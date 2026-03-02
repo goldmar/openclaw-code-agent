@@ -1,0 +1,61 @@
+{
+  "name": "openclaw-code-agent",
+  "version": "2.0.0",
+  "type": "commonjs",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "esbuild index.ts --bundle --platform=node --target=node18 --format=cjs --outfile=dist/index.js --minify --external:openclaw --external:openclaw/plugin-sdk --external:@anthropic-ai/claude-agent-sdk",
+    "test": "tsx --test 'tests/**/*.test.ts'"
+  },
+  "openclaw": {
+    "extensions": [
+      "./dist/index.js"
+    ]
+  },
+  "files": [
+    "dist/",
+    "workflows/",
+    "openclaw.plugin.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.2.37"
+  },
+  "devDependencies": {
+    "@sinclair/typebox": "^0.34.48",
+    "esbuild": "^0.27.3",
+    "nanoid": "^3.3.7",
+    "tsx": "^4.21.0"
+  },
+  "keywords": [
+    "openclaw",
+    "plugin",
+    "claude",
+    "claude-code",
+    "coding-agent",
+    "codex",
+    "ai",
+    "anthropic",
+    "agent",
+    "code-generation",
+    "automation",
+    "cli",
+    "background-process",
+    "developer-tools"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/goldmar/openclaw-code-agent.git"
+  },
+  "homepage": "https://github.com/goldmar/openclaw-code-agent#readme",
+  "bugs": {
+    "url": "https://github.com/goldmar/openclaw-code-agent/issues"
+  },
+  "license": "MIT",
+  "author": "OpenClaw Contributors",
+  "publishConfig": {
+    "access": "public"
+  },
+  "description": "An OpenClaw plugin that orchestrates coding agent sessions as managed background processes. Launch, monitor, and control coding agents (Claude Code, Codex, and more) directly from your AI gateway."
+}

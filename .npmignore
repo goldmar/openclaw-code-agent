@@ -1,0 +1,17 @@
+node_modules/
+CLAUDE.md
+package-lock.json
+.git
+.serena/
+tests/
+src/
+index.ts
+docs/
+skills/
+.idea/
+.vscode/
+*.bak
+*.bak2
+.DS_Store
+.env
+.env.*

@@ -1,0 +1,34 @@
+node_modules/
+dist/
+CLAUDE.md
+
+.idea/
+.vscode/
+*.bak
+*.bak2
+
+# Serena
+.serena/
+
+# BMAD Method V6 - core framework & generated files
+.bmad-core/
+_bmad/
+_bmad-output/
+.claude/commands/bmad-*
+
+# BMAD Method - generated artifacts
+docs/prd/
+docs/prd.md
+docs/architecture/
+docs/architecture.md
+docs/stories/
+docs/qa/
+.ai/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.*

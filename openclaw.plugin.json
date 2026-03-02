@@ -1,0 +1,72 @@
+{
+  "id": "openclaw-code-agent",
+  "name": "OpenClaw Code Agent",
+  "description": "Orchestrate coding agent sessions from OpenClaw",
+  "version": "2.0.0",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "maxSessions": {
+        "type": "number",
+        "default": 5
+      },
+      "defaultModel": {
+        "type": "string",
+        "description": "Default model for new sessions (e.g. 'sonnet', 'opus')"
+      },
+      "defaultWorkdir": {
+        "type": "string",
+        "description": "Default working directory for new sessions"
+      },
+      "idleTimeoutMinutes": {
+        "type": "number",
+        "default": 30,
+        "description": "Idle timeout in minutes for multi-turn sessions before auto-kill"
+      },
+      "postTurnIdleMinutes": {
+        "type": "number",
+        "default": 5,
+        "description": "Minutes to wait after a turn completes (without a question) before auto-killing the session"
+      },
+      "maxPersistedSessions": {
+        "type": "number",
+        "default": 50,
+        "description": "Maximum number of completed sessions to keep in memory for resume"
+      },
+      "fallbackChannel": {
+        "type": "string",
+        "description": "Fallback notification channel (e.g. 'telegram|123456789')"
+      },
+      "permissionMode": {
+        "type": "string",
+        "default": "plan",
+        "enum": [
+          "default",
+          "plan",
+          "acceptEdits",
+          "bypassPermissions"
+        ],
+        "description": "Default permission mode for coding agent sessions"
+      },
+      "agentChannels": {
+        "type": "object",
+        "description": "Map of agent working directories to notification channels",
+        "additionalProperties": {
+          "type": "string"
+        }
+      },
+      "maxAutoResponds": {
+        "type": "number",
+        "default": 10,
+        "description": "Maximum consecutive auto-responds per session before requiring user input"
+      },
+      "planApproval": {
+        "type": "string",
+        "default": "delegate",
+        "enum": ["approve", "ask", "delegate"],
+        "description": "Plan approval behavior. 'delegate' (default): orchestrator autonomously decides whether to approve low-risk plans or escalate to the user. 'approve': orchestrator can auto-approve after verification. 'ask': orchestrator always forwards plans to the user for approval."
+      }
+    }
+  }
+}
