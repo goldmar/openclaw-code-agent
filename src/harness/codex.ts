@@ -1,13 +1,10 @@
 /**
- * Codex harness — wraps OpenAI's `codex` CLI via subprocess + JSONL streaming.
- *
- * Auth: user runs `codex login` once; credentials are stored by the CLI itself.
- * Multi-turn: restart model — `codex exec resume <session-id> "<text>"` replays
- *   conversation history and continues from the previous turn.
+ * Codex harness — wraps `@openai/codex-sdk` threads and maps SDK events
+ * into the plugin's HarnessSession message contract.
  */
 
-import { execFileSync, spawn } from "child_process";
-import { createInterface } from "readline";
+import { parse } from "path";
+import { Codex, type Thread, type ThreadEvent, type ThreadOptions, type Usage } from "@openai/codex-sdk";
 import type {
   AgentHarness,
   HarnessLaunchOptions,
@@ -15,32 +12,28 @@ import type {
   HarnessMessage,
   HarnessResult,
 } from "./types";
-import { normalizeCodexEvent } from "./codex-events";
 import { looksLikeWaitingForUser } from "../waiting-detector";
 
 const DEFAULT_HEARTBEAT_MS = 10_000;
-const INTERRUPT_KILL_AFTER_MS = 2_000;
 
-// Synthetic tool names emitted when heuristic detection determines Codex is
-// waiting for user input or plan approval (Codex has no real tool-use events
-// for these, unlike Claude Code's AskUserQuestion / ExitPlanMode).
 const CODEX_QUESTION_TOOL = "codex:waiting-for-user" as const;
 const CODEX_PLAN_APPROVAL_TOOL = "codex:plan-approval" as const;
 
-// ---------------------------------------------------------------------------
-// Token pricing — Codex CLI defaults to codex-mini-latest (o4-mini class).
-// Prices in USD per token. Cached input tokens are discounted.
-// ---------------------------------------------------------------------------
+const CODEX_INPUT_PRICE = 1.10 / 1_000_000;
+const CODEX_CACHED_INPUT_PRICE = 0.275 / 1_000_000;
+const CODEX_OUTPUT_PRICE = 4.40 / 1_000_000;
 
-const CODEX_INPUT_PRICE = 1.10 / 1_000_000;   // $1.10 per 1M input tokens
-const CODEX_CACHED_INPUT_PRICE = 0.275 / 1_000_000; // $0.275 per 1M cached input
-const CODEX_OUTPUT_PRICE = 4.40 / 1_000_000;  // $4.40 per 1M output tokens
+type CodexClientLike = Pick<Codex, "startThread" | "resumeThread">;
 
-function estimateCostUsd(usage?: {
-  input_tokens?: number;
-  output_tokens?: number;
-  cached_input_tokens?: number;
-}): number {
+type ThreadLike = Pick<Thread, "id" | "runStreamed">;
+
+type TurnStreamLike = { events: AsyncIterable<ThreadEvent> };
+
+interface CodexHarnessDeps {
+  createCodex?: () => CodexClientLike;
+}
+
+function estimateCostUsd(usage?: Usage): number {
   if (!usage) return 0;
   const cached = usage.cached_input_tokens ?? 0;
   const nonCachedInput = Math.max(0, (usage.input_tokens ?? 0) - cached);
@@ -48,23 +41,6 @@ function estimateCostUsd(usage?: {
   return nonCachedInput * CODEX_INPUT_PRICE
     + cached * CODEX_CACHED_INPUT_PRICE
     + output * CODEX_OUTPUT_PRICE;
-}
-
-// ---------------------------------------------------------------------------
-// Permission mode → Codex CLI flag mapping
-// ---------------------------------------------------------------------------
-
-function permissionModeToFlags(mode?: string): string[] {
-  switch (mode) {
-    case "plan":
-      return ["--sandbox", "read-only"];
-    case "acceptEdits":
-      return ["--sandbox", "workspace-write"];
-    case "bypassPermissions":
-      return ["--dangerously-bypass-approvals-and-sandbox"];
-    default:
-      return []; // "default" → no flag, Codex on-request approvals
-  }
 }
 
 function makeResult(
@@ -95,9 +71,32 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-// ---------------------------------------------------------------------------
-// CodexHarness
-// ---------------------------------------------------------------------------
+function buildBypassAdditionalDirectories(cwd: string): string[] {
+  const root = parse(cwd).root || "/";
+  const extras = [root];
+
+  const fromEnv = process.env.OPENCLAW_CODEX_BYPASS_ADDITIONAL_DIRS?.trim();
+  if (fromEnv) {
+    extras.push(...fromEnv.split(",").map((v) => v.trim()).filter(Boolean));
+  }
+
+  return [...new Set(extras)];
+}
+
+function buildThreadOptions(options: HarnessLaunchOptions, permissionMode?: string): ThreadOptions {
+  const effectivePermissionMode = permissionMode ?? options.permissionMode;
+  const additionalDirectories = effectivePermissionMode === "bypassPermissions"
+    ? buildBypassAdditionalDirectories(options.cwd)
+    : undefined;
+
+  return {
+    model: options.model,
+    workingDirectory: options.cwd,
+    sandboxMode: "danger-full-access",
+    approvalPolicy: "never",
+    additionalDirectories,
+  };
+}
 
 export class CodexHarness implements AgentHarness {
   readonly name = "codex";
@@ -112,33 +111,36 @@ export class CodexHarness implements AgentHarness {
   readonly questionToolNames: readonly string[] = [CODEX_QUESTION_TOOL];
   readonly planApprovalToolNames: readonly string[] = [CODEX_PLAN_APPROVAL_TOOL];
 
+  constructor(private readonly deps: CodexHarnessDeps = {}) {}
+
   private activityHeartbeatMs(): number {
     const parsed = Number.parseInt(process.env.OPENCLAW_CODEX_HEARTBEAT_MS ?? String(DEFAULT_HEARTBEAT_MS), 10);
     if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_HEARTBEAT_MS;
     return parsed;
   }
 
-  launch(options: HarnessLaunchOptions): HarnessSession {
-    // Verify `codex` binary is available at launch time
-    try {
-      execFileSync("which", ["codex"], { stdio: "ignore" });
-    } catch {
-      throw new Error(
-        "codex CLI not found. Install it with: npm install -g @openai/codex && codex login",
-      );
-    }
+  private createCodexClient(): CodexClientLike {
+    return this.deps.createCodex?.() ?? new Codex();
+  }
 
-    // Mutable state shared by the async runSession loop and the HarnessSession handle
+  launch(options: HarnessLaunchOptions): HarnessSession {
     let effectivePermissionMode: string | undefined = options.permissionMode;
-    let codexSessionId: string | undefined;
-    let currentProcess: ReturnType<typeof spawn> | undefined;
+    let codexSessionId: string | undefined = options.resumeSessionId;
     let accumulatedCostUsd = 0;
+    let numTurns = 0;
+
     const heartbeatMs = this.activityHeartbeatMs();
 
-    // Simple async queue for HarnessMessages
+    let codexClient: CodexClientLike | undefined;
+    let thread: ThreadLike | undefined;
+    let pendingThreadRecreate = false;
+    let firstTurn = true;
+    let activeTurnAbortController: AbortController | undefined;
+
     const queue: HarnessMessage[] = [];
     let queueResolve: (() => void) | null = null;
     let queueDone = false;
+    let initEmitted = false;
 
     function flushResolve(): void {
       if (queueResolve) {
@@ -157,6 +159,12 @@ export class CodexHarness implements AgentHarness {
       flushResolve();
     }
 
+    function emitInitIfNeeded(sessionId: string | undefined): void {
+      if (!sessionId || initEmitted) return;
+      initEmitted = true;
+      enqueue({ type: "init", session_id: sessionId });
+    }
+
     async function* messageIterator(): AsyncGenerator<HarnessMessage> {
       while (true) {
         while (queue.length > 0) yield queue.shift()!;
@@ -165,280 +173,203 @@ export class CodexHarness implements AgentHarness {
       }
     }
 
-    // Spawn a single `codex exec` or `codex exec resume` process and parse JSONL
-    function spawnCodexProcess(prompt: string, resumeId?: string): Promise<void> {
-      return new Promise((resolve, reject) => {
-        const sandboxFlags = permissionModeToFlags(effectivePermissionMode);
+    const threadOptionsFactory = (): ThreadOptions => buildThreadOptions(options, effectivePermissionMode);
 
-        const args = resumeId
-          // `codex exec resume` expects: `codex exec resume --json <session-id> <prompt>`
-          // and rejects sandbox flags. Keep permission mode for future turns but
-          // do not pass sandbox flags on resume invocation itself.
-          ? ["exec", "resume", "--json", resumeId, prompt]
-          : [
-              "exec",
-              ...(options.cwd ? ["-C", options.cwd] : []),
-              ...(options.model ? ["-m", options.model] : []),
-              ...sandboxFlags,
-              "--json",
-              prompt,
-            ];
+    const ensureThreadForTurn = (): ThreadLike => {
+      if (!codexClient) codexClient = this.createCodexClient();
 
-        let currentTurnStarted = false;
-        let initEmitted = false;
-        let terminalResultEmitted = false;
-        let lastErrorMessage = "";
-        let stderrOutput = "";
-        let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
-        // Accumulates assistant text during the current turn so we can run
-        // the waiting-for-user heuristic on turn completion.
-        let turnAssistantText = "";
+      if (!thread) {
+        if (firstTurn && options.resumeSessionId) {
+          thread = codexClient.resumeThread(options.resumeSessionId, threadOptionsFactory());
+        } else if (codexSessionId) {
+          thread = codexClient.resumeThread(codexSessionId, threadOptionsFactory());
+        } else {
+          thread = codexClient.startThread(threadOptionsFactory());
+        }
+      }
 
-        const emitInitIfNeeded = (sid?: string): void => {
-          if (!sid) return;
-          codexSessionId = sid;
-          if (!initEmitted) {
-            initEmitted = true;
-            enqueue({ type: "init", session_id: sid });
-          }
-        };
+      if (pendingThreadRecreate && codexSessionId) {
+        thread = codexClient.resumeThread(codexSessionId, threadOptionsFactory());
+        pendingThreadRecreate = false;
+      }
 
-        const emitResult = (result: Partial<HarnessResult>): void => {
-          if (terminalResultEmitted) return;
-          terminalResultEmitted = true;
-          enqueue({
-            type: "result",
-            data: makeResult(codexSessionId ?? "", result),
-          });
-        };
+      emitInitIfNeeded((thread.id ?? codexSessionId) ?? undefined);
+      return thread;
+    };
 
-        const child = spawn("codex", args, { stdio: ["ignore", "pipe", "pipe"] });
-        currentProcess = child;
+    const runTurn = async (prompt: string): Promise<void> => {
+      const turnStart = Date.now();
+      numTurns += 1;
+      let turnAssistantText = "";
+      let terminalEmitted = false;
+      let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
 
-        // Kill the child process when the session's AbortController fires
-        // (e.g. session.kill() → teardown → abort). SIGTERM first, then
-        // SIGKILL after INTERRUPT_KILL_AFTER_MS if still alive.
-        let abortKillTimer: ReturnType<typeof setTimeout> | undefined;
-        const onAbort = (): void => {
-          try { child.kill("SIGTERM"); } catch { /* already exited */ }
-          abortKillTimer = setTimeout(() => {
-            try { child.kill("SIGKILL"); } catch { /* already exited */ }
-          }, INTERRUPT_KILL_AFTER_MS);
-        };
-        if (options.abortController) {
-          if (options.abortController.signal.aborted) {
-            onAbort();
-          } else {
-            options.abortController.signal.addEventListener("abort", onAbort, { once: true });
-          }
+      const emitResult = (partial: Partial<HarnessResult>): void => {
+        if (terminalEmitted) return;
+        terminalEmitted = true;
+        enqueue({
+          type: "result",
+          data: makeResult(codexSessionId ?? "", {
+            duration_ms: Date.now() - turnStart,
+            total_cost_usd: accumulatedCostUsd,
+            num_turns: numTurns,
+            ...partial,
+            session_id: codexSessionId ?? "",
+          }),
+        });
+      };
+
+      try {
+        const activeThread = ensureThreadForTurn();
+        const knownSessionId = (activeThread.id ?? codexSessionId) ?? undefined;
+        if (knownSessionId) {
+          codexSessionId = knownSessionId;
+          emitInitIfNeeded(codexSessionId);
         }
 
-        // Heartbeat prevents idle-timeout kills while a Codex subprocess is
-        // busy but temporarily silent (no text/tool events emitted yet).
+        activeTurnAbortController = new AbortController();
+        if (options.abortController?.signal.aborted) {
+          activeTurnAbortController.abort(options.abortController.signal.reason);
+        }
+
         heartbeatTimer = setInterval(() => {
           enqueue({ type: "activity" });
         }, heartbeatMs);
 
-        const rl = createInterface({ input: child.stdout!, crlfDelay: Infinity });
-        const errRl = createInterface({ input: child.stderr!, crlfDelay: Infinity });
+        const streamed: TurnStreamLike = await activeThread.runStreamed(prompt, {
+          signal: activeTurnAbortController.signal,
+        });
 
-        rl.on("line", (line: string) => {
-          const trimmed = line.trim();
-          if (!trimmed) return;
-
-          let event: unknown;
-          try {
-            event = JSON.parse(trimmed);
-          } catch {
-            return; // non-JSON line (debug output, etc.)
+        for await (const event of streamed.events) {
+          if (event.type === "thread.started") {
+            codexSessionId = event.thread_id;
+            emitInitIfNeeded(codexSessionId);
+            continue;
           }
 
-          const normalized = normalizeCodexEvent(event);
-          emitInitIfNeeded(normalized.sessionId);
-
-          if (normalized.event.kind === "turn_started") {
-            currentTurnStarted = true;
-            turnAssistantText = "";
-            return;
+          if (event.type === "item.completed") {
+            if (event.item.type === "agent_message" || event.item.type === "reasoning") {
+              turnAssistantText += `${event.item.text}\n`;
+              enqueue({ type: "text", text: event.item.text });
+            }
+            continue;
           }
 
-          if (normalized.event.kind === "noop") {
-            return;
+          if (event.type === "error") {
+            enqueue({ type: "text", text: `[codex:error] ${event.message}` });
+            continue;
           }
 
-          // Only emit text/tool events for the current turn (skip replay/history)
-          if (!currentTurnStarted && (normalized.event.kind === "text" || normalized.event.kind === "tool_use")) {
-            return;
-          }
-
-          if (normalized.event.kind === "text") {
-            turnAssistantText += normalized.event.text + "\n";
-            enqueue({ type: "text", text: normalized.event.text });
-            return;
-          }
-
-          if (normalized.event.kind === "tool_use") {
-            enqueue({
-              type: "tool_use",
-              name: normalized.event.name,
-              input: normalized.event.input,
+          if (event.type === "turn.failed") {
+            emitResult({
+              success: false,
+              result: event.error.message,
+              session_id: codexSessionId ?? "",
             });
-            return;
+            continue;
           }
 
-          if (normalized.event.kind === "error") {
-            lastErrorMessage = normalized.event.message;
-            enqueue({ type: "text", text: `[codex:error] ${normalized.event.message}` });
-            return;
-          }
+          if (event.type === "turn.completed") {
+            accumulatedCostUsd += estimateCostUsd(event.usage);
 
-          if (normalized.event.kind === "result") {
-            if (!normalized.event.success && normalized.event.result) {
-              lastErrorMessage = normalized.event.result;
+            const tail = turnAssistantText.slice(-500);
+            if (effectivePermissionMode === "plan") {
+              enqueue({
+                type: "tool_use",
+                name: CODEX_PLAN_APPROVAL_TOOL,
+                input: { text: tail },
+              });
+            } else if (looksLikeWaitingForUser(tail)) {
+              enqueue({
+                type: "tool_use",
+                name: CODEX_QUESTION_TOOL,
+                input: { text: tail },
+              });
             }
-
-            // Heuristic question/plan-approval detection for Codex.
-            // Codex doesn't use named tools like Claude Code's AskUserQuestion
-            // / ExitPlanMode, so we detect waiting-for-user from the assistant
-            // text and emit synthetic tool_use messages that the session's
-            // consumeMessages loop recognises.
-            if (normalized.event.success) {
-              // Use the tail of the assistant text for heuristic matching
-              // (last 500 chars captures the final question/prompt).
-              const tail = turnAssistantText.slice(-500);
-              if (effectivePermissionMode === "plan") {
-                // In plan mode every successful turn completion means the
-                // plan has been presented and is awaiting approval.
-                enqueue({
-                  type: "tool_use",
-                  name: CODEX_PLAN_APPROVAL_TOOL,
-                  input: { text: tail },
-                });
-              } else if (looksLikeWaitingForUser(tail)) {
-                enqueue({
-                  type: "tool_use",
-                  name: CODEX_QUESTION_TOOL,
-                  input: { text: tail },
-                });
-              }
-            }
-
-            // Accumulate cost from token usage reported by the Codex CLI
-            const turnCost = estimateCostUsd(normalized.event.usage);
-            accumulatedCostUsd += turnCost;
 
             emitResult({
-              success: normalized.event.success,
-              duration_ms: normalized.event.durationMs ?? 0,
-              total_cost_usd: accumulatedCostUsd,
-              num_turns: normalized.event.numTurns ?? 1,
-              result: normalized.event.result,
+              success: true,
+              session_id: codexSessionId ?? "",
             });
           }
-        });
+        }
 
-        child.on("error", (err) => {
-          if (heartbeatTimer) {
-            clearInterval(heartbeatTimer);
-            heartbeatTimer = undefined;
-          }
-          reject(new Error(`codex process error: ${err.message}`));
+        if (!terminalEmitted) {
+          emitResult({
+            success: false,
+            result: "Codex turn ended without terminal event",
+            session_id: codexSessionId ?? "",
+          });
+        }
+      } catch (err: unknown) {
+        emitResult({
+          success: false,
+          result: errorMessage(err),
+          session_id: codexSessionId ?? "",
         });
+      } finally {
+        if (heartbeatTimer) clearInterval(heartbeatTimer);
+        activeTurnAbortController = undefined;
+        firstTurn = false;
+      }
+    };
 
-        errRl.on("line", (line: string) => {
-          const trimmed = line.trim();
-          if (!trimmed) return;
-          stderrOutput = stderrOutput ? `${stderrOutput}\n${trimmed}` : trimmed;
-        });
+    const onExternalAbort = (): void => {
+      activeTurnAbortController?.abort(options.abortController?.signal.reason ?? "interrupted");
+    };
 
-        child.on("close", (code) => {
-          if (heartbeatTimer) {
-            clearInterval(heartbeatTimer);
-            heartbeatTimer = undefined;
-          }
-          if (abortKillTimer) {
-            clearTimeout(abortKillTimer);
-            abortKillTimer = undefined;
-          }
-          options.abortController?.signal.removeEventListener("abort", onAbort);
-          rl.close();
-          errRl.close();
-          currentProcess = undefined;
-          if (!terminalResultEmitted) {
-            if (code === 0 || code === null) {
-              emitResult({
-                success: true,
-                result: lastErrorMessage || undefined,
-              });
-            } else {
-              const stderrMsg = stderrOutput ? ` | stderr: ${stderrOutput}` : "";
-              emitResult({
-                success: false,
-                result: lastErrorMessage
-                  ? `${lastErrorMessage}${stderrMsg}`
-                  : `codex exited with code ${code}${stderrMsg}`,
-              });
-            }
-          }
-          resolve();
-        });
-      });
+    if (options.abortController?.signal) {
+      options.abortController.signal.addEventListener("abort", onExternalAbort);
     }
 
-    // Main session loop: first turn, then follow-up turns from the prompt iterable
-    async function runSession(): Promise<void> {
+    const runSession = async (): Promise<void> => {
       try {
         const promptInput = options.prompt;
 
         if (typeof promptInput === "string") {
-          // Single-turn or explicit string prompt
-          await spawnCodexProcess(promptInput, options.resumeSessionId);
-        } else {
-          // Multi-turn: async iterable of user messages
-          for await (const msg of promptInput) {
-            if (options.abortController?.signal.aborted) break;
-            const text = extractPromptText(msg);
-            const resumeId = codexSessionId ?? options.resumeSessionId;
-            await spawnCodexProcess(text, resumeId);
-            if (options.abortController?.signal.aborted) break;
-          }
+          await runTurn(promptInput);
+          return;
         }
-      } catch (err: unknown) {
-        enqueue({
-          type: "result",
-          data: makeResult(codexSessionId ?? "", { result: errorMessage(err) }),
-        });
+
+        for await (const msg of promptInput) {
+          if (options.abortController?.signal.aborted) break;
+          await runTurn(extractPromptText(msg));
+          if (options.abortController?.signal.aborted) break;
+        }
       } finally {
+        options.abortController?.signal.removeEventListener("abort", onExternalAbort);
         endQueue();
       }
-    }
+    };
 
-    // Start the session loop (detached — errors surface via enqueue)
-    runSession().catch(() => endQueue());
+    runSession().catch((err: unknown) => {
+      enqueue({
+        type: "result",
+        data: makeResult(codexSessionId ?? "", {
+          success: false,
+          result: errorMessage(err),
+          total_cost_usd: accumulatedCostUsd,
+          num_turns: numTurns,
+          session_id: codexSessionId ?? "",
+        }),
+      });
+      options.abortController?.signal.removeEventListener("abort", onExternalAbort);
+      endQueue();
+    });
 
     return {
       messages: messageIterator(),
 
       async setPermissionMode(mode: string): Promise<void> {
-        // Stored and applied on the next exec resume spawn
         effectivePermissionMode = mode;
+        pendingThreadRecreate = true;
       },
 
       async interrupt(): Promise<void> {
-        if (currentProcess) {
-          currentProcess.kill("SIGTERM");
-          const proc = currentProcess;
-          setTimeout(() => {
-            try {
-              proc.kill("SIGKILL");
-            } catch {
-              // Process already exited
-            }
-              }, INTERRUPT_KILL_AFTER_MS);
-            }
-          },
-        };
-      }
+        activeTurnAbortController?.abort("interrupted");
+      },
+    };
+  }
 
   buildUserMessage(text: string, sessionId: string): unknown {
     return { type: "user", text, session_id: sessionId };

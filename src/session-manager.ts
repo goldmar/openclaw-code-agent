@@ -1,5 +1,8 @@
 import { execFile } from "child_process";
-import { resolve } from "path";
+import { existsSync } from "fs";
+import { fileURLToPath } from "url";
+import { dirname, join } from "path";
+
 import { Session } from "./session";
 import { pluginConfig } from "./config";
 import { formatDuration, generateSessionName, lastCompleteLines, truncateText } from "./format";
@@ -10,7 +13,26 @@ import { SessionMetricsRecorder } from "./session-metrics";
 import { WakeDispatcher } from "./wake-dispatcher";
 import { looksLikeWaitingForUser } from "./waiting-detector";
 
-const LOBSTER_WORKFLOW_PATH = resolve(__dirname, "..", "workflows", "plan-approval.lobster");
+function resolveLobsterWorkflowPath(): string {
+  const explicit = process.env.OPENCLAW_CODE_AGENT_PLAN_WORKFLOW_PATH?.trim();
+  if (explicit) return explicit;
+
+  const moduleDir = dirname(fileURLToPath(import.meta.url));
+  const candidates = [
+    join(process.cwd(), "workflows", "plan-approval.lobster"),
+    join(moduleDir, "..", "workflows", "plan-approval.lobster"),
+    join(moduleDir, "..", "..", "workflows", "plan-approval.lobster"),
+  ];
+
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate;
+  }
+
+  // Preserve historical behavior as best-effort fallback.
+  return fileURLToPath(new URL("../workflows/plan-approval.lobster", import.meta.url));
+}
+
+const LOBSTER_WORKFLOW_PATH = resolveLobsterWorkflowPath();
 
 const TERMINAL_STATUSES = new Set<SessionStatus>(["completed", "failed", "killed"]);
 const KILLABLE_STATUSES = new Set<SessionStatus>(["starting", "running"]);

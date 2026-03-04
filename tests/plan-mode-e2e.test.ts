@@ -82,7 +82,6 @@ describe("Plan mode E2E: ExitPlanMode flow", () => {
       approve: true,
     });
 
-    console.log(`[Test] executeRespond result: ${result.text}`);
     assert.ok(!result.isError, `Should not be an error, got: ${result.text}`);
     assert.ok(!result.text.includes("no pending plan approval"), `Should not say no pending plan: ${result.text}`);
     assert.ok(result.text.includes("Message sent"), `Should say message sent: ${result.text}`);

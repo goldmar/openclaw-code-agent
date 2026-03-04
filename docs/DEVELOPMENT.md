@@ -14,7 +14,13 @@ openclaw-code-agent/
 │   ├── singletons.ts           # Module-level sessionManager/notificationService refs
 │   ├── session.ts              # Session class (EventEmitter, state machine, timers)
 │   ├── session-manager.ts      # Session pool management + lifecycle
+│   ├── session-store.ts        # Persistence/index store abstraction
+│   ├── session-metrics.ts      # Metrics recorder abstraction
+│   ├── wake-dispatcher.ts      # Wake delivery + retry abstraction
 │   ├── notifications.ts        # NotificationService (Telegram delivery, reminders)
+│   ├── application/
+│   │   ├── session-view.ts     # Shared output/list rendering for tool + command parity
+│   │   └── session-control.ts  # Shared kill/complete logic for tool + command parity
 │   ├── actions/
 │   │   └── respond.ts          # Shared respond logic (tool + command)
 │   ├── tools/
@@ -34,6 +40,7 @@ openclaw-code-agent/
 │   └── harness/                # Coding agent harness abstraction layer
 │       ├── types.ts            # AgentHarness interface + message types
 │       ├── claude-code.ts      # Claude Code harness (wraps @anthropic-ai/claude-agent-sdk)
+│       ├── codex.ts            # Codex harness (wraps @openai/codex-sdk thread streaming)
 │       └── index.ts            # Harness registry + re-exports
 ├── skills/
 │   └── code-agent-orchestration/
@@ -52,7 +59,8 @@ openclaw-code-agent/
 
 | Package | Purpose |
 |---|---|
-| `@anthropic-ai/claude-agent-sdk` | Coding agent harness SDK — the `query()` function that powers each session. **Pinned to `0.2.37`** — the plugin depends on specific behavioral assumptions about plan mode detection, `ExitPlanMode` handling, and message flow that may change in newer versions. Test thoroughly before upgrading. |
+| `@anthropic-ai/claude-agent-sdk` | Claude harness SDK — powers Claude Code sessions. Version policy: `^0.2.37`. |
+| `@openai/codex-sdk` | Codex harness SDK — powers Codex thread start/resume and streamed turn events. Version policy: `^0.107.0`. |
 | `@sinclair/typebox` | JSON Schema type builder for tool parameter definitions. |
 | `nanoid` | Generates short unique session IDs (8 characters). |
 
@@ -62,13 +70,13 @@ openclaw-code-agent/
 
 1. **Multi-turn uses `AsyncIterable` prompts.** The `MessageStream` class implements `Symbol.asyncIterator` to feed user messages into the SDK's `query()` function as an async generator, keeping the session alive across turns.
 
-2. **Persisted sessions survive GC.** When a session is garbage-collected (1 hour after completion), its harness session ID is retained in a separate persistence map so it can be resumed later. Entries are stored under three indexes (internal ID, name, harness UUID) for flexible lookup.
+2. **Persisted sessions survive GC.** When a session is garbage-collected (default 24 hours after completion, configurable via `sessionGcAgeMinutes`), its harness session ID is retained in a separate persistence map so it can be resumed later. Entries are stored under three indexes (internal ID, name, harness UUID) for flexible lookup.
 
 3. **Notifications use CLI shelling.** Since the plugin API doesn't expose a runtime `sendMessage` method, outbound notifications go through `openclaw message send` via `child_process.execFile`.
 
 4. **Metrics are in-memory only.** Session metrics are aggregated in the `SessionManager` and reset on service restart. They are not persisted to disk.
 
-5. **Waiting-for-input uses dual detection.** End-of-turn detection (when a multi-turn result resolves) is the primary signal, backed by a 15-second safety-net timer for edge cases. The `turnEnd` event carries a `hadQuestion` boolean.
+5. **Waiting-for-input uses end-of-turn detection.** End-of-turn detection (when a multi-turn result resolves) is the signal. The `turnEnd` event carries a `hadQuestion` boolean.
 
 6. **Channel `"unknown"` falls through.** If `channelId` is `"unknown"`, the notification system explicitly falls through to `fallbackChannel` rather than attempting delivery to an invalid destination.
 
@@ -91,8 +99,8 @@ openclaw-code-agent/
 ## Build
 
 ```bash
-npm run build    # esbuild → dist/index.js (CommonJS bundle)
-npx tsc --noEmit # Type-check only
+pnpm run build      # esbuild → dist/index.js (ESM bundle)
+pnpm run typecheck  # Type-check only
 ```
 
 ---

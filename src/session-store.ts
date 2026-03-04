@@ -1,10 +1,22 @@
 import { mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "fs";
 import { homedir, tmpdir } from "os";
-import { join } from "path";
+import { dirname, join } from "path";
 import type { PersistedSessionInfo, SessionStatus } from "./types";
 import type { Session } from "./session";
 
-const SESSION_INDEX_PATH = join(homedir(), ".openclaw", "code-agent-sessions.json");
+function resolveOpenclawHomeDir(): string {
+  const explicit = process.env.OPENCLAW_HOME?.trim();
+  if (explicit) return explicit;
+  return join(homedir(), ".openclaw");
+}
+
+function resolveSessionIndexPath(): string {
+  const explicit = process.env.OPENCLAW_CODE_AGENT_SESSIONS_PATH?.trim();
+  if (explicit) return explicit;
+  return join(resolveOpenclawHomeDir(), "code-agent-sessions.json");
+}
+
+const SESSION_INDEX_PATH = resolveSessionIndexPath();
 const TERMINAL_STATUSES = new Set<SessionStatus>(["completed", "failed", "killed"]);
 const VALID_STATUSES = new Set<SessionStatus>(["running", "completed", "failed", "killed"]);
 const TMP_OUTPUT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
@@ -74,6 +86,9 @@ export class SessionStore {
   readonly nameIndex: Map<string, string> = new Map();
 
   constructor() {
+    if (process.env.OPENCLAW_DEBUG_SESSION_STORE === "1") {
+      console.warn(`[SessionStore] index path: ${SESSION_INDEX_PATH}`);
+    }
     this.loadIndex();
   }
 
@@ -106,7 +121,7 @@ export class SessionStore {
 
   private saveIndex(): void {
     try {
-      mkdirSync(join(homedir(), ".openclaw"), { recursive: true });
+      mkdirSync(dirname(SESSION_INDEX_PATH), { recursive: true });
       const tmp = SESSION_INDEX_PATH + ".tmp";
       writeFileSync(tmp, JSON.stringify([...this.persisted.values()], null, 2), "utf-8");
       renameSync(tmp, SESSION_INDEX_PATH);

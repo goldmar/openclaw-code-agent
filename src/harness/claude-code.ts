@@ -59,8 +59,10 @@ export class ClaudeCodeHarness implements AgentHarness {
       cwd: options.cwd,
       model: options.model,
       permissionMode: options.permissionMode,
-      // Always bypass bwrap sandbox on this VPS — plan mode remains a behavioral
-      // constraint (present plan, wait for approval) without filesystem restrictions
+      // Always bypass the bwrap filesystem sandbox. On this VPS deployment,
+      // OpenClaw is the security boundary; bwrap adds friction without benefit.
+      // Plan mode remains a *behavioural* constraint — CC presents a plan and
+      // waits for approval — but does not restrict filesystem writes.
       allowDangerouslySkipPermissions: true,
       allowedTools: options.allowedTools,
       systemPrompt: options.systemPrompt,

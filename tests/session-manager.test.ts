@@ -1,6 +1,7 @@
 import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { SessionManager } from "../src/session-manager";
+import { setPluginConfig } from "../src/config";
 
 // ---------------------------------------------------------------------------
 // Helper to create a fake session-like object for injection
@@ -114,6 +115,22 @@ describe("SessionManager.resolve()", () => {
     (sm as any).sessions.set("alpha", s2);
     // "alpha" matches s2 by ID first
     assert.equal(sm.resolve("alpha"), s2);
+  });
+
+  it("prefers active session when multiple sessions share the same name", () => {
+    const killed = fakeSession({ id: "s1", name: "dup", status: "killed", startedAt: 1000 });
+    const running = fakeSession({ id: "s2", name: "dup", status: "running", startedAt: 2000 });
+    (sm as any).sessions.set("s1", killed);
+    (sm as any).sessions.set("s2", running);
+    assert.equal(sm.resolve("dup"), running);
+  });
+
+  it("falls back to most recent terminal session when no active match exists", () => {
+    const oldKilled = fakeSession({ id: "s1", name: "dup", status: "killed", startedAt: 1000 });
+    const newFailed = fakeSession({ id: "s2", name: "dup", status: "failed", startedAt: 3000 });
+    (sm as any).sessions.set("s1", oldKilled);
+    (sm as any).sessions.set("s2", newFailed);
+    assert.equal(sm.resolve("dup"), newFailed);
   });
 });
 
@@ -274,10 +291,10 @@ describe("SessionManager.resolveHarnessSessionId()", () => {
     assert.equal(sm.resolveHarnessSessionId("old-id"), "harness-ghi");
   });
 
-  it("looks up by nameIndex when session is not active", () => {
-    (sm as any).nameIndex.set("old-name", "harness-jkl");
-    (sm as any).persisted.set("harness-jkl", { harnessSessionId: "harness-jkl" });
-    assert.equal(sm.resolveHarnessSessionId("old-name"), "harness-jkl");
+  it("looks up latest persisted entry by name when session is not active", () => {
+    (sm as any).persisted.set("harness-jkl-old", { harnessSessionId: "harness-jkl-old", name: "old-name", createdAt: 100 });
+    (sm as any).persisted.set("harness-jkl-new", { harnessSessionId: "harness-jkl-new", name: "old-name", createdAt: 200 });
+    assert.equal(sm.resolveHarnessSessionId("old-name"), "harness-jkl-new");
   });
 
   it("returns ref directly if it exists in persisted map", () => {
@@ -319,11 +336,12 @@ describe("SessionManager.getPersistedSession()", () => {
     assert.equal(sm.getPersistedSession("internal-id"), info);
   });
 
-  it("returns session by name via nameIndex", () => {
-    const info = { harnessSessionId: "h3", name: "s3" };
-    (sm as any).persisted.set("h3", info);
-    (sm as any).nameIndex.set("s3", "h3");
-    assert.equal(sm.getPersistedSession("s3"), info);
+  it("returns latest session by name from persisted records", () => {
+    const infoOld = { harnessSessionId: "h3-old", name: "s3", createdAt: 100 };
+    const infoNew = { harnessSessionId: "h3-new", name: "s3", createdAt: 200 };
+    (sm as any).persisted.set("h3-old", infoOld);
+    (sm as any).persisted.set("h3-new", infoNew);
+    assert.equal(sm.getPersistedSession("s3"), infoNew);
   });
 
   it("returns undefined for unknown ref", () => {
@@ -336,6 +354,9 @@ describe("SessionManager.listPersistedSessions()", () => {
 
   beforeEach(() => {
     sm = new SessionManager(5);
+    (sm as any).persisted.clear();
+    (sm as any).idIndex.clear();
+    (sm as any).nameIndex.clear();
   });
 
   it("returns sorted by completedAt descending", () => {
@@ -492,10 +513,14 @@ describe("SessionManager.cleanup()", () => {
   let sm: SessionManager;
 
   beforeEach(() => {
+    setPluginConfig({ sessionGcAgeMinutes: 60 });
     sm = new SessionManager(5, 2); // maxPersistedSessions = 2
+    (sm as any).persisted.clear();
+    (sm as any).idIndex.clear();
+    (sm as any).nameIndex.clear();
   });
 
-  it("removes terminal sessions older than 1 hour from sessions map", () => {
+  it("removes terminal sessions older than configured TTL from sessions map", () => {
     const oldTime = Date.now() - 2 * 60 * 60 * 1000; // 2 hours ago
     const s = fakeSession({
       id: "old-s",
@@ -509,12 +534,30 @@ describe("SessionManager.cleanup()", () => {
     assert.equal((sm as any).sessions.has("old-s"), false);
   });
 
-  it("keeps terminal sessions that are less than 1 hour old", () => {
+  it("keeps terminal sessions that are less than configured TTL", () => {
     const recentTime = Date.now() - 10 * 60 * 1000; // 10 minutes ago
     const s = fakeSession({ id: "new-s", status: "completed", completedAt: recentTime });
     (sm as any).sessions.set("new-s", s);
     sm.cleanup();
     assert.equal((sm as any).sessions.has("new-s"), true);
+  });
+
+  it("uses sessionGcAgeMinutes from plugin config", () => {
+    setPluginConfig({ sessionGcAgeMinutes: 5 });
+    const oldTime = Date.now() - 10 * 60 * 1000; // 10 minutes ago
+    const s = fakeSession({ id: "old-short-ttl", status: "completed", completedAt: oldTime });
+    (sm as any).sessions.set("old-short-ttl", s);
+    sm.cleanup();
+    assert.equal((sm as any).sessions.has("old-short-ttl"), false);
+  });
+
+  it("keeps sessions exactly on the TTL boundary", () => {
+    setPluginConfig({ sessionGcAgeMinutes: 5 });
+    const boundaryTime = Date.now() - 5 * 60 * 1000;
+    const s = fakeSession({ id: "ttl-boundary", status: "completed", completedAt: boundaryTime });
+    (sm as any).sessions.set("ttl-boundary", s);
+    sm.cleanup();
+    assert.equal((sm as any).sessions.has("ttl-boundary"), true);
   });
 
   it("evicts oldest persisted sessions when exceeding maxPersistedSessions", () => {
@@ -570,5 +613,81 @@ describe("SessionManager.deliverToTelegram()", () => {
     assert.equal(calls[0].channelId, "telegram|bot|123");
     assert.equal(calls[0].text, "hello");
     assert.equal(calls[0].threadId, 42);
+  });
+});
+
+// =========================================================================
+// turn-end wake behavior
+// =========================================================================
+
+describe("SessionManager turn-end wake", () => {
+  let sm: SessionManager;
+
+  beforeEach(() => {
+    sm = new SessionManager(5);
+    (sm as any).wakeDispatcher = {
+      wakeAgent: (...args: any[]) => { ((sm as any).__wakeCalls ??= []).push(args); },
+      deliverToTelegram: () => {},
+      buildDeliverArgs: () => [],
+      clearPendingRetries: () => {},
+      setNotifications: () => {},
+    };
+    (sm as any).__wakeCalls = [];
+  });
+
+  it("fires wake deterministically on turn end", () => {
+    const s = fakeSession({
+      id: "s-turn",
+      name: "deterministic",
+      status: "running",
+      notifyOnTurnEnd: true,
+      getOutput: () => ["I completed the patch.", "Should I continue and apply tests?"],
+    });
+
+    (sm as any).onTurnEnd(s, false);
+
+    const calls = (sm as any).__wakeCalls;
+    assert.equal(calls.length, 1);
+    const [sessionArg, eventText, telegramText] = calls[0];
+    assert.equal(sessionArg.id, "s-turn");
+    assert.match(eventText, /Name: deterministic/);
+    assert.match(eventText, /Status: running/);
+    assert.match(eventText, /Looks like waiting for user input: yes/);
+    assert.match(telegramText, /Turn done/);
+  });
+
+  it("routes explicit question turns to waiting wake path", () => {
+    const s = fakeSession({
+      id: "s-wait",
+      name: "waiter",
+      status: "running",
+      notifyOnTurnEnd: true,
+      pendingPlanApproval: false,
+      getOutput: () => ["Need your decision."],
+    });
+
+    (sm as any).onTurnEnd(s, true);
+
+    const calls = (sm as any).__wakeCalls;
+    assert.equal(calls.length, 1);
+    const [_sessionArg, eventText, telegramText, label] = calls[0];
+    assert.equal(label, "waiting");
+    assert.match(telegramText, /Waiting for input/);
+    assert.match(eventText, /waiting for input/i);
+  });
+
+  it("suppresses turn-end wake when notifyOnTurnEnd is false", () => {
+    const s = fakeSession({
+      id: "s-no-wake",
+      name: "silent",
+      status: "running",
+      notifyOnTurnEnd: false,
+      getOutput: () => ["No wake expected."],
+    });
+
+    (sm as any).onTurnEnd(s, false);
+
+    const calls = (sm as any).__wakeCalls;
+    assert.equal(calls.length, 0);
   });
 });

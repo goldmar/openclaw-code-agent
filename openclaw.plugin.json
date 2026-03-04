@@ -24,6 +24,11 @@
         "default": 15,
         "description": "Idle timeout in minutes for multi-turn sessions before auto-kill"
       },
+      "sessionGcAgeMinutes": {
+        "type": "number",
+        "default": 1440,
+        "description": "TTL in minutes before terminal runtime sessions are evicted from memory (persisted metadata remains resumable)."
+      },
       "maxPersistedSessions": {
         "type": "number",
         "default": 50,

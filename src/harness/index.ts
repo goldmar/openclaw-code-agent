@@ -5,6 +5,7 @@
 import type { AgentHarness } from "./types";
 import { ClaudeCodeHarness } from "./claude-code";
 import { CodexHarness } from "./codex";
+import { pluginConfig } from "../config";
 
 const registry = new Map<string, AgentHarness>();
 
@@ -23,8 +24,6 @@ export function getHarness(name: string): AgentHarness {
 }
 
 export function getDefaultHarness(): AgentHarness {
-  // Import inline to avoid circular dependency at module load time
-  const { pluginConfig } = require("../config") as { pluginConfig: { defaultHarness?: string } };
   const name = pluginConfig.defaultHarness ?? "claude-code";
   return getHarness(name);
 }

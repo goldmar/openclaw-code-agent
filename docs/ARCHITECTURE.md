@@ -15,38 +15,64 @@ User (Telegram/Discord) → OpenClaw Gateway → Agent → Plugin Tools → Codi
 ## Core Components
 
 ### 1. Plugin Entry (`index.ts`)
-- Registers 6 tools, 6 commands, and 1 service
+- Registers 6 tools, 7 commands, and 1 service
 - Creates SessionManager and NotificationService during service start
 - Wires outbound messaging via `openclaw message send` CLI
 
 ### 2. SessionManager (`src/session-manager.ts`)
 - Manages lifecycle of coding agent processes (spawn, track, kill, resume)
 - Enforces `maxSessions` concurrent limit
-- Persists completed sessions for resume (up to `maxPersistedSessions`)
-- GC interval cleans up stale sessions every 5 minutes
+- Persists sessions to disk at `~/.openclaw/code-agent-sessions.json` for crash/restart recovery
+- Writes a stub on first `"running"` transition (captures harness, workdir, model before session completes)
+- Atomic writes (`.tmp` → rename) prevent corrupt JSON on kill mid-write
+- Sessions in `"running"` state at load time are marked `"killed"` (process died before they could complete)
+- GC interval cleans up stale sessions every 5 minutes; evicts oldest beyond `maxPersistedSessions`
+- Runtime session GC TTL is configurable via `sessionGcAgeMinutes` (default: 1440 minutes / 24h)
 - Subscribes to session events (statusChange, turnEnd) instead of callbacks
 - Single-index persistence with 3 maps (persisted, idIndex, nameIndex)
 
+### 2a. Agent Harness Abstraction (`src/harness/`)
+- `AgentHarness` interface: `name`, `launch()`, `buildUserMessage()`, `questionToolNames`, `planApprovalToolNames`
+- **ClaudeCodeHarness** — wraps `@anthropic-ai/claude-agent-sdk`; uses `query()` with `MessageStream` for multi-turn
+- **CodexHarness** — wraps `@openai/codex-sdk` (`Codex` + `Thread`) and maps SDK stream events to harness messages
+  - Streams SDK events (`thread.started`, `turn.started`, `turn.completed`, `turn.failed`, `item.*`)
+  - Emits synthetic tool-use events for plan approval and waiting-for-user detection
+  - Resume via `codex.resumeThread(<session-id>, options)`
+- Registry: `registerHarness()` / `getHarness(name)` / `getDefaultHarness()` reads `defaultHarness` config (default: `"claude-code"`)
+- Permission mode mapping:
+  - Claude Code uses SDK permission modes (`default` / `plan` / `acceptEdits` / `bypassPermissions`)
+  - Codex always uses SDK thread options `sandboxMode: "danger-full-access"` and `approvalPolicy: "never"`; `plan` and `acceptEdits` are behavioral orchestration states
+
 ### 3. Session (`src/session.ts`)
-- Wraps a single coding agent process via the harness SDK (`@anthropic-ai/claude-agent-sdk`)
+- Wraps a single coding agent process via the configured `AgentHarness`
 - Extends `EventEmitter` — emits `statusChange`, `output`, `toolUse`, `turnEnd`
 - State machine with validated transitions (`starting → running → completed/failed/killed`)
 - Centralized timer management via `setTimer`/`clearTimer`/`clearAllTimers`
-- Three named timers: `safetyNet` (15s), `idle` (30min), `postTurnIdle` (5min)
+- One named timer: `idle` (configurable, default 15 min)
 - Handles output buffering and multi-turn conversation via `MessageStream`
+  - `MessageStream` is an async queue backing multi-turn prompt delivery
+  - `hasPending()` prevents dropping queued follow-ups when a turn ends
+  - Terminal transitions set metadata (`killReason`/`completedAt`) before emitting status changes
 
 ### 4. NotificationService (`src/notifications.ts`)
 - Routes notifications to appropriate channels via `emitToChannel()`
 - Wraps the `sendMessage` callback for outbound delivery
 
-### 5. Config & Singletons
+### 5. Supporting Modules
+- `src/session-store.ts` — persisted session/index storage abstraction
+- `src/session-metrics.ts` — metrics aggregation abstraction
+- `src/wake-dispatcher.ts` — wake delivery + retry abstraction
+- `src/application/*` — shared app-layer logic used by both tools and commands to keep output/kill/list behavior in sync, including merged active+persisted session listing
+  - Listing merge dedups by internal session ID (not name) to avoid name-collision loss
+
+### 6. Config & Singletons
 - `src/config.ts` — Plugin config singleton, channel resolution utilities (`resolveToolChannel`, `resolveAgentChannel`, etc.)
 - `src/singletons.ts` — Module-level mutable references for `sessionManager` and `notificationService`
 - `src/format.ts` — Formatting utilities (duration, session listing, stats, name generation)
 
 ### 6. Shared Respond Action (`src/actions/respond.ts`)
 - Centralizes all respond logic used by both `agent_respond` tool and `/agent_respond` command
-- Auto-resume for idle-killed sessions (post-turn-idle, idle-timeout)
+- Auto-resume for idle-killed sessions (`done`, idle-timeout)
 - Permission mode switch (plan → bypassPermissions on approval keywords)
 - Auto-respond counter management
 
@@ -62,7 +88,7 @@ Agent calls agent_launch → tool validates params → SessionManager.spawn()
 
 ### Waiting for Input (Wake) — Two-Tier Mechanism
 ```
-Session detects idle (end-of-turn or 15s safety-net timer)
+Session detects end-of-turn idle
   → Session emits "turnEnd" event with hadQuestion=true
   → SessionManager triggers wake event
 
@@ -81,15 +107,23 @@ Wake tier 2 — Fallback (system event, requires heartbeat):
 
 ### Idle-Kill + Auto-Resume
 ```
-Turn completes without a question → post-turn idle timer starts (5min)
-  → Timer fires → session.kill("post-turn-idle")
+Turn completes without a question → session.complete("done") immediately
   → SessionManager persists harnessSessionId
-  → Notification: "💤 Idle-killed"
+  → No 💤 notification (🔄 Turn done already sent)
 
 On next agent_respond:
-  → actions/respond.ts detects killed + idle killReason + harnessSessionId
-  → Auto-spawns new session with same harnessSessionId
+  → actions/respond.ts detects killed + "done" killReason + harnessSessionId
+  → Auto-spawns new session with same harnessSessionId silently
   → Conversation context preserved
+
+If session remains untouched for idleTimeoutMinutes (default: 15 min):
+  → session.kill("idle-timeout")
+  → Notification: "💤 Idle-killed"
+  → Also auto-resumes on next agent_respond
+
+After `sessionGcAgeMinutes` (default: 1440 / 24h):
+  → Terminal session is evicted from runtime memory
+  → Persisted metadata/output still available for resume/list/output
 ```
 
 ### Session Completion
@@ -129,7 +163,7 @@ Controls how the orchestrator handles plans when a coding agent calls `ExitPlanM
 See `openclaw.plugin.json` for full config schema. Key settings:
 - `maxSessions` (5) — concurrent session limit
 - `fallbackChannel` — default notification target
-- `idleTimeoutMinutes` (30) — auto-kill for idle multi-turn sessions
-- `postTurnIdleMinutes` (5) — auto-kill after turn completes without a question
+- `idleTimeoutMinutes` (15) — auto-kill for idle multi-turn sessions
+- `defaultHarness` (`"claude-code"`) — default agent harness (`"claude-code"` or `"codex"`)
 - `maxAutoResponds` (10) — agent auto-respond limit per session
 - `permissionMode` (plan) — default coding agent permission mode

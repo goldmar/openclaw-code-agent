@@ -7,7 +7,7 @@ An [OpenClaw](https://openclaw.com) plugin that lets AI agents orchestrate codin
 | Agent | Status | Notes |
 |-------|--------|-------|
 | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | ✅ Supported | Full support via `@anthropic-ai/claude-agent-sdk` |
-| [Codex](https://github.com/openai/codex) | 🚧 Planned | — |
+| [Codex](https://github.com/openai/codex) | ✅ Supported | Full support via `@openai/codex-sdk` thread API |
 | Other agents | 🚧 Planned | Plugin architecture supports adding new harnesses |
 
 > **vs. built-in ACP?** See [docs/ACP-COMPARISON.md](docs/ACP-COMPARISON.md) for a full breakdown.
@@ -19,14 +19,18 @@ An [OpenClaw](https://openclaw.com) plugin that lets AI agents orchestrate codin
 - **Multi-session management** — Run multiple concurrent coding agent sessions, each with a unique ID and human-readable name
 - **Plan → Execute workflow** — Sessions start in plan mode; approve the plan and the session auto-switches to full implementation mode
 - **Thread-based routing** — Notifications go to the Telegram thread/topic where the session was launched
-- **Idle-kill + auto-resume** — Sessions auto-complete after idle timeout, then seamlessly auto-resume with full conversation context on next message
-- **Smart question detection** — Only notifies when the agent actually asks a question, not on every turn end
+- **Pause + auto-resume** — Non-question turn completion pauses sessions (`done`) and next `agent_respond` auto-resumes with context intact
+- **Turn-end wake signaling** — Every turn end emits a deterministic wake signal with output preview and waiting hint
+- **Smart waiting detection** — Heuristic waiting detector reduces false-positive wake escalations
 - **Multi-turn conversations** — Send follow-up messages, interrupt, or iterate with a running agent
 - **Session resume & fork** — Resume any completed session or fork it into a new conversation branch
+- **Merged session listing** — `agent_sessions` shows active + persisted sessions in one view (deduped by internal session ID)
+- **Pending MessageStream safety** — queued follow-ups are preserved across turn completion so messages are not dropped
+- **Codex SDK streaming harness** — uses `@openai/codex-sdk` thread streaming with synthetic plan/waiting events and activity heartbeats
 - **Multi-agent support** — Route notifications to the correct agent/chat via workspace-based channel mapping
 - **Auto-respond rules** — Orchestrator auto-handles permission requests and confirmations; forwards real decisions to you
 - **Anti-cascade protection** — Orchestrator never launches new sessions from wake events
-- **Automatic cleanup** — Completed sessions garbage-collected after 1 hour; IDs persist for resume
+- **Automatic cleanup** — Completed sessions are garbage-collected after a configurable TTL (`sessionGcAgeMinutes`, default 24h); IDs persist for resume
 - **Harness-agnostic architecture** — Pluggable `AgentHarness` interface allows adding new coding agent backends
 
 ---
@@ -74,7 +78,9 @@ Replace `my-bot` with your Telegram bot account name and `123456789` with your T
 | `agent_sessions` | List all sessions with status and progress |
 | `agent_stats` | Show usage metrics (counts, durations, costs) |
 
-All tools are also available as **chat commands** (`/agent`, `/agent_respond`, `/agent_kill`, `/agent_sessions`, `/agent_resume`, `/agent_stats`).
+Core orchestration workflows use `agent_launch`, `agent_respond`, `agent_output`, `agent_sessions`, and `agent_kill`.
+
+All tools are also available as **chat commands** (`/agent`, `/agent_respond`, `/agent_kill`, `/agent_sessions`, `/agent_resume`, `/agent_stats`, `/agent_output`).
 
 ---
 
@@ -113,7 +119,7 @@ The plugin sends targeted notifications to the originating Telegram thread:
 | 🚀 | Launched | Session started with prompt summary |
 | 🔔 | Agent asks | Session is waiting for user input |
 | 📋 | Plan ready | Plan approval requested — reply "go" to approve |
-| 🔄 | Turn done | Turn completed, session still running |
+| 🔄 | Turn done | Turn completed, session paused (auto-resumable) |
 | ✅ | Completed | Completion summary with cost and duration |
 | ❌ | Failed | Error notification with hint |
 | ⛔ | Killed | Session terminated with kill reason |
@@ -161,12 +167,35 @@ Set values in `~/.openclaw/openclaw.json` under `plugins.config["openclaw-code-a
 | `maxSessions` | `number` | `5` | Maximum concurrent sessions |
 | `maxAutoResponds` | `number` | `10` | Max consecutive auto-responds before requiring user input |
 | `permissionMode` | `string` | `"plan"` | `"default"` / `"plan"` / `"acceptEdits"` / `"bypassPermissions"` |
-| `idleTimeoutMinutes` | `number` | `30` | Idle timeout before auto-kill |
-| `postTurnIdleMinutes` | `number` | `5` | Minutes after turn completes before session auto-completes |
+| `idleTimeoutMinutes` | `number` | `15` | Idle timeout before auto-kill |
+| `sessionGcAgeMinutes` | `number` | `1440` | TTL for completed/failed/killed runtime sessions before GC eviction |
 | `maxPersistedSessions` | `number` | `50` | Max completed sessions kept for resume |
 | `planApproval` | `string` | `"delegate"` | `"approve"` (orchestrator can auto-approve) / `"ask"` (always forward to user) / `"delegate"` (orchestrator decides) |
+| `defaultHarness` | `string` | `"claude-code"` | Default harness for new sessions (`"claude-code"` / `"codex"`) |
 | `defaultModel` | `string` | — | Default model for new sessions (e.g. `"sonnet"`, `"opus"`) |
 | `defaultWorkdir` | `string` | — | Default working directory for new sessions |
+
+### Permission Mode Mapping By Harness
+
+Permission modes are shared at the plugin API, but each harness maps them differently:
+
+- **Claude Code harness**
+  - `default`, `plan`, `acceptEdits`, `bypassPermissions` are passed through the SDK
+- **Codex harness**
+  - Always runs with SDK thread options `sandboxMode: "danger-full-access"` and `approvalPolicy: "never"`
+  - `plan` / `acceptEdits` remain behavioral orchestration constraints (planning/approval flow), not sandbox restrictions
+
+### `notify_on_turn_end` (`notifyOnTurnEnd`)
+
+`agent_launch` accepts `notify_on_turn_end` (default `true`). When `false`, turn-end wake notifications are suppressed for that session.  
+Internal config field: `notifyOnTurnEnd`.
+
+### Session Lifecycle + GC
+
+- Active sessions live in runtime memory (`SessionManager.sessions`)
+- Terminal sessions are persisted with metadata/output stubs for resume and listing
+- Runtime records are evicted after `sessionGcAgeMinutes` (default 1440 / 24h)
+- Eviction means **removed from runtime cache**, not deleted permanently; persisted session records remain resumable
 
 ### Example
 
@@ -249,16 +278,16 @@ For a detailed look at how the plugin works internally, see the [docs/](docs/) d
 
 ```bash
 # Install dependencies
-npm install
+pnpm install
 
 # Build (esbuild → dist/index.js)
-npm run build
+pnpm run build
 
 # Type-check
-npx tsc --noEmit
+pnpm run typecheck
 
 # Run tests
-npm test
+pnpm test
 ```
 
 ### Project Structure
@@ -271,6 +300,7 @@ openclaw-code-agent/
 │   ├── harness/                # Agent harness abstraction layer
 │   │   ├── types.ts            # AgentHarness interface & message types
 │   │   ├── claude-code.ts      # Claude Code harness (SDK wrapper)
+│   │   ├── codex.ts            # Codex harness (@openai/codex-sdk thread stream wrapper)
 │   │   └── index.ts            # Harness registry
 │   ├── types.ts                # TypeScript interfaces
 │   ├── config.ts               # Config singleton + channel resolution
@@ -278,10 +308,14 @@ openclaw-code-agent/
 │   ├── singletons.ts           # Module-level singleton refs
 │   ├── session.ts              # Session class (state machine, timers, harness)
 │   ├── session-manager.ts      # Session pool management + lifecycle
+│   ├── session-store.ts        # Persisted session/index storage abstraction
+│   ├── session-metrics.ts      # Metrics recorder abstraction
+│   ├── wake-dispatcher.ts      # Wake delivery + retry abstraction
 │   ├── notifications.ts        # Notification service
 │   ├── actions/respond.ts      # Shared respond logic (tool + command)
+│   ├── application/            # Shared app-layer logic used by tools + commands
 │   ├── tools/                  # Tool implementations (6 tools)
-│   └── commands/               # Chat command implementations (6 commands)
+│   └── commands/               # Chat command implementations (7 commands)
 ├── tests/                      # Unit tests (node:test + tsx)
 ├── skills/                     # Orchestration skill definitions
 └── docs/                       # Architecture & reference docs

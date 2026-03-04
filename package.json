@@ -1,10 +1,10 @@
 {
   "name": "openclaw-code-agent",
   "version": "2.0.0",
-  "type": "commonjs",
+  "type": "module",
   "main": "dist/index.js",
   "scripts": {
-    "build": "esbuild index.ts --bundle --platform=node --target=node18 --format=cjs --outfile=dist/index.js --minify --external:openclaw --external:openclaw/plugin-sdk --external:@anthropic-ai/claude-agent-sdk",
+    "build": "esbuild index.ts --bundle --platform=node --target=node18 --format=esm --outfile=dist/index.js --minify --external:openclaw --external:openclaw/plugin-sdk --external:@anthropic-ai/claude-agent-sdk --external:@openai/codex-sdk",
     "test": "tsx --test 'tests/**/*.test.ts'",
     "typecheck": "tsc --noEmit"
   },
@@ -21,7 +21,8 @@
     "LICENSE"
   ],
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "0.2.37"
+    "@anthropic-ai/claude-agent-sdk": "^0.2.37",
+    "@openai/codex-sdk": "^0.107.0"
   },
   "devDependencies": {
     "@sinclair/typebox": "^0.34.48",

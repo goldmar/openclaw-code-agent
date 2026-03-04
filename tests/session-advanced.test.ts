@@ -4,6 +4,8 @@ import { Session } from "../src/session";
 import { registerHarness } from "../src/harness/index";
 import { createFakeHarness, makeSessionConfig, tick } from "./helpers";
 import type { FakeHarness } from "./helpers";
+import type { AgentHarness, HarnessLaunchOptions, HarnessSession } from "../src/harness/types";
+import { setPluginConfig } from "../src/config";
 
 // ---------------------------------------------------------------------------
 // Register fake harness once (before any tests)
@@ -12,7 +14,7 @@ import type { FakeHarness } from "./helpers";
 let fakeHarness: FakeHarness;
 
 before(() => {
-  fakeHarness = createFakeHarness("test-harness");
+  fakeHarness = createFakeHarness("test-harness", { initialPromptConsumptionPaused: true });
   registerHarness(fakeHarness);
 });
 
@@ -21,6 +23,7 @@ before(() => {
  * The caller MUST call session.kill() when done to clean up timers.
  */
 async function startSession(config: Partial<import("../src/types").SessionConfig> = {}): Promise<Session> {
+  fakeHarness.setPromptConsumptionPaused(true);
   const session = new Session(makeSessionConfig({ harness: "test-harness", ...config }), "test");
   await session.start();
   fakeHarness.pushMessage({ type: "init", session_id: `sess-${session.id}` });
@@ -130,10 +133,13 @@ describe("Session consumeMessages — result message (single-turn)", () => {
 });
 
 describe("Session consumeMessages — result message (multi-turn)", () => {
-  it("emits turnEnd with hadQuestion=false when no question was asked (non-plan mode)", async () => {
+  it("completes with done when no pending messages exist after successful turn", async () => {
     const session = await startSession({ multiTurn: true, permissionMode: "bypassPermissions" });
     const turnEndEvents: boolean[] = [];
     session.on("turnEnd", (_s: any, hadQuestion: boolean) => { turnEndEvents.push(hadQuestion); });
+
+    fakeHarness.setPromptConsumptionPaused(false);
+    await tick(50);
 
     fakeHarness.pushMessage({ type: "text", text: "did something" });
     await tick(50);
@@ -144,8 +150,80 @@ describe("Session consumeMessages — result message (multi-turn)", () => {
     await tick(50);
 
     assert.ok(turnEndEvents.includes(false), "turnEnd should fire with hadQuestion=false");
-    assert.equal(session.status, "running", "session should stay running in multi-turn mode");
+    assert.equal(session.status, "completed", "session should complete with done reason after turn completes without needing input");
+    assert.equal(session.killReason, "done");
+  });
+
+  it("stays running when a follow-up sendMessage() is queued during an active turn", async () => {
+    const session = await startSession({ multiTurn: true, permissionMode: "bypassPermissions" });
+    const turnEndEvents: boolean[] = [];
+    session.on("turnEnd", (_s: any, hadQuestion: boolean) => { turnEndEvents.push(hadQuestion); });
+
+    // Pause prompt consumption immediately so queued follow-ups stay pending.
+    fakeHarness.setPromptConsumptionPaused(true);
+    await session.sendMessage("follow-up while active");
+
+    fakeHarness.pushMessage({
+      type: "result",
+      data: { success: true, duration_ms: 100, total_cost_usd: 0.01, num_turns: 1, session_id: session.harnessSessionId! },
+    });
+    await tick(50);
+
+    assert.equal(session.status, "running", "session should remain running while queued messages are pending");
+    assert.equal(session.killReason, "unknown");
+    assert.equal(turnEndEvents.includes(false), false, "turnEnd(false) should not fire while pending queue exists");
+
     session.kill("user"); // cleanup
+  });
+
+  it("fires done-complete only after all queued follow-up messages are consumed", async () => {
+    const session = await startSession({ multiTurn: true, permissionMode: "bypassPermissions" });
+
+    fakeHarness.setPromptConsumptionPaused(true);
+    await session.sendMessage("queued-1");
+    await session.sendMessage("queued-2");
+    await session.sendMessage("queued-3");
+
+    fakeHarness.pushMessage({
+      type: "result",
+      data: { success: true, duration_ms: 100, total_cost_usd: 0.01, num_turns: 1, session_id: session.harnessSessionId! },
+    });
+    await tick(50);
+    assert.equal(session.status, "running", "session should not kill while queued follow-ups remain");
+
+    fakeHarness.setPromptConsumptionPaused(false);
+    await tick(50);
+
+    fakeHarness.pushMessage({
+      type: "result",
+      data: { success: true, duration_ms: 100, total_cost_usd: 0.01, num_turns: 2, session_id: session.harnessSessionId! },
+    });
+    await tick(50);
+
+    assert.equal(session.status, "completed", "session should complete with done only after queued messages are drained");
+    assert.equal(session.killReason, "done");
+  });
+
+  it("emits turnEnd(true) for user-question turns even when follow-up messages are queued", async () => {
+    const session = await startSession({ multiTurn: true, permissionMode: "bypassPermissions" });
+    const turnEndEvents: boolean[] = [];
+    session.on("turnEnd", (_s: any, hadQuestion: boolean) => { turnEndEvents.push(hadQuestion); });
+
+    fakeHarness.setPromptConsumptionPaused(true);
+    await session.sendMessage("queued-follow-up");
+
+    fakeHarness.pushMessage({ type: "tool_use", name: "AskUserQuestion", input: { question: "Proceed?" } });
+    await tick(20);
+    fakeHarness.pushMessage({
+      type: "result",
+      data: { success: true, duration_ms: 100, total_cost_usd: 0.01, num_turns: 1, session_id: session.harnessSessionId! },
+    });
+    await tick(50);
+
+    assert.equal(session.status, "running", "session should stay running with queued follow-up");
+    assert.ok(turnEndEvents.includes(true), "question turns should still signal waiting-for-input");
+
+    session.kill("user");
   });
 
   it("emits turnEnd with hadQuestion=true in plan mode (plan approval fallback)", async () => {
@@ -177,6 +255,23 @@ describe("Session consumeMessages — result message (multi-turn)", () => {
 
     assert.equal(session.costUsd, 1.23);
     // Completed — no kill needed
+  });
+
+  it("keeps session alive when heartbeat activity messages arrive during idle gaps", async () => {
+    setPluginConfig({ idleTimeoutMinutes: 0.001, sessionGcAgeMinutes: 1440 });
+    const session = await startSession({ multiTurn: true, permissionMode: "bypassPermissions" });
+
+    for (let i = 0; i < 4; i++) {
+      fakeHarness.pushMessage({ type: "activity" });
+      await tick(30);
+    }
+
+    assert.equal(session.status, "running", "heartbeat should prevent idle timeout");
+    await tick(90);
+    assert.equal(session.status, "killed", "without heartbeat, idle timeout should trigger");
+    assert.equal(session.killReason, "idle-timeout");
+
+    setPluginConfig({ idleTimeoutMinutes: 15, sessionGcAgeMinutes: 1440 });
   });
 });
 
@@ -346,6 +441,45 @@ describe("Session.kill() teardown", () => {
     const session = await startSession();
     session.kill("user");
     assert.equal((session as any).timers.size, 0, "all timers should be cleared after teardown");
+  });
+
+  it("does not fail terminal transition when harness interrupt rejects", async () => {
+    const rejectingHarness: AgentHarness = {
+      name: "test-harness-reject-interrupt",
+      supportedPermissionModes: ["default", "plan", "acceptEdits", "bypassPermissions"],
+      questionToolNames: [],
+      planApprovalToolNames: [],
+      launch(_options: HarnessLaunchOptions): HarnessSession {
+        async function* messages() {
+          yield { type: "init", session_id: "reject-int-1" } as const;
+        }
+        return {
+          messages: messages(),
+          async interrupt(): Promise<void> {
+            throw new Error("interrupt failed");
+          },
+        };
+      },
+      buildUserMessage(text: string, sessionId: string): unknown {
+        return { type: "user", text, session_id: sessionId };
+      },
+    };
+    registerHarness(rejectingHarness);
+
+    const session = new Session(makeSessionConfig({ harness: rejectingHarness.name }), "reject-int-session");
+    await session.start();
+    await tick(20);
+
+    const warn = console.warn;
+    try {
+      console.warn = () => {};
+      session.kill("user");
+      await tick(20);
+    } finally {
+      console.warn = warn;
+    }
+    assert.equal(session.status, "killed");
+    assert.equal(session.killReason, "user");
   });
 });
 

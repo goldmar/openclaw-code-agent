@@ -9,8 +9,11 @@ importers:
   .:
     dependencies:
       '@anthropic-ai/claude-agent-sdk':
-        specifier: 0.2.37
+        specifier: ^0.2.37
         version: 0.2.37(zod@4.3.6)
+      '@openai/codex-sdk':
+        specifier: ^0.107.0
+        version: 0.107.0
     devDependencies:
       '@sinclair/typebox':
         specifier: ^0.34.48
@@ -288,6 +291,51 @@ packages:
     cpu: [x64]
     os: [win32]
 
+  '@openai/codex-sdk@0.107.0':
+    resolution: {integrity: sha512-/BAiTahJ6u8FBxHCgqtfPLamWNQ9dyOqhWjR8Vtre/uxSlNeCLdlJ2ufXOBfvIs0McdQHvsFDD583Q5HtuDa5Q==}
+    engines: {node: '>=18'}
+
+  '@openai/codex@0.107.0':
+    resolution: {integrity: sha512-bAHmp4I3YNEqeR5U+LA5yViecDTlLVAJ+EGo8h647f0DClEWxFtyKXzyBJQ/kcL1G3bzstOTcuVpTdjhvJoe6g==}
+    engines: {node: '>=16'}
+    hasBin: true
+
+  '@openai/codex@0.107.0-darwin-arm64':
+    resolution: {integrity: sha512-g8u0nsns9JaHNYehVuw1eSL/83BSuBsmdOo2rrEU0D1rKI/QoIQSv6S6offZnQFerCHeqj0LabxYzqUTBzEh0g==}
+    engines: {node: '>=16'}
+    cpu: [arm64]
+    os: [darwin]
+
+  '@openai/codex@0.107.0-darwin-x64':
+    resolution: {integrity: sha512-uDCfszYS/9RL6fMBqnLyFloBCa/Lgvqjt/P2izrByRANlHZG4Nwn1Sayn7v2TugvOJ5fBPZMRcaloqfjowmdEQ==}
+    engines: {node: '>=16'}
+    cpu: [x64]
+    os: [darwin]
+
+  '@openai/codex@0.107.0-linux-arm64':
+    resolution: {integrity: sha512-iAPYuXfACBSjVf4DPkN8YFawFGXPORzm7hDJhkzqqQvXRSyeZDaVkdT81FhaNIjm1rcaMnMDGJn2M+tOwmGy0w==}
+    engines: {node: '>=16'}
+    cpu: [arm64]
+    os: [linux]
+
+  '@openai/codex@0.107.0-linux-x64':
+    resolution: {integrity: sha512-h9SG15CrNihjHwSiYBU3dxMWH2r9fQIBPxFIpWnSUnjE5/YaXusbJQEvC+5u+g6CzUXX40fFsm3gVWV9uzX7Og==}
+    engines: {node: '>=16'}
+    cpu: [x64]
+    os: [linux]
+
+  '@openai/codex@0.107.0-win32-arm64':
+    resolution: {integrity: sha512-LHGQA2h/L72NRFcdIjKN/+V2nFXfuHDSQcI1Qdt9/7fUdcpb/pqN1n7U5rujccuTCf0ihk4XhGywAwiwPsjmWA==}
+    engines: {node: '>=16'}
+    cpu: [arm64]
+    os: [win32]
+
+  '@openai/codex@0.107.0-win32-x64':
+    resolution: {integrity: sha512-Iq1UOxj2El/syo8abN0/7Z6ICIVTW7tY9DJbdx01wjQYbi6Ecb8e66iTNFq65Mingq7vG7QWvYGyLycVztHFuw==}
+    engines: {node: '>=16'}
+    cpu: [x64]
+    os: [win32]
+
   '@sinclair/typebox@0.34.48':
     resolution: {integrity: sha512-kKJTNuK3AQOrgjjotVxMrCn1sUJwM76wMszfq1kdU4uYVJjvEWuFQ6HgvLt4Xz3fSmZlTOxJ/Ie13KnIcWQXFA==}
 
@@ -481,6 +529,37 @@ snapshots:
     optional: true
 
   '@img/sharp-win32-x64@0.33.5':
+    optional: true
+
+  '@openai/codex-sdk@0.107.0':
+    dependencies:
+      '@openai/codex': 0.107.0
+
+  '@openai/codex@0.107.0':
+    optionalDependencies:
+      '@openai/codex-darwin-arm64': '@openai/codex@0.107.0-darwin-arm64'
+      '@openai/codex-darwin-x64': '@openai/codex@0.107.0-darwin-x64'
+      '@openai/codex-linux-arm64': '@openai/codex@0.107.0-linux-arm64'
+      '@openai/codex-linux-x64': '@openai/codex@0.107.0-linux-x64'
+      '@openai/codex-win32-arm64': '@openai/codex@0.107.0-win32-arm64'
+      '@openai/codex-win32-x64': '@openai/codex@0.107.0-win32-x64'
+
+  '@openai/codex@0.107.0-darwin-arm64':
+    optional: true
+
+  '@openai/codex@0.107.0-darwin-x64':
+    optional: true
+
+  '@openai/codex@0.107.0-linux-arm64':
+    optional: true
+
+  '@openai/codex@0.107.0-linux-x64':
+    optional: true
+
+  '@openai/codex@0.107.0-win32-arm64':
+    optional: true
+
+  '@openai/codex@0.107.0-win32-x64':
     optional: true
 
   '@sinclair/typebox@0.34.48': {}

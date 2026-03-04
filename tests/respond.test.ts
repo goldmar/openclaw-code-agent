@@ -38,11 +38,11 @@ describe("executeRespond — session not found", () => {
 });
 
 describe("executeRespond — auto-resume", () => {
-  it("auto-resumes a killed session with post-turn-idle reason", async () => {
+  it("auto-resumes a killed session with done reason", async () => {
     let spawnCalled = false;
     const session = createStubSession({
       status: "killed",
-      killReason: "post-turn-idle",
+      killReason: "done",
       harnessSessionId: "harness-123",
       name: "old-session",
     });
@@ -58,6 +58,39 @@ describe("executeRespond — auto-resume", () => {
     assert.ok(spawnCalled, "spawn should have been called");
     assert.ok(result.text.includes("Auto-resumed"));
     assert.ok(result.text.includes("idle-kill"));
+  });
+
+  it("preserves harness and origin routing metadata during auto-resume", async () => {
+    const session = createStubSession({
+      status: "completed",
+      killReason: "done",
+      harnessSessionId: "harness-meta",
+      harnessName: "codex",
+      notifyOnTurnEnd: false,
+      originChannel: "telegram|bot|123",
+      originThreadId: 42,
+      originAgentId: "agent-main",
+      originSessionKey: "agent:main:telegram:group:123:topic:42",
+      currentPermissionMode: "acceptEdits",
+    });
+    const sm = createStubSessionManager({ "test-id": session });
+
+    let capturedConfig: any;
+    sm.spawn = (config: any) => {
+      capturedConfig = config;
+      return createStubSession({ name: "resumed", id: "new-id" });
+    };
+
+    const result = await executeRespond(sm, { session: "test-id", message: "continue" });
+    assert.ok(result.text.includes("Auto-resumed"));
+    assert.ok(capturedConfig, "spawn config should be captured");
+    assert.equal(capturedConfig.harness, "codex");
+    assert.equal(capturedConfig.notifyOnTurnEnd, false);
+    assert.equal(capturedConfig.originSessionKey, "agent:main:telegram:group:123:topic:42");
+    assert.equal(capturedConfig.originChannel, "telegram|bot|123");
+    assert.equal(capturedConfig.originThreadId, 42);
+    assert.equal(capturedConfig.originAgentId, "agent-main");
+    assert.equal(capturedConfig.permissionMode, "acceptEdits");
   });
 
   it("auto-resumes a completed session with done reason", async () => {
@@ -101,7 +134,7 @@ describe("executeRespond — auto-resume", () => {
   it("does NOT auto-resume when harnessSessionId is missing", async () => {
     const session = createStubSession({
       status: "killed",
-      killReason: "post-turn-idle",
+      killReason: "done",
       harnessSessionId: undefined,
     });
     const sm = createStubSessionManager({ "test-id": session });
@@ -113,7 +146,7 @@ describe("executeRespond — auto-resume", () => {
   it("returns error when auto-resume spawn throws", async () => {
     const session = createStubSession({
       status: "killed",
-      killReason: "post-turn-idle",
+      killReason: "done",
       harnessSessionId: "harness-err",
     });
     const sm = createStubSessionManager({ "test-id": session });

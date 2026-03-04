@@ -16,11 +16,17 @@ export interface FakeHarness extends AgentHarness {
   lastSetPermissionMode: string | undefined;
   lastStreamInput: AsyncIterable<any> | undefined;
   interruptCalled: boolean;
+  setPromptConsumptionPaused: (paused: boolean) => void;
 }
 
-export function createFakeHarness(name: string = "fake-harness"): FakeHarness {
+export function createFakeHarness(
+  name: string = "fake-harness",
+  options?: { initialPromptConsumptionPaused?: boolean },
+): FakeHarness {
   let pushMessage: ((msg: HarnessMessage) => void) = () => {};
   let endMessages: (() => void) = () => {};
+  let promptConsumptionPaused = options?.initialPromptConsumptionPaused ?? false;
+  let resumePromptConsumption: (() => void) | null = null;
 
   const harness: FakeHarness = {
     name,
@@ -31,6 +37,13 @@ export function createFakeHarness(name: string = "fake-harness"): FakeHarness {
     lastSetPermissionMode: undefined,
     lastStreamInput: undefined,
     interruptCalled: false,
+    setPromptConsumptionPaused(paused: boolean) {
+      promptConsumptionPaused = paused;
+      if (!paused && resumePromptConsumption) {
+        resumePromptConsumption();
+        resumePromptConsumption = null;
+      }
+    },
 
     pushMessage(msg: HarnessMessage) { pushMessage(msg); },
     endMessages() { endMessages(); },
@@ -44,6 +57,23 @@ export function createFakeHarness(name: string = "fake-harness"): FakeHarness {
 
       pushMessage = (msg) => { queue.push(msg); if (resolve) { resolve(); resolve = null; } };
       endMessages = () => { done = true; if (resolve) { resolve(); resolve = null; } };
+
+      // Consume prompt stream in background so MessageStream queue behavior in tests
+      // matches real harnesses; tests can pause consumption to create pending messages.
+      if (options.prompt && typeof options.prompt !== "string") {
+        (async () => {
+          const it = options.prompt[Symbol.asyncIterator]();
+          while (true) {
+            while (promptConsumptionPaused) {
+              await new Promise<void>((r) => { resumePromptConsumption = r; });
+            }
+            const { done: promptDone } = await it.next();
+            if (promptDone) break;
+          }
+        })().catch(() => {
+          // Best-effort only for test scaffolding.
+        });
+      }
 
       const messages: AsyncIterable<HarnessMessage> = {
         [Symbol.asyncIterator]() {
