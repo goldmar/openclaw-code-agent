@@ -3,6 +3,15 @@ import { sessionManager } from "../singletons";
 import { executeRespond } from "../actions/respond";
 import type { OpenClawPluginToolContext } from "../types";
 
+interface AgentRespondParams {
+  session: string;
+  message: string;
+  interrupt?: boolean;
+  userInitiated?: boolean;
+  approve?: boolean;
+}
+
+/** Create `agent_respond` tool definition. */
 export function makeAgentRespondTool(_ctx?: OpenClawPluginToolContext) {
   return {
     name: "agent_respond",
@@ -21,7 +30,7 @@ export function makeAgentRespondTool(_ctx?: OpenClawPluginToolContext) {
         Type.Boolean({ description: "Set to true to approve a pending plan and switch the session from plan mode to bypassPermissions. Only works when the session has a pending plan approval (after ExitPlanMode / set_permission_mode). To request changes instead, omit this flag — the message will be sent as revision feedback and the agent will revise the plan." }),
       ),
     }),
-    async execute(_id: string, params: any) {
+    async execute(_id: string, params: AgentRespondParams) {
       if (!sessionManager) {
         return { content: [{ type: "text", text: "Error: SessionManager not initialized. The code-agent service must be running." }] };
       }

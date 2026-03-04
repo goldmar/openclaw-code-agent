@@ -1,9 +1,31 @@
 import { Type } from "@sinclair/typebox";
 import { sessionManager } from "../singletons";
 import { resolveAgentChannel } from "../config";
-import { formatSessionListing } from "../format";
 import type { OpenClawPluginToolContext } from "../types";
+import { getSessionsListingText } from "../application/session-view";
 
+type SessionsFilter = "all" | "running" | "completed" | "failed" | "killed";
+
+interface AgentSessionsParams {
+  status?: SessionsFilter;
+}
+
+function parseStatus(params: unknown): SessionsFilter {
+  if (!params || typeof params !== "object") return "all";
+  const status = (params as Record<string, unknown>).status;
+  switch (status) {
+    case "running":
+    case "completed":
+    case "failed":
+    case "killed":
+    case "all":
+      return status;
+    default:
+      return "all";
+  }
+}
+
+/** Register the `agent_sessions` tool factory. */
 export function makeAgentSessionsTool(ctx?: OpenClawPluginToolContext) {
   return {
     name: "agent_sessions",
@@ -16,27 +38,15 @@ export function makeAgentSessionsTool(ctx?: OpenClawPluginToolContext) {
         ),
       ),
     }),
-    async execute(_id: string, params: any) {
+    async execute(_id: string, params: AgentSessionsParams | unknown) {
       if (!sessionManager) {
         return { content: [{ type: "text", text: "Error: SessionManager not initialized. The code-agent service must be running." }] };
       }
 
-      const filter = params.status || "all";
-      let sessions = sessionManager.list(filter);
-
-      // Filter by agent channel if context is available
-      if (ctx?.workspaceDir) {
-        const agentChannel = resolveAgentChannel(ctx.workspaceDir);
-        if (agentChannel) {
-          sessions = sessions.filter((s) => s.originChannel === agentChannel);
-        }
-      }
-
-      if (sessions.length === 0) {
-        return { content: [{ type: "text", text: "No sessions found." }] };
-      }
-
-      return { content: [{ type: "text", text: sessions.map(formatSessionListing).join("\n\n") }] };
+      const filter = parseStatus(params);
+      const originChannel = ctx?.workspaceDir ? resolveAgentChannel(ctx.workspaceDir) : undefined;
+      const text = getSessionsListingText(sessionManager, filter, originChannel);
+      return { content: [{ type: "text", text }] };
     },
   };
 }

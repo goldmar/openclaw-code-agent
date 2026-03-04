@@ -1,7 +1,18 @@
 import { sessionManager } from "../singletons";
-import { formatSessionListing } from "../format";
+import { getSessionsListingText } from "../application/session-view";
 
-export function registerAgentSessionsCommand(api: any): void {
+interface CommandApi {
+  registerCommand(config: {
+    name: string;
+    description: string;
+    acceptsArgs: boolean;
+    requireAuth: boolean;
+    handler: () => { text: string };
+  }): void;
+}
+
+/** Register `/agent_sessions` chat command. */
+export function registerAgentSessionsCommand(api: CommandApi): void {
   api.registerCommand({
     name: "agent_sessions",
     description: "List all coding agent sessions",
@@ -12,9 +23,7 @@ export function registerAgentSessionsCommand(api: any): void {
         return { text: "Error: SessionManager not initialized. The code-agent service must be running." };
       }
 
-      const sessions = sessionManager.list("all");
-      if (sessions.length === 0) return { text: "No sessions found." };
-      return { text: sessions.map(formatSessionListing).join("\n\n") };
+      return { text: getSessionsListingText(sessionManager, "all") };
     },
   });
 }

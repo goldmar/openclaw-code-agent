@@ -1,13 +1,38 @@
 import { sessionManager } from "../singletons";
 import { pluginConfig, resolveOriginChannel, resolveOriginThreadId } from "../config";
 
-export function registerAgentCommand(api: any): void {
+interface AgentCommandContext {
+  args?: string;
+  id?: string | number;
+  channel?: string;
+  chatId?: string | number;
+  senderId?: string | number;
+  channelId?: string;
+  messageThreadId?: string | number;
+}
+
+interface CommandApi {
+  registerCommand(config: {
+    name: string;
+    description: string;
+    acceptsArgs: boolean;
+    requireAuth: boolean;
+    handler: (ctx: AgentCommandContext) => { text: string };
+  }): void;
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/** Register `/agent` chat command. */
+export function registerAgentCommand(api: CommandApi): void {
   api.registerCommand({
     name: "agent",
     description: "Launch a coding agent session. Usage: /agent [--name <name>] <prompt>",
     acceptsArgs: true,
     requireAuth: true,
-    handler: (ctx: any) => {
+    handler: (ctx: AgentCommandContext) => {
       if (!sessionManager) {
         return { text: "Error: SessionManager not initialized. The code-agent service must be running." };
       }
@@ -45,9 +70,10 @@ export function registerAgentCommand(api: any): void {
             `  Status: ${session.status}`,
           ].join("\n"),
         };
-      } catch (err: any) {
-        const hint = err.message.includes("Max sessions") ? "" : "\n\nUse /agent_sessions to see active sessions.";
-        return { text: `Error launching session: ${err.message}${hint}` };
+      } catch (err: unknown) {
+        const message = errorMessage(err);
+        const hint = message.includes("Max sessions") ? "" : "\n\nUse /agent_sessions to see active sessions.";
+        return { text: `Error launching session: ${message}${hint}` };
       }
     },
   });

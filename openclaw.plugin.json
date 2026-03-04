@@ -21,13 +21,8 @@
       },
       "idleTimeoutMinutes": {
         "type": "number",
-        "default": 30,
+        "default": 15,
         "description": "Idle timeout in minutes for multi-turn sessions before auto-kill"
-      },
-      "postTurnIdleMinutes": {
-        "type": "number",
-        "default": 5,
-        "description": "Minutes to wait after a turn completes (without a question) before auto-killing the session"
       },
       "maxPersistedSessions": {
         "type": "number",
@@ -66,7 +61,14 @@
         "default": "delegate",
         "enum": ["approve", "ask", "delegate"],
         "description": "Plan approval behavior. 'delegate' (default): orchestrator autonomously decides whether to approve low-risk plans or escalate to the user. 'approve': orchestrator can auto-approve after verification. 'ask': orchestrator always forwards plans to the user for approval."
+      },
+      "defaultHarness": {
+        "type": "string",
+        "default": "claude-code",
+        "enum": ["claude-code", "codex"],
+        "description": "Default agent harness when agent_launch omits the harness parameter."
       }
     }
-  }
+  },
+  "skills": ["./skills"]
 }

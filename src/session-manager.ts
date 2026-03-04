@@ -1,49 +1,53 @@
 import { execFile } from "child_process";
-import { writeFileSync, readFileSync, readdirSync, statSync, unlinkSync } from "fs";
-import { homedir, tmpdir } from "os";
-import { join, resolve } from "path";
+import { resolve } from "path";
 import { Session } from "./session";
 import { pluginConfig } from "./config";
 import { formatDuration, generateSessionName, lastCompleteLines, truncateText } from "./format";
 import type { NotificationService } from "./notifications";
 import type { SessionConfig, SessionStatus, SessionMetrics, PersistedSessionInfo, KillReason } from "./types";
+import { SessionStore } from "./session-store";
+import { SessionMetricsRecorder } from "./session-metrics";
+import { WakeDispatcher } from "./wake-dispatcher";
+import { looksLikeWaitingForUser } from "./waiting-detector";
 
 const LOBSTER_WORKFLOW_PATH = resolve(__dirname, "..", "workflows", "plan-approval.lobster");
 
-const CLEANUP_MAX_AGE_MS = 60 * 60 * 1000; // 1 hour
 const TERMINAL_STATUSES = new Set<SessionStatus>(["completed", "failed", "killed"]);
 const KILLABLE_STATUSES = new Set<SessionStatus>(["starting", "running"]);
 const WAITING_EVENT_DEBOUNCE_MS = 5_000;
 const WAKE_CLI_TIMEOUT_MS = 30_000;
-const WAKE_RETRY_DELAY_MS = 5_000;
 
 export class SessionManager {
   private sessions: Map<string, Session> = new Map();
   maxSessions: number;
   maxPersistedSessions: number;
-  notifications: NotificationService | null = null;
+  private _notifications: NotificationService | null = null;
 
   private lastWaitingEventTimestamps: Map<string, number> = new Map();
-  private pendingRetryTimers: Set<ReturnType<typeof setTimeout>> = new Set();
-
-  // Single-index persistence: keyed by harnessSessionId
-  private persisted: Map<string, PersistedSessionInfo> = new Map();
-  private idIndex: Map<string, string> = new Map();     // sessionId → harnessSessionId
-  private nameIndex: Map<string, string> = new Map();   // name → harnessSessionId
-
-  private _metrics: SessionMetrics = {
-    totalCostUsd: 0,
-    costPerDay: new Map(),
-    sessionsByStatus: { completed: 0, failed: 0, killed: 0 },
-    totalLaunched: 0,
-    totalDurationMs: 0,
-    sessionsWithDuration: 0,
-    mostExpensive: null,
-  };
+  private readonly store: SessionStore;
+  private readonly metrics: SessionMetricsRecorder;
+  private readonly wakeDispatcher: WakeDispatcher;
 
   constructor(maxSessions: number = 5, maxPersistedSessions: number = 50) {
     this.maxSessions = maxSessions;
     this.maxPersistedSessions = maxPersistedSessions;
+    this.store = new SessionStore();
+    this.metrics = new SessionMetricsRecorder();
+    this.wakeDispatcher = new WakeDispatcher();
+  }
+
+  // Back-compat for tests and internal inspection.
+  get persisted(): Map<string, PersistedSessionInfo> { return this.store.persisted; }
+  get idIndex(): Map<string, string> { return this.store.idIndex; }
+  get nameIndex(): Map<string, string> { return this.store.nameIndex; }
+
+  set notifications(value: NotificationService | null) {
+    this._notifications = value;
+    this.wakeDispatcher.setNotifications(value);
+  }
+
+  get notifications(): NotificationService | null {
+    return this._notifications;
   }
 
   private uniqueName(baseName: string): string {
@@ -73,7 +77,7 @@ export class SessionManager {
     }
     const session = new Session(config, name);
     this.sessions.set(session.id, session);
-    this._metrics.totalLaunched++;
+    this.metrics.incrementLaunched();
 
     if (this.notifications) {
       this.notifications.attachToSession(session);
@@ -81,17 +85,18 @@ export class SessionManager {
 
     // Wire event handlers for lifecycle management
     session.on("statusChange", (_s: Session, newStatus: SessionStatus) => {
-      if (TERMINAL_STATUSES.has(newStatus)) {
+      if (newStatus === "running" && session.harnessSessionId) {
+        this.store.markRunning(session);
+      } else if (TERMINAL_STATUSES.has(newStatus)) {
         this.onSessionTerminal(session);
       }
     });
 
+    // `turnEnd` is the canonical signal for "turn is over" in multi-turn mode.
+    // We wake the orchestrator even for non-question turns so it can inspect
+    // output and decide whether to continue autonomous workflows.
     session.on("turnEnd", (_s: Session, hadQuestion: boolean) => {
-      if (hadQuestion) {
-        this.triggerWaitingForInputEvent(session);
-      } else {
-        this.triggerTurnCompleteEvent(session);
-      }
+      this.onTurnEnd(session, hadQuestion);
     });
 
     session.start();
@@ -107,207 +112,77 @@ export class SessionManager {
 
   private onSessionTerminal(session: Session): void {
     this.persistSession(session);
+    this.lastWaitingEventTimestamps.delete(session.id);
+
+    // Multi-turn sessions that naturally end after a successful no-input turn
+    // use reason "done". Turn-complete wake already fired for that turn.
+    if (session.killReason === "done") return;
 
     if (session.status === "completed") {
       this.triggerAgentEvent(session);
-    } else {
-      // Failed or killed — informational Telegram notification
-      const costStr = `$${(session.costUsd ?? 0).toFixed(2)}`;
-      const duration = formatDuration(session.duration);
-
-      let statusLabel: string;
-      let errorSummary: string | undefined;
-
-      if (session.status === "failed") {
-        statusLabel = "Failed";
-        const rawError = session.error
-          || (session.result?.is_error && session.result.result)
-          || (session.result?.result)
-          || this.extractLastOutputLine(session)
-          || `Session failed with no error details (session=${session.id}, subtype=${session.result?.subtype ?? "none"}, turns=${session.result?.num_turns ?? 0})`;
-        errorSummary = truncateText(rawError, 200);
-      } else {
-        const reasonMap: Record<string, string> = {
-          "user": "by agent/user",
-          "idle-timeout": `idle ${pluginConfig.idleTimeoutMinutes ?? 30}min`,
-          "unknown": "",
-        };
-        const killDetail = reasonMap[session.killReason] || "";
-        statusLabel = `Killed${killDetail ? ` (${killDetail})` : ""}`;
-      }
-
-      const icon = session.status === "failed" ? "❌" : "⛔";
-      const notificationText = [
-        `${icon} [${session.name}] ${statusLabel} | ${costStr} | ${duration}`,
-        ...(errorSummary ? [`   ⚠️ ${errorSummary}`] : []),
-      ].join("\n");
-
-      this.deliverToTelegram(session, notificationText);
+      return;
     }
 
-    this.lastWaitingEventTimestamps.delete(session.id);
+    // Failed or killed — informational Telegram notification
+    const costStr = `$${(session.costUsd ?? 0).toFixed(2)}`;
+    const duration = formatDuration(session.duration);
+
+    let statusLabel: string;
+    let errorSummary: string | undefined;
+
+    if (session.status === "failed") {
+      statusLabel = "Failed";
+      const rawError = session.error
+        || (session.result?.is_error && session.result.result)
+        || (session.result?.result)
+        || this.extractLastOutputLine(session)
+        || `Session failed with no error details (session=${session.id}, subtype=${session.result?.subtype ?? "none"}, turns=${session.result?.num_turns ?? 0})`;
+      errorSummary = truncateText(rawError, 200);
+    } else {
+      const reasonMap: Record<string, string> = {
+        "user": "by agent/user",
+        "idle-timeout": `idle ${pluginConfig.idleTimeoutMinutes ?? 15}min`,
+        "unknown": "",
+      };
+      const killDetail = reasonMap[session.killReason] || "";
+      statusLabel = `Killed${killDetail ? ` (${killDetail})` : ""}`;
+    }
+
+    const icon = session.status === "failed" ? "❌" : "⛔";
+    const notificationText = [
+      `${icon} [${session.name}] ${statusLabel} | ${costStr} | ${duration}`,
+      ...(errorSummary ? [`   ⚠️ ${errorSummary}`] : []),
+    ].join("\n");
+
+    this.deliverToTelegram(session, notificationText);
   }
 
   private persistSession(session: Session): void {
     // Record metrics once
-    const alreadyPersisted = this.idIndex.has(session.id);
+    const alreadyPersisted = this.store.hasRecordedSession(session.id);
     if (!alreadyPersisted) {
-      this.recordSessionMetrics(session);
+      this.metrics.recordSession(session);
     }
 
-    if (!session.harnessSessionId) return;
-
-    let outputPath: string | undefined;
-    try {
-      const outputFile = join(tmpdir(), `openclaw-agent-${session.id}.txt`);
-      const fullOutput = session.getOutput().join("\n");
-      if (fullOutput.length > 0) {
-        writeFileSync(outputFile, fullOutput, "utf-8");
-        outputPath = outputFile;
-      }
-    } catch (err: any) {
-      console.warn(`[SessionManager] Failed to write output file for session ${session.id}: ${err.message}`);
-    }
-
-    const info: PersistedSessionInfo = {
-      harnessSessionId: session.harnessSessionId,
-      name: session.name,
-      prompt: session.prompt,
-      workdir: session.workdir,
-      model: session.model,
-      completedAt: session.completedAt,
-      status: session.status,
-      costUsd: session.costUsd,
-      originAgentId: session.originAgentId,
-      originChannel: session.originChannel,
-      originThreadId: session.originThreadId,
-      outputPath,
-    };
-
-    this.persisted.set(session.harnessSessionId, info);
-    this.idIndex.set(session.id, session.harnessSessionId);
-    this.nameIndex.set(session.name, session.harnessSessionId);
+    this.store.persistTerminal(session);
   }
 
+  getMetrics(): SessionMetrics { return this.metrics.getMetrics(); }
+
+  // Back-compat helper retained for test access.
   private recordSessionMetrics(session: Session): void {
-    const cost = session.costUsd ?? 0;
-    const status = session.status;
-
-    this._metrics.totalCostUsd += cost;
-
-    const dateKey = new Date(session.completedAt ?? session.startedAt).toISOString().slice(0, 10);
-    this._metrics.costPerDay.set(dateKey, (this._metrics.costPerDay.get(dateKey) ?? 0) + cost);
-
-    if (TERMINAL_STATUSES.has(status)) {
-      this._metrics.sessionsByStatus[status as "completed" | "failed" | "killed"]++;
-    }
-
-    if (session.completedAt) {
-      const durationMs = session.completedAt - session.startedAt;
-      this._metrics.totalDurationMs += durationMs;
-      this._metrics.sessionsWithDuration++;
-    }
-
-    if (!this._metrics.mostExpensive || cost > this._metrics.mostExpensive.costUsd) {
-      this._metrics.mostExpensive = {
-        id: session.id,
-        name: session.name,
-        costUsd: cost,
-        prompt: truncateText(session.prompt, 80),
-      };
-    }
+    this.metrics.recordSession(session);
   }
-
-  getMetrics(): SessionMetrics { return this._metrics; }
 
   // -- Wake / notification delivery --
 
-  private buildDeliverArgs(originChannel?: string, threadId?: string | number): string[] {
-    if (!originChannel || originChannel === "unknown" || originChannel === "gateway") return [];
-    const parts = originChannel.split("|");
-    if (parts.length < 2) return [];
-    const args: string[] = [];
-    const topicSuffix = (threadId != null && parts[0] === "telegram") ? `:topic:${threadId}` : "";
-    if (parts.length >= 3) {
-      args.push("--deliver", "--reply-channel", parts[0], "--reply-account", parts[1], "--reply-to", parts.slice(2).join("|") + topicSuffix);
-    } else {
-      args.push("--deliver", "--reply-channel", parts[0], "--reply-to", parts[1] + topicSuffix);
-    }
-    return args;
-  }
-
-  /**
-   * Look up the OpenClaw session UUID for a given session key from the sessions.json store.
-   * Returns undefined if the key is not found or the store can't be read.
-   */
-  private resolveOriginSessionId(agentId: string, sessionKey?: string): string | undefined {
-    if (!sessionKey) return undefined;
-    try {
-      const storePath = join(homedir(), ".openclaw", "agents", agentId, "sessions", "sessions.json");
-      const raw = readFileSync(storePath, "utf-8");
-      const store = JSON.parse(raw);
-      const entry = store[sessionKey];
-      if (entry?.sessionId) return entry.sessionId;
-      console.warn(`[SessionManager] resolveOriginSessionId: key=${sessionKey} not found in ${storePath} (${Object.keys(store).length} keys in store)`);
-    } catch (err: any) {
-      console.warn(`[SessionManager] resolveOriginSessionId: error reading sessions store for agent=${agentId}: ${err.message}`);
-    }
-    return undefined;
-  }
-
-  private wakeAgent(session: Session, eventText: string, telegramText: string, label: string): void {
-    const agentId = session.originAgentId?.trim();
-
-    if (!agentId) {
-      this.deliverToTelegram(session, telegramText);
-      this.fireSystemEventWithRetry(eventText, label, session.id);
-      return;
-    }
-
-    // Agent handles — skip system Telegram to prevent duplicates.
-    // Exception: always send Telegram for plan-approval events so the user
-    // gets a direct notification even if the parent agent doesn't relay it.
-    if (label === "plan-approval") {
-      this.deliverToTelegram(session, telegramText);
-    }
-
-    // --reply-to with :topic: ensures agent response goes to correct topic.
-    const deliverArgs = this.buildDeliverArgs(session.originChannel, session.originThreadId);
-
-    // Route to the originating session (e.g. topic-28) instead of the default agent session.
-    //
-    // Route wake event to the originating session using --session-id with the session key.
-    // Passing the session key string directly as --session-id correctly targets the
-    // originating chat session (e.g. agent:main:telegram:group:-1003863755361:topic:28).
-    let args: string[];
-    if (session.originSessionKey) {
-      args = ["agent", "--agent", agentId, "--session-id", session.originSessionKey, "--message", eventText, ...deliverArgs];
-    } else {
-      args = ["agent", "--agent", agentId, "--message", eventText, ...deliverArgs];
-      console.warn(`[SessionManager] No originSessionKey on session=${session.id} — wake will route to agent ${agentId} default session`);
-    }
-
-    execFile("openclaw", args, { timeout: WAKE_CLI_TIMEOUT_MS }, (err) => {
-      if (err) {
-        console.error(`[SessionManager] Agent wake failed for ${label} session=${session.id}, agent=${agentId}: ${err.message}`);
-        const timer = setTimeout(() => {
-          this.pendingRetryTimers.delete(timer);
-          execFile("openclaw", args, { timeout: WAKE_CLI_TIMEOUT_MS }, (retryErr) => {
-            if (retryErr) {
-              console.error(`[SessionManager] Agent wake retry also failed for ${label} session=${session.id}, agent=${agentId}`);
-              // Last resort: send system Telegram so user isn't left in the dark
-              this.deliverToTelegram(session, telegramText);
-            }
-          });
-        }, WAKE_RETRY_DELAY_MS);
-        this.pendingRetryTimers.add(timer);
-      }
-    });
-  }
-
   deliverToTelegram(session: Session, text: string): void {
-    if (!this.notifications) return;
-    this.notifications.emitToChannel(session.originChannel || "unknown", text, session.originThreadId);
+    this.wakeDispatcher.deliverToTelegram(session, text);
+  }
+
+  // Back-compat helper retained for test access.
+  private buildDeliverArgs(originChannel?: string, threadId?: string | number): string[] {
+    return this.wakeDispatcher.buildDeliverArgs(originChannel, threadId);
   }
 
   /**
@@ -402,22 +277,6 @@ export class SessionManager {
     return true;
   }
 
-  private fireSystemEventWithRetry(eventText: string, label: string, sessionId: string): void {
-    const args = ["system", "event", "--text", eventText, "--mode", "now"];
-    execFile("openclaw", args, { timeout: WAKE_CLI_TIMEOUT_MS }, (err) => {
-      if (err) {
-        console.error(`[SessionManager] System event failed for ${label} session=${sessionId}: ${err.message}`);
-        const timer = setTimeout(() => {
-          this.pendingRetryTimers.delete(timer);
-          execFile("openclaw", args, { timeout: WAKE_CLI_TIMEOUT_MS }, (retryErr) => {
-            if (retryErr) console.error(`[SessionManager] System event retry also failed for ${label} session=${sessionId}`);
-          });
-        }, WAKE_RETRY_DELAY_MS);
-        this.pendingRetryTimers.add(timer);
-      }
-    });
-  }
-
   private originThreadLine(session: Session): string {
     return session.originThreadId != null
       ? `Session origin thread: ${session.originThreadId}`
@@ -457,7 +316,7 @@ export class SessionManager {
     const duration = formatDuration(session.duration);
     const telegramText = `✅ [${session.name}] Completed | ${costStr} | ${duration}`;
 
-    this.wakeAgent(session, eventText, telegramText, "completed");
+    this.wakeDispatcher.wakeAgent(session, eventText, telegramText, "completed");
   }
 
   private triggerWaitingForInputEvent(session: Session): void {
@@ -551,36 +410,48 @@ export class SessionManager {
       ].join("\n");
     }
 
-    this.wakeAgent(session, eventText, telegramText, isPlanApproval ? "plan-approval" : "waiting");
+    this.wakeDispatcher.wakeAgent(session, eventText, telegramText, isPlanApproval ? "plan-approval" : "waiting");
   }
 
-  private triggerTurnCompleteEvent(session: Session): void {
-    if (!this.debounceWaitingEvent(session.id)) return;
+  private onTurnEnd(session: Session, hadQuestion: boolean): void {
+    if (session.notifyOnTurnEnd === false) return;
 
+    // Use the dedicated waiting path for explicit question/plan-approval turns.
+    // This preserves plan approval policy handling and waiting-specific guidance.
+    if (hadQuestion || session.pendingPlanApproval) {
+      this.triggerWaitingForInputEvent(session);
+      return;
+    }
+
+    // Non-question turns still emit a lightweight turn-complete wake. We keep
+    // a heuristic waiting hint in that payload as a fallback.
+    this.triggerTurnCompleteEventWithSignal(session);
+  }
+
+  private triggerTurnCompleteEventWithSignal(session: Session): void {
     const preview = this.getOutputPreview(session);
+    // Heuristic fallback only: explicit waiting turns should already route via
+    // `triggerWaitingForInputEvent`. This hint helps catch plain-text asks
+    // without introducing high false-positive wake churn.
+    const waitingForInput = looksLikeWaitingForUser(preview);
     const costStr = `$${(session.costUsd ?? 0).toFixed(2)}`;
-    const telegramText = `🔄 [${session.name}] Turn done | ${costStr}`;
+    const waitingText = waitingForInput ? "yes" : "no";
+    const telegramText = `🔄 [${session.name}] Turn done | ${costStr} | Waiting input: ${waitingText}`;
 
-    const postTurnMin = pluginConfig.postTurnIdleMinutes ?? 5;
     const eventText = [
-      `Coding agent session finished its current turn (session is still running).`,
-      `Name: ${session.name} | ID: ${session.id}`,
-      this.originThreadLine(session),
-      `Status: running (multi-turn, awaiting follow-up or user review)`,
+      `Coding agent session turn ended.`,
+      `Name: ${session.name}`,
+      `ID: ${session.id}`,
+      `Status: ${session.status}`,
       ``,
-      `Output preview:`,
+      `Looks like waiting for user input: ${waitingText}`,
+      ``,
+      `Last output (~20 lines):`,
       preview,
-      ``,
-      `[ACTION REQUIRED] Follow your autonomy rules for session completion:`,
-      `1. Use agent_output(session='${session.id}', full=true) to read the full output.`,
-      `2. If this is part of a multi-phase pipeline, launch the next phase NOW — do not wait for user input.`,
-      `3. Notify the user with a summary of what was done.`,
-      `4. If the output appears to ask a question or request approval, forward it to the user.`,
-      `The session is still running — use agent_respond(session='${session.id}', message='...') if you need to send a follow-up.`,
-      `The session will auto-complete in ${postTurnMin} minutes if no follow-up arrives (auto-resumes on next message).`,
+      ...(this.originThreadLine(session) ? ["", this.originThreadLine(session)] : []),
     ].join("\n");
 
-    this.wakeAgent(session, eventText, telegramText, "turn-complete");
+    this.wakeDispatcher.wakeAgent(session, eventText, telegramText, "turn-complete");
   }
 
   // -- Public API --
@@ -588,10 +459,16 @@ export class SessionManager {
   resolve(idOrName: string): Session | undefined {
     const byId = this.sessions.get(idOrName);
     if (byId) return byId;
-    for (const session of this.sessions.values()) {
-      if (session.name === idOrName) return session;
+
+    const matches = [...this.sessions.values()].filter((s) => s.name === idOrName);
+    if (matches.length === 0) return undefined;
+
+    const activeMatches = matches.filter((s) => KILLABLE_STATUSES.has(s.status));
+    if (activeMatches.length > 0) {
+      return activeMatches.sort((a, b) => b.startedAt - a.startedAt)[0];
     }
-    return undefined;
+
+    return matches.sort((a, b) => b.startedAt - a.startedAt)[0];
   }
 
   get(id: string): Session | undefined {
@@ -619,87 +496,37 @@ export class SessionManager {
         this.kill(session.id);
       }
     }
-    for (const timer of this.pendingRetryTimers) clearTimeout(timer);
-    this.pendingRetryTimers.clear();
+    this.wakeDispatcher.clearPendingRetries();
   }
 
   resolveHarnessSessionId(ref: string): string | undefined {
     const active = this.resolve(ref);
-    if (active?.harnessSessionId) return active.harnessSessionId;
-
-    // Check indexes
-    const byId = this.idIndex.get(ref);
-    if (byId && this.persisted.has(byId)) return byId;
-    const byName = this.nameIndex.get(ref);
-    if (byName && this.persisted.has(byName)) return byName;
-    // Direct harnessSessionId lookup
-    if (this.persisted.has(ref)) return ref;
-
-    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(ref)) return ref;
-    return undefined;
+    return this.store.resolveHarnessSessionId(ref, active?.harnessSessionId);
   }
 
   getPersistedSession(ref: string): PersistedSessionInfo | undefined {
-    // Direct harnessSessionId
-    const direct = this.persisted.get(ref);
-    if (direct) return direct;
-    // By internal id
-    const byId = this.idIndex.get(ref);
-    if (byId) return this.persisted.get(byId);
-    // By name
-    const byName = this.nameIndex.get(ref);
-    if (byName) return this.persisted.get(byName);
-    return undefined;
+    return this.store.getPersistedSession(ref);
   }
 
   listPersistedSessions(): PersistedSessionInfo[] {
-    return [...this.persisted.values()].sort((a, b) => (b.completedAt ?? 0) - (a.completedAt ?? 0));
+    return this.store.listPersistedSessions();
   }
 
   cleanup(): void {
     const now = Date.now();
+    // GC only evicts terminal sessions from the runtime in-memory map.
+    // Persisted entries stay in SessionStore for resume/list/output lookups.
+    // "evicted from runtime cache" means removed from `this.sessions`, not lost.
+    const cleanupMaxAgeMs = (pluginConfig.sessionGcAgeMinutes ?? 1440) * 60_000;
     for (const [id, session] of this.sessions) {
-      if (
-        session.completedAt &&
-        TERMINAL_STATUSES.has(session.status) &&
-        now - session.completedAt > CLEANUP_MAX_AGE_MS
-      ) {
+      if (this.store.shouldGcActiveSession(session, now, cleanupMaxAgeMs)) {
         this.persistSession(session);
         this.sessions.delete(id);
         this.lastWaitingEventTimestamps.delete(id);
       }
     }
 
-    // Clean old /tmp output files (24h)
-    try {
-      const TMP_OUTPUT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
-      const tmpDir = tmpdir();
-      const tmpFiles = readdirSync(tmpDir).filter((f) => f.startsWith("openclaw-agent-") && f.endsWith(".txt"));
-      for (const file of tmpFiles) {
-        try {
-          const filePath = join(tmpDir, file);
-          const mtime = statSync(filePath).mtimeMs;
-          if (now - mtime > TMP_OUTPUT_MAX_AGE_MS) {
-            unlinkSync(filePath);
-          }
-        } catch { /* best-effort */ }
-      }
-    } catch { /* best-effort */ }
-
-    // Evict oldest persisted sessions
-    const all = this.listPersistedSessions();
-    if (all.length > this.maxPersistedSessions) {
-      const toEvict = all.slice(this.maxPersistedSessions);
-      for (const info of toEvict) {
-        this.persisted.delete(info.harnessSessionId);
-        // Clean indexes
-        for (const [k, v] of this.idIndex) {
-          if (v === info.harnessSessionId) this.idIndex.delete(k);
-        }
-        for (const [k, v] of this.nameIndex) {
-          if (v === info.harnessSessionId) this.nameIndex.delete(k);
-        }
-      }
-    }
+    this.store.cleanupTmpOutputFiles(now);
+    this.store.evictOldestPersisted(this.maxPersistedSessions);
   }
 }

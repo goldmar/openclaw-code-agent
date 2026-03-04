@@ -1,7 +1,18 @@
 import { sessionManager } from "../singletons";
 import { formatStats } from "../format";
 
-export function registerAgentStatsCommand(api: any): void {
+interface CommandApi {
+  registerCommand(config: {
+    name: string;
+    description: string;
+    acceptsArgs: boolean;
+    requireAuth: boolean;
+    handler: () => { text: string };
+  }): void;
+}
+
+/** Register `/agent_stats` chat command. */
+export function registerAgentStatsCommand(api: CommandApi): void {
   api.registerCommand({
     name: "agent_stats",
     description: "Show OpenClaw Code Agent usage metrics",

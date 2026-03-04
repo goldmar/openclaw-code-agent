@@ -4,6 +4,33 @@ import { sessionManager } from "../singletons";
 import { pluginConfig, resolveOriginChannel, resolveAgentChannel, parseThreadIdFromSessionKey, resolveToolChannel } from "../config";
 import type { OpenClawPluginToolContext } from "../types";
 
+interface AgentLaunchParams {
+  prompt: string;
+  name?: string;
+  workdir?: string;
+  model?: string;
+  system_prompt?: string;
+  allowed_tools?: string[];
+  resume_session_id?: string;
+  fork_session?: boolean;
+  multi_turn_disabled?: boolean;
+  notify_on_turn_end?: boolean;
+  permission_mode?: "default" | "plan" | "acceptEdits" | "bypassPermissions";
+  harness?: string;
+  agentId?: string;
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+function isAgentLaunchParams(value: unknown): value is AgentLaunchParams {
+  if (!value || typeof value !== "object") return false;
+  const p = value as Record<string, unknown>;
+  return typeof p.prompt === "string";
+}
+
+/** Register the `agent_launch` tool factory. */
 export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
   return {
     name: "agent_launch",
@@ -27,19 +54,25 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
       multi_turn_disabled: Type.Optional(
         Type.Boolean({ description: "Disable multi-turn mode. By default sessions stay open for follow-up messages. Set to true for fire-and-forget sessions." }),
       ),
+      notify_on_turn_end: Type.Optional(
+        Type.Boolean({ description: "Send wake notifications at every turn end. Defaults to true." }),
+      ),
       permission_mode: Type.Optional(
         Type.Union(
           [Type.Literal("default"), Type.Literal("plan"), Type.Literal("acceptEdits"), Type.Literal("bypassPermissions")],
-          { description: "Permission mode for the session. Defaults to plugin config or 'bypassPermissions'." },
+          { description: "Permission mode for the session. Defaults to plugin config (plan by default)." },
         ),
       ),
       harness: Type.Optional(
         Type.String({ description: "Agent harness to use (e.g. 'claude-code'). Defaults to 'claude-code'." }),
       ),
     }),
-    async execute(_id: string, params: any) {
+    async execute(_id: string, params: unknown) {
       if (!sessionManager) {
         return { content: [{ type: "text", text: "Error: SessionManager not initialized. The code-agent service must be running." }] };
+      }
+      if (!isAgentLaunchParams(params)) {
+        return { content: [{ type: "text", text: "Error: Invalid parameters. Expected at least { prompt }." }] };
       }
 
       // Guard: agentId is NOT a valid parameter for agent_launch. It belongs to sessions_spawn (OpenClaw sub-agents).
@@ -90,6 +123,7 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
           resumeSessionId: resolvedResumeId,
           forkSession: params.fork_session,
           multiTurn: !params.multi_turn_disabled,
+          notifyOnTurnEnd: params.notify_on_turn_end ?? true,
           permissionMode: params.permission_mode,
           originChannel,
           originThreadId: parseThreadIdFromSessionKey(originSessionKey),
@@ -116,9 +150,10 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
         details.push(``, `Use agent_sessions to check status, agent_output to see output.`);
 
         return { content: [{ type: "text", text: details.join("\n") }] };
-      } catch (err: any) {
-        const hint = err.message.includes("Max sessions") ? "" : "\n\nUse agent_sessions to see active sessions and their status.";
-        return { content: [{ type: "text", text: `Error launching session: ${err.message}${hint}` }] };
+      } catch (err: unknown) {
+        const message = errorMessage(err);
+        const hint = message.includes("Max sessions") ? "" : "\n\nUse agent_sessions to see active sessions and their status.";
+        return { content: [{ type: "text", text: `Error launching session: ${message}${hint}` }] };
       }
     },
   };

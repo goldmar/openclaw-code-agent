@@ -1,7 +1,22 @@
 import { Type } from "@sinclair/typebox";
 import { sessionManager } from "../singletons";
 import type { OpenClawPluginToolContext } from "../types";
+import { getKillSessionText } from "../application/session-control";
 
+interface AgentKillParams {
+  session: string;
+  reason?: "completed" | "killed";
+}
+
+function isAgentKillParams(value: unknown): value is AgentKillParams {
+  if (!value || typeof value !== "object") return false;
+  const params = value as Record<string, unknown>;
+  if (typeof params.session !== "string") return false;
+  if (params.reason === undefined) return true;
+  return params.reason === "completed" || params.reason === "killed";
+}
+
+/** Register the `agent_kill` tool factory. */
 export function makeAgentKillTool(_ctx?: OpenClawPluginToolContext) {
   return {
     name: "agent_kill",
@@ -15,27 +30,16 @@ export function makeAgentKillTool(_ctx?: OpenClawPluginToolContext) {
         ),
       ),
     }),
-    async execute(_id: string, params: any) {
+    async execute(_id: string, params: unknown) {
       if (!sessionManager) {
         return { content: [{ type: "text", text: "Error: SessionManager not initialized. The code-agent service must be running." }] };
       }
-
-      const session = sessionManager.resolve(params.session);
-      if (!session) {
-        return { content: [{ type: "text", text: `Error: Session "${params.session}" not found.` }] };
+      if (!isAgentKillParams(params)) {
+        return { content: [{ type: "text", text: "Error: Invalid parameters. Expected { session, reason? }." }] };
       }
 
-      if (session.status === "completed" || session.status === "failed" || session.status === "killed") {
-        return { content: [{ type: "text", text: `Session ${session.name} [${session.id}] is already ${session.status}. No action needed.` }] };
-      }
-
-      if (params.reason === "completed") {
-        session.complete();
-        return { content: [{ type: "text", text: `Session ${session.name} [${session.id}] marked as completed.` }] };
-      }
-
-      sessionManager.kill(session.id);
-      return { content: [{ type: "text", text: `Session ${session.name} [${session.id}] has been terminated.` }] };
+      const text = getKillSessionText(sessionManager, params.session, params.reason);
+      return { content: [{ type: "text", text }] };
     },
   };
 }

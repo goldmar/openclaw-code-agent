@@ -7,8 +7,22 @@
  *
  * @module format
  */
-import type { Session } from "./session";
 import type { SessionMetrics } from "./types";
+
+export interface SessionListRenderable {
+  id: string;
+  name: string;
+  status: string;
+  duration: number;
+  prompt: string;
+  workdir: string;
+  multiTurn: boolean;
+  costUsd: number;
+  phase: string;
+  harnessSessionId?: string;
+  resumeSessionId?: string;
+  forkSession?: boolean;
+}
 
 export function formatDuration(ms: number): string {
   const seconds = Math.floor(ms / 1000);
@@ -49,7 +63,8 @@ const STATUS_ICONS: Record<string, string> = {
   killed: "⛔",
 };
 
-export function formatSessionListing(session: Session): string {
+/** Render a human-readable session row for `agent_sessions`. */
+export function formatSessionListing(session: SessionListRenderable): string {
   const icon = STATUS_ICONS[session.status] ?? "❓";
   const duration = formatDuration(session.duration);
   const mode = session.multiTurn ? "multi-turn" : "single";

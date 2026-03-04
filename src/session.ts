@@ -6,7 +6,11 @@ import type { SessionConfig, SessionStatus, PermissionMode, KillReason } from ".
 import { pluginConfig, getGlobalMcpServers } from "./config";
 
 const OUTPUT_BUFFER_MAX = 200;
-const SAFETY_NET_TIMER_MS = 45_000;
+const STARTUP_TIMEOUT_MS = 2 * 60 * 1000; // 2 minutes
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
 
 const TRANSITIONS: Record<SessionStatus, readonly SessionStatus[]> = {
   starting: ["running", "failed", "killed"],
@@ -17,14 +21,26 @@ const TRANSITIONS: Record<SessionStatus, readonly SessionStatus[]> = {
 };
 
 /**
- * AsyncIterable controller for multi-turn conversations.
+ * Async queue used as the prompt stream for multi-turn harnesses.
+ *
+ * `Session.sendMessage()` pushes follow-up user messages into this queue and
+ * the harness consumes it with `for await`.
+ *
+ * `hasPending()` is critical at turn boundaries: if follow-up prompts were
+ * queued during an active turn, we keep the session alive so the queue can be
+ * drained on the next turn instead of killing with reason `done`.
  */
 class MessageStream {
-  private queue: any[] = [];
+  private queue: unknown[] = [];
   private resolve: (() => void) | null = null;
   private done: boolean = false;
 
-  push(msg: any): void {
+  /** Return true when follow-up prompts are queued but not consumed yet. */
+  hasPending(): boolean {
+    return this.queue.length > 0;
+  }
+
+  push(msg: unknown): void {
     this.queue.push(msg);
     if (this.resolve) {
       this.resolve();
@@ -40,7 +56,7 @@ class MessageStream {
     }
   }
 
-  async *[Symbol.asyncIterator](): AsyncGenerator<any, void, undefined> {
+  async *[Symbol.asyncIterator](): AsyncGenerator<unknown, void, undefined> {
     while (true) {
       while (this.queue.length > 0) {
         yield this.queue.shift()!;
@@ -76,6 +92,7 @@ export class Session extends EventEmitter {
 
   // Multi-turn
   readonly multiTurn: boolean;
+  readonly notifyOnTurnEnd: boolean;
   private messageStream?: MessageStream;
 
   // State
@@ -142,11 +159,14 @@ export class Session extends EventEmitter {
     this.resumeSessionId = config.resumeSessionId;
     this.forkSession = config.forkSession;
     this.multiTurn = config.multiTurn ?? true;
+    this.notifyOnTurnEnd = config.notifyOnTurnEnd ?? true;
     this.startedAt = Date.now();
     this.abortController = new AbortController();
   }
 
   get status(): SessionStatus { return this._status; }
+
+  get harnessName(): string { return this.harness.name; }
 
   get duration(): number {
     return (this.completedAt ?? Date.now()) - this.startedAt;
@@ -192,9 +212,10 @@ export class Session extends EventEmitter {
 
   // -- Lifecycle --
 
+  /** Launch the configured harness and start consuming harness messages. */
   async start(): Promise<void> {
     try {
-      let prompt: string | AsyncIterable<any>;
+      let prompt: string | AsyncIterable<unknown>;
       if (this.multiTurn) {
         this.messageStream = new MessageStream();
         this.messageStream.push(
@@ -218,30 +239,32 @@ export class Session extends EventEmitter {
         mcpServers: getGlobalMcpServers(),
       });
       this.harnessHandle = handle;
-    } catch (err: any) {
-      this.transition("failed");
-      this.error = err?.message ?? String(err);
-      this.completedAt = Date.now();
+      this.setTimer("startup", STARTUP_TIMEOUT_MS, () => {
+        if (this._status === "starting") this.kill("startup-timeout");
+      });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.transitionToTerminal("failed", { error: message });
       return;
     }
 
-    this.consumeMessages(this.harnessHandle!.messages).catch((err) => {
-      console.error(`[Session ${this.id}] consumeMessages error: ${err?.message ?? String(err)}`, err?.stack);
+    this.consumeMessages(this.harnessHandle!.messages).catch((err: unknown) => {
+      const message = err instanceof Error ? err.message : String(err);
+      const stack = err instanceof Error ? err.stack : undefined;
+      console.error(`[Session ${this.id}] consumeMessages error: ${message}`, stack);
       if (this.isActive) {
-        this.transition("failed");
-        this.error = err?.message ?? String(err);
-        this.teardown();
+        this.transitionToTerminal("failed", { error: message });
       }
     });
   }
 
+  /** Send a follow-up user message to a running multi-turn session. */
   async sendMessage(text: string): Promise<void> {
     if (this._status !== "running") {
       throw new Error(`Session is not running (status: ${this._status})`);
     }
 
     this.resetIdleTimer();
-    this.clearTimer("postTurnIdle");
     this.waitingForInputFired = false;
 
     let effectiveText = text;
@@ -249,7 +272,6 @@ export class Session extends EventEmitter {
       // Only clear pendingPlanApproval on the approval path (mode switch)
       this.pendingPlanApproval = false;
       const newMode = this.pendingModeSwitch;
-      const oldMode = this.currentPermissionMode;
       this.pendingModeSwitch = undefined;
 
       let shouldInjectPrefix = false;
@@ -258,8 +280,8 @@ export class Session extends EventEmitter {
           await this.harnessHandle.setPermissionMode(newMode);
           this.currentPermissionMode = newMode;
           shouldInjectPrefix = true;
-        } catch (err: any) {
-          console.error(`[Session ${this.id}] setPermissionMode(${newMode}) FAILED: ${err.message}`);
+        } catch (err: unknown) {
+          console.error(`[Session ${this.id}] setPermissionMode(${newMode}) FAILED: ${errorMessage(err)}`);
           this.pendingModeSwitch = newMode;  // Retry on next sendMessage
         }
       } else {
@@ -283,8 +305,8 @@ export class Session extends EventEmitter {
         try {
           await this.harnessHandle.setPermissionMode("plan");
           this.currentPermissionMode = "plan";
-        } catch (err: any) {
-          console.warn(`[Session ${this.id}] Failed to re-assert plan mode: ${err.message}`);
+        } catch (err: unknown) {
+          console.warn(`[Session ${this.id}] Failed to re-assert plan mode: ${errorMessage(err)}`);
         }
       }
     }
@@ -302,12 +324,14 @@ export class Session extends EventEmitter {
     }
   }
 
+  /** Interrupt the currently running turn, if the harness supports it. */
   async interrupt(): Promise<void> {
     if (this.harnessHandle?.interrupt) {
       await this.harnessHandle.interrupt();
     }
   }
 
+  /** Queue a permission mode switch to apply on the next user message. */
   switchPermissionMode(mode: PermissionMode): void {
     this.pendingModeSwitch = mode;
   }
@@ -316,23 +340,20 @@ export class Session extends EventEmitter {
     return this._status === "starting" || this._status === "running";
   }
 
+  /** Kill the session and transition to `killed` when still active. */
   kill(reason?: KillReason): void {
-    if (!this.isActive) return;
-    this.transition("killed");
-    if (reason) this.killReason = reason;
-    this.teardown();
+    this.transitionToTerminal("killed", { reason });
   }
 
+  /** Mark the session completed and transition to `completed` when still active. */
   complete(reason: KillReason = "done"): void {
-    if (!this.isActive) return;
-    this.killReason = reason;
-    this.transition("completed");
-    this.teardown();
+    this.transitionToTerminal("completed", { reason });
   }
 
   incrementAutoRespond(): void { this.autoRespondCount++; }
   resetAutoRespond(): void { this.autoRespondCount = 0; }
 
+  /** Return full output or the last N lines from the in-memory output buffer. */
   getOutput(lines?: number): string[] {
     if (lines === undefined) return this.outputBuffer.slice();
     return this.outputBuffer.slice(-lines);
@@ -340,18 +361,9 @@ export class Session extends EventEmitter {
 
   // -- Internal --
 
-  private resetSafetyNetTimer(): void {
-    this.setTimer("safetyNet", SAFETY_NET_TIMER_MS, () => {
-      if (this._status === "running" && !this.waitingForInputFired && this.lastTurnHadQuestion) {
-        this.waitingForInputFired = true;
-        this.emit("turnEnd", this, true);
-      }
-    });
-  }
-
   private resetIdleTimer(): void {
     if (!this.multiTurn) return;
-    const idleTimeoutMs = (pluginConfig.idleTimeoutMinutes ?? 30) * 60 * 1000;
+    const idleTimeoutMs = (pluginConfig.idleTimeoutMinutes ?? 15) * 60 * 1000;
     this.setTimer("idle", idleTimeoutMs, () => {
       if (this._status === "running") {
         this.kill("idle-timeout");
@@ -359,29 +371,49 @@ export class Session extends EventEmitter {
     });
   }
 
-  private startPostTurnIdleTimer(): void {
-    if (!this.multiTurn) return;
-    const postTurnIdleMs = (pluginConfig.postTurnIdleMinutes ?? 5) * 60 * 1000;
-    this.setTimer("postTurnIdle", postTurnIdleMs, () => {
-      if (this._status === "running") {
-        this.complete("post-turn-idle");
-      }
-    });
-  }
-
   private teardown(): void {
     this.clearAllTimers();
-    this.completedAt = Date.now();
+    if (!this.completedAt) this.completedAt = Date.now();
     if (this.messageStream) this.messageStream.end();
+    if (this.harnessHandle?.interrupt) {
+      void this.harnessHandle.interrupt().catch((err: unknown) => {
+        console.warn(`[Session ${this.id}] interrupt during teardown failed: ${errorMessage(err)}`);
+      });
+    }
     this.abortController.abort();
+  }
+
+  /**
+   * Enter a terminal state in strict order so listeners persist consistent data:
+   * 1) set terminal metadata (`killReason` / `error` / `completedAt`)
+   * 2) emit the state transition
+   * 3) teardown timers/streams/process signal
+   */
+  private transitionToTerminal(
+    status: Extract<SessionStatus, "completed" | "failed" | "killed">,
+    options: { reason?: KillReason; error?: string } = {},
+  ): void {
+    if (!this.isActive) return;
+    if (options.reason) this.killReason = options.reason;
+    if (options.error !== undefined) this.error = options.error;
+    this.completedAt = Date.now();
+    this.transition(status);
+    this.teardown();
   }
 
   private async consumeMessages(messages: AsyncIterable<HarnessMessage>): Promise<void> {
     for await (const msg of messages) {
-      this.resetSafetyNetTimer();
+      // After terminal transition we intentionally ignore late harness events.
+      // This avoids spurious turnEnd/output processing from in-flight subprocess
+      // shutdown messages after kill/complete/fail.
+      if (!this.isActive) {
+        break;
+      }
+
       this.resetIdleTimer();
 
       if (msg.type === "init") {
+        this.clearTimer("startup");
         this.harnessSessionId = msg.session_id;
         if (this._status === "starting") {
           this.transition("running");
@@ -435,7 +467,6 @@ export class Session extends EventEmitter {
         const isMultiTurnEndOfTurn = this.multiTurn && this.messageStream && msg.data.success;
 
         if (isMultiTurnEndOfTurn) {
-          this.clearTimer("safetyNet");
           this.resetIdleTimer();
 
           // If the session is in plan mode and the turn completed, CC finished presenting
@@ -449,18 +480,27 @@ export class Session extends EventEmitter {
           // Use pendingPlanApproval OR lastTurnHadQuestion — pendingPlanApproval
           // is authoritative for the plan approval path (it survives text resets).
           const needsInput = this.pendingPlanApproval || this.lastTurnHadQuestion;
+          const hasPending = this.messageStream?.hasPending() === true;
           if (needsInput && !this.waitingForInputFired) {
             this.waitingForInputFired = true;
             this.emit("turnEnd", this, true);
+          } else if (hasPending) {
+            // Follow-up user messages were queued during this turn; keep the
+            // session alive so the harness can consume them on the next turn.
           } else if (!needsInput) {
             this.emit("turnEnd", this, false);
-            this.startPostTurnIdleTimer();
+            // `complete("done")` means "natural turn completion with no user
+            // input needed". This is intentionally different from `kill("done")`:
+            // completion emits the success lifecycle path and avoids killed/failure
+            // terminal handling noise.
+            this.complete("done");
           }
         } else {
-          this.transition(msg.data.success ? "completed" : "failed");
-          this.teardown();
+          this.transitionToTerminal(msg.data.success ? "completed" : "failed");
         }
         this.lastTurnHadQuestion = false;
+      } else if (msg.type === "activity") {
+        // Keepalive ping for long-running subprocesses with no output.
       }
     }
   }

@@ -5,7 +5,8 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "esbuild index.ts --bundle --platform=node --target=node18 --format=cjs --outfile=dist/index.js --minify --external:openclaw --external:openclaw/plugin-sdk --external:@anthropic-ai/claude-agent-sdk",
-    "test": "tsx --test 'tests/**/*.test.ts'"
+    "test": "tsx --test 'tests/**/*.test.ts'",
+    "typecheck": "tsc --noEmit"
   },
   "openclaw": {
     "extensions": [
@@ -24,9 +25,11 @@
   },
   "devDependencies": {
     "@sinclair/typebox": "^0.34.48",
+    "@types/node": "^25.3.3",
     "esbuild": "^0.27.3",
     "nanoid": "^3.3.7",
-    "tsx": "^4.21.0"
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.2"
   },
   "keywords": [
     "openclaw",

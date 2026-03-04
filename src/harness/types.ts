@@ -22,8 +22,9 @@ export interface HarnessResult {
 
 export type HarnessMessage =
   | { type: "init"; session_id: string }
+  | { type: "activity" }
   | { type: "text"; text: string }
-  | { type: "tool_use"; name: string; input: any }
+  | { type: "tool_use"; name: string; input: unknown }
   | { type: "permission_mode_change"; mode: string }
   | { type: "result"; data: HarnessResult };
 
@@ -32,7 +33,7 @@ export type HarnessMessage =
 // ---------------------------------------------------------------------------
 
 export interface HarnessLaunchOptions {
-  prompt: string | AsyncIterable<any>;
+  prompt: string | AsyncIterable<unknown>;
   cwd: string;
   model?: string;
   permissionMode?: string;
@@ -56,7 +57,7 @@ export interface HarnessSession {
   setPermissionMode?(mode: string): Promise<void>;
 
   /** Feed additional user messages into a running session. */
-  streamInput?(input: AsyncIterable<any>): Promise<void>;
+  streamInput?(input: AsyncIterable<unknown>): Promise<void>;
 
   /** Interrupt the current turn. */
   interrupt?(): Promise<void>;
@@ -74,7 +75,7 @@ export interface AgentHarness {
   launch(options: HarnessLaunchOptions): HarnessSession;
 
   /** Build a user-message payload suitable for the harness's multi-turn protocol. */
-  buildUserMessage(text: string, sessionId: string): any;
+  buildUserMessage(text: string, sessionId: string): unknown;
 
   /** Permission modes supported by this harness. */
   readonly supportedPermissionModes: readonly string[];

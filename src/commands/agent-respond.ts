@@ -1,14 +1,29 @@
 import { sessionManager } from "../singletons";
 import { executeRespond } from "../actions/respond";
 
-export function registerAgentRespondCommand(api: any): void {
+interface AgentRespondCommandContext {
+  args?: string;
+}
+
+interface CommandApi {
+  registerCommand(config: {
+    name: string;
+    description: string;
+    acceptsArgs: boolean;
+    requireAuth: boolean;
+    handler: (ctx: AgentRespondCommandContext) => Promise<{ text: string }>;
+  }): void;
+}
+
+/** Register `/agent_respond` chat command. */
+export function registerAgentRespondCommand(api: CommandApi): void {
   api.registerCommand({
     name: "agent_respond",
     description:
       "Send a follow-up message to a running coding agent session. Usage: /agent_respond <id-or-name> <message>",
     acceptsArgs: true,
     requireAuth: true,
-    handler: async (ctx: any) => {
+    handler: async (ctx: AgentRespondCommandContext) => {
       if (!sessionManager) {
         return { text: "Error: SessionManager not initialized. The code-agent service must be running." };
       }

@@ -2,7 +2,7 @@
 
 /** Context provided by OpenClaw's tool factory pattern. */
 export interface OpenClawPluginToolContext {
-  config?: Record<string, any>;
+  config?: Record<string, unknown>;
   workspaceDir?: string;
   agentDir?: string;
   agentId?: string;
@@ -14,7 +14,7 @@ export interface OpenClawPluginToolContext {
 
 export type SessionStatus = "starting" | "running" | "completed" | "failed" | "killed";
 
-export type KillReason = "user" | "idle-timeout" | "post-turn-idle" | "done" | "unknown";
+export type KillReason = "user" | "idle-timeout" | "startup-timeout" | "done" | "unknown";
 
 export type PermissionMode = "default" | "plan" | "acceptEdits" | "bypassPermissions";
 
@@ -36,6 +36,8 @@ export interface SessionConfig {
   multiTurn?: boolean;
   /** Agent harness to use (e.g. "claude-code"). Defaults to the built-in default. */
   harness?: string;
+  /** Whether to send wake notifications at every turn end. Defaults to true. */
+  notifyOnTurnEnd?: boolean;
 }
 
 export type PlanApprovalMode = "approve" | "ask" | "delegate";
@@ -45,27 +47,31 @@ export interface PluginConfig {
   defaultModel?: string;
   defaultWorkdir?: string;
   idleTimeoutMinutes: number;
-  postTurnIdleMinutes?: number;
+  sessionGcAgeMinutes?: number;
   maxPersistedSessions: number;
   fallbackChannel?: string;
   permissionMode?: PermissionMode;
   agentChannels?: Record<string, string>;
   maxAutoResponds: number;
   planApproval: PlanApprovalMode;
+  defaultHarness?: string;
 }
 
 export interface PersistedSessionInfo {
+  sessionId?: string;
   harnessSessionId: string;
   name: string;
   prompt: string;
   workdir: string;
   model?: string;
+  createdAt?: number;
   completedAt?: number;
   status: SessionStatus;
   costUsd: number;
   originAgentId?: string;
   originChannel?: string;
   originThreadId?: string | number;
+  originSessionKey?: string;
   outputPath?: string;
   harness?: string;
 }

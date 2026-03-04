@@ -10,6 +10,7 @@ export type McpServerConfig = Record<string, { type: string; command: string; ar
 
 let cachedMcpServers: McpServerConfig | undefined;
 
+/** Load and cache global MCP server definitions from `~/.claude.json`. */
 export function getGlobalMcpServers(): McpServerConfig {
   if (cachedMcpServers !== undefined) return cachedMcpServers;
   try {
@@ -26,30 +27,42 @@ export function getGlobalMcpServers(): McpServerConfig {
 
 export let pluginConfig: PluginConfig = {
   maxSessions: 5,
-  idleTimeoutMinutes: 30,
+  idleTimeoutMinutes: 15,
+  sessionGcAgeMinutes: 1440,
   maxPersistedSessions: 50,
   maxAutoResponds: 10,
   permissionMode: "plan",
   planApproval: "delegate",
 };
 
+/** Replace plugin config singleton with defaults applied for omitted fields. */
 export function setPluginConfig(config: Partial<PluginConfig>): void {
   pluginConfig = {
     maxSessions: config.maxSessions ?? 5,
     defaultModel: config.defaultModel,
     defaultWorkdir: config.defaultWorkdir,
-    idleTimeoutMinutes: config.idleTimeoutMinutes ?? 30,
-    postTurnIdleMinutes: config.postTurnIdleMinutes,
+    idleTimeoutMinutes: config.idleTimeoutMinutes ?? 15,
+    sessionGcAgeMinutes: config.sessionGcAgeMinutes ?? 1440,
     maxPersistedSessions: config.maxPersistedSessions ?? 50,
     fallbackChannel: config.fallbackChannel,
     agentChannels: config.agentChannels,
     maxAutoResponds: config.maxAutoResponds ?? 10,
     permissionMode: config.permissionMode ?? "plan",
     planApproval: config.planApproval ?? "delegate",
+    defaultHarness: config.defaultHarness,
   };
 }
 
 // -- Channel resolution utilities --
+
+interface OriginContextLike {
+  id?: string | number;
+  channel?: string;
+  chatId?: string | number;
+  senderId?: string | number;
+  channelId?: string;
+  messageThreadId?: string | number;
+}
 
 /**
  * Resolve the notification channel for a tool context.
@@ -77,7 +90,7 @@ export function resolveToolChannel(ctx: OpenClawPluginToolContext): string | und
 /**
  * Resolve origin channel from command/tool context with fallback chain.
  */
-export function resolveOriginChannel(ctx: any, explicitChannel?: string): string {
+export function resolveOriginChannel(ctx: OriginContextLike | undefined, explicitChannel?: string): string {
   if (explicitChannel && String(explicitChannel).includes("|")) {
     return String(explicitChannel);
   }
@@ -97,7 +110,7 @@ export function resolveOriginChannel(ctx: any, explicitChannel?: string): string
 }
 
 /** Resolve Telegram thread/forum topic ID from command context. */
-export function resolveOriginThreadId(ctx: any): string | number | undefined {
+export function resolveOriginThreadId(ctx: OriginContextLike | undefined): string | number | undefined {
   return ctx?.messageThreadId ?? undefined;
 }
 

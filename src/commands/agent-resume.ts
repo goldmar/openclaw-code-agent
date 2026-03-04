@@ -1,15 +1,42 @@
 import { sessionManager } from "../singletons";
-import { resolveOriginChannel } from "../config";
+import { resolveOriginChannel, resolveOriginThreadId } from "../config";
 import { formatDuration } from "../format";
 
-export function registerAgentResumeCommand(api: any): void {
+interface ResumeCommandContext {
+  args?: string;
+  agentId?: string;
+  sessionKey?: string;
+  channel?: string;
+  chatId?: string | number;
+  senderId?: string | number;
+  id?: string | number;
+  channelId?: string;
+  messageThreadId?: string | number;
+}
+
+interface CommandApi {
+  registerCommand(config: {
+    name: string;
+    description: string;
+    acceptsArgs: boolean;
+    requireAuth: boolean;
+    handler: (ctx: ResumeCommandContext) => { text: string };
+  }): void;
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/** Register `/agent_resume` chat command. */
+export function registerAgentResumeCommand(api: CommandApi): void {
   api.registerCommand({
     name: "agent_resume",
     description:
       "Resume a previous coding agent session. Usage: /agent_resume <id-or-name> [prompt] or /agent_resume --list to see resumable sessions.",
     acceptsArgs: true,
     requireAuth: true,
-    handler: (ctx: any) => {
+    handler: (ctx: ResumeCommandContext) => {
       if (!sessionManager) {
         return { text: "Error: SessionManager not initialized. The code-agent service must be running." };
       }
@@ -75,6 +102,9 @@ export function registerAgentResumeCommand(api: any): void {
           resumeSessionId: harnessSessionId,
           forkSession: fork,
           originChannel: resolveOriginChannel(ctx),
+          originThreadId: resolveOriginThreadId(ctx) ?? persisted?.originThreadId,
+          originAgentId: ctx?.agentId ?? persisted?.originAgentId,
+          originSessionKey: ctx?.sessionKey ?? persisted?.originSessionKey,
           harness: persisted?.harness,
         });
 
@@ -89,9 +119,10 @@ export function registerAgentResumeCommand(api: any): void {
             `  Prompt: "${promptSummary}"`,
           ].join("\n"),
         };
-      } catch (err: any) {
-        const hint = err.message.includes("Max sessions") ? "" : "\n\nUse /agent_sessions to see active sessions or /agent_resume --list to see resumable sessions.";
-        return { text: `Error resuming session: ${err.message}${hint}` };
+      } catch (err: unknown) {
+        const message = errorMessage(err);
+        const hint = message.includes("Max sessions") ? "" : "\n\nUse /agent_sessions to see active sessions or /agent_resume --list to see resumable sessions.";
+        return { text: `Error resuming session: ${message}${hint}` };
       }
     },
   });
