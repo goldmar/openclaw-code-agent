@@ -9,10 +9,12 @@ import { pluginConfig } from "../config";
 
 const registry = new Map<string, AgentHarness>();
 
+/** Register or replace a harness implementation by name. */
 export function registerHarness(harness: AgentHarness): void {
   registry.set(harness.name, harness);
 }
 
+/** Retrieve a harness by name, throwing if unknown. */
 export function getHarness(name: string): AgentHarness {
   const h = registry.get(name);
   if (!h) {
@@ -23,11 +25,13 @@ export function getHarness(name: string): AgentHarness {
   return h;
 }
 
+/** Resolve the configured default harness. */
 export function getDefaultHarness(): AgentHarness {
   const name = pluginConfig.defaultHarness ?? "claude-code";
   return getHarness(name);
 }
 
+/** Return all registered harness names. */
 export function listHarnesses(): string[] {
   return [...registry.keys()];
 }

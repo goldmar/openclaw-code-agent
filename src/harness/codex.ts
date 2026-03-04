@@ -145,6 +145,20 @@ export class CodexHarness implements AgentHarness {
     return this.deps.createCodex?.() ?? new Codex();
   }
 
+  /**
+   * Launch a Codex session backed by SDK threads.
+   *
+   * The harness emits:
+   * - `init` once thread identity is known
+   * - `text` for assistant/reasoning output
+   * - synthetic `tool_use` events for plan approval and waiting-for-user
+   * - `activity` heartbeats while a turn is in-flight
+   * - `result` exactly once per turn
+   *
+   * `setPermissionMode()` marks the thread for recreation on the *next* turn.
+   * Recreation uses `resumeThread` with the current thread id so continuity is
+   * preserved while new thread options take effect.
+   */
   launch(options: HarnessLaunchOptions): HarnessSession {
     let effectivePermissionMode: string | undefined = options.permissionMode;
     let codexSessionId: string | undefined = options.resumeSessionId;
@@ -255,6 +269,7 @@ export class CodexHarness implements AgentHarness {
         }
 
         heartbeatTimer = setInterval(() => {
+          // Keepalive so Session idle timers don't kill long silent turns.
           enqueue({ type: "activity" });
         }, heartbeatMs);
 
@@ -384,6 +399,8 @@ export class CodexHarness implements AgentHarness {
 
       async setPermissionMode(mode: string): Promise<void> {
         effectivePermissionMode = mode;
+        // Codex SDK thread options are immutable after creation. Recreate the
+        // thread lazily before the next turn (same session id via resumeThread).
         pendingThreadRecreate = true;
       },
 

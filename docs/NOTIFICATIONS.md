@@ -12,9 +12,7 @@ Sent by SessionManager via `openclaw message send` (fire-and-forget) to the orig
 | 🔄    | Turn done | Turn completed      | No                                   |
 | ✅    | Completed | Session finished    | Yes - agent_output + summarize      |
 | ❌    | Failed    | Session error       | No                                   |
-| ⛔    | Killed    | Session terminated  | No                                   |
-| 💤    | Idle-killed | Post-turn idle or idle timeout | Auto-resumes on next respond |
-| ⏱️    | Long-running | Session > 10 min  | One-shot reminder                   |
+| ⛔    | Killed    | Session terminated (including idle-timeout) | No |
 
 ## Thread-Based Routing
 
@@ -25,21 +23,23 @@ Notifications are routed to the Telegram thread/topic where the session was laun
 
 ## Wake Mechanism
 
-### Primary: Detached Spawn
-`spawn("openclaw", ["agent", "--agent", id, "--message", text, "--deliver", ...], { detached: true })` + `child.unref()`
-- Non-blocking, agent response routed to Telegram via --deliver
-- Used for 🔔 waiting and ✅ completed
+### Primary: Agent Wake CLI
+`execFile("openclaw", ["agent", "--agent", id, "--message", text, "--deliver", ...])`
+- Invokes the originating orchestrator agent directly
+- `--deliver` routes wake content back to the same chat/thread
+- Used for 🔔 waiting, 🔄 turn-done, and ✅ completed wakes
+- Retries once on failure before falling back to direct Telegram notification
 
 ### Fallback: System Event
 `openclaw system event --mode now`
 - Requires heartbeat to be configured
-- Only used when originAgentId is missing
+- Used when `originAgentId` is missing; wake dispatcher retries once before giving up
 
 ## Idle-Kill + Auto-Resume
 
-When a session completes a turn without asking a question, a post-turn idle timer starts (default: 5 minutes). If no follow-up arrives, the session is killed with reason `post-turn-idle` and a 💤 notification is sent.
+When a session completes a turn without asking a question, it is immediately **completed** with reason `done`. The turn already emitted a 🔄 notification, so no extra terminal wake is emitted for that `done` transition. If the session remains untouched for `idleTimeoutMinutes` (default: 15 min), it is killed with reason `idle-timeout` and appears as a standard ⛔ killed lifecycle event.
 
-On the next `agent_respond` to that session, the plugin auto-resumes by spawning a new session with the same harness session ID — conversation context is preserved. Sessions killed explicitly by the user (`agent_kill`) do NOT auto-resume.
+On the next `agent_respond` to either a `done`-paused or `idle-timeout`-killed session, the plugin auto-resumes by spawning a new session with the same harness session ID — conversation context is preserved. Sessions killed explicitly by the user (`agent_kill`) do NOT auto-resume.
 
 ## Configuration
 

@@ -9,20 +9,24 @@ export class WakeDispatcher {
   private notifications: NotificationService | null = null;
   private pendingRetryTimers: Set<ReturnType<typeof setTimeout>> = new Set();
 
+  /** Inject notification transport used for direct user-channel fallbacks. */
   setNotifications(notifications: NotificationService | null): void {
     this.notifications = notifications;
   }
 
+  /** Cancel any scheduled retry timers (called during service shutdown). */
   clearPendingRetries(): void {
     for (const timer of this.pendingRetryTimers) clearTimeout(timer);
     this.pendingRetryTimers.clear();
   }
 
+  /** Send a direct message to the originating channel/thread, if available. */
   deliverToTelegram(session: Session, text: string): void {
     if (!this.notifications) return;
     this.notifications.emitToChannel(session.originChannel || "unknown", text, session.originThreadId);
   }
 
+  /** Build `openclaw agent --deliver` routing args from origin channel metadata. */
   buildDeliverArgs(originChannel?: string, threadId?: string | number): string[] {
     if (!originChannel || originChannel === "unknown" || originChannel === "gateway") return [];
     const parts = originChannel.split("|");
@@ -38,6 +42,7 @@ export class WakeDispatcher {
     return args;
   }
 
+  /** Fire `openclaw system event` and retry once on failure. */
   fireSystemEventWithRetry(eventText: string, label: string, sessionId: string): void {
     const args = ["system", "event", "--text", eventText, "--mode", "now"];
     execFile("openclaw", args, { timeout: WAKE_CLI_TIMEOUT_MS }, (err) => {
@@ -54,6 +59,10 @@ export class WakeDispatcher {
     });
   }
 
+  /**
+   * Wake the originating orchestrator agent with context.
+   * Falls back to direct channel delivery + system event when agent metadata is missing.
+   */
   wakeAgent(session: Session, eventText: string, telegramText: string, label: string): void {
     const agentId = session.originAgentId?.trim();
 

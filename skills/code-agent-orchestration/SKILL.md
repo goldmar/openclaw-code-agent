@@ -197,14 +197,14 @@ Use `agent_kill(reason: "completed")` when:
 
 ### Idle completion and auto-resume
 
-- After a turn completes without a question, a **post-turn idle timer** starts (default: 5 min). If no follow-up arrives, the session transitions to **completed** (not killed).
+- After a turn completes without a question, the session is immediately **paused** (killed with reason `done`, auto-resumable).
 - On the next `agent_respond` to a completed or idle-killed session, the plugin **auto-resumes** by spawning a new session with the same session ID — conversation context is preserved.
-- Sessions idle for `idleTimeoutMinutes` (default: 30 min) are killed with reason `idle-timeout` and also auto-resume on next respond.
+- Sessions idle for `idleTimeoutMinutes` (default: 15 min) are killed with reason `idle-timeout` and also auto-resume on next respond.
 - Sessions killed explicitly by the user (`agent_kill` without `reason: "completed"`) do NOT auto-resume.
 
 ### Timeouts
 
-- Idle multi-turn sessions are automatically killed after `idleTimeoutMinutes` (default: 30 min)
+- Idle multi-turn sessions are automatically killed after `idleTimeoutMinutes` (default: 15 min)
 - Completed sessions are garbage-collected after 1h but remain resumable via persisted IDs
 
 ### Check the result after completion

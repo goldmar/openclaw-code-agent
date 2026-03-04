@@ -1,6 +1,6 @@
-# openclaw-code-agent: Claude Code orchestration for OpenClaw
+# openclaw-code-agent: Coding-Agent orchestration for OpenClaw
 
-> The dedicated OpenClaw plugin for Claude Code — more powerful than the built-in ACP integration.
+> The dedicated OpenClaw plugin for Claude Code and Codex — more powerful than the built-in ACP integration.
 > https://github.com/goldmar/openclaw-code-agent
 
 ---
@@ -9,7 +9,7 @@
 
 | Feature | Built-in ACP | openclaw-code-agent |
 |---------|-------------|----------------------|
-| Launch Claude Code sessions | ✅ | ✅ |
+| Launch coding-agent sessions | ✅ | ✅ |
 | Multi-turn sessions | ❌ | ✅ Fully resumable |
 | Plan mode (propose before coding) | ❌ | ✅ Native support |
 | Approve / revise plans inline | ❌ | ✅ `approve=true` or send feedback |
@@ -21,6 +21,7 @@
 | Session history & stats | ❌ | ✅ `agent_sessions`, `agent_stats` |
 | Resume a previous session by ID | ❌ | ✅ Full history preserved |
 | Fork a session to explore alternatives | ❌ | ✅ |
+| Multiple harness backends | ❌ | ✅ Claude Code + Codex |
 
 ---
 
@@ -63,4 +64,3 @@ agent_stats      — usage metrics and costs
 ```
 
 ---
-

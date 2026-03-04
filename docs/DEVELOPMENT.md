@@ -70,9 +70,15 @@ openclaw-code-agent/
 
 1. **Multi-turn uses `AsyncIterable` prompts.** The `MessageStream` class implements `Symbol.asyncIterator` to feed user messages into the SDK's `query()` function as an async generator, keeping the session alive across turns.
 
-2. **Persisted sessions survive GC.** When a session is garbage-collected (default 24 hours after completion, configurable via `sessionGcAgeMinutes`), its harness session ID is retained in a separate persistence map so it can be resumed later. Entries are stored under three indexes (internal ID, name, harness UUID) for flexible lookup.
+2. **Persisted sessions survive GC.** When a session is garbage-collected (default 24 hours after completion, configurable via `sessionGcAgeMinutes`), its harness session ID is retained in a separate persistence map so it can be resumed later. Entries are stored under three indexes (internal ID, name, harness UUID) for flexible lookup. Persistence path precedence is:
+   - `OPENCLAW_CODE_AGENT_SESSIONS_PATH`
+   - `$OPENCLAW_HOME/code-agent-sessions.json`
+   - `~/.openclaw/code-agent-sessions.json`
 
-3. **Notifications use CLI shelling.** Since the plugin API doesn't expose a runtime `sendMessage` method, outbound notifications go through `openclaw message send` via `child_process.execFile`.
+3. **Notifications and wakes use CLI shelling.** Since the plugin API doesn't expose runtime delivery/wake APIs, the plugin shells out via `child_process.execFile` to:
+   - `openclaw message send` (direct channel notifications)
+   - `openclaw agent --deliver` (orchestrator wake path)
+   - `openclaw system event --mode now` (fallback wake path)
 
 4. **Metrics are in-memory only.** Session metrics are aggregated in the `SessionManager` and reset on service restart. They are not persisted to disk.
 

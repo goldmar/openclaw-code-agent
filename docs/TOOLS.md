@@ -11,7 +11,7 @@ All tools provided by the OpenClaw Code Agent. Each tool is exposed to agents vi
 | Tool | Description | Key Parameters |
 |------|-------------|----------------|
 | `agent_launch` | Launch a coding agent session | `prompt`, `workdir`, `name`, `model`, `resume_session_id` |
-| `agent_respond` | Send follow-up message to a running session | `session`, `message`, `interrupt`, `userInitiated` |
+| `agent_respond` | Send follow-up message to a running session | `session`, `message`, `interrupt`, `userInitiated`, `approve` |
 | `agent_kill` | Terminate a session | `session` |
 | `agent_output` | Show session output (read-only) | `session`, `lines`, `full` |
 | `agent_sessions` | List all sessions | `status` |
@@ -38,7 +38,9 @@ Launch a coding agent session in the background to execute a development task. S
 | `resume_session_id` | string | no | — | Session ID to resume (from a previous session's `harnessSessionId`). Accepts name, internal ID, or harness UUID — the plugin resolves it |
 | `fork_session` | boolean | no | `false` | When resuming, fork to a new session instead of continuing the existing one. Use with `resume_session_id` |
 | `multi_turn_disabled` | boolean | no | `false` | Disable multi-turn mode. Set to `true` for fire-and-forget sessions that don't accept follow-ups |
-| `permission_mode` | enum | no | plugin config / `bypassPermissions` | One of: `default`, `plan`, `acceptEdits`, `bypassPermissions` |
+| `notify_on_turn_end` | boolean | no | `true` | If `false`, suppress turn-end wake notifications for this session |
+| `permission_mode` | enum | no | plugin config (`plan` by default) | One of: `default`, `plan`, `acceptEdits`, `bypassPermissions` |
+| `harness` | string | no | plugin `defaultHarness` (`claude-code`) | Harness backend. Built-ins: `claude-code`, `codex` |
 
 ### Example
 
@@ -75,7 +77,7 @@ agent_launch(
 
 ## agent_respond
 
-Send a follow-up message to a running multi-turn coding agent session. If the session was idle-killed (post-turn-idle or idle-timeout), the plugin auto-resumes it with conversation context preserved.
+Send a follow-up message to a running multi-turn coding agent session. If the session was idle-killed (idle-timeout or paused (`done`)), the plugin auto-resumes it with conversation context preserved.
 
 ### Parameters
 
@@ -85,6 +87,7 @@ Send a follow-up message to a running multi-turn coding agent session. If the se
 | `message` | string | **yes** | — | The message to send |
 | `interrupt` | boolean | no | `false` | Interrupt the current turn before sending. Useful to redirect the session mid-response |
 | `userInitiated` | boolean | no | `false` | Set to `true` when the message comes from the user (not auto-generated). Resets the auto-respond counter |
+| `approve` | boolean | no | `false` | When `true` and the session has a pending plan approval, switches to implementation mode (`bypassPermissions`) before sending the message |
 
 ### Auto-Respond Safety Cap
 
@@ -96,7 +99,25 @@ The plugin tracks how many times an agent auto-responds to a session. When the c
 
 ### Auto-Resume
 
-When responding to a session that was killed due to idle timeout (`idle-timeout` or `post-turn-idle`), the plugin automatically spawns a new session with the same harness session ID, preserving conversation context. Sessions killed explicitly by the user (`agent_kill`) do NOT auto-resume.
+When responding to a session that was killed due to idle timeout (`idle-timeout` or `done`), the plugin automatically spawns a new session with the same harness session ID, preserving conversation context. Sessions killed explicitly by the user (`agent_kill`) do NOT auto-resume.
+
+### Permission Modes By Harness
+
+- Claude Code harness: passes `default` / `plan` / `acceptEdits` / `bypassPermissions` through SDK permissions.
+- Codex harness:
+  - Always uses SDK thread options: `sandboxMode: "danger-full-access"` and `approvalPolicy: "never"`
+  - In `bypassPermissions`, adds filesystem root plus `OPENCLAW_CODEX_BYPASS_ADDITIONAL_DIRS` entries to SDK `additionalDirectories`
+  - `plan` / `acceptEdits` are orchestration behaviors (plan approval flow), not SDK sandbox restrictions
+  - Session continuation uses `codex.resumeThread(<thread-id>, options)` under the hood
+
+### Crash / Restart Recovery
+
+Session metadata (harness, workdir, model, name, harness session ID) is written when a session transitions to `"running"` — before the session completes. Persisted index path precedence:
+1. `OPENCLAW_CODE_AGENT_SESSIONS_PATH`
+2. `$OPENCLAW_HOME/code-agent-sessions.json` (when `OPENCLAW_HOME` is set)
+3. `~/.openclaw/code-agent-sessions.json`
+
+After a plugin restart, sessions that were mid-flight appear as `"killed"` in `/agent_resume --list` and can be resumed by name or harness session ID. The correct harness and workdir are restored automatically.
 
 ### Example
 
@@ -128,6 +149,7 @@ Terminate a running coding agent session. Cannot kill sessions that are already 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | `session` | string | **yes** | — | Session name or ID to terminate |
+| `reason` | enum | no | `killed` | `killed` terminates; `completed` marks as completed (sends completion lifecycle behavior) |
 
 ### Example
 
@@ -205,6 +227,7 @@ agent_launch  ──►  STARTING  ──►  RUNNING  ──►  COMPLETED
                                      ▼
                                agent_kill  ──►  KILLED
                                (idle timeout)──► KILLED (auto-resumes on respond)
+                               (turn done) ────► COMPLETED(reason=done, auto-resumes on respond)
 
                                (errors)    ──►  FAILED
 ```
@@ -213,7 +236,7 @@ agent_launch  ──►  STARTING  ──►  RUNNING  ──►  COMPLETED
 - **RUNNING** — Session is active and accepting messages
 - **COMPLETED** — Session finished successfully
 - **FAILED** — Session errored out
-- **KILLED** — Session was terminated (user, idle-timeout, or post-turn-idle)
+- **KILLED** — Session was terminated (user or idle-timeout; paused sessions are auto-resumable without appearing as KILLED)
 
 ---
 

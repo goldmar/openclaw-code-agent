@@ -67,6 +67,12 @@ class MessageStream {
   }
 }
 
+/**
+ * Runtime session wrapper around a single harness lifecycle.
+ *
+ * Owns state-machine transitions, output buffering, prompt streaming, timers,
+ * and lifecycle events consumed by SessionManager.
+ */
 export class Session extends EventEmitter {
   readonly id: string;
   name: string;

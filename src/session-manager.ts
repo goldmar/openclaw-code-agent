@@ -48,6 +48,9 @@ const KILLABLE_STATUSES = new Set<SessionStatus>(["starting", "running"]);
 const WAITING_EVENT_DEBOUNCE_MS = 5_000;
 const WAKE_CLI_TIMEOUT_MS = 30_000;
 
+/**
+ * Orchestrates active session lifecycles, wake signaling, persistence, and GC.
+ */
 export class SessionManager {
   private sessions: Map<string, Session> = new Map();
   maxSessions: number;
@@ -93,6 +96,7 @@ export class SessionManager {
     return `${baseName}-${i}`;
   }
 
+  /** Spawn and start a new session, wiring lifecycle listeners and launch notification. */
   spawn(config: SessionConfig): Session {
     const activeCount = [...this.sessions.values()].filter(
       (s) => KILLABLE_STATUSES.has(s.status),
@@ -488,6 +492,7 @@ export class SessionManager {
 
   // -- Public API --
 
+  /** Resolve by internal id first, then by name with active-session preference. */
   resolve(idOrName: string): Session | undefined {
     const byId = this.sessions.get(idOrName);
     if (byId) return byId;
@@ -503,10 +508,12 @@ export class SessionManager {
     return matches.sort((a, b) => b.startedAt - a.startedAt)[0];
   }
 
+  /** Return an active session by internal id. */
   get(id: string): Session | undefined {
     return this.sessions.get(id);
   }
 
+  /** List sessions sorted newest-first, optionally filtered by status. */
   list(filter?: SessionStatus | "all"): Session[] {
     let result = [...this.sessions.values()];
     if (filter && filter !== "all") {
@@ -515,6 +522,7 @@ export class SessionManager {
     return result.sort((a, b) => b.startedAt - a.startedAt);
   }
 
+  /** Kill a session by internal id. */
   kill(id: string, reason?: KillReason): boolean {
     const session = this.sessions.get(id);
     if (!session) return false;
@@ -522,6 +530,7 @@ export class SessionManager {
     return true;
   }
 
+  /** Kill all active sessions and clear pending wake retries. */
   killAll(): void {
     for (const session of this.sessions.values()) {
       if (KILLABLE_STATUSES.has(session.status)) {
@@ -531,19 +540,23 @@ export class SessionManager {
     this.wakeDispatcher.clearPendingRetries();
   }
 
+  /** Resolve any reference to a persisted harness session id for resume flows. */
   resolveHarnessSessionId(ref: string): string | undefined {
     const active = this.resolve(ref);
     return this.store.resolveHarnessSessionId(ref, active?.harnessSessionId);
   }
 
+  /** Read persisted metadata by harness id, internal id, or name. */
   getPersistedSession(ref: string): PersistedSessionInfo | undefined {
     return this.store.getPersistedSession(ref);
   }
 
+  /** Return persisted sessions newest-first. */
   listPersistedSessions(): PersistedSessionInfo[] {
     return this.store.listPersistedSessions();
   }
 
+  /** Evict stale runtime records and enforce persisted/session-output retention limits. */
   cleanup(): void {
     const now = Date.now();
     // GC only evicts terminal sessions from the runtime in-memory map.

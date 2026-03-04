@@ -91,6 +91,9 @@ function normalizePersistedEntry(raw: unknown): PersistedSessionInfo | undefined
   };
 }
 
+/**
+ * Durable storage/index for resumable sessions and lightweight output snapshots.
+ */
 export class SessionStore {
   readonly persisted: Map<string, PersistedSessionInfo> = new Map();
   readonly idIndex: Map<string, string> = new Map();
@@ -145,6 +148,7 @@ export class SessionStore {
     }
   }
 
+  /** Persist a running-session stub so crash/restart can recover routing metadata. */
   markRunning(session: Session): void {
     if (!session.harnessSessionId) return;
     const stub: PersistedSessionInfo = {
@@ -169,10 +173,12 @@ export class SessionStore {
     this.saveIndex();
   }
 
+  /** True when this internal session id was already indexed in persisted storage. */
   hasRecordedSession(sessionId: string): boolean {
     return this.idIndex.has(sessionId);
   }
 
+  /** Persist terminal session metadata and write a best-effort tmp output snapshot. */
   persistTerminal(session: Session): void {
     if (!session.harnessSessionId) return;
 
@@ -213,6 +219,7 @@ export class SessionStore {
     this.saveIndex();
   }
 
+  /** Return newest persisted entry for a user-facing name, handling name collisions. */
   getLatestPersistedByName(name: string): PersistedSessionInfo | undefined {
     let winner: PersistedSessionInfo | undefined;
     let winnerCreatedAt = Number.NEGATIVE_INFINITY;
@@ -245,6 +252,7 @@ export class SessionStore {
     return winner;
   }
 
+  /** Resolve any session reference to a harness session id, if possible. */
   resolveHarnessSessionId(ref: string, activeHarnessSessionId?: string): string | undefined {
     if (activeHarnessSessionId) return activeHarnessSessionId;
 
@@ -260,6 +268,7 @@ export class SessionStore {
     return undefined;
   }
 
+  /** Resolve persisted session metadata by harness id, internal id, or name. */
   getPersistedSession(ref: string): PersistedSessionInfo | undefined {
     const direct = this.persisted.get(ref);
     if (direct) return direct;
@@ -268,10 +277,12 @@ export class SessionStore {
     return this.getLatestPersistedByName(ref);
   }
 
+  /** List persisted sessions sorted by completion time (newest first). */
   listPersistedSessions(): PersistedSessionInfo[] {
     return [...this.persisted.values()].sort((a, b) => (b.completedAt ?? 0) - (a.completedAt ?? 0));
   }
 
+  /** Best-effort cleanup for stale tmp output files written by persistTerminal. */
   cleanupTmpOutputFiles(now: number): void {
     try {
       const tmpDir = tmpdir();
@@ -292,6 +303,7 @@ export class SessionStore {
     }
   }
 
+  /** Enforce max persisted session retention by evicting oldest records and indexes. */
   evictOldestPersisted(maxPersistedSessions: number): void {
     const all = this.listPersistedSessions();
     if (all.length <= maxPersistedSessions) return;
@@ -310,6 +322,7 @@ export class SessionStore {
     this.saveIndex();
   }
 
+  /** True when a runtime terminal session exceeded the configured in-memory TTL. */
   shouldGcActiveSession(session: Session, now: number, cleanupMaxAgeMs: number): boolean {
     if (!session.completedAt) return false;
     if (!TERMINAL_STATUSES.has(session.status)) return false;

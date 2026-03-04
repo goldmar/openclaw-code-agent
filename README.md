@@ -69,14 +69,14 @@ Replace `my-bot` with your Telegram bot account name and `123456789` with your T
 
 ## Tools
 
-| Tool | Description |
-|------|-------------|
-| `agent_launch` | Start a new coding agent session in background |
-| `agent_respond` | Send a follow-up message to a running session |
-| `agent_kill` | Terminate a running session |
-| `agent_output` | Read buffered output from a session |
-| `agent_sessions` | List all sessions with status and progress |
-| `agent_stats` | Show usage metrics (counts, durations, costs) |
+| Tool | Description | Key Parameters |
+|------|-------------|----------------|
+| `agent_launch` | Start a new coding agent session in background | `prompt`, `name`, `workdir`, `model`, `resume_session_id`, `fork_session`, `permission_mode`, `harness`, `notify_on_turn_end` |
+| `agent_respond` | Send a follow-up message to a running session | `session`, `message`, `interrupt`, `approve`, `userInitiated` |
+| `agent_kill` | Terminate or complete a running session | `session`, `reason` |
+| `agent_output` | Read buffered output from a session | `session`, `lines`, `full` |
+| `agent_sessions` | List active + persisted sessions | `status` |
+| `agent_stats` | Show usage metrics (counts, durations, costs) | *(none)* |
 
 Core orchestration workflows use `agent_launch`, `agent_respond`, `agent_output`, `agent_sessions`, and `agent_kill`.
 
@@ -183,7 +183,16 @@ Permission modes are shared at the plugin API, but each harness maps them differ
   - `default`, `plan`, `acceptEdits`, `bypassPermissions` are passed through the SDK
 - **Codex harness**
   - Always runs with SDK thread options `sandboxMode: "danger-full-access"` and `approvalPolicy: "never"`
+  - In `bypassPermissions`, the harness adds filesystem root (`/` on POSIX) to Codex `additionalDirectories`, plus optional extras from `OPENCLAW_CODEX_BYPASS_ADDITIONAL_DIRS` (comma-separated)
+  - `setPermissionMode()` is applied by recreating the thread on the next turn via `resumeThread` (same thread ID)
   - `plan` / `acceptEdits` remain behavioral orchestration constraints (planning/approval flow), not sandbox restrictions
+
+### Runtime Environment Overrides
+
+- `OPENCLAW_CODE_AGENT_SESSIONS_PATH` — explicit persisted session index path
+- `OPENCLAW_HOME` — base dir for persisted session index when explicit path is unset (`$OPENCLAW_HOME/code-agent-sessions.json`)
+- `OPENCLAW_CODEX_BYPASS_ADDITIONAL_DIRS` — comma-separated extra directories for Codex bypass mode
+- `OPENCLAW_CODEX_HEARTBEAT_MS` — Codex activity heartbeat interval in milliseconds (default `10000`)
 
 ### `notify_on_turn_end` (`notifyOnTurnEnd`)
 
@@ -275,6 +284,8 @@ For a detailed look at how the plugin works internally, see the [docs/](docs/) d
 ---
 
 ## Development
+
+Build output is an **ESM bundle** at `dist/index.js` (`package.json` has `"type": "module"`).
 
 ```bash
 # Install dependencies

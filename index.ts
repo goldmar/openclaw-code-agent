@@ -15,20 +15,52 @@ import { SessionManager } from "./src/session-manager";
 import { NotificationService } from "./src/notifications";
 import { setSessionManager, setNotificationService } from "./src/singletons";
 import { setPluginConfig, pluginConfig } from "./src/config";
+import type { OpenClawPluginToolContext, PluginConfig } from "./src/types";
 import { execFile } from "child_process";
 
-export function register(api: any) {
+interface OpenClawCommandApi {
+  registerCommand(config: {
+    name: string;
+    description: string;
+    acceptsArgs: boolean;
+    requireAuth: boolean;
+    handler: (...args: unknown[]) => unknown;
+  }): void;
+}
+
+interface OpenClawServiceApi {
+  registerService(config: {
+    id: string;
+    start: () => void;
+    stop: () => void;
+  }): void;
+}
+
+interface OpenClawToolApi {
+  registerTool(
+    factory: (ctx: OpenClawPluginToolContext) => unknown,
+    options?: { optional?: boolean },
+  ): void;
+}
+
+interface OpenClawPluginApi extends OpenClawCommandApi, OpenClawServiceApi, OpenClawToolApi {
+  pluginConfig?: Partial<PluginConfig>;
+  getConfig?: () => Partial<PluginConfig> | undefined;
+}
+
+/** Register plugin tools, commands, and the background session service. */
+export function register(api: OpenClawPluginApi): void {
   let sm: SessionManager | null = null;
   let ns: NotificationService | null = null;
   let cleanupInterval: ReturnType<typeof setInterval> | null = null;
 
   // Tools
-  api.registerTool((ctx: any) => makeAgentLaunchTool(ctx), { optional: false });
-  api.registerTool((ctx: any) => makeAgentSessionsTool(ctx), { optional: false });
-  api.registerTool((ctx: any) => makeAgentKillTool(ctx), { optional: false });
-  api.registerTool((ctx: any) => makeAgentOutputTool(ctx), { optional: false });
-  api.registerTool((ctx: any) => makeAgentRespondTool(ctx), { optional: false });
-  api.registerTool((ctx: any) => makeAgentStatsTool(ctx), { optional: false });
+  api.registerTool((ctx: OpenClawPluginToolContext) => makeAgentLaunchTool(ctx), { optional: false });
+  api.registerTool((ctx: OpenClawPluginToolContext) => makeAgentSessionsTool(ctx), { optional: false });
+  api.registerTool((ctx: OpenClawPluginToolContext) => makeAgentKillTool(ctx), { optional: false });
+  api.registerTool((ctx: OpenClawPluginToolContext) => makeAgentOutputTool(ctx), { optional: false });
+  api.registerTool((ctx: OpenClawPluginToolContext) => makeAgentRespondTool(ctx), { optional: false });
+  api.registerTool((ctx: OpenClawPluginToolContext) => makeAgentStatsTool(ctx), { optional: false });
 
   // Commands
   registerAgentCommand(api);

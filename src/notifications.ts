@@ -1,5 +1,6 @@
 import type { Session } from "./session";
 
+/** Transport callback used to emit chat messages to a channel/thread target. */
 export type SendMessageFn = (channelId: string, text: string, threadId?: string | number) => void;
 
 /**

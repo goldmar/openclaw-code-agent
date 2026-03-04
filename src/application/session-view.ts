@@ -8,6 +8,7 @@ const DEFAULT_OUTPUT_LINES = 50;
 const MIN_OUTPUT_LINES = 1;
 const VALID_SESSION_STATUSES = new Set<SessionStatus>(["starting", "running", "completed", "failed", "killed"]);
 
+/** Session output rendering options for `agent_output` and `/agent_output`. */
 export interface OutputOptions {
   full?: boolean;
   lines?: number;

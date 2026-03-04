@@ -4,6 +4,7 @@ import type { Session } from "./session";
 
 const TERMINAL_STATUSES = new Set<SessionStatus>(["completed", "failed", "killed"]);
 
+/** Aggregates in-memory usage metrics across session lifecycles. */
 export class SessionMetricsRecorder {
   private metrics: SessionMetrics = {
     totalCostUsd: 0,
@@ -15,10 +16,12 @@ export class SessionMetricsRecorder {
     mostExpensive: null,
   };
 
+  /** Count a newly launched session. */
   incrementLaunched(): void {
     this.metrics.totalLaunched++;
   }
 
+  /** Record terminal session metrics exactly once per lifecycle. */
   recordSession(session: Session): void {
     const cost = session.costUsd ?? 0;
     const status = session.status;
@@ -48,6 +51,7 @@ export class SessionMetricsRecorder {
     }
   }
 
+  /** Return the current metrics snapshot object. */
   getMetrics(): SessionMetrics {
     return this.metrics;
   }
