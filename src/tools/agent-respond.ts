@@ -11,6 +11,12 @@ interface AgentRespondParams {
   approve?: boolean;
 }
 
+function isAgentRespondParams(value: unknown): value is AgentRespondParams {
+  if (!value || typeof value !== "object") return false;
+  const params = value as Record<string, unknown>;
+  return typeof params.session === "string" && typeof params.message === "string";
+}
+
 /** Create `agent_respond` tool definition. */
 export function makeAgentRespondTool(_ctx?: OpenClawPluginToolContext) {
   return {
@@ -30,9 +36,12 @@ export function makeAgentRespondTool(_ctx?: OpenClawPluginToolContext) {
         Type.Boolean({ description: "Set to true to approve a pending plan and switch the session from plan mode to bypassPermissions. Only works when the session has a pending plan approval (after ExitPlanMode / set_permission_mode). To request changes instead, omit this flag — the message will be sent as revision feedback and the agent will revise the plan." }),
       ),
     }),
-    async execute(_id: string, params: AgentRespondParams) {
+    async execute(_id: string, params: unknown) {
       if (!sessionManager) {
         return { content: [{ type: "text", text: "Error: SessionManager not initialized. The code-agent service must be running." }] };
+      }
+      if (!isAgentRespondParams(params)) {
+        return { content: [{ type: "text", text: "Error: Invalid parameters. Expected { session, message, interrupt?, userInitiated?, approve? }." }] };
       }
 
       const result = await executeRespond(sessionManager, params);
