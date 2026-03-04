@@ -375,4 +375,37 @@ describe("CodexHarness SDK mapping", () => {
       assert.equal(opts.approvalPolicy, "never");
     }
   });
+
+  it("adds filesystem root and env extras to additionalDirectories in bypass mode", async () => {
+    const prev = process.env.OPENCLAW_CODEX_BYPASS_ADDITIONAL_DIRS;
+    process.env.OPENCLAW_CODEX_BYPASS_ADDITIONAL_DIRS = "/mnt/data,/tmp,/mnt/data";
+
+    try {
+      const codex = new MockCodex([
+        { events: [{ type: "thread.started", thread_id: "thread-bypass" }, { type: "turn.completed", usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 } }] },
+      ]);
+
+      const h = new CodexHarness({ createCodex: () => codex as any });
+      await collectMessages(h.launch({ prompt: "go", cwd: "/home/openclaw/project", permissionMode: "bypassPermissions" }));
+
+      const startOpts = codex.startCalls[0];
+      assert.ok(startOpts?.additionalDirectories?.includes("/"), "root directory should be included");
+      assert.ok(startOpts?.additionalDirectories?.includes("/mnt/data"));
+      assert.ok(startOpts?.additionalDirectories?.includes("/tmp"));
+      assert.equal(new Set(startOpts?.additionalDirectories ?? []).size, (startOpts?.additionalDirectories ?? []).length, "additionalDirectories should be deduped");
+    } finally {
+      process.env.OPENCLAW_CODEX_BYPASS_ADDITIONAL_DIRS = prev;
+    }
+  });
+
+  it("does not set additionalDirectories outside bypass mode", async () => {
+    const codex = new MockCodex([
+      { events: [{ type: "thread.started", thread_id: "thread-default" }, { type: "turn.completed", usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 } }] },
+    ]);
+
+    const h = new CodexHarness({ createCodex: () => codex as any });
+    await collectMessages(h.launch({ prompt: "go", cwd: "/tmp", permissionMode: "plan" }));
+
+    assert.equal(codex.startCalls[0]?.additionalDirectories, undefined);
+  });
 });

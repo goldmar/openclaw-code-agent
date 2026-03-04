@@ -9,6 +9,7 @@
  */
 import type { SessionMetrics } from "./types";
 
+/** Session shape needed by list formatting utilities. */
 export interface SessionListRenderable {
   id: string;
   name: string;
@@ -24,6 +25,7 @@ export interface SessionListRenderable {
   forkSession?: boolean;
 }
 
+/** Format a duration in milliseconds as `MmSs` or `Ss`. */
 export function formatDuration(ms: number): string {
   const seconds = Math.floor(ms / 1000);
   const minutes = Math.floor(seconds / 60);
@@ -92,6 +94,7 @@ export function formatSessionListing(session: SessionListRenderable): string {
   return lines.join("\n");
 }
 
+/** Render aggregate in-memory usage metrics for `agent_stats`. */
 export function formatStats(metrics: SessionMetrics, runningCount: number): string {
   const avgDurationMs =
     metrics.sessionsWithDuration > 0

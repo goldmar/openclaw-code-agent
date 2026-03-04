@@ -3,7 +3,7 @@
  * into the plugin's HarnessSession message contract.
  */
 
-import { parse } from "path";
+import { parse, resolve } from "path";
 import { Codex, type Thread, type ThreadEvent, type ThreadOptions, type Usage } from "@openai/codex-sdk";
 import type {
   AgentHarness,
@@ -22,6 +22,8 @@ const CODEX_PLAN_APPROVAL_TOOL = "codex:plan-approval" as const;
 const CODEX_INPUT_PRICE = 1.10 / 1_000_000;
 const CODEX_CACHED_INPUT_PRICE = 0.275 / 1_000_000;
 const CODEX_OUTPUT_PRICE = 4.40 / 1_000_000;
+const OPENCLAW_CODEX_HEARTBEAT_MS_ENV = "OPENCLAW_CODEX_HEARTBEAT_MS";
+const OPENCLAW_CODEX_BYPASS_ADDITIONAL_DIRS_ENV = "OPENCLAW_CODEX_BYPASS_ADDITIONAL_DIRS";
 
 type CodexClientLike = Pick<Codex, "startThread" | "resumeThread">;
 
@@ -71,14 +73,34 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-function buildBypassAdditionalDirectories(cwd: string): string[] {
-  const root = parse(cwd).root || "/";
-  const extras = [root];
+function parseCsvEnv(value: string | undefined): string[] {
+  if (!value) return [];
+  return value.split(",").map((v) => v.trim()).filter(Boolean);
+}
 
-  const fromEnv = process.env.OPENCLAW_CODEX_BYPASS_ADDITIONAL_DIRS?.trim();
-  if (fromEnv) {
-    extras.push(...fromEnv.split(",").map((v) => v.trim()).filter(Boolean));
-  }
+/**
+ * Return the filesystem root for the launch cwd.
+ *
+ * We resolve first so relative inputs still map to a stable root (`/` on POSIX,
+ * drive root on Windows-like paths).
+ */
+function resolveCwdRoot(cwd: string): string {
+  const root = parse(resolve(cwd)).root;
+  return root || "/";
+}
+
+/**
+ * Build extra sandbox directories for bypass mode.
+ *
+ * Why include the filesystem root:
+ * Codex SDK still applies an allowlist boundary even under permissive sandbox
+ * settings. Including the root avoids accidental write denials when a task
+ * needs to cross project boundaries (e.g., temp dirs, sibling repos, mounts).
+ */
+function buildBypassAdditionalDirectories(cwd: string): string[] {
+  const root = resolveCwdRoot(cwd);
+  const extras = [root];
+  extras.push(...parseCsvEnv(process.env[OPENCLAW_CODEX_BYPASS_ADDITIONAL_DIRS_ENV]));
 
   return [...new Set(extras)];
 }
@@ -114,7 +136,7 @@ export class CodexHarness implements AgentHarness {
   constructor(private readonly deps: CodexHarnessDeps = {}) {}
 
   private activityHeartbeatMs(): number {
-    const parsed = Number.parseInt(process.env.OPENCLAW_CODEX_HEARTBEAT_MS ?? String(DEFAULT_HEARTBEAT_MS), 10);
+    const parsed = Number.parseInt(process.env[OPENCLAW_CODEX_HEARTBEAT_MS_ENV] ?? String(DEFAULT_HEARTBEAT_MS), 10);
     if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_HEARTBEAT_MS;
     return parsed;
   }

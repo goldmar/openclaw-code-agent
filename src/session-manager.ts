@@ -13,6 +13,15 @@ import { SessionMetricsRecorder } from "./session-metrics";
 import { WakeDispatcher } from "./wake-dispatcher";
 import { looksLikeWaitingForUser } from "./waiting-detector";
 
+/**
+ * Resolve the plan-approval workflow path for both source and bundled layouts.
+ *
+ * Precedence:
+ * 1) `OPENCLAW_CODE_AGENT_PLAN_WORKFLOW_PATH`
+ * 2) CWD-relative workflow (dev/local runs)
+ * 3) module-relative candidates (bundled/dist layouts)
+ * 4) legacy relative fallback
+ */
 function resolveLobsterWorkflowPath(): string {
   const explicit = process.env.OPENCLAW_CODE_AGENT_PLAN_WORKFLOW_PATH?.trim();
   if (explicit) return explicit;
@@ -240,12 +249,13 @@ export class SessionManager {
 
       // Parse the Lobster response to get the resume token
       let resumeToken: string | undefined;
+      const stdoutText = typeof stdout === "string" ? stdout : String(stdout ?? "");
       try {
-        const response = JSON.parse(stdout.trim());
+        const response = JSON.parse(stdoutText.trim());
         resumeToken = response?.requiresApproval?.resumeToken
           ?? response?.details?.requiresApproval?.resumeToken;
       } catch {
-        console.warn(`[SessionManager] Could not parse Lobster response for session=${session.id}: ${stdout?.substring(0, 200)}`);
+        console.warn(`[SessionManager] Could not parse Lobster response for session=${session.id}: ${stdoutText.substring(0, 200)}`);
       }
 
       // Store token on session for programmatic resume via agent_respond

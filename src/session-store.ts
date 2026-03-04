@@ -4,22 +4,33 @@ import { dirname, join } from "path";
 import type { PersistedSessionInfo, SessionStatus } from "./types";
 import type { Session } from "./session";
 
-function resolveOpenclawHomeDir(): string {
-  const explicit = process.env.OPENCLAW_HOME?.trim();
+/** Resolve OpenClaw home directory from environment or default path. */
+function resolveOpenclawHomeDir(env: NodeJS.ProcessEnv): string {
+  const explicit = env.OPENCLAW_HOME?.trim();
   if (explicit) return explicit;
   return join(homedir(), ".openclaw");
 }
 
-function resolveSessionIndexPath(): string {
-  const explicit = process.env.OPENCLAW_CODE_AGENT_SESSIONS_PATH?.trim();
+/**
+ * Resolve persisted session index path using this precedence chain:
+ * 1) `OPENCLAW_CODE_AGENT_SESSIONS_PATH`
+ * 2) `OPENCLAW_HOME` + `code-agent-sessions.json`
+ * 3) `$HOME/.openclaw/code-agent-sessions.json`
+ */
+function resolveSessionIndexPath(env: NodeJS.ProcessEnv): string {
+  const explicit = env.OPENCLAW_CODE_AGENT_SESSIONS_PATH?.trim();
   if (explicit) return explicit;
-  return join(resolveOpenclawHomeDir(), "code-agent-sessions.json");
+  return join(resolveOpenclawHomeDir(env), "code-agent-sessions.json");
 }
 
-const SESSION_INDEX_PATH = resolveSessionIndexPath();
 const TERMINAL_STATUSES = new Set<SessionStatus>(["completed", "failed", "killed"]);
 const VALID_STATUSES = new Set<SessionStatus>(["running", "completed", "failed", "killed"]);
 const TMP_OUTPUT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+interface SessionStoreOptions {
+  env?: NodeJS.ProcessEnv;
+  indexPath?: string;
+}
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -84,17 +95,21 @@ export class SessionStore {
   readonly persisted: Map<string, PersistedSessionInfo> = new Map();
   readonly idIndex: Map<string, string> = new Map();
   readonly nameIndex: Map<string, string> = new Map();
+  private readonly indexPath: string;
 
-  constructor() {
-    if (process.env.OPENCLAW_DEBUG_SESSION_STORE === "1") {
-      console.warn(`[SessionStore] index path: ${SESSION_INDEX_PATH}`);
+  constructor(options: SessionStoreOptions = {}) {
+    const env = options.env ?? process.env;
+    this.indexPath = options.indexPath ?? resolveSessionIndexPath(env);
+
+    if (env.OPENCLAW_DEBUG_SESSION_STORE === "1") {
+      console.warn(`[SessionStore] index path: ${this.indexPath}`);
     }
     this.loadIndex();
   }
 
   private loadIndex(): void {
     try {
-      const raw = readFileSync(SESSION_INDEX_PATH, "utf-8");
+      const raw = readFileSync(this.indexPath, "utf-8");
       const parsed: unknown = JSON.parse(raw);
       if (!Array.isArray(parsed)) return;
 
@@ -121,10 +136,10 @@ export class SessionStore {
 
   private saveIndex(): void {
     try {
-      mkdirSync(dirname(SESSION_INDEX_PATH), { recursive: true });
-      const tmp = SESSION_INDEX_PATH + ".tmp";
+      mkdirSync(dirname(this.indexPath), { recursive: true });
+      const tmp = this.indexPath + ".tmp";
       writeFileSync(tmp, JSON.stringify([...this.persisted.values()], null, 2), "utf-8");
-      renameSync(tmp, SESSION_INDEX_PATH);
+      renameSync(tmp, this.indexPath);
     } catch (err: unknown) {
       console.warn(`[SessionStore] Failed to save session index: ${errorMessage(err)}`);
     }
