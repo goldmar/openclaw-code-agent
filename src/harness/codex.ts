@@ -116,6 +116,7 @@ function buildThreadOptions(options: HarnessLaunchOptions, permissionMode?: stri
     workingDirectory: options.cwd,
     sandboxMode: "danger-full-access",
     approvalPolicy: "never",
+    skipGitRepoCheck: true,
     additionalDirectories,
   };
 }
