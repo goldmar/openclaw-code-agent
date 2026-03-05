@@ -84,5 +84,49 @@
       }
     }
   },
+  "uiHints": {
+    "fallbackChannel": {
+      "label": "Fallback notification channel",
+      "help": "Default channel used when no workspace-specific agentChannels entry matches the session workdir.",
+      "placeholder": "telegram|my-bot|123456789",
+      "sensitive": true
+    },
+    "agentChannels": {
+      "label": "Workspace notification channels",
+      "help": "Map absolute working-directory paths to notification channels so each workspace routes session updates to the right chat.",
+      "sensitive": true
+    },
+    "defaultWorkdir": {
+      "label": "Default working directory",
+      "help": "Base directory used for new sessions when agent_launch does not provide a workdir.",
+      "placeholder": "/home/user/project"
+    },
+    "defaultModel": {
+      "label": "Default model",
+      "help": "Default model for new sessions when a harness-specific override is not set.",
+      "placeholder": "sonnet"
+    },
+    "model": {
+      "label": "Codex model override",
+      "help": "Override model for all Codex sessions; falls back to the agent model config or defaultModel when unset.",
+      "placeholder": "gpt-5.3-codex"
+    },
+    "maxSessions": {
+      "label": "Maximum concurrent sessions",
+      "help": "Upper limit on concurrently running coding-agent sessions."
+    },
+    "idleTimeoutMinutes": {
+      "label": "Idle timeout (minutes)",
+      "help": "Minutes a paused multi-turn session can remain idle before the plugin auto-kills it."
+    },
+    "permissionMode": {
+      "label": "Default permission mode",
+      "help": "Default approval mode used when new coding-agent sessions are launched."
+    },
+    "planApproval": {
+      "label": "Plan approval policy",
+      "help": "Choose whether plans are auto-approved, always escalated, or delegated to the orchestrator."
+    }
+  },
   "skills": ["./skills"]
 }

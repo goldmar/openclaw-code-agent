@@ -6,6 +6,12 @@ export interface OpenClawPluginToolContext {
   workspaceDir?: string;
   agentDir?: string;
   agentId?: string;
+  id?: string | number;
+  channel?: string;
+  chatId?: string | number;
+  senderId?: string | number;
+  channelId?: string;
+  messageThreadId?: string | number;
   sessionKey?: string;
   messageChannel?: string;
   agentAccountId?: string;

@@ -1,33 +1,3 @@
-import type { Session } from "./session";
-
-/** Transport callback used to emit chat messages to a channel/thread target. */
-export type SendMessageFn = (channelId: string, text: string, threadId?: string | number) => void;
-
-/**
- * NotificationService — delivers notifications via channel messaging.
- *
- * Completion/failure formatting is driven by SessionManager.
- */
-export class NotificationService {
-  private sendMessage: SendMessageFn;
-
-  constructor(sendMessage: SendMessageFn) {
-    this.sendMessage = sendMessage;
-  }
-
-  /** Hook called when a session starts. Currently a no-op; notifications are driven by SessionManager. */
-  attachToSession(_session: Session): void {}
-
-  stop(): void {
-    // No-op — retained for interface compatibility with index.ts lifecycle.
-  }
-
-  /** Emit a message to a specific channel. */
-  emitToChannel(channelId: string, text: string, threadId?: string | number): void {
-    this.sendMessage(channelId, text, threadId);
-  }
-}
-
 /** Summarize tool input for compact display. */
 export function summarizeToolInput(input: unknown): string {
   if (!input || typeof input !== "object") return "";

@@ -468,58 +468,6 @@ describe("parseLobsterResumeToken()", () => {
 });
 
 // =========================================================================
-// buildDeliverArgs
-// =========================================================================
-
-describe("SessionManager.buildDeliverArgs()", () => {
-  let sm: SessionManager;
-
-  beforeEach(() => {
-    sm = new SessionManager(5);
-  });
-
-  it("returns empty array for 'unknown' channel", () => {
-    const args = (sm as any).buildDeliverArgs("unknown");
-    assert.deepEqual(args, []);
-  });
-
-  it("returns empty array for 'gateway' channel", () => {
-    const args = (sm as any).buildDeliverArgs("gateway");
-    assert.deepEqual(args, []);
-  });
-
-  it("returns empty array for undefined channel", () => {
-    const args = (sm as any).buildDeliverArgs(undefined);
-    assert.deepEqual(args, []);
-  });
-
-  it("returns empty array for channel without pipe", () => {
-    const args = (sm as any).buildDeliverArgs("nopipe");
-    assert.deepEqual(args, []);
-  });
-
-  it("builds 2-part channel args correctly", () => {
-    const args = (sm as any).buildDeliverArgs("telegram|123456");
-    assert.deepEqual(args, ["--deliver", "--reply-channel", "telegram", "--reply-to", "123456"]);
-  });
-
-  it("builds 3-part channel args with account", () => {
-    const args = (sm as any).buildDeliverArgs("telegram|bot123|chatid");
-    assert.deepEqual(args, ["--deliver", "--reply-channel", "telegram", "--reply-account", "bot123", "--reply-to", "chatid"]);
-  });
-
-  it("appends :topic: suffix for telegram with threadId", () => {
-    const args = (sm as any).buildDeliverArgs("telegram|bot123|chatid", 42);
-    assert.deepEqual(args, ["--deliver", "--reply-channel", "telegram", "--reply-account", "bot123", "--reply-to", "chatid:topic:42"]);
-  });
-
-  it("does not append :topic: for non-telegram channels", () => {
-    const args = (sm as any).buildDeliverArgs("discord|bot123|chatid", 42);
-    assert.deepEqual(args, ["--deliver", "--reply-channel", "discord", "--reply-account", "bot123", "--reply-to", "chatid"]);
-  });
-});
-
-// =========================================================================
 // debounceWaitingEvent
 // =========================================================================
 
@@ -594,11 +542,18 @@ describe("SessionManager.cleanup()", () => {
 
   it("keeps sessions exactly on the TTL boundary", () => {
     setPluginConfig({ sessionGcAgeMinutes: 5 });
-    const boundaryTime = Date.now() - 5 * 60 * 1000;
-    const s = fakeSession({ id: "ttl-boundary", status: "completed", completedAt: boundaryTime });
-    (sm as any).sessions.set("ttl-boundary", s);
-    sm.cleanup();
-    assert.equal((sm as any).sessions.has("ttl-boundary"), true);
+    const originalDateNow = Date.now;
+    const now = 1_700_000_000_000;
+    Date.now = () => now;
+    try {
+      const boundaryTime = now - 5 * 60 * 1000;
+      const s = fakeSession({ id: "ttl-boundary", status: "completed", completedAt: boundaryTime });
+      (sm as any).sessions.set("ttl-boundary", s);
+      sm.cleanup();
+      assert.equal((sm as any).sessions.has("ttl-boundary"), true);
+    } finally {
+      Date.now = originalDateNow;
+    }
   });
 
   it("evicts oldest persisted sessions when exceeding maxPersistedSessions", () => {
@@ -623,37 +578,28 @@ describe("SessionManager.cleanup()", () => {
 });
 
 // =========================================================================
-// deliverToTelegram
+// notifySession
 // =========================================================================
 
-describe("SessionManager.deliverToTelegram()", () => {
+describe("SessionManager.notifySession()", () => {
   let sm: SessionManager;
 
   beforeEach(() => {
     sm = new SessionManager(5);
+    (sm as any).wakeDispatcher = {
+      dispatchSessionNotification: (...args: any[]) => { ((sm as any).__dispatchCalls ??= []).push(args); },
+    };
+    (sm as any).__dispatchCalls = [];
   });
 
-  it("does nothing when notifications is null", () => {
-    const s = fakeSession({ originChannel: "telegram|123" });
-    // Should not throw
-    sm.deliverToTelegram(s, "test text");
-  });
-
-  it("calls emitToChannel with correct arguments when notifications set", () => {
-    const calls: any[] = [];
-    sm.notifications = {
-      emitToChannel(channelId: string, text: string, threadId?: string | number) {
-        calls.push({ channelId, text, threadId });
-      },
-      attachToSession() {},
-      stop() {},
-    } as any;
-    const s = fakeSession({ originChannel: "telegram|bot|123", originThreadId: 42 });
-    sm.deliverToTelegram(s, "hello", "test");
-    assert.equal(calls.length, 1);
-    assert.equal(calls[0].channelId, "telegram|bot|123");
-    assert.equal(calls[0].text, "hello");
-    assert.equal(calls[0].threadId, 42);
+  it("delegates direct session notifications to the unified dispatcher", () => {
+    const s = fakeSession({ originSessionKey: "agent:main:telegram:group:-1003863755361:topic:11239" });
+    sm.notifySession(s, "hello", "launch");
+    assert.deepEqual((sm as any).__dispatchCalls, [[s, {
+      label: "launch",
+      userMessage: "hello",
+      notifyUser: "always",
+    }]]);
   });
 });
 
@@ -667,13 +613,10 @@ describe("SessionManager turn-end wake", () => {
   beforeEach(() => {
     sm = new SessionManager(5);
     (sm as any).wakeDispatcher = {
-      wakeAgent: (...args: any[]) => { ((sm as any).__wakeCalls ??= []).push(args); },
-      deliverToTelegram: () => {},
-      buildDeliverArgs: () => [],
+      dispatchSessionNotification: (...args: any[]) => { ((sm as any).__dispatchCalls ??= []).push(args); },
       clearPendingRetries: () => {},
-      setNotifications: () => {},
     };
-    (sm as any).__wakeCalls = [];
+    (sm as any).__dispatchCalls = [];
   });
 
   it("fires wake deterministically on turn end", () => {
@@ -682,19 +625,23 @@ describe("SessionManager turn-end wake", () => {
       name: "deterministic",
       status: "running",
       notifyOnTurnEnd: true,
+      originChannel: "telegram|bot|123",
+      originThreadId: 26,
       getOutput: () => ["I completed the patch.", "Should I continue and apply tests?"],
     });
 
     (sm as any).onTurnEnd(s, false);
 
-    const calls = (sm as any).__wakeCalls;
+    const calls = (sm as any).__dispatchCalls;
     assert.equal(calls.length, 1);
-    const [sessionArg, eventText, telegramText] = calls[0];
+    const [sessionArg, request] = calls[0];
     assert.equal(sessionArg.id, "s-turn");
-    assert.match(eventText, /Name: deterministic/);
-    assert.match(eventText, /Status: running/);
-    assert.match(eventText, /Looks like waiting for user input: yes/);
-    assert.match(telegramText, /Turn done/);
+    assert.equal(request.label, "turn-complete");
+    assert.equal(request.notifyUser, "always");
+    assert.match(request.wakeMessage, /Name: deterministic/);
+    assert.match(request.wakeMessage, /Status: running/);
+    assert.match(request.wakeMessage, /Looks like waiting for user input: yes/);
+    assert.match(request.userMessage, /Turn done/);
   });
 
   it("routes explicit question turns to waiting wake path", () => {
@@ -709,12 +656,13 @@ describe("SessionManager turn-end wake", () => {
 
     (sm as any).onTurnEnd(s, true);
 
-    const calls = (sm as any).__wakeCalls;
+    const calls = (sm as any).__dispatchCalls;
     assert.equal(calls.length, 1);
-    const [_sessionArg, eventText, telegramText, label] = calls[0];
-    assert.equal(label, "waiting");
-    assert.match(telegramText, /Waiting for input/);
-    assert.match(eventText, /waiting for input/i);
+    const [_sessionArg, request] = calls[0];
+    assert.equal(request.label, "waiting");
+    assert.equal(request.notifyUser, "on-wake-fallback");
+    assert.match(request.userMessage, /Waiting for input/);
+    assert.match(request.wakeMessage, /waiting for input/i);
   });
 
   it("suppresses turn-end wake when notifyOnTurnEnd is false", () => {
@@ -728,7 +676,150 @@ describe("SessionManager turn-end wake", () => {
 
     (sm as any).onTurnEnd(s, false);
 
-    const calls = (sm as any).__wakeCalls;
+    const calls = (sm as any).__dispatchCalls;
     assert.equal(calls.length, 0);
+  });
+
+  it("de-dupes duplicate turn-end wake for the same turn marker", () => {
+    const s = fakeSession({
+      id: "s-dup-turn",
+      name: "dup-turn",
+      status: "running",
+      notifyOnTurnEnd: true,
+      originChannel: "telegram|bot|123",
+      result: {
+        session_id: "thread-1",
+        num_turns: 3,
+        duration_ms: 1200,
+      },
+      getOutput: () => ["Turn output."],
+    });
+
+    (sm as any).onTurnEnd(s, false);
+    (sm as any).onTurnEnd(s, false);
+
+    const calls = (sm as any).__dispatchCalls;
+    assert.equal(calls.length, 1);
+    const [_sessionArg, request] = calls[0];
+    assert.equal(request.label, "turn-complete");
+  });
+});
+
+describe("SessionManager terminal wakes", () => {
+  let sm: SessionManager;
+
+  beforeEach(() => {
+    sm = new SessionManager(5);
+    (sm as any).wakeDispatcher = {
+      dispatchSessionNotification: (...args: any[]) => { ((sm as any).__dispatchCalls ??= []).push(args); },
+    };
+    (sm as any).__dispatchCalls = [];
+  });
+
+  it("dispatches completed notifications through the unified pipeline", () => {
+    const s = fakeSession({
+      id: "s-complete",
+      name: "done",
+      status: "completed",
+      costUsd: 1.23,
+      startedAt: Date.now() - 1_500,
+    });
+
+    (sm as any).triggerAgentEvent(s);
+
+    assert.equal((sm as any).__dispatchCalls.length, 1);
+    const [_sessionArg, request] = (sm as any).__dispatchCalls[0];
+    assert.equal(request.label, "completed");
+    assert.equal(request.notifyUser, "always");
+    assert.match(request.userMessage, /✅ \[done\] Completed/);
+    assert.match(request.wakeMessage, /Coding agent session completed/);
+  });
+});
+
+describe("SessionManager terminal wake behavior", () => {
+  let sm: SessionManager;
+
+  beforeEach(() => {
+    sm = new SessionManager(5);
+    (sm as any).wakeDispatcher = {
+      dispatchSessionNotification: (...args: any[]) => { ((sm as any).__dispatchCalls ??= []).push(args); },
+      clearPendingRetries: () => {},
+    };
+    (sm as any).__dispatchCalls = [];
+  });
+
+  it("de-dupes duplicate completion wake for the same terminal marker", () => {
+    const s = fakeSession({
+      id: "s-dup-complete",
+      name: "dup-complete",
+      status: "completed",
+      killReason: "user",
+      completedAt: 1700000000000,
+      result: {
+        session_id: "thread-2",
+        num_turns: 4,
+      },
+      getOutput: () => ["done"],
+    });
+
+    (sm as any).onSessionTerminal(s);
+    (sm as any).onSessionTerminal(s);
+
+    const calls = (sm as any).__dispatchCalls;
+    assert.equal(calls.length, 1);
+    const [_sessionArg, request] = calls[0];
+    assert.equal(request.label, "completed");
+  });
+
+  it("wakes the originating agent when a session fails", () => {
+    const s = fakeSession({
+      id: "s-failed",
+      name: "broken-launch",
+      status: "failed",
+      completedAt: 1700000001000,
+      error: "The 'codex' model is not supported when using Codex with a ChatGPT account.",
+      result: {
+        session_id: "",
+        num_turns: 0,
+      },
+      getOutput: () => [],
+    });
+
+    (sm as any).onSessionTerminal(s);
+
+    const calls = (sm as any).__dispatchCalls;
+    assert.equal(calls.length, 1);
+    const [sessionArg, request] = calls[0];
+    assert.equal(sessionArg.id, "s-failed");
+    assert.equal(request.label, "failed");
+    assert.equal(request.notifyUser, "always");
+    assert.match(request.wakeMessage, /Coding agent session failed/);
+    assert.match(request.wakeMessage, /Failure summary:/);
+    assert.match(request.wakeMessage, /not supported when using Codex with a ChatGPT account/);
+    assert.match(request.wakeMessage, /relaunch the task now or continue it yourself/);
+    assert.match(request.userMessage, /❌ \[broken-launch\] Failed/);
+  });
+
+  it("de-dupes duplicate failed wake for the same terminal marker", () => {
+    const s = fakeSession({
+      id: "s-dup-failed",
+      name: "dup-failed",
+      status: "failed",
+      completedAt: 1700000002000,
+      error: "launch failed",
+      result: {
+        session_id: "",
+        num_turns: 0,
+      },
+      getOutput: () => [],
+    });
+
+    (sm as any).onSessionTerminal(s);
+    (sm as any).onSessionTerminal(s);
+
+    const calls = (sm as any).__dispatchCalls;
+    assert.equal(calls.length, 1);
+    const [_sessionArg, request] = calls[0];
+    assert.equal(request.label, "failed");
   });
 });

@@ -11,13 +11,13 @@ openclaw-code-agent/
 │   ├── types.ts                # TypeScript interfaces (session config, metrics, etc.)
 │   ├── config.ts               # Plugin config singleton + channel resolution
 │   ├── format.ts               # Formatting utilities (duration, listings, stats)
-│   ├── singletons.ts           # Module-level sessionManager/notificationService refs
+│   ├── singletons.ts           # Module-level sessionManager ref
 │   ├── session.ts              # Session class (EventEmitter, state machine, timers)
 │   ├── session-manager.ts      # Session pool management + lifecycle
 │   ├── session-store.ts        # Persistence/index store abstraction
 │   ├── session-metrics.ts      # Metrics recorder abstraction
-│   ├── wake-dispatcher.ts      # Wake delivery + retry abstraction
-│   ├── notifications.ts        # NotificationService (Telegram delivery, reminders)
+│   ├── wake-dispatcher.ts      # Unified session-notification routing + retries
+│   ├── notifications.ts        # Notification formatting helpers
 │   ├── application/
 │   │   ├── session-view.ts     # Shared output/list rendering for tool + command parity
 │   │   └── session-control.ts  # Shared kill/complete logic for tool + command parity
@@ -76,9 +76,8 @@ openclaw-code-agent/
    - `~/.openclaw/code-agent-sessions.json`
 
 3. **Notifications and wakes use CLI shelling.** Since the plugin API doesn't expose runtime delivery/wake APIs, the plugin shells out via `child_process.execFile` to:
-   - `openclaw message send` (direct channel notifications)
-   - `openclaw agent --deliver` (orchestrator wake path)
-   - `openclaw system event --mode now` (fallback wake path)
+   - `openclaw gateway call chat.send` (direct session notifications + orchestrator wake path)
+   - `openclaw system event --mode now` (fallback path)
 
 4. **Metrics are in-memory only.** Session metrics are aggregated in the `SessionManager` and reset on service restart. They are not persisted to disk.
 
@@ -113,5 +112,5 @@ pnpm run typecheck  # Type-check only
 
 ## Service Lifecycle
 
-- **`start()`** — Creates `SessionManager` and `NotificationService`, wires them together, and starts a GC interval (5 min).
-- **`stop()`** — Stops the notification service, kills all active sessions, clears intervals, and nulls singletons.
+- **`start()`** — Creates `SessionManager`, stores it in the singleton, and starts a GC interval (5 min).
+- **`stop()`** — Kills all active sessions, clears intervals, and nulls the session-manager singleton.

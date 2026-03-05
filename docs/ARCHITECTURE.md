@@ -9,15 +9,15 @@ OpenClaw plugin that enables AI agents to orchestrate coding agent sessions from
 ```
 User (Telegram/Discord) → OpenClaw Gateway → Agent → Plugin Tools → Coding Agent Sessions
                                                   ↓
-                                        NotificationService → openclaw message send → User
+                                        SessionManager → WakeDispatcher → chat.send / system event
 ```
 
 ## Core Components
 
 ### 1. Plugin Entry (`index.ts`)
 - Registers 6 tools, 7 commands, and 1 service
-- Creates SessionManager and NotificationService during service start
-- Wires outbound messaging via `openclaw message send` CLI
+- Creates SessionManager during service start
+- Starts periodic runtime/persistence cleanup
 
 ### 2. SessionManager (`src/session-manager.ts`)
 - Manages lifecycle of coding agent processes (spawn, track, kill, resume)
@@ -61,9 +61,15 @@ User (Telegram/Discord) → OpenClaw Gateway → Agent → Plugin Tools → Codi
   - `hasPending()` prevents dropping queued follow-ups when a turn ends
   - Terminal transitions set metadata (`killReason`/`completedAt`) before emitting status changes
 
-### 4. NotificationService (`src/notifications.ts`)
-- Routes notifications to appropriate channels via `emitToChannel()`
-- Wraps the `sendMessage` callback for outbound delivery
+### 4. Notification Pipeline (`src/session-manager.ts` + `src/wake-dispatcher.ts`)
+- `SessionManager` decides lifecycle semantics: launch, waiting, turn-complete, completed, failed, killed
+- `WakeDispatcher` owns transport routing, retries, and fallbacks
+- Primary transport is `openclaw gateway call chat.send` against the originating `originSessionKey`
+- Fallback transport is `openclaw system event --mode now`
+- Every dispatch logs start, success, and failure with session id + label for investigation
+
+### 4a. Notification Helpers (`src/notifications.ts`)
+- Small formatting helpers used by tests/UI summaries
 
 ### 5. Supporting Modules
 - `src/session-store.ts` — persisted session/index storage abstraction
@@ -74,7 +80,7 @@ User (Telegram/Discord) → OpenClaw Gateway → Agent → Plugin Tools → Codi
 
 ### 6. Config & Singletons
 - `src/config.ts` — Plugin config singleton, channel resolution utilities (`resolveToolChannel`, `resolveAgentChannel`, etc.)
-- `src/singletons.ts` — Module-level mutable references for `sessionManager` and `notificationService`
+- `src/singletons.ts` — Module-level mutable reference for `sessionManager`
 - `src/format.ts` — Formatting utilities (duration, session listing, stats, name generation)
 
 ### 6. Shared Respond Action (`src/actions/respond.ts`)
@@ -93,20 +99,19 @@ Agent calls agent_launch → tool validates params → SessionManager.spawn()
   → SessionManager subscribes to session events
 ```
 
-### Waiting for Input (Wake) — Primary + Fallback
+### Waiting for Input (Wake) — Unified Notification Pipeline
 ```
 Session detects end-of-turn idle
   → Session emits "turnEnd" event with hadQuestion=true
   → SessionManager triggers wake event
 
-Primary wake path:
-  → openclaw agent --agent <id> --message <text> --deliver
-  → WakeDispatcher retries once on failure
+If `originSessionKey` + `originAgentId` are present:
+  → WakeDispatcher sends the wake payload via `openclaw gateway call chat.send`
+  → Retries with bounded backoff on failure
 
-Fallback path (missing originAgentId):
-  → openclaw system event --mode now
-  → WakeDispatcher retries once on failure
-  → Direct Telegram delivery is used so the user still receives a signal
+If wake metadata is incomplete:
+  → WakeDispatcher sends the compact user-facing notification when possible
+  → Falls back to `openclaw system event --mode now` for the wake payload
 
   → Orchestrator agent wakes up, reads output, forwards to user
 ```
@@ -137,7 +142,8 @@ After `sessionGcAgeMinutes` (default: 1440 / 24h):
 Coding agent process exits
   → Session status → completed/failed/killed
   → SessionManager persists metadata/output snapshot
-  → WakeDispatcher notifies orchestrator (or direct channel fallback)
+  → SessionManager emits one session-notification request
+  → WakeDispatcher handles direct notification + wake/fallback routing
   → Orchestrator retrieves output, summarizes to user
 ```
 
@@ -156,8 +162,8 @@ Controls how the orchestrator handles plans when a coding agent calls `ExitPlanM
 
 ## Key Design Decisions
 
-1. **CLI for outbound messages** — No runtime API for sending messages; uses `openclaw message send` subprocess
-2. **Wake routing with retry** — Primary path wakes the originating agent via `openclaw agent --deliver`; fallback path uses `openclaw system event` only when origin agent metadata is unavailable
+1. **Gateway-owned outbound delivery** — Direct user notifications use `chat.send` against the originating runtime session key, so delivery stays inside the active runtime snapshot
+2. **Unified notification dispatch** — `SessionManager` describes the event once; `WakeDispatcher` decides whether it is notify-only, wake-only, or both, including fallback behavior
 3. **EventEmitter over callbacks** — Session extends EventEmitter; SessionManager subscribes to events instead of wiring 6 optional callback properties
 4. **State machine** — `TRANSITIONS` map validates all status changes; invalid transitions throw
 5. **Done+resume (no hibernation state)** — Non-question turn completion is represented as `complete("done")`; next respond auto-resumes from persisted harness session id

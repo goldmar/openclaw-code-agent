@@ -18,8 +18,8 @@ function createStubSessionManager(sessions: Record<string, any> = {}): SessionMa
   for (const [id, session] of Object.entries(sessions)) {
     (sm as any).sessions.set(id, session);
   }
-  // Stub deliverToTelegram to avoid needing notifications
-  (sm as any).deliverToTelegram = () => {};
+  // Stub notifySession to avoid needing notifications
+  (sm as any).notifySession = () => {};
   return sm;
 }
 
@@ -199,7 +199,7 @@ describe("executeRespond — auto-resume", () => {
 
     const result = await executeRespond(sm, { session: "codex-morning-report-telegram-400", message: "continue after restart" });
     assert.ok(result.text.includes("Auto-resumed"));
-    assert.equal(capturedConfig.resumeSessionId, "harness-shutdown");
+    assert.equal(capturedConfig.resumeSessionId, undefined);
   });
 
   it("auto-resumes a persisted restart-recovered session by short internal ID", async () => {
@@ -234,11 +234,31 @@ describe("executeRespond — auto-resume", () => {
     const result = await executeRespond(sm, { session: "GccpSIqJ", message: "continue after restart" });
     assert.ok(result.text.includes("Auto-resumed"));
     assert.ok(capturedConfig, "spawn should use persisted session metadata");
-    assert.equal(capturedConfig.resumeSessionId, "harness-restart");
+    assert.equal(capturedConfig.resumeSessionId, undefined);
     assert.equal(capturedConfig.reasoningEffort, "high");
     assert.equal(capturedConfig.notifyOnTurnEnd, false);
     assert.equal(capturedConfig.permissionMode, "acceptEdits");
     assert.equal(capturedConfig.harness, "codex");
+  });
+
+  it("keeps resumeSessionId for in-memory Codex sessions", async () => {
+    const session = createStubSession({
+      status: "completed",
+      killReason: "done",
+      harnessSessionId: "harness-live-codex",
+      harnessName: "codex",
+    });
+    const sm = createStubSessionManager({ "test-id": session });
+
+    let capturedConfig: any;
+    sm.spawn = (config: any) => {
+      capturedConfig = config;
+      return createStubSession({ name: "resumed", id: "new-id" });
+    };
+
+    const result = await executeRespond(sm, { session: "test-id", message: "continue live codex" });
+    assert.ok(result.text.includes("Auto-resumed"));
+    assert.equal(capturedConfig.resumeSessionId, "harness-live-codex");
   });
 
   it("auto-resumes a persisted session by name or harness session ID", async () => {

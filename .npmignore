@@ -7,7 +7,6 @@ tests/
 src/
 index.ts
 docs/
-skills/
 .idea/
 .vscode/
 *.bak

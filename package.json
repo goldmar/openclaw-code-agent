@@ -1,11 +1,11 @@
 {
   "name": "openclaw-code-agent",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
     "build": "esbuild index.ts --bundle --platform=node --target=node18 --format=esm --outfile=dist/index.js --minify --external:openclaw --external:openclaw/plugin-sdk --external:@anthropic-ai/claude-agent-sdk --external:@openai/codex-sdk",
-    "test": "tsx --test 'tests/**/*.test.ts'",
+    "test": "find tests -type f -name '*.test.ts' -exec node --import tsx --test {} +",
     "typecheck": "tsc --noEmit"
   },
   "openclaw": {
@@ -15,6 +15,7 @@
   },
   "files": [
     "dist/",
+    "skills/",
     "workflows/",
     "openclaw.plugin.json",
     "README.md",

@@ -112,6 +112,21 @@ describe("resolveOriginChannel", () => {
     assert.equal(resolveOriginChannel({ channelId: "discord|789" }), "discord|789");
   });
 
+  it("builds from tool-style messageChannel + chatId", () => {
+    assert.equal(resolveOriginChannel({ messageChannel: "telegram", chatId: "-1003863755361" }), "telegram|-1003863755361");
+  });
+
+  it("prefers ctx.channelId over lossy ctx.channel + chatId reconstruction", () => {
+    assert.equal(
+      resolveOriginChannel({
+        channel: "telegram",
+        chatId: "99",
+        channelId: "telegram|bot1|99",
+      }),
+      "telegram|bot1|99",
+    );
+  });
+
   it("returns 'unknown' for empty ctx with no fallback", () => {
     assert.equal(resolveOriginChannel({}), "unknown");
   });
@@ -128,6 +143,11 @@ describe("resolveToolChannel", () => {
     assert.equal(resolveToolChannel(ctx), "telegram|bot1|123");
   });
 
+  it("preserves an already account-qualified messageChannel", () => {
+    const ctx = { messageChannel: "telegram|bot1|123", agentAccountId: "bot2" };
+    assert.equal(resolveToolChannel(ctx), "telegram|bot1|123");
+  });
+
   it("falls back to agentChannels lookup via workspaceDir", () => {
     setPluginConfig({ agentChannels: { "/home/user": "telegram|bot1|456" } });
     const ctx = { workspaceDir: "/home/user/project" };
@@ -137,6 +157,11 @@ describe("resolveToolChannel", () => {
   it("falls back to raw messageChannel with pipe", () => {
     const ctx = { messageChannel: "telegram|789" };
     assert.equal(resolveToolChannel(ctx), "telegram|789");
+  });
+
+  it("builds from provider-only messageChannel + chatId", () => {
+    const ctx = { messageChannel: "telegram", chatId: "-1003863755361" };
+    assert.equal(resolveToolChannel(ctx), "telegram|-1003863755361");
   });
 
   it("returns undefined when nothing matches", () => {

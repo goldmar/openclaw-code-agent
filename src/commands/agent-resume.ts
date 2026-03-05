@@ -1,6 +1,7 @@
 import { sessionManager } from "../singletons";
 import { resolveOriginChannel, resolveOriginThreadId } from "../config";
 import { formatDuration } from "../format";
+import { decideResumeSessionId } from "../resume-policy";
 
 interface ResumeCommandContext {
   args?: string;
@@ -90,7 +91,17 @@ export function registerAgentResumeCommand(api: CommandApi): void {
         return { text: `Error: Could not find a session ID for "${ref}".\nUse /agent_resume --list to see available sessions.` };
       }
 
+      const active = sessionManager.resolve(ref);
       const persisted = sessionManager.getPersistedSession(ref);
+      const { resumeSessionId, clearedPersistedCodexResume } = decideResumeSessionId({
+        requestedResumeSessionId: harnessSessionId,
+        activeSession: active
+          ? { harnessSessionId: active.harnessSessionId }
+          : undefined,
+        persistedSession: persisted
+          ? { harness: persisted.harness }
+          : undefined,
+      });
       const workdir = persisted?.workdir ?? process.cwd();
 
       try {
@@ -99,8 +110,8 @@ export function registerAgentResumeCommand(api: CommandApi): void {
           workdir,
           name: persisted?.name,
           model: persisted?.model,
-          resumeSessionId: harnessSessionId,
-          forkSession: fork,
+          resumeSessionId,
+          forkSession: resumeSessionId ? fork : false,
           originChannel: resolveOriginChannel(ctx),
           originThreadId: resolveOriginThreadId(ctx) ?? persisted?.originThreadId,
           originAgentId: ctx?.agentId ?? persisted?.originAgentId,
@@ -114,9 +125,14 @@ export function registerAgentResumeCommand(api: CommandApi): void {
             `Session resumed${fork ? " (forked)" : ""}.`,
             `  Name: ${session.name}`,
             `  ID: ${session.id}`,
-            `  Resume from: ${harnessSessionId}`,
+            resumeSessionId
+              ? `  Resume from: ${harnessSessionId}`
+              : `  Resume from: fresh thread`,
             `  Dir: ${workdir}`,
             `  Prompt: "${promptSummary}"`,
+            clearedPersistedCodexResume
+              ? `  Note: cleared persisted Codex thread state after restart to avoid org-mismatch resume failures.`
+              : ``,
           ].join("\n"),
         };
       } catch (err: unknown) {

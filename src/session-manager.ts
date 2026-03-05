@@ -6,11 +6,10 @@ import { dirname, join } from "path";
 import { Session } from "./session";
 import { pluginConfig } from "./config";
 import { formatDuration, generateSessionName, lastCompleteLines, truncateText } from "./format";
-import type { NotificationService } from "./notifications";
 import type { SessionConfig, SessionStatus, SessionMetrics, PersistedSessionInfo, KillReason } from "./types";
 import { SessionStore } from "./session-store";
 import { SessionMetricsRecorder } from "./session-metrics";
-import { WakeDispatcher } from "./wake-dispatcher";
+import { WakeDispatcher, type SessionNotificationRequest } from "./wake-dispatcher";
 import { looksLikeWaitingForUser } from "./waiting-detector";
 
 /**
@@ -97,9 +96,10 @@ export class SessionManager {
   private sessions: Map<string, Session> = new Map();
   maxSessions: number;
   maxPersistedSessions: number;
-  private _notifications: NotificationService | null = null;
 
   private lastWaitingEventTimestamps: Map<string, number> = new Map();
+  private lastTurnCompleteMarkers: Map<string, string> = new Map();
+  private lastTerminalWakeMarkers: Map<string, string> = new Map();
   private readonly store: SessionStore;
   private readonly metrics: SessionMetricsRecorder;
   private readonly wakeDispatcher: WakeDispatcher;
@@ -116,15 +116,6 @@ export class SessionManager {
   get persisted(): Map<string, PersistedSessionInfo> { return this.store.persisted; }
   get idIndex(): Map<string, string> { return this.store.idIndex; }
   get nameIndex(): Map<string, string> { return this.store.nameIndex; }
-
-  set notifications(value: NotificationService | null) {
-    this._notifications = value;
-    this.wakeDispatcher.setNotifications(value);
-  }
-
-  get notifications(): NotificationService | null {
-    return this._notifications;
-  }
 
   private uniqueName(baseName: string): string {
     const activeNames = new Set(
@@ -156,10 +147,6 @@ export class SessionManager {
     this.sessions.set(session.id, session);
     this.metrics.incrementLaunched();
 
-    if (this.notifications) {
-      this.notifications.attachToSession(session);
-    }
-
     // Wire event handlers for lifecycle management
     session.on("statusChange", (_s: Session, newStatus: SessionStatus) => {
       if (newStatus === "running" && session.harnessSessionId) {
@@ -179,10 +166,8 @@ export class SessionManager {
     session.start();
 
     // Send launch notification
-    if (this.notifications) {
-      const launchText = `🚀 [${session.name}] Launched | ${session.workdir} | ${session.model ?? "default"}`;
-      this.deliverToTelegram(session, launchText);
-    }
+    const launchText = `🚀 [${session.name}] Launched | ${session.workdir} | ${session.model ?? "default"}`;
+    this.notifySession(session, launchText, "launch");
 
     return session;
   }
@@ -196,43 +181,35 @@ export class SessionManager {
     if (session.killReason === "done") return;
 
     if (session.status === "completed") {
+      if (!this.shouldEmitTerminalWake(session)) return;
       this.triggerAgentEvent(session);
       return;
     }
 
-    // Failed or killed — informational Telegram notification
-    const costStr = `$${(session.costUsd ?? 0).toFixed(2)}`;
-    const duration = formatDuration(session.duration);
-
-    let statusLabel: string;
-    let errorSummary: string | undefined;
-
     if (session.status === "failed") {
-      statusLabel = "Failed";
+      if (!this.shouldEmitTerminalWake(session)) return;
       const rawError = session.error
         || (session.result?.is_error && session.result.result)
         || (session.result?.result)
         || this.extractLastOutputLine(session)
         || `Session failed with no error details (session=${session.id}, subtype=${session.result?.subtype ?? "none"}, turns=${session.result?.num_turns ?? 0})`;
-      errorSummary = truncateText(rawError, 200);
-    } else {
-      const reasonMap: Record<string, string> = {
-        "user": "by agent/user",
-        "idle-timeout": `idle ${pluginConfig.idleTimeoutMinutes ?? 15}min`,
-        "shutdown": "gateway shutdown",
-        "unknown": "",
-      };
-      const killDetail = reasonMap[session.killReason] || "";
-      statusLabel = `Killed${killDetail ? ` (${killDetail})` : ""}`;
+      const errorSummary = truncateText(rawError, 200);
+      this.triggerFailedEvent(session, errorSummary);
+      return;
     }
 
-    const icon = session.status === "failed" ? "❌" : "⛔";
-    const notificationText = [
-      `${icon} [${session.name}] ${statusLabel} | ${costStr} | ${duration}`,
-      ...(errorSummary ? [`   ⚠️ ${errorSummary}`] : []),
-    ].join("\n");
+    const costStr = `$${(session.costUsd ?? 0).toFixed(2)}`;
+    const duration = formatDuration(session.duration);
+    const reasonMap: Record<string, string> = {
+      "user": "by agent/user",
+      "idle-timeout": `idle ${pluginConfig.idleTimeoutMinutes ?? 15}min`,
+      "shutdown": "gateway shutdown",
+      "unknown": "",
+    };
+    const killDetail = reasonMap[session.killReason] || "";
+    const statusLabel = `Killed${killDetail ? ` (${killDetail})` : ""}`;
 
-    this.deliverToTelegram(session, notificationText);
+    this.notifySession(session, `⛔ [${session.name}] ${statusLabel} | ${costStr} | ${duration}`);
   }
 
   private persistSession(session: Session): void {
@@ -254,13 +231,16 @@ export class SessionManager {
 
   // -- Wake / notification delivery --
 
-  deliverToTelegram(session: Session, text: string): void {
-    this.wakeDispatcher.deliverToTelegram(session, text);
+  notifySession(session: Session, text: string, label: string = "notification"): void {
+    this.dispatchSessionNotification(session, {
+      label,
+      userMessage: text,
+      notifyUser: "always",
+    });
   }
 
-  // Back-compat helper retained for test access.
-  private buildDeliverArgs(originChannel?: string, threadId?: string | number): string[] {
-    return this.wakeDispatcher.buildDeliverArgs(originChannel, threadId);
+  private dispatchSessionNotification(session: Session, request: SessionNotificationRequest): void {
+    this.wakeDispatcher.dispatchSessionNotification(session, request);
   }
 
   /**
@@ -291,7 +271,7 @@ export class SessionManager {
       if (err) {
         console.error(`[SessionManager] Lobster launch failed for session=${session.id}: ${err.message}`);
         // Fallback: send Telegram directly so the user isn't left in the dark
-        this.deliverToTelegram(session, `📋 [${session.name}] Plan ready — Lobster gate failed, please review manually:\n\n${truncateText(planSummary, 800)}`);
+        this.notifySession(session, `📋 [${session.name}] Plan ready — Lobster gate failed, please review manually:\n\n${truncateText(planSummary, 800)}`);
         return;
       }
 
@@ -320,7 +300,7 @@ export class SessionManager {
         `To approve: reply "approve"`,
         `To reject: reply with feedback`,
       ];
-      this.deliverToTelegram(session, telegramLines.join("\n"));
+      this.notifySession(session, telegramLines.join("\n"));
     });
   }
 
@@ -395,7 +375,49 @@ export class SessionManager {
     const duration = formatDuration(session.duration);
     const telegramText = `✅ [${session.name}] Completed | ${costStr} | ${duration}`;
 
-    this.wakeDispatcher.wakeAgent(session, eventText, telegramText, "completed");
+    this.dispatchSessionNotification(session, {
+      label: "completed",
+      userMessage: telegramText,
+      wakeMessage: eventText,
+      notifyUser: "always",
+    });
+  }
+
+  private triggerFailedEvent(session: Session, errorSummary: string): void {
+    const preview = this.getOutputPreview(session);
+    const outputSection = preview.trim()
+      ? ["", "Output preview:", preview]
+      : [];
+
+    const eventText = [
+      `Coding agent session failed.`,
+      `Name: ${session.name} | ID: ${session.id}`,
+      `Status: ${session.status}`,
+      this.originThreadLine(session),
+      ``,
+      `Failure summary:`,
+      errorSummary,
+      ...outputSection,
+      ``,
+      `[ACTION REQUIRED] Follow your autonomy rules for session failure:`,
+      `1. Use agent_output(session='${session.id}', full=true) to inspect the full failure context.`,
+      `2. If the failure is a launch/config issue or other recoverable error, relaunch the task now or continue it yourself.`,
+      `3. Notify the user with the failure cause and the next action you are taking.`,
+    ].join("\n");
+
+    const costStr = `$${(session.costUsd ?? 0).toFixed(2)}`;
+    const duration = formatDuration(session.duration);
+    const telegramText = [
+      `❌ [${session.name}] Failed | ${costStr} | ${duration}`,
+      `   ⚠️ ${errorSummary}`,
+    ].join("\n");
+
+    this.dispatchSessionNotification(session, {
+      label: "failed",
+      userMessage: telegramText,
+      wakeMessage: eventText,
+      notifyUser: "always",
+    });
   }
 
   private triggerWaitingForInputEvent(session: Session): void {
@@ -489,7 +511,12 @@ export class SessionManager {
       ].join("\n");
     }
 
-    this.wakeDispatcher.wakeAgent(session, eventText, telegramText, isPlanApproval ? "plan-approval" : "waiting");
+    this.dispatchSessionNotification(session, {
+      label: isPlanApproval ? "plan-approval" : "waiting",
+      userMessage: telegramText,
+      wakeMessage: eventText,
+      notifyUser: isPlanApproval ? "always" : "on-wake-fallback",
+    });
   }
 
   private onTurnEnd(session: Session, hadQuestion: boolean): void {
@@ -504,7 +531,24 @@ export class SessionManager {
 
     // Non-question turns still emit a lightweight turn-complete wake. We keep
     // a heuristic waiting hint in that payload as a fallback.
+    if (!this.shouldEmitTurnCompleteWake(session)) return;
     this.triggerTurnCompleteEventWithSignal(session);
+  }
+
+  private shouldEmitTurnCompleteWake(session: Session): boolean {
+    const marker = `${session.result?.session_id ?? ""}|${session.result?.num_turns ?? 0}|${session.result?.duration_ms ?? 0}`;
+    const prev = this.lastTurnCompleteMarkers.get(session.id);
+    if (prev === marker) return false;
+    this.lastTurnCompleteMarkers.set(session.id, marker);
+    return true;
+  }
+
+  private shouldEmitTerminalWake(session: Session): boolean {
+    const marker = `${session.status}|${session.completedAt ?? 0}|${session.result?.session_id ?? ""}|${session.result?.num_turns ?? 0}|${session.killReason}`;
+    const prev = this.lastTerminalWakeMarkers.get(session.id);
+    if (prev === marker) return false;
+    this.lastTerminalWakeMarkers.set(session.id, marker);
+    return true;
   }
 
   private triggerTurnCompleteEventWithSignal(session: Session): void {
@@ -530,7 +574,16 @@ export class SessionManager {
       ...(this.originThreadLine(session) ? ["", this.originThreadLine(session)] : []),
     ].join("\n");
 
-    this.wakeDispatcher.wakeAgent(session, eventText, telegramText, "turn-complete");
+    // Turn-complete wakes are synthetic CLI-originated `chat.send` events, so any
+    // `[[reply_to_current]]` response from the main session targets the gateway
+    // caller instead of the user's Telegram topic. Keep the compact status ping
+    // in the same pipeline, but always deliver it directly alongside the wake.
+    this.dispatchSessionNotification(session, {
+      label: "turn-complete",
+      userMessage: telegramText,
+      wakeMessage: eventText,
+      notifyUser: "always",
+    });
   }
 
   // -- Public API --
@@ -611,6 +664,8 @@ export class SessionManager {
         this.persistSession(session);
         this.sessions.delete(id);
         this.lastWaitingEventTimestamps.delete(id);
+        this.lastTurnCompleteMarkers.delete(id);
+        this.lastTerminalWakeMarkers.delete(id);
       }
     }
 

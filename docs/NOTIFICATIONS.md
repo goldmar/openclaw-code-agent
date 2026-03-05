@@ -2,7 +2,7 @@
 
 ## Session Lifecycle Notifications
 
-Sent by SessionManager via `openclaw message send` (fire-and-forget) to the originating Telegram thread.
+Sent by SessionManager via gateway runtime channel senders (fire-and-forget) to the originating Telegram thread.
 
 | Emoji | Event | When | Agent Reaction |
 |-------|-----------|---------------------|--------------------------------------|
@@ -16,24 +16,32 @@ Sent by SessionManager via `openclaw message send` (fire-and-forget) to the orig
 
 ## Thread-Based Routing
 
-Notifications are routed to the Telegram thread/topic where the session was launched. This is handled automatically via `originThreadId` — no manual configuration needed.
+Notifications are routed back to the originating chat session with `originSessionKey`. For Telegram topics, the key already includes the topic/thread identifier, so topic routing stays exact without separate delivery logic.
 
 - `agentChannels` config handles chat-level routing (which bot, which chat)
-- `originThreadId` handles within-chat routing (which thread/topic)
+- `originSessionKey` handles the exact originating runtime session
+- `originThreadId` is still persisted for listing/debug output and resume metadata
 
 ## Wake Mechanism
 
-### Primary: Agent Wake CLI
-`execFile("openclaw", ["agent", "--agent", id, "--message", text, "--deliver", ...])`
-- Invokes the originating orchestrator agent directly
-- `--deliver` routes wake content back to the same chat/thread
-- Used for 🔔 waiting, 🔄 turn-done, and ✅ completed wakes
-- Retries once on failure before falling back to direct Telegram notification
+### One Notification Pipeline
+`SessionManager` builds a single notification request per lifecycle event and hands it to `WakeDispatcher`.
+
+- `userMessage` is the compact chat-facing status update
+- `wakeMessage` is the richer orchestrator/system-event payload
+- `WakeDispatcher` decides whether to send a direct notification, a wake, or both
+
+### Primary: `chat.send`
+`execFile("openclaw", ["gateway", "call", "chat.send", ...])`
+- Targets the exact originating runtime session via `originSessionKey`
+- Used for direct lifecycle notifications and orchestrator wakes
+- Logs start, completion, and failure for each dispatch attempt
+- Retries with bounded backoff before falling back to `system event`
 
 ### Fallback: System Event
 `openclaw system event --mode now`
-- Requires heartbeat to be configured
-- Used when `originAgentId` is missing; wake dispatcher retries once before giving up
+- Used when `originSessionKey` is missing, the originating agent metadata is incomplete, or `chat.send` exhausts retries
+- Provides the final recovery path for non-Telegram and degraded routing scenarios
 
 ## Idle-Kill + Auto-Resume
 

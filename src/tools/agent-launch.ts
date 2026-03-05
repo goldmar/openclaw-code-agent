@@ -1,7 +1,8 @@
 import { existsSync } from "fs";
 import { Type } from "@sinclair/typebox";
 import { sessionManager } from "../singletons";
-import { pluginConfig, resolveOriginChannel, resolveAgentChannel, parseThreadIdFromSessionKey, resolveToolChannel } from "../config";
+import { pluginConfig, resolveOriginChannel, resolveAgentChannel, parseThreadIdFromSessionKey, resolveOriginThreadId, resolveToolChannel } from "../config";
+import { decideResumeSessionId } from "../resume-policy";
 import type { OpenClawPluginToolContext } from "../types";
 
 interface AgentLaunchParams {
@@ -96,6 +97,12 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
 
         // Resolve resume_session_id
         let resolvedResumeId = params.resume_session_id;
+        const activeResumeSession = resolvedResumeId
+          ? sessionManager.resolve(resolvedResumeId)
+          : undefined;
+        const persistedResumeSession = resolvedResumeId
+          ? sessionManager.getPersistedSession(resolvedResumeId)
+          : undefined;
         if (resolvedResumeId) {
           const resolved = sessionManager.resolveHarnessSessionId(resolvedResumeId);
           if (!resolved) {
@@ -103,10 +110,19 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
           }
           resolvedResumeId = resolved;
         }
+        const { resumeSessionId, clearedPersistedCodexResume } = decideResumeSessionId({
+          requestedResumeSessionId: resolvedResumeId,
+          activeSession: activeResumeSession
+            ? { harnessSessionId: activeResumeSession.harnessSessionId }
+            : undefined,
+          persistedSession: persistedResumeSession
+            ? { harness: persistedResumeSession.harness }
+            : undefined,
+        });
 
         // Resolve origin channel
         const ctxChannel = resolveToolChannel(ctx);
-        const originChannel = resolveOriginChannel({ id: _id }, ctxChannel || resolveAgentChannel(workdir));
+        const originChannel = resolveOriginChannel(ctx, ctxChannel || resolveAgentChannel(workdir));
 
         // Resolve origin session key — prefer ctx.sessionKey (set by the framework),
         // but reconstruct from available fields if missing.
@@ -126,13 +142,13 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
           reasoningEffort: pluginConfig.reasoningEffort,
           systemPrompt: params.system_prompt,
           allowedTools: params.allowed_tools,
-          resumeSessionId: resolvedResumeId,
-          forkSession: params.fork_session,
+          resumeSessionId,
+          forkSession: resumeSessionId ? params.fork_session : false,
           multiTurn: !params.multi_turn_disabled,
           notifyOnTurnEnd: params.notify_on_turn_end ?? true,
           permissionMode: params.permission_mode,
           originChannel,
-          originThreadId: parseThreadIdFromSessionKey(originSessionKey),
+          originThreadId: parseThreadIdFromSessionKey(originSessionKey) ?? resolveOriginThreadId(ctx),
           originAgentId: ctx.agentId || undefined,
           originSessionKey,
           harness,
@@ -149,6 +165,9 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
         ];
         if (params.resume_session_id) {
           details.push(`  Resume: ${params.resume_session_id}${params.fork_session ? " (forked)" : ""}`);
+          if (clearedPersistedCodexResume) {
+            details.push(`  Thread state: historical Codex state cleared; starting a fresh thread.`);
+          }
         }
         details.push(params.multi_turn_disabled
           ? `  Mode: single-turn (fire-and-forget)`

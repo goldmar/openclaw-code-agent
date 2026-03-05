@@ -35,7 +35,7 @@ function createStubSessionManager(sessions: Record<string, any> = {}): SessionMa
   for (const [id, session] of Object.entries(sessions)) {
     (sm as any).sessions.set(id, session);
   }
-  (sm as any).deliverToTelegram = () => {};
+  (sm as any).notifySession = () => {};
   return sm;
 }
 

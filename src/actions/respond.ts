@@ -1,6 +1,7 @@
 import type { SessionManager } from "../session-manager";
 import { pluginConfig } from "../config";
 import { truncateText } from "../format";
+import { decideResumeSessionId } from "../resume-policy";
 import type { Session } from "../session";
 import type { PersistedSessionInfo, SessionConfig } from "../types";
 
@@ -89,6 +90,18 @@ async function tryAutoResume(
   if (!canAutoResume(session, options.allowRecoveredRunningStub === true)) return undefined;
 
   try {
+    const activeSession = "harnessName" in session ? session : undefined;
+    const persistedSession = "harnessName" in session ? undefined : session;
+    const { resumeSessionId } = decideResumeSessionId({
+      requestedResumeSessionId: session.harnessSessionId,
+      activeSession: activeSession
+        ? { harnessSessionId: activeSession.harnessSessionId }
+        : undefined,
+      persistedSession: persistedSession
+        ? { harness: persistedSession.harness }
+        : undefined,
+    });
+
     // Preserve all relevant runtime/session-routing knobs so auto-resume is a
     // continuation of the exact same lifecycle, not a best-effort relaunch.
     const resumeConfig: SessionConfig = {
@@ -97,7 +110,7 @@ async function tryAutoResume(
       name: session.name,
       model: session.model,
       reasoningEffort: session.reasoningEffort,
-      resumeSessionId: session.harnessSessionId,
+      resumeSessionId,
       multiTurn: true,
       notifyOnTurnEnd: session.notifyOnTurnEnd,
       originChannel: session.originChannel,
@@ -109,7 +122,7 @@ async function tryAutoResume(
     };
     const resumed = sm.spawn(resumeConfig);
     const resumeLabel = getResumeLabel(session.status);
-    sm.deliverToTelegram(resumed, `🔄 [${resumed.name}] Auto-resumed from ${resumeLabel}`);
+    sm.notifySession(resumed, `🔄 [${resumed.name}] Auto-resumed from ${resumeLabel}`);
     return { text: `Auto-resumed ${resumeLabel} session ${resumed.name} [${resumed.id}]. Use agent_output to see the response.` };
   } catch (err: unknown) {
     return { text: `Error auto-resuming session ${session.name} [${getSessionRef(session)}]: ${errorMessage(err)}`, isError: true };

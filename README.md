@@ -46,12 +46,21 @@ openclaw gateway restart
 
 ### 2. Configure notifications
 
-Add to `~/.openclaw/openclaw.json` under `plugins.config["openclaw-code-agent"]`:
+Add to `~/.openclaw/openclaw.json` under `plugins.entries["openclaw-code-agent"]`:
 
 ```json
 {
-  "fallbackChannel": "telegram|my-bot|123456789",
-  "maxSessions": 5
+  "plugins": {
+    "entries": {
+      "openclaw-code-agent": {
+        "enabled": true,
+        "config": {
+          "fallbackChannel": "telegram|my-bot|123456789",
+          "maxSessions": 5
+        }
+      }
+    }
+  }
 }
 ```
 
@@ -157,7 +166,7 @@ When forwarding, the orchestrator quotes the agent's exact question without addi
 
 ## Configuration
 
-Set values in `~/.openclaw/openclaw.json` under `plugins.config["openclaw-code-agent"]`:
+Set values in `~/.openclaw/openclaw.json` under `plugins.entries["openclaw-code-agent"].config`:
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
@@ -212,15 +221,24 @@ Internal config field: `notifyOnTurnEnd`.
 
 ```json
 {
-  "maxSessions": 3,
-  "model": "gpt-5.3-codex",
-  "reasoningEffort": "high",
-  "defaultModel": "sonnet",
-  "permissionMode": "plan",
-  "fallbackChannel": "telegram|my-bot|123456789",
-  "agentChannels": {
-    "/home/user/project-alpha": "telegram|my-bot|123456789",
-    "/home/user/project-beta": "telegram|ops-bot|987654321"
+  "plugins": {
+    "entries": {
+      "openclaw-code-agent": {
+        "enabled": true,
+        "config": {
+          "maxSessions": 3,
+          "model": "gpt-5.3-codex",
+          "reasoningEffort": "high",
+          "defaultModel": "sonnet",
+          "permissionMode": "plan",
+          "fallbackChannel": "telegram|my-bot|123456789",
+          "agentChannels": {
+            "/home/user/project-alpha": "telegram|my-bot|123456789",
+            "/home/user/project-beta": "telegram|ops-bot|987654321"
+          }
+        }
+      }
+    }
   }
 }
 ```
