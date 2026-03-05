@@ -48,6 +48,47 @@ const KILLABLE_STATUSES = new Set<SessionStatus>(["starting", "running"]);
 const WAITING_EVENT_DEBOUNCE_MS = 5_000;
 const WAKE_CLI_TIMEOUT_MS = 30_000;
 
+type LobsterResponseShape = {
+  requiresApproval?: { resumeToken?: string };
+  details?: { requiresApproval?: { resumeToken?: string } };
+};
+
+/**
+ * Extract a Lobster resume token from CLI output.
+ *
+ * We prefer `--json`, but keep this defensive parser because some runtimes can
+ * still prepend banners/log lines around the JSON body.
+ */
+export function parseLobsterResumeToken(output: string): string | undefined {
+  const trimmed = output.trim();
+  if (!trimmed) return undefined;
+  const isLikelyToken = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0 && /^[A-Za-z0-9._:-]+$/.test(value.trim());
+
+  const candidates: string[] = [trimmed];
+  for (const line of trimmed.split(/\r?\n/)) {
+    const t = line.trim();
+    if (t.startsWith("{") && t.endsWith("}")) candidates.push(t);
+  }
+
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate) as LobsterResponseShape;
+      const token = parsed?.requiresApproval?.resumeToken
+        ?? parsed?.details?.requiresApproval?.resumeToken;
+      if (isLikelyToken(token)) return token.trim();
+    } catch {
+      // Keep scanning other candidate JSON fragments.
+    }
+  }
+
+  // Fallback for mixed stdout/stderr output that embeds JSON-ish token fields.
+  const tokenMatch = trimmed.match(/"resumeToken"\s*:\s*"([^"]+)"/);
+  if (tokenMatch && isLikelyToken(tokenMatch[1])) return tokenMatch[1].trim();
+
+  return undefined;
+}
+
 /**
  * Orchestrates active session lifecycles, wake signaling, persistence, and GC.
  */
@@ -234,6 +275,7 @@ export class SessionManager {
     });
 
     const args = [
+      "--json",
       "invoke", "--tool", "lobster",
       "--args-json", JSON.stringify({
         action: "run",
@@ -251,15 +293,11 @@ export class SessionManager {
         return;
       }
 
-      // Parse the Lobster response to get the resume token
-      let resumeToken: string | undefined;
+      // Parse the Lobster response to get the resume token.
       const stdoutText = typeof stdout === "string" ? stdout : String(stdout ?? "");
-      try {
-        const response = JSON.parse(stdoutText.trim());
-        resumeToken = response?.requiresApproval?.resumeToken
-          ?? response?.details?.requiresApproval?.resumeToken;
-      } catch {
-        console.warn(`[SessionManager] Could not parse Lobster response for session=${session.id}: ${stdoutText.substring(0, 200)}`);
+      const resumeToken = parseLobsterResumeToken(stdoutText);
+      if (!resumeToken) {
+        console.warn(`[SessionManager] Lobster response missing resume token for session=${session.id}: ${stdoutText.substring(0, 200)}`);
       }
 
       // Store token on session for programmatic resume via agent_respond
@@ -290,6 +328,7 @@ export class SessionManager {
     const timeoutMs = approve ? 30_000 : 10_000;
     return new Promise<void>((resolve, reject) => {
       const args = [
+        "--json",
         "invoke", "--tool", "lobster",
         "--args-json", JSON.stringify({ action: "resume", token, approve }),
       ];
