@@ -1,9 +1,12 @@
 import { execFile } from "child_process";
+import { randomUUID } from "crypto";
 import type { NotificationService } from "./notifications";
 import type { Session } from "./session";
 
 const WAKE_CLI_TIMEOUT_MS = 30_000;
-const WAKE_RETRY_DELAY_MS = 5_000;
+const WAKE_RETRY_BASE_DELAY_MS = 2_000;
+const WAKE_RETRY_MAX_DELAY_MS = 20_000;
+const WAKE_MAX_ATTEMPTS = 4; // initial try + 3 retries
 
 export class WakeDispatcher {
   private notifications: NotificationService | null = null;
@@ -42,63 +45,108 @@ export class WakeDispatcher {
     return args;
   }
 
-  /** Fire `openclaw system event` and retry once on failure. */
+  private retryDelayMs(attempt: number): number {
+    const exp = Math.max(0, attempt - 1);
+    const delay = WAKE_RETRY_BASE_DELAY_MS * (2 ** exp);
+    return Math.min(delay, WAKE_RETRY_MAX_DELAY_MS);
+  }
+
+  private executeWithRetries(
+    args: string[],
+    opts: {
+      label: string;
+      sessionId: string;
+      target: "chat" | "system";
+      onFinalFailure?: () => void;
+    },
+    attempt: number = 1,
+  ): void {
+    execFile("openclaw", args, { timeout: WAKE_CLI_TIMEOUT_MS }, (err) => {
+      if (!err) return;
+
+      if (attempt >= WAKE_MAX_ATTEMPTS) {
+        console.error(
+          `[WakeDispatcher] ${opts.target} wake failed after ${attempt} attempts for ${opts.label} session=${opts.sessionId}: ${err.message}`,
+        );
+        opts.onFinalFailure?.();
+        return;
+      }
+
+      const delay = this.retryDelayMs(attempt);
+      console.error(
+        `[WakeDispatcher] ${opts.target} wake failed attempt ${attempt}/${WAKE_MAX_ATTEMPTS} for ${opts.label} session=${opts.sessionId}: ${err.message}. Retrying in ${delay}ms`,
+      );
+      const timer = setTimeout(() => {
+        this.pendingRetryTimers.delete(timer);
+        this.executeWithRetries(args, opts, attempt + 1);
+      }, delay);
+      this.pendingRetryTimers.add(timer);
+    });
+  }
+
+  /** Fire `openclaw gateway call chat.send` for a specific topic/session key with bounded retries. */
+  fireChatSendWithRetry(
+    sessionKey: string,
+    eventText: string,
+    label: string,
+    sessionId: string,
+    onFinalFailure?: () => void,
+  ): void {
+    const args = [
+      "gateway",
+      "call",
+      "chat.send",
+      "--expect-final",
+      "--timeout",
+      String(WAKE_CLI_TIMEOUT_MS),
+      "--params",
+      JSON.stringify({
+        sessionKey,
+        message: eventText,
+        idempotencyKey: randomUUID(),
+      }),
+    ];
+    this.executeWithRetries(args, {
+      label,
+      sessionId,
+      target: "chat",
+      onFinalFailure,
+    });
+  }
+
+  /** Fire `openclaw system event` with bounded retries. */
   fireSystemEventWithRetry(eventText: string, label: string, sessionId: string): void {
     const args = ["system", "event", "--text", eventText, "--mode", "now"];
-    execFile("openclaw", args, { timeout: WAKE_CLI_TIMEOUT_MS }, (err) => {
-      if (err) {
-        console.error(`[WakeDispatcher] System event failed for ${label} session=${sessionId}: ${err.message}`);
-        const timer = setTimeout(() => {
-          this.pendingRetryTimers.delete(timer);
-          execFile("openclaw", args, { timeout: WAKE_CLI_TIMEOUT_MS }, (retryErr) => {
-            if (retryErr) console.error(`[WakeDispatcher] System event retry also failed for ${label} session=${sessionId}`);
-          });
-        }, WAKE_RETRY_DELAY_MS);
-        this.pendingRetryTimers.add(timer);
-      }
+    this.executeWithRetries(args, {
+      label,
+      sessionId,
+      target: "system",
     });
   }
 
   /**
    * Wake the originating orchestrator agent with context.
-   * Falls back to direct channel delivery + system event when agent metadata is missing.
+   * Falls back to direct channel delivery + system event when wake metadata is missing.
    */
   wakeAgent(session: Session, eventText: string, telegramText: string, label: string): void {
     const agentId = session.originAgentId?.trim();
+    const sessionKey = session.originSessionKey?.trim();
 
-    if (!agentId) {
+    // Always notify via Telegram for plan-approval or missing wake metadata.
+    if (!agentId || !sessionKey || label === "plan-approval") {
       this.deliverToTelegram(session, telegramText);
+    }
+
+    if (!agentId || !sessionKey) {
       this.fireSystemEventWithRetry(eventText, label, session.id);
       return;
     }
 
-    if (label === "plan-approval") {
+    // Route wake via gateway chat.send so the originating topic-scoped session is targeted exactly.
+    this.fireChatSendWithRetry(sessionKey, eventText, label, session.id, () => {
+      // Final fallback: notify user directly and emit a system event so the orchestrator can still recover.
       this.deliverToTelegram(session, telegramText);
-    }
-
-    const deliverArgs = this.buildDeliverArgs(session.originChannel, session.originThreadId);
-    const args = session.originSessionKey
-      ? ["agent", "--agent", agentId, "--session-id", session.originSessionKey, "--message", eventText, ...deliverArgs]
-      : ["agent", "--agent", agentId, "--message", eventText, ...deliverArgs];
-
-    if (!session.originSessionKey) {
-      console.warn(`[WakeDispatcher] No originSessionKey on session=${session.id} — wake will route to agent ${agentId} default session`);
-    }
-
-    execFile("openclaw", args, { timeout: WAKE_CLI_TIMEOUT_MS }, (err) => {
-      if (err) {
-        console.error(`[WakeDispatcher] Agent wake failed for ${label} session=${session.id}, agent=${agentId}: ${err.message}`);
-        const timer = setTimeout(() => {
-          this.pendingRetryTimers.delete(timer);
-          execFile("openclaw", args, { timeout: WAKE_CLI_TIMEOUT_MS }, (retryErr) => {
-            if (retryErr) {
-              console.error(`[WakeDispatcher] Agent wake retry also failed for ${label} session=${session.id}, agent=${agentId}`);
-              this.deliverToTelegram(session, telegramText);
-            }
-          });
-        }, WAKE_RETRY_DELAY_MS);
-        this.pendingRetryTimers.add(timer);
-      }
+      this.fireSystemEventWithRetry(eventText, `${label}-fallback`, session.id);
     });
   }
 }
