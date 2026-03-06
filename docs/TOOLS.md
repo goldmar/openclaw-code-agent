@@ -32,7 +32,7 @@ Launch a coding agent session in the background to execute a development task. S
 | `prompt` | string | **yes** | — | The task prompt to execute |
 | `name` | string | no | auto-generated | Short kebab-case name (e.g. `fix-auth`). Auto-generated from prompt if omitted |
 | `workdir` | string | no | agent workspace / cwd | Working directory for the session |
-| `model` | string | no | plugin default | Model name to use |
+| `model` | string | no | plugin default | Model name to use. For Codex, explicit `model` overrides plugin config `model`, which otherwise falls back to `defaultModel` |
 | `system_prompt` | string | no | — | Additional system prompt injected into the session |
 | `allowed_tools` | string[] | no | — | List of allowed tools for the coding agent session |
 | `resume_session_id` | string | no | — | Session ID to resume (from a previous session's `harnessSessionId`). Accepts name, internal ID, or harness UUID — the plugin resolves it |
@@ -256,6 +256,24 @@ For `agent_launch` with `resume_session_id`, the plugin additionally checks pers
 ## Plugin Configuration
 
 Settings in `openclaw.plugin.json` that affect tool and session behavior. See `docs/ARCHITECTURE.md` for full config list.
+
+### `model`
+
+| Property | Value |
+|----------|-------|
+| Type | `string` |
+| Default | unset |
+
+Codex-only model override. When set, new Codex sessions use this as the default model unless `agent_launch` passes an explicit `model`. If unset, Codex falls back to the generic session `defaultModel` / agent model configuration.
+
+### `reasoningEffort`
+
+| Property | Value |
+|----------|-------|
+| Type | enum: `low`, `medium`, `high` |
+| Default | `medium` |
+
+Codex-only reasoning effort for SDK thread launches. Use `high` for deeper planning, `medium` for balanced behavior, and `low` for faster responses.
 
 ### `planApproval`
 

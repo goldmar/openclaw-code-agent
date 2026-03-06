@@ -408,4 +408,15 @@ describe("CodexHarness SDK mapping", () => {
 
     assert.equal(codex.startCalls[0]?.additionalDirectories, undefined);
   });
+
+  it("passes modelReasoningEffort through to thread options", async () => {
+    const codex = new MockCodex([
+      { events: [{ type: "thread.started", thread_id: "thread-reasoning" }, { type: "turn.completed", usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 } }] },
+    ]);
+
+    const h = new CodexHarness({ createCodex: () => codex as any });
+    await collectMessages(h.launch({ prompt: "go", cwd: "/tmp", reasoningEffort: "high" }));
+
+    assert.equal(codex.startCalls[0]?.modelReasoningEffort, "high");
+  });
 });

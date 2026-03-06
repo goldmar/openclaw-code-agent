@@ -51,13 +51,20 @@ export function registerAgentCommand(api: CommandApi): void {
       if (!prompt) return { text: "Usage: /agent [--name <name>] <prompt>" };
 
       try {
+        const harness = pluginConfig.defaultHarness;
+        const defaultModel = harness === "codex"
+          ? (pluginConfig.model ?? pluginConfig.defaultModel)
+          : pluginConfig.defaultModel;
+
         const session = sessionManager.spawn({
           prompt,
           name,
           workdir: pluginConfig.defaultWorkdir || process.cwd(),
-          model: pluginConfig.defaultModel,
+          model: defaultModel,
+          reasoningEffort: pluginConfig.reasoningEffort,
           originChannel: resolveOriginChannel(ctx),
           originThreadId: resolveOriginThreadId(ctx),
+          harness,
         });
 
         const promptSummary = prompt.length > 80 ? prompt.slice(0, 80) + "..." : prompt;

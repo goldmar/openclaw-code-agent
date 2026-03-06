@@ -15,6 +15,15 @@
         "type": "string",
         "description": "Default model for new sessions (e.g. 'sonnet', 'opus')"
       },
+      "model": {
+        "type": "string",
+        "description": "Override model for all Codex sessions (e.g. 'gpt-5.3-codex', 'gpt-5.4'). Falls back to agent model config if not set."
+      },
+      "reasoningEffort": {
+        "type": "string",
+        "enum": ["low", "medium", "high"],
+        "description": "Reasoning effort for Codex sessions. 'high' for complex tasks, 'medium' (default) for balance, 'low' for speed."
+      },
       "defaultWorkdir": {
         "type": "string",
         "description": "Default working directory for new sessions"

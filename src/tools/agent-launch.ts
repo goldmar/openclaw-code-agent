@@ -89,6 +89,11 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
       }
 
       try {
+        const harness = params.harness ?? pluginConfig.defaultHarness;
+        const defaultModel = harness === "codex"
+          ? (pluginConfig.model ?? pluginConfig.defaultModel)
+          : pluginConfig.defaultModel;
+
         // Resolve resume_session_id
         let resolvedResumeId = params.resume_session_id;
         if (resolvedResumeId) {
@@ -117,7 +122,8 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
           prompt: params.prompt,
           name: params.name,
           workdir,
-          model: params.model || pluginConfig.defaultModel,
+          model: params.model ?? defaultModel,
+          reasoningEffort: pluginConfig.reasoningEffort,
           systemPrompt: params.system_prompt,
           allowedTools: params.allowed_tools,
           resumeSessionId: resolvedResumeId,
@@ -129,7 +135,7 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
           originThreadId: parseThreadIdFromSessionKey(originSessionKey),
           originAgentId: ctx.agentId || undefined,
           originSessionKey,
-          harness: params.harness,
+          harness,
         });
 
         const promptSummary = params.prompt.length > 80 ? params.prompt.slice(0, 80) + "..." : params.prompt;

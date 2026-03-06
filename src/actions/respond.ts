@@ -75,6 +75,7 @@ async function tryAutoResume(
       workdir: session.workdir,
       name: session.name,
       model: session.model,
+      reasoningEffort: session.reasoningEffort,
       resumeSessionId: session.harnessSessionId,
       multiTurn: true,
       notifyOnTurnEnd: session.notifyOnTurnEnd,

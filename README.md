@@ -173,6 +173,8 @@ Set values in `~/.openclaw/openclaw.json` under `plugins.config["openclaw-code-a
 | `maxPersistedSessions` | `number` | `50` | Max completed sessions kept for resume |
 | `planApproval` | `string` | `"delegate"` | `"approve"` (orchestrator can auto-approve) / `"ask"` (always forward to user) / `"delegate"` (orchestrator decides) |
 | `defaultHarness` | `string` | `"claude-code"` | Default harness for new sessions (`"claude-code"` / `"codex"`) |
+| `model` | `string` | — | Codex-only model override for new sessions (for example `"gpt-5.3-codex"`). Used when no explicit `model` is passed to `agent_launch`; falls back to `defaultModel` if unset |
+| `reasoningEffort` | `string` | `"medium"` | Codex-only reasoning effort: `"low"`, `"medium"`, or `"high"` |
 | `defaultModel` | `string` | — | Default model for new sessions (e.g. `"sonnet"`, `"opus"`) |
 | `defaultWorkdir` | `string` | — | Default working directory for new sessions |
 
@@ -184,6 +186,7 @@ Permission modes are shared at the plugin API, but each harness maps them differ
   - `default`, `plan`, `acceptEdits`, `bypassPermissions` are passed through the SDK
 - **Codex harness**
   - Always runs with SDK thread options `sandboxMode: "danger-full-access"` and `approvalPolicy: "never"`
+  - Supports plugin config `model` and `reasoningEffort` defaults for Codex SDK thread launches
   - In `bypassPermissions`, the harness adds filesystem root (`/` on POSIX) to Codex `additionalDirectories`, plus optional extras from `OPENCLAW_CODEX_BYPASS_ADDITIONAL_DIRS` (comma-separated)
   - `setPermissionMode()` is applied by recreating the thread on the next turn via `resumeThread` (same thread ID)
   - `plan` / `acceptEdits` remain behavioral orchestration constraints (planning/approval flow), not sandbox restrictions
@@ -212,6 +215,8 @@ Internal config field: `notifyOnTurnEnd`.
 ```json
 {
   "maxSessions": 3,
+  "model": "gpt-5.3-codex",
+  "reasoningEffort": "high",
   "defaultModel": "sonnet",
   "permissionMode": "plan",
   "fallbackChannel": "telegram|my-bot|123456789",

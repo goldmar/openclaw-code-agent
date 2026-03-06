@@ -20,6 +20,7 @@ export type KillReason = "user" | "idle-timeout" | "startup-timeout" | "done" | 
 
 /** Unified permission modes exposed by tools/commands across harnesses. */
 export type PermissionMode = "default" | "plan" | "acceptEdits" | "bypassPermissions";
+export type ReasoningEffort = "low" | "medium" | "high";
 
 /** Session creation options used by SessionManager.spawn(). */
 export interface SessionConfig {
@@ -27,6 +28,7 @@ export interface SessionConfig {
   workdir: string;
   name?: string;
   model?: string;
+  reasoningEffort?: ReasoningEffort;
   systemPrompt?: string;
   allowedTools?: string[];
   originChannel?: string;
@@ -51,6 +53,8 @@ export type PlanApprovalMode = "approve" | "ask" | "delegate";
 export interface PluginConfig {
   maxSessions: number;
   defaultModel?: string;
+  model?: string;
+  reasoningEffort?: ReasoningEffort;
   defaultWorkdir?: string;
   idleTimeoutMinutes: number;
   sessionGcAgeMinutes?: number;

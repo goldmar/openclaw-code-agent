@@ -142,6 +142,7 @@ export function createStubSession(overrides: Record<string, any> = {}): any {
     autoRespondCount: 0,
     workdir: "/tmp",
     model: undefined,
+    reasoningEffort: undefined,
     originChannel: undefined,
     originThreadId: undefined,
     originAgentId: undefined,

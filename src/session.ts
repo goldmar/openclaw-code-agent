@@ -2,7 +2,7 @@ import { EventEmitter } from "events";
 import { nanoid } from "nanoid";
 import { getDefaultHarness, getHarness } from "./harness";
 import type { AgentHarness, HarnessSession, HarnessMessage } from "./harness";
-import type { SessionConfig, SessionStatus, PermissionMode, KillReason } from "./types";
+import type { SessionConfig, SessionStatus, PermissionMode, KillReason, ReasoningEffort } from "./types";
 import { pluginConfig, getGlobalMcpServers } from "./config";
 
 const OUTPUT_BUFFER_MAX = 200;
@@ -86,6 +86,7 @@ export class Session extends EventEmitter {
   readonly prompt: string;
   readonly workdir: string;
   readonly model?: string;
+  readonly reasoningEffort?: ReasoningEffort;
   private readonly systemPrompt?: string;
   private readonly allowedTools?: string[];
   private readonly permissionMode: PermissionMode;
@@ -151,9 +152,11 @@ export class Session extends EventEmitter {
     this.id = nanoid(8);
     this.name = name;
     this.harness = config.harness ? getHarness(config.harness) : getDefaultHarness();
+    const isCodexHarness = this.harness.name === "codex";
     this.prompt = config.prompt;
     this.workdir = config.workdir;
-    this.model = config.model;
+    this.model = config.model ?? (isCodexHarness ? pluginConfig.model : undefined) ?? pluginConfig.defaultModel;
+    this.reasoningEffort = config.reasoningEffort ?? (isCodexHarness ? pluginConfig.reasoningEffort : undefined);
     this.systemPrompt = config.systemPrompt;
     this.allowedTools = config.allowedTools;
     this.permissionMode = config.permissionMode ?? pluginConfig.permissionMode;
@@ -236,6 +239,7 @@ export class Session extends EventEmitter {
         prompt,
         cwd: this.workdir,
         model: this.model,
+        reasoningEffort: this.reasoningEffort,
         permissionMode: this.permissionMode,
         systemPrompt: this.systemPrompt,
         allowedTools: this.allowedTools,

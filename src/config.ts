@@ -33,6 +33,7 @@ export let pluginConfig: PluginConfig = {
   maxAutoResponds: 10,
   permissionMode: "plan",
   planApproval: "delegate",
+  reasoningEffort: "medium",
 };
 
 /** Replace plugin config singleton with defaults applied for omitted fields. */
@@ -40,6 +41,8 @@ export function setPluginConfig(config: Partial<PluginConfig>): void {
   pluginConfig = {
     maxSessions: config.maxSessions ?? 5,
     defaultModel: config.defaultModel,
+    model: config.model,
+    reasoningEffort: config.reasoningEffort ?? "medium",
     defaultWorkdir: config.defaultWorkdir,
     idleTimeoutMinutes: config.idleTimeoutMinutes ?? 15,
     sessionGcAgeMinutes: config.sessionGcAgeMinutes ?? 1440,
