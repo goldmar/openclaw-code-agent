@@ -275,25 +275,33 @@ export class Session extends EventEmitter {
 
     let effectiveText = text;
     if (this.pendingModeSwitch) {
-      // Only clear pendingPlanApproval on the approval path (mode switch)
-      this.pendingPlanApproval = false;
       const newMode = this.pendingModeSwitch;
-      this.pendingModeSwitch = undefined;
-
       let shouldInjectPrefix = false;
+      let appliedApprovalPath = false;
       if (this.harnessHandle?.setPermissionMode) {
         try {
           await this.harnessHandle.setPermissionMode(newMode);
           this.currentPermissionMode = newMode;
+          this.pendingModeSwitch = undefined;
+          appliedApprovalPath = true;
           shouldInjectPrefix = true;
         } catch (err: unknown) {
           console.error(`[Session ${this.id}] setPermissionMode(${newMode}) FAILED: ${errorMessage(err)}`);
-          this.pendingModeSwitch = newMode;  // Retry on next sendMessage
+          // Preserve the pending approval state so callers can retry cleanly.
+          this.pendingPlanApproval = true;
+          throw new Error(`Failed to switch permission mode to ${newMode}: ${errorMessage(err)}`);
         }
       } else {
         // Harness doesn't support setPermissionMode — inject text prefix as best-effort fallback
+        this.pendingModeSwitch = undefined;
+        appliedApprovalPath = true;
         shouldInjectPrefix = true;
         console.warn(`[Session ${this.id}] Cannot call setPermissionMode — falling back to text prefix only (currentPermissionMode remains ${this.currentPermissionMode})`);
+      }
+
+      if (appliedApprovalPath) {
+        // Only clear pendingPlanApproval when the approval path is actually applied.
+        this.pendingPlanApproval = false;
       }
 
       if (shouldInjectPrefix) {

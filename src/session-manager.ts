@@ -49,6 +49,7 @@ const WAITING_EVENT_DEBOUNCE_MS = 5_000;
 const WAKE_CLI_TIMEOUT_MS = 30_000;
 
 type LobsterResponseShape = {
+  resumeToken?: string;
   requiresApproval?: { resumeToken?: string };
   details?: { requiresApproval?: { resumeToken?: string } };
 };
@@ -74,7 +75,8 @@ export function parseLobsterResumeToken(output: string): string | undefined {
   for (const candidate of candidates) {
     try {
       const parsed = JSON.parse(candidate) as LobsterResponseShape;
-      const token = parsed?.requiresApproval?.resumeToken
+      const token = parsed?.resumeToken
+        ?? parsed?.requiresApproval?.resumeToken
         ?? parsed?.details?.requiresApproval?.resumeToken;
       if (isLikelyToken(token)) return token.trim();
     } catch {
@@ -285,7 +287,7 @@ export class SessionManager {
       }),
     ];
 
-    execFile("openclaw", args, { timeout: WAKE_CLI_TIMEOUT_MS }, (err, stdout) => {
+    execFile("openclaw", args, { timeout: WAKE_CLI_TIMEOUT_MS }, (err, stdout, stderr) => {
       if (err) {
         console.error(`[SessionManager] Lobster launch failed for session=${session.id}: ${err.message}`);
         // Fallback: send Telegram directly so the user isn't left in the dark
@@ -295,9 +297,11 @@ export class SessionManager {
 
       // Parse the Lobster response to get the resume token.
       const stdoutText = typeof stdout === "string" ? stdout : String(stdout ?? "");
-      const resumeToken = parseLobsterResumeToken(stdoutText);
+      const stderrText = typeof stderr === "string" ? stderr : String(stderr ?? "");
+      const resumeToken = parseLobsterResumeToken(`${stdoutText}\n${stderrText}`);
       if (!resumeToken) {
-        console.warn(`[SessionManager] Lobster response missing resume token for session=${session.id}: ${stdoutText.substring(0, 200)}`);
+        const combinedPreview = `${stdoutText}\n${stderrText}`.trim().substring(0, 200);
+        console.warn(`[SessionManager] Lobster response missing resume token for session=${session.id}: ${combinedPreview}`);
       }
 
       // Store token on session for programmatic resume via agent_respond

@@ -1,6 +1,6 @@
 import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { SessionManager } from "../src/session-manager";
+import { SessionManager, parseLobsterResumeToken } from "../src/session-manager";
 import { setPluginConfig } from "../src/config";
 
 // ---------------------------------------------------------------------------
@@ -423,6 +423,35 @@ describe("SessionManager.recordSessionMetrics()", () => {
     assert.ok(most);
     assert.equal(most!.name, "expensive");
     assert.equal(most!.costUsd, 5.0);
+  });
+
+  it("returns a defensive copy from getMetrics()", () => {
+    const s = fakeSession({ costUsd: 1.0, status: "completed", startedAt: 1000, completedAt: 2000 });
+    (sm as any).recordSessionMetrics(s);
+
+    const snapshot = sm.getMetrics();
+    snapshot.totalCostUsd = 999;
+    snapshot.costPerDay.set("2099-01-01", 50);
+    snapshot.sessionsByStatus.completed = 999;
+
+    const fresh = sm.getMetrics();
+    assert.equal(fresh.totalCostUsd, 1.0);
+    assert.equal(fresh.costPerDay.has("2099-01-01"), false);
+    assert.equal(fresh.sessionsByStatus.completed, 1);
+  });
+});
+
+describe("parseLobsterResumeToken()", () => {
+  it("parses top-level resumeToken", () => {
+    const token = parseLobsterResumeToken(JSON.stringify({ resumeToken: "tok_123" }));
+    assert.equal(token, "tok_123");
+  });
+
+  it("parses nested resumeToken in details.requiresApproval", () => {
+    const token = parseLobsterResumeToken(JSON.stringify({
+      details: { requiresApproval: { resumeToken: "tok_nested" } },
+    }));
+    assert.equal(token, "tok_nested");
   });
 });
 

@@ -53,6 +53,14 @@ export class SessionMetricsRecorder {
 
   /** Return the current metrics snapshot object. */
   getMetrics(): SessionMetrics {
-    return this.metrics;
+    return {
+      totalCostUsd: this.metrics.totalCostUsd,
+      costPerDay: new Map(this.metrics.costPerDay),
+      sessionsByStatus: { ...this.metrics.sessionsByStatus },
+      totalLaunched: this.metrics.totalLaunched,
+      totalDurationMs: this.metrics.totalDurationMs,
+      sessionsWithDuration: this.metrics.sessionsWithDuration,
+      mostExpensive: this.metrics.mostExpensive ? { ...this.metrics.mostExpensive } : null,
+    };
   }
 }

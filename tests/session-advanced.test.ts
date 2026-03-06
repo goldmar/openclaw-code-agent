@@ -389,6 +389,25 @@ describe("Session.switchPermissionMode()", () => {
     assert.equal(session.currentPermissionMode, "bypassPermissions");
     session.kill("user"); // cleanup
   });
+
+  it("throws and preserves pending plan approval when permission switch fails", async () => {
+    const session = await startSession({ multiTurn: true });
+    session.switchPermissionMode("bypassPermissions");
+    session.pendingPlanApproval = true;
+
+    const harnessHandle = (session as any).harnessHandle as { setPermissionMode?: (mode: string) => Promise<void> };
+    harnessHandle.setPermissionMode = async () => {
+      throw new Error("mode switch failed");
+    };
+
+    await assert.rejects(
+      () => session.sendMessage("Approved. Go ahead."),
+      /Failed to switch permission mode to bypassPermissions: mode switch failed/,
+    );
+    assert.equal(session.pendingPlanApproval, true, "approval state should remain pending on failed mode switch");
+    assert.equal((session as any).pendingModeSwitch, "bypassPermissions", "mode switch should remain queued for retry");
+    session.kill("user"); // cleanup
+  });
 });
 
 // ---------------------------------------------------------------------------
