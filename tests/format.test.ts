@@ -63,11 +63,23 @@ describe("truncateText", () => {
   });
 
   it("truncates long text with ...", () => {
-    assert.equal(truncateText("hello world", 5), "hello...");
+    assert.equal(truncateText("hello world", 5), "he...");
   });
 
   it("handles exact boundary", () => {
     assert.equal(truncateText("12345", 5), "12345");
+  });
+
+  it("never exceeds max length", () => {
+    const result = truncateText("abcdefghij", 8);
+    assert.equal(result, "abcde...");
+    assert.equal(result.length, 8);
+  });
+
+  it("handles tiny max lengths", () => {
+    assert.equal(truncateText("abcdef", 3), "...");
+    assert.equal(truncateText("abcdef", 2), "..");
+    assert.equal(truncateText("abcdef", 0), "");
   });
 });
 

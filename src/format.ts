@@ -131,7 +131,10 @@ export function formatStats(metrics: SessionMetrics, runningCount: number): stri
 
 /** Truncate a string with "..." suffix. */
 export function truncateText(text: string, maxLen: number): string {
-  return text.length > maxLen ? text.slice(0, maxLen) + "..." : text;
+  if (maxLen <= 0) return "";
+  if (text.length <= maxLen) return text;
+  if (maxLen <= 3) return ".".repeat(maxLen);
+  return text.slice(0, maxLen - 3) + "...";
 }
 
 /**
