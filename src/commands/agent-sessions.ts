@@ -7,7 +7,7 @@ interface CommandApi {
     description: string;
     acceptsArgs: boolean;
     requireAuth: boolean;
-    handler: () => { text: string };
+    handler: (ctx: { args?: string }) => { text: string };
   }): void;
 }
 
@@ -15,15 +15,16 @@ interface CommandApi {
 export function registerAgentSessionsCommand(api: CommandApi): void {
   api.registerCommand({
     name: "agent_sessions",
-    description: "List all coding agent sessions",
-    acceptsArgs: false,
+    description: "List coding agent sessions. Usage: /agent_sessions [--full]",
+    acceptsArgs: true,
     requireAuth: true,
-    handler: () => {
+    handler: (ctx: { args?: string }) => {
       if (!sessionManager) {
         return { text: "Error: SessionManager not initialized. The code-agent service must be running." };
       }
 
-      return { text: getSessionsListingText(sessionManager, "all") };
+      const full = (ctx.args ?? "").split(/\s+/).includes("--full");
+      return { text: getSessionsListingText(sessionManager, "all", undefined, { full }) };
     },
   });
 }

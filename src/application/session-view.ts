@@ -47,6 +47,13 @@ interface SessionListingItem {
   originThreadId?: string | number;
 }
 
+export interface SessionListingOptions {
+  full?: boolean;
+}
+
+const DEFAULT_SESSION_LIST_LIMIT = 5;
+const FULL_SESSION_LIST_WINDOW_MS = 24 * 60 * 60 * 1000;
+
 function normalizeLines(lines?: number): number {
   const parsed = Number(lines);
   if (!Number.isFinite(parsed) || parsed < MIN_OUTPUT_LINES) {
@@ -137,6 +144,7 @@ export function getSessionsListingText(
   sm: SessionManager,
   filter: "all" | "running" | "completed" | "failed" | "killed" = "all",
   originChannel?: string,
+  options: SessionListingOptions = {},
 ): string {
   const persisted = sm.listPersistedSessions() ?? [];
   const merged = mergeActiveAndPersistedSessions(sm.list("all"), persisted);
@@ -146,6 +154,12 @@ export function getSessionsListingText(
   }
   if (originChannel) {
     sessions = sessions.filter((s) => s.originChannel === originChannel);
+  }
+  if (options.full) {
+    const cutoff = Date.now() - FULL_SESSION_LIST_WINDOW_MS;
+    sessions = sessions.filter((s) => (s.startedAt ?? 0) >= cutoff);
+  } else {
+    sessions = sessions.slice(0, DEFAULT_SESSION_LIST_LIMIT);
   }
   if (sessions.length === 0) return "No sessions found.";
   return sessions.map((s) => formatSessionListing(s)).join("\n\n");
