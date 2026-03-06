@@ -71,9 +71,12 @@ interface OriginContextLike {
  * Priority: ctx.messageChannel + accountId → agentChannels(workspaceDir) → ctx.messageChannel as-is
  */
 export function resolveToolChannel(ctx: OpenClawPluginToolContext): string | undefined {
-  if (ctx.messageChannel && ctx.agentAccountId) {
+  if (ctx.messageChannel) {
     const parts = ctx.messageChannel.split("|");
-    if (parts.length >= 2) {
+    if (parts.length >= 3) {
+      return ctx.messageChannel;
+    }
+    if (ctx.agentAccountId && parts.length >= 2) {
       return `${parts[0]}|${ctx.agentAccountId}|${parts.slice(1).join("|")}`;
     }
   }
@@ -94,6 +97,9 @@ export function resolveOriginChannel(ctx: OriginContextLike | undefined, explici
   if (explicitChannel && String(explicitChannel).includes("|")) {
     return String(explicitChannel);
   }
+  if (ctx?.channelId && String(ctx.channelId).includes("|")) {
+    return String(ctx.channelId);
+  }
   if (ctx?.channel && ctx?.chatId) {
     return `${ctx.channel}|${ctx.chatId}`;
   }
@@ -102,9 +108,6 @@ export function resolveOriginChannel(ctx: OriginContextLike | undefined, explici
   }
   if (ctx?.id && /^-?\d+$/.test(String(ctx.id))) {
     return `telegram|${ctx.id}`;
-  }
-  if (ctx?.channelId && String(ctx.channelId).includes("|")) {
-    return String(ctx.channelId);
   }
   return pluginConfig.fallbackChannel ?? "unknown";
 }
