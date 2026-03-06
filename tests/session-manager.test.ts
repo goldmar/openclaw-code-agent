@@ -655,6 +655,23 @@ describe("SessionManager.deliverToTelegram()", () => {
     assert.equal(calls[0].text, "hello");
     assert.equal(calls[0].threadId, 42);
   });
+
+  it("skips invalid origin channels", () => {
+    const calls: any[] = [];
+    sm.notifications = {
+      emitToChannel(channelId: string, text: string, threadId?: string | number) {
+        calls.push({ channelId, text, threadId });
+      },
+      attachToSession() {},
+      stop() {},
+    } as any;
+
+    sm.deliverToTelegram(fakeSession({ originChannel: "unknown" }), "hello");
+    sm.deliverToTelegram(fakeSession({ originChannel: "gateway" }), "hello");
+    sm.deliverToTelegram(fakeSession({ originChannel: "nopipe" }), "hello");
+
+    assert.equal(calls.length, 0);
+  });
 });
 
 // =========================================================================

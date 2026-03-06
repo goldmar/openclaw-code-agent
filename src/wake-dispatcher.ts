@@ -26,7 +26,11 @@ export class WakeDispatcher {
   /** Send a direct message to the originating channel/thread, if available. */
   deliverToTelegram(session: Session, text: string): void {
     if (!this.notifications) return;
-    this.notifications.emitToChannel(session.originChannel || "unknown", text, session.originThreadId);
+    const originChannel = session.originChannel;
+    if (!originChannel || originChannel === "unknown" || originChannel === "gateway" || !originChannel.includes("|")) {
+      return;
+    }
+    this.notifications.emitToChannel(originChannel, text, session.originThreadId);
   }
 
   /** Build `openclaw agent --deliver` routing args from origin channel metadata. */
