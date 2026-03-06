@@ -36,7 +36,9 @@ export class WakeDispatcher {
     if (parts.length < 2) return [];
 
     const args: string[] = [];
-    const topicSuffix = (threadId != null && parts[0] === "telegram") ? `:topic:${threadId}` : "";
+    const hasThreadId = typeof threadId === "number"
+      || (typeof threadId === "string" && threadId.trim().length > 0);
+    const topicSuffix = (hasThreadId && parts[0] === "telegram") ? `:topic:${threadId}` : "";
     if (parts.length >= 3) {
       args.push("--deliver", "--reply-channel", parts[0], "--reply-account", parts[1], "--reply-to", parts.slice(2).join("|") + topicSuffix);
     } else {

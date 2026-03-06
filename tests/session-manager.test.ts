@@ -501,6 +501,11 @@ describe("SessionManager.buildDeliverArgs()", () => {
     assert.deepEqual(args, ["--deliver", "--reply-channel", "telegram", "--reply-account", "bot123", "--reply-to", "chatid:topic:42"]);
   });
 
+  it("ignores blank telegram thread ids", () => {
+    const args = (sm as any).buildDeliverArgs("telegram|bot123|chatid", "   ");
+    assert.deepEqual(args, ["--deliver", "--reply-channel", "telegram", "--reply-account", "bot123", "--reply-to", "chatid"]);
+  });
+
   it("does not append :topic: for non-telegram channels", () => {
     const args = (sm as any).buildDeliverArgs("discord|bot123|chatid", 42);
     assert.deepEqual(args, ["--deliver", "--reply-channel", "discord", "--reply-account", "bot123", "--reply-to", "chatid"]);
