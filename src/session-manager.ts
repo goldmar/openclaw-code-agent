@@ -101,6 +101,8 @@ export class SessionManager {
   private _notifications: NotificationService | null = null;
 
   private lastWaitingEventTimestamps: Map<string, number> = new Map();
+  private lastTurnCompleteMarkers: Map<string, string> = new Map();
+  private lastCompletionMarkers: Map<string, string> = new Map();
   private readonly store: SessionStore;
   private readonly metrics: SessionMetricsRecorder;
   private readonly wakeDispatcher: WakeDispatcher;
@@ -197,6 +199,7 @@ export class SessionManager {
     if (session.killReason === "done") return;
 
     if (session.status === "completed") {
+      if (!this.shouldEmitCompletionWake(session)) return;
       this.triggerAgentEvent(session);
       return;
     }
@@ -504,7 +507,24 @@ export class SessionManager {
 
     // Non-question turns still emit a lightweight turn-complete wake. We keep
     // a heuristic waiting hint in that payload as a fallback.
+    if (!this.shouldEmitTurnCompleteWake(session)) return;
     this.triggerTurnCompleteEventWithSignal(session);
+  }
+
+  private shouldEmitTurnCompleteWake(session: Session): boolean {
+    const marker = `${session.result?.session_id ?? ""}|${session.result?.num_turns ?? 0}|${session.result?.duration_ms ?? 0}`;
+    const prev = this.lastTurnCompleteMarkers.get(session.id);
+    if (prev === marker) return false;
+    this.lastTurnCompleteMarkers.set(session.id, marker);
+    return true;
+  }
+
+  private shouldEmitCompletionWake(session: Session): boolean {
+    const marker = `${session.completedAt ?? 0}|${session.result?.session_id ?? ""}|${session.result?.num_turns ?? 0}|${session.killReason}`;
+    const prev = this.lastCompletionMarkers.get(session.id);
+    if (prev === marker) return false;
+    this.lastCompletionMarkers.set(session.id, marker);
+    return true;
   }
 
   private triggerTurnCompleteEventWithSignal(session: Session): void {
@@ -611,6 +631,8 @@ export class SessionManager {
         this.persistSession(session);
         this.sessions.delete(id);
         this.lastWaitingEventTimestamps.delete(id);
+        this.lastTurnCompleteMarkers.delete(id);
+        this.lastCompletionMarkers.delete(id);
       }
     }
 

@@ -582,11 +582,18 @@ describe("SessionManager.cleanup()", () => {
 
   it("keeps sessions exactly on the TTL boundary", () => {
     setPluginConfig({ sessionGcAgeMinutes: 5 });
-    const boundaryTime = Date.now() - 5 * 60 * 1000;
-    const s = fakeSession({ id: "ttl-boundary", status: "completed", completedAt: boundaryTime });
-    (sm as any).sessions.set("ttl-boundary", s);
-    sm.cleanup();
-    assert.equal((sm as any).sessions.has("ttl-boundary"), true);
+    const originalDateNow = Date.now;
+    const now = 1_700_000_000_000;
+    Date.now = () => now;
+    try {
+      const boundaryTime = now - 5 * 60 * 1000;
+      const s = fakeSession({ id: "ttl-boundary", status: "completed", completedAt: boundaryTime });
+      (sm as any).sessions.set("ttl-boundary", s);
+      sm.cleanup();
+      assert.equal((sm as any).sessions.has("ttl-boundary"), true);
+    } finally {
+      Date.now = originalDateNow;
+    }
   });
 
   it("evicts oldest persisted sessions when exceeding maxPersistedSessions", () => {
@@ -718,5 +725,67 @@ describe("SessionManager turn-end wake", () => {
 
     const calls = (sm as any).__wakeCalls;
     assert.equal(calls.length, 0);
+  });
+
+  it("de-dupes duplicate turn-end wake for the same turn marker", () => {
+    const s = fakeSession({
+      id: "s-dup-turn",
+      name: "dup-turn",
+      status: "running",
+      notifyOnTurnEnd: true,
+      result: {
+        session_id: "thread-1",
+        num_turns: 3,
+        duration_ms: 1200,
+      },
+      getOutput: () => ["Turn output."],
+    });
+
+    (sm as any).onTurnEnd(s, false);
+    (sm as any).onTurnEnd(s, false);
+
+    const calls = (sm as any).__wakeCalls;
+    assert.equal(calls.length, 1);
+    const [_sessionArg, _eventText, _telegramText, label] = calls[0];
+    assert.equal(label, "turn-complete");
+  });
+});
+
+describe("SessionManager completion wake de-dup", () => {
+  let sm: SessionManager;
+
+  beforeEach(() => {
+    sm = new SessionManager(5);
+    (sm as any).wakeDispatcher = {
+      wakeAgent: (...args: any[]) => { ((sm as any).__wakeCalls ??= []).push(args); },
+      deliverToTelegram: () => {},
+      buildDeliverArgs: () => [],
+      clearPendingRetries: () => {},
+      setNotifications: () => {},
+    };
+    (sm as any).__wakeCalls = [];
+  });
+
+  it("de-dupes duplicate completion wake for the same terminal marker", () => {
+    const s = fakeSession({
+      id: "s-dup-complete",
+      name: "dup-complete",
+      status: "completed",
+      killReason: "user",
+      completedAt: 1700000000000,
+      result: {
+        session_id: "thread-2",
+        num_turns: 4,
+      },
+      getOutput: () => ["done"],
+    });
+
+    (sm as any).onSessionTerminal(s);
+    (sm as any).onSessionTerminal(s);
+
+    const calls = (sm as any).__wakeCalls;
+    assert.equal(calls.length, 1);
+    const [_sessionArg, _eventText, _telegramText, label] = calls[0];
+    assert.equal(label, "completed");
   });
 });
