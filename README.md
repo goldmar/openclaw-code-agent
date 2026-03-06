@@ -84,7 +84,7 @@ Replace `my-bot` with your Telegram bot account name and `123456789` with your T
 | `agent_respond` | Send a follow-up message to a running session | `session`, `message`, `interrupt`, `approve`, `userInitiated` |
 | `agent_kill` | Terminate or complete a running session | `session`, `reason` |
 | `agent_output` | Read buffered output from a session | `session`, `lines`, `full` |
-| `agent_sessions` | List active + persisted sessions | `status` |
+| `agent_sessions` | List recent sessions (5 by default, `full` for 24h view) | `status`, `full` |
 | `agent_stats` | Show usage metrics (counts, durations, costs) | *(none)* |
 
 Core orchestration workflows use `agent_launch`, `agent_respond`, `agent_output`, `agent_sessions`, and `agent_kill`.
@@ -102,6 +102,7 @@ All tools are also available as **chat commands** (`/agent`, `/agent_respond`, `
 
 # Monitor
 /agent_sessions
+/agent_sessions --full
 
 # Interact with a running session
 /agent_respond fix-auth Also add unit tests

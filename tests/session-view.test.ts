@@ -4,6 +4,89 @@ import { fileURLToPath } from "url";
 import { getSessionsListingText, getSessionOutputText } from "../src/application/session-view";
 
 describe("session-view app layer", () => {
+  it("shows only the 5 most recent sessions by default", () => {
+    const now = Date.now();
+    const sm: any = {
+      list: () => [
+        { status: "running", name: "s1", id: "1", duration: 1000, prompt: "x", multiTurn: true, workdir: "/tmp", costUsd: 0, phase: "running", startedAt: now - 1000 },
+        { status: "running", name: "s2", id: "2", duration: 1000, prompt: "x", multiTurn: true, workdir: "/tmp", costUsd: 0, phase: "running", startedAt: now - 2000 },
+        { status: "running", name: "s3", id: "3", duration: 1000, prompt: "x", multiTurn: true, workdir: "/tmp", costUsd: 0, phase: "running", startedAt: now - 3000 },
+        { status: "running", name: "s4", id: "4", duration: 1000, prompt: "x", multiTurn: true, workdir: "/tmp", costUsd: 0, phase: "running", startedAt: now - 4000 },
+        { status: "running", name: "s5", id: "5", duration: 1000, prompt: "x", multiTurn: true, workdir: "/tmp", costUsd: 0, phase: "running", startedAt: now - 5000 },
+        { status: "running", name: "s6", id: "6", duration: 1000, prompt: "x", multiTurn: true, workdir: "/tmp", costUsd: 0, phase: "running", startedAt: now - 6 * 24 * 60 * 60 * 1000 },
+      ],
+      listPersistedSessions: () => [],
+    };
+
+    const text = getSessionsListingText(sm, "all");
+    assert.match(text, /🟢 s1 \[1\]/);
+    assert.match(text, /🟢 s5 \[5\]/);
+    assert.doesNotMatch(text, /🟢 s6 \[6\]/);
+  });
+
+  it("includes harness metadata for active sessions in the listing text", () => {
+    const now = Date.now();
+    const sm: any = {
+      list: () => [
+        {
+          status: "running",
+          name: "live-codex",
+          id: "1",
+          duration: 1000,
+          prompt: "x",
+          multiTurn: true,
+          workdir: "/tmp",
+          costUsd: 0,
+          phase: "implementing",
+          harnessName: "codex",
+          startedAt: now - 1000,
+        },
+      ],
+      listPersistedSessions: () => [],
+    };
+
+    const text = getSessionsListingText(sm, "all", undefined, { full: true });
+    assert.match(text, /🧰 Harness: codex/);
+  });
+
+  it("shows all sessions from the last 24h when full is enabled", () => {
+    const now = Date.now();
+    const sm: any = {
+      list: () => [
+        { status: "running", name: "recent-active", id: "1", duration: 1000, prompt: "x", multiTurn: true, workdir: "/tmp", costUsd: 0, phase: "running", startedAt: now - 1000 },
+      ],
+      listPersistedSessions: () => [
+        {
+          sessionId: "recent-persisted",
+          harnessSessionId: "h-recent",
+          name: "recent-persisted",
+          status: "completed",
+          prompt: "ok",
+          workdir: "/tmp",
+          createdAt: now - (23 * 60 * 60 * 1000),
+          completedAt: now - 500,
+          costUsd: 0,
+        },
+        {
+          sessionId: "old-persisted",
+          harnessSessionId: "h-old",
+          name: "old-persisted",
+          status: "completed",
+          prompt: "old",
+          workdir: "/tmp",
+          createdAt: now - (25 * 60 * 60 * 1000),
+          completedAt: now - 1000,
+          costUsd: 0,
+        },
+      ],
+    };
+
+    const text = getSessionsListingText(sm, "all", undefined, { full: true });
+    assert.match(text, /recent-active \[1\]/);
+    assert.match(text, /recent-persisted \[recent-persisted\]/);
+    assert.doesNotMatch(text, /old-persisted \[old-persisted\]/);
+  });
+
   it("returns not found when output session reference is unknown", () => {
     const sm: any = {
       resolve: () => undefined,

@@ -20,6 +20,7 @@ export interface SessionListRenderable {
   multiTurn: boolean;
   costUsd: number;
   phase: string;
+  harness?: string;
   harnessSessionId?: string;
   resumeSessionId?: string;
   forkSession?: boolean;
@@ -84,6 +85,10 @@ export function formatSessionListing(session: SessionListRenderable): string {
     lines.push(`   ⚙️  Phase: ${session.phase}`);
   }
 
+  if (session.harness) {
+    lines.push(`   🧰 Harness: ${session.harness}`);
+  }
+
   if (session.harnessSessionId) {
     lines.push(`   🔗 Session ID: ${session.harnessSessionId}`);
   }
@@ -131,7 +136,10 @@ export function formatStats(metrics: SessionMetrics, runningCount: number): stri
 
 /** Truncate a string with "..." suffix. */
 export function truncateText(text: string, maxLen: number): string {
-  return text.length > maxLen ? text.slice(0, maxLen) + "..." : text;
+  if (maxLen <= 0) return "";
+  if (text.length <= maxLen) return text;
+  if (maxLen <= 3) return ".".repeat(maxLen);
+  return text.slice(0, maxLen - 3) + "...";
 }
 
 /**

@@ -63,11 +63,23 @@ describe("truncateText", () => {
   });
 
   it("truncates long text with ...", () => {
-    assert.equal(truncateText("hello world", 5), "hello...");
+    assert.equal(truncateText("hello world", 5), "he...");
   });
 
   it("handles exact boundary", () => {
     assert.equal(truncateText("12345", 5), "12345");
+  });
+
+  it("never exceeds max length", () => {
+    const result = truncateText("abcdefghij", 8);
+    assert.equal(result, "abcde...");
+    assert.equal(result.length, 8);
+  });
+
+  it("handles tiny max lengths", () => {
+    assert.equal(truncateText("abcdef", 3), "...");
+    assert.equal(truncateText("abcdef", 2), "..");
+    assert.equal(truncateText("abcdef", 0), "");
   });
 });
 
@@ -136,6 +148,11 @@ describe("formatSessionListing", () => {
   it("shows session ID when present", () => {
     const result = formatSessionListing(makeSession({ harnessSessionId: "session-123" }));
     assert.ok(result.includes("session-123"));
+  });
+
+  it("shows harness when present", () => {
+    const result = formatSessionListing(makeSession({ harness: "codex" }));
+    assert.ok(result.includes("Harness: codex"));
   });
 
   it("shows phase for running session in plan mode", () => {

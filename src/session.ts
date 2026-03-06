@@ -313,6 +313,7 @@ export class Session extends EventEmitter {
           this.planModeApproved = true;
         }
       }
+
       if (shouldInjectPrefix) {
         effectiveText = `[SYSTEM: The user has approved your plan. Exit plan mode immediately and implement the changes with full permissions. Do not ask for further confirmation.]\n\n${text}`;
       }

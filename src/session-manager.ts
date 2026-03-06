@@ -89,6 +89,7 @@ export function parseLobsterResumeToken(output: string): string | undefined {
 
   return undefined;
 }
+
 /**
  * Orchestrates active session lifecycles, wake signaling, persistence, and GC.
  */

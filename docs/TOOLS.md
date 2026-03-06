@@ -14,7 +14,7 @@ All tools provided by the OpenClaw Code Agent. Each tool is exposed to agents vi
 | `agent_respond` | Send follow-up message to a running session | `session`, `message`, `interrupt`, `userInitiated`, `approve` |
 | `agent_kill` | Terminate a session | `session` |
 | `agent_output` | Show session output (read-only) | `session`, `lines`, `full` |
-| `agent_sessions` | List all sessions | `status` |
+| `agent_sessions` | List recent sessions (5 by default, `full` for 24h view) | `status`, `full` |
 | `agent_stats` | Show usage metrics | *(none)* |
 
 > **Note:** There is no separate `agent_resume` tool. To resume a previous session, use `agent_launch` with the `resume_session_id` parameter. The `/agent_resume` chat command provides a convenient wrapper.
@@ -183,18 +183,23 @@ agent_output(session: "fix-auth-bug", lines: 100)
 
 ## agent_sessions
 
-List all coding agent sessions with their status and progress. When called by an agent with a workspace context, sessions are filtered to show only that agent's sessions (matched via `originChannel`).
+List coding agent sessions with their status and progress. By default, it shows only the 5 most recent sessions. Set `full: true` to show all sessions from the last 24 hours instead. When called by an agent with a workspace context, sessions are filtered to show only that agent's sessions (matched via `originChannel`).
 
 ### Parameters
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | `status` | enum | no | `all` | Filter by status: `all`, `running`, `completed`, `failed`, `killed` |
+| `full` | boolean | no | `false` | Show all sessions from the last 24h instead of just the most recent 5 |
 
 ### Example
 
 ```
 agent_sessions(status: "running")
+```
+
+```
+agent_sessions(full: true)
 ```
 
 ---

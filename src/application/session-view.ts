@@ -42,10 +42,18 @@ interface SessionListingItem {
   costUsd: number;
   multiTurn: boolean;
   phase: string;
+  harness?: string;
   harnessSessionId?: string;
   originChannel?: string;
   originThreadId?: string | number;
 }
+
+export interface SessionListingOptions {
+  full?: boolean;
+}
+
+const DEFAULT_SESSION_LIST_LIMIT = 5;
+const FULL_SESSION_LIST_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 function normalizeLines(lines?: number): number {
   const parsed = Number(lines);
@@ -137,6 +145,7 @@ export function getSessionsListingText(
   sm: SessionManager,
   filter: "all" | "running" | "completed" | "failed" | "killed" = "all",
   originChannel?: string,
+  options: SessionListingOptions = {},
 ): string {
   const persisted = sm.listPersistedSessions() ?? [];
   const merged = mergeActiveAndPersistedSessions(sm.list("all"), persisted);
@@ -146,6 +155,12 @@ export function getSessionsListingText(
   }
   if (originChannel) {
     sessions = sessions.filter((s) => s.originChannel === originChannel);
+  }
+  if (options.full) {
+    const cutoff = Date.now() - FULL_SESSION_LIST_WINDOW_MS;
+    sessions = sessions.filter((s) => (s.startedAt ?? 0) >= cutoff);
+  } else {
+    sessions = sessions.slice(0, DEFAULT_SESSION_LIST_LIMIT);
   }
   if (sessions.length === 0) return "No sessions found.";
   return sessions.map((s) => formatSessionListing(s)).join("\n\n");
@@ -182,6 +197,7 @@ function mergeActiveAndPersistedSessions(active: Session[], persisted: Persisted
       costUsd: p.costUsd ?? 0,
       multiTurn: true, // Persisted sessions are always resumable multi-turn records.
       phase: p.status,
+      harness: p.harness,
       harnessSessionId: p.harnessSessionId,
       originChannel: p.originChannel,
       originThreadId: p.originThreadId,
@@ -201,6 +217,7 @@ function mergeActiveAndPersistedSessions(active: Session[], persisted: Persisted
       costUsd: session.costUsd,
       multiTurn: session.multiTurn,
       phase: session.phase,
+      harness: session.harnessName,
       harnessSessionId: session.harnessSessionId,
       originChannel: session.originChannel,
       originThreadId: session.originThreadId,
