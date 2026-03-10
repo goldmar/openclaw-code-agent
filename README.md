@@ -1,6 +1,17 @@
 # OpenClaw Code Agent
 
+[![npm version](https://img.shields.io/npm/v/openclaw-code-agent.svg)](https://www.npmjs.com/package/openclaw-code-agent)
+[![npm downloads](https://img.shields.io/npm/dm/openclaw-code-agent.svg)](https://www.npmjs.com/package/openclaw-code-agent)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 An [OpenClaw](https://openclaw.com) plugin that lets AI agents orchestrate coding agent sessions as managed background processes. Launch, monitor, and interact with multiple concurrent coding sessions directly from Telegram, Discord, or any OpenClaw-supported messaging platform — without leaving your chat interface.
+
+## Why?
+
+Built-in ACP is useful as a relay bridge for simple one-shot tasks, but it stops short of full orchestration. `openclaw-code-agent` adds an async control layer around coding sessions so you can review plans before execution, persist and resume work later, and run multiple sessions concurrently. It also supports multiple harnesses instead of binding you to a single agent integration. The result is closer to background job orchestration for coding agents than a direct chat-to-agent relay.
+
+## Demo
+<!-- TODO: Add demo GIF showing plan-approve-execute flow in Telegram -->
 
 ## Supported Agents
 
@@ -354,6 +365,13 @@ openclaw-code-agent/
 ├── skills/                     # Orchestration skill definitions
 └── docs/                       # Architecture & reference docs
 ```
+
+---
+
+## Troubleshooting
+
+- Plugin installed but the gateway does not see it yet: run `openclaw gateway restart`.
+- Notifications are not arriving: verify `fallbackChannel` uses the exact format `"telegram|bot-name|chat-id"` in `~/.openclaw/openclaw.json`.
 
 ---
 
