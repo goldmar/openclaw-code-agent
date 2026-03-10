@@ -183,8 +183,12 @@ appendFileSync(process.env.OPENCLAW_TEST_LOG, JSON.stringify(process.argv.slice(
     const calls = await waitForCalls(logPath, 2);
 
     assert.equal(calls.length, 2);
-    assert.equal(parseMessageSendArgs(calls[0] ?? []).message, "🔔 waiting");
-    assert.deepEqual(calls[1], [
+    const notifyCall = calls.find((call) => call[0] === "message");
+    const systemCall = calls.find((call) => call[0] === "system");
+    assert.ok(notifyCall, "expected a message.send notification call");
+    assert.ok(systemCall, "expected a system.event fallback call");
+    assert.equal(parseMessageSendArgs(notifyCall).message, "🔔 waiting");
+    assert.deepEqual(systemCall, [
       "system",
       "event",
       "--text",
@@ -207,8 +211,12 @@ appendFileSync(process.env.OPENCLAW_TEST_LOG, JSON.stringify(process.argv.slice(
     const calls = await waitForCalls(logPath, 2);
 
     assert.equal(calls.length, 2);
-    assert.equal(parseMessageSendArgs(calls[0] ?? []).message, "✅ completed");
-    assert.deepEqual(calls[1], [
+    const notifyCall = calls.find((call) => call[0] === "message");
+    const systemCall = calls.find((call) => call[0] === "system");
+    assert.ok(notifyCall, "expected a message.send notification call");
+    assert.ok(systemCall, "expected a system.event fallback call");
+    assert.equal(parseMessageSendArgs(notifyCall).message, "✅ completed");
+    assert.deepEqual(systemCall, [
       "system",
       "event",
       "--text",
