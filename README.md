@@ -11,7 +11,15 @@ An [OpenClaw](https://openclaw.com) plugin that lets AI agents orchestrate codin
 Built-in ACP is useful as a relay bridge for simple one-shot tasks, but it stops short of full orchestration. `openclaw-code-agent` adds an async control layer around coding sessions so you can review plans before execution, persist and resume work later, and run multiple sessions concurrently. It also supports multiple harnesses instead of binding you to a single agent integration. The result is closer to background job orchestration for coding agents than a direct chat-to-agent relay.
 
 ## Demo
-<!-- TODO: Add demo GIF showing plan-approve-execute flow in Telegram -->
+<img src="assets/ask-readme.gif" alt="Ask mode demo showing plan review and approval before execution">
+
+*Plan review and approval in ask mode: the agent pauses for your decision before executing.*
+
+### Autonomous mode (delegate)
+
+<img src="assets/delegate-readme.gif" alt="Delegate mode demo showing autonomous execution with selective escalation">
+
+*In delegate mode, the orchestrator auto-approves low-risk plans and only escalates when needed.*
 
 ## Supported Agents
 
