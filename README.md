@@ -60,6 +60,7 @@ Built-in ACP is useful as a relay bridge for simple one-shot tasks, but it stops
 
 ```bash
 openclaw plugins install openclaw-code-agent
+openclaw plugins enable openclaw-code-agent
 openclaw gateway restart
 ```
 
