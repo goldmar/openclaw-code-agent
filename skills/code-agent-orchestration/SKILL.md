@@ -1,41 +1,19 @@
 ---
 name: Code Agent Orchestration
 description: Skill for orchestrating coding agent sessions from OpenClaw. Covers launching, monitoring, multi-turn interaction, lifecycle management, notifications, and parallel work patterns.
-metadata: {"openclaw": {"requires": {"plugins": ["openclaw-code-agent"]}}}
+metadata:
+  openclaw:
+    homepage: https://github.com/goldmar/openclaw-code-agent
+    requires:
+      bins:
+        - openclaw
+    install:
+      - kind: node
+        package: openclaw-code-agent
+        bins: []
 ---
 
 # Code Agent Orchestration
-
-## Requirements
-
-This skill requires the `openclaw-code-agent` plugin. Install it first:
-
-```bash
-openclaw plugins install openclaw-code-agent
-openclaw plugins enable openclaw-code-agent
-openclaw gateway restart
-```
-
-Then configure your notification channel in `~/.openclaw/openclaw.json`:
-
-```json
-{
-  "plugins": {
-    "entries": {
-      "openclaw-code-agent": {
-        "enabled": true,
-        "config": {
-          "fallbackChannel": "telegram|my-bot|123456789"
-        }
-      }
-    }
-  }
-}
-```
-
-Replace `my-bot` with your Telegram bot name and `123456789` with your chat ID. Full config reference: [github.com/goldmar/openclaw-code-agent](https://github.com/goldmar/openclaw-code-agent)
-
----
 
 You orchestrate coding agent sessions via the `openclaw-code-agent`. Each session is an autonomous agent that executes code tasks in the background.
 
