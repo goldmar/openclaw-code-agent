@@ -194,6 +194,7 @@ describe("setPluginConfig", () => {
       agentChannels: { "/a": "telegram|b|c" },
       maxAutoResponds: 20,
       permissionMode: "bypassPermissions",
+      codexApprovalPolicy: "on-request",
       planApproval: "ask",
     });
     assert.equal(pluginConfig.maxSessions, 10);
@@ -208,6 +209,7 @@ describe("setPluginConfig", () => {
     assert.deepEqual(pluginConfig.agentChannels, { "/a": "telegram|b|c" });
     assert.equal(pluginConfig.maxAutoResponds, 20);
     assert.equal(pluginConfig.permissionMode, "bypassPermissions");
+    assert.equal(pluginConfig.codexApprovalPolicy, "on-request");
     assert.equal(pluginConfig.planApproval, "ask");
   });
 
@@ -219,6 +221,7 @@ describe("setPluginConfig", () => {
     assert.equal(pluginConfig.maxPersistedSessions, 10000);
     assert.equal(pluginConfig.maxAutoResponds, 10);
     assert.equal(pluginConfig.reasoningEffort, "medium");
+    assert.equal(pluginConfig.codexApprovalPolicy, "on-request");
   });
 
   it("uses default for missing permissionMode", () => {
@@ -289,6 +292,7 @@ describe("pluginConfig singleton", () => {
     assert.equal(pluginConfig.permissionMode, "plan");
     assert.equal(pluginConfig.planApproval, "delegate");
     assert.equal(pluginConfig.reasoningEffort, "medium");
+    assert.equal(pluginConfig.codexApprovalPolicy, "on-request");
   });
 
   it("setPluginConfig mutates the module-level singleton", () => {

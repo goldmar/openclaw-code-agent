@@ -32,6 +32,7 @@ export let pluginConfig: PluginConfig = {
   maxPersistedSessions: 10000,
   maxAutoResponds: 10,
   permissionMode: "plan",
+  codexApprovalPolicy: "on-request",
   planApproval: "delegate",
   reasoningEffort: "medium",
 };
@@ -51,6 +52,7 @@ export function setPluginConfig(config: Partial<PluginConfig>): void {
     agentChannels: config.agentChannels,
     maxAutoResponds: config.maxAutoResponds ?? 10,
     permissionMode: config.permissionMode ?? "plan",
+    codexApprovalPolicy: config.codexApprovalPolicy ?? "on-request",
     planApproval: config.planApproval ?? "delegate",
     defaultHarness: config.defaultHarness,
   };

@@ -74,6 +74,7 @@ describe("executeRespond — auto-resume", () => {
       originAgentId: "agent-main",
       originSessionKey: "agent:main:telegram:group:123:topic:42",
       currentPermissionMode: "acceptEdits",
+      codexApprovalPolicy: "on-request",
     });
     const sm = createStubSessionManager({ "test-id": session });
 
@@ -92,6 +93,7 @@ describe("executeRespond — auto-resume", () => {
     assert.equal(capturedConfig.originThreadId, 42);
     assert.equal(capturedConfig.originAgentId, "agent-main");
     assert.equal(capturedConfig.permissionMode, "acceptEdits");
+    assert.equal(capturedConfig.codexApprovalPolicy, "on-request");
   });
 
   it("auto-resumes a completed session with done reason", async () => {
@@ -219,6 +221,7 @@ describe("executeRespond — auto-resume", () => {
       originSessionKey: "agent:main:telegram:group:123:topic:42",
       harness: "codex",
       currentPermissionMode: "acceptEdits",
+      codexApprovalPolicy: "on-request",
     });
     sm.idIndex.set("GccpSIqJ", "harness-restart");
 
@@ -234,6 +237,7 @@ describe("executeRespond — auto-resume", () => {
     assert.equal(capturedConfig.resumeSessionId, undefined);
     assert.equal(capturedConfig.reasoningEffort, "high");
     assert.equal(capturedConfig.permissionMode, "acceptEdits");
+    assert.equal(capturedConfig.codexApprovalPolicy, "on-request");
     assert.equal(capturedConfig.harness, "codex");
   });
 

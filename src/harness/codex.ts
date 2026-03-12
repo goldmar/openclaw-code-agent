@@ -4,7 +4,7 @@
  */
 
 import { parse, resolve } from "path";
-import { Codex, type ModelReasoningEffort, type Thread, type ThreadEvent, type ThreadOptions, type Usage } from "@openai/codex-sdk";
+import { Codex, type ApprovalMode, type ModelReasoningEffort, type Thread, type ThreadEvent, type ThreadOptions, type Usage } from "@openai/codex-sdk";
 import type {
   AgentHarness,
   HarnessLaunchOptions,
@@ -125,7 +125,7 @@ function buildThreadOptions(options: HarnessLaunchOptions, permissionMode?: stri
     modelReasoningEffort: options.reasoningEffort as ModelReasoningEffort | undefined,
     workingDirectory: options.cwd,
     sandboxMode: "danger-full-access",
-    approvalPolicy: "never",
+    approvalPolicy: (options.codexApprovalPolicy ?? "on-request") as ApprovalMode,
     skipGitRepoCheck: true,
     additionalDirectories,
   };

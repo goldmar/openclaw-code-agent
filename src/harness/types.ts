@@ -6,7 +6,7 @@
  */
 
 import type { McpServerConfig } from "../config";
-import type { ReasoningEffort } from "../types";
+import type { CodexApprovalPolicy, ReasoningEffort } from "../types";
 
 // ---------------------------------------------------------------------------
 // Harness message types (normalised from each SDK's wire format)
@@ -39,6 +39,7 @@ export interface HarnessLaunchOptions {
   model?: string;
   reasoningEffort?: ReasoningEffort;
   permissionMode?: string;
+  codexApprovalPolicy?: CodexApprovalPolicy;
   systemPrompt?: string;
   allowedTools?: string[];
   resumeSessionId?: string;

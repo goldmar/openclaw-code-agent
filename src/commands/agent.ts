@@ -62,6 +62,7 @@ export function registerAgentCommand(api: CommandApi): void {
           workdir: pluginConfig.defaultWorkdir || process.cwd(),
           model: defaultModel,
           reasoningEffort: pluginConfig.reasoningEffort,
+          codexApprovalPolicy: pluginConfig.codexApprovalPolicy,
           originChannel: resolveOriginChannel(ctx),
           originThreadId: resolveOriginThreadId(ctx),
           harness,

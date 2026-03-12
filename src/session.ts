@@ -2,7 +2,7 @@ import { EventEmitter } from "events";
 import { nanoid } from "nanoid";
 import { getDefaultHarness, getHarness } from "./harness";
 import type { AgentHarness, HarnessSession, HarnessMessage } from "./harness";
-import type { SessionConfig, SessionStatus, PermissionMode, KillReason, ReasoningEffort } from "./types";
+import type { SessionConfig, SessionStatus, PermissionMode, KillReason, ReasoningEffort, CodexApprovalPolicy } from "./types";
 import { pluginConfig, getGlobalMcpServers } from "./config";
 
 const OUTPUT_BUFFER_MAX = 200;
@@ -90,6 +90,7 @@ export class Session extends EventEmitter {
   private readonly systemPrompt?: string;
   private readonly allowedTools?: string[];
   private readonly permissionMode: PermissionMode;
+  readonly codexApprovalPolicy?: CodexApprovalPolicy;
   currentPermissionMode: PermissionMode;
   private pendingModeSwitch?: PermissionMode;
 
@@ -160,6 +161,9 @@ export class Session extends EventEmitter {
     this.systemPrompt = config.systemPrompt;
     this.allowedTools = config.allowedTools;
     this.permissionMode = config.permissionMode ?? pluginConfig.permissionMode;
+    this.codexApprovalPolicy = isCodexHarness
+      ? (config.codexApprovalPolicy ?? pluginConfig.codexApprovalPolicy)
+      : undefined;
     this.currentPermissionMode =
       isCodexHarness && this.permissionMode === "plan" ? "default" : this.permissionMode;
     this.originChannel = config.originChannel;
@@ -242,6 +246,7 @@ export class Session extends EventEmitter {
         model: this.model,
         reasoningEffort: this.reasoningEffort,
         permissionMode: this.permissionMode,
+        codexApprovalPolicy: this.codexApprovalPolicy,
         systemPrompt: this.systemPrompt,
         allowedTools: this.allowedTools,
         resumeSessionId: this.resumeSessionId,

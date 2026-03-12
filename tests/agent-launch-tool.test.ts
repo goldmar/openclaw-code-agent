@@ -17,6 +17,7 @@ describe("agent_launch tool defaults", () => {
       defaultModel: "sonnet",
       model: "gpt-5.3-codex",
       reasoningEffort: "high",
+      codexApprovalPolicy: "on-request",
     });
 
     setSessionManager({
@@ -27,6 +28,7 @@ describe("agent_launch tool defaults", () => {
           id: "sess-1",
           name: "codex-defaults",
           model: config.model,
+          codexApprovalPolicy: config.codexApprovalPolicy,
         };
       },
     } as any);
@@ -38,15 +40,18 @@ describe("agent_launch tool defaults", () => {
     assert.equal(spawnConfig?.harness, "codex");
     assert.equal(spawnConfig?.model, "gpt-5.3-codex");
     assert.equal(spawnConfig?.reasoningEffort, "high");
+    assert.equal(spawnConfig?.codexApprovalPolicy, "on-request");
     assert.match((result.content[0] as { text: string }).text, /Model: gpt-5\.3-codex/);
+    assert.match((result.content[0] as { text: string }).text, /Codex approval policy: on-request/);
   });
 
-  it("prefers an explicit model over plugin Codex model", async () => {
+  it("prefers an explicit model while keeping the plugin Codex approval policy", async () => {
     let spawnConfig: Record<string, unknown> | undefined;
     setPluginConfig({
       defaultHarness: "codex",
       model: "gpt-5.3-codex",
       reasoningEffort: "high",
+      codexApprovalPolicy: "never",
     });
 
     setSessionManager({
@@ -57,6 +62,7 @@ describe("agent_launch tool defaults", () => {
           id: "sess-2",
           name: "codex-explicit",
           model: config.model,
+          codexApprovalPolicy: config.codexApprovalPolicy,
         };
       },
     } as any);
@@ -67,6 +73,7 @@ describe("agent_launch tool defaults", () => {
     assert.ok(spawnConfig, "spawn should be called");
     assert.equal(spawnConfig?.model, "gpt-5.4");
     assert.equal(spawnConfig?.reasoningEffort, "high");
+    assert.equal(spawnConfig?.codexApprovalPolicy, "never");
   });
 
   it("captures Telegram group chat and topic metadata from tool context", async () => {

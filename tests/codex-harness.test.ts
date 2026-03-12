@@ -348,7 +348,7 @@ describe("CodexHarness SDK mapping", () => {
     assert.match(results[0].data.result, /mock thrown error/);
   });
 
-  it("uses permissive sandbox and approval options for all starts/resumes", async () => {
+  it("uses danger-full-access and preserves the default Codex approval policy across starts/resumes", async () => {
     const codex = new MockCodex([
       { events: [{ type: "thread.started", thread_id: "thread-perm" }, { type: "turn.completed", usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 } }] },
       { events: [{ type: "turn.completed", usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 } }] },
@@ -372,8 +372,24 @@ describe("CodexHarness SDK mapping", () => {
     assert.ok(all.length >= 1);
     for (const opts of all) {
       assert.equal(opts.sandboxMode, "danger-full-access");
-      assert.equal(opts.approvalPolicy, "never");
+      assert.equal(opts.approvalPolicy, "on-request");
     }
+  });
+
+  it("passes through an explicit never Codex approval policy", async () => {
+    const codex = new MockCodex([
+      { events: [{ type: "thread.started", thread_id: "thread-approval" }, { type: "turn.completed", usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 } }] },
+    ]);
+
+    const h = new CodexHarness({ createCodex: () => codex as any });
+    await collectMessages(h.launch({
+      prompt: "go",
+      cwd: "/tmp",
+      codexApprovalPolicy: "never",
+    }));
+
+    assert.equal(codex.startCalls[0]?.sandboxMode, "danger-full-access");
+    assert.equal(codex.startCalls[0]?.approvalPolicy, "never");
   });
 
   it("adds filesystem root and env extras to additionalDirectories in bypass mode", async () => {

@@ -110,6 +110,7 @@ export function registerAgentResumeCommand(api: CommandApi): void {
           workdir,
           name: persisted?.name,
           model: persisted?.model,
+          codexApprovalPolicy: active?.codexApprovalPolicy ?? persisted?.codexApprovalPolicy,
           resumeSessionId,
           forkSession: resumeSessionId ? fork : false,
           originChannel: resolveOriginChannel(ctx),

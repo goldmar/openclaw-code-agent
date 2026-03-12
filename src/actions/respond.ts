@@ -117,6 +117,7 @@ async function tryAutoResume(
       originAgentId: session.originAgentId,
       originSessionKey: session.originSessionKey,
       permissionMode: session.currentPermissionMode,
+      codexApprovalPolicy: session.codexApprovalPolicy,
       harness: "harnessName" in session ? session.harnessName : session.harness,
     };
     const resumed = sm.spawn(resumeConfig);

@@ -26,6 +26,7 @@ export type KillReason = "user" | "idle-timeout" | "startup-timeout" | "shutdown
 
 /** Unified permission modes exposed by tools/commands across harnesses. */
 export type PermissionMode = "default" | "plan" | "acceptEdits" | "bypassPermissions";
+export type CodexApprovalPolicy = "never" | "on-request";
 export type ReasoningEffort = "low" | "medium" | "high";
 
 /** Session creation options used by SessionManager.spawn(). */
@@ -43,6 +44,7 @@ export interface SessionConfig {
   /** OpenClaw session key of the originating chat (e.g. "agent:main:telegram:group:...:topic:28"). Used to route wake events back to the correct session. */
   originSessionKey?: string;
   permissionMode?: PermissionMode;
+  codexApprovalPolicy?: CodexApprovalPolicy;
   resumeSessionId?: string;
   forkSession?: boolean;
   multiTurn?: boolean;
@@ -65,6 +67,7 @@ export interface PluginConfig {
   maxPersistedSessions: number;
   fallbackChannel?: string;
   permissionMode?: PermissionMode;
+  codexApprovalPolicy: CodexApprovalPolicy;
   agentChannels?: Record<string, string>;
   maxAutoResponds: number;
   planApproval: PlanApprovalMode;
@@ -92,6 +95,7 @@ export interface PersistedSessionInfo {
   outputPath?: string;
   harness?: string;
   currentPermissionMode?: PermissionMode;
+  codexApprovalPolicy?: CodexApprovalPolicy;
 }
 
 /** In-memory usage metrics shown by `agent_stats`. */

@@ -57,7 +57,7 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
       permission_mode: Type.Optional(
         Type.Union(
           [Type.Literal("default"), Type.Literal("plan"), Type.Literal("acceptEdits"), Type.Literal("bypassPermissions")],
-          { description: "Permission mode for the session. Defaults to plugin config (plan by default)." },
+          { description: "Permission mode for the session. This is the plugin's orchestration mode, not the Codex SDK approval policy. Defaults to plugin config (plan by default)." },
         ),
       ),
       harness: Type.Optional(
@@ -142,6 +142,7 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
           forkSession: resumeSessionId ? params.fork_session : false,
           multiTurn: !params.multi_turn_disabled,
           permissionMode: params.permission_mode,
+          codexApprovalPolicy: harness === "codex" ? pluginConfig.codexApprovalPolicy : undefined,
           originChannel,
           originThreadId: parseThreadIdFromSessionKey(originSessionKey) ?? resolveOriginThreadId(ctx),
           originAgentId: ctx.agentId || undefined,
@@ -158,6 +159,9 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
           `  Model: ${session.model ?? "default"}`,
           `  Prompt: "${promptSummary}"`,
         ];
+        if (harness === "codex") {
+          details.push(`  Codex approval policy: ${session.codexApprovalPolicy ?? pluginConfig.codexApprovalPolicy}`);
+        }
         if (params.resume_session_id) {
           details.push(`  Resume: ${params.resume_session_id}${params.fork_session ? " (forked)" : ""}`);
           if (clearedPersistedCodexResume) {

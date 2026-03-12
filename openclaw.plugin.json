@@ -56,7 +56,13 @@
           "acceptEdits",
           "bypassPermissions"
         ],
-        "description": "Default permission mode for coding agent sessions"
+        "description": "Default plugin permission/orchestration mode for coding agent sessions"
+      },
+      "codexApprovalPolicy": {
+        "type": "string",
+        "default": "on-request",
+        "enum": ["never", "on-request"],
+        "description": "Codex-only SDK/CLI approval policy. Defaults to 'on-request'. Set to 'never' to keep Codex from requesting approval for privileged actions. Distinct from plugin permissionMode / plan orchestration."
       },
       "agentChannels": {
         "type": "object",
@@ -121,7 +127,11 @@
     },
     "permissionMode": {
       "label": "Default permission mode",
-      "help": "Default approval mode used when new coding-agent sessions are launched."
+      "help": "Default plugin orchestration mode used when new coding-agent sessions are launched. This is separate from the Codex SDK approval policy."
+    },
+    "codexApprovalPolicy": {
+      "label": "Codex approval policy",
+      "help": "Real Codex SDK/CLI approval policy for Codex sessions. Defaults to 'on-request'; use 'never' to preserve fully non-interactive Codex approval behavior."
     },
     "planApproval": {
       "label": "Plan approval policy",

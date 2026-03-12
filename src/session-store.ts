@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "fs";
 import { homedir, tmpdir } from "os";
 import { dirname, join } from "path";
-import type { PersistedSessionInfo, SessionStatus, KillReason, ReasoningEffort, PermissionMode } from "./types";
+import type { PersistedSessionInfo, SessionStatus, KillReason, ReasoningEffort, PermissionMode, CodexApprovalPolicy } from "./types";
 import type { Session } from "./session";
 
 /** Resolve OpenClaw home directory from environment or default path. */
@@ -62,6 +62,12 @@ function toOptionalPermissionMode(value: unknown): PermissionMode | undefined {
     : undefined;
 }
 
+function toOptionalCodexApprovalPolicy(value: unknown): CodexApprovalPolicy | undefined {
+  return value === "never" || value === "on-request"
+    ? value
+    : undefined;
+}
+
 function toOptionalKillReason(value: unknown): KillReason | undefined {
   return value === "user" || value === "idle-timeout" || value === "startup-timeout" || value === "shutdown" || value === "done" || value === "unknown"
     ? value
@@ -107,6 +113,7 @@ function normalizePersistedEntry(raw: unknown): PersistedSessionInfo | undefined
     outputPath: toOptionalString(raw.outputPath),
     harness: toOptionalString(raw.harness),
     currentPermissionMode: toOptionalPermissionMode(raw.currentPermissionMode),
+    codexApprovalPolicy: toOptionalCodexApprovalPolicy(raw.codexApprovalPolicy),
   };
 }
 
@@ -187,6 +194,7 @@ export class SessionStore {
       originSessionKey: session.originSessionKey,
       harness: session.harnessName,
       currentPermissionMode: session.currentPermissionMode,
+      codexApprovalPolicy: session.codexApprovalPolicy,
     };
     this.persisted.set(stub.harnessSessionId, stub);
     this.idIndex.set(session.id, stub.harnessSessionId);
@@ -235,6 +243,7 @@ export class SessionStore {
       outputPath,
       harness: session.harnessName,
       currentPermissionMode: session.currentPermissionMode,
+      codexApprovalPolicy: session.codexApprovalPolicy,
     };
 
     this.persisted.set(session.harnessSessionId, info);
