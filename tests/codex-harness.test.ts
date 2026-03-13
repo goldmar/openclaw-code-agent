@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import type { ThreadEvent, ThreadOptions } from "@openai/codex-sdk";
 import { getHarness, listHarnesses } from "../src/harness/index";
 import { CodexHarness } from "../src/harness/codex";
+import type { CodexAuthWorkspace } from "../src/harness/codex-auth";
 import type { HarnessMessage } from "../src/harness/types";
 
 type TurnPlan = {
@@ -11,12 +12,87 @@ type TurnPlan = {
   error?: Error;
 };
 
+type MockAuthWorkspaceState = {
+  prepareCalls: number;
+  releaseCalls: number;
+  cleanupCalls: number;
+};
+
+type MockAuthWorkspace = {
+  workspace: CodexAuthWorkspace;
+  state: MockAuthWorkspaceState;
+};
+
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 async function* eventsFromArray(events: ThreadEvent[]): AsyncGenerator<ThreadEvent> {
   for (const event of events) {
     yield event;
   }
+}
+
+function createMockAuthWorkspace(options: {
+  env?: Record<string, string>;
+  prepareForTurn?: (state: MockAuthWorkspaceState) => Promise<() => Promise<void>> | (() => Promise<void>);
+  cleanup?: (state: MockAuthWorkspaceState) => Promise<void> | void;
+} = {}): MockAuthWorkspace {
+  const state: MockAuthWorkspaceState = {
+    prepareCalls: 0,
+    releaseCalls: 0,
+    cleanupCalls: 0,
+  };
+
+  return {
+    state,
+    workspace: {
+      tempHome: "/tmp/openclaw-codex-auth-test-home",
+      tempCodexDir: "/tmp/openclaw-codex-auth-test-home/.codex",
+      canonicalHome: "/tmp/openclaw-codex-auth-test-canonical",
+      canonicalCodexDir: "/tmp/openclaw-codex-auth-test-canonical/.codex",
+      canonicalAuthPath: "/tmp/openclaw-codex-auth-test-canonical/.codex/auth.json",
+      canonicalSessionsPath: "/tmp/openclaw-codex-auth-test-canonical/.codex/sessions",
+      canonicalConfigPath: "/tmp/openclaw-codex-auth-test-canonical/.codex/config.toml",
+      env: options.env ?? {
+        HOME: "/tmp/openclaw-codex-auth-test-home",
+        PATH: process.env.PATH ?? "",
+      },
+      async prepareForTurn(): Promise<() => Promise<void>> {
+        state.prepareCalls += 1;
+        if (options.prepareForTurn) return options.prepareForTurn(state);
+        return async () => {
+          state.releaseCalls += 1;
+        };
+      },
+      async cleanup(): Promise<void> {
+        state.cleanupCalls += 1;
+        await options.cleanup?.(state);
+      },
+    },
+  };
+}
+
+function createHarness(
+  codex: MockCodex,
+  options: { auth?: MockAuthWorkspace } = {},
+): {
+  harness: CodexHarness;
+  auth: MockAuthWorkspace;
+  createCodexCalls: Array<{ env?: Record<string, string> }>;
+} {
+  const auth = options.auth ?? createMockAuthWorkspace();
+  const createCodexCalls: Array<{ env?: Record<string, string> }> = [];
+
+  return {
+    auth,
+    createCodexCalls,
+    harness: new CodexHarness({
+      createCodex: (createOptions) => {
+        createCodexCalls.push(createOptions ?? {});
+        return codex as any;
+      },
+      createAuthWorkspace: async () => auth.workspace,
+    }),
+  };
 }
 
 class MockThread {
@@ -126,7 +202,7 @@ describe("CodexHarness SDK mapping", () => {
       },
     ]);
 
-    const h = new CodexHarness({ createCodex: () => codex as any });
+    const { harness: h } = createHarness(codex);
     const session = h.launch({ prompt: "do work", cwd: "/tmp" });
     const msgs = await collectMessages(session);
 
@@ -148,6 +224,72 @@ describe("CodexHarness SDK mapping", () => {
     assert.ok(Math.abs(result.data.total_cost_usd - expectedCost) < 1e-12);
   });
 
+  it("passes the isolated HOME override to the Codex SDK constructor", async () => {
+    const codex = new MockCodex([
+      {
+        events: [
+          { type: "thread.started", thread_id: "thread-env" },
+          { type: "turn.completed", usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 } },
+        ],
+      },
+    ]);
+
+    const { harness: h, createCodexCalls } = createHarness(codex, {
+      auth: createMockAuthWorkspace({
+        env: {
+          HOME: "/tmp/isolated-codex-home",
+          PATH: process.env.PATH ?? "",
+        },
+      }),
+    });
+
+    await collectMessages(h.launch({ prompt: "go", cwd: "/tmp" }));
+
+    assert.equal(createCodexCalls.length, 1);
+    assert.equal(createCodexCalls[0]?.env?.HOME, "/tmp/isolated-codex-home");
+  });
+
+  it("releases the auth bootstrap lock on the first streamed event", async () => {
+    const codex = new MockCodex([
+      {
+        stream: async function* (): AsyncGenerator<ThreadEvent> {
+          yield { type: "thread.started", thread_id: "thread-lock" };
+          await sleep(10);
+          yield { type: "turn.completed", usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 } };
+        },
+      },
+    ]);
+
+    const auth = createMockAuthWorkspace();
+    const { harness: h } = createHarness(codex, { auth });
+    const session = h.launch({ prompt: "go", cwd: "/tmp" });
+
+    await collectMessages(session, (message) => {
+      if (message.type === "init") {
+        assert.equal(auth.state.releaseCalls, 1);
+      }
+    });
+
+    assert.equal(auth.state.prepareCalls, 1);
+    assert.equal(auth.state.releaseCalls, 1);
+    assert.equal(auth.state.cleanupCalls, 1);
+  });
+
+  it("releases the auth bootstrap lock on startup failure before the first event", async () => {
+    const codex = new MockCodex([{ error: new Error("startup failed") }]);
+    const auth = createMockAuthWorkspace();
+    const { harness: h } = createHarness(codex, { auth });
+
+    const msgs = await collectMessages(h.launch({ prompt: "go", cwd: "/tmp" }));
+
+    const result = msgs.find((message) => message.type === "result") as any;
+    assert.equal(result.data.success, false);
+    assert.match(result.data.result, /startup failed/);
+    assert.equal(auth.state.prepareCalls, 1);
+    assert.equal(auth.state.releaseCalls, 1);
+    assert.equal(auth.state.cleanupCalls, 1);
+  });
+
   it("uses a soft planning prompt on the first turn when launched in plan mode", async () => {
     const codex = new MockCodex([
       {
@@ -159,7 +301,7 @@ describe("CodexHarness SDK mapping", () => {
       },
     ]);
 
-    const h = new CodexHarness({ createCodex: () => codex as any });
+    const { harness: h } = createHarness(codex);
     const session = h.launch({ prompt: "plan this", cwd: "/tmp", permissionMode: "plan" });
     const msgs = await collectMessages(session);
 
@@ -179,7 +321,7 @@ describe("CodexHarness SDK mapping", () => {
       },
     ]);
 
-    const h = new CodexHarness({ createCodex: () => codex as any });
+    const { harness: h } = createHarness(codex);
     const session = h.launch({ prompt: "ask", cwd: "/tmp", permissionMode: "default" });
     const msgs = await collectMessages(session);
 
@@ -203,7 +345,7 @@ describe("CodexHarness SDK mapping", () => {
         },
       ]);
 
-      const h = new CodexHarness({ createCodex: () => codex as any });
+      const { harness: h } = createHarness(codex);
       const session = h.launch({ prompt: "heartbeat", cwd: "/tmp" });
       const msgs = await collectMessages(session);
 
@@ -226,7 +368,7 @@ describe("CodexHarness SDK mapping", () => {
       },
     ]);
 
-    const h = new CodexHarness({ createCodex: () => codex as any });
+    const { harness: h } = createHarness(codex);
     const session = h.launch({ prompt: "continue", cwd: "/tmp", resumeSessionId: "thread-resume" });
     const msgs = await collectMessages(session);
 
@@ -265,7 +407,7 @@ describe("CodexHarness SDK mapping", () => {
       },
     ]);
 
-    const h = new CodexHarness({ createCodex: () => codex as any });
+    const { harness: h } = createHarness(codex);
     const session = h.launch({ prompt: promptStream(), cwd: "/tmp", permissionMode: "plan" });
 
     const collected = collectMessages(session, async (msg) => {
@@ -301,7 +443,7 @@ describe("CodexHarness SDK mapping", () => {
       },
     ]);
 
-    const h = new CodexHarness({ createCodex: () => codex as any });
+    const { harness: h } = createHarness(codex);
     const session = h.launch({ prompt: "long", cwd: "/tmp" });
 
     const collected = collectMessages(session, async (msg) => {
@@ -327,7 +469,7 @@ describe("CodexHarness SDK mapping", () => {
       },
     ]);
 
-    const h = new CodexHarness({ createCodex: () => codex as any });
+    const { harness: h } = createHarness(codex);
     const msgs = await collectMessages(h.launch({ prompt: "fail", cwd: "/tmp" }));
 
     const results = msgs.filter((m) => m.type === "result") as any[];
@@ -338,7 +480,7 @@ describe("CodexHarness SDK mapping", () => {
 
   it("thrown exception path emits exactly one terminal failure result", async () => {
     const codex = new MockCodex([{ error: new Error("mock thrown error") }]);
-    const h = new CodexHarness({ createCodex: () => codex as any });
+    const { harness: h } = createHarness(codex);
 
     const msgs = await collectMessages(h.launch({ prompt: "throw", cwd: "/tmp" }));
     const results = msgs.filter((m) => m.type === "result") as any[];
@@ -359,7 +501,7 @@ describe("CodexHarness SDK mapping", () => {
       yield "two";
     }
 
-    const h = new CodexHarness({ createCodex: () => codex as any });
+    const { harness: h } = createHarness(codex);
     const session = h.launch({ prompt: prompts(), cwd: "/tmp", permissionMode: "plan" });
     await session.setPermissionMode?.("acceptEdits");
     await collectMessages(session);
@@ -381,7 +523,7 @@ describe("CodexHarness SDK mapping", () => {
       { events: [{ type: "thread.started", thread_id: "thread-approval" }, { type: "turn.completed", usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 } }] },
     ]);
 
-    const h = new CodexHarness({ createCodex: () => codex as any });
+    const { harness: h } = createHarness(codex);
     await collectMessages(h.launch({
       prompt: "go",
       cwd: "/tmp",
@@ -401,7 +543,7 @@ describe("CodexHarness SDK mapping", () => {
         { events: [{ type: "thread.started", thread_id: "thread-bypass" }, { type: "turn.completed", usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 } }] },
       ]);
 
-      const h = new CodexHarness({ createCodex: () => codex as any });
+      const { harness: h } = createHarness(codex);
       await collectMessages(h.launch({ prompt: "go", cwd: "/home/openclaw/project", permissionMode: "bypassPermissions" }));
 
       const startOpts = codex.startCalls[0];
@@ -419,7 +561,7 @@ describe("CodexHarness SDK mapping", () => {
       { events: [{ type: "thread.started", thread_id: "thread-default" }, { type: "turn.completed", usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 } }] },
     ]);
 
-    const h = new CodexHarness({ createCodex: () => codex as any });
+    const { harness: h } = createHarness(codex);
     await collectMessages(h.launch({ prompt: "go", cwd: "/tmp", permissionMode: "plan" }));
 
     assert.equal(codex.startCalls[0]?.additionalDirectories, undefined);
@@ -430,7 +572,7 @@ describe("CodexHarness SDK mapping", () => {
       { events: [{ type: "thread.started", thread_id: "thread-reasoning" }, { type: "turn.completed", usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 } }] },
     ]);
 
-    const h = new CodexHarness({ createCodex: () => codex as any });
+    const { harness: h } = createHarness(codex);
     await collectMessages(h.launch({ prompt: "go", cwd: "/tmp", reasoningEffort: "high" }));
 
     assert.equal(codex.startCalls[0]?.modelReasoningEffort, "high");

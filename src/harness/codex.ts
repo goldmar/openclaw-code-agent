@@ -12,6 +12,7 @@ import type {
   HarnessMessage,
   HarnessResult,
 } from "./types";
+import { createCodexAuthWorkspace, type CodexAuthWorkspace } from "./codex-auth";
 import { looksLikeWaitingForUser } from "../waiting-detector";
 
 const DEFAULT_HEARTBEAT_MS = 10_000;
@@ -23,6 +24,7 @@ const CODEX_CACHED_INPUT_PRICE = 0.275 / 1_000_000;
 const CODEX_OUTPUT_PRICE = 4.40 / 1_000_000;
 const OPENCLAW_CODEX_HEARTBEAT_MS_ENV = "OPENCLAW_CODEX_HEARTBEAT_MS";
 const OPENCLAW_CODEX_BYPASS_ADDITIONAL_DIRS_ENV = "OPENCLAW_CODEX_BYPASS_ADDITIONAL_DIRS";
+const OPENCLAW_CODEX_AUTH_STRATEGY_ENV = "OPENCLAW_CODEX_AUTH_STRATEGY";
 
 type CodexClientLike = Pick<Codex, "startThread" | "resumeThread">;
 
@@ -31,7 +33,8 @@ type ThreadLike = Pick<Thread, "id" | "runStreamed">;
 type TurnStreamLike = { events: AsyncIterable<ThreadEvent> };
 
 interface CodexHarnessDeps {
-  createCodex?: () => CodexClientLike;
+  createCodex?: (options?: { env?: Record<string, string> }) => CodexClientLike;
+  createAuthWorkspace?: (baseEnv?: NodeJS.ProcessEnv) => Promise<CodexAuthWorkspace>;
 }
 
 function estimateCostUsd(usage?: Usage): number {
@@ -152,8 +155,8 @@ export class CodexHarness implements AgentHarness {
     return parsed;
   }
 
-  private createCodexClient(): CodexClientLike {
-    return this.deps.createCodex?.() ?? new Codex();
+  private createCodexClient(env?: Record<string, string>): CodexClientLike {
+    return this.deps.createCodex?.({ env }) ?? (env ? new Codex({ env }) : new Codex());
   }
 
   /**
@@ -171,6 +174,10 @@ export class CodexHarness implements AgentHarness {
    * preserved while new thread options take effect.
    */
   launch(options: HarnessLaunchOptions): HarnessSession {
+    const useLegacyAuthStrategy = process.env[OPENCLAW_CODEX_AUTH_STRATEGY_ENV] === "legacy";
+    const authWorkspacePromise = useLegacyAuthStrategy
+      ? undefined
+      : (this.deps.createAuthWorkspace?.(process.env) ?? createCodexAuthWorkspace(process.env));
     const softPlanningFirstTurn = options.permissionMode === "plan";
     let effectivePermissionMode: string | undefined =
       options.permissionMode === "plan" ? "default" : options.permissionMode;
@@ -224,8 +231,8 @@ export class CodexHarness implements AgentHarness {
 
     const threadOptionsFactory = (): ThreadOptions => buildThreadOptions(options, effectivePermissionMode);
 
-    const ensureThreadForTurn = (): ThreadLike => {
-      if (!codexClient) codexClient = this.createCodexClient();
+    const ensureThreadForTurn = (env?: Record<string, string>): ThreadLike => {
+      if (!codexClient) codexClient = this.createCodexClient(env);
 
       if (!thread) {
         if (firstTurn && options.resumeSessionId) {
@@ -252,6 +259,8 @@ export class CodexHarness implements AgentHarness {
       let turnAssistantText = "";
       let terminalEmitted = false;
       let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+      let releaseAuthBootstrap: (() => Promise<void>) | undefined;
+      let authBootstrapReleased = false;
       const turnPrompt = firstTurn && softPlanningFirstTurn
         ? buildSoftPlanningPrompt(prompt)
         : prompt;
@@ -271,8 +280,19 @@ export class CodexHarness implements AgentHarness {
         });
       };
 
+      const releaseAuthBootstrapIfNeeded = async (): Promise<void> => {
+        if (!releaseAuthBootstrap || authBootstrapReleased) return;
+        authBootstrapReleased = true;
+        await releaseAuthBootstrap();
+      };
+
       try {
-        const activeThread = ensureThreadForTurn();
+        const authWorkspace = authWorkspacePromise ? await authWorkspacePromise : undefined;
+        if (authWorkspace) {
+          releaseAuthBootstrap = await authWorkspace.prepareForTurn();
+        }
+
+        const activeThread = ensureThreadForTurn(authWorkspace?.env);
         const knownSessionId = (activeThread.id ?? codexSessionId) ?? undefined;
         if (knownSessionId) {
           codexSessionId = knownSessionId;
@@ -294,6 +314,8 @@ export class CodexHarness implements AgentHarness {
         });
 
         for await (const event of streamed.events) {
+          await releaseAuthBootstrapIfNeeded();
+
           if (event.type === "thread.started") {
             codexSessionId = event.thread_id;
             emitInitIfNeeded(codexSessionId);
@@ -341,6 +363,8 @@ export class CodexHarness implements AgentHarness {
           }
         }
 
+        await releaseAuthBootstrapIfNeeded();
+
         if (!terminalEmitted) {
           emitResult({
             success: false,
@@ -349,6 +373,7 @@ export class CodexHarness implements AgentHarness {
           });
         }
       } catch (err: unknown) {
+        await releaseAuthBootstrapIfNeeded();
         emitResult({
           success: false,
           result: errorMessage(err),
@@ -385,6 +410,14 @@ export class CodexHarness implements AgentHarness {
         }
       } finally {
         options.abortController?.signal.removeEventListener("abort", onExternalAbort);
+        if (authWorkspacePromise) {
+          try {
+            const authWorkspace = await authWorkspacePromise;
+            await authWorkspace.cleanup();
+          } catch {
+            // Startup already surfaced the failure to the session result.
+          }
+        }
         endQueue();
       }
     };
