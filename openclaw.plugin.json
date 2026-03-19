@@ -11,18 +11,59 @@
         "type": "number",
         "default": 20
       },
+      "harnesses": {
+        "type": "object",
+        "description": "Per-harness launch defaults and model restrictions.",
+        "default": {
+          "codex": {
+            "defaultModel": "gpt-5.4",
+            "allowedModels": ["gpt-5.4"],
+            "reasoningEffort": "medium",
+            "approvalPolicy": "on-request"
+          },
+          "claude-code": {
+            "defaultModel": "sonnet",
+            "allowedModels": ["sonnet", "opus"]
+          }
+        },
+        "additionalProperties": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "defaultModel": {
+              "type": "string",
+              "description": "Default model for this harness when agent_launch omits model."
+            },
+            "allowedModels": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Restrict which models can be used with this harness. Empty or omitted means no restriction."
+            },
+            "reasoningEffort": {
+              "type": "string",
+              "enum": ["low", "medium", "high"],
+              "description": "Harness-specific reasoning effort. Currently used by Codex."
+            },
+            "approvalPolicy": {
+              "type": "string",
+              "enum": ["never", "on-request"],
+              "description": "Harness-specific approval policy. Currently used by Codex."
+            }
+          }
+        }
+      },
       "defaultModel": {
         "type": "string",
-        "description": "Default model for new sessions (e.g. 'sonnet', 'opus')"
+        "description": "Deprecated legacy default model. Mapped to harnesses[defaultHarness].defaultModel."
       },
       "model": {
         "type": "string",
-        "description": "Override model for all Codex sessions (e.g. 'gpt-5.3-codex', 'gpt-5.4'). Falls back to agent model config if not set."
+        "description": "Deprecated legacy Codex model override. Use harnesses.codex.defaultModel instead."
       },
       "reasoningEffort": {
         "type": "string",
         "enum": ["low", "medium", "high"],
-        "description": "Reasoning effort for Codex sessions. 'high' for complex tasks, 'medium' (default) for balance, 'low' for speed."
+        "description": "Deprecated legacy Codex reasoning effort. Use harnesses.codex.reasoningEffort instead."
       },
       "defaultWorkdir": {
         "type": "string",
@@ -85,8 +126,12 @@
       "defaultHarness": {
         "type": "string",
         "default": "claude-code",
-        "enum": ["claude-code", "codex"],
         "description": "Default agent harness when agent_launch omits the harness parameter."
+      },
+      "allowedModels": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Deprecated legacy global model restriction. Use harnesses.<name>.allowedModels instead."
       }
     }
   },
@@ -107,14 +152,18 @@
       "help": "Base directory used for new sessions when agent_launch does not provide a workdir.",
       "placeholder": "/home/user/project"
     },
+    "harnesses": {
+      "label": "Harness configuration",
+      "help": "Per-harness defaults and model restrictions. Default: {\"codex\":{\"defaultModel\":\"gpt-5.4\",\"allowedModels\":[\"gpt-5.4\"],\"reasoningEffort\":\"medium\",\"approvalPolicy\":\"on-request\"},\"claude-code\":{\"defaultModel\":\"sonnet\",\"allowedModels\":[\"sonnet\",\"opus\"]}}."
+    },
     "defaultModel": {
-      "label": "Default model",
-      "help": "Default model for new sessions when a harness-specific override is not set.",
+      "label": "Legacy default model",
+      "help": "Deprecated. Mapped to harnesses[defaultHarness].defaultModel during migration.",
       "placeholder": "sonnet"
     },
     "model": {
-      "label": "Codex model override",
-      "help": "Override model for all Codex sessions; falls back to the agent model config or defaultModel when unset.",
+      "label": "Legacy Codex model",
+      "help": "Deprecated. Use harnesses.codex.defaultModel instead.",
       "placeholder": "gpt-5.3-codex"
     },
     "maxSessions": {
@@ -131,7 +180,7 @@
     },
     "codexApprovalPolicy": {
       "label": "Codex approval policy",
-      "help": "Real Codex SDK/CLI approval policy for Codex sessions. Defaults to 'on-request'; use 'never' to preserve fully non-interactive Codex approval behavior."
+      "help": "Deprecated. Use harnesses.codex.approvalPolicy instead."
     },
     "planApproval": {
       "label": "Plan approval policy",

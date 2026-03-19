@@ -3,7 +3,13 @@ import { nanoid } from "nanoid";
 import { getDefaultHarness, getHarness } from "./harness";
 import type { AgentHarness, HarnessSession, HarnessMessage } from "./harness";
 import type { SessionConfig, SessionStatus, PermissionMode, KillReason, ReasoningEffort, CodexApprovalPolicy } from "./types";
-import { pluginConfig, getGlobalMcpServers } from "./config";
+import {
+  getGlobalMcpServers,
+  pluginConfig,
+  resolveApprovalPolicyForHarness,
+  resolveDefaultModelForHarness,
+  resolveReasoningEffortForHarness,
+} from "./config";
 
 const OUTPUT_BUFFER_MAX = 200;
 const STARTUP_TIMEOUT_MS = 2 * 60 * 1000; // 2 minutes
@@ -153,19 +159,18 @@ export class Session extends EventEmitter {
     this.id = nanoid(8);
     this.name = name;
     this.harness = config.harness ? getHarness(config.harness) : getDefaultHarness();
-    const isCodexHarness = this.harness.name === "codex";
     this.prompt = config.prompt;
     this.workdir = config.workdir;
-    this.model = config.model ?? (isCodexHarness ? pluginConfig.model : undefined) ?? pluginConfig.defaultModel;
-    this.reasoningEffort = config.reasoningEffort ?? (isCodexHarness ? pluginConfig.reasoningEffort : undefined);
+    this.model = config.model ?? resolveDefaultModelForHarness(this.harness.name);
+    this.reasoningEffort = config.reasoningEffort ?? resolveReasoningEffortForHarness(this.harness.name);
     this.systemPrompt = config.systemPrompt;
     this.allowedTools = config.allowedTools;
     this.permissionMode = config.permissionMode ?? pluginConfig.permissionMode;
-    this.codexApprovalPolicy = isCodexHarness
-      ? (config.codexApprovalPolicy ?? pluginConfig.codexApprovalPolicy)
+    this.codexApprovalPolicy = this.harness.name === "codex"
+      ? (config.codexApprovalPolicy ?? resolveApprovalPolicyForHarness(this.harness.name) ?? pluginConfig.codexApprovalPolicy)
       : undefined;
     this.currentPermissionMode =
-      isCodexHarness && this.permissionMode === "plan" ? "default" : this.permissionMode;
+      this.harness.name === "codex" && this.permissionMode === "plan" ? "default" : this.permissionMode;
     this.originChannel = config.originChannel;
     this.originThreadId = config.originThreadId;
     this.originAgentId = config.originAgentId;

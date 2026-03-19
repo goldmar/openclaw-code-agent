@@ -1,5 +1,5 @@
 import { sessionManager } from "../singletons";
-import { resolveOriginChannel, resolveOriginThreadId } from "../config";
+import { getDefaultHarnessName, resolveDefaultModelForHarness, resolveOriginChannel, resolveOriginThreadId } from "../config";
 import { formatDuration } from "../format";
 import { decideResumeSessionId } from "../resume-policy";
 
@@ -103,13 +103,20 @@ export function registerAgentResumeCommand(api: CommandApi): void {
           : undefined,
       });
       const workdir = persisted?.workdir ?? process.cwd();
+      const harness = persisted?.harness ?? getDefaultHarnessName();
+      const model = persisted?.model ?? resolveDefaultModelForHarness(harness);
 
       try {
+        if (!model) {
+          return {
+            text: `Error: No default model configured for harness "${harness}". Set plugins.entries["openclaw-code-agent"].config.harnesses.${harness}.defaultModel or pass model explicitly when launching a fresh session.`,
+          };
+        }
         const session = sessionManager.spawn({
           prompt,
           workdir,
           name: persisted?.name,
-          model: persisted?.model,
+          model,
           codexApprovalPolicy: active?.codexApprovalPolicy ?? persisted?.codexApprovalPolicy,
           resumeSessionId,
           forkSession: resumeSessionId ? fork : false,
@@ -117,7 +124,7 @@ export function registerAgentResumeCommand(api: CommandApi): void {
           originThreadId: resolveOriginThreadId(ctx) ?? persisted?.originThreadId,
           originAgentId: ctx?.agentId ?? persisted?.originAgentId,
           originSessionKey: ctx?.sessionKey ?? persisted?.originSessionKey,
-          harness: persisted?.harness,
+          harness,
         });
 
         const promptSummary = prompt.length > 80 ? prompt.slice(0, 80) + "..." : prompt;

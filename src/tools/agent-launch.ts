@@ -1,7 +1,19 @@
 import { existsSync } from "fs";
 import { Type } from "@sinclair/typebox";
 import { sessionManager } from "../singletons";
-import { pluginConfig, resolveOriginChannel, resolveAgentChannel, parseThreadIdFromSessionKey, resolveOriginThreadId, resolveToolChannel } from "../config";
+import {
+  getDefaultHarnessName,
+  parseThreadIdFromSessionKey,
+  pluginConfig,
+  resolveAgentChannel,
+  resolveAllowedModelsForHarness,
+  resolveApprovalPolicyForHarness,
+  resolveDefaultModelForHarness,
+  resolveOriginChannel,
+  resolveOriginThreadId,
+  resolveReasoningEffortForHarness,
+  resolveToolChannel,
+} from "../config";
 import { decideResumeSessionId } from "../resume-policy";
 import type { OpenClawPluginToolContext } from "../types";
 
@@ -28,6 +40,29 @@ function isAgentLaunchParams(value: unknown): value is AgentLaunchParams {
   if (!value || typeof value !== "object") return false;
   const p = value as Record<string, unknown>;
   return typeof p.prompt === "string";
+}
+
+/**
+ * Checks if a model identifier is allowed based on case-insensitive substring matching.
+ * Returns true if allowedModels is empty/undefined, or if any allowed pattern matches the model.
+ *
+ * @param model - The model identifier to check (e.g., "anthropic/claude-sonnet-4-6")
+ * @param allowedModels - Array of allowed patterns (e.g., ["sonnet", "opus"])
+ * @returns true if model is allowed, false otherwise
+ */
+function isModelAllowed(model: string | undefined, allowedModels: string[] | undefined): boolean {
+  // No restrictions if allowedModels is not configured or empty
+  if (!allowedModels || allowedModels.length === 0) {
+    return true;
+  }
+
+  // Reject if model is undefined/null when there are restrictions
+  if (!model) {
+    return false;
+  }
+
+  const modelLower = model.toLowerCase();
+  return allowedModels.some(pattern => modelLower.includes(pattern.toLowerCase()));
 }
 
 /** Register the `agent_launch` tool factory. */
@@ -86,10 +121,37 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
       }
 
       try {
-        const harness = params.harness ?? pluginConfig.defaultHarness;
-        const defaultModel = harness === "codex"
-          ? (pluginConfig.model ?? pluginConfig.defaultModel)
-          : pluginConfig.defaultModel;
+        const harness = params.harness ?? getDefaultHarnessName();
+        const defaultModel = resolveDefaultModelForHarness(harness);
+
+        // Resolve the actual model that will be used
+        const resolvedModel = params.model ?? defaultModel;
+        const wasExplicitModel = params.model !== undefined;
+        if (!resolvedModel) {
+          return {
+            content: [{
+              type: "text",
+              text: `Error: No default model configured for harness "${harness}". Set plugins.entries["openclaw-code-agent"].config.harnesses.${harness}.defaultModel or pass model explicitly.`,
+            }]
+          };
+        }
+
+        // Enforce allowedModels restrictions
+        const allowedModels = resolveAllowedModelsForHarness(harness);
+        if (allowedModels && allowedModels.length > 0) {
+          if (!isModelAllowed(resolvedModel, allowedModels)) {
+            // Hard error for both explicit and default models
+            const errorMsg = wasExplicitModel
+              ? `Error: Model "${resolvedModel}" is not allowed. Permitted models: ${allowedModels.join(", ")}`
+              : `Error: Default model "${resolvedModel || "undefined"}" is not in allowedModels (${allowedModels.join(", ")}). Update your plugin config to set a compatible defaultModel.`;
+            return {
+              content: [{
+                type: "text",
+                text: errorMsg
+              }]
+            };
+          }
+        }
 
         // Resolve resume_session_id
         let resolvedResumeId = params.resume_session_id;
@@ -134,15 +196,17 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
           prompt: params.prompt,
           name: params.name,
           workdir,
-          model: params.model ?? defaultModel,
-          reasoningEffort: pluginConfig.reasoningEffort,
+          model: resolvedModel,
+          reasoningEffort: resolveReasoningEffortForHarness(harness),
           systemPrompt: params.system_prompt,
           allowedTools: params.allowed_tools,
           resumeSessionId,
           forkSession: resumeSessionId ? params.fork_session : false,
           multiTurn: !params.multi_turn_disabled,
           permissionMode: params.permission_mode,
-          codexApprovalPolicy: harness === "codex" ? pluginConfig.codexApprovalPolicy : undefined,
+          codexApprovalPolicy: harness === "codex"
+            ? (resolveApprovalPolicyForHarness(harness) ?? pluginConfig.codexApprovalPolicy)
+            : undefined,
           originChannel,
           originThreadId: parseThreadIdFromSessionKey(originSessionKey) ?? resolveOriginThreadId(ctx),
           originAgentId: ctx.agentId || undefined,
@@ -160,7 +224,7 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
           `  Prompt: "${promptSummary}"`,
         ];
         if (harness === "codex") {
-          details.push(`  Codex approval policy: ${session.codexApprovalPolicy ?? pluginConfig.codexApprovalPolicy}`);
+          details.push(`  Codex approval policy: ${session.codexApprovalPolicy ?? resolveApprovalPolicyForHarness(harness) ?? pluginConfig.codexApprovalPolicy}`);
         }
         if (params.resume_session_id) {
           details.push(`  Resume: ${params.resume_session_id}${params.fork_session ? " (forked)" : ""}`);

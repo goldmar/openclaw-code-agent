@@ -183,9 +183,18 @@ describe("setPluginConfig", () => {
   it("applies all provided fields", () => {
     setPluginConfig({
       maxSessions: 10,
-      defaultModel: "opus",
-      model: "gpt-5.3-codex",
-      reasoningEffort: "high",
+      harnesses: {
+        "claude-code": {
+          defaultModel: "opus",
+          allowedModels: ["opus"],
+        },
+        codex: {
+          defaultModel: "gpt-5.3-codex",
+          allowedModels: ["gpt-5.3-codex", "gpt-5.4"],
+          reasoningEffort: "high",
+          approvalPolicy: "on-request",
+        },
+      },
       defaultWorkdir: "/work",
       idleTimeoutMinutes: 60,
       sessionGcAgeMinutes: 120,
@@ -198,9 +207,12 @@ describe("setPluginConfig", () => {
       planApproval: "ask",
     });
     assert.equal(pluginConfig.maxSessions, 10);
-    assert.equal(pluginConfig.defaultModel, "opus");
-    assert.equal(pluginConfig.model, "gpt-5.3-codex");
-    assert.equal(pluginConfig.reasoningEffort, "high");
+    assert.equal(pluginConfig.harnesses["claude-code"]?.defaultModel, "opus");
+    assert.deepEqual(pluginConfig.harnesses["claude-code"]?.allowedModels, ["opus"]);
+    assert.equal(pluginConfig.harnesses.codex?.defaultModel, "gpt-5.3-codex");
+    assert.deepEqual(pluginConfig.harnesses.codex?.allowedModels, ["gpt-5.3-codex", "gpt-5.4"]);
+    assert.equal(pluginConfig.harnesses.codex?.reasoningEffort, "high");
+    assert.equal(pluginConfig.harnesses.codex?.approvalPolicy, "on-request");
     assert.equal(pluginConfig.defaultWorkdir, "/work");
     assert.equal(pluginConfig.idleTimeoutMinutes, 60);
     assert.equal(pluginConfig.sessionGcAgeMinutes, 120);
@@ -213,6 +225,25 @@ describe("setPluginConfig", () => {
     assert.equal(pluginConfig.planApproval, "ask");
   });
 
+  it("preserves legacy flat model keys as deprecated fallbacks", () => {
+    setPluginConfig({
+      defaultHarness: "claude-code",
+      defaultModel: "opus",
+      model: "gpt-5.3-codex",
+      reasoningEffort: "high",
+      allowedModels: ["sonnet", "opus"],
+      codexApprovalPolicy: "never",
+    });
+
+    assert.equal(pluginConfig.harnesses["claude-code"]?.defaultModel, "opus");
+    assert.equal(pluginConfig.harnesses["claude-code"]?.allowedModels, undefined);
+    assert.equal(pluginConfig.harnesses.codex?.defaultModel, "gpt-5.3-codex");
+    assert.equal(pluginConfig.harnesses.codex?.allowedModels, undefined);
+    assert.equal(pluginConfig.harnesses.codex?.reasoningEffort, "high");
+    assert.equal(pluginConfig.harnesses.codex?.approvalPolicy, "never");
+    assert.deepEqual(pluginConfig.allowedModels, ["sonnet", "opus"]);
+  });
+
   it("uses defaults for missing numeric fields", () => {
     setPluginConfig({});
     assert.equal(pluginConfig.maxSessions, 20);
@@ -220,13 +251,31 @@ describe("setPluginConfig", () => {
     assert.equal(pluginConfig.sessionGcAgeMinutes, 1440);
     assert.equal(pluginConfig.maxPersistedSessions, 10000);
     assert.equal(pluginConfig.maxAutoResponds, 10);
-    assert.equal(pluginConfig.reasoningEffort, "medium");
     assert.equal(pluginConfig.codexApprovalPolicy, "on-request");
+    assert.equal(pluginConfig.harnesses["claude-code"]?.defaultModel, "sonnet");
+    assert.deepEqual(pluginConfig.harnesses["claude-code"]?.allowedModels, ["sonnet", "opus"]);
+    assert.equal(pluginConfig.harnesses.codex?.defaultModel, "gpt-5.4");
+    assert.deepEqual(pluginConfig.harnesses.codex?.allowedModels, ["gpt-5.4"]);
+    assert.equal(pluginConfig.harnesses.codex?.reasoningEffort, "medium");
+    assert.equal(pluginConfig.harnesses.codex?.approvalPolicy, "on-request");
   });
 
   it("uses default for missing permissionMode", () => {
     setPluginConfig({});
     assert.equal(pluginConfig.permissionMode, "plan");
+  });
+
+  it("drops built-in allowedModels when a harness sets a custom defaultModel", () => {
+    setPluginConfig({
+      harnesses: {
+        codex: {
+          defaultModel: "gpt-5.3-codex",
+        },
+      },
+    });
+
+    assert.equal(pluginConfig.harnesses.codex?.defaultModel, "gpt-5.3-codex");
+    assert.equal(pluginConfig.harnesses.codex?.allowedModels, undefined);
   });
 
   it("uses default for missing planApproval", () => {
@@ -236,11 +285,14 @@ describe("setPluginConfig", () => {
 
   it("preserves optional fields as undefined when not provided", () => {
     setPluginConfig({});
-    assert.equal(pluginConfig.defaultModel, undefined);
-    assert.equal(pluginConfig.model, undefined);
+    assert.equal(pluginConfig.harnesses["claude-code"]?.defaultModel, "sonnet");
+    assert.deepEqual(pluginConfig.harnesses["claude-code"]?.allowedModels, ["sonnet", "opus"]);
+    assert.equal(pluginConfig.harnesses.codex?.defaultModel, "gpt-5.4");
+    assert.deepEqual(pluginConfig.harnesses.codex?.allowedModels, ["gpt-5.4"]);
     assert.equal(pluginConfig.defaultWorkdir, undefined);
     assert.equal(pluginConfig.fallbackChannel, undefined);
     assert.equal(pluginConfig.agentChannels, undefined);
+    assert.equal(pluginConfig.allowedModels, undefined);
   });
 
   it("handles empty object input", () => {
@@ -291,8 +343,12 @@ describe("pluginConfig singleton", () => {
     assert.equal(pluginConfig.maxAutoResponds, 10);
     assert.equal(pluginConfig.permissionMode, "plan");
     assert.equal(pluginConfig.planApproval, "delegate");
-    assert.equal(pluginConfig.reasoningEffort, "medium");
     assert.equal(pluginConfig.codexApprovalPolicy, "on-request");
+    assert.equal(pluginConfig.harnesses["claude-code"]?.defaultModel, "sonnet");
+    assert.deepEqual(pluginConfig.harnesses["claude-code"]?.allowedModels, ["sonnet", "opus"]);
+    assert.equal(pluginConfig.harnesses.codex?.defaultModel, "gpt-5.4");
+    assert.deepEqual(pluginConfig.harnesses.codex?.allowedModels, ["gpt-5.4"]);
+    assert.equal(pluginConfig.harnesses.codex?.reasoningEffort, "medium");
   });
 
   it("setPluginConfig mutates the module-level singleton", () => {

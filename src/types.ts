@@ -29,6 +29,14 @@ export type PermissionMode = "default" | "plan" | "acceptEdits" | "bypassPermiss
 export type CodexApprovalPolicy = "never" | "on-request";
 export type ReasoningEffort = "low" | "medium" | "high";
 
+/** Harness-scoped launch defaults and model restrictions. */
+export interface HarnessConfig {
+  defaultModel?: string;
+  allowedModels?: string[];
+  reasoningEffort?: ReasoningEffort;
+  approvalPolicy?: CodexApprovalPolicy;
+}
+
 /** Session creation options used by SessionManager.spawn(). */
 export interface SessionConfig {
   prompt: string;
@@ -58,9 +66,6 @@ export type PlanApprovalMode = "approve" | "ask" | "delegate";
 /** Plugin-level configuration loaded from openclaw config schema. */
 export interface PluginConfig {
   maxSessions: number;
-  defaultModel?: string;
-  model?: string;
-  reasoningEffort?: ReasoningEffort;
   defaultWorkdir?: string;
   idleTimeoutMinutes: number;
   sessionGcAgeMinutes?: number;
@@ -72,6 +77,33 @@ export interface PluginConfig {
   maxAutoResponds: number;
   planApproval: PlanApprovalMode;
   defaultHarness?: string;
+  harnesses: Record<string, HarnessConfig>;
+  /**
+   * Deprecated global allowed-model fallback preserved during migration from the
+   * pre-harness config shape. Matching remains case-insensitive substring-based.
+   */
+  allowedModels?: string[];
+}
+
+/** Raw plugin config as accepted from OpenClaw, including deprecated legacy keys. */
+export interface RawPluginConfig {
+  maxSessions?: number;
+  defaultModel?: string;
+  model?: string;
+  reasoningEffort?: ReasoningEffort;
+  defaultWorkdir?: string;
+  idleTimeoutMinutes?: number;
+  sessionGcAgeMinutes?: number;
+  maxPersistedSessions?: number;
+  fallbackChannel?: string;
+  permissionMode?: PermissionMode;
+  codexApprovalPolicy?: CodexApprovalPolicy;
+  agentChannels?: Record<string, string>;
+  maxAutoResponds?: number;
+  planApproval?: PlanApprovalMode;
+  defaultHarness?: string;
+  allowedModels?: string[];
+  harnesses?: Record<string, HarnessConfig>;
 }
 
 /** Persisted session metadata retained for resume/list/output after GC/restart. */

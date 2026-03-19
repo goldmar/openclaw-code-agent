@@ -1,5 +1,13 @@
 import { sessionManager } from "../singletons";
-import { pluginConfig, resolveOriginChannel, resolveOriginThreadId } from "../config";
+import {
+  getDefaultHarnessName,
+  pluginConfig,
+  resolveApprovalPolicyForHarness,
+  resolveDefaultModelForHarness,
+  resolveOriginChannel,
+  resolveOriginThreadId,
+  resolveReasoningEffortForHarness,
+} from "../config";
 
 interface AgentCommandContext {
   args?: string;
@@ -51,18 +59,23 @@ export function registerAgentCommand(api: CommandApi): void {
       if (!prompt) return { text: "Usage: /agent [--name <name>] <prompt>" };
 
       try {
-        const harness = pluginConfig.defaultHarness;
-        const defaultModel = harness === "codex"
-          ? (pluginConfig.model ?? pluginConfig.defaultModel)
-          : pluginConfig.defaultModel;
+        const harness = getDefaultHarnessName();
+        const defaultModel = resolveDefaultModelForHarness(harness);
+        if (!defaultModel) {
+          return {
+            text: `Error: No default model configured for harness "${harness}". Set plugins.entries["openclaw-code-agent"].config.harnesses.${harness}.defaultModel or pass model explicitly via agent_launch.`,
+          };
+        }
 
         const session = sessionManager.spawn({
           prompt,
           name,
           workdir: pluginConfig.defaultWorkdir || process.cwd(),
           model: defaultModel,
-          reasoningEffort: pluginConfig.reasoningEffort,
-          codexApprovalPolicy: pluginConfig.codexApprovalPolicy,
+          reasoningEffort: resolveReasoningEffortForHarness(harness),
+          codexApprovalPolicy: harness === "codex"
+            ? (resolveApprovalPolicyForHarness(harness) ?? pluginConfig.codexApprovalPolicy)
+            : undefined,
           originChannel: resolveOriginChannel(ctx),
           originThreadId: resolveOriginThreadId(ctx),
           harness,

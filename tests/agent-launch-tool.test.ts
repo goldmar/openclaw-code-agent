@@ -14,10 +14,14 @@ describe("agent_launch tool defaults", () => {
     let spawnConfig: Record<string, unknown> | undefined;
     setPluginConfig({
       defaultHarness: "codex",
-      defaultModel: "sonnet",
-      model: "gpt-5.3-codex",
-      reasoningEffort: "high",
-      codexApprovalPolicy: "on-request",
+      harnesses: {
+        codex: {
+          defaultModel: "gpt-5.3-codex",
+          allowedModels: ["gpt-5.3-codex", "gpt-5.4"],
+          reasoningEffort: "high",
+          approvalPolicy: "on-request",
+        },
+      },
     });
 
     setSessionManager({
@@ -49,9 +53,14 @@ describe("agent_launch tool defaults", () => {
     let spawnConfig: Record<string, unknown> | undefined;
     setPluginConfig({
       defaultHarness: "codex",
-      model: "gpt-5.3-codex",
-      reasoningEffort: "high",
-      codexApprovalPolicy: "never",
+      harnesses: {
+        codex: {
+          defaultModel: "gpt-5.3-codex",
+          allowedModels: ["gpt-5.3-codex", "gpt-5.4"],
+          reasoningEffort: "high",
+          approvalPolicy: "never",
+        },
+      },
     });
 
     setSessionManager({
@@ -161,5 +170,285 @@ describe("agent_launch tool defaults", () => {
 
     assert.ok(spawnConfig, "spawn should be called");
     assert.equal(spawnConfig?.resumeSessionId, "resolved-old-thread");
+  });
+});
+
+describe("agent_launch allowedModels validation", () => {
+  beforeEach(() => {
+    setPluginConfig({});
+    setSessionManager(null);
+  });
+
+  it("allows model when allowedModels is not configured", async () => {
+    let spawnConfig: Record<string, unknown> | undefined;
+    setPluginConfig({
+      harnesses: {
+        "claude-code": {
+          defaultModel: "sonnet",
+          allowedModels: undefined,
+        },
+      },
+    });
+    setSessionManager({
+      resolveHarnessSessionId: (id: string) => id,
+      spawn(config: Record<string, unknown>) {
+        spawnConfig = config;
+        return { id: "sess-1", name: "test", model: config.model };
+      },
+    } as any);
+
+    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp" });
+    const result = await tool.execute("tool-id", { prompt: "test", model: "anthropic/claude-opus-4-6" });
+
+    assert.ok(spawnConfig, "spawn should be called");
+    assert.equal(spawnConfig.model, "anthropic/claude-opus-4-6");
+    assert.match((result.content[0] as { text: string }).text, /Session launched successfully/);
+  });
+
+  it("allows model when allowedModels is empty array", async () => {
+    let spawnConfig: Record<string, unknown> | undefined;
+    setPluginConfig({
+      harnesses: {
+        "claude-code": {
+          defaultModel: "sonnet",
+          allowedModels: [],
+        },
+      },
+    });
+    setSessionManager({
+      resolveHarnessSessionId: (id: string) => id,
+      spawn(config: Record<string, unknown>) {
+        spawnConfig = config;
+        return { id: "sess-1", name: "test", model: config.model };
+      },
+    } as any);
+
+    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp" });
+    const result = await tool.execute("tool-id", { prompt: "test", model: "anthropic/claude-opus-4-6" });
+
+    assert.ok(spawnConfig, "spawn should be called");
+    assert.equal(spawnConfig.model, "anthropic/claude-opus-4-6");
+    assert.match((result.content[0] as { text: string }).text, /Session launched successfully/);
+  });
+
+  it("allows explicit model matching allowedModels pattern (case-insensitive)", async () => {
+    let spawnConfig: Record<string, unknown> | undefined;
+    setPluginConfig({ harnesses: { "claude-code": { allowedModels: ["sonnet", "opus"] } } });
+    setSessionManager({
+      resolveHarnessSessionId: (id: string) => id,
+      spawn(config: Record<string, unknown>) {
+        spawnConfig = config;
+        return { id: "sess-1", name: "test", model: config.model };
+      },
+    } as any);
+
+    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp" });
+    const result = await tool.execute("tool-id", { prompt: "test", model: "anthropic/claude-SONNET-4-6" });
+
+    assert.ok(spawnConfig, "spawn should be called");
+    assert.equal(spawnConfig.model, "anthropic/claude-SONNET-4-6");
+    assert.match((result.content[0] as { text: string }).text, /Session launched successfully/);
+  });
+
+  it("allows explicit model with substring match", async () => {
+    let spawnConfig: Record<string, unknown> | undefined;
+    setPluginConfig({ harnesses: { "claude-code": { allowedModels: ["sonnet"] } } });
+    setSessionManager({
+      resolveHarnessSessionId: (id: string) => id,
+      spawn(config: Record<string, unknown>) {
+        spawnConfig = config;
+        return { id: "sess-1", name: "test", model: config.model };
+      },
+    } as any);
+
+    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp" });
+    const result = await tool.execute("tool-id", { prompt: "test", model: "claude-sonnet-4-6" });
+
+    assert.ok(spawnConfig, "spawn should be called");
+    assert.equal(spawnConfig.model, "claude-sonnet-4-6");
+    assert.match((result.content[0] as { text: string }).text, /Session launched successfully/);
+  });
+
+  it("blocks explicit model not in allowedModels", async () => {
+    setPluginConfig({ harnesses: { "claude-code": { allowedModels: ["sonnet"] } } });
+    setSessionManager({
+      resolveHarnessSessionId: (id: string) => id,
+    } as any);
+
+    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp" });
+    const result = await tool.execute("tool-id", { prompt: "test", model: "anthropic/claude-opus-4-6" });
+
+    const text = (result.content[0] as { text: string }).text;
+    assert.match(text, /Error: Model "anthropic\/claude-opus-4-6" is not allowed/);
+    assert.match(text, /Permitted models: sonnet/);
+  });
+
+  it("blocks explicit model with multiple allowedModels shown", async () => {
+    setPluginConfig({ harnesses: { "claude-code": { allowedModels: ["sonnet", "opus", "haiku"] } } });
+    setSessionManager({
+      resolveHarnessSessionId: (id: string) => id,
+    } as any);
+
+    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp" });
+    const result = await tool.execute("tool-id", { prompt: "test", model: "gpt-4" });
+
+    const text = (result.content[0] as { text: string }).text;
+    assert.match(text, /Error: Model "gpt-4" is not allowed/);
+    assert.match(text, /Permitted models: sonnet, opus, haiku/);
+  });
+
+  it("blocks default model not in allowedModels with config error", async () => {
+    setPluginConfig({
+      harnesses: {
+        "claude-code": {
+          defaultModel: "anthropic/claude-opus-4-6",
+          allowedModels: ["sonnet", "haiku"],
+        },
+      },
+    });
+    setSessionManager({
+      resolveHarnessSessionId: (id: string) => id,
+    } as any);
+
+    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp" });
+    const result = await tool.execute("tool-id", { prompt: "test" });
+
+    const text = (result.content[0] as { text: string }).text;
+    assert.match(text, /Error: Default model "anthropic\/claude-opus-4-6" is not in allowedModels \(sonnet, haiku\)\. Update your plugin config to set a compatible defaultModel\./);
+  });
+
+  it("allows launch when default model is in allowedModels", async () => {
+    let spawnConfig: Record<string, unknown> | undefined;
+    setPluginConfig({
+      harnesses: {
+        "claude-code": {
+          defaultModel: "anthropic/claude-sonnet-4-6",
+          allowedModels: ["sonnet", "haiku"],
+        },
+      },
+    });
+    setSessionManager({
+      resolveHarnessSessionId: (id: string) => id,
+      spawn(config: Record<string, unknown>) {
+        spawnConfig = config;
+        return { id: "sess-1", name: "test", model: config.model };
+      },
+    } as any);
+
+    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp" });
+    const result = await tool.execute("tool-id", { prompt: "test" });
+
+    const text = (result.content[0] as { text: string }).text;
+    assert.match(text, /Session launched successfully/);
+    assert.ok(spawnConfig, "spawn should be called");
+    assert.equal(spawnConfig.model, "anthropic/claude-sonnet-4-6");
+  });
+
+  it("handles codex harness model resolution with allowedModels", async () => {
+    let spawnConfig: Record<string, unknown> | undefined;
+    setPluginConfig({
+      harnesses: {
+        codex: {
+          defaultModel: "anthropic/claude-opus-4-6",
+          allowedModels: ["opus"],
+        },
+      },
+    });
+    setSessionManager({
+      resolveHarnessSessionId: (id: string) => id,
+      spawn(config: Record<string, unknown>) {
+        spawnConfig = config;
+        return { id: "sess-1", name: "test", model: config.model };
+      },
+    } as any);
+
+    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp" });
+    const result = await tool.execute("tool-id", { prompt: "test", harness: "codex" });
+
+    const text = (result.content[0] as { text: string }).text;
+    assert.match(text, /Session launched successfully/);
+    assert.ok(spawnConfig, "spawn should be called");
+    assert.equal(spawnConfig.model, "anthropic/claude-opus-4-6");
+  });
+
+  it("blocks codex harness model when not allowed", async () => {
+    setPluginConfig({
+      harnesses: {
+        codex: {
+          defaultModel: "anthropic/claude-opus-4-6",
+          allowedModels: ["haiku"],
+        },
+      },
+    });
+    setSessionManager({
+      resolveHarnessSessionId: (id: string) => id,
+    } as any);
+
+    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp" });
+    const result = await tool.execute("tool-id", { prompt: "test", harness: "codex" });
+
+    const text = (result.content[0] as { text: string }).text;
+    assert.match(text, /Error: Default model "anthropic\/claude-opus-4-6" is not in allowedModels \(haiku\)\. Update your plugin config to set a compatible defaultModel\./);
+  });
+
+  it("blocks undefined default model with allowedModels", async () => {
+    setPluginConfig({
+      harnesses: {
+        "claude-code": {
+          defaultModel: "haiku",
+          allowedModels: ["sonnet"],
+        },
+      },
+    });
+    setSessionManager({
+      resolveHarnessSessionId: (id: string) => id,
+    } as any);
+
+    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp" });
+    const result = await tool.execute("tool-id", { prompt: "test" });
+
+    const text = (result.content[0] as { text: string }).text;
+    // mismatched default should trigger error
+    assert.match(text, /Error: Default model "haiku" is not in allowedModels \(sonnet\)\. Update your plugin config to set a compatible defaultModel\./);
+  });
+
+  it("case-insensitive matching works both ways", async () => {
+    let spawnConfig: Record<string, unknown> | undefined;
+    setPluginConfig({ harnesses: { "claude-code": { allowedModels: ["SONNET"] } } });
+    setSessionManager({
+      resolveHarnessSessionId: (id: string) => id,
+      spawn(config: Record<string, unknown>) {
+        spawnConfig = config;
+        return { id: "sess-1", name: "test", model: config.model };
+      },
+    } as any);
+
+    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp" });
+    const result = await tool.execute("tool-id", { prompt: "test", model: "claude-sonnet-4-6" });
+
+    const text = (result.content[0] as { text: string }).text;
+    assert.match(text, /Session launched successfully/);
+    assert.ok(spawnConfig, "spawn should be called");
+    assert.equal(spawnConfig.model, "claude-sonnet-4-6");
+  });
+
+  it("partial pattern matching works", async () => {
+    let spawnConfig: Record<string, unknown> | undefined;
+    setPluginConfig({ harnesses: { "claude-code": { allowedModels: ["claude-son"] } } });
+    setSessionManager({
+      resolveHarnessSessionId: (id: string) => id,
+      spawn(config: Record<string, unknown>) {
+        spawnConfig = config;
+        return { id: "sess-1", name: "test", model: config.model };
+      },
+    } as any);
+
+    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp" });
+    const result = await tool.execute("tool-id", { prompt: "test", model: "anthropic/claude-sonnet-4-6" });
+
+    const text = (result.content[0] as { text: string }).text;
+    assert.match(text, /Session launched successfully/);
+    assert.ok(spawnConfig, "spawn should be called");
+    assert.equal(spawnConfig.model, "anthropic/claude-sonnet-4-6");
   });
 });

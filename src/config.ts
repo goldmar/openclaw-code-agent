@@ -1,7 +1,14 @@
 import { readFileSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
-import type { PluginConfig, OpenClawPluginToolContext } from "./types";
+import type {
+  CodexApprovalPolicy,
+  HarnessConfig,
+  OpenClawPluginToolContext,
+  PluginConfig,
+  RawPluginConfig,
+  ReasoningEffort,
+} from "./types";
 
 // -- Global MCP servers from ~/.claude.json --
 
@@ -9,6 +16,19 @@ import type { PluginConfig, OpenClawPluginToolContext } from "./types";
 export type McpServerConfig = Record<string, { type: string; command: string; args?: string[]; env?: Record<string, string> }>;
 
 let cachedMcpServers: McpServerConfig | undefined;
+const DEFAULT_HARNESS = "claude-code";
+const BUILTIN_HARNESS_CONFIGS: Record<string, HarnessConfig> = {
+  "claude-code": {
+    defaultModel: "sonnet",
+    allowedModels: ["sonnet", "opus"],
+  },
+  codex: {
+    defaultModel: "gpt-5.4",
+    allowedModels: ["gpt-5.4"],
+    reasoningEffort: "medium",
+    approvalPolicy: "on-request",
+  },
+};
 
 /** Load and cache global MCP server definitions from `~/.claude.json`. */
 export function getGlobalMcpServers(): McpServerConfig {
@@ -32,18 +52,96 @@ export let pluginConfig: PluginConfig = {
   maxPersistedSessions: 10000,
   maxAutoResponds: 10,
   permissionMode: "plan",
-  codexApprovalPolicy: "on-request",
   planApproval: "delegate",
-  reasoningEffort: "medium",
+  codexApprovalPolicy: "on-request",
+  harnesses: {
+    "claude-code": { ...BUILTIN_HARNESS_CONFIGS["claude-code"] },
+    codex: { ...BUILTIN_HARNESS_CONFIGS.codex },
+  },
 };
 
 /** Replace plugin config singleton with defaults applied for omitted fields. */
-export function setPluginConfig(config: Partial<PluginConfig>): void {
+export function setPluginConfig(config: Partial<RawPluginConfig>): void {
+  const defaultHarness = config.defaultHarness ?? DEFAULT_HARNESS;
+  const harnesses: Record<string, HarnessConfig> = {};
+
+  for (const [name, builtin] of Object.entries(BUILTIN_HARNESS_CONFIGS)) {
+    harnesses[name] = {
+      ...builtin,
+      allowedModels: builtin.allowedModels ? [...builtin.allowedModels] : undefined,
+    };
+  }
+
+  for (const [name, value] of Object.entries(config.harnesses ?? {})) {
+    const existing = harnesses[name] ?? {};
+    const next: HarnessConfig = {
+      ...existing,
+      ...value,
+    };
+    if (value.allowedModels !== undefined) {
+      next.allowedModels = value.allowedModels ? [...value.allowedModels] : value.allowedModels;
+    } else if (value.defaultModel !== undefined) {
+      next.allowedModels = undefined;
+    }
+    harnesses[name] = next;
+  }
+
+  if (config.defaultModel !== undefined) {
+    const existing = harnesses[defaultHarness] ?? {};
+    harnesses[defaultHarness] = {
+      ...existing,
+      defaultModel: (config.harnesses?.[defaultHarness]?.defaultModel ?? config.defaultModel),
+      allowedModels: config.harnesses?.[defaultHarness]?.allowedModels !== undefined
+        ? existing.allowedModels
+        : config.allowedModels,
+    };
+    console.warn(
+      `[openclaw-code-agent] config.defaultModel is deprecated; use harnesses.${defaultHarness}.defaultModel instead.`,
+    );
+  }
+
+  if (config.model !== undefined) {
+    const existing = harnesses.codex ?? {};
+    harnesses.codex = {
+      ...existing,
+      defaultModel: (config.harnesses?.codex?.defaultModel ?? config.model),
+      allowedModels: config.harnesses?.codex?.allowedModels !== undefined ? existing.allowedModels : config.allowedModels,
+    };
+    console.warn("[openclaw-code-agent] config.model is deprecated; use harnesses.codex.defaultModel instead.");
+  }
+
+  if (config.reasoningEffort !== undefined) {
+    const existing = harnesses.codex ?? {};
+    harnesses.codex = {
+      ...existing,
+      reasoningEffort: (config.harnesses?.codex?.reasoningEffort ?? config.reasoningEffort),
+    };
+    console.warn("[openclaw-code-agent] config.reasoningEffort is deprecated; use harnesses.codex.reasoningEffort instead.");
+  }
+
+  if (config.codexApprovalPolicy !== undefined) {
+    const existing = harnesses.codex ?? {};
+    harnesses.codex = {
+      ...existing,
+      approvalPolicy: (config.harnesses?.codex?.approvalPolicy ?? config.codexApprovalPolicy),
+    };
+    console.warn("[openclaw-code-agent] config.codexApprovalPolicy is deprecated; use harnesses.codex.approvalPolicy instead.");
+  }
+
+  if (config.allowedModels !== undefined) {
+    console.warn("[openclaw-code-agent] config.allowedModels is deprecated; use harnesses.<name>.allowedModels instead.");
+    for (const [name, existing] of Object.entries(harnesses)) {
+      if (config.harnesses?.[name]?.allowedModels === undefined) {
+        harnesses[name] = {
+          ...existing,
+          allowedModels: undefined,
+        };
+      }
+    }
+  }
+
   pluginConfig = {
     maxSessions: config.maxSessions ?? 20,
-    defaultModel: config.defaultModel,
-    model: config.model,
-    reasoningEffort: config.reasoningEffort ?? "medium",
     defaultWorkdir: config.defaultWorkdir,
     idleTimeoutMinutes: config.idleTimeoutMinutes ?? 15,
     sessionGcAgeMinutes: config.sessionGcAgeMinutes ?? 1440,
@@ -54,8 +152,40 @@ export function setPluginConfig(config: Partial<PluginConfig>): void {
     permissionMode: config.permissionMode ?? "plan",
     codexApprovalPolicy: config.codexApprovalPolicy ?? "on-request",
     planApproval: config.planApproval ?? "delegate",
-    defaultHarness: config.defaultHarness,
+    defaultHarness,
+    harnesses,
+    allowedModels: config.allowedModels,
   };
+}
+
+export function getDefaultHarnessName(): string {
+  return pluginConfig.defaultHarness ?? DEFAULT_HARNESS;
+}
+
+export function getHarnessConfig(name: string): HarnessConfig {
+  const builtin = BUILTIN_HARNESS_CONFIGS[name];
+  const configured = pluginConfig.harnesses[name];
+  return {
+    ...builtin,
+    ...configured,
+    allowedModels: configured?.allowedModels ?? builtin?.allowedModels,
+  };
+}
+
+export function resolveDefaultModelForHarness(name: string): string | undefined {
+  return getHarnessConfig(name).defaultModel;
+}
+
+export function resolveAllowedModelsForHarness(name: string): string[] | undefined {
+  return pluginConfig.harnesses[name]?.allowedModels ?? pluginConfig.allowedModels;
+}
+
+export function resolveReasoningEffortForHarness(name: string): ReasoningEffort | undefined {
+  return getHarnessConfig(name).reasoningEffort;
+}
+
+export function resolveApprovalPolicyForHarness(name: string): CodexApprovalPolicy | undefined {
+  return getHarnessConfig(name).approvalPolicy;
 }
 
 // -- Channel resolution utilities --
