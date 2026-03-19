@@ -2,7 +2,7 @@ import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { SessionManager } from "../src/session-manager";
 import { setPluginConfig } from "../src/config";
-import { registerHarness } from "../src/harness";
+import { registerHarness, type AgentHarness, type HarnessMessage } from "../src/harness";
 import { createFakeHarness, createStubSession } from "./helpers";
 
 import { executeRespond } from "../src/actions/respond";
@@ -195,7 +195,8 @@ describe("executeRespond — auto-resume", () => {
   });
 
   it("emits only the auto-resume notification when agent_respond resumes a completed session", async () => {
-    registerHarness(createFakeHarness("respond-resume-harness"));
+    const harness = createFakeHarness("respond-resume-harness");
+    registerHarness(harness);
 
     const session = createStubSession({
       id: "completed-id",
@@ -214,7 +215,25 @@ describe("executeRespond — auto-resume", () => {
     (sm as any).__dispatchCalls = [];
     (sm as any).sessions.set(session.id, session);
 
-    const result = await executeRespond(sm, { session: session.id, message: "continue" });
+    const pending = executeRespond(sm, { session: session.id, message: "continue" });
+    setTimeout(() => {
+      harness.pushMessage({ type: "init", session_id: "harness-resume-only" });
+    }, 5);
+    setTimeout(() => {
+      harness.pushMessage({
+        type: "result",
+        data: {
+          success: true,
+          duration_ms: 5,
+          total_cost_usd: 0,
+          num_turns: 1,
+          session_id: "harness-resume-only",
+        },
+      });
+      harness.endMessages();
+    }, 25);
+
+    const result = await pending;
 
     assert.ok(result.text.includes("Auto-resumed"));
     assert.equal((sm as any).__dispatchCalls.length, 1);
@@ -379,6 +398,59 @@ describe("executeRespond — auto-resume", () => {
     assert.ok(result.text.includes("Auto-resumed"));
     assert.ok(result.text.includes("user-killed"));
     assert.equal(capturedConfig.resumeSessionId, "harness-user");
+  });
+
+  it("waits for resume launch confirmation and returns an error when the resumed turn fails before init", async () => {
+    const harnessName = "resume-confirm-failure-harness";
+    const failingHarness: AgentHarness = {
+      name: harnessName,
+      supportedPermissionModes: ["default", "plan", "acceptEdits", "bypassPermissions"],
+      questionToolNames: [],
+      planApprovalToolNames: [],
+      launch() {
+        async function* messages(): AsyncGenerator<HarnessMessage> {
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          yield {
+            type: "result",
+            data: {
+              success: false,
+              duration_ms: 5,
+              total_cost_usd: 0,
+              num_turns: 1,
+              session_id: "",
+              result: "resume handshake failed",
+            },
+          };
+        }
+
+        return { messages: messages() };
+      },
+      buildUserMessage(text: string, sessionId: string): unknown {
+        return { type: "user", text, session_id: sessionId };
+      },
+    };
+    registerHarness(failingHarness);
+
+    const sourceSession = createStubSession({
+      id: "completed-id",
+      status: "completed",
+      killReason: "done",
+      harnessSessionId: "resume-dead-thread",
+      harnessName,
+      name: "resume-confirm-source",
+      workdir: "/tmp/repo",
+      model: "test-model",
+    });
+    const sm = createStubSessionManager({ [sourceSession.id]: sourceSession });
+    (sm as any).wakeDispatcher = {
+      dispatchSessionNotification: () => {},
+    };
+
+    const result = await executeRespond(sm, { session: sourceSession.id, message: "continue" });
+
+    assert.equal(result.isError, true);
+    assert.match(result.text, /resume handshake failed/);
+    assert.equal(sm.persisted.size, 0, "failed pre-init resume should not persist a running stub");
   });
 });
 

@@ -249,7 +249,6 @@ export class CodexHarness implements AgentHarness {
         pendingThreadRecreate = false;
       }
 
-      emitInitIfNeeded((thread.id ?? codexSessionId) ?? undefined);
       return thread;
     };
 
@@ -296,7 +295,6 @@ export class CodexHarness implements AgentHarness {
         const knownSessionId = (activeThread.id ?? codexSessionId) ?? undefined;
         if (knownSessionId) {
           codexSessionId = knownSessionId;
-          emitInitIfNeeded(codexSessionId);
         }
 
         activeTurnAbortController = new AbortController();
@@ -318,7 +316,14 @@ export class CodexHarness implements AgentHarness {
 
           if (event.type === "thread.started") {
             codexSessionId = event.thread_id;
-            emitInitIfNeeded(codexSessionId);
+          }
+
+          // Only mark the session live once the streamed turn has produced a
+          // real event. `resumeThread(id)` exposes a thread id immediately, but
+          // that alone does not guarantee a new Codex turn actually started.
+          emitInitIfNeeded(codexSessionId ?? activeThread.id ?? undefined);
+
+          if (event.type === "thread.started") {
             continue;
           }
 

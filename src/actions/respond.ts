@@ -124,7 +124,7 @@ async function tryAutoResume(
       codexApprovalPolicy: session.codexApprovalPolicy,
       harness: "harnessName" in session ? session.harnessName : session.harness,
     };
-    const resumed = sm.spawn(resumeConfig, { notifyLaunch: false });
+    const resumed = await sm.spawnAndAwaitRunning(resumeConfig, { notifyLaunch: false });
     const resumeLabel = getResumeLabel(session.status, session.killReason);
     sm.notifySession(resumed, `🔄 [${resumed.name}] Auto-resumed from ${resumeLabel}`);
     return { text: `Auto-resumed ${resumeLabel} session ${resumed.name} [${resumed.id}]. Use agent_output to see the response.` };

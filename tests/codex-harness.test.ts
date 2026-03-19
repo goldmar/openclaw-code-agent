@@ -380,6 +380,25 @@ describe("CodexHarness SDK mapping", () => {
     assert.equal(init.session_id, "thread-resume");
   });
 
+  it("does not emit init for a resumed thread before the streamed turn produces a real event", async () => {
+    const codex = new MockCodex([{ error: new Error("resume failed before first event") }]);
+
+    const { harness: h } = createHarness(codex);
+    const msgs = await collectMessages(h.launch({
+      prompt: "continue",
+      cwd: "/tmp",
+      resumeSessionId: "thread-resume-fail",
+    }));
+
+    assert.equal(codex.resumeCalls.length, 1);
+    assert.equal(msgs.some((m) => m.type === "init"), false);
+
+    const result = msgs.find((m) => m.type === "result") as any;
+    assert.ok(result, "expected terminal result");
+    assert.equal(result.data.success, false);
+    assert.match(result.data.result, /resume failed before first event/);
+  });
+
   it("setPermissionMode applies on next turn via thread recreation with same id", async () => {
     let releaseSecondTurn: (() => void) | undefined;
     const secondTurnGate = new Promise<void>((resolve) => {

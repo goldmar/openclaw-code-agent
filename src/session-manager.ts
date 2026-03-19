@@ -57,6 +57,12 @@ type SpawnOptions = {
   notifyLaunch?: boolean;
 };
 
+type LaunchConfirmationSession = Pick<Session, "status" | "name" | "id" | "killReason" | "error" | "result"> & {
+  on?: (event: string, listener: (...args: any[]) => void) => unknown;
+  off?: (event: string, listener: (...args: any[]) => void) => unknown;
+  removeListener?: (event: string, listener: (...args: any[]) => void) => unknown;
+};
+
 /**
  * Extract a Lobster resume token from CLI output.
  *
@@ -176,6 +182,54 @@ export class SessionManager {
     }
 
     return session;
+  }
+
+  /** Spawn a session and wait until it is truly running or fails before startup. */
+  async spawnAndAwaitRunning(config: SessionConfig, options: SpawnOptions = {}): Promise<Session> {
+    const session = this.spawn(config, options);
+    await this.waitForRunningSession(session);
+    return session;
+  }
+
+  private async waitForRunningSession(session: LaunchConfirmationSession): Promise<void> {
+    if (session.status === "running") return;
+    if (TERMINAL_STATUSES.has(session.status)) {
+      throw new Error(this.describeLaunchFailure(session));
+    }
+
+    const addListener = session.on?.bind(session);
+    const removeListener = session.off?.bind(session) ?? session.removeListener?.bind(session);
+    if (!addListener || !removeListener) {
+      throw new Error(`Session ${session.name} [${session.id}] did not expose lifecycle events during startup.`);
+    }
+
+    await new Promise<void>((resolve, reject) => {
+      const onStatusChange = (_session: Session, newStatus: SessionStatus): void => {
+        if (newStatus === "running") {
+          cleanup();
+          resolve();
+          return;
+        }
+        if (TERMINAL_STATUSES.has(newStatus)) {
+          cleanup();
+          reject(new Error(this.describeLaunchFailure(session)));
+        }
+      };
+
+      const cleanup = (): void => {
+        removeListener("statusChange", onStatusChange);
+      };
+
+      addListener("statusChange", onStatusChange);
+    });
+  }
+
+  private describeLaunchFailure(session: LaunchConfirmationSession): string {
+    const reason = session.killReason ? ` (reason: ${session.killReason})` : "";
+    const detail = session.error
+      || session.result?.result
+      || `status=${session.status}${reason}`;
+    return `Session ${session.name} [${session.id}] failed to start: ${detail}`;
   }
 
   private onSessionTerminal(session: Session): void {
