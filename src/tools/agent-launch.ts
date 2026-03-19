@@ -29,6 +29,7 @@ interface AgentLaunchParams {
   multi_turn_disabled?: boolean;
   permission_mode?: "default" | "plan" | "acceptEdits" | "bypassPermissions";
   harness?: string;
+  worktree?: boolean;
   agentId?: string;
 }
 
@@ -97,6 +98,9 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
       ),
       harness: Type.Optional(
         Type.String({ description: "Agent harness to use (e.g. 'claude-code'). Defaults to 'claude-code'." }),
+      ),
+      worktree: Type.Optional(
+        Type.Boolean({ description: "Control git worktree behavior. true=auto-create worktree, false=skip. Defaults to auto-detect (creates worktree if workdir is a git repo with a remote)." }),
       ),
     }),
     async execute(_id: string, params: unknown) {
@@ -212,6 +216,7 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
           originAgentId: ctx.agentId || undefined,
           originSessionKey,
           harness,
+          worktree: params.worktree,
         });
 
         const promptSummary = params.prompt.length > 80 ? params.prompt.slice(0, 80) + "..." : params.prompt;

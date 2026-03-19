@@ -3,6 +3,9 @@
  */
 
 import { query } from "@anthropic-ai/claude-agent-sdk";
+import { dirname, join } from "path";
+import { fileURLToPath } from "url";
+import { createRequire } from "module";
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type {
   AgentHarness,
@@ -64,6 +67,17 @@ export class ClaudeCodeHarness implements AgentHarness {
       // Plan mode remains a *behavioural* constraint — CC presents a plan and
       // waits for approval — but does not restrict filesystem writes.
       allowDangerouslySkipPermissions: true,
+      pathToClaudeCodeExecutable: (() => {
+        try {
+          const req = createRequire(import.meta.url);
+          const sdkMain = req.resolve("@anthropic-ai/claude-agent-sdk");
+          return join(dirname(sdkMain), "cli.js");
+        } catch {
+          // Fallback: resolve relative to this file
+          const thisDir = dirname(fileURLToPath(import.meta.url));
+          return join(thisDir, "..", "node_modules", "@anthropic-ai", "claude-agent-sdk", "cli.js");
+        }
+      })(),
       allowedTools: options.allowedTools,
       systemPrompt: options.systemPrompt,
       includePartialMessages: true,

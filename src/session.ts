@@ -104,6 +104,10 @@ export class Session extends EventEmitter {
   readonly resumeSessionId?: string;
   readonly forkSession?: boolean;
 
+  // Worktree
+  worktreePath?: string;
+  originalWorkdir?: string;
+
   // Multi-turn
   readonly multiTurn: boolean;
   private messageStream?: MessageStream;

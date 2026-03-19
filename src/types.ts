@@ -58,6 +58,8 @@ export interface SessionConfig {
   multiTurn?: boolean;
   /** Agent harness to use (e.g. "claude-code"). Defaults to the built-in default. */
   harness?: string;
+  /** Control git worktree behavior. true=auto-create, false=skip, undefined=auto-detect. */
+  worktree?: boolean;
 }
 
 /** Plan-approval policy for orchestrator wake flows. */
@@ -128,6 +130,8 @@ export interface PersistedSessionInfo {
   harness?: string;
   currentPermissionMode?: PermissionMode;
   codexApprovalPolicy?: CodexApprovalPolicy;
+  /** Path to the worktree if one was created. */
+  worktreePath?: string;
 }
 
 /** In-memory usage metrics shown by `agent_stats`. */
