@@ -246,4 +246,97 @@ appendFileSync(process.env.OPENCLAW_TEST_LOG, JSON.stringify(process.argv.slice(
       "now",
     ]]);
   });
+
+  it("routes feishu direct messages via message.send using sessionKey", async () => {
+    const dispatcher = new WakeDispatcher();
+    const session: FakeSession = {
+      id: "session-6",
+      originSessionKey: "agent:main:feishu:direct:ou_f4ec9a52fe6a68b5ca3c7bc22d671be5",
+      originAgentId: "main",
+    };
+
+    dispatcher.dispatchSessionNotification(session as any, {
+      label: "launch",
+      userMessage: "🚀 launched",
+      notifyUser: "always",
+    });
+    const calls = await waitForCalls(logPath, 1);
+
+    assert.equal(calls.length, 1);
+    const params = parseMessageSendArgs(calls[0] ?? []);
+    assert.equal(params.channel, "feishu");
+    assert.equal(params.target, "ou_f4ec9a52fe6a68b5ca3c7bc22d671be5");
+    assert.equal(params.message, "🚀 launched");
+  });
+
+  it("routes feishu group chats via message.send using sessionKey with group kind", async () => {
+    const dispatcher = new WakeDispatcher();
+    const session: FakeSession = {
+      id: "session-7",
+      originSessionKey: "agent:main:feishu:group:oc_abc123def456",
+      originAgentId: "main",
+    };
+
+    dispatcher.dispatchSessionNotification(session as any, {
+      label: "completed",
+      userMessage: "✅ completed",
+      wakeMessage: "Coding agent session completed.",
+      notifyUser: "always",
+    });
+    const calls = await waitForCalls(logPath, 2);
+
+    assert.equal(calls.length, 2);
+    const notifyCall = calls.find((call) => call[0] === "message");
+    const wakeCall = calls.find((call) => call[0] === "gateway");
+    assert.ok(notifyCall, "expected a message.send notification call");
+    assert.ok(wakeCall, "expected a chat.send wake call");
+    const notifyArgs = parseMessageSendArgs(notifyCall);
+    assert.equal(notifyArgs.channel, "feishu");
+    assert.equal(notifyArgs.target, "oc_abc123def456");
+    assert.equal(notifyArgs.message, "✅ completed");
+  });
+
+  it("routes feishu topic threads with threadId from sessionKey", async () => {
+    const dispatcher = new WakeDispatcher();
+    const session: FakeSession = {
+      id: "session-8",
+      originSessionKey: "agent:main:feishu:group:oc_topic_chat:topic:om_topic_xyz789",
+      originAgentId: "main",
+    };
+
+    dispatcher.dispatchSessionNotification(session as any, {
+      label: "waiting",
+      userMessage: "🔔 waiting",
+      wakeMessage: "Session waiting for input.",
+      notifyUser: "always",
+    });
+    const calls = await waitForCalls(logPath, 2);
+
+    assert.equal(calls.length, 2);
+    const notifyCall = calls.find((call) => call[0] === "message");
+    const notifyArgs = parseMessageSendArgs(notifyCall!);
+    assert.equal(notifyArgs.channel, "feishu");
+    assert.equal(notifyArgs.target, "oc_topic_chat");
+    assert.equal(notifyArgs["thread-id"], "om_topic_xyz789");
+    assert.equal(notifyArgs.message, "🔔 waiting");
+  });
+
+  it("prefers stored originThreadId over sessionKey threadId for feishu", async () => {
+    const dispatcher = new WakeDispatcher();
+    const session: FakeSession = {
+      id: "session-9",
+      originThreadId: "om_explicit_thread_123",
+      originSessionKey: "agent:main:feishu:group:oc_chat:topic:om_key_thread",
+      originAgentId: "main",
+    };
+
+    dispatcher.dispatchSessionNotification(session as any, {
+      label: "completed",
+      userMessage: "✅ done",
+      notifyUser: "always",
+    });
+    const calls = await waitForCalls(logPath, 1);
+    const notifyArgs = parseMessageSendArgs(calls[0]);
+    assert.equal(notifyArgs["thread-id"], "om_explicit_thread_123");
+  });
 });

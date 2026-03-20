@@ -68,13 +68,37 @@ export class WakeDispatcher {
 
     const sessionKey = this.getOriginSessionKey(session);
     if (!sessionKey) return undefined;
-    const match = sessionKey.match(/^agent:[^:]+:telegram:(?:direct|dm|group|channel):([^:]+)(?::topic:(\d+))?$/i);
-    if (!match?.[1]) return undefined;
-    return {
-      channel: "telegram",
-      target: match[1],
-      threadId: originThreadId ?? match[2],
-    };
+
+    // Try Telegram: agent:agentId:telegram:direct|dm|group|channel:target[:topic:threadId]
+    const telegramMatch = sessionKey.match(/^agent:[^:]+:telegram:(?:direct|dm|group|channel):([^:]+)(?::topic:(\d+))?$/i);
+    if (telegramMatch?.[1]) {
+      return {
+        channel: "telegram",
+        target: telegramMatch[1],
+        threadId: originThreadId ?? telegramMatch[2],
+      };
+    }
+
+    // Try Feishu: agent:agentId:feishu:direct|group:openId|chatId[:topic:threadId]
+    // Feishu uses open_id (ou_xxx) for direct messages and chat_id (oc_xxx) for groups.
+    // Topic threads use the pattern oc_chat_id:topic:thread_id.
+    const feishuMatch = sessionKey.match(/^agent:[^:]+:feishu:(direct|group):([^:]+)(?::topic:([^:]+))?$/i);
+    if (feishuMatch?.[2]) {
+      const feishuKind = feishuMatch[1].toLowerCase();
+      // For feishu, the target is the open_id (ou_xxx) for direct or chat_id (oc_xxx) for group.
+      const feishuTarget = feishuMatch[2];
+      // Thread/topic id comes from either the session key or the stored originThreadId.
+      const feishuThreadId = originThreadId ?? feishuMatch[3];
+      // For feishu message send, the --thread-id flag corresponds to reply_in_thread.
+      // We pass threadId only when it's a known topic thread id.
+      return {
+        channel: "feishu",
+        target: feishuTarget,
+        threadId: feishuThreadId,
+      };
+    }
+
+    return undefined;
   }
 
   private parseThreadIdFromSessionKey(sessionKey?: string): string | undefined {
