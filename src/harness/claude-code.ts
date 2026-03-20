@@ -10,6 +10,9 @@ import type {
   HarnessSession,
   HarnessMessage,
 } from "./types";
+import { readFileSync } from "fs";
+import { join } from "path";
+import { homedir } from "os";
 
 type ClaudeQueryHandle = AsyncIterable<unknown> & {
   setPermissionMode?: (mode: string) => Promise<void>;
@@ -53,8 +56,31 @@ export class ClaudeCodeHarness implements AgentHarness {
   readonly questionToolNames = ["AskUserQuestion"] as const;
   readonly planApprovalToolNames = ["ExitPlanMode", "set_permission_mode"] as const;
 
+  /**
+   * Load `env` from ~/.claude/settings.json and merge with process.env.
+   * Priority: process.env wins (never override existing keys).
+   * This ensures Claude Code child processes inherit auth credentials
+   * (ANTHROPIC_AUTH_TOKEN, ANTHROPIC_BASE_URL, etc.) from settings.json
+   * while preserving all other env vars from the parent process.
+   */
+  private getEnv(): Record<string, string> {
+    try {
+      const settingsPath = join(homedir(), ".claude", "settings.json");
+      const raw = readFileSync(settingsPath, "utf-8");
+      const settings = JSON.parse(raw);
+      const settingsEnv: Record<string, string> = settings?.env ?? {};
+      // Merge: settings.json provides defaults, process.env takes precedence
+      return { ...settingsEnv, ...process.env };
+    } catch {
+      // If settings.json doesn't exist or can't be read, fall back to process.env only
+      return { ...process.env };
+    }
+  }
+
   /** Launch a Claude Code session and adapt SDK messages into harness events. */
   launch(options: HarnessLaunchOptions): HarnessSession {
+    const env = this.getEnv();
+
     const sdkOptions: Record<string, unknown> = {
       cwd: options.cwd,
       model: options.model,
@@ -69,6 +95,7 @@ export class ClaudeCodeHarness implements AgentHarness {
       includePartialMessages: true,
       abortController: options.abortController,
       mcpServers: options.mcpServers,
+      env,
     };
 
     if (options.resumeSessionId) {
