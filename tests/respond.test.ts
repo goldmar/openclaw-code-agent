@@ -73,7 +73,7 @@ describe("executeRespond — auto-resume", () => {
       originThreadId: 42,
       originAgentId: "agent-main",
       originSessionKey: "agent:main:telegram:group:123:topic:42",
-      currentPermissionMode: "acceptEdits",
+      currentPermissionMode: "default",
       codexApprovalPolicy: "on-request",
     });
     const sm = createStubSessionManager({ "test-id": session });
@@ -92,7 +92,7 @@ describe("executeRespond — auto-resume", () => {
     assert.equal(capturedConfig.originChannel, "telegram|bot|123");
     assert.equal(capturedConfig.originThreadId, 42);
     assert.equal(capturedConfig.originAgentId, "agent-main");
-    assert.equal(capturedConfig.permissionMode, "acceptEdits");
+    assert.equal(capturedConfig.permissionMode, "default");
     assert.equal(capturedConfig.codexApprovalPolicy, "on-request");
   });
 
@@ -303,7 +303,7 @@ describe("executeRespond — auto-resume", () => {
       originAgentId: "agent-main",
       originSessionKey: "agent:main:telegram:group:123:topic:42",
       harness: "codex",
-      currentPermissionMode: "acceptEdits",
+      currentPermissionMode: "default",
       codexApprovalPolicy: "on-request",
     });
     sm.idIndex.set("GccpSIqJ", "harness-restart");
@@ -319,7 +319,7 @@ describe("executeRespond — auto-resume", () => {
     assert.ok(capturedConfig, "spawn should use persisted session metadata");
     assert.equal(capturedConfig.resumeSessionId, undefined);
     assert.equal(capturedConfig.reasoningEffort, "high");
-    assert.equal(capturedConfig.permissionMode, "acceptEdits");
+    assert.equal(capturedConfig.permissionMode, "default");
     assert.equal(capturedConfig.codexApprovalPolicy, "on-request");
     assert.equal(capturedConfig.harness, "codex");
   });
@@ -402,7 +402,7 @@ describe("executeRespond — auto-resume", () => {
     const harnessName = "resume-confirm-failure-harness";
     const failingHarness: AgentHarness = {
       name: harnessName,
-      supportedPermissionModes: ["default", "plan", "acceptEdits", "bypassPermissions"],
+      supportedPermissionModes: ["default", "plan", "bypassPermissions"],
       questionToolNames: [],
       planApprovalToolNames: [],
       launch() {
@@ -583,21 +583,7 @@ describe("executeRespond — plan approval", () => {
   });
 });
 
-describe("executeRespond — acceptEdits / default escalation", () => {
-  it("calls switchPermissionMode when approve=true and mode is acceptEdits", async () => {
-    let modeSwitched: string | undefined;
-    const session = createStubSession({
-      pendingPlanApproval: false,
-      currentPermissionMode: "acceptEdits",
-      switchPermissionMode(mode: string) { modeSwitched = mode; },
-    });
-    const sm = createStubSessionManager({ "test-id": session });
-    const result = await executeRespond(sm, { session: "test-id", message: "Go ahead", approve: true });
-    assert.equal(modeSwitched, "bypassPermissions");
-    assert.ok(result.text.includes("Message sent"));
-    assert.ok(!result.text.includes("⚠️"), "should not have approval warning");
-  });
-
+describe("executeRespond — default mode escalation", () => {
   it("calls switchPermissionMode when approve=true and mode is default", async () => {
     let modeSwitched: string | undefined;
     const session = createStubSession({
@@ -624,15 +610,14 @@ describe("executeRespond — acceptEdits / default escalation", () => {
     assert.ok(result.text.includes("already in bypassPermissions"));
   });
 
-  it("pendingPlanApproval takes priority over acceptEdits escalation", async () => {
-    // Edge case: acceptEdits + pendingPlanApproval + approve all true.
-    // The plan-approval branch (line 226 in respond.ts) fires first, calling
-    // switchPermissionMode("bypassPermissions") AND applying validateApprovalMessage.
-    // The acceptEdits branch (line 233) does NOT fire.
+  it("pendingPlanApproval takes priority over default mode escalation", async () => {
+    // Edge case: default + pendingPlanApproval + approve all true.
+    // The plan-approval branch fires first, calling switchPermissionMode("bypassPermissions")
+    // AND applying validateApprovalMessage. The default mode escalation branch does NOT fire.
     let modeSwitched: string | undefined;
     const session = createStubSession({
       pendingPlanApproval: true,
-      currentPermissionMode: "acceptEdits",
+      currentPermissionMode: "default",
       switchPermissionMode(mode: string) { modeSwitched = mode; },
     });
     const sm = createStubSessionManager({ "test-id": session });
@@ -737,26 +722,6 @@ describe("executeRespond — Lobster token handling", () => {
     // Wait for the async fallback to execute
     await new Promise((r) => setTimeout(r, 200));
     assert.equal(modeSwitched, "bypassPermissions", "fallback should switch mode");
-  });
-
-  it("consumes token and resumes Lobster when approve=true in acceptEdits mode", async () => {
-    let resumedToken: string | undefined;
-    let resumedApprove: boolean | undefined;
-    const session = createStubSession({
-      pendingPlanApproval: false,
-      currentPermissionMode: "acceptEdits",
-      lobsterResumeToken: "tok-accept",
-    });
-    const sm = createStubSessionManager({ "test-id": session });
-    (sm as any).resumeLobsterApproval = async (token: string, approve: boolean) => {
-      resumedToken = token;
-      resumedApprove = approve;
-    };
-    const result = await executeRespond(sm, { session: "test-id", message: "Go ahead", approve: true });
-    assert.equal(resumedToken, "tok-accept");
-    assert.equal(resumedApprove, true);
-    assert.equal(session.lobsterResumeToken, undefined, "token should be consumed");
-    assert.ok(result.text.includes("Lobster workflow resuming"));
   });
 
   it("consumes token and resumes Lobster when approve=true in default mode", async () => {

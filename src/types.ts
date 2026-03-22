@@ -25,7 +25,8 @@ export type SessionStatus = "starting" | "running" | "completed" | "failed" | "k
 export type KillReason = "user" | "idle-timeout" | "startup-timeout" | "shutdown" | "done" | "unknown";
 
 /** Unified permission modes exposed by tools/commands across harnesses. */
-export type PermissionMode = "default" | "plan" | "acceptEdits" | "bypassPermissions";
+export type PermissionMode = "default" | "plan" | "bypassPermissions";
+export type WorktreeStrategy = "off" | "manual" | "ask" | "delegate" | "auto-merge" | "auto-pr";
 export type CodexApprovalPolicy = "never" | "on-request";
 export type ReasoningEffort = "low" | "medium" | "high";
 
@@ -58,8 +59,10 @@ export interface SessionConfig {
   multiTurn?: boolean;
   /** Agent harness to use (e.g. "claude-code"). Defaults to the built-in default. */
   harness?: string;
-  /** Control git worktree behavior. true=auto-create, false=skip, undefined=auto-detect. */
-  worktree?: boolean;
+  /** Worktree merge-back strategy. undefined or "off" = no worktree. */
+  worktreeStrategy?: WorktreeStrategy;
+  /** Base branch for worktree merge/PR operations. */
+  worktreeBaseBranch?: string;
 }
 
 /** Plan-approval policy for orchestrator wake flows. */
@@ -80,6 +83,8 @@ export interface PluginConfig {
   planApproval: PlanApprovalMode;
   defaultHarness?: string;
   harnesses: Record<string, HarnessConfig>;
+  /** Default worktree strategy for new sessions when agent_launch omits worktree_strategy. */
+  defaultWorktreeStrategy?: WorktreeStrategy;
   /**
    * Deprecated global allowed-model fallback preserved during migration from the
    * pre-harness config shape. Matching remains case-insensitive substring-based.
@@ -106,6 +111,8 @@ export interface RawPluginConfig {
   defaultHarness?: string;
   allowedModels?: string[];
   harnesses?: Record<string, HarnessConfig>;
+  /** Default worktree strategy for new sessions. */
+  defaultWorktreeStrategy?: WorktreeStrategy;
 }
 
 /** Persisted session metadata retained for resume/list/output after GC/restart. */
@@ -132,6 +139,22 @@ export interface PersistedSessionInfo {
   codexApprovalPolicy?: CodexApprovalPolicy;
   /** Path to the worktree if one was created. */
   worktreePath?: string;
+  /** Branch name of the worktree. */
+  worktreeBranch?: string;
+  /** Worktree strategy used for this session. */
+  worktreeStrategy?: WorktreeStrategy;
+  /** Whether the worktree was merged back to the base branch. */
+  worktreeMerged?: boolean;
+  /** Timestamp when the worktree was merged. */
+  worktreeMergedAt?: string;
+  /** PR URL if a PR was created for this worktree. */
+  worktreePrUrl?: string;
+  /** PR number for commenting and state checks. */
+  worktreePrNumber?: number;
+  /** ISO timestamp set when "ask" or "delegate" fires and decision is pending. Cleared on merge/PR/dismiss. */
+  pendingWorktreeDecisionSince?: string;
+  /** ISO timestamp of last stale-branch reminder sent. */
+  lastWorktreeReminderAt?: string;
 }
 
 /** In-memory usage metrics shown by `agent_stats`. */

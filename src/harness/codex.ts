@@ -140,7 +140,6 @@ export class CodexHarness implements AgentHarness {
   readonly supportedPermissionModes = [
     "default",
     "plan",
-    "acceptEdits",
     "bypassPermissions",
   ] as const;
 

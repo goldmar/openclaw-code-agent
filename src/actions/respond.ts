@@ -132,7 +132,6 @@ function handleLobsterToken(
   session.lobsterResumeToken = undefined;
 
   const canEscalate = session.pendingPlanApproval
-    || session.currentPermissionMode === "acceptEdits"
     || session.currentPermissionMode === "default";
   if (params.approve && canEscalate) {
     sm.resumeLobsterApproval(lobsterToken, true).catch((err: unknown) => {
@@ -218,7 +217,7 @@ export async function executeRespond(
         return invalidApprovalResult;
       }
       session.switchPermissionMode("bypassPermissions");
-    } else if (params.approve && (session.currentPermissionMode === "acceptEdits" || session.currentPermissionMode === "default")) {
+    } else if (params.approve && session.currentPermissionMode === "default") {
       // Non-plan mode escalation — switch to bypassPermissions
       session.switchPermissionMode("bypassPermissions");
     } else if (params.approve && session.currentPermissionMode === "bypassPermissions") {

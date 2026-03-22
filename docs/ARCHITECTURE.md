@@ -15,8 +15,9 @@ User (Telegram/Discord) → OpenClaw Gateway → Agent → Plugin Tools → Codi
 ## Core Components
 
 ### 1. Plugin Entry (`index.ts`)
-- Registers 6 tools, 7 commands, and 1 service
+- Registers 9 tools, 7 commands, and 1 service
 - Creates SessionManager during service start
+- Runs startup orphan worktree cleanup on start
 - Starts periodic runtime/persistence cleanup
 
 ### 2. SessionManager (`src/session-manager.ts`)
@@ -48,7 +49,7 @@ User (Telegram/Discord) → OpenClaw Gateway → Agent → Plugin Tools → Codi
   - Resume via `codex.resumeThread(<session-id>, options)`
 - Registry: `registerHarness()` / `getHarness(name)` / `getDefaultHarness()` reads `defaultHarness` config (default: `"claude-code"`)
 - Permission mode mapping:
-  - Claude Code uses SDK permission modes (`default` / `plan` / `acceptEdits` / `bypassPermissions`)
+  - Claude Code uses SDK permission modes (`default` / `plan` / `bypassPermissions`)
   - Codex always uses SDK thread option `sandboxMode: "danger-full-access"` and defaults to `approvalPolicy: "on-request"` unless plugin config sets `codexApprovalPolicy: "never"`; `plan` is implemented as a soft first-turn planning prompt and is not surfaced as plan state in the session API/UI
 
 ### 3. Session (`src/session.ts`)
@@ -76,6 +77,12 @@ User (Telegram/Discord) → OpenClaw Gateway → Agent → Plugin Tools → Codi
 - `src/session-store.ts` — persisted session/index storage abstraction
 - `src/session-metrics.ts` — metrics aggregation abstraction
 - `src/wake-dispatcher.ts` — wake delivery + retry abstraction
+- `src/worktree.ts` — git worktree lifecycle management and merge-back utilities
+  - Atomic mkdir race fix with retry + hex suffix (C1)
+  - Branch collision handling - reuse existing vs create new (C2)
+  - Lifecycle fixes: space check, orphan cleanup, fallback removal
+  - Merge-back utilities: getBranchName, hasCommitsAhead, getDiffSummary, pushBranch, mergeBranch, createPR, deleteBranch
+  - All git operations use CLI exclusively (no .git file parsing)
 - `src/application/*` — shared app-layer logic used by both tools and commands to keep output/kill/list behavior in sync, including merged active+persisted session listing
   - Listing merge dedups by internal session ID (not name) to avoid name-collision loss
 

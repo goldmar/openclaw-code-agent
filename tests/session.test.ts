@@ -263,9 +263,9 @@ describe("Session.phase", () => {
     assert.equal(session.phase, "implementing");
   });
 
-  it("returns 'implementing' when permission mode is acceptEdits", () => {
+  it("returns 'implementing' when permission mode is bypassPermissions", () => {
     session.transition("running");
-    session.currentPermissionMode = "acceptEdits";
+    session.currentPermissionMode = "bypassPermissions";
     assert.equal(session.phase, "implementing");
   });
 

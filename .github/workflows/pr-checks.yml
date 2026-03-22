@@ -1,0 +1,160 @@
+name: PR Checks
+
+on:
+  pull_request:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  size-check:
+    name: Bundle Size Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm run build
+
+      - name: Check bundle size and comment on PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+
+            const distFile = 'dist/index.js';
+            const maxSizeBytes = 500 * 1024; // 500 KB
+
+            if (!fs.existsSync(distFile)) {
+              core.setFailed(`Build artifact not found: ${distFile}`);
+              return;
+            }
+
+            const sizeBytes = fs.statSync(distFile).size;
+            const sizeKb = (sizeBytes / 1024).toFixed(1);
+            const overLimit = sizeBytes > maxSizeBytes;
+            const status = overLimit ? '❌ EXCEEDS LIMIT' : '✅ Within limit';
+
+            const body = [
+              '## Bundle Size Report',
+              '',
+              '| File | Size | Limit | Status |',
+              '|------|------|-------|--------|',
+              `| \`dist/index.js\` | ${sizeKb} KB | 500 KB | ${status} |`,
+              '',
+              overLimit
+                ? '> ⚠️ **Bundle exceeds the 500 KB limit.** Please reduce bundle size before merging.'
+                : '> Bundle is within the 500 KB limit.',
+            ].join('\n');
+
+            // Update existing bot comment rather than posting a new one each run
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const existing = comments.find(
+              c => c.user.login === 'github-actions[bot]' && c.body.includes('## Bundle Size Report')
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+
+            if (overLimit) {
+              core.setFailed(`Bundle size ${sizeKb} KB exceeds the 500 KB limit.`);
+            }
+
+  lockfile-check:
+    name: Lockfile Integrity Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: pnpm
+
+      - name: Verify lockfile is in sync
+        id: lockfile
+        run: pnpm install --frozen-lockfile
+        continue-on-error: true
+
+      - name: Comment on PR if lockfile is out of sync
+        if: steps.lockfile.outcome == 'failure'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = [
+              '## ⚠️ Lockfile Out of Sync',
+              '',
+              'The `pnpm-lock.yaml` file is out of sync with `package.json`.',
+              '',
+              'This happens when `package.json` is updated but the lockfile is not regenerated.',
+              '',
+              '**To fix, run locally:**',
+              '```bash',
+              'pnpm install',
+              'git add pnpm-lock.yaml',
+              'git commit -m "chore: update pnpm lockfile"',
+              '```',
+              '',
+              '> Always commit `pnpm-lock.yaml` alongside any changes to `package.json`.',
+            ].join('\n');
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+
+      - name: Fail if lockfile was out of sync
+        if: steps.lockfile.outcome == 'failure'
+        run: |
+          echo "ERR_PNPM_OUTDATED_LOCKFILE: pnpm-lock.yaml is out of sync with package.json."
+          echo "Run 'pnpm install' locally and commit the updated lockfile."
+          exit 1

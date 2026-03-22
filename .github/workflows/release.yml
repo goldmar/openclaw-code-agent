@@ -1,0 +1,117 @@
+name: Release
+
+# Triggered by a version tag push (e.g. v2.3.2) or manually via workflow_dispatch.
+#
+# SETUP REQUIRED (one-time, on npmjs.com):
+#   1. Go to npmjs.com → package "openclaw-code-agent" → Settings → Trusted Publishers
+#   2. Click "GitHub Actions" and configure:
+#      - Organization/user: goldmar
+#      - Repository: openclaw-code-agent
+#      - Workflow filename: release.yml
+#   No secrets or tokens needed — OIDC handles authentication automatically.
+#   Requires: npm CLI 11.5.1+ (bundled with Node 22.14.0+)
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g. 1.2.3 — no leading v)'
+        required: true
+        type: string
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write  # required to create GitHub releases
+  id-token: write  # required for npm Trusted Publishing (OIDC)
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # full history so CHANGELOG extraction works
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # ── Full CI gate ──────────────────────────────────────────────────────────
+
+      - name: Typecheck
+        run: pnpm run typecheck
+
+      - name: Build
+        run: pnpm run build
+
+      - name: Test
+        run: pnpm run test
+
+      # ── Resolve version ───────────────────────────────────────────────────────
+
+      - name: Resolve version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+            echo "tag=v${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            TAG="${GITHUB_REF_NAME}"
+            echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+            echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ── Publish to npm ────────────────────────────────────────────────────────
+
+      - name: Publish to npm
+        run: npm publish --access public --provenance
+
+      # ── Create GitHub release ─────────────────────────────────────────────────
+
+      - name: Extract CHANGELOG entry for this version
+        id: changelog
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          # Extract the section between this version heading and the next one
+          NOTES=$(awk "/^## \[?${VERSION}\]?/{found=1; next} found && /^## /{exit} found{print}" CHANGELOG.md)
+          if [ -z "$NOTES" ]; then
+            NOTES="See [CHANGELOG.md](./CHANGELOG.md) for details."
+          fi
+          echo "$NOTES" > /tmp/release-notes.md
+
+      - name: Create GitHub Release
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const tag = '${{ steps.version.outputs.tag }}';
+            const version = '${{ steps.version.outputs.version }}';
+            const notes = fs.readFileSync('/tmp/release-notes.md', 'utf8').trim();
+
+            await github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: tag,
+              name: `v${version}`,
+              body: notes || `Release ${tag}`,
+              draft: false,
+              prerelease: tag.includes('-'),
+            });

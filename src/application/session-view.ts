@@ -46,6 +46,13 @@ interface SessionListingItem {
   harnessSessionId?: string;
   originChannel?: string;
   originThreadId?: string | number;
+  worktreePath?: string;
+  worktreeBranch?: string;
+  worktreeStrategy?: string;
+  originalWorkdir?: string;
+  worktreeMerged?: boolean;
+  worktreeMergedAt?: string;
+  worktreePrUrl?: string;
 }
 
 export interface SessionListingOptions {
@@ -201,10 +208,26 @@ function mergeActiveAndPersistedSessions(active: Session[], persisted: Persisted
       harnessSessionId: p.harnessSessionId,
       originChannel: p.originChannel,
       originThreadId: p.originThreadId,
+      worktreePath: p.worktreePath,
+      worktreeBranch: p.worktreeBranch,
+      worktreeStrategy: p.worktreeStrategy,
+      worktreeMerged: p.worktreeMerged,
+      worktreeMergedAt: p.worktreeMergedAt,
+      worktreePrUrl: p.worktreePrUrl,
     });
   }
 
   for (const session of active) {
+    // F1: If worktreePath is set, extract branch name and show original repo
+    let worktreeBranch: string | undefined;
+    if (session.worktreePath && session.originalWorkdir) {
+      // Extract branch from worktreePath
+      const branchMatch = session.worktreePath.match(/openclaw-worktree-(.+)$/);
+      if (branchMatch) {
+        worktreeBranch = `agent/${branchMatch[1]}`;
+      }
+    }
+
     merged.set(session.id, {
       id: session.id,
       name: session.name,
@@ -213,7 +236,7 @@ function mergeActiveAndPersistedSessions(active: Session[], persisted: Persisted
       completedAt: session.completedAt,
       duration: session.duration,
       prompt: session.prompt,
-      workdir: session.workdir,
+      workdir: session.originalWorkdir ?? session.workdir,
       costUsd: session.costUsd,
       multiTurn: session.multiTurn,
       phase: session.phase,
@@ -221,6 +244,12 @@ function mergeActiveAndPersistedSessions(active: Session[], persisted: Persisted
       harnessSessionId: session.harnessSessionId,
       originChannel: session.originChannel,
       originThreadId: session.originThreadId,
+      worktreePath: session.worktreePath,
+      worktreeBranch,
+      worktreeStrategy: session.worktreeStrategy,
+      worktreeMerged: undefined, // Active sessions don't have merge status yet
+      worktreeMergedAt: undefined,
+      worktreePrUrl: undefined,
     });
   }
 

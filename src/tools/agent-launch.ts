@@ -27,9 +27,10 @@ interface AgentLaunchParams {
   resume_session_id?: string;
   fork_session?: boolean;
   multi_turn_disabled?: boolean;
-  permission_mode?: "default" | "plan" | "acceptEdits" | "bypassPermissions";
+  permission_mode?: "default" | "plan" | "bypassPermissions";
   harness?: string;
-  worktree?: boolean;
+  worktree_strategy?: "off" | "manual" | "ask" | "auto-merge" | "auto-pr";
+  worktree_base_branch?: string;
   agentId?: string;
 }
 
@@ -92,15 +93,21 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
       ),
       permission_mode: Type.Optional(
         Type.Union(
-          [Type.Literal("default"), Type.Literal("plan"), Type.Literal("acceptEdits"), Type.Literal("bypassPermissions")],
-          { description: "Permission mode for the session. This is the plugin's orchestration mode, not the Codex SDK approval policy. Defaults to plugin config (plan by default)." },
+          [Type.Literal("default"), Type.Literal("plan"), Type.Literal("bypassPermissions")],
+          { description: "Permission mode: 'default' (standard prompts), 'plan' (present plan first, wait for approval), 'bypassPermissions' (fully autonomous execution). Defaults to plugin config ('plan' by default)." },
         ),
       ),
       harness: Type.Optional(
         Type.String({ description: "Agent harness to use (e.g. 'claude-code'). Defaults to 'claude-code'." }),
       ),
-      worktree: Type.Optional(
-        Type.Boolean({ description: "Control git worktree behavior. true=auto-create worktree, false=skip. Defaults to auto-detect (creates worktree if workdir is a git repo with a remote)." }),
+      worktree_strategy: Type.Optional(
+        Type.Union(
+          [Type.Literal("off"), Type.Literal("manual"), Type.Literal("ask"), Type.Literal("auto-merge"), Type.Literal("auto-pr")],
+          { description: "Worktree strategy: 'off' (no worktree), 'manual' (create worktree but no auto merge-back), 'ask' (prompt user with options), 'auto-merge' (merge automatically), 'auto-pr' (create PR automatically). Defaults to 'off'." },
+        ),
+      ),
+      worktree_base_branch: Type.Optional(
+        Type.String({ description: "Base branch for worktree merge/PR operations (default: auto-detected or 'main')" }),
       ),
     }),
     async execute(_id: string, params: unknown) {
@@ -216,7 +223,8 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
           originAgentId: ctx.agentId || undefined,
           originSessionKey,
           harness,
-          worktree: params.worktree,
+          worktreeStrategy: params.worktree_strategy,
+          worktreeBaseBranch: params.worktree_base_branch,
         });
 
         const promptSummary = params.prompt.length > 80 ? params.prompt.slice(0, 80) + "..." : params.prompt;

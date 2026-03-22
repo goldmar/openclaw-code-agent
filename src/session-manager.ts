@@ -11,7 +11,23 @@ import { SessionStore } from "./session-store";
 import { SessionMetricsRecorder } from "./session-metrics";
 import { WakeDispatcher, type SessionNotificationRequest } from "./wake-dispatcher";
 import { looksLikeWaitingForUser } from "./waiting-detector";
-import { isGitRepoWithRemote, createWorktree, removeWorktree } from "./worktree";
+import {
+  isGitRepoWithRemote,
+  createWorktree,
+  removeWorktree,
+  hasEnoughWorktreeSpace,
+  getBranchName,
+  hasCommitsAhead,
+  getDiffSummary,
+  pushBranch,
+  mergeBranch,
+  createPR,
+  isGitHubCLIAvailable,
+  deleteBranch,
+  detectDefaultBranch,
+  syncWorktreePR,
+  commentOnPR,
+} from "./worktree";
 
 /**
  * Resolve the plan-approval workflow path for both source and bundled layouts.
@@ -156,17 +172,63 @@ export class SessionManager {
       console.warn(`[SessionManager] Name conflict: "${baseName}" → "${name}" (active session with same name exists)`);
     }
 
+    // D1: Resume context — if resuming and worktree info exists, try to recreate or warn
+    // F10: Restore worktreeStrategy from persisted record if not explicitly provided
+    if (config.resumeSessionId) {
+      const persistedSession = this.store.getPersistedSession(config.resumeSessionId);
+      if (persistedSession) {
+        // Restore strategy if not explicitly overridden
+        if (!config.worktreeStrategy && persistedSession.worktreeStrategy) {
+          config.worktreeStrategy = persistedSession.worktreeStrategy;
+        }
+
+        if (persistedSession.worktreePath) {
+          const worktreeExists = existsSync(persistedSession.worktreePath);
+          if (worktreeExists) {
+            console.info(`[SessionManager] Resuming with existing worktree: ${persistedSession.worktreePath}`);
+            config.workdir = persistedSession.worktreePath;
+          } else if (persistedSession.worktreeBranch && persistedSession.workdir) {
+            // Try to recreate worktree from branch
+            try {
+              const repoDir = persistedSession.workdir;
+              const newWorktreePath = createWorktree(repoDir, persistedSession.worktreeBranch.replace(/^agent\//, ""));
+              console.info(`[SessionManager] Recreated worktree from branch ${persistedSession.worktreeBranch}: ${newWorktreePath}`);
+              config.workdir = newWorktreePath;
+            } catch (err) {
+              console.warn(`[SessionManager] Failed to recreate worktree for resume: ${err instanceof Error ? err.message : String(err)}, using original workdir`);
+              config.workdir = persistedSession.workdir;
+            }
+          } else {
+            console.warn(`[SessionManager] Worktree ${persistedSession.worktreePath} no longer exists and cannot be recreated, using original workdir`);
+            config.workdir = persistedSession.workdir;
+          }
+        }
+      }
+    }
+
     // Worktree auto-creation: create a git worktree so the main checkout stays clean.
+    // Strategy: off (or undefined) = no worktree, any other value = create worktree
+    // Skip entirely for resume — the resume block above already restored the correct workdir.
     let actualWorkdir = config.workdir;
     let worktreePath: string | undefined;
-    const shouldWorktree = config.worktree !== false; // default true unless explicitly false
+    let worktreeCreationFailed = false;
+    const strategy = config.worktreeStrategy ?? pluginConfig.defaultWorktreeStrategy;
+    // Bake effective strategy back into config so Session and handleWorktreeStrategy see it
+    if (strategy && !config.worktreeStrategy) config.worktreeStrategy = strategy;
+    const shouldWorktree = !config.resumeSessionId && strategy && strategy !== "off";
     if (shouldWorktree && isGitRepoWithRemote(config.workdir)) {
-      try {
-        worktreePath = createWorktree(config.workdir, name);
-        actualWorkdir = worktreePath;
-        console.log(`[SessionManager] Created worktree at ${worktreePath}`);
-      } catch (err) {
-        console.warn(`[SessionManager] Failed to create worktree: ${err instanceof Error ? err.message : String(err)}, using original workdir`);
+      // A3: Check space before creating worktree
+      if (!hasEnoughWorktreeSpace()) {
+        console.warn(`[SessionManager] Insufficient space for worktree (< 100MB), skipping worktree creation`);
+      } else {
+        try {
+          worktreePath = createWorktree(config.workdir, name);
+          actualWorkdir = worktreePath;
+          console.log(`[SessionManager] Created worktree at ${worktreePath}`);
+        } catch (err) {
+          worktreeCreationFailed = true;
+          console.warn(`[SessionManager] Failed to create worktree: ${err instanceof Error ? err.message : String(err)}, using original workdir`);
+        }
       }
     }
 
@@ -183,7 +245,8 @@ export class SessionManager {
       if (newStatus === "running" && session.harnessSessionId) {
         this.store.markRunning(session);
       } else if (TERMINAL_STATUSES.has(newStatus)) {
-        this.onSessionTerminal(session);
+        // Fire async handler without awaiting to avoid blocking event loop
+        void this.onSessionTerminal(session);
       }
     });
 
@@ -202,6 +265,15 @@ export class SessionManager {
         : session.workdir;
       const launchText = `🚀 [${session.name}] Launched | ${workdirLabel} | ${session.model ?? "default"}`;
       this.notifySession(session, launchText, "launch");
+    }
+
+    // F2: Send warning notification if worktree creation was requested but failed
+    if (worktreeCreationFailed) {
+      const warningText = `⚠️ [${session.name}] Worktree creation failed — session running in original workdir`;
+      this.wakeDispatcher.dispatchSessionNotification(session, {
+        label: "worktree-creation-failed",
+        userMessage: warningText,
+      });
     }
 
     return session;
@@ -255,9 +327,410 @@ export class SessionManager {
     return `Session ${session.name} [${session.id}] failed to start: ${detail}`;
   }
 
-  private onSessionTerminal(session: Session): void {
+  /**
+   * Handle worktree merge-back strategy when a session with a worktree terminates.
+   * Called from onSessionTerminal BEFORE worktree cleanup.
+   */
+  private async handleWorktreeStrategy(session: Session): Promise<void> {
+    // Only handle completed sessions (not failed/killed)
+    if (session.status !== "completed") return;
+
+    const strategy = session.worktreeStrategy;
+    // Skip merge-back for "off", "manual", or undefined
+    if (!strategy || strategy === "off" || strategy === "manual") return;
+
+    const repoDir = session.originalWorkdir!;
+    const worktreePath = session.worktreePath!;
+    const branchName = getBranchName(worktreePath);
+    if (!branchName) {
+      console.warn(`[SessionManager] Cannot determine branch name for worktree ${worktreePath}`);
+      return;
+    }
+
+    const baseBranch = session.worktreeBaseBranch ?? detectDefaultBranch(repoDir);
+
+    // Check if there are any commits ahead
+    if (!hasCommitsAhead(repoDir, branchName, baseBranch)) {
+      console.info(`[SessionManager] No commits ahead of ${baseBranch} for ${branchName}, skipping merge-back`);
+      return;
+    }
+
+    const diffSummary = getDiffSummary(repoDir, branchName, baseBranch);
+    if (!diffSummary) {
+      console.warn(`[SessionManager] Failed to get diff summary for ${branchName}, skipping merge-back`);
+      return;
+    }
+
+    // Build notification message
+    const commitMessages = diffSummary.commitMessages
+      .slice(0, 5)
+      .map((c) => `• ${c.hash} ${c.message} (${c.author})`)
+      .join("\n");
+    const moreCommits = diffSummary.commits > 5 ? `\n...and ${diffSummary.commits - 5} more` : "";
+    const notificationBody = [
+      `🔀 Session ${session.name} completed with changes`,
+      ``,
+      `Branch: ${branchName} → ${baseBranch}`,
+      `Commits: ${diffSummary.commits}  |  Files: ${diffSummary.filesChanged}  |  +${diffSummary.insertions} / -${diffSummary.deletions}`,
+      ``,
+      commitMessages + moreCommits,
+    ].join("\n");
+
+    if (strategy === "ask") {
+      // Push branch first (best-effort)
+      pushBranch(repoDir, branchName);
+
+      const askCommitLines = diffSummary.commitMessages
+        .slice(0, 5)
+        .map((c) => `• ${c.hash} ${c.message} (${c.author})`);
+      const askMoreNote = diffSummary.commits > 5 ? `...and ${diffSummary.commits - 5} more` : "";
+
+      const userNotifyMessage = [
+        `🔀 Session \`${session.name}\` completed with changes — decision required`,
+        ``,
+        `Branch: \`${branchName}\` → \`${baseBranch}\``,
+        `Commits: ${diffSummary.commits} | Files: ${diffSummary.filesChanged} | +${diffSummary.insertions} / -${diffSummary.deletions}`,
+      ].join("\n");
+
+      const wakeDecisionMessage = [
+        `[WORKTREE DECISION REQUIRED] Session "${session.name}" completed with changes.`,
+        ``,
+        `Branch: ${branchName} → ${baseBranch}`,
+        `Commits: ${diffSummary.commits} | Files: ${diffSummary.filesChanged} | +${diffSummary.insertions} / -${diffSummary.deletions}`,
+        ``,
+        ...askCommitLines,
+        ...(askMoreNote ? [askMoreNote] : []),
+        ``,
+        `Present this to the user and wait for their choice:`,
+        `  1. Merge: agent_merge(session="${session.name}", base_branch="${baseBranch}")`,
+        `  2. Open PR: agent_pr(session="${session.name}")`,
+        `  3. Dismiss: agent_worktree_cleanup(workdir="${repoDir}")`,
+        ``,
+        `Wait for user reply before acting.`,
+      ].join("\n");
+
+      const askButtons: Array<Array<{ label: string; callbackData: string }>> = [[
+        { label: "✅ Merge", callbackData: "merge" },
+        { label: "🔀 Open PR", callbackData: "pr" },
+        { label: "❌ Dismiss", callbackData: "dismiss" },
+      ]];
+
+      this.wakeDispatcher.dispatchSessionNotification(session, {
+        label: "worktree-merge-ask",
+        userMessage: userNotifyMessage,
+        wakeMessage: wakeDecisionMessage,
+        notifyUser: "always",
+        buttons: askButtons,
+      });
+
+      // Stamp pending decision timestamp
+      if (session.harnessSessionId) {
+        this.updatePersistedSession(session.harnessSessionId, {
+          pendingWorktreeDecisionSince: new Date().toISOString(),
+        });
+      }
+      return;
+    }
+
+    if (strategy === "delegate") {
+      // Push branch first (best-effort)
+      pushBranch(repoDir, branchName);
+
+      const delegateCommitLines = diffSummary.commitMessages
+        .slice(0, 5)
+        .map((c) => `• ${c.hash} ${c.message} (${c.author})`);
+      const delegateMoreNote = diffSummary.commits > 5 ? `...and ${diffSummary.commits - 5} more` : "";
+
+      const delegateUserMessage = `🤖 Delegating merge decision for \`${branchName}\` to orchestrator`;
+
+      const promptSnippet = session.prompt ? session.prompt.slice(0, 500) : "(no prompt)";
+
+      const delegateWakeMessage = [
+        `[DELEGATED WORKTREE DECISION] Session "${session.name}" completed with changes.`,
+        ``,
+        `Branch: ${branchName} → ${baseBranch}`,
+        `Commits: ${diffSummary.commits} | Files: ${diffSummary.filesChanged} | +${diffSummary.insertions} / -${diffSummary.deletions}`,
+        ``,
+        ...delegateCommitLines,
+        ...(delegateMoreNote ? [delegateMoreNote] : []),
+        ``,
+        `Original task prompt (first 500 chars):`,
+        promptSnippet,
+        ``,
+        `━━━ DECISION REQUIRED ━━━`,
+        `You are the delegated decision-maker for this worktree branch.`,
+        ``,
+        `MERGE if:`,
+        `  - Changes match the original task scope`,
+        `  - No breaking changes or architectural concerns`,
+        `  → agent_merge(session="${session.name}", base_branch="${baseBranch}")`,
+        ``,
+        `OPEN PR if:`,
+        `  - Changes are non-trivial and benefit from review`,
+        `  - User has previously requested PRs for this kind of work`,
+        `  - You are unsure — PRs are the safer default`,
+        `  → agent_pr(session="${session.name}")`,
+        ``,
+        `ESCALATE to user if:`,
+        `  - Scope is ambiguous or changes are risky`,
+        `  - User has standing preferences that apply here`,
+        ``,
+        `Always notify the user briefly with what you decided and why.`,
+      ].join("\n");
+
+      this.wakeDispatcher.dispatchSessionNotification(session, {
+        label: "worktree-delegate",
+        userMessage: delegateUserMessage,
+        wakeMessage: delegateWakeMessage,
+        notifyUser: "always",
+      });
+
+      // Stamp pending decision timestamp
+      if (session.harnessSessionId) {
+        this.updatePersistedSession(session.harnessSessionId, {
+          pendingWorktreeDecisionSince: new Date().toISOString(),
+        });
+      }
+      return;
+    }
+
+    if (strategy === "auto-merge") {
+      // Push branch first
+      if (!pushBranch(repoDir, branchName)) {
+        this.wakeDispatcher.dispatchSessionNotification(session, {
+          label: "worktree-merge-push-failed",
+          userMessage: `❌ [${session.name}] Failed to push ${branchName} — cannot auto-merge`,
+        });
+        return;
+      }
+
+      // Attempt merge
+      const mergeResult = mergeBranch(repoDir, branchName, baseBranch);
+
+      if (mergeResult.success) {
+        // Push base branch
+        if (!pushBranch(repoDir, baseBranch)) {
+          this.wakeDispatcher.dispatchSessionNotification(session, {
+            label: "worktree-merge-base-push-failed",
+            userMessage: `⚠️ [${session.name}] Merged ${branchName} → ${baseBranch} locally, but failed to push ${baseBranch}`,
+          });
+          return;
+        }
+
+        // Delete branch
+        deleteBranch(repoDir, branchName);
+
+        // Persist merge status
+        if (session.harnessSessionId) {
+          this.updatePersistedSession(session.harnessSessionId, {
+            worktreeMerged: true,
+            worktreeMergedAt: new Date().toISOString(),
+          });
+        }
+
+        this.wakeDispatcher.dispatchSessionNotification(session, {
+          label: "worktree-merge-success",
+          userMessage: `✅ [${session.name}] Merged and pushed ${branchName} → ${baseBranch}. Branch cleaned up.`,
+        });
+      } else if (mergeResult.conflictFiles && mergeResult.conflictFiles.length > 0) {
+        // Spawn conflict resolver session
+        const conflictPrompt = [
+          `Resolve merge conflicts in the following files and commit the resolution:`,
+          ``,
+          ...mergeResult.conflictFiles.map((f) => `- ${f}`),
+          ``,
+          `After resolving, commit with message: "Resolve merge conflicts from ${branchName}"`,
+        ].join("\n");
+
+        try {
+          this.spawn({
+            prompt: conflictPrompt,
+            workdir: repoDir,
+            name: `${session.name}-conflict-resolver`,
+            harness: "claude-code",
+            permissionMode: "bypassPermissions",
+            multiTurn: true,
+          });
+
+          this.wakeDispatcher.dispatchSessionNotification(session, {
+            label: "worktree-merge-conflict",
+            userMessage: `⚠️ [${session.name}] Merge conflicts in ${mergeResult.conflictFiles.length} file(s) — spawned conflict resolver session`,
+          });
+        } catch (err) {
+          this.wakeDispatcher.dispatchSessionNotification(session, {
+            label: "worktree-merge-conflict-spawn-failed",
+            userMessage: `❌ [${session.name}] Merge conflicts detected, but failed to spawn resolver: ${err instanceof Error ? err.message : String(err)}`,
+          });
+        }
+      } else {
+        this.wakeDispatcher.dispatchSessionNotification(session, {
+          label: "worktree-merge-error",
+          userMessage: `❌ [${session.name}] Merge failed: ${mergeResult.error ?? "unknown error"}`,
+        });
+      }
+      return;
+    }
+
+    if (strategy === "auto-pr") {
+      // Check if gh CLI is available
+      if (!isGitHubCLIAvailable()) {
+        console.warn(`[SessionManager] GitHub CLI not available, falling back to 'ask' strategy`);
+        // Fall back to ask
+        const askMessage = [
+          notificationBody,
+          ``,
+          `(GitHub CLI not available for auto-PR)`,
+          ``,
+          `Reply with one of the following:`,
+          `1. Merge to ${baseBranch}`,
+          `2. Dismiss`,
+        ].join("\n");
+
+        this.wakeDispatcher.dispatchSessionNotification(session, {
+          label: "worktree-pr-fallback-ask",
+          userMessage: askMessage,
+        });
+        return;
+      }
+
+      // Push branch first (required for PR operations)
+      if (!pushBranch(repoDir, branchName)) {
+        this.wakeDispatcher.dispatchSessionNotification(session, {
+          label: "worktree-pr-push-failed",
+          userMessage: `❌ [${session.name}] Failed to push ${branchName} — cannot create/update PR`,
+        });
+        return;
+      }
+
+      // Sync PR state from GitHub
+      const prStatus = syncWorktreePR(repoDir, branchName);
+
+      // PR Lifecycle Handling for auto-pr
+      if (prStatus.exists && prStatus.state === "open") {
+        // Case: Open PR exists — update with summary comment
+        if (diffSummary && diffSummary.commits > 0) {
+          const commentBody = [
+            `🔄 **New commits pushed**`,
+            ``,
+            `${diffSummary.commits} commits (+${diffSummary.insertions} / -${diffSummary.deletions})`,
+            ``,
+            `---`,
+            `🤖 [openclaw-code-agent](https://github.com/goldmar/openclaw-code-agent)`,
+          ].join("\n");
+
+          const commented = commentOnPR(repoDir, prStatus.number!, commentBody);
+
+          if (session.harnessSessionId) {
+            this.updatePersistedSession(session.harnessSessionId, {
+              worktreePrUrl: prStatus.url,
+              worktreePrNumber: prStatus.number,
+            });
+          }
+
+          if (commented) {
+            this.wakeDispatcher.dispatchSessionNotification(session, {
+              label: "worktree-pr-updated",
+              userMessage: `✅ [${session.name}] PR updated: ${prStatus.url} (+${diffSummary.commits} commits)`,
+            });
+          } else {
+            this.wakeDispatcher.dispatchSessionNotification(session, {
+              label: "worktree-pr-updated-no-comment",
+              userMessage: `⚠️ [${session.name}] Pushed to ${prStatus.url} (comment failed)`,
+            });
+          }
+        } else {
+          // No new commits
+          if (session.harnessSessionId) {
+            this.updatePersistedSession(session.harnessSessionId, {
+              worktreePrUrl: prStatus.url,
+              worktreePrNumber: prStatus.number,
+            });
+          }
+          this.wakeDispatcher.dispatchSessionNotification(session, {
+            label: "worktree-pr-up-to-date",
+            userMessage: `ℹ️ [${session.name}] PR up to date: ${prStatus.url}`,
+          });
+        }
+        return;
+      } else if (prStatus.exists && prStatus.state === "merged") {
+        // Case: PR was merged
+        if (session.harnessSessionId) {
+          this.updatePersistedSession(session.harnessSessionId, {
+            worktreePrUrl: prStatus.url,
+            worktreePrNumber: prStatus.number,
+          });
+        }
+        this.wakeDispatcher.dispatchSessionNotification(session, {
+          label: "worktree-pr-merged",
+          userMessage: `✅ [${session.name}] PR already merged: ${prStatus.url}`,
+        });
+        return;
+      } else if (prStatus.exists && prStatus.state === "closed") {
+        // Case: PR was closed without merging
+        if (session.harnessSessionId) {
+          this.updatePersistedSession(session.harnessSessionId, {
+            worktreePrUrl: prStatus.url,
+            worktreePrNumber: prStatus.number,
+          });
+        }
+        this.wakeDispatcher.dispatchSessionNotification(session, {
+          label: "worktree-pr-closed",
+          userMessage: `⚠️ [${session.name}] PR was closed without merging: ${prStatus.url}`,
+        });
+        return;
+      } else {
+        // Case: No PR exists — create new PR
+        const prTitle = `[openclaw-code-agent] ${session.name}`;
+        const prBody = [
+          `Automated changes from OpenClaw Code Agent session: ${session.name}`,
+          ``,
+          `## Summary`,
+          `${diffSummary.commits} commits, ${diffSummary.filesChanged} files changed (+${diffSummary.insertions} / -${diffSummary.deletions})`,
+          ``,
+          `## Commits`,
+          commitMessages + moreCommits,
+          ``,
+          `---`,
+          `🤖 Generated with [openclaw-code-agent](https://github.com/goldmar/openclaw-code-agent)`,
+        ].join("\n");
+
+        const prResult = createPR(repoDir, branchName, baseBranch, prTitle, prBody);
+
+        if (prResult.success && prResult.prUrl) {
+          // Sync again to get PR number
+          const newPrStatus = syncWorktreePR(repoDir, branchName);
+
+          // Persist PR URL and number
+          if (session.harnessSessionId) {
+            this.updatePersistedSession(session.harnessSessionId, {
+              worktreePrUrl: prResult.prUrl,
+              worktreePrNumber: newPrStatus.number,
+            });
+          }
+
+          this.wakeDispatcher.dispatchSessionNotification(session, {
+            label: "worktree-pr-success",
+            userMessage: `🔀 [${session.name}] PR created: ${prResult.prUrl}`,
+          });
+        } else {
+          this.wakeDispatcher.dispatchSessionNotification(session, {
+            label: "worktree-pr-error",
+            userMessage: `❌ [${session.name}] Failed to create PR: ${prResult.error ?? "unknown error"}`,
+          });
+        }
+        return;
+      }
+    }
+  }
+
+  private async onSessionTerminal(session: Session): Promise<void> {
     this.persistSession(session);
     this.lastWaitingEventTimestamps.delete(session.id);
+
+    // Handle worktree merge-back strategy BEFORE cleanup
+    if (session.worktreePath && session.originalWorkdir) {
+      await this.handleWorktreeStrategy(session);
+    }
 
     // Best-effort worktree cleanup — remove the worktree but keep the branch.
     if (session.worktreePath && session.originalWorkdir) {
@@ -747,14 +1220,80 @@ export class SessionManager {
     return this.store.getPersistedSession(ref);
   }
 
+  /** Update fields on a persisted session record and flush to disk. */
+  updatePersistedSession(ref: string, patch: Partial<PersistedSessionInfo>): boolean {
+    const existing = this.store.getPersistedSession(ref);
+    if (!existing) return false;
+    Object.assign(existing, patch);
+    this.store.saveIndex();
+    return true;
+  }
+
   /** Return persisted sessions newest-first. */
   listPersistedSessions(): PersistedSessionInfo[] {
     return this.store.listPersistedSessions();
   }
 
+  /** Send daily reminders for sessions with unresolved pending worktree decisions. */
+  private remindStaleDecisions(): void {
+    const REMINDER_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24h
+    const now = Date.now();
+
+    for (const session of this.store.listPersistedSessions()) {
+      // Only sessions with pending decisions that aren't resolved
+      if (!session.pendingWorktreeDecisionSince) continue;
+      if (session.worktreeMerged || session.worktreePrUrl) continue;
+
+      const pendingMs = now - new Date(session.pendingWorktreeDecisionSince).getTime();
+      if (pendingMs < REMINDER_INTERVAL_MS) continue;
+
+      // Rate-limit: max once per 24h per session
+      if (session.lastWorktreeReminderAt) {
+        const lastReminderMs = now - new Date(session.lastWorktreeReminderAt).getTime();
+        if (lastReminderMs < REMINDER_INTERVAL_MS) continue;
+      }
+
+      const pendingHours = Math.floor(pendingMs / (60 * 60 * 1000));
+      const reminderText = [
+        `⏰ Reminder: branch \`${session.worktreeBranch ?? "unknown"}\` is still waiting for a merge decision.`,
+        `Session: ${session.name} | Pending: ${pendingHours}h`,
+        ``,
+        `agent_merge(session="${session.name}") or agent_pr(session="${session.name}") or agent_worktree_cleanup() to resolve.`,
+      ].join("\n");
+
+      try {
+        this.sendReminderNotification(session, reminderText);
+      } catch (err) {
+        console.warn(`[SessionManager] Failed to send stale-decision reminder for session ${session.name}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+
+      this.updatePersistedSession(session.harnessSessionId, {
+        lastWorktreeReminderAt: new Date().toISOString(),
+      });
+    }
+  }
+
+  /** Send a notification for a persisted (not active) session using its stored origin channel. */
+  private sendReminderNotification(session: PersistedSessionInfo, text: string): void {
+    // Build a minimal routing proxy with the fields WakeDispatcher needs
+    const routingProxy = {
+      id: session.harnessSessionId,
+      originChannel: session.originChannel,
+      originThreadId: session.originThreadId,
+      originSessionKey: session.originSessionKey,
+    } as Session;
+
+    this.wakeDispatcher.dispatchSessionNotification(routingProxy, {
+      label: `worktree-stale-reminder-${session.name}`,
+      userMessage: text,
+      notifyUser: "always",
+    });
+  }
+
   /** Evict stale runtime records and enforce persisted/session-output retention limits. */
   cleanup(): void {
     const now = Date.now();
+    this.remindStaleDecisions();
     // GC only evicts terminal sessions from the runtime in-memory map.
     // Persisted entries stay in SessionStore for resume/list/output lookups.
     // "evicted from runtime cache" means removed from `this.sessions`, not lost.

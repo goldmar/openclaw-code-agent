@@ -155,6 +155,7 @@ export function setPluginConfig(config: Partial<RawPluginConfig>): void {
     defaultHarness,
     harnesses,
     allowedModels: config.allowedModels,
+    defaultWorktreeStrategy: config.defaultWorktreeStrategy,
   };
 }
 

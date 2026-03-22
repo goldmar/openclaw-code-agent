@@ -14,6 +14,8 @@ export interface SessionNotificationRequest {
   userMessage?: string;
   wakeMessage?: string;
   notifyUser?: SessionNotificationPolicy;
+  /** Telegram inline keyboard buttons. Ignored by non-Telegram channels. */
+  buttons?: Array<Array<{ label: string; callbackData: string }>>;
 }
 
 type DispatchTarget = "chat.send" | "message.send" | "system.event";
@@ -84,7 +86,7 @@ export class WakeDispatcher {
         threadId: originThreadId ?? match[2],
       };
     }
-    const discordMatch = sessionKey.match(/^agent:[^:]+:discord:(direct|dm|channel|group):([^:]+)$/i);
+    const discordMatch = sessionKey.match(/^agent:[^:]+:discord:(direct|dm|channel|group):(\d+)$/i);
     if (discordMatch?.[2]) {
       const dKind = discordMatch[1].toLowerCase();
       const dId = discordMatch[2];
@@ -195,6 +197,7 @@ export class WakeDispatcher {
     text: string,
     label: string,
     sessionId: string,
+    buttons?: Array<Array<{ label: string; callbackData: string }>>,
     onFinalFailure?: () => void,
   ): void {
     const args = [
@@ -212,6 +215,9 @@ export class WakeDispatcher {
     }
     if (route.threadId) {
       args.push("--thread-id", route.threadId);
+    }
+    if (buttons && route.channel === "telegram") {
+      args.push("--buttons", JSON.stringify(buttons));
     }
     this.executeWithRetries(args, {
       label,
@@ -243,6 +249,7 @@ export class WakeDispatcher {
     text: string,
     label: string,
     sessionId: string,
+    buttons?: Array<Array<{ label: string; callbackData: string }>>,
   ): void {
     const route = this.parseNotificationRoute(session);
     if (!route) {
@@ -250,7 +257,7 @@ export class WakeDispatcher {
       return;
     }
 
-    this.fireDirectNotificationWithRetry(route, text, `${label}-notify`, sessionId, () => {
+    this.fireDirectNotificationWithRetry(route, text, `${label}-notify`, sessionId, buttons, () => {
       this.fireSystemEventWithRetry(text, `${label}-notify-fallback`, sessionId, "notify");
     });
   }
@@ -268,16 +275,17 @@ export class WakeDispatcher {
     const notifyUser = request.notifyUser ?? (request.wakeMessage ? "on-wake-fallback" : "always");
     const userMessage = request.userMessage?.trim();
     const wakeMessage = request.wakeMessage?.trim();
+    const buttons = request.buttons;
 
     if (notifyUser === "always" && userMessage) {
-      this.sendUserNotification(session, userMessage, request.label, session.id);
+      this.sendUserNotification(session, userMessage, request.label, session.id, buttons);
     }
 
     if (!wakeMessage) return;
 
     if (!sessionKey) {
       if (notifyUser === "on-wake-fallback" && userMessage) {
-        this.sendUserNotification(session, userMessage, request.label, session.id);
+        this.sendUserNotification(session, userMessage, request.label, session.id, buttons);
       }
       this.fireSystemEventWithRetry(wakeMessage, `${request.label}-wake-system`, session.id, "wake");
       return;

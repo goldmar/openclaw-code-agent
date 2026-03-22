@@ -44,6 +44,8 @@ For the current version-pinned breakdown, see [docs/ACP-COMPARISON.md](docs/ACP-
 - **Multi-session management** — Run multiple concurrent coding agent sessions, each with a unique ID and human-readable name
 - **Plan → Execute workflow** — Claude Code sessions expose plan mode; Codex uses a soft first-turn planning prompt while staying externally in implement mode
 - **Real Codex approval policy support** — Codex sessions default to the real Codex SDK/CLI `approvalPolicy: "on-request"` and can be pinned back to `"never"` via `harnesses.codex.approvalPolicy`
+- **Git worktree isolation** — Opt-in worktree support keeps main checkout clean; automatic merge-back with configurable strategies (manual, ask, auto-merge, auto-pr)
+- **Conflict resolution** — Auto-merge conflicts spawn Claude Code conflict-resolver sessions automatically
 - **Thread-based routing** — Notifications go to the Telegram thread/topic where the session was launched
 - **Pause + auto-resume** — Non-question turn completion pauses sessions (`done`) and next `agent_respond` auto-resumes with context intact
 - **Turn-end wake signaling** — Every turn end emits a deterministic wake signal with output preview and waiting hint
@@ -58,6 +60,19 @@ For the current version-pinned breakdown, see [docs/ACP-COMPARISON.md](docs/ACP-
 - **Anti-cascade protection** — Orchestrator never launches new sessions from wake events
 - **Automatic cleanup** — Completed sessions are garbage-collected after a configurable TTL (`sessionGcAgeMinutes`, default 24h); IDs persist for resume
 - **Harness-agnostic architecture** — Pluggable `AgentHarness` interface allows adding new coding agent backends
+
+---
+
+## Compatibility
+
+| Plugin version | OpenClaw version |
+|---|---|
+| 2.3.x | >=2026.3.13 |
+| 2.4.x | >=2026.3.22 |
+
+Tested against OpenClaw v2026.3.22. The plugin uses CLI-based integration and is unaffected by OpenClaw plugin SDK surface changes.
+
+**Codex model options (v2026.3.22+):** In addition to the default `gpt-5.4`, you can configure `gpt-5.4-mini` or `gpt-5.4-nano` in `harnesses.codex.allowedModels` for lower-cost Codex sessions.
 
 ---
 
@@ -129,12 +144,16 @@ Put that in `~/.codex/config.toml`. This keeps Codex on the ChatGPT auth path an
 
 | Tool | Description | Key Parameters |
 |------|-------------|----------------|
-| `agent_launch` | Start a new coding agent session in background | `prompt`, `name`, `workdir`, `model`, `resume_session_id`, `fork_session`, `permission_mode`, `harness` |
+| `agent_launch` | Start a new coding agent session in background | `prompt`, `name`, `workdir`, `model`, `resume_session_id`, `fork_session`, `permission_mode`, `harness`, `worktree_strategy` |
 | `agent_respond` | Send a follow-up message to a running session | `session`, `message`, `interrupt`, `approve`, `userInitiated` |
 | `agent_kill` | Terminate or complete a running session | `session`, `reason` |
 | `agent_output` | Read buffered output from a session | `session`, `lines`, `full` |
 | `agent_sessions` | List recent sessions (5 by default, `full` for 24h view) | `status`, `full` |
 | `agent_stats` | Show usage metrics (counts, durations, costs) | *(none)* |
+| `agent_merge` | Merge a worktree branch back to base branch | `session`, `base_branch`, `strategy`, `push`, `delete_branch` |
+| `agent_pr` | Create or update a GitHub PR for a worktree branch (full lifecycle) | `session`, `title`, `body`, `base_branch`, `force_new` |
+| `agent_worktree_status` | Show worktree status for sessions | `session` (optional) |
+| `agent_worktree_cleanup` | Clean up merged agent/* branches | `workdir`, `base_branch`, `force`, `dry_run` |
 
 Core orchestration workflows use `agent_launch`, `agent_respond`, `agent_output`, `agent_sessions`, and `agent_kill`.
 
@@ -228,7 +247,7 @@ Set values in `~/.openclaw/openclaw.json` under `plugins.entries["openclaw-code-
 | `fallbackChannel` | `string` | — | Default notification channel when no workspace match found |
 | `maxSessions` | `number` | `20` | Maximum concurrent sessions |
 | `maxAutoResponds` | `number` | `10` | Max consecutive auto-responds before requiring user input |
-| `permissionMode` | `string` | `"plan"` | Plugin orchestration mode: `"default"` / `"plan"` / `"acceptEdits"` / `"bypassPermissions"` |
+| `permissionMode` | `string` | `"plan"` | Plugin orchestration mode: `"default"` (standard prompts) / `"plan"` (present plan first) / `"bypassPermissions"` (fully autonomous) |
 | `idleTimeoutMinutes` | `number` | `15` | Idle timeout before auto-kill |
 | `sessionGcAgeMinutes` | `number` | `1440` | TTL for completed/failed/killed runtime sessions before GC eviction |
 | `maxPersistedSessions` | `number` | `10000` | Max completed sessions kept for resume; the 24h GC TTL (`sessionGcAgeMinutes`) is the primary retention control |
@@ -242,19 +261,22 @@ Set values in `~/.openclaw/openclaw.json` under `plugins.entries["openclaw-code-
 Permission modes are shared at the plugin API, but each harness maps them differently:
 
 - **Claude Code harness**
-  - `default`, `plan`, `acceptEdits`, `bypassPermissions` are passed through the SDK
+  - `default`, `plan`, `bypassPermissions` are passed through the SDK
 - **Codex harness**
   - Always runs with SDK thread option `sandboxMode: "danger-full-access"`
   - Uses Codex SDK/CLI `approvalPolicy: "on-request"` by default, or `"never"` when `harnesses.codex.approvalPolicy` is set
   - Supports `harnesses.codex.defaultModel`, `harnesses.codex.allowedModels`, `harnesses.codex.reasoningEffort`, and `harnesses.codex.approvalPolicy`
   - In `bypassPermissions`, the harness adds filesystem root (`/` on POSIX) to Codex `additionalDirectories`, plus optional extras from `OPENCLAW_CODEX_BYPASS_ADDITIONAL_DIRS` (comma-separated)
   - `setPermissionMode()` is applied by recreating the thread on the next turn via `resumeThread` (same thread ID)
-  - `plan` / `acceptEdits` remain plugin behavioral orchestration constraints (planning/approval flow), not Codex sandbox or SDK approval settings
+  - `plan` remains a plugin behavioral orchestration constraint (planning/approval flow), not a Codex sandbox or SDK approval setting
 
 ### Runtime Environment Overrides
 
 - `OPENCLAW_CODE_AGENT_SESSIONS_PATH` — explicit persisted session index path
 - `OPENCLAW_HOME` — base dir for persisted session index when explicit path is unset (`$OPENCLAW_HOME/code-agent-sessions.json`)
+- `OPENCLAW_WORKTREE_DIR` — base directory for worktrees (default: system tmpdir)
+- `OPENCLAW_WORKTREE_BASE_BRANCH` — global base branch override (default: auto-detected from repo)
+- `OPENCLAW_WORKTREE_CLEANUP_AGE_HOURS` — age threshold for orphan worktree cleanup (default: 1 hour)
 - `OPENCLAW_CODEX_BYPASS_ADDITIONAL_DIRS` — comma-separated extra directories for Codex bypass mode
 - `OPENCLAW_CODEX_HEARTBEAT_MS` — Codex activity heartbeat interval in milliseconds (default `10000`)
 
@@ -290,6 +312,81 @@ With an explicit account:
 ```json
 "fallbackChannel": "discord|my-discord-bot|channel:1234567890123456789"
 ```
+
+### Git Worktree Support
+
+When `worktree_strategy` is set to anything other than `"off"` (via `agent_launch` or `SessionConfig`), the agent will automatically create a git worktree for the session if the `workdir` is a git repository with at least one remote. This keeps the main checkout clean while the agent works in an isolated branch.
+
+**Behavior:**
+- Worktree path: `<OPENCLAW_WORKTREE_DIR>/openclaw-worktree-<session-name>` (default: system tmpdir)
+- Branch name: `agent/<session-name>` (sanitized, with random suffix if needed)
+- Worktrees are automatically cleaned up when the session terminates
+- **Branches are kept** — `agent/<name>` branches persist after session cleanup to allow pushing commits
+- Base branch auto-detection: `OPENCLAW_WORKTREE_BASE_BRANCH` env var → origin/HEAD → main → master
+
+**Worktree Strategies:**
+
+Control what happens to worktree branches when a session completes via `worktree_strategy`:
+
+- **`off`** (default) — No worktree. Session runs in the main checkout.
+- **`manual`** — Create worktree but no automatic action. Branch is kept for manual handling via `agent_merge` or `agent_pr`.
+- **`ask`** — Push branch and send a Telegram notification with inline buttons (✅ Merge / 🔀 Open PR / ❌ Dismiss). Also wakes the orchestrator with full decision context to present the choice to the user.
+- **`delegate`** — Push branch and wake the orchestrator with full decision context (diff summary, original prompt, decision guidance). The orchestrator autonomously decides to merge, open a PR, or escalate to the user. Always sends a brief one-line notification to the user.
+- **`auto-merge`** — Automatically merge to base branch and push. On conflicts, spawns a Claude Code conflict-resolver session.
+- **`auto-pr`** — Automatically create/update GitHub PR with full lifecycle management (requires `gh` CLI). If `gh` unavailable, falls back to `ask` strategy.
+
+Example with auto-pr:
+```javascript
+agent_launch({
+  prompt: "Fix the auth bug",
+  worktree_strategy: "auto-pr"
+})
+```
+
+**Merge-Back Tools:**
+
+Four tools are available for manual worktree management:
+
+- `agent_merge` — Merge a worktree branch to base branch. On conflicts, spawns conflict-resolver session.
+- `agent_pr` — Create or update a GitHub PR for a worktree branch (requires `gh` CLI). Handles full PR lifecycle: creates new PRs, updates existing open PRs with comments, detects merged/closed PRs.
+- `agent_worktree_status` — Show worktree status for sessions (branch name, commits ahead, merge/PR status).
+- `agent_worktree_cleanup` — List and delete merged `agent/*` branches. Use `dry_run: true` to preview, `force: true` to delete all agent branches regardless of merge status.
+
+**PR Lifecycle Management:**
+
+When using `auto-pr` strategy or calling `agent_pr` manually:
+
+- **No PR exists**: Creates a new PR with auto-generated title and commit summary
+- **Open PR exists**: Pushes new commits and adds a detailed comment with diff stats
+- **Merged PR**: Notifies that the PR was already merged
+- **Closed PR**: Prompts user to choose: reopen manually, delete branch, or recreate PR
+
+**Conflict Resolution:**
+
+When auto-merge encounters conflicts, a Claude Code session is automatically spawned with `bypassPermissions` to resolve conflicts and commit the resolution. You'll receive a notification when this happens.
+
+**Cleanup:**
+Users can manually prune accumulated agent branches with `agent_worktree_cleanup`:
+```javascript
+// Preview what would be deleted
+agent_worktree_cleanup({ workdir: "/path/to/repo", dry_run: true })
+
+// Delete merged branches
+agent_worktree_cleanup({ workdir: "/path/to/repo" })
+
+// Force delete all agent/* branches
+agent_worktree_cleanup({ workdir: "/path/to/repo", force: true })
+```
+
+**Environment Variables:**
+- `OPENCLAW_WORKTREE_DIR` — Base directory for worktrees (default: system tmpdir)
+- `OPENCLAW_WORKTREE_BASE_BRANCH` — Global base branch override (default: auto-detected)
+- `OPENCLAW_WORKTREE_CLEANUP_AGE_HOURS` — Age threshold for orphan worktree cleanup (default: 1 hour)
+
+**Limitations:**
+- Worktree creation requires the workdir to be a git repository with at least one configured remote
+- Only works with committed changes — uncommitted changes in the main checkout are not transferred to the worktree
+- Worktree creation is **opt-in** (defaults to `"off"`). Set `worktree_strategy` explicitly to enable
 
 ### Example
 
@@ -430,7 +527,7 @@ openclaw-code-agent/
 │   ├── notifications.ts        # Notification service
 │   ├── actions/respond.ts      # Shared respond logic (tool + command)
 │   ├── application/            # Shared app-layer logic used by tools + commands
-│   ├── tools/                  # Tool implementations (6 tools)
+│   ├── tools/                  # Tool implementations (9 tools)
 │   └── commands/               # Chat command implementations (7 commands)
 ├── tests/                      # Unit tests (node:test + tsx)
 ├── skills/                     # Orchestration skill definitions

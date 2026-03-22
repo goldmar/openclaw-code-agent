@@ -10,12 +10,16 @@ All tools provided by the OpenClaw Code Agent. Each tool is exposed to agents vi
 
 | Tool | Description | Key Parameters |
 |------|-------------|----------------|
-| `agent_launch` | Launch a coding agent session | `prompt`, `workdir`, `name`, `model`, `resume_session_id` |
+| `agent_launch` | Launch a coding agent session | `prompt`, `workdir`, `name`, `model`, `resume_session_id`, `worktree`, `worktree_strategy`, `worktree_base_branch` |
 | `agent_respond` | Send follow-up message to a running session | `session`, `message`, `interrupt`, `userInitiated`, `approve` |
-| `agent_kill` | Terminate a session | `session` |
+| `agent_kill` | Terminate a session | `session`, `reason` |
 | `agent_output` | Show session output (read-only) | `session`, `lines`, `full` |
 | `agent_sessions` | List recent sessions (5 by default, `full` for 24h view) | `status`, `full` |
 | `agent_stats` | Show usage metrics | *(none)* |
+| `agent_merge` | Merge a worktree branch to base branch | `session`, `base_branch`, `strategy`, `push`, `auto_cleanup` |
+| `agent_pr` | Create or update a GitHub PR for a worktree branch (full lifecycle) | `session`, `title`, `body`, `base_branch`, `force_new` |
+| `agent_worktree_status` | Show worktree status for sessions (branch, commits, merge/PR status) | `session` (optional) |
+| `agent_worktree_cleanup` | Clean up merged agent/* branches | `workdir`, `base_branch`, `force`, `dry_run` |
 
 > **Note:** There is no separate `agent_resume` tool. To resume a previous session, use `agent_launch` with the `resume_session_id` parameter. The `/agent_resume` chat command provides a convenient wrapper.
 
@@ -38,8 +42,11 @@ Launch a coding agent session in the background to execute a development task. S
 | `resume_session_id` | string | no | — | Session ID to resume (from a previous session's `harnessSessionId`). Accepts name, internal ID, or harness UUID — the plugin resolves it |
 | `fork_session` | boolean | no | `false` | When resuming, fork to a new session instead of continuing the existing one. Use with `resume_session_id` |
 | `multi_turn_disabled` | boolean | no | `false` | Disable multi-turn mode. Set to `true` for fire-and-forget sessions that don't accept follow-ups |
-| `permission_mode` | enum | no | plugin config (`plan` by default) | One of: `default`, `plan`, `acceptEdits`, `bypassPermissions` |
+| `permission_mode` | enum | no | plugin config (`plan` by default) | One of: `default` (standard prompts), `plan` (present plan first, wait for approval), `bypassPermissions` (fully autonomous execution) |
 | `harness` | string | no | plugin `defaultHarness` (`claude-code`) | Harness backend. Built-ins: `claude-code`, `codex` |
+| `worktree` | boolean | no | `false` | Create a git worktree for the session (keeps main checkout clean) |
+| `worktree_strategy` | enum | no | `none` | Merge-back strategy: `none`, `ask`, `auto-merge`, `auto-pr` |
+| `worktree_base_branch` | string | no | `main` | Base branch for merge/PR operations |
 
 ### Example
 
@@ -102,11 +109,11 @@ When responding to a terminal session that is resumable, the plugin automaticall
 
 ### Permission Modes By Harness
 
-- Claude Code harness: passes `default` / `plan` / `acceptEdits` / `bypassPermissions` through SDK permissions.
+- Claude Code harness: passes `default` / `plan` / `bypassPermissions` through SDK permissions.
 - Codex harness:
   - Always uses SDK thread option `sandboxMode: "danger-full-access"` and defaults to `approvalPolicy: "on-request"` unless `harnesses.codex.approvalPolicy` sets `"never"`
   - In `bypassPermissions`, adds filesystem root plus `OPENCLAW_CODEX_BYPASS_ADDITIONAL_DIRS` entries to SDK `additionalDirectories`
-  - `plan` / `acceptEdits` are orchestration behaviors (plan approval flow), not SDK sandbox restrictions
+  - `plan` is an orchestration behavior (plan approval flow), not an SDK sandbox restriction
   - Session continuation uses `codex.resumeThread(<thread-id>, options)` under the hood
 
 ### Crash / Restart Recovery
@@ -223,6 +230,156 @@ Show OpenClaw Code Agent usage metrics: session counts by status, total cost, av
 
 ```
 agent_stats()
+```
+
+---
+
+## agent_merge
+
+Merge a worktree branch back to the base branch. Automatically handles conflicts by spawning a Claude Code conflict-resolver session.
+
+### Parameters
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `session` | string | **yes** | — | Session name or ID (must have a worktree) |
+| `base_branch` | string | no | `main` | Base branch to merge into |
+| `strategy` | enum | no | `merge` | `merge` (creates merge commit) or `squash` (squashes all commits) |
+| `push` | boolean | no | `true` | Push the base branch after successful merge |
+| `auto_cleanup` | boolean | no | `true` | Delete the agent branch after successful merge |
+
+### Example
+
+```
+agent_merge(
+  session: "fix-auth-bug",
+  base_branch: "main",
+  strategy: "merge",
+  push: true,
+  auto_cleanup: true
+)
+```
+
+### Conflict Resolution
+
+When merge conflicts are detected, `agent_merge` automatically spawns a new Claude Code session with `bypassPermissions` to resolve the conflicts. The conflict-resolver session receives a list of conflicted files and instructions to resolve and commit.
+
+---
+
+## agent_pr
+
+Create or update a GitHub Pull Request for a worktree branch with full lifecycle management. Automatically handles:
+- Creating new PRs when none exist
+- Updating existing open PRs with new commits (adds detailed comment)
+- Detecting merged PRs (notifies user)
+- Detecting closed PRs (prompts user for action)
+
+Requires the `gh` CLI to be installed and authenticated.
+
+### Parameters
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `session` | string | **yes** | — | Session name or ID (must have a worktree) |
+| `title` | string | no | auto-generated | PR title (defaults to `[openclaw-code-agent] <session-name>`) |
+| `body` | string | no | auto-generated | PR body with commit summary |
+| `base_branch` | string | no | detected from repo | Base branch for the PR (auto-detected via git or `OPENCLAW_WORKTREE_BASE_BRANCH`) |
+| `force_new` | boolean | no | `false` | Reject if a PR already exists (prevents accidental updates) |
+
+### Example: Create new PR
+
+```
+agent_pr(
+  session: "fix-auth-bug",
+  title: "Fix authentication token refresh",
+  base_branch: "main"
+)
+```
+
+### Example: Update existing PR with new commits
+
+```
+agent_pr(session: "fix-auth-bug")
+```
+
+If the PR already exists and is open, this will push new commits and add a comment detailing the changes.
+
+### PR Lifecycle States
+
+- **No PR**: Creates a new PR
+- **Open PR**: Pushes new commits and adds a detailed comment (commit list, diff stats)
+- **Merged PR**: Notifies that the PR was already merged
+- **Closed PR**: Prompts user to choose: reopen manually, delete branch, or recreate PR
+
+The PR URL and number are persisted in session metadata for automatic lifecycle tracking.
+
+---
+
+## agent_worktree_status
+
+Show the current status of worktree branches for coding agent sessions. Displays branch names, repository paths, merge-back strategy, commits ahead of base, merge status, and PR URLs.
+
+### Parameters
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `session` | string | no | — | Session name or ID to show status for. If omitted, shows all sessions with worktrees |
+
+### Example: Show all worktree sessions
+
+```
+agent_worktree_status()
+```
+
+### Example: Show specific session
+
+```
+agent_worktree_status(session: "fix-auth-bug")
+```
+
+### Output Format
+
+```
+Session: fix-auth-bug [abc123]
+  Branch:   agent/fix-auth-bug → main
+  Repo:     /home/user/my-project
+  Strategy: auto-pr
+  Commits:  3 ahead of main (+45 / -12)
+  PR:       https://github.com/user/repo/pull/42
+```
+
+---
+
+## agent_worktree_cleanup
+
+List and clean up `agent/*` branches. Uses `git merge-base` to detect which branches have been fully merged into the base branch.
+
+### Parameters
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `workdir` | string | no | cwd | Working directory (git repository) |
+| `base_branch` | string | no | `main` | Base branch to check merge status against |
+| `force` | boolean | no | `false` | Delete ALL `agent/*` branches regardless of merge status |
+| `dry_run` | boolean | no | `false` | Preview what would be deleted without actually deleting |
+
+### Example
+
+```
+// Preview what would be deleted
+agent_worktree_cleanup(
+  workdir: "/home/user/my-project",
+  dry_run: true
+)
+
+// Delete merged branches
+agent_worktree_cleanup(workdir: "/home/user/my-project")
+
+// Force delete all agent/* branches
+agent_worktree_cleanup(
+  workdir: "/home/user/my-project",
+  force: true
+)
 ```
 
 ---

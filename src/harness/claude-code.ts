@@ -49,7 +49,6 @@ export class ClaudeCodeHarness implements AgentHarness {
   readonly supportedPermissionModes = [
     "default",
     "plan",
-    "acceptEdits",
     "bypassPermissions",
   ] as const;
 

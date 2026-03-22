@@ -465,7 +465,7 @@ describe("Session.kill() teardown", () => {
   it("does not fail terminal transition when harness interrupt rejects", async () => {
     const rejectingHarness: AgentHarness = {
       name: "test-harness-reject-interrupt",
-      supportedPermissionModes: ["default", "plan", "acceptEdits", "bypassPermissions"],
+      supportedPermissionModes: ["default", "plan", "bypassPermissions"],
       questionToolNames: [],
       planApprovalToolNames: [],
       launch(_options: HarnessLaunchOptions): HarnessSession {

@@ -24,6 +24,12 @@ export interface SessionListRenderable {
   harnessSessionId?: string;
   resumeSessionId?: string;
   forkSession?: boolean;
+  worktreePath?: string;
+  worktreeBranch?: string;
+  worktreeStrategy?: string;
+  worktreeMerged?: boolean;
+  worktreeMergedAt?: string;
+  worktreePrUrl?: string;
 }
 
 /** Format a duration in milliseconds as `MmSs` or `Ss`. */
@@ -80,6 +86,21 @@ export function formatSessionListing(session: SessionListRenderable): string {
     `   📁 ${session.workdir}`,
     `   📝 "${promptSummary}"`,
   ];
+
+  // F1 + F5: Show branch name, merge status, and PR info when worktree is used
+  if (session.worktreePath && session.worktreeBranch) {
+    let worktreeInfo = `   🌿 Worktree: ${session.worktreeBranch}`;
+
+    if (session.worktreeMerged) {
+      worktreeInfo += ` [merged ✓]`;
+    } else if (session.worktreePrUrl) {
+      worktreeInfo += ` [PR: ${session.worktreePrUrl}]`;
+    } else {
+      worktreeInfo += ` [not merged]`;
+    }
+
+    lines.push(worktreeInfo);
+  }
 
   if (session.phase !== session.status) {
     lines.push(`   ⚙️  Phase: ${session.phase}`);

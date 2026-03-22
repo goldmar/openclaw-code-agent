@@ -3,6 +3,7 @@ import { homedir, tmpdir } from "os";
 import { dirname, join } from "path";
 import type { PersistedSessionInfo, SessionStatus, KillReason, ReasoningEffort, PermissionMode, CodexApprovalPolicy } from "./types";
 import type { Session } from "./session";
+import { getBranchName } from "./worktree";
 
 /** Resolve OpenClaw home directory from environment or default path. */
 function resolveOpenclawHomeDir(env: NodeJS.ProcessEnv): string {
@@ -57,7 +58,7 @@ function toOptionalReasoningEffort(value: unknown): ReasoningEffort | undefined 
 }
 
 function toOptionalPermissionMode(value: unknown): PermissionMode | undefined {
-  return value === "default" || value === "plan" || value === "acceptEdits" || value === "bypassPermissions"
+  return value === "default" || value === "plan" || value === "bypassPermissions"
     ? value
     : undefined;
 }
@@ -114,6 +115,13 @@ function normalizePersistedEntry(raw: unknown): PersistedSessionInfo | undefined
     harness: toOptionalString(raw.harness),
     currentPermissionMode: toOptionalPermissionMode(raw.currentPermissionMode),
     codexApprovalPolicy: toOptionalCodexApprovalPolicy(raw.codexApprovalPolicy),
+    worktreePath: toOptionalString(raw.worktreePath),
+    worktreeBranch: toOptionalString(raw.worktreeBranch),
+    worktreeStrategy: (raw.worktreeStrategy === "off" || raw.worktreeStrategy === "manual" || raw.worktreeStrategy === "ask" || raw.worktreeStrategy === "auto-merge" || raw.worktreeStrategy === "auto-pr") ? raw.worktreeStrategy : undefined,
+    worktreeMerged: typeof raw.worktreeMerged === "boolean" ? raw.worktreeMerged : undefined,
+    worktreeMergedAt: toOptionalString(raw.worktreeMergedAt),
+    worktreePrUrl: toOptionalString(raw.worktreePrUrl),
+    worktreePrNumber: toOptionalNumber(raw.worktreePrNumber),
   };
 }
 
@@ -163,7 +171,7 @@ export class SessionStore {
     }
   }
 
-  private saveIndex(): void {
+  saveIndex(): void {
     try {
       mkdirSync(dirname(this.indexPath), { recursive: true });
       const tmp = this.indexPath + ".tmp";
@@ -182,7 +190,7 @@ export class SessionStore {
       harnessSessionId: session.harnessSessionId,
       name: session.name,
       prompt: session.prompt,
-      workdir: session.workdir,
+      workdir: session.originalWorkdir ?? session.workdir, // E1: Always write originalWorkdir
       model: session.model,
       reasoningEffort: session.reasoningEffort,
       createdAt: session.startedAt,
@@ -195,6 +203,9 @@ export class SessionStore {
       harness: session.harnessName,
       currentPermissionMode: session.currentPermissionMode,
       codexApprovalPolicy: session.codexApprovalPolicy,
+      worktreePath: session.worktreePath,
+      worktreeBranch: session.worktreePath ? getBranchName(session.worktreePath) : undefined,
+      worktreeStrategy: session.worktreeStrategy,
     };
     this.persisted.set(stub.harnessSessionId, stub);
     this.idIndex.set(session.id, stub.harnessSessionId);
@@ -228,7 +239,7 @@ export class SessionStore {
       harnessSessionId: session.harnessSessionId,
       name: session.name,
       prompt: session.prompt,
-      workdir: session.workdir,
+      workdir: session.originalWorkdir ?? session.workdir, // E1: Always write originalWorkdir
       model: session.model,
       reasoningEffort: session.reasoningEffort,
       createdAt: session.startedAt,
@@ -244,6 +255,9 @@ export class SessionStore {
       harness: session.harnessName,
       currentPermissionMode: session.currentPermissionMode,
       codexApprovalPolicy: session.codexApprovalPolicy,
+      worktreePath: session.worktreePath,
+      worktreeBranch: session.worktreePath ? getBranchName(session.worktreePath) : undefined,
+      worktreeStrategy: session.worktreeStrategy,
     };
 
     this.persisted.set(session.harnessSessionId, info);

@@ -2,7 +2,7 @@ import { EventEmitter } from "events";
 import { nanoid } from "nanoid";
 import { getDefaultHarness, getHarness } from "./harness";
 import type { AgentHarness, HarnessSession, HarnessMessage } from "./harness";
-import type { SessionConfig, SessionStatus, PermissionMode, KillReason, ReasoningEffort, CodexApprovalPolicy } from "./types";
+import type { SessionConfig, SessionStatus, PermissionMode, KillReason, ReasoningEffort, CodexApprovalPolicy, WorktreeStrategy } from "./types";
 import {
   getGlobalMcpServers,
   pluginConfig,
@@ -107,6 +107,8 @@ export class Session extends EventEmitter {
   // Worktree
   worktreePath?: string;
   originalWorkdir?: string;
+  readonly worktreeStrategy?: WorktreeStrategy;
+  readonly worktreeBaseBranch?: string;
 
   // Multi-turn
   readonly multiTurn: boolean;
@@ -183,6 +185,8 @@ export class Session extends EventEmitter {
     this.resumeSessionId = config.resumeSessionId;
     this.forkSession = config.forkSession;
     this.multiTurn = config.multiTurn ?? true;
+    this.worktreeStrategy = config.worktreeStrategy;
+    this.worktreeBaseBranch = config.worktreeBaseBranch;
     this.startedAt = Date.now();
     this.abortController = new AbortController();
   }

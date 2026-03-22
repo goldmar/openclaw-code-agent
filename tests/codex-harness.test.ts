@@ -156,7 +156,6 @@ describe("CodexHarness static properties", () => {
   it("supports all permission modes", () => {
     assert.ok(h.supportedPermissionModes.includes("default"));
     assert.ok(h.supportedPermissionModes.includes("plan"));
-    assert.ok(h.supportedPermissionModes.includes("acceptEdits"));
     assert.ok(h.supportedPermissionModes.includes("bypassPermissions"));
   });
 
@@ -540,7 +539,7 @@ describe("CodexHarness SDK mapping", () => {
 
     const { harness: h } = createHarness(codex);
     const session = h.launch({ prompt: prompts(), cwd: "/tmp", permissionMode: "plan" });
-    await session.setPermissionMode?.("acceptEdits");
+    await session.setPermissionMode?.("default");
     await collectMessages(session);
 
     const all = [

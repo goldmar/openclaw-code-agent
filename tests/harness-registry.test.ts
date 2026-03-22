@@ -111,7 +111,6 @@ describe("ClaudeCodeHarness properties", () => {
     const h = getHarness("claude-code");
     assert.ok(h.supportedPermissionModes.includes("default"));
     assert.ok(h.supportedPermissionModes.includes("plan"));
-    assert.ok(h.supportedPermissionModes.includes("acceptEdits"));
     assert.ok(h.supportedPermissionModes.includes("bypassPermissions"));
   });
 

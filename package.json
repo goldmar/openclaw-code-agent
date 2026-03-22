@@ -22,16 +22,16 @@
     "LICENSE"
   ],
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.77",
-    "@openai/codex-sdk": "^0.107.0"
+    "@anthropic-ai/claude-agent-sdk": "^0.2.81",
+    "@openai/codex-sdk": "^0.116.0"
   },
   "devDependencies": {
     "@sinclair/typebox": "^0.34.48",
-    "@types/node": "^25.3.3",
-    "esbuild": "^0.27.3",
-    "nanoid": "^3.3.7",
+    "@types/node": "^25.5.0",
+    "esbuild": "^0.27.4",
+    "nanoid": "^5.1.7",
     "tsx": "^4.21.0",
-    "typescript": "^5.9.2"
+    "typescript": "^6.0.2"
   },
   "keywords": [
     "openclaw",
@@ -62,5 +62,11 @@
   "publishConfig": {
     "access": "public"
   },
-  "description": "An OpenClaw plugin that orchestrates coding agent sessions as managed background processes. Launch, monitor, and control coding agents (Claude Code, Codex, and more) directly from your AI gateway."
+  "description": "An OpenClaw plugin that orchestrates coding agent sessions as managed background processes. Launch, monitor, and control coding agents (Claude Code, Codex, and more) directly from your AI gateway.",
+  "peerDependencies": {
+    "openclaw": ">=2026.3.22"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild", "koffi", "protobufjs", "sharp", "@img/sharp-linux-x64", "@img/sharp-linux-arm64"]
+  }
 }
