@@ -2,7 +2,7 @@
   "id": "openclaw-code-agent",
   "name": "OpenClaw Code Agent",
   "description": "Orchestrate coding agent sessions from OpenClaw",
-  "version": "2.0.5",
+  "version": "2.3.0",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
@@ -17,13 +17,18 @@
         "default": {
           "codex": {
             "defaultModel": "gpt-5.4",
-            "allowedModels": ["gpt-5.4"],
+            "allowedModels": [
+              "gpt-5.4"
+            ],
             "reasoningEffort": "medium",
             "approvalPolicy": "on-request"
           },
           "claude-code": {
             "defaultModel": "sonnet",
-            "allowedModels": ["sonnet", "opus"]
+            "allowedModels": [
+              "sonnet",
+              "opus"
+            ]
           }
         },
         "additionalProperties": {
@@ -36,17 +41,26 @@
             },
             "allowedModels": {
               "type": "array",
-              "items": { "type": "string" },
+              "items": {
+                "type": "string"
+              },
               "description": "Restrict which models can be used with this harness. Empty or omitted means no restriction."
             },
             "reasoningEffort": {
               "type": "string",
-              "enum": ["low", "medium", "high"],
+              "enum": [
+                "low",
+                "medium",
+                "high"
+              ],
               "description": "Harness-specific reasoning effort. Currently used by Codex."
             },
             "approvalPolicy": {
               "type": "string",
-              "enum": ["never", "on-request"],
+              "enum": [
+                "never",
+                "on-request"
+              ],
               "description": "Harness-specific approval policy. Currently used by Codex."
             }
           }
@@ -62,7 +76,11 @@
       },
       "reasoningEffort": {
         "type": "string",
-        "enum": ["low", "medium", "high"],
+        "enum": [
+          "low",
+          "medium",
+          "high"
+        ],
         "description": "Deprecated legacy Codex reasoning effort. Use harnesses.codex.reasoningEffort instead."
       },
       "defaultWorkdir": {
@@ -102,7 +120,10 @@
       "codexApprovalPolicy": {
         "type": "string",
         "default": "on-request",
-        "enum": ["never", "on-request"],
+        "enum": [
+          "never",
+          "on-request"
+        ],
         "description": "Codex-only SDK/CLI approval policy. Defaults to 'on-request'. Set to 'never' to keep Codex from requesting approval for privileged actions. Distinct from plugin permissionMode / plan orchestration."
       },
       "agentChannels": {
@@ -120,7 +141,11 @@
       "planApproval": {
         "type": "string",
         "default": "delegate",
-        "enum": ["approve", "ask", "delegate"],
+        "enum": [
+          "approve",
+          "ask",
+          "delegate"
+        ],
         "description": "Plan approval behavior. 'delegate' (default): orchestrator autonomously decides whether to approve low-risk plans or escalate to the user. 'approve': orchestrator can auto-approve after verification. 'ask': orchestrator always forwards plans to the user for approval."
       },
       "defaultHarness": {
@@ -130,7 +155,9 @@
       },
       "allowedModels": {
         "type": "array",
-        "items": { "type": "string" },
+        "items": {
+          "type": "string"
+        },
         "description": "Deprecated legacy global model restriction. Use harnesses.<name>.allowedModels instead."
       }
     }
@@ -187,5 +214,7 @@
       "help": "Choose whether plans are auto-approved, always escalated, or delegated to the orchestrator."
     }
   },
-  "skills": ["./skills"]
+  "skills": [
+    "./skills"
+  ]
 }
