@@ -236,6 +236,11 @@ describe("executeRespond — auto-resume", () => {
     assert.equal(request.label, "notification");
     assert.match(request.userMessage, /▶️ \[resume-only\] Auto-resumed/);
     assert.doesNotMatch(request.userMessage, /Launched/);
+
+    const resumedSession = [...(sm as any).sessions.values()].find((candidate: any) => candidate.id !== session.id);
+    if (resumedSession?.status === "running") {
+      resumedSession.kill("user");
+    }
   });
 
   it("auto-resumes a shutdown-killed session without exposing the prior terminal label", async () => {
@@ -799,7 +804,10 @@ describe("executeRespond — interrupt", () => {
   it("calls session.interrupt() when interrupt=true", async () => {
     let interrupted = false;
     const session = createStubSession({
-      interrupt: async () => { interrupted = true; },
+      interrupt: async () => {
+        interrupted = true;
+        return true;
+      },
     });
     const sm = createStubSessionManager({ "test-id": session });
     await executeRespond(sm, { session: "test-id", message: "stop", interrupt: true });
@@ -809,11 +817,48 @@ describe("executeRespond — interrupt", () => {
   it("does not call interrupt when interrupt is false", async () => {
     let interrupted = false;
     const session = createStubSession({
-      interrupt: async () => { interrupted = true; },
+      interrupt: async () => {
+        interrupted = true;
+        return true;
+      },
     });
     const sm = createStubSessionManager({ "test-id": session });
     await executeRespond(sm, { session: "test-id", message: "hello", interrupt: false });
     assert.ok(!interrupted, "interrupt should not have been called");
+  });
+
+  it("emits a redirected notification when interrupting active work", async () => {
+    const notifications: Array<{ text: string; label: string }> = [];
+    const session = createStubSession({
+      interrupt: async () => true,
+    });
+    const sm = createStubSessionManager({ "test-id": session });
+    (sm as any).notifySession = (_session: any, text: string, label: string) => {
+      notifications.push({ text, label });
+    };
+
+    const result = await executeRespond(sm, { session: "test-id", message: "redirect", interrupt: true });
+
+    assert.equal(notifications.length, 1);
+    assert.equal(notifications[0]?.label, "redirected");
+    assert.equal(notifications[0]?.text, "↪️ [test-session] Redirected");
+    assert.match(result.text, /redirected active turn first/);
+  });
+
+  it("does not emit a redirected notification when no active turn is in progress", async () => {
+    const notifications: Array<{ text: string; label: string }> = [];
+    const session = createStubSession({
+      interrupt: async () => false,
+    });
+    const sm = createStubSessionManager({ "test-id": session });
+    (sm as any).notifySession = (_session: any, text: string, label: string) => {
+      notifications.push({ text, label });
+    };
+
+    const result = await executeRespond(sm, { session: "test-id", message: "redirect", interrupt: true });
+
+    assert.equal(notifications.length, 0);
+    assert.match(result.text, /no active turn to interrupt/);
   });
 });
 
@@ -853,7 +898,7 @@ describe("executeRespond — message formatting", () => {
     const session = createStubSession();
     const sm = createStubSessionManager({ "test-id": session });
     const result = await executeRespond(sm, { session: "test-id", message: "stop", interrupt: true });
-    assert.ok(result.text.includes("interrupted"));
+    assert.ok(result.text.includes("redirected active turn first"));
   });
 });
 

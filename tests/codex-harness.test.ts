@@ -445,7 +445,7 @@ describe("CodexHarness SDK mapping", () => {
     assert.equal(codex.resumeCalls[0]?.id, "thread-recreate");
   });
 
-  it("interrupt aborts the active turn and emits terminal failure", async () => {
+  it("interrupt redirects the active turn without emitting terminal failure", async () => {
     const codex = new MockCodex([
       {
         stream: async function* (signal?: AbortSignal): AsyncGenerator<ThreadEvent> {
@@ -460,22 +460,40 @@ describe("CodexHarness SDK mapping", () => {
           });
         },
       },
+      {
+        events: [
+          { type: "turn.completed", usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 } },
+        ],
+      },
     ]);
 
     const { harness: h } = createHarness(codex);
-    const session = h.launch({ prompt: "long", cwd: "/tmp" });
+    let releaseSecondTurn: (() => void) | undefined;
+    const secondTurnGate = new Promise<void>((resolve) => {
+      releaseSecondTurn = resolve;
+    });
+    async function* promptStream(): AsyncGenerator<string> {
+      yield "long";
+      await secondTurnGate;
+      yield "redirected";
+    }
+
+    const session = h.launch({ prompt: promptStream(), cwd: "/tmp" });
 
     const collected = collectMessages(session, async (msg) => {
       if (msg.type === "init") {
         await session.interrupt?.();
+        releaseSecondTurn?.();
       }
     });
 
     const msgs = await collected;
-    const result = msgs.find((m) => m.type === "result") as any;
-    assert.ok(result, "expected result");
-    assert.equal(result.data.success, false);
-    assert.match(result.data.result, /interrupted/);
+    const results = msgs.filter((m) => m.type === "result") as any[];
+    assert.equal(results.length, 1);
+    assert.equal(results[0]?.data.success, true);
+    assert.deepEqual(codex.inputs.map((entry) => entry.input), ["long", "redirected"]);
+    assert.equal(codex.resumeCalls.length, 1);
+    assert.equal(codex.resumeCalls[0]?.id, "thread-interrupt");
   });
 
   it("turn.failed path emits exactly one terminal failure result", async () => {

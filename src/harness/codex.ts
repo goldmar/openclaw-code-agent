@@ -192,6 +192,7 @@ export class CodexHarness implements AgentHarness {
     let pendingThreadRecreate = false;
     let firstTurn = true;
     let activeTurnAbortController: AbortController | undefined;
+    let suppressAbortFailureOnce = false;
 
     const queue: HarnessMessage[] = [];
     let queueResolve: (() => void) | null = null;
@@ -257,6 +258,7 @@ export class CodexHarness implements AgentHarness {
       numTurns += 1;
       let turnAssistantText = "";
       let terminalEmitted = false;
+      let suppressTerminalResult = false;
       let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
       let releaseAuthBootstrap: (() => Promise<void>) | undefined;
       let authBootstrapReleased = false;
@@ -336,11 +338,19 @@ export class CodexHarness implements AgentHarness {
           }
 
           if (event.type === "error") {
-            enqueue({ type: "text", text: `[codex:error] ${event.message}` });
+            if (!(activeTurnAbortController?.signal.aborted && suppressAbortFailureOnce)) {
+              enqueue({ type: "text", text: `[codex:error] ${event.message}` });
+            }
             continue;
           }
 
           if (event.type === "turn.failed") {
+            if (activeTurnAbortController?.signal.aborted && suppressAbortFailureOnce) {
+              suppressAbortFailureOnce = false;
+              suppressTerminalResult = true;
+              pendingThreadRecreate = true;
+              break;
+            }
             emitResult({
               success: false,
               result: event.error.message,
@@ -370,6 +380,10 @@ export class CodexHarness implements AgentHarness {
 
         await releaseAuthBootstrapIfNeeded();
 
+        if (suppressTerminalResult) {
+          return;
+        }
+
         if (!terminalEmitted) {
           emitResult({
             success: false,
@@ -379,6 +393,11 @@ export class CodexHarness implements AgentHarness {
         }
       } catch (err: unknown) {
         await releaseAuthBootstrapIfNeeded();
+        if (activeTurnAbortController?.signal.aborted && suppressAbortFailureOnce) {
+          suppressAbortFailureOnce = false;
+          pendingThreadRecreate = true;
+          return;
+        }
         emitResult({
           success: false,
           result: errorMessage(err),
@@ -453,7 +472,9 @@ export class CodexHarness implements AgentHarness {
       },
 
       async interrupt(): Promise<void> {
-        activeTurnAbortController?.abort("interrupted");
+        if (!activeTurnAbortController) return;
+        suppressAbortFailureOnce = true;
+        activeTurnAbortController.abort("interrupted");
       },
     };
   }

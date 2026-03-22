@@ -148,7 +148,7 @@ export function createStubSession(overrides: Record<string, any> = {}): any {
     originAgentId: undefined,
     multiTurn: true,
     sendMessage: async (_text: string) => {},
-    interrupt: async () => {},
+    interrupt: async () => true,
     switchPermissionMode: (_mode: string) => {},
     resetAutoRespond() { session.autoRespondCount = 0; },
     incrementAutoRespond() { session.autoRespondCount++; },

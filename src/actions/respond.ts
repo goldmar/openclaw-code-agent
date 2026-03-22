@@ -204,8 +204,9 @@ export async function executeRespond(
   }
 
   try {
+    let redirectedActiveTurn = false;
     if (params.interrupt) {
-      await session.interrupt();
+      redirectedActiveTurn = await session.interrupt();
     }
 
     // Permission escalation — explicit approve flag
@@ -231,6 +232,10 @@ export async function executeRespond(
 
     await session.sendMessage(params.message);
 
+    if (redirectedActiveTurn) {
+      sm.notifySession(session, `↪️ [${session.name}] Redirected`, "redirected");
+    }
+
     if (!params.userInitiated) {
       session.incrementAutoRespond();
     }
@@ -240,7 +245,9 @@ export async function executeRespond(
     return {
       text: [
         `Message sent to session ${session.name} [${session.id}].`,
-        params.interrupt ? `  (interrupted current turn first)` : "",
+        redirectedActiveTurn
+          ? `  (redirected active turn first)`
+          : (params.interrupt ? `  (no active turn to interrupt)` : ""),
         `  Message: "${msgSummary}"`,
         approvalWarning,
         `Use agent_output to see the response.`,

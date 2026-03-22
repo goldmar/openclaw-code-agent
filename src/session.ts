@@ -147,6 +147,7 @@ export class Session extends EventEmitter {
   private waitingForInputFired: boolean = false;
   private lastTurnHadQuestion: boolean = false;
   private planModeApproved: boolean = false;
+  private turnInProgress: boolean = true;
 
   // Auto-respond counter
   autoRespondCount: number = 0;
@@ -287,6 +288,7 @@ export class Session extends EventEmitter {
 
     this.resetIdleTimer();
     this.waitingForInputFired = false;
+    this.turnInProgress = true;
 
     let effectiveText = text;
     if (this.pendingModeSwitch) {
@@ -357,10 +359,13 @@ export class Session extends EventEmitter {
   }
 
   /** Interrupt the currently running turn, if the harness supports it. */
-  async interrupt(): Promise<void> {
-    if (this.harnessHandle?.interrupt) {
-      await this.harnessHandle.interrupt();
+  async interrupt(): Promise<boolean> {
+    if (!this.turnInProgress || !this.harnessHandle?.interrupt) {
+      return false;
     }
+
+    await this.harnessHandle.interrupt();
+    return true;
   }
 
   /** Queue a permission mode switch to apply on the next user message. */
@@ -426,6 +431,7 @@ export class Session extends EventEmitter {
     options: { reason?: KillReason; error?: string } = {},
   ): void {
     if (!this.isActive) return;
+    this.turnInProgress = false;
     if (options.reason) this.killReason = options.reason;
     if (options.error !== undefined) this.error = options.error;
     this.completedAt = Date.now();
@@ -517,6 +523,7 @@ export class Session extends EventEmitter {
           // is authoritative for the plan approval path (it survives text resets).
           const needsInput = this.pendingPlanApproval || this.lastTurnHadQuestion;
           const hasPending = this.messageStream?.hasPending() === true;
+          this.turnInProgress = hasPending;
           if (needsInput && !this.waitingForInputFired) {
             this.waitingForInputFired = true;
             this.emit("turnEnd", this, true);
@@ -532,6 +539,7 @@ export class Session extends EventEmitter {
             this.complete("done");
           }
         } else {
+          this.turnInProgress = false;
           this.transitionToTerminal(msg.data.success ? "completed" : "failed");
         }
         this.lastTurnHadQuestion = false;

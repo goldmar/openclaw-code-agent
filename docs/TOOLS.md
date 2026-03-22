@@ -137,6 +137,14 @@ agent_respond(
 )
 ```
 
+If the session is actively working, this emits a single redirect lifecycle notification:
+
+```
+↪️ [fix-auth-bug] Redirected
+```
+
+`interrupt: true` does not convert an intentional redirect into ❌ `Failed`, and it does not emit a fresh 🚀 `Launched` or ▶️ `Auto-resumed` notification. If the session is already between turns and not actively working, the message is sent normally and no redirect notification is emitted.
+
 ---
 
 ## agent_kill

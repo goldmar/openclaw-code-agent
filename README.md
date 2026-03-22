@@ -179,6 +179,7 @@ The plugin sends targeted notifications to the originating Telegram thread:
 | ❓ | Waiting for input | Session is waiting for user input |
 | 📋 | Plan ready | Plan approval requested — reply "go" to approve |
 | ⏸️ | Paused after turn | Turn completed, session paused (auto-resumable) |
+| ↪️ | Redirected | Active work was intentionally interrupted and redirected in-place |
 | ▶️ | Auto-resumed | Session resumed on the next `agent_respond` |
 | ✅ | Completed | Completion summary with cost and duration |
 | ❌ | Failed | Error notification with hint |

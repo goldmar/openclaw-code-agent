@@ -130,6 +130,12 @@ On next agent_respond to any killed/completed/failed session:
   → Sends ▶️ "Auto-resumed"
   → Conversation context preserved
 
+On agent_respond(..., interrupt=true) to an active running session:
+  → Session interrupt path aborts the current turn in-place
+  → No terminal failure/launch lifecycle is emitted for intentional redirect
+  → Sends ↪️ "Redirected"
+  → Follow-up instruction continues in the same live session
+
 If session remains untouched for idleTimeoutMinutes (default: 15 min):
   → session.kill("idle-timeout")
   → Notification: "💤 Idle timeout"
