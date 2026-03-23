@@ -31,7 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### Worktree
 - **Full worktree strategy enum**: `off | manual | ask | delegate | auto-merge | auto-pr`
-  - `ask` — push branch, send Telegram inline buttons (Merge locally / Create PR / Dismiss), wake orchestrator with full decision context
+  - `ask` — push branch, send Telegram inline buttons (Merge / Open PR / Dismiss), wake orchestrator with full decision context
   - `delegate` — push branch, wake orchestrator with diff summary + decision guidance; always sends brief one-liner to user
   - `auto-merge` — merge automatically; spawns Claude Code conflict-resolver on conflicts
   - `auto-pr` — create/update GitHub PR with full lifecycle management; falls back to `ask` if `gh` unavailable

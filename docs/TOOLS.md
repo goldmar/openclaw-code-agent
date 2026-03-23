@@ -10,16 +10,16 @@ All tools provided by the OpenClaw Code Agent. Each tool is exposed to agents vi
 
 | Tool | Description | Key Parameters |
 |------|-------------|----------------|
-| `agent_launch` | Launch a coding agent session | `prompt`, `workdir`, `name`, `model`, `resume_session_id`, `worktree`, `worktree_strategy`, `worktree_base_branch` |
+| `agent_launch` | Launch a coding agent session | `prompt`, `workdir`, `name`, `model`, `resume_session_id`, `worktree_strategy`, `worktree_base_branch`, `output_mode` |
 | `agent_respond` | Send follow-up message to a running session | `session`, `message`, `interrupt`, `userInitiated`, `approve` |
 | `agent_kill` | Terminate a session | `session`, `reason` |
 | `agent_output` | Show session output (read-only) | `session`, `lines`, `full` |
 | `agent_sessions` | List recent sessions (5 by default, `full` for 24h view) | `status`, `full` |
 | `agent_stats` | Show usage metrics | *(none)* |
-| `agent_merge` | Merge a worktree branch to base branch | `session`, `base_branch`, `strategy`, `push`, `auto_cleanup` |
+| `agent_merge` | Merge a worktree branch to base branch | `session`, `base_branch`, `strategy`, `push`, `delete_branch` |
 | `agent_pr` | Create or update a GitHub PR for a worktree branch (full lifecycle) | `session`, `title`, `body`, `base_branch`, `force_new` |
 | `agent_worktree_status` | Show worktree status for sessions (branch, commits, merge/PR status) | `session` (optional) |
-| `agent_worktree_cleanup` | Clean up merged agent/* branches | `workdir`, `base_branch`, `force`, `dry_run` |
+| `agent_worktree_cleanup` | Clean up merged agent/* branches | `workdir`, `base_branch`, `skip_session_check`, `dry_run`, `session` |
 
 > **Note:** There is no separate `agent_resume` tool. To resume a previous session, use `agent_launch` with the `resume_session_id` parameter. The `/agent_resume` chat command provides a convenient wrapper.
 
@@ -44,9 +44,9 @@ Launch a coding agent session in the background to execute a development task. S
 | `multi_turn_disabled` | boolean | no | `false` | Disable multi-turn mode. Set to `true` for fire-and-forget sessions that don't accept follow-ups |
 | `permission_mode` | enum | no | plugin config (`plan` by default) | One of: `default` (standard prompts), `plan` (present plan first, wait for approval), `bypassPermissions` (fully autonomous execution) |
 | `harness` | string | no | plugin `defaultHarness` (`claude-code`) | Harness backend. Built-ins: `claude-code`, `codex` |
-| `worktree` | boolean | no | `false` | Create a git worktree for the session (keeps main checkout clean) |
-| `worktree_strategy` | enum | no | `none` | Merge-back strategy: `none`, `ask`, `auto-merge`, `auto-pr` |
-| `worktree_base_branch` | string | no | `main` | Base branch for merge/PR operations |
+| `worktree_strategy` | enum | no | plugin `defaultWorktreeStrategy` or `"off"` | Worktree merge-back strategy: `"off"` (no worktree), `"manual"` (create, no auto action), `"ask"` (prompt user with inline buttons), `"auto-merge"` (merge automatically), `"auto-pr"` (create/update GitHub PR). `"delegate"` is only available via `defaultWorktreeStrategy` plugin config. |
+| `worktree_base_branch` | string | no | auto-detected | Base branch for merge/PR operations (auto-detected via `detectDefaultBranch()` or `OPENCLAW_WORKTREE_BASE_BRANCH`) |
+| `output_mode` | enum | no | — | `"deliverable"` — sends 📄 Deliverable ready instead of ✅ Completed when the session finishes |
 
 ### Example
 
@@ -150,7 +150,11 @@ If the session is actively working, this emits a single redirect lifecycle notif
 ↪️ [fix-auth-bug] Redirected
 ```
 
-`interrupt: true` does not convert an intentional redirect into ❌ `Failed`, and it does not emit a fresh 🚀 `Launched` or ▶️ `Auto-resumed` notification. If the session is already between turns and not actively working, the message is sent normally and no redirect notification is emitted.
+`interrupt: true` does not convert an intentional redirect into ❌ `Failed`, and it does not emit a fresh 🚀 `Launched` or ▶️ `Auto-resumed` notification. If the session is already between turns and not actively working, the message is sent normally.
+
+**Notification icons for `agent_respond`:**
+- Regular send (no `approve`): ↪️
+- Plan approval (`approve: true`): 👍
 
 ---
 
@@ -183,15 +187,15 @@ Show recent output from a coding agent session. Read-only — does not affect se
 |-----------|------|----------|---------|-------------|
 | `session` | string | **yes** | — | Session name or ID |
 | `lines` | number | no | `50` | Number of recent lines to show |
-| `full` | boolean | no | `false` | Show all available output (up to the 200-line buffer) |
-
-For garbage-collected sessions, output is retrieved from the persisted `/tmp` file if available.
+| `full` | boolean | no | `false` | Show all available output (up to the 2000-line buffer) |
 
 ### Example
 
 ```
 agent_output(session: "fix-auth-bug", lines: 100)
 ```
+
+For garbage-collected sessions, output is retrieved from the persisted `/tmp` stream file if available (session output is streamed incrementally to disk as it arrives).
 
 ---
 
@@ -246,7 +250,7 @@ Merge a worktree branch back to the base branch. Automatically handles conflicts
 | `base_branch` | string | no | `main` | Base branch to merge into |
 | `strategy` | enum | no | `merge` | `merge` (creates merge commit) or `squash` (squashes all commits) |
 | `push` | boolean | no | `true` | Push the base branch after successful merge |
-| `auto_cleanup` | boolean | no | `true` | Delete the agent branch after successful merge |
+| `delete_branch` | boolean | no | `true` | Delete the agent branch after successful merge |
 
 ### Example
 
@@ -256,7 +260,7 @@ agent_merge(
   base_branch: "main",
   strategy: "merge",
   push: true,
-  auto_cleanup: true
+  delete_branch: true
 )
 ```
 
@@ -352,16 +356,22 @@ Session: fix-auth-bug [abc123]
 
 ## agent_worktree_cleanup
 
-List and clean up `agent/*` branches. Uses `git merge-base` to detect which branches have been fully merged into the base branch.
+List and clean up `agent/*` branches. Three categories are **always** protected from deletion:
+1. Branches with active running/starting sessions
+2. Branches with unmerged commits ahead of the base branch
+3. Branches with open GitHub PRs
+
+Only fully merged branches with no active session and no open PR are eligible for deletion.
 
 ### Parameters
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | `workdir` | string | no | cwd | Working directory (git repository) |
-| `base_branch` | string | no | `main` | Base branch to check merge status against |
-| `force` | boolean | no | `false` | Delete ALL `agent/*` branches regardless of merge status |
+| `base_branch` | string | no | auto-detected | Base branch to check merge status against |
+| `skip_session_check` | boolean | no | `false` | Bypass the active-session check only — useful when a session crashed and left a stale branch. Does **not** override unmerged-commit or open-PR protection. (`force` is a deprecated alias.) |
 | `dry_run` | boolean | no | `false` | Preview what would be deleted without actually deleting |
+| `session` | string | no | — | Session name or ID whose pending worktree decision to dismiss/clear (does not delete any branch) |
 
 ### Example
 
@@ -372,14 +382,18 @@ agent_worktree_cleanup(
   dry_run: true
 )
 
-// Delete merged branches
+// Delete fully merged branches
 agent_worktree_cleanup(workdir: "/home/user/my-project")
 
-// Force delete all agent/* branches
+// Bypass active-session check (session crashed, left stale branch)
+// Unmerged and open-PR protections still apply
 agent_worktree_cleanup(
   workdir: "/home/user/my-project",
-  force: true
+  skip_session_check: true
 )
+
+// Dismiss a pending worktree decision for a session without merging
+agent_worktree_cleanup(session: "fix-auth-bug")
 ```
 
 ---

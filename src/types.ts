@@ -55,6 +55,10 @@ export interface SessionConfig {
   permissionMode?: PermissionMode;
   codexApprovalPolicy?: CodexApprovalPolicy;
   resumeSessionId?: string;
+  /** Original requested session ID for worktree inheritance, independent of harness thread resume.
+   * Set even when resumeSessionId is cleared (e.g. Codex harness), so the D1 block can still
+   * inherit the persisted worktree context. */
+  resumeWorktreeFrom?: string;
   forkSession?: boolean;
   multiTurn?: boolean;
   /** Agent harness to use (e.g. "claude-code"). Defaults to the built-in default. */
@@ -63,6 +67,8 @@ export interface SessionConfig {
   worktreeStrategy?: WorktreeStrategy;
   /** Base branch for worktree merge/PR operations. */
   worktreeBaseBranch?: string;
+  /** Output mode: "deliverable" sends 📄 Deliverable ready instead of ✅ Completed. */
+  outputMode?: "deliverable";
 }
 
 /** Plan-approval policy for orchestrator wake flows. */

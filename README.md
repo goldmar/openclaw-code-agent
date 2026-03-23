@@ -334,7 +334,7 @@ Control what happens to worktree branches when a session completes via `worktree
 
 - **`off`** (default) — No worktree. Session runs in the main checkout.
 - **`manual`** — Create worktree but no automatic action. Branch is kept for manual handling via `agent_merge` or `agent_pr`.
-- **`ask`** — Push branch and send a Telegram notification with inline buttons (Merge locally / Create PR / Dismiss). Also wakes the orchestrator with full decision context (diff summary, original prompt, decision guidance) to present the choice to the user.
+- **`ask`** — Push branch and send a Telegram notification with inline buttons (Merge / Open PR / Dismiss). Also wakes the orchestrator with full decision context (diff summary, original prompt, decision guidance) to present the choice to the user.
 - **`delegate`** — Push branch and wake the orchestrator with full decision context. The orchestrator autonomously decides to merge, open a PR, or escalate to the user. Always sends a brief one-line notification to the user. **Available via `defaultWorktreeStrategy` plugin config; not exposed as a `worktree_strategy` tool parameter.**
 - **`auto-merge`** — Automatically merge to base branch and push. On conflicts, spawns a Claude Code conflict-resolver session.
 - **`auto-pr`** — Automatically create/update GitHub PR with full lifecycle management (requires `gh` CLI). If `gh` is unavailable, falls back to `ask` strategy.

@@ -56,6 +56,46 @@ function canAutoResume(session: ResumableSession, allowRecoveredRunningStub: boo
   );
 }
 
+/**
+ * Returns true when a session was killed by a shutdown signal before the
+ * harness ever initialised — i.e. it has no harness session ID to resume.
+ */
+function isNeverStartedShutdown(session: ResumableSession): boolean {
+  return session.killReason === "shutdown" && !session.harnessSessionId;
+}
+
+async function spawnFreshRelaunch(
+  sm: SessionManager,
+  session: ResumableSession,
+  _message: string,
+): Promise<RespondResult> {
+  try {
+    const freshConfig: SessionConfig = {
+      prompt: session.prompt,
+      workdir: session.workdir,
+      name: session.name,
+      model: session.model,
+      reasoningEffort: session.reasoningEffort,
+      worktreeStrategy: session.worktreeStrategy,
+      multiTurn: true,
+      originChannel: session.originChannel,
+      originThreadId: session.originThreadId,
+      originAgentId: session.originAgentId,
+      originSessionKey: session.originSessionKey,
+      permissionMode: session.currentPermissionMode,
+      codexApprovalPolicy: session.codexApprovalPolicy,
+      harness: "harnessName" in session ? session.harnessName : session.harness,
+    };
+    const relaunched = await sm.spawnAndAwaitRunning(freshConfig, { notifyLaunch: false });
+    sm.notifySession(relaunched, `▶️ [${relaunched.name}] Relaunched fresh`);
+    return {
+      text: `Session ${session.name} was relaunched fresh — it was killed during startup before the harness initialized. New session: ${relaunched.name} [${relaunched.id}].`,
+    };
+  } catch (err: unknown) {
+    return { text: `Error relaunching session ${session.name} [${getSessionRef(session)}]: ${errorMessage(err)}`, isError: true };
+  }
+}
+
 function validateApprovalMessage(sessionName: string, message: string): RespondResult | undefined {
   const isSimpleApproval =
     message.trim().length < SIMPLE_APPROVAL_MAX_CHARS &&
@@ -137,6 +177,11 @@ export async function executeRespond(
   }
 
   const target = session ?? persisted!;
+
+  if (isNeverStartedShutdown(target)) {
+    return spawnFreshRelaunch(sm, target, params.message);
+  }
+
   const autoResumeResult = await tryAutoResume(sm, target, params.message, { allowRecoveredRunningStub: !session });
   if (autoResumeResult) {
     return autoResumeResult;
@@ -174,6 +219,7 @@ export async function executeRespond(
     }
 
     // Permission escalation — explicit approve flag
+    const isPlanApproval = !!(params.approve && session.pendingPlanApproval);
     let approvalWarning = "";
     if (params.approve && session.pendingPlanApproval) {
       // Plan mode approval (existing behavior)
@@ -196,8 +242,13 @@ export async function executeRespond(
 
     await session.sendMessage(params.message);
 
-    if (redirectedActiveTurn) {
-      sm.notifySession(session, `↪️ [${session.name}] Redirected`, "redirected");
+    // Single notification: plan approval gets a dedicated icon; everything else
+    // (including interrupt/redirect) collapses into one ↪️ message with preview.
+    if (isPlanApproval) {
+      sm.notifySession(session, `👍 [${session.name}] Plan approved`, "plan-approved");
+    } else {
+      const notifyPreview = truncateText(params.message, 100);
+      sm.notifySession(session, `↪️ [${session.name}] "${notifyPreview}"`, "agent-respond");
     }
 
     if (!params.userInitiated) {

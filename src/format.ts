@@ -68,13 +68,15 @@ const STATUS_ICONS: Record<string, string> = {
   starting: "🟡",
   running: "🟢",
   completed: "✅",
+  deliverable: "📄",
   failed: "❌",
   killed: "⛔",
+  "awaiting-plan-approval": "📋",
 };
 
 /** Render a human-readable session row for `agent_sessions`. */
 export function formatSessionListing(session: SessionListRenderable): string {
-  const icon = STATUS_ICONS[session.status] ?? "❓";
+  const icon = STATUS_ICONS[session.phase] ?? STATUS_ICONS[session.status] ?? "❓";
   const duration = formatDuration(session.duration);
   const mode = session.multiTurn ? "multi-turn" : "single";
   const promptSummary =

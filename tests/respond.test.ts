@@ -757,3 +757,123 @@ describe("executeRespond — resolve by name", () => {
     assert.ok(result.text.includes("my-session"));
   });
 });
+
+describe("executeRespond — fresh relaunch (never-started shutdown)", () => {
+  it("relaunches fresh when session was shutdown-killed before harness initialized", async () => {
+    let spawnCalled = false;
+    const session = createStubSession({
+      status: "killed",
+      killReason: "shutdown",
+      harnessSessionId: undefined,
+      name: "startup-victim",
+      prompt: "original task prompt",
+    });
+    const sm = createStubSessionManager({ "test-id": session });
+    sm.spawn = (config: any) => {
+      spawnCalled = true;
+      assert.equal(config.prompt, "original task prompt", "should use original session prompt");
+      assert.equal(config.resumeSessionId, undefined, "must NOT set resumeSessionId");
+      assert.equal(config.multiTurn, true);
+      return createStubSession({ name: "startup-victim", id: "new-id" });
+    };
+    const result = await executeRespond(sm, { session: "test-id", message: "please restart" });
+    assert.ok(spawnCalled, "spawn should have been called");
+    assert.equal(result.isError, undefined);
+    assert.ok(result.text.includes("was relaunched fresh"), `unexpected: ${result.text}`);
+    assert.ok(result.text.includes("killed during startup before the harness initialized"), `unexpected: ${result.text}`);
+    assert.ok(result.text.includes("new-id"), `unexpected: ${result.text}`);
+  });
+
+  it("does NOT take fresh-relaunch path when shutdown-killed session HAS a harnessSessionId (normal auto-resume)", async () => {
+    const session = createStubSession({
+      status: "killed",
+      killReason: "shutdown",
+      harnessSessionId: "harness-already-started",
+      name: "shutdown-session",
+    });
+    const sm = createStubSessionManager({ "test-id": session });
+    sm.spawn = () => createStubSession({ name: "shutdown-session", id: "new-id" });
+    const result = await executeRespond(sm, { session: "test-id", message: "wake up" });
+    // Should auto-resume, not fresh-relaunch
+    assert.ok(result.text.includes("Auto-resumed"), `unexpected: ${result.text}`);
+    assert.ok(!result.text.includes("relaunched fresh"), `should not be a fresh relaunch: ${result.text}`);
+  });
+
+  it("preserves origin routing metadata on fresh relaunch", async () => {
+    const session = createStubSession({
+      status: "killed",
+      killReason: "shutdown",
+      harnessSessionId: undefined,
+      name: "routed-victim",
+      prompt: "routed task",
+      originChannel: "telegram|bot|456",
+      originThreadId: 99,
+      originAgentId: "agent-x",
+      originSessionKey: "agent:main:telegram:group:456:topic:99",
+      currentPermissionMode: "default",
+      codexApprovalPolicy: "on-request",
+    });
+    const sm = createStubSessionManager({ "test-id": session });
+
+    let capturedConfig: any;
+    sm.spawn = (config: any) => {
+      capturedConfig = config;
+      return createStubSession({ name: "routed-victim", id: "new-id" });
+    };
+
+    const result = await executeRespond(sm, { session: "test-id", message: "restart" });
+    assert.ok(result.text.includes("relaunched fresh"), `unexpected: ${result.text}`);
+    assert.ok(capturedConfig, "spawn config should be captured");
+    assert.equal(capturedConfig.resumeSessionId, undefined);
+    assert.equal(capturedConfig.originChannel, "telegram|bot|456");
+    assert.equal(capturedConfig.originThreadId, 99);
+    assert.equal(capturedConfig.originAgentId, "agent-x");
+    assert.equal(capturedConfig.originSessionKey, "agent:main:telegram:group:456:topic:99");
+    assert.equal(capturedConfig.permissionMode, "default");
+    assert.equal(capturedConfig.codexApprovalPolicy, "on-request");
+  });
+
+  it("takes fresh-relaunch path for a persisted session shutdown-killed before harness initialized", async () => {
+    const sm = createStubSessionManager();
+    sm.persisted.set("never-started-key", {
+      sessionId: "ns_abc123",
+      harnessSessionId: "",
+      name: "never-started-session",
+      prompt: "do the thing",
+      workdir: "/tmp/workspace",
+      model: "gpt-5",
+      createdAt: 100,
+      status: "killed",
+      killReason: "shutdown",
+      costUsd: 0,
+    });
+    sm.idIndex.set("ns_abc123", "never-started-key");
+
+    let capturedConfig: any;
+    sm.spawn = (config: any) => {
+      capturedConfig = config;
+      return createStubSession({ name: "never-started-session", id: "fresh-id" });
+    };
+
+    const result = await executeRespond(sm, { session: "ns_abc123", message: "try again" });
+    assert.ok(result.text.includes("relaunched fresh"), `unexpected: ${result.text}`);
+    assert.equal(capturedConfig.prompt, "do the thing");
+    assert.equal(capturedConfig.resumeSessionId, undefined);
+  });
+
+  it("returns error when fresh relaunch spawn throws", async () => {
+    const session = createStubSession({
+      status: "killed",
+      killReason: "shutdown",
+      harnessSessionId: undefined,
+      name: "error-victim",
+      prompt: "task",
+    });
+    const sm = createStubSessionManager({ "test-id": session });
+    sm.spawn = () => { throw new Error("spawn exploded"); };
+    const result = await executeRespond(sm, { session: "test-id", message: "restart" });
+    assert.equal(result.isError, true);
+    assert.ok(result.text.includes("Error relaunching"), `unexpected: ${result.text}`);
+    assert.ok(result.text.includes("spawn exploded"), `unexpected: ${result.text}`);
+  });
+});

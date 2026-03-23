@@ -294,7 +294,7 @@ Notifications are routed to the Telegram thread/topic where the session was laun
 | Session auto-resumes | `▶️ Auto-resumed` |
 | Session idle-times out | `💤 Idle timeout` |
 | Session is forcibly stopped | `⛔ Stopped ...` with the specific stop reason |
-| Worktree decision pending (`ask`/`delegate`) | Telegram notification with inline buttons (Merge locally / Create PR / Dismiss) |
+| Worktree decision pending (`ask`/`delegate`) | Telegram notification with inline buttons (Merge / Open PR / Dismiss) |
 
 ### Sending completion summaries — use `message send`, not inline reply
 
@@ -369,7 +369,7 @@ When a session uses `worktree_strategy`, the agent runs in an isolated git branc
 |---|---|---|
 | `off` (default) | No worktree. Session runs in main checkout | Simple/trusted tasks |
 | `manual` | Creates worktree; no auto action | You want to review diffs before merging |
-| `ask` | Sends Telegram inline buttons (Merge locally / Create PR / Dismiss) | User should decide |
+| `ask` | Sends Telegram inline buttons (Merge / Open PR / Dismiss) | User should decide |
 | `auto-merge` | Merges automatically; spawns conflict-resolver if needed | Trusted tasks on a safe branch |
 | `auto-pr` | Creates/updates GitHub PR automatically (requires `gh`) | Feature branches needing review |
 

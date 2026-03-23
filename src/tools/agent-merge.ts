@@ -1,4 +1,5 @@
 import { Type } from "@sinclair/typebox";
+import { existsSync } from "fs";
 import { sessionManager } from "../singletons";
 import type { OpenClawPluginToolContext } from "../types";
 import { getBranchName, mergeBranch, pushBranch, deleteBranch, detectDefaultBranch } from "../worktree";
@@ -30,7 +31,7 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
           description: "Merge strategy: 'merge' (default, creates merge commit) or 'squash' (squashes all commits)",
         }),
       ),
-      push: Type.Optional(Type.Boolean({ description: "Push the base branch after successful merge (default: true)" })),
+      push: Type.Optional(Type.Boolean({ description: "Push the base branch after successful merge (default: false)" })),
       delete_branch: Type.Optional(Type.Boolean({ description: "Delete the worktree branch after successful merge (default: true)" })),
     }),
     async execute(_id: string, params: unknown) {
@@ -57,14 +58,22 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
         return { content: [{ type: "text", text: `Error: Session "${params.session}" does not have a worktree.` }] };
       }
 
-      const branchName = getBranchName(worktreePath);
+      // Fix 2-A: Fall back to persisted branch name if live lookup fails (worktree may be removed)
+      const liveBranch = getBranchName(worktreePath);
+      const branchName = liveBranch ?? persistedSession?.worktreeBranch;
       if (!branchName) {
-        return { content: [{ type: "text", text: `Error: Cannot determine branch name for worktree ${worktreePath}.` }] };
+        return { content: [{ type: "text", text: `Error: Cannot determine branch name for worktree at ${worktreePath}. The worktree may have been removed and no persisted branch name is available.` }] };
+      }
+
+      // Fix 2-D: If worktreePath no longer exists (removed after session ended), that is fine —
+      // mergeBranch operates on originalWorkdir and does not require the worktree directory.
+      if (!existsSync(worktreePath)) {
+        console.info(`[agent_merge] Worktree directory ${worktreePath} no longer exists; proceeding with merge via originalWorkdir (${originalWorkdir})`);
       }
 
       const baseBranch = params.base_branch ?? detectDefaultBranch(originalWorkdir);
       const strategy = params.strategy ?? "merge";
-      const shouldPush = params.push !== false; // Default true
+      const shouldPush = params.push === true; // Default false
       const shouldCleanup = params.delete_branch !== false; // Default true
 
       // Attempt merge

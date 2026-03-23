@@ -1,4 +1,7 @@
 import { EventEmitter } from "events";
+import { appendFileSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
 import { nanoid } from "nanoid";
 import { getDefaultHarness, getHarness } from "./harness";
 import type { AgentHarness, HarnessSession, HarnessMessage } from "./harness";
@@ -11,7 +14,7 @@ import {
   resolveReasoningEffortForHarness,
 } from "./config";
 
-const OUTPUT_BUFFER_MAX = 200;
+const OUTPUT_BUFFER_MAX = 2000;
 const STARTUP_TIMEOUT_MS = 2 * 60 * 1000; // 2 minutes
 
 function errorMessage(err: unknown): string {
@@ -107,8 +110,12 @@ export class Session extends EventEmitter {
   // Worktree
   worktreePath?: string;
   originalWorkdir?: string;
+  worktreeBranch?: string; // Fix 2-B: cached at creation to avoid live lookups after worktree removal
   readonly worktreeStrategy?: WorktreeStrategy;
   readonly worktreeBaseBranch?: string;
+
+  // Output mode
+  readonly outputMode?: "deliverable";
 
   // Multi-turn
   readonly multiTurn: boolean;
@@ -186,6 +193,7 @@ export class Session extends EventEmitter {
     this.multiTurn = config.multiTurn ?? true;
     this.worktreeStrategy = config.worktreeStrategy;
     this.worktreeBaseBranch = config.worktreeBaseBranch;
+    this.outputMode = config.outputMode;
     this.startedAt = Date.now();
     this.abortController = new AbortController();
   }
@@ -473,6 +481,11 @@ export class Session extends EventEmitter {
         this.outputBuffer.push(msg.text);
         if (this.outputBuffer.length > OUTPUT_BUFFER_MAX) {
           this.outputBuffer.splice(0, this.outputBuffer.length - OUTPUT_BUFFER_MAX);
+        }
+        try {
+          appendFileSync(join(tmpdir(), `openclaw-agent-${this.id}.txt`), msg.text + "\n", "utf-8");
+        } catch {
+          // best-effort; don't let disk errors interrupt the session
         }
         this.emit("output", this, msg.text);
       } else if (msg.type === "tool_use") {
