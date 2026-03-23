@@ -16,6 +16,12 @@ export interface SessionNotificationRequest {
   notifyUser?: SessionNotificationPolicy;
   /** Telegram inline keyboard buttons. Ignored by non-Telegram channels. */
   buttons?: Array<Array<{ label: string; callbackData: string }>>;
+  /**
+   * Called when ALL user-notification delivery attempts fail (direct channel + system-event
+   * fallback). Use this to fire a fallback terminal notification when a turn-complete delivery
+   * is unconfirmed and all retry paths are exhausted.
+   */
+  onUserNotifyFailed?: () => void;
 }
 
 type DispatchTarget = "chat.send" | "message.send" | "system.event";
@@ -28,12 +34,44 @@ type NotificationRoute = {
 };
 
 export class WakeDispatcher {
-  private pendingRetryTimers: Set<ReturnType<typeof setTimeout>> = new Set();
+  private pendingRetryTimers: Map<string, Set<ReturnType<typeof setTimeout>>> = new Map();
 
-  /** Cancel any scheduled retry timers (called during service shutdown). */
+  constructor() {
+    process.on("beforeExit", () => {
+      if (this.pendingRetryTimers.size > 0) {
+        console.warn(
+          `[WakeDispatcher] beforeExit: ${this.pendingRetryTimers.size} pending retry timer(s) ` +
+          `still active — event loop should stay alive, investigate if process exits prematurely.`,
+        );
+        // DO NOT cancel — cancelling abandons in-flight notification retries
+      }
+    });
+
+    const gracefulShutdown = (signal: string): void => {
+      if (this.pendingRetryTimers.size === 0) return;
+      console.warn(
+        `[WakeDispatcher] ${signal}: ${this.pendingRetryTimers.size} pending retry timer(s) ` +
+        `will be abandoned on hard exit.`,
+      );
+    };
+    process.once("SIGTERM", () => gracefulShutdown("SIGTERM"));
+    process.once("SIGINT", () => gracefulShutdown("SIGINT"));
+  }
+
+  /** Cancel all scheduled retry timers across all sessions. */
   clearPendingRetries(): void {
-    for (const timer of this.pendingRetryTimers) clearTimeout(timer);
+    for (const timers of this.pendingRetryTimers.values()) {
+      for (const timer of timers) clearTimeout(timer);
+    }
     this.pendingRetryTimers.clear();
+  }
+
+  /** Cancel retry timers for a specific session (e.g. when a session is killed). */
+  clearRetryTimersForSession(sessionId: string): void {
+    const timers = this.pendingRetryTimers.get(sessionId);
+    if (!timers) return;
+    for (const timer of timers) clearTimeout(timer);
+    this.pendingRetryTimers.delete(sessionId);
   }
 
   private getOriginSessionKey(session: Session): string | undefined {
@@ -126,8 +164,11 @@ export class WakeDispatcher {
     console.info(
       `[WakeDispatcher] ${opts.target} ${opts.phase} started attempt ${attempt}/${WAKE_MAX_ATTEMPTS} for ${opts.label} session=${opts.sessionId}`,
     );
+    console.info(
+      `[WakeDispatcher] dispatching notification: label=${opts.label} session=${opts.sessionId}`,
+    );
 
-    execFile("openclaw", args, { timeout: WAKE_CLI_TIMEOUT_MS }, (err) => {
+    execFile("openclaw", args, { timeout: WAKE_CLI_TIMEOUT_MS }, (err, _stdout, stderr) => {
       const elapsedMs = Date.now() - startedAt;
       if (!err) {
         console.info(
@@ -136,10 +177,11 @@ export class WakeDispatcher {
         return;
       }
 
+      const stderrSuffix = stderr?.trim() ? ` | stderr: ${stderr.trim()}` : "";
       const failurePrefix = `[WakeDispatcher] ${opts.target} ${opts.phase} failed`;
       if (attempt >= WAKE_MAX_ATTEMPTS) {
         console.error(
-          `${failurePrefix} after ${attempt} attempts for ${opts.label} session=${opts.sessionId} in ${elapsedMs}ms: ${err.message}`,
+          `${failurePrefix} after ${attempt} attempts for ${opts.label} session=${opts.sessionId} in ${elapsedMs}ms: ${err.message}${stderrSuffix}`,
         );
         opts.onFinalFailure?.();
         return;
@@ -147,13 +189,20 @@ export class WakeDispatcher {
 
       const delay = this.retryDelayMs(attempt);
       console.error(
-        `${failurePrefix} attempt ${attempt}/${WAKE_MAX_ATTEMPTS} for ${opts.label} session=${opts.sessionId} in ${elapsedMs}ms: ${err.message}. Retrying in ${delay}ms`,
+        `${failurePrefix} attempt ${attempt}/${WAKE_MAX_ATTEMPTS} for ${opts.label} session=${opts.sessionId} in ${elapsedMs}ms: ${err.message}${stderrSuffix}. Retrying in ${delay}ms`,
       );
       const timer = setTimeout(() => {
-        this.pendingRetryTimers.delete(timer);
+        const timers = this.pendingRetryTimers.get(opts.sessionId);
+        if (timers) {
+          timers.delete(timer);
+          if (timers.size === 0) this.pendingRetryTimers.delete(opts.sessionId);
+        }
         this.executeWithRetries(args, opts, attempt + 1);
       }, delay);
-      this.pendingRetryTimers.add(timer);
+      if (!this.pendingRetryTimers.has(opts.sessionId)) {
+        this.pendingRetryTimers.set(opts.sessionId, new Set());
+      }
+      this.pendingRetryTimers.get(opts.sessionId)!.add(timer);
     });
   }
 
@@ -234,6 +283,7 @@ export class WakeDispatcher {
     label: string,
     sessionId: string,
     phase: DispatchPhase,
+    onFinalFailure?: () => void,
   ): void {
     const args = ["system", "event", "--text", text, "--mode", "now"];
     this.executeWithRetries(args, {
@@ -241,6 +291,7 @@ export class WakeDispatcher {
       sessionId,
       target: "system.event",
       phase,
+      onFinalFailure,
     });
   }
 
@@ -250,15 +301,16 @@ export class WakeDispatcher {
     label: string,
     sessionId: string,
     buttons?: Array<Array<{ label: string; callbackData: string }>>,
+    onAllFailed?: () => void,
   ): void {
     const route = this.parseNotificationRoute(session);
     if (!route) {
-      this.fireSystemEventWithRetry(text, `${label}-notify-system`, sessionId, "notify");
+      this.fireSystemEventWithRetry(text, `${label}-notify-system`, sessionId, "notify", onAllFailed);
       return;
     }
 
     this.fireDirectNotificationWithRetry(route, text, `${label}-notify`, sessionId, buttons, () => {
-      this.fireSystemEventWithRetry(text, `${label}-notify-fallback`, sessionId, "notify");
+      this.fireSystemEventWithRetry(text, `${label}-notify-fallback`, sessionId, "notify", onAllFailed);
     });
   }
 
@@ -278,14 +330,14 @@ export class WakeDispatcher {
     const buttons = request.buttons;
 
     if (notifyUser === "always" && userMessage) {
-      this.sendUserNotification(session, userMessage, request.label, session.id, buttons);
+      this.sendUserNotification(session, userMessage, request.label, session.id, buttons, request.onUserNotifyFailed);
     }
 
     if (!wakeMessage) return;
 
     if (!sessionKey) {
       if (notifyUser === "on-wake-fallback" && userMessage) {
-        this.sendUserNotification(session, userMessage, request.label, session.id, buttons);
+        this.sendUserNotification(session, userMessage, request.label, session.id, buttons, request.onUserNotifyFailed);
       }
       this.fireSystemEventWithRetry(wakeMessage, `${request.label}-wake-system`, session.id, "wake");
       return;

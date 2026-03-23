@@ -83,13 +83,13 @@ export function isGitHubCLIAvailable(): boolean {
 }
 
 /**
- * Check if a directory is a git repo with at least one remote.
+ * Check if a directory is inside a git repository.
  */
-export function isGitRepoWithRemote(dir: string): boolean {
+export function isGitRepo(dir: string): boolean {
   if (!isGitAvailable()) return false;
   try {
-    const result = execFileSync("git", ["remote"], { cwd: dir, timeout: 5_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
-    return result.trim().length > 0;
+    execFileSync("git", ["rev-parse", "--git-dir"], { cwd: dir, timeout: 5_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
+    return true;
   } catch {
     return false;
   }
@@ -229,6 +229,23 @@ export function removeWorktree(repoDir: string, worktreePath: string): boolean {
       console.error(`[worktree] Both git worktree remove and rmSync failed for ${worktreePath}: ${fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr)}`);
       return false;
     }
+  }
+}
+
+/**
+ * Prune stale worktree metadata from `.git/worktrees/` (best-effort).
+ * Call this before recreating a worktree whose directory was manually deleted but whose
+ * git metadata still exists, to avoid "branch already used by worktree" errors.
+ */
+export function pruneWorktrees(repoDir: string): void {
+  try {
+    execFileSync(
+      "git",
+      ["-C", repoDir, "worktree", "prune"],
+      { timeout: 10_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
+    );
+  } catch {
+    // best-effort — proceed even if prune fails
   }
 }
 

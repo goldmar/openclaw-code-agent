@@ -204,7 +204,7 @@ export class SessionStore {
       currentPermissionMode: session.currentPermissionMode,
       codexApprovalPolicy: session.codexApprovalPolicy,
       worktreePath: session.worktreePath,
-      worktreeBranch: session.worktreePath ? getBranchName(session.worktreePath) : undefined,
+      worktreeBranch: session.worktreeBranch ?? (session.worktreePath ? getBranchName(session.worktreePath) : undefined), // Fix 2-B: prefer cached name
       worktreeStrategy: session.worktreeStrategy,
     };
     this.persisted.set(stub.harnessSessionId, stub);
@@ -256,7 +256,7 @@ export class SessionStore {
       currentPermissionMode: session.currentPermissionMode,
       codexApprovalPolicy: session.codexApprovalPolicy,
       worktreePath: session.worktreePath,
-      worktreeBranch: session.worktreePath ? getBranchName(session.worktreePath) : undefined,
+      worktreeBranch: session.worktreeBranch ?? (session.worktreePath ? getBranchName(session.worktreePath) : undefined), // Fix 2-B: prefer cached name
       worktreeStrategy: session.worktreeStrategy,
     };
 

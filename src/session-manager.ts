@@ -9,9 +9,10 @@ import { SessionMetricsRecorder } from "./session-metrics";
 import { WakeDispatcher, type SessionNotificationRequest } from "./wake-dispatcher";
 import { looksLikeWaitingForUser } from "./waiting-detector";
 import {
-  isGitRepoWithRemote,
+  isGitRepo,
   createWorktree,
   removeWorktree,
+  pruneWorktrees,
   hasEnoughWorktreeSpace,
   getBranchName,
   hasCommitsAhead,
@@ -99,10 +100,18 @@ export class SessionManager {
       console.warn(`[SessionManager] Name conflict: "${baseName}" → "${name}" (active session with same name exists)`);
     }
 
-    // D1: Resume context — if resuming and worktree info exists, try to recreate or warn
-    // F10: Restore worktreeStrategy from persisted record if not explicitly provided
-    if (config.resumeSessionId) {
-      const persistedSession = this.store.getPersistedSession(config.resumeSessionId);
+    // Hoist worktree variables before D1 so the D1 block can populate them.
+    // (Bug 1 fix: previously declared after D1, leaving them undefined on resume.)
+    let worktreePath: string | undefined;
+    let worktreeBranchName: string | undefined; // Fix 2-B: capture once at creation
+
+    // D1: Resume context — if resuming and worktree info exists, try to recreate or warn.
+    // F10: Restore worktreeStrategy from persisted record if not explicitly provided.
+    // Bug 3 fix: use resumeWorktreeFrom as fallback so Codex resumes (where resumeSessionId
+    // is cleared by decideResumeSessionId) still inherit the persisted worktree context.
+    const resumeWorktreeId = config.resumeSessionId ?? config.resumeWorktreeFrom;
+    if (resumeWorktreeId) {
+      const persistedSession = this.store.getPersistedSession(resumeWorktreeId);
       if (persistedSession) {
         // Restore strategy if not explicitly overridden
         if (!config.worktreeStrategy && persistedSession.worktreeStrategy) {
@@ -114,13 +123,23 @@ export class SessionManager {
           if (worktreeExists) {
             console.info(`[SessionManager] Resuming with existing worktree: ${persistedSession.worktreePath}`);
             config.workdir = persistedSession.worktreePath;
+            // Bug 1 fix: assign hoisted variables so system prompt injection and
+            // session property assignment are reached downstream.
+            worktreePath = persistedSession.worktreePath;
+            worktreeBranchName = persistedSession.worktreeBranch ?? getBranchName(persistedSession.worktreePath);
           } else if (persistedSession.worktreeBranch && persistedSession.workdir) {
-            // Try to recreate worktree from branch
+            // Try to recreate worktree from branch.
+            // Bug 2 fix: prune stale .git/worktrees/ metadata first to avoid
+            // "branch already used by worktree" errors after manual directory deletion.
             try {
               const repoDir = persistedSession.workdir;
+              pruneWorktrees(repoDir);
               const newWorktreePath = createWorktree(repoDir, persistedSession.worktreeBranch.replace(/^agent\//, ""));
               console.info(`[SessionManager] Recreated worktree from branch ${persistedSession.worktreeBranch}: ${newWorktreePath}`);
               config.workdir = newWorktreePath;
+              // Bug 1 fix: assign hoisted variables for the recreation path too.
+              worktreePath = newWorktreePath;
+              worktreeBranchName = persistedSession.worktreeBranch;
             } catch (err) {
               console.warn(`[SessionManager] Failed to recreate worktree for resume: ${err instanceof Error ? err.message : String(err)}, using original workdir`);
               config.workdir = persistedSession.workdir;
@@ -137,32 +156,70 @@ export class SessionManager {
     // Strategy: off (or undefined) = no worktree, any other value = create worktree
     // Skip entirely for resume — the resume block above already restored the correct workdir.
     let actualWorkdir = config.workdir;
-    let worktreePath: string | undefined;
     let worktreeCreationFailed = false;
-    const strategy = config.worktreeStrategy ?? pluginConfig.defaultWorktreeStrategy;
+    let worktreeSkippedNotGitRemote = false; // Fix 1-A
+    // F2: Enforce admin defaultWorktreeStrategy — agents cannot override it unless it is
+    // "delegate" or unset.  Resumed sessions inherit their strategy at creation time and are
+    // exempt from this enforcement (their worktreeStrategy was already baked in above).
+    const isResumedSession = !!(config.resumeSessionId ?? config.resumeWorktreeFrom);
+    const strategy = (!isResumedSession &&
+      pluginConfig.defaultWorktreeStrategy &&
+      pluginConfig.defaultWorktreeStrategy !== "delegate")
+      ? pluginConfig.defaultWorktreeStrategy   // Admin pinned a non-delegate strategy — override
+      : (config.worktreeStrategy ?? pluginConfig.defaultWorktreeStrategy); // delegate/unset — respect per-launch
     // Bake effective strategy back into config so Session and handleWorktreeStrategy see it
     if (strategy && !config.worktreeStrategy) config.worktreeStrategy = strategy;
-    const shouldWorktree = !config.resumeSessionId && strategy && strategy !== "off";
-    if (shouldWorktree && isGitRepoWithRemote(config.workdir)) {
+    // Bug 3 fix: also gate on !worktreePath — if we already inherited a worktree from the
+    // persisted session (via resumeWorktreeFrom), don't attempt a new worktree creation.
+    const shouldWorktree = !config.resumeSessionId && !worktreePath && strategy && strategy !== "off";
+    if (shouldWorktree && isGitRepo(config.workdir)) {
       // A3: Check space before creating worktree
       if (!hasEnoughWorktreeSpace()) {
         console.warn(`[SessionManager] Insufficient space for worktree (< 100MB), skipping worktree creation`);
+        worktreeCreationFailed = true; // Fix 2-B: surface disk-space skip as a user-visible warning
       } else {
         try {
           worktreePath = createWorktree(config.workdir, name);
           actualWorkdir = worktreePath;
+          worktreeBranchName = getBranchName(worktreePath); // Fix 2-B: cache branch name immediately
           console.log(`[SessionManager] Created worktree at ${worktreePath}`);
         } catch (err) {
           worktreeCreationFailed = true;
           console.warn(`[SessionManager] Failed to create worktree: ${err instanceof Error ? err.message : String(err)}, using original workdir`);
         }
       }
+    } else if (shouldWorktree) {
+      // Fix 1-A: workdir is not a git repo — skip with dedicated notification
+      worktreeSkippedNotGitRemote = true;
+      console.info(`[SessionManager] Worktree creation skipped for "${name}" — workdir is not a git repo`);
     }
 
-    const session = new Session({ ...config, workdir: actualWorkdir }, name);
+    // Fix 1-B: Inject worktree-aware system prompt so the agent commits to its branch
+    let effectiveSystemPrompt = config.systemPrompt;
+    if (worktreePath && worktreeBranchName) {
+      const worktreeSuffix = [
+        ``,
+        `You are working in a git worktree.`,
+        `Worktree path: ${worktreePath}`,
+        `Branch: ${worktreeBranchName}`,
+        ``,
+        `IMPORTANT: ALL file edits must be made within this worktree at ${worktreePath}.`,
+        `Do NOT edit files directly in ${config.workdir} (the original workspace).`,
+        `If your task references files by absolute path under ${config.workdir}, rewrite those`,
+        `paths relative to your current working directory. For example:`,
+        `  "${config.workdir}/src/file.py"  →  use relative path "src/file.py"`,
+        ``,
+        `Commit all your file changes to this branch before finishing.`,
+        `Use \`git add\` and \`git commit\`. Do NOT run \`git checkout\`, \`git switch\`, or \`git reset --hard\` as these will detach or corrupt the worktree HEAD.`,
+      ].join("\n");
+      effectiveSystemPrompt = (config.systemPrompt ?? "") + worktreeSuffix;
+    }
+
+    const session = new Session({ ...config, workdir: actualWorkdir, systemPrompt: effectiveSystemPrompt }, name);
     if (worktreePath) {
       session.worktreePath = worktreePath;
       session.originalWorkdir = config.workdir;
+      session.worktreeBranch = worktreeBranchName; // Fix 2-B: store cached branch name on session
     }
     this.sessions.set(session.id, session);
     this.metrics.incrementLaunched();
@@ -173,7 +230,9 @@ export class SessionManager {
         this.store.markRunning(session);
       } else if (TERMINAL_STATUSES.has(newStatus)) {
         // Fire async handler without awaiting to avoid blocking event loop
-        void this.onSessionTerminal(session);
+        this.onSessionTerminal(session).catch((err) => {
+          console.error(`[SessionManager] onSessionTerminal threw for session ${session.id}:`, err);
+        });
       }
     });
 
@@ -200,6 +259,14 @@ export class SessionManager {
       this.wakeDispatcher.dispatchSessionNotification(session, {
         label: "worktree-creation-failed",
         userMessage: warningText,
+      });
+    }
+
+    // Fix 1-A: Notify when worktree was skipped because workdir is not a git repo with a remote
+    if (worktreeSkippedNotGitRemote) {
+      this.wakeDispatcher.dispatchSessionNotification(session, {
+        label: "worktree-skipped-not-git-remote",
+        userMessage: `⚠️ [${session.name}] Worktree creation skipped — workdir is not a git repo with a remote. Running in original workdir.`,
       });
     }
 
@@ -258,34 +325,42 @@ export class SessionManager {
    * Handle worktree merge-back strategy when a session with a worktree terminates.
    * Called from onSessionTerminal BEFORE worktree cleanup.
    */
-  private async handleWorktreeStrategy(session: Session): Promise<void> {
+  private async handleWorktreeStrategy(session: Session): Promise<boolean> {
     // Only handle completed sessions (not failed/killed)
-    if (session.status !== "completed") return;
+    if (session.status !== "completed") return false;
 
     const strategy = session.worktreeStrategy;
     // Skip merge-back for "off", "manual", or undefined
-    if (!strategy || strategy === "off" || strategy === "manual") return;
+    if (!strategy || strategy === "off" || strategy === "manual") return false;
 
     const repoDir = session.originalWorkdir!;
     const worktreePath = session.worktreePath!;
-    const branchName = getBranchName(worktreePath);
+    // Fix 2-C: Fall back to session.worktreeBranch if live lookup fails (worktree may be removed)
+    const branchName = getBranchName(worktreePath) ?? session.worktreeBranch;
     if (!branchName) {
-      console.warn(`[SessionManager] Cannot determine branch name for worktree ${worktreePath}`);
-      return;
+      this.dispatchSessionNotification(session, {
+        label: "worktree-no-branch-name",
+        userMessage: `⚠️ [${session.name}] Cannot determine branch name for worktree ${worktreePath}. The worktree may have been removed or is in detached HEAD state. Manual cleanup may be needed.`,
+      });
+      return true;
     }
 
     const baseBranch = session.worktreeBaseBranch ?? detectDefaultBranch(repoDir);
 
     // Check if there are any commits ahead
+    // Fix 1-C: Replace silent return with a user notification
     if (!hasCommitsAhead(repoDir, branchName, baseBranch)) {
-      console.info(`[SessionManager] No commits ahead of ${baseBranch} for ${branchName}, skipping merge-back`);
-      return;
+      this.dispatchSessionNotification(session, {
+        label: "worktree-no-commits-ahead",
+        userMessage: `⚠️ [${session.name}] Auto-merge: branch '${branchName}' has no commits ahead of '${baseBranch}'.\nChanges may be uncommitted. Check worktree directory: ${worktreePath}`,
+      });
+      return true;
     }
 
     const diffSummary = getDiffSummary(repoDir, branchName, baseBranch);
     if (!diffSummary) {
       console.warn(`[SessionManager] Failed to get diff summary for ${branchName}, skipping merge-back`);
-      return;
+      return false;
     }
 
     // Build notification message
@@ -356,7 +431,7 @@ export class SessionManager {
           pendingWorktreeDecisionSince: new Date().toISOString(),
         });
       }
-      return;
+      return true;
     }
 
     if (strategy === "delegate") {
@@ -418,32 +493,14 @@ export class SessionManager {
           pendingWorktreeDecisionSince: new Date().toISOString(),
         });
       }
-      return;
+      return true;
     }
 
     if (strategy === "auto-merge") {
-      // Push branch first
-      if (!pushBranch(repoDir, branchName)) {
-        this.wakeDispatcher.dispatchSessionNotification(session, {
-          label: "worktree-merge-push-failed",
-          userMessage: `❌ [${session.name}] Failed to push ${branchName} — cannot auto-merge`,
-        });
-        return;
-      }
-
-      // Attempt merge
+      // Attempt merge (no push — auto-merge is local-only)
       const mergeResult = mergeBranch(repoDir, branchName, baseBranch);
 
       if (mergeResult.success) {
-        // Push base branch
-        if (!pushBranch(repoDir, baseBranch)) {
-          this.wakeDispatcher.dispatchSessionNotification(session, {
-            label: "worktree-merge-base-push-failed",
-            userMessage: `⚠️ [${session.name}] Merged ${branchName} → ${baseBranch} locally, but failed to push ${baseBranch}`,
-          });
-          return;
-        }
-
         // Delete branch
         deleteBranch(repoDir, branchName);
 
@@ -457,7 +514,7 @@ export class SessionManager {
 
         this.wakeDispatcher.dispatchSessionNotification(session, {
           label: "worktree-merge-success",
-          userMessage: `✅ [${session.name}] Merged and pushed ${branchName} → ${baseBranch}. Branch cleaned up.`,
+          userMessage: `✅ [${session.name}] Merged ${branchName} → ${baseBranch} locally. Branch cleaned up.`,
         });
       } else if (mergeResult.conflictFiles && mergeResult.conflictFiles.length > 0) {
         // Spawn conflict resolver session
@@ -496,7 +553,7 @@ export class SessionManager {
           userMessage: `❌ [${session.name}] Merge failed: ${mergeResult.error ?? "unknown error"}`,
         });
       }
-      return;
+      return true;
     }
 
     if (strategy === "auto-pr") {
@@ -522,7 +579,7 @@ export class SessionManager {
             { label: "❌ Dismiss", callbackData: `code-agent:dismiss:${session.id}` },
           ]],
         });
-        return;
+        return true;
       }
 
       // Push branch first (required for PR operations)
@@ -531,7 +588,7 @@ export class SessionManager {
           label: "worktree-pr-push-failed",
           userMessage: `❌ [${session.name}] Failed to push ${branchName} — cannot create/update PR`,
         });
-        return;
+        return true;
       }
 
       // Sync PR state from GitHub
@@ -583,7 +640,7 @@ export class SessionManager {
             userMessage: `ℹ️ [${session.name}] PR up to date: ${prStatus.url}`,
           });
         }
-        return;
+        return true;
       } else if (prStatus.exists && prStatus.state === "merged") {
         // Case: PR was merged
         if (session.harnessSessionId) {
@@ -596,7 +653,7 @@ export class SessionManager {
           label: "worktree-pr-merged",
           userMessage: `✅ [${session.name}] PR already merged: ${prStatus.url}`,
         });
-        return;
+        return true;
       } else if (prStatus.exists && prStatus.state === "closed") {
         // Case: PR was closed without merging
         if (session.harnessSessionId) {
@@ -614,7 +671,7 @@ export class SessionManager {
             { label: "❌ Dismiss", callbackData: `code-agent:dismiss:${session.id}` },
           ]],
         });
-        return;
+        return true;
       } else {
         // Case: No PR exists — create new PR
         const prTitle = `[openclaw-code-agent] ${session.name}`;
@@ -655,9 +712,10 @@ export class SessionManager {
             userMessage: `❌ [${session.name}] Failed to create PR: ${prResult.error ?? "unknown error"}`,
           });
         }
-        return;
+        return true;
       }
     }
+    return false;
   }
 
   private async onSessionTerminal(session: Session): Promise<void> {
@@ -665,18 +723,68 @@ export class SessionManager {
     this.lastWaitingEventTimestamps.delete(session.id);
 
     // Handle worktree merge-back strategy BEFORE cleanup
+    let worktreeNotificationSent = false;
     if (session.worktreePath && session.originalWorkdir) {
-      await this.handleWorktreeStrategy(session);
+      worktreeNotificationSent = await this.handleWorktreeStrategy(session);
+    }
+
+    // Detect early startup failure: session failed with a worktree but zero cost and
+    // very short runtime — meaning no real work was done (e.g. usage limit hit at launch).
+    // In that case, auto-clean both the worktree directory AND the branch, and clear the
+    // worktree fields from the persisted record so no orphaned entries remain.
+    let worktreeAutoCleaned = false;
+    if (
+      session.worktreePath &&
+      session.originalWorkdir &&
+      session.status === "failed" &&
+      session.costUsd === 0 &&
+      session.duration < 30_000
+    ) {
+      const repoDir = session.originalWorkdir;
+      const branchName = getBranchName(session.worktreePath);
+      console.info(
+        `[SessionManager] Early startup failure for "${session.name}" — auto-cleaning worktree ` +
+        `(cost=$${session.costUsd.toFixed(2)}, duration=${session.duration}ms)`
+      );
+
+      // Remove worktree directory (replaces the generic removeWorktree call below)
+      removeWorktree(repoDir, session.worktreePath);
+
+      // Delete the branch — no real work was committed, so it's safe to drop
+      if (branchName) {
+        deleteBranch(repoDir, branchName);
+      }
+
+      // Clear worktree fields from the persisted session record
+      if (session.harnessSessionId) {
+        this.updatePersistedSession(session.harnessSessionId, {
+          worktreePath: undefined,
+          worktreeBranch: undefined,
+        });
+      }
+
+      worktreeAutoCleaned = true;
     }
 
     // Best-effort worktree cleanup — remove the worktree but keep the branch.
-    if (session.worktreePath && session.originalWorkdir) {
+    // Skipped if the early-failure path already handled it.
+    if (!worktreeAutoCleaned && session.worktreePath && session.originalWorkdir) {
       removeWorktree(session.originalWorkdir, session.worktreePath);
     }
 
     // Multi-turn sessions that naturally end after a successful no-input turn
-    // use reason "done". Turn-complete wake already fired for that turn.
-    if (session.killReason === "done") return;
+    // use reason "done". The worktree notification (if sent) IS the completion signal;
+    // otherwise fall back to a terminal completion wake.
+    if (session.killReason === "done") {
+      if (worktreeNotificationSent) return; // worktree path already notified
+      // If a turn-complete wake was dispatched, suppress the terminal notification to
+      // avoid duplicates (⏸️ + ✅). The `onUserNotifyFailed` callback in
+      // `triggerTurnCompleteEventWithSignal` handles the fallback if delivery fails.
+      if (this.lastTurnCompleteMarkers.has(session.id)) return;
+      if (!this.shouldEmitTerminalWake(session)) return;
+      this.triggerAgentEvent(session);
+      return;
+    }
 
     if (session.status === "completed") {
       if (!this.shouldEmitTerminalWake(session)) return;
@@ -692,7 +800,7 @@ export class SessionManager {
         || this.extractLastOutputLine(session)
         || `Session failed with no error details (session=${session.id}, subtype=${session.result?.subtype ?? "none"}, turns=${session.result?.num_turns ?? 0})`;
       const errorSummary = truncateText(rawError, 200);
-      this.triggerFailedEvent(session, errorSummary);
+      this.triggerFailedEvent(session, errorSummary, worktreeAutoCleaned);
       return;
     }
 
@@ -701,11 +809,13 @@ export class SessionManager {
 
     if (session.killReason === "idle-timeout") {
       this.notifySession(session, `💤 [${session.name}] Idle timeout | ${costStr} | ${duration}`);
+      this.wakeDispatcher.clearRetryTimersForSession(session.id);
       return;
     }
 
     const statusLabel = this.getStoppedStatusLabel(session.killReason);
     this.notifySession(session, `⛔ [${session.name}] ${statusLabel} | ${costStr} | ${duration}`);
+    this.wakeDispatcher.clearRetryTimersForSession(session.id);
   }
 
   private getStoppedStatusLabel(killReason?: string): string {
@@ -791,6 +901,8 @@ export class SessionManager {
       `Status: ${session.status}`,
       this.originThreadLine(session),
       ``,
+      `(Note: a turn-complete wake may have already been sent for this session. If you already acted on it, treat this as confirmation — do not repeat actions.)`,
+      ``,
       `Output preview:`,
       preview,
       ``,
@@ -802,7 +914,9 @@ export class SessionManager {
 
     const costStr = `$${(session.costUsd ?? 0).toFixed(2)}`;
     const duration = formatDuration(session.duration);
-    const telegramText = `✅ [${session.name}] Completed | ${costStr} | ${duration}`;
+    const telegramText = session.outputMode === "deliverable"
+      ? `📄 [${session.name}] Deliverable ready | ${costStr} | ${duration}`
+      : `✅ [${session.name}] Completed | ${costStr} | ${duration}`;
 
     this.dispatchSessionNotification(session, {
       label: "completed",
@@ -812,10 +926,14 @@ export class SessionManager {
     });
   }
 
-  private triggerFailedEvent(session: Session, errorSummary: string): void {
+  private triggerFailedEvent(session: Session, errorSummary: string, worktreeAutoCleaned: boolean = false): void {
     const preview = this.getOutputPreview(session);
     const outputSection = preview.trim()
       ? ["", "Output preview:", preview]
+      : [];
+
+    const worktreeCleanupNote = worktreeAutoCleaned
+      ? [``, `Note: Worktree and branch were auto-removed (zero cost, startup failure).`]
       : [];
 
     const eventText = [
@@ -823,14 +941,19 @@ export class SessionManager {
       `Name: ${session.name} | ID: ${session.id}`,
       `Status: ${session.status}`,
       this.originThreadLine(session),
+      `Harness session ID: ${session.harnessSessionId ?? "unknown"}`,
       ``,
       `Failure summary:`,
       errorSummary,
       ...outputSection,
+      ...worktreeCleanupNote,
       ``,
       `[ACTION REQUIRED] Follow your autonomy rules for session failure:`,
       `1. Use agent_output(session='${session.id}', full=true) to inspect the full failure context.`,
-      `2. If the failure is a launch/config issue or other recoverable error, relaunch the task now or continue it yourself.`,
+      `2. If the failure is a runtime error (usage limit, API error, crash), resume with a different harness:`,
+      `   agent_launch(resume_session_id='${session.harnessSessionId ?? "unknown"}', harness='claude-code', ...)`,
+      `   Note: agent_respond also resumes, but uses the same harness (may hit the same error).`,
+      `   If the failure is a launch/config issue, relaunch fresh with agent_launch(prompt=...).`,
       `3. Notify the user with the failure cause and the next action you are taking.`,
     ].join("\n");
 
@@ -916,6 +1039,21 @@ export class SessionManager {
           `If escalating: tell the user you need their decision and WAIT for his explicit response.`,
           `To request changes: agent_respond(session='${session.id}', message='<your feedback>') — do NOT set approve=true. The agent will revise the plan.`,
         ].join("\n");
+      } else if (planApprovalMode === "ask") {
+        // ask mode — notify the user directly; Alice must wait for explicit user approval
+        eventText = [
+          `[USER APPROVAL REQUESTED] Coding agent session has finished its plan. The user has been notified via Telegram and must approve directly.`,
+          `Name: ${session.name} | ID: ${session.id}`,
+          this.originThreadLine(session),
+          ``,
+          `DO NOT approve this plan yourself. Wait for the user's explicit approval or rejection.`,
+          `Once the user responds, forward their decision:`,
+          `  To approve: agent_respond(session='${session.id}', message='Approved. Go ahead.', approve=true)`,
+          `  To request changes: agent_respond(session='${session.id}', message='<user feedback>')`,
+          ``,
+          `Preview (truncated):`,
+          preview,
+        ].join("\n");
       } else {
         // approve mode — always auto-approve
         eventText = [
@@ -952,7 +1090,7 @@ export class SessionManager {
       label: isPlanApproval ? "plan-approval" : "waiting",
       userMessage: telegramText,
       wakeMessage: eventText,
-      notifyUser: isPlanApproval ? "always" : "on-wake-fallback",
+      notifyUser: "always",
       buttons: waitingButtons,
     });
   }
@@ -965,6 +1103,15 @@ export class SessionManager {
       return;
     }
 
+    // Suppress turn-complete for ask/delegate — the worktree notification IS the completion signal
+    if (session.worktreeStrategy === "ask" || session.worktreeStrategy === "delegate") {
+      console.info(
+        `[SessionManager] Suppressing turn-complete wake for session ${session.id} ` +
+        `(worktreeStrategy=${session.worktreeStrategy}) — worktree notification will follow.`,
+      );
+      return;
+    }
+
     // Non-question turns still emit a lightweight turn-complete wake. We keep
     // a heuristic waiting hint in that payload as a fallback.
     if (!this.shouldEmitTurnCompleteWake(session)) return;
@@ -974,7 +1121,13 @@ export class SessionManager {
   private shouldEmitTurnCompleteWake(session: Session): boolean {
     const marker = `${session.result?.session_id ?? ""}|${session.result?.num_turns ?? 0}|${session.result?.duration_ms ?? 0}`;
     const prev = this.lastTurnCompleteMarkers.get(session.id);
-    if (prev === marker) return false;
+    if (prev === marker) {
+      console.info(
+        `[SessionManager] shouldEmitTurnCompleteWake: debounced for session ${session.id} ` +
+        `(marker unchanged: ${marker})`,
+      );
+      return false;
+    }
     this.lastTurnCompleteMarkers.set(session.id, marker);
     return true;
   }
@@ -988,6 +1141,10 @@ export class SessionManager {
   }
 
   private triggerTurnCompleteEventWithSignal(session: Session): void {
+    console.info(
+      `[SessionManager] turn-complete wake dispatching for session ${session.id} ` +
+      `(turns=${session.result?.num_turns ?? 0}, strategy=${session.worktreeStrategy ?? "none"})`,
+    );
     const preview = this.getOutputPreview(session);
     // Heuristic fallback only: explicit waiting turns should already route via
     // `triggerWaitingForInputEvent`. This hint helps catch plain-text asks
@@ -1019,6 +1176,18 @@ export class SessionManager {
       userMessage: telegramText,
       wakeMessage: eventText,
       notifyUser: "always",
+      // If all turn-complete delivery paths fail, fire the terminal notification as fallback
+      // so the user still learns the session completed. The `onSessionTerminal` path is
+      // suppressed when a turn-complete was dispatched (see killReason === "done" block),
+      // so this callback is the only recovery path on full delivery failure.
+      onUserNotifyFailed: () => {
+        console.warn(
+          `[SessionManager] turn-complete delivery failed for session ${session.id} — ` +
+          `firing terminal notification as fallback`,
+        );
+        if (!this.shouldEmitTerminalWake(session)) return;
+        this.triggerAgentEvent(session);
+      },
     });
   }
 
@@ -1062,14 +1231,13 @@ export class SessionManager {
     return true;
   }
 
-  /** Kill all active sessions and clear pending wake retries. */
+  /** Kill all active sessions. Per-session retry timers are cleared in onSessionTerminal. */
   killAll(reason: KillReason = "user"): void {
     for (const session of this.sessions.values()) {
       if (KILLABLE_STATUSES.has(session.status)) {
         this.kill(session.id, reason);
       }
     }
-    this.wakeDispatcher.clearPendingRetries();
   }
 
   /** Resolve any reference to a persisted harness session id for resume flows. */

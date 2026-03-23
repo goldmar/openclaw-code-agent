@@ -31,6 +31,7 @@ interface AgentLaunchParams {
   harness?: string;
   worktree_strategy?: "off" | "manual" | "ask" | "auto-merge" | "auto-pr";
   worktree_base_branch?: string;
+  output_mode?: "deliverable";
   agentId?: string;
 }
 
@@ -103,11 +104,14 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
       worktree_strategy: Type.Optional(
         Type.Union(
           [Type.Literal("off"), Type.Literal("manual"), Type.Literal("ask"), Type.Literal("auto-merge"), Type.Literal("auto-pr")],
-          { description: "Worktree strategy: 'off' (no worktree), 'manual' (create worktree but no auto merge-back), 'ask' (prompt user with options), 'auto-merge' (merge automatically), 'auto-pr' (create PR automatically). Defaults to 'off'." },
+          { description: "Worktree strategy: 'off' (no worktree), 'manual' (create worktree but no auto merge-back), 'ask' (prompt user with options), 'auto-merge' (merge automatically), 'auto-pr' (create PR automatically). Defaults to 'off'. Only respected when `defaultWorktreeStrategy` is set to `delegate` or is unset. Otherwise the admin-configured default is used regardless." },
         ),
       ),
       worktree_base_branch: Type.Optional(
         Type.String({ description: "Base branch for worktree merge/PR operations (default: auto-detected or 'main')" }),
+      ),
+      output_mode: Type.Optional(
+        Type.Literal("deliverable", { description: "Output mode: 'deliverable' sends a 📄 Deliverable ready notification instead of ✅ Completed when the session finishes." }),
       ),
     }),
     async execute(_id: string, params: unknown) {
@@ -212,6 +216,9 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
           systemPrompt: params.system_prompt,
           allowedTools: params.allowed_tools,
           resumeSessionId,
+          // Bug 3 fix: always pass the original resolved session ID for worktree inheritance,
+          // even when resumeSessionId was cleared by decideResumeSessionId (e.g. Codex harness).
+          resumeWorktreeFrom: resolvedResumeId,
           forkSession: resumeSessionId ? params.fork_session : false,
           multiTurn: !params.multi_turn_disabled,
           permissionMode: params.permission_mode,
@@ -225,6 +232,7 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
           harness,
           worktreeStrategy: params.worktree_strategy,
           worktreeBaseBranch: params.worktree_base_branch,
+          outputMode: params.output_mode,
         });
 
         const promptSummary = params.prompt.length > 80 ? params.prompt.slice(0, 80) + "..." : params.prompt;
