@@ -158,6 +158,10 @@
         "enum": ["off", "manual", "ask", "delegate", "auto-merge", "auto-pr"],
         "description": "Default worktree strategy for all new sessions when agent_launch omits worktree_strategy. 'off' = no worktree (default). 'manual' = create worktree, no automatic action. 'ask' = push branch and notify user with inline buttons (merge / open PR / dismiss). 'delegate' = push branch and wake orchestrator to autonomously decide (merge, PR, or escalate). 'auto-merge' = auto-merge to base branch on completion. 'auto-pr' = auto-create/update GitHub PR on completion."
       },
+      "worktreeDir": {
+        "type": "string",
+        "description": "Base directory for agent worktrees. Defaults to <repoRoot>/.worktrees when unset. Overridden by OPENCLAW_WORKTREE_DIR env var."
+      },
       "allowedModels": {
         "type": "array",
         "items": {

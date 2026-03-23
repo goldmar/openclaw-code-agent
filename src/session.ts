@@ -148,7 +148,6 @@ export class Session extends EventEmitter {
 
   // Flags
   pendingPlanApproval: boolean = false;
-  lobsterResumeToken?: string;
   killReason: KillReason = "unknown";
   private waitingForInputFired: boolean = false;
   private lastTurnHadQuestion: boolean = false;

@@ -85,6 +85,8 @@ export interface PluginConfig {
   harnesses: Record<string, HarnessConfig>;
   /** Default worktree strategy for new sessions when agent_launch omits worktree_strategy. */
   defaultWorktreeStrategy?: WorktreeStrategy;
+  /** Override base directory for agent worktrees. Defaults to <repoRoot>/.worktrees when unset. */
+  worktreeDir?: string;
   /**
    * Deprecated global allowed-model fallback preserved during migration from the
    * pre-harness config shape. Matching remains case-insensitive substring-based.
@@ -113,6 +115,8 @@ export interface RawPluginConfig {
   harnesses?: Record<string, HarnessConfig>;
   /** Default worktree strategy for new sessions. */
   defaultWorktreeStrategy?: WorktreeStrategy;
+  /** Override base directory for agent worktrees. Defaults to <repoRoot>/.worktrees when unset. */
+  worktreeDir?: string;
 }
 
 /** Persisted session metadata retained for resume/list/output after GC/restart. */

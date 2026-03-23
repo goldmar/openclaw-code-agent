@@ -161,7 +161,7 @@ agent_sessions(status: "completed")
 # Summary (last 50 lines)
 agent_output(session: "fix-null-auth")
 
-# Full output (up to 200 blocks)
+# Full output (up to 2000 lines)
 agent_output(session: "fix-null-auth", full: true)
 
 # Specific last N lines
@@ -284,13 +284,35 @@ Notifications are routed to the Telegram thread/topic where the session was laun
 | Event | What happens |
 |---|---|
 | Session starts | Silent (command response confirms launch) |
-| Session completed | Brief one-liner to originating thread |
-| Session failed | Error notification to originating thread |
-| Waiting for input | Wake event + `❓ Waiting for input` in thread (only when the agent actually asks a question) |
-| Turn completes without a question | `⏸️ Paused after turn | Auto-resumable` |
+| Session completed | `✅ Completed` — brief one-liner to originating thread |
+| Session completed (deliverable mode) | `📄 Deliverable ready` — when launched with `output_mode: "deliverable"` |
+| Session failed | `❌ Failed` — error notification with `harnessSessionId` and resume guidance |
+| Waiting for input | `❓ Waiting for input` — wake event (only when the agent actually asks a question) |
+| Turn completes without a question | `⏸️ Paused after turn \| Auto-resumable` |
+| `agent_respond` send | `↪️` — notification sent for every `agent_respond` call |
+| `agent_respond` plan approval | `👍` — notification sent when `approve: true` |
 | Session auto-resumes | `▶️ Auto-resumed` |
 | Session idle-times out | `💤 Idle timeout` |
 | Session is forcibly stopped | `⛔ Stopped ...` with the specific stop reason |
+| Worktree decision pending (`ask`/`delegate`) | Telegram notification with inline buttons (Merge locally / Create PR / Dismiss) |
+
+### Sending completion summaries — use `message send`, not inline reply
+
+When you process a CC session completion wake and want to notify the user with a summary, **always send the summary via the `message` tool** rather than as an inline session reply:
+
+```bash
+# Correct — standalone message, guaranteed notification ping
+openclaw message send --channel telegram --target <chatId> --thread-id <topicId> \
+  --message "✅ [session-name] Done — <one-line summary>"
+```
+
+**Why this matters**: Alice's inline session replies are sent as Telegram *replies* (`reply_to_message_id`) to the message that triggered the wake. Because the plugin's ⏸️ status notification typically arrives just before the wake fires, Alice's reply targets that bot message — and Telegram does not re-ping the user when a bot replies to a recent bot message in an already-active topic thread. The `message` tool sends a standalone new message (`message_thread_id` only, no `reply_to_message_id`), which always generates a fresh notification ping.
+
+**Rule**: Inline replies are fine for conversational back-and-forth. For any user-facing "session done" notification that must reliably reach the user, use `message send` explicitly.
+
+The Telegram chat ID and topic thread ID are available from the current conversation context.
+
+---
 
 ### Plan → Execute mode switch
 
@@ -300,13 +322,13 @@ Sessions start in `plan` mode by default. When you reply with **only** an approv
 
 The `approve` parameter on `agent_respond` escalates session permissions to `bypassPermissions`. It works in two scenarios:
 
-1. **Plan mode approval**: When a session has a pending plan approval (after `ExitPlanMode` / `set_permission_mode`), `approve: true` approves the plan and switches to `bypassPermissions`.
-2. **`acceptEdits` / `default` mode escalation**: When a session is in `acceptEdits` or `default` mode and keeps prompting for shell/exec command permissions, `approve: true` escalates to `bypassPermissions` to skip all remaining prompts.
+1. **Plan mode approval**: When a session has a pending plan approval (after `ExitPlanMode` / `set_permission_mode`), `approve: true` approves the plan and switches to `bypassPermissions`. Sends a 👍 notification.
+2. **`default` mode escalation**: When a session in `default` mode keeps prompting for shell/exec command permissions, `approve: true` escalates to `bypassPermissions` to skip all remaining prompts.
 
 If the session is already in `bypassPermissions` mode, `approve: true` is a no-op. In `plan` mode without a pending plan, it is ignored.
 
 ```
-# Escalate an acceptEdits session that keeps prompting for bash permissions
+# Escalate a session that keeps prompting for bash permissions
 agent_respond(session: "fix-auth", message: "proceed", approve: true)
 ```
 
@@ -337,7 +359,76 @@ When operating in `delegate` mode, **approve** the plan directly if ALL of the f
 
 ---
 
-## 7. Best practices
+## 7. Worktree workflow
+
+When a session uses `worktree_strategy`, the agent runs in an isolated git branch. After completion, the branch needs to be merged or published as a PR.
+
+### Strategies at a glance
+
+| Strategy | What it does | When to use |
+|---|---|---|
+| `off` (default) | No worktree. Session runs in main checkout | Simple/trusted tasks |
+| `manual` | Creates worktree; no auto action | You want to review diffs before merging |
+| `ask` | Sends Telegram inline buttons (Merge locally / Create PR / Dismiss) | User should decide |
+| `auto-merge` | Merges automatically; spawns conflict-resolver if needed | Trusted tasks on a safe branch |
+| `auto-pr` | Creates/updates GitHub PR automatically (requires `gh`) | Feature branches needing review |
+
+`delegate` is available via `defaultWorktreeStrategy` plugin config only — orchestrator autonomously decides merge/PR/escalate.
+
+### Launch with worktree isolation
+
+```
+agent_launch(
+  prompt: "Implement the new user settings page",
+  name: "user-settings",
+  workdir: "/app",
+  worktree_strategy: "auto-pr"
+)
+```
+
+### Check worktree status
+
+```
+agent_worktree_status()                      # all sessions with worktrees
+agent_worktree_status(session: "user-settings")  # specific session
+```
+
+### Manual merge or PR after `manual`/`ask`
+
+```
+# Merge back to base branch
+agent_merge(session: "user-settings", strategy: "merge")
+
+# Or create/update a GitHub PR
+agent_pr(session: "user-settings", title: "Add user settings page")
+```
+
+### Resume with worktree context
+
+When resuming a session that had a worktree, the worktree context (branch, strategy, PR URL) is inherited automatically — no need to pass `worktree_strategy` again:
+
+```
+agent_launch(
+  prompt: "Continue — also add unit tests",
+  resume_session_id: "user-settings"
+)
+```
+
+### Deliverable mode
+
+For document/report generation tasks, use `output_mode: "deliverable"` to send 📄 instead of ✅:
+
+```
+agent_launch(
+  prompt: "Write a technical spec for the new auth system",
+  name: "auth-spec",
+  output_mode: "deliverable"
+)
+```
+
+---
+
+## 8. Best practices
 
 ### Launch checklist
 
@@ -367,7 +458,7 @@ When a session completes, keep summaries brief:
 
 ---
 
-## 8. Anti-patterns
+## 9. Anti-patterns
 
 | Anti-pattern | Consequence | Fix |
 |---|---|---|
@@ -380,13 +471,17 @@ When a session completes, keep summaries brief:
 
 ---
 
-## 9. Quick tool reference
+## 10. Quick tool reference
 
 | Tool | Usage | Key parameters |
 |---|---|---|
-| `agent_launch` | Launch a session | `prompt`, `name`, `workdir`, `multi_turn` |
+| `agent_launch` | Launch a session | `prompt`, `name`, `workdir`, `multi_turn`, `worktree_strategy`, `output_mode` |
 | `agent_sessions` | List sessions | `status` (all/running/completed/failed/killed) |
 | `agent_output` | Read the output | `session`, `full`, `lines` |
 | `agent_kill` | Kill or complete a session | `session`, `reason` (`"completed"` or omit) |
 | `agent_respond` | Send a follow-up | `session`, `message`, `interrupt`, `approve` |
 | `agent_stats` | Usage metrics | none |
+| `agent_worktree_status` | Show worktree status for sessions | `session` (optional — omit for all) |
+| `agent_merge` | Merge worktree branch to base | `session`, `base_branch`, `strategy`, `push`, `delete_branch` |
+| `agent_pr` | Create/update GitHub PR for worktree branch | `session`, `title`, `body`, `base_branch`, `force_new` |
+| `agent_worktree_cleanup` | Clean up merged agent/* branches | `workdir`, `base_branch`, `skip_session_check`, `dry_run`, `session` |

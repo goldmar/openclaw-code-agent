@@ -1,6 +1,7 @@
 import { execFileSync } from "child_process";
 import { existsSync, mkdirSync, rmSync, statfsSync } from "fs";
 import { tmpdir } from "os";
+import { join } from "path";
 
 // Cached availability checks
 let gitAvailableCache: boolean | undefined;
@@ -19,10 +20,35 @@ function sanitizeBranchName(name: string): string {
 }
 
 /**
- * Resolve the worktree base directory from environment or default to tmpdir.
+ * Resolve the git repository root for a given directory.
+ * Returns undefined if the directory is not inside a git repo or git is unavailable.
  */
-function getWorktreeBaseDir(): string {
-  return process.env.OPENCLAW_WORKTREE_DIR ?? tmpdir();
+function getRepoRoot(dir: string): string | undefined {
+  try {
+    const result = execFileSync(
+      "git",
+      ["rev-parse", "--show-toplevel"],
+      { cwd: dir, timeout: 5_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
+    );
+    return result.trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Resolve the worktree base directory using the following priority chain:
+ * 1. OPENCLAW_WORKTREE_DIR env var (explicit override)
+ * 2. <repoRoot>/.worktrees — derived via git rev-parse relative to repoDir (when provided)
+ * 3. tmpdir() — fallback when git is unavailable or repoDir is not supplied
+ */
+function getWorktreeBaseDir(repoDir?: string): string {
+  if (process.env.OPENCLAW_WORKTREE_DIR) return process.env.OPENCLAW_WORKTREE_DIR;
+  if (repoDir) {
+    const root = getRepoRoot(repoDir);
+    if (root) return join(root, ".worktrees");
+  }
+  return tmpdir();
 }
 
 /**
@@ -113,7 +139,8 @@ function branchExists(repoDir: string, branchName: string): boolean {
  */
 export function createWorktree(repoDir: string, sessionName: string): string {
   const sanitized = sanitizeBranchName(sessionName);
-  const baseDir = getWorktreeBaseDir();
+  const baseDir = getWorktreeBaseDir(repoDir);
+  mkdirSync(baseDir, { recursive: true });
 
   // C1: Atomic mkdir with retry on collision
   let worktreePath: string | undefined;

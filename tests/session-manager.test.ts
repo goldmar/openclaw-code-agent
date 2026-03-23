@@ -1,6 +1,6 @@
 import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { SessionManager, parseLobsterResumeToken } from "../src/session-manager";
+import { SessionManager } from "../src/session-manager";
 import { setPluginConfig } from "../src/config";
 
 // ---------------------------------------------------------------------------
@@ -453,19 +453,6 @@ describe("SessionManager.recordSessionMetrics()", () => {
   });
 });
 
-describe("parseLobsterResumeToken()", () => {
-  it("parses top-level resumeToken", () => {
-    const token = parseLobsterResumeToken(JSON.stringify({ resumeToken: "tok_123" }));
-    assert.equal(token, "tok_123");
-  });
-
-  it("parses nested resumeToken in details.requiresApproval", () => {
-    const token = parseLobsterResumeToken(JSON.stringify({
-      details: { requiresApproval: { resumeToken: "tok_nested" } },
-    }));
-    assert.equal(token, "tok_nested");
-  });
-});
 
 // =========================================================================
 // debounceWaitingEvent

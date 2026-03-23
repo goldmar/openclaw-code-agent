@@ -120,37 +120,6 @@ async function tryAutoResume(
   }
 }
 
-function handleLobsterToken(
-  sm: SessionManager,
-  session: Session,
-  params: RespondParams,
-): RespondResult | undefined {
-  const lobsterToken = session.lobsterResumeToken;
-  if (!lobsterToken) return undefined;
-
-  // Consume BEFORE resume to prevent re-entry loops.
-  session.lobsterResumeToken = undefined;
-
-  const canEscalate = session.pendingPlanApproval
-    || session.currentPermissionMode === "default";
-  if (params.approve && canEscalate) {
-    sm.resumeLobsterApproval(lobsterToken, true).catch((err: unknown) => {
-      // Fallback: direct mode switch if Lobster fails.
-      console.error(`[Respond] Lobster resume failed, falling back to direct mode switch: ${errorMessage(err)}`);
-      session.switchPermissionMode("bypassPermissions");
-      session.sendMessage(params.message).catch((sendErr: unknown) => {
-        console.error(`[Respond] Fallback sendMessage also failed: ${errorMessage(sendErr)}`);
-      });
-    });
-    return { text: `Plan approved. Lobster workflow resuming for session ${session.name} [${session.id}].` };
-  }
-
-  // Rejection/feedback: cancel Lobster (fire-and-forget), then continue normal send flow.
-  sm.resumeLobsterApproval(lobsterToken, false).catch((err: unknown) => {
-    console.error(`[Respond] Lobster cancel failed (non-critical): ${errorMessage(err)}`);
-  });
-  return undefined;
-}
 
 /**
  * Shared respond logic used by both tool and command.
@@ -197,10 +166,6 @@ export async function executeRespond(
     };
   }
 
-  const lobsterResult = handleLobsterToken(sm, session, params);
-  if (lobsterResult) {
-    return lobsterResult;
-  }
 
   try {
     let redirectedActiveTurn = false;

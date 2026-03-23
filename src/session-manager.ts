@@ -1,7 +1,4 @@
-import { execFile } from "child_process";
 import { existsSync } from "fs";
-import { fileURLToPath } from "url";
-import { dirname, join } from "path";
 
 import { Session } from "./session";
 import { pluginConfig } from "./config";
@@ -29,46 +26,12 @@ import {
   commentOnPR,
 } from "./worktree";
 
-/**
- * Resolve the plan-approval workflow path for both source and bundled layouts.
- *
- * Precedence:
- * 1) `OPENCLAW_CODE_AGENT_PLAN_WORKFLOW_PATH`
- * 2) CWD-relative workflow (dev/local runs)
- * 3) module-relative candidates (bundled/dist layouts)
- * 4) legacy relative fallback
- */
-function resolveLobsterWorkflowPath(): string {
-  const explicit = process.env.OPENCLAW_CODE_AGENT_PLAN_WORKFLOW_PATH?.trim();
-  if (explicit) return explicit;
-
-  const moduleDir = dirname(fileURLToPath(import.meta.url));
-  const candidates = [
-    join(process.cwd(), "workflows", "plan-approval.lobster"),
-    join(moduleDir, "..", "workflows", "plan-approval.lobster"),
-    join(moduleDir, "..", "..", "workflows", "plan-approval.lobster"),
-  ];
-
-  for (const candidate of candidates) {
-    if (existsSync(candidate)) return candidate;
-  }
-
-  // Preserve historical behavior as best-effort fallback.
-  return fileURLToPath(new URL("../workflows/plan-approval.lobster", import.meta.url));
-}
-
-const LOBSTER_WORKFLOW_PATH = resolveLobsterWorkflowPath();
 
 const TERMINAL_STATUSES = new Set<SessionStatus>(["completed", "failed", "killed"]);
 const KILLABLE_STATUSES = new Set<SessionStatus>(["starting", "running"]);
 const WAITING_EVENT_DEBOUNCE_MS = 5_000;
 const WAKE_CLI_TIMEOUT_MS = 30_000;
 
-type LobsterResponseShape = {
-  resumeToken?: string;
-  requiresApproval?: { resumeToken?: string };
-  details?: { requiresApproval?: { resumeToken?: string } };
-};
 
 type SpawnOptions = {
   notifyLaunch?: boolean;
@@ -80,42 +43,6 @@ type LaunchConfirmationSession = Pick<Session, "status" | "name" | "id" | "killR
   removeListener?: (event: string, listener: (...args: any[]) => void) => unknown;
 };
 
-/**
- * Extract a Lobster resume token from CLI output.
- *
- * We prefer `--json`, but keep this defensive parser because some runtimes can
- * still prepend banners/log lines around the JSON body.
- */
-export function parseLobsterResumeToken(output: string): string | undefined {
-  const trimmed = output.trim();
-  if (!trimmed) return undefined;
-  const isLikelyToken = (value: unknown): value is string =>
-    typeof value === "string" && value.trim().length > 0 && /^[A-Za-z0-9._:-]+$/.test(value.trim());
-
-  const candidates: string[] = [trimmed];
-  for (const line of trimmed.split(/\r?\n/)) {
-    const t = line.trim();
-    if (t.startsWith("{") && t.endsWith("}")) candidates.push(t);
-  }
-
-  for (const candidate of candidates) {
-    try {
-      const parsed = JSON.parse(candidate) as LobsterResponseShape;
-      const token = parsed?.resumeToken
-        ?? parsed?.requiresApproval?.resumeToken
-        ?? parsed?.details?.requiresApproval?.resumeToken;
-      if (isLikelyToken(token)) return token.trim();
-    } catch {
-      // Keep scanning other candidate JSON fragments.
-    }
-  }
-
-  // Fallback for mixed stdout/stderr output that embeds JSON-ish token fields.
-  const tokenMatch = trimmed.match(/"resumeToken"\s*:\s*"([^"]+)"/);
-  if (tokenMatch && isLikelyToken(tokenMatch[1])) return tokenMatch[1].trim();
-
-  return undefined;
-}
 
 /**
  * Orchestrates active session lifecycles, wake signaling, persistence, and GC.
@@ -410,9 +337,9 @@ export class SessionManager {
       ].join("\n");
 
       const askButtons: Array<Array<{ label: string; callbackData: string }>> = [[
-        { label: "✅ Merge", callbackData: "merge" },
-        { label: "🔀 Open PR", callbackData: "pr" },
-        { label: "❌ Dismiss", callbackData: "dismiss" },
+        { label: "⬇️ Merge locally", callbackData: `code-agent:merge:${session.id}` },
+        { label: "🔀 Create PR", callbackData: `code-agent:pr:${session.id}` },
+        { label: "❌ Dismiss", callbackData: `code-agent:dismiss:${session.id}` },
       ]];
 
       this.wakeDispatcher.dispatchSessionNotification(session, {
@@ -555,6 +482,7 @@ export class SessionManager {
           this.wakeDispatcher.dispatchSessionNotification(session, {
             label: "worktree-merge-conflict",
             userMessage: `⚠️ [${session.name}] Merge conflicts in ${mergeResult.conflictFiles.length} file(s) — spawned conflict resolver session`,
+            buttons: [[{ label: "🔀 Open PR instead", callbackData: `code-agent:open-pr:${session.id}` }]],
           });
         } catch (err) {
           this.wakeDispatcher.dispatchSessionNotification(session, {
@@ -589,6 +517,10 @@ export class SessionManager {
         this.wakeDispatcher.dispatchSessionNotification(session, {
           label: "worktree-pr-fallback-ask",
           userMessage: askMessage,
+          buttons: [[
+            { label: "✅ Merge instead", callbackData: `code-agent:merge:${session.id}` },
+            { label: "❌ Dismiss", callbackData: `code-agent:dismiss:${session.id}` },
+          ]],
         });
         return;
       }
@@ -676,6 +608,11 @@ export class SessionManager {
         this.wakeDispatcher.dispatchSessionNotification(session, {
           label: "worktree-pr-closed",
           userMessage: `⚠️ [${session.name}] PR was closed without merging: ${prStatus.url}`,
+          buttons: [[
+            { label: "🆕 New PR", callbackData: `code-agent:new-pr:${session.id}` },
+            { label: "✅ Merge locally", callbackData: `code-agent:merge-locally:${session.id}` },
+            { label: "❌ Dismiss", callbackData: `code-agent:dismiss:${session.id}` },
+          ]],
         });
         return;
       } else {
@@ -818,89 +755,6 @@ export class SessionManager {
     this.wakeDispatcher.dispatchSessionNotification(session, request);
   }
 
-  /**
-   * Run the Lobster plan-approval workflow as a structural gate.
-   * Sends a direct Telegram notification with the plan summary and a resume token,
-   * bypassing the orchestrator entirely. The user approves/rejects via Lobster's
-   * approval mechanism which then calls agent_respond on the session.
-   */
-  private runLobsterApproval(session: Session, planSummary: string): void {
-    const argsJson = JSON.stringify({
-      session_id: session.id,
-      session_name: session.name,
-      plan_summary: planSummary,
-    });
-
-    const args = [
-      "--json",
-      "invoke", "--tool", "lobster",
-      "--args-json", JSON.stringify({
-        action: "run",
-        pipeline: LOBSTER_WORKFLOW_PATH,
-        argsJson,
-        timeoutMs: 0, // No timeout — waits for human approval
-      }),
-    ];
-
-    execFile("openclaw", args, { timeout: WAKE_CLI_TIMEOUT_MS }, (err, stdout, stderr) => {
-      if (err) {
-        console.error(`[SessionManager] Lobster launch failed for session=${session.id}: ${err.message}`);
-        // Fallback: send Telegram directly so the user isn't left in the dark
-        this.notifySession(session, `📋 [${session.name}] Plan ready — Lobster gate failed, please review manually:\n\n${truncateText(planSummary, 800)}`);
-        return;
-      }
-
-      // Parse the Lobster response to get the resume token.
-      const stdoutText = typeof stdout === "string" ? stdout : String(stdout ?? "");
-      const stderrText = typeof stderr === "string" ? stderr : String(stderr ?? "");
-      const resumeToken = parseLobsterResumeToken(`${stdoutText}\n${stderrText}`);
-      if (!resumeToken) {
-        const combinedPreview = `${stdoutText}\n${stderrText}`.trim().substring(0, 200);
-        console.warn(`[SessionManager] Lobster response missing resume token for session=${session.id}: ${combinedPreview}`);
-      }
-
-      // Store token on session for programmatic resume via agent_respond
-      if (resumeToken) {
-        session.lobsterResumeToken = resumeToken;
-      }
-
-      // Send Telegram notification with plan summary
-      const telegramLines = [
-        `📋 [${session.name}] Plan ready for approval`,
-        ``,
-        truncateText(planSummary, 1200),
-        ``,
-        `Session: ${session.name} (${session.id})`,
-        ``,
-        `To approve: reply "approve"`,
-        `To reject: reply with feedback`,
-      ];
-      this.notifySession(session, telegramLines.join("\n"));
-    });
-  }
-
-  /**
-   * Resume (or cancel) a Lobster approval workflow by token.
-   * Calls `openclaw invoke --tool lobster` with the resume action.
-   */
-  resumeLobsterApproval(token: string, approve: boolean): Promise<void> {
-    const timeoutMs = approve ? 30_000 : 10_000;
-    return new Promise<void>((resolve, reject) => {
-      const args = [
-        "--json",
-        "invoke", "--tool", "lobster",
-        "--args-json", JSON.stringify({ action: "resume", token, approve }),
-      ];
-      execFile("openclaw", args, { timeout: timeoutMs }, (err) => {
-        if (err) {
-          console.error(`[SessionManager] Lobster resume failed (approve=${approve}): ${err.message}`);
-          reject(err);
-        } else {
-          resolve();
-        }
-      });
-    });
-  }
 
   /** Returns true if the event should proceed; false if debounced. */
   private debounceWaitingEvent(sessionId: string): boolean {
@@ -987,11 +841,17 @@ export class SessionManager {
       `   ⚠️ ${errorSummary}`,
     ].join("\n");
 
+    const failedButtons: Array<Array<{ label: string; callbackData: string }>> = [[
+      { label: "🔄 Retry", callbackData: `code-agent:retry:${session.id}` },
+      { label: "📋 View output", callbackData: `code-agent:view-output:${session.id}` },
+    ]];
+
     this.dispatchSessionNotification(session, {
       label: "failed",
       userMessage: telegramText,
       wakeMessage: eventText,
       notifyUser: "always",
+      buttons: failedButtons,
     });
   }
 
@@ -1008,14 +868,7 @@ export class SessionManager {
     let eventText: string;
     if (isPlanApproval) {
       const planApprovalMode = pluginConfig.planApproval ?? "delegate";
-      if (planApprovalMode === "ask") {
-        // ASK mode: bypass the orchestrator entirely. Use Lobster's approval: required
-        // to create a hard structural gate. Send the user a direct Telegram
-        // notification with the plan summary. On approve/reject, Lobster
-        // calls agent_respond on the session directly.
-        this.runLobsterApproval(session, preview);
-        return; // Do NOT wake the orchestrator — Lobster handles the full flow
-      } else if (planApprovalMode === "delegate") {
+      if (planApprovalMode === "delegate") {
         eventText = [
           `[DELEGATED PLAN APPROVAL] Coding agent session has finished its plan and is requesting approval to implement.`,
           `Name: ${session.name} | ID: ${session.id}`,
@@ -1086,11 +939,21 @@ export class SessionManager {
       ].join("\n");
     }
 
+    const waitingButtons: Array<Array<{ label: string; callbackData: string }>> | undefined =
+      isPlanApproval
+        ? [[
+            { label: "✅ Approve", callbackData: `code-agent:approve:${session.id}` },
+            { label: "❌ Reject", callbackData: `code-agent:reject:${session.id}` },
+            { label: "✏️ Revise", callbackData: `code-agent:revise:${session.id}` },
+          ]]
+        : [[{ label: "💬 Reply", callbackData: `code-agent:reply:${session.id}` }]];
+
     this.dispatchSessionNotification(session, {
       label: isPlanApproval ? "plan-approval" : "waiting",
       userMessage: telegramText,
       wakeMessage: eventText,
       notifyUser: isPlanApproval ? "always" : "on-wake-fallback",
+      buttons: waitingButtons,
     });
   }
 
@@ -1287,6 +1150,11 @@ export class SessionManager {
       label: `worktree-stale-reminder-${session.name}`,
       userMessage: text,
       notifyUser: "always",
+      buttons: [[
+        { label: "⬇️ Merge locally", callbackData: `code-agent:merge:${session.harnessSessionId}` },
+        { label: "🔀 Create PR", callbackData: `code-agent:open-pr:${session.harnessSessionId}` },
+        { label: "❌ Dismiss", callbackData: `code-agent:dismiss:${session.harnessSessionId}` },
+      ]],
     });
   }
 

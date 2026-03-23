@@ -144,7 +144,7 @@ Put that in `~/.codex/config.toml`. This keeps Codex on the ChatGPT auth path an
 
 | Tool | Description | Key Parameters |
 |------|-------------|----------------|
-| `agent_launch` | Start a new coding agent session in background | `prompt`, `name`, `workdir`, `model`, `resume_session_id`, `fork_session`, `permission_mode`, `harness`, `worktree_strategy` |
+| `agent_launch` | Start a new coding agent session in background | `prompt`, `name`, `workdir`, `model`, `resume_session_id`, `fork_session`, `permission_mode`, `harness`, `worktree_strategy`, `output_mode` |
 | `agent_respond` | Send a follow-up message to a running session | `session`, `message`, `interrupt`, `approve`, `userInitiated` |
 | `agent_kill` | Terminate or complete a running session | `session`, `reason` |
 | `agent_output` | Read buffered output from a session | `session`, `lines`, `full` |
@@ -153,7 +153,7 @@ Put that in `~/.codex/config.toml`. This keeps Codex on the ChatGPT auth path an
 | `agent_merge` | Merge a worktree branch back to base branch | `session`, `base_branch`, `strategy`, `push`, `delete_branch` |
 | `agent_pr` | Create or update a GitHub PR for a worktree branch (full lifecycle) | `session`, `title`, `body`, `base_branch`, `force_new` |
 | `agent_worktree_status` | Show worktree status for sessions | `session` (optional) |
-| `agent_worktree_cleanup` | Clean up merged agent/* branches | `workdir`, `base_branch`, `force`, `dry_run` |
+| `agent_worktree_cleanup` | Clean up merged agent/* branches | `workdir`, `base_branch`, `skip_session_check`, `dry_run`, `session` |
 
 Core orchestration workflows use `agent_launch`, `agent_respond`, `agent_output`, `agent_sessions`, and `agent_kill`.
 
@@ -198,10 +198,12 @@ The plugin sends targeted notifications to the originating Telegram thread:
 | ❓ | Waiting for input | Session is waiting for user input |
 | 📋 | Plan ready | Plan approval requested — reply "go" to approve |
 | ⏸️ | Paused after turn | Turn completed, session paused (auto-resumable) |
-| ↪️ | Redirected | Active work was intentionally interrupted and redirected in-place |
+| ↪️ | Responded / Redirected | `agent_respond` sent a message; also fires when `interrupt: true` redirects active work |
+| 👍 | Plan approved | Plan was approved via `agent_respond(..., approve: true)` |
 | ▶️ | Auto-resumed | Session resumed on the next `agent_respond` |
 | ✅ | Completed | Completion summary with cost and duration |
-| ❌ | Failed | Error notification with hint |
+| 📄 | Deliverable ready | Session finished with `output_mode: "deliverable"` |
+| ❌ | Failed | Error notification with `harnessSessionId` and resume guidance |
 | 💤 | Idle timeout | Session timed out while waiting; auto-resumes on next respond |
 | ⛔ | Stopped | Session was stopped by user, shutdown, or another forced stop |
 
@@ -255,6 +257,8 @@ Set values in `~/.openclaw/openclaw.json` under `plugins.entries["openclaw-code-
 | `defaultHarness` | `string` | `"claude-code"` | Default harness for new sessions (`"claude-code"` / `"codex"`) |
 | `harnesses` | `object` | built-in defaults | Per-harness defaults and restrictions. Built-in defaults: `claude-code.defaultModel = "sonnet"`, `claude-code.allowedModels = ["sonnet","opus"]`, `codex.defaultModel = "gpt-5.4"`, `codex.allowedModels = ["gpt-5.4"]`, `codex.reasoningEffort = "medium"`, `codex.approvalPolicy = "on-request"` |
 | `defaultWorkdir` | `string` | — | Default working directory for new sessions |
+| `defaultWorktreeStrategy` | `string` | — | Default worktree strategy for new sessions when `worktree_strategy` is omitted from `agent_launch`. Accepts any `WorktreeStrategy` value including `"delegate"` |
+| `worktreeDir` | `string` | `<repoRoot>/.worktrees` | Override base directory for agent worktrees |
 
 ### Permission Mode Mapping By Harness
 
@@ -315,7 +319,7 @@ With an explicit account:
 
 ### Git Worktree Support
 
-When `worktree_strategy` is set to anything other than `"off"` (via `agent_launch` or `SessionConfig`), the agent will automatically create a git worktree for the session if the `workdir` is a git repository with at least one remote. This keeps the main checkout clean while the agent works in an isolated branch.
+When `worktree_strategy` is set to anything other than `"off"` (via `agent_launch` or plugin config `defaultWorktreeStrategy`), the agent will automatically create a git worktree for the session if the `workdir` is a git repository. This keeps the main checkout clean while the agent works in an isolated branch.
 
 **Behavior:**
 - Worktree path: `<OPENCLAW_WORKTREE_DIR>/openclaw-worktree-<session-name>` (default: system tmpdir)
@@ -326,20 +330,31 @@ When `worktree_strategy` is set to anything other than `"off"` (via `agent_launc
 
 **Worktree Strategies:**
 
-Control what happens to worktree branches when a session completes via `worktree_strategy`:
+Control what happens to worktree branches when a session completes via `worktree_strategy`. Set it per-launch in `agent_launch`, or set a default for all sessions via `defaultWorktreeStrategy` in plugin config.
 
 - **`off`** (default) — No worktree. Session runs in the main checkout.
 - **`manual`** — Create worktree but no automatic action. Branch is kept for manual handling via `agent_merge` or `agent_pr`.
-- **`ask`** — Push branch and send a Telegram notification with inline buttons (✅ Merge / 🔀 Open PR / ❌ Dismiss). Also wakes the orchestrator with full decision context to present the choice to the user.
-- **`delegate`** — Push branch and wake the orchestrator with full decision context (diff summary, original prompt, decision guidance). The orchestrator autonomously decides to merge, open a PR, or escalate to the user. Always sends a brief one-line notification to the user.
+- **`ask`** — Push branch and send a Telegram notification with inline buttons (Merge locally / Create PR / Dismiss). Also wakes the orchestrator with full decision context (diff summary, original prompt, decision guidance) to present the choice to the user.
+- **`delegate`** — Push branch and wake the orchestrator with full decision context. The orchestrator autonomously decides to merge, open a PR, or escalate to the user. Always sends a brief one-line notification to the user. **Available via `defaultWorktreeStrategy` plugin config; not exposed as a `worktree_strategy` tool parameter.**
 - **`auto-merge`** — Automatically merge to base branch and push. On conflicts, spawns a Claude Code conflict-resolver session.
-- **`auto-pr`** — Automatically create/update GitHub PR with full lifecycle management (requires `gh` CLI). If `gh` unavailable, falls back to `ask` strategy.
+- **`auto-pr`** — Automatically create/update GitHub PR with full lifecycle management (requires `gh` CLI). If `gh` is unavailable, falls back to `ask` strategy.
 
 Example with auto-pr:
 ```javascript
 agent_launch({
   prompt: "Fix the auth bug",
   worktree_strategy: "auto-pr"
+})
+```
+
+**`output_mode: "deliverable"`:**
+
+Use this when the session is producing a document, report, or artifact rather than a code change. Instead of the default `✅ Completed` notification, the session emits `📄 Deliverable ready`:
+
+```javascript
+agent_launch({
+  prompt: "Write a technical spec for the new auth system",
+  output_mode: "deliverable"
 })
 ```
 
@@ -366,16 +381,21 @@ When using `auto-pr` strategy or calling `agent_pr` manually:
 When auto-merge encounters conflicts, a Claude Code session is automatically spawned with `bypassPermissions` to resolve conflicts and commit the resolution. You'll receive a notification when this happens.
 
 **Cleanup:**
-Users can manually prune accumulated agent branches with `agent_worktree_cleanup`:
+Users can manually prune accumulated agent branches with `agent_worktree_cleanup`. Three categories are always protected from deletion: branches with active sessions, branches with unmerged commits, and branches with open PRs.
+
 ```javascript
 // Preview what would be deleted
 agent_worktree_cleanup({ workdir: "/path/to/repo", dry_run: true })
 
-// Delete merged branches
+// Delete fully merged branches (unmerged and open-PR branches are always kept)
 agent_worktree_cleanup({ workdir: "/path/to/repo" })
 
-// Force delete all agent/* branches
-agent_worktree_cleanup({ workdir: "/path/to/repo", force: true })
+// Skip the active-session check (e.g. session crashed and left a stale branch)
+// NOTE: unmerged-commit and open-PR protections still apply
+agent_worktree_cleanup({ workdir: "/path/to/repo", skip_session_check: true })
+
+// Dismiss a pending worktree decision for a session without merging
+agent_worktree_cleanup({ session: "fix-auth-bug" })
 ```
 
 **Environment Variables:**
@@ -384,9 +404,10 @@ agent_worktree_cleanup({ workdir: "/path/to/repo", force: true })
 - `OPENCLAW_WORKTREE_CLEANUP_AGE_HOURS` — Age threshold for orphan worktree cleanup (default: 1 hour)
 
 **Limitations:**
-- Worktree creation requires the workdir to be a git repository with at least one configured remote
+- Worktree creation requires the workdir to be a git repository
 - Only works with committed changes — uncommitted changes in the main checkout are not transferred to the worktree
-- Worktree creation is **opt-in** (defaults to `"off"`). Set `worktree_strategy` explicitly to enable
+- Worktree creation is **opt-in** (defaults to `"off"`). Set `worktree_strategy` explicitly or configure `defaultWorktreeStrategy` to enable
+- Push and PR operations (`ask`, `auto-pr`, `delegate`) require a configured remote
 
 ### Example
 

@@ -1,5 +1,6 @@
 node_modules/
 dist/
+.worktrees/
 CLAUDE.md
 
 .idea/
