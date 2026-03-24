@@ -266,7 +266,11 @@ export class WakeDispatcher {
       args.push("--thread-id", route.threadId);
     }
     if (buttons && route.channel === "telegram") {
-      args.push("--buttons", JSON.stringify(buttons));
+      // OpenClaw CLI expects { text, callback_data } — map from internal { label, callbackData }
+      const cliButtons = buttons.map(row =>
+        row.map(btn => ({ text: btn.label, callback_data: btn.callbackData }))
+      );
+      args.push("--buttons", JSON.stringify(cliButtons));
     }
     this.executeWithRetries(args, {
       label,

@@ -113,13 +113,27 @@ function validateApprovalMessage(sessionName: string, message: string): RespondR
   };
 }
 
+const PLAN_APPROVAL_SYSTEM_PREFIX =
+  "[SYSTEM: The user has approved your plan. Exit plan mode immediately and implement the changes with full permissions. Do not ask for further confirmation.]\n\n";
+
 async function tryAutoResume(
   sm: SessionManager,
   session: ResumableSession,
   message: string,
-  options: { allowRecoveredRunningStub?: boolean } = {},
+  options: { allowRecoveredRunningStub?: boolean; approve?: boolean } = {},
 ): Promise<RespondResult | undefined> {
   if (!canAutoResume(session, options.allowRecoveredRunningStub === true)) return undefined;
+
+  // When approve=true is sent to a dead plan-mode session, forward the approval
+  // into the resumed session by switching its permission mode to bypassPermissions
+  // and prepending the system approval prefix. Without this, the resume would
+  // inherit permissionMode="plan", the first turn-end would re-set
+  // pendingPlanApproval=true, and Alice would be asked to approve a second time.
+  const isPlanApproval = !!(options.approve && session.currentPermissionMode === "plan");
+  if (isPlanApproval) {
+    const invalid = validateApprovalMessage(session.name, message);
+    if (invalid) return invalid;
+  }
 
   try {
     const activeSession = "harnessName" in session ? session : undefined;
@@ -137,7 +151,9 @@ async function tryAutoResume(
     // Preserve all relevant runtime/session-routing knobs so auto-resume is a
     // continuation of the exact same lifecycle, not a best-effort relaunch.
     const resumeConfig: SessionConfig = {
-      prompt: message,
+      // Inject the approval prefix so Claude knows it's approved and switches
+      // out of plan mode without re-presenting the plan.
+      prompt: isPlanApproval ? PLAN_APPROVAL_SYSTEM_PREFIX + message : message,
       workdir: session.workdir,
       name: session.name,
       model: session.model,
@@ -148,12 +164,19 @@ async function tryAutoResume(
       originThreadId: session.originThreadId,
       originAgentId: session.originAgentId,
       originSessionKey: session.originSessionKey,
-      permissionMode: session.currentPermissionMode,
+      // For a plan approval, start the resumed session in bypassPermissions so
+      // the harness launches without plan-mode constraints and the turn-end
+      // fallback (currentPermissionMode === "plan") cannot re-fire.
+      permissionMode: isPlanApproval ? "bypassPermissions" : session.currentPermissionMode,
       codexApprovalPolicy: session.codexApprovalPolicy,
       harness: "harnessName" in session ? session.harnessName : session.harness,
     };
     const resumed = await sm.spawnAndAwaitRunning(resumeConfig, { notifyLaunch: false });
-    sm.notifySession(resumed, `▶️ [${resumed.name}] Auto-resumed`);
+    if (isPlanApproval) {
+      sm.notifySession(resumed, `👍 [${resumed.name}] Plan approved (resumed)`, "plan-approved");
+    } else {
+      sm.notifySession(resumed, `▶️ [${resumed.name}] Auto-resumed`);
+    }
     return { text: `Auto-resumed session ${resumed.name} [${resumed.id}]. Use agent_output to see the response.` };
   } catch (err: unknown) {
     return { text: `Error auto-resuming session ${session.name} [${getSessionRef(session)}]: ${errorMessage(err)}`, isError: true };
@@ -182,7 +205,7 @@ export async function executeRespond(
     return spawnFreshRelaunch(sm, target, params.message);
   }
 
-  const autoResumeResult = await tryAutoResume(sm, target, params.message, { allowRecoveredRunningStub: !session });
+  const autoResumeResult = await tryAutoResume(sm, target, params.message, { allowRecoveredRunningStub: !session, approve: params.approve });
   if (autoResumeResult) {
     return autoResumeResult;
   }

@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "fs";
 import { homedir, tmpdir } from "os";
 import { dirname, join } from "path";
 import type { PersistedSessionInfo, SessionStatus, KillReason, ReasoningEffort, PermissionMode, CodexApprovalPolicy } from "./types";
@@ -225,10 +225,19 @@ export class SessionStore {
     let outputPath: string | undefined;
     try {
       const outputFile = join(tmpdir(), `openclaw-agent-${session.id}.txt`);
-      const fullOutput = session.getOutput().join("\n");
-      if (fullOutput.length > 0) {
-        writeFileSync(outputFile, fullOutput, "utf-8");
+      if (existsSync(outputFile)) {
+        // The incremental appendFileSync writes during session execution already
+        // produced a complete file. Using it directly preserves output that may
+        // have been evicted from the in-memory buffer (capped at 2000 items).
         outputPath = outputFile;
+      } else {
+        // Fallback: no incremental file exists (e.g. disk error during session),
+        // so write the in-memory buffer as a best-effort snapshot.
+        const fullOutput = session.getOutput().join("\n");
+        if (fullOutput.length > 0) {
+          writeFileSync(outputFile, fullOutput, "utf-8");
+          outputPath = outputFile;
+        }
       }
     } catch (err: unknown) {
       console.warn(`[SessionStore] Failed to write output file for session ${session.id}: ${errorMessage(err)}`);

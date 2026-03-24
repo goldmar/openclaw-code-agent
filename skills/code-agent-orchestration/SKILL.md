@@ -294,7 +294,8 @@ Notifications are routed to the Telegram thread/topic where the session was laun
 | Session auto-resumes | `▶️ Auto-resumed` |
 | Session idle-times out | `💤 Idle timeout` |
 | Session is forcibly stopped | `⛔ Stopped ...` with the specific stop reason |
-| Worktree decision pending (`ask`/`delegate`) | Telegram notification with inline buttons (Merge / Open PR / Dismiss) |
+| Worktree decision pending (`ask`) | Inline Telegram buttons sent to user (Merge locally / Create PR / Dismiss) — Alice must NOT preempt |
+| Worktree decision pending (`delegate`) | Wake sent to Alice with diff context — Alice must decide and call `agent_merge` or `agent_pr` |
 
 ### Sending completion summaries — use `message send`, not inline reply
 
@@ -369,11 +370,10 @@ When a session uses `worktree_strategy`, the agent runs in an isolated git branc
 |---|---|---|
 | `off` (default) | No worktree. Session runs in main checkout | Simple/trusted tasks |
 | `manual` | Creates worktree; no auto action | You want to review diffs before merging |
-| `ask` | Sends Telegram inline buttons (Merge / Open PR / Dismiss) | User should decide |
+| `ask` | Sends Telegram inline buttons (Merge locally / Create PR / Dismiss) | User should decide |
 | `auto-merge` | Merges automatically; spawns conflict-resolver if needed | Trusted tasks on a safe branch |
 | `auto-pr` | Creates/updates GitHub PR automatically (requires `gh`) | Feature branches needing review |
-
-`delegate` is available via `defaultWorktreeStrategy` plugin config only — orchestrator autonomously decides merge/PR/escalate.
+| `delegate` | Wakes orchestrator with diff context; Alice decides merge/PR/escalate | Set via `defaultWorktreeStrategy` config — orchestrator decides autonomously |
 
 ### Launch with worktree isolation
 
@@ -385,6 +385,34 @@ agent_launch(
   worktree_strategy: "auto-pr"
 )
 ```
+
+### Post-completion behavior by strategy
+
+When a session with a worktree completes, your action depends on the strategy:
+
+| Strategy | What to do after completion |
+|---|---|
+| `ask` | **Do nothing.** The plugin sends inline Telegram buttons (Merge locally / Create PR / Dismiss) to the user. **Never** call `agent_merge`, `agent_pr`, or any `git` command — wait for the user to decide. |
+| `delegate` | You receive a `worktree-delegate` wake with diff context. Evaluate and act (see *Delegate mode* below). |
+| `auto-merge` | No action needed — merge happens automatically. Watch for `worktree-merge-success` or `worktree-merge-conflict` notification. |
+| `auto-pr` | No action needed — PR is created/updated automatically. |
+| `manual` | Call `agent_merge` or `agent_pr` **only** when the user explicitly asks. |
+| `off` | No worktree — nothing to merge. |
+
+Note: the ⏸️ turn-complete wake is suppressed for both `ask` and `delegate` strategies — the worktree decision notification replaces it as the completion signal.
+
+### Delegate mode: deciding merge vs PR
+
+When you receive a `worktree-delegate` wake:
+
+1. **Evaluate the diff** — read the commit count, files changed, and diff summary included in the wake message
+2. **Compare to original task scope** — does the diff match what was asked?
+3. **Decide:**
+   - **Call `agent_merge`** when: changes are low-risk, well-scoped, match the original task, and no code review is needed
+   - **Call `agent_pr`** when: changes are non-trivial, touch many files, introduce significant complexity, or when uncertain
+   - **Escalate to the user** when: changes are ambiguous, out of scope, or involve sensitive areas
+4. **Notify the user briefly** — send a short message with your decision and one-sentence reasoning (e.g. "Merged `agent/feature-x` — straightforward 2-file change matching the original task.")
+5. **Never use raw `git` commands** — always use `agent_merge` or `agent_pr`
 
 ### Check worktree status
 
@@ -468,6 +496,8 @@ When a session completes, keep summaries brief:
 | Passing `channel` explicitly | Bypasses automatic routing | Let `agentChannels` handle routing automatically |
 | Not checking the result of a completed session | User doesn't know what happened | Always read `agent_output` and summarize briefly |
 | Launching too many sessions in parallel | `maxSessions` limit reached | Respect the limit, prioritize, sequence if necessary |
+| Calling `agent_merge` or `agent_pr` when strategy is `ask` | Bypasses the user's inline-button decision | Wait for the Telegram buttons — do nothing until the user decides |
+| Using raw `git merge` instead of `agent_merge` | Skips conflict resolution, cleanup, and session state tracking | Always use `agent_merge` when the user asks to merge a worktree branch |
 
 ---
 

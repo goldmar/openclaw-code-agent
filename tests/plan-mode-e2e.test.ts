@@ -233,6 +233,147 @@ describe("Plan mode E2E: permission_mode_change flow", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Test: approve=true forwarded through tryAutoResume to dead plan-mode session
+// ---------------------------------------------------------------------------
+
+describe("Plan mode E2E: approve=true on idle-killed plan session (double-approval bug)", () => {
+  it("tryAutoResume forwards approve=true as bypassPermissions + system prefix when session was in plan mode", async () => {
+    // Simulate a dead session that was in awaiting-plan-approval when killed.
+    const deadPersistedSession = {
+      sessionId: "dead-id",
+      harnessSessionId: "harness-dead-123",
+      name: "plan-merge-robustness",
+      prompt: "Write a plan for X",
+      workdir: "/tmp",
+      status: "killed" as const,
+      killReason: "idle-timeout" as const,
+      currentPermissionMode: "plan" as const,
+      costUsd: 0.05,
+      harness: "plan-e2e-harness",
+    };
+
+    let capturedResumeConfig: import("../src/types").SessionConfig | undefined;
+
+    // Build a stub SessionManager that:
+    //  - resolve() returns null (session is dead)
+    //  - getPersistedSession() returns the dead session
+    //  - spawnAndAwaitRunning() captures the config and returns a fake running session
+    const sm = {
+      resolve: (_ref: string) => null,
+      getPersistedSession: (_ref: string) => deadPersistedSession,
+      notifySession: () => {},
+      spawnAndAwaitRunning: async (config: import("../src/types").SessionConfig) => {
+        capturedResumeConfig = config;
+        return {
+          id: "new-session-id",
+          name: "plan-merge-robustness",
+          status: "running",
+        };
+      },
+    } as unknown as import("../src/session-manager").SessionManager;
+
+    const result = await executeRespond(sm, {
+      session: "dead-id",
+      message: "Approved. Go ahead.",
+      approve: true,
+    });
+
+    assert.ok(!result.isError, `Should not be an error: ${result.text}`);
+    assert.ok(result.text.includes("Auto-resumed"), `Should say auto-resumed: ${result.text}`);
+
+    assert.ok(capturedResumeConfig, "spawnAndAwaitRunning should have been called");
+    assert.equal(
+      capturedResumeConfig!.permissionMode,
+      "bypassPermissions",
+      "Resumed session must use bypassPermissions, not plan",
+    );
+    assert.ok(
+      capturedResumeConfig!.prompt?.includes("[SYSTEM: The user has approved your plan."),
+      `Prompt must contain approval system prefix, got: ${capturedResumeConfig!.prompt}`,
+    );
+    assert.ok(
+      capturedResumeConfig!.prompt?.includes("Approved. Go ahead."),
+      "Prompt must contain original user message",
+    );
+  });
+
+  it("tryAutoResume with approve=true on a non-plan dead session does NOT inject bypassPermissions", async () => {
+    const deadDefaultSession = {
+      sessionId: "dead-default",
+      harnessSessionId: "harness-default-456",
+      name: "normal-session",
+      prompt: "Do some work",
+      workdir: "/tmp",
+      status: "killed" as const,
+      killReason: "idle-timeout" as const,
+      currentPermissionMode: "default" as const,
+      costUsd: 0.02,
+      harness: "plan-e2e-harness",
+    };
+
+    let capturedResumeConfig: import("../src/types").SessionConfig | undefined;
+
+    const sm = {
+      resolve: (_ref: string) => null,
+      getPersistedSession: (_ref: string) => deadDefaultSession,
+      notifySession: () => {},
+      spawnAndAwaitRunning: async (config: import("../src/types").SessionConfig) => {
+        capturedResumeConfig = config;
+        return { id: "new-id", name: "normal-session", status: "running" };
+      },
+    } as unknown as import("../src/session-manager").SessionManager;
+
+    await executeRespond(sm, {
+      session: "dead-default",
+      message: "Continue please.",
+      approve: true,
+    });
+
+    assert.ok(capturedResumeConfig, "spawnAndAwaitRunning should have been called");
+    assert.equal(
+      capturedResumeConfig!.permissionMode,
+      "default",
+      "Non-plan session should keep its original permissionMode",
+    );
+    assert.ok(
+      !capturedResumeConfig!.prompt?.includes("[SYSTEM: The user has approved your plan."),
+      "Non-plan session should not get the approval prefix",
+    );
+  });
+
+  it("tryAutoResume with approve=true rejects revision keywords even for dead plan session", async () => {
+    const deadPlanSession = {
+      sessionId: "dead-plan-2",
+      harnessSessionId: "harness-plan-789",
+      name: "plan-session-2",
+      prompt: "Write a plan",
+      workdir: "/tmp",
+      status: "killed" as const,
+      killReason: "idle-timeout" as const,
+      currentPermissionMode: "plan" as const,
+      costUsd: 0.01,
+      harness: "plan-e2e-harness",
+    };
+
+    const sm = {
+      resolve: (_ref: string) => null,
+      getPersistedSession: (_ref: string) => deadPlanSession,
+      notifySession: () => {},
+      spawnAndAwaitRunning: async () => ({ id: "new", name: "plan-session-2", status: "running" }),
+    } as unknown as import("../src/session-manager").SessionManager;
+
+    const result = await executeRespond(sm, {
+      session: "dead-plan-2",
+      message: "Please change the approach and add more steps before approving.",
+      approve: true,
+    });
+
+    assert.equal(result.isError, true, "Should reject approve+revision in same call");
+    assert.ok(result.text.includes("Cannot approve and revise"), `Should explain the error: ${result.text}`);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Test: Simulate real-world delayed approve
 // ---------------------------------------------------------------------------
 

@@ -443,6 +443,33 @@ export interface MergeResult {
   success: boolean;
   conflictFiles?: string[];
   error?: string;
+  /** True when dirty tracked changes on base were auto-stashed before merging. */
+  stashed?: boolean;
+  /** e.g. "stash@{0}" — for user reference in notifications. */
+  stashRef?: string;
+  /** True when stash pop conflicted after a successful merge; stash left intact for manual recovery. */
+  stashPopConflict?: boolean;
+  /** True when the failure was specifically a stash-push failure (dirty state could not be stashed). */
+  dirtyError?: boolean;
+}
+
+/**
+ * Returns true if the repo at repoDir has dirty tracked files (staged or unstaged).
+ * Untracked files ("??") are ignored — they do not block git merge.
+ */
+function checkDirtyTracked(repoDir: string): boolean {
+  try {
+    const status = execFileSync(
+      "git",
+      ["-C", repoDir, "status", "--porcelain"],
+      { timeout: 5_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
+    );
+    return status.split("\n").some(
+      (line) => line.length > 0 && !line.startsWith("??") && !line.startsWith("!!"),
+    );
+  } catch {
+    return false; // if check fails, proceed — merge will surface any error
+  }
 }
 
 /**
@@ -456,6 +483,9 @@ export function mergeBranch(
   base: string,
   strategy: "merge" | "squash" = "merge",
 ): MergeResult {
+  let stashed = false;
+  let stashRef: string | undefined;
+
   try {
     // Checkout base branch first
     execFileSync(
@@ -463,6 +493,38 @@ export function mergeBranch(
       ["-C", repoDir, "checkout", base],
       { timeout: 15_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
     );
+
+    // Auto-stash dirty tracked files so merge can proceed cleanly.
+    // Untracked files ("??") are intentionally excluded — they don't block merges.
+    if (checkDirtyTracked(repoDir)) {
+      let stashOutput: string;
+      try {
+        stashOutput = execFileSync(
+          "git",
+          ["-C", repoDir, "stash", "push", "-m", `pre-merge stash before ${branch}`],
+          { timeout: 10_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
+        );
+      } catch (stashErr) {
+        return {
+          success: false,
+          dirtyError: true,
+          error: `Auto-stash failed: ${stashErr instanceof Error ? stashErr.message : String(stashErr)}. Commit or stash changes manually, then retry.`,
+        };
+      }
+      // Guard against edge case where checkDirtyTracked returned true but nothing was stashable
+      if (!stashOutput.includes("No local changes to save")) {
+        stashed = true;
+        try {
+          stashRef = execFileSync(
+            "git",
+            ["-C", repoDir, "stash", "list", "--format=%gd", "-n", "1"],
+            { timeout: 5_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
+          ).trim() || undefined;
+        } catch {
+          // Best effort — stashRef is informational only
+        }
+      }
+    }
 
     // Attempt merge
     const mergeArgs = strategy === "squash"
@@ -480,7 +542,26 @@ export function mergeBranch(
       );
     }
 
-    return { success: true };
+    // Restore stash (best effort — failure means stash left intact for manual recovery)
+    let stashPopConflict = false;
+    if (stashed) {
+      try {
+        execFileSync(
+          "git",
+          ["-C", repoDir, "stash", "pop"],
+          { timeout: 10_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
+        );
+      } catch {
+        stashPopConflict = true;
+      }
+    }
+
+    return {
+      success: true,
+      stashed: stashed || undefined,
+      stashRef,
+      stashPopConflict: stashPopConflict || undefined,
+    };
   } catch (err) {
     // Check if it's a merge conflict
     try {
@@ -496,7 +577,7 @@ export function mergeBranch(
         .map((line) => line.slice(3).trim());
 
       if (conflictFiles.length > 0) {
-        // Abort merge
+        // Abort merge to restore clean tree
         try {
           execFileSync(
             "git",
@@ -507,13 +588,44 @@ export function mergeBranch(
           // Best effort
         }
 
-        return { success: false, conflictFiles };
+        // Best-effort stash pop after abort — aborted merge leaves clean tree so pop should succeed
+        if (stashed) {
+          try {
+            execFileSync(
+              "git",
+              ["-C", repoDir, "stash", "pop"],
+              { timeout: 10_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
+            );
+          } catch {
+            // Best effort — stash remains for user recovery
+          }
+        }
+
+        return { success: false, conflictFiles, stashed: stashed || undefined, stashRef };
       }
     } catch {
       // Not a conflict, just a regular error
     }
 
-    return { success: false, error: err instanceof Error ? err.message : String(err) };
+    // Best-effort stash pop on generic error path
+    if (stashed) {
+      try {
+        execFileSync(
+          "git",
+          ["-C", repoDir, "stash", "pop"],
+          { timeout: 10_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
+        );
+      } catch {
+        // Best effort — stash remains for user recovery
+      }
+    }
+
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : String(err),
+      stashed: stashed || undefined,
+      stashRef,
+    };
   }
 }
 

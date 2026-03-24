@@ -76,62 +76,93 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
       const shouldPush = params.push === true; // Default false
       const shouldCleanup = params.delete_branch !== false; // Default true
 
-      // Attempt merge
-      const mergeResult = mergeBranch(originalWorkdir, branchName, baseBranch, strategy);
-
-      if (mergeResult.success) {
-        // Push base branch if requested
-        if (shouldPush) {
-          if (!pushBranch(originalWorkdir, baseBranch)) {
-            return { content: [{ type: "text", text: `⚠️ Merged ${branchName} → ${baseBranch} locally, but failed to push ${baseBranch}` }] };
-          }
-        }
-
-        // Cleanup branch if requested
-        if (shouldCleanup) {
-          deleteBranch(originalWorkdir, branchName);
-        }
-
-        // Persist merge status if we have a persisted session
-        if (persistedSession) {
-          sessionManager.updatePersistedSession(persistedSession.harnessSessionId, {
-            worktreeMerged: true,
-            worktreeMergedAt: new Date().toISOString(),
-            pendingWorktreeDecisionSince: undefined,
-            lastWorktreeReminderAt: undefined,
-          });
-        }
-
-        const cleanupMsg = shouldCleanup ? " Branch cleaned up." : "";
-        const pushMsg = shouldPush ? " Pushed." : "";
-        return { content: [{ type: "text", text: `✅ Merged ${branchName} → ${baseBranch}.${pushMsg}${cleanupMsg}` }] };
-      } else if (mergeResult.conflictFiles && mergeResult.conflictFiles.length > 0) {
-        // Spawn conflict resolver
-        const conflictPrompt = [
-          `Resolve merge conflicts in the following files and commit the resolution:`,
-          ``,
-          ...mergeResult.conflictFiles.map((f) => `- ${f}`),
-          ``,
-          `After resolving, commit with message: "Resolve merge conflicts from ${branchName}"`,
-        ].join("\n");
-
-        try {
-          const conflictSession = sessionManager.spawn({
-            prompt: conflictPrompt,
-            workdir: originalWorkdir,
-            name: `${params.session}-conflict-resolver`,
-            harness: "claude-code",
-            permissionMode: "bypassPermissions",
-            multiTurn: true,
-          });
-
-          return { content: [{ type: "text", text: `⚠️ Merge conflicts in ${mergeResult.conflictFiles.length} file(s) — spawned conflict resolver session: ${conflictSession.name}` }] };
-        } catch (err) {
-          return { content: [{ type: "text", text: `❌ Merge conflicts detected, but failed to spawn resolver: ${err instanceof Error ? err.message : String(err)}` }] };
-        }
-      } else {
-        return { content: [{ type: "text", text: `❌ Merge failed: ${mergeResult.error ?? "unknown error"}` }] };
+      // Idempotency guard: if already merged, return early before touching the queue
+      if (persistedSession?.worktreeMerged) {
+        return { content: [{ type: "text", text: `ℹ️ Session "${params.session}" is already merged.` }] };
       }
+
+      // Serialise against concurrent merges on the same repo directory
+      let toolResult: { content: Array<{ type: string; text: string }> } = {
+        content: [{ type: "text", text: "❌ Merge did not run (internal error)" }],
+      };
+
+      await sessionManager.enqueueMerge(originalWorkdir, async () => {
+        // Re-check inside the queue slot — a concurrent auto-merge may have beaten us
+        const freshPersisted = sessionManager.getPersistedSession(params.session);
+        if (freshPersisted?.worktreeMerged) {
+          toolResult = { content: [{ type: "text", text: `ℹ️ Session "${params.session}" was already merged while waiting in queue.` }] };
+          return;
+        }
+
+        // Attempt merge
+        const mergeResult = mergeBranch(originalWorkdir, branchName, baseBranch, strategy);
+
+        if (mergeResult.success) {
+          // Push base branch if requested
+          if (shouldPush) {
+            if (!pushBranch(originalWorkdir, baseBranch)) {
+              toolResult = { content: [{ type: "text", text: `⚠️ Merged ${branchName} → ${baseBranch} locally, but failed to push ${baseBranch}` }] };
+              return;
+            }
+          }
+
+          // Cleanup branch if requested
+          if (shouldCleanup) {
+            deleteBranch(originalWorkdir, branchName);
+          }
+
+          // Persist merge status if we have a persisted session
+          if (freshPersisted) {
+            sessionManager.updatePersistedSession(freshPersisted.harnessSessionId, {
+              worktreeMerged: true,
+              worktreeMergedAt: new Date().toISOString(),
+              pendingWorktreeDecisionSince: undefined,
+              lastWorktreeReminderAt: undefined,
+            });
+          }
+
+          const cleanupMsg = shouldCleanup ? " Branch cleaned up." : "";
+          const pushMsg = shouldPush ? " Pushed." : "";
+          let successText = `✅ Merged ${branchName} → ${baseBranch}.${pushMsg}${cleanupMsg}`;
+          if (mergeResult.stashPopConflict) {
+            successText += `\n⚠️ Pre-merge stash pop conflicted — run \`git stash show ${mergeResult.stashRef ?? "stash@{0}"}\` in ${originalWorkdir} to review stashed changes.`;
+          } else if (mergeResult.stashed) {
+            successText += `\n(Pre-existing changes on ${baseBranch} were auto-stashed and restored.)`;
+          }
+          toolResult = { content: [{ type: "text", text: successText }] };
+        } else if (mergeResult.conflictFiles && mergeResult.conflictFiles.length > 0) {
+          // Spawn conflict resolver
+          const conflictPrompt = [
+            `Resolve merge conflicts in the following files and commit the resolution:`,
+            ``,
+            ...mergeResult.conflictFiles.map((f) => `- ${f}`),
+            ``,
+            `After resolving, commit with message: "Resolve merge conflicts from ${branchName}"`,
+          ].join("\n");
+
+          try {
+            const conflictSession = sessionManager.spawn({
+              prompt: conflictPrompt,
+              workdir: originalWorkdir,
+              name: `${params.session}-conflict-resolver`,
+              harness: "claude-code",
+              permissionMode: "bypassPermissions",
+              multiTurn: true,
+            });
+
+            toolResult = { content: [{ type: "text", text: `⚠️ Merge conflicts in ${mergeResult.conflictFiles.length} file(s) — spawned conflict resolver session: ${conflictSession.name}` }] };
+          } catch (err) {
+            toolResult = { content: [{ type: "text", text: `❌ Merge conflicts detected, but failed to spawn resolver: ${err instanceof Error ? err.message : String(err)}` }] };
+          }
+        } else {
+          const errorText = mergeResult.dirtyError
+            ? `❌ Merge blocked: ${mergeResult.error}`
+            : `❌ Merge failed: ${mergeResult.error ?? "unknown error"}`;
+          toolResult = { content: [{ type: "text", text: errorText }] };
+        }
+      });
+
+      return toolResult;
     },
   };
 }

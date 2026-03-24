@@ -56,6 +56,8 @@ export class SessionManager {
   private lastWaitingEventTimestamps: Map<string, number> = new Map();
   private lastTurnCompleteMarkers: Map<string, string> = new Map();
   private lastTerminalWakeMarkers: Map<string, string> = new Map();
+  /** Serializes concurrent merge operations per repo directory (keyed by repoDir). */
+  private mergeQueues: Map<string, Promise<void>> = new Map();
   private readonly store: SessionStore;
   private readonly metrics: SessionMetricsRecorder;
   private readonly wakeDispatcher: WakeDispatcher;
@@ -497,62 +499,90 @@ export class SessionManager {
     }
 
     if (strategy === "auto-merge") {
-      // Attempt merge (no push — auto-merge is local-only)
-      const mergeResult = mergeBranch(repoDir, branchName, baseBranch);
+      // Idempotency guard: skip entirely if already merged before we even enter the queue
+      if (this.isAlreadyMerged(session.harnessSessionId)) return true;
 
-      if (mergeResult.success) {
-        // Delete branch
-        deleteBranch(repoDir, branchName);
+      await this.enqueueMerge(
+        repoDir,
+        async () => {
+          // Re-check inside the queue slot in case a concurrent merge completed while we waited
+          if (this.isAlreadyMerged(session.harnessSessionId)) return;
 
-        // Persist merge status
-        if (session.harnessSessionId) {
-          this.updatePersistedSession(session.harnessSessionId, {
-            worktreeMerged: true,
-            worktreeMergedAt: new Date().toISOString(),
-          });
-        }
+          // Attempt merge (no push — auto-merge is local-only)
+          const mergeResult = mergeBranch(repoDir, branchName, baseBranch);
 
-        this.wakeDispatcher.dispatchSessionNotification(session, {
-          label: "worktree-merge-success",
-          userMessage: `✅ [${session.name}] Merged ${branchName} → ${baseBranch} locally. Branch cleaned up.`,
-        });
-      } else if (mergeResult.conflictFiles && mergeResult.conflictFiles.length > 0) {
-        // Spawn conflict resolver session
-        const conflictPrompt = [
-          `Resolve merge conflicts in the following files and commit the resolution:`,
-          ``,
-          ...mergeResult.conflictFiles.map((f) => `- ${f}`),
-          ``,
-          `After resolving, commit with message: "Resolve merge conflicts from ${branchName}"`,
-        ].join("\n");
+          if (mergeResult.success) {
+            // Delete branch
+            deleteBranch(repoDir, branchName);
 
-        try {
-          this.spawn({
-            prompt: conflictPrompt,
-            workdir: repoDir,
-            name: `${session.name}-conflict-resolver`,
-            harness: "claude-code",
-            permissionMode: "bypassPermissions",
-            multiTurn: true,
-          });
+            // Persist merge status
+            if (session.harnessSessionId) {
+              this.updatePersistedSession(session.harnessSessionId, {
+                worktreeMerged: true,
+                worktreeMergedAt: new Date().toISOString(),
+              });
+            }
 
+            let successMsg = `✅ [${session.name}] Merged ${branchName} → ${baseBranch} locally. Branch cleaned up.`;
+            if (mergeResult.stashPopConflict) {
+              successMsg += `\n⚠️ Pre-merge stash pop conflicted — run \`git stash show ${mergeResult.stashRef ?? "stash@{0}"}\` in ${repoDir} to review stashed changes.`;
+            } else if (mergeResult.stashed) {
+              successMsg += `\n(Pre-existing changes on ${baseBranch} were auto-stashed and restored.)`;
+            }
+
+            this.wakeDispatcher.dispatchSessionNotification(session, {
+              label: "worktree-merge-success",
+              userMessage: successMsg,
+            });
+          } else if (mergeResult.conflictFiles && mergeResult.conflictFiles.length > 0) {
+            // Spawn conflict resolver session
+            const conflictPrompt = [
+              `Resolve merge conflicts in the following files and commit the resolution:`,
+              ``,
+              ...mergeResult.conflictFiles.map((f) => `- ${f}`),
+              ``,
+              `After resolving, commit with message: "Resolve merge conflicts from ${branchName}"`,
+            ].join("\n");
+
+            try {
+              this.spawn({
+                prompt: conflictPrompt,
+                workdir: repoDir,
+                name: `${session.name}-conflict-resolver`,
+                harness: "claude-code",
+                permissionMode: "bypassPermissions",
+                multiTurn: true,
+              });
+
+              this.wakeDispatcher.dispatchSessionNotification(session, {
+                label: "worktree-merge-conflict",
+                userMessage: `⚠️ [${session.name}] Merge conflicts in ${mergeResult.conflictFiles.length} file(s) — spawned conflict resolver session`,
+                buttons: [[{ label: "🔀 Open PR instead", callbackData: `code-agent:open-pr:${session.id}` }]],
+              });
+            } catch (err) {
+              this.wakeDispatcher.dispatchSessionNotification(session, {
+                label: "worktree-merge-conflict-spawn-failed",
+                userMessage: `❌ [${session.name}] Merge conflicts detected, but failed to spawn resolver: ${err instanceof Error ? err.message : String(err)}`,
+              });
+            }
+          } else {
+            const errorMsg = mergeResult.dirtyError
+              ? `❌ [${session.name}] Merge blocked: ${mergeResult.error}`
+              : `❌ [${session.name}] Merge failed: ${mergeResult.error ?? "unknown error"}`;
+            this.wakeDispatcher.dispatchSessionNotification(session, {
+              label: "worktree-merge-error",
+              userMessage: errorMsg,
+            });
+          }
+        },
+        () => {
+          // Notify user that this merge is waiting behind another in-progress merge
           this.wakeDispatcher.dispatchSessionNotification(session, {
-            label: "worktree-merge-conflict",
-            userMessage: `⚠️ [${session.name}] Merge conflicts in ${mergeResult.conflictFiles.length} file(s) — spawned conflict resolver session`,
-            buttons: [[{ label: "🔀 Open PR instead", callbackData: `code-agent:open-pr:${session.id}` }]],
+            label: "worktree-merge-queued",
+            userMessage: `🕐 [${session.name}] Merge queued — another merge for this repo is in progress. Will notify when complete.`,
           });
-        } catch (err) {
-          this.wakeDispatcher.dispatchSessionNotification(session, {
-            label: "worktree-merge-conflict-spawn-failed",
-            userMessage: `❌ [${session.name}] Merge conflicts detected, but failed to spawn resolver: ${err instanceof Error ? err.message : String(err)}`,
-          });
-        }
-      } else {
-        this.wakeDispatcher.dispatchSessionNotification(session, {
-          label: "worktree-merge-error",
-          userMessage: `❌ [${session.name}] Merge failed: ${mergeResult.error ?? "unknown error"}`,
-        });
-      }
+        },
+      );
       return true;
     }
 
@@ -1249,6 +1279,44 @@ export class SessionManager {
   /** Read persisted metadata by harness id, internal id, or name. */
   getPersistedSession(ref: string): PersistedSessionInfo | undefined {
     return this.store.getPersistedSession(ref);
+  }
+
+  /** Returns true if this session's branch has already been merged (idempotency guard). */
+  private isAlreadyMerged(harnessSessionId: string | undefined): boolean {
+    if (!harnessSessionId) return false;
+    return this.store.getPersistedSession(harnessSessionId)?.worktreeMerged === true;
+  }
+
+  /**
+   * Enqueue a merge operation for a given repo, ensuring only one merge runs at a time
+   * per repo directory. If another merge is already in progress, `onQueued` is called
+   * immediately (before waiting), and the new operation waits its turn.
+   *
+   * The returned Promise resolves/rejects with the result of `fn()`.
+   * A prior failure in the queue does NOT block subsequent items.
+   */
+  async enqueueMerge(
+    repoDir: string,
+    fn: () => Promise<void>,
+    onQueued?: () => void,
+  ): Promise<void> {
+    const current = this.mergeQueues.get(repoDir);
+    if (current !== undefined && onQueued) onQueued();
+
+    // Chain off the current tail; swallow prior errors so they don't block the queue
+    const next: Promise<void> = (current ?? Promise.resolve())
+      .catch(() => {})
+      .then(() => fn());
+
+    // The tail stored in the map must never reject (unhandled rejection)
+    const tail = next.catch(() => {});
+    this.mergeQueues.set(repoDir, tail);
+    tail.finally(() => {
+      // Only delete if no newer operation has replaced this entry
+      if (this.mergeQueues.get(repoDir) === tail) this.mergeQueues.delete(repoDir);
+    });
+
+    return next; // caller awaits this — will reject if fn() throws
   }
 
   /** Update fields on a persisted session record and flush to disk. */

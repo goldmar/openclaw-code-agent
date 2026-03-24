@@ -155,6 +155,7 @@ export class Session extends EventEmitter {
 
   // Flags
   pendingPlanApproval: boolean = false;
+  planFilePath?: string;
   killReason: KillReason = "unknown";
   private waitingForInputFired: boolean = false;
   private lastTurnHadQuestion: boolean = false;
@@ -489,6 +490,13 @@ export class Session extends EventEmitter {
         }
         this.emit("output", this, msg.text);
       } else if (msg.type === "tool_use") {
+        // Track plan file writes so agent_output can surface the plan content.
+        if (msg.name === "Write") {
+          const input = msg.input as Record<string, unknown>;
+          if (typeof input?.file_path === "string" && input.file_path.includes("/.claude/plans/")) {
+            this.planFilePath = input.file_path;
+          }
+        }
         if (this.harness.questionToolNames.includes(msg.name)) {
           this.lastTurnHadQuestion = true;
           // Defensive: CC normally uses ExitPlanMode in plan mode, but if it

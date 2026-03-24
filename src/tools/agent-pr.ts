@@ -1,4 +1,5 @@
 import { Type } from "@sinclair/typebox";
+import { existsSync } from "fs";
 import { sessionManager } from "../singletons";
 import type { OpenClawPluginToolContext } from "../types";
 import { getBranchName, getDiffSummary, createPR, pushBranch, isGitHubCLIAvailable, detectDefaultBranch, syncWorktreePR, commentOnPR } from "../worktree";
@@ -59,9 +60,15 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext) {
         return { content: [{ type: "text", text: `Error: Session "${params.session}" does not have a worktree.` }] };
       }
 
-      const branchName = getBranchName(worktreePath);
+      // Fall back to persisted branch name if live lookup fails (worktree directory may have been removed)
+      const liveBranch = getBranchName(worktreePath);
+      const derivedBranch = `agent/${sessionName}`;
+      const branchName = liveBranch ?? persistedSession?.worktreeBranch ?? derivedBranch;
       if (!branchName) {
-        return { content: [{ type: "text", text: `Error: Cannot determine branch name for worktree ${worktreePath}.` }] };
+        return { content: [{ type: "text", text: `Error: Cannot determine branch name for worktree ${worktreePath}. The worktree may have been removed and no persisted branch name is available.` }] };
+      }
+      if (!existsSync(worktreePath)) {
+        console.info(`[agent_pr] Worktree directory ${worktreePath} no longer exists; proceeding with branch "${branchName}" via originalWorkdir (${originalWorkdir})`);
       }
 
       const baseBranch = params.base_branch ?? detectDefaultBranch(originalWorkdir);

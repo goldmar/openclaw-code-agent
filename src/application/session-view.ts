@@ -138,10 +138,24 @@ export function getSessionOutputText(
 
   const outputLines = options.full ? session.getOutput() : session.getOutput(linesToShow);
   const header = outputHeaderForActiveSession(session);
-  if (outputLines.length === 0) {
-    return `${header}${emptyOutputDiagnostics(session)}`;
+  const body = outputLines.length === 0
+    ? `${header}${emptyOutputDiagnostics(session)}`
+    : `${header}\n${outputLines.join("\n")}`;
+
+  // When awaiting plan approval, append the plan file contents so the
+  // orchestrator can read the full plan without having to know the file path.
+  if (session.pendingPlanApproval && session.planFilePath) {
+    try {
+      if (existsSync(session.planFilePath)) {
+        const planContent = readFileSync(session.planFilePath, "utf-8");
+        const divider = "─".repeat(60);
+        return `${body}\n${divider}\nPlan file: ${session.planFilePath}\n${divider}\n${planContent}`;
+      }
+    } catch {
+      // best-effort: if the file can't be read, return normal output
+    }
   }
-  return `${header}\n${outputLines.join("\n")}`;
+  return body;
 }
 
 /**
