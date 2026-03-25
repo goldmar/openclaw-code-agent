@@ -33,6 +33,11 @@ export type HarnessMessage =
 // Launch options
 // ---------------------------------------------------------------------------
 
+export type CanUseToolCallback = (
+  toolName: string,
+  input: Record<string, unknown>,
+) => Promise<{ behavior: "allow"; updatedInput: Record<string, unknown> }>;
+
 export interface HarnessLaunchOptions {
   prompt: string | AsyncIterable<unknown>;
   cwd: string;
@@ -46,6 +51,8 @@ export interface HarnessLaunchOptions {
   forkSession?: boolean;
   abortController?: AbortController;
   mcpServers?: McpServerConfig;
+  /** Optional tool-intercept callback (CC sessions only). */
+  canUseTool?: CanUseToolCallback;
 }
 
 // ---------------------------------------------------------------------------

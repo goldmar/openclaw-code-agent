@@ -38,6 +38,12 @@ export interface HarnessConfig {
   approvalPolicy?: CodexApprovalPolicy;
 }
 
+/** Tool-intercept callback type for harnesses that support it. */
+export type CanUseToolCallback = (
+  toolName: string,
+  input: Record<string, unknown>,
+) => Promise<{ behavior: "allow"; updatedInput: Record<string, unknown> }>;
+
 /** Session creation options used by SessionManager.spawn(). */
 export interface SessionConfig {
   prompt: string;
@@ -69,6 +75,8 @@ export interface SessionConfig {
   worktreeBaseBranch?: string;
   /** Output mode: "deliverable" sends 📄 Deliverable ready instead of ✅ Completed. */
   outputMode?: "deliverable";
+  /** Optional tool-intercept callback (CC sessions only). Used for AskUserQuestion intercept. */
+  canUseTool?: CanUseToolCallback;
 }
 
 /** Plan-approval policy for orchestrator wake flows. */

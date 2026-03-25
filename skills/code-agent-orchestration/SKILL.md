@@ -313,6 +313,16 @@ openclaw message send --channel telegram --target <chatId> --thread-id <topicId>
 
 The Telegram chat ID and topic thread ID are available from the current conversation context.
 
+### Worktree `ask` strategy — no duplicate summary
+
+When a session completes with `worktree_strategy: "ask"`, the plugin sends the user a single consolidated Telegram message that contains:
+- The full commit list and diff stats
+- The ⬇️ Merge locally / 🔀 Create PR / ❌ Dismiss inline buttons
+
+**Do NOT send a separate completion summary.** The button message IS the completion signal. Sending an additional "✅ Done!" or "Here's what was done:" message creates duplicates and confuses the user.
+
+This applies when the wake message says "Worktree strategy buttons delivered to user." — treat that as confirmation that the user is already fully informed. Take no further action until the user clicks a button.
+
 ---
 
 ### Plan → Execute mode switch

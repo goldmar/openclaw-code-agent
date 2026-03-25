@@ -96,6 +96,13 @@ export function createCallbackHandler() {
       switch (action) {
         case "merge":
         case "merge-locally": {
+          // Clear pending worktree decision so cleanup can proceed and reminders stop
+          {
+            const ms = sessionManager.resolve(sessionId);
+            const ps = sessionManager.getPersistedSession(sessionId);
+            const hid = ms?.harnessSessionId ?? ps?.harnessSessionId;
+            if (hid) sessionManager.updatePersistedSession(hid, { pendingWorktreeDecisionSince: undefined, lastWorktreeReminderAt: undefined });
+          }
           const result = await makeAgentMergeTool().execute("callback", { session: sessionId });
           await ctx.respond.reply({ text: toolResultText(result) });
           break;
@@ -103,12 +110,21 @@ export function createCallbackHandler() {
 
         case "pr":
         case "open-pr": {
+          // Do NOT pre-clear pendingWorktreeDecisionSince here.
+          // For the PR path the worktree directory must stay alive indefinitely so the
+          // user can push follow-up commits for PR review.  The worktree directory was
+          // already preserved by onSessionTerminal (which skips removeWorktree when
+          // pendingWorktreeDecisionSince is set).  agent-pr.ts clears the flag itself
+          // on success; if the PR creation fails the flag remains set so reminders
+          // continue until the user tries again.
           const result = await makeAgentPrTool().execute("callback", { session: sessionId });
           await ctx.respond.reply({ text: toolResultText(result) });
           break;
         }
 
         case "new-pr": {
+          // Same as "pr" / "open-pr": do NOT pre-clear pendingWorktreeDecisionSince.
+          // Keep the worktree alive — agent-pr.ts clears the flag on success only.
           const result = await makeAgentPrTool().execute("callback", { session: sessionId, force_new: true });
           await ctx.respond.reply({ text: toolResultText(result) });
           break;
@@ -193,9 +209,27 @@ export function createCallbackHandler() {
           break;
         }
 
+        case "question-answer": {
+          // sessionId here is actually "<sessionId>:<optionIndex>" due to parsePayload splitting at first colon
+          const lastColonIdx = sessionId.lastIndexOf(":");
+          if (lastColonIdx === -1) {
+            await ctx.respond.reply({ text: `⚠️ Malformed question-answer payload: "${sessionId}"` });
+            break;
+          }
+          const realSessionId = sessionId.slice(0, lastColonIdx);
+          const optionIndex = parseInt(sessionId.slice(lastColonIdx + 1), 10);
+          if (isNaN(optionIndex)) {
+            await ctx.respond.reply({ text: `⚠️ Invalid option index in question-answer payload.` });
+            break;
+          }
+          sessionManager.resolveAskUserQuestion(realSessionId, optionIndex);
+          await ctx.respond.reply({ text: `✅ Answer submitted.` });
+          break;
+        }
+
         default: {
           await ctx.respond.reply({
-            text: `⚠️ Unknown callback action: "${action}". Supported: merge, pr, open-pr, new-pr, dismiss, approve, reject, revise, reply, retry, view-output.`,
+            text: `⚠️ Unknown callback action: "${action}". Supported: merge, pr, open-pr, new-pr, dismiss, approve, reject, revise, reply, retry, view-output, question-answer.`,
           });
           break;
         }
