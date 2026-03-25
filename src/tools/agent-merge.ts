@@ -1,5 +1,6 @@
 import { Type } from "@sinclair/typebox";
 import { existsSync } from "fs";
+import { resolve, dirname } from "path";
 import { sessionManager } from "../singletons";
 import type { OpenClawPluginToolContext } from "../types";
 import { getBranchName, mergeBranch, pushBranch, deleteBranch, detectDefaultBranch } from "../worktree";
@@ -71,7 +72,26 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
         console.info(`[agent_merge] Worktree directory ${worktreePath} no longer exists; proceeding with merge via originalWorkdir (${originalWorkdir})`);
       }
 
-      const baseBranch = params.base_branch ?? detectDefaultBranch(originalWorkdir);
+      // Fix 2-E: Guard against stale persisted sessions where workdir was incorrectly
+      // stored as the worktree path rather than the original repo directory.
+      // Symptom: `git -C <worktreePath> checkout main` → "No such file or directory".
+      // Heuristic: if originalWorkdir doesn't exist on disk, derive the repo root from
+      // the worktree path (worktrees live at <repoRoot>/.worktrees/<sessionName>).
+      let effectiveWorkdir = originalWorkdir;
+      if (!existsSync(originalWorkdir)) {
+        const derivedRepoDir = resolve(dirname(worktreePath), "..");
+        if (existsSync(derivedRepoDir)) {
+          console.warn(
+            `[agent_merge] originalWorkdir "${originalWorkdir}" does not exist — ` +
+            `falling back to derived repo root "${derivedRepoDir}" (worktree path: ${worktreePath}).`
+          );
+          effectiveWorkdir = derivedRepoDir;
+        } else {
+          return { content: [{ type: "text", text: `Error: originalWorkdir "${originalWorkdir}" does not exist and could not derive repo root from worktree path "${worktreePath}".` }] };
+        }
+      }
+
+      const baseBranch = params.base_branch ?? detectDefaultBranch(effectiveWorkdir);
       const strategy = params.strategy ?? "merge";
       const shouldPush = params.push === true; // Default false
       const shouldCleanup = params.delete_branch !== false; // Default true
@@ -86,7 +106,7 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
         content: [{ type: "text", text: "❌ Merge did not run (internal error)" }],
       };
 
-      await sessionManager.enqueueMerge(originalWorkdir, async () => {
+      await sessionManager.enqueueMerge(effectiveWorkdir, async () => {
         // Re-check inside the queue slot — a concurrent auto-merge may have beaten us
         const freshPersisted = sessionManager.getPersistedSession(params.session);
         if (freshPersisted?.worktreeMerged) {
@@ -95,12 +115,12 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
         }
 
         // Attempt merge
-        const mergeResult = mergeBranch(originalWorkdir, branchName, baseBranch, strategy);
+        const mergeResult = mergeBranch(effectiveWorkdir, branchName, baseBranch, strategy);
 
         if (mergeResult.success) {
           // Push base branch if requested
           if (shouldPush) {
-            if (!pushBranch(originalWorkdir, baseBranch)) {
+            if (!pushBranch(effectiveWorkdir, baseBranch)) {
               toolResult = { content: [{ type: "text", text: `⚠️ Merged ${branchName} → ${baseBranch} locally, but failed to push ${baseBranch}` }] };
               return;
             }
@@ -108,7 +128,7 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
 
           // Cleanup branch if requested
           if (shouldCleanup) {
-            deleteBranch(originalWorkdir, branchName);
+            deleteBranch(effectiveWorkdir, branchName);
           }
 
           // Persist merge status if we have a persisted session
@@ -125,7 +145,7 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
           const pushMsg = shouldPush ? " Pushed." : "";
           let successText = `✅ Merged ${branchName} → ${baseBranch}.${pushMsg}${cleanupMsg}`;
           if (mergeResult.stashPopConflict) {
-            successText += `\n⚠️ Pre-merge stash pop conflicted — run \`git stash show ${mergeResult.stashRef ?? "stash@{0}"}\` in ${originalWorkdir} to review stashed changes.`;
+            successText += `\n⚠️ Pre-merge stash pop conflicted — run \`git stash show ${mergeResult.stashRef ?? "stash@{0}"}\` in ${effectiveWorkdir} to review stashed changes.`;
           } else if (mergeResult.stashed) {
             successText += `\n(Pre-existing changes on ${baseBranch} were auto-stashed and restored.)`;
           }
@@ -143,7 +163,7 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
           try {
             const conflictSession = sessionManager.spawn({
               prompt: conflictPrompt,
-              workdir: originalWorkdir,
+              workdir: effectiveWorkdir,
               name: `${params.session}-conflict-resolver`,
               harness: "claude-code",
               permissionMode: "bypassPermissions",

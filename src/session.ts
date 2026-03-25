@@ -5,7 +5,7 @@ import { join } from "path";
 import { nanoid } from "nanoid";
 import { getDefaultHarness, getHarness } from "./harness";
 import type { AgentHarness, HarnessSession, HarnessMessage } from "./harness";
-import type { SessionConfig, SessionStatus, PermissionMode, KillReason, ReasoningEffort, CodexApprovalPolicy, WorktreeStrategy } from "./types";
+import type { SessionConfig, SessionStatus, PermissionMode, KillReason, ReasoningEffort, CodexApprovalPolicy, WorktreeStrategy, CanUseToolCallback } from "./types";
 import {
   getGlobalMcpServers,
   pluginConfig,
@@ -162,6 +162,9 @@ export class Session extends EventEmitter {
   private planModeApproved: boolean = false;
   private turnInProgress: boolean = true;
 
+  // AskUserQuestion intercept
+  private readonly canUseTool?: CanUseToolCallback;
+
   // Auto-respond counter
   autoRespondCount: number = 0;
 
@@ -195,6 +198,7 @@ export class Session extends EventEmitter {
     this.worktreeStrategy = config.worktreeStrategy;
     this.worktreeBaseBranch = config.worktreeBaseBranch;
     this.outputMode = config.outputMode;
+    this.canUseTool = config.canUseTool;
     this.startedAt = Date.now();
     this.abortController = new AbortController();
   }
@@ -275,6 +279,7 @@ export class Session extends EventEmitter {
         forkSession: this.forkSession,
         abortController: this.abortController,
         mcpServers: getGlobalMcpServers(),
+        canUseTool: this.canUseTool,
       });
       this.harnessHandle = handle;
       this.setTimer("startup", STARTUP_TIMEOUT_MS, () => {

@@ -57,6 +57,7 @@ export class ClaudeCodeHarness implements AgentHarness {
 
   /** Launch a Claude Code session and adapt SDK messages into harness events. */
   launch(options: HarnessLaunchOptions): HarnessSession {
+    const canUseToolCallback = options.canUseTool;
     const sdkOptions: Record<string, unknown> = {
       cwd: options.cwd,
       model: options.model,
@@ -82,6 +83,19 @@ export class ClaudeCodeHarness implements AgentHarness {
       includePartialMessages: true,
       abortController: options.abortController,
       mcpServers: options.mcpServers,
+      // AskUserQuestion intercept — forwards questions to the user as inline buttons.
+      // Only wired when the caller provides a handler (CC sessions only).
+      ...(canUseToolCallback
+        ? {
+            canUseTool: async (toolName: string, input: Record<string, unknown>) => {
+              if (toolName === "AskUserQuestion") {
+                return canUseToolCallback(toolName, input);
+              }
+              // Default: allow all other tools
+              return { behavior: "allow" as const };
+            },
+          }
+        : {}),
     };
 
     if (options.resumeSessionId) {

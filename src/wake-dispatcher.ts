@@ -13,6 +13,18 @@ export interface SessionNotificationRequest {
   label: string;
   userMessage?: string;
   wakeMessage?: string;
+  /**
+   * Wake message dispatched only after confirmed user-notification delivery.
+   * When set (together with or instead of wakeMessageOnNotifyFailed), the wake
+   * is NOT fired immediately — it gates on the delivery outcome.
+   */
+  wakeMessageOnNotifySuccess?: string;
+  /**
+   * Wake message dispatched only when ALL user-notification delivery attempts fail.
+   * Allows the orchestrator to handle the decision via text instead of waiting for
+   * a button callback that the user never received.
+   */
+  wakeMessageOnNotifyFailed?: string;
   notifyUser?: SessionNotificationPolicy;
   /** Telegram inline keyboard buttons. Ignored by non-Telegram channels. */
   buttons?: Array<Array<{ label: string; callbackData: string }>>;
@@ -156,6 +168,7 @@ export class WakeDispatcher {
       sessionId: string;
       target: DispatchTarget;
       phase: DispatchPhase;
+      onSuccess?: () => void;
       onFinalFailure?: () => void;
     },
     attempt: number = 1,
@@ -174,6 +187,7 @@ export class WakeDispatcher {
         console.info(
           `[WakeDispatcher] ${opts.target} ${opts.phase} completed attempt ${attempt}/${WAKE_MAX_ATTEMPTS} for ${opts.label} session=${opts.sessionId} in ${elapsedMs}ms`,
         );
+        opts.onSuccess?.();
         return;
       }
 
@@ -248,6 +262,7 @@ export class WakeDispatcher {
     sessionId: string,
     buttons?: Array<Array<{ label: string; callbackData: string }>>,
     onFinalFailure?: () => void,
+    onSuccess?: () => void,
   ): void {
     const args = [
       "message",
@@ -277,6 +292,7 @@ export class WakeDispatcher {
       sessionId,
       target: "message.send",
       phase: "notify",
+      onSuccess,
       onFinalFailure,
     });
   }
@@ -288,6 +304,7 @@ export class WakeDispatcher {
     sessionId: string,
     phase: DispatchPhase,
     onFinalFailure?: () => void,
+    onSuccess?: () => void,
   ): void {
     const args = ["system", "event", "--text", text, "--mode", "now"];
     this.executeWithRetries(args, {
@@ -295,6 +312,7 @@ export class WakeDispatcher {
       sessionId,
       target: "system.event",
       phase,
+      onSuccess,
       onFinalFailure,
     });
   }
@@ -306,32 +324,73 @@ export class WakeDispatcher {
     sessionId: string,
     buttons?: Array<Array<{ label: string; callbackData: string }>>,
     onAllFailed?: () => void,
+    onSuccess?: () => void,
   ): void {
     const route = this.parseNotificationRoute(session);
     if (!route) {
-      this.fireSystemEventWithRetry(text, `${label}-notify-system`, sessionId, "notify", onAllFailed);
+      this.fireSystemEventWithRetry(text, `${label}-notify-system`, sessionId, "notify", onAllFailed, onSuccess);
       return;
     }
 
     this.fireDirectNotificationWithRetry(route, text, `${label}-notify`, sessionId, buttons, () => {
-      this.fireSystemEventWithRetry(text, `${label}-notify-fallback`, sessionId, "notify", onAllFailed);
-    });
+      this.fireSystemEventWithRetry(text, `${label}-notify-fallback`, sessionId, "notify", onAllFailed, onSuccess);
+    }, onSuccess);
   }
 
   /**
    * Dispatch a session notification through one conceptual pipeline.
    *
    * - `userMessage` is the compact chat-facing status update.
-   * - `wakeMessage` is the richer orchestrator/system-event payload.
+   * - `wakeMessage` is the richer orchestrator/system-event payload (fired immediately).
+   * - `wakeMessageOnNotifySuccess` / `wakeMessageOnNotifyFailed` gate the wake on the
+   *   delivery outcome — use these instead of `wakeMessage` for button notifications so
+   *   the orchestrator does not race ahead of the user's button click.
    * - `notifyUser: "on-wake-fallback"` only emits `userMessage` when the wake cannot
    *   be routed directly to the originating orchestrator session.
    */
   dispatchSessionNotification(session: Session, request: SessionNotificationRequest): void {
     const sessionKey = this.getOriginSessionKey(session);
+    const hasConditionalWake =
+      request.wakeMessageOnNotifySuccess != null || request.wakeMessageOnNotifyFailed != null;
     const notifyUser = request.notifyUser ?? (request.wakeMessage ? "on-wake-fallback" : "always");
     const userMessage = request.userMessage?.trim();
     const wakeMessage = request.wakeMessage?.trim();
     const buttons = request.buttons;
+
+    if (hasConditionalWake) {
+      // Delivery-gated wake: fire the appropriate wake message only after we know
+      // whether the user notification succeeded or failed. The wake is NOT sent
+      // immediately — this prevents the orchestrator from racing ahead of the button.
+      const wakeOnSuccess = request.wakeMessageOnNotifySuccess?.trim();
+      const wakeOnFailed = request.wakeMessageOnNotifyFailed?.trim();
+
+      const dispatchWake = (wakeText: string): void => {
+        if (!wakeText) return;
+        if (!sessionKey) {
+          this.fireSystemEventWithRetry(wakeText, `${request.label}-wake-system`, session.id, "wake");
+          return;
+        }
+        this.fireChatSendWithRetry(sessionKey, wakeText, `${request.label}-wake`, session.id, "wake", true, () => {
+          this.fireSystemEventWithRetry(wakeText, `${request.label}-wake-fallback`, session.id, "wake");
+        });
+      };
+
+      const onSuccess = wakeOnSuccess ? () => dispatchWake(wakeOnSuccess) : undefined;
+      const onFailed = wakeOnFailed
+        ? () => {
+            request.onUserNotifyFailed?.();
+            dispatchWake(wakeOnFailed);
+          }
+        : request.onUserNotifyFailed;
+
+      if (userMessage) {
+        this.sendUserNotification(session, userMessage, request.label, session.id, buttons, onFailed, onSuccess);
+      } else if (onFailed) {
+        // No user message to send — treat as immediate failure (fire fallback wake now)
+        onFailed();
+      }
+      return;
+    }
 
     if (notifyUser === "always" && userMessage) {
       this.sendUserNotification(session, userMessage, request.label, session.id, buttons, request.onUserNotifyFailed);

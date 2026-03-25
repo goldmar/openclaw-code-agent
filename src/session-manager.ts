@@ -48,6 +48,23 @@ type LaunchConfirmationSession = Pick<Session, "status" | "name" | "id" | "killR
 /**
  * Orchestrates active session lifecycles, wake signaling, persistence, and GC.
  */
+/** Structured input passed by Claude Code's AskUserQuestion tool. */
+interface AskUserQuestionInput {
+  questions: Array<{
+    question: string;
+    options?: Array<{ label: string; preview?: string }>;
+    multiSelect?: boolean;
+  }>;
+}
+
+/** Pending AskUserQuestion state stored per session. */
+interface PendingAskUserQuestion {
+  resolve: (result: { behavior: "allow"; updatedInput: Record<string, unknown> }) => void;
+  reject: (err: Error) => void;
+  questions: AskUserQuestionInput["questions"];
+  timeoutHandle: ReturnType<typeof setTimeout>;
+}
+
 export class SessionManager {
   private sessions: Map<string, Session> = new Map();
   maxSessions: number;
@@ -58,6 +75,8 @@ export class SessionManager {
   private lastTerminalWakeMarkers: Map<string, string> = new Map();
   /** Serializes concurrent merge operations per repo directory (keyed by repoDir). */
   private mergeQueues: Map<string, Promise<void>> = new Map();
+  /** Pending AskUserQuestion intercepts awaiting user button selection. */
+  private pendingAskUserQuestions: Map<string, PendingAskUserQuestion> = new Map();
   private readonly store: SessionStore;
   private readonly metrics: SessionMetricsRecorder;
   private readonly wakeDispatcher: WakeDispatcher;
@@ -217,7 +236,21 @@ export class SessionManager {
       effectiveSystemPrompt = (config.systemPrompt ?? "") + worktreeSuffix;
     }
 
-    const session = new Session({ ...config, workdir: actualWorkdir, systemPrompt: effectiveSystemPrompt }, name);
+    // Inject AskUserQuestion intercept for CC sessions. Codex sessions do not support
+    // canUseTool — their questions appear as plain text in the message stream.
+    // Use a late-bound wrapper so we can capture session.id after construction.
+    const harnessName = config.harness ?? "claude-code";
+    const selfRef = this;
+    let sessionIdRef: string | undefined;
+    const canUseTool = (harnessName === "claude-code" && !config.canUseTool)
+      ? async (_toolName: string, input: Record<string, unknown>) => {
+          if (!sessionIdRef) throw new Error("canUseTool called before session ID was set");
+          return selfRef.handleAskUserQuestion(sessionIdRef, input);
+        }
+      : config.canUseTool;
+
+    const session = new Session({ ...config, workdir: actualWorkdir, systemPrompt: effectiveSystemPrompt, canUseTool }, name);
+    sessionIdRef = session.id; // bind late — canUseTool closure captures this ref
     if (worktreePath) {
       session.worktreePath = worktreePath;
       session.originalWorkdir = config.workdir;
@@ -328,6 +361,12 @@ export class SessionManager {
    * Called from onSessionTerminal BEFORE worktree cleanup.
    */
   private async handleWorktreeStrategy(session: Session): Promise<boolean> {
+    // Early-return guard: if branch was already merged, skip all strategy handling
+    if (this.isAlreadyMerged(session.harnessSessionId)) {
+      console.info(`[SessionManager] handleWorktreeStrategy: session "${session.name}" already merged — skipping strategy handling`);
+      return true;
+    }
+
     // Only handle completed sessions (not failed/killed)
     if (session.status !== "completed") return false;
 
@@ -394,6 +433,9 @@ export class SessionManager {
         ``,
         `Branch: \`${branchName}\` → \`${baseBranch}\``,
         `Commits: ${diffSummary.commits} | Files: ${diffSummary.filesChanged} | +${diffSummary.insertions} / -${diffSummary.deletions}`,
+        ``,
+        ...askCommitLines,
+        ...(askMoreNote ? [askMoreNote] : []),
       ].join("\n");
 
       const wakeDecisionMessage = [
@@ -422,9 +464,11 @@ export class SessionManager {
       this.wakeDispatcher.dispatchSessionNotification(session, {
         label: "worktree-merge-ask",
         userMessage: userNotifyMessage,
-        wakeMessage: wakeDecisionMessage,
         notifyUser: "always",
         buttons: askButtons,
+        wakeMessageOnNotifySuccess:
+          `Worktree strategy buttons delivered to user. Wait for their button callback — do NOT act on this worktree yourself. The user has already received the full diff summary and decision buttons. Do NOT send a duplicate completion message.`,
+        wakeMessageOnNotifyFailed: wakeDecisionMessage,
       });
 
       // Stamp pending decision timestamp
@@ -798,8 +842,19 @@ export class SessionManager {
 
     // Best-effort worktree cleanup — remove the worktree but keep the branch.
     // Skipped if the early-failure path already handled it.
+    // Also skipped when a pending worktree decision is set (ask strategy button callback
+    // may still fire — deleting the dir before the user clicks would break the callback).
+    const hasPendingWorktreeDecision = !!session.harnessSessionId &&
+      !!this.store.getPersistedSession(session.harnessSessionId)?.pendingWorktreeDecisionSince;
     if (!worktreeAutoCleaned && session.worktreePath && session.originalWorkdir) {
-      removeWorktree(session.originalWorkdir, session.worktreePath);
+      if (hasPendingWorktreeDecision) {
+        console.info(
+          `[SessionManager] Skipping worktree directory removal for "${session.name}" — ` +
+          `pendingWorktreeDecision is set (ask-strategy button callback may still fire).`,
+        );
+      } else {
+        removeWorktree(session.originalWorkdir, session.worktreePath);
+      }
     }
 
     // Multi-turn sessions that naturally end after a successful no-input turn
@@ -1018,10 +1073,12 @@ export class SessionManager {
       ? `📋 [${session.name}] Plan ready for review:\n\n${preview}\n\nReply to approve or provide feedback.`
       : `❓ [${session.name}] Waiting for input`;
 
+    const planApprovalMode = isPlanApproval ? (pluginConfig.planApproval ?? "delegate") : undefined;
+
     let eventText: string;
     if (isPlanApproval) {
-      const planApprovalMode = pluginConfig.planApproval ?? "delegate";
-      if (planApprovalMode === "delegate") {
+      const _planApprovalMode = planApprovalMode ?? "delegate";
+      if (_planApprovalMode === "delegate") {
         eventText = [
           `[DELEGATED PLAN APPROVAL] Coding agent session has finished its plan and is requesting approval to implement.`,
           `Name: ${session.name} | ID: ${session.id}`,
@@ -1069,7 +1126,7 @@ export class SessionManager {
           `If escalating: tell the user you need their decision and WAIT for his explicit response.`,
           `To request changes: agent_respond(session='${session.id}', message='<your feedback>') — do NOT set approve=true. The agent will revise the plan.`,
         ].join("\n");
-      } else if (planApprovalMode === "ask") {
+      } else if (_planApprovalMode === "ask") {
         // ask mode — notify the user directly; Alice must wait for explicit user approval
         eventText = [
           `[USER APPROVAL REQUESTED] Coding agent session has finished its plan. The user has been notified via Telegram and must approve directly.`,
@@ -1108,21 +1165,37 @@ export class SessionManager {
     }
 
     const waitingButtons: Array<Array<{ label: string; callbackData: string }>> | undefined =
-      isPlanApproval
+      isPlanApproval && planApprovalMode === "ask"
         ? [[
             { label: "✅ Approve", callbackData: `code-agent:approve:${session.id}` },
             { label: "❌ Reject", callbackData: `code-agent:reject:${session.id}` },
             { label: "✏️ Revise", callbackData: `code-agent:revise:${session.id}` },
           ]]
-        : [[{ label: "💬 Reply", callbackData: `code-agent:reply:${session.id}` }]];
+        : !isPlanApproval
+          ? [[{ label: "💬 Reply", callbackData: `code-agent:reply:${session.id}` }]]
+          : undefined; // delegate and approve modes: no buttons
 
-    this.dispatchSessionNotification(session, {
-      label: isPlanApproval ? "plan-approval" : "waiting",
-      userMessage: telegramText,
-      wakeMessage: eventText,
-      notifyUser: "always",
-      buttons: waitingButtons,
-    });
+    if (isPlanApproval && planApprovalMode === "ask") {
+      // ask mode: send buttons to user and gate the orchestrator wake on delivery outcome
+      this.dispatchSessionNotification(session, {
+        label: "plan-approval",
+        userMessage: telegramText,
+        notifyUser: "always",
+        buttons: waitingButtons,
+        wakeMessageOnNotifySuccess:
+          `Plan approval buttons delivered to user. Wait for their button callback — do NOT approve or reject this plan yourself.`,
+        wakeMessageOnNotifyFailed: eventText,
+      });
+    } else {
+      // delegate and approve modes: immediate wake, no buttons
+      this.dispatchSessionNotification(session, {
+        label: isPlanApproval ? "plan-approval" : "waiting",
+        userMessage: telegramText,
+        wakeMessage: eventText,
+        notifyUser: "always",
+        buttons: waitingButtons,
+      });
+    }
   }
 
   private onTurnEnd(session: Session, hadQuestion: boolean): void {
@@ -1333,9 +1406,9 @@ export class SessionManager {
     return this.store.listPersistedSessions();
   }
 
-  /** Send daily reminders for sessions with unresolved pending worktree decisions. */
+  /** Send hourly reminders for sessions with unresolved pending worktree decisions. */
   private remindStaleDecisions(): void {
-    const REMINDER_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24h
+    const REMINDER_INTERVAL_MS = 60 * 60 * 1000; // 1h
     const now = Date.now();
 
     for (const session of this.store.listPersistedSessions()) {
@@ -1346,7 +1419,7 @@ export class SessionManager {
       const pendingMs = now - new Date(session.pendingWorktreeDecisionSince).getTime();
       if (pendingMs < REMINDER_INTERVAL_MS) continue;
 
-      // Rate-limit: max once per 24h per session
+      // Rate-limit: max once per 1h per session
       if (session.lastWorktreeReminderAt) {
         const lastReminderMs = now - new Date(session.lastWorktreeReminderAt).getTime();
         if (lastReminderMs < REMINDER_INTERVAL_MS) continue;
@@ -1391,6 +1464,105 @@ export class SessionManager {
         { label: "🔀 Create PR", callbackData: `code-agent:open-pr:${session.harnessSessionId}` },
         { label: "❌ Dismiss", callbackData: `code-agent:dismiss:${session.harnessSessionId}` },
       ]],
+    });
+  }
+
+  /**
+   * Intercept an AskUserQuestion tool call from a CC session.
+   * Sends inline buttons to the user and returns a Promise that resolves when
+   * the user clicks a button (via resolveAskUserQuestion) or rejects on timeout.
+   */
+  async handleAskUserQuestion(
+    sessionId: string,
+    input: Record<string, unknown>,
+  ): Promise<{ behavior: "allow"; updatedInput: Record<string, unknown> }> {
+    const TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      throw new Error(`Session "${sessionId}" not found for AskUserQuestion intercept`);
+    }
+
+    const typedInput = input as unknown as AskUserQuestionInput;
+    const questions = typedInput?.questions ?? [];
+    if (questions.length === 0) {
+      throw new Error(`AskUserQuestion: no questions in input`);
+    }
+
+    const firstQuestion = questions[0];
+    const options = firstQuestion.options ?? [];
+
+    const fallbackWakeText = [
+      `[ASK USER QUESTION] Session "${session.name}" has a question requiring user input.`,
+      ``,
+      `Question: ${firstQuestion.question}`,
+      ...(options.length > 0 ? [`Options:`, ...options.map((o, i) => `  ${i + 1}. ${o.label}`)] : []),
+      ``,
+      `Send the question to the user and call agent_respond(session="${session.id}", message="<answer>") with their answer.`,
+    ].join("\n");
+
+    let buttons: Array<Array<{ label: string; callbackData: string }>> | undefined;
+    if (options.length > 0) {
+      buttons = [options.map((o, i) => ({
+        label: o.label,
+        callbackData: `code-agent:question-answer:${session.id}:${i}`,
+      }))];
+    }
+
+    const userMessage = [
+      `❓ [${session.name}] ${firstQuestion.question}`,
+    ].join("\n");
+
+    return new Promise((resolve, reject) => {
+      const timeoutHandle = setTimeout(() => {
+        this.pendingAskUserQuestions.delete(sessionId);
+        reject(new Error(`AskUserQuestion timed out after ${TIMEOUT_MS / 1000}s for session "${session.name}"`));
+      }, TIMEOUT_MS);
+
+      this.pendingAskUserQuestions.set(sessionId, {
+        resolve,
+        reject,
+        questions,
+        timeoutHandle,
+      });
+
+      this.wakeDispatcher.dispatchSessionNotification(session, {
+        label: "ask-user-question",
+        userMessage,
+        notifyUser: "always",
+        buttons,
+        wakeMessageOnNotifySuccess:
+          `AskUserQuestion buttons delivered to user. Await their selection — do NOT answer this question yourself.`,
+        wakeMessageOnNotifyFailed: fallbackWakeText,
+      });
+    });
+  }
+
+  /**
+   * Resolve a pending AskUserQuestion by option index (from button callback).
+   */
+  resolveAskUserQuestion(sessionId: string, optionIndex: number): void {
+    const pending = this.pendingAskUserQuestions.get(sessionId);
+    if (!pending) {
+      console.warn(`[SessionManager] resolveAskUserQuestion: no pending question for session "${sessionId}"`);
+      return;
+    }
+    clearTimeout(pending.timeoutHandle);
+    this.pendingAskUserQuestions.delete(sessionId);
+
+    const firstQuestion = pending.questions[0];
+    const options = firstQuestion.options ?? [];
+    const selectedOption = options[optionIndex];
+    if (!selectedOption) {
+      pending.reject(new Error(`AskUserQuestion: invalid option index ${optionIndex} (${options.length} options available)`));
+      return;
+    }
+
+    pending.resolve({
+      behavior: "allow",
+      updatedInput: {
+        questions: pending.questions,
+        answers: { [firstQuestion.question]: selectedOption.label },
+      },
     });
   }
 
