@@ -450,7 +450,6 @@ export class SessionManager {
         `Present this to the user and wait for their choice:`,
         `  1. Merge: agent_merge(session="${session.name}", base_branch="${baseBranch}")`,
         `  2. Open PR: agent_pr(session="${session.name}")`,
-        `  3. Dismiss: agent_worktree_cleanup(workdir="${repoDir}")`,
         ``,
         `Wait for user reply before acting.`,
       ].join("\n");
@@ -458,7 +457,6 @@ export class SessionManager {
       const askButtons: Array<Array<{ label: string; callbackData: string }>> = [[
         { label: "⬇️ Merge locally", callbackData: `code-agent:merge:${session.id}` },
         { label: "🔀 Create PR", callbackData: `code-agent:pr:${session.id}` },
-        { label: "❌ Dismiss", callbackData: `code-agent:dismiss:${session.id}` },
       ]];
 
       this.wakeDispatcher.dispatchSessionNotification(session, {
@@ -642,7 +640,6 @@ export class SessionManager {
           ``,
           `Reply with one of the following:`,
           `1. Merge to ${baseBranch}`,
-          `2. Dismiss`,
         ].join("\n");
 
         this.wakeDispatcher.dispatchSessionNotification(session, {
@@ -650,7 +647,6 @@ export class SessionManager {
           userMessage: askMessage,
           buttons: [[
             { label: "✅ Merge instead", callbackData: `code-agent:merge:${session.id}` },
-            { label: "❌ Dismiss", callbackData: `code-agent:dismiss:${session.id}` },
           ]],
         });
         return true;
@@ -742,7 +738,6 @@ export class SessionManager {
           buttons: [[
             { label: "🆕 New PR", callbackData: `code-agent:new-pr:${session.id}` },
             { label: "✅ Merge locally", callbackData: `code-agent:merge-locally:${session.id}` },
-            { label: "❌ Dismiss", callbackData: `code-agent:dismiss:${session.id}` },
           ]],
         });
         return true;
@@ -1462,7 +1457,6 @@ export class SessionManager {
       buttons: [[
         { label: "⬇️ Merge locally", callbackData: `code-agent:merge:${session.harnessSessionId}` },
         { label: "🔀 Create PR", callbackData: `code-agent:open-pr:${session.harnessSessionId}` },
-        { label: "❌ Dismiss", callbackData: `code-agent:dismiss:${session.harnessSessionId}` },
       ]],
     });
   }

@@ -3,7 +3,7 @@ import { existsSync } from "fs";
 import { resolve, dirname } from "path";
 import { sessionManager } from "../singletons";
 import type { OpenClawPluginToolContext } from "../types";
-import { getBranchName, mergeBranch, pushBranch, deleteBranch, detectDefaultBranch } from "../worktree";
+import { getBranchName, mergeBranch, pushBranch, deleteBranch, detectDefaultBranch, removeWorktree, pruneWorktrees } from "../worktree";
 
 interface AgentMergeParams {
   session: string;
@@ -29,7 +29,7 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
       base_branch: Type.Optional(Type.String({ description: "Base branch to merge into (default: main)" })),
       strategy: Type.Optional(
         Type.Union([Type.Literal("merge"), Type.Literal("squash")], {
-          description: "Merge strategy: 'merge' (default, creates merge commit) or 'squash' (squashes all commits)",
+          description: "Merge strategy: 'merge' (default, fast-forward if possible; merge commit if branches have diverged) or 'squash' (squashes all commits into one)",
         }),
       ),
       push: Type.Optional(Type.Boolean({ description: "Push the base branch after successful merge (default: false)" })),
@@ -114,8 +114,8 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
           return;
         }
 
-        // Attempt merge
-        const mergeResult = mergeBranch(effectiveWorkdir, branchName, baseBranch, strategy);
+        // Attempt merge — pass worktreePath so rebase runs there when the worktree still exists
+        const mergeResult = mergeBranch(effectiveWorkdir, branchName, baseBranch, strategy, worktreePath);
 
         if (mergeResult.success) {
           // Push base branch if requested
@@ -131,6 +131,13 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
             deleteBranch(effectiveWorkdir, branchName);
           }
 
+          // Remove worktree directory — it lingered while pendingWorktreeDecisionSince was set
+          // (onSessionTerminal skipped cleanup while awaiting the user's button click).
+          if (existsSync(worktreePath)) {
+            removeWorktree(effectiveWorkdir, worktreePath);
+            pruneWorktrees(effectiveWorkdir);
+          }
+
           // Persist merge status if we have a persisted session
           if (freshPersisted) {
             sessionManager.updatePersistedSession(freshPersisted.harnessSessionId, {
@@ -141,17 +148,21 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
             });
           }
 
-          const cleanupMsg = shouldCleanup ? " Branch cleaned up." : "";
+          const mergeTypeMsg = mergeResult.fastForward ? "⚡ Fast-forward" : "🔀 Merge commit";
+          const cleanupMsg = shouldCleanup ? " Branch and worktree cleaned up." : "";
           const pushMsg = shouldPush ? " Pushed." : "";
-          let successText = `✅ Merged ${branchName} → ${baseBranch}.${pushMsg}${cleanupMsg}`;
+          let successText = `✅ ${mergeTypeMsg}: ${branchName} → ${baseBranch}.${pushMsg}${cleanupMsg}`;
           if (mergeResult.stashPopConflict) {
             successText += `\n⚠️ Pre-merge stash pop conflicted — run \`git stash show ${mergeResult.stashRef ?? "stash@{0}"}\` in ${effectiveWorkdir} to review stashed changes.`;
           } else if (mergeResult.stashed) {
             successText += `\n(Pre-existing changes on ${baseBranch} were auto-stashed and restored.)`;
           }
           toolResult = { content: [{ type: "text", text: successText }] };
+        } else if (mergeResult.rebaseConflict) {
+          // Rebase conflicts require manual resolution — surface instructions to the user
+          toolResult = { content: [{ type: "text", text: `⚠️ Rebase conflicts — manual resolution required:\n\n${mergeResult.error}` }] };
         } else if (mergeResult.conflictFiles && mergeResult.conflictFiles.length > 0) {
-          // Spawn conflict resolver
+          // Squash-merge conflict path (should be rare after rebase) — spawn conflict resolver
           const conflictPrompt = [
             `Resolve merge conflicts in the following files and commit the resolution:`,
             ``,

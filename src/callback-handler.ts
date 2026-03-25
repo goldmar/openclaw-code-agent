@@ -130,28 +130,6 @@ export function createCallbackHandler() {
           break;
         }
 
-        case "dismiss": {
-          const activeSession = sessionManager.resolve(sessionId);
-          const persistedSession = sessionManager.getPersistedSession(sessionId);
-          const harnessId = activeSession?.harnessSessionId ?? persistedSession?.harnessSessionId;
-
-          if (!harnessId) {
-            await ctx.respond.reply({ text: `⚠️ Session "${sessionId}" not found.` });
-            break;
-          }
-
-          sessionManager.updatePersistedSession(harnessId, {
-            pendingWorktreeDecisionSince: undefined,
-            lastWorktreeReminderAt: undefined,
-          });
-
-          const name = activeSession?.name ?? persistedSession?.name ?? sessionId;
-          await ctx.respond.reply({
-            text: `❌ Dismissed worktree for session "${name}". No merge or PR will be created.`,
-          });
-          break;
-        }
-
         case "approve": {
           const result = await executeRespond(sessionManager, {
             session: sessionId,
@@ -229,7 +207,7 @@ export function createCallbackHandler() {
 
         default: {
           await ctx.respond.reply({
-            text: `⚠️ Unknown callback action: "${action}". Supported: merge, pr, open-pr, new-pr, dismiss, approve, reject, revise, reply, retry, view-output, question-answer.`,
+            text: `⚠️ Unknown callback action: "${action}". Supported: merge, pr, open-pr, new-pr, approve, reject, revise, reply, retry, view-output, question-answer.`,
           });
           break;
         }

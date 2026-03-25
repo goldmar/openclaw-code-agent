@@ -294,7 +294,7 @@ Notifications are routed to the Telegram thread/topic where the session was laun
 | Session auto-resumes | `▶️ Auto-resumed` |
 | Session idle-times out | `💤 Idle timeout` |
 | Session is forcibly stopped | `⛔ Stopped ...` with the specific stop reason |
-| Worktree decision pending (`ask`) | Inline Telegram buttons sent to user (Merge locally / Create PR / Dismiss) — Alice must NOT preempt |
+| Worktree decision pending (`ask`) | Inline Telegram buttons sent to user (Merge locally / Create PR) — Alice must NOT preempt |
 | Worktree decision pending (`delegate`) | Wake sent to Alice with diff context — Alice must decide and call `agent_merge` or `agent_pr` |
 
 ### Sending completion summaries — use `message send`, not inline reply
@@ -317,13 +317,13 @@ The Telegram chat ID and topic thread ID are available from the current conversa
 
 When a session completes with `worktree_strategy: "ask"`, the plugin sends the user a single consolidated Telegram message that contains:
 - The full commit list and diff stats
-- The ⬇️ Merge locally / 🔀 Create PR / ❌ Dismiss inline buttons
+- The ⬇️ Merge locally / 🔀 Create PR inline buttons
 
 **Do NOT send a separate completion summary.** The button message IS the completion signal. Sending an additional "✅ Done!" or "Here's what was done:" message creates duplicates and confuses the user.
 
 This applies when the wake message says "Worktree strategy buttons delivered to user." — treat that as confirmation that the user is already fully informed. Take no further action until the user clicks a button.
 
-**Buttons are handled automatically by the plugin.** When the user taps a button, the plugin's callback router dispatches the action (`agent_merge`, `agent_pr`, or dismiss) directly — no agent `agent_merge`/`agent_pr` call is needed in response to a button tap. If the action succeeds, the plugin sends a result notification. If the action fails, a failure notification is sent. Alice does not need to poll or intervene.
+**Buttons are handled automatically by the plugin.** When the user taps a button, the plugin's callback router dispatches the action (`agent_merge` or `agent_pr`) directly — no agent `agent_merge`/`agent_pr` call is needed in response to a button tap. If the action succeeds, the plugin sends a result notification. If the action fails, a failure notification is sent. Alice does not need to poll or intervene.
 
 ---
 
@@ -380,7 +380,7 @@ When a session uses `worktree_strategy`, the agent runs in an isolated git branc
 
 | Strategy | What it does | When to use |
 |---|---|---|
-| `ask` (default) | Sends Telegram inline buttons (Merge locally / Create PR / Dismiss) | User should decide — the interactive default |
+| `ask` (default) | Sends Telegram inline buttons (Merge locally / Create PR) | User should decide — the interactive default |
 | `off` | No worktree. Session runs in main checkout | Simple/trusted tasks where isolation isn't needed |
 | `manual` | Creates worktree; no auto action | You want to review diffs before merging |
 | `auto-merge` | Merges automatically; spawns conflict-resolver if needed | Trusted tasks on a safe branch |
@@ -404,7 +404,7 @@ When a session with a worktree completes, your action depends on the strategy:
 
 | Strategy | What to do after completion |
 |---|---|
-| `ask` | **Do nothing.** The plugin sends inline Telegram buttons (Merge locally / Create PR / Dismiss) to the user. **Never** call `agent_merge`, `agent_pr`, or any `git` command — wait for the user to decide. |
+| `ask` | **Do nothing.** The plugin sends inline Telegram buttons (Merge locally / Create PR) to the user. **Never** call `agent_merge`, `agent_pr`, or any `git` command — wait for the user to decide. |
 | `delegate` | You receive a `worktree-delegate` wake with diff context. Evaluate and act (see *Delegate mode* below). |
 | `auto-merge` | No action needed — merge happens automatically. Watch for `worktree-merge-success` or `worktree-merge-conflict` notification. |
 | `auto-pr` | No action needed — PR is created/updated automatically. |

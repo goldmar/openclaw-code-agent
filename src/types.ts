@@ -169,7 +169,7 @@ export interface PersistedSessionInfo {
   worktreePrUrl?: string;
   /** PR number for commenting and state checks. */
   worktreePrNumber?: number;
-  /** ISO timestamp set when "ask" or "delegate" fires and decision is pending. Cleared on merge/PR/dismiss. */
+  /** ISO timestamp set when "ask" or "delegate" fires and decision is pending. Cleared on merge or PR. */
   pendingWorktreeDecisionSince?: string;
   /** ISO timestamp of last stale-branch reminder sent. */
   lastWorktreeReminderAt?: string;

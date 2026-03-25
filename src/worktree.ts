@@ -451,6 +451,10 @@ export interface MergeResult {
   stashPopConflict?: boolean;
   /** True when the failure was specifically a stash-push failure (dirty state could not be stashed). */
   dirtyError?: boolean;
+  /** True when the merge resulted in a clean fast-forward (linear history). Always true for "merge" strategy. */
+  fastForward?: boolean;
+  /** True when the rebase step hit conflicts; user must resolve manually with `git rebase --continue`. */
+  rebaseConflict?: boolean;
 }
 
 /**
@@ -473,152 +477,227 @@ function checkDirtyTracked(repoDir: string): boolean {
 }
 
 /**
- * Merge a branch into another branch.
- * On conflict, aborts the merge and returns conflict files.
- * Strategy: "merge" (default) or "squash".
+ * Merge a branch into the base branch using a rebase-then-fast-forward strategy.
+ *
+ * For "merge" strategy:
+ *   1. Rebase <branch> onto <base> (run in worktreePath if provided and exists, else in repoDir
+ *      after checking out the branch). This keeps history linear.
+ *   2. Fast-forward merge <base> ← <branch> (`git merge --ff-only`). Guaranteed to succeed
+ *      after a successful rebase.
+ *   If rebase hits conflicts → abort, restore state, return `rebaseConflict: true` with instructions.
+ *
+ * For "squash" strategy: standard squash merge into base (creates one commit, no merge commit).
+ *
+ * @param repoDir    The root of the git repository (main checkout).
+ * @param branch     The agent branch to merge.
+ * @param base       The base branch to merge into.
+ * @param strategy   "merge" (default, rebase-then-ff) or "squash".
+ * @param worktreePath  Optional path to the git worktree where <branch> is checked out.
+ *                      When provided and the directory exists, the rebase is run there instead
+ *                      of switching branches in repoDir — avoids a checkout round-trip.
  */
 export function mergeBranch(
   repoDir: string,
   branch: string,
   base: string,
   strategy: "merge" | "squash" = "merge",
+  worktreePath?: string,
 ): MergeResult {
   let stashed = false;
   let stashRef: string | undefined;
 
-  try {
-    // Checkout base branch first
-    execFileSync(
-      "git",
-      ["-C", repoDir, "checkout", base],
-      { timeout: 15_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
-    );
+  // Helper: best-effort pop of the stash we created
+  const tryPopStash = (dir: string) => {
+    if (!stashed) return;
+    try {
+      execFileSync("git", ["-C", dir, "stash", "pop"], { timeout: 10_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
+    } catch {
+      // Best effort — stash remains for user recovery
+    }
+  };
 
-    // Auto-stash dirty tracked files so merge can proceed cleanly.
-    // Untracked files ("??") are intentionally excluded — they don't block merges.
-    if (checkDirtyTracked(repoDir)) {
-      let stashOutput: string;
-      try {
-        stashOutput = execFileSync(
-          "git",
-          ["-C", repoDir, "stash", "push", "-m", `pre-merge stash before ${branch}`],
-          { timeout: 10_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
-        );
-      } catch (stashErr) {
-        return {
-          success: false,
-          dirtyError: true,
-          error: `Auto-stash failed: ${stashErr instanceof Error ? stashErr.message : String(stashErr)}. Commit or stash changes manually, then retry.`,
-        };
-      }
-      // Guard against edge case where checkDirtyTracked returned true but nothing was stashable
-      if (!stashOutput.includes("No local changes to save")) {
-        stashed = true;
+  try {
+    if (strategy === "squash") {
+      // ── Squash path ────────────────────────────────────────────────────────
+      // Checkout base, auto-stash if dirty, squash-merge, commit, pop stash.
+      execFileSync(
+        "git",
+        ["-C", repoDir, "checkout", base],
+        { timeout: 15_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
+      );
+
+      if (checkDirtyTracked(repoDir)) {
+        let stashOutput: string;
         try {
-          stashRef = execFileSync(
+          stashOutput = execFileSync(
             "git",
-            ["-C", repoDir, "stash", "list", "--format=%gd", "-n", "1"],
-            { timeout: 5_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
-          ).trim() || undefined;
-        } catch {
-          // Best effort — stashRef is informational only
+            ["-C", repoDir, "stash", "push", "-m", `pre-merge stash before ${branch}`],
+            { timeout: 10_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
+          );
+        } catch (stashErr) {
+          return {
+            success: false,
+            dirtyError: true,
+            error: `Auto-stash failed: ${stashErr instanceof Error ? stashErr.message : String(stashErr)}. Commit or stash changes manually, then retry.`,
+          };
+        }
+        if (!stashOutput.includes("No local changes to save")) {
+          stashed = true;
+          try {
+            stashRef = execFileSync(
+              "git",
+              ["-C", repoDir, "stash", "list", "--format=%gd", "-n", "1"],
+              { timeout: 5_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
+            ).trim() || undefined;
+          } catch {
+            // Best effort — stashRef is informational only
+          }
         }
       }
-    }
 
-    // Attempt merge
-    const mergeArgs = strategy === "squash"
-      ? ["-C", repoDir, "merge", "--squash", branch]
-      : ["-C", repoDir, "merge", "--no-ff", branch];
-
-    execFileSync("git", mergeArgs, { timeout: 30_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
-
-    // If squash, need to commit
-    if (strategy === "squash") {
+      execFileSync(
+        "git",
+        ["-C", repoDir, "merge", "--squash", branch],
+        { timeout: 30_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
+      );
       execFileSync(
         "git",
         ["-C", repoDir, "commit", "-m", `Squash merge ${branch}`],
         { timeout: 10_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
       );
-    }
 
-    // Restore stash (best effort — failure means stash left intact for manual recovery)
-    let stashPopConflict = false;
-    if (stashed) {
-      try {
+      let stashPopConflict = false;
+      if (stashed) {
+        try {
+          execFileSync("git", ["-C", repoDir, "stash", "pop"], { timeout: 10_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
+        } catch {
+          stashPopConflict = true;
+        }
+      }
+
+      return { success: true, stashed: stashed || undefined, stashRef, stashPopConflict: stashPopConflict || undefined };
+
+    } else {
+      // ── Rebase-then-fast-forward path ──────────────────────────────────────
+      // Determine where to run the rebase:
+      //   • If worktreePath is provided and exists on disk, the branch is already checked out
+      //     there — rebase from the worktree directory directly.
+      //   • Otherwise, check out the branch in repoDir and rebase from there.
+      const useWorktree = worktreePath && existsSync(worktreePath);
+      const rebaseDir = useWorktree ? worktreePath : repoDir;
+
+      if (!useWorktree) {
+        // Check out the agent branch in the main repo so we can rebase it
         execFileSync(
           "git",
-          ["-C", repoDir, "stash", "pop"],
-          { timeout: 10_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
+          ["-C", repoDir, "checkout", branch],
+          { timeout: 15_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
         );
-      } catch {
-        stashPopConflict = true;
       }
-    }
 
-    return {
-      success: true,
-      stashed: stashed || undefined,
-      stashRef,
-      stashPopConflict: stashPopConflict || undefined,
-    };
-  } catch (err) {
-    // Check if it's a merge conflict
-    try {
-      const statusResult = execFileSync(
-        "git",
-        ["-C", repoDir, "status", "--porcelain"],
-        { timeout: 5_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
-      );
-
-      const conflictFiles = statusResult
-        .split("\n")
-        .filter((line) => line.startsWith("UU ") || line.startsWith("AA ") || line.startsWith("DD "))
-        .map((line) => line.slice(3).trim());
-
-      if (conflictFiles.length > 0) {
-        // Abort merge to restore clean tree
+      // Auto-stash dirty tracked files in the base (main) repo before we touch it.
+      // Note: we check repoDir regardless of whether we're using a worktree, because the
+      // final ff-merge runs in repoDir on the base branch.
+      if (checkDirtyTracked(repoDir)) {
+        let stashOutput: string;
         try {
-          execFileSync(
+          stashOutput = execFileSync(
             "git",
-            ["-C", repoDir, "merge", "--abort"],
+            ["-C", repoDir, "stash", "push", "-m", `pre-merge stash before ${branch}`],
             { timeout: 10_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
           );
-        } catch {
-          // Best effort
+        } catch (stashErr) {
+          // Restore branch pointer before returning
+          try { execFileSync("git", ["-C", repoDir, "checkout", base], { timeout: 15_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }); } catch { /* best effort */ }
+          return {
+            success: false,
+            dirtyError: true,
+            error: `Auto-stash failed: ${stashErr instanceof Error ? stashErr.message : String(stashErr)}. Commit or stash changes manually, then retry.`,
+          };
         }
-
-        // Best-effort stash pop after abort — aborted merge leaves clean tree so pop should succeed
-        if (stashed) {
+        if (!stashOutput.includes("No local changes to save")) {
+          stashed = true;
           try {
-            execFileSync(
+            stashRef = execFileSync(
               "git",
-              ["-C", repoDir, "stash", "pop"],
-              { timeout: 10_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
-            );
+              ["-C", repoDir, "stash", "list", "--format=%gd", "-n", "1"],
+              { timeout: 5_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
+            ).trim() || undefined;
           } catch {
-            // Best effort — stash remains for user recovery
+            // Best effort — stashRef is informational only
           }
         }
-
-        return { success: false, conflictFiles, stashed: stashed || undefined, stashRef };
       }
-    } catch {
-      // Not a conflict, just a regular error
-    }
 
-    // Best-effort stash pop on generic error path
-    if (stashed) {
+      // Step 1: Rebase the agent branch onto base to linearise history.
       try {
         execFileSync(
           "git",
-          ["-C", repoDir, "stash", "pop"],
-          { timeout: 10_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
+          ["-C", rebaseDir, "rebase", base],
+          { timeout: 60_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
         );
-      } catch {
-        // Best effort — stash remains for user recovery
+      } catch (rebaseErr) {
+        // Rebase failed — abort to restore clean state
+        try {
+          execFileSync("git", ["-C", rebaseDir, "rebase", "--abort"], { timeout: 15_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
+        } catch { /* best effort */ }
+        // Return to base branch in the main repo
+        try {
+          execFileSync("git", ["-C", repoDir, "checkout", base], { timeout: 15_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
+        } catch { /* best effort */ }
+        tryPopStash(repoDir);
+        return {
+          success: false,
+          rebaseConflict: true,
+          stashed: stashed || undefined,
+          stashRef,
+          error: [
+            `Rebase of ${branch} onto ${base} hit conflicts.`,
+            `To resolve manually:`,
+            `  cd ${rebaseDir}`,
+            `  git rebase ${base}`,
+            `  # resolve conflicts in each file, then:`,
+            `  git add <file>`,
+            `  git rebase --continue`,
+            `  # repeat until rebase finishes, then re-run agent_merge.`,
+          ].join("\n"),
+        };
       }
+
+      // Step 2: Checkout base in the main repo and fast-forward merge.
+      execFileSync(
+        "git",
+        ["-C", repoDir, "checkout", base],
+        { timeout: 15_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
+      );
+
+      execFileSync(
+        "git",
+        ["-C", repoDir, "merge", "--ff-only", branch],
+        { timeout: 30_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
+      );
+
+      let stashPopConflict = false;
+      if (stashed) {
+        try {
+          execFileSync("git", ["-C", repoDir, "stash", "pop"], { timeout: 10_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
+        } catch {
+          stashPopConflict = true;
+        }
+      }
+
+      return {
+        success: true,
+        fastForward: true,
+        stashed: stashed || undefined,
+        stashRef,
+        stashPopConflict: stashPopConflict || undefined,
+      };
     }
+  } catch (err) {
+    // Unexpected error — best-effort cleanup
+    try { execFileSync("git", ["-C", repoDir, "checkout", base], { timeout: 15_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }); } catch { /* best effort */ }
+    tryPopStash(repoDir);
 
     return {
       success: false,
