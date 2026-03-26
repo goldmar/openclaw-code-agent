@@ -1,9 +1,10 @@
 import { Type } from "@sinclair/typebox";
 import { existsSync } from "fs";
 import { resolve, dirname } from "path";
+import { getDefaultHarnessName } from "../config";
 import { sessionManager } from "../singletons";
 import type { OpenClawPluginToolContext } from "../types";
-import { getBranchName, mergeBranch, pushBranch, deleteBranch, detectDefaultBranch, removeWorktree, pruneWorktrees } from "../worktree";
+import { getBranchName, mergeBranch, pushBranch, deleteBranch, detectDefaultBranch, removeWorktree, pruneWorktrees, getDiffSummary, formatWorktreeOutcomeLine } from "../worktree";
 
 interface AgentMergeParams {
   session: string;
@@ -23,7 +24,7 @@ function isAgentMergeParams(value: unknown): value is AgentMergeParams {
 export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
   return {
     name: "agent_merge",
-    description: "Merge a worktree branch back to the base branch. Resolves session (active or persisted), gets worktree path, and performs the merge. On conflict, spawns a Claude Code conflict-resolver session.",
+    description: "Merge a worktree branch back to the base branch. Resolves session (active or persisted), gets worktree path, and performs the merge. On conflict, spawns a conflict-resolver session using the configured default harness.",
     parameters: Type.Object({
       session: Type.String({ description: "Session name or ID to merge" }),
       base_branch: Type.Optional(Type.String({ description: "Base branch to merge into (default: main)" })),
@@ -91,7 +92,8 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
         }
       }
 
-      const baseBranch = params.base_branch ?? detectDefaultBranch(effectiveWorkdir);
+      const resolvedBaseBranch = params.base_branch ?? detectDefaultBranch(effectiveWorkdir);
+      const baseBranch = resolvedBaseBranch;
       const strategy = params.strategy ?? "merge";
       const shouldPush = params.push === true; // Default false
       const shouldCleanup = params.delete_branch !== false; // Default true
@@ -106,6 +108,8 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
         content: [{ type: "text", text: "❌ Merge did not run (internal error)" }],
       };
 
+      const harnessId = targetSession?.harnessSessionId ?? persistedSession?.harnessSessionId;
+
       await sessionManager.enqueueMerge(effectiveWorkdir, async () => {
         // Re-check inside the queue slot — a concurrent auto-merge may have beaten us
         const freshPersisted = sessionManager.getPersistedSession(params.session);
@@ -113,6 +117,9 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
           toolResult = { content: [{ type: "text", text: `ℹ️ Session "${params.session}" was already merged while waiting in queue.` }] };
           return;
         }
+
+        // Get diff summary before merging for outcome notification
+        const diffSummary = getDiffSummary(effectiveWorkdir, branchName, resolvedBaseBranch);
 
         // Attempt merge — pass worktreePath so rebase runs there when the worktree still exists
         const mergeResult = mergeBranch(effectiveWorkdir, branchName, baseBranch, strategy, worktreePath);
@@ -131,8 +138,7 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
             deleteBranch(effectiveWorkdir, branchName);
           }
 
-          // Remove worktree directory — it lingered while pendingWorktreeDecisionSince was set
-          // (onSessionTerminal skipped cleanup while awaiting the user's button click).
+          // Remove worktree directory — it may have been kept alive pending user decision
           if (existsSync(worktreePath)) {
             removeWorktree(effectiveWorkdir, worktreePath);
             pruneWorktrees(effectiveWorkdir);
@@ -145,8 +151,23 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
               worktreeMergedAt: new Date().toISOString(),
               pendingWorktreeDecisionSince: undefined,
               lastWorktreeReminderAt: undefined,
+              worktreeDisposition: "merged",
             });
           }
+
+          // Send unified confirmation notification
+          const outcomeLine = formatWorktreeOutcomeLine({
+            kind: "merge",
+            branch: branchName,
+            base: resolvedBaseBranch,
+            filesChanged: diffSummary?.filesChanged,
+            insertions: diffSummary?.insertions,
+            deletions: diffSummary?.deletions,
+          });
+          sessionManager.notifyWorktreeOutcome(
+            targetSession ?? { id: harnessId ?? params.session, originChannel: persistedSession?.originChannel, originThreadId: persistedSession?.originThreadId, originSessionKey: persistedSession?.originSessionKey },
+            outcomeLine
+          );
 
           const mergeTypeMsg = mergeResult.fastForward ? "⚡ Fast-forward" : "🔀 Merge commit";
           const cleanupMsg = shouldCleanup ? " Branch and worktree cleaned up." : "";
@@ -176,7 +197,7 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
               prompt: conflictPrompt,
               workdir: effectiveWorkdir,
               name: `${params.session}-conflict-resolver`,
-              harness: "claude-code",
+              harness: getDefaultHarnessName(),
               permissionMode: "bypassPermissions",
               multiTurn: true,
             });

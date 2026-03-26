@@ -26,12 +26,12 @@ interface AgentLaunchParams {
   allowed_tools?: string[];
   resume_session_id?: string;
   fork_session?: boolean;
-  multi_turn_disabled?: boolean;
   permission_mode?: "default" | "plan" | "bypassPermissions";
+  plan_approval?: "ask" | "delegate" | "approve";
   harness?: string;
-  worktree_strategy?: "off" | "manual" | "ask" | "auto-merge" | "auto-pr";
+  worktree_strategy?: "off" | "manual" | "ask" | "delegate" | "auto-merge" | "auto-pr";
   worktree_base_branch?: string;
-  output_mode?: "deliverable";
+  worktree_pr_target_repo?: string;
   agentId?: string;
 }
 
@@ -73,7 +73,7 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
   return {
     name: "agent_launch",
     description:
-      "Launch a coding agent session in background to execute a development task. Sessions are multi-turn by default — they stay open for follow-up messages via agent_respond. Set multi_turn_disabled: true for fire-and-forget sessions. Supports resuming previous sessions. Returns a session ID and name for tracking.",
+      "Launch a coding agent session in background to execute a development task. Sessions are multi-turn — they stay open for follow-up messages via agent_respond. Supports resuming previous sessions. Returns a session ID and name for tracking.",
     parameters: Type.Object({
       prompt: Type.String({ description: "The task prompt to execute" }),
       name: Type.Optional(
@@ -89,13 +89,16 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
       fork_session: Type.Optional(
         Type.Boolean({ description: "When resuming, fork to a new session instead of continuing the existing one. Use with resume_session_id." }),
       ),
-      multi_turn_disabled: Type.Optional(
-        Type.Boolean({ description: "Disable multi-turn mode. By default sessions stay open for follow-up messages. Set to true for fire-and-forget sessions." }),
-      ),
       permission_mode: Type.Optional(
         Type.Union(
           [Type.Literal("default"), Type.Literal("plan"), Type.Literal("bypassPermissions")],
           { description: "Permission mode: 'default' (standard prompts), 'plan' (present plan first, wait for approval), 'bypassPermissions' (fully autonomous execution). Defaults to plugin config ('plan' by default)." },
+        ),
+      ),
+      plan_approval: Type.Optional(
+        Type.Union(
+          [Type.Literal("ask"), Type.Literal("delegate"), Type.Literal("approve")],
+          { description: "Plan approval policy for this session: 'ask' (show Approve/Reject/Revise buttons), 'delegate' (orchestrator decides), 'approve' (auto-approve). Overrides the plugin-level planApproval setting." },
         ),
       ),
       harness: Type.Optional(
@@ -103,15 +106,15 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
       ),
       worktree_strategy: Type.Optional(
         Type.Union(
-          [Type.Literal("off"), Type.Literal("manual"), Type.Literal("ask"), Type.Literal("auto-merge"), Type.Literal("auto-pr")],
-          { description: "Worktree strategy: 'off' (no worktree), 'manual' (create worktree but no auto merge-back), 'ask' (prompt user with options), 'auto-merge' (merge automatically), 'auto-pr' (create PR automatically). Defaults to 'off'. Only respected when `defaultWorktreeStrategy` is set to `delegate` or is unset. Otherwise the admin-configured default is used regardless." },
+          [Type.Literal("off"), Type.Literal("manual"), Type.Literal("ask"), Type.Literal("delegate"), Type.Literal("auto-merge"), Type.Literal("auto-pr")],
+          { description: "Worktree strategy: 'off' (no worktree), 'manual' (create worktree but no auto merge-back), 'ask' (prompt user with Merge/PR/Decide later/Dismiss buttons), 'delegate' (orchestrator decides), 'auto-merge' (merge automatically), 'auto-pr' (DEPRECATED: treated as 'ask'). Defaults to 'off'." },
         ),
       ),
       worktree_base_branch: Type.Optional(
         Type.String({ description: "Base branch for worktree merge/PR operations (default: auto-detected or 'main')" }),
       ),
-      output_mode: Type.Optional(
-        Type.Literal("deliverable", { description: "Output mode: 'deliverable' sends a 📄 Deliverable ready notification instead of ✅ Completed when the session finishes." }),
+      worktree_pr_target_repo: Type.Optional(
+        Type.String({ description: "Target repository for cross-repo PRs (e.g. 'openai/codex' for fork-to-upstream workflow). If not set, auto-detected from 'upstream' remote or defaults to 'origin'." }),
       ),
     }),
     async execute(_id: string, params: unknown) {
@@ -220,8 +223,9 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
           // even when resumeSessionId was cleared by decideResumeSessionId (e.g. Codex harness).
           resumeWorktreeFrom: resolvedResumeId,
           forkSession: resumeSessionId ? params.fork_session : false,
-          multiTurn: !params.multi_turn_disabled,
+          multiTurn: true,
           permissionMode: params.permission_mode,
+          planApproval: params.plan_approval,
           codexApprovalPolicy: harness === "codex"
             ? (resolveApprovalPolicyForHarness(harness) ?? pluginConfig.codexApprovalPolicy)
             : undefined,
@@ -232,7 +236,7 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
           harness,
           worktreeStrategy: params.worktree_strategy,
           worktreeBaseBranch: params.worktree_base_branch,
-          outputMode: params.output_mode,
+          worktreePrTargetRepo: params.worktree_pr_target_repo,
         });
 
         const promptSummary = params.prompt.length > 80 ? params.prompt.slice(0, 80) + "..." : params.prompt;
@@ -253,9 +257,7 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
             details.push(`  Thread state: historical Codex state cleared; starting a fresh thread.`);
           }
         }
-        details.push(params.multi_turn_disabled
-          ? `  Mode: single-turn (fire-and-forget)`
-          : `  Mode: multi-turn (use agent_respond to send follow-up messages)`);
+        details.push(`  Mode: multi-turn (use agent_respond to send follow-up messages)`);
         details.push(``, `Use agent_sessions to check status, agent_output to see output.`);
 
         return { content: [{ type: "text", text: details.join("\n") }] };

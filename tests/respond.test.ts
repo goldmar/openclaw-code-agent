@@ -189,6 +189,42 @@ describe("executeRespond — auto-resume", () => {
     assert.equal(result.text, "Auto-resumed session resumed [new-id]. Use agent_output to see the response.");
   });
 
+  it("treats approve=true as a plan approval when a persisted soft-plan session is pending approval", async () => {
+    const sm = createStubSessionManager();
+    const persisted = {
+      sessionId: "dead-soft-plan",
+      harnessSessionId: "harness-soft-plan",
+      name: "soft-plan",
+      prompt: "Plan only and stop.",
+      workdir: "/tmp",
+      status: "killed" as const,
+      killReason: "idle-timeout" as const,
+      currentPermissionMode: "bypassPermissions" as const,
+      pendingPlanApproval: true,
+      planApprovalContext: "soft-plan" as const,
+      costUsd: 0.05,
+      harness: "respond-resume-harness",
+    };
+    sm.persisted.set("harness-soft-plan", persisted as any);
+    sm.idIndex.set("dead-soft-plan", "harness-soft-plan");
+
+    let capturedConfig: any;
+    sm.spawn = (config: any) => {
+      capturedConfig = config;
+      return createStubSession({ name: "soft-plan", id: "new-id" });
+    };
+
+    const result = await executeRespond(sm, {
+      session: "dead-soft-plan",
+      message: "Approved. Go ahead.",
+      approve: true,
+    });
+
+    assert.ok(result.text.includes("Auto-resumed"));
+    assert.equal(capturedConfig.permissionMode, "bypassPermissions");
+    assert.match(capturedConfig.prompt, /The user has approved your plan/i);
+  });
+
   it("emits only the auto-resume notification when agent_respond resumes a completed session", async () => {
     const harness = createFakeHarness("respond-resume-harness");
     registerHarness(harness);
@@ -206,6 +242,7 @@ describe("executeRespond — auto-resume", () => {
     const sm = new SessionManager(5);
     (sm as any).wakeDispatcher = {
       dispatchSessionNotification: (...args: any[]) => { ((sm as any).__dispatchCalls ??= []).push(args); },
+      clearRetryTimersForSession: () => {},
     };
     (sm as any).__dispatchCalls = [];
     (sm as any).sessions.set(session.id, session);
@@ -442,6 +479,7 @@ describe("executeRespond — auto-resume", () => {
     const sm = createStubSessionManager({ [sourceSession.id]: sourceSession });
     (sm as any).wakeDispatcher = {
       dispatchSessionNotification: () => {},
+      clearRetryTimersForSession: () => {},
     };
 
     const result = await executeRespond(sm, { session: sourceSession.id, message: "continue" });
@@ -685,9 +723,7 @@ describe("executeRespond — interrupt", () => {
 
     const result = await executeRespond(sm, { session: "test-id", message: "redirect", interrupt: true });
 
-    assert.equal(notifications.length, 1);
-    assert.equal(notifications[0]?.label, "redirected");
-    assert.equal(notifications[0]?.text, "↪️ [test-session] Redirected");
+    assert.equal(notifications.length, 0);
     assert.match(result.text, /redirected active turn first/);
   });
 

@@ -289,11 +289,24 @@ describe("Session.phase", () => {
     assert.equal(session.phase, "awaiting-plan-approval");
   });
 
-  it("surfaces Codex sessions as implementing even when configured in plan mode", () => {
+  // Fix B: Codex sessions must preserve plan mode so pendingPlanApproval is set
+  // after the first (soft-plan) turn and the Approve/Reject/Revise buttons fire.
+  it("Codex session in plan mode keeps currentPermissionMode=plan (Fix B)", () => {
     const codexSession = new Session({ ...BASE_CONFIG, harness: "codex" }, "codex-test");
     codexSession.transition("running");
 
-    assert.equal(codexSession.currentPermissionMode, "default");
-    assert.equal(codexSession.phase, "implementing");
+    assert.equal(codexSession.currentPermissionMode, "plan",
+      "Codex plan-mode sessions must not downgrade currentPermissionMode to 'default'");
+    assert.equal(codexSession.phase, "planning",
+      "Codex plan-mode sessions should show phase='planning' while the first turn is in progress");
+  });
+
+  it("Codex session in plan mode shows awaiting-plan-approval after pendingPlanApproval is set (Fix B)", () => {
+    const codexSession = new Session({ ...BASE_CONFIG, harness: "codex" }, "codex-test");
+    codexSession.transition("running");
+    codexSession.pendingPlanApproval = true;
+
+    assert.equal(codexSession.phase, "awaiting-plan-approval",
+      "Codex plan-mode sessions must show awaiting-plan-approval once pendingPlanApproval is set");
   });
 });

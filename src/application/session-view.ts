@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "fs";
 import type { SessionManager } from "../session-manager";
 import type { Session } from "../session";
+import { getSessionOutputFilePath } from "../session";
 import { formatDuration, formatSessionListing } from "../format";
 import type { PersistedSessionInfo, SessionStatus } from "../types";
 
@@ -74,6 +75,31 @@ function isSessionStatus(status: unknown): status is SessionStatus {
   return typeof status === "string" && VALID_SESSION_STATUSES.has(status as SessionStatus);
 }
 
+function splitOutputLines(content: string): string[] {
+  const lines = content.split("\n");
+  if (lines.at(-1) === "") lines.pop();
+  return lines;
+}
+
+function readOutputLinesFromFile(path: string, options: OutputOptions, linesToShow: number): string[] {
+  const fileContent = readFileSync(path, "utf-8");
+  const lines = splitOutputLines(fileContent);
+  return options.full ? lines : lines.slice(-linesToShow);
+}
+
+function readLiveOutputLines(session: ActiveSessionView, options: OutputOptions, linesToShow: number): string[] | null {
+  if (session.status !== "starting" && session.status !== "running") return null;
+
+  const outputPath = getSessionOutputFilePath(session.id);
+  if (!existsSync(outputPath)) return null;
+
+  try {
+    return readOutputLinesFromFile(outputPath, options, linesToShow);
+  } catch {
+    return null;
+  }
+}
+
 /** Build a header line for active runtime sessions. */
 function outputHeaderForActiveSession(session: ActiveSessionView): string {
   const duration = formatDuration(session.duration);
@@ -120,12 +146,7 @@ export function getSessionOutputText(
     const persisted = sm.getPersistedSession(ref);
     if (persisted?.outputPath && existsSync(persisted.outputPath)) {
       try {
-        const fileContent = readFileSync(persisted.outputPath, "utf-8");
-        let output = fileContent;
-        if (!options.full && fileContent) {
-          const lines = fileContent.split("\n");
-          output = lines.slice(-linesToShow).join("\n");
-        }
+        const output = readOutputLinesFromFile(persisted.outputPath, options, linesToShow).join("\n");
         const header = outputHeaderForPersistedSession(persisted);
         return output ? `${header}\n${output}` : `${header}\n(output file was empty)`;
       } catch (err: unknown) {
@@ -136,7 +157,10 @@ export function getSessionOutputText(
     return `Error: Session "${ref}" not found.`;
   }
 
-  const outputLines = options.full ? session.getOutput() : session.getOutput(linesToShow);
+  const liveOutputLines = readLiveOutputLines(session, options, linesToShow);
+  const outputLines = liveOutputLines && liveOutputLines.length > 0
+    ? liveOutputLines
+    : (options.full ? session.getOutput() : session.getOutput(linesToShow));
   const header = outputHeaderForActiveSession(session);
   const body = outputLines.length === 0
     ? `${header}${emptyOutputDiagnostics(session)}`

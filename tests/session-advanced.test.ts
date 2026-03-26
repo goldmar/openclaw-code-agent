@@ -103,6 +103,31 @@ describe("Session consumeMessages — tool_use message", () => {
     assert.ok(turnEndEvents.includes(true), "turnEnd should fire with hadQuestion=true");
     session.kill("user"); // cleanup
   });
+
+  it("suppresses worktree merge-or-pr questions so the session can complete", async () => {
+    const session = await startSession({
+      multiTurn: true,
+      permissionMode: "default",
+      worktreeStrategy: "ask",
+    });
+
+    fakeHarness.pushMessage({
+      type: "tool_use",
+      name: "AskUserQuestion",
+      input: { text: "Would you like me to merge this branch or open a PR?" },
+    });
+    await tick(20);
+    fakeHarness.setPromptConsumptionPaused(false);
+    await tick(20);
+    fakeHarness.pushMessage({
+      type: "result",
+      data: { success: true, duration_ms: 100, total_cost_usd: 0.01, num_turns: 1, session_id: session.harnessSessionId! },
+    });
+    await tick(50);
+
+    assert.equal(session.status, "completed");
+    assert.equal(session.pendingPlanApproval, false);
+  });
 });
 
 describe("Session consumeMessages — result message (single-turn)", () => {
@@ -280,19 +305,19 @@ describe("Session consumeMessages — result message (multi-turn)", () => {
 // ---------------------------------------------------------------------------
 
 describe("Session output buffer overflow", () => {
-  it("caps output buffer at 200 lines", async () => {
+  it("caps output buffer at 2000 lines", async () => {
     const session = await startSession();
 
-    for (let i = 0; i < 210; i++) {
+    for (let i = 0; i < 2010; i++) {
       fakeHarness.pushMessage({ type: "text", text: `line-${i}` });
     }
     await tick(200);
 
     const output = session.getOutput();
-    assert.equal(output.length, 200);
+    assert.equal(output.length, 2000);
     // Oldest lines should be evicted — first entry should be line-10
     assert.equal(output[0], "line-10");
-    assert.equal(output[199], "line-209");
+    assert.equal(output[1999], "line-2009");
     session.kill("user"); // cleanup
   });
 });

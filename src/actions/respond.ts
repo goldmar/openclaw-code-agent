@@ -83,6 +83,7 @@ async function spawnFreshRelaunch(
       originAgentId: session.originAgentId,
       originSessionKey: session.originSessionKey,
       permissionMode: session.currentPermissionMode,
+      planApproval: session.planApproval,
       codexApprovalPolicy: session.codexApprovalPolicy,
       harness: "harnessName" in session ? session.harnessName : session.harness,
     };
@@ -129,7 +130,10 @@ async function tryAutoResume(
   // and prepending the system approval prefix. Without this, the resume would
   // inherit permissionMode="plan", the first turn-end would re-set
   // pendingPlanApproval=true, and Alice would be asked to approve a second time.
-  const isPlanApproval = !!(options.approve && session.currentPermissionMode === "plan");
+  const isPlanApproval = !!(
+    options.approve &&
+    (session.pendingPlanApproval || session.currentPermissionMode === "plan")
+  );
   if (isPlanApproval) {
     const invalid = validateApprovalMessage(session.name, message);
     if (invalid) return invalid;
@@ -168,6 +172,7 @@ async function tryAutoResume(
       // the harness launches without plan-mode constraints and the turn-end
       // fallback (currentPermissionMode === "plan") cannot re-fire.
       permissionMode: isPlanApproval ? "bypassPermissions" : session.currentPermissionMode,
+      planApproval: session.planApproval,
       codexApprovalPolicy: session.codexApprovalPolicy,
       harness: "harnessName" in session ? session.harnessName : session.harness,
     };
@@ -269,10 +274,11 @@ export async function executeRespond(
     // (including interrupt/redirect) collapses into one ↪️ message with preview.
     if (isPlanApproval) {
       sm.notifySession(session, `👍 [${session.name}] Plan approved`, "plan-approved");
-    } else {
+    } else if (params.userInitiated) {
       const notifyPreview = truncateText(params.message, 100);
       sm.notifySession(session, `↪️ [${session.name}] "${notifyPreview}"`, "agent-respond");
     }
+    // else: silent auto-respond — no notification
 
     if (!params.userInitiated) {
       session.incrementAutoRespond();

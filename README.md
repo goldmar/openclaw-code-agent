@@ -8,7 +8,7 @@
 
 - **Plan -> Review -> Execute**. `plan` is the default launch mode, with `ask`, `delegate`, and `approve` deciding how much plan approval autonomy the orchestrator gets.
 - **Worktree isolation by default**. New sessions default to `ask`, which creates a clean worktree and `agent/*` branch instead of contaminating your main checkout.
-- **Merge or PR straight from chat**. `ask` sends inline Telegram buttons for `Merge locally` and `Create PR`; `auto-merge` and `auto-pr` automate the finish line.
+- **4-button decision UX**. `ask` sends inline Telegram buttons: **Merge**, **Open PR**, **Decide later** (snooze 24h), and **Dismiss** (permanently deletes branch). `auto-merge` automates local merge. `auto-pr` is deprecated and now also uses the 4-button flow.
 - **Full session lifecycle**. Pause, auto-resume, fork, interrupt, and recover sessions across restarts with persisted metadata and output.
 - **Real operator visibility**. `agent_sessions`, `agent_output`, and `agent_stats` show status, buffered output, duration, and USD cost.
 - **Two harnesses, one control plane**. Claude Code and Codex share the same tools, routing, notification pipeline, and worktree model.
@@ -31,7 +31,7 @@ The differentiator is the plan-review loop. Claude Code exposes true plan mode. 
 
 ### Finish Cleanly
 
-When the task is done, the plugin can leave the branch for review, merge it automatically, or create a PR. In `ask`, the user gets inline Telegram buttons. In `delegate`, the orchestrator receives the diff context, makes the merge-or-PR decision, and posts the result.
+When the task is done, the plugin can leave the branch for review, merge it automatically, or help create a PR. In `ask`, the user gets 4 inline Telegram buttons: Merge, Open PR, Decide later, and Dismiss. In `delegate`, the orchestrator receives the diff context, may merge if safe, and always escalates PR decisions to the user. Planning artifacts belong in `/tmp/` — the agent will not commit analysis notes to the branch.
 
 <img src="assets/delegate-readme.gif" alt="Delegated worktree flow with autonomous follow-through">
 

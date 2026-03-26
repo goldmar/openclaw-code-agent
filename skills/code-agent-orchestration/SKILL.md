@@ -24,6 +24,8 @@ Use `openclaw-code-agent` to run Claude Code or Codex sessions as background cod
 - Always set a short kebab-case `name` when you care about later follow-up.
 - Set `workdir` to the target repo, not to the agent's own workspace.
 - Default behavior is `permission_mode: "plan"` plus `planApproval: "ask"` plus `defaultWorktreeStrategy: "ask"`.
+- Use `permission_mode: "plan"` whenever the user wants a real planning checkpoint, reviewable plan, or approval buttons before implementation.
+- Use `permission_mode: "bypassPermissions"` only when the user wants autonomous execution. Do not try to recreate plan mode by stuffing "plan only" into the prompt unless you intentionally want a soft fallback rather than the primary UX contract.
 
 Example:
 
@@ -60,6 +62,22 @@ When you are woken because a session is waiting or completed, do not launch a ne
 - `agent_merge`
 - `agent_pr`
 - `agent_worktree_status`
+
+## 2a. Resume vs. Spawn Rule (CRITICAL)
+
+**Always resume — never spawn fresh — when a session already exists for the task.**
+
+| Situation | Correct action |
+|-----------|---------------|
+| Session waiting for plan approval | `agent_respond(session, message, approve=true)` |
+| Session waiting for a question answer | `agent_respond(session, message)` |
+| Session killed/stopped by restart | `agent_respond(session, message)` — killed sessions auto-resume on next `agent_respond` |
+| Session completed, user wants to extend/revise | `agent_launch(resume_session_id=session_id)` |
+| Worktree has uncommitted work after a crash | `agent_respond` on the stopped session first; only if truly unrecoverable, relaunch with the worktree still in place |
+
+**Never use `agent_launch` to start a fresh session when `agent_respond` would work.** Spawning fresh loses conversation history, may duplicate worktrees, and confuses the user.
+
+Only spawn a genuinely new session for work that is **completely independent** of any existing session.
 
 ## 3. Monitoring
 
@@ -106,6 +124,13 @@ agent_respond(
 
 ## 5. Plan Approval
 
+Mode selection:
+
+- `permission_mode: "plan"` is the primary contract for planning sessions. It produces a plan-review stop and is the only mode you should rely on for explicit approval UX.
+- `permission_mode: "bypassPermissions"` is for autonomous execution. If you put "plan only", "do not implement yet", or similar text in the prompt, the plugin may heuristically treat the first turn as a soft plan approval stop, but that is a fallback path, not the default orchestration strategy.
+- If the user says "investigate first", "show me the plan", "plan only", or "wait for approval before coding", launch in `plan` mode.
+- If the user says "just do it", "run autonomously", or wants uninterrupted execution, use `bypassPermissions`.
+
 Approve a pending plan with:
 
 ```text
@@ -128,15 +153,21 @@ Rules:
 
 ### `ask`
 
-Do nothing after completion. The plugin already informed the user and attached `Merge locally` / `Create PR` buttons. Do not call `agent_merge` or `agent_pr` unless the user explicitly asks after that.
+Do nothing after completion. The plugin already informed the user and attached 4 buttons:
+- **✅ Merge** — merge branch locally
+- **📬 Open PR** — create a GitHub PR
+- **⏭️ Decide later** — snooze reminders for 24h
+- **🗑️ Dismiss (deletes branch)** — permanently delete branch and worktree (irreversible)
+
+Do not call `agent_merge` or `agent_pr` unless the user explicitly asks after that.
 
 ### `delegate`
 
 Read the diff context from the wake, then decide:
 
 - `agent_merge` for low-risk, clearly scoped changes that match the task
-- `agent_pr` when review is safer or the change is non-trivial
-- escalate to the user if scope or risk is unclear
+- **NEVER call `agent_pr()` autonomously** — always escalate PR decisions to the user
+- escalate to the user if scope or risk is unclear, or if a PR is the safer choice
 
 ### `manual`
 
@@ -145,7 +176,19 @@ Wait for an explicit user request before calling `agent_merge` or `agent_pr`.
 ### Never
 
 - never use raw `git merge` or raw PR commands in place of the plugin tools
-- never clear a pending worktree decision by inventing your own workaround; use `agent_worktree_cleanup(session: "...")` if the user wants to dismiss it
+- never clear a pending worktree decision by inventing your own workaround; use `agent_worktree_cleanup(session: "...", dismiss_session: true)` to permanently dismiss
+- never call `agent_pr()` autonomously in `delegate` flows — always escalate to the user for PR decisions
+
+## 6b. Planning Document Policy
+
+- Do NOT commit planning documents, investigation notes, or analysis artifacts to the branch
+- Only commit actual code, configuration, tests, and documentation changes that were explicitly requested as part of the task
+
+## 6c. Resume vs New Session
+
+- When resuming a session with an existing worktree, use `resume_session_id` with `agent_launch`
+- Do not create a new session if the old worktree branch still has unmerged changes — resume instead
+- If the user wants a fresh start, use `fork_session: true` to branch from the previous session state
 
 ## 7. Lifecycle Notes
 

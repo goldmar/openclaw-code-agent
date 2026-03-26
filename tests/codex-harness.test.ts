@@ -614,3 +614,137 @@ describe("CodexHarness SDK mapping", () => {
     assert.equal(codex.startCalls[0]?.modelReasoningEffort, "high");
   });
 });
+
+// Fix A regression tests: system prompt (worktree instructions) reaches Codex first turn
+describe("CodexHarness systemPrompt injection (Fix A)", () => {
+  it("prepends systemPrompt to the first turn input when set", async () => {
+    const codex = new MockCodex([
+      {
+        events: [
+          { type: "thread.started", thread_id: "thread-sysprompt" },
+          { type: "item.completed", item: { id: "a1", type: "agent_message", text: "Done." } },
+          { type: "turn.completed", usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 } },
+        ],
+      },
+    ]);
+    const { harness: h } = createHarness(codex);
+    const systemPrompt = "You are working in a git worktree.\nWorktree path: /repo/.worktrees/fix-foo\nBranch: agent/fix-foo";
+
+    await collectMessages(
+      h.launch({ prompt: "implement the fix", cwd: "/tmp", systemPrompt }),
+    );
+
+    assert.equal(codex.inputs.length, 1);
+    const sentInput = codex.inputs[0]!.input;
+    assert.ok(
+      sentInput.startsWith(systemPrompt),
+      `First turn should start with systemPrompt. Got: ${sentInput.slice(0, 200)}`,
+    );
+    assert.ok(
+      sentInput.includes("implement the fix"),
+      "First turn should include the original prompt",
+    );
+    assert.ok(
+      sentInput.includes("GIT SAFETY"),
+      "First turn should include the git branch safety reminder",
+    );
+  });
+
+  it("prepends systemPrompt on a resumed session's first turn", async () => {
+    const codex = new MockCodex(
+      [
+        {
+          events: [
+            { type: "thread.started", thread_id: "thread-resume-sysprompt" },
+            { type: "item.completed", item: { id: "a1", type: "agent_message", text: "Resumed." } },
+            { type: "turn.completed", usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 } },
+          ],
+        },
+      ],
+      "thread-existing",
+    );
+    const { harness: h } = createHarness(codex);
+    const systemPrompt = "WORKTREE: /repo/.worktrees/resume-branch\nBranch: agent/resume-branch";
+
+    await collectMessages(
+      h.launch({
+        prompt: "continue work",
+        cwd: "/tmp",
+        systemPrompt,
+        resumeSessionId: "thread-existing",
+      }),
+    );
+
+    assert.equal(codex.inputs.length, 1);
+    const sentInput = codex.inputs[0]!.input;
+    assert.ok(
+      sentInput.startsWith(systemPrompt),
+      `Resumed first turn should start with systemPrompt. Got: ${sentInput.slice(0, 200)}`,
+    );
+    assert.ok(sentInput.includes("continue work"), "Resumed first turn should include the prompt");
+  });
+
+  it("does NOT prepend systemPrompt to subsequent turns", async () => {
+    const codex = new MockCodex([
+      {
+        events: [
+          { type: "thread.started", thread_id: "thread-multi" },
+          { type: "item.completed", item: { id: "a1", type: "agent_message", text: "Turn 1." } },
+          { type: "turn.completed", usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 } },
+        ],
+      },
+      {
+        events: [
+          { type: "item.completed", item: { id: "a2", type: "agent_message", text: "Turn 2." } },
+          { type: "turn.completed", usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 } },
+        ],
+      },
+    ]);
+
+    async function* twoTurns(): AsyncGenerator<string> {
+      yield "first prompt";
+      yield "second prompt";
+    }
+
+    const { harness: h } = createHarness(codex);
+    const systemPrompt = "SYSTEM: stay in worktree";
+    await collectMessages(h.launch({ prompt: twoTurns(), cwd: "/tmp", systemPrompt }));
+
+    assert.equal(codex.inputs.length, 2);
+    // First turn: system prompt prepended
+    assert.ok(codex.inputs[0]!.input.startsWith(systemPrompt));
+    // Second turn: raw prompt only
+    assert.ok(
+      !codex.inputs[1]!.input.startsWith(systemPrompt),
+      "Second turn should NOT include the system prompt",
+    );
+    assert.equal(codex.inputs[1]!.input, "second prompt");
+  });
+
+  it("prepends systemPrompt before soft-planning wrapper in plan mode", async () => {
+    const codex = new MockCodex([
+      {
+        events: [
+          { type: "thread.started", thread_id: "thread-plan-sys" },
+          { type: "item.completed", item: { id: "a1", type: "agent_message", text: "Plan." } },
+          { type: "turn.completed", usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 } },
+        ],
+      },
+    ]);
+    const { harness: h } = createHarness(codex);
+    const systemPrompt = "WORKTREE INSTRUCTIONS";
+
+    await collectMessages(
+      h.launch({ prompt: "do work", cwd: "/tmp", permissionMode: "plan", systemPrompt }),
+    );
+
+    assert.equal(codex.inputs.length, 1);
+    const sentInput = codex.inputs[0]!.input;
+    // systemPrompt before the soft-planning prefix
+    const sysIdx = sentInput.indexOf(systemPrompt);
+    const planIdx = sentInput.indexOf("[SYSTEM: First turn only");
+    assert.ok(sysIdx >= 0, "systemPrompt should appear in plan-mode first turn");
+    assert.ok(planIdx >= 0, "soft-planning prefix should appear in plan-mode first turn");
+    assert.ok(sysIdx < planIdx, "systemPrompt should come before the soft-planning wrapper");
+  });
+});

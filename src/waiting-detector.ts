@@ -46,6 +46,37 @@ function normalize(text: string): string {
   return text.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
+const PLAN_ONLY_PROMPT_PATTERNS = [
+  "plan only",
+  "planning only",
+  "do not implement yet",
+  "don't implement yet",
+  "do not implement",
+  "don't implement",
+  "stop after the plan",
+  "stop after planning",
+  "wait for approval",
+  "ask before implementing",
+  "provide a plan",
+  "produce a plan",
+  "write a plan",
+  "implementation plan",
+];
+
+const PLAN_OUTPUT_KEYWORDS_RE =
+  /\b(plan|implementation plan|approach|next steps|step 1|phase 1|findings|root cause|investigation)\b/i;
+
+const PLAN_OUTPUT_INTRO_RE =
+  /\b(here(?:'s| is)|below is|proposed|recommended|concise|high-level)\b.{0,40}\b(plan|approach|next steps)\b/i;
+
+function structuredPlanLineCount(text: string): number {
+  return text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => /^(\d+[.)]|[-*])\s+\S+/.test(line))
+    .length;
+}
+
 /** Return true when text likely asks for explicit user action/approval. */
 export function looksLikeWaitingForUser(text: string): boolean {
   const normalized = normalize(text);
@@ -72,4 +103,29 @@ export function looksLikeWaitingForUser(text: string): boolean {
   }
 
   return hasActionVerb;
+}
+
+/** Return true when the original prompt explicitly asked for planning only. */
+export function looksLikePlanOnlyPrompt(text: string): boolean {
+  const normalized = normalize(text);
+  if (!normalized) return false;
+  return PLAN_ONLY_PROMPT_PATTERNS.some((pattern) => normalized.includes(pattern));
+}
+
+/** Return true when the assistant output looks like a plan rather than a final answer. */
+export function looksLikePlanOutput(text: string): boolean {
+  const normalized = normalize(text);
+  if (!normalized) return false;
+
+  const structuredLines = structuredPlanLineCount(text);
+  const hasPlanKeywords = PLAN_OUTPUT_KEYWORDS_RE.test(normalized);
+  const hasPlanIntro = PLAN_OUTPUT_INTRO_RE.test(text);
+  const hasStepSequence = /\b(step 1|first,|first step|next steps)\b/i.test(text);
+
+  return hasPlanIntro || hasStepSequence || (hasPlanKeywords && structuredLines >= 2);
+}
+
+/** Return true when output both looks like a plan and asks whether to continue. */
+export function looksLikePlanApprovalRequest(text: string): boolean {
+  return looksLikePlanOutput(text) && looksLikeWaitingForUser(text);
 }

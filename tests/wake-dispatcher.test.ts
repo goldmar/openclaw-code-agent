@@ -167,6 +167,43 @@ appendFileSync(process.env.OPENCLAW_TEST_LOG, JSON.stringify(process.argv.slice(
     assert.equal(wakeParams.deliver, true);
   });
 
+  it("preserves Telegram inline buttons when a notification also sends a wake", async () => {
+    const dispatcher = new WakeDispatcher();
+    const session: FakeSession = {
+      id: "session-buttons",
+      originChannel: "telegram|bot|12345",
+      originThreadId: 11239,
+      originSessionKey: "agent:main:telegram:group:-1003863755361:topic:11239",
+      originAgentId: "main",
+    };
+
+    dispatcher.dispatchSessionNotification(session as any, {
+      label: "worktree-delegate",
+      userMessage: "🔀 Worktree decision required",
+      wakeMessage: "Delegated worktree decision wake",
+      notifyUser: "always",
+      buttons: [[
+        { label: "✅ Merge", callbackData: "code-agent:merge:session-buttons" },
+        { label: "📬 Open PR", callbackData: "code-agent:pr:session-buttons" },
+      ]],
+    });
+    const calls = await waitForCalls(logPath, 2);
+
+    assert.equal(calls.length, 2);
+    const notifyCall = calls.find((call) => call[0] === "message");
+    const wakeCall = calls.find((call) => call[0] === "gateway");
+    assert.ok(notifyCall, "expected a message.send notification call");
+    assert.ok(wakeCall, "expected a chat.send wake call");
+    const notifyArgs = parseMessageSendArgs(notifyCall);
+    assert.equal(notifyArgs.message, "🔀 Worktree decision required");
+    assert.equal(notifyArgs.buttons, JSON.stringify([[
+      { text: "✅ Merge", callback_data: "code-agent:merge:session-buttons" },
+      { text: "📬 Open PR", callback_data: "code-agent:pr:session-buttons" },
+    ]]));
+    const wakeParams = parseChatSendParams(wakeCall);
+    assert.equal(wakeParams.message, "Delegated worktree decision wake");
+  });
+
   it("falls back to a direct user notification plus system event when the wake target is unavailable", async () => {
     const dispatcher = new WakeDispatcher();
     const session: FakeSession = {

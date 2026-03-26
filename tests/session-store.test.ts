@@ -190,3 +190,114 @@ describe("SessionStore path resolution", () => {
     assert.equal(persisted?.killReason, "shutdown");
   });
 });
+
+// =========================================================================
+// New worktree fields persistence
+// =========================================================================
+
+describe("SessionStore new worktree lifecycle fields", () => {
+  let indexPath: string;
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "store-test-"));
+    indexPath = join(tmpDir, "sessions.json");
+  });
+
+  it("persists and reloads 'delegate' worktree strategy", () => {
+    writeFileSync(indexPath, JSON.stringify([{
+      harnessSessionId: "h-delegate",
+      name: "delegate-session",
+      prompt: "p",
+      workdir: "/tmp",
+      status: "completed",
+      costUsd: 0,
+      worktreeStrategy: "delegate",
+    }]), "utf-8");
+
+    const store = new SessionStore({ indexPath, env: {} });
+    const persisted = store.getPersistedSession("h-delegate");
+    assert.equal(persisted?.worktreeStrategy, "delegate");
+  });
+
+  it("persists and reloads worktreeBaseBranch", () => {
+    writeFileSync(indexPath, JSON.stringify([{
+      harnessSessionId: "h-base",
+      name: "base-session",
+      prompt: "p",
+      workdir: "/tmp",
+      status: "completed",
+      costUsd: 0,
+      worktreeBaseBranch: "develop",
+    }]), "utf-8");
+
+    const store = new SessionStore({ indexPath, env: {} });
+    const persisted = store.getPersistedSession("h-base");
+    assert.equal(persisted?.worktreeBaseBranch, "develop");
+  });
+
+  it("persists and reloads pendingWorktreeDecisionSince", () => {
+    const ts = new Date().toISOString();
+    writeFileSync(indexPath, JSON.stringify([{
+      harnessSessionId: "h-pending",
+      name: "pending-session",
+      prompt: "p",
+      workdir: "/tmp",
+      status: "completed",
+      costUsd: 0,
+      pendingWorktreeDecisionSince: ts,
+    }]), "utf-8");
+
+    const store = new SessionStore({ indexPath, env: {} });
+    const persisted = store.getPersistedSession("h-pending");
+    assert.equal(persisted?.pendingWorktreeDecisionSince, ts);
+  });
+
+  it("persists and reloads planApproval", () => {
+    writeFileSync(indexPath, JSON.stringify([{
+      harnessSessionId: "h-plan-approval",
+      name: "plan-approval-session",
+      prompt: "p",
+      workdir: "/tmp",
+      status: "completed",
+      costUsd: 0,
+      planApproval: "approve",
+    }]), "utf-8");
+
+    const store = new SessionStore({ indexPath, env: {} });
+    const persisted = store.getPersistedSession("h-plan-approval");
+    assert.equal(persisted?.planApproval, "approve");
+  });
+
+  it("persists and reloads worktreeDisposition", () => {
+    writeFileSync(indexPath, JSON.stringify([{
+      harnessSessionId: "h-disp",
+      name: "disp-session",
+      prompt: "p",
+      workdir: "/tmp",
+      status: "completed",
+      costUsd: 0,
+      worktreeDisposition: "pr-opened",
+    }]), "utf-8");
+
+    const store = new SessionStore({ indexPath, env: {} });
+    const persisted = store.getPersistedSession("h-disp");
+    assert.equal(persisted?.worktreeDisposition, "pr-opened");
+  });
+
+  it("normalizes unknown worktreeDisposition to undefined", () => {
+    writeFileSync(indexPath, JSON.stringify([{
+      harnessSessionId: "h-bad-disp",
+      name: "bad-disp-session",
+      prompt: "p",
+      workdir: "/tmp",
+      status: "completed",
+      costUsd: 0,
+      worktreeDisposition: "unknown-value",
+    }]), "utf-8");
+
+    const store = new SessionStore({ indexPath, env: {} });
+    const persisted = store.getPersistedSession("h-bad-disp");
+    assert.equal(persisted?.worktreeDisposition, undefined);
+  });
+});

@@ -1,7 +1,9 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { rmSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "url";
 import { getSessionsListingText, getSessionOutputText } from "../src/application/session-view";
+import { getSessionOutputFilePath } from "../src/session";
 
 describe("session-view app layer", () => {
   it("shows only the 5 most recent sessions by default", () => {
@@ -293,6 +295,31 @@ describe("session-view app layer", () => {
 
     const text = getSessionOutputText(sm, "run", { lines: -10, full: false });
     assert.match(text, /default-window/);
+  });
+
+  it("reads live output from the streaming temp file for active sessions", () => {
+    const outputPath = getSessionOutputFilePath("live-123");
+    writeFileSync(outputPath, "older line\nlatest line\n", "utf-8");
+
+    try {
+      const sm: any = {
+        resolve: () => ({
+          id: "live-123",
+          name: "run",
+          status: "running",
+          phase: "running",
+          duration: 1000,
+          costUsd: 0,
+          getOutput: () => ["buffered line"],
+        }),
+      };
+
+      const text = getSessionOutputText(sm, "run", { full: false, lines: 1 });
+      assert.match(text, /latest line/);
+      assert.doesNotMatch(text, /buffered line/);
+    } finally {
+      rmSync(outputPath, { force: true });
+    }
   });
 
   it("uses harness session ID when persisted session name is missing", () => {

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { createCodexAuthWorkspace } from "../src/harness/codex-auth";
+import { resolveCodexAuthWorkspaceRoot } from "../src/openclaw-paths";
 
 async function pathExists(path: string): Promise<boolean> {
   try {
@@ -47,6 +48,15 @@ async function createFixture() {
 }
 
 describe("createCodexAuthWorkspace", () => {
+  it("defaults the isolated Codex home root to OpenClaw state instead of /tmp", async () => {
+    const resolved = resolveCodexAuthWorkspaceRoot({
+      HOME: "/home/tester",
+      OPENCLAW_HOME: "/home/tester/.openclaw-state",
+    });
+
+    assert.equal(resolved, "/home/tester/.openclaw-state/codex-auth");
+  });
+
   it("creates an isolated temp home with the expected structure", async () => {
     const fixture = await createFixture();
 

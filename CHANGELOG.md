@@ -7,21 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.1.0] - 2026-03-25
+
+### Breaking Changes
+
+- **`multi_turn_disabled` removed** — all sessions are multi-turn by default. `agent_launch` no longer accepts the parameter, and resume flows no longer carry any single-turn compatibility path.
+- **`worktree_strategy: "auto-pr"` is deprecated** — it now routes through the same explicit review flow as `ask` instead of opening or updating a PR automatically.
+- **`delegate` is now part of the public `agent_launch.worktree_strategy` schema** — callers with pinned client-side enums or validation need to accept the expanded worktree strategy surface.
+- **Worktree completion policy changed** — `ask` and deprecated `auto-pr` sessions now land in the 4-button decision lifecycle (Merge locally, Create PR, Decide later, Dismiss) instead of the previous completion behavior.
+
+### Features
+
+- **Worktree lifecycle and PR policy overhaul** — sessions now carry fuller worktree state across completion and resume, including pending-decision tracking, snooze/dismiss actions, and clearer merge/PR decision routing.
+- **Cross-repo PR support** — `agent_launch` now accepts `worktree_pr_target_repo`, enabling fork-to-upstream PR flows instead of assuming the current repo remote is always the PR target.
+- **4-button worktree review UX** — `ask` completions now surface Merge locally, Create PR, Decide later, and Dismiss actions, with the corresponding callback routing and session-state transitions.
+
 ### Fixed
 
-- **Codex worktree instructions**: Codex sessions now receive worktree boundary constraints (path, branch, git safety rules) in the first user turn, since the Codex SDK `ThreadOptions` has no system-prompt field. Resumes also re-inject the instructions on their first turn of each launch invocation.
-- **Codex plan mode approval buttons**: Codex sessions launched with `permission_mode: "plan"` now correctly set `pendingPlanApproval = true` after the first (soft-plan) turn, triggering the Approve / Reject / Revise Telegram buttons via the existing `triggerWaitingForInputEvent` path.
-- **Worktree commit misdirection detection**: When a worktree branch has no commits ahead of the base branch, the plugin now also checks whether the base branch itself advanced. If it did, the notification says "commits likely landed outside the worktree branch" instead of the generic "Changes may be uncommitted".
+- **Codex worktree instructions** now inject on the first user turn for both fresh launches and auto-resumes, preserving worktree boundaries even though the SDK has no system-prompt field in `ThreadOptions`.
+- **Codex `permission_mode: "plan"` approval flow** now reliably sets `pendingPlanApproval` after the soft-plan turn, so approval buttons appear when Codex pauses for confirmation.
+- **Reply button UX** improved for Codex-backed sessions by forwarding plan approval correctly, suppressing echoed replies, and adding a context preview before the response is sent.
+- **Conflict-resolver launches** now honor the configured `defaultHarness` instead of hardcoding the previous harness choice.
+- **Codex auth bootstrap** now creates isolated `HOME` directories under OpenClaw state (`~/.openclaw/codex-auth/` or `OPENCLAW_HOME`) instead of `/tmp`, avoiding SDK startup failures when resumed sessions land on temp-backed auth homes.
+- **`agent_output` live streaming** now reads the session’s streaming output file while the session is still active, then falls back to in-memory or persisted output after completion.
+- **Worktree commit misdirection detection** now reports when commits likely landed on the base branch instead of incorrectly implying the worktree is merely uncommitted.
+- **Worktree preamble guidance** no longer tells the agent to treat `/tmp/` as the only safe destination for planning artifacts.
 
-### Removed
+### Docs
 
-- **`multi_turn_disabled` removed** — all sessions are now multi-turn by default. The `agent_launch` tool no longer accepts the `multi_turn_disabled` parameter. Resume paths already normalized back to multi-turn and the parameter had no net effect on plan review loops, approval workflows, or wait/resume behavior.
-
-### Changed
-
-- Consolidated the documentation set around a value-first README, a single operator reference, and narrower architecture/development docs.
-- Archived the Codex auth race plan under `docs/archive/` and removed superseded standalone docs for tools, channels, and notifications.
-- Aligned markdown and schema help text with the current defaults and terminology (`planApproval: "ask"`, no Dismiss button).
+- Consolidated the documentation set around the current worktree lifecycle, operator reference, and harness behavior.
+- Removed committed investigation/planning docs from the shipped repo and archived superseded auth-race notes under `docs/archive/`.
+- Updated docs and schema help text to reflect the current defaults and terminology, including the new worktree lifecycle and public `delegate` strategy.
 
 ## [3.0.0] - 2026-03-25
 
@@ -187,7 +203,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Default Codex approval policy to `on-request`
 - Raised default session limit
 
-[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v3.0.0...HEAD
+[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v3.1.0...HEAD
+[3.1.0]: https://github.com/goldmar/openclaw-code-agent/compare/v3.0.0...v3.1.0
 [3.0.0]: https://github.com/goldmar/openclaw-code-agent/compare/v2.4.0...v3.0.0
 [2.4.0]: https://github.com/goldmar/openclaw-code-agent/compare/v2.3.1...v2.4.0
 [2.3.1]: https://github.com/goldmar/openclaw-code-agent/compare/v2.3.0...v2.3.1

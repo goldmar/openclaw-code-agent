@@ -145,10 +145,10 @@ Plan approval behavior depends on `planApproval`:
 
 When a session completes with worktree metadata:
 
-- `ask`: push the branch, notify the user, and attach `Merge locally` / `Create PR` buttons
-- `delegate`: push the branch, send a brief user ping, and wake the orchestrator with diff context
+- `ask`: keep the branch local, notify the user, and attach `Merge locally` / `Create PR` buttons
+- `delegate`: keep the branch local, send a brief user ping, and wake the orchestrator with diff context
 - `auto-merge`: attempt merge automatically and spawn a conflict resolver on failure
-- `auto-pr`: create or update a PR automatically
+- `auto-pr`: deprecated alias of `ask`; keep the branch local until PR creation is explicitly chosen
 - `manual`: keep the branch for explicit follow-up
 
 `ask` and `delegate` suppress the normal turn-complete wake because the worktree decision message is the completion signal.

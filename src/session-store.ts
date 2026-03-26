@@ -1,16 +1,11 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "fs";
-import { homedir, tmpdir } from "os";
+import { tmpdir } from "os";
 import { dirname, join } from "path";
-import type { PersistedSessionInfo, SessionStatus, KillReason, ReasoningEffort, PermissionMode, CodexApprovalPolicy } from "./types";
+import type { PersistedSessionInfo, SessionStatus, KillReason, ReasoningEffort, PermissionMode, CodexApprovalPolicy, PlanApprovalMode, PlanApprovalContext } from "./types";
 import type { Session } from "./session";
+import { getSessionOutputFilePath } from "./session";
+import { resolveOpenclawHomeDir } from "./openclaw-paths";
 import { getBranchName } from "./worktree";
-
-/** Resolve OpenClaw home directory from environment or default path. */
-function resolveOpenclawHomeDir(env: NodeJS.ProcessEnv): string {
-  const explicit = env.OPENCLAW_HOME?.trim();
-  if (explicit) return explicit;
-  return join(homedir(), ".openclaw");
-}
 
 /**
  * Resolve persisted session index path using this precedence chain:
@@ -69,6 +64,18 @@ function toOptionalCodexApprovalPolicy(value: unknown): CodexApprovalPolicy | un
     : undefined;
 }
 
+function toOptionalPlanApprovalMode(value: unknown): PlanApprovalMode | undefined {
+  return value === "approve" || value === "ask" || value === "delegate"
+    ? value
+    : undefined;
+}
+
+function toOptionalPlanApprovalContext(value: unknown): PlanApprovalContext | undefined {
+  return value === "plan-mode" || value === "soft-plan"
+    ? value
+    : undefined;
+}
+
 function toOptionalKillReason(value: unknown): KillReason | undefined {
   return value === "user" || value === "idle-timeout" || value === "startup-timeout" || value === "shutdown" || value === "done" || value === "unknown"
     ? value
@@ -114,14 +121,25 @@ function normalizePersistedEntry(raw: unknown): PersistedSessionInfo | undefined
     outputPath: toOptionalString(raw.outputPath),
     harness: toOptionalString(raw.harness),
     currentPermissionMode: toOptionalPermissionMode(raw.currentPermissionMode),
+    pendingPlanApproval: raw.pendingPlanApproval === true,
+    planApprovalContext: toOptionalPlanApprovalContext(raw.planApprovalContext),
+    planApproval: toOptionalPlanApprovalMode(raw.planApproval),
     codexApprovalPolicy: toOptionalCodexApprovalPolicy(raw.codexApprovalPolicy),
     worktreePath: toOptionalString(raw.worktreePath),
     worktreeBranch: toOptionalString(raw.worktreeBranch),
-    worktreeStrategy: (raw.worktreeStrategy === "off" || raw.worktreeStrategy === "manual" || raw.worktreeStrategy === "ask" || raw.worktreeStrategy === "auto-merge" || raw.worktreeStrategy === "auto-pr") ? raw.worktreeStrategy : undefined,
+    worktreeStrategy: (raw.worktreeStrategy === "off" || raw.worktreeStrategy === "manual" || raw.worktreeStrategy === "ask" || raw.worktreeStrategy === "delegate" || raw.worktreeStrategy === "auto-merge" || raw.worktreeStrategy === "auto-pr") ? raw.worktreeStrategy : undefined,
     worktreeMerged: typeof raw.worktreeMerged === "boolean" ? raw.worktreeMerged : undefined,
     worktreeMergedAt: toOptionalString(raw.worktreeMergedAt),
     worktreePrUrl: toOptionalString(raw.worktreePrUrl),
     worktreePrNumber: toOptionalNumber(raw.worktreePrNumber),
+    pendingWorktreeDecisionSince: toOptionalString(raw.pendingWorktreeDecisionSince),
+    lastWorktreeReminderAt: toOptionalString(raw.lastWorktreeReminderAt),
+    worktreeBaseBranch: toOptionalString(raw.worktreeBaseBranch),
+    worktreePrTargetRepo: toOptionalString(raw.worktreePrTargetRepo),
+    worktreePushRemote: toOptionalString(raw.worktreePushRemote),
+    worktreeDecisionSnoozedUntil: toOptionalString(raw.worktreeDecisionSnoozedUntil),
+    worktreeDisposition: (raw.worktreeDisposition === "active" || raw.worktreeDisposition === "pr-opened" || raw.worktreeDisposition === "merged" || raw.worktreeDisposition === "dismissed" || raw.worktreeDisposition === "no-change-cleaned") ? raw.worktreeDisposition : undefined,
+    worktreeDismissedAt: toOptionalString(raw.worktreeDismissedAt),
   };
 }
 
@@ -202,10 +220,15 @@ export class SessionStore {
       originSessionKey: session.originSessionKey,
       harness: session.harnessName,
       currentPermissionMode: session.currentPermissionMode,
+      pendingPlanApproval: session.pendingPlanApproval,
+      planApprovalContext: session.planApprovalContext,
+      planApproval: session.planApproval,
       codexApprovalPolicy: session.codexApprovalPolicy,
       worktreePath: session.worktreePath,
       worktreeBranch: session.worktreeBranch ?? (session.worktreePath ? getBranchName(session.worktreePath) : undefined), // Fix 2-B: prefer cached name
       worktreeStrategy: session.worktreeStrategy,
+      worktreeBaseBranch: session.worktreeBaseBranch,
+      worktreePrTargetRepo: (session as any).worktreePrTargetRepo,
     };
     this.persisted.set(stub.harnessSessionId, stub);
     this.idIndex.set(session.id, stub.harnessSessionId);
@@ -224,7 +247,7 @@ export class SessionStore {
 
     let outputPath: string | undefined;
     try {
-      const outputFile = join(tmpdir(), `openclaw-agent-${session.id}.txt`);
+      const outputFile = getSessionOutputFilePath(session.id);
       if (existsSync(outputFile)) {
         // The incremental appendFileSync writes during session execution already
         // produced a complete file. Using it directly preserves output that may
@@ -263,10 +286,15 @@ export class SessionStore {
       outputPath,
       harness: session.harnessName,
       currentPermissionMode: session.currentPermissionMode,
+      pendingPlanApproval: session.pendingPlanApproval,
+      planApprovalContext: session.planApprovalContext,
+      planApproval: session.planApproval,
       codexApprovalPolicy: session.codexApprovalPolicy,
       worktreePath: session.worktreePath,
       worktreeBranch: session.worktreeBranch ?? (session.worktreePath ? getBranchName(session.worktreePath) : undefined), // Fix 2-B: prefer cached name
       worktreeStrategy: session.worktreeStrategy,
+      worktreeBaseBranch: session.worktreeBaseBranch,
+      worktreePrTargetRepo: (session as any).worktreePrTargetRepo,
     };
 
     this.persisted.set(session.harnessSessionId, info);

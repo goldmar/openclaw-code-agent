@@ -5,7 +5,7 @@ import { join } from "path";
 import { nanoid } from "nanoid";
 import { getDefaultHarness, getHarness } from "./harness";
 import type { AgentHarness, HarnessSession, HarnessMessage } from "./harness";
-import type { SessionConfig, SessionStatus, PermissionMode, KillReason, ReasoningEffort, CodexApprovalPolicy, WorktreeStrategy, CanUseToolCallback } from "./types";
+import type { SessionConfig, SessionStatus, PermissionMode, KillReason, ReasoningEffort, CodexApprovalPolicy, WorktreeStrategy, CanUseToolCallback, PlanApprovalMode, PlanApprovalContext } from "./types";
 import {
   getGlobalMcpServers,
   pluginConfig,
@@ -13,9 +13,14 @@ import {
   resolveDefaultModelForHarness,
   resolveReasoningEffortForHarness,
 } from "./config";
+import { looksLikePlanOnlyPrompt, looksLikePlanOutput } from "./waiting-detector";
 
 const OUTPUT_BUFFER_MAX = 2000;
 const STARTUP_TIMEOUT_MS = 2 * 60 * 1000; // 2 minutes
+
+export function getSessionOutputFilePath(sessionId: string): string {
+  return join(tmpdir(), `openclaw-agent-${sessionId}.txt`);
+}
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -99,6 +104,7 @@ export class Session extends EventEmitter {
   private readonly systemPrompt?: string;
   private readonly allowedTools?: string[];
   private readonly permissionMode: PermissionMode;
+  readonly planApproval: PlanApprovalMode;
   readonly codexApprovalPolicy?: CodexApprovalPolicy;
   currentPermissionMode: PermissionMode;
   private pendingModeSwitch?: PermissionMode;
@@ -113,9 +119,9 @@ export class Session extends EventEmitter {
   worktreeBranch?: string; // Fix 2-B: cached at creation to avoid live lookups after worktree removal
   readonly worktreeStrategy?: WorktreeStrategy;
   readonly worktreeBaseBranch?: string;
-
-  // Output mode
-  readonly outputMode?: "deliverable";
+  worktreePrTargetRepo?: string;
+  worktreePushRemote?: string;
+  worktreeDisposition?: string;
 
   // Multi-turn
   readonly multiTurn: boolean;
@@ -155,12 +161,15 @@ export class Session extends EventEmitter {
 
   // Flags
   pendingPlanApproval: boolean = false;
+  planApprovalContext?: PlanApprovalContext;
   planFilePath?: string;
   killReason: KillReason = "unknown";
   private waitingForInputFired: boolean = false;
   private lastTurnHadQuestion: boolean = false;
   private planModeApproved: boolean = false;
   private turnInProgress: boolean = true;
+  private currentTurnText: string = "";
+  private readonly softPlanExpected: boolean;
 
   // AskUserQuestion intercept
   private readonly canUseTool?: CanUseToolCallback;
@@ -183,11 +192,16 @@ export class Session extends EventEmitter {
     this.systemPrompt = config.systemPrompt;
     this.allowedTools = config.allowedTools;
     this.permissionMode = config.permissionMode ?? pluginConfig.permissionMode;
+    this.planApproval = config.planApproval ?? pluginConfig.planApproval;
     this.codexApprovalPolicy = this.harness.name === "codex"
       ? (config.codexApprovalPolicy ?? resolveApprovalPolicyForHarness(this.harness.name) ?? pluginConfig.codexApprovalPolicy)
       : undefined;
-    this.currentPermissionMode =
-      this.harness.name === "codex" && this.permissionMode === "plan" ? "default" : this.permissionMode;
+    // Keep currentPermissionMode in sync with permissionMode for all harnesses.
+    // Codex uses a soft-planning approach (first-turn prompt wrapper) rather than
+    // a true SDK plan mode, but the session still needs to track "plan" state so
+    // pendingPlanApproval is set at the end of the first turn and the
+    // Approve/Reject/Revise buttons fire via triggerWaitingForInputEvent.
+    this.currentPermissionMode = this.permissionMode;
     this.originChannel = config.originChannel;
     this.originThreadId = config.originThreadId;
     this.originAgentId = config.originAgentId;
@@ -197,8 +211,13 @@ export class Session extends EventEmitter {
     this.multiTurn = config.multiTurn ?? true;
     this.worktreeStrategy = config.worktreeStrategy;
     this.worktreeBaseBranch = config.worktreeBaseBranch;
-    this.outputMode = config.outputMode;
+    if (config.worktreePrTargetRepo) {
+      this.worktreePrTargetRepo = config.worktreePrTargetRepo;
+    }
     this.canUseTool = config.canUseTool;
+    this.softPlanExpected =
+      this.permissionMode === "bypassPermissions"
+      && looksLikePlanOnlyPrompt(this.prompt);
     this.startedAt = Date.now();
     this.abortController = new AbortController();
   }
@@ -213,9 +232,9 @@ export class Session extends EventEmitter {
 
   get phase(): string {
     if (this._status !== "running") return this._status;
-    if (this.harness.name === "codex") return "implementing";
     if (this.pendingPlanApproval) return "awaiting-plan-approval";
-    if (this.currentPermissionMode === "plan") return "planning";
+    if (this.currentPermissionMode === "plan" && !this.planModeApproved) return "planning";
+    if (this.harness.name === "codex") return "implementing"; // after the approval check
     return "implementing";
   }
 
@@ -248,6 +267,53 @@ export class Session extends EventEmitter {
   private clearAllTimers(): void {
     for (const t of this.timers.values()) clearTimeout(t);
     this.timers.clear();
+  }
+
+  private shouldSuppressWorktreeDecisionQuestion(input: Record<string, unknown>): boolean {
+    if (
+      !this.worktreeStrategy ||
+      this.worktreeStrategy === "off" ||
+      this.worktreeStrategy === "manual" ||
+      (this.currentPermissionMode === "plan" && !this.planModeApproved)
+    ) {
+      return false;
+    }
+
+    const questions = Array.isArray(input.questions) ? input.questions : [];
+    const firstQuestion = questions[0];
+    const textSource =
+      typeof input.text === "string"
+        ? input.text
+        : typeof input.question === "string"
+          ? input.question
+          : firstQuestion && typeof firstQuestion === "object" && typeof (firstQuestion as { question?: unknown }).question === "string"
+            ? (firstQuestion as { question: string }).question
+            : "";
+    const text = textSource.toLowerCase();
+    if (!text) return false;
+
+    const mentionsMerge = /\bmerge\b/.test(text);
+    const mentionsPr = /\b(pr|pull request)\b/.test(text);
+    const mentionsDecision = /\b(decide|decision|later|dismiss)\b/.test(text);
+    return mentionsMerge && (mentionsPr || mentionsDecision);
+  }
+
+  private markPendingPlanApproval(context: PlanApprovalContext): void {
+    if (this.planModeApproved) return;
+    this.pendingPlanApproval = true;
+    this.planApprovalContext = context;
+  }
+
+  private clearPendingPlanApproval(): void {
+    this.pendingPlanApproval = false;
+    this.planApprovalContext = undefined;
+  }
+
+  private shouldTreatCurrentTurnAsSoftPlanApproval(numTurns: number): boolean {
+    if (!this.softPlanExpected) return false;
+    if (numTurns !== 1) return false;
+    if (this.pendingPlanApproval || this.planModeApproved) return false;
+    return looksLikePlanOutput(this.currentTurnText);
   }
 
   // -- Lifecycle --
@@ -310,6 +376,7 @@ export class Session extends EventEmitter {
     this.resetIdleTimer();
     this.waitingForInputFired = false;
     this.turnInProgress = true;
+    this.currentTurnText = "";
 
     let effectiveText = text;
     if (this.pendingModeSwitch) {
@@ -326,7 +393,7 @@ export class Session extends EventEmitter {
         } catch (err: unknown) {
           console.error(`[Session ${this.id}] setPermissionMode(${newMode}) FAILED: ${errorMessage(err)}`);
           // Preserve the pending approval state so callers can retry cleanly.
-          this.pendingPlanApproval = true;
+          this.markPendingPlanApproval(this.planApprovalContext ?? "plan-mode");
           throw new Error(`Failed to switch permission mode to ${newMode}: ${errorMessage(err)}`);
         }
       } else {
@@ -339,7 +406,7 @@ export class Session extends EventEmitter {
 
       if (appliedApprovalPath) {
         // Only clear pendingPlanApproval when the approval path is actually applied.
-        this.pendingPlanApproval = false;
+        this.clearPendingPlanApproval();
         if (newMode !== "plan") {
           this.planModeApproved = true;
         }
@@ -488,8 +555,9 @@ export class Session extends EventEmitter {
         if (this.outputBuffer.length > OUTPUT_BUFFER_MAX) {
           this.outputBuffer.splice(0, this.outputBuffer.length - OUTPUT_BUFFER_MAX);
         }
+        this.currentTurnText += this.currentTurnText ? `\n${msg.text}` : msg.text;
         try {
-          appendFileSync(join(tmpdir(), `openclaw-agent-${this.id}.txt`), msg.text + "\n", "utf-8");
+          appendFileSync(getSessionOutputFilePath(this.id), msg.text + "\n", "utf-8");
         } catch {
           // best-effort; don't let disk errors interrupt the session
         }
@@ -503,15 +571,19 @@ export class Session extends EventEmitter {
           }
         }
         if (this.harness.questionToolNames.includes(msg.name)) {
-          this.lastTurnHadQuestion = true;
-          // Defensive: CC normally uses ExitPlanMode in plan mode, but if it
-          // uses AskUserQuestion instead, treat it as a plan approval signal.
-          if (this.currentPermissionMode === "plan" && !this.planModeApproved) {
-            this.pendingPlanApproval = true;
+          const questionInput = (msg.input ?? {}) as Record<string, unknown>;
+          const suppressWorktreeQuestion = this.shouldSuppressWorktreeDecisionQuestion(questionInput);
+          if (!suppressWorktreeQuestion) {
+            this.lastTurnHadQuestion = true;
+            // Defensive: CC normally uses ExitPlanMode in plan mode, but if it
+            // uses AskUserQuestion instead, treat it as a plan approval signal.
+            if ((this.currentPermissionMode === "plan" || this.permissionMode === "plan") && !this.planModeApproved) {
+              this.markPendingPlanApproval("plan-mode");
+            }
           }
         } else if (this.harness.planApprovalToolNames.includes(msg.name) && !this.planModeApproved) {
           this.lastTurnHadQuestion = true;
-          this.pendingPlanApproval = true;
+          this.markPendingPlanApproval("plan-mode");
         }
         this.emit("toolUse", this, msg.name, msg.input);
       } else if (msg.type === "permission_mode_change") {
@@ -520,7 +592,7 @@ export class Session extends EventEmitter {
         const oldMode = this.currentPermissionMode;
         this.currentPermissionMode = msg.mode as PermissionMode;
         if (msg.mode !== "plan" && oldMode === "plan" && !this.planModeApproved) {
-          this.pendingPlanApproval = true;
+          this.markPendingPlanApproval("plan-mode");
           this.lastTurnHadQuestion = true;
         }
       } else if (msg.type === "result") {
@@ -545,11 +617,15 @@ export class Session extends EventEmitter {
           // permissionMode change event — it just stops streaming. So we set
           // pendingPlanApproval here based on currentPermissionMode.
           if (
-            this.currentPermissionMode === "plan" &&
+            (this.currentPermissionMode === "plan" || this.permissionMode === "plan") &&
             !this.pendingPlanApproval &&
             !this.planModeApproved
           ) {
-            this.pendingPlanApproval = true;
+            this.markPendingPlanApproval("plan-mode");
+          }
+
+          if (this.shouldTreatCurrentTurnAsSoftPlanApproval(msg.data.num_turns)) {
+            this.markPendingPlanApproval("soft-plan");
           }
 
           // Use pendingPlanApproval OR lastTurnHadQuestion — pendingPlanApproval
@@ -576,6 +652,7 @@ export class Session extends EventEmitter {
           this.transitionToTerminal(msg.data.success ? "completed" : "failed");
         }
         this.lastTurnHadQuestion = false;
+        this.currentTurnText = "";
       } else if (msg.type === "activity") {
         // Keepalive ping for long-running subprocesses with no output.
       }

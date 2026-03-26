@@ -232,6 +232,79 @@ describe("Plan mode E2E: permission_mode_change flow", () => {
   });
 });
 
+describe("Soft planning E2E: bypassPermissions + plan-only prompt", () => {
+  it("keeps the session running and marks pending approval after a plan-only first turn", async () => {
+    const session = await startSession({
+      permissionMode: "bypassPermissions",
+      prompt: "Investigate the bug, produce a plan only, and stop. Do not implement yet.",
+      multiTurn: true,
+    });
+
+    fakeHarness.pushMessage({
+      type: "text",
+      text: [
+        "Here is the implementation plan:",
+        "1. Inspect the no-change cleanup path.",
+        "2. Detect soft planning sessions in bypassPermissions mode.",
+        "3. Add approval buttons and keep the worktree alive.",
+      ].join("\n"),
+    });
+    await tick(20);
+
+    fakeHarness.pushMessage({
+      type: "result",
+      data: { success: true, duration_ms: 2500, total_cost_usd: 0.1, num_turns: 1, session_id: session.harnessSessionId! },
+    });
+    await tick(50);
+
+    assert.equal(session.pendingPlanApproval, true);
+    assert.equal(session.planApprovalContext, "soft-plan");
+    assert.equal(session.phase, "awaiting-plan-approval");
+    assert.equal(session.status, "running", "soft plan sessions should stay resumable");
+
+    session.kill("user");
+  });
+
+  it("approve=true works for soft-plan sessions that are already in bypassPermissions", async () => {
+    const session = await startSession({
+      permissionMode: "bypassPermissions",
+      prompt: "Plan only. Do not implement yet. Stop after the plan.",
+      multiTurn: true,
+    });
+
+    fakeHarness.pushMessage({
+      type: "text",
+      text: [
+        "Proposed plan:",
+        "- Inspect the session manager.",
+        "- Add a soft-plan approval heuristic.",
+        "",
+        "Should I continue with implementation?",
+      ].join("\n"),
+    });
+    await tick(20);
+
+    fakeHarness.pushMessage({
+      type: "result",
+      data: { success: true, duration_ms: 2500, total_cost_usd: 0.1, num_turns: 1, session_id: session.harnessSessionId! },
+    });
+    await tick(50);
+
+    const sm = createStubSessionManager({ [session.id]: session });
+    const result = await executeRespond(sm, {
+      session: session.id,
+      message: "Approved. Go ahead.",
+      approve: true,
+    });
+
+    assert.ok(!result.isError, `Should not be an error, got: ${result.text}`);
+    assert.equal(session.pendingPlanApproval, false);
+    assert.equal(session.currentPermissionMode, "bypassPermissions");
+
+    session.kill("user");
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Test: approve=true forwarded through tryAutoResume to dead plan-mode session
 // ---------------------------------------------------------------------------
@@ -370,6 +443,60 @@ describe("Plan mode E2E: approve=true on idle-killed plan session (double-approv
 
     assert.equal(result.isError, true, "Should reject approve+revision in same call");
     assert.ok(result.text.includes("Cannot approve and revise"), `Should explain the error: ${result.text}`);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Test: Fix B — Codex plan mode sets pendingPlanApproval after first turn
+// ---------------------------------------------------------------------------
+
+describe("Plan mode E2E: Codex soft-plan turn sets pendingPlanApproval (Fix B)", () => {
+  it("Codex session in plan mode: currentPermissionMode='plan', sets pendingPlanApproval on result", async () => {
+    // Use the fake harness but start a session with permissionMode="plan".
+    // The key assertion is that when the first turn's result arrives, the
+    // currentPermissionMode=="plan" path sets pendingPlanApproval=true — this
+    // is the same path that fires for Codex sessions after Fix B.
+    const session = await startSession({ permissionMode: "plan", multiTurn: true });
+
+    assert.equal(session.currentPermissionMode, "plan",
+      "plan-mode session must start with currentPermissionMode='plan'");
+    assert.equal(session.phase, "planning");
+    assert.equal(session.pendingPlanApproval, false);
+
+    // Simulate soft-plan turn: some text output followed by the turn result
+    fakeHarness.pushMessage({ type: "text", text: "I'll start by reading the file..." });
+    await tick(20);
+    fakeHarness.pushMessage({ type: "text", text: "Here is my plan: ..." });
+    await tick(20);
+
+    // No ExitPlanMode — this is the Codex path (soft-plan, no special tool)
+    // Turn completes: the result handler should set pendingPlanApproval
+    fakeHarness.pushMessage({
+      type: "result",
+      data: {
+        success: true,
+        duration_ms: 3000,
+        total_cost_usd: 0.05,
+        num_turns: 1,
+        session_id: session.harnessSessionId!,
+      },
+    });
+    await tick(50);
+
+    assert.equal(session.pendingPlanApproval, true,
+      "pendingPlanApproval must be set to true after first turn completes in plan mode (Codex soft-plan path)");
+    assert.equal(session.phase, "awaiting-plan-approval");
+    assert.equal(session.status, "running",
+      "session should remain running, waiting for user approval");
+
+    // Simulate user approving → session switches to bypassPermissions
+    session.switchPermissionMode("bypassPermissions");
+    await session.sendMessage("Approved. Go ahead.");
+
+    assert.equal(session.pendingPlanApproval, false, "approval clears pendingPlanApproval");
+    assert.equal(session.currentPermissionMode, "bypassPermissions");
+
+    session.kill("user");
   });
 });
 

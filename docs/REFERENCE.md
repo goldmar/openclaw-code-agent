@@ -100,17 +100,40 @@ In `ask`, the plugin sends inline Telegram buttons for `Approve`, `Reject`, and 
 | --- | --- | --- |
 | `off` | Tool param or config | No worktree; session runs in the main checkout |
 | `manual` | Tool param or config | Create worktree and branch, then stop for manual follow-through |
-| `ask` | Tool param or config | Default. Push branch, notify the user, and send inline `Merge locally` / `Create PR` buttons |
-| `delegate` | Config only via `defaultWorktreeStrategy` | Push branch, wake the orchestrator with diff context, and send a brief user notification |
+| `ask` | Tool param or config | Default. Keep the branch local, notify the user, and send inline 4-button decision UI |
+| `delegate` | Tool param or config | Keep the branch local, wake the orchestrator with diff context; orchestrator must merge or escalate (never auto-PR) |
 | `auto-merge` | Tool param or config | Merge back automatically; spawn a conflict resolver if needed |
-| `auto-pr` | Tool param or config | Create or update a GitHub PR automatically |
+| `auto-pr` | Tool param or config | **DEPRECATED**: now treated as `ask` — requires explicit user confirmation and stays local until PR creation is chosen |
+
+### 4-Button Decision UX (ask / auto-pr strategies)
+
+When a session completes with changes under `ask` or `auto-pr` strategy, users receive 4 inline buttons:
+
+| Button | Action |
+| --- | --- |
+| **✅ Merge** | Merge branch into base locally |
+| **📬 Open PR** | Create a GitHub PR |
+| **⏭️ Decide later** | Snooze reminders for 24h |
+| **🗑️ Dismiss (deletes branch)** | Permanently delete branch and worktree (irreversible) |
+
+### Worktree Lifecycle
+
+| State | `worktreeDisposition` | Notes |
+| --- | --- | --- |
+| Active with pending decision | `active` | Worktree preserved; decision buttons sent |
+| PR created | `pr-opened` | Worktree preserved for follow-up commits |
+| Merged | `merged` | Worktree and branch cleaned up |
+| Dismissed | `dismissed` | Branch and worktree permanently deleted |
+| No-change clean | `no-change-cleaned` | No commits made; worktree silently cleaned up |
 
 Notes:
 
-- `agent_launch` only accepts `off`, `manual`, `ask`, `auto-merge`, and `auto-pr` as `worktree_strategy`.
-- `delegate` is intentionally configured at the plugin level with `defaultWorktreeStrategy`.
+- `agent_launch` accepts `off`, `manual`, `ask`, `delegate`, `auto-merge`, and `auto-pr` as `worktree_strategy`.
+- `delegate` can also be configured at the plugin level with `defaultWorktreeStrategy`.
 - If the admin pins `defaultWorktreeStrategy` to anything other than `delegate`, that default overrides the per-launch `worktree_strategy` for fresh sessions.
 - Resumed sessions keep the worktree strategy they already had.
+- Worktrees are kept alive until explicitly resolved (merge/PR/dismiss) when using non-trivial strategies.
+- Stale-decision reminders fire every 3h; users can snooze per-session for 24h.
 
 ## Tool Reference
 
@@ -130,8 +153,9 @@ Launch a background coding session.
 | `fork_session` | `boolean` | No | Fork instead of continuing when resuming |
 | `permission_mode` | `default \| plan \| bypassPermissions` | No | Defaults to plugin `permissionMode` |
 | `harness` | `string` | No | Defaults to `defaultHarness` |
-| `worktree_strategy` | `off \| manual \| ask \| auto-merge \| auto-pr` | No | Subject to the admin override rule above |
+| `worktree_strategy` | `off \| manual \| ask \| delegate \| auto-merge \| auto-pr` | No | Subject to the admin override rule above; `auto-pr` is deprecated |
 | `worktree_base_branch` | `string` | No | Defaults to detected base branch |
+| `worktree_pr_target_repo` | `string` | No | Cross-repo PR target (e.g. `openai/codex`); auto-detected from `upstream` remote if unset |
 
 Example:
 
@@ -210,7 +234,7 @@ Merge a worktree branch back to base.
 | `session` | `string` | Yes | Must resolve to a session with worktree metadata |
 | `base_branch` | `string` | No | Defaults to detected base branch |
 | `strategy` | `merge \| squash` | No | `merge` means rebase-then-fast-forward |
-| `push` | `boolean` | No | Defaults to `true` |
+| `push` | `boolean` | No | Defaults to `false`; set `true` only when you want the merged base branch pushed |
 | `delete_branch` | `boolean` | No | Defaults to `true` |
 
 On conflicts, the plugin spawns a conflict-resolver session using the configured default harness.
@@ -227,7 +251,7 @@ Create or update a GitHub PR for a worktree branch.
 | `base_branch` | `string` | No | Defaults to detected base branch |
 | `force_new` | `boolean` | No | Reject instead of updating an existing PR |
 
-The PR path handles open, merged, and closed PR states instead of blindly creating duplicates.
+The PR path pushes the worktree branch on demand, then handles open, merged, and closed PR states instead of blindly creating duplicates.
 
 ### `agent_worktree_status`
 
@@ -344,6 +368,6 @@ Thread routing is separate from channel routing. When OpenClaw provides the orig
 - No notifications: verify `fallbackChannel` or `agentChannels`, then restart the gateway.
 - Wrong chat receives the update: check `agentChannels` longest-prefix matches and remove ambiguous path entries.
 - Worktree was not created: confirm the workdir is a git repo and there is enough free space for the worktree.
-- Push or PR failed: `ask`, `delegate`, and `auto-pr` need a configured remote; `agent_pr` also needs `gh` installed and authenticated.
+- Push or PR failed: `agent_pr` always needs a configured remote plus `gh` installed and authenticated. `agent_merge(push=true)` also needs a configured remote. `ask`, `delegate`, and deprecated `auto-pr` keep branches local until one of those explicit push paths is chosen.
 - Model launch rejected: update `harnesses.<name>.allowedModels` or the harness default model so they agree.
 - Codex auth weirdness: prefer `forced_login_method = "chatgpt"` and relaunch.

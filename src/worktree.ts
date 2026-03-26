@@ -458,10 +458,10 @@ export interface MergeResult {
 }
 
 /**
- * Returns true if the repo at repoDir has dirty tracked files (staged or unstaged).
- * Untracked files ("??") are ignored — they do not block git merge.
+ * Check if there are dirty tracked files in the given directory.
+ * Returns true if there are uncommitted changes to tracked files.
  */
-function checkDirtyTracked(repoDir: string): boolean {
+export function checkDirtyTracked(repoDir: string): boolean {
   try {
     const status = execFileSync(
       "git",
@@ -720,6 +720,7 @@ export interface PRResult {
 /**
  * Create a GitHub PR using gh CLI.
  * Requires gh CLI to be installed and authenticated.
+ * @param targetRepo - Optional cross-repo target (e.g. 'openai/codex' for fork-to-upstream workflow).
  */
 export function createPR(
   repoDir: string,
@@ -727,14 +728,37 @@ export function createPR(
   base: string,
   title: string,
   body: string,
+  targetRepo?: string,
 ): PRResult {
   if (!isGitHubCLIAvailable()) {
     return { success: false, error: "GitHub CLI (gh) is not available" };
   }
 
   try {
+    // Determine fork owner for cross-repo PR head reference
+    let forkOwner: string | undefined;
+    if (targetRepo) {
+      try {
+        const originUrl = execFileSync("git", ["-C", repoDir, "remote", "get-url", "origin"], { timeout: 5_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }).trim();
+        const match = originUrl.match(/[:/]([^/]+)\/[^/]+(?:\.git)?$/);
+        if (match) forkOwner = match[1];
+      } catch { /* best effort */ }
+    }
+
     // Use --fill-verbose to auto-populate title/body from commits if not provided custom values
-    const args = ["pr", "create", "--base", base, "--head", branch];
+    const args = ["pr", "create", "--base", base];
+
+    // Add cross-repo target if specified
+    if (targetRepo) {
+      args.push("--repo", targetRepo);
+    }
+
+    // Use fork owner prefix for head when creating cross-repo PR
+    if (forkOwner) {
+      args.push("--head", `${forkOwner}:${branch}`);
+    } else {
+      args.push("--head", branch);
+    }
 
     // If title/body are provided, use them; otherwise let gh auto-fill from commits
     if (title && body) {
@@ -790,16 +814,21 @@ export interface PRStatus {
  * Check if a PR exists for a branch and return its current state.
  * Uses gh CLI to query PR state across all states (open, merged, closed).
  * Returns PRStatus with exists=false if no PR found.
+ * @param targetRepo - Optional cross-repo target (e.g. 'openai/codex').
  */
-export function syncWorktreePR(repoDir: string, branchName: string): PRStatus {
+export function syncWorktreePR(repoDir: string, branchName: string, targetRepo?: string): PRStatus {
   if (!isGitHubCLIAvailable()) {
     return { exists: false, state: "none" };
   }
 
   try {
+    const ghArgs = ["pr", "list", "--head", branchName, "--state", "all", "--json", "url,number,title,state", "--jq", ".[0]"];
+    if (targetRepo) {
+      ghArgs.push("--repo", targetRepo);
+    }
     const result = execFileSync(
       "gh",
-      ["pr", "list", "--head", branchName, "--state", "all", "--json", "url,number,title,state", "--jq", ".[0]"],
+      ghArgs,
       { cwd: repoDir, timeout: 10_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
     );
 
@@ -840,16 +869,21 @@ export function syncWorktreePR(repoDir: string, branchName: string): PRStatus {
 /**
  * Add a comment to an existing PR.
  * Returns true on success, false on failure.
+ * @param targetRepo - Optional cross-repo target (e.g. 'openai/codex').
  */
-export function commentOnPR(repoDir: string, prNumber: number, body: string): boolean {
+export function commentOnPR(repoDir: string, prNumber: number, body: string, targetRepo?: string): boolean {
   if (!isGitHubCLIAvailable()) {
     return false;
   }
 
   try {
+    const ghArgs = ["pr", "comment", String(prNumber), "--body", body];
+    if (targetRepo) {
+      ghArgs.push("--repo", targetRepo);
+    }
     execFileSync(
       "gh",
-      ["pr", "comment", String(prNumber), "--body", body],
+      ghArgs,
       { cwd: repoDir, timeout: 30_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
     );
     return true;
@@ -857,4 +891,56 @@ export function commentOnPR(repoDir: string, prNumber: number, body: string): bo
     console.warn(`[worktree] Failed to comment on PR #${prNumber}: ${err instanceof Error ? err.message : String(err)}`);
     return false;
   }
+}
+
+/**
+ * Resolve the PR target repository.
+ * Priority: explicit param > 'upstream' remote (if distinct from origin) > undefined (same-repo)
+ */
+export function resolveTargetRepo(repoDir: string, explicitRepo?: string): string | undefined {
+  if (explicitRepo) return explicitRepo;
+  try {
+    const origin = execFileSync("git", ["-C", repoDir, "remote", "get-url", "origin"], { timeout: 5_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }).trim();
+    const upstream = execFileSync("git", ["-C", repoDir, "remote", "get-url", "upstream"], { timeout: 5_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }).trim();
+    if (upstream && upstream !== origin) {
+      // Extract "owner/repo" from URL
+      const match = upstream.match(/[:/]([^/]+\/[^/]+?)(?:\.git)?$/);
+      if (match) return match[1];
+    }
+  } catch { /* no upstream remote */ }
+  return undefined;
+}
+
+/**
+ * Parameters for formatting a worktree outcome notification line.
+ */
+export interface WorktreeOutcomeParams {
+  kind: "merge" | "pr-opened" | "pr-updated";
+  branch: string;
+  base?: string;
+  targetRepo?: string;
+  filesChanged?: number;
+  insertions?: number;
+  deletions?: number;
+  prUrl?: string;
+}
+
+/**
+ * Format a single-line outcome notification for a worktree operation.
+ */
+export function formatWorktreeOutcomeLine(params: WorktreeOutcomeParams): string {
+  if (params.kind === "merge") {
+    const stats = (params.filesChanged !== undefined)
+      ? ` (${params.filesChanged} files, +${params.insertions ?? 0}/-${params.deletions ?? 0})`
+      : "";
+    return `✅ Merged: ${params.branch} → ${params.base ?? "main"}${stats}`;
+  }
+  if (params.kind === "pr-updated") {
+    return `✅ PR updated: ${params.prUrl ?? ""}`;
+  }
+  // pr-opened
+  if (params.targetRepo) {
+    return `✅ PR opened against ${params.targetRepo}: ${params.prUrl ?? ""}`;
+  }
+  return `✅ PR opened: ${params.prUrl ?? ""}`;
 }

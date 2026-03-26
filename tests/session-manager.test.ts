@@ -572,6 +572,7 @@ describe("SessionManager.notifySession()", () => {
   let sm: SessionManager;
 
   beforeEach(() => {
+    setPluginConfig({});
     sm = new SessionManager(5);
     (sm as any).wakeDispatcher = {
       dispatchSessionNotification: (...args: any[]) => { ((sm as any).__dispatchCalls ??= []).push(args); },
@@ -601,7 +602,7 @@ describe("SessionManager turn-end wake", () => {
     sm = new SessionManager(5);
     (sm as any).wakeDispatcher = {
       dispatchSessionNotification: (...args: any[]) => { ((sm as any).__dispatchCalls ??= []).push(args); },
-      clearPendingRetries: () => {},
+      clearRetryTimersForSession: () => {},
     };
     (sm as any).__dispatchCalls = [];
   });
@@ -645,9 +646,161 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(calls.length, 1);
     const [_sessionArg, request] = calls[0];
     assert.equal(request.label, "waiting");
-    assert.equal(request.notifyUser, "on-wake-fallback");
-    assert.match(request.userMessage, /❓ \[waiter\] Waiting for input/);
-    assert.match(request.wakeMessage, /waiting for input/i);
+    assert.equal(request.buttons, undefined);
+    assert.equal(request.notifyUser, "always");
+    assert.match(request.userMessage, /❓ \[waiter\] Question waiting for reply/);
+    assert.match(request.wakeMessage, /genuine user reply/i);
+  });
+
+  it("uses session planApproval override for plan approval buttons", () => {
+    setPluginConfig({ planApproval: "delegate" });
+
+    const s = fakeSession({
+      id: "s-plan-ask",
+      name: "planner",
+      status: "running",
+      pendingPlanApproval: true,
+      planApproval: "ask",
+      getOutput: () => ["Plan preview"],
+    });
+
+    (sm as any).triggerWaitingForInputEvent(s);
+
+    const calls = (sm as any).__dispatchCalls;
+    assert.equal(calls.length, 1);
+    const [_sessionArg, request] = calls[0];
+    assert.equal(request.label, "plan-approval");
+    assert.match(request.userMessage, /Plan ready for approval/);
+    assert.equal(request.buttons[0][0].label, "✅ Approve");
+    assert.equal(request.buttons[0][1].label, "❌ Reject");
+    assert.equal(request.buttons[0][2].label, "✏️ Revise");
+  });
+
+  it("shows approval buttons for Codex plan sessions when planApproval=ask", () => {
+    const s = fakeSession({
+      id: "s-codex-plan-ask",
+      name: "codex-plan-ask",
+      status: "running",
+      harnessName: "codex",
+      pendingPlanApproval: true,
+      planApproval: "ask",
+      getOutput: () => ["Codex plan preview"],
+    });
+
+    (sm as any).triggerWaitingForInputEvent(s);
+
+    const calls = (sm as any).__dispatchCalls;
+    assert.equal(calls.length, 1);
+    const [_sessionArg, request] = calls[0];
+    assert.equal(request.label, "plan-approval");
+    assert.equal(request.buttons[0][0].label, "✅ Approve");
+    assert.equal(request.buttons[0][1].label, "❌ Reject");
+    assert.equal(request.buttons[0][2].label, "✏️ Revise");
+  });
+
+  it("suppresses plan approval buttons when the session override delegates approval", () => {
+    setPluginConfig({ planApproval: "ask" });
+
+    const s = fakeSession({
+      id: "s-plan-delegate",
+      name: "planner-delegate",
+      status: "running",
+      pendingPlanApproval: true,
+      planApproval: "delegate",
+      getOutput: () => ["Plan preview"],
+    });
+
+    (sm as any).triggerWaitingForInputEvent(s);
+
+    const calls = (sm as any).__dispatchCalls;
+    assert.equal(calls.length, 1);
+    const [_sessionArg, request] = calls[0];
+    assert.equal(request.label, "plan-approval");
+    assert.match(request.userMessage, /Plan awaiting approval/);
+    assert.equal(request.buttons, undefined);
+    assert.match(request.wakeMessage, /DELEGATED PLAN APPROVAL/);
+  });
+
+  it("does not show approval buttons for Codex plan sessions when planApproval=delegate", () => {
+    const s = fakeSession({
+      id: "s-codex-plan-delegate",
+      name: "codex-plan-delegate",
+      status: "running",
+      harnessName: "codex",
+      pendingPlanApproval: true,
+      planApproval: "delegate",
+      getOutput: () => ["Codex plan preview"],
+    });
+
+    (sm as any).triggerWaitingForInputEvent(s);
+
+    const calls = (sm as any).__dispatchCalls;
+    assert.equal(calls.length, 1);
+    const [_sessionArg, request] = calls[0];
+    assert.equal(request.label, "plan-approval");
+    assert.equal(request.buttons, undefined);
+  });
+
+  it("shows approval buttons for soft-plan bypass sessions when planApproval=ask", () => {
+    const s = fakeSession({
+      id: "s-soft-plan-ask",
+      name: "soft-plan-ask",
+      status: "running",
+      currentPermissionMode: "bypassPermissions",
+      pendingPlanApproval: true,
+      planApprovalContext: "soft-plan",
+      planApproval: "ask",
+      getOutput: () => ["Proposed plan:\n- Inspect state flow\n- Add buttons\n\nShould I continue?"],
+    });
+
+    (sm as any).triggerWaitingForInputEvent(s);
+
+    const calls = (sm as any).__dispatchCalls;
+    assert.equal(calls.length, 1);
+    const [_sessionArg, request] = calls[0];
+    assert.equal(request.label, "plan-approval");
+    assert.equal(request.buttons[0][0].label, "✅ Approve");
+    assert.match(request.wakeMessageOnNotifyFailed, /approval resumes implementation/i);
+  });
+
+  it("routes bypass-permissions 'should I continue?' prompts through generic waiting only", () => {
+    const s = fakeSession({
+      id: "s-continue",
+      name: "continue-session",
+      status: "running",
+      currentPermissionMode: "bypassPermissions",
+      pendingPlanApproval: false,
+      getOutput: () => ["Should I continue and apply the migration?"],
+    });
+
+    (sm as any).onTurnEnd(s, true);
+
+    const calls = (sm as any).__dispatchCalls;
+    assert.equal(calls.length, 1);
+    const [_sessionArg, request] = calls[0];
+    assert.equal(request.label, "waiting");
+    assert.equal(request.buttons, undefined);
+    assert.doesNotMatch(request.userMessage, /Plan ready for approval/);
+  });
+
+  it("keeps plan approval routing ahead of worktree delegate suppression", () => {
+    const s = fakeSession({
+      id: "s-plan-worktree",
+      name: "planner-worktree",
+      status: "running",
+      pendingPlanApproval: true,
+      planApproval: "ask",
+      worktreeStrategy: "delegate",
+      getOutput: () => ["Plan preview"],
+    });
+
+    (sm as any).onTurnEnd(s, true);
+
+    const calls = (sm as any).__dispatchCalls;
+    assert.equal(calls.length, 1);
+    const [_sessionArg, request] = calls[0];
+    assert.equal(request.label, "plan-approval");
+    assert.equal(request.buttons[0][0].label, "✅ Approve");
   });
 
   it("de-dupes duplicate turn-end wake for the same turn marker", () => {
@@ -712,7 +865,7 @@ describe("SessionManager terminal wake behavior", () => {
     sm = new SessionManager(5);
     (sm as any).wakeDispatcher = {
       dispatchSessionNotification: (...args: any[]) => { ((sm as any).__dispatchCalls ??= []).push(args); },
-      clearPendingRetries: () => {},
+      clearRetryTimersForSession: () => {},
     };
     (sm as any).__dispatchCalls = [];
   });
@@ -765,7 +918,7 @@ describe("SessionManager terminal wake behavior", () => {
     assert.match(request.wakeMessage, /Coding agent session failed/);
     assert.match(request.wakeMessage, /Failure summary:/);
     assert.match(request.wakeMessage, /not supported when using Codex with a ChatGPT account/);
-    assert.match(request.wakeMessage, /relaunch the task now or continue it yourself/);
+    assert.match(request.wakeMessage, /relaunch fresh with agent_launch/);
     assert.match(request.userMessage, /❌ \[broken-launch\] Failed/);
   });
 
@@ -860,5 +1013,184 @@ describe("SessionManager terminal wake behavior", () => {
     assert.equal(calls.length, 1);
     const [_sessionArg, request] = calls[0];
     assert.match(request.userMessage, /⛔ \[shutdown-stop\] Stopped by shutdown/);
+  });
+});
+
+// =========================================================================
+// shouldRunWorktreeStrategy
+// =========================================================================
+
+describe("SessionManager.shouldRunWorktreeStrategy", () => {
+  let sm: SessionManager;
+
+  beforeEach(() => {
+    sm = new SessionManager(5);
+  });
+
+  it("returns false when session phase is 'planning'", () => {
+    const session = fakeSession({ phase: "planning", pendingPlanApproval: false });
+    // Override phase property since fakeSession doesn't have a getter
+    Object.defineProperty(session, "phase", { get: () => "planning" });
+    const result = (sm as any).shouldRunWorktreeStrategy(session);
+    assert.equal(result, false);
+  });
+
+  it("returns false when session phase is 'awaiting-plan-approval'", () => {
+    const session = fakeSession({ pendingPlanApproval: true });
+    Object.defineProperty(session, "phase", { get: () => "awaiting-plan-approval" });
+    const result = (sm as any).shouldRunWorktreeStrategy(session);
+    assert.equal(result, false);
+  });
+
+  it("returns false when pendingPlanApproval is true", () => {
+    const session = fakeSession({ pendingPlanApproval: true });
+    Object.defineProperty(session, "phase", { get: () => "implementing" });
+    const result = (sm as any).shouldRunWorktreeStrategy(session);
+    assert.equal(result, false);
+  });
+
+  it("returns true when session phase is 'implementing' and no pending plan approval", () => {
+    const session = fakeSession({ pendingPlanApproval: false });
+    Object.defineProperty(session, "phase", { get: () => "implementing" });
+    const result = (sm as any).shouldRunWorktreeStrategy(session);
+    assert.equal(result, true);
+  });
+});
+
+describe("SessionManager.handleAskUserQuestion()", () => {
+  let sm: SessionManager;
+
+  beforeEach(() => {
+    sm = new SessionManager(5);
+    (sm as any).wakeDispatcher = {
+      dispatchSessionNotification: (...args: any[]) => { ((sm as any).__dispatchCalls ??= []).push(args); },
+    };
+    (sm as any).__dispatchCalls = [];
+  });
+
+  it("bypasses CC worktree decision questions so the session can complete", async () => {
+    const session = fakeSession({
+      id: "s-cc-worktree",
+      name: "cc-worktree",
+      worktreeStrategy: "ask",
+    });
+    (sm as any).sessions.set(session.id, session);
+
+    const result = await sm.handleAskUserQuestion(session.id, {
+      questions: [{
+        question: "Should I merge this branch or open a PR?",
+        options: [
+          { label: "Merge" },
+          { label: "Open PR" },
+          { label: "Decide later" },
+        ],
+      }],
+    });
+
+    assert.deepEqual(result, {
+      behavior: "allow",
+      updatedInput: {
+        questions: [{
+          question: "Should I merge this branch or open a PR?",
+          options: [
+            { label: "Merge" },
+            { label: "Open PR" },
+            { label: "Decide later" },
+          ],
+        }],
+        answers: { "Should I merge this branch or open a PR?": "Decide later" },
+      },
+    });
+    assert.equal((sm as any).__dispatchCalls.length, 0);
+  });
+
+  it("still delivers genuine questions to the user with reply buttons", async () => {
+    const session = fakeSession({
+      id: "s-cc-question",
+      name: "cc-question",
+      worktreeStrategy: "ask",
+    });
+    (sm as any).sessions.set(session.id, session);
+
+    const pending = sm.handleAskUserQuestion(session.id, {
+      questions: [{
+        question: "Which environment should I target?",
+        options: [
+          { label: "Staging" },
+          { label: "Production" },
+        ],
+      }],
+    });
+
+    const calls = (sm as any).__dispatchCalls;
+    assert.equal(calls.length, 1);
+    const [_sessionArg, request] = calls[0];
+    assert.equal(request.label, "ask-user-question");
+    assert.equal(request.buttons[0][0].label, "Staging");
+    assert.equal(request.buttons[0][1].label, "Production");
+
+    sm.resolveAskUserQuestion(session.id, 0);
+    await pending;
+  });
+});
+
+// =========================================================================
+// remindStaleDecisions - 3h interval check
+// =========================================================================
+
+describe("SessionManager remindStaleDecisions interval", () => {
+  it("uses 3-hour interval constant", () => {
+    const sm = new SessionManager(5);
+    // Verify the 3h constant by checking a stub session just under 3h doesn't trigger
+    const harnessId = "h-stale";
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+    sm.store.persisted.set(harnessId, {
+      harnessSessionId: harnessId,
+      name: "stale-session",
+      prompt: "p",
+      workdir: "/tmp",
+      status: "completed",
+      costUsd: 0,
+      pendingWorktreeDecisionSince: twoHoursAgo,
+      worktreeBranch: "agent/stale",
+    } as any);
+
+    const dispatched: any[] = [];
+    (sm as any).wakeDispatcher = {
+      dispatchSessionNotification: (...args: any[]) => dispatched.push(args),
+      clearRetryTimersForSession: () => {},
+    };
+
+    (sm as any).remindStaleDecisions();
+    // Should NOT send reminder since only 2h elapsed (interval is 3h)
+    assert.equal(dispatched.length, 0);
+  });
+
+  it("skips snoozed sessions even if past interval", () => {
+    const sm = new SessionManager(5);
+    const harnessId = "h-snoozed";
+    const fourHoursAgo = new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString();
+    const snoozedUntilFuture = new Date(Date.now() + 20 * 60 * 60 * 1000).toISOString();
+    sm.store.persisted.set(harnessId, {
+      harnessSessionId: harnessId,
+      name: "snoozed-session",
+      prompt: "p",
+      workdir: "/tmp",
+      status: "completed",
+      costUsd: 0,
+      pendingWorktreeDecisionSince: fourHoursAgo,
+      worktreeDecisionSnoozedUntil: snoozedUntilFuture,
+      worktreeBranch: "agent/snoozed",
+    } as any);
+
+    const dispatched: any[] = [];
+    (sm as any).wakeDispatcher = {
+      dispatchSessionNotification: (...args: any[]) => dispatched.push(args),
+      clearRetryTimersForSession: () => {},
+    };
+
+    (sm as any).remindStaleDecisions();
+    // Should NOT send reminder — snoozed until the future
+    assert.equal(dispatched.length, 0);
   });
 });

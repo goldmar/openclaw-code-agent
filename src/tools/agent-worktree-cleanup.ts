@@ -12,6 +12,7 @@ interface AgentWorktreeCleanupParams {
   force?: boolean;              // Fix 3-B: deprecated alias for skip_session_check
   dry_run?: boolean;
   session?: string;
+  dismiss_session?: boolean;
 }
 
 function isAgentWorktreeCleanupParams(value: unknown): value is AgentWorktreeCleanupParams {
@@ -168,6 +169,7 @@ export function makeAgentWorktreeCleanupTool(_ctx?: OpenClawPluginToolContext) {
       ),
       dry_run: Type.Optional(Type.Boolean({ description: "Show what would be deleted without actually deleting (default: false)" })),
       session: Type.Optional(Type.String({ description: "Session name or ID to dismiss/clear pending worktree decision for (optional)" })),
+      dismiss_session: Type.Optional(Type.Boolean({ description: "When true and session is provided, permanently dismiss the worktree — deletes the branch and worktree directory. Irreversible. (default: false)" })),
     }),
     async execute(_id: string, params: unknown) {
       if (!isAgentWorktreeCleanupParams(params)) {
@@ -175,8 +177,15 @@ export function makeAgentWorktreeCleanupTool(_ctx?: OpenClawPluginToolContext) {
       }
 
       const sessionRef = (params as AgentWorktreeCleanupParams).session;
+      const dismissSession = (params as AgentWorktreeCleanupParams).dismiss_session === true;
 
-      // If session is provided, dismiss the pending worktree decision for it
+      // If session is provided and dismiss_session=true, permanently delete branch/worktree
+      if (sessionRef && dismissSession && sessionManager) {
+        const dismissResult = await sessionManager.dismissWorktree(sessionRef);
+        return { content: [{ type: "text", text: dismissResult }] };
+      }
+
+      // If session is provided, clear the pending worktree decision for it
       if (sessionRef && sessionManager) {
         const persistedSession = sessionManager.getPersistedSession(sessionRef);
         if (persistedSession) {

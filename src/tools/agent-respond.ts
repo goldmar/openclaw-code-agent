@@ -22,7 +22,7 @@ export function makeAgentRespondTool(_ctx?: OpenClawPluginToolContext) {
   return {
     name: "agent_respond",
     description:
-      "Send a follow-up message to a running coding agent session. The session must be running. Sessions are multi-turn by default, so this works with any session unless it was launched with multi_turn_disabled: true.",
+      "Send a follow-up message to a running coding agent session. The session must be running. All sessions are multi-turn.",
     parameters: Type.Object({
       session: Type.String({ description: "Session name or ID to respond to" }),
       message: Type.String({ description: "The message to send to the session" }),

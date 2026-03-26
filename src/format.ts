@@ -68,7 +68,6 @@ const STATUS_ICONS: Record<string, string> = {
   starting: "🟡",
   running: "🟢",
   completed: "✅",
-  deliverable: "📄",
   failed: "❌",
   killed: "⛔",
   "awaiting-plan-approval": "📋",

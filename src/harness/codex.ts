@@ -261,9 +261,33 @@ export class CodexHarness implements AgentHarness {
       let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
       let releaseAuthBootstrap: (() => Promise<void>) | undefined;
       let authBootstrapReleased = false;
-      const turnPrompt = firstTurn && softPlanningFirstTurn
-        ? buildSoftPlanningPrompt(prompt)
-        : prompt;
+
+      // Codex SDK ThreadOptions has no system-prompt field. Inject the system
+      // prompt (including worktree instructions) into the first user turn so
+      // the agent receives its boundary constraints. This applies to both new
+      // sessions and resumed sessions (firstTurn is true at launch() start).
+      //
+      // Ordering: system prompt first (highest-priority boundary constraints),
+      // then the optional soft-planning wrapper, then the original prompt.
+      let turnPrompt: string;
+      if (firstTurn && options.systemPrompt) {
+        const innerPrompt = softPlanningFirstTurn
+          ? buildSoftPlanningPrompt(prompt)
+          : prompt;
+        turnPrompt = [
+          options.systemPrompt,
+          ``,
+          `[GIT SAFETY: Before every commit, run \`git rev-parse --abbrev-ref HEAD\``,
+          `and confirm it matches the expected worktree branch above.`,
+          `Never commit if the current branch does not match.]`,
+          ``,
+          innerPrompt,
+        ].join("\n");
+      } else {
+        turnPrompt = firstTurn && softPlanningFirstTurn
+          ? buildSoftPlanningPrompt(prompt)
+          : prompt;
+      }
 
       const emitResult = (partial: Partial<HarnessResult>): void => {
         if (terminalEmitted) return;

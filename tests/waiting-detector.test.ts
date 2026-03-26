@@ -1,6 +1,11 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { looksLikeWaitingForUser } from "../src/waiting-detector";
+import {
+  looksLikePlanApprovalRequest,
+  looksLikePlanOnlyPrompt,
+  looksLikePlanOutput,
+  looksLikeWaitingForUser,
+} from "../src/waiting-detector";
 
 describe("looksLikeWaitingForUser", () => {
   it("matches explicit approval prompts", () => {
@@ -37,5 +42,32 @@ describe("looksLikeWaitingForUser", () => {
 
   it("normalizes whitespace and casing", () => {
     assert.equal(looksLikeWaitingForUser("  SHOULD   I   CONTINUE? "), true);
+  });
+
+  it("detects plan-only prompts", () => {
+    assert.equal(looksLikePlanOnlyPrompt("Plan only and stop. Do not implement yet."), true);
+    assert.equal(looksLikePlanOnlyPrompt("Fix the bug and ship it."), false);
+  });
+
+  it("detects structured plan output", () => {
+    const plan = [
+      "Here is the implementation plan:",
+      "1. Inspect src/session-manager.ts for the no-change cleanup path.",
+      "2. Add a soft-plan approval state for bypass sessions.",
+      "3. Update tests and the orchestration skill guidance.",
+    ].join("\n");
+    assert.equal(looksLikePlanOutput(plan), true);
+    assert.equal(looksLikePlanOutput("I fixed the bug and tests are passing."), false);
+  });
+
+  it("detects plan outputs that also ask for approval", () => {
+    const plan = [
+      "Proposed plan:",
+      "- Inspect the session state machine.",
+      "- Add a pending approval flag for soft plans.",
+      "",
+      "Should I continue with implementation?",
+    ].join("\n");
+    assert.equal(looksLikePlanApprovalRequest(plan), true);
   });
 });

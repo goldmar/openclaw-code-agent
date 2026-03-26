@@ -108,6 +108,18 @@ export function createCallbackHandler() {
           break;
         }
 
+        case "snooze": {
+          const result = sessionManager.snoozeWorktreeDecision(sessionId);
+          await ctx.respond.reply({ text: result.startsWith("Error") ? result : "⏭️ Snoozed 24h" });
+          break;
+        }
+
+        case "dismiss": {
+          const result = await sessionManager.dismissWorktree(sessionId);
+          await ctx.respond.reply({ text: result.startsWith("Error") ? result : result });
+          break;
+        }
+
         case "pr":
         case "open-pr": {
           // Do NOT pre-clear pendingWorktreeDecisionSince here.
@@ -207,7 +219,7 @@ export function createCallbackHandler() {
 
         default: {
           await ctx.respond.reply({
-            text: `⚠️ Unknown callback action: "${action}". Supported: merge, pr, open-pr, new-pr, approve, reject, revise, reply, retry, view-output, question-answer.`,
+            text: `⚠️ Unknown callback action: "${action}". Supported: merge, pr, open-pr, new-pr, snooze, dismiss, approve, reject, revise, reply, retry, view-output, question-answer.`,
           });
           break;
         }

@@ -26,6 +26,7 @@ export type KillReason = "user" | "idle-timeout" | "startup-timeout" | "shutdown
 
 /** Unified permission modes exposed by tools/commands across harnesses. */
 export type PermissionMode = "default" | "plan" | "bypassPermissions";
+export type PlanApprovalContext = "plan-mode" | "soft-plan";
 export type WorktreeStrategy = "off" | "manual" | "ask" | "delegate" | "auto-merge" | "auto-pr";
 export type CodexApprovalPolicy = "never" | "on-request";
 export type ReasoningEffort = "low" | "medium" | "high";
@@ -59,6 +60,7 @@ export interface SessionConfig {
   /** OpenClaw session key of the originating chat (e.g. "agent:main:telegram:group:...:topic:28"). Used to route wake events back to the correct session. */
   originSessionKey?: string;
   permissionMode?: PermissionMode;
+  planApproval?: PlanApprovalMode;
   codexApprovalPolicy?: CodexApprovalPolicy;
   resumeSessionId?: string;
   /** Original requested session ID for worktree inheritance, independent of harness thread resume.
@@ -73,8 +75,8 @@ export interface SessionConfig {
   worktreeStrategy?: WorktreeStrategy;
   /** Base branch for worktree merge/PR operations. */
   worktreeBaseBranch?: string;
-  /** Output mode: "deliverable" sends 📄 Deliverable ready instead of ✅ Completed. */
-  outputMode?: "deliverable";
+  /** Target repository for cross-repo PRs (e.g. 'openai/codex' for fork-to-upstream workflow). */
+  worktreePrTargetRepo?: string;
   /** Optional tool-intercept callback (CC sessions only). Used for AskUserQuestion intercept. */
   canUseTool?: CanUseToolCallback;
 }
@@ -154,6 +156,9 @@ export interface PersistedSessionInfo {
   outputPath?: string;
   harness?: string;
   currentPermissionMode?: PermissionMode;
+  pendingPlanApproval?: boolean;
+  planApprovalContext?: PlanApprovalContext;
+  planApproval?: PlanApprovalMode;
   codexApprovalPolicy?: CodexApprovalPolicy;
   /** Path to the worktree if one was created. */
   worktreePath?: string;
@@ -173,6 +178,18 @@ export interface PersistedSessionInfo {
   pendingWorktreeDecisionSince?: string;
   /** ISO timestamp of last stale-branch reminder sent. */
   lastWorktreeReminderAt?: string;
+  /** Base branch used for worktree merge/PR operations. */
+  worktreeBaseBranch?: string;
+  /** Target repository for cross-repo PRs (e.g. 'openai/codex'). */
+  worktreePrTargetRepo?: string;
+  /** Remote to push worktree branch to. */
+  worktreePushRemote?: string;
+  /** ISO timestamp until which stale-decision reminder is snoozed. */
+  worktreeDecisionSnoozedUntil?: string;
+  /** Current lifecycle disposition of the worktree. */
+  worktreeDisposition?: "active" | "pr-opened" | "merged" | "dismissed" | "no-change-cleaned";
+  /** ISO timestamp when the worktree was dismissed. */
+  worktreeDismissedAt?: string;
 }
 
 /** In-memory usage metrics shown by `agent_stats`. */

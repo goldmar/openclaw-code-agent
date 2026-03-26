@@ -2,7 +2,7 @@ import { Type } from "@sinclair/typebox";
 import { existsSync } from "fs";
 import { sessionManager } from "../singletons";
 import type { OpenClawPluginToolContext } from "../types";
-import { getBranchName, getDiffSummary, createPR, pushBranch, isGitHubCLIAvailable, detectDefaultBranch, syncWorktreePR, commentOnPR } from "../worktree";
+import { getBranchName, getDiffSummary, createPR, pushBranch, isGitHubCLIAvailable, detectDefaultBranch, syncWorktreePR, commentOnPR, resolveTargetRepo, formatWorktreeOutcomeLine } from "../worktree";
 
 interface AgentPrParams {
   session: string;
@@ -10,6 +10,7 @@ interface AgentPrParams {
   body?: string;
   base_branch?: string;
   force_new?: boolean;
+  target_repo?: string;
 }
 
 function isAgentPrParams(value: unknown): value is AgentPrParams {
@@ -29,6 +30,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext) {
       body: Type.Optional(Type.String({ description: "PR body (default: auto-generated from commit summary)" })),
       base_branch: Type.Optional(Type.String({ description: "Base branch for the PR (default: detected from repo)" })),
       force_new: Type.Optional(Type.Boolean({ description: "Force creation of a new PR even if one exists (default: false)" })),
+      target_repo: Type.Optional(Type.String({ description: "Target repository for cross-repo PRs (e.g. 'openai/codex'). Auto-detected from 'upstream' remote if not set." })),
     }),
     async execute(_id: string, params: unknown) {
       if (!sessionManager) {
@@ -72,6 +74,10 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext) {
       }
 
       const baseBranch = params.base_branch ?? detectDefaultBranch(originalWorkdir);
+      const harnessId = targetSession?.harnessSessionId ?? persistedSession?.harnessSessionId;
+
+      // Resolve target repository for cross-repo PRs
+      const targetRepo = resolveTargetRepo(originalWorkdir, params.target_repo ?? persistedSession?.worktreePrTargetRepo);
 
       // Push branch first (required for PR operations)
       if (!pushBranch(originalWorkdir, branchName)) {
@@ -79,7 +85,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext) {
       }
 
       // Sync PR state from GitHub
-      const prStatus = syncWorktreePR(originalWorkdir, branchName);
+      const prStatus = syncWorktreePR(originalWorkdir, branchName, targetRepo);
 
       // Handle force_new parameter
       if (params.force_new && prStatus.exists) {
@@ -118,21 +124,29 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext) {
             `🤖 [openclaw-code-agent](https://github.com/goldmar/openclaw-code-agent)`,
           ].join("\n");
 
-          const commented = commentOnPR(originalWorkdir, prStatus.number!, commentBody);
+          const commented = commentOnPR(originalWorkdir, prStatus.number!, commentBody, targetRepo);
 
           if (commented) {
             // Update persisted metadata
-            if (persistedSession) {
-              sessionManager.updatePersistedSession(persistedSession.harnessSessionId, {
+            if (harnessId) {
+              sessionManager.updatePersistedSession(harnessId, {
                 worktreePrUrl: prStatus.url,
                 worktreePrNumber: prStatus.number,
               });
             }
+            const updateOutcomeLine = formatWorktreeOutcomeLine({
+              kind: "pr-updated",
+              branch: branchName,
+              prUrl: prStatus.url,
+            });
+            sessionManager.notifyWorktreeOutcome(
+              targetSession ?? { id: harnessId ?? params.session, originChannel: persistedSession?.originChannel, originThreadId: persistedSession?.originThreadId, originSessionKey: persistedSession?.originSessionKey },
+              updateOutcomeLine
+            );
             return {
               content: [{
                 type: "text",
-                text: `✅ PR updated with new commits: ${prStatus.url}\n\n` +
-                      `📝 Added comment detailing ${diffSummary.commits} new commits (+${diffSummary.insertions} / -${diffSummary.deletions})`
+                text: `${updateOutcomeLine}\n\n📝 Added comment detailing ${diffSummary.commits} new commits (+${diffSummary.insertions} / -${diffSummary.deletions})`
               }]
             };
           } else {
@@ -146,8 +160,8 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext) {
           }
         } else {
           // No new commits
-          if (persistedSession) {
-            sessionManager.updatePersistedSession(persistedSession.harnessSessionId, {
+          if (harnessId) {
+            sessionManager.updatePersistedSession(harnessId, {
               worktreePrUrl: prStatus.url,
               worktreePrNumber: prStatus.number,
             });
@@ -162,8 +176,8 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext) {
         }
       } else if (prStatus.exists && prStatus.state === "merged") {
         // Case: PR was merged
-        if (persistedSession) {
-          sessionManager.updatePersistedSession(persistedSession.harnessSessionId, {
+        if (harnessId) {
+          sessionManager.updatePersistedSession(harnessId, {
             worktreePrUrl: prStatus.url,
             worktreePrNumber: prStatus.number,
           });
@@ -220,23 +234,36 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext) {
         }
 
         // Create PR
-        const prResult = createPR(originalWorkdir, branchName, baseBranch, prTitle, prBody);
+        const prResult = createPR(originalWorkdir, branchName, baseBranch, prTitle, prBody, targetRepo);
 
         if (prResult.success && prResult.prUrl) {
           // Sync again to get PR number
-          const newPrStatus = syncWorktreePR(originalWorkdir, branchName);
+          const newPrStatus = syncWorktreePR(originalWorkdir, branchName, targetRepo);
 
           // Persist PR URL and number
-          if (persistedSession) {
-            sessionManager.updatePersistedSession(persistedSession.harnessSessionId, {
+          if (harnessId) {
+            sessionManager.updatePersistedSession(harnessId, {
               worktreePrUrl: prResult.prUrl,
               worktreePrNumber: newPrStatus.number,
               pendingWorktreeDecisionSince: undefined,
               lastWorktreeReminderAt: undefined,
+              worktreeDisposition: "pr-opened",
             });
           }
 
-          return { content: [{ type: "text", text: `🔀 PR created: ${prResult.prUrl}` }] };
+          // Notify via unified outcome pipeline
+          const outcomeLine = formatWorktreeOutcomeLine({
+            kind: "pr-opened",
+            branch: branchName,
+            targetRepo,
+            prUrl: prResult.prUrl,
+          });
+          sessionManager.notifyWorktreeOutcome(
+            targetSession ?? { id: harnessId ?? params.session, originChannel: persistedSession?.originChannel, originThreadId: persistedSession?.originThreadId, originSessionKey: persistedSession?.originSessionKey },
+            outcomeLine
+          );
+
+          return { content: [{ type: "text", text: outcomeLine }] };
         } else {
           return { content: [{ type: "text", text: `❌ Failed to create PR: ${prResult.error ?? "unknown error"}` }] };
         }

@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { lstat, mkdir, readFile, readlink, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
-import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { resolveCodexAuthLockDir, resolveCodexAuthWorkspaceRoot } from "../openclaw-paths";
 
 const DEFAULT_LOCK_RETRY_MS = 50;
 const DEFAULT_LOCK_TIMEOUT_MS = 30_000;
 
-export const CODEX_AUTH_LOCK_DIR = join(tmpdir(), "openclaw-codex-auth.lock");
+export const CODEX_AUTH_LOCK_DIR = resolveCodexAuthLockDir(process.env);
 
 type AuthSnapshot = {
   lastRefresh: number;
@@ -139,6 +139,7 @@ async function acquireLockDir(
   timeoutMs: number,
   retryMs: number,
 ): Promise<() => Promise<void>> {
+  await mkdir(dirname(lockDir), { recursive: true });
   const deadline = Date.now() + timeoutMs;
 
   while (true) {
@@ -176,7 +177,10 @@ export async function createCodexAuthWorkspace(
   baseEnv: NodeJS.ProcessEnv = process.env,
   options: CodexAuthWorkspaceOptions = {},
 ): Promise<CodexAuthWorkspace> {
-  const requestedHome = baseEnv.HOME ?? homedir();
+  const requestedHome = baseEnv.HOME ?? process.env.HOME;
+  if (!requestedHome) {
+    throw new Error("Cannot create Codex auth workspace without HOME set");
+  }
   const canonicalHome = await realpath(requestedHome).catch(() => resolve(requestedHome));
   const canonicalCodexDir = join(canonicalHome, ".codex");
   const canonicalAuthPath = join(canonicalCodexDir, "auth.json");
@@ -184,11 +188,11 @@ export async function createCodexAuthWorkspace(
   const configPath = join(canonicalCodexDir, "config.toml");
   const canonicalConfigPath = await exists(configPath) ? configPath : undefined;
 
-  const tempRootDir = options.tempRootDir ?? tmpdir();
+  const tempRootDir = resolveCodexAuthWorkspaceRoot(baseEnv, options.tempRootDir);
   const tempHome = join(tempRootDir, `openclaw-codex-auth-${randomUUID()}`);
   const tempCodexDir = join(tempHome, ".codex");
   const tempAuthPath = join(tempCodexDir, "auth.json");
-  const lockDir = options.lockDir ?? CODEX_AUTH_LOCK_DIR;
+  const lockDir = options.lockDir ?? resolveCodexAuthLockDir(baseEnv);
   const lockTimeoutMs = options.lockTimeoutMs ?? DEFAULT_LOCK_TIMEOUT_MS;
   const lockRetryMs = options.lockRetryMs ?? DEFAULT_LOCK_RETRY_MS;
 

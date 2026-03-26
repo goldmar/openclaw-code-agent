@@ -171,6 +171,35 @@ describe("agent_launch tool defaults", () => {
     assert.ok(spawnConfig, "spawn should be called");
     assert.equal(spawnConfig?.resumeSessionId, "resolved-old-thread");
   });
+
+  it("forwards per-session plan_approval override to spawn", async () => {
+    let spawnConfig: Record<string, unknown> | undefined;
+
+    setPluginConfig({
+      planApproval: "delegate",
+    });
+
+    setSessionManager({
+      resolveHarnessSessionId: (id: string) => id,
+      spawn(config: Record<string, unknown>) {
+        spawnConfig = config;
+        return {
+          id: "sess-6",
+          name: "session-plan-approval",
+          model: config.model,
+        };
+      },
+    } as any);
+
+    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp" });
+    await tool.execute("tool-id", {
+      prompt: "Ship it",
+      plan_approval: "ask",
+    });
+
+    assert.ok(spawnConfig, "spawn should be called");
+    assert.equal(spawnConfig?.planApproval, "ask");
+  });
 });
 
 describe("agent_launch allowedModels validation", () => {
