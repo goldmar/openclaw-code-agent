@@ -327,6 +327,7 @@ export class CodexHarness implements AgentHarness {
           // Keepalive so Session idle timers don't kill long silent turns.
           enqueue({ type: "activity" });
         }, heartbeatMs);
+        heartbeatTimer.unref?.();
 
         const streamed: TurnStreamLike = await activeThread.runStreamed(turnPrompt, {
           signal: activeTurnAbortController.signal,

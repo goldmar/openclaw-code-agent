@@ -14,6 +14,9 @@ User (Telegram / Discord / other OpenClaw channel)
   -> coding session
 
 SessionManager
+  -> SessionNotificationService
+  -> SessionInteractionService
+  -> SessionWorktreeController
   -> WakeDispatcher
   -> openclaw gateway call chat.send
   -> openclaw system event --mode now
@@ -45,7 +48,7 @@ Service startup loads config, instantiates `SessionManager`, restores persisted 
 - resolves resume and fork requests
 - persists runtime metadata and output
 - handles waiting, completion, failure, and worktree follow-through
-- routes lifecycle notifications through `WakeDispatcher`
+- composes the notification, interaction, and worktree controller services
 
 Key behavior:
 
@@ -88,9 +91,10 @@ Important mapping detail:
 - fallback path: `openclaw system event --mode now`
 - bounded retries
 - per-session retry timers
-- before-exit draining
+- structured delivery logs
+- no per-instance process signal hooks
 
-`SessionManager` decides what happened. `WakeDispatcher` decides how to deliver it.
+`SessionNotificationService` decides the delivery-state transitions. `WakeDispatcher` decides how to deliver each transport request.
 
 ### `CallbackHandler`
 
@@ -108,6 +112,9 @@ This keeps plan approval and worktree decisions inside the plugin instead of lea
 
 ### Supporting Modules
 
+- `src/session-interactions.ts`: state-driven button construction and opaque action-token persistence
+- `src/session-notifications.ts`: delivery-state-aware notification wrapper over `WakeDispatcher`
+- `src/session-worktree-controller.ts`: worktree completion/retention rules
 - `src/session-store.ts`: persisted metadata and output index
 - `src/session-metrics.ts`: in-memory aggregate metrics
 - `src/worktree.ts`: worktree creation, merge, PR, cleanup, diff summaries
@@ -235,3 +242,8 @@ The architecture is most sensitive to these config settings:
 - `harnesses.*`
 
 See [REFERENCE.md](REFERENCE.md) for the operator-facing meaning of those settings.
+## Breaking Schema Policy
+
+The current persisted-session store is new-schema-only. On startup, any older or invalid store is archived to a timestamped `.legacy-*.json` backup and replaced with a fresh index. Legacy rows are not migrated or repaired in place.
+
+New persisted sessions must carry explicit `route` metadata, and any persisted worktree session must carry `worktreeBranch`. Runtime control flow does not reconstruct notifications from `originChannel` / `originSessionKey`, and it does not infer branch state from worktree paths.

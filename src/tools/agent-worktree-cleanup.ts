@@ -232,9 +232,7 @@ export function makeAgentWorktreeCleanupTool(_ctx?: OpenClawPluginToolContext) {
       if (sessionManager) {
         for (const session of sessionManager.list()) {
           if (session.status === "starting" || session.status === "running") {
-            const branch =
-              session.worktreeBranch ??
-              (session.worktreePath ? getBranchName(session.worktreePath) : undefined);
+            const branch = session.worktreeBranch;
             if (branch) {
               activeBranchSet.add(branch);
               activeBranchInfo.set(branch, `${session.name} is ${session.status}`);

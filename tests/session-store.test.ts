@@ -4,8 +4,17 @@ import { SessionStore } from "../src/session-store";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
+import { execFileSync } from "child_process";
 
-const STORE_SCHEMA_VERSION = 2;
+const STORE_SCHEMA_VERSION = 4;
+
+const DEFAULT_ROUTE = {
+  provider: "telegram",
+  accountId: "bot",
+  target: "12345",
+  threadId: "42",
+  sessionKey: "agent:main:telegram:group:12345:topic:42",
+};
 
 function writeStore(
   indexPath: string,
@@ -14,7 +23,10 @@ function writeStore(
 ): void {
   writeFileSync(indexPath, JSON.stringify({
     schemaVersion: STORE_SCHEMA_VERSION,
-    sessions,
+    sessions: sessions.map((session) => ({
+      route: DEFAULT_ROUTE,
+      ...session,
+    })),
     actionTokens,
   }), "utf-8");
 }
@@ -100,6 +112,7 @@ describe("SessionStore path resolution", () => {
       originChannel: undefined,
       originThreadId: undefined,
       originSessionKey: undefined,
+      route: DEFAULT_ROUTE,
       harnessName: "codex",
     } as any);
   }
@@ -234,6 +247,62 @@ describe("SessionStore path resolution", () => {
     assert.deepEqual(saved.sessions, []);
     assert.deepEqual(saved.actionTokens, []);
 
+    const archived = readdirSync(dir).filter((name) => name.startsWith("sessions.json.legacy-"));
+    assert.equal(archived.length, 1);
+  });
+
+  it("archives current-schema stores whose sessions are missing route metadata", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-store-legacy-route-"));
+    const indexPath = join(dir, "sessions.json");
+    writeFileSync(indexPath, JSON.stringify({
+      schemaVersion: STORE_SCHEMA_VERSION,
+      sessions: [{
+      sessionId: "legacy-route",
+      harnessSessionId: "h-legacy-route",
+      name: "legacy-route",
+      prompt: "p",
+      workdir: "/tmp",
+      status: "completed",
+      costUsd: 0,
+      }],
+      actionTokens: [],
+    }), "utf-8");
+
+    const store = new SessionStore({
+      indexPath,
+      env: {},
+    });
+
+    assert.equal(store.listPersistedSessions().length, 0);
+    const archived = readdirSync(dir).filter((name) => name.startsWith("sessions.json.legacy-"));
+    assert.equal(archived.length, 1);
+  });
+
+  it("archives current-schema stores whose worktree sessions are missing worktreeBranch metadata", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-store-legacy-branch-"));
+    const indexPath = join(dir, "sessions.json");
+    writeFileSync(indexPath, JSON.stringify({
+      schemaVersion: STORE_SCHEMA_VERSION,
+      sessions: [{
+      sessionId: "legacy-branch",
+      harnessSessionId: "h-legacy-branch",
+      name: "legacy-branch",
+      prompt: "p",
+      workdir: "/tmp/repo",
+      status: "completed",
+      costUsd: 0,
+      route: DEFAULT_ROUTE,
+      worktreePath: "/tmp/repo/.worktrees/legacy-branch",
+      }],
+      actionTokens: [],
+    }), "utf-8");
+
+    const store = new SessionStore({
+      indexPath,
+      env: {},
+    });
+
+    assert.equal(store.listPersistedSessions().length, 0);
     const archived = readdirSync(dir).filter((name) => name.startsWith("sessions.json.legacy-"));
     assert.equal(archived.length, 1);
   });

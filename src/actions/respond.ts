@@ -60,6 +60,7 @@ async function spawnFreshRelaunch(
       originThreadId: session.originThreadId,
       originAgentId: session.originAgentId,
       originSessionKey: session.originSessionKey,
+      route: session.route,
       permissionMode: session.currentPermissionMode,
       planApproval: session.planApproval,
       codexApprovalPolicy: session.codexApprovalPolicy,
@@ -125,6 +126,7 @@ async function tryAutoResume(
       originThreadId: session.originThreadId,
       originAgentId: session.originAgentId,
       originSessionKey: session.originSessionKey,
+      route: session.route,
       // For a plan approval, start the resumed session in bypassPermissions so
       // the harness launches without plan-mode constraints and the turn-end
       // fallback (currentPermissionMode === "plan") cannot re-fire.

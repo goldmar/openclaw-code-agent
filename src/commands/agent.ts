@@ -5,6 +5,7 @@ import {
   resolveApprovalPolicyForHarness,
   resolveDefaultModelForHarness,
   resolveOriginChannel,
+  resolveSessionRoute,
   resolveOriginThreadId,
   resolveReasoningEffortForHarness,
 } from "../config";
@@ -78,6 +79,7 @@ export function registerAgentCommand(api: CommandApi): void {
             : undefined,
           originChannel: resolveOriginChannel(ctx),
           originThreadId: resolveOriginThreadId(ctx),
+          route: resolveSessionRoute(ctx),
           harness,
         });
 

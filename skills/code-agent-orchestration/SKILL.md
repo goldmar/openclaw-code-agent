@@ -26,6 +26,7 @@ Use `openclaw-code-agent` to run Claude Code or Codex sessions as background cod
 - Default behavior is `permission_mode: "plan"` plus `planApproval: "ask"` plus `defaultWorktreeStrategy: "ask"`.
 - Use `permission_mode: "plan"` whenever the user wants a real planning checkpoint, reviewable plan, or approval buttons before implementation.
 - Use `permission_mode: "bypassPermissions"` only when the user wants autonomous execution. Do not try to recreate plan mode by stuffing "plan only" into the prompt unless you intentionally want a soft fallback rather than the primary UX contract.
+- In `plan` mode, the plan should be emitted directly in normal session output so the user can review it in chat. Do not tell the coding agent to write a plan document or markdown file unless the user explicitly asked for a file.
 
 Example:
 
@@ -127,9 +128,10 @@ agent_respond(
 Mode selection:
 
 - `permission_mode: "plan"` is the primary contract for planning sessions. It produces a plan-review stop and is the only mode you should rely on for explicit approval UX.
-- `permission_mode: "bypassPermissions"` is for autonomous execution. If you put "plan only", "do not implement yet", or similar text in the prompt, the plugin may heuristically treat the first turn as a soft plan approval stop, but that is a fallback path, not the default orchestration strategy.
+- `permission_mode: "bypassPermissions"` is for autonomous execution. Do not try to recreate plan mode by stuffing "plan only", "do not implement yet", or similar text into the prompt.
 - If the user says "investigate first", "show me the plan", "plan only", or "wait for approval before coding", launch in `plan` mode.
 - If the user says "just do it", "run autonomously", or wants uninterrupted execution, use `bypassPermissions`.
+- In `plan` mode, the plan belongs in the agent's normal output stream. Do not ask the coding agent to write `PLAN.md`, investigation notes, or similar artifacts unless the user explicitly requested a file deliverable.
 
 Approve a pending plan with:
 
@@ -181,6 +183,7 @@ Wait for an explicit user request before calling `agent_merge` or `agent_pr`.
 
 ## 6b. Planning Document Policy
 
+- Do NOT ask the coding agent to write planning documents, investigation notes, or analysis artifacts as files unless the user explicitly requested a file
 - Do NOT commit planning documents, investigation notes, or analysis artifacts to the branch
 - Only commit actual code, configuration, tests, and documentation changes that were explicitly requested as part of the task
 

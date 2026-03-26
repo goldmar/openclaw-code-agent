@@ -15,6 +15,15 @@ function createStubSessionManager(sessions: Record<string, any> = {}): SessionMa
     (sm as any).sessions.set(id, session);
   }
   (sm as any).notifySession = () => {};
+  (sm as any).notifications = {
+    dispatch: () => {},
+    notifyWorktreeOutcome: () => {},
+    dispose: () => {},
+  };
+  (sm as any).wakeDispatcher = {
+    clearRetryTimersForSession: () => {},
+    dispose: () => {},
+  };
   return sm;
 }
 
@@ -249,10 +258,12 @@ describe("executeRespond", () => {
       model: "test-model",
     });
     const sm = new SessionManager(5);
-    (sm as any).wakeDispatcher = {
-      dispatchSessionNotification: (...args: any[]) => { ((sm as any).__dispatchCalls ??= []).push(args); },
-      clearRetryTimersForSession: () => {},
+    (sm as any).notifications = {
+      dispatch: (...args: any[]) => { ((sm as any).__dispatchCalls ??= []).push(args); },
+      notifyWorktreeOutcome: (...args: any[]) => { ((sm as any).__dispatchCalls ??= []).push(args); },
+      dispose: () => {},
     };
+    (sm as any).wakeDispatcher = { clearRetryTimersForSession: () => {}, dispose: () => {} };
     (sm as any).__dispatchCalls = [];
     (sm as any).sessions.set(session.id, session);
 

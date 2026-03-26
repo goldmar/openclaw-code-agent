@@ -23,7 +23,6 @@ import type {
 import type { Session } from "./session";
 import { getSessionOutputFilePath } from "./session";
 import { resolveOpenclawHomeDir } from "./openclaw-paths";
-import { getBranchName } from "./worktree";
 
 /**
  * Resolve persisted session index path using this precedence chain:
@@ -40,7 +39,7 @@ function resolveSessionIndexPath(env: NodeJS.ProcessEnv): string {
 const TERMINAL_STATUSES = new Set<SessionStatus>(["completed", "failed", "killed"]);
 const VALID_STATUSES = new Set<SessionStatus>(["running", "completed", "failed", "killed"]);
 const TMP_OUTPUT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
-const STORE_SCHEMA_VERSION = 2;
+const STORE_SCHEMA_VERSION = 4;
 
 interface SessionStoreOptions {
   env?: NodeJS.ProcessEnv;
@@ -172,7 +171,7 @@ function normalizeRoute(raw: unknown): SessionRoute | undefined {
   const target = toOptionalString(raw.target);
   const threadId = toOptionalString(raw.threadId);
   const sessionKey = toOptionalString(raw.sessionKey);
-  if (!provider && !accountId && !target && !threadId && !sessionKey) return undefined;
+  if (!provider || !target) return undefined;
   return { provider, accountId, target, threadId, sessionKey };
 }
 
@@ -193,6 +192,12 @@ function normalizePersistedEntry(raw: unknown): PersistedSessionInfo | undefined
   const status = normalizeStatus(raw.status);
   if (!status) return undefined;
   const recoveredFromRunning = raw.status === "running";
+
+  const worktreePath = toOptionalString(raw.worktreePath);
+  const persistedWorktreeBranch = toOptionalString(raw.worktreeBranch);
+  const route = normalizeRoute(raw.route);
+  if (!route) return undefined;
+  if (worktreePath && !persistedWorktreeBranch) return undefined;
 
   return {
     sessionId: toOptionalString(raw.sessionId),
@@ -218,7 +223,7 @@ function normalizePersistedEntry(raw: unknown): PersistedSessionInfo | undefined
       ? raw.originThreadId
       : undefined,
     originSessionKey: toOptionalString(raw.originSessionKey),
-    route: normalizeRoute(raw.route),
+    route,
     outputPath: toOptionalString(raw.outputPath),
     harness: toOptionalString(raw.harness),
     currentPermissionMode: toOptionalPermissionMode(raw.currentPermissionMode),
@@ -226,8 +231,8 @@ function normalizePersistedEntry(raw: unknown): PersistedSessionInfo | undefined
     planApprovalContext: toOptionalPlanApprovalContext(raw.planApprovalContext),
     planApproval: toOptionalPlanApprovalMode(raw.planApproval),
     codexApprovalPolicy: toOptionalCodexApprovalPolicy(raw.codexApprovalPolicy),
-    worktreePath: toOptionalString(raw.worktreePath),
-    worktreeBranch: toOptionalString(raw.worktreeBranch),
+    worktreePath,
+    worktreeBranch: persistedWorktreeBranch,
     worktreeStrategy: (raw.worktreeStrategy === "off" || raw.worktreeStrategy === "manual" || raw.worktreeStrategy === "ask" || raw.worktreeStrategy === "delegate" || raw.worktreeStrategy === "auto-merge" || raw.worktreeStrategy === "auto-pr") ? raw.worktreeStrategy : undefined,
     worktreeMerged: typeof raw.worktreeMerged === "boolean" ? raw.worktreeMerged : undefined,
     worktreeMergedAt: toOptionalString(raw.worktreeMergedAt),
@@ -272,6 +277,15 @@ interface SessionStoreSchema {
   actionTokens: SessionActionToken[];
 }
 
+function assertNewSchemaEntry(entry: PersistedSessionInfo): void {
+  if (!entry.route?.provider || !entry.route.target) {
+    throw new Error(`Persisted session ${entry.harnessSessionId} is missing required route metadata.`);
+  }
+  if (entry.worktreePath && !entry.worktreeBranch) {
+    throw new Error(`Persisted session ${entry.harnessSessionId} is missing required worktreeBranch metadata.`);
+  }
+}
+
 /**
  * Durable storage/index for resumable sessions and lightweight output snapshots.
  */
@@ -297,23 +311,27 @@ export class SessionStore {
       const raw = readFileSync(this.indexPath, "utf-8");
       const parsed: unknown = JSON.parse(raw);
       if (Array.isArray(parsed)) {
-        this.archiveLegacyIndex();
+        this.archiveLegacyIndex("legacy array store");
         this.saveIndex();
         return;
       }
       if (!isRecord(parsed) || parsed.schemaVersion !== STORE_SCHEMA_VERSION) {
-        this.archiveLegacyIndex();
+        this.archiveLegacyIndex(`schema mismatch (expected v${STORE_SCHEMA_VERSION})`);
         this.saveIndex();
         return;
       }
 
-      let hadInvalid = false;
       const sessionsRaw = Array.isArray(parsed.sessions) ? parsed.sessions : [];
       for (const candidate of sessionsRaw) {
         const entry = normalizePersistedEntry(candidate);
         if (!entry) {
-          hadInvalid = true;
-          continue;
+          this.persisted.clear();
+          this.idIndex.clear();
+          this.nameIndex.clear();
+          this.actionTokens.clear();
+          this.archiveLegacyIndex("invalid v4 session entry");
+          this.saveIndex();
+          return;
         }
 
         this.persisted.set(entry.harnessSessionId, entry);
@@ -325,17 +343,18 @@ export class SessionStore {
       for (const candidate of tokensRaw) {
         const token = normalizeActionToken(candidate);
         if (!token) {
-          hadInvalid = true;
-          continue;
+          this.persisted.clear();
+          this.idIndex.clear();
+          this.nameIndex.clear();
+          this.actionTokens.clear();
+          this.archiveLegacyIndex("invalid v4 action token");
+          this.saveIndex();
+          return;
         }
         this.actionTokens.set(token.id, token);
       }
 
       this.purgeExpiredActionTokens();
-
-      if (hadInvalid) {
-        this.saveIndex();
-      }
     } catch {
       // File doesn't exist yet or is corrupt — start fresh
     }
@@ -357,12 +376,16 @@ export class SessionStore {
     }
   }
 
-  private archiveLegacyIndex(): void {
+  assertPersistedEntry(entry: PersistedSessionInfo): void {
+    assertNewSchemaEntry(entry);
+  }
+
+  private archiveLegacyIndex(reason: string): void {
     try {
       if (!existsSync(this.indexPath)) return;
       const archivedPath = `${this.indexPath}.legacy-${Date.now()}.json`;
       renameSync(this.indexPath, archivedPath);
-      console.warn(`[SessionStore] Archived legacy session store to ${archivedPath}`);
+      console.warn(`[SessionStore] Breaking upgrade: archived ${reason} session store to ${archivedPath}. Legacy sessions are not loaded by this release.`);
     } catch (err: unknown) {
       console.warn(`[SessionStore] Failed to archive legacy session store: ${errorMessage(err)}`);
     }
@@ -399,12 +422,13 @@ export class SessionStore {
       planApproval: session.planApproval,
       codexApprovalPolicy: session.codexApprovalPolicy,
       worktreePath: session.worktreePath,
-      worktreeBranch: session.worktreeBranch ?? (session.worktreePath ? getBranchName(session.worktreePath) : undefined), // Fix 2-B: prefer cached name
+      worktreeBranch: session.worktreeBranch,
       worktreeStrategy: session.worktreeStrategy,
       worktreeBaseBranch: session.worktreeBaseBranch,
-      worktreePrTargetRepo: (session as any).worktreePrTargetRepo,
+      worktreePrTargetRepo: session.worktreePrTargetRepo,
       resumable: session.isExplicitlyResumable,
     };
+    assertNewSchemaEntry(stub);
     this.persisted.set(stub.harnessSessionId, stub);
     this.idIndex.set(session.id, stub.harnessSessionId);
     this.nameIndex.set(session.name, stub.harnessSessionId);
@@ -472,12 +496,13 @@ export class SessionStore {
       planApproval: session.planApproval,
       codexApprovalPolicy: session.codexApprovalPolicy,
       worktreePath: session.worktreePath,
-      worktreeBranch: session.worktreeBranch ?? (session.worktreePath ? getBranchName(session.worktreePath) : undefined), // Fix 2-B: prefer cached name
+      worktreeBranch: session.worktreeBranch,
       worktreeStrategy: session.worktreeStrategy,
       worktreeBaseBranch: session.worktreeBaseBranch,
-      worktreePrTargetRepo: (session as any).worktreePrTargetRepo,
+      worktreePrTargetRepo: session.worktreePrTargetRepo,
       resumable: session.isExplicitlyResumable,
     };
+    assertNewSchemaEntry(info);
 
     this.persisted.set(session.harnessSessionId, info);
     this.idIndex.set(session.id, session.harnessSessionId);

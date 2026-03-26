@@ -7,11 +7,30 @@ import { WakeDispatcher } from "../src/wake-dispatcher";
 
 type FakeSession = {
   id: string;
+  harnessSessionId?: string;
+  route?: {
+    provider?: string;
+    accountId?: string;
+    target?: string;
+    threadId?: string;
+    sessionKey?: string;
+  };
   originChannel?: string;
   originThreadId?: string | number;
   originSessionKey?: string;
   originAgentId?: string;
 };
+
+function buildRoute(overrides: Partial<NonNullable<FakeSession["route"]>> = {}): NonNullable<FakeSession["route"]> {
+  return {
+    provider: "telegram",
+    accountId: "bot",
+    target: "12345",
+    threadId: "11239",
+    sessionKey: "agent:main:telegram:group:-1003863755361:topic:11239",
+    ...overrides,
+  };
+}
 
 const WAIT_STEP_MS = 25;
 const WAIT_TIMEOUT_MS = 2_000;
@@ -107,6 +126,7 @@ appendFileSync(process.env.OPENCLAW_TEST_LOG, JSON.stringify(process.argv.slice(
     const dispatcher = new WakeDispatcher();
     const session: FakeSession = {
       id: "session-1",
+      route: buildRoute(),
       originChannel: "telegram|bot|12345",
       originThreadId: 11239,
       originSessionKey: "agent:main:telegram:group:-1003863755361:topic:11239",
@@ -131,16 +151,50 @@ appendFileSync(process.env.OPENCLAW_TEST_LOG, JSON.stringify(process.argv.slice(
     assert.equal(params.message, "🚀 launched");
     assert.equal(params["thread-id"], "11239");
     await waitFor(
-      () => infoLogs.some((line) => line.includes("message.send notify completed")),
+      () => infoLogs.some((line) => line.includes("\"event\":\"dispatch_succeeded\"") && line.includes("\"target\":\"message.send\"")),
       "dispatcher completion log",
     );
-    assert.ok(infoLogs.some((line) => line.includes("message.send notify completed")));
+    assert.ok(infoLogs.some((line) => line.includes("\"route\":\"telegram|bot|12345#11239\"")));
+  });
+
+  it("treats explicit system routes as non-routable and falls back to system.event", async () => {
+    const dispatcher = new WakeDispatcher();
+    const session: FakeSession = {
+      id: "session-system-route",
+      route: {
+        provider: "system",
+        target: "system",
+      },
+    };
+
+    dispatcher.dispatchSessionNotification(session as any, {
+      label: "launch",
+      userMessage: "🚀 launched",
+      notifyUser: "always",
+    });
+    const calls = await waitForCalls(logPath, 1);
+
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0], ["system", "event", "--text", "🚀 launched", "--mode", "now"]);
+  });
+
+  it("does not install process-level signal listeners per instance", () => {
+    const sigintBefore = process.listenerCount("SIGINT");
+    const sigtermBefore = process.listenerCount("SIGTERM");
+
+    new WakeDispatcher();
+    new WakeDispatcher();
+    new WakeDispatcher();
+
+    assert.equal(process.listenerCount("SIGINT"), sigintBefore);
+    assert.equal(process.listenerCount("SIGTERM"), sigtermBefore);
   });
 
   it("sends the direct notification and wake through separate transports when wake metadata is present", async () => {
     const dispatcher = new WakeDispatcher();
     const session: FakeSession = {
       id: "session-2",
+      route: buildRoute(),
       originChannel: "telegram|bot|12345",
       originThreadId: 11239,
       originSessionKey: "agent:main:telegram:group:-1003863755361:topic:11239",
@@ -171,6 +225,7 @@ appendFileSync(process.env.OPENCLAW_TEST_LOG, JSON.stringify(process.argv.slice(
     const dispatcher = new WakeDispatcher();
     const session: FakeSession = {
       id: "session-buttons",
+      route: buildRoute(),
       originChannel: "telegram|bot|12345",
       originThreadId: 11239,
       originSessionKey: "agent:main:telegram:group:-1003863755361:topic:11239",
@@ -208,7 +263,7 @@ appendFileSync(process.env.OPENCLAW_TEST_LOG, JSON.stringify(process.argv.slice(
     const dispatcher = new WakeDispatcher();
     const session: FakeSession = {
       id: "session-3",
-      originChannel: "telegram|bot|12345",
+      route: buildRoute({ sessionKey: undefined }),
     };
 
     dispatcher.dispatchSessionNotification(session as any, {
@@ -235,9 +290,34 @@ appendFileSync(process.env.OPENCLAW_TEST_LOG, JSON.stringify(process.argv.slice(
     ]);
   });
 
+  it("prefers the structured route over legacy originChannel fields for new-schema sessions", async () => {
+    const dispatcher = new WakeDispatcher();
+    const session: FakeSession = {
+      id: "session-route-wins",
+      route: {
+        provider: "discord",
+        accountId: "bot-account",
+        target: "channel:999",
+      },
+      originChannel: "telegram|bot|12345",
+      originSessionKey: "agent:main:telegram:group:-1003863755361:topic:11239",
+    };
+
+    dispatcher.dispatchSessionNotification(session as any, {
+      label: "launch",
+      userMessage: "🚀 launched",
+      notifyUser: "always",
+    });
+    const calls = await waitForCalls(logPath, 1);
+    const params = parseMessageSendArgs(calls[0] ?? []);
+    assert.equal(params.channel, "discord");
+    assert.equal(params.account, "bot-account");
+    assert.equal(params.target, "channel:999");
+  });
+
   it("uses the wake/system fallback only once when originSessionKey is missing", async () => {
     const dispatcher = new WakeDispatcher();
-    const session: FakeSession = { id: "session-4", originChannel: "telegram|bot|12345" };
+    const session: FakeSession = { id: "session-4", route: buildRoute({ sessionKey: undefined }) };
 
     dispatcher.dispatchSessionNotification(session as any, {
       label: "completed",
@@ -284,11 +364,17 @@ appendFileSync(process.env.OPENCLAW_TEST_LOG, JSON.stringify(process.argv.slice(
     ]]);
   });
 
-  it("routes Discord channel session key to message.send with channel: prefix", async () => {
+  it("routes explicit Discord channel targets through message.send", async () => {
     const dispatcher = new WakeDispatcher();
     const session: FakeSession = {
       id: "session-6",
-      originSessionKey: "agent:main:discord:channel:1481874223294054540",
+      route: buildRoute({
+        provider: "discord",
+        accountId: undefined,
+        target: "channel:1481874223294054540",
+        threadId: undefined,
+        sessionKey: undefined,
+      }),
     };
 
     dispatcher.dispatchSessionNotification(session as any, {
@@ -305,11 +391,17 @@ appendFileSync(process.env.OPENCLAW_TEST_LOG, JSON.stringify(process.argv.slice(
     assert.equal(params.message, "🚀 launched");
   });
 
-  it("routes Discord DM session key to message.send with user: prefix", async () => {
+  it("routes explicit Discord DM targets through message.send", async () => {
     const dispatcher = new WakeDispatcher();
     const session: FakeSession = {
       id: "session-7",
-      originSessionKey: "agent:main:discord:dm:774236449288749097",
+      route: buildRoute({
+        provider: "discord",
+        accountId: undefined,
+        target: "user:774236449288749097",
+        threadId: undefined,
+        sessionKey: undefined,
+      }),
     };
 
     dispatcher.dispatchSessionNotification(session as any, {
@@ -326,12 +418,10 @@ appendFileSync(process.env.OPENCLAW_TEST_LOG, JSON.stringify(process.argv.slice(
     assert.equal(params.message, "🚀 launched");
   });
 
-  it("enriches bare numeric Discord originChannel with channel: prefix", async () => {
+  it("falls back to system notify when no explicit route is present", async () => {
     const dispatcher = new WakeDispatcher();
     const session: FakeSession = {
       id: "session-8",
-      originChannel: "discord|1481874223294054540",
-      originSessionKey: "agent:main:discord:channel:1481874223294054540",
     };
 
     dispatcher.dispatchSessionNotification(session as any, {
@@ -341,20 +431,21 @@ appendFileSync(process.env.OPENCLAW_TEST_LOG, JSON.stringify(process.argv.slice(
     });
     const calls = await waitForCalls(logPath, 1);
 
-    assert.equal(calls.length, 1);
-    const params = parseMessageSendArgs(calls[0] ?? []);
-    assert.equal(params.channel, "discord");
-    assert.equal(params.target, "channel:1481874223294054540");
-    assert.equal(params.message, "🚀 launched");
+    assert.deepEqual(calls, [[
+      "system",
+      "event",
+      "--text",
+      "🚀 launched",
+      "--mode",
+      "now",
+    ]]);
   });
 
   it("preserves existing Telegram routing when Discord sessions are added", async () => {
     const dispatcher = new WakeDispatcher();
     const session: FakeSession = {
       id: "session-9",
-      originChannel: "telegram|bot|12345",
-      originThreadId: 11239,
-      originSessionKey: "agent:main:telegram:group:-1003863755361:topic:11239",
+      route: buildRoute(),
     };
 
     dispatcher.dispatchSessionNotification(session as any, {

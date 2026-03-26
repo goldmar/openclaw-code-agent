@@ -54,16 +54,8 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # ── Full CI gate ──────────────────────────────────────────────────────────
-
-      - name: Typecheck
-        run: pnpm run typecheck
-
-      - name: Build
-        run: pnpm run build
-
-      - name: Test
-        run: pnpm run test
+      - name: Verify
+        run: pnpm run verify
 
       # ── Resolve version ───────────────────────────────────────────────────────
 

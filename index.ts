@@ -184,10 +184,12 @@ export function register(api: OpenClawPluginApi): void {
       cleanupOrphanedWorktrees(sm);
 
       cleanupInterval = setInterval(() => sm!.cleanup(), 5 * 60 * 1000);
+      cleanupInterval.unref?.();
     },
     stop: () => {
       if (sm) sm.killAll("shutdown");
       if (cleanupInterval) clearInterval(cleanupInterval);
+      if (sm) sm.dispose();
       cleanupInterval = null;
       sm = null;
       setSessionManager(null);

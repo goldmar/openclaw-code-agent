@@ -22,12 +22,33 @@ function fakeSession(overrides: Record<string, any> = {}): any {
     originChannel: undefined,
     originThreadId: undefined,
     originAgentId: undefined,
+    originSessionKey: undefined,
+    route: {
+      provider: "telegram",
+      accountId: "bot",
+      target: "12345",
+      threadId: "42",
+      sessionKey: "agent:main:telegram:group:12345:topic:42",
+    },
     multiTurn: true,
     pendingPlanApproval: false,
     getOutput: (n?: number) => [],
     kill: () => {},
     on: () => {},
     ...overrides,
+  };
+}
+
+function stubDispatch(sm: SessionManager): void {
+  (sm as any).__dispatchCalls = [];
+  (sm as any).notifications = {
+    dispatch: (...args: any[]) => { ((sm as any).__dispatchCalls ??= []).push(args); },
+    notifyWorktreeOutcome: (...args: any[]) => { ((sm as any).__dispatchCalls ??= []).push(args); },
+    dispose: () => {},
+  };
+  (sm as any).wakeDispatcher = {
+    clearRetryTimersForSession: () => {},
+    dispose: () => {},
   };
 }
 
@@ -406,6 +427,11 @@ describe("SessionManager.updatePersistedSession()", () => {
       name: "session",
       prompt: "test",
       workdir: "/tmp",
+      route: {
+        provider: "telegram",
+        target: "12345",
+        sessionKey: "agent:main:telegram:group:12345",
+      },
       status: "completed",
       lifecycle: "terminal",
       worktreeState: "provisioned",
@@ -441,6 +467,11 @@ describe("SessionManager.updatePersistedSession()", () => {
       name: "session",
       prompt: "test",
       workdir: "/tmp",
+      route: {
+        provider: "telegram",
+        target: "12345",
+        sessionKey: "agent:main:telegram:group:12345",
+      },
       status: "completed",
       lifecycle: "awaiting_worktree_decision",
       worktreeState: "pending_decision",
@@ -654,10 +685,7 @@ describe("SessionManager.notifySession()", () => {
   beforeEach(() => {
     setPluginConfig({});
     sm = new SessionManager(5);
-    (sm as any).wakeDispatcher = {
-      dispatchSessionNotification: (...args: any[]) => { ((sm as any).__dispatchCalls ??= []).push(args); },
-    };
-    (sm as any).__dispatchCalls = [];
+    stubDispatch(sm);
   });
 
   it("delegates direct session notifications to the unified dispatcher", () => {
@@ -680,11 +708,7 @@ describe("SessionManager turn-end wake", () => {
 
   beforeEach(() => {
     sm = new SessionManager(5);
-    (sm as any).wakeDispatcher = {
-      dispatchSessionNotification: (...args: any[]) => { ((sm as any).__dispatchCalls ??= []).push(args); },
-      clearRetryTimersForSession: () => {},
-    };
-    (sm as any).__dispatchCalls = [];
+    stubDispatch(sm);
   });
 
   it("fires wake deterministically on turn end", () => {
@@ -911,10 +935,7 @@ describe("SessionManager terminal wakes", () => {
 
   beforeEach(() => {
     sm = new SessionManager(5);
-    (sm as any).wakeDispatcher = {
-      dispatchSessionNotification: (...args: any[]) => { ((sm as any).__dispatchCalls ??= []).push(args); },
-    };
-    (sm as any).__dispatchCalls = [];
+    stubDispatch(sm);
   });
 
   it("dispatches completed notifications through the unified pipeline", () => {
@@ -942,11 +963,7 @@ describe("SessionManager terminal wake behavior", () => {
 
   beforeEach(() => {
     sm = new SessionManager(5);
-    (sm as any).wakeDispatcher = {
-      dispatchSessionNotification: (...args: any[]) => { ((sm as any).__dispatchCalls ??= []).push(args); },
-      clearRetryTimersForSession: () => {},
-    };
-    (sm as any).__dispatchCalls = [];
+    stubDispatch(sm);
   });
 
   it("de-dupes duplicate completion wake for the same terminal marker", () => {
@@ -1140,10 +1157,7 @@ describe("SessionManager.handleAskUserQuestion()", () => {
 
   beforeEach(() => {
     sm = new SessionManager(5);
-    (sm as any).wakeDispatcher = {
-      dispatchSessionNotification: (...args: any[]) => { ((sm as any).__dispatchCalls ??= []).push(args); },
-    };
-    (sm as any).__dispatchCalls = [];
+    stubDispatch(sm);
   });
 
   it("renders explicit question options as buttons without bypassing them", async () => {
@@ -1230,10 +1244,12 @@ describe("SessionManager remindStaleDecisions interval", () => {
     } as any);
 
     const dispatched: any[] = [];
-    (sm as any).wakeDispatcher = {
-      dispatchSessionNotification: (...args: any[]) => dispatched.push(args),
-      clearRetryTimersForSession: () => {},
+    (sm as any).notifications = {
+      dispatch: (...args: any[]) => dispatched.push(args),
+      notifyWorktreeOutcome: (...args: any[]) => dispatched.push(args),
+      dispose: () => {},
     };
+    (sm as any).wakeDispatcher = { clearRetryTimersForSession: () => {}, dispose: () => {} };
 
     (sm as any).remindStaleDecisions();
     // Should NOT send reminder since only 2h elapsed (interval is 3h)
@@ -1258,10 +1274,12 @@ describe("SessionManager remindStaleDecisions interval", () => {
     } as any);
 
     const dispatched: any[] = [];
-    (sm as any).wakeDispatcher = {
-      dispatchSessionNotification: (...args: any[]) => dispatched.push(args),
-      clearRetryTimersForSession: () => {},
+    (sm as any).notifications = {
+      dispatch: (...args: any[]) => dispatched.push(args),
+      notifyWorktreeOutcome: (...args: any[]) => dispatched.push(args),
+      dispose: () => {},
     };
+    (sm as any).wakeDispatcher = { clearRetryTimersForSession: () => {}, dispose: () => {} };
 
     (sm as any).remindStaleDecisions();
     // Should NOT send reminder — snoozed until the future

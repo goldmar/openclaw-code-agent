@@ -1,10 +1,9 @@
 import { Type } from "@sinclair/typebox";
 import { existsSync } from "fs";
-import { resolve, dirname } from "path";
 import { getDefaultHarnessName } from "../config";
 import { sessionManager } from "../singletons";
 import type { OpenClawPluginToolContext } from "../types";
-import { getBranchName, mergeBranch, pushBranch, deleteBranch, detectDefaultBranch, removeWorktree, pruneWorktrees, getDiffSummary, formatWorktreeOutcomeLine } from "../worktree";
+import { mergeBranch, pushBranch, deleteBranch, detectDefaultBranch, removeWorktree, pruneWorktrees, getDiffSummary, formatWorktreeOutcomeLine } from "../worktree";
 
 interface AgentMergeParams {
   session: string;
@@ -60,9 +59,7 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
         return { content: [{ type: "text", text: `Error: Session "${params.session}" does not have a worktree.` }] };
       }
 
-      // Fix 2-A: Fall back to persisted branch name if live lookup fails (worktree may be removed)
-      const liveBranch = getBranchName(worktreePath);
-      const branchName = liveBranch ?? persistedSession?.worktreeBranch;
+      const branchName = targetSession?.worktreeBranch ?? persistedSession?.worktreeBranch;
       if (!branchName) {
         return { content: [{ type: "text", text: `Error: Cannot determine branch name for worktree at ${worktreePath}. The worktree may have been removed and no persisted branch name is available.` }] };
       }
@@ -73,23 +70,9 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
         console.info(`[agent_merge] Worktree directory ${worktreePath} no longer exists; proceeding with merge via originalWorkdir (${originalWorkdir})`);
       }
 
-      // Fix 2-E: Guard against stale persisted sessions where workdir was incorrectly
-      // stored as the worktree path rather than the original repo directory.
-      // Symptom: `git -C <worktreePath> checkout main` → "No such file or directory".
-      // Heuristic: if originalWorkdir doesn't exist on disk, derive the repo root from
-      // the worktree path (worktrees live at <repoRoot>/.worktrees/<sessionName>).
       let effectiveWorkdir = originalWorkdir;
       if (!existsSync(originalWorkdir)) {
-        const derivedRepoDir = resolve(dirname(worktreePath), "..");
-        if (existsSync(derivedRepoDir)) {
-          console.warn(
-            `[agent_merge] originalWorkdir "${originalWorkdir}" does not exist — ` +
-            `falling back to derived repo root "${derivedRepoDir}" (worktree path: ${worktreePath}).`
-          );
-          effectiveWorkdir = derivedRepoDir;
-        } else {
-          return { content: [{ type: "text", text: `Error: originalWorkdir "${originalWorkdir}" does not exist and could not derive repo root from worktree path "${worktreePath}".` }] };
-        }
+        return { content: [{ type: "text", text: `Error: originalWorkdir "${originalWorkdir}" does not exist.` }] };
       }
 
       const resolvedBaseBranch = params.base_branch ?? detectDefaultBranch(effectiveWorkdir);
@@ -165,7 +148,11 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
             deletions: diffSummary?.deletions,
           });
           sessionManager.notifyWorktreeOutcome(
-            targetSession ?? { id: harnessId ?? params.session, originChannel: persistedSession?.originChannel, originThreadId: persistedSession?.originThreadId, originSessionKey: persistedSession?.originSessionKey },
+            targetSession ?? {
+              id: harnessId ?? params.session,
+              harnessSessionId: harnessId,
+              route: persistedSession?.route,
+            },
             outcomeLine
           );
 
@@ -200,6 +187,11 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
               harness: getDefaultHarnessName(),
               permissionMode: "bypassPermissions",
               multiTurn: true,
+              route: targetSession?.route ?? persistedSession?.route,
+              originChannel: targetSession?.originChannel ?? persistedSession?.originChannel,
+              originThreadId: targetSession?.originThreadId ?? persistedSession?.originThreadId,
+              originAgentId: targetSession?.originAgentId ?? persistedSession?.originAgentId,
+              originSessionKey: targetSession?.originSessionKey ?? persistedSession?.originSessionKey,
             });
 
             toolResult = { content: [{ type: "text", text: `⚠️ Merge conflicts in ${mergeResult.conflictFiles.length} file(s) — spawned conflict resolver session: ${conflictSession.name}` }] };

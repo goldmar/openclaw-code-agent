@@ -231,7 +231,7 @@ export class Session extends EventEmitter {
     this.originThreadId = config.originThreadId;
     this.originAgentId = config.originAgentId;
     this.originSessionKey = config.originSessionKey;
-    this.route = this.buildRoute();
+    this.route = config.route ? { ...config.route } : undefined;
     this.resumeSessionId = config.resumeSessionId;
     this.forkSession = config.forkSession;
     this.multiTurn = config.multiTurn ?? true;
@@ -278,7 +278,9 @@ export class Session extends EventEmitter {
 
   private setTimer(name: string, ms: number, cb: () => void): void {
     this.clearTimer(name);
-    this.timers.set(name, setTimeout(cb, ms));
+    const timer = setTimeout(cb, ms);
+    timer.unref?.();
+    this.timers.set(name, timer);
   }
 
   private clearTimer(name: string): void {
@@ -648,32 +650,6 @@ export class Session extends EventEmitter {
         // Keepalive ping for long-running subprocesses with no output.
       }
     }
-  }
-
-  private buildRoute(): SessionRoute | undefined {
-    const originChannel = this.originChannel?.trim();
-    let provider: string | undefined;
-    let accountId: string | undefined;
-    let target: string | undefined;
-    if (originChannel) {
-      const parts = originChannel.split("|").map((part) => part.trim()).filter(Boolean);
-      provider = parts[0];
-      if (parts.length >= 3) {
-        accountId = parts[1];
-        target = parts[2];
-      } else if (parts.length >= 2) {
-        target = parts[1];
-      }
-    }
-    const threadId = this.originThreadId != null ? String(this.originThreadId) : undefined;
-    if (!provider && !target && !threadId && !this.originSessionKey) return undefined;
-    return {
-      provider,
-      accountId,
-      target,
-      threadId,
-      sessionKey: this.originSessionKey,
-    };
   }
 
   controlStateSnapshot(): SessionControlState {

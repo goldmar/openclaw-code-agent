@@ -11,6 +11,7 @@ import {
   resolveDefaultModelForHarness,
   resolveOriginChannel,
   resolveOriginThreadId,
+  resolveSessionRoute,
   resolveReasoningEffortForHarness,
   resolveToolChannel,
 } from "../config";
@@ -401,6 +402,7 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
           originThreadId: parseThreadIdFromSessionKey(originSessionKey) ?? resolveOriginThreadId(ctx),
           originAgentId: ctx.agentId || undefined,
           originSessionKey,
+          route: resolveSessionRoute(ctx, originChannel, originSessionKey),
           harness,
           worktreeStrategy: params.worktree_strategy,
           worktreeBaseBranch: params.worktree_base_branch,

@@ -119,6 +119,8 @@ export interface SessionConfig {
   originAgentId?: string;
   /** OpenClaw session key of the originating chat (e.g. "agent:main:telegram:group:...:topic:28"). Used to route wake events back to the correct session. */
   originSessionKey?: string;
+  /** Explicit delivery route used for notifications and wakes. */
+  route?: SessionRoute;
   permissionMode?: PermissionMode;
   planApproval?: PlanApprovalMode;
   codexApprovalPolicy?: CodexApprovalPolicy;

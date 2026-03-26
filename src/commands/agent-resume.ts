@@ -1,5 +1,5 @@
 import { sessionManager } from "../singletons";
-import { getDefaultHarnessName, resolveDefaultModelForHarness, resolveOriginChannel, resolveOriginThreadId } from "../config";
+import { getDefaultHarnessName, resolveDefaultModelForHarness, resolveOriginChannel, resolveOriginThreadId, resolveSessionRoute } from "../config";
 import { formatDuration } from "../format";
 import { decideResumeSessionId } from "../resume-policy";
 
@@ -127,6 +127,7 @@ export function registerAgentResumeCommand(api: CommandApi): void {
           originThreadId: resolveOriginThreadId(ctx) ?? persisted?.originThreadId,
           originAgentId: ctx?.agentId ?? persisted?.originAgentId,
           originSessionKey: ctx?.sessionKey ?? persisted?.originSessionKey,
+          route: resolveSessionRoute(ctx, undefined, ctx?.sessionKey) ?? persisted?.route,
           harness,
         });
 

@@ -6,9 +6,7 @@ Contributor guide for `openclaw-code-agent`. For operator setup and runtime usag
 
 ```bash
 pnpm install
-pnpm run build
-pnpm run typecheck
-pnpm test
+pnpm verify
 ```
 
 Build output is the ESM bundle at `dist/index.js`.
@@ -27,7 +25,11 @@ openclaw-code-agent/
 │   ├── tools/
 │   ├── config.ts
 │   ├── session.ts
+│   ├── session-state.ts
 │   ├── session-manager.ts
+│   ├── session-interactions.ts
+│   ├── session-notifications.ts
+│   ├── session-worktree-controller.ts
 │   ├── session-store.ts
 │   ├── session-metrics.ts
 │   ├── wake-dispatcher.ts
@@ -43,6 +45,9 @@ openclaw-code-agent/
 - `index.ts`: plugin registration, service lifecycle, startup cleanup
 - `src/session-manager.ts`: session control plane
 - `src/session.ts`: single-session lifecycle and event model
+- `src/session-state.ts`: reducer-backed lifecycle / approval / runtime / worktree transitions
+- `src/session-interactions.ts`: action-token creation and state-driven button sets
+- `src/session-notifications.ts`: delivery-state-aware wrapper around lifecycle notifications
 - `src/harness/*`: Claude Code and Codex integrations
 - `src/tools/*`: OpenClaw tool implementations
 - `src/commands/*`: chat command implementations
@@ -51,12 +56,10 @@ openclaw-code-agent/
 ## Build And Test
 
 ```bash
-pnpm run build
-pnpm run typecheck
-pnpm test
+pnpm verify
 ```
 
-Use `pnpm test` before merging behavior changes. The plugin has a lot of orchestration state, and regressions tend to hide in resume, worktree, and notification edge cases.
+Use `pnpm verify` before merging behavior changes. CI and release workflows both gate on that exact command. `pnpm test` runs the stable per-file suite without force-exit, and `pnpm test:file tests/foo.test.ts` is the fastest way to rerun one file while debugging orchestration edge cases.
 
 ## Extending The Plugin
 

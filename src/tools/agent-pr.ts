@@ -2,7 +2,7 @@ import { Type } from "@sinclair/typebox";
 import { existsSync } from "fs";
 import { sessionManager } from "../singletons";
 import type { OpenClawPluginToolContext } from "../types";
-import { getBranchName, getDiffSummary, createPR, pushBranch, isGitHubCLIAvailable, detectDefaultBranch, syncWorktreePR, commentOnPR, resolveTargetRepo, formatWorktreeOutcomeLine } from "../worktree";
+import { getDiffSummary, createPR, pushBranch, isGitHubCLIAvailable, detectDefaultBranch, syncWorktreePR, commentOnPR, resolveTargetRepo, formatWorktreeOutcomeLine } from "../worktree";
 
 interface AgentPrParams {
   session: string;
@@ -76,10 +76,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext) {
         return { content: [{ type: "text", text: `Error: Session "${params.session}" does not have a worktree.` }], meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
       }
 
-      // Fall back to persisted branch name if live lookup fails (worktree directory may have been removed)
-      const liveBranch = getBranchName(worktreePath);
-      const derivedBranch = `agent/${sessionName}`;
-      const branchName = liveBranch ?? persistedSession?.worktreeBranch ?? derivedBranch;
+      const branchName = targetSession?.worktreeBranch ?? persistedSession?.worktreeBranch;
       if (!branchName) {
         return { content: [{ type: "text", text: `Error: Cannot determine branch name for worktree ${worktreePath}. The worktree may have been removed and no persisted branch name is available.` }], meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
       }
@@ -159,7 +156,11 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext) {
               prUrl: prStatus.url,
             });
             sessionManager.notifyWorktreeOutcome(
-              targetSession ?? { id: harnessId ?? params.session, originChannel: persistedSession?.originChannel, originThreadId: persistedSession?.originThreadId, originSessionKey: persistedSession?.originSessionKey },
+              targetSession ?? {
+                id: harnessId ?? params.session,
+                harnessSessionId: harnessId,
+                route: persistedSession?.route,
+              },
               updateOutcomeLine
             );
             return {
@@ -296,7 +297,11 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext) {
             prUrl: prResult.prUrl,
           });
           sessionManager.notifyWorktreeOutcome(
-            targetSession ?? { id: harnessId ?? params.session, originChannel: persistedSession?.originChannel, originThreadId: persistedSession?.originThreadId, originSessionKey: persistedSession?.originSessionKey },
+            targetSession ?? {
+              id: harnessId ?? params.session,
+              harnessSessionId: harnessId,
+              route: persistedSession?.route,
+            },
             outcomeLine
           );
 

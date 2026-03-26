@@ -9,6 +9,7 @@ import {
   parseThreadIdFromSessionKey,
   resolveOriginChannel,
   resolveOriginThreadId,
+  resolveSessionRoute,
   resolveToolChannel,
 } from "../src/config";
 
@@ -134,6 +135,29 @@ describe("resolveOriginChannel", () => {
   it("uses fallbackChannel from config", () => {
     setPluginConfig({ fallbackChannel: "telegram|default" });
     assert.equal(resolveOriginChannel({}), "telegram|default");
+  });
+});
+
+describe("resolveSessionRoute", () => {
+  it("builds a direct Telegram route from chat context", () => {
+    assert.deepEqual(
+      resolveSessionRoute({ messageChannel: "telegram", chatId: "-1003863755361", messageThreadId: 28 }),
+      {
+        provider: "telegram",
+        accountId: undefined,
+        target: "-1003863755361",
+        threadId: "28",
+        sessionKey: undefined,
+      },
+    );
+  });
+
+  it("falls back to an explicit system route when chat metadata is unavailable", () => {
+    assert.deepEqual(resolveSessionRoute({}), {
+      provider: "system",
+      target: "system",
+      sessionKey: undefined,
+    });
   });
 });
 

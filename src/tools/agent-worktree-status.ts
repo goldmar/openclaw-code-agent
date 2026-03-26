@@ -2,7 +2,7 @@ import { Type } from "@sinclair/typebox";
 import { existsSync } from "fs";
 import { sessionManager } from "../singletons";
 import type { OpenClawPluginToolContext } from "../types";
-import { getBranchName, hasCommitsAhead, getDiffSummary, detectDefaultBranch } from "../worktree";
+import { hasCommitsAhead, getDiffSummary, detectDefaultBranch } from "../worktree";
 
 interface AgentWorktreeStatusParams {
   session?: string;
@@ -71,7 +71,7 @@ export function makeAgentWorktreeStatusTool(_ctx?: OpenClawPluginToolContext) {
           id: s.id,
           name: s.name,
           worktreePath: s.worktreePath,
-          worktreeBranch: getBranchName(s.worktreePath),
+          worktreeBranch: s.worktreeBranch,
           worktreeStrategy: s.worktreeStrategy,
           workdir: s.originalWorkdir ?? s.workdir,
           worktreeMerged: undefined,
@@ -139,7 +139,7 @@ export function makeAgentWorktreeStatusTool(_ctx?: OpenClawPluginToolContext) {
 
       // Show status for each session
       for (const session of sessionsToShow) {
-        const branchName = session.worktreeBranch ?? getBranchName(session.worktreePath);
+        const branchName = session.worktreeBranch;
         if (!branchName) {
           lines.push(`Session: ${session.name} [${session.id}]`);
           lines.push(`  Worktree: ${session.worktreePath}`);

@@ -8,7 +8,9 @@ import type {
   PluginConfig,
   RawPluginConfig,
   ReasoningEffort,
+  SessionRoute,
 } from "./types";
+import { routeFromOriginMetadata } from "./session-route";
 
 // -- Global MCP servers from ~/.claude.json --
 
@@ -201,6 +203,7 @@ interface OriginContextLike {
   messageThreadId?: string | number;
   messageChannel?: string;
   agentAccountId?: string;
+  sessionKey?: string;
 }
 
 /**
@@ -272,6 +275,19 @@ export function resolveOriginChannel(ctx: OriginContextLike | undefined, explici
 /** Resolve Telegram thread/forum topic ID from command context. */
 export function resolveOriginThreadId(ctx: OriginContextLike | undefined): string | number | undefined {
   return ctx?.messageThreadId ?? undefined;
+}
+
+/** Build the explicit session route used for notifications and wakes. */
+export function resolveSessionRoute(
+  ctx: OriginContextLike | undefined,
+  explicitChannel?: string,
+  explicitSessionKey?: string,
+): SessionRoute | undefined {
+  return routeFromOriginMetadata(
+    resolveOriginChannel(ctx, explicitChannel),
+    resolveOriginThreadId(ctx),
+    explicitSessionKey ?? ctx?.sessionKey,
+  );
 }
 
 /** Extract agentId from "channel|account|target" string. */

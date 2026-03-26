@@ -113,6 +113,30 @@ describe("agent_launch tool defaults", () => {
     assert.equal(spawnConfig?.originThreadId, 28);
   });
 
+  it("falls back to an explicit system route when the tool context has no chat metadata", async () => {
+    let spawnConfig: Record<string, unknown> | undefined;
+
+    setSessionManager({
+      resolveHarnessSessionId: (id: string) => id,
+      spawn(config: Record<string, unknown>) {
+        spawnConfig = config;
+        return {
+          id: "sess-system-route",
+          name: "system-route",
+          model: config.model,
+        };
+      },
+    } as any);
+
+    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp" } as any);
+    const result = await tool.execute("tool-id", { prompt: "Launch without explicit chat metadata" });
+
+    assert.ok(spawnConfig, "spawn should be called");
+    assert.equal((spawnConfig?.route as { provider?: string } | undefined)?.provider, "system");
+    assert.equal((spawnConfig?.route as { target?: string } | undefined)?.target, "system");
+    assert.match((result.content[0] as { text: string }).text, /Session launched successfully/);
+  });
+
   it("clears persisted Codex resume state before spawn", async () => {
     let spawnConfig: Record<string, unknown> | undefined;
 
