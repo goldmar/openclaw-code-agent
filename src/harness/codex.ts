@@ -1,3 +1,4 @@
+// Pipeline Stage 3 fix applied 2026-03-25
 /**
  * Codex harness — wraps `@openai/codex-sdk` threads and maps SDK events
  * into the plugin's HarnessSession message contract.
