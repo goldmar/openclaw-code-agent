@@ -380,12 +380,12 @@ When a session uses `worktree_strategy`, the agent runs in an isolated git branc
 
 | Strategy | What it does | When to use |
 |---|---|---|
-| `ask` (default) | Sends Telegram inline buttons (Merge locally / Create PR) | User should decide — the interactive default |
 | `off` | No worktree. Session runs in main checkout | Simple/trusted tasks where isolation isn't needed |
-| `manual` | Creates worktree; no auto action | You want to review diffs before merging |
-| `auto-merge` | Merges automatically; spawns conflict-resolver if needed | Trusted tasks on a safe branch |
-| `auto-pr` | Creates/updates GitHub PR automatically (requires `gh`) | Feature branches needing review |
-| `delegate` | Wakes orchestrator with diff context; Alice decides merge/PR/escalate | Set via `defaultWorktreeStrategy` config — orchestrator decides autonomously |
+| `ask` (default) | Push branch and send inline buttons (Merge locally / Create PR); wake orchestrator with full decision context | User should decide — the interactive default |
+| `delegate` | Push branch and wake orchestrator to decide autonomously (merge, create PR, or leave for later) | Set via `defaultWorktreeStrategy` config — orchestrator decides autonomously |
+| `auto-merge` | Automatically merge back to base branch on completion; spawns conflict-resolver if needed | Trusted tasks on a safe branch |
+| `auto-pr` | Automatically open a GitHub PR on completion (requires `gh`) | Feature branches needing review |
+| `manual` | Push the branch; no further action — user handles merge/PR manually | You want to review diffs before merging |
 
 ### Launch with worktree isolation
 

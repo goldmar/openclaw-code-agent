@@ -73,7 +73,7 @@ User (Telegram/Discord) → OpenClaw Gateway → Agent → Plugin Tools → Codi
 ### 4. Callback Handler (`src/callback-handler.ts`)
 - Routes Telegram inline button taps (from `ask` strategy worktree decision messages) back into plugin logic
 - Registered as a gateway callback listener on plugin startup
-- Dispatches button actions: Merge locally → `agent_merge`, Create PR → `agent_pr`, Dismiss → clear pending flag
+- Dispatches button actions: Merge locally → `agent_merge`, Create PR → `agent_pr`
 - Validates callback data format and session ownership before dispatching
 - Clears `pendingWorktreeDecision` flag on the session after the user acts
 - **Conditional wake design** — `WakeDispatcher` skips the turn-complete wake when a session has a pending worktree decision; the button message IS the user notification, no duplicate ping needed
@@ -150,13 +150,13 @@ If wake metadata is incomplete:
 ```
 Session completes with worktree_strategy = "ask"
   → Branch pushed to remote
-  → Inline keyboard message sent to user (Merge locally / Create PR / Dismiss)
+  → Inline keyboard message sent to user (Merge locally / Create PR)
   → Session marked pendingWorktreeDecision = true
   → Turn-complete wake is SUPPRESSED (button message replaces it)
 
 User taps a button
   → OpenClaw gateway delivers callback_query to CallbackHandler
-  → CallbackHandler dispatches action (merge / PR / dismiss)
+  → CallbackHandler dispatches action (merge / PR)
   → Session pendingWorktreeDecision cleared
   → Result notification sent
 ```
@@ -233,12 +233,12 @@ Codex does not use `ExitPlanMode` or `AskUserQuestion` — plan approval for Cod
 ## Worktree Lifecycle States
 
 ```
-off       → no worktree created; session runs in main checkout
-manual    → worktree created; pendingWorktreeDecision NOT set; branch kept for manual handling
-ask       → worktree created; on completion: branch pushed, inline buttons sent, pendingWorktreeDecision = true
-delegate  → worktree created; on completion: branch pushed, wake with diff context sent, brief user ping always
-auto-merge→ worktree created; on completion: auto-merge runs; on conflicts → conflict-resolver session spawned
-auto-pr   → worktree created; on completion: PR created/updated; no gh CLI → falls back to ask
+off        → no worktree created; session runs in main checkout
+ask        → worktree created; on completion: branch pushed, inline buttons sent (Merge locally / Create PR), pendingWorktreeDecision = true
+delegate   → worktree created; on completion: branch pushed, wake with diff context sent to orchestrator, brief user ping always
+auto-merge → worktree created; on completion: rebase-then-ff-only merge runs; on conflicts → conflict-resolver session spawned
+auto-pr    → worktree created; on completion: PR created/updated; no gh CLI → falls back to ask
+manual     → worktree created; pendingWorktreeDecision NOT set; branch kept for manual handling
 ```
 
 ## Key Design Decisions

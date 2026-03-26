@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-03-25
+
+### Breaking Changes
+
+- **Dismiss button removed** — The ❌ Dismiss inline button has been removed from `ask` strategy worktree decision messages. Only two buttons remain: ⬇️ Merge locally and 🔀 Create PR. To dismiss a pending worktree decision without merging, use `agent_worktree_cleanup({ session: "..." })`.
+- **`planApproval` default changed to `"ask"`** (was `"delegate"`) — Plans are now always forwarded to the user for approval. Set `planApproval: "delegate"` in plugin config to restore autonomous orchestrator behavior.
+- **`defaultWorktreeStrategy` default changed to `"ask"`** (was off/disabled) — New sessions now run in an isolated git worktree by default. Set `defaultWorktreeStrategy: "off"` in plugin config to disable worktree isolation.
+
+### Changed
+
+- **Merge strategy is now rebase-then-ff-only** — `agent_merge` with `strategy: "merge"` now rebases the agent branch onto the base branch and fast-forwards, producing a linear history with no merge commits. The `squash` strategy is unchanged.
+
 ## [2.4.0] - 2026-03-25
 
 ### Breaking Changes
@@ -160,7 +172,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Default Codex approval policy to `on-request`
 - Raised default session limit
 
-[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v2.4.0...HEAD
+[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v3.0.0...HEAD
+[3.0.0]: https://github.com/goldmar/openclaw-code-agent/compare/v2.4.0...v3.0.0
 [2.4.0]: https://github.com/goldmar/openclaw-code-agent/compare/v2.3.1...v2.4.0
 [2.3.1]: https://github.com/goldmar/openclaw-code-agent/compare/v2.3.0...v2.3.1
 [2.3.0]: https://github.com/goldmar/openclaw-code-agent/compare/v2.2.0...v2.3.0

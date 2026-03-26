@@ -248,7 +248,7 @@ Merge a worktree branch back to the base branch. Automatically handles conflicts
 |-----------|------|----------|---------|-------------|
 | `session` | string | **yes** | — | Session name or ID (must have a worktree) |
 | `base_branch` | string | no | `main` | Base branch to merge into |
-| `strategy` | enum | no | `merge` | `merge` (creates merge commit) or `squash` (squashes all commits) |
+| `strategy` | enum | no | `merge` | `merge` (rebases agent branch onto base then fast-forwards; produces linear history, no merge commits) or `squash` (squashes all commits into one) |
 | `push` | boolean | no | `true` | Push the base branch after successful merge |
 | `delete_branch` | boolean | no | `true` | Delete the agent branch after successful merge |
 

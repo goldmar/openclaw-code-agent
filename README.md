@@ -46,7 +46,7 @@ For the current version-pinned breakdown, see [docs/ACP-COMPARISON.md](docs/ACP-
 - **Plan approval modes** — Three configurable modes (`ask` / `delegate` / `approve`) control how the orchestrator handles plan-approval events before execution
 - **Real Codex approval policy support** — Codex sessions default to the real Codex SDK/CLI `approvalPolicy: "on-request"` and can be pinned back to `"never"` via `harnesses.codex.approvalPolicy`
 - **Git worktree isolation** — Opt-in worktree support keeps main checkout clean; configurable strategies: `manual`, `ask`, `delegate`, `auto-merge`, `auto-pr`
-- **Telegram inline buttons** — `ask` strategy sends inline keyboard buttons (Merge locally / Create PR / Dismiss) directly in chat; button taps route back to the plugin
+- **Telegram inline buttons** — `ask` strategy sends inline keyboard buttons (Merge locally / Create PR) directly in chat; button taps route back to the plugin
 - **PR lifecycle management** — `agent_pr` detects existing open/merged/closed PRs and updates instead of duplicating; full lifecycle handling via `gh` CLI
 - **Conflict resolution** — Auto-merge conflicts spawn Claude Code conflict-resolver sessions automatically
 - **Thread-based routing** — Notifications go to the Telegram thread/topic where the session was launched
@@ -74,6 +74,7 @@ For the current version-pinned breakdown, see [docs/ACP-COMPARISON.md](docs/ACP-
 |---|---|
 | 2.3.x | >=2026.3.13 |
 | 2.4.x | >=2026.3.22 |
+| 3.0.x | >=2026.3.22 |
 
 Tested against OpenClaw v2026.3.23. The plugin uses CLI-based integration and is unaffected by OpenClaw plugin SDK surface changes.
 
@@ -211,7 +212,7 @@ The plugin sends targeted notifications to the originating Telegram thread:
 | ❌ | Failed | Error notification with `harnessSessionId` and resume guidance |
 | 💤 | Idle timeout | Session timed out while waiting; auto-resumes on next respond |
 | ⛔ | Stopped | Session was stopped by user, shutdown, or another forced stop |
-| 🔀 | Worktree decision (`ask`) | Telegram inline buttons sent: Merge locally / Create PR / Dismiss |
+| 🔀 | Worktree decision (`ask`) | Telegram inline buttons sent: Merge locally / Create PR |
 | 🤖 | Worktree decision (`delegate`) | Wake sent to orchestrator with diff context for autonomous decision |
 
 ---
@@ -267,7 +268,7 @@ Set values in `~/.openclaw/openclaw.json` under `plugins.entries["openclaw-code-
 | `defaultWorktreeStrategy` | `string` | `"ask"` | Default worktree strategy for new sessions when `worktree_strategy` is omitted from `agent_launch`. Accepts any `WorktreeStrategy` value including `"delegate"` |
 | `worktreeDir` | `string` | `<repoRoot>/.worktrees` | Override base directory for agent worktrees |
 
-Out of the box (with no custom config), the plugin delivers the full interactive experience: `planApproval: "ask"` ensures every plan is forwarded to the user for review before execution, and `defaultWorktreeStrategy: "ask"` means every session runs in an isolated git worktree and presents inline Telegram buttons (Merge locally / Create PR / Dismiss) on completion. Set either to `"delegate"` to hand those decisions to the orchestrator autonomously.
+Out of the box (with no custom config), the plugin delivers the full interactive experience: `planApproval: "ask"` ensures every plan is forwarded to the user for review before execution, and `defaultWorktreeStrategy: "ask"` means every session runs in an isolated git worktree and presents inline Telegram buttons (Merge locally / Create PR) on completion. Set either to `"delegate"` to hand those decisions to the orchestrator autonomously.
 
 ### Permission Mode Mapping By Harness
 
@@ -341,12 +342,12 @@ When `worktree_strategy` is set to anything other than `"off"` (via `agent_launc
 
 Control what happens to worktree branches when a session completes via `worktree_strategy`. Set it per-launch in `agent_launch`, or set a default for all sessions via `defaultWorktreeStrategy` in plugin config.
 
-- **`ask`** (plugin config default) — Push branch and send a Telegram notification with inline buttons (Merge locally / Create PR / Dismiss). Also wakes the orchestrator with full decision context (diff summary, original prompt, decision guidance) to present the choice to the user.
 - **`off`** — No worktree. Session runs in the main checkout.
-- **`manual`** — Create worktree but no automatic action. Branch is kept for manual handling via `agent_merge` or `agent_pr`.
-- **`delegate`** — Push branch and wake the orchestrator with full decision context. The orchestrator autonomously decides to merge, open a PR, or escalate to the user. Always sends a brief one-line notification to the user. **Available via `defaultWorktreeStrategy` plugin config; not exposed as a `worktree_strategy` tool parameter.**
-- **`auto-merge`** — Automatically merge to base branch and push. On conflicts, spawns a Claude Code conflict-resolver session.
-- **`auto-pr`** — Automatically create/update GitHub PR with full lifecycle management (requires `gh` CLI). If `gh` is unavailable, falls back to `ask` strategy.
+- **`ask`** (plugin config default) — Push branch and send a Telegram notification with inline buttons (Merge locally / Create PR). Also wakes the orchestrator with full decision context (diff summary, original prompt, decision guidance) to present the choice to the user.
+- **`delegate`** — Push branch and wake the orchestrator to decide autonomously (merge, create PR, or leave for later). Always sends a brief one-line notification to the user. **Available via `defaultWorktreeStrategy` plugin config; not exposed as a `worktree_strategy` tool parameter.**
+- **`auto-merge`** — Automatically merge back to the base branch on session completion. On conflicts, spawns a Claude Code conflict-resolver session.
+- **`auto-pr`** — Automatically open a GitHub PR on session completion (requires `gh` CLI). If `gh` is unavailable, falls back to `ask` strategy.
+- **`manual`** — Push the branch but take no further action; user handles merge/PR manually via `agent_merge` or `agent_pr`.
 
 Example with auto-pr:
 ```javascript
@@ -441,6 +442,8 @@ agent_worktree_cleanup({ session: "fix-auth-bug" })
             }
           },
           "permissionMode": "plan",
+          "planApproval": "ask",              // "ask" = always forward plans to user (default); "delegate" = orchestrator decides autonomously
+          "defaultWorktreeStrategy": "ask",   // "ask" = isolated worktree + inline Merge/PR buttons (default); "off" = no worktree
           "fallbackChannel": "telegram|my-bot|123456789",
           "agentChannels": {
             "/home/user/project-alpha": "telegram|my-bot|123456789",
