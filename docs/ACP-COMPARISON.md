@@ -23,7 +23,7 @@ Use `openclaw-code-agent` when you want coding agents to behave like managed bac
 | Async wake back to origin chat | Thread-bound ACP replies | Explicit notification and wake pipeline |
 | Git worktree isolation | No | Yes |
 | Merge or PR lifecycle | No | Yes |
-| Inline chat actions | No | Yes, Telegram callbacks |
+| Inline chat actions | No | Yes, Telegram and Discord callbacks |
 | Harness coverage | Broader ACP backend set | Claude Code and Codex today |
 | IDE-native ACP server | Yes | No |
 
@@ -55,7 +55,7 @@ ACP does not solve this layer.
 
 The plugin is built for long-running coding jobs in chat:
 
-- explicit pause and auto-resume behavior
+- explicit suspended/resume behavior
 - persisted session catalog
 - interrupt and redirect
 - startup recovery

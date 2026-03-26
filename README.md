@@ -106,6 +106,13 @@ Launch a first session:
 
 For multi-workspace or multi-bot setups, configure `agentChannels`. The full routing rules, config matrix, and notification behavior live in [docs/REFERENCE.md](docs/REFERENCE.md).
 
+### Upgrade Note For 3.5.0
+
+`3.5.0` is a maintenance release focused on reliability, explicit session state, and release-tooling hardening.
+
+- Upgrading archives old or invalid persisted session stores to a timestamped `.legacy-*.json` backup and starts with a fresh index.
+- Contributors and release automation should use `pnpm verify` as the canonical validation gate.
+
 ## Tool Surface
 
 | Tool | Purpose |

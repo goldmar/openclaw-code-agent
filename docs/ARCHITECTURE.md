@@ -138,7 +138,7 @@ agent_launch / /agent
 
 ### Waiting For Input
 
-`turnEnd` plus waiting detection drives the wake path.
+`turnEnd` plus explicit question / approval / worktree state drives the wake path.
 
 - Real question: emit `❓ Waiting for input`
 - Plan approval pending: emit `📋 Plan ready for review`
@@ -166,7 +166,7 @@ When a session completes with worktree metadata:
 
 - `agent_respond(..., interrupt=true)` aborts the current turn in place and sends a redirect notification
 - only explicitly suspended sessions are resumable through `agent_respond` / `agent_resume`
-- sessions found in `running` state during startup recovery are marked killed and remain resumable
+- sessions found in `running` state during startup recovery are normalized into resumable persisted entries instead of being implicitly restarted
 - persisted Codex resume state is treated more conservatively after restart because thread reuse is brittle across auth and process boundaries
 
 ## Persistence Model

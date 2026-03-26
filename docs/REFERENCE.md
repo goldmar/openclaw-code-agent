@@ -20,7 +20,11 @@ Canonical operator reference for `openclaw-code-agent`: install, configuration, 
 | `sessionGcAgeMinutes` | `1440` |
 | `maxPersistedSessions` | `10000` |
 
-Sessions are multi-turn. All sessions stay open for follow-up messages via `agent_respond`.
+Sessions are multi-turn. Active sessions accept follow-up messages via `agent_respond`, and explicitly suspended sessions can be continued with `agent_respond` or `/agent_resume`.
+
+## Upgrade Note
+
+`3.5.0` treats persisted session storage as new-schema-only. If startup finds an older or invalid session store, the plugin archives it to a timestamped `.legacy-*.json` backup and starts with a fresh index instead of migrating rows in place.
 
 ## Install
 
@@ -150,7 +154,7 @@ Launch a background coding session.
 | `model` | `string` | No | Defaults to the selected harness default model |
 | `system_prompt` | `string` | No | Extra system prompt |
 | `allowed_tools` | `string[]` | No | Harness tool allowlist |
-| `resume_session_id` | `string` | No | Resume by internal ID, name, or harness session ID |
+| `resume_session_id` | `string` | No | Resume by internal ID, name, or harness session ID; linked resumable sessions are preferred over creating a duplicate fresh launch |
 | `fork_session` | `boolean` | No | Fork instead of continuing when resuming |
 | `permission_mode` | `default \| plan \| bypassPermissions` | No | Defaults to plugin `permissionMode` |
 | `harness` | `string` | No | Defaults to `defaultHarness` |
@@ -292,7 +296,7 @@ The cleanup tool always protects:
 | `/agent_resume` | Resume or fork a persisted session |
 | `/agent_stats` | Show aggregate metrics |
 
-`/agent_resume --list` shows resumable sessions. `/agent_resume --fork <id-or-name> [prompt]` forks a previous session instead of continuing it.
+`/agent_resume --list` shows explicitly resumable persisted sessions. `/agent_resume --fork <id-or-name> [prompt]` forks a previous session instead of continuing it.
 
 ## Routing And Channels
 
@@ -344,11 +348,10 @@ Thread routing is separate from channel routing. When OpenClaw provides the orig
 | Plan ready | `📋` plan ready for review |
 | Reply or redirect sent | `↪️` follow-up delivered |
 | Plan approved | `👍` plan approved |
-| Auto-resumed | `▶️` session resumed from persisted context |
-| Turn completed | `⏸️` paused after turn, auto-resumable |
+| Resumed | `▶️` session resumed from persisted context |
+| Turn completed | `⏸️` paused after turn |
 | Completed | `✅` done with cost and duration |
-| Deliverable ready | `📄` deliverable-ready completion |
-| Failed | `❌` failed, with resume guidance |
+| Failed | `❌` failed, with recovery guidance |
 | Idle timeout | `💤` idle kill |
 | Stopped | `⛔` stopped by user or shutdown |
 | Worktree decision in `ask` | Inline `Merge locally` / `Create PR` buttons |
@@ -358,10 +361,11 @@ Thread routing is separate from channel routing. When OpenClaw provides the orig
 
 ## Session Lifecycle
 
-- A launched session moves through `starting -> running -> completed|failed|killed`.
-- Multi-turn sessions pause automatically after a non-question turn. The next `agent_respond` auto-resumes them with the same harness session ID when possible.
-- Sessions killed for any reason except `startup-timeout` auto-resume on the next `agent_respond`.
-- Runtime GC evicts old terminal sessions from memory after `sessionGcAgeMinutes`, but persisted metadata remains resumable.
+- A launched session starts in `starting`, becomes active while the harness is running, and then moves into explicit review, waiting, suspended, or terminal states.
+- `agent_respond` sends follow-up messages to active sessions. It only resumes a session automatically when that session is explicitly suspended and still has resumable harness state.
+- `/agent_resume` is the explicit path for continuing or forking persisted resumable sessions after GC or restart.
+- Runtime GC evicts old runtime records from memory after `sessionGcAgeMinutes`, but explicitly resumable persisted sessions remain available through `/agent_resume --list`.
+- Startup recovery may convert interrupted running sessions into resumable persisted entries so they can be continued intentionally.
 - Persisted session resolution accepts internal IDs, names, and harness session IDs.
 
 ## Troubleshooting
