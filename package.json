@@ -1,6 +1,6 @@
 {
   "name": "openclaw-code-agent",
-  "version": "2.3.1",
+  "version": "3.0.0",
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
@@ -67,6 +67,13 @@
     "openclaw": ">=2026.3.22"
   },
   "pnpm": {
-    "onlyBuiltDependencies": ["esbuild", "koffi", "protobufjs", "sharp", "@img/sharp-linux-x64", "@img/sharp-linux-arm64"]
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "koffi",
+      "protobufjs",
+      "sharp",
+      "@img/sharp-linux-x64",
+      "@img/sharp-linux-arm64"
+    ]
   }
 }
