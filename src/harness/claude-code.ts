@@ -5,7 +5,6 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { dirname, join } from "path";
 import { readFileSync, writeFileSync, existsSync } from "fs";
-import { execFileSync } from "child_process";
 import { homedir } from "os";
 import { fileURLToPath } from "url";
 import { createRequire } from "module";
@@ -44,6 +43,121 @@ interface ClaudeMessageEnvelope {
   total_cost_usd?: number;
   num_turns?: number;
   result?: string;
+}
+
+/** Refresh window: refresh token if it expires within 30 minutes. */
+const TOKEN_REFRESH_WINDOW_MS = 30 * 60 * 1000; // 1_800_000
+
+/** Timeout for the token refresh HTTP request. */
+const TOKEN_REFRESH_TIMEOUT_MS = 15_000;
+
+/**
+ * Refresh the OAuth token using an in-process HTTPS POST via native fetch().
+ * Returns the new access token string, or throws on failure.
+ *
+ * Secrets never appear in process argv — they are sent in the request body
+ * via fetch(), which keeps them in-process memory only.
+ */
+async function refreshOAuthToken(oauth: {
+  accessToken: string;
+  refreshToken: string;
+  expiresAt?: number;
+}): Promise<{ accessToken: string; refreshToken?: string; expiresIn?: number }> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TOKEN_REFRESH_TIMEOUT_MS);
+
+  try {
+    const response = await fetch("https://platform.claude.com/v1/oauth/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        grant_type: "refresh_token",
+        refresh_token: oauth.refreshToken,
+        client_id: "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
+      }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const text = await response.text().catch(() => "<unreadable>");
+      throw new Error(
+        `OAuth refresh failed: HTTP ${response.status} — ${text.slice(0, 200)}`,
+      );
+    }
+
+    const data = (await response.json()) as Record<string, unknown>;
+    if (!data.access_token || typeof data.access_token !== "string") {
+      throw new Error(
+        `OAuth refresh returned unexpected payload: ${JSON.stringify(data).slice(0, 200)}`,
+      );
+    }
+
+    return {
+      accessToken: data.access_token,
+      refreshToken:
+        typeof data.refresh_token === "string" ? data.refresh_token : undefined,
+      expiresIn:
+        typeof data.expires_in === "number" ? data.expires_in : undefined,
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Read the OAuth credentials, refresh if near expiry, and return the
+ * access token to use. This is fully async — no main-thread blocking.
+ *
+ * On refresh success the credentials file is updated. On refresh failure
+ * an error is thrown (fail-fast) rather than silently using a stale token.
+ */
+async function resolveOAuthToken(): Promise<string | undefined> {
+  const credsPath = join(homedir(), ".claude", ".credentials.json");
+  if (!existsSync(credsPath)) return undefined;
+
+  let creds: Record<string, unknown>;
+  try {
+    creds = JSON.parse(readFileSync(credsPath, "utf-8"));
+  } catch {
+    return undefined; // unreadable credentials file
+  }
+
+  const oauth = creds?.claudeAiOauth as
+    | { accessToken?: string; refreshToken?: string; expiresAt?: number }
+    | undefined;
+
+  if (!oauth?.accessToken) return undefined;
+
+  const now = Date.now();
+  const expiresAt = oauth.expiresAt || 0;
+  const needsRefresh =
+    expiresAt > 0 &&
+    expiresAt < now + TOKEN_REFRESH_WINDOW_MS &&
+    oauth.refreshToken;
+
+  if (needsRefresh) {
+    console.log(
+      "[ClaudeCodeHarness] Token expires in",
+      Math.round((expiresAt - now) / 60000),
+      "min — refreshing asynchronously...",
+    );
+    // This throws on failure — caller must handle
+    const result = await refreshOAuthToken(
+      oauth as { accessToken: string; refreshToken: string; expiresAt?: number },
+    );
+    oauth.accessToken = result.accessToken;
+    if (result.refreshToken) oauth.refreshToken = result.refreshToken;
+    if (result.expiresIn != null) oauth.expiresAt = now + result.expiresIn * 1000;
+    creds.claudeAiOauth = oauth;
+    writeFileSync(credsPath, JSON.stringify(creds, null, 2));
+    console.log(
+      "[ClaudeCodeHarness] OAuth token refreshed, expires in",
+      result.expiresIn ?? "?",
+      "seconds",
+    );
+  }
+
+  return oauth.accessToken;
 }
 
 export class ClaudeCodeHarness implements AgentHarness {
@@ -106,73 +220,36 @@ export class ClaudeCodeHarness implements AgentHarness {
       sdkOptions.forkSession = options.forkSession ?? false;
     }
 
-    // Read fresh OAuth token from credentials file, refresh if near expiry
-    const credsPath = join(homedir(), ".claude", ".credentials.json");
-    if (existsSync(credsPath)) {
-      try {
-        const creds = JSON.parse(readFileSync(credsPath, "utf-8"));
-        const oauth = creds?.claudeAiOauth;
-        if (oauth?.accessToken) {
-          const now = Date.now();
-          const expiresAt = oauth.expiresAt || 0;
-          // If token expires within 30 minutes, refresh synchronously via curl
-          if (expiresAt > 0 && expiresAt < now + 7200000 && oauth.refreshToken) {
-            try {
-              console.log("[ClaudeCodeHarness] Token expires in", Math.round((expiresAt - now) / 60000), "min — refreshing...");
-              const curlResult = execFileSync("curl", [
-                "-s", "-X", "POST",
-                "https://platform.claude.com/v1/oauth/token",
-                "-H", "Content-Type: application/json",
-                "-d", JSON.stringify({
-                  grant_type: "refresh_token",
-                  refresh_token: oauth.refreshToken,
-                  client_id: "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
-                }),
-              ], { timeout: 15000, encoding: "utf-8" });
-              const data = JSON.parse(curlResult) as Record<string, unknown>;
-              if (data.access_token && typeof data.access_token === "string") {
-                oauth.accessToken = data.access_token;
-                if (typeof data.refresh_token === "string") oauth.refreshToken = data.refresh_token;
-                if (typeof data.expires_in === "number") oauth.expiresAt = now + data.expires_in * 1000;
-                creds.claudeAiOauth = oauth;
-                writeFileSync(credsPath, JSON.stringify(creds, null, 2));
-                console.log("[ClaudeCodeHarness] OAuth token refreshed, expires in", data.expires_in, "seconds");
-              } else {
-                console.warn("[ClaudeCodeHarness] OAuth refresh unexpected response:", JSON.stringify(data).slice(0, 200));
-              }
-            } catch (refreshErr) {
-              console.warn("[ClaudeCodeHarness] OAuth refresh failed:", (refreshErr as Error).message);
-            }
-          }
-          process.env.CLAUDE_CODE_OAUTH_TOKEN = oauth.accessToken;
-        }
-      } catch {
-        // Ignore errors reading credentials
-      }
-    }
+    // Kick off async token resolution immediately (non-blocking).
+    // The messages generator awaits this before starting the SDK query.
+    const tokenPromise = resolveOAuthToken();
 
-    const q = query({
-      prompt: options.prompt as string | AsyncIterable<SDKUserMessage>,
-      options: sdkOptions,
-    }) as ClaudeQueryHandle;
+    // We store the query handle here so setPermissionMode/streamInput/interrupt
+    // can reference it once the async generator has initialised the SDK.
+    let q: ClaudeQueryHandle | undefined;
 
     return {
-      messages: this.adaptMessages(q),
+      messages: this.launchAndAdaptMessages(
+        tokenPromise,
+        options,
+        sdkOptions,
+        (handle) => { q = handle; },
+      ),
 
       async setPermissionMode(mode: string): Promise<void> {
-        if (typeof q.setPermissionMode === "function") {
+        if (q && typeof q.setPermissionMode === "function") {
           await q.setPermissionMode(mode);
         }
       },
 
       async streamInput(input: AsyncIterable<unknown>): Promise<void> {
-        if (typeof q.streamInput === "function") {
+        if (q && typeof q.streamInput === "function") {
           await q.streamInput(input as AsyncIterable<SDKUserMessage>);
         }
       },
 
       async interrupt(): Promise<void> {
-        if (typeof q.interrupt === "function") {
+        if (q && typeof q.interrupt === "function") {
           await q.interrupt();
         }
       },
@@ -190,6 +267,51 @@ export class ClaudeCodeHarness implements AgentHarness {
   }
 
   // -- internal ----------------------------------------------------------------
+
+  /**
+   * Awaits the async token refresh, sets the env var for the SDK subprocess,
+   * starts the SDK query, then yields adapted harness messages.
+   *
+   * The env var is set just before query() and restored immediately after,
+   * minimising the window of global state mutation.
+   */
+  private async *launchAndAdaptMessages(
+    tokenPromise: Promise<string | undefined>,
+    options: HarnessLaunchOptions,
+    sdkOptions: Record<string, unknown>,
+    onQuery: (q: ClaudeQueryHandle) => void,
+  ): AsyncGenerator<HarnessMessage> {
+    // Await the async OAuth refresh (non-blocking to event loop until consumed)
+    const token = await tokenPromise;
+
+    // Set the env var only for the duration of query() initialisation.
+    // The SDK spawns a child process that inherits env, so we need it set
+    // at call time, but we restore immediately after to avoid leaking into
+    // unrelated code paths.
+    const previousToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+    if (token) {
+      process.env.CLAUDE_CODE_OAUTH_TOKEN = token;
+    }
+
+    let q: ClaudeQueryHandle;
+    try {
+      q = query({
+        prompt: options.prompt as string | AsyncIterable<SDKUserMessage>,
+        options: sdkOptions,
+      }) as ClaudeQueryHandle;
+    } finally {
+      // Restore previous env state
+      if (previousToken !== undefined) {
+        process.env.CLAUDE_CODE_OAUTH_TOKEN = previousToken;
+      } else {
+        delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+      }
+    }
+
+    onQuery(q);
+
+    yield* this.adaptMessages(q);
+  }
 
   private async *adaptMessages(
     q: AsyncIterable<unknown>,
