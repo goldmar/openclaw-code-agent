@@ -418,7 +418,12 @@ export class PipelineManager {
   }
 
   /**
-   * Spawn a single stage session and wire up the statusChange listener.
+   * Spawn a single stage session, wait for it to reach `running`, and wire
+   * up the statusChange listener for terminal transitions.
+   *
+   * The startup wait closes the detached async gap between `spawn()` returning
+   * and the harness actually being alive. Without it a broken/hung stage would
+   * sit in `"starting"` until the coarse 10-minute stage timeout fires.
    */
   private spawnStage(
     run: PipelineRun,
@@ -467,9 +472,24 @@ export class PipelineManager {
     }
 
     stage.sessionId = session.id;
-    stage.status = "running";
-    this.persistState(run);
-    pipelineLog(`Stage ${spec.kind} spawned: session=${session.id} name=${session.name}`);
+    pipelineLog(`Stage ${spec.kind} spawned: session=${session.id} name=${session.name}, awaiting startup...`);
+
+    // Await startup before marking the stage as running. If the session never
+    // reaches `running` (e.g. auth failure, harness crash), fail the stage
+    // immediately instead of waiting for the coarse STAGE_TIMEOUT_MS.
+    session.waitForStartup().then(() => {
+      stage.status = "running";
+      this.persistState(run);
+      pipelineLog(`Stage ${spec.kind} confirmed running: session=${session.id}`);
+    }).catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      pipelineLog(`ERROR: Stage ${spec.kind} startup failed: session=${session.id} — ${msg}`);
+      stage.status = "failed";
+      stage.error = msg;
+      stage.completedAt = Date.now();
+      this.persistState(run);
+      this.finalizePipeline(run, "failed", `Stage ${spec.kind} startup failed: ${msg}`);
+    });
 
     // Set up a timeout for this stage
     const timeout = setTimeout(() => {
@@ -641,6 +661,13 @@ export class PipelineManager {
     error?: string,
     summary?: string,
   ): void {
+    // Guard against double-finalize: the startup-wait rejection and the
+    // statusChange listener can both race to finalize the same run.
+    if (run.status === "completed" || run.status === "failed" || run.status === "blocked") {
+      pipelineLog(`Pipeline ${run.id} already finalized (${run.status}), ignoring duplicate finalize(${status})`);
+      return;
+    }
+
     run.status = status;
     run.completedAt = Date.now();
     if (error) run.error = error;
