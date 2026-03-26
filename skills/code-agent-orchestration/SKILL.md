@@ -323,6 +323,8 @@ When a session completes with `worktree_strategy: "ask"`, the plugin sends the u
 
 This applies when the wake message says "Worktree strategy buttons delivered to user." — treat that as confirmation that the user is already fully informed. Take no further action until the user clicks a button.
 
+**Buttons are handled automatically by the plugin.** When the user taps a button, the plugin's callback router dispatches the action (`agent_merge`, `agent_pr`, or dismiss) directly — no agent `agent_merge`/`agent_pr` call is needed in response to a button tap. If the action succeeds, the plugin sends a result notification. If the action fails, a failure notification is sent. Alice does not need to poll or intervene.
+
 ---
 
 ### Plan → Execute mode switch
