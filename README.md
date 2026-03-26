@@ -260,12 +260,14 @@ Set values in `~/.openclaw/openclaw.json` under `plugins.entries["openclaw-code-
 | `idleTimeoutMinutes` | `number` | `15` | Idle timeout before auto-kill |
 | `sessionGcAgeMinutes` | `number` | `1440` | TTL for completed/failed/killed runtime sessions before GC eviction |
 | `maxPersistedSessions` | `number` | `10000` | Max completed sessions kept for resume; the 24h GC TTL (`sessionGcAgeMinutes`) is the primary retention control |
-| `planApproval` | `string` | `"delegate"` | `"approve"` (orchestrator can auto-approve) / `"ask"` (always forward to user) / `"delegate"` (orchestrator decides) |
+| `planApproval` | `string` | `"ask"` | `"ask"` (always forward to user) / `"delegate"` (orchestrator decides) / `"approve"` (orchestrator can auto-approve) |
 | `defaultHarness` | `string` | `"claude-code"` | Default harness for new sessions (`"claude-code"` / `"codex"`) |
 | `harnesses` | `object` | built-in defaults | Per-harness defaults and restrictions. Built-in defaults: `claude-code.defaultModel = "sonnet"`, `claude-code.allowedModels = ["sonnet","opus"]`, `codex.defaultModel = "gpt-5.4"`, `codex.allowedModels = ["gpt-5.4"]`, `codex.reasoningEffort = "medium"`, `codex.approvalPolicy = "on-request"` |
 | `defaultWorkdir` | `string` | — | Default working directory for new sessions |
-| `defaultWorktreeStrategy` | `string` | — | Default worktree strategy for new sessions when `worktree_strategy` is omitted from `agent_launch`. Accepts any `WorktreeStrategy` value including `"delegate"` |
+| `defaultWorktreeStrategy` | `string` | `"ask"` | Default worktree strategy for new sessions when `worktree_strategy` is omitted from `agent_launch`. Accepts any `WorktreeStrategy` value including `"delegate"` |
 | `worktreeDir` | `string` | `<repoRoot>/.worktrees` | Override base directory for agent worktrees |
+
+Out of the box (with no custom config), the plugin delivers the full interactive experience: `planApproval: "ask"` ensures every plan is forwarded to the user for review before execution, and `defaultWorktreeStrategy: "ask"` means every session runs in an isolated git worktree and presents inline Telegram buttons (Merge locally / Create PR / Dismiss) on completion. Set either to `"delegate"` to hand those decisions to the orchestrator autonomously.
 
 ### Permission Mode Mapping By Harness
 
@@ -339,9 +341,9 @@ When `worktree_strategy` is set to anything other than `"off"` (via `agent_launc
 
 Control what happens to worktree branches when a session completes via `worktree_strategy`. Set it per-launch in `agent_launch`, or set a default for all sessions via `defaultWorktreeStrategy` in plugin config.
 
-- **`off`** (default) — No worktree. Session runs in the main checkout.
+- **`ask`** (plugin config default) — Push branch and send a Telegram notification with inline buttons (Merge locally / Create PR / Dismiss). Also wakes the orchestrator with full decision context (diff summary, original prompt, decision guidance) to present the choice to the user.
+- **`off`** — No worktree. Session runs in the main checkout.
 - **`manual`** — Create worktree but no automatic action. Branch is kept for manual handling via `agent_merge` or `agent_pr`.
-- **`ask`** — Push branch and send a Telegram notification with inline buttons (Merge locally / Create PR / Dismiss). Also wakes the orchestrator with full decision context (diff summary, original prompt, decision guidance) to present the choice to the user.
 - **`delegate`** — Push branch and wake the orchestrator with full decision context. The orchestrator autonomously decides to merge, open a PR, or escalate to the user. Always sends a brief one-line notification to the user. **Available via `defaultWorktreeStrategy` plugin config; not exposed as a `worktree_strategy` tool parameter.**
 - **`auto-merge`** — Automatically merge to base branch and push. On conflicts, spawns a Claude Code conflict-resolver session.
 - **`auto-pr`** — Automatically create/update GitHub PR with full lifecycle management (requires `gh` CLI). If `gh` is unavailable, falls back to `ask` strategy.
@@ -413,7 +415,7 @@ agent_worktree_cleanup({ session: "fix-auth-bug" })
 **Limitations:**
 - Worktree creation requires the workdir to be a git repository
 - Only works with committed changes — uncommitted changes in the main checkout are not transferred to the worktree
-- Worktree creation is **opt-in** (defaults to `"off"`). Set `worktree_strategy` explicitly or configure `defaultWorktreeStrategy` to enable
+- Worktree creation is enabled by default via `defaultWorktreeStrategy: "ask"`. Pass `worktree_strategy: "off"` to `agent_launch` (or set `defaultWorktreeStrategy: "off"` in plugin config) to disable
 - Push and PR operations (`ask`, `auto-pr`, `delegate`) require a configured remote
 
 ### Example

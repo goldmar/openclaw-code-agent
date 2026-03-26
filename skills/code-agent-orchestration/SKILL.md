@@ -349,9 +349,9 @@ agent_respond(session: "fix-auth", message: "proceed", approve: true)
 
 The `planApproval` config controls how the orchestrator handles plan-approval events:
 
-- **`delegate`** (default): The orchestrator autonomously decides whether to approve or escalate each plan to the user. Approve when the plan is low-risk, well-scoped, and matches the original task. Escalate when the plan involves destructive operations, credentials/production, architectural decisions, scope expansion, or ambiguous requirements. When in doubt, always escalate.
+- **`ask`** (default): The orchestrator always forwards plans to the user. It never auto-approves on the user's behalf.
+- **`delegate`**: The orchestrator autonomously decides whether to approve or escalate each plan to the user. Approve when the plan is low-risk, well-scoped, and matches the original task. Escalate when the plan involves destructive operations, credentials/production, architectural decisions, scope expansion, or ambiguous requirements. When in doubt, always escalate.
 - **`approve`**: The orchestrator can auto-approve straightforward, low-risk plans. Before approving, it verifies the working directory, codebase, and scope.
-- **`ask`**: The orchestrator always forwards plans to the user. It never auto-approves on the user's behalf.
 
 #### Delegate mode decision criteria
 
@@ -380,9 +380,9 @@ When a session uses `worktree_strategy`, the agent runs in an isolated git branc
 
 | Strategy | What it does | When to use |
 |---|---|---|
-| `off` (default) | No worktree. Session runs in main checkout | Simple/trusted tasks |
+| `ask` (default) | Sends Telegram inline buttons (Merge locally / Create PR / Dismiss) | User should decide — the interactive default |
+| `off` | No worktree. Session runs in main checkout | Simple/trusted tasks where isolation isn't needed |
 | `manual` | Creates worktree; no auto action | You want to review diffs before merging |
-| `ask` | Sends Telegram inline buttons (Merge locally / Create PR / Dismiss) | User should decide |
 | `auto-merge` | Merges automatically; spawns conflict-resolver if needed | Trusted tasks on a safe branch |
 | `auto-pr` | Creates/updates GitHub PR automatically (requires `gh`) | Feature branches needing review |
 | `delegate` | Wakes orchestrator with diff context; Alice decides merge/PR/escalate | Set via `defaultWorktreeStrategy` config — orchestrator decides autonomously |

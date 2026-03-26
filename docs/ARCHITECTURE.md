@@ -217,8 +217,8 @@ Controls how the orchestrator handles plans when a coding agent calls `ExitPlanM
 
 | Mode | Default | Behavior |
 |------|---------|----------|
-| `ask` | | Always forwards plan to user — orchestrator never auto-approves |
-| `delegate` | ✓ | Orchestrator decides: approves low-risk plans autonomously, escalates high-risk or ambiguous plans to user |
+| `ask` | ✓ | Always forwards plan to user — orchestrator never auto-approves |
+| `delegate` | | Orchestrator decides: approves low-risk plans autonomously, escalates high-risk or ambiguous plans to user |
 | `approve` | | Orchestrator may auto-approve after verification (workdir, scope, codebase correctness); can still escalate complex/risky plans |
 
 ### AskUserQuestion Interception (CC only)
@@ -264,6 +264,6 @@ See `openclaw.plugin.json` for full config schema. Key settings:
 - `defaultHarness` (`"claude-code"`) — default agent harness (`"claude-code"` or `"codex"`)
 - `maxAutoResponds` (10) — agent auto-respond limit per session
 - `permissionMode` (`"plan"`) — default coding agent permission mode
-- `planApproval` (`"delegate"`) — how the orchestrator handles plan-approval events (`ask` / `delegate` / `approve`)
-- `defaultWorktreeStrategy` — default worktree strategy for new sessions (`off` / `manual` / `ask` / `delegate` / `auto-merge` / `auto-pr`)
+- `planApproval` (`"ask"`) — how the orchestrator handles plan-approval events (`ask` / `delegate` / `approve`)
+- `defaultWorktreeStrategy` (`"ask"`) — default worktree strategy for new sessions (`off` / `manual` / `ask` / `delegate` / `auto-merge` / `auto-pr`)
 - `worktreeDir` — base directory for agent worktrees (default: `<repoRoot>/.worktrees`)

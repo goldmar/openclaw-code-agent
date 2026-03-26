@@ -94,7 +94,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Session store persists original `workdir` (repo path) instead of the tmp worktree path, so resumed sessions reference the correct repo
 - `isGitRepo()` simplified — no longer requires a configured remote
 - `onSessionTerminal` is now async to support merge-back flow
-- `planApproval` defaults to `"delegate"` (was previously implicit auto-approve behavior)
+- `planApproval` defaults to `"ask"` (always forward plans to user) — provides the safest out-of-box experience; set to `"delegate"` to let the orchestrator decide autonomously
+- `defaultWorktreeStrategy` defaults to `"ask"` (push branch and send inline Telegram buttons on completion) — worktree isolation is now on by default; set to `"off"` to disable
 - Session listing shows worktree branch name, merge status, and PR URL in `agent_sessions`
 
 ### Fixed

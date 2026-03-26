@@ -140,13 +140,13 @@
       },
       "planApproval": {
         "type": "string",
-        "default": "delegate",
+        "default": "ask",
         "enum": [
           "approve",
           "ask",
           "delegate"
         ],
-        "description": "Plan approval behavior. 'delegate' (default): orchestrator autonomously decides whether to approve low-risk plans or escalate to the user. 'approve': orchestrator can auto-approve after verification. 'ask': orchestrator always forwards plans to the user for approval."
+        "description": "Plan approval behavior. 'ask' (default): orchestrator always forwards plans to the user for approval. 'delegate': orchestrator autonomously decides whether to approve low-risk plans or escalate to the user. 'approve': orchestrator can auto-approve after verification."
       },
       "defaultHarness": {
         "type": "string",
@@ -155,8 +155,9 @@
       },
       "defaultWorktreeStrategy": {
         "type": "string",
+        "default": "ask",
         "enum": ["off", "manual", "ask", "delegate", "auto-merge", "auto-pr"],
-        "description": "Default worktree strategy for all new sessions when agent_launch omits worktree_strategy. 'off' = no worktree (default). 'manual' = create worktree, no automatic action. 'ask' = push branch and notify user with inline buttons (merge / open PR / dismiss). 'delegate' = push branch and wake orchestrator to autonomously decide (merge, PR, or escalate). 'auto-merge' = auto-merge to base branch on completion. 'auto-pr' = auto-create/update GitHub PR on completion."
+        "description": "Default worktree strategy for all new sessions when agent_launch omits worktree_strategy. 'ask' (default) = push branch and notify user with inline buttons (merge / open PR / dismiss). 'off' = no worktree. 'manual' = create worktree, no automatic action. 'delegate' = push branch and wake orchestrator to autonomously decide (merge, PR, or escalate). 'auto-merge' = auto-merge to base branch on completion. 'auto-pr' = auto-create/update GitHub PR on completion."
       },
       "worktreeDir": {
         "type": "string",
@@ -224,7 +225,7 @@
     },
     "defaultWorktreeStrategy": {
       "label": "Default worktree strategy",
-      "help": "Applies to all sessions that don't specify worktree_strategy explicitly. 'off' disables worktrees globally (default). 'ask' creates worktrees and prompts user with inline buttons on completion. 'delegate' wakes the orchestrator to decide autonomously. 'auto-merge' and 'auto-pr' are fully automated."
+      "help": "Applies to all sessions that don't specify worktree_strategy explicitly. 'ask' (default) creates worktrees and prompts user with inline buttons on completion. 'off' disables worktrees globally. 'delegate' wakes the orchestrator to decide autonomously. 'auto-merge' and 'auto-pr' are fully automated."
     }
   },
   "skills": [
