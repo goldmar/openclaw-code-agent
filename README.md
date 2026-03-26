@@ -43,8 +43,11 @@ For the current version-pinned breakdown, see [docs/ACP-COMPARISON.md](docs/ACP-
 
 - **Multi-session management** — Run multiple concurrent coding agent sessions, each with a unique ID and human-readable name
 - **Plan → Execute workflow** — Claude Code sessions expose plan mode; Codex uses a soft first-turn planning prompt while staying externally in implement mode
+- **Plan approval modes** — Three configurable modes (`ask` / `delegate` / `approve`) control how the orchestrator handles plan-approval events before execution
 - **Real Codex approval policy support** — Codex sessions default to the real Codex SDK/CLI `approvalPolicy: "on-request"` and can be pinned back to `"never"` via `harnesses.codex.approvalPolicy`
-- **Git worktree isolation** — Opt-in worktree support keeps main checkout clean; automatic merge-back with configurable strategies (manual, ask, auto-merge, auto-pr)
+- **Git worktree isolation** — Opt-in worktree support keeps main checkout clean; configurable strategies: `manual`, `ask`, `delegate`, `auto-merge`, `auto-pr`
+- **Telegram inline buttons** — `ask` strategy sends inline keyboard buttons (Merge locally / Create PR / Dismiss) directly in chat; button taps route back to the plugin
+- **PR lifecycle management** — `agent_pr` detects existing open/merged/closed PRs and updates instead of duplicating; full lifecycle handling via `gh` CLI
 - **Conflict resolution** — Auto-merge conflicts spawn Claude Code conflict-resolver sessions automatically
 - **Thread-based routing** — Notifications go to the Telegram thread/topic where the session was launched
 - **Pause + auto-resume** — Non-question turn completion pauses sessions (`done`) and next `agent_respond` auto-resumes with context intact
@@ -52,12 +55,14 @@ For the current version-pinned breakdown, see [docs/ACP-COMPARISON.md](docs/ACP-
 - **Smart waiting detection** — Heuristic waiting detector reduces false-positive wake escalations
 - **Multi-turn conversations** — Send follow-up messages, interrupt, or iterate with a running agent
 - **Session resume & fork** — Resume any completed session or fork it into a new conversation branch
+- **Deliverable mode** — `output_mode: "deliverable"` switches from `✅ Completed` to `📄 Deliverable ready` for document/report generation tasks
 - **Merged session listing** — `agent_sessions` shows active + persisted sessions in one view (deduped by internal session ID)
 - **Pending MessageStream safety** — queued follow-ups are preserved across turn completion so messages are not dropped
 - **Codex SDK streaming harness** — uses `@openai/codex-sdk` thread streaming with soft first-turn planning, waiting detection, and activity heartbeats
 - **Multi-agent support** — Route notifications to the correct agent/chat via workspace-based channel mapping
 - **Auto-respond rules** — Orchestrator auto-handles permission requests and confirmations; forwards real decisions to you
 - **Anti-cascade protection** — Orchestrator never launches new sessions from wake events
+- **Startup recovery** — Orphaned worktrees and crashed running-state sessions are automatically cleaned up on gateway restart
 - **Automatic cleanup** — Completed sessions are garbage-collected after a configurable TTL (`sessionGcAgeMinutes`, default 24h); IDs persist for resume
 - **Harness-agnostic architecture** — Pluggable `AgentHarness` interface allows adding new coding agent backends
 
@@ -70,7 +75,7 @@ For the current version-pinned breakdown, see [docs/ACP-COMPARISON.md](docs/ACP-
 | 2.3.x | >=2026.3.13 |
 | 2.4.x | >=2026.3.22 |
 
-Tested against OpenClaw v2026.3.22. The plugin uses CLI-based integration and is unaffected by OpenClaw plugin SDK surface changes.
+Tested against OpenClaw v2026.3.23. The plugin uses CLI-based integration and is unaffected by OpenClaw plugin SDK surface changes.
 
 **Codex model options (v2026.3.22+):** In addition to the default `gpt-5.4`, you can configure `gpt-5.4-mini` or `gpt-5.4-nano` in `harnesses.codex.allowedModels` for lower-cost Codex sessions.
 
@@ -206,6 +211,8 @@ The plugin sends targeted notifications to the originating Telegram thread:
 | ❌ | Failed | Error notification with `harnessSessionId` and resume guidance |
 | 💤 | Idle timeout | Session timed out while waiting; auto-resumes on next respond |
 | ⛔ | Stopped | Session was stopped by user, shutdown, or another forced stop |
+| 🔀 | Worktree decision (`ask`) | Telegram inline buttons sent: Merge locally / Create PR / Dismiss |
+| 🤖 | Worktree decision (`delegate`) | Wake sent to orchestrator with diff context for autonomous decision |
 
 ---
 
@@ -334,7 +341,7 @@ Control what happens to worktree branches when a session completes via `worktree
 
 - **`off`** (default) — No worktree. Session runs in the main checkout.
 - **`manual`** — Create worktree but no automatic action. Branch is kept for manual handling via `agent_merge` or `agent_pr`.
-- **`ask`** — Push branch and send a Telegram notification with inline buttons (Merge / Open PR / Dismiss). Also wakes the orchestrator with full decision context (diff summary, original prompt, decision guidance) to present the choice to the user.
+- **`ask`** — Push branch and send a Telegram notification with inline buttons (Merge locally / Create PR / Dismiss). Also wakes the orchestrator with full decision context (diff summary, original prompt, decision guidance) to present the choice to the user.
 - **`delegate`** — Push branch and wake the orchestrator with full decision context. The orchestrator autonomously decides to merge, open a PR, or escalate to the user. Always sends a brief one-line notification to the user. **Available via `defaultWorktreeStrategy` plugin config; not exposed as a `worktree_strategy` tool parameter.**
 - **`auto-merge`** — Automatically merge to base branch and push. On conflicts, spawns a Claude Code conflict-resolver session.
 - **`auto-pr`** — Automatically create/update GitHub PR with full lifecycle management (requires `gh` CLI). If `gh` is unavailable, falls back to `ask` strategy.
