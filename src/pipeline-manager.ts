@@ -352,7 +352,7 @@ export class PipelineManager {
 
     const id = nanoid(8);
     const name = params.name || `pipeline-${generateSessionName(params.prompt)}`;
-    const maxIterations = params.maxIterations ?? 2;
+    const maxIterations = params.maxIterations ?? 4;
 
     // Create shared worktree for all stages
     let actualWorkdir = params.workdir;
