@@ -11,7 +11,10 @@
  * @module pipeline-manager
  */
 
-import { appendFileSync } from "fs";
+import { appendFileSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "fs";
+import os from "os";
+import path from "path";
+import { execSync } from "child_process";
 import { nanoid } from "nanoid";
 import { Session } from "./session";
 import { sessionManager } from "./singletons";
@@ -30,6 +33,9 @@ import type {
 } from "./pipeline-types";
 
 const TERMINAL_STATUSES = new Set<SessionStatus>(["completed", "failed", "killed"]);
+
+/** Directory for persisting pipeline run state across restarts. */
+const PIPELINE_STATE_DIR = path.join(os.homedir(), ".openclaw", "pipeline-state");
 
 /** Per-stage timeout in ms. */
 const STAGE_TIMEOUT_MS = 600_000;
@@ -173,6 +179,150 @@ export class PipelineManager {
   /** Map from pipeline ID to the currently active stage (for timeout cleanup). */
   private activeStages: Map<string, ActiveStage> = new Map();
 
+  // -- Persistence helpers --
+
+  private stateFile(runOrId: PipelineRun | string): string {
+    const id = typeof runOrId === "string" ? runOrId : runOrId.id;
+    return path.join(PIPELINE_STATE_DIR, `${id}.json`);
+  }
+
+  private persistState(run: PipelineRun): void {
+    mkdirSync(PIPELINE_STATE_DIR, { recursive: true });
+    writeFileSync(this.stateFile(run), JSON.stringify(run, null, 2), "utf-8");
+  }
+
+  private removeState(run: PipelineRun): void {
+    rmSync(this.stateFile(run), { force: true });
+  }
+
+  /**
+   * Resume any incomplete pipelines from persisted state files.
+   * Must be called after sessionManager is initialized.
+   */
+  resumePipelines(): void {
+    if (!sessionManager) {
+      throw new Error("SessionManager not initialized");
+    }
+
+    mkdirSync(PIPELINE_STATE_DIR, { recursive: true });
+
+    const entries = readdirSync(PIPELINE_STATE_DIR);
+    for (const entry of entries) {
+      if (!entry.endsWith(".json")) continue;
+      const filePath = path.join(PIPELINE_STATE_DIR, entry);
+
+      let raw: PipelineRun;
+      try {
+        raw = JSON.parse(readFileSync(filePath, "utf-8")) as PipelineRun;
+      } catch (err) {
+        pipelineLog(`WARN: Failed to parse pipeline state file ${entry}: ${err instanceof Error ? err.message : String(err)}`);
+        rmSync(filePath, { force: true });
+        continue;
+      }
+
+      // Terminal pipelines: clean up stale state file
+      if (raw.status === "completed" || raw.status === "failed" || raw.status === "blocked") {
+        pipelineLog(`Removing stale terminal state file for pipeline ${raw.id} (${raw.status})`);
+        rmSync(filePath, { force: true });
+        continue;
+      }
+
+      pipelineLog(`Resuming pipeline ${raw.id} (${raw.name})`);
+      this.runs.set(raw.id, raw);
+
+      const lastStage = raw.stages[raw.stages.length - 1];
+
+      if (!lastStage) {
+        // Pipeline was created but stage 1 never spawned
+        try {
+          this.spawnStage(raw, {
+            kind: "codex-plan",
+            harness: "codex",
+            prompt: codexPlanPrompt(raw.prompt),
+            iteration: 0,
+          });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          this.finalizePipeline(raw, "failed", `Resume: failed to spawn stage 1: ${msg}`);
+        }
+        continue;
+      }
+
+      if (lastStage.status === "running" || lastStage.status === "starting") {
+        // Check if the session still exists in runtime
+        const existing = lastStage.sessionId ? sessionManager.get(lastStage.sessionId) : undefined;
+        if (!existing) {
+          // Session is gone — re-spawn the same stage
+          const spec = this.buildStageSpec(raw, lastStage.kind, lastStage.iteration);
+          if (!spec) {
+            this.finalizePipeline(raw, "failed", `Resume: cannot reconstruct prompt for stage ${lastStage.kind} (missing prerequisite output)`);
+            continue;
+          }
+          // Remove the stale trailing stage record before re-spawning
+          raw.stages.pop();
+          try {
+            this.spawnStage(raw, spec);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            this.finalizePipeline(raw, "failed", `Resume: failed to re-spawn stage ${lastStage.kind}: ${msg}`);
+          }
+        }
+        // If session still exists, it will complete normally via its statusChange listener
+        continue;
+      }
+
+      if (lastStage.status === "completed") {
+        // Stage completed but next stage was never spawned
+        this.onStageCompleted(raw, lastStage.kind, lastStage.iteration, lastStage.output || "");
+        continue;
+      }
+
+      if (lastStage.status === "failed") {
+        this.finalizePipeline(raw, "failed", lastStage.error || `Stage ${lastStage.kind} previously failed`);
+        continue;
+      }
+    }
+  }
+
+  /**
+   * Reconstruct a stage spawn spec from persisted run state.
+   * Returns undefined if prerequisite stage outputs are missing.
+   */
+  private buildStageSpec(
+    run: PipelineRun,
+    kind: PipelineStageKind,
+    iteration: number,
+  ): { kind: PipelineStageKind; harness: "codex" | "claude-code"; prompt: string; iteration: number } | undefined {
+    switch (kind) {
+      case "codex-plan":
+        return { kind, harness: "codex", prompt: codexPlanPrompt(run.prompt), iteration: 0 };
+
+      case "claude-implement": {
+        const planOutput = this.findCompletedStageOutput(run, "codex-plan", 0);
+        if (!planOutput) return undefined;
+        return { kind, harness: "claude-code", prompt: claudeImplementPrompt(planOutput, run.prompt), iteration: 0 };
+      }
+
+      case "codex-review":
+        return { kind, harness: "codex", prompt: codexReviewPrompt(), iteration };
+
+      case "claude-fix": {
+        // Fix stages use the output from the preceding codex-review
+        const reviewOutput = this.findCompletedStageOutput(run, "codex-review", iteration - 1);
+        if (!reviewOutput) return undefined;
+        return { kind, harness: "claude-code", prompt: claudeFixPrompt(reviewOutput), iteration };
+      }
+    }
+  }
+
+  /**
+   * Find the output of a completed stage by kind and iteration.
+   */
+  private findCompletedStageOutput(run: PipelineRun, kind: PipelineStageKind, iteration: number): string | undefined {
+    const stage = run.stages.find(s => s.kind === kind && s.iteration === iteration && s.status === "completed");
+    return stage?.output;
+  }
+
   list(): PipelineRun[] {
     return [...this.runs.values()].sort((a, b) => b.startedAt - a.startedAt);
   }
@@ -247,6 +397,7 @@ export class PipelineManager {
 
     // Kick off Stage 1
     run.status = "running";
+    this.persistState(run);
     pipelineLog(`Pipeline ${id} starting: ${name}`);
     this.sendStatus(run, `🔧 Pipeline started: ${name}`);
     this.sendStatus(run, `📋 Stage 1/3: Codex analyzing and planning...`);
@@ -317,6 +468,7 @@ export class PipelineManager {
 
     stage.sessionId = session.id;
     stage.status = "running";
+    this.persistState(run);
     pipelineLog(`Stage ${spec.kind} spawned: session=${session.id} name=${session.name}`);
 
     // Set up a timeout for this stage
@@ -344,7 +496,28 @@ export class PipelineManager {
 
       if (newStatus === "completed") {
         stage.output = session.getOutput().join("\n");
+
+        // Detect auth failures that the SDK reports as "success"
+        const authFailurePatterns = [
+          "OAuth token has expired",
+          "authentication_error",
+          "Failed to authenticate",
+          "401",
+        ];
+        const isAuthFailure = authFailurePatterns.some(p => stage.output.includes(p))
+          && stage.output.length < 500; // Real output is long; auth errors are short
+
+        if (isAuthFailure) {
+          stage.status = "failed";
+          stage.error = "Authentication failed (expired OAuth token)";
+          stage.completedAt = Date.now();
+          pipelineLog(`Stage ${spec.kind} auth failure detected: session=${session.id}`);
+          this.finalizePipeline(run, "failed", `Stage ${spec.kind} failed: Authentication error (expired OAuth token). Run token refresh and retry.`);
+          return;
+        }
+
         stage.status = "completed";
+        this.persistState(run);
         pipelineLog(`Stage ${spec.kind} completed: session=${session.id}`);
         this.onStageCompleted(run, spec.kind, spec.iteration, stage.output);
       } else {
@@ -459,7 +632,8 @@ export class PipelineManager {
   }
 
   /**
-   * Finalize a pipeline run: set terminal status, send notification, clean up worktree.
+   * Finalize a pipeline run: set terminal status, optionally create PR,
+   * send notification, persist final state, clean up worktree.
    */
   private finalizePipeline(
     run: PipelineRun,
@@ -478,9 +652,28 @@ export class PipelineManager {
       this.activeStages.delete(run.id);
     }
 
+    // Persist terminal state before PR attempt
+    this.persistState(run);
+
+    // Attempt PR creation for successful worktree-based pipelines
+    let prUrl: string | undefined;
+    let prError: string | undefined;
+    if (status === "completed" && run.worktreePath) {
+      const pr = this.createPullRequest(run);
+      prUrl = pr.url;
+      prError = pr.error;
+    }
+
     // Send final status
     if (status === "completed") {
-      this.sendStatus(run, `✅ Pipeline complete! All stages passed.\n\nSummary: ${summary || "(no summary)"}`);
+      const lines = [
+        `✅ Pipeline complete! All stages passed.`,
+        "",
+        `Summary: ${summary || "(no summary)"}`,
+        ...(prUrl ? ["", `PR: ${prUrl}`] : []),
+        ...(prError ? ["", `PR creation failed: ${prError}`] : []),
+      ];
+      this.sendStatus(run, lines.join("\n"));
     } else if (status === "blocked") {
       this.sendStatus(run, `🟡 Pipeline blocked: ${error || "Unknown reason"}`);
     } else {
@@ -489,7 +682,10 @@ export class PipelineManager {
       this.sendStatus(run, `❌ Pipeline failed at ${stageLabel}: ${error || "Unknown error"}`);
     }
 
-    // Clean up shared worktree
+    // Remove persisted state file now that pipeline is terminal and PR attempted
+    this.removeState(run);
+
+    // Clean up shared worktree (after PR creation so the branch can be pushed)
     if (run.worktreePath && run.originalWorkdir) {
       try {
         removeWorktree(run.originalWorkdir, run.worktreePath);
@@ -503,6 +699,42 @@ export class PipelineManager {
 
     // Auto-purge from map after 1 hour
     setTimeout(() => this.runs.delete(run.id), 3_600_000);
+  }
+
+  /**
+   * Push the worktree branch and create a PR via `gh pr create`.
+   * Returns the PR URL on success, or an error message on failure.
+   * Never throws — PR failures should not flip a successful pipeline to failed.
+   */
+  private createPullRequest(run: PipelineRun): { url?: string; error?: string } {
+    if (!run.worktreePath) return {};
+
+    try {
+      execSync("git push -u origin HEAD", {
+        cwd: run.worktreePath,
+        encoding: "utf-8",
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+
+      const branch = execSync("git rev-parse --abbrev-ref HEAD", {
+        cwd: run.worktreePath,
+        encoding: "utf-8",
+        stdio: ["pipe", "pipe", "pipe"],
+      }).trim();
+
+      const prUrl = execSync(`gh pr create --fill --head ${JSON.stringify(branch)}`, {
+        cwd: run.worktreePath,
+        encoding: "utf-8",
+        stdio: ["pipe", "pipe", "pipe"],
+      }).trim();
+
+      pipelineLog(`PR created for pipeline ${run.id}: ${prUrl}`);
+      return { url: prUrl };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      pipelineLog(`WARN: PR creation failed for pipeline ${run.id}: ${msg}`);
+      return { error: msg };
+    }
   }
 
   /** Send a status message for a pipeline run. */
