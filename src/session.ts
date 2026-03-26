@@ -14,6 +14,14 @@ import {
   resolveReasoningEffortForHarness,
 } from "./config";
 
+const STAGE3_TRACE_LOG = "/tmp/stage3-trace.log";
+
+function stage3Trace(fn: string, detail: string): void {
+  const ts = new Date().toISOString();
+  const line = `[${ts}] [session.ts] ${fn}: ${detail}\n`;
+  try { appendFileSync(STAGE3_TRACE_LOG, line); } catch {}
+}
+
 const OUTPUT_BUFFER_MAX = 2000;
 const STARTUP_TIMEOUT_MS = 2 * 60 * 1000; // 2 minutes
 
@@ -121,6 +129,9 @@ export class Session extends EventEmitter {
   readonly multiTurn: boolean;
   private messageStream?: MessageStream;
 
+  // Pipeline notification control
+  readonly notificationsEnabled: boolean;
+
   // State
   private _status: SessionStatus = "starting";
   error?: string;
@@ -199,6 +210,7 @@ export class Session extends EventEmitter {
     this.worktreeBaseBranch = config.worktreeBaseBranch;
     this.outputMode = config.outputMode;
     this.canUseTool = config.canUseTool;
+    this.notificationsEnabled = config.notificationsEnabled ?? true;
     this.startedAt = Date.now();
     this.abortController = new AbortController();
   }
@@ -254,6 +266,7 @@ export class Session extends EventEmitter {
 
   /** Launch the configured harness and start consuming harness messages. */
   async start(): Promise<void> {
+    stage3Trace("Session.start", `entry — id=${this.id} name=${this.name} harness=${this.harnessName} multiTurn=${this.multiTurn} status=${this._status}`);
     try {
       let prompt: string | AsyncIterable<unknown>;
       if (this.multiTurn) {
@@ -262,10 +275,13 @@ export class Session extends EventEmitter {
           this.harness.buildUserMessage(this.prompt, ""),
         );
         prompt = this.messageStream;
+        stage3Trace("Session.start", "prompt set to messageStream (multi-turn)");
       } else {
         prompt = this.prompt;
+        stage3Trace("Session.start", `prompt set to string (single-turn), len=${this.prompt.length}`);
       }
 
+      stage3Trace("Session.start", "calling harness.launch()...");
       const handle = this.harness.launch({
         prompt,
         cwd: this.workdir,
@@ -282,22 +298,84 @@ export class Session extends EventEmitter {
         canUseTool: this.canUseTool,
       });
       this.harnessHandle = handle;
+      stage3Trace("Session.start", "harness.launch() returned — setting startup timer");
       this.setTimer("startup", STARTUP_TIMEOUT_MS, () => {
+        stage3Trace("Session.start", `STARTUP TIMER FIRED — status=${this._status}, killing with startup-timeout`);
         if (this._status === "starting") this.kill("startup-timeout");
       });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
+      stage3Trace("Session.start", `CATCH in launch — ${message}`);
       this.transitionToTerminal("failed", { error: message });
       return;
     }
 
+    stage3Trace("Session.start", "starting consumeMessages loop");
     this.consumeMessages(this.harnessHandle!.messages).catch((err: unknown) => {
       const message = err instanceof Error ? err.message : String(err);
       const stack = err instanceof Error ? err.stack : undefined;
+      stage3Trace("Session.start", `consumeMessages CATCH — ${message}`);
       console.error(`[Session ${this.id}] consumeMessages error: ${message}`, stack);
       if (this.isActive) {
         this.transitionToTerminal("failed", { error: message });
       }
+    });
+  }
+
+  /**
+   * Wait until the session has definitively started (`running`) or failed during startup.
+   *
+   * This closes the detached async gap between `spawn()` returning and the first
+   * harness event arriving. Callers that orchestrate sequential stages should
+   * await this before assuming the harness is alive.
+   */
+  waitForStartup(timeoutMs: number = STARTUP_TIMEOUT_MS): Promise<void> {
+    if (this._status === "running") {
+      return Promise.resolve();
+    }
+
+    if (this._status === "completed" || this._status === "failed" || this._status === "killed") {
+      return Promise.reject(new Error(
+        `Session ${this.id} ended during startup with status: ${this._status}${this.error ? ` — ${this.error}` : ""}`,
+      ));
+    }
+
+    return new Promise<void>((resolve, reject) => {
+      let settled = false;
+
+      const cleanup = (): void => {
+        this.removeListener("statusChange", onStatusChange);
+        clearTimeout(timer);
+      };
+
+      const settle = (fn: () => void): void => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        fn();
+      };
+
+      const onStatusChange = (_s: Session, newStatus: SessionStatus): void => {
+        if (newStatus === "running") {
+          settle(resolve);
+          return;
+        }
+
+        if (newStatus === "completed" || newStatus === "failed" || newStatus === "killed") {
+          settle(() => reject(new Error(
+            `Session ${this.id} ended during startup with status: ${newStatus}${this.error ? ` — ${this.error}` : ""}`,
+          )));
+        }
+      };
+
+      const timer = setTimeout(() => {
+        if (this._status === "starting") {
+          this.kill("startup-timeout");
+        }
+        settle(() => reject(new Error(`Session ${this.id} did not reach running state within ${timeoutMs}ms`)));
+      }, timeoutMs);
+
+      this.on("statusChange", onStatusChange);
     });
   }
 
@@ -433,11 +511,12 @@ export class Session extends EventEmitter {
     this.clearAllTimers();
     if (!this.completedAt) this.completedAt = Date.now();
     if (this.messageStream) this.messageStream.end();
-    if (this.harnessHandle?.interrupt) {
-      void this.harnessHandle.interrupt().catch((err: unknown) => {
-        console.warn(`[Session ${this.id}] interrupt during teardown failed: ${errorMessage(err)}`);
-      });
-    }
+    // Abort the controller — this signals the SDK to stop cleanly.
+    // Do NOT call harnessHandle.interrupt() here: the Claude Code SDK writes
+    // to a socket synchronously inside interrupt(), and if the socket is already
+    // closed (e.g. single-turn completion), it emits an uncaught 'error' event
+    // on the socket that crashes the entire gateway process.
+    // The abort signal achieves the same cleanup without the dangerous socket write.
     this.abortController.abort();
   }
 
@@ -461,19 +540,33 @@ export class Session extends EventEmitter {
   }
 
   private async consumeMessages(messages: AsyncIterable<HarnessMessage>): Promise<void> {
+    let sawInit = false;
+    let sawResult = false;
+    let msgCount = 0;
+
+    stage3Trace("consumeMessages", `entry — id=${this.id} status=${this._status}`);
+
     for await (const msg of messages) {
+      msgCount++;
+      if (msgCount === 1) {
+        stage3Trace("consumeMessages", `first message received — type=${msg.type} status=${this._status} elapsed=${Date.now() - this.startedAt}ms`);
+      }
+
       // After terminal transition we intentionally ignore late harness events.
       // This avoids spurious turnEnd/output processing from in-flight subprocess
       // shutdown messages after kill/complete/fail.
       if (!this.isActive) {
+        stage3Trace("consumeMessages", `session no longer active (status=${this._status}), breaking`);
         break;
       }
 
       this.resetIdleTimer();
 
       if (msg.type === "init") {
+        sawInit = true;
         this.clearTimer("startup");
         this.harnessSessionId = msg.session_id;
+        stage3Trace("consumeMessages", `init received — session_id=${msg.session_id}, transitioning starting→running`);
         if (this._status === "starting") {
           this.transition("running");
         }
@@ -524,6 +617,11 @@ export class Session extends EventEmitter {
           this.lastTurnHadQuestion = true;
         }
       } else if (msg.type === "result") {
+        stage3Trace("consumeMessages", `result received — success=${msg.data.success} status=${this._status} multiTurn=${this.multiTurn}`);
+        sawResult = true;
+        if (!this.harnessSessionId && msg.data.session_id) {
+          this.harnessSessionId = msg.data.session_id;
+        }
         this.result = {
           subtype: msg.data.success ? "success" : "error",
           duration_ms: msg.data.duration_ms,
@@ -579,6 +677,17 @@ export class Session extends EventEmitter {
       } else if (msg.type === "activity") {
         // Keepalive ping for long-running subprocesses with no output.
       }
+    }
+
+    // After the for-await loop (the stream has closed)
+    stage3Trace("consumeMessages", `loop ended — totalMessages=${msgCount} sawInit=${sawInit} sawResult=${sawResult} status=${this._status}`);
+    // If we're still active, the harness closed without a terminal result — force fail
+    if (this.isActive) {
+      stage3Trace("consumeMessages", "still active after stream closed — forcing failed");
+      console.warn(`[Session ${this.id}] Harness stream closed without terminal result. Forcing failed.`);
+      this.transitionToTerminal("failed", {
+        error: "Harness stream closed without terminal result",
+      });
     }
   }
 }

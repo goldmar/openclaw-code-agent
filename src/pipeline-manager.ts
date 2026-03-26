@@ -1,4 +1,3 @@
-// Event-driven pipeline v2 — verified 2026-03-25
 /**
  * Pipeline orchestration manager (event-driven).
  *
@@ -415,7 +414,17 @@ export class PipelineManager {
 
           // verdict === "critical"
           if (iteration >= run.maxIterations - 1) {
-            this.finalizePipeline(run, "failed", `Max fix iterations (${run.maxIterations}) reached. Remaining issues: ${verdict.criticalIssues.join(", ")}`);
+            const issueList = verdict.criticalIssues.length > 0
+              ? verdict.criticalIssues.join("\n- ")
+              : verdict.summary || "No specific issues listed";
+            this.finalizePipeline(
+              run,
+              "blocked",
+              `Max fix iterations (${run.maxIterations}) reached — needs human judgment.\n\n` +
+              `**Codex review summary:** ${verdict.summary || "(no summary)"}\n\n` +
+              `**Remaining issues:**\n- ${issueList}\n\n` +
+              `Reply with instructions to redirect the fix approach, or approve to ship as-is.`
+            );
             return;
           }
 
