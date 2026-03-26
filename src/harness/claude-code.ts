@@ -4,6 +4,9 @@
 
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { dirname, join } from "path";
+import { readFileSync, writeFileSync, existsSync } from "fs";
+import { execFileSync } from "child_process";
+import { homedir } from "os";
 import { fileURLToPath } from "url";
 import { createRequire } from "module";
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
@@ -101,6 +104,51 @@ export class ClaudeCodeHarness implements AgentHarness {
     if (options.resumeSessionId) {
       sdkOptions.resume = options.resumeSessionId;
       sdkOptions.forkSession = options.forkSession ?? false;
+    }
+
+    // Read fresh OAuth token from credentials file, refresh if near expiry
+    const credsPath = join(homedir(), ".claude", ".credentials.json");
+    if (existsSync(credsPath)) {
+      try {
+        const creds = JSON.parse(readFileSync(credsPath, "utf-8"));
+        const oauth = creds?.claudeAiOauth;
+        if (oauth?.accessToken) {
+          const now = Date.now();
+          const expiresAt = oauth.expiresAt || 0;
+          // If token expires within 30 minutes, refresh synchronously via curl
+          if (expiresAt > 0 && expiresAt < now + 7200000 && oauth.refreshToken) {
+            try {
+              console.log("[ClaudeCodeHarness] Token expires in", Math.round((expiresAt - now) / 60000), "min — refreshing...");
+              const curlResult = execFileSync("curl", [
+                "-s", "-X", "POST",
+                "https://platform.claude.com/v1/oauth/token",
+                "-H", "Content-Type: application/json",
+                "-d", JSON.stringify({
+                  grant_type: "refresh_token",
+                  refresh_token: oauth.refreshToken,
+                  client_id: "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
+                }),
+              ], { timeout: 15000, encoding: "utf-8" });
+              const data = JSON.parse(curlResult) as Record<string, unknown>;
+              if (data.access_token && typeof data.access_token === "string") {
+                oauth.accessToken = data.access_token;
+                if (typeof data.refresh_token === "string") oauth.refreshToken = data.refresh_token;
+                if (typeof data.expires_in === "number") oauth.expiresAt = now + data.expires_in * 1000;
+                creds.claudeAiOauth = oauth;
+                writeFileSync(credsPath, JSON.stringify(creds, null, 2));
+                console.log("[ClaudeCodeHarness] OAuth token refreshed, expires in", data.expires_in, "seconds");
+              } else {
+                console.warn("[ClaudeCodeHarness] OAuth refresh unexpected response:", JSON.stringify(data).slice(0, 200));
+              }
+            } catch (refreshErr) {
+              console.warn("[ClaudeCodeHarness] OAuth refresh failed:", (refreshErr as Error).message);
+            }
+          }
+          process.env.CLAUDE_CODE_OAUTH_TOKEN = oauth.accessToken;
+        }
+      } catch {
+        // Ignore errors reading credentials
+      }
     }
 
     const q = query({
