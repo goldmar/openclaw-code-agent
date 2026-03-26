@@ -1,0 +1,349 @@
+# Reference
+
+Canonical operator reference for `openclaw-code-agent`: install, configuration, tool surface, chat commands, routing, notifications, worktree behavior, and troubleshooting.
+
+## Defaults At A Glance
+
+| Setting | Default |
+| --- | --- |
+| `defaultHarness` | `claude-code` |
+| `harnesses.claude-code.defaultModel` | `sonnet` |
+| `harnesses.codex.defaultModel` | `gpt-5.4` |
+| `harnesses.codex.reasoningEffort` | `medium` |
+| `harnesses.codex.approvalPolicy` | `on-request` |
+| `permissionMode` | `plan` |
+| `planApproval` | `ask` |
+| `defaultWorktreeStrategy` | `ask` |
+| `maxSessions` | `20` |
+| `maxAutoResponds` | `10` |
+| `idleTimeoutMinutes` | `15` |
+| `sessionGcAgeMinutes` | `1440` |
+| `maxPersistedSessions` | `10000` |
+
+Sessions are multi-turn. All sessions stay open for follow-up messages via `agent_respond`.
+
+## Install
+
+```bash
+openclaw plugins install openclaw-code-agent
+openclaw plugins enable openclaw-code-agent
+openclaw gateway restart
+```
+
+## Minimal Config
+
+Add this under `plugins.entries["openclaw-code-agent"]` in `~/.openclaw/openclaw.json`:
+
+```json
+{
+  "enabled": true,
+  "config": {
+    "fallbackChannel": "telegram|my-bot|123456789",
+    "planApproval": "ask",
+    "defaultWorktreeStrategy": "ask",
+    "harnesses": {
+      "claude-code": {
+        "defaultModel": "sonnet",
+        "allowedModels": ["sonnet", "opus"]
+      },
+      "codex": {
+        "defaultModel": "gpt-5.4",
+        "allowedModels": ["gpt-5.4"],
+        "reasoningEffort": "medium",
+        "approvalPolicy": "on-request"
+      }
+    }
+  }
+}
+```
+
+If you use Codex, recommend this in `~/.codex/config.toml`:
+
+```toml
+forced_login_method = "chatgpt"
+```
+
+## Harnesses
+
+| Harness | Models | Notes |
+| --- | --- | --- |
+| `claude-code` | Controlled by `harnesses.claude-code.allowedModels` | Native Claude Code harness with plan-mode interception |
+| `codex` | Controlled by `harnesses.codex.allowedModels` | Native Codex thread harness with `reasoningEffort` and `approvalPolicy` |
+
+Allowed-model matching is case-insensitive substring matching. If the resolved model is not allowed, `agent_launch` fails immediately.
+
+## Permission And Approval Modes
+
+### `permissionMode`
+
+| Mode | Meaning |
+| --- | --- |
+| `default` | Standard interactive execution |
+| `plan` | Present the plan first, then wait for approval before implementation |
+| `bypassPermissions` | Fully autonomous execution |
+
+`plan` is the plugin default. Claude Code uses true SDK plan mode. Codex uses a plan-first turn while the plugin preserves the same approval workflow.
+
+### `planApproval`
+
+| Mode | Meaning |
+| --- | --- |
+| `ask` | Default. Notify the user directly and wait for explicit approval or revision |
+| `delegate` | Wake the orchestrator with the full plan and let it decide whether to approve or escalate |
+| `approve` | Auto-approve after verification |
+
+In `ask`, the plugin sends inline Telegram buttons for `Approve`, `Reject`, and `Revise` when Telegram callbacks are available. The same flow still works through plain replies.
+
+## Worktree Strategies
+
+| Strategy | Where It Is Set | Behavior |
+| --- | --- | --- |
+| `off` | Tool param or config | No worktree; session runs in the main checkout |
+| `manual` | Tool param or config | Create worktree and branch, then stop for manual follow-through |
+| `ask` | Tool param or config | Default. Push branch, notify the user, and send inline `Merge locally` / `Create PR` buttons |
+| `delegate` | Config only via `defaultWorktreeStrategy` | Push branch, wake the orchestrator with diff context, and send a brief user notification |
+| `auto-merge` | Tool param or config | Merge back automatically; spawn a conflict resolver if needed |
+| `auto-pr` | Tool param or config | Create or update a GitHub PR automatically |
+
+Notes:
+
+- `agent_launch` only accepts `off`, `manual`, `ask`, `auto-merge`, and `auto-pr` as `worktree_strategy`.
+- `delegate` is intentionally configured at the plugin level with `defaultWorktreeStrategy`.
+- If the admin pins `defaultWorktreeStrategy` to anything other than `delegate`, that default overrides the per-launch `worktree_strategy` for fresh sessions.
+- Resumed sessions keep the worktree strategy they already had.
+
+## Tool Reference
+
+### `agent_launch`
+
+Launch a background coding session.
+
+| Parameter | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `prompt` | `string` | Yes | Task to execute |
+| `name` | `string` | No | Short session name; auto-generated if omitted |
+| `workdir` | `string` | No | Defaults to tool workspace, plugin `defaultWorkdir`, or cwd |
+| `model` | `string` | No | Defaults to the selected harness default model |
+| `system_prompt` | `string` | No | Extra system prompt |
+| `allowed_tools` | `string[]` | No | Harness tool allowlist |
+| `resume_session_id` | `string` | No | Resume by internal ID, name, or harness session ID |
+| `fork_session` | `boolean` | No | Fork instead of continuing when resuming |
+| `permission_mode` | `default \| plan \| bypassPermissions` | No | Defaults to plugin `permissionMode` |
+| `harness` | `string` | No | Defaults to `defaultHarness` |
+| `worktree_strategy` | `off \| manual \| ask \| auto-merge \| auto-pr` | No | Subject to the admin override rule above |
+| `worktree_base_branch` | `string` | No | Defaults to detected base branch |
+
+Example:
+
+```text
+agent_launch(
+  prompt: "Fix the auth middleware bug and add tests",
+  name: "fix-auth",
+  workdir: "/home/user/my-app"
+)
+```
+
+### `agent_respond`
+
+Send a follow-up, redirect work, approve a plan, or escalate a `default` mode session to `bypassPermissions`.
+
+| Parameter | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `session` | `string` | Yes | Name or internal ID |
+| `message` | `string` | Yes | Follow-up text |
+| `interrupt` | `boolean` | No | Abort the current turn before sending |
+| `userInitiated` | `boolean` | No | Reset the auto-respond counter |
+| `approve` | `boolean` | No | Approve a pending plan or escalate `default` mode permissions |
+
+Example:
+
+```text
+agent_respond(
+  session: "fix-auth",
+  message: "Approved. Go ahead.",
+  approve: true
+)
+```
+
+### `agent_output`
+
+Read buffered output without changing session state.
+
+| Parameter | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `session` | `string` | Yes | Name or internal ID |
+| `lines` | `number` | No | Defaults to `50` |
+| `full` | `boolean` | No | Show the full buffered stream |
+
+### `agent_sessions`
+
+List active and recent sessions.
+
+| Parameter | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `status` | `all \| running \| completed \| failed \| killed` | No | Filter by runtime state |
+| `full` | `boolean` | No | Show the broader recent view instead of the short default |
+
+`agent_sessions` merges active runtime sessions and persisted sessions into one view.
+
+### `agent_kill`
+
+Terminate a running session or mark it complete.
+
+| Parameter | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `session` | `string` | Yes | Name or internal ID |
+| `reason` | `killed \| completed` | No | Omit to stop; use `completed` to mark success |
+
+### `agent_stats`
+
+Show aggregate session counts, cost, average duration, and most expensive sessions.
+
+This tool takes no parameters.
+
+### `agent_merge`
+
+Merge a worktree branch back to base.
+
+| Parameter | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `session` | `string` | Yes | Must resolve to a session with worktree metadata |
+| `base_branch` | `string` | No | Defaults to detected base branch |
+| `strategy` | `merge \| squash` | No | `merge` means rebase-then-fast-forward |
+| `push` | `boolean` | No | Defaults to `true` |
+| `delete_branch` | `boolean` | No | Defaults to `true` |
+
+On conflicts, the plugin spawns a conflict-resolver session using the configured default harness.
+
+### `agent_pr`
+
+Create or update a GitHub PR for a worktree branch.
+
+| Parameter | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `session` | `string` | Yes | Must resolve to a session with worktree metadata |
+| `title` | `string` | No | Auto-generated if omitted |
+| `body` | `string` | No | Auto-generated if omitted |
+| `base_branch` | `string` | No | Defaults to detected base branch |
+| `force_new` | `boolean` | No | Reject instead of updating an existing PR |
+
+The PR path handles open, merged, and closed PR states instead of blindly creating duplicates.
+
+### `agent_worktree_status`
+
+Show the worktree state for one session or all sessions with worktree metadata.
+
+| Parameter | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `session` | `string` | No | Omit to list all tracked worktrees |
+
+### `agent_worktree_cleanup`
+
+Clean up merged `agent/*` branches or dismiss a pending worktree decision.
+
+| Parameter | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `workdir` | `string` | No | Repository to inspect |
+| `base_branch` | `string` | No | Defaults to detected base branch |
+| `skip_session_check` | `boolean` | No | Skip only the active-session protection |
+| `dry_run` | `boolean` | No | Preview without deleting |
+| `session` | `string` | No | Clear a pending worktree decision for that session |
+
+The cleanup tool always protects:
+
+- branches with active sessions
+- branches with unmerged commits
+- branches with open PRs
+
+## Chat Commands
+
+| Command | Purpose |
+| --- | --- |
+| `/agent` | Launch a session from chat |
+| `/agent_sessions` | List sessions |
+| `/agent_output` | Show recent output |
+| `/agent_respond` | Send a reply |
+| `/agent_kill` | Stop a session |
+| `/agent_resume` | Resume or fork a persisted session |
+| `/agent_stats` | Show aggregate metrics |
+
+`/agent_resume --list` shows resumable sessions. `/agent_resume --fork <id-or-name> [prompt]` forks a previous session instead of continuing it.
+
+## Routing And Channels
+
+### `agentChannels`
+
+`agentChannels` maps workspace paths to notification channels. The plugin uses longest-prefix matching, so a specific project can override a broader catch-all path.
+
+Example:
+
+```json
+{
+  "agentChannels": {
+    "/home/user/projects": "telegram|default-bot|1111111111",
+    "/home/user/projects/critical-app": "telegram|ops-bot|2222222222"
+  }
+}
+```
+
+A session launched in `/home/user/projects/critical-app/api` routes to `telegram|ops-bot|2222222222`, not the broader default entry.
+
+### Channel Formats
+
+| Format | Example |
+| --- | --- |
+| Telegram with explicit bot | `telegram|my-bot|123456789` |
+| Telegram with default bot | `telegram|123456789` |
+| Discord channel | `discord|channel:1234567890123456789` |
+| Discord with explicit bot account | `discord|my-bot|channel:1234567890123456789` |
+| Discord DM | `discord|user:1234567890123456789` |
+
+### Routing Order
+
+Tool launches resolve the origin channel in this order:
+
+1. `ctx.messageChannel` plus `ctx.agentAccountId`
+2. `agentChannels` match for the workspace directory
+3. raw `ctx.messageChannel` if already pipe-delimited
+4. `fallbackChannel`
+5. `"unknown"`
+
+Thread routing is separate from channel routing. When OpenClaw provides the originating session key or thread ID, notifications return to the exact thread or topic where the session started.
+
+## Notifications
+
+| Event | User Message |
+| --- | --- |
+| Launch | `🚀` session launched |
+| Waiting for input | `❓` session asked a real question |
+| Plan ready | `📋` plan ready for review |
+| Reply or redirect sent | `↪️` follow-up delivered |
+| Plan approved | `👍` plan approved |
+| Auto-resumed | `▶️` session resumed from persisted context |
+| Turn completed | `⏸️` paused after turn, auto-resumable |
+| Completed | `✅` done with cost and duration |
+| Deliverable ready | `📄` deliverable-ready completion |
+| Failed | `❌` failed, with resume guidance |
+| Idle timeout | `💤` idle kill |
+| Stopped | `⛔` stopped by user or shutdown |
+| Worktree decision in `ask` | Inline `Merge locally` / `Create PR` buttons |
+| Worktree decision in `delegate` | Brief user ping plus orchestrator wake |
+
+`ask` and `delegate` suppress the normal turn-complete wake at the end of the session because the worktree decision message becomes the completion signal.
+
+## Session Lifecycle
+
+- A launched session moves through `starting -> running -> completed|failed|killed`.
+- Multi-turn sessions pause automatically after a non-question turn. The next `agent_respond` auto-resumes them with the same harness session ID when possible.
+- Sessions killed for any reason except `startup-timeout` auto-resume on the next `agent_respond`.
+- Runtime GC evicts old terminal sessions from memory after `sessionGcAgeMinutes`, but persisted metadata remains resumable.
+- Persisted session resolution accepts internal IDs, names, and harness session IDs.
+
+## Troubleshooting
+
+- No notifications: verify `fallbackChannel` or `agentChannels`, then restart the gateway.
+- Wrong chat receives the update: check `agentChannels` longest-prefix matches and remove ambiguous path entries.
+- Worktree was not created: confirm the workdir is a git repo and there is enough free space for the worktree.
+- Push or PR failed: `ask`, `delegate`, and `auto-pr` need a configured remote; `agent_pr` also needs `gh` installed and authenticated.
+- Model launch rejected: update `harnesses.<name>.allowedModels` or the harness default model so they agree.
+- Codex auth weirdness: prefer `forced_login_method = "chatgpt"` and relaunch.

@@ -1,11 +1,13 @@
 # Codex Auth Race Fix Plan
 
+> Historical implementation plan. This is an internal design record, not part of the main user-facing docs surface.
+
 ## Summary
 
 ### What I verified
 
 - `openclaw-code-agent` uses `@openai/codex-sdk@0.107.0` and `@anthropic-ai/claude-agent-sdk@0.2.37`.
-- The Codex harness currently constructs the SDK with `new Codex()` in [`src/harness/codex.ts`](../src/harness/codex.ts), so every Codex turn inherits the plugin process environment and therefore the shared `~/.codex` tree.
+- The Codex harness currently constructs the SDK with `new Codex()` in [`src/harness/codex.ts`](../../src/harness/codex.ts), so every Codex turn inherits the plugin process environment and therefore the shared `~/.codex` tree.
 - The installed Codex SDK is a thin wrapper around the `codex` CLI. In `node_modules/@openai/codex-sdk/dist/index.js`, `new Codex({ env })` is supported and passed directly to the spawned CLI process.
 - The SDK exposes no auth-path override, no refresh-disable option, and no hook around token refresh.
 - The shipped Codex CLI help exposes `--config` and `--ephemeral`, but not `--no-refresh`, not a config-dir flag, and nothing equivalent to `CODEX_CONFIG_DIR`.
@@ -13,7 +15,7 @@
   - top-level keys: `OPENAI_API_KEY`, `auth_mode`, `last_refresh`, `tokens`
   - `auth_mode` is `chatgpt`
   - `tokens` contains `access_token`, `account_id`, `id_token`, `refresh_token`
-- The plugin already avoids reusing persisted Codex thread IDs after restart in [`src/resume-policy.ts:20-52`](../src/resume-policy.ts), because Codex resume state is brittle across restarts/auth changes.
+- The plugin already avoids reusing persisted Codex thread IDs after restart in [`src/resume-policy.ts:20-52`](../../src/resume-policy.ts), because Codex resume state is brittle across restarts/auth changes.
 - The OpenClaw `acpx` plugin spawns backend processes with inherited `process.env` in `/home/openclaw/openclaw/extensions/acpx/src/runtime-internals/process.ts:125-154`; it does not override `HOME`.
 - `acpx` defaults to a Codex-backed agent path for `codex` sessions via `/home/openclaw/openclaw/extensions/acpx/src/runtime-internals/mcp-agent-command.ts:6`, and its runtime launches those sessions through `/home/openclaw/openclaw/extensions/acpx/src/runtime.ts:282-360` and `/home/openclaw/openclaw/extensions/acpx/src/runtime.ts:702-720`.
 
@@ -107,9 +109,9 @@ This should be enough. A more complex token-field merge is not needed unless tes
 
 Current ranges to touch:
 
-- [`src/harness/codex.ts:6-35`](../src/harness/codex.ts#L6)
-- [`src/harness/codex.ts:147-157`](../src/harness/codex.ts#L147)
-- [`src/harness/codex.ts:173-424`](../src/harness/codex.ts#L173)
+- [`src/harness/codex.ts:6-35`](../../src/harness/codex.ts#L6)
+- [`src/harness/codex.ts:147-157`](../../src/harness/codex.ts#L147)
+- [`src/harness/codex.ts:173-424`](../../src/harness/codex.ts#L173)
 
 Planned changes:
 
@@ -135,8 +137,8 @@ Responsibilities:
 
 Current ranges likely affected:
 
-- [`tests/codex-harness.test.ts:40-58`](../tests/codex-harness.test.ts#L40)
-- [`tests/codex-harness.test.ts:114-438`](../tests/codex-harness.test.ts#L114)
+- [`tests/codex-harness.test.ts:40-58`](../../tests/codex-harness.test.ts#L40)
+- [`tests/codex-harness.test.ts:114-438`](../../tests/codex-harness.test.ts#L114)
 
 Planned changes:
 
@@ -153,7 +155,7 @@ New helper-focused tests for file/lock/sync behavior.
 
 Audited ranges:
 
-- [`src/harness/claude-code.ts:57-82`](../src/harness/claude-code.ts#L57)
+- [`src/harness/claude-code.ts:57-82`](../../src/harness/claude-code.ts#L57)
 
 No fix planned. See Claude audit below.
 
@@ -161,8 +163,8 @@ No fix planned. See Claude audit below.
 
 Audited ranges:
 
-- [`src/session-manager.ts:133-174`](../src/session-manager.ts#L133)
-- [`src/session-manager.ts:176-223`](../src/session-manager.ts#L176)
+- [`src/session-manager.ts:133-174`](../../src/session-manager.ts#L133)
+- [`src/session-manager.ts:176-223`](../../src/session-manager.ts#L176)
 
 No change required for the initial fix if `sessions/` remains shared and auth isolation stays self-contained in the Codex harness.
 
@@ -170,7 +172,7 @@ No change required for the initial fix if `sessions/` remains shared and auth is
 
 Audited ranges:
 
-- [`src/resume-policy.ts:20-52`](../src/resume-policy.ts#L20)
+- [`src/resume-policy.ts:20-52`](../../src/resume-policy.ts#L20)
 
 No change required. Existing behavior already disables persisted Codex resume after restart.
 
@@ -335,7 +337,7 @@ No analogous fix is warranted right now for the Claude harness.
 
 ### Why it does not look affected
 
-- The harness in [`src/harness/claude-code.ts`](../src/harness/claude-code.ts) calls `query(...)` directly and does not manipulate any shared auth file.
+- The harness in [`src/harness/claude-code.ts`](../../src/harness/claude-code.ts) calls `query(...)` directly and does not manipulate any shared auth file.
 - The Claude SDK surface exposes:
   - `env`
   - `persistSession`

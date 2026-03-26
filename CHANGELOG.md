@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Codex worktree instructions**: Codex sessions now receive worktree boundary constraints (path, branch, git safety rules) in the first user turn, since the Codex SDK `ThreadOptions` has no system-prompt field. Resumes also re-inject the instructions on their first turn of each launch invocation.
+- **Codex plan mode approval buttons**: Codex sessions launched with `permission_mode: "plan"` now correctly set `pendingPlanApproval = true` after the first (soft-plan) turn, triggering the Approve / Reject / Revise Telegram buttons via the existing `triggerWaitingForInputEvent` path.
+- **Worktree commit misdirection detection**: When a worktree branch has no commits ahead of the base branch, the plugin now also checks whether the base branch itself advanced. If it did, the notification says "commits likely landed outside the worktree branch" instead of the generic "Changes may be uncommitted".
+
+### Removed
+
+- **`multi_turn_disabled` removed** — all sessions are now multi-turn by default. The `agent_launch` tool no longer accepts the `multi_turn_disabled` parameter. Resume paths already normalized back to multi-turn and the parameter had no net effect on plan review loops, approval workflows, or wait/resume behavior.
+
+### Changed
+
+- Consolidated the documentation set around a value-first README, a single operator reference, and narrower architecture/development docs.
+- Archived the Codex auth race plan under `docs/archive/` and removed superseded standalone docs for tools, channels, and notifications.
+- Aligned markdown and schema help text with the current defaults and terminology (`planApproval: "ask"`, no Dismiss button).
+
 ## [3.0.0] - 2026-03-25
 
 ### Breaking Changes
@@ -38,7 +54,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `manual` — creates worktree but no automatic action; branch is kept for manual `agent_merge` or `agent_pr`
   - `ask` — push branch, send Telegram inline buttons (Merge locally / Create PR / Dismiss), wake orchestrator with full decision context
   - `delegate` — push branch, wake orchestrator with diff summary + decision guidance; always sends brief one-liner to user
-  - `auto-merge` — merge automatically; spawns Claude Code conflict-resolver session on conflicts
+  - `auto-merge` — merge automatically; spawns a conflict-resolver session using the configured default harness on conflicts
   - `auto-pr` — create/update GitHub PR with full lifecycle management; falls back to `ask` if `gh` unavailable
 - **`defaultWorktreeStrategy` plugin config option** — set a default strategy for all new sessions
 - **`worktreeDir` plugin config option** — override base directory for agent worktrees
@@ -77,7 +93,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`AskUserQuestion` interception** (Claude Code only) — intercepts plan-approval and worktree-decision tool calls from the CC harness and handles them in the plugin layer before they surface in chat
 
 #### Notifications
-- **`output_mode: "deliverable"`** on `agent_launch` — sends `📄 Deliverable ready` instead of `✅ Completed` when the session finishes; use for document/report/artifact generation
 - **Failure notification** now includes `harnessSessionId` and resume guidance for easier recovery
 - **Per-session retry timers** for wake delivery — eliminates shared timer contention between concurrent sessions
 - **`beforeExit` race fix** — notifications now complete before the process exits
