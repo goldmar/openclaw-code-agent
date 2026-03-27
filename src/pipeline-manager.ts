@@ -22,7 +22,7 @@ import {
   pluginConfig,
   resolveReasoningEffortForHarness,
 } from "./config";
-import { isGitRepoWithRemote, createWorktree, removeWorktree } from "./worktree";
+import { isGitRepo, createWorktree, removeWorktree } from "./worktree";
 import { generateSessionName } from "./format";
 import type { SessionConfig, SessionStatus } from "./types";
 import type {
@@ -319,7 +319,7 @@ export class PipelineManager {
    * Find the output of a completed stage by kind and iteration.
    */
   private findCompletedStageOutput(run: PipelineRun, kind: PipelineStageKind, iteration: number): string | undefined {
-    const stage = run.stages.find(s => s.kind === kind && s.iteration === iteration && s.status === "completed");
+    const stage = run.stages.find((s: PipelineStageRecord) => s.kind === kind && s.iteration === iteration && s.status === "completed");
     return stage?.output;
   }
 
@@ -360,7 +360,7 @@ export class PipelineManager {
     let originalWorkdir: string | undefined;
     const worktreeExplicit = params.worktree === true;
     const shouldWorktree = params.worktree !== false;
-    if (shouldWorktree && isGitRepoWithRemote(params.workdir)) {
+    if (shouldWorktree && isGitRepo(params.workdir)) {
       const uniqueName = `${name}-${Date.now()}`;
       try {
         worktreePath = createWorktree(params.workdir, uniqueName);
@@ -448,7 +448,7 @@ export class PipelineManager {
       name: `${run.name}-${spec.kind}${spec.iteration > 0 ? `-${spec.iteration}` : ""}`,
       harness: spec.harness,
       multiTurn: false,
-      worktree: false,
+      worktreeStrategy: "off",
       permissionMode: "bypassPermissions",
       codexApprovalPolicy: spec.harness === "codex" ? "never" : undefined,
       reasoningEffort: resolveReasoningEffortForHarness(spec.harness),

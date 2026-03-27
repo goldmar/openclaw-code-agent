@@ -77,6 +77,8 @@ export interface SessionConfig {
   outputMode?: "deliverable";
   /** Optional tool-intercept callback (CC sessions only). Used for AskUserQuestion intercept. */
   canUseTool?: CanUseToolCallback;
+  /** If false, suppress notifications for this session (e.g. pipeline sub-stages). */
+  notificationsEnabled?: boolean;
 }
 
 /** Plan-approval policy for orchestrator wake flows. */
