@@ -1285,4 +1285,45 @@ describe("SessionManager remindStaleDecisions interval", () => {
     // Should NOT send reminder — snoozed until the future
     assert.equal(dispatched.length, 0);
   });
+
+  it("re-wakes the orchestrator for stale delegate decisions without user buttons", () => {
+    const sm = new SessionManager(5);
+    const harnessId = "h-delegate-reminder";
+    const fourHoursAgo = new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString();
+    sm.store.persisted.set(harnessId, {
+      harnessSessionId: harnessId,
+      sessionId: "s-delegate-reminder",
+      name: "delegate-reminder",
+      prompt: "p",
+      workdir: "/tmp",
+      status: "completed",
+      costUsd: 0,
+      pendingWorktreeDecisionSince: fourHoursAgo,
+      worktreeBranch: "agent/delegate-reminder",
+      worktreeStrategy: "delegate",
+      route: {
+        provider: "telegram",
+        target: "12345",
+        sessionKey: "agent:main:telegram:group:12345",
+      },
+    } as any);
+
+    const dispatched: any[] = [];
+    (sm as any).notifications = {
+      dispatch: (...args: any[]) => dispatched.push(args),
+      notifyWorktreeOutcome: (...args: any[]) => dispatched.push(args),
+      dispose: () => {},
+    };
+    (sm as any).wakeDispatcher = { clearRetryTimersForSession: () => {}, dispose: () => {} };
+
+    (sm as any).remindStaleDecisions();
+
+    assert.equal(dispatched.length, 1);
+    const [_sessionArg, request] = dispatched[0];
+    assert.equal(request.notifyUser, "never");
+    assert.equal(request.userMessage, undefined);
+    assert.equal(request.buttons, undefined);
+    assert.match(request.wakeMessage, /DELEGATED WORKTREE DECISION REMINDER/);
+    assert.match(request.wakeMessage, /Never call agent_pr\(\) autonomously/);
+  });
 });

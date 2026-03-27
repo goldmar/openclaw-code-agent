@@ -276,8 +276,9 @@ export class SessionManager {
     return this.interactions.consumeActionToken(tokenId);
   }
 
-  private getWorktreeDecisionButtons(sessionId: string): NotificationButton[][] {
+  private getWorktreeDecisionButtons(sessionId: string): NotificationButton[][] | undefined {
     const session = this.resolve(sessionId) ?? this.getPersistedSession(sessionId);
+    if (!session || session.worktreeStrategy === "delegate") return undefined;
     return this.interactions.getWorktreeDecisionButtons(sessionId, session);
   }
 
@@ -311,6 +312,70 @@ export class SessionManager {
       harnessSessionId: session.harnessSessionId,
       route: session.route,
     } as Session;
+  }
+
+  private buildDelegateWorktreeWakeMessage(args: {
+    sessionName: string;
+    sessionId: string;
+    branchName: string;
+    baseBranch: string;
+    promptSnippet: string;
+    commitLines: string[];
+    moreNote?: string;
+    diffSummary: {
+      commits: number;
+      filesChanged: number;
+      insertions: number;
+      deletions: number;
+    };
+  }): string {
+    const {
+      sessionName,
+      sessionId,
+      branchName,
+      baseBranch,
+      promptSnippet,
+      commitLines,
+      moreNote,
+      diffSummary,
+    } = args;
+
+    return [
+      `[DELEGATED WORKTREE DECISION] Session "${sessionName}" completed with changes.`,
+      ``,
+      `Session ID: ${sessionId}`,
+      `Branch: ${branchName} → ${baseBranch}`,
+      `Commits: ${diffSummary.commits} | Files: ${diffSummary.filesChanged} | +${diffSummary.insertions} / -${diffSummary.deletions}`,
+      ``,
+      ...commitLines,
+      ...(moreNote ? [moreNote] : []),
+      ``,
+      `Original task prompt (first 500 chars):`,
+      promptSnippet,
+      ``,
+      `You own the next step for this worktree.`,
+      `- Merge immediately with agent_merge(session="${sessionName}", base_branch="${baseBranch}") if the changes are clearly in-scope and low-risk.`,
+      `- If a PR is safer, message the user with the summary and ask for confirmation before calling agent_pr().`,
+      `- If scope or risk is unclear, message the user and ask for guidance.`,
+      `- Never call agent_pr() autonomously in delegate mode.`,
+      `- After deciding, notify the user briefly with what you did and why.`,
+    ].join("\n");
+  }
+
+  private buildDelegateReminderWakeMessage(session: PersistedSessionInfo, pendingHours: number): string {
+    return [
+      `[DELEGATED WORKTREE DECISION REMINDER] Session "${session.name}" still has an unresolved worktree decision.`,
+      ``,
+      `Session ID: ${session.sessionId ?? session.harnessSessionId}`,
+      `Branch: ${session.worktreeBranch ?? "unknown"}`,
+      `Pending: ${pendingHours}h`,
+      ``,
+      `Resolve it now:`,
+      `- agent_merge(session="${session.name}") if the diff is clearly safe and in scope`,
+      `- If a PR is safer, ask the user before agent_pr()`,
+      `- If scope or risk is unclear, ask the user for guidance`,
+      `- Never call agent_pr() autonomously in delegate mode`,
+    ].join("\n");
   }
 
   async dismissWorktree(ref: string): Promise<string> {
@@ -529,63 +594,21 @@ export class SessionManager {
         .slice(0, 5)
         .map((c) => `• ${c.hash} ${c.message} (${c.author})`);
       const delegateMoreNote = diffSummary.commits > 5 ? `...and ${diffSummary.commits - 5} more` : "";
-
-      const delegateBranchLine = session.worktreePrTargetRepo
-        ? `Branch: \`${branchName}\` → \`${baseBranch}\` | PR target: ${session.worktreePrTargetRepo}`
-        : `Branch: \`${branchName}\` → \`${baseBranch}\``;
-
-      const delegateUserMessage = [
-        `🤖 Delegating merge decision for \`${branchName}\` to orchestrator`,
-        ``,
-        delegateBranchLine,
-        `Commits: ${diffSummary.commits} | Files: ${diffSummary.filesChanged} | +${diffSummary.insertions} / -${diffSummary.deletions}`,
-        ``,
-        ...delegateCommitLines,
-        ...(delegateMoreNote ? [delegateMoreNote] : []),
-        ``,
-        `⚠️ Dismiss will permanently delete branch \`${branchName}\` and all local changes. This cannot be undone.`,
-      ].join("\n");
-
       const promptSnippet = session.prompt ? session.prompt.slice(0, 500) : "(no prompt)";
-
-      const delegateWakeMessage = [
-        `[DELEGATED WORKTREE DECISION] Session "${session.name}" completed with changes.`,
-        ``,
-        `Branch: ${branchName} → ${baseBranch}`,
-        `Commits: ${diffSummary.commits} | Files: ${diffSummary.filesChanged} | +${diffSummary.insertions} / -${diffSummary.deletions}`,
-        ``,
-        ...delegateCommitLines,
-        ...(delegateMoreNote ? [delegateMoreNote] : []),
-        ``,
-        `Original task prompt (first 500 chars):`,
-        promptSnippet,
-        ``,
-        `━━━ DECISION REQUIRED ━━━`,
-        `You are the delegated decision-maker for this worktree branch.`,
-        ``,
-        `MERGE if:`,
-        `  - Changes match the original task scope`,
-        `  - No breaking changes or architectural concerns`,
-        `  → agent_merge(session="${session.name}", base_branch="${baseBranch}")`,
-        ``,
-        `ESCALATE to the user if PR creation is safer or required:`,
-        `  - Present the branch summary to the user and wait for their explicit choice`,
-        `  - You MUST NOT call agent_pr() autonomously — always escalate to the user for PR decisions`,
-        `  - PRs are the safer default when changes are non-trivial or benefit from review`,
-        ``,
-        `ESCALATE to user if:`,
-        `  - Scope is ambiguous or changes are risky`,
-        `  - User has standing preferences that apply here`,
-        ``,
-        `Always notify the user briefly with what you decided and why.`,
-      ].join("\n");
 
       this.dispatchSessionNotification(session, {
         label: "worktree-delegate",
-        userMessage: delegateUserMessage,
-        wakeMessage: delegateWakeMessage,
-        notifyUser: "always",
-        buttons: this.getWorktreeDecisionButtons(session.id),
+        wakeMessage: this.buildDelegateWorktreeWakeMessage({
+          sessionName: session.name,
+          sessionId: session.id,
+          branchName,
+          baseBranch,
+          promptSnippet,
+          commitLines: delegateCommitLines,
+          moreNote: delegateMoreNote || undefined,
+          diffSummary,
+        }),
+        notifyUser: "never",
       });
 
       // Stamp pending decision timestamp
@@ -1465,6 +1488,20 @@ export class SessionManager {
       harnessSessionId: session.harnessSessionId,
       route: session.route,
     });
+
+    if (session.worktreeStrategy === "delegate") {
+      const pendingSince = session.pendingWorktreeDecisionSince
+        ? new Date(session.pendingWorktreeDecisionSince).getTime()
+        : Date.now();
+      const pendingHours = Math.max(0, Math.floor((Date.now() - pendingSince) / (60 * 60 * 1000)));
+
+      this.notifications.dispatch(routingProxy, {
+        label: `worktree-stale-reminder-${session.name}`,
+        wakeMessage: this.buildDelegateReminderWakeMessage(session, pendingHours),
+        notifyUser: "never",
+      });
+      return;
+    }
 
     this.notifications.dispatch(routingProxy, {
       label: `worktree-stale-reminder-${session.name}`,

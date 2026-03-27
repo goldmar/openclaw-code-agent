@@ -87,7 +87,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
     }
   });
 
-  it("sends the standard worktree decision buttons in delegate mode", async () => {
+  it("routes delegate mode to the orchestrator without user buttons", async () => {
     const repoDir = mkdtempSync(join(tmpdir(), "sm-worktree-delegate-"));
     try {
       git(repoDir, "init", "-b", "main");
@@ -147,16 +147,12 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       assert.equal(calls.length, 1);
       const [_sessionArg, request] = calls[0];
       assert.equal(request.label, "worktree-delegate");
-      assert.equal(request.notifyUser, "always");
-      assert.match(request.userMessage, /Delegating merge decision/);
-      assert.match(request.userMessage, /Commits: 1 \| Files: 1/);
-      assert.deepEqual(request.buttons[0].map((button: any) => button.label), [
-        "Merge locally",
-        "Create PR",
-        "Decide later",
-        "Dismiss",
-      ]);
+      assert.equal(request.notifyUser, "never");
+      assert.equal(request.userMessage, undefined);
+      assert.equal(request.buttons, undefined);
       assert.match(request.wakeMessage, /DELEGATED WORKTREE DECISION/);
+      assert.match(request.wakeMessage, /agent_merge\(session="delegate-session"/);
+      assert.match(request.wakeMessage, /Never call agent_pr\(\) autonomously/);
       const persisted = (sm as any).store.persisted.get("h-delegate");
       assert.match(persisted.pendingWorktreeDecisionSince, /^\d{4}-\d{2}-\d{2}T/);
     } finally {
