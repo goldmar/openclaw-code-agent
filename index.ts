@@ -22,6 +22,7 @@ import { registerAgentStatsCommand } from "./src/commands/agent-stats";
 import { registerAgentOutputCommand } from "./src/commands/agent-output";
 import { SessionManager } from "./src/session-manager";
 import { setSessionManager } from "./src/singletons";
+import { setPluginRuntime } from "./src/runtime-store";
 import { setPluginConfig, pluginConfig } from "./src/config";
 import type { OpenClawPluginToolContext, PluginConfig } from "./src/types";
 
@@ -144,6 +145,7 @@ function cleanupOrphanedWorktrees(sm: SessionManager): void {
 export function register(api: OpenClawPluginApi): void {
   let sm: SessionManager | null = null;
   let cleanupInterval: ReturnType<typeof setInterval> | null = null;
+  setPluginRuntime(api.runtime);
 
   // Tools
   api.registerTool((ctx: OpenClawPluginToolContext) => makeAgentLaunchTool(ctx), { optional: false });
@@ -176,6 +178,7 @@ export function register(api: OpenClawPluginApi): void {
     start: (ctx) => {
       const config = api.pluginConfig ?? api.getConfig?.() ?? {};
       setPluginConfig(config);
+      setPluginRuntime(api.runtime);
 
       sm = new SessionManager(pluginConfig.maxSessions, pluginConfig.maxPersistedSessions);
       setSessionManager(sm);
@@ -192,6 +195,7 @@ export function register(api: OpenClawPluginApi): void {
       if (sm) sm.dispose();
       cleanupInterval = null;
       sm = null;
+      setPluginRuntime(undefined);
       setSessionManager(null);
     },
   });

@@ -1,5 +1,6 @@
 import { existsSync } from "fs";
 import { pluginConfig } from "./config";
+import { pathsReferToSameLocation } from "./path-utils";
 import type { PersistedSessionInfo, SessionConfig } from "./types";
 import {
   createWorktree,
@@ -64,7 +65,15 @@ function restoreResumeWorktreeContext(
       return persistedSession.workdir;
     }
     if (persistedSession.worktreePath) {
-      return getPrimaryRepoRootFromWorktree(persistedSession.worktreePath) ?? persistedSession.workdir;
+      const recoveredRepoRoot = getPrimaryRepoRootFromWorktree(persistedSession.worktreePath);
+      if (
+        persistedSession.workdir
+        && recoveredRepoRoot
+        && pathsReferToSameLocation(persistedSession.workdir, recoveredRepoRoot)
+      ) {
+        return persistedSession.workdir;
+      }
+      return recoveredRepoRoot ?? persistedSession.workdir;
     }
     return persistedSession.workdir;
   })();

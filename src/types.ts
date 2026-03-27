@@ -71,6 +71,27 @@ export type SessionActionKind =
   | "view-output"
   | "question-answer";
 
+export type TurnBoundaryDecision =
+  | "complete"
+  | "awaiting_user_input"
+  | "awaiting_plan_decision";
+
+export interface TurnBoundaryDecisionContext {
+  sessionId: string;
+  sessionName: string;
+  prompt: string;
+  workdir: string;
+  harnessName: string;
+  permissionMode: PermissionMode;
+  currentPermissionMode: PermissionMode;
+  originAgentId?: string;
+  turnText: string;
+}
+
+export type TurnBoundaryDecisionCallback = (
+  context: TurnBoundaryDecisionContext,
+) => Promise<TurnBoundaryDecision>;
+
 export interface SessionRoute {
   provider?: string;
   accountId?: string;
@@ -142,6 +163,8 @@ export interface SessionConfig {
   worktreePrTargetRepo?: string;
   /** Optional tool-intercept callback (CC sessions only). Used for AskUserQuestion intercept. */
   canUseTool?: CanUseToolCallback;
+  /** Optional semantic turn-boundary classifier used to decide whether a turn should wait for input instead of completing. */
+  turnBoundaryDecision?: TurnBoundaryDecisionCallback;
 }
 
 /** Plan-approval policy for orchestrator wake flows. */

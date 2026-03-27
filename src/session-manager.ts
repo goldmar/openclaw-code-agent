@@ -4,6 +4,9 @@ import { Session } from "./session";
 import { pluginConfig, getDefaultHarnessName } from "./config";
 import { prepareSessionBootstrap } from "./session-bootstrap";
 import { formatDuration, generateSessionName, lastCompleteLines, truncateText } from "./format";
+import { formatLaunchSummary } from "./launch-summary";
+import { pathsReferToSameLocation } from "./path-utils";
+import { SessionSemanticAdapter } from "./session-semantic-adapter";
 import type {
   SessionConfig,
   SessionStatus,
@@ -92,6 +95,7 @@ export class SessionManager {
   private readonly interactions: SessionInteractionService;
   private readonly notifications: SessionNotificationService;
   private readonly worktrees: SessionWorktreeController;
+  private readonly semantic: SessionSemanticAdapter;
 
   constructor(maxSessions: number = 20, maxPersistedSessions: number = 50) {
     this.maxSessions = maxSessions;
@@ -105,6 +109,7 @@ export class SessionManager {
       (ref, patch) => this.applySessionPatch(ref, patch),
     );
     this.worktrees = new SessionWorktreeController();
+    this.semantic = new SessionSemanticAdapter();
   }
 
   // Back-compat for tests and internal inspection.
@@ -164,7 +169,13 @@ export class SessionManager {
         }
       : config.canUseTool;
 
-    const session = new Session({ ...config, workdir: actualWorkdir, systemPrompt: effectiveSystemPrompt, canUseTool }, name);
+    const session = new Session({
+      ...config,
+      workdir: actualWorkdir,
+      systemPrompt: effectiveSystemPrompt,
+      canUseTool,
+      turnBoundaryDecision: (context) => this.semantic.classifyTurnBoundary(context),
+    }, name);
     sessionIdRef = session.id; // bind late — canUseTool closure captures this ref
     if (worktreePath) {
       session.worktreePath = worktreePath;
@@ -254,6 +265,38 @@ export class SessionManager {
       || session.result?.result
       || `status=${session.status}${reason}`;
     return `Session ${session.name} [${session.id}] failed to start: ${detail}`;
+  }
+
+  formatLaunchResult(config: {
+    prompt: string;
+    workdir: string;
+    harness: string;
+    permissionMode: string;
+    planApproval: string;
+    forceNewSession?: boolean;
+    resumeSessionId?: string;
+    forkSession?: boolean;
+    clearedPersistedCodexResume?: boolean;
+  }, session: Session): string {
+    return formatLaunchSummary({
+      sessionId: session.id,
+      sessionName: session.name,
+      prompt: config.prompt,
+      workdir: config.workdir,
+      harness: config.harness,
+      model: session.model,
+      reasoningEffort: session.reasoningEffort,
+      permissionMode: config.permissionMode,
+      planApproval: config.planApproval,
+      worktreeStrategy: session.worktreeStrategy ?? "off",
+      worktreePath: session.worktreePath,
+      originalWorkdir: session.originalWorkdir,
+      codexApprovalPolicy: session.codexApprovalPolicy,
+      resumeSessionId: config.resumeSessionId,
+      forkSession: config.forkSession,
+      forceNewSession: config.forceNewSession,
+      clearedPersistedCodexResume: config.clearedPersistedCodexResume,
+    });
   }
 
   private shouldRunWorktreeStrategy(session: Session): boolean {
@@ -406,7 +449,7 @@ export class SessionManager {
   }
 
   private resolveWorktreeRepoDir(repoDir: string | undefined, worktreePath?: string): string | undefined {
-    if (repoDir && (!worktreePath || repoDir !== worktreePath)) return repoDir;
+    if (repoDir && (!worktreePath || !pathsReferToSameLocation(repoDir, worktreePath))) return repoDir;
     if (!worktreePath) return repoDir;
     return getPrimaryRepoRootFromWorktree(worktreePath) ?? repoDir;
   }
@@ -416,29 +459,6 @@ export class SessionManager {
     const repoDir = this.resolveWorktreeRepoDir(session.originalWorkdir, session.worktreePath);
     if (!repoDir || repoDir === session.worktreePath) return session.worktreePath;
     return `${session.worktreePath} (worktree of ${repoDir})`;
-  }
-
-  private getNoChangeDeliverablePreview(session: Session, maxChars: number = 2_500): string | undefined {
-    const preview = this.getOutputPreview(session, maxChars).trim();
-    if (!preview) return undefined;
-
-    const nonEmptyLines = preview
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean);
-    const hasStructuredContent = /(?:^|\n)\s*(?:[-*]\s+|\d+\.\s+)/m.test(preview)
-      || /\b(plan|summary|findings|report|investigation|root cause|recommendations?)\b/i.test(preview);
-    const isSubstantial = preview.length >= 120 || nonEmptyLines.length >= 3;
-
-    if (!isSubstantial && !hasStructuredContent) return undefined;
-    return preview;
-  }
-
-  private isPlanOrInvestigationSession(session: Pick<Session, "name" | "prompt"> & { currentPermissionMode?: string }): boolean {
-    if (session.currentPermissionMode === "plan") return true;
-
-    const combined = `${session.name}\n${session.prompt}`.toLowerCase();
-    return /\b(plan|planning|investigat(?:e|ion)|analy[sz]e|analysis|report|review|audit|research|root cause|findings|proposal|outline|spec)\b/.test(combined);
   }
 
   private buildNoChangeDeliverableMessage(
@@ -457,6 +477,41 @@ export class SessionManager {
       ``,
       cleanupLine,
     ].join("\n");
+  }
+
+  private getNoChangeOutputText(
+    session: Pick<Session, "getOutput">,
+    maxChars: number = 5_000,
+  ): string {
+    return session.getOutput()
+      .join("\n")
+      .slice(-maxChars)
+      .trim();
+  }
+
+  private async classifyNoChangeDeliverable(
+    session: Pick<Session, "harnessName" | "name" | "prompt" | "originAgentId" | "getOutput"> & {
+      workdir?: string;
+      originalWorkdir?: string;
+    },
+  ): Promise<string | undefined> {
+    if (typeof session.getOutput !== "function") return undefined;
+    const preview = this.getOutputPreview(session as Session, 2_500).trim();
+    if (!preview) return undefined;
+    const outputText = this.getNoChangeOutputText(session);
+    const workspaceDir = session.workdir ?? session.originalWorkdir;
+    if (!outputText) return undefined;
+    if (!workspaceDir) return undefined;
+
+    const result = await this.semantic.classifyNoChangeDeliverable({
+      harnessName: session.harnessName,
+      sessionName: session.name,
+      prompt: session.prompt,
+      workdir: workspaceDir,
+      agentId: session.originAgentId,
+      outputText,
+    });
+    return result.classification === "report_worthy_no_change" ? preview : undefined;
   }
 
   async dismissWorktree(ref: string): Promise<string> {
@@ -588,10 +643,7 @@ export class SessionManager {
     const completionState = this.getWorktreeCompletionState(repoDir, worktreePath, branchName, baseBranch);
 
     if (completionState === "no-change") {
-      const deliverablePreview =
-        this.isPlanOrInvestigationSession(session)
-          ? this.getNoChangeDeliverablePreview(session)
-          : undefined;
+      const deliverablePreview = await this.classifyNoChangeDeliverable(session);
       const removed = removeWorktree(repoDir, worktreePath);
       if (removed) {
         session.worktreePath = undefined;

@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { pathsReferToSameLocation } from "../src/path-utils";
 import { prepareSessionBootstrap } from "../src/session-bootstrap";
 import type { PersistedSessionInfo, SessionConfig } from "../src/types";
 import { createWorktree, getBranchName } from "../src/worktree";
@@ -55,10 +56,13 @@ describe("prepareSessionBootstrap()", () => {
       );
 
       assert.equal(bootstrap.actualWorkdir, worktreePath);
-      assert.equal(bootstrap.originalWorkdir, repoDir);
+      assert.equal(pathsReferToSameLocation(bootstrap.originalWorkdir, repoDir), true);
       assert.equal(bootstrap.worktreePath, worktreePath);
       assert.equal(bootstrap.worktreeBranchName, branchName);
-      assert.match(bootstrap.effectiveSystemPrompt ?? "", new RegExp(`Do NOT edit files directly in ${repoDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+      assert.match(
+        bootstrap.effectiveSystemPrompt ?? "",
+        new RegExp(`Do NOT edit files directly in ${(bootstrap.originalWorkdir ?? "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`),
+      );
       assert.doesNotMatch(
         bootstrap.effectiveSystemPrompt ?? "",
         new RegExp(`Do NOT edit files directly in ${worktreePath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`),

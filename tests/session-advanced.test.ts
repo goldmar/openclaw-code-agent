@@ -253,6 +253,57 @@ describe("Session consumeMessages — result message (multi-turn)", () => {
     session.kill("user");
   });
 
+  it("keeps the session open when turnBoundaryDecision classifies a Codex turn as awaiting user input", async () => {
+    const session = await startSession({
+      multiTurn: true,
+      permissionMode: "bypassPermissions",
+      turnBoundaryDecision: async () => "awaiting_user_input",
+    });
+    const turnEndEvents: boolean[] = [];
+    session.on("turnEnd", (_s: any, hadQuestion: boolean) => { turnEndEvents.push(hadQuestion); });
+
+    fakeHarness.setPromptConsumptionPaused(false);
+    await tick(20);
+    fakeHarness.pushMessage({ type: "text", text: "Please confirm whether I should continue with the rollout." });
+    await tick(20);
+    fakeHarness.pushMessage({
+      type: "result",
+      data: { success: true, duration_ms: 100, total_cost_usd: 0.01, num_turns: 1, session_id: session.harnessSessionId! },
+    });
+    await tick(50);
+
+    assert.equal(session.status, "running");
+    assert.equal(session.lifecycle, "awaiting_user_input");
+    assert.ok(turnEndEvents.includes(true));
+    session.kill("user");
+  });
+
+  it("keeps the session open when turnBoundaryDecision classifies a turn as awaiting plan decision", async () => {
+    const session = await startSession({
+      multiTurn: true,
+      permissionMode: "default",
+      turnBoundaryDecision: async () => "awaiting_plan_decision",
+    });
+    const turnEndEvents: boolean[] = [];
+    session.on("turnEnd", (_s: any, hadQuestion: boolean) => { turnEndEvents.push(hadQuestion); });
+
+    fakeHarness.setPromptConsumptionPaused(false);
+    await tick(20);
+    fakeHarness.pushMessage({ type: "text", text: "Implementation plan:\n1. Update the routing path\n2. Add regression tests\nShould I proceed?" });
+    await tick(20);
+    fakeHarness.pushMessage({
+      type: "result",
+      data: { success: true, duration_ms: 100, total_cost_usd: 0.01, num_turns: 1, session_id: session.harnessSessionId! },
+    });
+    await tick(50);
+
+    assert.equal(session.status, "running");
+    assert.equal(session.lifecycle, "awaiting_plan_decision");
+    assert.equal(session.pendingPlanApproval, true);
+    assert.ok(turnEndEvents.includes(true));
+    session.kill("user");
+  });
+
   it("emits turnEnd with hadQuestion=true in plan mode (plan approval fallback)", async () => {
     const session = await startSession({ multiTurn: true, permissionMode: "plan" });
     const turnEndEvents: boolean[] = [];

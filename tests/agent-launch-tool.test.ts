@@ -48,8 +48,13 @@ describe("agent_launch tool defaults", () => {
     assert.equal(spawnConfig?.model, "gpt-5.3-codex");
     assert.equal(spawnConfig?.reasoningEffort, "high");
     assert.equal(spawnConfig?.codexApprovalPolicy, "on-request");
-    assert.match((result.content[0] as { text: string }).text, /Model: gpt-5\.3-codex/);
-    assert.match((result.content[0] as { text: string }).text, /Codex approval policy: on-request/);
+    const text = (result.content[0] as { text: string }).text;
+    assert.match(text, /Harness: codex/);
+    assert.match(text, /Permission mode: plan/);
+    assert.match(text, /Plan approval: delegate/);
+    assert.match(text, /Worktree strategy: ask/);
+    assert.match(text, /Model: gpt-5\.3-codex/);
+    assert.match(text, /Codex approval policy: on-request/);
   });
 
   it("prefers an explicit model while keeping the plugin Codex approval policy", async () => {

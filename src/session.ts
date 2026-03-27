@@ -22,6 +22,8 @@ import type {
   SessionRuntimeState,
   SessionDeliveryState,
   SessionRoute,
+  TurnBoundaryDecision,
+  TurnBoundaryDecisionCallback,
 } from "./types";
 import {
   getGlobalMcpServers,
@@ -199,6 +201,7 @@ export class Session extends EventEmitter {
 
   // AskUserQuestion intercept
   private readonly canUseTool?: CanUseToolCallback;
+  private readonly turnBoundaryDecision?: TurnBoundaryDecisionCallback;
 
   // Auto-respond counter
   autoRespondCount: number = 0;
@@ -242,6 +245,7 @@ export class Session extends EventEmitter {
       this.worktreePrTargetRepo = config.worktreePrTargetRepo;
     }
     this.canUseTool = config.canUseTool;
+    this.turnBoundaryDecision = config.turnBoundaryDecision;
     this.startedAt = Date.now();
     this.abortController = new AbortController();
     this.applyControlEvent({ type: "initialize", hasWorktree: !!(this.worktreeStrategy && this.worktreeStrategy !== "off") });
@@ -303,6 +307,14 @@ export class Session extends EventEmitter {
 
   private clearPendingPlanApproval(): void {
     this.applyControlEvent({ type: "plan.cleared" });
+  }
+
+  markAwaitingUserInput(): void {
+    this.applyControlEvent({ type: "input.requested" });
+  }
+
+  markPendingPlanApprovalFromClassifier(context: PlanApprovalContext): void {
+    this.markPendingPlanApproval(context);
   }
 
   // -- Lifecycle --
@@ -633,13 +645,30 @@ export class Session extends EventEmitter {
             // Follow-up user messages were queued during this turn; keep the
             // session alive so the harness can consume them on the next turn.
           } else if (!needsInput) {
-            this.applyControlEvent({ type: "terminal.entered" });
-            this.emit("turnEnd", this, false);
-            // `complete("done")` means "natural turn completion with no user
-            // input needed". This is intentionally different from `kill("done")`:
-            // completion emits the success lifecycle path and avoids killed/failure
-            // terminal handling noise.
-            this.complete("done");
+            const semanticDecision = await this.resolveTurnBoundaryDecision(this.currentTurnText);
+            if (semanticDecision === "awaiting_plan_decision") {
+              const planContext: PlanApprovalContext =
+                this.currentPermissionMode === "plan" || this.permissionMode === "plan"
+                  ? "plan-mode"
+                  : "soft-plan";
+              this.markPendingPlanApproval(planContext);
+              this.lastTurnHadQuestion = true;
+              this.waitingForInputFired = true;
+              this.emit("turnEnd", this, true);
+            } else if (semanticDecision === "awaiting_user_input") {
+              this.lastTurnHadQuestion = true;
+              this.waitingForInputFired = true;
+              this.applyControlEvent({ type: "input.requested" });
+              this.emit("turnEnd", this, true);
+            } else {
+              this.applyControlEvent({ type: "terminal.entered" });
+              this.emit("turnEnd", this, false);
+              // `complete("done")` means "natural turn completion with no user
+              // input needed". This is intentionally different from `kill("done")`:
+              // completion emits the success lifecycle path and avoids killed/failure
+              // terminal handling noise.
+              this.complete("done");
+            }
           }
         } else {
           this.turnInProgress = false;
@@ -650,6 +679,26 @@ export class Session extends EventEmitter {
       } else if (msg.type === "activity") {
         // Keepalive ping for long-running subprocesses with no output.
       }
+    }
+  }
+
+  private async resolveTurnBoundaryDecision(turnText: string): Promise<TurnBoundaryDecision> {
+    if (!this.turnBoundaryDecision) return "complete";
+    try {
+      return await this.turnBoundaryDecision({
+        sessionId: this.id,
+        sessionName: this.name,
+        prompt: this.prompt,
+        workdir: this.workdir,
+        harnessName: this.harnessName,
+        permissionMode: this.permissionMode,
+        currentPermissionMode: this.currentPermissionMode,
+        originAgentId: this.originAgentId,
+        turnText,
+      });
+    } catch (err) {
+      console.warn(`[Session ${this.id}] turnBoundaryDecision failed: ${errorMessage(err)}`);
+      return "complete";
     }
   }
 

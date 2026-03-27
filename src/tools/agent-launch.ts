@@ -1,6 +1,7 @@
 import { existsSync } from "fs";
 import { Type } from "@sinclair/typebox";
 import { sessionManager } from "../singletons";
+import { formatLaunchSummary } from "../launch-summary";
 import {
   getDefaultHarnessName,
   parseThreadIdFromSessionKey,
@@ -432,30 +433,47 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
           worktreePrTargetRepo: params.worktree_pr_target_repo,
         });
 
-        const promptSummary = params.prompt.length > 80 ? params.prompt.slice(0, 80) + "..." : params.prompt;
-        const details = [
-          `Session launched successfully.`,
-          `  Name: ${session.name}`,
-          `  ID: ${session.id}`,
-          `  Dir: ${workdir}`,
-          `  Model: ${session.model ?? "default"}`,
-          `  Prompt: "${promptSummary}"`,
-        ];
-        if (harness === "codex") {
-          details.push(`  Codex approval policy: ${session.codexApprovalPolicy ?? resolveApprovalPolicyForHarness(harness) ?? pluginConfig.codexApprovalPolicy}`);
-        }
-        if (params.resume_session_id) {
-          details.push(`  Resume: ${params.resume_session_id}${params.fork_session ? " (forked)" : ""}`);
-          if (clearedPersistedCodexResume) {
-            details.push(`  Thread state: historical Codex state cleared; starting a fresh thread.`);
-          }
-        } else if (params.force_new_session) {
-          details.push(`  Force new session: true`);
-        }
-        details.push(`  Mode: multi-turn (use agent_respond to send follow-up messages)`);
-        details.push(``, `Use agent_sessions to check status, agent_output to see output.`);
+        const permissionMode = params.permission_mode ?? pluginConfig.permissionMode;
+        const planApproval = params.plan_approval ?? pluginConfig.planApproval;
+        const launchText = typeof (sessionManager as { formatLaunchResult?: unknown }).formatLaunchResult === "function"
+          ? sessionManager.formatLaunchResult({
+              prompt: params.prompt,
+              workdir,
+              harness,
+              permissionMode,
+              planApproval,
+              forceNewSession: params.force_new_session,
+              resumeSessionId: params.resume_session_id,
+              forkSession: params.fork_session,
+              clearedPersistedCodexResume,
+            }, session)
+          : formatLaunchSummary({
+              sessionId: session.id,
+              sessionName: session.name,
+              prompt: params.prompt,
+              workdir,
+              harness,
+              model: session.model,
+              reasoningEffort: resolveReasoningEffortForHarness(harness),
+              permissionMode,
+              planApproval,
+              worktreeStrategy: (session as { worktreeStrategy?: string }).worktreeStrategy ?? params.worktree_strategy ?? pluginConfig.defaultWorktreeStrategy ?? "off",
+              worktreePath: (session as { worktreePath?: string }).worktreePath,
+              originalWorkdir: (session as { originalWorkdir?: string }).originalWorkdir,
+              codexApprovalPolicy: (session as { codexApprovalPolicy?: string }).codexApprovalPolicy
+                ?? (harness === "codex" ? (resolveApprovalPolicyForHarness(harness) ?? pluginConfig.codexApprovalPolicy) : undefined),
+              resumeSessionId: params.resume_session_id,
+              forkSession: params.fork_session,
+              forceNewSession: params.force_new_session,
+              clearedPersistedCodexResume,
+            });
 
-        return { content: [{ type: "text", text: details.join("\n") }] };
+        return {
+          content: [{
+            type: "text",
+            text: launchText,
+          }],
+        };
       } catch (err: unknown) {
         const message = errorMessage(err);
         const hint = message.includes("Max sessions") ? "" : "\n\nUse agent_sessions to see active sessions and their status.";

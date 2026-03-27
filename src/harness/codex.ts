@@ -72,6 +72,7 @@ function buildSoftPlanningPrompt(prompt: string): string {
   return [
     "[SYSTEM: First turn only. Do not implement yet.]",
     "Start by producing a concise implementation plan only.",
+    "Emit the plan directly in this response. Do not write the plan to a file unless the user explicitly asked for a file artifact.",
     "Then end your response with an explicit question asking whether you should proceed with implementation.",
     "",
     prompt,

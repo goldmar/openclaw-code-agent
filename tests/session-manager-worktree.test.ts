@@ -103,6 +103,9 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
 
       const sm = new SessionManager(5);
       stubDispatch(sm);
+      (sm as any).semantic = {
+        classifyNoChangeDeliverable: async () => ({ classification: "report_worthy_no_change" }),
+      };
       (sm as any).store.persisted.set("h-plan-report", {
         harnessSessionId: "h-plan-report",
         name: "plan-report",
@@ -173,6 +176,9 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
 
       const sm = new SessionManager(5);
       stubDispatch(sm);
+      (sm as any).semantic = {
+        classifyNoChangeDeliverable: async () => ({ classification: "report_worthy_no_change" }),
+      };
 
       const session = {
         id: "s-investigation-report",
