@@ -1,0 +1,136 @@
+import type { PlanApprovalMode } from "../types";
+import type { Session } from "../session";
+import type { NotificationButton } from "../session-interactions";
+
+type OriginThreadLine = string;
+
+export function buildWaitingForInputPayload(args: {
+  session: Pick<Session, "id" | "name" | "multiTurn" | "pendingPlanApproval">;
+  preview: string;
+  originThreadLine: OriginThreadLine;
+  planApprovalMode?: PlanApprovalMode;
+  planApprovalButtons?: NotificationButton[][];
+}): {
+  label: "plan-approval" | "waiting";
+  userMessage: string;
+  wakeMessage: string;
+  buttons?: NotificationButton[][];
+} {
+  const { session, preview, originThreadLine, planApprovalMode, planApprovalButtons } = args;
+  const isPlanApproval = session.pendingPlanApproval;
+
+  const userMessage = isPlanApproval
+    ? (
+        planApprovalMode === "ask"
+          ? `📋 [${session.name}] Plan ready for approval:\n\n${preview}\n\nChoose Approve, Reject, or Revise below.`
+          : `📋 [${session.name}] Plan awaiting approval:\n\n${preview}`
+      )
+    : `❓ [${session.name}] Question waiting for reply:\n\n${preview}`;
+
+  if (isPlanApproval) {
+    const resolvedMode = planApprovalMode ?? "delegate";
+    const permissionModeLine = `Permission mode: plan → will switch to bypassPermissions on approval`;
+    if (resolvedMode === "delegate") {
+      return {
+        label: "plan-approval",
+        userMessage,
+        wakeMessage: [
+          `[DELEGATED PLAN APPROVAL] Coding agent session has finished its plan and is requesting approval to implement.`,
+          `Name: ${session.name} | ID: ${session.id}`,
+          originThreadLine,
+          permissionModeLine,
+          ``,
+          `⚠️ YOU MUST COMPLETE THESE STEPS IN ORDER. Do NOT skip any step.`,
+          ``,
+          `━━━ STEP 1 (MANDATORY): Read the full plan ━━━`,
+          `Call agent_output(session='${session.id}', full=true) to read the FULL plan output.`,
+          `The preview below is truncated — you MUST read the full output before making any decision.`,
+          ``,
+          `Preview (truncated):`,
+          preview,
+          ``,
+          `━━━ STEP 2 (MANDATORY): Notify the user ━━━`,
+          `After reading the full plan, use the message tool to send the user a summary that includes:`,
+          `- What files/components will be changed`,
+          `- Risk level (low/medium/high) and why`,
+          `- Scope: does this match the original task or has it expanded?`,
+          `- Any concerns or assumptions the plan makes`,
+          `This message creates accountability — you cannot approve blindly.`,
+          ``,
+          `━━━ STEP 3 (ONLY AFTER steps 1 and 2): Decide ━━━`,
+          `You are the delegated decision-maker. Choose ONE:`,
+          ``,
+          `APPROVE the plan directly if ALL of the following are true:`,
+          `- You have read the FULL plan (not just the preview)`,
+          `- You have sent the user the summary message`,
+          `- The plan scope matches the original task request`,
+          `- The changes are low-risk (no destructive operations, no credential handling, no production deployments)`,
+          `- The plan is clear and well-scoped (no ambiguous requirements or open design questions)`,
+          `- No architectural decisions that the user should weigh in on`,
+          `- The working directory and codebase are correct`,
+          ``,
+          `ESCALATE to the user and WAIT if ANY of the following are true:`,
+          `- The plan involves destructive operations (deleting files, dropping tables, force-pushing)`,
+          `- The plan involves credentials, secrets, or production environments`,
+          `- The plan requires architectural decisions not covered by the original task`,
+          `- The scope has expanded beyond the original request`,
+          `- The requirements are ambiguous or the plan makes assumptions the user should confirm`,
+          `- You are unsure — when in doubt, always escalate`,
+          ``,
+          `If approving: agent_respond(session='${session.id}', message='Approved. Go ahead.', approve=true)`,
+          `If escalating: tell the user you need their decision and WAIT for his explicit response.`,
+          `To request changes: agent_respond(session='${session.id}', message='<your feedback>') — do NOT set approve=true. The agent will revise the plan.`,
+        ].join("\n"),
+      };
+    }
+
+    if (resolvedMode === "ask") {
+      return {
+        label: "plan-approval",
+        userMessage,
+        wakeMessage: [
+          `[USER APPROVAL REQUESTED] Coding agent session has finished its plan. The user has been notified via Telegram and must approve directly.`,
+          `Name: ${session.name} | ID: ${session.id}`,
+          originThreadLine,
+          permissionModeLine,
+          ``,
+          `DO NOT approve this plan yourself. Wait for the user's explicit approval or rejection.`,
+          `Once the user responds, forward their decision:`,
+          `  To approve: agent_respond(session='${session.id}', message='Approved. Go ahead.', approve=true)`,
+          `  To request changes: agent_respond(session='${session.id}', message='<user feedback>')`,
+          ``,
+          `Preview (truncated):`,
+          preview,
+        ].join("\n"),
+        buttons: planApprovalButtons,
+      };
+    }
+
+    return {
+      label: "plan-approval",
+      userMessage,
+      wakeMessage: [
+        `[AUTO-APPROVE] Session has a plan ready. Approve it now:`,
+        `agent_respond(session='${session.id}', message='Approved. Go ahead.', approve=true)`,
+      ].join("\n"),
+    };
+  }
+
+  const sessionType = session.multiTurn ? "Multi-turn session" : "Session";
+  return {
+    label: "waiting",
+    userMessage,
+    wakeMessage: [
+      `[SYSTEM INSTRUCTION: Follow your auto-respond rules strictly. If this is a permission request or "should I continue?" → auto-respond. For ALL other questions → forward the agent's EXACT question to the user. Do NOT add your own analysis, commentary, or interpretation. Do NOT "nudge" or "poke" the session.]`,
+      ``,
+      `${sessionType} is waiting for a genuine user reply.`,
+      `Name: ${session.name} | ID: ${session.id}`,
+      originThreadLine,
+      ``,
+      `Last output:`,
+      preview,
+      ``,
+      `Use agent_respond(session='${session.id}', message='...') to send a reply, or agent_output(session='${session.id}', full: true) to see full context before deciding.`,
+    ].join("\n"),
+  };
+}

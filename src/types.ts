@@ -52,6 +52,11 @@ export type KillReason = "user" | "idle-timeout" | "startup-timeout" | "shutdown
 
 /** Unified permission modes exposed by tools/commands across harnesses. */
 export type PermissionMode = "default" | "plan" | "bypassPermissions";
+/**
+ * `plan-mode` is the native structured plan gate for harnesses that support it directly.
+ * `codex-first-turn-plan` is the Codex-only first-turn planning gate inferred by the
+ * bounded semantic adapter before implementation begins.
+ */
 export type PlanApprovalContext = "plan-mode" | "codex-first-turn-plan";
 export type WorktreeStrategy = "off" | "manual" | "ask" | "delegate" | "auto-merge" | "auto-pr";
 export type CodexApprovalPolicy = "never" | "on-request";

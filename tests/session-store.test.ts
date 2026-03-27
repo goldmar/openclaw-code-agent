@@ -1,12 +1,11 @@
 import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { SessionStore } from "../src/session-store";
+import { STORE_SCHEMA_VERSION } from "../src/session-store-normalization";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { execFileSync } from "child_process";
-
-const STORE_SCHEMA_VERSION = 4;
 
 const DEFAULT_ROUTE = {
   provider: "telegram",

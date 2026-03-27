@@ -2,11 +2,11 @@ import { existsSync } from "fs";
 
 import { Session } from "./session";
 import { pluginConfig, getDefaultHarnessName } from "./config";
-import { prepareSessionBootstrap } from "./session-bootstrap";
 import { generateSessionName, lastCompleteLines } from "./format";
 import { formatLaunchSummaryFromSession } from "./launch-summary";
 import { pathsReferToSameLocation } from "./path-utils";
 import { SessionSemanticAdapter } from "./session-semantic-adapter";
+import { SessionRestoreService } from "./session-restore-service";
 import type {
   SessionConfig,
   SessionStatus,
@@ -92,6 +92,7 @@ export class SessionManager {
   private readonly questions: SessionQuestionService;
   private readonly reminders: SessionReminderService;
   private readonly lifecycle: SessionLifecycleService;
+  private readonly restore: SessionRestoreService;
 
   constructor(maxSessions: number = 20, maxPersistedSessions: number = 50) {
     this.maxSessions = maxSessions;
@@ -106,6 +107,7 @@ export class SessionManager {
     );
     this.worktrees = new SessionWorktreeController();
     this.semantic = new SessionSemanticAdapter();
+    this.restore = new SessionRestoreService((ref) => this.store.getPersistedSession(ref));
     this.questions = new SessionQuestionService(
       this.pendingAskUserQuestions,
       (session, request) => this.dispatchSessionNotification(session, request),
@@ -176,13 +178,7 @@ export class SessionManager {
       throw new Error(`Cannot launch session "${name}": missing explicit route metadata.`);
     }
 
-    const {
-      actualWorkdir,
-      originalWorkdir,
-      effectiveSystemPrompt,
-      worktreePath,
-      worktreeBranchName,
-    } = prepareSessionBootstrap(config, name, (ref) => this.store.getPersistedSession(ref));
+    const preparedLaunch = this.restore.prepareSpawn(config, name);
 
     // Inject AskUserQuestion intercept for CC sessions. Codex sessions do not support
     // canUseTool — their questions appear as plain text in the message stream.
@@ -199,21 +195,13 @@ export class SessionManager {
 
     const session = new Session({
       ...config,
-      workdir: actualWorkdir,
-      systemPrompt: effectiveSystemPrompt,
+      workdir: preparedLaunch.actualWorkdir,
+      systemPrompt: preparedLaunch.effectiveSystemPrompt,
       canUseTool,
       turnBoundaryDecision: (context) => this.semantic.classifyTurnBoundary(context),
     }, name);
     sessionIdRef = session.id; // bind late — canUseTool closure captures this ref
-    if (worktreePath) {
-      session.worktreePath = worktreePath;
-      session.originalWorkdir = originalWorkdir;
-      session.worktreeBranch = worktreeBranchName; // Fix 2-B: store cached branch name on session
-      session.worktreeState = "provisioned";
-    }
-    if (config.worktreePrTargetRepo) {
-      session.worktreePrTargetRepo = config.worktreePrTargetRepo;
-    }
+    this.restore.hydrateSpawnedSession(session, preparedLaunch, config);
     this.sessions.set(session.id, session);
     this.metrics.incrementLaunched();
 
