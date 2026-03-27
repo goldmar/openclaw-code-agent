@@ -17,6 +17,7 @@ import {
   resolveToolChannel,
 } from "../config";
 import { decideResumeSessionId } from "../resume-policy";
+import { getBackendConversationId, getPrimarySessionLookupRef } from "../session-backend-ref";
 import type { OpenClawPluginToolContext, PersistedSessionInfo } from "../types";
 
 interface AgentLaunchParams {
@@ -190,8 +191,9 @@ function findLinkedSessionMatches(
   for (const session of sessions.listPersistedSessions()) {
     if (!session.resumable) continue;
     if (!routeMatchesSession(session, route)) continue;
-    const ref = session.sessionId ?? session.harnessSessionId;
-    const key = session.harnessSessionId;
+    const ref = getPrimarySessionLookupRef(session) ?? session.harnessSessionId;
+    const key = session.sessionId ?? getBackendConversationId(session) ?? session.harnessSessionId;
+    if (!key) continue;
     if (seen.has(key)) continue;
     seen.add(key);
     resumable.push({
