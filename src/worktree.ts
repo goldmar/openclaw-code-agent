@@ -1,7 +1,7 @@
 import { execFileSync } from "child_process";
 import { existsSync, mkdirSync, rmSync, statfsSync } from "fs";
 import { tmpdir } from "os";
-import { join } from "path";
+import { dirname, join } from "path";
 import { pluginConfig } from "./config";
 
 // Cached availability checks
@@ -32,6 +32,25 @@ function getRepoRoot(dir: string): string | undefined {
       { cwd: dir, timeout: 5_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
     );
     return result.trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Resolve the main checkout root for a linked worktree.
+ * For linked worktrees, `git rev-parse --show-toplevel` returns the worktree path,
+ * so use the shared git dir to recover the actual parent checkout when needed.
+ */
+export function getPrimaryRepoRootFromWorktree(worktreePath: string): string | undefined {
+  try {
+    const commonDir = execFileSync(
+      "git",
+      ["-C", worktreePath, "rev-parse", "--git-common-dir"],
+      { cwd: worktreePath, timeout: 5_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
+    ).trim();
+    if (!commonDir) return undefined;
+    return commonDir.endsWith("/.git") ? dirname(commonDir) : undefined;
   } catch {
     return undefined;
   }

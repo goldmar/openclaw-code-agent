@@ -27,6 +27,7 @@ import {
   deleteBranch,
   detectDefaultBranch,
   formatWorktreeOutcomeLine,
+  getPrimaryRepoRootFromWorktree,
   isGitHubCLIAvailable,
 } from "./worktree";
 
@@ -144,6 +145,7 @@ export class SessionManager {
 
     const {
       actualWorkdir,
+      originalWorkdir,
       effectiveSystemPrompt,
       worktreePath,
       worktreeBranchName,
@@ -166,7 +168,7 @@ export class SessionManager {
     sessionIdRef = session.id; // bind late — canUseTool closure captures this ref
     if (worktreePath) {
       session.worktreePath = worktreePath;
-      session.originalWorkdir = config.workdir;
+      session.originalWorkdir = originalWorkdir;
       session.worktreeBranch = worktreeBranchName; // Fix 2-B: store cached branch name on session
       session.worktreeState = "provisioned";
     }
@@ -198,9 +200,7 @@ export class SessionManager {
     session.start();
 
     if (options.notifyLaunch !== false) {
-      const workdirLabel = session.worktreePath
-        ? `${session.worktreePath} (worktree of ${session.originalWorkdir})`
-        : session.workdir;
+      const workdirLabel = this.formatLaunchWorkdirLabel(session);
       const launchText = `🚀 [${session.name}] Launched | ${workdirLabel} | ${session.model ?? "default"}`;
       this.notifySession(session, launchText, "launch");
     }
@@ -378,6 +378,19 @@ export class SessionManager {
     ].join("\n");
   }
 
+  private resolveWorktreeRepoDir(repoDir: string | undefined, worktreePath?: string): string | undefined {
+    if (repoDir && (!worktreePath || repoDir !== worktreePath)) return repoDir;
+    if (!worktreePath) return repoDir;
+    return getPrimaryRepoRootFromWorktree(worktreePath) ?? repoDir;
+  }
+
+  private formatLaunchWorkdirLabel(session: Pick<Session, "workdir" | "worktreePath" | "originalWorkdir">): string {
+    if (!session.worktreePath) return session.workdir;
+    const repoDir = this.resolveWorktreeRepoDir(session.originalWorkdir, session.worktreePath);
+    if (!repoDir || repoDir === session.worktreePath) return session.worktreePath;
+    return `${session.worktreePath} (worktree of ${repoDir})`;
+  }
+
   async dismissWorktree(ref: string): Promise<string> {
     const persistedSession = this.store.getPersistedSession(ref);
     const activeSession = this.resolve(ref);
@@ -385,7 +398,7 @@ export class SessionManager {
     if (!session) return `Error: Session "${ref}" not found.`;
 
     const worktreePath = activeSession?.worktreePath ?? persistedSession?.worktreePath;
-    const repoDir = activeSession?.originalWorkdir ?? persistedSession?.workdir;
+    const repoDir = this.resolveWorktreeRepoDir(activeSession?.originalWorkdir ?? persistedSession?.workdir, worktreePath);
     const branchName = activeSession?.worktreeBranch ?? persistedSession?.worktreeBranch;
     const sessionName = activeSession?.name ?? persistedSession?.name ?? ref;
 
@@ -484,9 +497,16 @@ export class SessionManager {
       return { notificationSent: false, worktreeRemoved: false };
     }
 
-    const repoDir = session.originalWorkdir!;
     const worktreePath = session.worktreePath!;
+    const repoDir = this.resolveWorktreeRepoDir(session.originalWorkdir, worktreePath);
     const branchName = session.worktreeBranch;
+    if (!repoDir) {
+      this.dispatchSessionNotification(session, {
+        label: "worktree-missing-repo-dir",
+        userMessage: `⚠️ [${session.name}] Cannot determine the original repo for worktree ${worktreePath}. Manual inspection is required.`,
+      });
+      return { notificationSent: true, worktreeRemoved: false };
+    }
     if (!branchName) {
       this.dispatchSessionNotification(session, {
         label: "worktree-no-branch-name",
@@ -779,7 +799,7 @@ export class SessionManager {
       session.costUsd === 0 &&
       session.duration < 30_000
     ) {
-      const repoDir = session.originalWorkdir;
+      const repoDir = this.resolveWorktreeRepoDir(session.originalWorkdir, session.worktreePath);
       const branchName = session.worktreeBranch;
       console.info(
         `[SessionManager] Early startup failure for "${session.name}" — auto-cleaning worktree ` +
@@ -787,10 +807,12 @@ export class SessionManager {
       );
 
       // Remove worktree directory (replaces the generic removeWorktree call below)
-      removeWorktree(repoDir, session.worktreePath);
+      if (repoDir) {
+        removeWorktree(repoDir, session.worktreePath);
+      }
 
       // Delete the branch — no real work was committed, so it's safe to drop
-      if (branchName) {
+      if (repoDir && branchName) {
         deleteBranch(repoDir, branchName);
       }
 
@@ -815,6 +837,7 @@ export class SessionManager {
     const nonTrivialWorktreeStrategy = session.worktreeStrategy &&
       session.worktreeStrategy !== "off" && session.worktreeStrategy !== "manual";
     if (!worktreeAutoCleaned && session.worktreePath && session.originalWorkdir) {
+      const repoDir = this.resolveWorktreeRepoDir(session.originalWorkdir, session.worktreePath);
       if (worktreeResult.worktreeRemoved) {
         console.info(
           `[SessionManager] Worktree already removed for "${session.name}" during strategy handling.`,
@@ -823,8 +846,8 @@ export class SessionManager {
         console.info(
           `[SessionManager] Keeping worktree alive for "${session.name}" (strategy=${session.worktreeStrategy}) — will be cleaned up on explicit resolution.`,
         );
-      } else {
-        removeWorktree(session.originalWorkdir, session.worktreePath);
+      } else if (repoDir) {
+        removeWorktree(repoDir, session.worktreePath);
       }
     }
 
@@ -1640,7 +1663,9 @@ export class SessionManager {
       if (!this.worktrees.isResolvedWorktreeEligibleForCleanup(session, now, RESOLVED_RETENTION_MS)) continue;
 
       try {
-        removeWorktree(session.workdir, session.worktreePath);
+        const repoDir = this.resolveWorktreeRepoDir(session.workdir, session.worktreePath);
+        if (!repoDir) continue;
+        removeWorktree(repoDir, session.worktreePath);
         this.updatePersistedSession(session.harnessSessionId, {
           worktreePath: undefined,
           worktreeState: "none",

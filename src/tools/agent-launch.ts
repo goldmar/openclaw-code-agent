@@ -53,6 +53,25 @@ function normalizeThreadId(value: unknown): string | undefined {
   return normalized || undefined;
 }
 
+function stripOptionalQuotes(value: string): string {
+  return value.trim().replace(/^['"`](.*)['"`]$/s, "$1").trim();
+}
+
+function extractPromptDeclaredWorkdir(prompt: string): string | undefined {
+  const patterns = [
+    /^Workdir:\s*(.+)$/im,
+    /^Repo:\s*(.+)$/im,
+  ];
+  for (const pattern of patterns) {
+    const match = prompt.match(pattern);
+    const candidate = stripOptionalQuotes(match?.[1] ?? "");
+    if (candidate.startsWith("/") && existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return undefined;
+}
+
 interface LinkedSessionMatch {
   ref: string;
   name: string;
@@ -252,7 +271,11 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
         console.warn(`[agent_launch] ⚠️ agentId="${params.agentId}" was passed as a parameter — this is WRONG. agentId is only for sessions_spawn (OpenClaw sub-agents), not agent_launch (CC sessions). The field is being ignored. ctx.agentId="${ctx.agentId}" will be used for origin routing instead.`);
       }
 
-      const workdir = params.workdir || ctx.workspaceDir || pluginConfig.defaultWorkdir || process.cwd();
+      const workdir = params.workdir
+        || extractPromptDeclaredWorkdir(params.prompt)
+        || ctx.workspaceDir
+        || pluginConfig.defaultWorkdir
+        || process.cwd();
 
       if (!existsSync(workdir)) {
         return { content: [{ type: "text", text: `Error: Working directory does not exist: ${workdir}` }] };

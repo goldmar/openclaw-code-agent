@@ -1,5 +1,8 @@
 import { beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { makeAgentLaunchTool } from "../src/tools/agent-launch";
 import { setPluginConfig } from "../src/config";
 import { setSessionManager } from "../src/singletons";
@@ -223,6 +226,34 @@ describe("agent_launch tool defaults", () => {
 
     assert.ok(spawnConfig, "spawn should be called");
     assert.equal(spawnConfig?.planApproval, "ask");
+  });
+
+  it("uses Workdir from the prompt when no explicit workdir parameter is provided", async () => {
+    let spawnConfig: Record<string, unknown> | undefined;
+    const repoDir = mkdtempSync(join(tmpdir(), "agent-launch-workdir-"));
+    try {
+      setSessionManager({
+        resolveHarnessSessionId: (id: string) => id,
+        spawn(config: Record<string, unknown>) {
+          spawnConfig = config;
+          return {
+            id: "sess-workdir",
+            name: "prompt-workdir",
+            model: config.model,
+          };
+        },
+      } as any);
+
+      const tool = makeAgentLaunchTool({ workspaceDir: "/tmp/orchestrator-workspace" });
+      await tool.execute("tool-id", {
+        prompt: `Investigate the bug.\n\nRepo: ${repoDir}\nWorkdir: ${repoDir}`,
+      });
+
+      assert.ok(spawnConfig, "spawn should be called");
+      assert.equal(spawnConfig?.workdir, repoDir);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
   });
 
   it("blocks a fresh launch when a linked resumable session already exists", async () => {

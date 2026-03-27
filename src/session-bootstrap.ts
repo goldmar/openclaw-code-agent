@@ -5,12 +5,14 @@ import {
   createWorktree,
   getBranchName,
   hasEnoughWorktreeSpace,
+  getPrimaryRepoRootFromWorktree,
   isGitRepo,
   pruneWorktrees,
 } from "./worktree";
 
 type Preparation = {
   actualWorkdir: string;
+  originalWorkdir: string;
   effectiveSystemPrompt?: string;
   worktreePath?: string;
   worktreeBranchName?: string;
@@ -51,12 +53,21 @@ function appendWorktreeSystemPrompt(
 function restoreResumeWorktreeContext(
   config: SessionConfig,
   getPersistedSession: (ref: string) => PersistedSessionInfo | undefined,
-): { worktreePath?: string; worktreeBranchName?: string } {
+): { actualWorkdir?: string; originalWorkdir?: string; worktreePath?: string; worktreeBranchName?: string } {
   const resumeWorktreeId = config.resumeSessionId ?? config.resumeWorktreeFrom;
   if (!resumeWorktreeId) return {};
 
   const persistedSession = getPersistedSession(resumeWorktreeId);
   if (!persistedSession) return {};
+  const originalWorkdir = (() => {
+    if (persistedSession.workdir && persistedSession.workdir !== persistedSession.worktreePath) {
+      return persistedSession.workdir;
+    }
+    if (persistedSession.worktreePath) {
+      return getPrimaryRepoRootFromWorktree(persistedSession.worktreePath) ?? persistedSession.workdir;
+    }
+    return persistedSession.workdir;
+  })();
 
   if (!config.worktreeStrategy && persistedSession.worktreeStrategy) {
     config.worktreeStrategy = persistedSession.worktreeStrategy;
@@ -72,34 +83,38 @@ function restoreResumeWorktreeContext(
 
   if (existsSync(persistedSession.worktreePath)) {
     console.info(`[SessionManager] Resuming with existing worktree: ${persistedSession.worktreePath}`);
-    config.workdir = persistedSession.worktreePath;
     return {
+      actualWorkdir: persistedSession.worktreePath,
+      originalWorkdir: originalWorkdir ?? persistedSession.worktreePath,
       worktreePath: persistedSession.worktreePath,
       worktreeBranchName: persistedSession.worktreeBranch,
     };
   }
 
-  if (!persistedSession.workdir) {
+  if (!originalWorkdir) {
     console.warn(`[SessionManager] Worktree ${persistedSession.worktreePath} no longer exists and cannot be recreated, using original workdir`);
     return {};
   }
 
   try {
-    pruneWorktrees(persistedSession.workdir);
+    pruneWorktrees(originalWorkdir);
     const recreatedPath = createWorktree(
-      persistedSession.workdir,
+      originalWorkdir,
       persistedSession.worktreeBranch.replace(/^agent\//, ""),
     );
     console.info(`[SessionManager] Recreated worktree from branch ${persistedSession.worktreeBranch}: ${recreatedPath}`);
-    config.workdir = recreatedPath;
     return {
+      actualWorkdir: recreatedPath,
+      originalWorkdir,
       worktreePath: recreatedPath,
       worktreeBranchName: persistedSession.worktreeBranch,
     };
   } catch (err) {
     console.warn(`[SessionManager] Failed to recreate worktree for resume: ${errorMessage(err)}, using original workdir`);
-    config.workdir = persistedSession.workdir;
-    return {};
+    return {
+      actualWorkdir: originalWorkdir,
+      originalWorkdir,
+    };
   }
 }
 
@@ -108,20 +123,26 @@ export function prepareSessionBootstrap(
   name: string,
   getPersistedSession: (ref: string) => PersistedSessionInfo | undefined,
 ): Preparation {
-  let { worktreePath, worktreeBranchName } = restoreResumeWorktreeContext(config, getPersistedSession);
+  let {
+    actualWorkdir,
+    originalWorkdir,
+    worktreePath,
+    worktreeBranchName,
+  } = restoreResumeWorktreeContext(config, getPersistedSession);
 
-  let actualWorkdir = config.workdir;
+  actualWorkdir ??= config.workdir;
+  originalWorkdir ??= config.workdir;
   const isResumedSession = !!(config.resumeSessionId ?? config.resumeWorktreeFrom);
   const strategy = config.worktreeStrategy ?? pluginConfig.defaultWorktreeStrategy;
   if (strategy) config.worktreeStrategy = strategy;
   const shouldWorktree = !config.resumeSessionId && !worktreePath && strategy && strategy !== "off";
 
-  if (shouldWorktree && isGitRepo(config.workdir)) {
+  if (shouldWorktree && isGitRepo(originalWorkdir)) {
     if (!hasEnoughWorktreeSpace()) {
       throw new Error(`Cannot launch session "${name}": insufficient space for worktree creation.`);
     }
     try {
-      worktreePath = createWorktree(config.workdir, name);
+      worktreePath = createWorktree(originalWorkdir, name);
       actualWorkdir = worktreePath;
       worktreeBranchName = getBranchName(worktreePath);
       if (!worktreeBranchName) {
@@ -132,7 +153,7 @@ export function prepareSessionBootstrap(
       throw new Error(`Cannot launch session "${name}": worktree creation failed: ${errorMessage(err)}`);
     }
   } else if (shouldWorktree) {
-    throw new Error(`Cannot launch session "${name}": worktree strategy "${strategy}" requires a git worktree, but "${config.workdir}" is not a git repository.`);
+    throw new Error(`Cannot launch session "${name}": worktree strategy "${strategy}" requires a git worktree, but "${originalWorkdir}" is not a git repository.`);
   }
 
   if (isResumedSession && worktreePath) {
@@ -141,8 +162,9 @@ export function prepareSessionBootstrap(
 
   return {
     actualWorkdir,
+    originalWorkdir,
     effectiveSystemPrompt: worktreePath && worktreeBranchName
-      ? appendWorktreeSystemPrompt(config.systemPrompt, config.workdir, worktreePath, worktreeBranchName)
+      ? appendWorktreeSystemPrompt(config.systemPrompt, originalWorkdir, worktreePath, worktreeBranchName)
       : config.systemPrompt,
     worktreePath,
     worktreeBranchName,
