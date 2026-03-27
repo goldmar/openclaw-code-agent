@@ -289,7 +289,7 @@ describe("CodexHarness SDK mapping", () => {
     assert.equal(auth.state.cleanupCalls, 1);
   });
 
-  it("uses a soft planning prompt on the first turn when launched in plan mode", async () => {
+  it("uses a first-turn planning prompt on the first turn when launched in plan mode", async () => {
     const codex = new MockCodex([
       {
         events: [
@@ -720,7 +720,7 @@ describe("CodexHarness systemPrompt injection (Fix A)", () => {
     assert.equal(codex.inputs[1]!.input, "second prompt");
   });
 
-  it("prepends systemPrompt before soft-planning wrapper in plan mode", async () => {
+  it("prepends systemPrompt before the first-turn planning wrapper in plan mode", async () => {
     const codex = new MockCodex([
       {
         events: [
@@ -739,11 +739,11 @@ describe("CodexHarness systemPrompt injection (Fix A)", () => {
 
     assert.equal(codex.inputs.length, 1);
     const sentInput = codex.inputs[0]!.input;
-    // systemPrompt before the soft-planning prefix
+    // systemPrompt before the first-turn planning prefix
     const sysIdx = sentInput.indexOf(systemPrompt);
     const planIdx = sentInput.indexOf("[SYSTEM: First turn only");
     assert.ok(sysIdx >= 0, "systemPrompt should appear in plan-mode first turn");
-    assert.ok(planIdx >= 0, "soft-planning prefix should appear in plan-mode first turn");
-    assert.ok(sysIdx < planIdx, "systemPrompt should come before the soft-planning wrapper");
+    assert.ok(planIdx >= 0, "first-turn planning prefix should appear in plan-mode first turn");
+    assert.ok(sysIdx < planIdx, "systemPrompt should come before the first-turn planning wrapper");
   });
 });

@@ -265,7 +265,7 @@ export class CodexHarness implements AgentHarness {
       // sessions and resumed sessions (firstTurn is true at launch() start).
       //
       // Ordering: system prompt first (highest-priority boundary constraints),
-      // then the optional soft-planning wrapper, then the original prompt.
+      // then the optional first-turn planning wrapper, then the original prompt.
       let turnPrompt: string;
       if (firstTurn && options.systemPrompt) {
         const innerPrompt = softPlanningFirstTurn

@@ -300,6 +300,7 @@ describe("Session consumeMessages — result message (multi-turn)", () => {
     assert.equal(session.status, "running");
     assert.equal(session.lifecycle, "awaiting_plan_decision");
     assert.equal(session.pendingPlanApproval, true);
+    assert.equal(session.planApprovalContext, "codex-first-turn-plan");
     assert.ok(turnEndEvents.includes(true));
     session.kill("user");
   });

@@ -52,7 +52,7 @@ export type KillReason = "user" | "idle-timeout" | "startup-timeout" | "shutdown
 
 /** Unified permission modes exposed by tools/commands across harnesses. */
 export type PermissionMode = "default" | "plan" | "bypassPermissions";
-export type PlanApprovalContext = "plan-mode" | "soft-plan";
+export type PlanApprovalContext = "plan-mode" | "codex-first-turn-plan";
 export type WorktreeStrategy = "off" | "manual" | "ask" | "delegate" | "auto-merge" | "auto-pr";
 export type CodexApprovalPolicy = "never" | "on-request";
 export type ReasoningEffort = "low" | "medium" | "high";

@@ -258,6 +258,83 @@ describe("SessionStore path resolution", () => {
     });
   });
 
+  it("normalizes legacy soft-plan persisted values to codex-first-turn-plan", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-store-plan-context-"));
+    const indexPath = join(dir, "sessions.json");
+    writeStore(indexPath, [{
+      sessionId: "plan-context",
+      harnessSessionId: "h-plan-context",
+      name: "plan-context",
+      prompt: "p",
+      workdir: "/tmp",
+      status: "completed",
+      lifecycle: "awaiting_plan_decision",
+      pendingPlanApproval: true,
+      planApprovalContext: "soft-plan",
+      costUsd: 0,
+    }]);
+
+    const store = new SessionStore({
+      indexPath,
+      env: {},
+    });
+
+    const persisted = store.getPersistedSession("plan-context");
+    assert.equal(persisted?.planApprovalContext, "codex-first-turn-plan");
+  });
+
+  it("preserves persisted waiting lifecycles across reload", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-store-waiting-lifecycle-"));
+    const indexPath = join(dir, "sessions.json");
+    writeStore(indexPath, [
+      {
+        sessionId: "awaiting-plan",
+        harnessSessionId: "h-awaiting-plan",
+        name: "awaiting-plan",
+        prompt: "p",
+        workdir: "/tmp",
+        status: "completed",
+        lifecycle: "awaiting_plan_decision",
+        pendingPlanApproval: true,
+        planApprovalContext: "codex-first-turn-plan",
+        costUsd: 0,
+      },
+      {
+        sessionId: "awaiting-input",
+        harnessSessionId: "h-awaiting-input",
+        name: "awaiting-input",
+        prompt: "p",
+        workdir: "/tmp",
+        status: "completed",
+        lifecycle: "awaiting_user_input",
+        costUsd: 0,
+      },
+      {
+        sessionId: "awaiting-worktree",
+        harnessSessionId: "h-awaiting-worktree",
+        name: "awaiting-worktree",
+        prompt: "p",
+        workdir: "/tmp",
+        status: "completed",
+        lifecycle: "awaiting_worktree_decision",
+        worktreeState: "pending_decision",
+        worktreePath: "/tmp/repo/.worktrees/awaiting-worktree",
+        worktreeBranch: "agent/awaiting-worktree",
+        costUsd: 0,
+      },
+    ]);
+
+    const store = new SessionStore({
+      indexPath,
+      env: {},
+    });
+
+    assert.equal(store.getPersistedSession("awaiting-plan")?.lifecycle, "awaiting_plan_decision");
+    assert.equal(store.getPersistedSession("awaiting-input")?.lifecycle, "awaiting_user_input");
+    assert.equal(store.getPersistedSession("awaiting-worktree")?.lifecycle, "awaiting_worktree_decision");
+    assert.equal(store.getPersistedSession("awaiting-worktree")?.worktreeState, "pending_decision");
+  });
+
   it("archives legacy array stores and starts fresh", () => {
     const dir = mkdtempSync(join(tmpdir(), "openclaw-store-legacy-"));
     const indexPath = join(dir, "sessions.json");

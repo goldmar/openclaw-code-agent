@@ -58,6 +58,8 @@ function stripOptionalQuotes(value: string): string {
   return value.trim().replace(/^['"`](.*)['"`]$/s, "$1").trim();
 }
 
+// Launch metadata protocol: only parse an explicit top-of-prompt header block.
+// This is not free-form prompt inference and must never scan arbitrary body text.
 function extractPromptDeclaredWorkdir(prompt: string): string | undefined {
   const headerBlock = prompt
     .split(/\n\s*\n/, 1)[0]

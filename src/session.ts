@@ -226,8 +226,8 @@ export class Session extends EventEmitter {
       ? (config.codexApprovalPolicy ?? resolveApprovalPolicyForHarness(this.harness.name) ?? pluginConfig.codexApprovalPolicy)
       : undefined;
     // Keep currentPermissionMode in sync with permissionMode for all harnesses.
-    // Codex uses a soft-planning approach (first-turn prompt wrapper) rather than
-    // a true SDK plan mode, but the session still needs to track "plan" state so
+    // Codex uses a first-turn planning prompt wrapper rather than a native SDK
+    // plan mode, but the session still needs to track explicit plan state so
     // pendingPlanApproval is set at the end of the first turn and the
     // Approve/Reject/Revise buttons fire via triggerWaitingForInputEvent.
     this.currentPermissionMode = this.permissionMode;
@@ -650,7 +650,7 @@ export class Session extends EventEmitter {
               const planContext: PlanApprovalContext =
                 this.currentPermissionMode === "plan" || this.permissionMode === "plan"
                   ? "plan-mode"
-                  : "soft-plan";
+                  : "codex-first-turn-plan";
               this.markPendingPlanApproval(planContext);
               this.lastTurnHadQuestion = true;
               this.waitingForInputFired = true;

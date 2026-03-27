@@ -934,6 +934,104 @@ describe("SessionManager turn-end wake", () => {
     const [_sessionArg, request] = calls[0];
     assert.equal(request.label, "turn-complete");
   });
+
+  it("preserves Codex first-turn plan approvals as normal ask-mode buttons", () => {
+    const s = fakeSession({
+      id: "s-codex-first-turn-plan",
+      name: "codex-first-turn-plan",
+      status: "running",
+      harnessName: "codex",
+      pendingPlanApproval: true,
+      planApprovalContext: "codex-first-turn-plan",
+      planApproval: "ask",
+      getOutput: () => ["Codex first-turn plan preview"],
+    });
+
+    (sm as any).triggerWaitingForInputEvent(s);
+
+    const calls = (sm as any).__dispatchCalls;
+    assert.equal(calls.length, 1);
+    const [_sessionArg, request] = calls[0];
+    assert.equal(request.label, "plan-approval");
+    assert.deepEqual(
+      request.buttons.map((row: Array<{ label: string }>) => row.map((button) => button.label)),
+      [["Approve", "Request changes", "Reject"]],
+    );
+  });
+});
+
+describe("SessionManager restored button parity", () => {
+  let sm: SessionManager;
+
+  beforeEach(() => {
+    sm = new SessionManager(5);
+  });
+
+  function buttonLabels(rows: Array<Array<{ label: string }>> | undefined): string[][] {
+    return (rows ?? []).map((row) => row.map((button) => button.label));
+  }
+
+  it("renders the same restored worktree action set for Telegram and Discord sessions", () => {
+    const telegramId = "h-telegram-worktree";
+    const discordId = "h-discord-worktree";
+
+    sm.persisted.set(telegramId, {
+      harnessSessionId: telegramId,
+      name: "telegram-worktree",
+      prompt: "p",
+      workdir: "/tmp",
+      status: "completed",
+      costUsd: 0,
+      route: { provider: "telegram", target: "12345", threadId: "42" },
+      worktreeState: "pending_decision",
+      lifecycle: "awaiting_worktree_decision",
+      worktreeStrategy: "ask",
+      worktreePath: "/tmp/repo/.worktrees/telegram-worktree",
+      worktreeBranch: "agent/telegram-worktree",
+    } as any);
+    sm.persisted.set(discordId, {
+      harnessSessionId: discordId,
+      name: "discord-worktree",
+      prompt: "p",
+      workdir: "/tmp",
+      status: "completed",
+      costUsd: 0,
+      route: { provider: "discord", target: "channel:999" },
+      worktreeState: "pending_decision",
+      lifecycle: "awaiting_worktree_decision",
+      worktreeStrategy: "ask",
+      worktreePath: "/tmp/repo/.worktrees/discord-worktree",
+      worktreeBranch: "agent/discord-worktree",
+    } as any);
+
+    const telegramButtons = (sm as any).getWorktreeDecisionButtons(telegramId);
+    const discordButtons = (sm as any).getWorktreeDecisionButtons(discordId);
+
+    assert.deepEqual(buttonLabels(telegramButtons), buttonLabels(discordButtons));
+    assert.deepEqual(buttonLabels(telegramButtons), [["Merge", "Open PR"], ["Later", "Discard"]]);
+  });
+
+  it("uses the same plan approval button set for restored plan decisions", () => {
+    const buttons = (sm as any).interactions.getPlanApprovalButtons("restored-plan", {
+      planDecisionVersion: 4,
+    });
+
+    assert.deepEqual(buttonLabels(buttons), [["Approve", "Request changes", "Reject"]]);
+    const approveToken = (sm as any).interactions.consumeActionToken(buttons[0][0].callbackData);
+    assert.equal(approveToken?.planDecisionVersion, 4);
+  });
+
+  it("uses the same resume action set for restored failed or suspended sessions", () => {
+    const resumableButtons = (sm as any).interactions.getResumeButtons("restored-resume", {
+      isExplicitlyResumable: true,
+    });
+    const nonResumableButtons = (sm as any).interactions.getResumeButtons("restored-output-only", {
+      isExplicitlyResumable: false,
+    });
+
+    assert.deepEqual(buttonLabels(resumableButtons), [["Resume", "View output"]]);
+    assert.deepEqual(buttonLabels(nonResumableButtons), [["View output"]]);
+  });
 });
 
 describe("SessionManager terminal wakes", () => {

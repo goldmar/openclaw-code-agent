@@ -3,7 +3,7 @@ import { existsSync } from "fs";
 import { Session } from "./session";
 import { pluginConfig, getDefaultHarnessName } from "./config";
 import { prepareSessionBootstrap } from "./session-bootstrap";
-import { formatDuration, generateSessionName, lastCompleteLines, truncateText } from "./format";
+import { generateSessionName, lastCompleteLines } from "./format";
 import { formatLaunchSummaryFromSession } from "./launch-summary";
 import { pathsReferToSameLocation } from "./path-utils";
 import { SessionSemanticAdapter } from "./session-semantic-adapter";
@@ -23,6 +23,16 @@ import { WakeDispatcher, type SessionNotificationRequest } from "./wake-dispatch
 import { SessionInteractionService, type NotificationButton } from "./session-interactions";
 import { SessionNotificationService } from "./session-notifications";
 import { SessionWorktreeController } from "./session-worktree-controller";
+import { SessionQuestionService, type PendingAskUserQuestion } from "./session-question-service";
+import { SessionReminderService } from "./session-reminder-service";
+import { SessionLifecycleService } from "./session-lifecycle-service";
+import {
+  buildDelegateWorktreeWakeMessage,
+  buildDelegateReminderWakeMessage,
+  buildNoChangeDeliverableMessage,
+  buildWorktreeDecisionSummary,
+  getStoppedStatusLabel as formatStoppedStatusLabel,
+} from "./session-notification-builder";
 import {
   removeWorktree,
   getDiffSummary,
@@ -59,23 +69,6 @@ type WorktreeStrategyResult = {
 /**
  * Orchestrates active session lifecycles, wake signaling, persistence, and GC.
  */
-/** Structured input passed by Claude Code's AskUserQuestion tool. */
-interface AskUserQuestionInput {
-  questions: Array<{
-    question: string;
-    options?: Array<{ label: string; preview?: string }>;
-    multiSelect?: boolean;
-  }>;
-}
-
-/** Pending AskUserQuestion state stored per session. */
-interface PendingAskUserQuestion {
-  resolve: (result: { behavior: "allow"; updatedInput: Record<string, unknown> }) => void;
-  reject: (err: Error) => void;
-  questions: AskUserQuestionInput["questions"];
-  timeoutHandle: ReturnType<typeof setTimeout>;
-}
-
 export class SessionManager {
   private sessions: Map<string, Session> = new Map();
   maxSessions: number;
@@ -96,6 +89,9 @@ export class SessionManager {
   private readonly notifications: SessionNotificationService;
   private readonly worktrees: SessionWorktreeController;
   private readonly semantic: SessionSemanticAdapter;
+  private readonly questions: SessionQuestionService;
+  private readonly reminders: SessionReminderService;
+  private readonly lifecycle: SessionLifecycleService;
 
   constructor(maxSessions: number = 20, maxPersistedSessions: number = 50) {
     this.maxSessions = maxSessions;
@@ -110,6 +106,38 @@ export class SessionManager {
     );
     this.worktrees = new SessionWorktreeController();
     this.semantic = new SessionSemanticAdapter();
+    this.questions = new SessionQuestionService(
+      this.pendingAskUserQuestions,
+      (session, request) => this.dispatchSessionNotification(session, request),
+      (sessionId, options) => this.interactions.getQuestionButtons(sessionId, options),
+    );
+    this.reminders = new SessionReminderService(
+      (session) => this.buildRoutingProxy(session),
+      (session, request) => this.notifications.dispatch(session, request),
+      (ref, patch) => this.updatePersistedSession(ref, patch),
+      (sessionId) => this.getWorktreeDecisionButtons(sessionId),
+    );
+    this.lifecycle = new SessionLifecycleService({
+      persistSession: (session) => this.persistSession(session),
+      clearWaitingTimestamp: (sessionId) => { this.lastWaitingEventTimestamps.delete(sessionId); },
+      handleWorktreeStrategy: (session) => this.handleWorktreeStrategy(session),
+      resolveWorktreeRepoDir: (repoDir, worktreePath) => this.resolveWorktreeRepoDir(repoDir, worktreePath),
+      updatePersistedSession: (ref, patch) => this.updatePersistedSession(ref, patch),
+      dispatchSessionNotification: (session, request) => this.dispatchSessionNotification(session, request),
+      notifySession: (session, text, label) => this.notifySession(session, text, label),
+      clearRetryTimersForSession: (sessionId) => this.wakeDispatcher.clearRetryTimersForSession(sessionId),
+      hasTurnCompleteWakeMarker: (sessionId) => this.lastTurnCompleteMarkers.has(sessionId),
+      shouldEmitTurnCompleteWake: (session) => this.shouldEmitTurnCompleteWake(session),
+      shouldEmitTerminalWake: (session) => this.shouldEmitTerminalWake(session),
+      resolvePlanApprovalMode: (session) => this.resolvePlanApprovalMode(session),
+      getPlanApprovalButtons: (sessionId, session) => this.interactions.getPlanApprovalButtons(sessionId, session),
+      getResumeButtons: (sessionId, session) => this.interactions.getResumeButtons(sessionId, session),
+      extractLastOutputLine: (session) => this.extractLastOutputLine(session),
+      getOutputPreview: (session, maxChars) => this.getOutputPreview(session, maxChars),
+      originThreadLine: (session) => this.originThreadLine(session),
+      debounceWaitingEvent: (sessionId) => this.debounceWaitingEvent(sessionId),
+      isAlreadyMerged: (harnessSessionId) => this.isAlreadyMerged(harnessSessionId),
+    });
   }
 
   // Back-compat for tests and internal inspection.
@@ -364,80 +392,18 @@ export class SessionManager {
       deletions: number;
     };
   }): string {
-    const {
-      sessionName,
-      sessionId,
-      branchName,
-      baseBranch,
-      promptSnippet,
-      commitLines,
-      moreNote,
-      diffSummary,
-    } = args;
-
-    return [
-      `[DELEGATED WORKTREE DECISION] Session "${sessionName}" completed with changes.`,
-      ``,
-      `Session ID: ${sessionId}`,
-      `Branch: ${branchName} → ${baseBranch}`,
-      `Commits: ${diffSummary.commits} | Files: ${diffSummary.filesChanged} | +${diffSummary.insertions} / -${diffSummary.deletions}`,
-      ``,
-      ...commitLines,
-      ...(moreNote ? [moreNote] : []),
-      ``,
-      `Original task prompt (first 500 chars):`,
-      promptSnippet,
-      ``,
-      `You own the next step for this worktree.`,
-      `- Merge immediately with agent_merge(session="${sessionName}", base_branch="${baseBranch}") if the changes are clearly in-scope and low-risk.`,
-      `- If a PR is safer, message the user with the summary and ask for confirmation before calling agent_pr().`,
-      `- If scope or risk is unclear, message the user and ask for guidance.`,
-      `- Never call agent_pr() autonomously in delegate mode.`,
-      `- After deciding, notify the user briefly with what you did and why.`,
-    ].join("\n");
+    return buildDelegateWorktreeWakeMessage(args);
   }
 
   private buildDelegateReminderWakeMessage(session: PersistedSessionInfo, pendingHours: number): string {
-    return [
-      `[DELEGATED WORKTREE DECISION REMINDER] Session "${session.name}" still has an unresolved worktree decision.`,
-      ``,
-      `Session ID: ${session.sessionId ?? session.harnessSessionId}`,
-      `Branch: ${session.worktreeBranch ?? "unknown"}`,
-      `Pending: ${pendingHours}h`,
-      ``,
-      `Resolve it now:`,
-      `- agent_merge(session="${session.name}") if the diff is clearly safe and in scope`,
-      `- If a PR is safer, ask the user before agent_pr()`,
-      `- If scope or risk is unclear, ask the user for guidance`,
-      `- Never call agent_pr() autonomously in delegate mode`,
-    ].join("\n");
+    return buildDelegateReminderWakeMessage(session, pendingHours);
   }
 
   private buildWorktreeDecisionSummary(diffSummary: {
     changedFiles: string[];
     commitMessages: Array<{ message: string }>;
   }): string[] {
-    const summaryLines: string[] = [];
-    const topFiles = diffSummary.changedFiles.slice(0, 3).map((file) => `\`${file}\``);
-    if (topFiles.length > 0) {
-      const remainingFiles = diffSummary.changedFiles.length - topFiles.length;
-      summaryLines.push(
-        remainingFiles > 0
-          ? `Touches ${topFiles.join(", ")} and ${remainingFiles} more file${remainingFiles === 1 ? "" : "s"}`
-          : `Touches ${topFiles.join(", ")}`,
-      );
-    }
-
-    const recentSubjects = [...new Set(
-      diffSummary.commitMessages
-        .map((commit) => commit.message.trim())
-        .filter(Boolean),
-    )].slice(0, 2);
-    if (recentSubjects.length > 0) {
-      summaryLines.push(`Recent work: ${recentSubjects.join("; ")}`);
-    }
-
-    return summaryLines;
+    return buildWorktreeDecisionSummary(diffSummary);
   }
 
   private resolveWorktreeRepoDir(repoDir: string | undefined, worktreePath?: string): string | undefined {
@@ -459,16 +425,7 @@ export class SessionManager {
     cleanupSucceeded: boolean,
     worktreePath: string,
   ): string {
-    const cleanupLine = cleanupSucceeded
-      ? "No code changes were made; the worktree was cleaned up."
-      : `No code changes were made; worktree cleanup failed. Worktree still exists at ${worktreePath}`;
-    return [
-      `📋 [${session.name}] Completed with report-only output:`,
-      ``,
-      preview,
-      ``,
-      cleanupLine,
-    ].join("\n");
+    return buildNoChangeDeliverableMessage(session, preview, cleanupSucceeded, worktreePath);
   }
 
   private getNoChangeOutputText(
@@ -904,147 +861,11 @@ export class SessionManager {
   }
 
   private async onSessionTerminal(session: Session): Promise<void> {
-    this.persistSession(session);
-    this.lastWaitingEventTimestamps.delete(session.id);
-
-    // Handle worktree merge-back strategy BEFORE cleanup
-    let worktreeResult: WorktreeStrategyResult = {
-      notificationSent: false,
-      worktreeRemoved: false,
-    };
-    if (session.worktreePath && session.originalWorkdir) {
-      worktreeResult = await this.handleWorktreeStrategy(session);
-    }
-
-    // Detect early startup failure: session failed with a worktree but zero cost and
-    // very short runtime — meaning no real work was done (e.g. usage limit hit at launch).
-    // In that case, auto-clean both the worktree directory AND the branch, and clear the
-    // worktree fields from the persisted record so no orphaned entries remain.
-    let worktreeAutoCleaned = false;
-    if (
-      session.worktreePath &&
-      session.originalWorkdir &&
-      session.status === "failed" &&
-      session.costUsd === 0 &&
-      session.duration < 30_000
-    ) {
-      const repoDir = this.resolveWorktreeRepoDir(session.originalWorkdir, session.worktreePath);
-      const branchName = session.worktreeBranch;
-      console.info(
-        `[SessionManager] Early startup failure for "${session.name}" — auto-cleaning worktree ` +
-        `(cost=$${session.costUsd.toFixed(2)}, duration=${session.duration}ms)`
-      );
-
-      // Remove worktree directory (replaces the generic removeWorktree call below)
-      if (repoDir) {
-        removeWorktree(repoDir, session.worktreePath);
-      }
-
-      // Delete the branch — no real work was committed, so it's safe to drop
-      if (repoDir && branchName) {
-        deleteBranch(repoDir, branchName);
-      }
-
-      // Clear worktree fields from the persisted session record
-      if (session.harnessSessionId) {
-        this.updatePersistedSession(session.harnessSessionId, {
-          worktreePath: undefined,
-          worktreeBranch: undefined,
-        });
-      }
-
-      worktreeAutoCleaned = true;
-    }
-
-    // Best-effort worktree cleanup — remove the worktree but keep the branch.
-    // Strategy A: Keep worktree alive until explicitly resolved.
-    // Only remove worktree on:
-    // 1. Early startup failure (zero cost, very short duration) — already handled above
-    // 2. Clean no-change completion — worktree was cleaned up in handleWorktreeStrategy
-    // 3. Strategy is "off" or "manual" — no decision needed
-    // Otherwise: keep worktree until user resolves (merge/pr/dismiss/cleanup)
-    const nonTrivialWorktreeStrategy = session.worktreeStrategy &&
-      session.worktreeStrategy !== "off" && session.worktreeStrategy !== "manual";
-    if (!worktreeAutoCleaned && session.worktreePath && session.originalWorkdir) {
-      const repoDir = this.resolveWorktreeRepoDir(session.originalWorkdir, session.worktreePath);
-      if (worktreeResult.worktreeRemoved) {
-        console.info(
-          `[SessionManager] Worktree already removed for "${session.name}" during strategy handling.`,
-        );
-      } else if (nonTrivialWorktreeStrategy) {
-        console.info(
-          `[SessionManager] Keeping worktree alive for "${session.name}" (strategy=${session.worktreeStrategy}) — will be cleaned up on explicit resolution.`,
-        );
-      } else if (repoDir) {
-        removeWorktree(repoDir, session.worktreePath);
-      }
-    }
-
-    // Multi-turn sessions that naturally end after a successful no-input turn
-    // use reason "done". The worktree notification (if sent) IS the completion signal;
-    // otherwise fall back to a terminal completion wake.
-    if (session.killReason === "done") {
-      if (worktreeResult.notificationSent) return; // worktree path already notified
-      // If a turn-complete wake was dispatched, suppress the terminal notification to
-      // avoid duplicates (⏸️ + ✅). The `onUserNotifyFailed` callback in
-      // `triggerTurnCompleteEventWithSignal` handles the fallback if delivery fails.
-      if (this.lastTurnCompleteMarkers.has(session.id)) return;
-      if (!this.shouldEmitTerminalWake(session)) return;
-      this.triggerAgentEvent(session);
-      return;
-    }
-
-    if (session.status === "completed") {
-      if (!this.shouldEmitTerminalWake(session)) return;
-      this.triggerAgentEvent(session);
-      return;
-    }
-
-    if (session.status === "failed") {
-      if (!this.shouldEmitTerminalWake(session)) return;
-      const rawError = session.error
-        || (session.result?.is_error && session.result.result)
-        || (session.result?.result)
-        || this.extractLastOutputLine(session)
-        || `Session failed with no error details (session=${session.id}, subtype=${session.result?.subtype ?? "none"}, turns=${session.result?.num_turns ?? 0})`;
-      const errorSummary = truncateText(rawError, 200);
-      this.triggerFailedEvent(session, errorSummary, worktreeAutoCleaned);
-      return;
-    }
-
-    const costStr = `$${(session.costUsd ?? 0).toFixed(2)}`;
-    const duration = formatDuration(session.duration);
-
-    if (session.killReason === "idle-timeout") {
-      this.dispatchSessionNotification(session, {
-        label: "suspended",
-        userMessage: `💤 [${session.name}] Suspended after idle timeout | ${costStr} | ${duration}`,
-        notifyUser: "always",
-        buttons: this.interactions.getResumeButtons(session.id, session),
-      });
-      this.wakeDispatcher.clearRetryTimersForSession(session.id);
-      return;
-    }
-
-    const statusLabel = this.getStoppedStatusLabel(session.killReason);
-    this.notifySession(session, `⛔ [${session.name}] ${statusLabel} | ${costStr} | ${duration}`);
-    this.wakeDispatcher.clearRetryTimersForSession(session.id);
+    return this.lifecycle.handleSessionTerminal(session);
   }
 
-  private getStoppedStatusLabel(killReason?: string): string {
-    switch (killReason) {
-      case "user":
-        return "Stopped by user";
-      case "shutdown":
-        return "Stopped by shutdown";
-      case "startup-timeout":
-        return "Stopped by startup timeout";
-      case "unknown":
-      case undefined:
-        return "Stopped unexpectedly";
-      default:
-        return "Stopped";
-    }
+  private getStoppedStatusLabel(killReason?: KillReason): string {
+    return formatStoppedStatusLabel(killReason);
   }
 
   private persistSession(session: Session): void {
@@ -1106,220 +927,15 @@ export class SessionManager {
   }
 
   private triggerAgentEvent(session: Session): void {
-    const preview = this.getOutputPreview(session);
-
-    const eventText = [
-      `Coding agent session completed.`,
-      `Name: ${session.name} | ID: ${session.id}`,
-      `Status: ${session.status}`,
-      this.originThreadLine(session),
-      ``,
-      `(Note: a turn-complete wake may have already been sent for this session. If you already acted on it, treat this as confirmation — do not repeat actions.)`,
-      ``,
-      `Output preview:`,
-      preview,
-      ``,
-      `[ACTION REQUIRED] Follow your autonomy rules for session completion:`,
-      `1. Use agent_output(session='${session.id}', full=true) to read the full result.`,
-      `2. If this is part of a multi-phase pipeline, launch the next phase NOW — do not wait for user input.`,
-      `3. Notify the user with a summary of what was done.`,
-    ].join("\n");
-
-    const costStr = `$${(session.costUsd ?? 0).toFixed(2)}`;
-    const duration = formatDuration(session.duration);
-    const telegramText = `✅ [${session.name}] Completed | ${costStr} | ${duration}`;
-
-    this.dispatchSessionNotification(session, {
-      label: "completed",
-      userMessage: telegramText,
-      wakeMessage: eventText,
-      notifyUser: "always",
-    });
+    this.lifecycle.emitCompleted(session);
   }
 
   private triggerFailedEvent(session: Session, errorSummary: string, worktreeAutoCleaned: boolean = false): void {
-    const preview = this.getOutputPreview(session);
-    const outputSection = preview.trim()
-      ? ["", "Output preview:", preview]
-      : [];
-
-    const worktreeCleanupNote = worktreeAutoCleaned
-      ? [``, `Note: Worktree and branch were auto-removed (zero cost, startup failure).`]
-      : [];
-
-    const eventText = [
-      `Coding agent session failed.`,
-      `Name: ${session.name} | ID: ${session.id}`,
-      `Status: ${session.status}`,
-      this.originThreadLine(session),
-      `Harness session ID: ${session.harnessSessionId ?? "unknown"}`,
-      ``,
-      `Failure summary:`,
-      errorSummary,
-      ...outputSection,
-      ...worktreeCleanupNote,
-      ``,
-      `[ACTION REQUIRED] Follow your autonomy rules for session failure:`,
-      `1. Use agent_output(session='${session.id}', full=true) to inspect the full failure context.`,
-      `2. If the failure is a runtime error (usage limit, API error, crash), resume with a different harness:`,
-      `   agent_launch(resume_session_id='${session.harnessSessionId ?? "unknown"}', harness='claude-code', ...)`,
-      `   Note: agent_respond also resumes, but uses the same harness (may hit the same error).`,
-      `   If the failure is a launch/config issue, relaunch fresh with agent_launch(prompt=...).`,
-      `3. Notify the user with the failure cause and the next action you are taking.`,
-    ].join("\n");
-
-    const costStr = `$${(session.costUsd ?? 0).toFixed(2)}`;
-    const duration = formatDuration(session.duration);
-    const telegramText = [
-      `❌ [${session.name}] Failed | ${costStr} | ${duration}`,
-      `   ⚠️ ${errorSummary}`,
-    ].join("\n");
-
-    const failedButtons = this.interactions.getResumeButtons(session.id, session);
-
-    this.dispatchSessionNotification(session, {
-      label: "failed",
-      userMessage: telegramText,
-      wakeMessage: eventText,
-      notifyUser: "always",
-      buttons: failedButtons,
-    });
+    this.lifecycle.emitFailed(session, errorSummary, worktreeAutoCleaned);
   }
 
   private triggerWaitingForInputEvent(session: Session): void {
-    if (!this.debounceWaitingEvent(session.id)) return;
-
-    const preview = this.getOutputPreview(session);
-    const isPlanApproval = session.pendingPlanApproval;
-    const planApprovalMode = isPlanApproval
-      ? this.resolvePlanApprovalMode(session)
-      : undefined;
-
-    const telegramText = isPlanApproval
-      ? (
-          planApprovalMode === "ask"
-            ? `📋 [${session.name}] Plan ready for approval:\n\n${preview}\n\nChoose Approve, Reject, or Revise below.`
-            : `📋 [${session.name}] Plan awaiting approval:\n\n${preview}`
-        )
-      : `❓ [${session.name}] Question waiting for reply:\n\n${preview}`;
-
-    let eventText: string;
-    if (isPlanApproval) {
-      const _planApprovalMode = planApprovalMode ?? "delegate";
-      const permissionModeLine = `Permission mode: plan → will switch to bypassPermissions on approval`;
-      if (_planApprovalMode === "delegate") {
-        eventText = [
-          `[DELEGATED PLAN APPROVAL] Coding agent session has finished its plan and is requesting approval to implement.`,
-          `Name: ${session.name} | ID: ${session.id}`,
-          this.originThreadLine(session),
-          permissionModeLine,
-          ``,
-          `⚠️ YOU MUST COMPLETE THESE STEPS IN ORDER. Do NOT skip any step.`,
-          ``,
-          `━━━ STEP 1 (MANDATORY): Read the full plan ━━━`,
-          `Call agent_output(session='${session.id}', full=true) to read the FULL plan output.`,
-          `The preview below is truncated — you MUST read the full output before making any decision.`,
-          ``,
-          `Preview (truncated):`,
-          preview,
-          ``,
-          `━━━ STEP 2 (MANDATORY): Notify the user ━━━`,
-          `After reading the full plan, use the message tool to send the user a summary that includes:`,
-          `- What files/components will be changed`,
-          `- Risk level (low/medium/high) and why`,
-          `- Scope: does this match the original task or has it expanded?`,
-          `- Any concerns or assumptions the plan makes`,
-          `This message creates accountability — you cannot approve blindly.`,
-          ``,
-          `━━━ STEP 3 (ONLY AFTER steps 1 and 2): Decide ━━━`,
-          `You are the delegated decision-maker. Choose ONE:`,
-          ``,
-          `APPROVE the plan directly if ALL of the following are true:`,
-          `- You have read the FULL plan (not just the preview)`,
-          `- You have sent the user the summary message`,
-          `- The plan scope matches the original task request`,
-          `- The changes are low-risk (no destructive operations, no credential handling, no production deployments)`,
-          `- The plan is clear and well-scoped (no ambiguous requirements or open design questions)`,
-          `- No architectural decisions that the user should weigh in on`,
-          `- The working directory and codebase are correct`,
-          ``,
-          `ESCALATE to the user and WAIT if ANY of the following are true:`,
-          `- The plan involves destructive operations (deleting files, dropping tables, force-pushing)`,
-          `- The plan involves credentials, secrets, or production environments`,
-          `- The plan requires architectural decisions not covered by the original task`,
-          `- The scope has expanded beyond the original request`,
-          `- The requirements are ambiguous or the plan makes assumptions the user should confirm`,
-          `- You are unsure — when in doubt, always escalate`,
-          ``,
-          `If approving: agent_respond(session='${session.id}', message='Approved. Go ahead.', approve=true)`,
-          `If escalating: tell the user you need their decision and WAIT for his explicit response.`,
-          `To request changes: agent_respond(session='${session.id}', message='<your feedback>') — do NOT set approve=true. The agent will revise the plan.`,
-        ].join("\n");
-      } else if (_planApprovalMode === "ask") {
-        // ask mode — notify the user directly; Alice must wait for explicit user approval
-        eventText = [
-          `[USER APPROVAL REQUESTED] Coding agent session has finished its plan. The user has been notified via Telegram and must approve directly.`,
-          `Name: ${session.name} | ID: ${session.id}`,
-          this.originThreadLine(session),
-          permissionModeLine,
-          ``,
-          `DO NOT approve this plan yourself. Wait for the user's explicit approval or rejection.`,
-          `Once the user responds, forward their decision:`,
-          `  To approve: agent_respond(session='${session.id}', message='Approved. Go ahead.', approve=true)`,
-          `  To request changes: agent_respond(session='${session.id}', message='<user feedback>')`,
-          ``,
-          `Preview (truncated):`,
-          preview,
-        ].join("\n");
-      } else {
-        // approve mode — always auto-approve
-        eventText = [
-          `[AUTO-APPROVE] Session has a plan ready. Approve it now:`,
-          `agent_respond(session='${session.id}', message='Approved. Go ahead.', approve=true)`,
-        ].join("\n");
-      }
-    } else {
-      const sessionType = session.multiTurn ? "Multi-turn session" : "Session";
-      eventText = [
-        `[SYSTEM INSTRUCTION: Follow your auto-respond rules strictly. If this is a permission request or "should I continue?" → auto-respond. For ALL other questions → forward the agent's EXACT question to the user. Do NOT add your own analysis, commentary, or interpretation. Do NOT "nudge" or "poke" the session.]`,
-        ``,
-        `${sessionType} is waiting for a genuine user reply.`,
-        `Name: ${session.name} | ID: ${session.id}`,
-        this.originThreadLine(session),
-        ``,
-        `Last output:`,
-        preview,
-        ``,
-        `Use agent_respond(session='${session.id}', message='...') to send a reply, or agent_output(session='${session.id}', full: true) to see full context before deciding.`,
-      ].join("\n");
-    }
-
-    const waitingButtons =
-      isPlanApproval && planApprovalMode === "ask"
-        ? this.interactions.getPlanApprovalButtons(session.id, session)
-        : undefined; // omit standalone Reply buttons; direct replies already work without a callback
-
-    if (isPlanApproval && planApprovalMode === "ask") {
-      // ask mode: send buttons to user and gate the orchestrator wake on delivery outcome
-      this.dispatchSessionNotification(session, {
-        label: "plan-approval",
-        userMessage: telegramText,
-        notifyUser: "always",
-        buttons: waitingButtons,
-        wakeMessageOnNotifySuccess:
-          `Plan approval buttons delivered to user. Wait for their button callback — do NOT approve or reject this plan yourself.`,
-        wakeMessageOnNotifyFailed: eventText,
-      });
-    } else {
-      // delegate and approve modes: immediate wake, no buttons
-      this.dispatchSessionNotification(session, {
-        label: isPlanApproval ? "plan-approval" : "waiting",
-        userMessage: telegramText,
-        wakeMessage: eventText,
-        notifyUser: "always",
-        buttons: waitingButtons,
-      });
-    }
+    this.lifecycle.emitWaitingForInput(session);
   }
 
   private resolvePlanApprovalMode(session: Session | PersistedSessionInfo): PlanApprovalMode {
@@ -1327,26 +943,7 @@ export class SessionManager {
   }
 
   private onTurnEnd(session: Session, hadQuestion: boolean): void {
-    // Use the dedicated waiting path for explicit question/plan-approval turns.
-    // This preserves plan approval policy handling and waiting-specific guidance.
-    if (hadQuestion || session.pendingPlanApproval) {
-      this.triggerWaitingForInputEvent(session);
-      return;
-    }
-
-    // Suppress turn-complete for ask/delegate — the worktree notification IS the completion signal
-    if (session.worktreeStrategy === "ask" || session.worktreeStrategy === "delegate") {
-      console.info(
-        `[SessionManager] Suppressing turn-complete wake for session ${session.id} ` +
-        `(worktreeStrategy=${session.worktreeStrategy}) — worktree notification will follow.`,
-      );
-      return;
-    }
-
-    // Non-question turns still emit a lightweight turn-complete wake so the
-    // orchestrator can evaluate the next step explicitly.
-    if (!this.shouldEmitTurnCompleteWake(session)) return;
-    this.triggerTurnCompleteEventWithSignal(session);
+    this.lifecycle.handleTurnEnd(session, hadQuestion);
   }
 
   private shouldEmitTurnCompleteWake(session: Session): boolean {
@@ -1372,48 +969,7 @@ export class SessionManager {
   }
 
   private triggerTurnCompleteEventWithSignal(session: Session): void {
-    console.info(
-      `[SessionManager] turn-complete wake dispatching for session ${session.id} ` +
-      `(turns=${session.result?.num_turns ?? 0}, strategy=${session.worktreeStrategy ?? "none"})`,
-    );
-    const preview = this.getOutputPreview(session);
-    const costStr = `$${(session.costUsd ?? 0).toFixed(2)}`;
-    const telegramText = `⏸️ [${session.name}] Turn completed | ${costStr}`;
-
-    const eventText = [
-      `Coding agent session turn ended.`,
-      `Name: ${session.name}`,
-      `ID: ${session.id}`,
-      `Status: ${session.status}`,
-      `Lifecycle: ${session.lifecycle}`,
-      ``,
-      `Last output (~20 lines):`,
-      preview,
-      ...(this.originThreadLine(session) ? ["", this.originThreadLine(session)] : []),
-    ].join("\n");
-
-    // Turn-complete wakes are synthetic CLI-originated `chat.send` events, so any
-    // `[[reply_to_current]]` response from the main session targets the gateway
-    // caller instead of the user's Telegram topic. Keep the compact status ping
-    // in the same pipeline, but always deliver it directly alongside the wake.
-    this.dispatchSessionNotification(session, {
-      label: "turn-complete",
-      userMessage: telegramText,
-      wakeMessage: eventText,
-      notifyUser: "always",
-      // If all turn-complete delivery paths fail, fire the terminal notification as fallback
-      // so the user still learns the session completed. The `onSessionTerminal` path is
-      // suppressed when a turn-complete was dispatched (see killReason === "done" block),
-      // so this callback is the only recovery path on full delivery failure.
-      onUserNotifyFailed: () => {
-        console.warn(
-          `[SessionManager] turn-complete delivery failed for session ${session.id} — ` +
-          `firing terminal notification as fallback`,
-        );
-        if (!this.shouldEmitTerminalWake(session)) return;
-        this.triggerAgentEvent(session);
-      },
-    });
+    this.lifecycle.emitTurnComplete(session);
   }
 
   // -- Public API --
@@ -1591,78 +1147,20 @@ export class SessionManager {
 
   /** Send periodic reminders for sessions with unresolved pending worktree decisions. */
   private remindStaleDecisions(): void {
-    const REMINDER_INTERVAL_MS = 3 * 60 * 60 * 1000; // 3h
-    const now = Date.now();
-
-    for (const session of this.store.listPersistedSessions()) {
-      // Only sessions with pending decisions that aren't resolved
-      if (!session.pendingWorktreeDecisionSince) continue;
-      if (session.worktreeMerged || session.worktreePrUrl) continue;
-
-      // Skip if decision is snoozed
-      if (session.worktreeDecisionSnoozedUntil) {
-        const snoozedUntilMs = new Date(session.worktreeDecisionSnoozedUntil).getTime();
-        if (now < snoozedUntilMs) continue;
-      }
-
-      const pendingMs = now - new Date(session.pendingWorktreeDecisionSince).getTime();
-      if (pendingMs < REMINDER_INTERVAL_MS) continue;
-
-      // Rate-limit: max once per 3h per session
-      if (session.lastWorktreeReminderAt) {
-        const lastReminderMs = now - new Date(session.lastWorktreeReminderAt).getTime();
-        if (lastReminderMs < REMINDER_INTERVAL_MS) continue;
-      }
-
-      const pendingHours = Math.floor(pendingMs / (60 * 60 * 1000));
-      const reminderText = [
-        `⏰ Reminder: branch \`${session.worktreeBranch ?? "unknown"}\` is still waiting for a merge decision.`,
-        `Session: ${session.name} | Pending: ${pendingHours}h`,
-        ``,
-        `agent_merge(session="${session.name}") or agent_pr(session="${session.name}") or agent_worktree_cleanup() to resolve.`,
-      ].join("\n");
-
-      try {
-        this.sendReminderNotification(session, reminderText);
-      } catch (err) {
-        console.warn(`[SessionManager] Failed to send stale-decision reminder for session ${session.name}: ${err instanceof Error ? err.message : String(err)}`);
-      }
-
-      this.updatePersistedSession(session.harnessSessionId, {
-        lastWorktreeReminderAt: new Date().toISOString(),
-      });
-    }
+    this.reminders.remindStaleDecisions(this.store.listPersistedSessions());
   }
 
   /** Send a notification for a persisted (not active) session using its stored origin channel. */
   private sendReminderNotification(session: PersistedSessionInfo, text: string): void {
-    // Build a minimal routing proxy with the fields WakeDispatcher needs
-    const routingProxy = this.buildRoutingProxy({
-      id: session.harnessSessionId,
-      harnessSessionId: session.harnessSessionId,
-      route: session.route,
-    });
-
-    if (session.worktreeStrategy === "delegate") {
-      const pendingSince = session.pendingWorktreeDecisionSince
-        ? new Date(session.pendingWorktreeDecisionSince).getTime()
-        : Date.now();
-      const pendingHours = Math.max(0, Math.floor((Date.now() - pendingSince) / (60 * 60 * 1000)));
-
-      this.notifications.dispatch(routingProxy, {
-        label: `worktree-stale-reminder-${session.name}`,
-        wakeMessage: this.buildDelegateReminderWakeMessage(session, pendingHours),
-        notifyUser: "never",
-      });
-      return;
-    }
-
-    this.notifications.dispatch(routingProxy, {
-      label: `worktree-stale-reminder-${session.name}`,
-      userMessage: text,
-      notifyUser: "always",
-      buttons: this.getWorktreeDecisionButtons(session.harnessSessionId),
-    });
+    const now = Date.now();
+    const pendingSince = session.pendingWorktreeDecisionSince
+      ? new Date(session.pendingWorktreeDecisionSince).getTime()
+      : now - 4 * 60 * 60 * 1000;
+    this.reminders.remindStaleDecisions([{
+      ...session,
+      pendingWorktreeDecisionSince: new Date(pendingSince).toISOString(),
+      lastWorktreeReminderAt: undefined,
+    }], now);
   }
 
   /**
@@ -1674,89 +1172,18 @@ export class SessionManager {
     sessionId: string,
     input: Record<string, unknown>,
   ): Promise<{ behavior: "allow"; updatedInput: Record<string, unknown> }> {
-    const TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
     const session = this.sessions.get(sessionId);
     if (!session) {
       throw new Error(`Session "${sessionId}" not found for AskUserQuestion intercept`);
     }
-
-    const typedInput = input as unknown as AskUserQuestionInput;
-    const questions = typedInput?.questions ?? [];
-    if (questions.length === 0) {
-      throw new Error(`AskUserQuestion: no questions in input`);
-    }
-
-    const firstQuestion = questions[0];
-    const options = firstQuestion.options ?? [];
-
-    const fallbackWakeText = [
-      `[ASK USER QUESTION] Session "${session.name}" has a question requiring user input.`,
-      ``,
-      `Question: ${firstQuestion.question}`,
-      ...(options.length > 0 ? [`Options:`, ...options.map((o, i) => `  ${i + 1}. ${o.label}`)] : []),
-      ``,
-      `Send the question to the user and call agent_respond(session="${session.id}", message="<answer>") with their answer.`,
-    ].join("\n");
-
-    const buttons = this.interactions.getQuestionButtons(session.id, options);
-
-    const userMessage = [
-      `❓ [${session.name}] ${firstQuestion.question}`,
-    ].join("\n");
-
-    return new Promise((resolve, reject) => {
-      const timeoutHandle = setTimeout(() => {
-        this.pendingAskUserQuestions.delete(sessionId);
-        reject(new Error(`AskUserQuestion timed out after ${TIMEOUT_MS / 1000}s for session "${session.name}"`));
-      }, TIMEOUT_MS);
-      timeoutHandle.unref?.();
-
-      this.pendingAskUserQuestions.set(sessionId, {
-        resolve,
-        reject,
-        questions,
-        timeoutHandle,
-      });
-
-      this.dispatchSessionNotification(session, {
-        label: "ask-user-question",
-        userMessage,
-        notifyUser: "always",
-        buttons,
-        wakeMessageOnNotifySuccess:
-          `AskUserQuestion buttons delivered to user. Await their selection — do NOT answer this question yourself.`,
-        wakeMessageOnNotifyFailed: fallbackWakeText,
-      });
-    });
+    return this.questions.handleAskUserQuestion(session, input);
   }
 
   /**
    * Resolve a pending AskUserQuestion by option index (from button callback).
    */
   resolveAskUserQuestion(sessionId: string, optionIndex: number): void {
-    const pending = this.pendingAskUserQuestions.get(sessionId);
-    if (!pending) {
-      console.warn(`[SessionManager] resolveAskUserQuestion: no pending question for session "${sessionId}"`);
-      return;
-    }
-    clearTimeout(pending.timeoutHandle);
-    this.pendingAskUserQuestions.delete(sessionId);
-
-    const firstQuestion = pending.questions[0];
-    const options = firstQuestion.options ?? [];
-    const selectedOption = options[optionIndex];
-    if (!selectedOption) {
-      pending.reject(new Error(`AskUserQuestion: invalid option index ${optionIndex} (${options.length} options available)`));
-      return;
-    }
-
-    pending.resolve({
-      behavior: "allow",
-      updatedInput: {
-        questions: pending.questions,
-        answers: { [firstQuestion.question]: selectedOption.label },
-      },
-    });
+    this.questions.resolveAskUserQuestion(sessionId, optionIndex);
   }
 
   /** Evict stale runtime records and enforce persisted/session-output retention limits. */
@@ -1806,11 +1233,7 @@ export class SessionManager {
   }
 
   dispose(): void {
-    for (const pending of this.pendingAskUserQuestions.values()) {
-      clearTimeout(pending.timeoutHandle);
-      pending.reject(new Error("SessionManager disposed before AskUserQuestion resolved."));
-    }
-    this.pendingAskUserQuestions.clear();
+    this.questions.dispose();
     this.notifications.dispose();
   }
 }

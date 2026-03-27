@@ -292,7 +292,7 @@ describe("Session.phase", () => {
   });
 
   // Fix B: Codex sessions must preserve plan mode so pendingPlanApproval is set
-  // after the first (soft-plan) turn and the Approve/Reject/Revise buttons fire.
+  // after the first Codex first-turn plan and the Approve/Reject/Revise buttons fire.
   it("Codex session in plan mode keeps currentPermissionMode=plan (Fix B)", () => {
     const codexSession = new Session({ ...BASE_CONFIG, harness: "codex" }, "codex-test");
     codexSession.transition("running");

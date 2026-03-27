@@ -404,13 +404,13 @@ describe("Plan mode E2E: Codex plan turn sets pendingPlanApproval", () => {
     assert.equal(session.phase, "active");
     assert.equal(session.pendingPlanApproval, false);
 
-    // Simulate soft-plan turn: some text output followed by the turn result
+    // Simulate the Codex first-turn plan: some text output followed by the turn result
     fakeHarness.pushMessage({ type: "text", text: "I'll start by reading the file..." });
     await tick(20);
     fakeHarness.pushMessage({ type: "text", text: "Here is my plan: ..." });
     await tick(20);
 
-    // No ExitPlanMode — this is the Codex path (soft-plan, no special tool)
+    // No ExitPlanMode — this is the Codex path (first-turn plan, no special tool)
     // Turn completes: the result handler should set pendingPlanApproval
     fakeHarness.pushMessage({
       type: "result",

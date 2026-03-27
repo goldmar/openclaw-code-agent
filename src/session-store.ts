@@ -90,9 +90,9 @@ function toOptionalPlanApprovalMode(value: unknown): PlanApprovalMode | undefine
 }
 
 function toOptionalPlanApprovalContext(value: unknown): PlanApprovalContext | undefined {
-  return value === "plan-mode" || value === "soft-plan"
-    ? value
-    : undefined;
+  if (value === "plan-mode" || value === "codex-first-turn-plan") return value;
+  if (value === "soft-plan") return "codex-first-turn-plan";
+  return undefined;
 }
 
 function toOptionalKillReason(value: unknown): KillReason | undefined {
