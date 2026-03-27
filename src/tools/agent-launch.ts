@@ -4,40 +4,18 @@ import { sessionManager } from "../singletons";
 import { formatLaunchSummaryFromSession, type LaunchSummarySessionLike } from "../launch-summary";
 import {
   getDefaultHarnessName,
-  parseThreadIdFromSessionKey,
   pluginConfig,
-  resolveAgentChannel,
   resolveAllowedModelsForHarness,
   resolveApprovalPolicyForHarness,
   resolveDefaultModelForHarness,
-  resolveOriginChannel,
-  resolveOriginThreadId,
-  resolveSessionRoute,
   resolveReasoningEffortForHarness,
-  resolveToolChannel,
 } from "../config";
-import { decideResumeSessionId } from "../resume-policy";
-import { getBackendConversationId, getPrimarySessionLookupRef } from "../session-backend-ref";
 import type { OpenClawPluginToolContext, PersistedSessionInfo } from "../types";
-
-interface AgentLaunchParams {
-  prompt: string;
-  name?: string;
-  workdir?: string;
-  model?: string;
-  system_prompt?: string;
-  allowed_tools?: string[];
-  resume_session_id?: string;
-  fork_session?: boolean;
-  force_new_session?: boolean;
-  permission_mode?: "default" | "plan" | "bypassPermissions";
-  plan_approval?: "ask" | "delegate" | "approve";
-  harness?: string;
-  worktree_strategy?: "off" | "manual" | "ask" | "delegate" | "auto-merge" | "auto-pr";
-  worktree_base_branch?: string;
-  worktree_pr_target_repo?: string;
-  agentId?: string;
-}
+import {
+  extractPromptDeclaredWorkdir,
+  resolveAgentLaunchRequest,
+  type AgentLaunchParams,
+} from "./agent-launch-resolution";
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -49,44 +27,6 @@ function isAgentLaunchParams(value: unknown): value is AgentLaunchParams {
   return typeof p.prompt === "string";
 }
 
-function normalizeThreadId(value: unknown): string | undefined {
-  if (value == null) return undefined;
-  const normalized = String(value).trim();
-  return normalized || undefined;
-}
-
-function stripOptionalQuotes(value: string): string {
-  return value.trim().replace(/^['"`](.*)['"`]$/s, "$1").trim();
-}
-
-// Launch metadata protocol: only parse an explicit top-of-prompt header block.
-// This is not free-form prompt inference and must never scan arbitrary body text.
-function extractPromptDeclaredWorkdir(prompt: string): string | undefined {
-  const headerBlock = prompt
-    .split(/\n\s*\n/, 1)[0]
-    ?.split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean) ?? [];
-
-  if (headerBlock.length === 0) return undefined;
-
-  for (const line of headerBlock) {
-    const match = line.match(/^(Workdir|Repo):\s*(.+)$/);
-    const candidate = stripOptionalQuotes(match?.[2] ?? "");
-    if (candidate.startsWith("/") && existsSync(candidate)) {
-      return candidate;
-    }
-  }
-  return undefined;
-}
-
-interface LinkedSessionMatch {
-  ref: string;
-  name: string;
-  status: string;
-  lifecycle?: string;
-  resumable: boolean;
-}
 
 function hasFormatLaunchResult(value: unknown): value is {
   formatLaunchResult: (config: {
@@ -104,108 +44,6 @@ function hasFormatLaunchResult(value: unknown): value is {
   return !!value
     && typeof value === "object"
     && typeof (value as { formatLaunchResult?: unknown }).formatLaunchResult === "function";
-}
-
-function routeMatchesSession(
-  session: {
-    workdir?: string;
-    originSessionKey?: string;
-    originChannel?: string;
-    originThreadId?: string | number;
-  },
-  route: {
-    workdir: string;
-    originSessionKey?: string;
-    originChannel?: string;
-    originThreadId?: string | number;
-  },
-): boolean {
-  if (session.workdir !== route.workdir) return false;
-  if (route.originSessionKey && session.originSessionKey) {
-    return session.originSessionKey === route.originSessionKey;
-  }
-  if (!route.originChannel || !session.originChannel) return false;
-  return session.originChannel === route.originChannel
-    && normalizeThreadId(session.originThreadId) === normalizeThreadId(route.originThreadId);
-}
-
-function summarizeLinkedSessions(matches: LinkedSessionMatch[]): string {
-  return matches
-    .slice(0, 3)
-    .map((match) => `  - ${match.name} [${match.ref}] | status=${match.status}${match.lifecycle ? ` | lifecycle=${match.lifecycle}` : ""}`)
-    .join("\n");
-}
-
-function findLinkedSessionMatches(
-  sessions: {
-    list: (filter?: "all") => Array<{
-      id: string;
-      name: string;
-      status: string;
-      lifecycle?: string;
-      isExplicitlyResumable?: boolean;
-      workdir: string;
-      originSessionKey?: string;
-      originChannel?: string;
-      originThreadId?: string | number;
-    }>;
-    listPersistedSessions: () => PersistedSessionInfo[];
-  },
-  route: {
-    workdir: string;
-    originSessionKey?: string;
-    originChannel?: string;
-    originThreadId?: string | number;
-  },
-): { resumable: LinkedSessionMatch[]; active: LinkedSessionMatch[] } {
-  const resumable: LinkedSessionMatch[] = [];
-  const active: LinkedSessionMatch[] = [];
-  const seen = new Set<string>();
-
-  for (const session of sessions.list("all")) {
-    if (!routeMatchesSession(session, route)) continue;
-    const key = session.id;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    if (session.isExplicitlyResumable) {
-      resumable.push({
-        ref: session.id,
-        name: session.name,
-        status: session.status,
-        lifecycle: session.lifecycle,
-        resumable: true,
-      });
-      continue;
-    }
-    if (session.status === "starting" || session.status === "running") {
-      active.push({
-        ref: session.id,
-        name: session.name,
-        status: session.status,
-        lifecycle: session.lifecycle,
-        resumable: false,
-      });
-    }
-  }
-
-  for (const session of sessions.listPersistedSessions()) {
-    if (!session.resumable) continue;
-    if (!routeMatchesSession(session, route)) continue;
-    const ref = getPrimarySessionLookupRef(session) ?? session.harnessSessionId;
-    const key = session.sessionId ?? getBackendConversationId(session) ?? session.harnessSessionId;
-    if (!key) continue;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    resumable.push({
-      ref,
-      name: session.name,
-      status: session.status,
-      lifecycle: session.lifecycle,
-      resumable: true,
-    });
-  }
-
-  return { resumable, active };
 }
 
 /**
@@ -298,146 +136,33 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
         console.warn(`[agent_launch] ⚠️ agentId="${params.agentId}" was passed as a parameter — this is WRONG. agentId is only for sessions_spawn (OpenClaw sub-agents), not agent_launch (CC sessions). The field is being ignored. ctx.agentId="${ctx.agentId}" will be used for origin routing instead.`);
       }
 
-      const workdir = params.workdir
-        || extractPromptDeclaredWorkdir(params.prompt)
-        || ctx.workspaceDir
-        || pluginConfig.defaultWorkdir
-        || process.cwd();
-
-      if (!existsSync(workdir)) {
-        return { content: [{ type: "text", text: `Error: Working directory does not exist: ${workdir}` }] };
-      }
-
       try {
-        const harness = params.harness ?? getDefaultHarnessName();
-        const defaultModel = resolveDefaultModelForHarness(harness);
-
-        // Resolve the actual model that will be used
-        const resolvedModel = params.model ?? defaultModel;
-        const wasExplicitModel = params.model !== undefined;
-        if (!resolvedModel) {
-          return {
-            content: [{
-              type: "text",
-              text: `Error: No default model configured for harness "${harness}". Set plugins.entries["openclaw-code-agent"].config.harnesses.${harness}.defaultModel or pass model explicitly.`,
-            }]
-          };
+        const resolution = resolveAgentLaunchRequest(params, ctx, sessionManager as any);
+        if (resolution.kind !== "resolved") {
+          return { content: [{ type: "text", text: resolution.text }] };
         }
-
-        // Enforce allowedModels restrictions
-        const allowedModels = resolveAllowedModelsForHarness(harness);
-        if (allowedModels && allowedModels.length > 0) {
-          if (!isModelAllowed(resolvedModel, allowedModels)) {
-            // Hard error for both explicit and default models
-            const errorMsg = wasExplicitModel
-              ? `Error: Model "${resolvedModel}" is not allowed. Permitted models: ${allowedModels.join(", ")}`
-              : `Error: Default model "${resolvedModel || "undefined"}" is not in allowedModels (${allowedModels.join(", ")}). Update your plugin config to set a compatible defaultModel.`;
-            return {
-              content: [{
-                type: "text",
-                text: errorMsg
-              }]
-            };
-          }
-        }
-
-        // Resolve origin channel
-        const ctxChannel = resolveToolChannel(ctx);
-        const originChannel = resolveOriginChannel(ctx, ctxChannel || resolveAgentChannel(workdir));
-
-        // Resolve origin session key — prefer ctx.sessionKey (set by the framework),
-        // but reconstruct from available fields if missing.
-        let originSessionKey = ctx.sessionKey || undefined;
-        if (!originSessionKey && ctx.agentId) {
-          // ctx.sessionKey not populated — reconstruct from available context fields.
-          // Format: "agent:{agentId}:{channel}:{chatType}:{chatId}:topic:{threadId}"
-          // We can't reconstruct the full key without chat info, but log the gap for debugging.
-          console.warn(`[agent_launch] ctx.sessionKey is not populated. ctx fields: agentId=${ctx.agentId}, messageChannel=${ctx.messageChannel}, agentAccountId=${ctx.agentAccountId}, workspaceDir=${ctx.workspaceDir}`);
-        }
-
-        if (!params.resume_session_id && !params.force_new_session) {
-          const linked = findLinkedSessionMatches({
-            list: typeof sessionManager.list === "function"
-              ? sessionManager.list.bind(sessionManager)
-              : () => [],
-            listPersistedSessions: typeof sessionManager.listPersistedSessions === "function"
-              ? sessionManager.listPersistedSessions.bind(sessionManager)
-              : () => [],
-          }, {
-            workdir,
-            originSessionKey,
-            originChannel,
-            originThreadId: parseThreadIdFromSessionKey(originSessionKey) ?? resolveOriginThreadId(ctx),
-          });
-          if (linked.resumable.length > 0 || linked.active.length > 0) {
-            const resumableText = linked.resumable.length > 0
-              ? [
-                `Linked resumable session(s) already exist for this thread/workdir:`,
-                summarizeLinkedSessions(linked.resumable),
-                ``,
-                `Resume the latest one with:`,
-                `  agent_respond(session='${linked.resumable[0].ref}', message='<next instruction>')`,
-                `Fork from it with:`,
-                `  agent_launch(prompt='<new task>', resume_session_id='${linked.resumable[0].ref}', fork_session=true)`,
-              ].join("\n")
-              : "";
-            const activeText = linked.active.length > 0
-              ? [
-                linked.resumable.length > 0 ? `Linked active session(s):` : `Linked active session(s) already exist for this thread/workdir:`,
-                summarizeLinkedSessions(linked.active),
-                ``,
-                `Send a follow-up instead of launching a duplicate:`,
-                `  agent_respond(session='${linked.active[0].ref}', message='<next instruction>')`,
-              ].join("\n")
-              : "";
-            const parts = [
-              `Resume-first protection blocked a fresh launch.`,
-              ``,
-              resumableText,
-              activeText,
-              [
-                `If you intentionally want a brand-new independent session here, call:`,
-                `  agent_launch(prompt='<new task>', force_new_session=true)`,
-              ].join("\n"),
-            ].filter(Boolean);
-            return { content: [{ type: "text", text: parts.join("\n\n") }] };
-          }
-        }
-
-        // Resolve resume_session_id
-        let resolvedResumeId = params.resume_session_id;
-        const activeResumeSession = resolvedResumeId
-          ? sessionManager.resolve(resolvedResumeId)
-          : undefined;
-        const persistedResumeSession = resolvedResumeId
-          ? sessionManager.getPersistedSession(resolvedResumeId)
-          : undefined;
-        if (resolvedResumeId) {
-          const resolved = (
-            sessionManager.resolveBackendConversationId?.(resolvedResumeId)
-            ?? sessionManager.resolveHarnessSessionId?.(resolvedResumeId)
-          );
-          if (!resolved) {
-            return { content: [{ type: "text", text: `Error: Could not resolve resume_session_id "${resolvedResumeId}" to a session ID. Use agent_sessions to list available sessions.` }] };
-          }
-          resolvedResumeId = resolved;
-        }
-        const { resumeSessionId, clearedPersistedCodexResume } = decideResumeSessionId({
-          requestedResumeSessionId: resolvedResumeId,
-          activeSession: activeResumeSession
-            ? { harnessSessionId: activeResumeSession.backendConversationId ?? activeResumeSession.harnessSessionId }
-            : undefined,
-          persistedSession: persistedResumeSession
-            ? { harness: persistedResumeSession.harness, backendRef: persistedResumeSession.backendRef }
-            : undefined,
-        });
+        const {
+          workdir,
+          harness,
+          resolvedModel,
+          permissionMode,
+          planApproval,
+          originChannel,
+          originThreadId,
+          originSessionKey,
+          route,
+          resumeSessionId,
+          resolvedResumeId,
+          clearedPersistedCodexResume,
+          reasoningEffort,
+        } = resolution;
 
         const session = sessionManager.spawn({
           prompt: params.prompt,
           name: params.name,
           workdir,
           model: resolvedModel,
-          reasoningEffort: resolveReasoningEffortForHarness(harness),
+          reasoningEffort,
           systemPrompt: params.system_prompt,
           allowedTools: params.allowed_tools,
           resumeSessionId,
@@ -452,24 +177,22 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
             ? (resolveApprovalPolicyForHarness(harness) ?? pluginConfig.codexApprovalPolicy)
             : undefined,
           originChannel,
-          originThreadId: parseThreadIdFromSessionKey(originSessionKey) ?? resolveOriginThreadId(ctx),
+          originThreadId,
           originAgentId: ctx.agentId || undefined,
           originSessionKey,
-          route: resolveSessionRoute(ctx, originChannel, originSessionKey),
+          route,
           harness,
           worktreeStrategy: params.worktree_strategy,
           worktreeBaseBranch: params.worktree_base_branch,
           worktreePrTargetRepo: params.worktree_pr_target_repo,
         });
 
-        const permissionMode = params.permission_mode ?? pluginConfig.permissionMode;
-        const planApproval = params.plan_approval ?? pluginConfig.planApproval;
         const launchText = hasFormatLaunchResult(sessionManager)
           ? sessionManager.formatLaunchResult({
               prompt: params.prompt,
               workdir,
               harness,
-              permissionMode,
+              permissionMode: permissionMode ?? pluginConfig.permissionMode,
               planApproval,
               forceNewSession: params.force_new_session,
               resumeSessionId: params.resume_session_id,
@@ -480,7 +203,7 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
               prompt: params.prompt,
               workdir,
               harness,
-              permissionMode,
+              permissionMode: permissionMode ?? pluginConfig.permissionMode,
               planApproval,
               resumeSessionId: params.resume_session_id,
               forkSession: params.fork_session,

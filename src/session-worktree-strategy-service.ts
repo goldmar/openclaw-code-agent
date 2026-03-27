@@ -4,8 +4,8 @@ import type { PersistedSessionInfo } from "./types";
 import type { SessionNotificationRequest } from "./wake-dispatcher";
 import type { WorktreeCompletionState } from "./session-worktree-controller";
 import type { EmbeddedEvalResult } from "./embedded-eval";
+import { SessionWorktreeMessageService } from "./session-worktree-message-service";
 import { getPersistedMutationRefs, getPrimarySessionLookupRef, usesNativeBackendWorktree } from "./session-backend-ref";
-import { buildDelegateWorktreeWakeMessage, buildNoChangeDeliverableMessage, buildWorktreeDecisionSummary } from "./session-notification-builder";
 import {
   removeWorktree,
   getDiffSummary,
@@ -50,6 +50,7 @@ export class SessionWorktreeStrategyService {
       dispatchSessionNotification: (session: Session, request: SessionNotificationRequest) => void;
       getWorktreeDecisionButtons: (sessionId: string) => NotificationButton[][] | undefined;
       makeOpenPrButton: (sessionId: string) => NotificationButton;
+      worktreeMessages: SessionWorktreeMessageService;
       enqueueMerge: (
         repoDir: string,
         fn: () => Promise<void>,
@@ -164,31 +165,21 @@ export class SessionWorktreeStrategyService {
         worktreeDisposition: "no-change-cleaned",
         worktreeState: "none",
       });
-      this.deps.dispatchSessionNotification(session, {
-        label: deliverablePreview ? "worktree-no-change-deliverable" : "worktree-no-changes",
-        userMessage: deliverablePreview
-          ? (
-              nativeBackendWorktree
-                ? [
-                    `📋 [${session.name}] Completed with report-only output:`,
-                    ``,
-                    deliverablePreview,
-                    ``,
-                    `No code changes were made; the native backend worktree was released for backend cleanup.`,
-                  ].join("\n")
-                : buildNoChangeDeliverableMessage(session, deliverablePreview, true, worktreePath)
-            )
-          : nativeBackendWorktree
-            ? `ℹ️ [${session.name}] Session completed with no changes — native backend worktree released for backend cleanup`
-            : `ℹ️ [${session.name}] Session completed with no changes — worktree cleaned up`,
-      });
+      this.deps.dispatchSessionNotification(session, this.deps.worktreeMessages.buildNoChangeNotification({
+        session,
+        deliverablePreview,
+        nativeBackendWorktree,
+        cleanupSucceeded: true,
+        worktreePath,
+      }));
     } else {
-      this.deps.dispatchSessionNotification(session, {
-        label: deliverablePreview ? "worktree-no-change-deliverable-cleanup-failed" : "worktree-no-changes-cleanup-failed",
-        userMessage: deliverablePreview
-          ? buildNoChangeDeliverableMessage(session, deliverablePreview, false, worktreePath)
-          : `⚠️ [${session.name}] Session completed with no changes, but worktree cleanup failed. Worktree still exists at ${worktreePath}`,
-      });
+      this.deps.dispatchSessionNotification(session, this.deps.worktreeMessages.buildNoChangeNotification({
+        session,
+        deliverablePreview,
+        nativeBackendWorktree,
+        cleanupSucceeded: false,
+        worktreePath,
+      }));
     }
     return { notificationSent: true, worktreeRemoved: removed };
   }
@@ -199,45 +190,13 @@ export class SessionWorktreeStrategyService {
     baseBranch: string,
     diffSummary: DiffSummary,
   ): WorktreeStrategyResult {
-    const askSummaryLines = buildWorktreeDecisionSummary(diffSummary);
-    const askCommitLines = diffSummary.commitMessages
-      .slice(0, 5)
-      .map((c) => `• ${c.hash} ${c.message} (${c.author})`);
-    const askMoreNote = diffSummary.commits > 5 ? `...and ${diffSummary.commits - 5} more` : "";
-
-    const askBranchLine = session.worktreePrTargetRepo
-      ? `Branch: \`${branchName}\` → \`${baseBranch}\` | PR target: ${session.worktreePrTargetRepo}`
-      : `Branch: \`${branchName}\` → \`${baseBranch}\``;
-
-    const userNotifyMessage = [
-      `🔀 Worktree decision required for session \`${session.name}\``,
-      ``,
-      askBranchLine,
-      `Commits: ${diffSummary.commits} | Files: ${diffSummary.filesChanged} | +${diffSummary.insertions} / -${diffSummary.deletions}`,
-      ``,
-      ...(askSummaryLines.length > 0
-        ? [
-            `Summary:`,
-            ...askSummaryLines.map((line) => `- ${line}`),
-            ``,
-          ]
-        : []),
-      `Recent commits:`,
-      ...askCommitLines,
-      ...(askMoreNote ? [askMoreNote] : []),
-      ``,
-      `⚠️ Discard will permanently delete branch \`${branchName}\` and all local changes. This cannot be undone.`,
-    ].join("\n");
-
-    this.deps.dispatchSessionNotification(session, {
-      label: "worktree-merge-ask",
-      userMessage: userNotifyMessage,
-      notifyUser: "always",
+    this.deps.dispatchSessionNotification(session, this.deps.worktreeMessages.buildAskNotification({
+      session,
+      branchName,
+      baseBranch,
+      diffSummary,
       buttons: this.deps.getWorktreeDecisionButtons(session.id),
-      wakeMessageOnNotifySuccess:
-        `Worktree strategy buttons delivered to user. Wait for their button callback — do NOT act on this worktree yourself.`,
-      wakeMessageOnNotifyFailed: userNotifyMessage,
-    });
+    }));
 
     this.updatePersistedSessionFor(session, {
       pendingWorktreeDecisionSince: new Date().toISOString(),
@@ -253,26 +212,12 @@ export class SessionWorktreeStrategyService {
     baseBranch: string,
     diffSummary: DiffSummary,
   ): WorktreeStrategyResult {
-    const delegateCommitLines = diffSummary.commitMessages
-      .slice(0, 5)
-      .map((c) => `• ${c.hash} ${c.message} (${c.author})`);
-    const delegateMoreNote = diffSummary.commits > 5 ? `...and ${diffSummary.commits - 5} more` : "";
-    const promptSnippet = session.prompt ? session.prompt.slice(0, 500) : "(no prompt)";
-
-    this.deps.dispatchSessionNotification(session, {
-      label: "worktree-delegate",
-      wakeMessage: buildDelegateWorktreeWakeMessage({
-        sessionName: session.name,
-        sessionId: session.id,
-        branchName,
-        baseBranch,
-        promptSnippet,
-        commitLines: delegateCommitLines,
-        moreNote: delegateMoreNote || undefined,
-        diffSummary,
-      }),
-      notifyUser: "never",
-    });
+    this.deps.dispatchSessionNotification(session, this.deps.worktreeMessages.buildDelegateNotification({
+      session,
+      branchName,
+      baseBranch,
+      diffSummary,
+    }));
 
     this.updatePersistedSessionFor(session, {
       pendingWorktreeDecisionSince: new Date().toISOString(),

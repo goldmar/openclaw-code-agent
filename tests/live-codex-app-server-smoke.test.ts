@@ -5,6 +5,7 @@ import type { HarnessMessage } from "../src/harness/types";
 
 const RUN_LIVE = process.env.OPENCLAW_RUN_LIVE_CODEX_SMOKE === "1";
 const RUN_LIVE_WORKTREE = process.env.OPENCLAW_RUN_LIVE_CODEX_WORKTREE_SMOKE === "1";
+const RUN_LIVE_RELEASE = process.env.OPENCLAW_RUN_LIVE_CODEX_RELEASE_SMOKE === "1";
 const LIVE_TIMEOUT_MS = 120_000;
 
 async function collectUntilCompleted(
@@ -99,5 +100,44 @@ describe("live Codex App Server smoke", () => {
     if (worktreeRef.ref.worktreeId) {
       assert.equal(resumedRef.ref.worktreeId, worktreeRef.ref.worktreeId);
     }
+  });
+
+  it("covers a release-oriented launch/resume/plan/worktree flow when explicitly enabled", { skip: !RUN_LIVE_RELEASE, timeout: LIVE_TIMEOUT_MS }, async () => {
+    const codex = getHarness("codex");
+
+    const planned = codex.launch({
+      prompt: "Present a short two-step plan in markdown and then stop.",
+      cwd: process.cwd(),
+      permissionMode: "plan",
+    });
+    const plannedMessages = await collectUntilCompleted(planned.messages);
+    const plannedRef = plannedMessages.find((message): message is Extract<HarnessMessage, { type: "backend_ref" }> => message.type === "backend_ref");
+    const plannedArtifact = plannedMessages.find((message): message is Extract<HarnessMessage, { type: "plan_artifact" }> => message.type === "plan_artifact");
+
+    assert.ok(plannedRef);
+    assert.ok(plannedArtifact, "expected a structured plan artifact");
+
+    const resumed = codex.launch({
+      prompt: "Reply with the exact word RELEASE and then stop.",
+      cwd: process.cwd(),
+      resumeSessionId: plannedRef.ref.conversationId,
+      backendRef: plannedRef.ref,
+    });
+    const resumedMessages = await collectUntilCompleted(resumed.messages);
+    const resumedResult = resumedMessages.find((message) => message.type === "run_completed");
+    assert.ok(resumedResult && resumedResult.type === "run_completed");
+    assert.equal(resumedResult.data.success, true);
+
+    const worktree = codex.launch({
+      prompt: "Reply with the exact word WORKTREE-RELEASE and then stop.",
+      cwd: process.cwd(),
+      worktreeStrategy: "ask",
+      originalWorkdir: process.cwd(),
+    });
+    const worktreeMessages = await collectUntilCompleted(worktree.messages);
+    const worktreeRef = worktreeMessages.find((message): message is Extract<HarnessMessage, { type: "backend_ref" }> => (
+      message.type === "backend_ref" && Boolean(message.ref.worktreeId || message.ref.worktreePath)
+    ));
+    assert.ok(worktreeRef, "expected native worktree metadata during release smoke");
   });
 });

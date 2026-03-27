@@ -16,8 +16,19 @@ import type {
   AgentHarness,
   HarnessLaunchOptions,
   HarnessSession,
-  HarnessMessage,
 } from "./types";
+import {
+  createBackendRefEvent,
+  createPendingInputEvent,
+  createPendingInputResolvedEvent,
+  createPlanArtifactEvent,
+  createRunCompletedEvent,
+  createRunStartedEvent,
+  createSettingsChangedEvent,
+  createTextDeltaEvent,
+  createToolCallEvent,
+  HarnessMessageQueue,
+} from "./harness-events";
 
 type ClaudeQueryHandle = AsyncIterable<unknown> & {
   setPermissionMode?: (mode: string) => Promise<void>;
@@ -93,31 +104,12 @@ export class ClaudeCodeHarness implements AgentHarness {
 
   /** Launch a Claude Code session and adapt SDK messages into structured events. */
   launch(options: HarnessLaunchOptions): HarnessSession {
-    const queue: HarnessMessage[] = [];
-    let queueResolve: (() => void) | null = null;
-    let queueDone = false;
+    const queue = new HarnessMessageQueue();
     let sawRunOutput = false;
     let currentTurnText = "";
     let sawPlanGateSignal = false;
     let requestCounter = 0;
     let currentSessionId = options.resumeSessionId ?? "";
-
-    const flushResolve = (): void => {
-      if (queueResolve) {
-        queueResolve();
-        queueResolve = null;
-      }
-    };
-
-    const enqueue = (message: HarnessMessage): void => {
-      queue.push(message);
-      flushResolve();
-    };
-
-    const endQueue = (): void => {
-      queueDone = true;
-      flushResolve();
-    };
 
     const canUseToolCallback = options.canUseTool;
     const sdkOptions: Record<string, unknown> = {
@@ -147,13 +139,13 @@ export class ClaudeCodeHarness implements AgentHarness {
                 return { behavior: "allow" as const };
               }
               const state = buildPendingInputState(currentSessionId, ++requestCounter, input);
-              enqueue({ type: "pending_input", state });
+              queue.enqueue(createPendingInputEvent(state));
               try {
                 const result = await canUseToolCallback(toolName, input);
-                enqueue({ type: "pending_input_resolved", requestId: state.requestId });
+                queue.enqueue(createPendingInputResolvedEvent(state.requestId));
                 return result;
               } catch (error) {
-                enqueue({ type: "pending_input_resolved", requestId: state.requestId });
+                queue.enqueue(createPendingInputResolvedEvent(state.requestId));
                 throw error;
               }
             },
@@ -177,30 +169,27 @@ export class ClaudeCodeHarness implements AgentHarness {
           const msg = raw as ClaudeMessageEnvelope;
           if (msg.type === "system" && msg.subtype === "init") {
             currentSessionId = msg.session_id ?? currentSessionId;
-            enqueue({
-              type: "backend_ref",
-              ref: {
-                kind: "claude-code",
-                conversationId: currentSessionId,
-              },
-            });
+            queue.enqueue(createBackendRefEvent({
+              kind: "claude-code",
+              conversationId: currentSessionId,
+            }));
             continue;
           }
 
           if (msg.type === "system" && msg.subtype === "status" && msg.permissionMode) {
-            enqueue({ type: "settings_changed", permissionMode: msg.permissionMode });
+            queue.enqueue(createSettingsChangedEvent(msg.permissionMode));
             continue;
           }
 
           if (msg.type === "assistant") {
             if (!sawRunOutput) {
               sawRunOutput = true;
-              enqueue({ type: "run_started" });
+              queue.enqueue(createRunStartedEvent());
             }
             for (const block of msg.message?.content ?? []) {
               if (block.type === "text") {
                 currentTurnText += currentTurnText ? `\n${block.text}` : block.text;
-                enqueue({ type: "text_delta", text: block.text });
+                queue.enqueue(createTextDeltaEvent(block.text));
                 continue;
               }
 
@@ -209,7 +198,7 @@ export class ClaudeCodeHarness implements AgentHarness {
                   sawPlanGateSignal = true;
                 }
                 if (block.name !== "AskUserQuestion") {
-                  enqueue({ type: "tool_call", name: block.name, input: block.input });
+                  queue.enqueue(createToolCallEvent(block.name, block.input));
                 }
               }
             }
@@ -227,55 +216,39 @@ export class ClaudeCodeHarness implements AgentHarness {
                 steps: [],
                 markdown: finalizedPlanText,
               };
-              enqueue({ type: "plan_artifact", artifact, finalized: true });
+              queue.enqueue(createPlanArtifactEvent(artifact, true));
             }
 
-            enqueue({
-              type: "run_completed",
-              data: {
-                success: msg.subtype === "success",
-                duration_ms: msg.duration_ms ?? 0,
-                total_cost_usd: msg.total_cost_usd ?? 0,
-                num_turns: msg.num_turns ?? 0,
-                result: msg.result,
-                session_id: msg.session_id ?? currentSessionId,
-              },
-            });
+            queue.enqueue(createRunCompletedEvent({
+              success: msg.subtype === "success",
+              duration_ms: msg.duration_ms ?? 0,
+              total_cost_usd: msg.total_cost_usd ?? 0,
+              num_turns: msg.num_turns ?? 0,
+              result: msg.result,
+              session_id: msg.session_id ?? currentSessionId,
+            }));
             currentTurnText = "";
             sawPlanGateSignal = false;
             sawRunOutput = false;
           }
         }
       } finally {
-        endQueue();
+        queue.close();
       }
     })().catch((error: unknown) => {
-      enqueue({
-        type: "run_completed",
-        data: {
-          success: false,
-          duration_ms: 0,
-          total_cost_usd: 0,
-          num_turns: 0,
-          result: error instanceof Error ? error.message : String(error),
-          session_id: currentSessionId,
-        },
-      });
-      endQueue();
+      queue.enqueue(createRunCompletedEvent({
+        success: false,
+        duration_ms: 0,
+        total_cost_usd: 0,
+        num_turns: 0,
+        result: error instanceof Error ? error.message : String(error),
+        session_id: currentSessionId,
+      }));
+      queue.close();
     });
 
     return {
-      messages: (async function* (): AsyncGenerator<HarnessMessage> {
-        while (true) {
-          while (queue.length > 0) {
-            yield queue.shift()!;
-          }
-          if (queueDone) return;
-          await new Promise<void>((resolve) => {
-            queueResolve = resolve;
-          });
-        }
-      })(),
+      messages: queue.messages(),
 
       async setPermissionMode(mode: string): Promise<void> {
         if (typeof q.setPermissionMode === "function") {

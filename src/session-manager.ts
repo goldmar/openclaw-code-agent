@@ -34,6 +34,9 @@ import { SessionQuestionService, type PendingAskUserQuestion } from "./session-q
 import { SessionReminderService } from "./session-reminder-service";
 import { SessionLifecycleService } from "./session-lifecycle-service";
 import { SessionWorktreeDecisionService } from "./session-worktree-decision-service";
+import { SessionRuntimeRegistry } from "./session-runtime-registry";
+import { SessionRuntimeBootstrapService } from "./session-runtime-bootstrap-service";
+import { SessionWorktreeMessageService } from "./session-worktree-message-service";
 import {
   getStoppedStatusLabel as formatStoppedStatusLabel,
 } from "./session-notification-builder";
@@ -63,7 +66,8 @@ type LaunchConfirmationSession = Pick<Session, "status" | "name" | "id" | "killR
  * Orchestrates active session lifecycles, wake signaling, persistence, and GC.
  */
 export class SessionManager {
-  private sessions: Map<string, Session> = new Map();
+  private readonly registry: SessionRuntimeRegistry;
+  private sessions: Map<string, Session>;
   maxSessions: number;
   maxPersistedSessions: number;
   private lastDailyMaintenanceAt = 0;
@@ -90,10 +94,14 @@ export class SessionManager {
   private readonly references: SessionReferenceService;
   private readonly worktreeStrategy: SessionWorktreeStrategyService;
   private readonly worktreeDecisions: SessionWorktreeDecisionService;
+  private readonly runtimeBootstrap: SessionRuntimeBootstrapService;
+  private readonly worktreeMessages: SessionWorktreeMessageService;
 
   constructor(maxSessions: number = 20, maxPersistedSessions: number = 50) {
     this.maxSessions = maxSessions;
     this.maxPersistedSessions = maxPersistedSessions;
+    this.registry = new SessionRuntimeRegistry();
+    this.sessions = this.registry.sessions;
     this.store = new SessionStore();
     this.metrics = new SessionMetricsRecorder();
     this.wakeDispatcher = new WakeDispatcher();
@@ -111,6 +119,7 @@ export class SessionManager {
     this.worktrees = new SessionWorktreeController();
     this.semantic = new SessionSemanticAdapter();
     this.restore = new SessionRestoreService((ref) => this.store.getPersistedSession(ref));
+    this.worktreeMessages = new SessionWorktreeMessageService();
     this.worktreeStrategy = new SessionWorktreeStrategyService({
       shouldRunWorktreeStrategy: (session) => this.shouldRunWorktreeStrategy(session),
       isAlreadyMerged: (harnessSessionId) => this.isAlreadyMerged(harnessSessionId),
@@ -123,6 +132,7 @@ export class SessionManager {
       dispatchSessionNotification: (session, request) => this.dispatchSessionNotification(session, request),
       getWorktreeDecisionButtons: (sessionId) => this.getWorktreeDecisionButtons(sessionId),
       makeOpenPrButton: (sessionId) => this.makeActionButton(sessionId, "worktree-create-pr", "Open PR"),
+      worktreeMessages: this.worktreeMessages,
       enqueueMerge: (repoDir, fn, onQueued) => this.enqueueMerge(repoDir, fn, onQueued),
       spawnConflictResolver: async (session, repoDir, prompt) => {
         this.spawn({
@@ -189,6 +199,16 @@ export class SessionManager {
       dispatchNotification: (session, request) => this.notifications.dispatch(session, request),
       buildRoutingProxy: (session) => this.buildRoutingProxy(session),
     });
+    this.runtimeBootstrap = new SessionRuntimeBootstrapService({
+      hydrateSpawnedSession: (session, preparedLaunch, config) => {
+        this.restore.hydrateSpawnedSession(session, preparedLaunch, config);
+      },
+      markRunning: (session) => this.store.markRunning(session),
+      handleTerminal: async (session) => this.onSessionTerminal(session),
+      handleTurnEnd: (session, hadQuestion) => this.onTurnEnd(session, hadQuestion),
+      formatLaunchWorkdirLabel: (session) => this.formatLaunchWorkdirLabel(session),
+      notifySession: (session, text, label) => this.notifySession(session, text, label),
+    });
   }
 
   // Back-compat for tests and internal inspection.
@@ -197,22 +217,12 @@ export class SessionManager {
   get nameIndex(): Map<string, string> { return this.store.nameIndex; }
 
   private uniqueName(baseName: string): string {
-    const activeNames = new Set(
-      [...this.sessions.values()]
-        .filter((s) => KILLABLE_STATUSES.has(s.status))
-        .map((s) => s.name),
-    );
-    if (!activeNames.has(baseName)) return baseName;
-    let i = 2;
-    while (activeNames.has(`${baseName}-${i}`)) i++;
-    return `${baseName}-${i}`;
+    return this.registry.uniqueName(baseName);
   }
 
   /** Spawn and start a new session, wiring lifecycle listeners and launch notification. */
   spawn(config: SessionConfig, options: SpawnOptions = {}): Session {
-    const activeCount = [...this.sessions.values()].filter(
-      (s) => KILLABLE_STATUSES.has(s.status),
-    ).length;
+    const activeCount = this.registry.activeSessionCount();
     if (activeCount >= this.maxSessions) {
       throw new Error(`Max sessions reached (${this.maxSessions}). Use agent_sessions to list active sessions and agent_kill to end one.`);
     }
@@ -249,38 +259,9 @@ export class SessionManager {
       canUseTool,
     }, name);
     sessionIdRef = session.id; // bind late — canUseTool closure captures this ref
-    this.restore.hydrateSpawnedSession(session, preparedLaunch, config);
-    this.sessions.set(session.id, session);
+    this.registry.add(session);
     this.metrics.incrementLaunched();
-
-    // Wire event handlers for lifecycle management
-    session.on("statusChange", (_s: Session, newStatus: SessionStatus) => {
-      if (newStatus === "running" && session.harnessSessionId) {
-        this.store.markRunning(session);
-      } else if (TERMINAL_STATUSES.has(newStatus)) {
-        // Fire async handler without awaiting to avoid blocking event loop
-        this.onSessionTerminal(session).catch((err) => {
-          console.error(`[SessionManager] onSessionTerminal threw for session ${session.id}:`, err);
-        });
-      }
-    });
-
-    // `turnEnd` is the canonical signal for "turn is over" in multi-turn mode.
-    // We wake the orchestrator even for non-question turns so it can inspect
-    // output and decide whether to continue autonomous workflows.
-    session.on("turnEnd", (_s: Session, hadQuestion: boolean) => {
-      this.onTurnEnd(session, hadQuestion);
-    });
-
-    session.start();
-
-    if (options.notifyLaunch !== false) {
-      const workdirLabel = this.formatLaunchWorkdirLabel(session);
-      const launchText = `🚀 [${session.name}] Launched | ${workdirLabel} | ${session.model ?? "default"}`;
-      this.notifySession(session, launchText, "launch");
-    }
-
-    return session;
+    return this.runtimeBootstrap.initializeSession(session, preparedLaunch, config, options);
   }
 
   /** Spawn a session and wait until it is truly running or fails before startup. */
@@ -566,12 +547,12 @@ export class SessionManager {
 
   /** Return an active session by internal id. */
   get(id: string): Session | undefined {
-    return this.sessions.get(id);
+    return this.registry.get(id);
   }
 
   /** List sessions sorted newest-first, optionally filtered by status. */
   list(filter?: SessionStatus | "all"): Session[] {
-    let result = [...this.sessions.values()];
+    let result = this.registry.list();
     if (filter && filter !== "all") {
       result = result.filter((s) => s.status === filter);
     }
@@ -580,7 +561,7 @@ export class SessionManager {
 
   /** Kill a session by internal id. */
   kill(id: string, reason?: KillReason): boolean {
-    const session = this.sessions.get(id);
+    const session = this.registry.get(id);
     if (!session) return false;
     session.kill(reason ?? "user");
     return true;
@@ -720,7 +701,7 @@ export class SessionManager {
     for (const [id, session] of this.sessions) {
       if (this.store.shouldGcActiveSession(session, now, cleanupMaxAgeMs)) {
         this.persistSession(session);
-        this.sessions.delete(id);
+        this.registry.remove(id);
         this.lastWaitingEventTimestamps.delete(id);
         this.lastTurnCompleteMarkers.delete(id);
         this.lastTerminalWakeMarkers.delete(id);

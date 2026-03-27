@@ -10,11 +10,21 @@ import type { PlanArtifact, PlanArtifactStep } from "../types";
 import type {
   AgentHarness,
   HarnessLaunchOptions,
-  HarnessMessage,
   HarnessSession,
 } from "./types";
 import type { JsonRpcClient } from "./codex-rpc";
 import { StdioJsonRpcClient } from "./codex-rpc";
+import {
+  createBackendRefEvent,
+  createPendingInputEvent,
+  createPendingInputResolvedEvent,
+  createPlanArtifactEvent,
+  createRunCompletedEvent,
+  createRunStartedEvent,
+  createSettingsChangedEvent,
+  createTextDeltaEvent,
+  HarnessMessageQueue,
+} from "./harness-events";
 import {
   approvalPolicyForMode,
   buildPendingInputState,
@@ -105,9 +115,7 @@ export class CodexHarness implements AgentHarness {
         clientSettings.requestTimeoutMs,
       );
 
-    const queue: HarnessMessage[] = [];
-    let queueResolve: (() => void) | null = null;
-    let queueDone = false;
+    const queue = new HarnessMessageQueue();
     let threadId = options.resumeSessionId;
     let turnId: string | undefined;
     let backendWorktreePath = options.backendRef?.worktreePath;
@@ -127,23 +135,6 @@ export class CodexHarness implements AgentHarness {
     const planDraftByItemId = new Map<string, string>();
     const assistantStreamByItemId = new Set<string>();
 
-    const flushResolve = (): void => {
-      if (queueResolve) {
-        queueResolve();
-        queueResolve = null;
-      }
-    };
-
-    const enqueue = (message: HarnessMessage): void => {
-      queue.push(message);
-      flushResolve();
-    };
-
-    const endQueue = (): void => {
-      queueDone = true;
-      flushResolve();
-    };
-
     const updateBackendWorktree = (candidatePath: string | undefined): void => {
       const trimmed = candidatePath?.trim();
       if (!trimmed) return;
@@ -158,16 +149,13 @@ export class CodexHarness implements AgentHarness {
 
     const emitBackendRef = (): void => {
       if (!threadId) return;
-      enqueue({
-        type: "backend_ref",
-        ref: {
-          kind: "codex-app-server",
-          conversationId: threadId,
-          ...(turnId ? { runId: turnId } : {}),
-          ...(backendWorktreeId ? { worktreeId: backendWorktreeId } : {}),
-          ...(backendWorktreePath ? { worktreePath: backendWorktreePath } : {}),
-        },
-      });
+      queue.enqueue(createBackendRefEvent({
+        kind: "codex-app-server",
+        conversationId: threadId,
+        ...(turnId ? { runId: turnId } : {}),
+        ...(backendWorktreeId ? { worktreeId: backendWorktreeId } : {}),
+        ...(backendWorktreePath ? { worktreePath: backendWorktreePath } : {}),
+      }));
     };
 
     client.setNotificationHandler(async (method, params) => {
@@ -188,7 +176,7 @@ export class CodexHarness implements AgentHarness {
 
       if (methodLower === "serverrequest/resolved") {
         if (currentPendingInput) {
-          enqueue({ type: "pending_input_resolved", requestId: currentPendingInput.requestId });
+          queue.enqueue(createPendingInputResolvedEvent(currentPendingInput.requestId));
           currentPendingInput = undefined;
         }
         return;
@@ -220,7 +208,7 @@ export class CodexHarness implements AgentHarness {
             steps: planSteps,
             markdown: completedPlan.text.trim(),
           };
-          enqueue({ type: "plan_artifact", artifact, finalized: true });
+          queue.enqueue(createPlanArtifactEvent(artifact, true));
           return;
         }
       }
@@ -230,12 +218,12 @@ export class CodexHarness implements AgentHarness {
         if (assistant.itemId) {
           assistantStreamByItemId.add(assistant.itemId);
         }
-        enqueue({ type: "text_delta", text: assistant.text });
+        queue.enqueue(createTextDeltaEvent(assistant.text));
         return;
       }
       if (assistant.mode === "snapshot" && assistant.text) {
         if (!assistant.itemId || !assistantStreamByItemId.has(assistant.itemId)) {
-          enqueue({ type: "text_delta", text: assistant.text });
+          queue.enqueue(createTextDeltaEvent(assistant.text));
         }
       }
 
@@ -283,10 +271,10 @@ export class CodexHarness implements AgentHarness {
           actions,
           resolveResponse: resolve,
         };
-        enqueue({ type: "pending_input", state });
+        queue.enqueue(createPendingInputEvent(state));
       });
       currentPendingInput = undefined;
-      enqueue({ type: "pending_input_resolved", requestId });
+      queue.enqueue(createPendingInputResolvedEvent(requestId));
       return response;
     });
 
@@ -341,7 +329,7 @@ export class CodexHarness implements AgentHarness {
 
     const runTurn = async (prompt: string): Promise<void> => {
       await ensureThread();
-      enqueue({ type: "run_started" });
+      queue.enqueue(createRunStartedEvent());
       runCounter += 1;
       planExplanation = "";
       planSteps = [];
@@ -378,29 +366,23 @@ export class CodexHarness implements AgentHarness {
         await completion;
         terminalMethod = activeTurnCompletion?.method ?? "turn/failed";
         terminalParams = activeTurnCompletion?.params;
-        enqueue({
-          type: "run_completed",
-          data: {
-            success: normalizeTerminalStatus(terminalMethod, terminalParams),
-            duration_ms: 0,
-            total_cost_usd: 0,
-            num_turns: runCounter,
-            result: extractTerminalMessage(terminalMethod, terminalParams),
-            session_id: threadId!,
-          },
-        });
+        queue.enqueue(createRunCompletedEvent({
+          success: normalizeTerminalStatus(terminalMethod, terminalParams),
+          duration_ms: 0,
+          total_cost_usd: 0,
+          num_turns: runCounter,
+          result: extractTerminalMessage(terminalMethod, terminalParams),
+          session_id: threadId!,
+        }));
       } catch (error) {
-        enqueue({
-          type: "run_completed",
-          data: {
-            success: false,
-            duration_ms: 0,
-            total_cost_usd: 0,
-            num_turns: runCounter,
-            result: errorMessage(error),
-            session_id: threadId ?? "",
-          },
-        });
+        queue.enqueue(createRunCompletedEvent({
+          success: false,
+          duration_ms: 0,
+          total_cost_usd: 0,
+          num_turns: runCounter,
+          result: errorMessage(error),
+          session_id: threadId ?? "",
+        }));
       } finally {
         activeTurnCompletion = undefined;
       }
@@ -456,39 +438,26 @@ export class CodexHarness implements AgentHarness {
           await runTurn(text);
         }
       } catch (error) {
-        enqueue({
-          type: "run_completed",
-          data: {
-            success: false,
-            duration_ms: 0,
-            total_cost_usd: 0,
-            num_turns: runCounter,
-            result: errorMessage(error),
-            session_id: threadId ?? options.resumeSessionId ?? "",
-          },
-        });
+        queue.enqueue(createRunCompletedEvent({
+          success: false,
+          duration_ms: 0,
+          total_cost_usd: 0,
+          num_turns: runCounter,
+          result: errorMessage(error),
+          session_id: threadId ?? options.resumeSessionId ?? "",
+        }));
       } finally {
         await client.close().catch((): undefined => undefined);
-        endQueue();
+        queue.close();
       }
     })();
 
     return {
-      messages: (async function* (): AsyncGenerator<HarnessMessage> {
-        while (true) {
-          while (queue.length > 0) {
-            yield queue.shift()!;
-          }
-          if (queueDone) return;
-          await new Promise<void>((resolve) => {
-            queueResolve = resolve;
-          });
-        }
-      })(),
+      messages: queue.messages(),
 
       async setPermissionMode(mode: string): Promise<void> {
         currentPermissionMode = mode;
-        enqueue({ type: "settings_changed", permissionMode: mode });
+        queue.enqueue(createSettingsChangedEvent(mode));
       },
 
       async submitPendingInputOption(index: number): Promise<boolean> {

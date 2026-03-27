@@ -42,6 +42,7 @@ import {
 import { MessageStream } from "./session-message-stream";
 import { appendSessionOutput } from "./session-output";
 import { SessionTimerRegistry } from "./session-timer-registry";
+import { SessionTurnRuntime } from "./session-turn-runtime";
 import { getBranchName } from "./worktree";
 
 const STARTUP_TIMEOUT_MS = 2 * 60 * 1000; // 2 minutes
@@ -143,12 +144,8 @@ export class Session extends EventEmitter {
   planDecisionVersion: number = 0;
   planFilePath?: string;
   killReason: KillReason = "unknown";
-  private waitingForInputFired: boolean = false;
-  private lastTurnHadQuestion: boolean = false;
   private planModeApproved: boolean = false;
-  private turnInProgress: boolean = true;
-  private currentTurnText: string = "";
-  private currentTurnPlanArtifact?: PlanArtifact;
+  private readonly turnRuntime: SessionTurnRuntime;
   lifecycle: SessionLifecycle = "starting";
   approvalState: SessionApprovalState = "not_required";
   runtimeState: SessionRuntimeState = "live";
@@ -200,6 +197,20 @@ export class Session extends EventEmitter {
     this.canUseTool = config.canUseTool;
     this.startedAt = Date.now();
     this.abortController = new AbortController();
+    this.turnRuntime = new SessionTurnRuntime({
+      appendOutput: (text) => appendSessionOutput(this.outputBuffer, this.id, text),
+      emitOutput: (text) => this.emit("output", this, text),
+      emitToolUse: (name, input) => this.emit("toolUse", this, name, input),
+      emitTurnEnd: (hadQuestion) => this.emit("turnEnd", this, hadQuestion),
+      markPendingPlanApproval: (context) => this.markPendingPlanApproval(context),
+      markAwaitingUserInput: () => this.markAwaitingUserInput(),
+      applyInputRequested: () => this.applyControlEvent({ type: "input.requested" }),
+      completeTurn: () => {
+        this.applyControlEvent({ type: "terminal.entered" });
+        this.complete("done");
+      },
+      setPlanFilePath: (path) => { this.planFilePath = path; },
+    });
     this.applyControlEvent({ type: "initialize", hasWorktree: !!(this.worktreeStrategy && this.worktreeStrategy !== "off") });
   }
 
@@ -217,6 +228,46 @@ export class Session extends EventEmitter {
 
   get backendConversationId(): string | undefined {
     return getBackendConversationId(this);
+  }
+
+  private get waitingForInputFired(): boolean {
+    return this.turnRuntime.waitingForInputFired;
+  }
+
+  private set waitingForInputFired(value: boolean) {
+    this.turnRuntime.waitingForInputFired = value;
+  }
+
+  private get lastTurnHadQuestion(): boolean {
+    return this.turnRuntime.lastTurnHadQuestion;
+  }
+
+  private set lastTurnHadQuestion(value: boolean) {
+    this.turnRuntime.lastTurnHadQuestion = value;
+  }
+
+  private get turnInProgress(): boolean {
+    return this.turnRuntime.turnInProgress;
+  }
+
+  private set turnInProgress(value: boolean) {
+    this.turnRuntime.turnInProgress = value;
+  }
+
+  private get currentTurnText(): string {
+    return this.turnRuntime.currentTurnText;
+  }
+
+  private set currentTurnText(value: string) {
+    this.turnRuntime.currentTurnText = value;
+  }
+
+  private get currentTurnPlanArtifact(): PlanArtifact | undefined {
+    return this.turnRuntime.currentTurnPlanArtifact;
+  }
+
+  private set currentTurnPlanArtifact(value: PlanArtifact | undefined) {
+    this.turnRuntime.currentTurnPlanArtifact = value;
   }
 
   get duration(): number {
@@ -330,9 +381,7 @@ export class Session extends EventEmitter {
     }
 
     this.resetIdleTimer();
-    this.waitingForInputFired = false;
-    this.turnInProgress = true;
-    this.currentTurnText = "";
+    this.turnRuntime.beginUserTurn();
     this.applyControlEvent({ type: "turn.started" });
 
     let effectiveText = text;
@@ -531,70 +580,33 @@ export class Session extends EventEmitter {
           this.backendRef = { ...this.backendRef, runId: msg.runId };
         }
       } else if (msg.type === "text_delta") {
-        const text = msg.text;
-        this.waitingForInputFired = false;
-        // Don't reset lastTurnHadQuestion if we already detected a plan
-        // approval tool — pendingPlanApproval is the authoritative flag.
-        if (!this.pendingPlanApproval) {
-          this.lastTurnHadQuestion = false;
-        }
-        appendSessionOutput(this.outputBuffer, this.id, text);
-        this.currentTurnText += this.currentTurnText ? `\n${text}` : text;
-        this.emit("output", this, text);
+        this.turnRuntime.noteTextDelta(msg.text, this.pendingPlanApproval);
       } else if (msg.type === "tool_call") {
-        const name = msg.name;
-        const input = msg.input;
-        // Track plan file writes so agent_output can surface the plan content.
-        if (name === "Write") {
-          const writeInput = input as Record<string, unknown>;
-          if (typeof writeInput?.file_path === "string" && writeInput.file_path.includes("/.claude/plans/")) {
-            this.planFilePath = writeInput.file_path;
-          }
-        }
-        if (name === "AskUserQuestion") {
-          this.lastTurnHadQuestion = true;
-          this.applyControlEvent({ type: "input.requested" });
-          if ((this.currentPermissionMode === "plan" || this.permissionMode === "plan") && !this.planModeApproved) {
-            this.markPendingPlanApproval("plan-mode");
-          }
-        } else if ((name === "ExitPlanMode" || name === "set_permission_mode") && !this.planModeApproved) {
-          this.lastTurnHadQuestion = true;
-          this.markPendingPlanApproval("plan-mode");
-        }
-        this.emit("toolUse", this, name, input);
+        this.turnRuntime.noteToolCall({
+          name: msg.name,
+          input: msg.input,
+          currentPermissionMode: this.currentPermissionMode,
+          permissionMode: this.permissionMode,
+          planModeApproved: this.planModeApproved,
+        });
       } else if (msg.type === "pending_input") {
         this.pendingInputState = msg.state;
-        this.lastTurnHadQuestion = true;
-        this.applyControlEvent({ type: "input.requested" });
-        if (!this.waitingForInputFired) {
-          this.waitingForInputFired = true;
-          this.emit("turnEnd", this, true);
-        }
+        this.turnRuntime.notePendingInput();
       } else if (msg.type === "pending_input_resolved") {
-        if (!msg.requestId || this.pendingInputState?.requestId === msg.requestId) {
-          this.pendingInputState = undefined;
-        }
+        this.pendingInputState = this.turnRuntime.clearResolvedPendingInput(msg.requestId, this.pendingInputState);
       } else if (msg.type === "plan_artifact") {
-        this.currentTurnPlanArtifact = msg.artifact;
-        if (msg.finalized) {
-          const markdown = msg.artifact.markdown.trim();
-          if (markdown && this.currentTurnText.trim() !== markdown) {
-            appendSessionOutput(this.outputBuffer, this.id, markdown);
-            this.currentTurnText = markdown;
-            this.emit("output", this, markdown);
-          }
-        }
+        this.turnRuntime.notePlanArtifact(msg.artifact, msg.finalized);
       } else if (msg.type === "settings_changed") {
         // Defensive: SDK does not currently emit this event (see docs/internal/PLAN-MODE-INVESTIGATION.md).
         // Kept for forward-compatibility if future SDK versions emit system/status permissionMode changes.
         const oldMode = this.currentPermissionMode;
-        const permissionMode = msg.permissionMode;
-        if (permissionMode) {
-          this.currentPermissionMode = permissionMode as PermissionMode;
-        }
-        if (permissionMode && permissionMode !== "plan" && oldMode === "plan" && !this.planModeApproved) {
-          this.markPendingPlanApproval("plan-mode");
-          this.lastTurnHadQuestion = true;
+        const nextMode = this.turnRuntime.noteSettingsChanged({
+          oldMode,
+          permissionMode: msg.permissionMode,
+          planModeApproved: this.planModeApproved,
+        });
+        if (nextMode) {
+          this.currentPermissionMode = nextMode;
         }
       } else if (msg.type === "run_completed") {
         const data = msg.data;
@@ -613,49 +625,19 @@ export class Session extends EventEmitter {
 
         if (isMultiTurnEndOfTurn) {
           this.resetIdleTimer();
-
-          // If the session is in plan mode and the turn completed, CC finished presenting
-          // its plan and is waiting for approval. The SDK does NOT fire a system/status
-          // permissionMode change event — it just stops streaming. So we set
-          // pendingPlanApproval here based on currentPermissionMode.
-          if (
-            (this.currentPermissionMode === "plan" || this.permissionMode === "plan") &&
-            !this.pendingPlanApproval &&
-            !this.planModeApproved
-          ) {
-            this.markPendingPlanApproval("plan-mode");
-          }
-
-          // Use pendingPlanApproval OR lastTurnHadQuestion — pendingPlanApproval
-          // is authoritative for the plan approval path (it survives text resets).
-          const needsInput = this.pendingPlanApproval || this.lastTurnHadQuestion || !!this.pendingInputState;
-          const hasPending = this.messageStream?.hasPending() === true;
-          this.turnInProgress = hasPending;
-          if (needsInput && !this.waitingForInputFired) {
-            this.waitingForInputFired = true;
-            if (!this.pendingPlanApproval) {
-              this.applyControlEvent({ type: "input.requested" });
-            }
-            this.emit("turnEnd", this, true);
-          } else if (hasPending) {
-            // Follow-up user messages were queued during this turn; keep the
-            // session alive so the harness can consume them on the next turn.
-          } else if (!needsInput) {
-            this.applyControlEvent({ type: "terminal.entered" });
-            this.emit("turnEnd", this, false);
-            // `complete("done")` means "natural turn completion with no user
-            // input needed". This is intentionally different from `kill("done")`:
-            // completion emits the success lifecycle path and avoids killed/failure
-            // terminal handling noise.
-            this.complete("done");
-          }
+          this.turnRuntime.finishSuccessfulTurn({
+            currentPermissionMode: this.currentPermissionMode,
+            permissionMode: this.permissionMode,
+            pendingPlanApproval: this.pendingPlanApproval,
+            planModeApproved: this.planModeApproved,
+            pendingInputState: this.pendingInputState,
+            hasPendingMessages: this.messageStream?.hasPending() === true,
+          });
         } else {
-          this.turnInProgress = false;
+          this.turnRuntime.finishTerminalTurn();
           this.transitionToTerminal(data.success ? "completed" : "failed");
         }
-        this.lastTurnHadQuestion = false;
-        this.currentTurnText = "";
-        this.currentTurnPlanArtifact = undefined;
+        this.turnRuntime.resetAfterRun();
         this.pendingInputState = undefined;
       } else if (msg.type === "activity") {
         // Keepalive ping for long-running subprocesses with no output.
