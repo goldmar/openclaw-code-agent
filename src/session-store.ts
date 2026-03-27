@@ -1,17 +1,16 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "fs";
-import { randomUUID } from "crypto";
 import { tmpdir } from "os";
 import { dirname, join } from "path";
 import type {
   PersistedSessionInfo,
   SessionStatus,
   SessionActionToken,
-  SessionActionKind,
 } from "./types";
 import type { Session } from "./session";
 import { getSessionOutputFilePath } from "./session";
 import { resolveOpenclawHomeDir } from "./openclaw-paths";
 import { canonicalizeSessionRoute } from "./session-route";
+import { SessionActionTokenStore } from "./session-action-token-store";
 import {
   assertNewSchemaEntry,
   normalizeActionToken,
@@ -55,12 +54,15 @@ export class SessionStore {
   readonly persisted: Map<string, PersistedSessionInfo> = new Map();
   readonly idIndex: Map<string, string> = new Map();
   readonly nameIndex: Map<string, string> = new Map();
-  readonly actionTokens: Map<string, SessionActionToken> = new Map();
+  readonly actionTokens: Map<string, SessionActionToken>;
+  readonly actionTokenStore: SessionActionTokenStore;
   private readonly indexPath: string;
 
   constructor(options: SessionStoreOptions = {}) {
     const env = options.env ?? process.env;
     this.indexPath = options.indexPath ?? resolveSessionIndexPath(env);
+    this.actionTokenStore = new SessionActionTokenStore(() => this.saveIndex(), TMP_OUTPUT_MAX_AGE_MS);
+    this.actionTokens = this.actionTokenStore.tokens;
 
     if (env.OPENCLAW_DEBUG_SESSION_STORE === "1") {
       console.warn(`[SessionStore] index path: ${this.indexPath}`);
@@ -90,7 +92,7 @@ export class SessionStore {
           this.persisted.clear();
           this.idIndex.clear();
           this.nameIndex.clear();
-          this.actionTokens.clear();
+          this.actionTokenStore.clear();
           this.archiveLegacyIndex("invalid v4 session entry");
           this.saveIndex();
           return;
@@ -108,7 +110,7 @@ export class SessionStore {
           this.persisted.clear();
           this.idIndex.clear();
           this.nameIndex.clear();
-          this.actionTokens.clear();
+          this.actionTokenStore.clear();
           this.archiveLegacyIndex("invalid v4 action token");
           this.saveIndex();
           return;
@@ -116,7 +118,7 @@ export class SessionStore {
         this.actionTokens.set(token.id, token);
       }
 
-      this.purgeExpiredActionTokens();
+      this.actionTokenStore.purgeExpiredActionTokens();
     } catch {
       // File doesn't exist yet or is corrupt — start fresh
     }
@@ -129,7 +131,7 @@ export class SessionStore {
       const payload: SessionStoreSchema = {
         schemaVersion: STORE_SCHEMA_VERSION,
         sessions: [...this.persisted.values()],
-        actionTokens: [...this.actionTokens.values()],
+        actionTokens: this.actionTokenStore.listForPersistence(),
       };
       writeFileSync(tmp, JSON.stringify(payload, null, 2), "utf-8");
       renameSync(tmp, this.indexPath);
@@ -353,7 +355,7 @@ export class SessionStore {
 
   /** Best-effort cleanup for stale tmp output files written by persistTerminal. */
   cleanupTmpOutputFiles(now: number): void {
-    this.purgeExpiredActionTokens(now);
+    this.actionTokenStore.purgeExpiredActionTokens(now);
     try {
       const tmpDir = tmpdir();
       const tmpFiles = readdirSync(tmpDir).filter((f) => f.startsWith("openclaw-agent-") && f.endsWith(".txt"));
@@ -399,63 +401,19 @@ export class SessionStore {
     return now - session.completedAt > cleanupMaxAgeMs;
   }
 
-  createActionToken(
-    sessionId: string,
-    kind: SessionActionKind,
-    options: Partial<Omit<SessionActionToken, "id" | "sessionId" | "kind" | "createdAt">> = {},
-  ): SessionActionToken {
-    const token: SessionActionToken = {
-      id: randomUUID(),
-      sessionId,
-      kind,
-      createdAt: Date.now(),
-      ...options,
-    };
-    this.actionTokens.set(token.id, token);
-    this.saveIndex();
-    return token;
-  }
-
   getActionToken(tokenId: string): SessionActionToken | undefined {
-    const token = this.actionTokens.get(tokenId);
-    if (!token) return undefined;
-    if (token.expiresAt != null && token.expiresAt <= Date.now()) {
-      this.actionTokens.delete(tokenId);
-      this.saveIndex();
-      return undefined;
-    }
-    return token;
+    return this.actionTokenStore.getActionToken(tokenId);
   }
 
   consumeActionToken(tokenId: string): SessionActionToken | undefined {
-    const token = this.getActionToken(tokenId);
-    if (!token || token.consumedAt != null) return undefined;
-    token.consumedAt = Date.now();
-    this.saveIndex();
-    return token;
+    return this.actionTokenStore.consumeActionToken(tokenId);
   }
 
   deleteActionTokensForSession(sessionId: string): void {
-    let changed = false;
-    for (const [tokenId, token] of this.actionTokens) {
-      if (token.sessionId === sessionId) {
-        this.actionTokens.delete(tokenId);
-        changed = true;
-      }
-    }
-    if (changed) this.saveIndex();
+    this.actionTokenStore.deleteActionTokensForSession(sessionId);
   }
 
   purgeExpiredActionTokens(now: number = Date.now()): void {
-    let changed = false;
-    for (const [tokenId, token] of this.actionTokens) {
-      const expired = token.expiresAt != null && token.expiresAt <= now;
-      const consumedTooOld = token.consumedAt != null && now - token.consumedAt > TMP_OUTPUT_MAX_AGE_MS;
-      if (expired || consumedTooOld) {
-        this.actionTokens.delete(tokenId);
-        changed = true;
-      }
-    }
-    if (changed) this.saveIndex();
+    this.actionTokenStore.purgeExpiredActionTokens(now);
   }
 }

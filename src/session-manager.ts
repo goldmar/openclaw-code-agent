@@ -7,6 +7,8 @@ import { formatLaunchSummaryFromSession } from "./launch-summary";
 import { pathsReferToSameLocation } from "./path-utils";
 import { SessionSemanticAdapter } from "./session-semantic-adapter";
 import { SessionRestoreService } from "./session-restore-service";
+import { SessionStateSyncService } from "./session-state-sync-service";
+import { SessionWorktreeStrategyService, type WorktreeStrategyResult } from "./session-worktree-strategy-service";
 import type {
   SessionConfig,
   SessionStatus,
@@ -27,19 +29,11 @@ import { SessionQuestionService, type PendingAskUserQuestion } from "./session-q
 import { SessionReminderService } from "./session-reminder-service";
 import { SessionLifecycleService } from "./session-lifecycle-service";
 import {
-  buildDelegateWorktreeWakeMessage,
-  buildDelegateReminderWakeMessage,
-  buildNoChangeDeliverableMessage,
-  buildWorktreeDecisionSummary,
   getStoppedStatusLabel as formatStoppedStatusLabel,
 } from "./session-notification-builder";
 import {
   removeWorktree,
-  getDiffSummary,
-  mergeBranch,
   deleteBranch,
-  detectDefaultBranch,
-  formatWorktreeOutcomeLine,
   getPrimaryRepoRootFromWorktree,
   isGitHubCLIAvailable,
 } from "./worktree";
@@ -59,12 +53,6 @@ type LaunchConfirmationSession = Pick<Session, "status" | "name" | "id" | "killR
   off?: (event: string, listener: (...args: any[]) => void) => unknown;
   removeListener?: (event: string, listener: (...args: any[]) => void) => unknown;
 };
-
-type WorktreeStrategyResult = {
-  notificationSent: boolean;
-  worktreeRemoved: boolean;
-};
-
 
 /**
  * Orchestrates active session lifecycles, wake signaling, persistence, and GC.
@@ -93,6 +81,8 @@ export class SessionManager {
   private readonly reminders: SessionReminderService;
   private readonly lifecycle: SessionLifecycleService;
   private readonly restore: SessionRestoreService;
+  private readonly stateSync: SessionStateSyncService;
+  private readonly worktreeStrategy: SessionWorktreeStrategyService;
 
   constructor(maxSessions: number = 20, maxPersistedSessions: number = 50) {
     this.maxSessions = maxSessions;
@@ -100,14 +90,56 @@ export class SessionManager {
     this.store = new SessionStore();
     this.metrics = new SessionMetricsRecorder();
     this.wakeDispatcher = new WakeDispatcher();
-    this.interactions = new SessionInteractionService(this.store, isGitHubCLIAvailable);
+    this.interactions = new SessionInteractionService(this.store.actionTokenStore, isGitHubCLIAvailable);
+    this.stateSync = new SessionStateSyncService({
+      store: this.store,
+      sessions: this.sessions,
+      resolveSession: (ref) => this.resolve(ref),
+    });
     this.notifications = new SessionNotificationService(
       this.wakeDispatcher,
-      (ref, patch) => this.applySessionPatch(ref, patch),
+      (ref, patch) => this.stateSync.applySessionPatch(ref, patch),
     );
     this.worktrees = new SessionWorktreeController();
     this.semantic = new SessionSemanticAdapter();
     this.restore = new SessionRestoreService((ref) => this.store.getPersistedSession(ref));
+    this.worktreeStrategy = new SessionWorktreeStrategyService({
+      shouldRunWorktreeStrategy: (session) => this.shouldRunWorktreeStrategy(session),
+      isAlreadyMerged: (harnessSessionId) => this.isAlreadyMerged(harnessSessionId),
+      resolveWorktreeRepoDir: (repoDir, worktreePath) => this.resolveWorktreeRepoDir(repoDir, worktreePath),
+      getWorktreeCompletionState: (repoDir, worktreePath, branchName, baseBranch) => (
+        this.getWorktreeCompletionState(repoDir, worktreePath, branchName, baseBranch)
+      ),
+      classifyNoChangeDeliverable: (context) => this.semantic.classifyNoChangeDeliverable(context),
+      updatePersistedSession: (ref, patch) => this.updatePersistedSession(ref, patch),
+      dispatchSessionNotification: (session, request) => this.dispatchSessionNotification(session, request),
+      getWorktreeDecisionButtons: (sessionId) => this.getWorktreeDecisionButtons(sessionId),
+      makeOpenPrButton: (sessionId) => this.makeActionButton(sessionId, "worktree-create-pr", "Open PR"),
+      enqueueMerge: (repoDir, fn, onQueued) => this.enqueueMerge(repoDir, fn, onQueued),
+      spawnConflictResolver: async (session, repoDir, prompt) => {
+        this.spawn({
+          prompt,
+          workdir: repoDir,
+          name: `${session.name}-conflict-resolver`,
+          harness: getDefaultHarnessName(),
+          permissionMode: "bypassPermissions",
+          multiTurn: true,
+          route: session.route,
+          originChannel: session.originChannel,
+          originThreadId: session.originThreadId,
+          originAgentId: session.originAgentId,
+          originSessionKey: session.originSessionKey,
+        });
+      },
+      runAutoPr: async (session, baseBranch) => {
+        const { makeAgentPrTool } = await import("./tools/agent-pr");
+        const result = await makeAgentPrTool().execute("auto-pr", {
+          session: session.id,
+          base_branch: baseBranch,
+        }) as { meta?: { success?: boolean } };
+        return { success: result?.meta?.success === true };
+      },
+    });
     this.questions = new SessionQuestionService(
       this.pendingAskUserQuestions,
       (session, request) => this.dispatchSessionNotification(session, request),
@@ -365,35 +397,6 @@ export class SessionManager {
     } as Session;
   }
 
-  private buildDelegateWorktreeWakeMessage(args: {
-    sessionName: string;
-    sessionId: string;
-    branchName: string;
-    baseBranch: string;
-    promptSnippet: string;
-    commitLines: string[];
-    moreNote?: string;
-    diffSummary: {
-      commits: number;
-      filesChanged: number;
-      insertions: number;
-      deletions: number;
-    };
-  }): string {
-    return buildDelegateWorktreeWakeMessage(args);
-  }
-
-  private buildDelegateReminderWakeMessage(session: PersistedSessionInfo, pendingHours: number): string {
-    return buildDelegateReminderWakeMessage(session, pendingHours);
-  }
-
-  private buildWorktreeDecisionSummary(diffSummary: {
-    changedFiles: string[];
-    commitMessages: Array<{ message: string }>;
-  }): string[] {
-    return buildWorktreeDecisionSummary(diffSummary);
-  }
-
   private resolveWorktreeRepoDir(repoDir: string | undefined, worktreePath?: string): string | undefined {
     if (repoDir && (!worktreePath || !pathsReferToSameLocation(repoDir, worktreePath))) return repoDir;
     if (!worktreePath) return repoDir;
@@ -405,50 +408,6 @@ export class SessionManager {
     const repoDir = this.resolveWorktreeRepoDir(session.originalWorkdir, session.worktreePath);
     if (!repoDir || repoDir === session.worktreePath) return session.worktreePath;
     return `${session.worktreePath} (worktree of ${repoDir})`;
-  }
-
-  private buildNoChangeDeliverableMessage(
-    session: Pick<Session, "name">,
-    preview: string,
-    cleanupSucceeded: boolean,
-    worktreePath: string,
-  ): string {
-    return buildNoChangeDeliverableMessage(session, preview, cleanupSucceeded, worktreePath);
-  }
-
-  private getNoChangeOutputText(
-    session: Pick<Session, "getOutput">,
-    maxChars: number = 5_000,
-  ): string {
-    return session.getOutput()
-      .join("\n")
-      .slice(-maxChars)
-      .trim();
-  }
-
-  private async classifyNoChangeDeliverable(
-    session: Pick<Session, "harnessName" | "name" | "prompt" | "originAgentId" | "getOutput"> & {
-      workdir?: string;
-      originalWorkdir?: string;
-    },
-  ): Promise<string | undefined> {
-    if (typeof session.getOutput !== "function") return undefined;
-    const preview = this.getOutputPreview(session as Session, 2_500).trim();
-    if (!preview) return undefined;
-    const outputText = this.getNoChangeOutputText(session);
-    const workspaceDir = session.workdir ?? session.originalWorkdir;
-    if (!outputText) return undefined;
-    if (!workspaceDir) return undefined;
-
-    const result = await this.semantic.classifyNoChangeDeliverable({
-      harnessName: session.harnessName,
-      sessionName: session.name,
-      prompt: session.prompt,
-      workdir: workspaceDir,
-      agentId: session.originAgentId,
-      outputText,
-    });
-    return result.classification === "report_worthy_no_change" ? preview : undefined;
   }
 
   async dismissWorktree(ref: string): Promise<string> {
@@ -536,316 +495,7 @@ export class SessionManager {
    * Called from onSessionTerminal BEFORE worktree cleanup.
    */
   private async handleWorktreeStrategy(session: Session): Promise<WorktreeStrategyResult> {
-    // Early-return guard: if branch was already merged, skip all strategy handling
-    if (this.isAlreadyMerged(session.harnessSessionId)) {
-      console.info(`[SessionManager] handleWorktreeStrategy: session "${session.name}" already merged — skipping strategy handling`);
-      return { notificationSent: true, worktreeRemoved: false };
-    }
-
-    // Only handle completed sessions (not failed/killed)
-    if (session.status !== "completed") return { notificationSent: false, worktreeRemoved: false };
-
-    // Phase gate: skip strategy during plan turns
-    if (!this.shouldRunWorktreeStrategy(session)) {
-      console.info(`[SessionManager] handleWorktreeStrategy: skipping — session "${session.name}" is in phase "${session.phase}"`);
-      return { notificationSent: false, worktreeRemoved: false };
-    }
-
-    const strategy = session.worktreeStrategy;
-    // Skip merge-back for "off", "manual", or undefined
-    if (!strategy || strategy === "off" || strategy === "manual") {
-      return { notificationSent: false, worktreeRemoved: false };
-    }
-
-    const worktreePath = session.worktreePath!;
-    const repoDir = this.resolveWorktreeRepoDir(session.originalWorkdir, worktreePath);
-    const branchName = session.worktreeBranch;
-    if (!repoDir) {
-      this.dispatchSessionNotification(session, {
-        label: "worktree-missing-repo-dir",
-        userMessage: `⚠️ [${session.name}] Cannot determine the original repo for worktree ${worktreePath}. Manual inspection is required.`,
-      });
-      return { notificationSent: true, worktreeRemoved: false };
-    }
-    if (!branchName) {
-      this.dispatchSessionNotification(session, {
-        label: "worktree-no-branch-name",
-        userMessage: `⚠️ [${session.name}] Cannot determine branch name for worktree ${worktreePath}. The worktree may have been removed or is in detached HEAD state. Manual cleanup may be needed.`,
-      });
-      return { notificationSent: true, worktreeRemoved: false };
-    }
-
-    const baseBranch = session.worktreeBaseBranch ?? detectDefaultBranch(repoDir);
-
-    const completionState = this.getWorktreeCompletionState(repoDir, worktreePath, branchName, baseBranch);
-
-    if (completionState === "no-change") {
-      const deliverablePreview = await this.classifyNoChangeDeliverable(session);
-      const removed = removeWorktree(repoDir, worktreePath);
-      if (removed) {
-        session.worktreePath = undefined;
-        if (session.harnessSessionId) {
-          this.updatePersistedSession(session.harnessSessionId, {
-            worktreePath: undefined,
-            worktreeDisposition: "no-change-cleaned",
-            worktreeState: "none",
-          });
-        }
-        this.dispatchSessionNotification(session, {
-          label: deliverablePreview ? "worktree-no-change-deliverable" : "worktree-no-changes",
-          userMessage: deliverablePreview
-            ? this.buildNoChangeDeliverableMessage(session, deliverablePreview, true, worktreePath)
-            : `ℹ️ [${session.name}] Session completed with no changes — worktree cleaned up`,
-        });
-      } else {
-        this.dispatchSessionNotification(session, {
-          label: deliverablePreview ? "worktree-no-change-deliverable-cleanup-failed" : "worktree-no-changes-cleanup-failed",
-          userMessage: deliverablePreview
-            ? this.buildNoChangeDeliverableMessage(session, deliverablePreview, false, worktreePath)
-            : `⚠️ [${session.name}] Session completed with no changes, but worktree cleanup failed. Worktree still exists at ${worktreePath}`,
-        });
-      }
-      return { notificationSent: true, worktreeRemoved: removed };
-    }
-
-    if (completionState === "base-advanced") {
-      this.dispatchSessionNotification(session, {
-        label: "worktree-no-commits-ahead",
-        userMessage: `⚠️ [${session.name}] Auto-merge: branch '${branchName}' has no commits ahead of '${baseBranch}', but '${baseBranch}' has new commits — commits likely landed outside the worktree branch. Verify that commits were not made directly to '${baseBranch}' instead of the worktree branch. Worktree: ${worktreePath}`,
-      });
-      return { notificationSent: true, worktreeRemoved: false };
-    }
-
-    if (completionState === "dirty-uncommitted") {
-      this.dispatchSessionNotification(session, {
-        label: "worktree-dirty-uncommitted",
-        userMessage: `⚠️ [${session.name}] Session completed with uncommitted changes. The branch has no commits ahead of '${baseBranch}' but there are modified tracked files in the worktree. Check: ${worktreePath}`,
-      });
-      return { notificationSent: true, worktreeRemoved: false };
-    }
-
-    // completionState === "has-commits" — proceed with strategy
-    const diffSummary = getDiffSummary(repoDir, branchName, baseBranch);
-    if (!diffSummary) {
-      console.warn(`[SessionManager] Failed to get diff summary for ${branchName}, skipping merge-back`);
-      return { notificationSent: false, worktreeRemoved: false };
-    }
-
-    if (strategy === "ask") {
-      const askSummaryLines = this.buildWorktreeDecisionSummary(diffSummary);
-      const askCommitLines = diffSummary.commitMessages
-        .slice(0, 5)
-        .map((c) => `• ${c.hash} ${c.message} (${c.author})`);
-      const askMoreNote = diffSummary.commits > 5 ? `...and ${diffSummary.commits - 5} more` : "";
-
-      const askBranchLine = session.worktreePrTargetRepo
-        ? `Branch: \`${branchName}\` → \`${baseBranch}\` | PR target: ${session.worktreePrTargetRepo}`
-        : `Branch: \`${branchName}\` → \`${baseBranch}\``;
-
-      const userNotifyMessage = [
-        `🔀 Worktree decision required for session \`${session.name}\``,
-        ``,
-        askBranchLine,
-        `Commits: ${diffSummary.commits} | Files: ${diffSummary.filesChanged} | +${diffSummary.insertions} / -${diffSummary.deletions}`,
-        ``,
-        ...(askSummaryLines.length > 0
-          ? [
-              `Summary:`,
-              ...askSummaryLines.map((line) => `- ${line}`),
-              ``,
-            ]
-          : []),
-        `Recent commits:`,
-        ...askCommitLines,
-        ...(askMoreNote ? [askMoreNote] : []),
-        ``,
-        `⚠️ Discard will permanently delete branch \`${branchName}\` and all local changes. This cannot be undone.`,
-      ].join("\n");
-
-      this.dispatchSessionNotification(session, {
-        label: "worktree-merge-ask",
-        userMessage: userNotifyMessage,
-        notifyUser: "always",
-        buttons: this.getWorktreeDecisionButtons(session.id),
-        wakeMessageOnNotifySuccess:
-          `Worktree strategy buttons delivered to user. Wait for their button callback — do NOT act on this worktree yourself.`,
-        wakeMessageOnNotifyFailed: userNotifyMessage,
-      });
-
-      // Stamp pending decision timestamp
-      if (session.harnessSessionId) {
-        this.updatePersistedSession(session.harnessSessionId, {
-          pendingWorktreeDecisionSince: new Date().toISOString(),
-          lifecycle: "awaiting_worktree_decision",
-          worktreeState: "pending_decision",
-        });
-      }
-      return { notificationSent: true, worktreeRemoved: false };
-    }
-
-    if (strategy === "delegate") {
-      const delegateCommitLines = diffSummary.commitMessages
-        .slice(0, 5)
-        .map((c) => `• ${c.hash} ${c.message} (${c.author})`);
-      const delegateMoreNote = diffSummary.commits > 5 ? `...and ${diffSummary.commits - 5} more` : "";
-      const promptSnippet = session.prompt ? session.prompt.slice(0, 500) : "(no prompt)";
-
-      this.dispatchSessionNotification(session, {
-        label: "worktree-delegate",
-        wakeMessage: this.buildDelegateWorktreeWakeMessage({
-          sessionName: session.name,
-          sessionId: session.id,
-          branchName,
-          baseBranch,
-          promptSnippet,
-          commitLines: delegateCommitLines,
-          moreNote: delegateMoreNote || undefined,
-          diffSummary,
-        }),
-        notifyUser: "never",
-      });
-
-      // Stamp pending decision timestamp
-      if (session.harnessSessionId) {
-        this.updatePersistedSession(session.harnessSessionId, {
-          pendingWorktreeDecisionSince: new Date().toISOString(),
-          lifecycle: "awaiting_worktree_decision",
-          worktreeState: "pending_decision",
-        });
-      }
-      return { notificationSent: true, worktreeRemoved: false };
-    }
-
-    if (strategy === "auto-merge") {
-      // Idempotency guard: skip entirely if already merged before we even enter the queue
-      if (this.isAlreadyMerged(session.harnessSessionId)) {
-        return { notificationSent: true, worktreeRemoved: false };
-      }
-
-      await this.enqueueMerge(
-        repoDir,
-        async () => {
-          // Re-check inside the queue slot in case a concurrent merge completed while we waited
-          if (this.isAlreadyMerged(session.harnessSessionId)) return;
-
-          // Attempt merge (no push — auto-merge is local-only)
-          const mergeResult = mergeBranch(repoDir, branchName, baseBranch, "merge", worktreePath);
-
-          if (mergeResult.success) {
-            // Delete branch
-            deleteBranch(repoDir, branchName);
-
-            // Persist merge status
-            if (session.harnessSessionId) {
-              this.updatePersistedSession(session.harnessSessionId, {
-                worktreeMerged: true,
-                worktreeMergedAt: new Date().toISOString(),
-                lifecycle: "terminal",
-                worktreeState: "merged",
-                pendingWorktreeDecisionSince: undefined,
-                lastWorktreeReminderAt: undefined,
-              });
-            }
-
-            const outcomeLine = formatWorktreeOutcomeLine({
-              kind: "merge",
-              branch: branchName,
-              base: baseBranch,
-              filesChanged: diffSummary.filesChanged,
-              insertions: diffSummary.insertions,
-              deletions: diffSummary.deletions,
-            });
-            let successMsg = outcomeLine;
-            if (mergeResult.stashPopConflict) {
-              successMsg += `\n⚠️ Pre-merge stash pop conflicted — run \`git stash show ${mergeResult.stashRef ?? "stash@{0}"}\` in ${repoDir} to review stashed changes.`;
-            } else if (mergeResult.stashed) {
-              successMsg += `\n(Pre-existing changes on ${baseBranch} were auto-stashed and restored.)`;
-            }
-
-            this.dispatchSessionNotification(session, {
-              label: "worktree-merge-success",
-              userMessage: successMsg,
-            });
-          } else if (mergeResult.conflictFiles && mergeResult.conflictFiles.length > 0) {
-            // Spawn conflict resolver session
-            const conflictPrompt = [
-              `Resolve merge conflicts in the following files and commit the resolution:`,
-              ``,
-              ...mergeResult.conflictFiles.map((f) => `- ${f}`),
-              ``,
-              `After resolving, commit with message: "Resolve merge conflicts from ${branchName}"`,
-            ].join("\n");
-
-            try {
-              this.spawn({
-                prompt: conflictPrompt,
-                workdir: repoDir,
-                name: `${session.name}-conflict-resolver`,
-                harness: getDefaultHarnessName(),
-                permissionMode: "bypassPermissions",
-                multiTurn: true,
-                route: session.route,
-                originChannel: session.originChannel,
-                originThreadId: session.originThreadId,
-                originAgentId: session.originAgentId,
-                originSessionKey: session.originSessionKey,
-              });
-
-              this.dispatchSessionNotification(session, {
-                label: "worktree-merge-conflict",
-                userMessage: `⚠️ [${session.name}] Merge conflicts in ${mergeResult.conflictFiles.length} file(s) — spawned conflict resolver session`,
-                buttons: [[this.makeActionButton(session.id, "worktree-create-pr", "Open PR instead")]],
-              });
-            } catch (err) {
-              this.dispatchSessionNotification(session, {
-                label: "worktree-merge-conflict-spawn-failed",
-                userMessage: `❌ [${session.name}] Merge conflicts detected, but failed to spawn resolver: ${err instanceof Error ? err.message : String(err)}`,
-              });
-            }
-          } else {
-            const errorMsg = mergeResult.dirtyError
-              ? `❌ [${session.name}] Merge blocked: ${mergeResult.error}`
-              : `❌ [${session.name}] Merge failed: ${mergeResult.error ?? "unknown error"}`;
-            this.dispatchSessionNotification(session, {
-              label: "worktree-merge-error",
-              userMessage: errorMsg,
-            });
-          }
-        },
-        () => {
-          // Notify user that this merge is waiting behind another in-progress merge
-          this.dispatchSessionNotification(session, {
-            label: "worktree-merge-queued",
-            userMessage: `🕐 [${session.name}] Merge queued — another merge for this repo is in progress. Will notify when complete.`,
-          });
-        },
-      );
-      return { notificationSent: true, worktreeRemoved: false };
-    }
-
-    if (strategy === "auto-pr") {
-      const { makeAgentPrTool } = await import("./tools/agent-pr");
-      if (session.harnessSessionId) {
-        this.updatePersistedSession(session.harnessSessionId, {
-          lifecycle: "terminal",
-          worktreeState: "pr_in_progress",
-        });
-      }
-      const result = await makeAgentPrTool().execute("auto-pr", { session: session.id, base_branch: baseBranch }) as {
-        meta?: { success?: boolean };
-      };
-      if (result?.meta?.success !== true) {
-        if (session.harnessSessionId) {
-          this.updatePersistedSession(session.harnessSessionId, {
-            pendingWorktreeDecisionSince: new Date().toISOString(),
-            lifecycle: "awaiting_worktree_decision",
-            worktreeState: "pending_decision",
-          });
-        }
-      }
-      return { notificationSent: true, worktreeRemoved: false };
-    }
-    return { notificationSent: false, worktreeRemoved: false };
+    return this.worktreeStrategy.handleWorktreeStrategy(session);
   }
 
   private async onSessionTerminal(session: Session): Promise<void> {
@@ -1060,72 +710,7 @@ export class SessionManager {
 
   /** Update fields on a persisted session record and flush to disk. */
   updatePersistedSession(ref: string, patch: Partial<PersistedSessionInfo>): boolean {
-    return this.applySessionPatch(ref, patch);
-  }
-
-  private applySessionPatch(ref: string, patch: Partial<PersistedSessionInfo>): boolean {
-    const existing = this.store.getPersistedSession(ref);
-    if (existing) {
-      Object.assign(existing, patch);
-      this.store.assertPersistedEntry(existing);
-    }
-
-    const active = this.findActiveSessionForRef(ref, existing);
-    if (active) {
-      this.applyPatchToActiveSession(active, patch);
-    }
-
-    if (!existing && !active) return false;
-    if (existing) this.store.saveIndex();
-    return true;
-  }
-
-  private findActiveSessionForRef(ref: string, existing?: PersistedSessionInfo): Session | undefined {
-    const byResolve = this.resolve(ref);
-    if (byResolve) return byResolve;
-
-    for (const session of this.sessions.values()) {
-      if (session.harnessSessionId === ref) return session;
-      if (existing?.sessionId && session.id === existing.sessionId) return session;
-      if (existing?.harnessSessionId && session.harnessSessionId === existing.harnessSessionId) return session;
-      if (existing?.name && session.name === existing.name) return session;
-    }
-
-    return undefined;
-  }
-
-  private applyPatchToActiveSession(session: Session, patch: Partial<PersistedSessionInfo>): void {
-    if (typeof (session as Session & { applyControlPatch?: unknown }).applyControlPatch === "function") {
-      session.applyControlPatch({
-        lifecycle: patch.lifecycle,
-        approvalState: patch.approvalState,
-        worktreeState: patch.worktreeState,
-        runtimeState: patch.runtimeState,
-        deliveryState: patch.deliveryState,
-        pendingPlanApproval: patch.pendingPlanApproval,
-        planApprovalContext: patch.planApprovalContext,
-        planDecisionVersion: patch.planDecisionVersion,
-        pendingWorktreeDecisionSince: patch.pendingWorktreeDecisionSince,
-      });
-    } else {
-      if (patch.lifecycle !== undefined) session.lifecycle = patch.lifecycle;
-      if (patch.approvalState !== undefined) session.approvalState = patch.approvalState;
-      if (patch.worktreeState !== undefined) session.worktreeState = patch.worktreeState;
-      if (patch.runtimeState !== undefined) session.runtimeState = patch.runtimeState;
-      if (patch.deliveryState !== undefined) session.deliveryState = patch.deliveryState;
-      if (patch.pendingPlanApproval !== undefined) session.pendingPlanApproval = patch.pendingPlanApproval;
-      if (patch.planApprovalContext !== undefined) session.planApprovalContext = patch.planApprovalContext;
-      if (patch.planDecisionVersion !== undefined) session.planDecisionVersion = patch.planDecisionVersion;
-    }
-    if (patch.worktreePath !== undefined) session.worktreePath = patch.worktreePath;
-    if (patch.worktreeBranch !== undefined) session.worktreeBranch = patch.worktreeBranch;
-    if (patch.worktreePrUrl !== undefined) session.worktreePrUrl = patch.worktreePrUrl;
-    if (patch.worktreePrNumber !== undefined) session.worktreePrNumber = patch.worktreePrNumber;
-    if (patch.worktreeMerged !== undefined) session.worktreeMerged = patch.worktreeMerged;
-    if (patch.worktreeMergedAt !== undefined) session.worktreeMergedAt = patch.worktreeMergedAt;
-    if (patch.worktreeDisposition !== undefined) session.worktreeDisposition = patch.worktreeDisposition;
-    if (patch.worktreePrTargetRepo !== undefined) session.worktreePrTargetRepo = patch.worktreePrTargetRepo;
-    if (patch.worktreePushRemote !== undefined) session.worktreePushRemote = patch.worktreePushRemote;
+    return this.stateSync.applySessionPatch(ref, patch);
   }
 
   /** Return persisted sessions newest-first. */

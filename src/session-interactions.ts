@@ -3,7 +3,7 @@ import type {
   SessionActionKind,
   SessionActionToken,
 } from "./types";
-import type { SessionStore } from "./session-store";
+import type { SessionActionTokenStore } from "./session-action-token-store";
 
 export type NotificationButton = { label: string; callbackData: string };
 
@@ -15,7 +15,7 @@ type ButtonSource = {
 
 export class SessionInteractionService {
   constructor(
-    private readonly store: SessionStore,
+    private readonly actionTokens: SessionActionTokenStore,
     private readonly isGitHubCliAvailable: () => boolean,
   ) {}
 
@@ -24,14 +24,14 @@ export class SessionInteractionService {
     kind: SessionActionKind,
     options: Partial<Omit<SessionActionToken, "id" | "sessionId" | "kind" | "createdAt">> = {},
   ): SessionActionToken {
-    return this.store.createActionToken(sessionId, kind, {
+    return this.actionTokens.createActionToken(sessionId, kind, {
       expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000,
       ...options,
     });
   }
 
   consumeActionToken(tokenId: string): SessionActionToken | undefined {
-    return this.store.consumeActionToken(tokenId);
+    return this.actionTokens.consumeActionToken(tokenId);
   }
 
   makeActionButton(
