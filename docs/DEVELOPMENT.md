@@ -66,6 +66,17 @@ Additional smoke entry points:
 - `pnpm smoke:backend-parity` for the shared backend-contract surface
 - `pnpm smoke:codex-worktrees` for Codex native-worktree bootstrap/restore behavior
 - `pnpm smoke:codex-live` for opt-in real App Server validation when a live Codex environment is available
+- `pnpm smoke:codex-release` for the fuller opt-in operator/release check covering launch, `agent_respond`-style resume, structured plan delivery, restart/resume, and native worktree reuse
+
+### Live Codex Release Check
+
+Use `pnpm smoke:codex-release` only when you have a real Codex App Server environment available and want a release-confidence pass against the live protocol. It intentionally stays out of `pnpm verify`.
+
+Before running it:
+
+1. Make sure the local Codex App Server environment is configured and reachable.
+2. Run it from a workspace where creating or reusing a native backend worktree is acceptable.
+3. Treat failures as operator/runtime regressions first, not just test flakes.
 
 ## Extending The Plugin
 

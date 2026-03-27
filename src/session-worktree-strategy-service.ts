@@ -6,12 +6,12 @@ import type { WorktreeCompletionState } from "./session-worktree-controller";
 import type { EmbeddedEvalResult } from "./embedded-eval";
 import { SessionWorktreeMessageService } from "./session-worktree-message-service";
 import { getPersistedMutationRefs, getPrimarySessionLookupRef, usesNativeBackendWorktree } from "./session-backend-ref";
+import { SessionWorktreeActionService } from "./session-worktree-action-service";
 import {
   removeWorktree,
   getDiffSummary,
   mergeBranch,
   deleteBranch,
-  detectDefaultBranch,
   formatWorktreeOutcomeLine,
 } from "./worktree";
 
@@ -59,7 +59,17 @@ export class SessionWorktreeStrategyService {
       spawnConflictResolver: (session: Session, repoDir: string, prompt: string) => Promise<void>;
       runAutoPr: (session: Session, baseBranch: string) => Promise<{ success: boolean }>;
     },
-  ) {}
+  ) {
+    this.actions = new SessionWorktreeActionService({
+      shouldRunWorktreeStrategy: deps.shouldRunWorktreeStrategy,
+      isAlreadyMerged: deps.isAlreadyMerged,
+      resolveWorktreeRepoDir: deps.resolveWorktreeRepoDir,
+      getWorktreeCompletionState: deps.getWorktreeCompletionState,
+      classifyNoChangeDeliverable: deps.classifyNoChangeDeliverable,
+    });
+  }
+
+  private readonly actions: SessionWorktreeActionService;
 
   private updatePersistedSessionFor(
     session: Pick<Session, "id" | "harnessSessionId" | "backendRef">,
@@ -71,79 +81,50 @@ export class SessionWorktreeStrategyService {
   }
 
   async handleWorktreeStrategy(session: Session): Promise<WorktreeStrategyResult> {
-    const sessionRef = getPrimarySessionLookupRef(session) ?? session.harnessSessionId;
-    if (this.deps.isAlreadyMerged(sessionRef)) {
-      console.info(`[SessionManager] handleWorktreeStrategy: session "${session.name}" already merged — skipping strategy handling`);
-      return { notificationSent: true, worktreeRemoved: false };
-    }
-    if (session.status !== "completed") return { notificationSent: false, worktreeRemoved: false };
-    if (!this.deps.shouldRunWorktreeStrategy(session)) {
-      console.info(`[SessionManager] handleWorktreeStrategy: skipping — session "${session.name}" is in phase "${session.phase}"`);
-      return { notificationSent: false, worktreeRemoved: false };
+    const action = await this.actions.plan(session);
+
+    if (action.kind === "skip") {
+      return action.result;
     }
 
-    const strategy = session.worktreeStrategy;
-    if (!strategy || strategy === "off" || strategy === "manual") {
-      return { notificationSent: false, worktreeRemoved: false };
-    }
-
-    const worktreePath = session.worktreePath!;
-    const repoDir = this.deps.resolveWorktreeRepoDir(session.originalWorkdir, worktreePath);
-    const branchName = session.worktreeBranch;
-    if (!repoDir) {
+    if (action.kind === "notify") {
       this.deps.dispatchSessionNotification(session, {
-        label: "worktree-missing-repo-dir",
-        userMessage: `⚠️ [${session.name}] Cannot determine the original repo for worktree ${worktreePath}. Manual inspection is required.`,
-      });
-      return { notificationSent: true, worktreeRemoved: false };
-    }
-    if (!branchName) {
-      this.deps.dispatchSessionNotification(session, {
-        label: "worktree-no-branch-name",
-        userMessage: `⚠️ [${session.name}] Cannot determine branch name for worktree ${worktreePath}. The worktree may have been removed or is in detached HEAD state. Manual cleanup may be needed.`,
+        label: action.label,
+        userMessage: action.message,
       });
       return { notificationSent: true, worktreeRemoved: false };
     }
 
-    const baseBranch = session.worktreeBaseBranch ?? detectDefaultBranch(repoDir);
-    const completionState = this.deps.getWorktreeCompletionState(repoDir, worktreePath, branchName, baseBranch);
-
-    if (completionState === "no-change") {
-      return this.handleNoChange(session, repoDir, worktreePath);
-    }
-    if (completionState === "base-advanced") {
-      this.deps.dispatchSessionNotification(session, {
-        label: "worktree-no-commits-ahead",
-        userMessage: `⚠️ [${session.name}] Auto-merge: branch '${branchName}' has no commits ahead of '${baseBranch}', but '${baseBranch}' has new commits — commits likely landed outside the worktree branch. Verify that commits were not made directly to '${baseBranch}' instead of the worktree branch. Worktree: ${worktreePath}`,
-      });
-      return { notificationSent: true, worktreeRemoved: false };
-    }
-    if (completionState === "dirty-uncommitted") {
-      this.deps.dispatchSessionNotification(session, {
-        label: "worktree-dirty-uncommitted",
-        userMessage: `⚠️ [${session.name}] Session completed with uncommitted changes. The branch has no commits ahead of '${baseBranch}' but there are modified tracked files in the worktree. Check: ${worktreePath}`,
-      });
-      return { notificationSent: true, worktreeRemoved: false };
+    if (action.kind === "no-change") {
+      return this.handleNoChange(
+        session,
+        action.repoDir,
+        action.worktreePath,
+        action.deliverablePreview,
+        action.nativeBackendWorktree,
+      );
     }
 
-    const diffSummary = getDiffSummary(repoDir, branchName, baseBranch);
-    if (!diffSummary) {
-      console.warn(`[SessionManager] Failed to get diff summary for ${branchName}, skipping merge-back`);
-      return { notificationSent: false, worktreeRemoved: false };
+    if (action.strategy === "ask") {
+      return this.handleAskStrategy(session, action.branchName, action.baseBranch, action.diffSummary);
     }
-
-    if (strategy === "ask") {
-      return this.handleAskStrategy(session, branchName, baseBranch, diffSummary);
+    if (action.strategy === "delegate") {
+      return this.handleDelegateStrategy(session, action.branchName, action.baseBranch, action.diffSummary);
     }
-    if (strategy === "delegate") {
-      return this.handleDelegateStrategy(session, branchName, baseBranch, diffSummary);
-    }
-    if (strategy === "auto-merge") {
-      await this.handleAutoMergeStrategy(session, repoDir, worktreePath, branchName, baseBranch, diffSummary);
+    if (action.strategy === "auto-merge") {
+      await this.handleAutoMergeStrategy(
+        session,
+        action.repoDir,
+        action.worktreePath,
+        action.branchName,
+        action.baseBranch,
+        action.diffSummary,
+        action.sessionRef,
+      );
       return { notificationSent: true, worktreeRemoved: false };
     }
-    if (strategy === "auto-pr") {
-      return this.handleAutoPrStrategy(session, baseBranch);
+    if (action.strategy === "auto-pr") {
+      return this.handleAutoPrStrategy(session, action.baseBranch);
     }
     return { notificationSent: false, worktreeRemoved: false };
   }
@@ -152,9 +133,9 @@ export class SessionWorktreeStrategyService {
     session: Session,
     repoDir: string,
     worktreePath: string,
+    deliverablePreview?: string,
+    nativeBackendWorktree: boolean = usesNativeBackendWorktree(session),
   ): Promise<WorktreeStrategyResult> {
-    const deliverablePreview = await this.classifyNoChangeDeliverable(session);
-    const nativeBackendWorktree = usesNativeBackendWorktree(session);
     const removed = nativeBackendWorktree
       ? true
       : removeWorktree(repoDir, worktreePath);
@@ -234,8 +215,8 @@ export class SessionWorktreeStrategyService {
     branchName: string,
     baseBranch: string,
     diffSummary: DiffSummary,
+    sessionRef = getPrimarySessionLookupRef(session) ?? session.harnessSessionId,
   ): Promise<void> {
-    const sessionRef = getPrimarySessionLookupRef(session) ?? session.harnessSessionId;
     if (this.deps.isAlreadyMerged(sessionRef)) return;
 
     await this.deps.enqueueMerge(
@@ -338,36 +319,5 @@ export class SessionWorktreeStrategyService {
       });
     }
     return { notificationSent: true, worktreeRemoved: false };
-  }
-
-  private async classifyNoChangeDeliverable(
-    session: Pick<Session, "harnessName" | "name" | "prompt" | "originAgentId" | "getOutput"> & {
-      workdir?: string;
-      originalWorkdir?: string;
-    },
-  ): Promise<string | undefined> {
-    if (typeof session.getOutput !== "function") return undefined;
-    const preview = session.getOutput()
-      .join("\n")
-      .slice(-2_500)
-      .trim();
-    if (!preview) return undefined;
-    const outputText = session.getOutput()
-      .join("\n")
-      .slice(-5_000)
-      .trim();
-    if (!outputText) return undefined;
-    const workspaceDir = session.workdir ?? session.originalWorkdir;
-    if (!workspaceDir) return undefined;
-
-    const result = await this.deps.classifyNoChangeDeliverable({
-      harnessName: session.harnessName,
-      sessionName: session.name,
-      prompt: session.prompt,
-      workdir: workspaceDir,
-      agentId: session.originAgentId,
-      outputText,
-    });
-    return result.classification === "report_worthy_no_change" ? preview : undefined;
   }
 }

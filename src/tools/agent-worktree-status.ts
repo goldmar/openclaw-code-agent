@@ -3,6 +3,7 @@ import { existsSync } from "fs";
 import { sessionManager } from "../singletons";
 import type { OpenClawPluginToolContext } from "../types";
 import { hasCommitsAhead, getDiffSummary, detectDefaultBranch } from "../worktree";
+import { listWorktreeToolTargets, matchesWorktreeToolRef } from "./worktree-tool-context";
 
 interface AgentWorktreeStatusParams {
   session?: string;
@@ -32,60 +33,9 @@ export function makeAgentWorktreeStatusTool(_ctx?: OpenClawPluginToolContext) {
       const targetSession = (params as AgentWorktreeStatusParams).session;
       const lines: string[] = [];
 
-      // Get all sessions with worktrees (active + persisted)
-      const activeSessions = sessionManager.list("all").filter((s) => s.worktreePath);
-      const persistedSessions = sessionManager.listPersistedSessions().filter((p) => p.worktreePath);
-
-      // Build a unified list (prefer active over persisted for same session ID)
-      const sessionMap = new Map<string, {
-        id: string;
-        name: string;
-        worktreePath: string;
-        worktreeBranch?: string;
-        worktreeStrategy?: string;
-        workdir: string;
-        worktreeMerged?: boolean;
-        worktreeMergedAt?: string;
-        worktreePrUrl?: string;
-      }>();
-
-      for (const p of persistedSessions) {
-        if (!p.worktreePath) continue;
-        const key = p.sessionId ?? p.harnessSessionId;
-        sessionMap.set(key, {
-          id: key,
-          name: p.name,
-          worktreePath: p.worktreePath,
-          worktreeBranch: p.worktreeBranch,
-          worktreeStrategy: p.worktreeStrategy,
-          workdir: p.workdir,
-          worktreeMerged: p.worktreeMerged,
-          worktreeMergedAt: p.worktreeMergedAt,
-          worktreePrUrl: p.worktreePrUrl,
-        });
-      }
-
-      for (const s of activeSessions) {
-        if (!s.worktreePath) continue;
-        sessionMap.set(s.id, {
-          id: s.id,
-          name: s.name,
-          worktreePath: s.worktreePath,
-          worktreeBranch: s.worktreeBranch,
-          worktreeStrategy: s.worktreeStrategy,
-          workdir: s.originalWorkdir ?? s.workdir,
-          worktreeMerged: undefined,
-          worktreeMergedAt: undefined,
-          worktreePrUrl: undefined,
-        });
-      }
-
-      // Filter by target session if specified
-      let sessionsToShow = Array.from(sessionMap.values());
+      let sessionsToShow = listWorktreeToolTargets(sessionManager);
       if (targetSession) {
-        sessionsToShow = sessionsToShow.filter(
-          (s) => s.id === targetSession || s.name === targetSession
-        );
+        sessionsToShow = sessionsToShow.filter((s) => matchesWorktreeToolRef(s, targetSession));
         if (sessionsToShow.length === 0) {
           return { content: [{ type: "text", text: `Error: Session "${targetSession}" not found or has no worktree.` }] };
         }
@@ -102,7 +52,12 @@ export function makeAgentWorktreeStatusTool(_ctx?: OpenClawPluginToolContext) {
       );
       const filteredPending = targetSession
         ? pendingDecisions.filter(
-            (p) => p.harnessSessionId === targetSession || p.name === targetSession || p.sessionId === targetSession,
+            (p) => matchesWorktreeToolRef({
+              id: p.sessionId ?? p.name ?? p.harnessSessionId,
+              name: p.name,
+              backendConversationId: p.backendRef?.conversationId,
+              harnessSessionId: p.harnessSessionId,
+            }, targetSession),
           )
         : pendingDecisions;
 

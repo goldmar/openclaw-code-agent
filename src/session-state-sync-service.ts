@@ -1,5 +1,5 @@
 import type { Session } from "./session";
-import { getBackendConversationId } from "./session-backend-ref";
+import { getBackendConversationId, getPrimarySessionLookupRef } from "./session-backend-ref";
 import type { PersistedSessionInfo } from "./types";
 
 type PersistedStore = Pick<
@@ -54,6 +54,7 @@ export class SessionStateSyncService {
     if (byResolve) return byResolve;
 
     for (const session of this.deps.sessions.values()) {
+      if (getPrimarySessionLookupRef(session) === ref) return session;
       if (getBackendConversationId(session) === ref) return session;
       if (session.harnessSessionId === ref) return session; // compatibility-only lookup
       if (this.matchesExistingSession(session, existing)) return session;

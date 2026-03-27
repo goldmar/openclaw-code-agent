@@ -43,6 +43,7 @@ import { MessageStream } from "./session-message-stream";
 import { appendSessionOutput } from "./session-output";
 import { SessionTimerRegistry } from "./session-timer-registry";
 import { SessionTurnRuntime } from "./session-turn-runtime";
+import { SessionHarnessEventApplier } from "./session-harness-event-applier";
 import { getBranchName } from "./worktree";
 
 const STARTUP_TIMEOUT_MS = 2 * 60 * 1000; // 2 minutes
@@ -146,6 +147,7 @@ export class Session extends EventEmitter {
   killReason: KillReason = "unknown";
   private planModeApproved: boolean = false;
   private readonly turnRuntime: SessionTurnRuntime;
+  private readonly harnessEvents: SessionHarnessEventApplier;
   lifecycle: SessionLifecycle = "starting";
   approvalState: SessionApprovalState = "not_required";
   runtimeState: SessionRuntimeState = "live";
@@ -210,6 +212,72 @@ export class Session extends EventEmitter {
         this.complete("done");
       },
       setPlanFilePath: (path) => { this.planFilePath = path; },
+    });
+    this.harnessEvents = new SessionHarnessEventApplier({
+      clearStartupTimer: () => this.clearTimer("startup"),
+      assignBackendRef: (ref) => {
+        this.backendRef = ref;
+        this.harnessSessionId = ref.conversationId;
+        if (ref.worktreePath) {
+          this.worktreePath = ref.worktreePath;
+          this.originalWorkdir ??= this.workdir;
+          this.worktreeBranch ??= getBranchName(ref.worktreePath);
+          if (this.worktreeStrategy && this.worktreeStrategy !== "off") {
+            this.applyControlEvent({ type: "worktree.state_set", worktreeState: "provisioned" });
+          }
+        }
+      },
+      noteRunStarted: (runId) => {
+        if (this.backendRef) {
+          this.backendRef = { ...this.backendRef, runId };
+        }
+      },
+      transitionRunning: () => {
+        if (this._status === "starting") {
+          this.transition("running");
+        }
+      },
+      noteTextDelta: (text, pendingPlanApproval) => this.turnRuntime.noteTextDelta(text, pendingPlanApproval),
+      noteToolCall: (args) => this.turnRuntime.noteToolCall(args),
+      setPendingInputState: (state) => { this.pendingInputState = state; },
+      notePendingInput: () => this.turnRuntime.notePendingInput(),
+      clearResolvedPendingInput: (requestId, currentState) => (
+        this.turnRuntime.clearResolvedPendingInput(requestId, currentState)
+      ),
+      notePlanArtifact: (msg) => this.turnRuntime.notePlanArtifact(msg.artifact, msg.finalized),
+      noteSettingsChanged: (args) => this.turnRuntime.noteSettingsChanged(args),
+      setCurrentPermissionMode: (mode) => { this.currentPermissionMode = mode; },
+      handleRunCompleted: (data) => {
+        this.result = {
+          subtype: data.success ? "success" : "error",
+          duration_ms: data.duration_ms,
+          total_cost_usd: data.total_cost_usd,
+          num_turns: data.num_turns,
+          result: data.result,
+          is_error: !data.success,
+          session_id: data.session_id,
+        };
+        this.costUsd = data.total_cost_usd;
+
+        const isMultiTurnEndOfTurn = this.multiTurn && this.messageStream && data.success;
+
+        if (isMultiTurnEndOfTurn) {
+          this.resetIdleTimer();
+          this.turnRuntime.finishSuccessfulTurn({
+            currentPermissionMode: this.currentPermissionMode,
+            permissionMode: this.permissionMode,
+            pendingPlanApproval: this.pendingPlanApproval,
+            planModeApproved: this.planModeApproved,
+            pendingInputState: this.pendingInputState,
+            hasPendingMessages: this.messageStream?.hasPending() === true,
+          });
+        } else {
+          this.turnRuntime.finishTerminalTurn();
+          this.transitionToTerminal(data.success ? "completed" : "failed");
+        }
+        this.turnRuntime.resetAfterRun();
+        this.pendingInputState = undefined;
+      },
     });
     this.applyControlEvent({ type: "initialize", hasWorktree: !!(this.worktreeStrategy && this.worktreeStrategy !== "off") });
   }
@@ -559,89 +627,13 @@ export class Session extends EventEmitter {
       }
 
       this.resetIdleTimer();
-
-      if (msg.type === "backend_ref") {
-        this.clearTimer("startup");
-        this.backendRef = { ...msg.ref };
-        this.harnessSessionId = msg.ref.conversationId;
-        if (msg.ref.worktreePath) {
-          this.worktreePath = msg.ref.worktreePath;
-          this.originalWorkdir ??= this.workdir;
-          this.worktreeBranch ??= getBranchName(msg.ref.worktreePath);
-          if (this.worktreeStrategy && this.worktreeStrategy !== "off") {
-            this.applyControlEvent({ type: "worktree.state_set", worktreeState: "provisioned" });
-          }
-        }
-        if (this._status === "starting") {
-          this.transition("running");
-        }
-      } else if (msg.type === "run_started") {
-        if (msg.runId && this.backendRef) {
-          this.backendRef = { ...this.backendRef, runId: msg.runId };
-        }
-      } else if (msg.type === "text_delta") {
-        this.turnRuntime.noteTextDelta(msg.text, this.pendingPlanApproval);
-      } else if (msg.type === "tool_call") {
-        this.turnRuntime.noteToolCall({
-          name: msg.name,
-          input: msg.input,
-          currentPermissionMode: this.currentPermissionMode,
-          permissionMode: this.permissionMode,
-          planModeApproved: this.planModeApproved,
-        });
-      } else if (msg.type === "pending_input") {
-        this.pendingInputState = msg.state;
-        this.turnRuntime.notePendingInput();
-      } else if (msg.type === "pending_input_resolved") {
-        this.pendingInputState = this.turnRuntime.clearResolvedPendingInput(msg.requestId, this.pendingInputState);
-      } else if (msg.type === "plan_artifact") {
-        this.turnRuntime.notePlanArtifact(msg.artifact, msg.finalized);
-      } else if (msg.type === "settings_changed") {
-        // Defensive: SDK does not currently emit this event (see docs/internal/PLAN-MODE-INVESTIGATION.md).
-        // Kept for forward-compatibility if future SDK versions emit system/status permissionMode changes.
-        const oldMode = this.currentPermissionMode;
-        const nextMode = this.turnRuntime.noteSettingsChanged({
-          oldMode,
-          permissionMode: msg.permissionMode,
-          planModeApproved: this.planModeApproved,
-        });
-        if (nextMode) {
-          this.currentPermissionMode = nextMode;
-        }
-      } else if (msg.type === "run_completed") {
-        const data = msg.data;
-        this.result = {
-          subtype: data.success ? "success" : "error",
-          duration_ms: data.duration_ms,
-          total_cost_usd: data.total_cost_usd,
-          num_turns: data.num_turns,
-          result: data.result,
-          is_error: !data.success,
-          session_id: data.session_id,
-        };
-        this.costUsd = data.total_cost_usd;
-
-        const isMultiTurnEndOfTurn = this.multiTurn && this.messageStream && data.success;
-
-        if (isMultiTurnEndOfTurn) {
-          this.resetIdleTimer();
-          this.turnRuntime.finishSuccessfulTurn({
-            currentPermissionMode: this.currentPermissionMode,
-            permissionMode: this.permissionMode,
-            pendingPlanApproval: this.pendingPlanApproval,
-            planModeApproved: this.planModeApproved,
-            pendingInputState: this.pendingInputState,
-            hasPendingMessages: this.messageStream?.hasPending() === true,
-          });
-        } else {
-          this.turnRuntime.finishTerminalTurn();
-          this.transitionToTerminal(data.success ? "completed" : "failed");
-        }
-        this.turnRuntime.resetAfterRun();
-        this.pendingInputState = undefined;
-      } else if (msg.type === "activity") {
-        // Keepalive ping for long-running subprocesses with no output.
-      }
+      this.harnessEvents.applyMessage(msg, {
+        pendingPlanApproval: this.pendingPlanApproval,
+        currentPermissionMode: this.currentPermissionMode,
+        permissionMode: this.permissionMode,
+        planModeApproved: this.planModeApproved,
+        pendingInputState: this.pendingInputState,
+      });
     }
   }
 
