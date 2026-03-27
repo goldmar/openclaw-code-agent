@@ -164,10 +164,18 @@ export class SessionManager {
             } catch (err) {
               console.warn(`[SessionManager] Failed to recreate worktree for resume: ${err instanceof Error ? err.message : String(err)}, using original workdir`);
               config.workdir = persistedSession.workdir;
+              if (config.resumeSessionId) {
+                console.warn(`[SessionManager] Clearing resumeSessionId — cannot resume a session whose worktree could not be recreated`);
+                config.resumeSessionId = undefined;
+              }
             }
           } else {
             console.warn(`[SessionManager] Worktree ${persistedSession.worktreePath} no longer exists and cannot be recreated, using original workdir`);
             config.workdir = persistedSession.workdir;
+            if (config.resumeSessionId) {
+              console.warn(`[SessionManager] Clearing resumeSessionId — cannot resume a session whose worktree no longer exists`);
+              config.resumeSessionId = undefined;
+            }
           }
         }
       }
