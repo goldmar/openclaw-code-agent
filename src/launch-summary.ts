@@ -1,22 +1,41 @@
-type LaunchSummaryInput = {
+import type {
+  CodexApprovalPolicy,
+  PlanApprovalMode,
+  PermissionMode,
+  ReasoningEffort,
+  WorktreeStrategy,
+} from "./types";
+
+export interface LaunchSummaryInput {
   sessionId: string;
   sessionName: string;
   prompt: string;
   workdir: string;
   harness: string;
   model?: string;
-  reasoningEffort?: string;
-  permissionMode: string;
-  planApproval: string;
-  worktreeStrategy?: string;
+  reasoningEffort?: ReasoningEffort;
+  permissionMode: PermissionMode;
+  planApproval: PlanApprovalMode;
+  worktreeStrategy?: WorktreeStrategy;
   worktreePath?: string;
   originalWorkdir?: string;
-  codexApprovalPolicy?: string;
+  codexApprovalPolicy?: CodexApprovalPolicy;
   resumeSessionId?: string;
   forkSession?: boolean;
   forceNewSession?: boolean;
   clearedPersistedCodexResume?: boolean;
-};
+}
+
+export interface LaunchSummarySessionLike {
+  id: string;
+  name: string;
+  model?: string;
+  reasoningEffort?: ReasoningEffort;
+  worktreeStrategy?: WorktreeStrategy;
+  worktreePath?: string;
+  originalWorkdir?: string;
+  codexApprovalPolicy?: CodexApprovalPolicy;
+}
 
 function summarizePrompt(prompt: string): string {
   return prompt.length > 80 ? `${prompt.slice(0, 80)}...` : prompt;
@@ -61,4 +80,21 @@ export function formatLaunchSummary(input: LaunchSummaryInput): string {
   details.push("  Mode: multi-turn (use agent_respond to send follow-up messages)");
   details.push("", "Use agent_sessions to check status, agent_output to see output.");
   return details.join("\n");
+}
+
+export function formatLaunchSummaryFromSession(
+  input: Omit<LaunchSummaryInput, "sessionId" | "sessionName" | "model" | "reasoningEffort" | "worktreeStrategy" | "worktreePath" | "originalWorkdir" | "codexApprovalPolicy">,
+  session: LaunchSummarySessionLike,
+): string {
+  return formatLaunchSummary({
+    ...input,
+    sessionId: session.id,
+    sessionName: session.name,
+    model: session.model,
+    reasoningEffort: session.reasoningEffort,
+    worktreeStrategy: session.worktreeStrategy ?? "off",
+    worktreePath: session.worktreePath,
+    originalWorkdir: session.originalWorkdir,
+    codexApprovalPolicy: session.codexApprovalPolicy,
+  });
 }

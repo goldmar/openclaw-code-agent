@@ -4,7 +4,7 @@ import { Session } from "./session";
 import { pluginConfig, getDefaultHarnessName } from "./config";
 import { prepareSessionBootstrap } from "./session-bootstrap";
 import { formatDuration, generateSessionName, lastCompleteLines, truncateText } from "./format";
-import { formatLaunchSummary } from "./launch-summary";
+import { formatLaunchSummaryFromSession } from "./launch-summary";
 import { pathsReferToSameLocation } from "./path-utils";
 import { SessionSemanticAdapter } from "./session-semantic-adapter";
 import type {
@@ -271,32 +271,24 @@ export class SessionManager {
     prompt: string;
     workdir: string;
     harness: string;
-    permissionMode: string;
-    planApproval: string;
+    permissionMode: SessionConfig["permissionMode"];
+    planApproval: PlanApprovalMode;
     forceNewSession?: boolean;
     resumeSessionId?: string;
     forkSession?: boolean;
     clearedPersistedCodexResume?: boolean;
   }, session: Session): string {
-    return formatLaunchSummary({
-      sessionId: session.id,
-      sessionName: session.name,
+    return formatLaunchSummaryFromSession({
       prompt: config.prompt,
       workdir: config.workdir,
       harness: config.harness,
-      model: session.model,
-      reasoningEffort: session.reasoningEffort,
-      permissionMode: config.permissionMode,
+      permissionMode: config.permissionMode ?? pluginConfig.permissionMode,
       planApproval: config.planApproval,
-      worktreeStrategy: session.worktreeStrategy ?? "off",
-      worktreePath: session.worktreePath,
-      originalWorkdir: session.originalWorkdir,
-      codexApprovalPolicy: session.codexApprovalPolicy,
       resumeSessionId: config.resumeSessionId,
       forkSession: config.forkSession,
       forceNewSession: config.forceNewSession,
       clearedPersistedCodexResume: config.clearedPersistedCodexResume,
-    });
+    }, session);
   }
 
   private shouldRunWorktreeStrategy(session: Session): boolean {

@@ -1,7 +1,7 @@
 import { existsSync } from "fs";
 import { Type } from "@sinclair/typebox";
 import { sessionManager } from "../singletons";
-import { formatLaunchSummary } from "../launch-summary";
+import { formatLaunchSummaryFromSession, type LaunchSummarySessionLike } from "../launch-summary";
 import {
   getDefaultHarnessName,
   parseThreadIdFromSessionKey,
@@ -83,6 +83,24 @@ interface LinkedSessionMatch {
   status: string;
   lifecycle?: string;
   resumable: boolean;
+}
+
+function hasFormatLaunchResult(value: unknown): value is {
+  formatLaunchResult: (config: {
+    prompt: string;
+    workdir: string;
+    harness: string;
+    permissionMode: "default" | "plan" | "bypassPermissions";
+    planApproval: "ask" | "delegate" | "approve";
+    forceNewSession?: boolean;
+    resumeSessionId?: string;
+    forkSession?: boolean;
+    clearedPersistedCodexResume?: boolean;
+  }, session: LaunchSummarySessionLike) => string;
+} {
+  return !!value
+    && typeof value === "object"
+    && typeof (value as { formatLaunchResult?: unknown }).formatLaunchResult === "function";
 }
 
 function routeMatchesSession(
@@ -439,7 +457,7 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
 
         const permissionMode = params.permission_mode ?? pluginConfig.permissionMode;
         const planApproval = params.plan_approval ?? pluginConfig.planApproval;
-        const launchText = typeof (sessionManager as { formatLaunchResult?: unknown }).formatLaunchResult === "function"
+        const launchText = hasFormatLaunchResult(sessionManager)
           ? sessionManager.formatLaunchResult({
               prompt: params.prompt,
               workdir,
@@ -451,25 +469,26 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
               forkSession: params.fork_session,
               clearedPersistedCodexResume,
             }, session)
-          : formatLaunchSummary({
-              sessionId: session.id,
-              sessionName: session.name,
+          : formatLaunchSummaryFromSession({
               prompt: params.prompt,
               workdir,
               harness,
-              model: session.model,
-              reasoningEffort: resolveReasoningEffortForHarness(harness),
               permissionMode,
               planApproval,
-              worktreeStrategy: (session as { worktreeStrategy?: string }).worktreeStrategy ?? params.worktree_strategy ?? pluginConfig.defaultWorktreeStrategy ?? "off",
-              worktreePath: (session as { worktreePath?: string }).worktreePath,
-              originalWorkdir: (session as { originalWorkdir?: string }).originalWorkdir,
-              codexApprovalPolicy: (session as { codexApprovalPolicy?: string }).codexApprovalPolicy
-                ?? (harness === "codex" ? (resolveApprovalPolicyForHarness(harness) ?? pluginConfig.codexApprovalPolicy) : undefined),
               resumeSessionId: params.resume_session_id,
               forkSession: params.fork_session,
               forceNewSession: params.force_new_session,
               clearedPersistedCodexResume,
+            }, {
+              id: session.id,
+              name: session.name,
+              model: session.model,
+              reasoningEffort: session.reasoningEffort ?? resolveReasoningEffortForHarness(harness),
+              worktreeStrategy: session.worktreeStrategy ?? params.worktree_strategy ?? pluginConfig.defaultWorktreeStrategy ?? "off",
+              worktreePath: session.worktreePath,
+              originalWorkdir: session.originalWorkdir,
+              codexApprovalPolicy: session.codexApprovalPolicy
+                ?? (harness === "codex" ? (resolveApprovalPolicyForHarness(harness) ?? pluginConfig.codexApprovalPolicy) : undefined),
             });
 
         return {
