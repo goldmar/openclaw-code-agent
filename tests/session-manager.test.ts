@@ -424,6 +424,7 @@ describe("SessionManager.updatePersistedSession()", () => {
     (sm as any).sessions.set(session.id, session);
     (sm as any).store.persisted.set("h-live-1", {
       harnessSessionId: "h-live-1",
+      backendRef: { kind: "claude-code", conversationId: "h-live-1" },
       sessionId: "live-1",
       name: "session",
       prompt: "test",
@@ -464,6 +465,7 @@ describe("SessionManager.updatePersistedSession()", () => {
     (sm as any).sessions.set(session.id, session);
     (sm as any).store.persisted.set("h-live-2", {
       harnessSessionId: "h-live-2",
+      backendRef: { kind: "claude-code", conversationId: "h-live-2" },
       sessionId: "live-2",
       name: "session",
       prompt: "test",
@@ -1338,6 +1340,7 @@ describe("SessionManager remindStaleDecisions interval", () => {
     const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
     sm.store.persisted.set(harnessId, {
       harnessSessionId: harnessId,
+      backendRef: { kind: "claude-code", conversationId: harnessId },
       name: "stale-session",
       prompt: "p",
       workdir: "/tmp",
@@ -1367,6 +1370,7 @@ describe("SessionManager remindStaleDecisions interval", () => {
     const snoozedUntilFuture = new Date(Date.now() + 20 * 60 * 60 * 1000).toISOString();
     sm.store.persisted.set(harnessId, {
       harnessSessionId: harnessId,
+      backendRef: { kind: "claude-code", conversationId: harnessId },
       name: "snoozed-session",
       prompt: "p",
       workdir: "/tmp",
@@ -1396,6 +1400,7 @@ describe("SessionManager remindStaleDecisions interval", () => {
     const fourHoursAgo = new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString();
     sm.store.persisted.set(harnessId, {
       harnessSessionId: harnessId,
+      backendRef: { kind: "claude-code", conversationId: harnessId },
       sessionId: "s-delegate-reminder",
       name: "delegate-reminder",
       prompt: "p",

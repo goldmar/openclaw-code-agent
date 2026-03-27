@@ -40,6 +40,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       stubDispatch(sm);
       (sm as any).store.persisted.set("h-no-change", {
         harnessSessionId: "h-no-change",
+        backendRef: { kind: "claude-code", conversationId: "h-no-change" },
         name: "no-change",
         prompt: "test",
         workdir: repoDir,
@@ -108,6 +109,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       };
       (sm as any).store.persisted.set("h-plan-report", {
         harnessSessionId: "h-plan-report",
+        backendRef: { kind: "claude-code", conversationId: "h-plan-report" },
         name: "plan-report",
         prompt: "Investigate the issue and write a plan before making any code changes.",
         workdir: repoDir,
@@ -238,6 +240,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       stubDispatch(sm);
       (sm as any).store.persisted.set("h-delegate", {
         harnessSessionId: "h-delegate",
+        backendRef: { kind: "claude-code", conversationId: "h-delegate" },
         name: "delegate-session",
         prompt: "update the readme",
         workdir: repoDir,
@@ -313,6 +316,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       stubDispatch(sm);
       (sm as any).store.persisted.set("h-ask-summary", {
         harnessSessionId: "h-ask-summary",
+        backendRef: { kind: "claude-code", conversationId: "h-ask-summary" },
         name: "ask-summary",
         prompt: "fix the worktree decision prompt",
         workdir: repoDir,
@@ -383,6 +387,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       const sm = new SessionManager(5);
       (sm as any).store.persisted.set("h-resolved", {
         harnessSessionId: "h-resolved",
+        backendRef: { kind: "claude-code", conversationId: "h-resolved" },
         name: "resolved-cleanup",
         prompt: "test",
         workdir: repoDir,
@@ -427,6 +432,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       const sm = new SessionManager(5);
       (sm as any).store.persisted.set("h-pending", {
         harnessSessionId: "h-pending",
+        backendRef: { kind: "claude-code", conversationId: "h-pending" },
         name: "pending-cleanup",
         prompt: "test",
         workdir: repoDir,

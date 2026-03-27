@@ -61,6 +61,73 @@ export type PlanApprovalContext = "plan-mode" | "codex-first-turn-plan";
 export type WorktreeStrategy = "off" | "manual" | "ask" | "delegate" | "auto-merge" | "auto-pr";
 export type CodexApprovalPolicy = "never" | "on-request";
 export type ReasoningEffort = "low" | "medium" | "high";
+export type SessionBackendKind = "claude-code" | "codex-app-server";
+export type BackendWorktreeCapability = "plugin-managed" | "native";
+
+export interface SessionBackendRef {
+  kind: SessionBackendKind;
+  conversationId: string;
+  runId?: string;
+  worktreeId?: string;
+  worktreePath?: string;
+}
+
+export interface BackendCapabilityFlags {
+  nativePendingInput: boolean;
+  nativePlanArtifacts: boolean;
+  worktrees: BackendWorktreeCapability;
+  nativeWorktreeRestore: boolean;
+}
+
+export type PendingInputDecision =
+  | "accept"
+  | "acceptForSession"
+  | "decline"
+  | "cancel";
+
+export type PendingInputAction =
+  | {
+      kind: "approval";
+      label: string;
+      decision: PendingInputDecision;
+      responseDecision: string;
+      proposedExecpolicyAmendment?: Record<string, unknown>;
+      sessionPrefix?: string;
+    }
+  | {
+      kind: "option";
+      label: string;
+      value: string;
+    }
+  | {
+      kind: "steer";
+      label: string;
+    };
+
+export type PendingInputKind = "question" | "approval";
+
+export interface PendingInputState {
+  requestId: string;
+  kind: PendingInputKind;
+  promptText?: string;
+  options: string[];
+  actions?: PendingInputAction[];
+  allowsFreeText?: boolean;
+  expiresAt?: number;
+  responseMode?: "structured" | "compact";
+}
+
+export interface PlanArtifactStep {
+  step: string;
+  status: "pending" | "inProgress" | "completed";
+}
+
+export interface PlanArtifact {
+  explanation?: string;
+  steps: PlanArtifactStep[];
+  markdown: string;
+}
+
 export type SessionActionKind =
   | "plan-approve"
   | "plan-request-changes"
@@ -170,6 +237,8 @@ export interface SessionConfig {
   canUseTool?: CanUseToolCallback;
   /** Optional semantic turn-boundary classifier used to decide whether a turn should wait for input instead of completing. */
   turnBoundaryDecision?: TurnBoundaryDecisionCallback;
+  /** Explicit backend ref when reconstructing a persisted session against a native backend conversation. */
+  backendRef?: SessionBackendRef;
 }
 
 /** Plan-approval policy for orchestrator wake flows. */
@@ -230,6 +299,7 @@ export interface RawPluginConfig {
 export interface PersistedSessionInfo {
   sessionId?: string;
   harnessSessionId: string;
+  backendRef?: SessionBackendRef;
   name: string;
   prompt: string;
   workdir: string;

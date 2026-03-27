@@ -20,7 +20,7 @@ Canonical operator reference for `openclaw-code-agent`: install, configuration, 
 | `sessionGcAgeMinutes` | `1440` |
 | `maxPersistedSessions` | `10000` |
 
-Sessions are multi-turn. Active sessions accept follow-up messages via `agent_respond`, and explicitly suspended sessions can be continued with `agent_respond` or `/agent_resume`.
+Sessions are multi-turn. Active sessions accept follow-up messages via `agent_respond`, and explicitly suspended sessions can also be continued with `agent_respond`.
 
 ## Upgrade Note
 
@@ -293,10 +293,9 @@ The cleanup tool always protects:
 | `/agent_output` | Show recent output |
 | `/agent_respond` | Send a reply |
 | `/agent_kill` | Stop a session |
-| `/agent_resume` | Resume or fork a persisted session |
 | `/agent_stats` | Show aggregate metrics |
 
-`/agent_resume --list` shows explicitly resumable persisted sessions. `/agent_resume --fork <id-or-name> [prompt]` forks a previous session instead of continuing it.
+Use `agent_sessions` to inspect resumable sessions. Continue them with `agent_respond`, or fork from prior context with `agent_launch(..., resume_session_id=..., fork_session=true)`.
 
 ## Routing And Channels
 
@@ -365,8 +364,8 @@ Prefer fully routable channel strings in `fallbackChannel` and `agentChannels`. 
 
 - A launched session starts in `starting`, becomes active while the harness is running, and then moves into explicit review, waiting, suspended, or terminal states.
 - `agent_respond` sends follow-up messages to active sessions. It only resumes a session automatically when that session is explicitly suspended and still has resumable harness state.
-- `/agent_resume` is the explicit path for continuing or forking persisted resumable sessions after GC or restart.
-- Runtime GC evicts old runtime records from memory after `sessionGcAgeMinutes`, but explicitly resumable persisted sessions remain available through `/agent_resume --list`.
+- `agent_respond` is the explicit continuation path for persisted resumable sessions after GC or restart.
+- Runtime GC evicts old runtime records from memory after `sessionGcAgeMinutes`, but explicitly resumable persisted sessions remain available through `agent_sessions`.
 - Startup recovery may convert interrupted running sessions into resumable persisted entries so they can be continued intentionally.
 - Persisted session resolution accepts internal IDs, names, and harness session IDs.
 

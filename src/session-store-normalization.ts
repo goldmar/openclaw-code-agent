@@ -16,9 +16,10 @@ import type {
   SessionActionToken,
   SessionActionKind,
   SessionRoute,
+  SessionBackendRef,
 } from "./types";
 
-export const STORE_SCHEMA_VERSION = 4;
+export const STORE_SCHEMA_VERSION = 5;
 
 export interface SessionStoreSchema {
   schemaVersion: number;
@@ -153,6 +154,36 @@ function normalizeRoute(raw: unknown): SessionRoute | undefined {
   return { provider, accountId, target, threadId, sessionKey };
 }
 
+function normalizeBackendRef(
+  raw: unknown,
+  fallbackHarness: unknown,
+  harnessSessionId: string,
+): SessionBackendRef | undefined {
+  if (isRecord(raw)) {
+    const kind = toOptionalString(raw.kind);
+    const conversationId = toOptionalString(raw.conversationId);
+    if (
+      conversationId &&
+      (kind === "claude-code" || kind === "codex-app-server")
+    ) {
+      return {
+        kind,
+        conversationId,
+        runId: toOptionalString(raw.runId),
+        worktreeId: toOptionalString(raw.worktreeId),
+        worktreePath: toOptionalString(raw.worktreePath),
+      };
+    }
+  }
+  if (fallbackHarness === "claude-code") {
+    return {
+      kind: "claude-code",
+      conversationId: harnessSessionId,
+    };
+  }
+  return undefined;
+}
+
 function normalizeStatus(value: unknown): SessionStatus | undefined {
   if (typeof value !== "string") return undefined;
   if (!VALID_PERSISTED_STATUSES.has(value as SessionStatus)) return undefined;
@@ -186,10 +217,13 @@ export function normalizePersistedEntry(raw: unknown): PersistedSessionInfo | un
   });
   if (!route) return undefined;
   if (worktreePath && !persistedWorktreeBranch) return undefined;
+  const harness = toOptionalString(raw.harness);
+  const backendRef = normalizeBackendRef(raw.backendRef, harness, harnessSessionId);
 
   return {
     sessionId: toOptionalString(raw.sessionId),
     harnessSessionId,
+    backendRef,
     name: toNonEmptyString(raw.name, harnessSessionId),
     prompt: toNonEmptyString(raw.prompt),
     workdir: toNonEmptyString(raw.workdir, "(unknown)"),
@@ -211,7 +245,7 @@ export function normalizePersistedEntry(raw: unknown): PersistedSessionInfo | un
     originSessionKey,
     route,
     outputPath: toOptionalString(raw.outputPath),
-    harness: toOptionalString(raw.harness),
+    harness,
     currentPermissionMode: toOptionalPermissionMode(raw.currentPermissionMode),
     pendingPlanApproval: raw.pendingPlanApproval === true,
     planApprovalContext: toOptionalPlanApprovalContext(raw.planApprovalContext),
@@ -260,6 +294,9 @@ export function normalizeActionToken(raw: unknown): SessionActionToken | undefin
 }
 
 export function assertNewSchemaEntry(entry: PersistedSessionInfo): void {
+  if (!entry.backendRef?.kind || !entry.backendRef.conversationId) {
+    throw new Error(`Persisted session ${entry.harnessSessionId} is missing required backend ref metadata.`);
+  }
   if (!entry.route?.provider || !entry.route.target) {
     throw new Error(`Persisted session ${entry.harnessSessionId} is missing required route metadata.`);
   }

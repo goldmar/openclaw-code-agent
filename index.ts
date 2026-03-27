@@ -16,7 +16,6 @@ import { createCallbackHandler } from "./src/callback-handler";
 import { registerAgentCommand } from "./src/commands/agent";
 import { registerAgentSessionsCommand } from "./src/commands/agent-sessions";
 import { registerAgentKillCommand } from "./src/commands/agent-kill";
-import { registerAgentResumeCommand } from "./src/commands/agent-resume";
 import { registerAgentRespondCommand } from "./src/commands/agent-respond";
 import { registerAgentStatsCommand } from "./src/commands/agent-stats";
 import { registerAgentOutputCommand } from "./src/commands/agent-output";
@@ -167,7 +166,6 @@ export function register(api: OpenClawPluginApi): void {
   registerAgentCommand(api);
   registerAgentSessionsCommand(api);
   registerAgentKillCommand(api);
-  registerAgentResumeCommand(api);
   registerAgentRespondCommand(api);
   registerAgentStatsCommand(api);
   registerAgentOutputCommand(api);

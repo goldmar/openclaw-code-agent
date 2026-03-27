@@ -273,7 +273,7 @@ export function createCallbackHandler(channel: InteractiveChannel = "telegram") 
             await ctx.respond.reply({ text: `⚠️ Invalid question-answer action.` });
             break;
           }
-          sessionManager.resolveAskUserQuestion(sessionId, token.optionIndex);
+          await sessionManager.resolvePendingInputOption(sessionId, token.optionIndex);
           await ctx.respond.reply({ text: `✅ Answer submitted.` });
           break;
         }

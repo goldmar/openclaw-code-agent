@@ -1,147 +1,124 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import type { ThreadEvent, ThreadOptions } from "@openai/codex-sdk";
 import { getHarness, listHarnesses } from "../src/harness/index";
 import { CodexHarness } from "../src/harness/codex";
-import type { CodexAuthWorkspace } from "../src/harness/codex-auth";
 import type { HarnessMessage } from "../src/harness/types";
 
-type TurnPlan = {
-  events?: ThreadEvent[];
-  stream?: (signal?: AbortSignal) => AsyncIterable<ThreadEvent>;
-  error?: Error;
-};
+type NotificationHandler = (method: string, params: unknown) => Promise<void> | void;
+type RequestHandler = (method: string, params: unknown) => Promise<unknown>;
 
-type MockAuthWorkspaceState = {
-  prepareCalls: number;
-  releaseCalls: number;
-  cleanupCalls: number;
-};
-
-type MockAuthWorkspace = {
-  workspace: CodexAuthWorkspace;
-  state: MockAuthWorkspaceState;
-};
-
-const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-
-async function* eventsFromArray(events: ThreadEvent[]): AsyncGenerator<ThreadEvent> {
-  for (const event of events) {
-    yield event;
-  }
-}
-
-function createMockAuthWorkspace(options: {
-  env?: Record<string, string>;
-  prepareForTurn?: (state: MockAuthWorkspaceState) => Promise<() => Promise<void>> | (() => Promise<void>);
-  cleanup?: (state: MockAuthWorkspaceState) => Promise<void> | void;
-} = {}): MockAuthWorkspace {
-  const state: MockAuthWorkspaceState = {
-    prepareCalls: 0,
-    releaseCalls: 0,
-    cleanupCalls: 0,
-  };
-
-  return {
-    state,
-    workspace: {
-      tempHome: "/tmp/openclaw-codex-auth-test-home",
-      tempCodexDir: "/tmp/openclaw-codex-auth-test-home/.codex",
-      canonicalHome: "/tmp/openclaw-codex-auth-test-canonical",
-      canonicalCodexDir: "/tmp/openclaw-codex-auth-test-canonical/.codex",
-      canonicalAuthPath: "/tmp/openclaw-codex-auth-test-canonical/.codex/auth.json",
-      canonicalSessionsPath: "/tmp/openclaw-codex-auth-test-canonical/.codex/sessions",
-      canonicalConfigPath: "/tmp/openclaw-codex-auth-test-canonical/.codex/config.toml",
-      env: options.env ?? {
-        HOME: "/tmp/openclaw-codex-auth-test-home",
-        PATH: process.env.PATH ?? "",
-      },
-      async prepareForTurn(): Promise<() => Promise<void>> {
-        state.prepareCalls += 1;
-        if (options.prepareForTurn) return options.prepareForTurn(state);
-        return async () => {
-          state.releaseCalls += 1;
-        };
-      },
-      async cleanup(): Promise<void> {
-        state.cleanupCalls += 1;
-        await options.cleanup?.(state);
-      },
-    },
-  };
-}
-
-function createHarness(
-  codex: MockCodex,
-  options: { auth?: MockAuthWorkspace } = {},
-): {
-  harness: CodexHarness;
-  auth: MockAuthWorkspace;
-  createCodexCalls: Array<{ env?: Record<string, string> }>;
-} {
-  const auth = options.auth ?? createMockAuthWorkspace();
-  const createCodexCalls: Array<{ env?: Record<string, string> }> = [];
-
-  return {
-    auth,
-    createCodexCalls,
-    harness: new CodexHarness({
-      createCodex: (createOptions) => {
-        createCodexCalls.push(createOptions ?? {});
-        return codex as any;
-      },
-      createAuthWorkspace: async () => auth.workspace,
-    }),
-  };
-}
-
-class MockThread {
-  constructor(
-    public id: string | null,
-    private readonly plans: TurnPlan[],
-    private readonly inputs: Array<{ threadId: string | null; input: string }>,
-  ) {}
-
-  async runStreamed(input: string, turnOptions: { signal?: AbortSignal } = {}): Promise<{ events: AsyncIterable<ThreadEvent> }> {
-    this.inputs.push({ threadId: this.id, input });
-
-    const plan = this.plans.shift();
-    if (!plan) throw new Error("No turn plan configured");
-    if (plan.error) throw plan.error;
-    if (plan.stream) return { events: plan.stream(turnOptions.signal) };
-    return { events: eventsFromArray(plan.events ?? []) };
-  }
-}
-
-class MockCodex {
-  readonly startCalls: ThreadOptions[] = [];
-  readonly resumeCalls: Array<{ id: string; options: ThreadOptions }> = [];
-  readonly inputs: Array<{ threadId: string | null; input: string }> = [];
+class MockJsonRpcClient {
+  requests: Array<{ method: string; params: unknown }> = [];
+  pendingInputResponses: unknown[] = [];
+  private notificationHandler: NotificationHandler = () => undefined;
+  private requestHandler: RequestHandler = async () => ({});
 
   constructor(
-    private readonly plans: TurnPlan[],
-    private readonly defaultThreadId: string | null = null,
+    private readonly options: {
+      threadId?: string;
+      runId?: string;
+      assistantText?: string;
+      finalPlanMarkdown?: string;
+      pendingInput?: {
+        method: string;
+        params: unknown;
+      };
+      failTurn?: string;
+    } = {},
   ) {}
 
-  startThread(options: ThreadOptions = {}): MockThread {
-    this.startCalls.push(options);
-    return new MockThread(this.defaultThreadId, this.plans, this.inputs);
+  setNotificationHandler(handler: NotificationHandler): void {
+    this.notificationHandler = handler;
   }
 
-  resumeThread(id: string, options: ThreadOptions = {}): MockThread {
-    this.resumeCalls.push({ id, options });
-    return new MockThread(id, this.plans, this.inputs);
+  setRequestHandler(handler: RequestHandler): void {
+    this.requestHandler = handler;
+  }
+
+  async connect(): Promise<void> {}
+  async close(): Promise<void> {}
+  async notify(_method: string, _params?: unknown): Promise<void> {}
+
+  async request(method: string, params?: unknown): Promise<unknown> {
+    this.requests.push({ method, params });
+
+    if (method === "initialize") return {};
+    if (method === "thread/start" || method === "thread/new") {
+      return { threadId: this.options.threadId ?? "thread-123" };
+    }
+    if (method === "thread/resume") {
+      return { threadId: this.options.threadId ?? "thread-resume" };
+    }
+    if (method === "turn/interrupt") {
+      return {};
+    }
+    if (method !== "turn/start") {
+      return {};
+    }
+
+    const threadId = this.options.threadId ?? "thread-123";
+    const runId = this.options.runId ?? "turn-1";
+
+    queueMicrotask(async () => {
+      if (this.options.pendingInput) {
+        const response = await this.requestHandler(this.options.pendingInput.method, this.options.pendingInput.params);
+        this.pendingInputResponses.push(response);
+        await this.notificationHandler("serverrequest/resolved", {
+          threadId,
+          turnId: runId,
+          requestId: "req-1",
+        });
+      }
+
+      if (this.options.assistantText) {
+        await this.notificationHandler("item/agentmessage/delta", {
+          threadId,
+          turnId: runId,
+          item: { id: "assistant-1", type: "agentMessage", delta: this.options.assistantText },
+        });
+      }
+
+      if (this.options.finalPlanMarkdown) {
+        await this.notificationHandler("turn/plan/updated", {
+          threadId,
+          turnId: runId,
+          plan: {
+            explanation: "Implementation plan",
+            steps: [{ step: "Update code", status: "pending" }],
+          },
+        });
+        await this.notificationHandler("item/completed", {
+          threadId,
+          turnId: runId,
+          item: { id: "plan-1", type: "plan", text: this.options.finalPlanMarkdown },
+        });
+      }
+
+      await this.notificationHandler(
+        this.options.failTurn ? "turn/failed" : "turn/completed",
+        {
+          threadId,
+          turnId: runId,
+          turn: this.options.failTurn
+            ? { id: runId, status: "failed", error: { message: this.options.failTurn } }
+            : { id: runId, status: "completed" },
+        },
+      );
+    });
+
+    return { threadId, turnId: runId };
   }
 }
 
 async function collectMessages(
   session: { messages: AsyncIterable<HarnessMessage> },
-  onMessage?: (message: HarnessMessage) => Promise<void> | void,
+  limit = 20,
 ): Promise<HarnessMessage[]> {
   const out: HarnessMessage[] = [];
   for await (const message of session.messages) {
     out.push(message);
-    if (onMessage) await onMessage(message);
+    if (out.length >= limit) break;
+    if (message.type === "run_completed" || message.type === "result") break;
   }
   return out;
 }
@@ -159,9 +136,9 @@ describe("CodexHarness static properties", () => {
     assert.ok(h.supportedPermissionModes.includes("bypassPermissions"));
   });
 
-  it("does not expose synthetic question tool names", () => {
-    assert.deepEqual(h.questionToolNames, []);
-    assert.deepEqual(h.planApprovalToolNames, []);
+  it("exposes native pending-input and plan-artifact capabilities", () => {
+    assert.equal(h.capabilities.nativePendingInput, true);
+    assert.equal(h.capabilities.nativePlanArtifacts, true);
   });
 });
 
@@ -186,564 +163,103 @@ describe("harness registry — codex registration", () => {
   });
 });
 
-describe("CodexHarness SDK mapping", () => {
-  it("emits init, assistant text, reasoning text, and success result with cost", async () => {
-    const usage = { input_tokens: 1_000_000, cached_input_tokens: 200_000, output_tokens: 100_000 };
-    const codex = new MockCodex([
-      {
-        events: [
-          { type: "thread.started", thread_id: "thread-abc" },
-          { type: "turn.started" },
-          { type: "item.completed", item: { id: "r1", type: "reasoning", text: "thinking" } },
-          { type: "item.completed", item: { id: "a1", type: "agent_message", text: "Done." } },
-          { type: "turn.completed", usage },
-        ],
-      },
-    ]);
-
-    const { harness: h } = createHarness(codex);
-    const session = h.launch({ prompt: "do work", cwd: "/tmp" });
-    const msgs = await collectMessages(session);
-
-    const init = msgs.find((m) => m.type === "init") as any;
-    assert.equal(init.session_id, "thread-abc");
-
-    const texts = msgs.filter((m) => m.type === "text").map((m: any) => m.text);
-    assert.deepEqual(texts, ["thinking", "Done."]);
-
-    const result = msgs.find((m) => m.type === "result") as any;
-    assert.ok(result, "expected result event");
-    assert.equal(result.data.success, true);
-    assert.equal(result.data.session_id, "thread-abc");
-
-    const expectedCost =
-      (800_000 * (1.10 / 1_000_000)) +
-      (200_000 * (0.275 / 1_000_000)) +
-      (100_000 * (4.40 / 1_000_000));
-    assert.ok(Math.abs(result.data.total_cost_usd - expectedCost) < 1e-12);
-  });
-
-  it("passes the isolated HOME override to the Codex SDK constructor", async () => {
-    const codex = new MockCodex([
-      {
-        events: [
-          { type: "thread.started", thread_id: "thread-env" },
-          { type: "turn.completed", usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 } },
-        ],
-      },
-    ]);
-
-    const { harness: h, createCodexCalls } = createHarness(codex, {
-      auth: createMockAuthWorkspace({
-        env: {
-          HOME: "/tmp/isolated-codex-home",
-          PATH: process.env.PATH ?? "",
-        },
-      }),
+describe("CodexHarness App Server mapping", () => {
+  it("emits backend ref, assistant output, and a completed run", async () => {
+    const client = new MockJsonRpcClient({ assistantText: "Done." });
+    const harness = new CodexHarness({
+      createClient: () => client as any,
     });
 
-    await collectMessages(h.launch({ prompt: "go", cwd: "/tmp" }));
+    const messages = await collectMessages(harness.launch({ prompt: "ship it", cwd: "/tmp" }));
+    const ref = messages.find((message) => message.type === "backend_ref") as Extract<HarnessMessage, { type: "backend_ref" }> | undefined;
+    const text = messages.find((message) => message.type === "text_delta") as Extract<HarnessMessage, { type: "text_delta" }> | undefined;
+    const result = messages.find((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }> | undefined;
 
-    assert.equal(createCodexCalls.length, 1);
-    assert.equal(createCodexCalls[0]?.env?.HOME, "/tmp/isolated-codex-home");
+    assert.equal(ref?.ref.kind, "codex-app-server");
+    assert.equal(ref?.ref.conversationId, "thread-123");
+    assert.equal(text?.text, "Done.");
+    assert.equal(result?.data.success, true);
+    assert.equal(result?.data.session_id, "thread-123");
   });
 
-  it("releases the auth bootstrap lock on the first streamed event", async () => {
-    const codex = new MockCodex([
-      {
-        stream: async function* (): AsyncGenerator<ThreadEvent> {
-          yield { type: "thread.started", thread_id: "thread-lock" };
-          await sleep(10);
-          yield { type: "turn.completed", usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 } };
-        },
-      },
-    ]);
-
-    const auth = createMockAuthWorkspace();
-    const { harness: h } = createHarness(codex, { auth });
-    const session = h.launch({ prompt: "go", cwd: "/tmp" });
-
-    await collectMessages(session, (message) => {
-      if (message.type === "init") {
-        assert.equal(auth.state.releaseCalls, 1);
-      }
+  it("resumes an existing thread when resumeSessionId is provided", async () => {
+    const client = new MockJsonRpcClient({ threadId: "thread-existing", assistantText: "Resumed." });
+    const harness = new CodexHarness({
+      createClient: () => client as any,
     });
 
-    assert.equal(auth.state.prepareCalls, 1);
-    assert.equal(auth.state.releaseCalls, 1);
-    assert.equal(auth.state.cleanupCalls, 1);
-  });
-
-  it("releases the auth bootstrap lock on startup failure before the first event", async () => {
-    const codex = new MockCodex([{ error: new Error("startup failed") }]);
-    const auth = createMockAuthWorkspace();
-    const { harness: h } = createHarness(codex, { auth });
-
-    const msgs = await collectMessages(h.launch({ prompt: "go", cwd: "/tmp" }));
-
-    const result = msgs.find((message) => message.type === "result") as any;
-    assert.equal(result.data.success, false);
-    assert.match(result.data.result, /startup failed/);
-    assert.equal(auth.state.prepareCalls, 1);
-    assert.equal(auth.state.releaseCalls, 1);
-    assert.equal(auth.state.cleanupCalls, 1);
-  });
-
-  it("uses a first-turn planning prompt on the first turn when launched in plan mode", async () => {
-    const codex = new MockCodex([
-      {
-        events: [
-          { type: "thread.started", thread_id: "thread-plan" },
-          { type: "item.completed", item: { id: "a1", type: "agent_message", text: "Proposed plan." } },
-          { type: "turn.completed", usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 } },
-        ],
-      },
-    ]);
-
-    const { harness: h } = createHarness(codex);
-    const session = h.launch({ prompt: "plan this", cwd: "/tmp", permissionMode: "plan" });
-    const msgs = await collectMessages(session);
-
-    assert.match(codex.inputs[0]?.input ?? "", /Do not implement yet/);
-    assert.match(codex.inputs[0]?.input ?? "", /implementation plan only/);
-    assert.equal(msgs.some((m) => m.type === "tool_use"), false);
-  });
-
-  it("does not emit synthetic waiting-for-user tool events from assistant text", async () => {
-    const codex = new MockCodex([
-      {
-        events: [
-          { type: "thread.started", thread_id: "thread-wait" },
-          { type: "item.completed", item: { id: "a1", type: "agent_message", text: "Should I proceed with implementation?" } },
-          { type: "turn.completed", usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 } },
-        ],
-      },
-    ]);
-
-    const { harness: h } = createHarness(codex);
-    const session = h.launch({ prompt: "ask", cwd: "/tmp", permissionMode: "default" });
-    const msgs = await collectMessages(session);
-
-    const toolUse = msgs.find((m) => m.type === "tool_use") as any;
-    assert.equal(toolUse, undefined);
-  });
-
-  it("emits activity heartbeat while a turn is running", async () => {
-    const prev = process.env.OPENCLAW_CODEX_HEARTBEAT_MS;
-    process.env.OPENCLAW_CODEX_HEARTBEAT_MS = "20";
-
-    try {
-      const codex = new MockCodex([
-        {
-          stream: async function* (): AsyncGenerator<ThreadEvent> {
-            yield { type: "thread.started", thread_id: "thread-heartbeat" };
-            await sleep(75);
-            yield { type: "turn.completed", usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 } };
-          },
-        },
-      ]);
-
-      const { harness: h } = createHarness(codex);
-      const session = h.launch({ prompt: "heartbeat", cwd: "/tmp" });
-      const msgs = await collectMessages(session);
-
-      const activityCount = msgs.filter((m) => m.type === "activity").length;
-      assert.ok(activityCount >= 1, "expected at least one heartbeat");
-      assert.ok(msgs.some((m) => m.type === "result"), "expected terminal result");
-    } finally {
-      process.env.OPENCLAW_CODEX_HEARTBEAT_MS = prev;
-    }
-  });
-
-  it("resumeSessionId uses resumeThread on first turn and emits init from thread id", async () => {
-    const codex = new MockCodex([
-      {
-        events: [
-          { type: "turn.started" },
-          { type: "item.completed", item: { id: "a1", type: "agent_message", text: "Resumed." } },
-          { type: "turn.completed", usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 } },
-        ],
-      },
-    ]);
-
-    const { harness: h } = createHarness(codex);
-    const session = h.launch({ prompt: "continue", cwd: "/tmp", resumeSessionId: "thread-resume" });
-    const msgs = await collectMessages(session);
-
-    assert.equal(codex.resumeCalls.length, 1);
-    assert.equal(codex.resumeCalls[0]?.id, "thread-resume");
-
-    const init = msgs.find((m) => m.type === "init") as any;
-    assert.ok(init, "expected init event");
-    assert.equal(init.session_id, "thread-resume");
-  });
-
-  it("does not emit init for a resumed thread before the streamed turn produces a real event", async () => {
-    const codex = new MockCodex([{ error: new Error("resume failed before first event") }]);
-
-    const { harness: h } = createHarness(codex);
-    const msgs = await collectMessages(h.launch({
+    const messages = await collectMessages(harness.launch({
       prompt: "continue",
       cwd: "/tmp",
-      resumeSessionId: "thread-resume-fail",
+      resumeSessionId: "thread-existing",
     }));
 
-    assert.equal(codex.resumeCalls.length, 1);
-    assert.equal(msgs.some((m) => m.type === "init"), false);
-
-    const result = msgs.find((m) => m.type === "result") as any;
-    assert.ok(result, "expected terminal result");
-    assert.equal(result.data.success, false);
-    assert.match(result.data.result, /resume failed before first event/);
+    assert.equal(client.requests.some((request) => request.method === "thread/resume"), true);
+    const ref = messages.find((message) => message.type === "backend_ref") as Extract<HarnessMessage, { type: "backend_ref" }> | undefined;
+    assert.equal(ref?.ref.conversationId, "thread-existing");
   });
 
-  it("setPermissionMode applies on next turn via thread recreation with same id", async () => {
-    let releaseSecondTurn: (() => void) | undefined;
-    const secondTurnGate = new Promise<void>((resolve) => {
-      releaseSecondTurn = resolve;
-    });
-
-    async function* promptStream(): AsyncGenerator<string> {
-      yield "first";
-      await secondTurnGate;
-      yield "second";
-    }
-
-    const codex = new MockCodex([
-      {
-        events: [
-          { type: "thread.started", thread_id: "thread-recreate" },
-          { type: "turn.completed", usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 } },
-        ],
-      },
-      {
-        events: [
-          { type: "turn.started" },
-          { type: "turn.completed", usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 } },
-        ],
-      },
-    ]);
-
-    const { harness: h } = createHarness(codex);
-    const session = h.launch({ prompt: promptStream(), cwd: "/tmp", permissionMode: "plan" });
-
-    const collected = collectMessages(session, async (msg) => {
-      if (msg.type === "result" && (msg as any).data.num_turns === 1) {
-        await session.setPermissionMode?.("bypassPermissions");
-        releaseSecondTurn?.();
-      }
-    });
-
-    const msgs = await collected;
-    const results = msgs.filter((m) => m.type === "result") as any[];
-    assert.equal(results.length, 2);
-
-    assert.equal(codex.startCalls.length, 1);
-    assert.equal(codex.resumeCalls.length, 1);
-    assert.equal(codex.resumeCalls[0]?.id, "thread-recreate");
-  });
-
-  it("interrupt redirects the active turn without emitting terminal failure", async () => {
-    const codex = new MockCodex([
-      {
-        stream: async function* (signal?: AbortSignal): AsyncGenerator<ThreadEvent> {
-          yield { type: "thread.started", thread_id: "thread-interrupt" };
-          await new Promise<void>((resolve, reject) => {
-            if (!signal) return reject(new Error("missing abort signal"));
-            const onAbort = (): void => {
-              signal.removeEventListener("abort", onAbort);
-              reject(new Error("interrupted"));
-            };
-            signal.addEventListener("abort", onAbort, { once: true });
-          });
+  it("emits structured pending input and resolves button selections", async () => {
+    const client = new MockJsonRpcClient({
+      pendingInput: {
+        method: "turn/requestUserInput",
+        params: {
+          threadId: "thread-123",
+          turnId: "turn-1",
+          requestId: "req-1",
+          question: "Choose an environment",
+          options: ["Staging", "Production"],
         },
       },
-      {
-        events: [
-          { type: "turn.completed", usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 } },
-        ],
-      },
-    ]);
-
-    const { harness: h } = createHarness(codex);
-    let releaseSecondTurn: (() => void) | undefined;
-    const secondTurnGate = new Promise<void>((resolve) => {
-      releaseSecondTurn = resolve;
     });
-    async function* promptStream(): AsyncGenerator<string> {
-      yield "long";
-      await secondTurnGate;
-      yield "redirected";
-    }
+    const harness = new CodexHarness({
+      createClient: () => client as any,
+    });
+    const session = harness.launch({ prompt: "deploy it", cwd: "/tmp" });
+    const iter = session.messages[Symbol.asyncIterator]();
 
-    const session = h.launch({ prompt: promptStream(), cwd: "/tmp" });
-
-    const collected = collectMessages(session, async (msg) => {
-      if (msg.type === "init") {
-        await session.interrupt?.();
-        releaseSecondTurn?.();
+    const seen: HarnessMessage[] = [];
+    for (let i = 0; i < 8; i += 1) {
+      const next = await iter.next();
+      if (next.done) break;
+      seen.push(next.value);
+      if (next.value.type === "pending_input") {
+        const submitted = await session.submitPendingInputOption?.(1);
+        assert.equal(submitted, true);
       }
+      if (
+        next.value.type === "run_completed"
+        && seen.some((message) => message.type === "pending_input_resolved")
+      ) {
+        break;
+      }
+    }
+
+    const pending = seen.find((message) => message.type === "pending_input") as Extract<HarnessMessage, { type: "pending_input" }> | undefined;
+    const resolved = seen.find((message) => message.type === "pending_input_resolved") as Extract<HarnessMessage, { type: "pending_input_resolved" }> | undefined;
+    assert.equal(pending?.state.promptText, "Choose an environment");
+    assert.deepEqual(pending?.state.options, ["Staging", "Production"]);
+    assert.equal(Boolean(resolved), true);
+    assert.deepEqual(client.pendingInputResponses[0], { option: "Production", index: 1 });
+  });
+
+  it("emits finalized plan artifacts from Codex plan notifications", async () => {
+    const client = new MockJsonRpcClient({
+      finalPlanMarkdown: "1. Update code\n2. Add tests\n\nShould I proceed?",
+    });
+    const harness = new CodexHarness({
+      createClient: () => client as any,
     });
 
-    const msgs = await collected;
-    const results = msgs.filter((m) => m.type === "result") as any[];
-    assert.equal(results.length, 1);
-    assert.equal(results[0]?.data.success, true);
-    assert.deepEqual(codex.inputs.map((entry) => entry.input), ["long", "redirected"]);
-    assert.equal(codex.resumeCalls.length, 1);
-    assert.equal(codex.resumeCalls[0]?.id, "thread-interrupt");
-  });
-
-  it("turn.failed path emits exactly one terminal failure result", async () => {
-    const codex = new MockCodex([
-      {
-        events: [
-          { type: "thread.started", thread_id: "thread-failed" },
-          { type: "turn.failed", error: { message: "mock turn failure" } },
-        ],
-      },
-    ]);
-
-    const { harness: h } = createHarness(codex);
-    const msgs = await collectMessages(h.launch({ prompt: "fail", cwd: "/tmp" }));
-
-    const results = msgs.filter((m) => m.type === "result") as any[];
-    assert.equal(results.length, 1);
-    assert.equal(results[0].data.success, false);
-    assert.match(results[0].data.result, /mock turn failure/);
-  });
-
-  it("thrown exception path emits exactly one terminal failure result", async () => {
-    const codex = new MockCodex([{ error: new Error("mock thrown error") }]);
-    const { harness: h } = createHarness(codex);
-
-    const msgs = await collectMessages(h.launch({ prompt: "throw", cwd: "/tmp" }));
-    const results = msgs.filter((m) => m.type === "result") as any[];
-
-    assert.equal(results.length, 1);
-    assert.equal(results[0].data.success, false);
-    assert.match(results[0].data.result, /mock thrown error/);
-  });
-
-  it("uses danger-full-access and preserves the default Codex approval policy across starts/resumes", async () => {
-    const codex = new MockCodex([
-      { events: [{ type: "thread.started", thread_id: "thread-perm" }, { type: "turn.completed", usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 } }] },
-      { events: [{ type: "turn.completed", usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 } }] },
-    ]);
-
-    async function* prompts(): AsyncGenerator<string> {
-      yield "one";
-      yield "two";
-    }
-
-    const { harness: h } = createHarness(codex);
-    const session = h.launch({ prompt: prompts(), cwd: "/tmp", permissionMode: "plan" });
-    await session.setPermissionMode?.("default");
-    await collectMessages(session);
-
-    const all = [
-      ...codex.startCalls,
-      ...codex.resumeCalls.map((c) => c.options),
-    ];
-
-    assert.ok(all.length >= 1);
-    for (const opts of all) {
-      assert.equal(opts.sandboxMode, "danger-full-access");
-      assert.equal(opts.approvalPolicy, "on-request");
-    }
-  });
-
-  it("passes through an explicit never Codex approval policy", async () => {
-    const codex = new MockCodex([
-      { events: [{ type: "thread.started", thread_id: "thread-approval" }, { type: "turn.completed", usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 } }] },
-    ]);
-
-    const { harness: h } = createHarness(codex);
-    await collectMessages(h.launch({
-      prompt: "go",
+    const messages = await collectMessages(harness.launch({
+      prompt: "plan it",
       cwd: "/tmp",
-      codexApprovalPolicy: "never",
+      permissionMode: "plan",
     }));
 
-    assert.equal(codex.startCalls[0]?.sandboxMode, "danger-full-access");
-    assert.equal(codex.startCalls[0]?.approvalPolicy, "never");
-  });
-
-  it("adds filesystem root and env extras to additionalDirectories in bypass mode", async () => {
-    const prev = process.env.OPENCLAW_CODEX_BYPASS_ADDITIONAL_DIRS;
-    process.env.OPENCLAW_CODEX_BYPASS_ADDITIONAL_DIRS = "/mnt/data,/tmp,/mnt/data";
-
-    try {
-      const codex = new MockCodex([
-        { events: [{ type: "thread.started", thread_id: "thread-bypass" }, { type: "turn.completed", usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 } }] },
-      ]);
-
-      const { harness: h } = createHarness(codex);
-      await collectMessages(h.launch({ prompt: "go", cwd: "/home/openclaw/project", permissionMode: "bypassPermissions" }));
-
-      const startOpts = codex.startCalls[0];
-      assert.ok(startOpts?.additionalDirectories?.includes("/"), "root directory should be included");
-      assert.ok(startOpts?.additionalDirectories?.includes("/mnt/data"));
-      assert.ok(startOpts?.additionalDirectories?.includes("/tmp"));
-      assert.equal(new Set(startOpts?.additionalDirectories ?? []).size, (startOpts?.additionalDirectories ?? []).length, "additionalDirectories should be deduped");
-    } finally {
-      process.env.OPENCLAW_CODEX_BYPASS_ADDITIONAL_DIRS = prev;
-    }
-  });
-
-  it("does not set additionalDirectories outside bypass mode", async () => {
-    const codex = new MockCodex([
-      { events: [{ type: "thread.started", thread_id: "thread-default" }, { type: "turn.completed", usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 } }] },
-    ]);
-
-    const { harness: h } = createHarness(codex);
-    await collectMessages(h.launch({ prompt: "go", cwd: "/tmp", permissionMode: "plan" }));
-
-    assert.equal(codex.startCalls[0]?.additionalDirectories, undefined);
-  });
-
-  it("passes modelReasoningEffort through to thread options", async () => {
-    const codex = new MockCodex([
-      { events: [{ type: "thread.started", thread_id: "thread-reasoning" }, { type: "turn.completed", usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 } }] },
-    ]);
-
-    const { harness: h } = createHarness(codex);
-    await collectMessages(h.launch({ prompt: "go", cwd: "/tmp", reasoningEffort: "high" }));
-
-    assert.equal(codex.startCalls[0]?.modelReasoningEffort, "high");
-  });
-});
-
-// Fix A regression tests: system prompt (worktree instructions) reaches Codex first turn
-describe("CodexHarness systemPrompt injection (Fix A)", () => {
-  it("prepends systemPrompt to the first turn input when set", async () => {
-    const codex = new MockCodex([
-      {
-        events: [
-          { type: "thread.started", thread_id: "thread-sysprompt" },
-          { type: "item.completed", item: { id: "a1", type: "agent_message", text: "Done." } },
-          { type: "turn.completed", usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 } },
-        ],
-      },
-    ]);
-    const { harness: h } = createHarness(codex);
-    const systemPrompt = "You are working in a git worktree.\nWorktree path: /repo/.worktrees/fix-foo\nBranch: agent/fix-foo";
-
-    await collectMessages(
-      h.launch({ prompt: "implement the fix", cwd: "/tmp", systemPrompt }),
-    );
-
-    assert.equal(codex.inputs.length, 1);
-    const sentInput = codex.inputs[0]!.input;
-    assert.ok(
-      sentInput.startsWith(systemPrompt),
-      `First turn should start with systemPrompt. Got: ${sentInput.slice(0, 200)}`,
-    );
-    assert.ok(
-      sentInput.includes("implement the fix"),
-      "First turn should include the original prompt",
-    );
-    assert.ok(
-      sentInput.includes("GIT SAFETY"),
-      "First turn should include the git branch safety reminder",
-    );
-  });
-
-  it("prepends systemPrompt on a resumed session's first turn", async () => {
-    const codex = new MockCodex(
-      [
-        {
-          events: [
-            { type: "thread.started", thread_id: "thread-resume-sysprompt" },
-            { type: "item.completed", item: { id: "a1", type: "agent_message", text: "Resumed." } },
-            { type: "turn.completed", usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 } },
-          ],
-        },
-      ],
-      "thread-existing",
-    );
-    const { harness: h } = createHarness(codex);
-    const systemPrompt = "WORKTREE: /repo/.worktrees/resume-branch\nBranch: agent/resume-branch";
-
-    await collectMessages(
-      h.launch({
-        prompt: "continue work",
-        cwd: "/tmp",
-        systemPrompt,
-        resumeSessionId: "thread-existing",
-      }),
-    );
-
-    assert.equal(codex.inputs.length, 1);
-    const sentInput = codex.inputs[0]!.input;
-    assert.ok(
-      sentInput.startsWith(systemPrompt),
-      `Resumed first turn should start with systemPrompt. Got: ${sentInput.slice(0, 200)}`,
-    );
-    assert.ok(sentInput.includes("continue work"), "Resumed first turn should include the prompt");
-  });
-
-  it("does NOT prepend systemPrompt to subsequent turns", async () => {
-    const codex = new MockCodex([
-      {
-        events: [
-          { type: "thread.started", thread_id: "thread-multi" },
-          { type: "item.completed", item: { id: "a1", type: "agent_message", text: "Turn 1." } },
-          { type: "turn.completed", usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 } },
-        ],
-      },
-      {
-        events: [
-          { type: "item.completed", item: { id: "a2", type: "agent_message", text: "Turn 2." } },
-          { type: "turn.completed", usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 } },
-        ],
-      },
-    ]);
-
-    async function* twoTurns(): AsyncGenerator<string> {
-      yield "first prompt";
-      yield "second prompt";
-    }
-
-    const { harness: h } = createHarness(codex);
-    const systemPrompt = "SYSTEM: stay in worktree";
-    await collectMessages(h.launch({ prompt: twoTurns(), cwd: "/tmp", systemPrompt }));
-
-    assert.equal(codex.inputs.length, 2);
-    // First turn: system prompt prepended
-    assert.ok(codex.inputs[0]!.input.startsWith(systemPrompt));
-    // Second turn: raw prompt only
-    assert.ok(
-      !codex.inputs[1]!.input.startsWith(systemPrompt),
-      "Second turn should NOT include the system prompt",
-    );
-    assert.equal(codex.inputs[1]!.input, "second prompt");
-  });
-
-  it("prepends systemPrompt before the first-turn planning wrapper in plan mode", async () => {
-    const codex = new MockCodex([
-      {
-        events: [
-          { type: "thread.started", thread_id: "thread-plan-sys" },
-          { type: "item.completed", item: { id: "a1", type: "agent_message", text: "Plan." } },
-          { type: "turn.completed", usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 } },
-        ],
-      },
-    ]);
-    const { harness: h } = createHarness(codex);
-    const systemPrompt = "WORKTREE INSTRUCTIONS";
-
-    await collectMessages(
-      h.launch({ prompt: "do work", cwd: "/tmp", permissionMode: "plan", systemPrompt }),
-    );
-
-    assert.equal(codex.inputs.length, 1);
-    const sentInput = codex.inputs[0]!.input;
-    // systemPrompt before the first-turn planning prefix
-    const sysIdx = sentInput.indexOf(systemPrompt);
-    const planIdx = sentInput.indexOf("[SYSTEM: First turn only");
-    assert.ok(sysIdx >= 0, "systemPrompt should appear in plan-mode first turn");
-    assert.ok(planIdx >= 0, "first-turn planning prefix should appear in plan-mode first turn");
-    assert.ok(sysIdx < planIdx, "systemPrompt should come before the first-turn planning wrapper");
+    const plan = messages.find((message) => message.type === "plan_artifact") as Extract<HarnessMessage, { type: "plan_artifact" }> | undefined;
+    assert.equal(plan?.finalized, true);
+    assert.match(plan?.artifact.markdown ?? "", /Should I proceed\?/);
+    assert.equal(plan?.artifact.steps[0]?.step, "Update code");
   });
 });

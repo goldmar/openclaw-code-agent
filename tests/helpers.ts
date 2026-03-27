@@ -30,9 +30,14 @@ export function createFakeHarness(
 
   const harness: FakeHarness = {
     name,
-    supportedPermissionModes: ["default", "plan", "acceptEdits", "bypassPermissions"],
-    questionToolNames: ["AskUserQuestion"],
-    planApprovalToolNames: ["ExitPlanMode"],
+    backendKind: "claude-code",
+    supportedPermissionModes: ["default", "plan", "bypassPermissions"],
+    capabilities: {
+      nativePendingInput: false,
+      nativePlanArtifacts: false,
+      worktrees: "plugin-managed",
+      nativeWorktreeRestore: false,
+    },
     lastLaunchOptions: undefined,
     lastSetPermissionMode: undefined,
     lastStreamInput: undefined,

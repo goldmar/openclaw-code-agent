@@ -166,6 +166,7 @@ export class SessionManager {
       resolvePlanApprovalMode: (session) => this.resolvePlanApprovalMode(session),
       getPlanApprovalButtons: (sessionId, session) => this.interactions.getPlanApprovalButtons(sessionId, session),
       getResumeButtons: (sessionId, session) => this.interactions.getResumeButtons(sessionId, session),
+      getQuestionButtons: (sessionId, options) => this.interactions.getQuestionButtons(sessionId, options),
       extractLastOutputLine: (session) => this.extractLastOutputLine(session),
       getOutputPreview: (session, maxChars) => this.getOutputPreview(session, maxChars),
       originThreadLine: (session) => this.originThreadLine(session),
@@ -230,7 +231,6 @@ export class SessionManager {
       workdir: preparedLaunch.actualWorkdir,
       systemPrompt: preparedLaunch.effectiveSystemPrompt,
       canUseTool,
-      turnBoundaryDecision: (context) => this.semantic.classifyTurnBoundary(context),
     }, name);
     sessionIdRef = session.id; // bind late — canUseTool closure captures this ref
     this.restore.hydrateSpawnedSession(session, preparedLaunch, config);
@@ -757,6 +757,15 @@ export class SessionManager {
    */
   resolveAskUserQuestion(sessionId: string, optionIndex: number): void {
     this.questions.resolveAskUserQuestion(sessionId, optionIndex);
+  }
+
+  async resolvePendingInputOption(sessionId: string, optionIndex: number): Promise<boolean> {
+    const session = this.sessions.get(sessionId);
+    if (session && await session.submitPendingInputOption(optionIndex)) {
+      return true;
+    }
+    this.questions.resolveAskUserQuestion(sessionId, optionIndex);
+    return true;
   }
 
   /** Evict stale runtime records and enforce persisted/session-output retention limits. */

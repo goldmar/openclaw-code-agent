@@ -76,12 +76,12 @@ Key behavior:
 `src/harness/types.ts` defines the `AgentHarness` interface. The built-in harnesses are:
 
 - `claude-code`: native Claude Code harness with plan-mode and `AskUserQuestion` interception
-- `codex`: native Codex thread harness with soft plan-first behavior, `reasoningEffort`, and `approvalPolicy`
+- `codex`: native Codex App Server harness with structured pending input, structured plan artifacts, `reasoningEffort`, and `approvalPolicy`
 
 Important mapping detail:
 
 - Claude Code maps plugin `permissionMode` directly to the SDK modes.
-- Codex always runs with `sandboxMode: "danger-full-access"`. Plugin `plan` mode is implemented as orchestrated behavior, not as a Codex SDK permission state.
+- Codex runs through the Codex App Server transport. Plugin `plan` mode remains a plugin-owned approval workflow even when the backend exposes structured plan artifacts.
 
 ### `WakeDispatcher`
 
@@ -165,7 +165,7 @@ When a session completes with worktree metadata:
 ### Resume, Redirect, And Recovery
 
 - `agent_respond(..., interrupt=true)` aborts the current turn in place and sends a redirect notification
-- only explicitly suspended sessions are resumable through `agent_respond` / `agent_resume`
+- only explicitly suspended sessions are resumable through `agent_respond`
 - sessions found in `running` state during startup recovery are normalized into resumable persisted entries instead of being implicitly restarted
 - persisted Codex resume state is treated more conservatively after restart because thread reuse is brittle across auth and process boundaries
 

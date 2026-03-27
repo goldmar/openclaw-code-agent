@@ -141,8 +141,9 @@ describe("createCallbackHandler()", () => {
     const resolved: Array<{ sessionId: string; optionIndex: number }> = [];
     setSessionManager({
       consumeActionToken: () => ({ sessionId: "sess-42", kind: "question-answer", optionIndex: 1 }),
-      resolveAskUserQuestion: (sessionId: string, optionIndex: number) => {
+      resolvePendingInputOption: (sessionId: string, optionIndex: number) => {
         resolved.push({ sessionId, optionIndex });
+        return true;
       },
     } as any);
 

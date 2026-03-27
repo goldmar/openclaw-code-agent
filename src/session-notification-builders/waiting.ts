@@ -10,13 +10,14 @@ export function buildWaitingForInputPayload(args: {
   originThreadLine: OriginThreadLine;
   planApprovalMode?: PlanApprovalMode;
   planApprovalButtons?: NotificationButton[][];
+  questionButtons?: NotificationButton[][];
 }): {
   label: "plan-approval" | "waiting";
   userMessage: string;
   wakeMessage: string;
   buttons?: NotificationButton[][];
 } {
-  const { session, preview, originThreadLine, planApprovalMode, planApprovalButtons } = args;
+  const { session, preview, originThreadLine, planApprovalMode, planApprovalButtons, questionButtons } = args;
   const isPlanApproval = session.pendingPlanApproval;
 
   const userMessage = isPlanApproval
@@ -132,5 +133,6 @@ export function buildWaitingForInputPayload(args: {
       ``,
       `Use agent_respond(session='${session.id}', message='...') to send a reply, or agent_output(session='${session.id}', full: true) to see full context before deciding.`,
     ].join("\n"),
+    buttons: questionButtons,
   };
 }

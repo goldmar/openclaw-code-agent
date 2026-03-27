@@ -42,7 +42,7 @@ When the task is done, the plugin can leave the branch for review, merge it auto
 | Harness | Status | Notes |
 | --- | --- | --- |
 | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | Supported | Native harness via `@anthropic-ai/claude-agent-sdk` |
-| [Codex](https://github.com/openai/codex) | Supported | Native harness via `@openai/codex-sdk` thread streaming |
+| [Codex](https://github.com/openai/codex) | Supported | Native harness via Codex App Server over stdio |
 
 Launches and notifications work from Telegram, Discord, or any OpenClaw-supported channel. Telegram and Discord now share the same action-token callback flow for plan approvals, question options, resume/restart, and worktree decisions.
 
@@ -101,7 +101,7 @@ Launch a first session:
 /agent --name fix-auth Fix the auth middleware bug
 /agent_sessions
 /agent_respond fix-auth Add unit tests too
-/agent_resume --fork fix-auth Try a different approach
+agent_launch(prompt="<new task>", resume_session_id="fix-auth", fork_session=true)
 ```
 
 For multi-workspace or multi-bot setups, configure `agentChannels`. The full routing rules, config matrix, and notification behavior live in [docs/REFERENCE.md](docs/REFERENCE.md).
@@ -130,7 +130,7 @@ Prefer fully routable channel strings such as `telegram|123456789` or `telegram|
 | `agent_worktree_status` | Show branch, PR, and pending-decision state |
 | `agent_worktree_cleanup` | Clean up merged agent branches or dismiss a pending worktree decision |
 
-The chat command surface mirrors the common workflows: `/agent`, `/agent_sessions`, `/agent_output`, `/agent_respond`, `/agent_kill`, `/agent_resume`, and `/agent_stats`.
+The chat command surface mirrors the common workflows: `/agent`, `/agent_sessions`, `/agent_output`, `/agent_respond`, `/agent_kill`, and `/agent_stats`.
 
 ## Docs
 

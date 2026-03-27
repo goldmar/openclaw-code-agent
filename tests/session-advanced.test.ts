@@ -544,9 +544,14 @@ describe("Session.kill() teardown", () => {
   it("does not fail terminal transition when harness interrupt rejects", async () => {
     const rejectingHarness: AgentHarness = {
       name: "test-harness-reject-interrupt",
+      backendKind: "claude-code",
       supportedPermissionModes: ["default", "plan", "bypassPermissions"],
-      questionToolNames: [],
-      planApprovalToolNames: [],
+      capabilities: {
+        nativePendingInput: false,
+        nativePlanArtifacts: false,
+        worktrees: "plugin-managed",
+        nativeWorktreeRestore: false,
+      },
       launch(_options: HarnessLaunchOptions): HarnessSession {
         async function* messages() {
           yield { type: "init", session_id: "reject-int-1" } as const;

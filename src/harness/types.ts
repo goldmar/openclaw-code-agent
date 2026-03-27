@@ -6,7 +6,15 @@
  */
 
 import type { McpServerConfig } from "../config";
-import type { CodexApprovalPolicy, ReasoningEffort } from "../types";
+import type {
+  BackendCapabilityFlags,
+  CodexApprovalPolicy,
+  PendingInputState,
+  PlanArtifact,
+  ReasoningEffort,
+  SessionBackendKind,
+  SessionBackendRef,
+} from "../types";
 
 // ---------------------------------------------------------------------------
 // Harness message types (normalised from each SDK's wire format)
@@ -22,8 +30,18 @@ export interface HarnessResult {
 }
 
 export type HarnessMessage =
-  | { type: "init"; session_id: string }
+  | { type: "backend_ref"; ref: SessionBackendRef }
+  | { type: "run_started"; runId?: string }
   | { type: "activity" }
+  | { type: "text_delta"; text: string }
+  | { type: "tool_call"; name: string; input: unknown }
+  | { type: "pending_input"; state: PendingInputState }
+  | { type: "pending_input_resolved"; requestId?: string }
+  | { type: "plan_artifact"; artifact: PlanArtifact; finalized: boolean }
+  | { type: "settings_changed"; permissionMode?: string }
+  | { type: "run_completed"; data: HarnessResult }
+  // Deprecated compatibility aliases retained for tests/fakes during the transition.
+  | { type: "init"; session_id: string }
   | { type: "text"; text: string }
   | { type: "tool_use"; name: string; input: unknown }
   | { type: "permission_mode_change"; mode: string }
@@ -69,6 +87,9 @@ export interface HarnessSession {
   /** Feed additional user messages into a running session. */
   streamInput?(input: AsyncIterable<unknown>): Promise<void>;
 
+  /** Resolve an active structured pending-input request via option index. */
+  submitPendingInputOption?(index: number): Promise<boolean>;
+
   /** Interrupt the current turn. */
   interrupt?(): Promise<void>;
 }
@@ -81,6 +102,9 @@ export interface AgentHarness {
   /** Unique harness identifier, e.g. "claude-code", "codex". */
   readonly name: string;
 
+  /** Canonical backend kind used for persisted refs. */
+  readonly backendKind: SessionBackendKind;
+
   /** Launch a new session and return a handle. */
   launch(options: HarnessLaunchOptions): HarnessSession;
 
@@ -90,9 +114,6 @@ export interface AgentHarness {
   /** Permission modes supported by this harness. */
   readonly supportedPermissionModes: readonly string[];
 
-  /** Tool-use names that mean "the agent is asking the user a question". */
-  readonly questionToolNames: readonly string[];
-
-  /** Tool-use names that mean "plan submitted for approval". */
-  readonly planApprovalToolNames: readonly string[];
+  /** Structured capabilities surfaced by the backend. */
+  readonly capabilities: BackendCapabilityFlags;
 }

@@ -58,9 +58,14 @@ describe("harness registry — error handling", () => {
 describe("harness registry — custom registration", () => {
   const createTestHarness = (name: string): AgentHarness => ({
     name,
+    backendKind: "claude-code",
     supportedPermissionModes: ["default"],
-    questionToolNames: [],
-    planApprovalToolNames: [],
+    capabilities: {
+      nativePendingInput: false,
+      nativePlanArtifacts: false,
+      worktrees: "plugin-managed",
+      nativeWorktreeRestore: false,
+    },
     launch() { return { messages: (async function*() {})() }; },
     buildUserMessage(text: string, sessionId: string) { return { text, sessionId }; },
   });
@@ -97,14 +102,10 @@ describe("ClaudeCodeHarness properties", () => {
     assert.equal(h.name, "claude-code");
   });
 
-  it("has expected questionToolNames", () => {
+  it("surfaces structured capabilities instead of tool-name heuristics", () => {
     const h = getHarness("claude-code");
-    assert.ok(h.questionToolNames.includes("AskUserQuestion"));
-  });
-
-  it("has expected planApprovalToolNames", () => {
-    const h = getHarness("claude-code");
-    assert.ok(h.planApprovalToolNames.includes("ExitPlanMode"));
+    assert.equal(h.capabilities.nativePendingInput, false);
+    assert.equal(h.capabilities.nativePlanArtifacts, false);
   });
 
   it("has expected supportedPermissionModes", () => {

@@ -79,14 +79,26 @@ export class SessionStore {
         this.saveIndex();
         return;
       }
-      if (!isRecord(parsed) || parsed.schemaVersion !== STORE_SCHEMA_VERSION) {
+      if (
+        !isRecord(parsed) ||
+        (parsed.schemaVersion !== STORE_SCHEMA_VERSION && parsed.schemaVersion !== 4)
+      ) {
         this.archiveLegacyIndex(`schema mismatch (expected v${STORE_SCHEMA_VERSION})`);
         this.saveIndex();
         return;
       }
 
       const sessionsRaw = Array.isArray(parsed.sessions) ? parsed.sessions : [];
+      const archivedLegacyCodex: unknown[] = [];
       for (const candidate of sessionsRaw) {
+        if (isRecord(candidate) && candidate.harness === "codex") {
+          const backendRef = isRecord(candidate.backendRef) ? candidate.backendRef : undefined;
+          const backendKind = typeof backendRef?.kind === "string" ? backendRef.kind : undefined;
+          if (backendKind !== "codex-app-server") {
+            archivedLegacyCodex.push(candidate);
+            continue;
+          }
+        }
         const entry = normalizePersistedEntry(candidate);
         if (!entry) {
           this.persisted.clear();
@@ -101,6 +113,11 @@ export class SessionStore {
         this.persisted.set(entry.harnessSessionId, entry);
         if (entry.sessionId) this.idIndex.set(entry.sessionId, entry.harnessSessionId);
         if (entry.name) this.nameIndex.set(entry.name, entry.harnessSessionId);
+      }
+
+      if (archivedLegacyCodex.length > 0) {
+        this.archiveLegacyCodexEntries(archivedLegacyCodex);
+        this.saveIndex();
       }
 
       const tokensRaw = Array.isArray(parsed.actionTokens) ? parsed.actionTokens : [];
@@ -155,6 +172,17 @@ export class SessionStore {
     }
   }
 
+  private archiveLegacyCodexEntries(entries: unknown[]): void {
+    try {
+      if (entries.length === 0) return;
+      const archivedPath = `${this.indexPath}.codex-sdk-legacy-${Date.now()}.json`;
+      writeFileSync(archivedPath, JSON.stringify(entries, null, 2), "utf-8");
+      console.warn(`[SessionStore] Breaking Codex transport upgrade: archived ${entries.length} legacy Codex SDK session(s) to ${archivedPath}. They are not loaded by the App Server backend.`);
+    } catch (err: unknown) {
+      console.warn(`[SessionStore] Failed to archive legacy Codex SDK sessions: ${errorMessage(err)}`);
+    }
+  }
+
   /** Persist a running-session stub so crash/restart can recover routing metadata. */
   markRunning(session: Session): void {
     if (!session.harnessSessionId) return;
@@ -168,6 +196,10 @@ export class SessionStore {
     const stub: PersistedSessionInfo = {
       sessionId: session.id,
       harnessSessionId: session.harnessSessionId,
+      backendRef: session.backendRef ?? {
+        kind: session.harnessName === "codex" ? "codex-app-server" : "claude-code",
+        conversationId: session.harnessSessionId,
+      },
       name: session.name,
       prompt: session.prompt,
       workdir: session.originalWorkdir ?? session.workdir, // E1: Always write originalWorkdir
@@ -247,6 +279,10 @@ export class SessionStore {
     const info: PersistedSessionInfo = {
       sessionId: session.id,
       harnessSessionId: session.harnessSessionId,
+      backendRef: session.backendRef ?? {
+        kind: session.harnessName === "codex" ? "codex-app-server" : "claude-code",
+        conversationId: session.harnessSessionId,
+      },
       name: session.name,
       prompt: session.prompt,
       workdir: session.originalWorkdir ?? session.workdir, // E1: Always write originalWorkdir

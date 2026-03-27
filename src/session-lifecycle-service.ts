@@ -44,6 +44,10 @@ export class SessionLifecycleService {
         isExplicitlyResumable?: boolean;
         planDecisionVersion?: number;
       }) => NotificationButton[][];
+      getQuestionButtons: (
+        sessionId: string,
+        options: Array<{ label: string }>,
+      ) => NotificationButton[][] | undefined;
       extractLastOutputLine: (session: Session) => string | undefined;
       getOutputPreview: (session: Session, maxChars?: number) => string;
       originThreadLine: (session: Session) => string;
@@ -177,13 +181,21 @@ export class SessionLifecycleService {
   emitWaitingForInput(session: Session): void {
     if (!this.deps.debounceWaitingEvent(session.id)) return;
 
-    const preview = this.deps.getOutputPreview(session);
+    const preview =
+      (!session.pendingPlanApproval && session.pendingInputState?.promptText)
+        ? session.pendingInputState.promptText
+        : this.deps.getOutputPreview(session);
     const planApprovalMode = session.pendingPlanApproval
       ? this.deps.resolvePlanApprovalMode(session)
       : undefined;
     const waitingButtons =
       session.pendingPlanApproval && planApprovalMode === "ask"
         ? this.deps.getPlanApprovalButtons(session.id, session)
+        : (!session.pendingPlanApproval && session.pendingInputState?.options.length)
+          ? this.deps.getQuestionButtons(
+              session.id,
+              session.pendingInputState.options.map((label) => ({ label })),
+            )
         : undefined;
     const payload = buildWaitingForInputPayload({
       session,
@@ -191,6 +203,7 @@ export class SessionLifecycleService {
       originThreadLine: this.deps.originThreadLine(session),
       planApprovalMode,
       planApprovalButtons: waitingButtons,
+      questionButtons: !session.pendingPlanApproval ? waitingButtons : undefined,
     });
 
     if (payload.label === "plan-approval" && planApprovalMode === "ask") {

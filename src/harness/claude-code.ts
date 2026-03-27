@@ -1,5 +1,6 @@
 /**
- * Claude Code harness — wraps @anthropic-ai/claude-agent-sdk.
+ * Claude Code harness — wraps @anthropic-ai/claude-agent-sdk and emits the
+ * plugin's structured backend/run event model.
  */
 
 import { query } from "@anthropic-ai/claude-agent-sdk";
@@ -7,6 +8,10 @@ import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 import { createRequire } from "module";
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import type {
+  PendingInputState,
+  PlanArtifact,
+} from "../types";
 import type {
   AgentHarness,
   HarnessLaunchOptions,
@@ -43,29 +48,83 @@ interface ClaudeMessageEnvelope {
   result?: string;
 }
 
+function buildPendingInputState(
+  sessionId: string,
+  requestId: number,
+  input: Record<string, unknown>,
+): PendingInputState {
+  const questions = Array.isArray((input as { questions?: unknown[] }).questions)
+    ? (input as { questions: Array<Record<string, unknown>> }).questions
+    : [];
+  const first = questions[0] ?? {};
+  const promptText = typeof first.question === "string" ? first.question : undefined;
+  const options = Array.isArray(first.options)
+    ? first.options
+        .map((option) => {
+          if (!option || typeof option !== "object") return "";
+          const label = (option as { label?: unknown }).label;
+          return typeof label === "string" ? label : "";
+        })
+        .filter(Boolean)
+    : [];
+
+  return {
+    requestId: `${sessionId || "claude"}-ask-${requestId}`,
+    kind: "question",
+    promptText,
+    options,
+    allowsFreeText: options.length === 0 || first.multiSelect === true,
+  };
+}
+
 export class ClaudeCodeHarness implements AgentHarness {
   readonly name = "claude-code";
-
+  readonly backendKind = "claude-code" as const;
   readonly supportedPermissionModes = [
     "default",
     "plan",
     "bypassPermissions",
   ] as const;
+  readonly capabilities = {
+    nativePendingInput: false,
+    nativePlanArtifacts: false,
+    worktrees: "plugin-managed",
+    nativeWorktreeRestore: false,
+  } as const;
 
-  readonly questionToolNames = ["AskUserQuestion"] as const;
-  readonly planApprovalToolNames = ["ExitPlanMode", "set_permission_mode"] as const;
-
-  /** Launch a Claude Code session and adapt SDK messages into harness events. */
+  /** Launch a Claude Code session and adapt SDK messages into structured events. */
   launch(options: HarnessLaunchOptions): HarnessSession {
+    const queue: HarnessMessage[] = [];
+    let queueResolve: (() => void) | null = null;
+    let queueDone = false;
+    let sawRunOutput = false;
+    let currentTurnText = "";
+    let sawPlanGateSignal = false;
+    let requestCounter = 0;
+    let currentSessionId = options.resumeSessionId ?? "";
+
+    const flushResolve = (): void => {
+      if (queueResolve) {
+        queueResolve();
+        queueResolve = null;
+      }
+    };
+
+    const enqueue = (message: HarnessMessage): void => {
+      queue.push(message);
+      flushResolve();
+    };
+
+    const endQueue = (): void => {
+      queueDone = true;
+      flushResolve();
+    };
+
     const canUseToolCallback = options.canUseTool;
     const sdkOptions: Record<string, unknown> = {
       cwd: options.cwd,
       model: options.model,
       permissionMode: options.permissionMode,
-      // Always bypass the bwrap filesystem sandbox. On this VPS deployment,
-      // OpenClaw is the security boundary; bwrap adds friction without benefit.
-      // Plan mode remains a *behavioural* constraint — CC presents a plan and
-      // waits for approval — but does not restrict filesystem writes.
       allowDangerouslySkipPermissions: true,
       pathToClaudeCodeExecutable: (() => {
         try {
@@ -73,7 +132,6 @@ export class ClaudeCodeHarness implements AgentHarness {
           const sdkMain = req.resolve("@anthropic-ai/claude-agent-sdk");
           return join(dirname(sdkMain), "cli.js");
         } catch {
-          // Fallback: resolve relative to this file
           const thisDir = dirname(fileURLToPath(import.meta.url));
           return join(thisDir, "..", "node_modules", "@anthropic-ai", "claude-agent-sdk", "cli.js");
         }
@@ -83,16 +141,22 @@ export class ClaudeCodeHarness implements AgentHarness {
       includePartialMessages: true,
       abortController: options.abortController,
       mcpServers: options.mcpServers,
-      // AskUserQuestion intercept — forwards questions to the user as inline buttons.
-      // Only wired when the caller provides a handler (CC sessions only).
       ...(canUseToolCallback
         ? {
             canUseTool: async (toolName: string, input: Record<string, unknown>) => {
-              if (toolName === "AskUserQuestion") {
-                return canUseToolCallback(toolName, input);
+              if (toolName !== "AskUserQuestion") {
+                return { behavior: "allow" as const };
               }
-              // Default: allow all other tools
-              return { behavior: "allow" as const };
+              const state = buildPendingInputState(currentSessionId, ++requestCounter, input);
+              enqueue({ type: "pending_input", state });
+              try {
+                const result = await canUseToolCallback(toolName, input);
+                enqueue({ type: "pending_input_resolved", requestId: state.requestId });
+                return result;
+              } catch (error) {
+                enqueue({ type: "pending_input_resolved", requestId: state.requestId });
+                throw error;
+              }
             },
           }
         : {}),
@@ -108,8 +172,111 @@ export class ClaudeCodeHarness implements AgentHarness {
       options: sdkOptions,
     }) as ClaudeQueryHandle;
 
+    void (async () => {
+      try {
+        for await (const raw of q) {
+          const msg = raw as ClaudeMessageEnvelope;
+          if (msg.type === "system" && msg.subtype === "init") {
+            currentSessionId = msg.session_id ?? currentSessionId;
+            enqueue({
+              type: "backend_ref",
+              ref: {
+                kind: "claude-code",
+                conversationId: currentSessionId,
+              },
+            });
+            continue;
+          }
+
+          if (msg.type === "system" && msg.subtype === "status" && msg.permissionMode) {
+            enqueue({ type: "settings_changed", permissionMode: msg.permissionMode });
+            continue;
+          }
+
+          if (msg.type === "assistant") {
+            if (!sawRunOutput) {
+              sawRunOutput = true;
+              enqueue({ type: "run_started" });
+            }
+            for (const block of msg.message?.content ?? []) {
+              if (block.type === "text") {
+                currentTurnText += currentTurnText ? `\n${block.text}` : block.text;
+                enqueue({ type: "text_delta", text: block.text });
+                continue;
+              }
+
+              if (block.type === "tool_use") {
+                if (block.name === "ExitPlanMode" || block.name === "set_permission_mode") {
+                  sawPlanGateSignal = true;
+                }
+                if (block.name !== "AskUserQuestion") {
+                  enqueue({ type: "tool_call", name: block.name, input: block.input });
+                }
+              }
+            }
+            continue;
+          }
+
+          if (msg.type === "result") {
+            const finalizedPlanText = currentTurnText.trim();
+            if (
+              finalizedPlanText &&
+              (options.permissionMode === "plan" || sawPlanGateSignal)
+            ) {
+              const artifact: PlanArtifact = {
+                explanation: undefined,
+                steps: [],
+                markdown: finalizedPlanText,
+              };
+              enqueue({ type: "plan_artifact", artifact, finalized: true });
+            }
+
+            enqueue({
+              type: "run_completed",
+              data: {
+                success: msg.subtype === "success",
+                duration_ms: msg.duration_ms ?? 0,
+                total_cost_usd: msg.total_cost_usd ?? 0,
+                num_turns: msg.num_turns ?? 0,
+                result: msg.result,
+                session_id: msg.session_id ?? currentSessionId,
+              },
+            });
+            currentTurnText = "";
+            sawPlanGateSignal = false;
+            sawRunOutput = false;
+          }
+        }
+      } finally {
+        endQueue();
+      }
+    })().catch((error: unknown) => {
+      enqueue({
+        type: "run_completed",
+        data: {
+          success: false,
+          duration_ms: 0,
+          total_cost_usd: 0,
+          num_turns: 0,
+          result: error instanceof Error ? error.message : String(error),
+          session_id: currentSessionId,
+        },
+      });
+      endQueue();
+    });
+
     return {
-      messages: this.adaptMessages(q),
+      messages: (async function* (): AsyncGenerator<HarnessMessage> {
+        while (true) {
+          while (queue.length > 0) {
+            yield queue.shift()!;
+          }
+          if (queueDone) return;
+          await new Promise<void>((resolve) => {
+            queueResolve = resolve;
+          });
+        }
+      })(),
 
       async setPermissionMode(mode: string): Promise<void> {
         if (typeof q.setPermissionMode === "function") {
@@ -139,42 +306,5 @@ export class ClaudeCodeHarness implements AgentHarness {
       parent_tool_use_id: null,
       session_id: sessionId,
     };
-  }
-
-  // -- internal ----------------------------------------------------------------
-
-  private async *adaptMessages(
-    q: AsyncIterable<unknown>,
-  ): AsyncGenerator<HarnessMessage> {
-    for await (const raw of q) {
-      const msg = raw as ClaudeMessageEnvelope;
-      if (msg.type === "system" && msg.subtype === "init") {
-        yield { type: "init", session_id: msg.session_id ?? "" };
-      } else if (msg.type === "system" && msg.subtype === "status" && msg.permissionMode) {
-        // Defensive: SDK does not currently emit system/status with permissionMode,
-        // but future versions may. Keep this path so it activates automatically.
-        yield { type: "permission_mode_change", mode: msg.permissionMode };
-      } else if (msg.type === "assistant") {
-        for (const block of msg.message?.content ?? []) {
-          if (block.type === "text") {
-            yield { type: "text", text: block.text };
-          } else if (block.type === "tool_use") {
-            yield { type: "tool_use", name: block.name, input: block.input };
-          }
-        }
-      } else if (msg.type === "result") {
-        yield {
-          type: "result",
-          data: {
-            success: msg.subtype === "success",
-            duration_ms: msg.duration_ms ?? 0,
-            total_cost_usd: msg.total_cost_usd ?? 0,
-            num_turns: msg.num_turns ?? 0,
-            result: msg.result,
-            session_id: msg.session_id ?? "",
-          },
-        };
-      }
-    }
   }
 }
