@@ -12,6 +12,7 @@
 - **Full session lifecycle**. Suspend, resume, fork, interrupt, and recover sessions across restarts with persisted metadata and output.
 - **Real operator visibility**. `agent_sessions`, `agent_output`, and `agent_stats` show status, buffered output, duration, and USD cost.
 - **Two harnesses, one control plane**. Claude Code and Codex share the same tools, routing, notification pipeline, and worktree strategy model while each backend uses its own native execution substrate.
+- **One continuation primitive**. `agent_respond` is the only way to continue, approve, revise, or redirect an existing session. Forks still go through `agent_launch(..., resume_session_id=..., fork_session=true)`.
 
 Need the version-pinned ACP breakdown? See [docs/ACP-COMPARISON.md](docs/ACP-COMPARISON.md).
 
@@ -114,7 +115,14 @@ Prefer fully routable channel strings such as `telegram|123456789` or `telegram|
 
 - Upgrading archives old or invalid persisted session stores to a timestamped `.legacy-*.json` backup and starts with a fresh index.
 - Legacy Codex SDK session entries are archived and not loaded by the App Server backend.
+- App Server-backed Codex sessions are now the only supported Codex runtime path.
 - Contributors and release automation should use `pnpm verify` as the canonical validation gate.
+
+### Backend Capabilities
+
+- Claude Code stays on plugin-managed worktrees.
+- Codex now runs through App Server structured events and may execute inside a native backend-managed worktree.
+- Merge, PR, reminder, and decision policy remain plugin-owned above both backends.
 
 ## Tool Surface
 

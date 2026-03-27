@@ -61,6 +61,12 @@ pnpm verify
 
 Use `pnpm verify` before merging behavior changes. CI and release workflows both gate on that exact command. `pnpm test` runs the stable per-file suite without force-exit, and `pnpm test:file tests/foo.test.ts` is the fastest way to rerun one file while debugging orchestration edge cases.
 
+Additional smoke entry points:
+
+- `pnpm smoke:backend-parity` for the shared backend-contract surface
+- `pnpm smoke:codex-worktrees` for Codex native-worktree bootstrap/restore behavior
+- `pnpm smoke:codex-live` for opt-in real App Server validation when a live Codex environment is available
+
 ## Extending The Plugin
 
 ### Add A Tool

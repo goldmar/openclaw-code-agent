@@ -24,8 +24,8 @@ describe("SessionNotificationService", () => {
     );
 
     assert.deepEqual(patches, [
-      { ref: "h-1", deliveryState: "notifying" },
-      { ref: "h-1", deliveryState: "idle" },
+      { ref: "session-1", deliveryState: "notifying" },
+      { ref: "session-1", deliveryState: "idle" },
     ]);
   });
 
@@ -50,8 +50,8 @@ describe("SessionNotificationService", () => {
     );
 
     assert.deepEqual(patches, [
-      { ref: "h-2", deliveryState: "notifying" },
-      { ref: "h-2", deliveryState: "failed" },
+      { ref: "session-2", deliveryState: "notifying" },
+      { ref: "session-2", deliveryState: "failed" },
     ]);
   });
 
@@ -83,10 +83,10 @@ describe("SessionNotificationService", () => {
     );
 
     assert.deepEqual(patches, [
-      { ref: "h-3", deliveryState: "notifying" },
-      { ref: "h-3", deliveryState: "wake_pending" },
-      { ref: "h-3", deliveryState: "wake_pending" },
-      { ref: "h-3", deliveryState: "idle" },
+      { ref: "session-3", deliveryState: "notifying" },
+      { ref: "session-3", deliveryState: "wake_pending" },
+      { ref: "session-3", deliveryState: "wake_pending" },
+      { ref: "session-3", deliveryState: "idle" },
     ]);
   });
 
@@ -111,8 +111,8 @@ describe("SessionNotificationService", () => {
     );
 
     assert.deepEqual(patches, [
-      { ref: "h-4", deliveryState: "wake_pending" },
-      { ref: "h-4", deliveryState: "failed" },
+      { ref: "session-4", deliveryState: "wake_pending" },
+      { ref: "session-4", deliveryState: "failed" },
     ]);
   });
 });

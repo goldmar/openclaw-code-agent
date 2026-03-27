@@ -58,6 +58,7 @@ Key behavior:
 - explicit per-launch `worktreeStrategy` overrides the plugin default
 - sessions with pending worktree decisions are kept visible and protected from cleanup
 - persisted control-state patches are mirrored back onto active runtime sessions to keep lifecycle/worktree state coherent
+- backend refs are the authoritative backend identity; legacy harness session ids remain compatibility/display metadata only
 
 ### `Session`
 
@@ -82,6 +83,7 @@ Important mapping detail:
 
 - Claude Code maps plugin `permissionMode` directly to the SDK modes.
 - Codex runs through the Codex App Server transport. Plugin `plan` mode remains a plugin-owned approval workflow even when the backend exposes structured plan artifacts, and plugin worktree strategy stays policy-only above Codex-native worktree execution.
+- `agent_respond` is the only continuation primitive across both backends; fork flows still go through `agent_launch(..., resume_session_id=..., fork_session=true)`.
 
 ### `WakeDispatcher`
 
@@ -188,6 +190,8 @@ Stored data includes:
 - backend conversation ID
 - output stubs and persisted stream references
 
+`backendRef` is required for all new-schema sessions. Codex SDK-era persisted sessions are archived and not loaded.
+
 ## Notification Pipeline
 
 The notification pipeline is intentionally centralized:
@@ -217,6 +221,12 @@ Important constraints:
 - Codex can execute inside a native backend-managed worktree while the plugin still owns ask/delegate/auto-merge/auto-pr policy above it
 - push and PR flows need a configured remote
 - the main checkout is not modified during isolated worktree execution
+
+Backend capabilities intentionally differ:
+
+- Claude Code: plugin-managed worktree substrate
+- Codex App Server: native backend worktree substrate with persisted backend refs
+- User-facing worktree strategy and decision UX remain identical above both
 
 ## Design Decisions
 

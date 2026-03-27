@@ -26,6 +26,8 @@ Sessions are multi-turn. Active sessions accept follow-up messages via `agent_re
 
 `3.5.0` treats persisted session storage as new-schema-only. If startup finds an older or invalid session store, the plugin archives it to a timestamped `.legacy-*.json` backup and starts with a fresh index instead of migrating rows in place.
 
+Old Codex SDK persisted sessions are archived separately and are not resumed. App Server-backed Codex sessions are the only supported Codex runtime going forward.
+
 ## Install
 
 ```bash
@@ -72,7 +74,7 @@ forced_login_method = "chatgpt"
 | Harness | Models | Notes |
 | --- | --- | --- |
 | `claude-code` | Controlled by `harnesses.claude-code.allowedModels` | Native Claude Code harness with plan-mode interception |
-| `codex` | Controlled by `harnesses.codex.allowedModels` | Native Codex thread harness with `reasoningEffort` and `approvalPolicy` |
+| `codex` | Controlled by `harnesses.codex.allowedModels` | Native Codex App Server harness with structured pending input, structured plans, and native backend worktree refs |
 
 Allowed-model matching is case-insensitive substring matching. If the resolved model is not allowed, `agent_launch` fails immediately.
 
@@ -139,6 +141,7 @@ Notes:
 - Resumed sessions keep the worktree strategy they already had.
 - Worktrees are kept alive until explicitly resolved (merge/PR/dismiss) when using non-trivial strategies.
 - Stale-decision reminders fire every 3h; users can snooze per-session for 24h.
+- Claude Code uses plugin-managed worktrees; Codex may execute inside a native backend-managed worktree while the plugin still owns merge/PR/reminder policy.
 
 ## Tool Reference
 
@@ -178,7 +181,7 @@ Send a follow-up, redirect work, approve a plan, or escalate a `default` mode se
 
 | Parameter | Type | Required | Notes |
 | --- | --- | --- | --- |
-| `session` | `string` | Yes | Name or internal ID |
+| `session` | `string` | Yes | Prefer the plugin session ID or name; persisted backend conversation IDs are still accepted for recovery/diagnostics |
 | `message` | `string` | Yes | Follow-up text |
 | `interrupt` | `boolean` | No | Abort the current turn before sending |
 | `userInitiated` | `boolean` | No | Reset the auto-respond counter |
@@ -295,7 +298,7 @@ The cleanup tool always protects:
 | `/agent_kill` | Stop a session |
 | `/agent_stats` | Show aggregate metrics |
 
-Use `agent_sessions` to inspect resumable sessions. Continue them with `agent_respond`, or fork from prior context with `agent_launch(..., resume_session_id=..., fork_session=true)`.
+Use `agent_sessions` to inspect resumable sessions. Continue them with `agent_respond`, or fork from prior context with `agent_launch(..., resume_session_id=..., fork_session=true)`. `agent_respond` is the only continuation primitive.
 
 ## Routing And Channels
 

@@ -47,6 +47,7 @@ interface SessionListingItem {
   lifecycle?: string;
   resumable?: boolean;
   harness?: string;
+  backendRef?: PersistedSessionInfo["backendRef"];
   harnessSessionId?: string;
   originChannel?: string;
   originThreadId?: string | number;
@@ -249,6 +250,7 @@ function mergeActiveAndPersistedSessions(active: Session[], persisted: Persisted
       lifecycle: p.lifecycle,
       resumable: p.resumable,
       harness: p.harness,
+      backendRef: p.backendRef,
       harnessSessionId: p.harnessSessionId,
       originChannel: p.originChannel,
       originThreadId: p.originThreadId,
@@ -277,6 +279,7 @@ function mergeActiveAndPersistedSessions(active: Session[], persisted: Persisted
       lifecycle: session.lifecycle,
       resumable: session.isExplicitlyResumable,
       harness: session.harnessName,
+      backendRef: session.backendRef,
       harnessSessionId: session.harnessSessionId,
       originChannel: session.originChannel,
       originThreadId: session.originThreadId,

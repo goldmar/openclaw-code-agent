@@ -4,6 +4,9 @@ interface ActiveResumeSessionInfo {
 
 interface PersistedResumeSessionInfo {
   harness?: string;
+  backendRef?: {
+    kind?: string;
+  };
 }
 
 interface ResumeSessionDecision {
@@ -18,10 +21,9 @@ interface ResumeSessionDecisionOptions {
 }
 
 /**
- * Codex thread state is tied to the auth/org context that created it.
- * Historical persisted thread IDs can fail after a gateway restart if the
- * underlying SDK auth context changed, so only live in-memory Codex sessions
- * are allowed to reuse their prior thread id.
+ * Historical Codex SDK thread IDs are not compatible with the App Server
+ * backend and must never be resumed. App Server-backed Codex sessions are
+ * resumable like any other persisted backend conversation.
  */
 export function decideResumeSessionId(
   options: ResumeSessionDecisionOptions,
@@ -39,7 +41,10 @@ export function decideResumeSessionId(
     };
   }
 
-  if (persistedSession?.harness === "codex") {
+  if (
+    persistedSession?.harness === "codex"
+    && persistedSession.backendRef?.kind !== "codex-app-server"
+  ) {
     return {
       resumeSessionId: undefined,
       clearedPersistedCodexResume: true,

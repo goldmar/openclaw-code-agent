@@ -420,10 +420,10 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
         const { resumeSessionId, clearedPersistedCodexResume } = decideResumeSessionId({
           requestedResumeSessionId: resolvedResumeId,
           activeSession: activeResumeSession
-            ? { harnessSessionId: activeResumeSession.harnessSessionId }
+            ? { harnessSessionId: activeResumeSession.backendConversationId ?? activeResumeSession.harnessSessionId }
             : undefined,
           persistedSession: persistedResumeSession
-            ? { harness: persistedResumeSession.harness }
+            ? { harness: persistedResumeSession.harness, backendRef: persistedResumeSession.backendRef }
             : undefined,
         });
 

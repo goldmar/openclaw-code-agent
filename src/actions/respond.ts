@@ -3,6 +3,7 @@ import { pluginConfig } from "../config";
 import { truncateText } from "../format";
 import { decideResumeSessionId } from "../resume-policy";
 import type { Session } from "../session";
+import { getBackendConversationId, getPrimarySessionLookupRef } from "../session-backend-ref";
 import type { PersistedSessionInfo, SessionConfig } from "../types";
 
 interface RespondParams {
@@ -31,12 +32,8 @@ type PlanApprovalTarget = Pick<
   "approvalState" | "pendingPlanApproval" | "currentPermissionMode" | "name"
 >;
 
-function getBackendConversationId(session: ResumableSession): string | undefined {
-  return session.backendRef?.conversationId ?? session.harnessSessionId;
-}
-
 function getSessionRef(session: ResumableSession): string {
-  return "id" in session ? session.id : (session.sessionId ?? session.harnessSessionId);
+  return getPrimarySessionLookupRef(session) ?? session.harnessSessionId ?? "unknown-session";
 }
 
 function isExplicitlyResumable(session: ResumableSession): boolean {
@@ -127,7 +124,7 @@ async function tryAutoResume(
         ? { harnessSessionId: getBackendConversationId(activeSession) }
         : undefined,
       persistedSession: persistedSession
-        ? { harness: persistedSession.harness }
+        ? { harness: persistedSession.harness, backendRef: persistedSession.backendRef }
         : undefined,
     });
 

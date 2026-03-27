@@ -38,11 +38,13 @@ describe("SessionStore getLatestPersistedByName", () => {
     store.persisted.clear();
     store.idIndex.clear();
     store.nameIndex.clear();
+    (store as any).backendIdIndex?.clear();
   });
 
   it("returns latest created entry when sessions share same name", () => {
     store.persisted.set("h-old", {
       harnessSessionId: "h-old",
+      backendRef: { kind: "claude-code", conversationId: "thread-old" },
       name: "dup",
       prompt: "p",
       workdir: "/tmp",
@@ -53,6 +55,7 @@ describe("SessionStore getLatestPersistedByName", () => {
     } as any);
     store.persisted.set("h-new", {
       harnessSessionId: "h-new",
+      backendRef: { kind: "claude-code", conversationId: "thread-new" },
       name: "dup",
       prompt: "p",
       workdir: "/tmp",
@@ -65,13 +68,14 @@ describe("SessionStore getLatestPersistedByName", () => {
     const resolved = store.resolveHarnessSessionId("dup");
     const persisted = store.getPersistedSession("dup");
 
-    assert.equal(resolved, "h-new");
+    assert.equal(resolved, "thread-new");
     assert.equal(persisted?.harnessSessionId, "h-new");
   });
 
   it("legacy entries without createdAt fall back to completedAt", () => {
     store.persisted.set("h-older", {
       harnessSessionId: "h-older",
+      backendRef: { kind: "claude-code", conversationId: "thread-older" },
       name: "legacy",
       prompt: "p",
       workdir: "/tmp",
@@ -81,6 +85,7 @@ describe("SessionStore getLatestPersistedByName", () => {
     } as any);
     store.persisted.set("h-latest", {
       harnessSessionId: "h-latest",
+      backendRef: { kind: "claude-code", conversationId: "thread-latest" },
       name: "legacy",
       prompt: "p",
       workdir: "/tmp",
@@ -92,7 +97,7 @@ describe("SessionStore getLatestPersistedByName", () => {
     const resolved = store.resolveHarnessSessionId("legacy");
     const persisted = store.getPersistedSession("legacy");
 
-    assert.equal(resolved, "h-latest");
+    assert.equal(resolved, "thread-latest");
     assert.equal(persisted?.harnessSessionId, "h-latest");
   });
 });
@@ -193,6 +198,35 @@ describe("SessionStore path resolution", () => {
     assert.equal(persisted?.harnessSessionId, "h-GccpSIqJ");
     assert.equal(persisted?.sessionId, "GccpSIqJ");
     assert.equal(persisted?.status, "killed");
+  });
+
+  it("resolves persisted sessions by backend conversation id before legacy harness id", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-store-backend-ref-"));
+    const indexPath = join(dir, "sessions.json");
+    writeStore(indexPath, [{
+      sessionId: "backend-ref",
+      harnessSessionId: "legacy-thread",
+      backendRef: {
+        kind: "claude-code",
+        conversationId: "backend-thread",
+      },
+      name: "backend-ref",
+      prompt: "p",
+      workdir: "/tmp",
+      status: "completed",
+      lifecycle: "terminal",
+      costUsd: 0,
+    }]);
+
+    const store = new SessionStore({
+      indexPath,
+      env: {},
+    });
+
+    assert.equal(store.resolveHarnessSessionId("backend-ref"), "backend-thread");
+    assert.equal(store.resolveHarnessSessionId("backend-thread"), "backend-thread");
+    assert.equal(store.getPersistedSession("backend-thread")?.harnessSessionId, "legacy-thread");
+    assert.equal(store.getPersistedSession("legacy-thread")?.sessionId, "backend-ref");
   });
 
   it("preserves shutdown kill reason when reloading persisted sessions", () => {

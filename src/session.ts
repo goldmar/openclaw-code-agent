@@ -33,6 +33,7 @@ import {
   resolveDefaultModelForHarness,
   resolveReasoningEffortForHarness,
 } from "./config";
+import { getBackendConversationId } from "./session-backend-ref";
 import {
   reduceSessionControlState,
   SESSION_STATUS_TRANSITIONS,
@@ -257,6 +258,18 @@ export class Session extends EventEmitter {
 
   get harnessName(): string { return this.harness.name; }
 
+  get backendKind(): SessionBackendRef["kind"] {
+    return this.harness.backendKind;
+  }
+
+  get backendCapabilities() {
+    return this.harness.capabilities;
+  }
+
+  get backendConversationId(): string | undefined {
+    return getBackendConversationId(this);
+  }
+
   get duration(): number {
     return (this.completedAt ?? Date.now()) - this.startedAt;
   }
@@ -436,11 +449,11 @@ export class Session extends EventEmitter {
     }
 
     if (this.multiTurn && this.messageStream) {
-      this.messageStream.push(
-        this.harness.buildUserMessage(effectiveText, this.harnessSessionId ?? ""),
-      );
+        this.messageStream.push(
+          this.harness.buildUserMessage(effectiveText, this.backendConversationId ?? ""),
+        );
     } else if (this.harnessHandle?.streamInput) {
-      const msg = this.harness.buildUserMessage(effectiveText, this.harnessSessionId ?? "");
+      const msg = this.harness.buildUserMessage(effectiveText, this.backendConversationId ?? "");
       async function* oneMessage() { yield msg; }
       await this.harnessHandle.streamInput(oneMessage());
     } else {

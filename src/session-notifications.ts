@@ -1,17 +1,18 @@
 import type { PersistedSessionInfo } from "./types";
 import { WakeDispatcher, type SessionNotificationHooks, type SessionNotificationRequest } from "./wake-dispatcher";
 import type { Session } from "./session";
+import { getBackendConversationId, getPrimarySessionLookupRef } from "./session-backend-ref";
 
 type RoutableSession = Pick<
   Session,
-  "id" | "harnessSessionId" | "route"
+  "id" | "harnessSessionId" | "backendRef" | "route"
 > & {
   name?: string;
 };
 
 type PersistedRoutingSession = Pick<
   PersistedSessionInfo,
-  "harnessSessionId" | "route" | "name"
+  "sessionId" | "harnessSessionId" | "backendRef" | "route" | "name"
 > & {
   id?: string;
 };
@@ -79,7 +80,7 @@ export class SessionNotificationService {
   }
 
   private getDeliveryRef(session: RoutableSession | PersistedRoutingSession): string {
-    return session.harnessSessionId ?? session.id ?? "";
+    return getPrimarySessionLookupRef(session) ?? getBackendConversationId(session) ?? "";
   }
 
   private applyDeliveryState(

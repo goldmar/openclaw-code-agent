@@ -1,6 +1,7 @@
 import { Type } from "@sinclair/typebox";
 import { existsSync } from "fs";
 import { getDefaultHarnessName } from "../config";
+import { getPrimarySessionLookupRef } from "../session-backend-ref";
 import { sessionManager } from "../singletons";
 import type { OpenClawPluginToolContext } from "../types";
 import { mergeBranch, pushBranch, deleteBranch, detectDefaultBranch, removeWorktree, pruneWorktrees, getDiffSummary, formatWorktreeOutcomeLine } from "../worktree";
@@ -91,7 +92,9 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
         content: [{ type: "text", text: "❌ Merge did not run (internal error)" }],
       };
 
-      const harnessId = targetSession?.harnessSessionId ?? persistedSession?.harnessSessionId;
+      const persistedRef = targetSession
+        ? getPrimarySessionLookupRef(targetSession)
+        : (persistedSession ? getPrimarySessionLookupRef(persistedSession) : undefined);
 
       await sessionManager.enqueueMerge(effectiveWorkdir, async () => {
         // Re-check inside the queue slot — a concurrent auto-merge may have beaten us
@@ -129,7 +132,7 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
 
           // Persist merge status if we have a persisted session
           if (freshPersisted) {
-            sessionManager.updatePersistedSession(freshPersisted.harnessSessionId, {
+            sessionManager.updatePersistedSession(getPrimarySessionLookupRef(freshPersisted) ?? freshPersisted.harnessSessionId, {
               worktreeMerged: true,
               worktreeMergedAt: new Date().toISOString(),
               pendingWorktreeDecisionSince: undefined,
@@ -149,8 +152,9 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
           });
           sessionManager.notifyWorktreeOutcome(
             targetSession ?? {
-              id: harnessId ?? params.session,
-              harnessSessionId: harnessId,
+              id: persistedRef ?? params.session,
+              harnessSessionId: targetSession?.harnessSessionId ?? persistedSession?.harnessSessionId,
+              backendRef: targetSession?.backendRef ?? persistedSession?.backendRef,
               route: persistedSession?.route,
             },
             outcomeLine

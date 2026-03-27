@@ -218,6 +218,83 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
     }
   });
 
+  it("releases native Codex worktrees to backend cleanup instead of deleting them directly", async () => {
+    const repoDir = mkdtempSync(join(tmpdir(), "sm-worktree-native-codex-"));
+    const nativeWorktreePath = join(tmpdir(), "codex-native-worktree-release");
+    try {
+      git(repoDir, "init", "-b", "main");
+      git(repoDir, "config", "user.name", "Test User");
+      git(repoDir, "config", "user.email", "test@example.com");
+      writeFileSync(join(repoDir, "README.md"), "hello\n", "utf-8");
+      git(repoDir, "add", "README.md");
+      git(repoDir, "commit", "-m", "init");
+
+      const sm = new SessionManager(5);
+      stubDispatch(sm);
+      (sm as any).store.persisted.set("legacy-native-thread", {
+        sessionId: "s-native-codex",
+        harnessSessionId: "legacy-native-thread",
+        backendRef: {
+          kind: "codex-app-server",
+          conversationId: "backend-native-thread",
+          worktreeId: "abcd",
+          worktreePath: nativeWorktreePath,
+        },
+        name: "native-codex",
+        prompt: "inspect only",
+        workdir: repoDir,
+        route: {
+          provider: "telegram",
+          target: "12345",
+          sessionKey: "agent:main:telegram:group:12345",
+        },
+        status: "completed",
+        costUsd: 0,
+        worktreePath: nativeWorktreePath,
+        worktreeBranch: "agent/native-codex",
+        worktreeStrategy: "ask",
+      });
+      (sm as any).store.idIndex.set("s-native-codex", "legacy-native-thread");
+
+      const session = {
+        id: "s-native-codex",
+        name: "native-codex",
+        status: "completed",
+        phase: "implementing",
+        harnessName: "codex",
+        backendRef: {
+          kind: "codex-app-server",
+          conversationId: "backend-native-thread",
+          worktreeId: "abcd",
+          worktreePath: nativeWorktreePath,
+        },
+        harnessSessionId: "legacy-native-thread",
+        prompt: "inspect only",
+        originalWorkdir: repoDir,
+        worktreePath: nativeWorktreePath,
+        worktreeBranch: "agent/native-codex",
+        worktreeStrategy: "ask",
+        worktreeBaseBranch: "main",
+        pendingPlanApproval: false,
+      };
+
+      const result = await (sm as any).handleWorktreeStrategy(session);
+
+      assert.deepEqual(result, { notificationSent: true, worktreeRemoved: true });
+      assert.equal(session.worktreePath, undefined);
+      const calls = (sm as any).__dispatchCalls;
+      assert.equal(calls.length, 1);
+      const [_sessionArg, request] = calls[0];
+      assert.equal(request.label, "worktree-no-changes");
+      assert.match(request.userMessage, /native backend worktree released for backend cleanup/);
+      const persisted = (sm as any).store.getPersistedSession("s-native-codex");
+      assert.equal(persisted?.worktreePath, undefined);
+      assert.equal(persisted?.worktreeDisposition, "no-change-cleaned");
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
   it("routes delegate mode to the orchestrator without user buttons", async () => {
     const repoDir = mkdtempSync(join(tmpdir(), "sm-worktree-delegate-"));
     try {

@@ -4,6 +4,7 @@ import type { PersistedSessionInfo } from "./types";
 import type { SessionNotificationRequest } from "./wake-dispatcher";
 import type { WorktreeCompletionState } from "./session-worktree-controller";
 import type { EmbeddedEvalResult } from "./embedded-eval";
+import { getPrimarySessionLookupRef, usesNativeBackendWorktree } from "./session-backend-ref";
 import { buildDelegateWorktreeWakeMessage, buildNoChangeDeliverableMessage, buildWorktreeDecisionSummary } from "./session-notification-builder";
 import {
   removeWorktree,
@@ -59,8 +60,22 @@ export class SessionWorktreeStrategyService {
     },
   ) {}
 
+  private updatePersistedSessionFor(
+    session: Pick<Session, "id" | "harnessSessionId">,
+    patch: Partial<PersistedSessionInfo>,
+  ): void {
+    const primaryRef = getPrimarySessionLookupRef(session);
+    if (primaryRef) {
+      this.deps.updatePersistedSession(primaryRef, patch);
+    }
+    if (session.harnessSessionId && session.harnessSessionId !== primaryRef) {
+      this.deps.updatePersistedSession(session.harnessSessionId, patch);
+    }
+  }
+
   async handleWorktreeStrategy(session: Session): Promise<WorktreeStrategyResult> {
-    if (this.deps.isAlreadyMerged(session.harnessSessionId)) {
+    const sessionRef = getPrimarySessionLookupRef(session) ?? session.harnessSessionId;
+    if (this.deps.isAlreadyMerged(sessionRef)) {
       console.info(`[SessionManager] handleWorktreeStrategy: session "${session.name}" already merged — skipping strategy handling`);
       return { notificationSent: true, worktreeRemoved: false };
     }
@@ -142,21 +157,34 @@ export class SessionWorktreeStrategyService {
     worktreePath: string,
   ): Promise<WorktreeStrategyResult> {
     const deliverablePreview = await this.classifyNoChangeDeliverable(session);
-    const removed = removeWorktree(repoDir, worktreePath);
+    const nativeBackendWorktree = usesNativeBackendWorktree(session);
+    const removed = nativeBackendWorktree
+      ? true
+      : removeWorktree(repoDir, worktreePath);
     if (removed) {
       session.worktreePath = undefined;
-      if (session.harnessSessionId) {
-        this.deps.updatePersistedSession(session.harnessSessionId, {
-          worktreePath: undefined,
-          worktreeDisposition: "no-change-cleaned",
-          worktreeState: "none",
-        });
-      }
+      this.updatePersistedSessionFor(session, {
+        worktreePath: undefined,
+        worktreeDisposition: "no-change-cleaned",
+        worktreeState: "none",
+      });
       this.deps.dispatchSessionNotification(session, {
         label: deliverablePreview ? "worktree-no-change-deliverable" : "worktree-no-changes",
         userMessage: deliverablePreview
-          ? buildNoChangeDeliverableMessage(session, deliverablePreview, true, worktreePath)
-          : `ℹ️ [${session.name}] Session completed with no changes — worktree cleaned up`,
+          ? (
+              nativeBackendWorktree
+                ? [
+                    `📋 [${session.name}] Completed with report-only output:`,
+                    ``,
+                    deliverablePreview,
+                    ``,
+                    `No code changes were made; the native backend worktree was released for backend cleanup.`,
+                  ].join("\n")
+                : buildNoChangeDeliverableMessage(session, deliverablePreview, true, worktreePath)
+            )
+          : nativeBackendWorktree
+            ? `ℹ️ [${session.name}] Session completed with no changes — native backend worktree released for backend cleanup`
+            : `ℹ️ [${session.name}] Session completed with no changes — worktree cleaned up`,
       });
     } else {
       this.deps.dispatchSessionNotification(session, {
@@ -215,13 +243,11 @@ export class SessionWorktreeStrategyService {
       wakeMessageOnNotifyFailed: userNotifyMessage,
     });
 
-    if (session.harnessSessionId) {
-      this.deps.updatePersistedSession(session.harnessSessionId, {
-        pendingWorktreeDecisionSince: new Date().toISOString(),
-        lifecycle: "awaiting_worktree_decision",
-        worktreeState: "pending_decision",
-      });
-    }
+    this.updatePersistedSessionFor(session, {
+      pendingWorktreeDecisionSince: new Date().toISOString(),
+      lifecycle: "awaiting_worktree_decision",
+      worktreeState: "pending_decision",
+    });
     return { notificationSent: true, worktreeRemoved: false };
   }
 
@@ -252,13 +278,11 @@ export class SessionWorktreeStrategyService {
       notifyUser: "never",
     });
 
-    if (session.harnessSessionId) {
-      this.deps.updatePersistedSession(session.harnessSessionId, {
-        pendingWorktreeDecisionSince: new Date().toISOString(),
-        lifecycle: "awaiting_worktree_decision",
-        worktreeState: "pending_decision",
-      });
-    }
+    this.updatePersistedSessionFor(session, {
+      pendingWorktreeDecisionSince: new Date().toISOString(),
+      lifecycle: "awaiting_worktree_decision",
+      worktreeState: "pending_decision",
+    });
     return { notificationSent: true, worktreeRemoved: false };
   }
 
@@ -270,28 +294,27 @@ export class SessionWorktreeStrategyService {
     baseBranch: string,
     diffSummary: DiffSummary,
   ): Promise<void> {
-    if (this.deps.isAlreadyMerged(session.harnessSessionId)) return;
+    const sessionRef = getPrimarySessionLookupRef(session) ?? session.harnessSessionId;
+    if (this.deps.isAlreadyMerged(sessionRef)) return;
 
     await this.deps.enqueueMerge(
       repoDir,
       async () => {
-        if (this.deps.isAlreadyMerged(session.harnessSessionId)) return;
+        if (this.deps.isAlreadyMerged(sessionRef)) return;
 
         const mergeResult = mergeBranch(repoDir, branchName, baseBranch, "merge", worktreePath);
 
         if (mergeResult.success) {
           deleteBranch(repoDir, branchName);
 
-          if (session.harnessSessionId) {
-            this.deps.updatePersistedSession(session.harnessSessionId, {
-              worktreeMerged: true,
-              worktreeMergedAt: new Date().toISOString(),
-              lifecycle: "terminal",
-              worktreeState: "merged",
-              pendingWorktreeDecisionSince: undefined,
-              lastWorktreeReminderAt: undefined,
-            });
-          }
+          this.updatePersistedSessionFor(session, {
+            worktreeMerged: true,
+            worktreeMergedAt: new Date().toISOString(),
+            lifecycle: "terminal",
+            worktreeState: "merged",
+            pendingWorktreeDecisionSince: undefined,
+            lastWorktreeReminderAt: undefined,
+          });
 
           const outcomeLine = formatWorktreeOutcomeLine({
             kind: "merge",
@@ -361,15 +384,13 @@ export class SessionWorktreeStrategyService {
     session: Session,
     baseBranch: string,
   ): Promise<WorktreeStrategyResult> {
-    if (session.harnessSessionId) {
-      this.deps.updatePersistedSession(session.harnessSessionId, {
-        lifecycle: "terminal",
-        worktreeState: "pr_in_progress",
-      });
-    }
+    this.updatePersistedSessionFor(session, {
+      lifecycle: "terminal",
+      worktreeState: "pr_in_progress",
+    });
     const result = await this.deps.runAutoPr(session, baseBranch);
-    if (!result.success && session.harnessSessionId) {
-      this.deps.updatePersistedSession(session.harnessSessionId, {
+    if (!result.success) {
+      this.updatePersistedSessionFor(session, {
         pendingWorktreeDecisionSince: new Date().toISOString(),
         lifecycle: "awaiting_worktree_decision",
         worktreeState: "pending_decision",

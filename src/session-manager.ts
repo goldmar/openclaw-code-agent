@@ -6,8 +6,14 @@ import { generateSessionName, lastCompleteLines } from "./format";
 import { formatLaunchSummaryFromSession } from "./launch-summary";
 import { pathsReferToSameLocation } from "./path-utils";
 import { SessionSemanticAdapter } from "./session-semantic-adapter";
+import {
+  getBackendConversationId,
+  getPrimarySessionLookupRef,
+  usesNativeBackendWorktree,
+} from "./session-backend-ref";
 import { SessionRestoreService } from "./session-restore-service";
 import { SessionStateSyncService } from "./session-state-sync-service";
+import { SessionReferenceService } from "./session-reference-service";
 import { SessionWorktreeStrategyService, type WorktreeStrategyResult } from "./session-worktree-strategy-service";
 import type {
   SessionConfig,
@@ -82,6 +88,7 @@ export class SessionManager {
   private readonly lifecycle: SessionLifecycleService;
   private readonly restore: SessionRestoreService;
   private readonly stateSync: SessionStateSyncService;
+  private readonly references: SessionReferenceService;
   private readonly worktreeStrategy: SessionWorktreeStrategyService;
 
   constructor(maxSessions: number = 20, maxPersistedSessions: number = 50) {
@@ -91,10 +98,11 @@ export class SessionManager {
     this.metrics = new SessionMetricsRecorder();
     this.wakeDispatcher = new WakeDispatcher();
     this.interactions = new SessionInteractionService(this.store.actionTokenStore, isGitHubCLIAvailable);
+    this.references = new SessionReferenceService(this.sessions, this.store);
     this.stateSync = new SessionStateSyncService({
       store: this.store,
       sessions: this.sessions,
-      resolveSession: (ref) => this.resolve(ref),
+      resolveSession: (ref) => this.references.resolveActive(ref),
     });
     this.notifications = new SessionNotificationService(
       this.wakeDispatcher,
@@ -387,12 +395,15 @@ export class SessionManager {
 
   private buildRoutingProxy(session: {
     id?: string;
+    sessionId?: string;
     harnessSessionId?: string;
+    backendRef?: PersistedSessionInfo["backendRef"];
     route?: PersistedSessionInfo["route"];
   }): Session {
     return {
-      id: session.id ?? session.harnessSessionId ?? "unknown-session",
+      id: getPrimarySessionLookupRef(session) ?? getBackendConversationId(session) ?? session.harnessSessionId ?? "unknown-session",
       harnessSessionId: session.harnessSessionId,
+      backendRef: session.backendRef ? { ...session.backendRef } : undefined,
       route: session.route,
     } as Session;
   }
@@ -424,7 +435,8 @@ export class SessionManager {
     if (!repoDir) return `Error: No workdir found for session "${ref}".`;
 
     // Remove worktree directory
-    if (worktreePath && existsSync(worktreePath)) {
+    const nativeBackendWorktree = !!session && usesNativeBackendWorktree(session);
+    if (!nativeBackendWorktree && worktreePath && existsSync(worktreePath)) {
       removeWorktree(repoDir, worktreePath);
     }
 
@@ -434,9 +446,11 @@ export class SessionManager {
     }
 
     // Update persisted state
-    const harnessId = activeSession?.harnessSessionId ?? persistedSession?.harnessSessionId;
-    if (harnessId) {
-      this.updatePersistedSession(harnessId, {
+    const persistedRef = activeSession
+      ? getPrimarySessionLookupRef(activeSession)
+      : (persistedSession ? getPrimarySessionLookupRef(persistedSession) : undefined);
+    if (persistedRef) {
+      this.updatePersistedSession(persistedRef, {
         worktreeDisposition: "dismissed",
         worktreeDismissedAt: new Date().toISOString(),
         pendingWorktreeDecisionSince: undefined,
@@ -448,10 +462,14 @@ export class SessionManager {
     }
 
     // Notify
-    const msg = `🗑️ [${sessionName}] Branch \`${branchName ?? "unknown"}\` dismissed and permanently deleted.`;
+    const msg = nativeBackendWorktree
+      ? `🗑️ [${sessionName}] Branch \`${branchName ?? "unknown"}\` dismissed. Native backend worktree released for backend cleanup.`
+      : `🗑️ [${sessionName}] Branch \`${branchName ?? "unknown"}\` dismissed and permanently deleted.`;
     const routingProxy = this.buildRoutingProxy({
-      id: harnessId ?? ref,
-      harnessSessionId: harnessId ?? ref,
+      id: getPrimarySessionLookupRef(activeSession ?? persistedSession ?? { id: ref }) ?? ref,
+      sessionId: persistedSession?.sessionId,
+      harnessSessionId: activeSession?.harnessSessionId ?? persistedSession?.harnessSessionId,
+      backendRef: activeSession?.backendRef ?? persistedSession?.backendRef,
       route: activeSession?.route ?? persistedSession?.route,
     });
     this.notifications.dispatch(routingProxy, {
@@ -468,7 +486,7 @@ export class SessionManager {
     if (!persistedSession) return `Error: Session "${ref}" not found.`;
 
     const snoozedUntil = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-    this.updatePersistedSession(persistedSession.harnessSessionId, {
+    this.updatePersistedSession(getPrimarySessionLookupRef(persistedSession) ?? persistedSession.harnessSessionId, {
       worktreeDecisionSnoozedUntil: snoozedUntil,
       lastWorktreeReminderAt: new Date().toISOString(),
     } as Partial<PersistedSessionInfo>);
@@ -477,8 +495,10 @@ export class SessionManager {
     const msg = `⏭️ Reminder snoozed 24h for \`${branchName}\` (session: ${persistedSession.name})`;
 
     const routingProxy = this.buildRoutingProxy({
-      id: persistedSession.harnessSessionId,
+      id: getPrimarySessionLookupRef(persistedSession) ?? persistedSession.harnessSessionId,
+      sessionId: persistedSession.sessionId,
       harnessSessionId: persistedSession.harnessSessionId,
+      backendRef: persistedSession.backendRef,
       route: persistedSession.route,
     });
     this.notifications.dispatch(routingProxy, {
@@ -614,18 +634,7 @@ export class SessionManager {
 
   /** Resolve by internal id first, then by name with active-session preference. */
   resolve(idOrName: string): Session | undefined {
-    const byId = this.sessions.get(idOrName);
-    if (byId) return byId;
-
-    const matches = [...this.sessions.values()].filter((s) => s.name === idOrName);
-    if (matches.length === 0) return undefined;
-
-    const activeMatches = matches.filter((s) => KILLABLE_STATUSES.has(s.status));
-    if (activeMatches.length > 0) {
-      return activeMatches.sort((a, b) => b.startedAt - a.startedAt)[0];
-    }
-
-    return matches.sort((a, b) => b.startedAt - a.startedAt)[0];
+    return this.references.resolveActive(idOrName);
   }
 
   /** Return an active session by internal id. */
@@ -661,19 +670,18 @@ export class SessionManager {
 
   /** Resolve any reference to a persisted harness session id for resume flows. */
   resolveHarnessSessionId(ref: string): string | undefined {
-    const active = this.resolve(ref);
-    return this.store.resolveHarnessSessionId(ref, active?.harnessSessionId);
+    return this.references.resolveBackendConversationId(ref);
   }
 
   /** Read persisted metadata by harness id, internal id, or name. */
   getPersistedSession(ref: string): PersistedSessionInfo | undefined {
-    return this.store.getPersistedSession(ref);
+    return this.references.getPersistedSession(ref);
   }
 
   /** Returns true if this session's branch has already been merged (idempotency guard). */
-  private isAlreadyMerged(harnessSessionId: string | undefined): boolean {
-    if (!harnessSessionId) return false;
-    return this.store.getPersistedSession(harnessSessionId)?.worktreeMerged === true;
+  private isAlreadyMerged(ref: string | undefined): boolean {
+    if (!ref) return false;
+    return this.store.getPersistedSession(ref)?.worktreeMerged === true;
   }
 
   /**
@@ -803,8 +811,10 @@ export class SessionManager {
       try {
         const repoDir = this.resolveWorktreeRepoDir(session.workdir, session.worktreePath);
         if (!repoDir) continue;
-        removeWorktree(repoDir, session.worktreePath);
-        this.updatePersistedSession(session.harnessSessionId, {
+        if (!usesNativeBackendWorktree(session)) {
+          removeWorktree(repoDir, session.worktreePath);
+        }
+        this.updatePersistedSession(getPrimarySessionLookupRef(session) ?? session.harnessSessionId, {
           worktreePath: undefined,
           worktreeState: "none",
         });

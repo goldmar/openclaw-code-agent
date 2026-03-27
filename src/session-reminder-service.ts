@@ -3,10 +3,13 @@ import type { NotificationButton } from "./session-interactions";
 import type { SessionNotificationRequest } from "./wake-dispatcher";
 import type { PersistedSessionInfo } from "./types";
 import type { Session } from "./session";
+import { getBackendConversationId, getPrimarySessionLookupRef } from "./session-backend-ref";
 
 type RoutingProxyBuilder = (session: {
   id?: string;
+  sessionId?: string;
   harnessSessionId?: string;
+  backendRef?: PersistedSessionInfo["backendRef"];
   route?: PersistedSessionInfo["route"];
 }) => Session;
 
@@ -60,7 +63,7 @@ export class SessionReminderService {
         );
       }
 
-      this.updatePersistedSession(session.harnessSessionId, {
+      this.updatePersistedSession(getPrimarySessionLookupRef(session) ?? session.harnessSessionId, {
         lastWorktreeReminderAt: new Date(now).toISOString(),
       });
     }
@@ -68,8 +71,10 @@ export class SessionReminderService {
 
   private sendReminderNotification(session: PersistedSessionInfo, pendingHours: number): void {
     const routingProxy = this.buildRoutingProxy({
-      id: session.harnessSessionId,
+      id: session.sessionId ?? session.name ?? getBackendConversationId(session) ?? session.harnessSessionId,
+      sessionId: session.sessionId,
       harnessSessionId: session.harnessSessionId,
+      backendRef: session.backendRef,
       route: session.route,
     });
 
@@ -93,7 +98,7 @@ export class SessionReminderService {
       label: `worktree-stale-reminder-${session.name}`,
       userMessage: text,
       notifyUser: "always",
-      buttons: this.getWorktreeDecisionButtons(session.harnessSessionId),
+      buttons: this.getWorktreeDecisionButtons(getPrimarySessionLookupRef(session) ?? session.harnessSessionId),
     });
   }
 }

@@ -7,7 +7,8 @@
  *
  * @module format
  */
-import type { SessionMetrics } from "./types";
+import type { SessionBackendRef, SessionMetrics } from "./types";
+import { getBackendConversationId } from "./session-backend-ref";
 
 /** Session shape needed by list formatting utilities. */
 export interface SessionListRenderable {
@@ -23,6 +24,7 @@ export interface SessionListRenderable {
   lifecycle?: string;
   resumable?: boolean;
   harness?: string;
+  backendRef?: SessionBackendRef;
   harnessSessionId?: string;
   resumeSessionId?: string;
   forkSession?: boolean;
@@ -123,8 +125,9 @@ export function formatSessionListing(session: SessionListRenderable): string {
     lines.push(`   🧰 Harness: ${session.harness}`);
   }
 
-  if (session.harnessSessionId) {
-    lines.push(`   🔗 Backend ID: ${session.harnessSessionId}`);
+  const backendConversationId = getBackendConversationId(session);
+  if (backendConversationId) {
+    lines.push(`   🔗 Backend ID: ${backendConversationId}`);
   }
   if (session.resumeSessionId) {
     lines.push(`   ↩️  Resumed from: ${session.resumeSessionId}${session.forkSession ? " (forked)" : ""}`);

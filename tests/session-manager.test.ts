@@ -308,32 +308,67 @@ describe("SessionManager.resolveHarnessSessionId()", () => {
   });
 
   it("returns harnessSessionId from active session matched by ID", () => {
-    const s = fakeSession({ id: "s1", harnessSessionId: "harness-abc" });
+    const s = fakeSession({
+      id: "s1",
+      harnessSessionId: "harness-abc",
+      backendRef: { kind: "claude-code", conversationId: "backend-abc" },
+    });
     (sm as any).sessions.set("s1", s);
-    assert.equal(sm.resolveHarnessSessionId("s1"), "harness-abc");
+    assert.equal(sm.resolveHarnessSessionId("s1"), "backend-abc");
   });
 
   it("returns harnessSessionId from active session matched by name", () => {
-    const s = fakeSession({ id: "s1", name: "my-session", harnessSessionId: "harness-def" });
+    const s = fakeSession({
+      id: "s1",
+      name: "my-session",
+      harnessSessionId: "harness-def",
+      backendRef: { kind: "claude-code", conversationId: "backend-def" },
+    });
     (sm as any).sessions.set("s1", s);
-    assert.equal(sm.resolveHarnessSessionId("my-session"), "harness-def");
+    assert.equal(sm.resolveHarnessSessionId("my-session"), "backend-def");
   });
 
   it("looks up by idIndex when session is not active", () => {
     (sm as any).idIndex.set("old-id", "harness-ghi");
-    (sm as any).persisted.set("harness-ghi", { harnessSessionId: "harness-ghi" });
-    assert.equal(sm.resolveHarnessSessionId("old-id"), "harness-ghi");
+    (sm as any).persisted.set("harness-ghi", {
+      harnessSessionId: "harness-ghi",
+      backendRef: { kind: "claude-code", conversationId: "backend-ghi" },
+    });
+    assert.equal(sm.resolveHarnessSessionId("old-id"), "backend-ghi");
   });
 
   it("looks up latest persisted entry by name when session is not active", () => {
-    (sm as any).persisted.set("harness-jkl-old", { harnessSessionId: "harness-jkl-old", name: "old-name", createdAt: 100 });
-    (sm as any).persisted.set("harness-jkl-new", { harnessSessionId: "harness-jkl-new", name: "old-name", createdAt: 200 });
-    assert.equal(sm.resolveHarnessSessionId("old-name"), "harness-jkl-new");
+    (sm as any).persisted.set("harness-jkl-old", {
+      harnessSessionId: "harness-jkl-old",
+      backendRef: { kind: "claude-code", conversationId: "backend-jkl-old" },
+      name: "old-name",
+      createdAt: 100,
+    });
+    (sm as any).persisted.set("harness-jkl-new", {
+      harnessSessionId: "harness-jkl-new",
+      backendRef: { kind: "claude-code", conversationId: "backend-jkl-new" },
+      name: "old-name",
+      createdAt: 200,
+    });
+    assert.equal(sm.resolveHarnessSessionId("old-name"), "backend-jkl-new");
   });
 
   it("returns ref directly if it exists in persisted map", () => {
-    (sm as any).persisted.set("direct-key", { harnessSessionId: "direct-key" });
-    assert.equal(sm.resolveHarnessSessionId("direct-key"), "direct-key");
+    (sm as any).persisted.set("direct-key", {
+      harnessSessionId: "direct-key",
+      backendRef: { kind: "claude-code", conversationId: "backend-direct" },
+    });
+    assert.equal(sm.resolveHarnessSessionId("direct-key"), "backend-direct");
+  });
+
+  it("resolves active sessions by backend conversation id before legacy harness id", () => {
+    const s = fakeSession({
+      id: "s2",
+      harnessSessionId: "legacy-id",
+      backendRef: { kind: "claude-code", conversationId: "backend-live" },
+    });
+    (sm as any).sessions.set("s2", s);
+    assert.equal(sm.resolve("backend-live"), s);
   });
 
   it("returns UUID ref as-is even when not in any index", () => {
@@ -368,6 +403,17 @@ describe("SessionManager.getPersistedSession()", () => {
     (sm as any).persisted.set("h2", info);
     (sm as any).idIndex.set("internal-id", "h2");
     assert.equal(sm.getPersistedSession("internal-id"), info);
+  });
+
+  it("returns session by backend conversation id before legacy harness id", () => {
+    const info = {
+      harnessSessionId: "legacy-h3",
+      backendRef: { kind: "claude-code", conversationId: "backend-h3" },
+      name: "s3",
+    };
+    (sm as any).persisted.set("legacy-h3", info);
+    (sm as any).store.backendIdIndex.set("backend-h3", "legacy-h3");
+    assert.equal(sm.getPersistedSession("backend-h3"), info);
   });
 
   it("returns latest session by name from persisted records", () => {
@@ -440,7 +486,7 @@ describe("SessionManager.updatePersistedSession()", () => {
       costUsd: 0,
     });
 
-    const changed = sm.updatePersistedSession("h-live-1", {
+    const changed = sm.updatePersistedSession("live-1", {
       lifecycle: "awaiting_worktree_decision",
       worktreeState: "pending_decision",
       pendingWorktreeDecisionSince: "2026-03-25T00:00:00.000Z",
@@ -481,7 +527,7 @@ describe("SessionManager.updatePersistedSession()", () => {
       costUsd: 0,
     });
 
-    const changed = sm.updatePersistedSession("h-live-2", {
+    const changed = sm.updatePersistedSession("live-2", {
       lifecycle: "terminal",
       worktreeState: "pr_open",
       worktreePrUrl: "https://github.com/example/repo/pull/7",

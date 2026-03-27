@@ -9,7 +9,9 @@
     "test:serial": "node scripts/run-tests.mjs",
     "test:file": "node scripts/run-tests.mjs",
     "smoke:backend": "node scripts/run-tests.mjs tests/codex-harness.test.ts tests/plan-mode-e2e.test.ts tests/session-restore-service.test.ts",
+    "smoke:backend-parity": "node scripts/run-tests.mjs tests/backend-contract-smoke.test.ts tests/codex-harness.test.ts tests/harness-registry.test.ts",
     "smoke:codex-worktrees": "node scripts/run-tests.mjs tests/codex-harness.test.ts tests/session-bootstrap.test.ts tests/session-restore-service.test.ts",
+    "smoke:codex-live": "OPENCLAW_RUN_LIVE_CODEX_SMOKE=1 node scripts/run-tests.mjs tests/live-codex-app-server-smoke.test.ts",
     "typecheck": "tsc --noEmit",
     "verify": "pnpm typecheck && pnpm build && pnpm test"
   },

@@ -1,5 +1,6 @@
 import { removeWorktree, deleteBranch } from "./worktree";
 import { formatDuration, truncateText } from "./format";
+import { getPrimarySessionLookupRef, usesNativeBackendWorktree } from "./session-backend-ref";
 import {
   buildCompletedPayload,
   buildFailedPayload,
@@ -52,7 +53,7 @@ export class SessionLifecycleService {
       getOutputPreview: (session: Session, maxChars?: number) => string;
       originThreadLine: (session: Session) => string;
       debounceWaitingEvent: (sessionId: string) => boolean;
-      isAlreadyMerged: (harnessSessionId: string | undefined) => boolean;
+      isAlreadyMerged: (ref: string | undefined) => boolean;
     },
   ) {}
 
@@ -96,21 +97,23 @@ export class SessionLifecycleService {
     ) {
       const repoDir = this.deps.resolveWorktreeRepoDir(session.originalWorkdir, session.worktreePath);
       const branchName = session.worktreeBranch;
+      const nativeBackendWorktree = usesNativeBackendWorktree(session);
       console.info(
         `[SessionManager] Early startup failure for "${session.name}" — auto-cleaning worktree ` +
         `(cost=$${session.costUsd.toFixed(2)}, duration=${session.duration}ms)`,
       );
 
-      if (repoDir) {
+      if (repoDir && !nativeBackendWorktree) {
         removeWorktree(repoDir, session.worktreePath);
       }
 
-      if (repoDir && branchName) {
+      if (repoDir && branchName && !nativeBackendWorktree) {
         deleteBranch(repoDir, branchName);
       }
 
-      if (session.harnessSessionId) {
-        this.deps.updatePersistedSession(session.harnessSessionId, {
+      const sessionRef = getPrimarySessionLookupRef(session) ?? session.harnessSessionId;
+      if (sessionRef) {
+        this.deps.updatePersistedSession(sessionRef, {
           worktreePath: undefined,
           worktreeBranch: undefined,
         });
@@ -123,6 +126,7 @@ export class SessionLifecycleService {
       session.worktreeStrategy !== "off" && session.worktreeStrategy !== "manual";
     if (!worktreeAutoCleaned && session.worktreePath && session.originalWorkdir) {
       const repoDir = this.deps.resolveWorktreeRepoDir(session.originalWorkdir, session.worktreePath);
+      const nativeBackendWorktree = usesNativeBackendWorktree(session);
       if (worktreeResult.worktreeRemoved) {
         console.info(
           `[SessionManager] Worktree already removed for "${session.name}" during strategy handling.`,
@@ -131,7 +135,7 @@ export class SessionLifecycleService {
         console.info(
           `[SessionManager] Keeping worktree alive for "${session.name}" (strategy=${session.worktreeStrategy}) — will be cleaned up on explicit resolution.`,
         );
-      } else if (repoDir) {
+      } else if (repoDir && !nativeBackendWorktree) {
         removeWorktree(repoDir, session.worktreePath);
       }
     }

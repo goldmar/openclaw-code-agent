@@ -1,4 +1,5 @@
 import type { Session } from "./session";
+import { getBackendConversationId } from "./session-backend-ref";
 import type { PersistedSessionInfo } from "./types";
 
 type PersistedStore = Pick<
@@ -42,8 +43,10 @@ export class SessionStateSyncService {
     if (byResolve) return byResolve;
 
     for (const session of this.deps.sessions.values()) {
+      if (getBackendConversationId(session) === ref) return session;
       if (session.harnessSessionId === ref) return session;
       if (existing?.sessionId && session.id === existing.sessionId) return session;
+      if (existing && getBackendConversationId(existing) === getBackendConversationId(session)) return session;
       if (existing?.harnessSessionId && session.harnessSessionId === existing.harnessSessionId) return session;
       if (existing?.name && session.name === existing.name) return session;
     }

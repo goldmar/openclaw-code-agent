@@ -1,6 +1,11 @@
 import { existsSync } from "fs";
 import { getDefaultHarnessName, pluginConfig } from "./config";
 import { pathsReferToSameLocation } from "./path-utils";
+import {
+  getBackendWorktreeCapability,
+  supportsNativeBackendWorktreeExecution,
+  supportsNativeBackendWorktreeRestore,
+} from "./session-backend-ref";
 import type { PersistedSessionInfo, SessionConfig } from "./types";
 import {
   createWorktree,
@@ -24,9 +29,13 @@ function errorMessage(err: unknown): string {
 }
 
 function prefersNativeCodexWorktrees(config: SessionConfig): boolean {
-  const harnessName = config.harness ?? getDefaultHarnessName();
   const strategy = config.worktreeStrategy ?? pluginConfig.defaultWorktreeStrategy;
-  return harnessName === "codex" && !!strategy && strategy !== "off";
+  return !!strategy
+    && strategy !== "off"
+    && supportsNativeBackendWorktreeExecution(getBackendWorktreeCapability({
+      harnessName: config.harness ?? getDefaultHarnessName(),
+      backendRef: config.backendRef,
+    }));
 }
 
 function appendWorktreeSystemPrompt(
@@ -97,8 +106,11 @@ function restoreResumeWorktreeContext(
   }
 
   const usesNativeCodexWorktree =
-    persistedSession.backendRef?.kind === "codex-app-server"
-    && !!persistedSession.backendRef.worktreePath;
+    supportsNativeBackendWorktreeRestore(getBackendWorktreeCapability({
+      persistedHarness: persistedSession.harness,
+      backendRef: persistedSession.backendRef,
+    }))
+    && !!persistedSession.backendRef?.worktreePath;
 
   if (existsSync(persistedSession.worktreePath)) {
     console.info(`[SessionManager] Resuming with existing worktree: ${persistedSession.worktreePath}`);

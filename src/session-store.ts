@@ -11,6 +11,7 @@ import { getSessionOutputFilePath } from "./session";
 import { resolveOpenclawHomeDir } from "./openclaw-paths";
 import { canonicalizeSessionRoute } from "./session-route";
 import { SessionActionTokenStore } from "./session-action-token-store";
+import { getBackendConversationId, resolveHarnessName } from "./session-backend-ref";
 import {
   assertNewSchemaEntry,
   normalizeActionToken,
@@ -54,6 +55,7 @@ export class SessionStore {
   readonly persisted: Map<string, PersistedSessionInfo> = new Map();
   readonly idIndex: Map<string, string> = new Map();
   readonly nameIndex: Map<string, string> = new Map();
+  readonly backendIdIndex: Map<string, string> = new Map();
   readonly actionTokens: Map<string, SessionActionToken>;
   readonly actionTokenStore: SessionActionTokenStore;
   private readonly indexPath: string;
@@ -104,15 +106,14 @@ export class SessionStore {
           this.persisted.clear();
           this.idIndex.clear();
           this.nameIndex.clear();
+          this.backendIdIndex.clear();
           this.actionTokenStore.clear();
           this.archiveLegacyIndex("invalid v4 session entry");
           this.saveIndex();
           return;
         }
 
-        this.persisted.set(entry.harnessSessionId, entry);
-        if (entry.sessionId) this.idIndex.set(entry.sessionId, entry.harnessSessionId);
-        if (entry.name) this.nameIndex.set(entry.name, entry.harnessSessionId);
+        this.indexPersistedEntry(entry);
       }
 
       if (archivedLegacyCodex.length > 0) {
@@ -127,6 +128,7 @@ export class SessionStore {
           this.persisted.clear();
           this.idIndex.clear();
           this.nameIndex.clear();
+          this.backendIdIndex.clear();
           this.actionTokenStore.clear();
           this.archiveLegacyIndex("invalid v4 action token");
           this.saveIndex();
@@ -159,6 +161,28 @@ export class SessionStore {
 
   assertPersistedEntry(entry: PersistedSessionInfo): void {
     assertNewSchemaEntry(entry);
+  }
+
+  private indexPersistedEntry(entry: PersistedSessionInfo): void {
+    this.persisted.set(entry.harnessSessionId, entry);
+    if (entry.sessionId) this.idIndex.set(entry.sessionId, entry.harnessSessionId);
+    if (entry.name) this.nameIndex.set(entry.name, entry.harnessSessionId);
+    const backendConversationId = getBackendConversationId(entry);
+    if (backendConversationId) this.backendIdIndex.set(backendConversationId, entry.harnessSessionId);
+  }
+
+  private removePersistedIndexes(entry: PersistedSessionInfo): void {
+    this.persisted.delete(entry.harnessSessionId);
+
+    for (const [k, v] of this.idIndex) {
+      if (v === entry.harnessSessionId) this.idIndex.delete(k);
+    }
+    for (const [k, v] of this.nameIndex) {
+      if (v === entry.harnessSessionId) this.nameIndex.delete(k);
+    }
+    for (const [k, v] of this.backendIdIndex) {
+      if (v === entry.harnessSessionId) this.backendIdIndex.delete(k);
+    }
   }
 
   private archiveLegacyIndex(reason: string): void {
@@ -197,7 +221,7 @@ export class SessionStore {
       sessionId: session.id,
       harnessSessionId: session.harnessSessionId,
       backendRef: session.backendRef ?? {
-        kind: session.harnessName === "codex" ? "codex-app-server" : "claude-code",
+        kind: resolveHarnessName(session) === "codex" ? "codex-app-server" : "claude-code",
         conversationId: session.harnessSessionId,
       },
       name: session.name,
@@ -233,9 +257,7 @@ export class SessionStore {
       resumable: session.isExplicitlyResumable,
     };
     assertNewSchemaEntry(stub);
-    this.persisted.set(stub.harnessSessionId, stub);
-    this.idIndex.set(session.id, stub.harnessSessionId);
-    this.nameIndex.set(session.name, stub.harnessSessionId);
+    this.indexPersistedEntry(stub);
     this.saveIndex();
   }
 
@@ -280,7 +302,7 @@ export class SessionStore {
       sessionId: session.id,
       harnessSessionId: session.harnessSessionId,
       backendRef: session.backendRef ?? {
-        kind: session.harnessName === "codex" ? "codex-app-server" : "claude-code",
+        kind: resolveHarnessName(session) === "codex" ? "codex-app-server" : "claude-code",
         conversationId: session.harnessSessionId,
       },
       name: session.name,
@@ -320,9 +342,7 @@ export class SessionStore {
     };
     assertNewSchemaEntry(info);
 
-    this.persisted.set(session.harnessSessionId, info);
-    this.idIndex.set(session.id, session.harnessSessionId);
-    this.nameIndex.set(session.name, session.harnessSessionId);
+    this.indexPersistedEntry(info);
     this.saveIndex();
   }
 
@@ -364,12 +384,26 @@ export class SessionStore {
     if (activeHarnessSessionId) return activeHarnessSessionId;
 
     const byId = this.idIndex.get(ref);
-    if (byId && this.persisted.has(byId)) return byId;
+    if (byId) {
+      const entry = this.persisted.get(byId);
+      const backendConversationId = entry ? getBackendConversationId(entry) : undefined;
+      return backendConversationId ?? byId;
+    }
 
     const byName = this.getLatestPersistedByName(ref);
-    if (byName) return byName.harnessSessionId;
+    if (byName) return getBackendConversationId(byName) ?? byName.harnessSessionId;
 
-    if (this.persisted.has(ref)) return ref;
+    const byBackendId = this.backendIdIndex.get(ref);
+    if (byBackendId) {
+      const entry = this.persisted.get(byBackendId);
+      const backendConversationId = entry ? getBackendConversationId(entry) : undefined;
+      return backendConversationId ?? byBackendId;
+    }
+
+    if (this.persisted.has(ref)) {
+      const entry = this.persisted.get(ref);
+      return entry ? (getBackendConversationId(entry) ?? ref) : ref;
+    }
 
     if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(ref)) return ref;
     return undefined;
@@ -377,11 +411,13 @@ export class SessionStore {
 
   /** Resolve persisted session metadata by harness id, internal id, or name. */
   getPersistedSession(ref: string): PersistedSessionInfo | undefined {
-    const direct = this.persisted.get(ref);
-    if (direct) return direct;
     const byId = this.idIndex.get(ref);
     if (byId) return this.persisted.get(byId);
-    return this.getLatestPersistedByName(ref);
+    const byName = this.getLatestPersistedByName(ref);
+    if (byName) return byName;
+    const byBackendId = this.backendIdIndex.get(ref);
+    if (byBackendId) return this.persisted.get(byBackendId);
+    return this.persisted.get(ref);
   }
 
   /** List persisted sessions sorted by completion time (newest first). */
@@ -418,14 +454,7 @@ export class SessionStore {
 
     const toEvict = all.slice(maxPersistedSessions);
     for (const info of toEvict) {
-      this.persisted.delete(info.harnessSessionId);
-
-      for (const [k, v] of this.idIndex) {
-        if (v === info.harnessSessionId) this.idIndex.delete(k);
-      }
-      for (const [k, v] of this.nameIndex) {
-        if (v === info.harnessSessionId) this.nameIndex.delete(k);
-      }
+      this.removePersistedIndexes(info);
     }
     this.saveIndex();
   }
