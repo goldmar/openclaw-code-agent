@@ -57,7 +57,7 @@ export let pluginConfig: PluginConfig = {
   maxPersistedSessions: 10000,
   maxAutoResponds: 10,
   permissionMode: "plan",
-  planApproval: "delegate",
+  planApproval: "ask",
   codexApprovalPolicy: "never",
   harnesses: {
     "claude-code": { ...BUILTIN_HARNESS_CONFIGS["claude-code"] },
@@ -156,7 +156,7 @@ export function setPluginConfig(config: Partial<RawPluginConfig>): void {
     maxAutoResponds: config.maxAutoResponds ?? 10,
     permissionMode: config.permissionMode ?? "plan",
     codexApprovalPolicy: config.codexApprovalPolicy ?? "never",
-    planApproval: config.planApproval ?? "delegate",
+    planApproval: config.planApproval ?? "ask",
     defaultHarness,
     harnesses,
     allowedModels: config.allowedModels,

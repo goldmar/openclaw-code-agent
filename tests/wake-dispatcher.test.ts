@@ -318,6 +318,35 @@ appendFileSync(process.env.OPENCLAW_TEST_LOG, JSON.stringify(process.argv.slice(
     ]);
   });
 
+  it("does not silently downgrade interactive notifications to system text when direct routing is unavailable", async () => {
+    const dispatcher = new WakeDispatcher();
+    const session: FakeSession = {
+      id: "session-interactive-no-route",
+    };
+
+    dispatcher.dispatchSessionNotification(session as any, {
+      label: "plan-approval",
+      userMessage: "📋 Plan ready",
+      notifyUser: "always",
+      buttons: [[
+        { label: "Approve", callbackData: "token-approve" },
+        { label: "Reject", callbackData: "token-reject" },
+      ]],
+      wakeMessageOnNotifyFailed: "Interactive delivery failed; no buttons were sent.",
+    });
+    const calls = await waitForCalls(logPath, 1);
+
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0], [
+      "system",
+      "event",
+      "--text",
+      "Interactive delivery failed; no buttons were sent.",
+      "--mode",
+      "now",
+    ]);
+  });
+
   it("prefers the structured route over legacy originChannel fields for new-schema sessions", async () => {
     const dispatcher = new WakeDispatcher();
     const session: FakeSession = {

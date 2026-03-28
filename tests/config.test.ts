@@ -319,7 +319,7 @@ describe("setPluginConfig", () => {
 
   it("uses default for missing planApproval", () => {
     setPluginConfig({});
-    assert.equal(pluginConfig.planApproval, "delegate");
+    assert.equal(pluginConfig.planApproval, "ask");
   });
 
   it("preserves optional fields as undefined when not provided", () => {
@@ -338,7 +338,7 @@ describe("setPluginConfig", () => {
     setPluginConfig({});
     // Should not throw, and all defaults should be applied
     assert.equal(pluginConfig.maxSessions, 20);
-    assert.equal(pluginConfig.planApproval, "delegate");
+    assert.equal(pluginConfig.planApproval, "ask");
   });
 });
 
@@ -381,7 +381,7 @@ describe("pluginConfig singleton", () => {
     assert.equal(pluginConfig.maxPersistedSessions, 10000);
     assert.equal(pluginConfig.maxAutoResponds, 10);
     assert.equal(pluginConfig.permissionMode, "plan");
-    assert.equal(pluginConfig.planApproval, "delegate");
+    assert.equal(pluginConfig.planApproval, "ask");
     assert.equal(pluginConfig.codexApprovalPolicy, "never");
     assert.equal(pluginConfig.harnesses["claude-code"]?.defaultModel, "sonnet");
     assert.deepEqual(pluginConfig.harnesses["claude-code"]?.allowedModels, ["sonnet", "opus"]);

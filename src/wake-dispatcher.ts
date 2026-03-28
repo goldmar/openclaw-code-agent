@@ -107,8 +107,17 @@ export class WakeDispatcher {
     onAllFailed?: () => void,
     onSuccess?: () => void,
   ): void {
+    const hasInteractiveButtons = Boolean(buttons && buttons.length > 0);
     const route = this.routes.resolve(session);
     if (!route) {
+      if (hasInteractiveButtons) {
+        console.warn(
+          `[WakeDispatcher] Interactive notification "${label}" for session ${session.id} ` +
+          `has no direct route; refusing text-only fallback because buttons would be lost.`,
+        );
+        onAllFailed?.();
+        return;
+      }
       this.executor.execute(
         this.transport.buildSystemEventArgs(text),
         {
@@ -136,6 +145,14 @@ export class WakeDispatcher {
         messageKind: "notify",
         onSuccess,
         onFinalFailure: () => {
+          if (hasInteractiveButtons) {
+            console.warn(
+              `[WakeDispatcher] Interactive notification "${label}" for session ${session.id} ` +
+              `failed direct delivery; refusing text-only fallback because buttons would be lost.`,
+            );
+            onAllFailed?.();
+            return;
+          }
           this.executor.execute(
             this.transport.buildSystemEventArgs(text),
             {
