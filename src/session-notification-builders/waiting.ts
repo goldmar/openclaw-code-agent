@@ -23,7 +23,7 @@ export function buildWaitingForInputPayload(args: {
   const userMessage = isPlanApproval
     ? (
         planApprovalMode === "ask"
-          ? `📋 [${session.name}] Plan ready for approval:\n\n${preview}\n\nChoose Approve, Reject, or Revise below.`
+          ? `📋 [${session.name}] Plan ready for approval:\n\n${preview}\n\nChoose Approve, Request changes, or Reject below.`
           : `📋 [${session.name}] Plan awaiting approval:\n\n${preview}`
       )
     : `❓ [${session.name}] Question waiting for reply:\n\n${preview}`;

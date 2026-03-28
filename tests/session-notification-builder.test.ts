@@ -25,7 +25,7 @@ describe("session-notification-builder", () => {
     });
 
     assert.equal(payload.label, "plan-approval");
-    assert.equal(payload.userMessage, "📋 [plan-session] Plan ready for approval:\n\nPlan preview\n\nChoose Approve, Reject, or Revise below.");
+    assert.equal(payload.userMessage, "📋 [plan-session] Plan ready for approval:\n\nPlan preview\n\nChoose Approve, Request changes, or Reject below.");
     assert.equal(payload.buttons, buttons);
     assert.match(payload.wakeMessage, /USER APPROVAL REQUESTED/);
   });

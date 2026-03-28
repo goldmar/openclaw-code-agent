@@ -228,6 +228,13 @@ describe("CodexHarness App Server mapping", () => {
       approvalPolicy: "never",
       sandbox: "danger-full-access",
     });
+    const turnStartRequest = client.requests.find((request) => request.method === "turn/start");
+    assert.deepEqual(turnStartRequest?.params, {
+      threadId: "thread-123",
+      input: [{ type: "text", text: "investigate" }],
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+    });
   });
 
   it("captures native Codex worktree refs from thread state", async () => {

@@ -359,12 +359,16 @@ export function buildTurnStartPayloads(params: {
   model?: string;
   reasoningEffort?: string;
   permissionMode?: string;
+  approvalPolicy?: string;
+  sandbox?: string;
 }): unknown[] {
   const base: Record<string, unknown> = {
     threadId: params.threadId,
     input: buildTurnInput(params.prompt),
   };
   if (params.model?.trim()) base.model = params.model.trim();
+  if (params.approvalPolicy?.trim()) base.approvalPolicy = params.approvalPolicy.trim();
+  if (params.sandbox?.trim()) base.sandbox = params.sandbox.trim();
   const collaborationMode = buildCollaborationMode(params.permissionMode ?? "default", params.model, params.reasoningEffort);
   if (!collaborationMode) return [base];
   return [

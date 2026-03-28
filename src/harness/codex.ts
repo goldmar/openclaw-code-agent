@@ -350,6 +350,10 @@ export class CodexHarness implements AgentHarness {
       activeTurnCompletion = { resolve: completionResolve };
 
       try {
+        const executionPolicy = codexExecutionPolicyForMode(
+          currentPermissionMode,
+          options.codexApprovalPolicy,
+        );
         const started = await requestWithFallbacks({
           client,
           methods: ["turn/start"],
@@ -359,6 +363,8 @@ export class CodexHarness implements AgentHarness {
             model: options.model,
             reasoningEffort: options.reasoningEffort,
             permissionMode: currentPermissionMode,
+            approvalPolicy: executionPolicy.approvalPolicy,
+            sandbox: executionPolicy.sandbox,
           }),
           timeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
         });
