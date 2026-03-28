@@ -10,6 +10,7 @@ import {
   resolveDefaultModelForHarness,
   resolveReasoningEffortForHarness,
 } from "../config";
+import { assessResumeCandidate, getStableSessionId } from "../session-resume";
 import type { OpenClawPluginToolContext, PersistedSessionInfo } from "../types";
 import {
   extractPromptDeclaredWorkdir,
@@ -19,6 +20,11 @@ import {
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+function resumeTargetRef(target: PersistedSessionInfo | { id: string; name: string } | undefined, fallback?: string): string {
+  if (!target) return fallback ?? "unknown-session";
+  return ("id" in target ? target.id : target.sessionId) ?? fallback ?? "unknown-session";
 }
 
 function isAgentLaunchParams(value: unknown): value is AgentLaunchParams {
@@ -156,16 +162,44 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
           clearedPersistedCodexResume,
           reasoningEffort,
         } = resolution;
+        const resumeTarget = params.resume_session_id
+          ? sessionManager.resolve(params.resume_session_id) ?? sessionManager.getPersistedSession(params.resume_session_id)
+          : undefined;
+        const resumeAssessment = (!params.fork_session && resumeTarget)
+          ? assessResumeCandidate(resumeTarget)
+          : undefined;
+
+        if (resumeAssessment?.kind === "direct") {
+          return {
+            content: [{
+              type: "text",
+              text: `Session ${resumeTarget!.name} [${resumeTargetRef(resumeTarget, params.resume_session_id)}] is already running. Use agent_respond(session='${params.resume_session_id}', message='<next instruction>') instead of agent_launch(resume_session_id=...).`,
+            }],
+          };
+        }
+        if (resumeAssessment?.kind === "unavailable") {
+          return {
+            content: [{
+              type: "text",
+              text: `Resume unavailable for session ${resumeTarget!.name} [${resumeTargetRef(resumeTarget, params.resume_session_id)}] (${resumeAssessment.reason}). Use agent_launch(prompt='<new task>') for a fresh session or set fork_session=true to fork from prior context.`,
+            }],
+          };
+        }
 
         const session = sessionManager.spawn({
           prompt: params.prompt,
+          sessionIdOverride: !params.fork_session
+            ? (resumeAssessment?.kind === "resume" || resumeAssessment?.kind === "relaunch"
+              ? resumeAssessment.stableSessionId
+              : undefined)
+            : undefined,
           name: params.name,
           workdir,
           model: resolvedModel,
           reasoningEffort,
           systemPrompt: params.system_prompt,
           allowedTools: params.allowed_tools,
-          resumeSessionId,
+          resumeSessionId: resumeAssessment?.kind === "resume" ? resumeAssessment.resumeSessionId : resumeSessionId,
           // Bug 3 fix: always pass the original resolved session ID for worktree inheritance,
           // even when resumeSessionId was cleared by decideResumeSessionId (e.g. Codex harness).
           resumeWorktreeFrom: resolvedResumeId,

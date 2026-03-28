@@ -1,9 +1,15 @@
 import type { SessionManager } from "../session-manager";
 import { pluginConfig } from "../config";
 import { truncateText } from "../format";
-import { decideResumeSessionId } from "../resume-policy";
 import type { Session } from "../session";
 import { getBackendConversationId, getPrimarySessionLookupRef } from "../session-backend-ref";
+import {
+  assessResumeCandidate,
+  getStableSessionId,
+  isCompletedByDefault,
+  type ResumeUnavailableReason,
+  type ResumableSessionLike,
+} from "../session-resume";
 import type { PersistedSessionInfo, SessionConfig } from "../types";
 
 interface RespondParams {
@@ -25,7 +31,7 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-type ResumableSession = Session | PersistedSessionInfo;
+type ResumableSession = ResumableSessionLike;
 
 type PlanApprovalTarget = Pick<
   ResumableSession,
@@ -34,10 +40,6 @@ type PlanApprovalTarget = Pick<
 
 function getSessionRef(session: ResumableSession): string {
   return getPrimarySessionLookupRef(session) ?? session.harnessSessionId ?? "unknown-session";
-}
-
-function isExplicitlyResumable(session: ResumableSession): boolean {
-  return session.lifecycle === "suspended" && !!getBackendConversationId(session);
 }
 
 function canAutoResumeStoppedPlanDecision(session: ResumableSession): boolean {
@@ -54,6 +56,25 @@ function isNeverStartedShutdown(session: ResumableSession): boolean {
   return session.killReason === "shutdown" && !getBackendConversationId(session);
 }
 
+function formatResumeUnavailable(
+  session: ResumableSession,
+  reason: ResumeUnavailableReason,
+  details?: string,
+): RespondResult {
+  const guidance = reason === "completed"
+    ? `This session is closed by default. Launch a fresh session, or fork from prior context with agent_launch(resume_session_id='${getSessionRef(session)}', fork_session=true, prompt='<new task>').`
+    : reason === "legacy_non_resumable"
+      ? `Persisted historical backend state is intentionally non-resumable here. Launch fresh, or fork with agent_launch(resume_session_id='${getSessionRef(session)}', fork_session=true, prompt='<new task>').`
+      : reason === "missing_backend_state"
+        ? `No resumable backend state is available. Launch a fresh session, or fork from prior context with agent_launch(resume_session_id='${getSessionRef(session)}', fork_session=true, prompt='<new task>').`
+        : `Use agent_respond(session='${getSessionRef(session)}', message='<next instruction>') to continue the running session.`;
+  const detailLine = details ? ` ${details}` : "";
+  return {
+    text: `Resume unavailable for session ${session.name} [${getSessionRef(session)}] (${reason}).${detailLine} ${guidance}`,
+    isError: true,
+  };
+}
+
 async function spawnFreshRelaunch(
   sm: SessionManager,
   session: ResumableSession,
@@ -62,6 +83,7 @@ async function spawnFreshRelaunch(
   try {
     const freshConfig: SessionConfig = {
       prompt: session.prompt,
+      sessionIdOverride: getStableSessionId(session),
       workdir: session.workdir,
       name: session.name,
       model: session.model,
@@ -112,7 +134,8 @@ async function tryAutoResume(
   message: string,
   options: { approve?: boolean } = {},
 ): Promise<RespondResult | undefined> {
-  const resumable = isExplicitlyResumable(session) || canAutoResumeStoppedPlanDecision(session);
+  const assessment = assessResumeCandidate(session);
+  const resumable = assessment.kind === "resume" || canAutoResumeStoppedPlanDecision(session);
   if (!resumable) return undefined;
 
   // When approve=true is sent to a dead plan-mode session, forward the approval
@@ -123,17 +146,11 @@ async function tryAutoResume(
   const isPlanApproval = !!(options.approve && canAutoResumePlanApproval(session));
 
   try {
-    const activeSession = "harnessName" in session ? session : undefined;
-    const persistedSession = "harnessName" in session ? undefined : session;
-    const { resumeSessionId } = decideResumeSessionId({
-      requestedResumeSessionId: getBackendConversationId(session),
-      activeSession: activeSession
-        ? { harnessSessionId: getBackendConversationId(activeSession) }
-        : undefined,
-      persistedSession: persistedSession
-        ? { harness: persistedSession.harness, backendRef: persistedSession.backendRef }
-        : undefined,
-    });
+    if (assessment.kind !== "resume") {
+      return assessment.kind === "relaunch"
+        ? spawnFreshRelaunch(sm, session, message)
+        : formatResumeUnavailable(session, assessment.reason);
+    }
 
     // Preserve all relevant runtime/session-routing knobs so auto-resume is a
     // continuation of the exact same lifecycle, not a best-effort relaunch.
@@ -141,11 +158,12 @@ async function tryAutoResume(
       // Inject the approval prefix so Claude knows it's approved and switches
       // out of plan mode without re-presenting the plan.
       prompt: isPlanApproval ? PLAN_APPROVAL_SYSTEM_PREFIX + message : message,
+      sessionIdOverride: assessment.stableSessionId,
       workdir: session.workdir,
       name: session.name,
       model: session.model,
       reasoningEffort: session.reasoningEffort,
-      resumeSessionId,
+      resumeSessionId: assessment.resumeSessionId,
       multiTurn: true,
       originChannel: session.originChannel,
       originThreadId: session.originThreadId,
@@ -168,7 +186,7 @@ async function tryAutoResume(
     }
     return { text: `Auto-resumed session ${resumed.name} [${resumed.id}]. Use agent_output to see the response.` };
   } catch (err: unknown) {
-    return { text: `Error auto-resuming session ${session.name} [${getSessionRef(session)}]: ${errorMessage(err)}`, isError: true };
+    return formatResumeUnavailable(session, "missing_backend_state", `Backend resume failed: ${errorMessage(err)}`);
   }
 }
 
@@ -189,10 +207,7 @@ export async function executeRespond(
   }
 
   const target = session ?? persisted!;
-
-  if (isNeverStartedShutdown(target)) {
-    return spawnFreshRelaunch(sm, target, params.message);
-  }
+  const resumeAssessment = target.status === "running" ? { kind: "direct" as const } : assessResumeCandidate(target);
 
   if (params.approve) {
     const blockedReason = approvalBlockedReason(target);
@@ -201,23 +216,36 @@ export async function executeRespond(
     }
   }
 
-  const autoResumeResult = await tryAutoResume(sm, target, params.message, { approve: params.approve });
-  if (autoResumeResult) {
-    return autoResumeResult;
+  if (resumeAssessment.kind === "resume" || canAutoResumeStoppedPlanDecision(target)) {
+    const autoResumeResult = await tryAutoResume(sm, target, params.message, { approve: params.approve });
+    if (autoResumeResult) {
+      return autoResumeResult;
+    }
+  } else {
+    if (resumeAssessment.kind === "relaunch") {
+      return spawnFreshRelaunch(sm, target, params.message);
+    }
+    if (resumeAssessment.kind === "unavailable") {
+      return formatResumeUnavailable(target, resumeAssessment.reason);
+    }
   }
 
   if (!session) {
-    return {
-      text: `Error: Session ${persisted!.name} [${getSessionRef(persisted!)}] is not running (status: ${persisted!.status}). Cannot send a message to a non-running session.`,
-      isError: true,
-    };
+    return isCompletedByDefault(persisted!)
+      ? formatResumeUnavailable(persisted!, "completed")
+      : {
+          text: `Error: Session ${persisted!.name} [${getSessionRef(persisted!)}] is not running (status: ${persisted!.status}). Cannot send a message to a non-running session.`,
+          isError: true,
+        };
   }
 
   if (session.status !== "running") {
-    return {
-      text: `Error: Session ${session.name} [${session.id}] is not running (status: ${session.status}). Cannot send a message to a non-running session.`,
-      isError: true,
-    };
+    return isCompletedByDefault(session)
+      ? formatResumeUnavailable(session, "completed")
+      : {
+          text: `Error: Session ${session.name} [${session.id}] is not running (status: ${session.status}). Cannot send a message to a non-running session.`,
+          isError: true,
+        };
   }
 
   // Auto-respond safety cap

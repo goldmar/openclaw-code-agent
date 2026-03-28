@@ -39,13 +39,13 @@ describe("executeRespond", () => {
     assert.match(result.text, /not found/);
   });
 
-  it("auto-resumes only explicitly suspended sessions", async () => {
+  it("auto-resumes killed sessions with resumable backend state", async () => {
     const session = createStubSession({
       status: "killed",
-      lifecycle: "suspended",
+      lifecycle: "terminal",
       runtimeState: "stopped",
-      isExplicitlyResumable: true,
-      killReason: "idle-timeout",
+      isExplicitlyResumable: false,
+      killReason: "user",
       harnessSessionId: "harness-idle",
       name: "suspended-session",
     });
@@ -54,12 +54,13 @@ describe("executeRespond", () => {
     let capturedConfig: any;
     sm.spawn = (config: any) => {
       capturedConfig = config;
-      return createStubSession({ name: "suspended-session", id: "new-id" });
+      return createStubSession({ name: "suspended-session", id: "test-id" });
     };
 
     const result = await executeRespond(sm, { session: "test-id", message: "wake up" });
-    assert.equal(result.text, "Auto-resumed session suspended-session [new-id]. Use agent_output to see the response.");
+    assert.equal(result.text, "Auto-resumed session suspended-session [test-id]. Use agent_output to see the response.");
     assert.equal(capturedConfig.resumeSessionId, "harness-idle");
+    assert.equal(capturedConfig.sessionIdOverride, "test-id");
   });
 
   it("preserves routing and harness metadata during explicit resume", async () => {
@@ -83,7 +84,7 @@ describe("executeRespond", () => {
     let capturedConfig: any;
     sm.spawn = (config: any) => {
       capturedConfig = config;
-      return createStubSession({ name: "resumed", id: "new-id" });
+      return createStubSession({ name: "resumed", id: "test-id" });
     };
 
     const result = await executeRespond(sm, { session: "test-id", message: "continue" });
@@ -95,9 +96,10 @@ describe("executeRespond", () => {
     assert.equal(capturedConfig.originAgentId, "agent-main");
     assert.equal(capturedConfig.permissionMode, "default");
     assert.equal(capturedConfig.codexApprovalPolicy, "on-request");
+    assert.equal(capturedConfig.sessionIdOverride, "test-id");
   });
 
-  it("does not auto-resume terminal sessions", async () => {
+  it("keeps completed sessions closed by default", async () => {
     const session = createStubSession({
       status: "completed",
       lifecycle: "terminal",
@@ -107,7 +109,8 @@ describe("executeRespond", () => {
     const sm = createStubSessionManager({ "test-id": session });
     const result = await executeRespond(sm, { session: "test-id", message: "continue" });
     assert.equal(result.isError, true);
-    assert.match(result.text, /not running/);
+    assert.match(result.text, /Resume unavailable/);
+    assert.match(result.text, /completed/);
   });
 
   it("returns an explicit auto-resume error when spawn fails", async () => {
@@ -124,7 +127,8 @@ describe("executeRespond", () => {
 
     const result = await executeRespond(sm, { session: "test-id", message: "continue" });
     assert.equal(result.isError, true);
-    assert.match(result.text, /Error auto-resuming/);
+    assert.match(result.text, /Resume unavailable/);
+    assert.match(result.text, /missing_backend_state/);
     assert.match(result.text, /spawn failed/);
   });
 
@@ -150,7 +154,7 @@ describe("executeRespond", () => {
     let capturedConfig: any;
     sm.spawn = (config: any) => {
       capturedConfig = config;
-      return createStubSession({ name: "plan-session", id: "new-id" });
+      return createStubSession({ name: "plan-session", id: "dead-plan" });
     };
 
     const result = await executeRespond(sm, {
@@ -162,6 +166,7 @@ describe("executeRespond", () => {
     assert.ok(result.text.includes("Auto-resumed"));
     assert.equal(capturedConfig.permissionMode, "bypassPermissions");
     assert.match(capturedConfig.prompt, /The user has approved your plan/i);
+    assert.equal(capturedConfig.sessionIdOverride, "dead-plan");
   });
 
   it("auto-resumes a shutdown-killed pending-plan session when approve=true is sent", async () => {
@@ -186,7 +191,7 @@ describe("executeRespond", () => {
     let capturedConfig: any;
     sm.spawn = (config: any) => {
       capturedConfig = config;
-      return createStubSession({ name: "plan-session-shutdown", id: "new-id" });
+      return createStubSession({ name: "plan-session-shutdown", id: "dead-plan-shutdown" });
     };
 
     const result = await executeRespond(sm, {
@@ -199,6 +204,7 @@ describe("executeRespond", () => {
     assert.equal(capturedConfig.resumeSessionId, "harness-plan-shutdown");
     assert.equal(capturedConfig.permissionMode, "bypassPermissions");
     assert.match(capturedConfig.prompt, /The user has approved your plan/i);
+    assert.equal(capturedConfig.sessionIdOverride, "dead-plan-shutdown");
   });
 
   it("auto-resumes a shutdown-killed pending-plan session for revision feedback too", async () => {
@@ -223,7 +229,7 @@ describe("executeRespond", () => {
     let capturedConfig: any;
     sm.spawn = (config: any) => {
       capturedConfig = config;
-      return createStubSession({ name: "plan-session-revise", id: "new-id" });
+      return createStubSession({ name: "plan-session-revise", id: "dead-plan-revise" });
     };
 
     const result = await executeRespond(sm, {
@@ -235,6 +241,7 @@ describe("executeRespond", () => {
     assert.equal(capturedConfig.resumeSessionId, "harness-plan-revise");
     assert.equal(capturedConfig.permissionMode, "plan");
     assert.doesNotMatch(capturedConfig.prompt, /The user has approved your plan/i);
+    assert.equal(capturedConfig.sessionIdOverride, "dead-plan-revise");
   });
 
   it("sends messages to active running sessions without auto-resuming", async () => {
@@ -327,12 +334,29 @@ describe("executeRespond", () => {
     let capturedConfig: any;
     sm.spawn = (config: any) => {
       capturedConfig = config;
-      return createStubSession({ name: "startup-failure", id: "new-id", status: "running" });
+      return createStubSession({ name: "startup-failure", id: "test-id", status: "running" });
     };
 
     const result = await executeRespond(sm, { session: "test-id", message: "continue" });
     assert.match(result.text, /relaunched fresh/i);
     assert.equal(capturedConfig.prompt, "original prompt");
+    assert.equal(capturedConfig.sessionIdOverride, "test-id");
+  });
+
+  it("returns a typed resume-unavailable reason when backend state is missing", async () => {
+    const session = createStubSession({
+      status: "killed",
+      lifecycle: "terminal",
+      killReason: "unknown",
+      harnessSessionId: undefined,
+      name: "missing-backend",
+    });
+    const sm = createStubSessionManager({ "test-id": session });
+
+    const result = await executeRespond(sm, { session: "test-id", message: "continue" });
+    assert.equal(result.isError, true);
+    assert.match(result.text, /Resume unavailable/);
+    assert.match(result.text, /missing_backend_state/);
   });
 
   it("emits only the auto-resume notification when resuming a suspended session", async () => {

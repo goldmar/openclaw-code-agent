@@ -164,7 +164,7 @@ export class Session extends EventEmitter {
 
   constructor(config: SessionConfig, name: string) {
     super();
-    this.id = nanoid(8);
+    this.id = config.sessionIdOverride ?? nanoid(8);
     this.name = name;
     this.harness = config.harness ? getHarness(config.harness) : getDefaultHarness();
     this.prompt = config.prompt;
@@ -347,7 +347,10 @@ export class Session extends EventEmitter {
   }
 
   get isExplicitlyResumable(): boolean {
-    return this.lifecycle === "suspended";
+    return this.status !== "running"
+      && this.status !== "completed"
+      && this.killReason !== "done"
+      && !!this.backendConversationId;
   }
 
   // -- State machine --

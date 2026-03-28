@@ -229,6 +229,74 @@ describe("agent_launch tool defaults", () => {
     assert.equal(spawnConfig?.resumeSessionId, "resolved-old-thread");
   });
 
+  it("reuses the original OpenClaw session ID when resuming a stopped session without fork", async () => {
+    let spawnConfig: Record<string, unknown> | undefined;
+
+    setSessionManager({
+      resolve: () => undefined,
+      getPersistedSession: () => ({
+        sessionId: "sess-stable",
+        harnessSessionId: "resolved-old-thread",
+        name: "stable-session",
+        status: "killed",
+        lifecycle: "terminal",
+        killReason: "shutdown",
+        backendRef: { kind: "codex-app-server", conversationId: "resolved-old-thread" },
+      }),
+      resolveHarnessSessionId: (id: string) => `resolved-${id}`,
+      resolveBackendConversationId: (id: string) => `resolved-${id}`,
+      spawn(config: Record<string, unknown>) {
+        spawnConfig = config;
+        return {
+          id: "sess-stable",
+          name: "stable-session",
+          model: config.model,
+        };
+      },
+    } as any);
+
+    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp" });
+    const result = await tool.execute("tool-id", {
+      prompt: "Continue stable session",
+      harness: "codex",
+      resume_session_id: "old-thread",
+    });
+
+    assert.ok(spawnConfig, "spawn should be called");
+    assert.equal(spawnConfig?.sessionIdOverride, "sess-stable");
+    assert.equal(spawnConfig?.resumeSessionId, "resolved-old-thread");
+    assert.match((result.content[0] as { text: string }).text, /ID: sess-stable/);
+  });
+
+  it("rejects non-fork resume attempts for completed sessions", async () => {
+    setSessionManager({
+      resolve: () => undefined,
+      getPersistedSession: () => ({
+        sessionId: "sess-done",
+        harnessSessionId: "resolved-old-thread",
+        name: "done-session",
+        status: "completed",
+        lifecycle: "terminal",
+        killReason: "done",
+        backendRef: { kind: "codex-app-server", conversationId: "resolved-old-thread" },
+      }),
+      resolveHarnessSessionId: (id: string) => `resolved-${id}`,
+      resolveBackendConversationId: (id: string) => `resolved-${id}`,
+    } as any);
+
+    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp" });
+    const result = await tool.execute("tool-id", {
+      prompt: "Continue closed session",
+      harness: "codex",
+      resume_session_id: "old-thread",
+    });
+
+    const text = (result.content[0] as { text: string }).text;
+    assert.match(text, /Resume unavailable/);
+    assert.match(text, /completed/);
+    assert.match(text, /fork_session=true/);
+  });
+
   it("forwards per-session plan_approval override to spawn", async () => {
     let spawnConfig: Record<string, unknown> | undefined;
 

@@ -227,6 +227,19 @@ export class SessionManager {
       throw new Error(`Max sessions reached (${this.maxSessions}). Use agent_sessions to list active sessions and agent_kill to end one.`);
     }
 
+    if (config.sessionIdOverride) {
+      const existing = this.registry.get(config.sessionIdOverride);
+      if (existing?.status === "starting" || existing?.status === "running") {
+        throw new Error(`Cannot reuse session ID ${config.sessionIdOverride}: that session is still ${existing.status}.`);
+      }
+      if (existing) {
+        this.registry.remove(existing.id);
+      }
+      this.lastWaitingEventTimestamps.delete(config.sessionIdOverride);
+      this.lastTurnCompleteMarkers.delete(config.sessionIdOverride);
+      this.lastTerminalWakeMarkers.delete(config.sessionIdOverride);
+    }
+
     const baseName = config.name || generateSessionName(config.prompt);
     const name = this.uniqueName(baseName);
     if (name !== baseName) {

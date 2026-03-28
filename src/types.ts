@@ -181,6 +181,8 @@ export type CanUseToolCallback = (
 export interface SessionConfig {
   prompt: string;
   workdir: string;
+  /** Reuse an existing OpenClaw session ID when continuing the same logical session. */
+  sessionIdOverride?: string;
   name?: string;
   model?: string;
   reasoningEffort?: ReasoningEffort;
