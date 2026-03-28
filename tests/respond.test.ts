@@ -164,6 +164,79 @@ describe("executeRespond", () => {
     assert.match(capturedConfig.prompt, /The user has approved your plan/i);
   });
 
+  it("auto-resumes a shutdown-killed pending-plan session when approve=true is sent", async () => {
+    const sm = createStubSessionManager();
+    sm.persisted.set("harness-plan-shutdown", {
+      sessionId: "dead-plan-shutdown",
+      harnessSessionId: "harness-plan-shutdown",
+      name: "plan-session-shutdown",
+      prompt: "Plan only and stop.",
+      workdir: "/tmp",
+      status: "killed",
+      lifecycle: "terminal",
+      resumable: false,
+      killReason: "shutdown",
+      currentPermissionMode: "plan",
+      pendingPlanApproval: true,
+      costUsd: 0.05,
+      harness: "respond-resume-harness",
+    } as any);
+    sm.idIndex.set("dead-plan-shutdown", "harness-plan-shutdown");
+
+    let capturedConfig: any;
+    sm.spawn = (config: any) => {
+      capturedConfig = config;
+      return createStubSession({ name: "plan-session-shutdown", id: "new-id" });
+    };
+
+    const result = await executeRespond(sm, {
+      session: "dead-plan-shutdown",
+      message: "Approved. Go ahead.",
+      approve: true,
+    });
+
+    assert.ok(result.text.includes("Auto-resumed"));
+    assert.equal(capturedConfig.resumeSessionId, "harness-plan-shutdown");
+    assert.equal(capturedConfig.permissionMode, "bypassPermissions");
+    assert.match(capturedConfig.prompt, /The user has approved your plan/i);
+  });
+
+  it("auto-resumes a shutdown-killed pending-plan session for revision feedback too", async () => {
+    const sm = createStubSessionManager();
+    sm.persisted.set("harness-plan-revise", {
+      sessionId: "dead-plan-revise",
+      harnessSessionId: "harness-plan-revise",
+      name: "plan-session-revise",
+      prompt: "Plan only and stop.",
+      workdir: "/tmp",
+      status: "killed",
+      lifecycle: "terminal",
+      resumable: false,
+      killReason: "shutdown",
+      currentPermissionMode: "plan",
+      pendingPlanApproval: true,
+      costUsd: 0.05,
+      harness: "respond-resume-harness",
+    } as any);
+    sm.idIndex.set("dead-plan-revise", "harness-plan-revise");
+
+    let capturedConfig: any;
+    sm.spawn = (config: any) => {
+      capturedConfig = config;
+      return createStubSession({ name: "plan-session-revise", id: "new-id" });
+    };
+
+    const result = await executeRespond(sm, {
+      session: "dead-plan-revise",
+      message: "Please revise the plan to avoid touching migrations.",
+    });
+
+    assert.ok(result.text.includes("Auto-resumed"));
+    assert.equal(capturedConfig.resumeSessionId, "harness-plan-revise");
+    assert.equal(capturedConfig.permissionMode, "plan");
+    assert.doesNotMatch(capturedConfig.prompt, /The user has approved your plan/i);
+  });
+
   it("sends messages to active running sessions without auto-resuming", async () => {
     const session = createStubSession({
       status: "running",

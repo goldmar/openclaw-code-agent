@@ -40,6 +40,12 @@ function isExplicitlyResumable(session: ResumableSession): boolean {
   return session.lifecycle === "suspended" && !!getBackendConversationId(session);
 }
 
+function canAutoResumeStoppedPlanDecision(session: ResumableSession): boolean {
+  return session.status !== "running"
+    && !!session.pendingPlanApproval
+    && !!getBackendConversationId(session);
+}
+
 /**
  * Returns true when a session was killed by a shutdown signal before the
  * harness ever initialised — i.e. it has no harness session ID to resume.
@@ -106,7 +112,8 @@ async function tryAutoResume(
   message: string,
   options: { approve?: boolean } = {},
 ): Promise<RespondResult | undefined> {
-  if (!isExplicitlyResumable(session)) return undefined;
+  const resumable = isExplicitlyResumable(session) || canAutoResumeStoppedPlanDecision(session);
+  if (!resumable) return undefined;
 
   // When approve=true is sent to a dead plan-mode session, forward the approval
   // into the resumed session by switching its permission mode to bypassPermissions
