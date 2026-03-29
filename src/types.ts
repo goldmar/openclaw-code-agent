@@ -59,7 +59,12 @@ export type PermissionMode = "default" | "plan" | "bypassPermissions";
  */
 export type PlanApprovalContext = "plan-mode";
 export type WorktreeStrategy = "off" | "manual" | "ask" | "delegate" | "auto-merge" | "auto-pr";
-export type CodexApprovalPolicy = "never" | "on-request";
+/**
+ * Codex App Server execution policy is fixed to `never`.
+ * OpenClaw owns the plan-review and approval UX through `permissionMode`
+ * and `planApproval` instead of Codex-side approval prompts.
+ */
+export type CodexApprovalPolicy = "never";
 export type ReasoningEffort = "low" | "medium" | "high";
 export type SessionBackendKind = "claude-code" | "codex-app-server";
 export type BackendWorktreeCapability = "plugin-managed" | "native-execution" | "native-restore";
@@ -168,7 +173,6 @@ export interface HarnessConfig {
   defaultModel?: string;
   allowedModels?: string[];
   reasoningEffort?: ReasoningEffort;
-  approvalPolicy?: CodexApprovalPolicy;
 }
 
 /** Tool-intercept callback type for harnesses that support it. */
@@ -231,7 +235,6 @@ export interface PluginConfig {
   maxPersistedSessions: number;
   fallbackChannel?: string;
   permissionMode?: PermissionMode;
-  codexApprovalPolicy: CodexApprovalPolicy;
   agentChannels?: Record<string, string>;
   maxAutoResponds: number;
   planApproval: PlanApprovalMode;
@@ -260,7 +263,6 @@ export interface RawPluginConfig {
   maxPersistedSessions?: number;
   fallbackChannel?: string;
   permissionMode?: PermissionMode;
-  codexApprovalPolicy?: CodexApprovalPolicy;
   agentChannels?: Record<string, string>;
   maxAutoResponds?: number;
   planApproval?: PlanApprovalMode;

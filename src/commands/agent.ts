@@ -2,7 +2,6 @@ import { sessionManager } from "../singletons";
 import {
   getDefaultHarnessName,
   pluginConfig,
-  resolveApprovalPolicyForHarness,
   resolveDefaultModelForHarness,
   resolveOriginChannel,
   resolveSessionRoute,
@@ -74,9 +73,7 @@ export function registerAgentCommand(api: CommandApi): void {
           workdir: pluginConfig.defaultWorkdir || process.cwd(),
           model: defaultModel,
           reasoningEffort: resolveReasoningEffortForHarness(harness),
-          codexApprovalPolicy: harness === "codex"
-            ? (resolveApprovalPolicyForHarness(harness) ?? pluginConfig.codexApprovalPolicy)
-            : undefined,
+          codexApprovalPolicy: harness === "codex" ? "never" : undefined,
           originChannel: resolveOriginChannel(ctx),
           originThreadId: resolveOriginThreadId(ctx),
           route: resolveSessionRoute(ctx),

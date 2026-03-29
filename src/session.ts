@@ -26,7 +26,6 @@ import type {
 import {
   getGlobalMcpServers,
   pluginConfig,
-  resolveApprovalPolicyForHarness,
   resolveDefaultModelForHarness,
   resolveReasoningEffortForHarness,
 } from "./config";
@@ -176,7 +175,7 @@ export class Session extends EventEmitter {
     this.permissionMode = config.permissionMode ?? pluginConfig.permissionMode;
     this.planApproval = config.planApproval ?? pluginConfig.planApproval;
     this.codexApprovalPolicy = this.harness.name === "codex"
-      ? (config.codexApprovalPolicy ?? resolveApprovalPolicyForHarness(this.harness.name) ?? pluginConfig.codexApprovalPolicy)
+      ? "never"
       : undefined;
     // Keep currentPermissionMode in sync with permissionMode for all harnesses.
     // The structured backend contract still uses plugin-owned plan state so

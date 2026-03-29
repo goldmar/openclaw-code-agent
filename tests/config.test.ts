@@ -231,7 +231,6 @@ describe("setPluginConfig", () => {
           defaultModel: "gpt-5.3-codex",
           allowedModels: ["gpt-5.3-codex", "gpt-5.4"],
           reasoningEffort: "high",
-          approvalPolicy: "on-request",
         },
       },
       defaultWorkdir: "/work",
@@ -242,7 +241,6 @@ describe("setPluginConfig", () => {
       agentChannels: { "/a": "telegram|b|c" },
       maxAutoResponds: 20,
       permissionMode: "bypassPermissions",
-      codexApprovalPolicy: "on-request",
       planApproval: "ask",
     });
     assert.equal(pluginConfig.maxSessions, 10);
@@ -251,7 +249,6 @@ describe("setPluginConfig", () => {
     assert.equal(pluginConfig.harnesses.codex?.defaultModel, "gpt-5.3-codex");
     assert.deepEqual(pluginConfig.harnesses.codex?.allowedModels, ["gpt-5.3-codex", "gpt-5.4"]);
     assert.equal(pluginConfig.harnesses.codex?.reasoningEffort, "high");
-    assert.equal(pluginConfig.harnesses.codex?.approvalPolicy, "on-request");
     assert.equal(pluginConfig.defaultWorkdir, "/work");
     assert.equal(pluginConfig.idleTimeoutMinutes, 60);
     assert.equal(pluginConfig.sessionGcAgeMinutes, 120);
@@ -260,8 +257,21 @@ describe("setPluginConfig", () => {
     assert.deepEqual(pluginConfig.agentChannels, { "/a": "telegram|b|c" });
     assert.equal(pluginConfig.maxAutoResponds, 20);
     assert.equal(pluginConfig.permissionMode, "bypassPermissions");
-    assert.equal(pluginConfig.codexApprovalPolicy, "on-request");
     assert.equal(pluginConfig.planApproval, "ask");
+  });
+
+  it("ignores removed Codex approval-policy config keys", () => {
+    setPluginConfig({
+      harnesses: {
+        codex: {
+          approvalPolicy: "on-request" as any,
+        } as any,
+      },
+      codexApprovalPolicy: "on-request" as any,
+    } as any);
+
+    assert.equal("approvalPolicy" in (pluginConfig.harnesses.codex ?? {}), false);
+    assert.equal("codexApprovalPolicy" in pluginConfig, false);
   });
 
   it("preserves legacy flat model keys as deprecated fallbacks", () => {
@@ -271,7 +281,6 @@ describe("setPluginConfig", () => {
       model: "gpt-5.3-codex",
       reasoningEffort: "high",
       allowedModels: ["sonnet", "opus"],
-      codexApprovalPolicy: "never",
     });
 
     assert.equal(pluginConfig.harnesses["claude-code"]?.defaultModel, "opus");
@@ -279,7 +288,6 @@ describe("setPluginConfig", () => {
     assert.equal(pluginConfig.harnesses.codex?.defaultModel, "gpt-5.3-codex");
     assert.equal(pluginConfig.harnesses.codex?.allowedModels, undefined);
     assert.equal(pluginConfig.harnesses.codex?.reasoningEffort, "high");
-    assert.equal(pluginConfig.harnesses.codex?.approvalPolicy, "never");
     assert.deepEqual(pluginConfig.allowedModels, ["sonnet", "opus"]);
   });
 
@@ -290,13 +298,11 @@ describe("setPluginConfig", () => {
     assert.equal(pluginConfig.sessionGcAgeMinutes, 1440);
     assert.equal(pluginConfig.maxPersistedSessions, 10000);
     assert.equal(pluginConfig.maxAutoResponds, 10);
-    assert.equal(pluginConfig.codexApprovalPolicy, "never");
     assert.equal(pluginConfig.harnesses["claude-code"]?.defaultModel, "sonnet");
     assert.deepEqual(pluginConfig.harnesses["claude-code"]?.allowedModels, ["sonnet", "opus"]);
     assert.equal(pluginConfig.harnesses.codex?.defaultModel, "gpt-5.4");
     assert.deepEqual(pluginConfig.harnesses.codex?.allowedModels, ["gpt-5.4"]);
     assert.equal(pluginConfig.harnesses.codex?.reasoningEffort, "medium");
-    assert.equal(pluginConfig.harnesses.codex?.approvalPolicy, "never");
   });
 
   it("uses default for missing permissionMode", () => {
@@ -382,7 +388,6 @@ describe("pluginConfig singleton", () => {
     assert.equal(pluginConfig.maxAutoResponds, 10);
     assert.equal(pluginConfig.permissionMode, "plan");
     assert.equal(pluginConfig.planApproval, "ask");
-    assert.equal(pluginConfig.codexApprovalPolicy, "never");
     assert.equal(pluginConfig.harnesses["claude-code"]?.defaultModel, "sonnet");
     assert.deepEqual(pluginConfig.harnesses["claude-code"]?.allowedModels, ["sonnet", "opus"]);
     assert.equal(pluginConfig.harnesses.codex?.defaultModel, "gpt-5.4");

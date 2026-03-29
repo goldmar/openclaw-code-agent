@@ -10,7 +10,6 @@ Canonical operator reference for `openclaw-code-agent`: install, configuration, 
 | `harnesses.claude-code.defaultModel` | `sonnet` |
 | `harnesses.codex.defaultModel` | `gpt-5.4` |
 | `harnesses.codex.reasoningEffort` | `medium` |
-| `harnesses.codex.approvalPolicy` | `never` |
 | `permissionMode` | `plan` |
 | `planApproval` | `ask` |
 | `defaultWorktreeStrategy` | `ask` |
@@ -55,8 +54,7 @@ Add this under `plugins.entries["openclaw-code-agent"]` in `~/.openclaw/openclaw
       "codex": {
         "defaultModel": "gpt-5.4",
         "allowedModels": ["gpt-5.4"],
-        "reasoningEffort": "medium",
-        "approvalPolicy": "never"
+        "reasoningEffort": "medium"
       }
     }
   }
@@ -84,21 +82,23 @@ Allowed-model matching is case-insensitive substring matching. If the resolved m
 
 | Mode | Meaning |
 | --- | --- |
-| `default` | Standard interactive execution |
-| `plan` | Present the plan first, then wait for approval before implementation |
-| `bypassPermissions` | Fully autonomous execution |
+| `default` | Plugin-managed interactive execution. The session can ask questions or pause between turns, but Codex-side approval prompts stay disabled |
+| `plan` | Present the plan first, then block implementation until approval |
+| `bypassPermissions` | Fully autonomous execution with no plan checkpoint |
 
 `plan` is the plugin default. Claude Code and Codex both feed the same plugin-owned approval workflow; Codex now supplies structured plan artifacts through the App Server backend instead of relying on text-shape inference.
+
+For Codex, approval behavior is fixed to the supported execution path and is not user-configurable. Use `permissionMode` and `planApproval` to control review gates instead.
 
 ### `planApproval`
 
 | Mode | Meaning |
 | --- | --- |
-| `ask` | Default. Notify the user directly and wait for explicit approval or revision |
-| `delegate` | Wake the orchestrator with the full plan and let it decide whether to approve or escalate |
+| `ask` | Default. Notify the user directly with the full plan and wait for explicit approval or revision |
+| `delegate` | Wake the orchestrator, require a full-plan review, then let it either approve directly or escalate back to the user with the same approval buttons |
 | `approve` | Auto-approve after verification |
 
-In `ask`, the plugin sends action buttons for `Approve`, `Revise`, and `Reject` when interactive callbacks are available. The same flow still works through plain replies.
+In `ask`, the plugin sends action buttons for `Approve`, `Revise`, and `Reject` when interactive callbacks are available, and the user-facing message includes the full plan text rather than the normal preview budget. The same flow still works through plain replies. In `delegate`, the orchestrator must read the full plan with `agent_output(..., full=true)` before approving anything.
 
 ## Worktree Strategies
 
@@ -107,7 +107,7 @@ In `ask`, the plugin sends action buttons for `Approve`, `Revise`, and `Reject` 
 | `off` | Tool param or config | No worktree; session runs in the main checkout |
 | `manual` | Tool param or config | Create worktree and branch, then stop for manual follow-through |
 | `ask` | Tool param or config | Default. Keep the branch local, notify the user, and send inline 4-button decision UI |
-| `delegate` | Tool param or config | Keep the branch local, wake the orchestrator with diff context; orchestrator must merge or escalate |
+| `delegate` | Tool param or config | Keep the branch local and wake the orchestrator with diff context; no user decision buttons are sent automatically |
 | `auto-merge` | Tool param or config | Merge back automatically; spawn a conflict resolver if needed |
 | `auto-pr` | Tool param or config | Create or update the PR automatically; on failure, fall back to an explicit pending worktree decision |
 
@@ -354,12 +354,12 @@ Prefer fully routable channel strings in `fallbackChannel` and `agentChannels`. 
 | Plan approved | `👍` plan approved |
 | Resumed | `▶️` session resumed from persisted context |
 | Turn completed | `⏸️` paused after turn |
-| Completed | `✅` done with cost and duration |
+| Completed | `✅` done with cost and duration, or `📋 Completed with summary` / `📋 Completed with report-only output` for substantive no-change review sessions |
 | Failed | `❌` failed, with recovery guidance |
 | Idle timeout | `💤` idle kill |
 | Stopped | `⛔` stopped by user or shutdown |
 | Worktree decision in `ask` | Inline `Merge locally` / `Create PR` buttons |
-| Worktree decision in `delegate` | Brief user ping plus orchestrator wake |
+| Worktree decision in `delegate` | Orchestrator wake only |
 
 `ask` and `delegate` suppress the normal turn-complete wake at the end of the session because the worktree decision message becomes the completion signal.
 

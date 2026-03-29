@@ -77,7 +77,7 @@ describe("executeRespond", () => {
       originAgentId: "agent-main",
       originSessionKey: "agent:main:telegram:group:123:topic:42",
       currentPermissionMode: "default",
-      codexApprovalPolicy: "on-request",
+      codexApprovalPolicy: "never",
     });
     const sm = createStubSessionManager({ "test-id": session });
 
@@ -95,7 +95,7 @@ describe("executeRespond", () => {
     assert.equal(capturedConfig.originThreadId, 42);
     assert.equal(capturedConfig.originAgentId, "agent-main");
     assert.equal(capturedConfig.permissionMode, "default");
-    assert.equal(capturedConfig.codexApprovalPolicy, "on-request");
+    assert.equal(capturedConfig.codexApprovalPolicy, "never");
     assert.equal(capturedConfig.sessionIdOverride, "test-id");
   });
 

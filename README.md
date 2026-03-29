@@ -77,8 +77,7 @@ Add a minimal config block under `plugins.entries["openclaw-code-agent"]` in `~/
             "codex": {
               "defaultModel": "gpt-5.4",
               "allowedModels": ["gpt-5.4"],
-              "reasoningEffort": "medium",
-              "approvalPolicy": "on-request"
+              "reasoningEffort": "medium"
             }
           }
         }
@@ -95,6 +94,8 @@ forced_login_method = "chatgpt"
 ```
 
 Put that in `~/.codex/config.toml`.
+
+Codex approval behavior is fixed to the supported execution path, and OpenClaw handles review gates through `permissionMode` plus `planApproval`.
 
 Launch a first session:
 

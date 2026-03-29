@@ -20,8 +20,7 @@
             "allowedModels": [
               "gpt-5.4"
             ],
-            "reasoningEffort": "medium",
-            "approvalPolicy": "never"
+            "reasoningEffort": "medium"
           },
           "claude-code": {
             "defaultModel": "sonnet",
@@ -54,14 +53,6 @@
                 "high"
               ],
               "description": "Harness-specific reasoning effort. Currently used by Codex."
-            },
-            "approvalPolicy": {
-              "type": "string",
-              "enum": [
-                "never",
-                "on-request"
-              ],
-              "description": "Harness-specific approval policy. Currently used by Codex."
             }
           }
         }
@@ -114,16 +105,7 @@
           "plan",
           "bypassPermissions"
         ],
-        "description": "Default plugin permission/orchestration mode for coding agent sessions"
-      },
-      "codexApprovalPolicy": {
-        "type": "string",
-        "default": "never",
-        "enum": [
-          "never",
-          "on-request"
-        ],
-        "description": "Codex-only SDK/CLI approval policy. Defaults to 'never'. Set to 'on-request' to re-enable interactive approval prompts for privileged actions. Distinct from plugin permissionMode / plan orchestration."
+        "description": "Default plugin orchestration mode for coding-agent sessions. This controls OpenClaw plan/default/bypass behavior and is separate from the fixed Codex execution policy."
       },
       "agentChannels": {
         "type": "object",
@@ -190,7 +172,7 @@
     },
     "harnesses": {
       "label": "Harness configuration",
-      "help": "Per-harness defaults and model restrictions. Default: {\"codex\":{\"defaultModel\":\"gpt-5.4\",\"allowedModels\":[\"gpt-5.4\"],\"reasoningEffort\":\"medium\",\"approvalPolicy\":\"never\"},\"claude-code\":{\"defaultModel\":\"sonnet\",\"allowedModels\":[\"sonnet\",\"opus\"]}}."
+      "help": "Per-harness defaults and model restrictions. Default: {\"codex\":{\"defaultModel\":\"gpt-5.4\",\"allowedModels\":[\"gpt-5.4\"],\"reasoningEffort\":\"medium\"},\"claude-code\":{\"defaultModel\":\"sonnet\",\"allowedModels\":[\"sonnet\",\"opus\"]}}."
     },
     "defaultModel": {
       "label": "Legacy default model",
@@ -212,15 +194,11 @@
     },
     "permissionMode": {
       "label": "Default permission mode",
-      "help": "Default plugin orchestration mode used when new coding-agent sessions are launched. This is separate from the Codex SDK approval policy."
-    },
-    "codexApprovalPolicy": {
-      "label": "Codex approval policy",
-      "help": "Deprecated. Use harnesses.codex.approvalPolicy instead."
+      "help": "Default plugin orchestration mode used when new coding-agent sessions are launched. Use this for plan/default/bypass behavior; Codex execution stays fixed to 'never'."
     },
     "planApproval": {
       "label": "Plan approval policy",
-      "help": "Choose whether plans are always sent to the user (`ask`, default), delegated to the orchestrator, or auto-approved."
+      "help": "Choose whether plans are always sent to the user with Approve/Revise/Reject buttons (`ask`, default), delegated to the orchestrator for full-plan review first, or auto-approved."
     },
     "defaultWorktreeStrategy": {
       "label": "Default worktree strategy",

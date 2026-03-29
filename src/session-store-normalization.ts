@@ -56,8 +56,10 @@ function toOptionalPermissionMode(value: unknown): PermissionMode | undefined {
 }
 
 function toOptionalCodexApprovalPolicy(value: unknown): CodexApprovalPolicy | undefined {
+  // Legacy persisted rows may still contain "on-request". Normalize them to
+  // the only supported App Server execution policy so reload remains safe.
   return value === "never" || value === "on-request"
-    ? value
+    ? "never"
     : undefined;
 }
 

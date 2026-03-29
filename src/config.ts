@@ -2,7 +2,6 @@ import { readFileSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
 import type {
-  CodexApprovalPolicy,
   HarnessConfig,
   OpenClawPluginToolContext,
   PluginConfig,
@@ -31,7 +30,6 @@ const BUILTIN_HARNESS_CONFIGS: Record<string, HarnessConfig> = {
     defaultModel: "gpt-5.4",
     allowedModels: ["gpt-5.4"],
     reasoningEffort: "medium",
-    approvalPolicy: "never",
   },
 };
 
@@ -58,7 +56,6 @@ export let pluginConfig: PluginConfig = {
   maxAutoResponds: 10,
   permissionMode: "plan",
   planApproval: "ask",
-  codexApprovalPolicy: "never",
   harnesses: {
     "claude-code": { ...BUILTIN_HARNESS_CONFIGS["claude-code"] },
     codex: { ...BUILTIN_HARNESS_CONFIGS.codex },
@@ -81,7 +78,8 @@ export function setPluginConfig(config: Partial<RawPluginConfig>): void {
     const existing = harnesses[name] ?? {};
     const next: HarnessConfig = {
       ...existing,
-      ...value,
+      defaultModel: value.defaultModel ?? existing.defaultModel,
+      reasoningEffort: value.reasoningEffort ?? existing.reasoningEffort,
     };
     if (value.allowedModels !== undefined) {
       next.allowedModels = value.allowedModels ? [...value.allowedModels] : value.allowedModels;
@@ -124,15 +122,6 @@ export function setPluginConfig(config: Partial<RawPluginConfig>): void {
     console.warn("[openclaw-code-agent] config.reasoningEffort is deprecated; use harnesses.codex.reasoningEffort instead.");
   }
 
-  if (config.codexApprovalPolicy !== undefined) {
-    const existing = harnesses.codex ?? {};
-    harnesses.codex = {
-      ...existing,
-      approvalPolicy: (config.harnesses?.codex?.approvalPolicy ?? config.codexApprovalPolicy),
-    };
-    console.warn("[openclaw-code-agent] config.codexApprovalPolicy is deprecated; use harnesses.codex.approvalPolicy instead.");
-  }
-
   if (config.allowedModels !== undefined) {
     console.warn("[openclaw-code-agent] config.allowedModels is deprecated; use harnesses.<name>.allowedModels instead.");
     for (const [name, existing] of Object.entries(harnesses)) {
@@ -155,7 +144,6 @@ export function setPluginConfig(config: Partial<RawPluginConfig>): void {
     agentChannels: config.agentChannels,
     maxAutoResponds: config.maxAutoResponds ?? 10,
     permissionMode: config.permissionMode ?? "plan",
-    codexApprovalPolicy: config.codexApprovalPolicy ?? "never",
     planApproval: config.planApproval ?? "ask",
     defaultHarness,
     harnesses,
@@ -189,10 +177,6 @@ export function resolveAllowedModelsForHarness(name: string): string[] | undefin
 
 export function resolveReasoningEffortForHarness(name: string): ReasoningEffort | undefined {
   return getHarnessConfig(name).reasoningEffort;
-}
-
-export function resolveApprovalPolicyForHarness(name: string): CodexApprovalPolicy | undefined {
-  return getHarnessConfig(name).approvalPolicy;
 }
 
 // -- Channel resolution utilities --

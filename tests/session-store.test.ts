@@ -316,6 +316,30 @@ describe("SessionStore path resolution", () => {
     assert.equal(persisted?.planApprovalContext, "plan-mode");
   });
 
+  it("normalizes legacy Codex on-request approval policy to never", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-store-codex-approval-"));
+    const indexPath = join(dir, "sessions.json");
+    writeStore(indexPath, [{
+      sessionId: "codex-approval",
+      harnessSessionId: "h-codex-approval",
+      name: "codex-approval",
+      prompt: "p",
+      workdir: "/tmp",
+      status: "completed",
+      lifecycle: "terminal",
+      codexApprovalPolicy: "on-request",
+      costUsd: 0,
+    }]);
+
+    const store = new SessionStore({
+      indexPath,
+      env: {},
+    });
+
+    const persisted = store.getPersistedSession("codex-approval");
+    assert.equal(persisted?.codexApprovalPolicy, "never");
+  });
+
   it("preserves persisted waiting lifecycles across reload", () => {
     const dir = mkdtempSync(join(tmpdir(), "openclaw-store-waiting-lifecycle-"));
     const indexPath = join(dir, "sessions.json");

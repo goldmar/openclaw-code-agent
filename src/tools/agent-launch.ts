@@ -6,7 +6,6 @@ import {
   getDefaultHarnessName,
   pluginConfig,
   resolveAllowedModelsForHarness,
-  resolveApprovalPolicyForHarness,
   resolveDefaultModelForHarness,
   resolveReasoningEffortForHarness,
 } from "../config";
@@ -102,13 +101,13 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
       permission_mode: Type.Optional(
         Type.Union(
           [Type.Literal("default"), Type.Literal("plan"), Type.Literal("bypassPermissions")],
-          { description: "Permission mode: 'default' (standard prompts), 'plan' (present plan first, wait for approval), 'bypassPermissions' (fully autonomous execution). Defaults to plugin config ('plan' by default)." },
+          { description: "Permission mode: 'default' (plugin-managed interactive execution), 'plan' (present the plan first and block implementation until approval), 'bypassPermissions' (fully autonomous execution). Defaults to plugin config ('plan' by default)." },
         ),
       ),
       plan_approval: Type.Optional(
         Type.Union(
           [Type.Literal("ask"), Type.Literal("delegate"), Type.Literal("approve")],
-          { description: "Plan approval policy for this session: 'ask' (show Approve/Revise/Reject buttons), 'delegate' (orchestrator decides), 'approve' (auto-approve). Overrides the plugin-level planApproval setting." },
+          { description: "Plan approval policy for this session: 'ask' (send the full plan to the user with Approve/Revise/Reject buttons), 'delegate' (orchestrator must review the full plan, then either approve directly or escalate back to the user with the same buttons), 'approve' (auto-approve after verification). Overrides the plugin-level planApproval setting." },
         ),
       ),
       harness: Type.Optional(
@@ -207,9 +206,7 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
           multiTurn: true,
           permissionMode,
           planApproval,
-          codexApprovalPolicy: harness === "codex"
-            ? (resolveApprovalPolicyForHarness(harness) ?? pluginConfig.codexApprovalPolicy)
-            : undefined,
+          codexApprovalPolicy: harness === "codex" ? "never" : undefined,
           originChannel,
           originThreadId,
           originAgentId: ctx.agentId || undefined,
@@ -251,8 +248,6 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
               worktreeStrategy: session.worktreeStrategy ?? params.worktree_strategy ?? pluginConfig.defaultWorktreeStrategy ?? "off",
               worktreePath: session.worktreePath,
               originalWorkdir: session.originalWorkdir,
-              codexApprovalPolicy: session.codexApprovalPolicy
-                ?? (harness === "codex" ? (resolveApprovalPolicyForHarness(harness) ?? pluginConfig.codexApprovalPolicy) : undefined),
             });
 
         return {

@@ -36,7 +36,7 @@ The plugin has a first-class approval workflow:
 - `permissionMode: "plan"` is the default
 - `planApproval: "ask"` is the default
 - plans can be revised before implementation
-- approval happens with `agent_respond(..., approve=true)` or the Telegram approval buttons
+- approval happens with `agent_respond(..., approve=true)` or the shared Approve / Revise / Reject callback flow
 
 ACP can run sessions. It does not give you this orchestration loop out of the box.
 

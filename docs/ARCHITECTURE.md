@@ -149,7 +149,7 @@ agent_launch / /agent
 Plan approval behavior depends on `planApproval`:
 
 - `ask`: notify the user directly and wait
-- `delegate`: wake the orchestrator with the full plan and decision criteria
+- `delegate`: wake the orchestrator with the full plan and decision criteria; it must review the full plan before approving or escalating back to the user
 - `approve`: wake the orchestrator with an immediate approval instruction
 
 ### Worktree Completion
@@ -157,7 +157,7 @@ Plan approval behavior depends on `planApproval`:
 When a session completes with worktree metadata:
 
 - `ask`: keep the branch local, notify the user, and attach `Merge locally` / `Create PR` buttons
-- `delegate`: keep the branch local, send a brief user ping, and wake the orchestrator with diff context
+- `delegate`: keep the branch local and wake the orchestrator with diff context
 - `auto-merge`: attempt merge automatically and spawn a conflict resolver on failure
 - `auto-pr`: attempt PR creation/update automatically; fall back to explicit pending decision state on failure
 - `manual`: keep the branch for explicit follow-up

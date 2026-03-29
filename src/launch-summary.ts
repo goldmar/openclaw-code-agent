@@ -1,5 +1,4 @@
 import type {
-  CodexApprovalPolicy,
   PlanApprovalMode,
   PermissionMode,
   ReasoningEffort,
@@ -19,7 +18,6 @@ export interface LaunchSummaryInput {
   worktreeStrategy?: WorktreeStrategy;
   worktreePath?: string;
   originalWorkdir?: string;
-  codexApprovalPolicy?: CodexApprovalPolicy;
   resumeSessionId?: string;
   forkSession?: boolean;
   forceNewSession?: boolean;
@@ -34,7 +32,6 @@ export interface LaunchSummarySessionLike {
   worktreeStrategy?: WorktreeStrategy;
   worktreePath?: string;
   originalWorkdir?: string;
-  codexApprovalPolicy?: CodexApprovalPolicy;
 }
 
 function summarizePrompt(prompt: string): string {
@@ -66,9 +63,6 @@ export function formatLaunchSummary(input: LaunchSummaryInput): string {
   if (input.reasoningEffort) {
     details.push(`  Reasoning effort: ${input.reasoningEffort}`);
   }
-  if (input.codexApprovalPolicy) {
-    details.push(`  Codex approval policy: ${input.codexApprovalPolicy}`);
-  }
   if (input.resumeSessionId) {
     details.push(`  Resume: ${input.resumeSessionId}${input.forkSession ? " (forked)" : ""}`);
   } else if (input.forceNewSession) {
@@ -83,7 +77,7 @@ export function formatLaunchSummary(input: LaunchSummaryInput): string {
 }
 
 export function formatLaunchSummaryFromSession(
-  input: Omit<LaunchSummaryInput, "sessionId" | "sessionName" | "model" | "reasoningEffort" | "worktreeStrategy" | "worktreePath" | "originalWorkdir" | "codexApprovalPolicy">,
+  input: Omit<LaunchSummaryInput, "sessionId" | "sessionName" | "model" | "reasoningEffort" | "worktreeStrategy" | "worktreePath" | "originalWorkdir">,
   session: LaunchSummarySessionLike,
 ): string {
   return formatLaunchSummary({
@@ -95,6 +89,5 @@ export function formatLaunchSummaryFromSession(
     worktreeStrategy: session.worktreeStrategy ?? "off",
     worktreePath: session.worktreePath,
     originalWorkdir: session.originalWorkdir,
-    codexApprovalPolicy: session.codexApprovalPolicy,
   });
 }
