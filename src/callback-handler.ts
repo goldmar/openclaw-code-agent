@@ -225,7 +225,21 @@ export function createCallbackHandler(channel: InteractiveChannel = "telegram") 
             sessionManager.kill(active.id, "user");
             await ctx.respond.reply({ text: `❌ Plan rejected for [${active.name}]. Session stopped.` });
           } else {
-            await ctx.respond.reply({ text: `❌ Plan rejected.` });
+            const persisted = sessionManager.getPersistedSession?.(sessionId);
+            if (persisted) {
+              sessionManager.updatePersistedSession?.(sessionId, {
+                approvalState: "rejected",
+                lifecycle: "terminal",
+                pendingPlanApproval: false,
+                planApprovalContext: undefined,
+                planDecisionVersion: (persisted.planDecisionVersion ?? 0) + 1,
+              });
+              await ctx.respond.reply({
+                text: `❌ Plan rejected for [${persisted.name ?? actionSessionName}]. Session remains stopped.`,
+              });
+            } else {
+              await ctx.respond.reply({ text: `❌ Plan rejected.` });
+            }
           }
           break;
         }

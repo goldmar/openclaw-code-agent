@@ -111,6 +111,44 @@ describe("createCallbackHandler()", () => {
     });
   });
 
+  it("rejects timed-out pending plans without leaving them pending in persisted state", async () => {
+    const patches: Array<Record<string, unknown>> = [];
+    setSessionManager({
+      consumeActionToken: () => ({
+        sessionId: "test-id",
+        kind: "plan-reject",
+        planDecisionVersion: 4,
+      }),
+      resolve: () => undefined,
+      getPersistedSession: () => ({
+        id: "test-id",
+        name: "spellcast-release-readiness-plan",
+        pendingPlanApproval: true,
+        approvalState: "pending",
+        planDecisionVersion: 4,
+      }),
+      updatePersistedSession: (_ref: string, patch: Record<string, unknown>) => {
+        patches.push(patch);
+        return true;
+      },
+    } as any);
+
+    const handler = createCallbackHandler();
+    const state = createCtx("token-reject");
+    const result = await handler.handler(state.ctx as any);
+
+    assert.deepEqual(result, { handled: true });
+    assert.equal(state.buttonsCleared, 1);
+    assert.match(state.replies[0], /Plan rejected for \[spellcast-release-readiness-plan\]\. Session remains stopped\./);
+    assert.deepEqual(patches[0], {
+      approvalState: "rejected",
+      lifecycle: "terminal",
+      pendingPlanApproval: false,
+      planApprovalContext: undefined,
+      planDecisionVersion: 5,
+    });
+  });
+
   it("rejects stale plan approval callbacks from an older plan-decision version", async () => {
     setSessionManager({
       consumeActionToken: () => ({

@@ -1274,6 +1274,36 @@ describe("SessionManager terminal wake behavior", () => {
     assert.match(request.userMessage, /💤 \[idle-run\] Suspended after idle timeout/);
   });
 
+  it("keeps timed-out pending plans in the plan-decision UX", () => {
+    const s = fakeSession({
+      id: "s-plan-timeout",
+      name: "spellcast-release-readiness-plan",
+      status: "killed",
+      killReason: "idle-timeout",
+      pendingPlanApproval: true,
+      planDecisionVersion: 7,
+      planApproval: "ask",
+      isExplicitlyResumable: true,
+      costUsd: 0,
+      startedAt: Date.now() - 2_000,
+    });
+
+    (sm as any).onSessionTerminal(s);
+
+    const calls = (sm as any).__dispatchCalls;
+    assert.equal(calls.length, 1);
+    const [_sessionArg, request] = calls[0];
+    assert.equal(request.label, "plan-approval-timeout");
+    assert.match(request.userMessage, /Plan still awaiting approval after idle timeout/);
+    assert.match(request.userMessage, /Approve resumes the session and starts implementation/);
+    assert.match(request.userMessage, /Revise resumes it in plan mode/);
+    assert.match(request.userMessage, /Reject keeps the session stopped/);
+    assert.deepEqual(
+      (request.buttons ?? []).map((row: Array<{ label: string }>) => row.map((button) => button.label)),
+      [["Approve", "Revise", "Reject"]],
+    );
+  });
+
   it("uses explicit stopped wording for user-terminated sessions", () => {
     const s = fakeSession({
       id: "s-user-stop",

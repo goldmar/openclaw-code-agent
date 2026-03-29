@@ -167,6 +167,28 @@ export class SessionLifecycleService {
     const costStr = `$${(session.costUsd ?? 0).toFixed(2)}`;
     const duration = session.duration;
     if (session.killReason === "idle-timeout") {
+      const planApprovalMode = session.pendingPlanApproval
+        ? this.deps.resolvePlanApprovalMode(session)
+        : undefined;
+      if (session.pendingPlanApproval) {
+        this.deps.dispatchSessionNotification(session, {
+          label: "plan-approval-timeout",
+          userMessage: [
+            `📋 [${session.name}] Plan still awaiting approval after idle timeout | ${costStr} | ${formatDuration(duration)}`,
+            ``,
+            `The agent already produced a plan and is waiting for your decision.`,
+            `Approve resumes the session and starts implementation.`,
+            `Revise resumes it in plan mode so it can update the plan first.`,
+            `Reject keeps the session stopped.`,
+          ].join("\n"),
+          notifyUser: "always",
+          buttons: planApprovalMode === "ask"
+            ? this.deps.getPlanApprovalButtons(session.id, session)
+            : undefined,
+        });
+        this.deps.clearRetryTimersForSession(session.id);
+        return;
+      }
       this.deps.dispatchSessionNotification(session, {
         label: "suspended",
         userMessage: `💤 [${session.name}] Suspended after idle timeout | ${costStr} | ${formatDuration(duration)}`,
