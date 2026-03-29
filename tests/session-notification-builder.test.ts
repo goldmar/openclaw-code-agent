@@ -58,10 +58,12 @@ describe("session-notification-builder", () => {
       } as any,
       originThreadLine: "Origin thread: telegram topic 42",
       preview: "Final output",
+      compactSummary: "Implemented the requested fix.",
     });
 
-    assert.equal(payload.userMessage, "✅ [done-session] Completed | $1.25 | 1m1s");
+    assert.equal(payload.userMessage, "✅ [done-session] Completed | $1.25 | 1m1s\n   Summary: Implemented the requested fix.");
     assert.match(payload.wakeMessage, /Coding agent session completed\./);
+    assert.match(payload.wakeMessage, /Completion summary:/);
     assert.match(payload.wakeMessage, /Output preview:/);
   });
 

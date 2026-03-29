@@ -1172,7 +1172,35 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(calls.length, 1);
     const [_sessionArg, request] = calls[0];
     assert.equal(request.label, "completed");
-    assert.equal(request.userMessage, "✅ [normal-session] Completed | $0.00 | 8s");
+    assert.equal(request.userMessage, "✅ [normal-session] Completed | $0.00 | 8s\n   Summary: Implemented the fix and updated tests.");
+  });
+
+  it("suppresses turn-complete when the session is already terminal and relies on the final completed notification", async () => {
+    const s = fakeSession({
+      id: "s-terminal-race",
+      name: "terminal-race",
+      status: "completed",
+      killReason: "done",
+      duration: 5_000,
+      completedAt: Date.now(),
+      result: {
+        session_id: "thread-race",
+        num_turns: 2,
+        duration_ms: 5_000,
+      },
+      getOutput: () => ["Applied the completion fix and added tests."],
+    });
+    (sm as any).semantic.classifyCompletionSummary = async () => ({ classification: "none" });
+
+    (sm as any).onTurnEnd(s, false);
+    await (sm as any).onSessionTerminal(s);
+
+    const calls = (sm as any).__dispatchCalls;
+    assert.equal(calls.length, 1);
+    const [_sessionArg, request] = calls[0];
+    assert.equal(request.label, "completed");
+    assert.doesNotMatch(request.userMessage, /⏸️/);
+    assert.match(request.userMessage, /Summary: Applied the completion fix and added tests\./);
   });
 });
 

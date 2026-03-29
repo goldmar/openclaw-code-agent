@@ -65,13 +65,29 @@ export class SessionLifecycleService {
     },
   ) {}
 
-  private async getCompletionSummary(session: Session): Promise<string | undefined> {
+  private async getCompletionSummary(session: Session): Promise<{
+    compactSummary: string;
+    substantiveSummary?: string;
+  }> {
     const preview = this.deps.getOutputPreview(session).trim();
-    if (!preview) return undefined;
     const outputText = session.getOutput().join("\n").trim();
-    if (!outputText) return undefined;
+    const summarySource = outputText || preview;
+    const compactSummary = summarySource
+      ? truncateText(
+          summarySource
+            .split("\n")
+            .map((line) => line.trim())
+            .find(Boolean)
+            ?.replace(/\s+/g, " ")
+            ?? "No textual summary produced.",
+          160,
+        )
+      : "No textual summary produced.";
+    if (!preview || !outputText) {
+      return { compactSummary };
+    }
     const workdir = session.workdir || session.originalWorkdir;
-    if (!workdir) return undefined;
+    if (!workdir) return { compactSummary };
 
     const result = await this.deps.classifyCompletionSummary({
       harnessName: session.harnessName,
@@ -81,10 +97,21 @@ export class SessionLifecycleService {
       agentId: session.originAgentId,
       outputText: outputText.slice(-5_000),
     });
-    return result.classification === "report_worthy_no_change" ? preview : undefined;
+    return {
+      compactSummary,
+      substantiveSummary: result.classification === "report_worthy_no_change" ? preview : undefined,
+    };
   }
 
   handleTurnEnd(session: Session, hadQuestion: boolean): void {
+    if (session.status !== "running") {
+      console.info(
+        `[SessionManager] Suppressing turn-end wake for session ${session.id} ` +
+        `(status=${session.status}) — terminal notification owns the completion path.`,
+      );
+      return;
+    }
+
     if (hadQuestion || session.pendingPlanApproval) {
       this.emitWaitingForInput(session);
       return;
@@ -322,13 +349,20 @@ export class SessionLifecycleService {
     });
   }
 
-  emitCompleted(session: Session, substantiveSummary?: string): void {
+  emitCompleted(
+    session: Session,
+    completionSummary: {
+      compactSummary: string;
+      substantiveSummary?: string;
+    } = { compactSummary: "No textual summary produced." },
+  ): void {
     const preview = this.deps.getOutputPreview(session);
     const payload = buildCompletedPayload({
       session,
       originThreadLine: this.deps.originThreadLine(session),
       preview,
-      substantiveSummary,
+      compactSummary: completionSummary.compactSummary,
+      substantiveSummary: completionSummary.substantiveSummary,
     });
     this.deps.dispatchSessionNotification(session, {
       label: "completed",

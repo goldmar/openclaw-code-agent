@@ -25,22 +25,25 @@ export function buildCompletedPayload(args: {
   session: Pick<Session, "id" | "name" | "status" | "costUsd" | "duration">;
   originThreadLine: OriginThreadLine;
   preview: string;
+  compactSummary: string;
   substantiveSummary?: string;
 }): { userMessage: string; wakeMessage: string } {
-  const { session, originThreadLine, preview, substantiveSummary } = args;
+  const { session, originThreadLine, preview, compactSummary, substantiveSummary } = args;
   const costStr = `$${(session.costUsd ?? 0).toFixed(2)}`;
   const duration = formatDuration(session.duration);
+  const summary = substantiveSummary?.trim() || compactSummary.trim();
   return {
     userMessage: substantiveSummary?.trim()
       ? `📋 [${session.name}] Completed with summary:\n\n${substantiveSummary}`
-      : `✅ [${session.name}] Completed | ${costStr} | ${duration}`,
+      : `✅ [${session.name}] Completed | ${costStr} | ${duration}\n   Summary: ${summary}`,
     wakeMessage: [
       `Coding agent session completed.`,
       `Name: ${session.name} | ID: ${session.id}`,
       `Status: ${session.status}`,
       originThreadLine,
       ``,
-      `(Note: a turn-complete wake may have already been sent for this session. If you already acted on it, treat this as confirmation — do not repeat actions.)`,
+      `Completion summary:`,
+      summary,
       ``,
       `Output preview:`,
       preview,
