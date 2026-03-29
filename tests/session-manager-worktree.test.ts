@@ -69,6 +69,11 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
         worktreeStrategy: "ask",
         worktreeBaseBranch: "main",
         pendingPlanApproval: false,
+        getOutput: () => [
+          "Builds & Tools follow-up:",
+          "Built rust-hello-world and verified the binary output.",
+          "No repo changes were needed after validation.",
+        ],
       };
 
       const result = await (sm as any).handleWorktreeStrategy(session);
@@ -80,6 +85,9 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       const [_sessionArg, request] = calls[0];
       assert.equal(request.label, "worktree-no-changes");
       assert.match(request.userMessage, /worktree cleaned up/);
+      assert.equal(request.notifyUser, "always");
+      assert.match(request.wakeMessage, /completed with no repository changes/);
+      assert.match(request.wakeMessage, /Built rust-hello-world and verified the binary output/);
       const persisted = (sm as any).store.persisted.get("h-no-change");
       assert.equal(persisted.worktreePath, undefined);
       assert.equal(persisted.worktreeDisposition, "no-change-cleaned");
@@ -425,6 +433,8 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       assert.match(request.userMessage, /Summary:/);
       assert.match(request.userMessage, /Touches `README.md`, `src-note.txt`/);
       assert.match(request.userMessage, /Recent work: tighten worktree decision UX/);
+      assert.match(request.wakeMessageOnNotifySuccess, /Session: ask-summary \| ID: s-ask-summary/);
+      assert.match(request.wakeMessageOnNotifySuccess, /Branch: `agent\/ask-summary` → `main`/);
       assert.deepEqual(
         request.buttons.map((row: Array<{ label: string }>) => row.map((button) => button.label)),
         [

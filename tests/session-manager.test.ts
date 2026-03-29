@@ -829,6 +829,7 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(request.buttons[0][0].label, "Approve");
     assert.equal(request.buttons[0][1].label, "Revise");
     assert.equal(request.buttons[0][2].label, "Reject");
+    assert.match(request.wakeMessageOnNotifySuccess, /Session: planner \| ID: s-plan-ask/);
 
     const approveTokenId = request.buttons[0][0].callbackData;
     const approveToken = (sm as any).interactions.consumeActionToken(approveTokenId);
@@ -1387,6 +1388,58 @@ describe("SessionManager terminal wake behavior", () => {
     assert.match(request.userMessage, /❌ \[broken-launch\] Failed/);
   });
 
+  it("uses the final substantive block for terminal completion wake previews", async () => {
+    const prefix = "Plan:\n" + "review requirements\n".repeat(120);
+    const suffix = [
+      "Implementation complete:",
+      "- Built rust-hello-world successfully",
+      "- Verified the binary prints hello world",
+      "- No follow-up action needed",
+    ].join("\n");
+    const s = fakeSession({
+      id: "s-final-block",
+      name: "final-block",
+      status: "completed",
+      completedAt: 1700000001500,
+      getOutput: () => [`${prefix}\n\n${suffix}`],
+    });
+
+    await (sm as any).onSessionTerminal(s);
+
+    const calls = (sm as any).__dispatchCalls;
+    assert.equal(calls.length, 1);
+    const [_sessionArg, request] = calls[0];
+    assert.match(request.wakeMessage, /Implementation complete:/);
+    assert.doesNotMatch(request.wakeMessage, /review requirements/);
+  });
+
+  it("prefers post-approval execution output over earlier plan text in completion wakes", async () => {
+    const planBlock = "Plan draft:\n" + "collect requirements\n".repeat(140);
+    const finalBlock = [
+      "Completed work after approval:",
+      "- Added the missing build step",
+      "- Ran the hello world binary",
+      "- Confirmed the output is stable",
+    ].join("\n");
+    const s = fakeSession({
+      id: "s-approved-complete",
+      name: "approved-complete",
+      status: "completed",
+      approvalState: "approved",
+      planDecisionVersion: 2,
+      completedAt: 1700000001750,
+      getOutput: () => [`${planBlock}\n\n${finalBlock}`],
+    });
+
+    await (sm as any).onSessionTerminal(s);
+
+    const calls = (sm as any).__dispatchCalls;
+    assert.equal(calls.length, 1);
+    const [_sessionArg, request] = calls[0];
+    assert.match(request.wakeMessage, /Completed work after approval:/);
+    assert.doesNotMatch(request.wakeMessage, /collect requirements/);
+  });
+
   it("de-dupes duplicate failed wake for the same terminal marker", async () => {
     const s = fakeSession({
       id: "s-dup-failed",
@@ -1584,6 +1637,8 @@ describe("SessionManager.handleAskUserQuestion()", () => {
     assert.equal(request.buttons[0][0].label, "Merge");
     assert.equal(request.buttons[0][1].label, "Open PR");
     assert.equal(request.buttons[0][2].label, "Decide later");
+    assert.match(request.wakeMessageOnNotifySuccess, /Session: cc-worktree \| ID: s-cc-worktree/);
+    assert.match(request.wakeMessageOnNotifySuccess, /Should I merge this branch or open a PR\?/);
 
     const pendingQuestion = (sm as any).pendingAskUserQuestions.get(session.id);
     clearTimeout(pendingQuestion.timeoutHandle);
@@ -1615,6 +1670,8 @@ describe("SessionManager.handleAskUserQuestion()", () => {
     assert.equal(request.label, "ask-user-question");
     assert.equal(request.buttons[0][0].label, "Staging");
     assert.equal(request.buttons[0][1].label, "Production");
+    assert.match(request.wakeMessageOnNotifySuccess, /Session: cc-question \| ID: s-cc-question/);
+    assert.match(request.wakeMessageOnNotifySuccess, /Which environment should I target\?/);
 
     sm.resolveAskUserQuestion(session.id, 0);
     await pending;

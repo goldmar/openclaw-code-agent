@@ -67,6 +67,32 @@ export function buildDelegateReminderWakeMessage(
   ].join("\n");
 }
 
+export function buildNoChangeWakeMessage(args: {
+  sessionName: string;
+  sessionId: string;
+  cleanupSummary: string;
+  preview: string;
+  originThreadLine?: string;
+}): string {
+  const { sessionName, sessionId, cleanupSummary, preview, originThreadLine } = args;
+  const previewSection = preview.trim()
+    ? ["", "Output preview:", preview]
+    : [];
+
+  return [
+    `Coding agent session completed with no repository changes.`,
+    `Name: ${sessionName} | ID: ${sessionId}`,
+    `Worktree outcome: ${cleanupSummary}`,
+    ...(originThreadLine ? [originThreadLine] : []),
+    ...previewSection,
+    ``,
+    `[ACTION REQUIRED] Follow your autonomy rules for session completion:`,
+    `1. Use agent_output(session='${sessionId}', full=true) to read the full result.`,
+    `2. If this is part of a multi-phase pipeline, launch the next phase NOW — do not wait for user input.`,
+    `3. Notify the user with a summary of what was done, even though no repo changes were kept.`,
+  ].join("\n");
+}
+
 export function buildWorktreeDecisionSummary(diffSummary: {
   changedFiles: string[];
   commitMessages: Array<{ message: string }>;

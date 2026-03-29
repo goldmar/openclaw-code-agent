@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   buildCompletedPayload,
   buildDelegateWorktreeWakeMessage,
+  buildNoChangeWakeMessage,
   buildFailedPayload,
   buildWaitingForInputPayload,
 } from "../src/session-notification-builder";
@@ -103,5 +104,20 @@ describe("session-notification-builder", () => {
 
     assert.match(message, /Branch: agent\/feature-session → main/);
     assert.match(message, /Never call agent_pr\(\) autonomously in delegate mode/);
+  });
+
+  it("builds deterministic no-change worktree wakes with preview context", () => {
+    const message = buildNoChangeWakeMessage({
+      sessionName: "rust-hello-world",
+      sessionId: "session-4",
+      cleanupSummary: "worktree cleaned up",
+      preview: "Built the project and verified the binary prints hello world.",
+      originThreadLine: "Origin thread: telegram topic 42",
+    });
+
+    assert.match(message, /completed with no repository changes/);
+    assert.match(message, /Worktree outcome: worktree cleaned up/);
+    assert.match(message, /Output preview:/);
+    assert.match(message, /agent_output\(session='session-4', full=true\)/);
   });
 });

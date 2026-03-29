@@ -77,8 +77,12 @@ export class SessionQuestionService {
         userMessage,
         notifyUser: "always",
         buttons,
-        wakeMessageOnNotifySuccess:
-          `AskUserQuestion buttons delivered to user. Await their selection — do NOT answer this question yourself.`,
+        wakeMessageOnNotifySuccess: [
+          `AskUserQuestion delivered to the user.`,
+          `Session: ${session.name} | ID: ${session.id}`,
+          `Question: ${firstQuestion.question}`,
+          `Await their selection — do NOT answer this question yourself.`,
+        ].join("\n"),
         wakeMessageOnNotifyFailed: fallbackWakeText,
       });
     });

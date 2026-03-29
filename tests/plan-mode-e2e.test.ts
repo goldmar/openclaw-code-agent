@@ -84,7 +84,7 @@ describe("Plan mode E2E: ExitPlanMode flow", () => {
 
     assert.ok(!result.isError, `Should not be an error, got: ${result.text}`);
     assert.ok(!result.text.includes("no pending plan approval"), `Should not say no pending plan: ${result.text}`);
-    assert.ok(result.text.includes("Message sent"), `Should say message sent: ${result.text}`);
+    assert.ok(result.text.includes("Plan approved for session"), `Should confirm plan approval: ${result.text}`);
 
     session.kill("user"); // cleanup
   });
@@ -281,7 +281,11 @@ describe("Plan mode E2E: approve=true on idle-killed plan session (double-approv
     });
 
     assert.ok(!result.isError, `Should not be an error: ${result.text}`);
-    assert.ok(result.text.includes("Auto-resumed"), `Should say auto-resumed: ${result.text}`);
+    assert.ok(result.text.includes("Plan approved for session"), `Should confirm plan approval on resume: ${result.text}`);
+    assert.ok(
+      result.text.includes("Session resumed in bypassPermissions mode"),
+      `Should confirm resumed bypassPermissions mode: ${result.text}`,
+    );
 
     assert.ok(capturedResumeConfig, "spawnAndAwaitRunning should have been called");
     assert.equal(
@@ -380,7 +384,11 @@ describe("Plan mode E2E: approve=true on idle-killed plan session (double-approv
     });
 
     assert.equal(result.isError, undefined);
-    assert.ok(result.text.includes("Auto-resumed"), `Should auto-resume deterministically: ${result.text}`);
+    assert.ok(result.text.includes("Plan approved for session"), `Should confirm plan approval deterministically: ${result.text}`);
+    assert.ok(
+      result.text.includes("Session resumed in bypassPermissions mode"),
+      `Should confirm resumed bypassPermissions mode: ${result.text}`,
+    );
     assert.equal(capturedConfig.permissionMode, "bypassPermissions");
     assert.match(capturedConfig.prompt, /The user has approved your plan/i);
     assert.match(capturedConfig.prompt, /Please change the approach and add more steps before approving\./);

@@ -1,6 +1,6 @@
 import { Session } from "./session";
 import { pluginConfig, getDefaultHarnessName } from "./config";
-import { generateSessionName, firstCompleteLines } from "./format";
+import { generateSessionName, firstCompleteLines, lastCompleteLines } from "./format";
 import { formatLaunchSummaryFromSession } from "./launch-summary";
 import { pathsReferToSameLocation } from "./path-utils";
 import {
@@ -126,6 +126,8 @@ export class SessionManager {
       ),
       updatePersistedSession: (ref, patch) => this.updatePersistedSession(ref, patch),
       dispatchSessionNotification: (session, request) => this.dispatchSessionNotification(session, request),
+      getOutputPreview: (session, maxChars) => this.getOutputPreview(session, maxChars),
+      originThreadLine: (session) => this.originThreadLine(session),
       getWorktreeDecisionButtons: (sessionId) => this.getWorktreeDecisionButtons(sessionId),
       makeOpenPrButton: (sessionId) => this.makeActionButton(sessionId, "worktree-create-pr", "Open PR"),
       worktreeMessages: this.worktreeMessages,
@@ -546,9 +548,57 @@ export class SessionManager {
 
   private getOutputPreview(session: Session, maxChars: number = 1000): string {
     const useFullOutput = !Number.isFinite(maxChars);
-    const raw = (useFullOutput ? session.getOutput() : session.getOutput(20)).join("\n");
+    const outputLines = typeof (session as Partial<Session>).getOutput === "function"
+      ? session.getOutput()
+      : [];
+    const raw = useFullOutput
+      ? outputLines.join("\n")
+      : this.selectCompletionPreviewSource(session);
     if (useFullOutput) return raw;
-    return raw.length > maxChars ? firstCompleteLines(raw, maxChars) : raw;
+    return raw.length > maxChars
+      ? this.shouldPreferTailPreview(session)
+        ? lastCompleteLines(raw, maxChars)
+        : firstCompleteLines(raw, maxChars)
+      : raw;
+  }
+
+  private selectCompletionPreviewSource(session: Session): string {
+    const outputLines = typeof (session as Partial<Session>).getOutput === "function"
+      ? session.getOutput()
+      : [];
+    const fullOutput = outputLines.join("\n").trim();
+    if (!fullOutput) return "";
+    if (!this.shouldPreferTailPreview(session)) {
+      return outputLines.slice(-20).join("\n");
+    }
+
+    const lastBlock = this.extractLastSubstantiveBlock(fullOutput);
+    return lastBlock ?? fullOutput;
+  }
+
+  private shouldPreferTailPreview(session: Session): boolean {
+    if (session.status === "completed" || session.killReason === "done") return true;
+    const control = session as unknown as {
+      approvalState?: string;
+      planDecisionVersion?: number;
+      planModeApproved?: boolean;
+      pendingPlanApproval?: boolean;
+    };
+    return control.approvalState === "approved"
+      || control.planModeApproved === true
+      || (control.planDecisionVersion ?? 0) > 0;
+  }
+
+  private extractLastSubstantiveBlock(text: string): string | undefined {
+    const blocks = text
+      .split(/\n\s*\n+/)
+      .map((block) => block.trim())
+      .filter((block) => /[A-Za-z0-9]/.test(block));
+    const lastBlock = blocks.at(-1);
+    if (!lastBlock) return undefined;
+    return lastBlock.length >= 120 || lastBlock.includes("\n")
+      ? lastBlock
+      : undefined;
   }
 
   private triggerAgentEvent(session: Session): void {

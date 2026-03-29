@@ -3,6 +3,7 @@ import type { NotificationButton } from "./session-interactions";
 import type { SessionNotificationRequest } from "./wake-dispatcher";
 import {
   buildDelegateWorktreeWakeMessage,
+  buildNoChangeWakeMessage,
   buildWorktreeDecisionSummary,
 } from "./session-notification-builder";
 
@@ -21,17 +22,26 @@ type DiffSummary = {
  */
 export class SessionWorktreeMessageService {
   buildNoChangeNotification(args: {
-    session: Pick<Session, "name">;
+    session: Pick<Session, "id" | "name">;
     nativeBackendWorktree: boolean;
     cleanupSucceeded: boolean;
     worktreePath: string;
+    preview: string;
+    originThreadLine?: string;
   }): SessionNotificationRequest {
     const {
       session,
       nativeBackendWorktree,
       cleanupSucceeded,
       worktreePath,
+      preview,
+      originThreadLine,
     } = args;
+    const cleanupSummary = cleanupSucceeded
+      ? nativeBackendWorktree
+        ? "native backend worktree released for backend cleanup"
+        : "worktree cleaned up"
+      : `cleanup failed; worktree still exists at ${worktreePath}`;
 
     return {
       label: cleanupSucceeded ? "worktree-no-changes" : "worktree-no-changes-cleanup-failed",
@@ -40,6 +50,14 @@ export class SessionWorktreeMessageService {
           ? `ℹ️ [${session.name}] Session completed with no changes — native backend worktree released for backend cleanup`
           : `ℹ️ [${session.name}] Session completed with no changes — worktree cleaned up`
         : `⚠️ [${session.name}] Session completed with no changes, but worktree cleanup failed. Worktree still exists at ${worktreePath}`,
+      wakeMessage: buildNoChangeWakeMessage({
+        sessionName: session.name,
+        sessionId: session.id,
+        cleanupSummary,
+        preview,
+        originThreadLine,
+      }),
+      notifyUser: "always",
     };
   }
 
@@ -79,8 +97,12 @@ export class SessionWorktreeMessageService {
       ].join("\n"),
       notifyUser: "always",
       buttons,
-      wakeMessageOnNotifySuccess:
-        `Worktree strategy buttons delivered to user. Wait for their button callback — do NOT act on this worktree yourself.`,
+      wakeMessageOnNotifySuccess: [
+        `Worktree decision buttons delivered to the user.`,
+        `Session: ${session.name} | ID: ${session.id}`,
+        branchLine,
+        `Wait for their button callback — do NOT act on this worktree yourself.`,
+      ].join("\n"),
       wakeMessageOnNotifyFailed: [
         `🔀 Worktree decision required for session \`${session.name}\``,
         ``,

@@ -252,8 +252,11 @@ export class SessionLifecycleService {
         userMessage: payload.userMessage,
         notifyUser: "always",
         buttons: payload.buttons,
-        wakeMessageOnNotifySuccess:
-          `Plan approval buttons delivered to user. Wait for their button callback — do NOT approve or reject this plan yourself.`,
+        wakeMessageOnNotifySuccess: [
+          `Plan approval buttons delivered to the user.`,
+          `Session: ${session.name} | ID: ${session.id}`,
+          `Wait for their button callback — do NOT approve or reject this plan yourself.`,
+        ].join("\n"),
         wakeMessageOnNotifyFailed: payload.wakeMessage,
       });
       return;

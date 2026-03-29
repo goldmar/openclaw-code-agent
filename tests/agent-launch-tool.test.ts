@@ -51,7 +51,7 @@ describe("agent_launch tool defaults", () => {
     assert.match(text, /Harness: codex/);
     assert.match(text, /Permission mode: plan/);
     assert.match(text, /Plan approval: ask/);
-    assert.match(text, /Worktree strategy: ask/);
+    assert.match(text, /Worktree strategy: off/);
     assert.match(text, /Model: gpt-5\.3-codex/);
   });
 

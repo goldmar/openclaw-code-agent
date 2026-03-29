@@ -39,6 +39,8 @@ export class SessionWorktreeStrategyService {
       ) => WorktreeCompletionState;
       updatePersistedSession: (ref: string, patch: Partial<PersistedSessionInfo>) => boolean;
       dispatchSessionNotification: (session: Session, request: SessionNotificationRequest) => void;
+      getOutputPreview: (session: Session, maxChars?: number) => string;
+      originThreadLine: (session: Session) => string;
       getWorktreeDecisionButtons: (sessionId: string) => NotificationButton[][] | undefined;
       makeOpenPrButton: (sessionId: string) => NotificationButton;
       worktreeMessages: SessionWorktreeMessageService;
@@ -139,6 +141,8 @@ export class SessionWorktreeStrategyService {
         nativeBackendWorktree,
         cleanupSucceeded: true,
         worktreePath,
+        preview: this.deps.getOutputPreview(session),
+        originThreadLine: this.deps.originThreadLine(session),
       }));
     } else {
       this.deps.dispatchSessionNotification(session, this.deps.worktreeMessages.buildNoChangeNotification({
@@ -146,6 +150,8 @@ export class SessionWorktreeStrategyService {
         nativeBackendWorktree,
         cleanupSucceeded: false,
         worktreePath,
+        preview: this.deps.getOutputPreview(session),
+        originThreadLine: this.deps.originThreadLine(session),
       }));
     }
     return { notificationSent: true, worktreeRemoved: removed };
