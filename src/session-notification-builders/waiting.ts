@@ -13,7 +13,7 @@ export function buildWaitingForInputPayload(args: {
   questionButtons?: NotificationButton[][];
 }): {
   label: "plan-approval" | "waiting";
-  userMessage: string;
+  userMessage?: string;
   wakeMessage: string;
   buttons?: NotificationButton[][];
 } {
@@ -24,7 +24,7 @@ export function buildWaitingForInputPayload(args: {
     ? (
         planApprovalMode === "ask"
           ? `📋 [${session.name}] Plan ready for approval:\n\n${preview}\n\nChoose Approve, Revise, or Reject below.`
-          : `📋 [${session.name}] Plan awaiting approval:\n\n${preview}`
+          : undefined
       )
     : `❓ [${session.name}] Question waiting for reply:\n\n${preview}`;
 
@@ -50,22 +50,15 @@ export function buildWaitingForInputPayload(args: {
           `Preview (truncated):`,
           preview,
           ``,
-          `━━━ STEP 2 (MANDATORY): Notify the user ━━━`,
-          `After reading the full plan, call agent_request_plan_approval(session='${session.id}', summary='...') so the user gets the decision summary AND the Approve / Revise / Reject buttons in one message.`,
-          `Your summary passed to agent_request_plan_approval(...) must include:`,
-          `- What files/components will be changed`,
-          `- Risk level (low/medium/high) and why`,
-          `- Scope: does this match the original task or has it expanded?`,
-          `- Any concerns or assumptions the plan makes`,
-          `Do NOT send a plain-text-only approval request; that loses the decision buttons.`,
-          `This message creates accountability — you cannot approve blindly.`,
+          `━━━ STEP 2 (MANDATORY): Review privately ━━━`,
+          `You are the delegated decision-maker. Review the plan yourself before involving the user.`,
+          `Do NOT post any user-facing approval summary unless you decide escalation is required.`,
           ``,
           `━━━ STEP 3 (ONLY AFTER steps 1 and 2): Decide ━━━`,
-          `You are the delegated decision-maker. Choose ONE:`,
+          `Choose ONE:`,
           ``,
           `APPROVE the plan directly if ALL of the following are true:`,
           `- You have read the FULL plan (not just the preview)`,
-          `- You have sent the user the summary-with-buttons prompt`,
           `- The plan scope matches the original task request`,
           `- The changes are low-risk (no destructive operations, no credential handling, no production deployments)`,
           `- The plan is clear and well-scoped (no ambiguous requirements or open design questions)`,
@@ -80,9 +73,11 @@ export function buildWaitingForInputPayload(args: {
           `- The requirements are ambiguous or the plan makes assumptions the user should confirm`,
           `- You are unsure — when in doubt, always escalate`,
           ``,
-          `If approving: agent_respond(session='${session.id}', message='Approved. Go ahead.', approve=true)`,
-          `If escalating: call agent_request_plan_approval(...) and WAIT for the user's button click or explicit response.`,
-          `To request changes: agent_respond(session='${session.id}', message='<your feedback>') — do NOT set approve=true. The agent will revise the plan.`,
+          `If approving: call agent_respond(session='${session.id}', message='Approved. Go ahead.', approve=true) and do NOT show the user an approval prompt.`,
+          `If escalating: call agent_request_plan_approval(session='${session.id}', summary='...') exactly once so the plugin posts the single canonical Approve / Revise / Reject prompt.`,
+          `That summary must include changed files/components, risk level and why, scope match/expansion, and any concerns or assumptions.`,
+          `After the canonical prompt exists, WAIT for the user's button click or explicit response and do NOT send a second plain-text recap.`,
+          `To request changes without user escalation: call agent_respond(session='${session.id}', message='<your feedback>') and do NOT set approve=true. The agent will revise the plan.`,
         ].join("\n"),
       };
     }

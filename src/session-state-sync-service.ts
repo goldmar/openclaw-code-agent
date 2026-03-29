@@ -74,6 +74,7 @@ export class SessionStateSyncService {
         pendingPlanApproval: patch.pendingPlanApproval,
         planApprovalContext: patch.planApprovalContext,
         planDecisionVersion: patch.planDecisionVersion,
+        canonicalPlanPromptVersion: patch.canonicalPlanPromptVersion,
         pendingWorktreeDecisionSince: patch.pendingWorktreeDecisionSince,
       });
     } else {
@@ -85,6 +86,7 @@ export class SessionStateSyncService {
       if (patch.pendingPlanApproval !== undefined) session.pendingPlanApproval = patch.pendingPlanApproval;
       if (patch.planApprovalContext !== undefined) session.planApprovalContext = patch.planApprovalContext;
       if (patch.planDecisionVersion !== undefined) session.planDecisionVersion = patch.planDecisionVersion;
+      if (patch.canonicalPlanPromptVersion !== undefined) session.canonicalPlanPromptVersion = patch.canonicalPlanPromptVersion;
     }
     if (patch.worktreePath !== undefined) session.worktreePath = patch.worktreePath;
     if (patch.worktreeBranch !== undefined) session.worktreeBranch = patch.worktreeBranch;

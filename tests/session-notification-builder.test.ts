@@ -43,8 +43,11 @@ describe("session-notification-builder", () => {
       planApprovalMode: "delegate",
     });
 
+    assert.equal(payload.userMessage, undefined);
+    assert.match(payload.wakeMessage, /Review privately/);
+    assert.match(payload.wakeMessage, /agent_respond\(session='session-delegate', message='Approved\. Go ahead\.', approve=true\)/);
     assert.match(payload.wakeMessage, /agent_request_plan_approval\(session='session-delegate'/);
-    assert.match(payload.wakeMessage, /Do NOT send a plain-text-only approval request/);
+    assert.match(payload.wakeMessage, /do NOT send a second plain-text recap/i);
   });
 
   it("preserves terminal completion payload formatting", () => {

@@ -181,6 +181,23 @@ export class SessionLifecycleService {
         ? this.deps.resolvePlanApprovalMode(session)
         : undefined;
       if (session.pendingPlanApproval) {
+        if (planApprovalMode === "delegate") {
+          this.deps.dispatchSessionNotification(session, {
+            label: "plan-approval-timeout",
+            wakeMessage: [
+              `[DELEGATED PLAN APPROVAL REMINDER] Plan review is still pending after the session hit idle timeout.`,
+              `Name: ${session.name} | ID: ${session.id}`,
+              this.deps.originThreadLine(session),
+              `The agent already produced a plan and is waiting for a delegated decision.`,
+              `Review privately first. Approve directly with agent_respond(..., approve=true) if the plan is clearly within scope and low risk.`,
+              `Escalate only if needed via agent_request_plan_approval(summary='...').`,
+              `If a canonical approval prompt was already posted for this plan version, do not restate it in plain text.`,
+            ].join("\n"),
+            notifyUser: "never",
+          });
+          this.deps.clearRetryTimersForSession(session.id);
+          return;
+        }
         this.deps.dispatchSessionNotification(session, {
           label: "plan-approval-timeout",
           userMessage: [
@@ -219,6 +236,7 @@ export class SessionLifecycleService {
     const planApprovalMode = session.pendingPlanApproval
       ? this.deps.resolvePlanApprovalMode(session)
       : undefined;
+    const planDecisionVersion = session.planDecisionVersion;
     const preview =
       (!session.pendingPlanApproval && session.pendingInputState?.promptText)
         ? session.pendingInputState.promptText
@@ -252,6 +270,13 @@ export class SessionLifecycleService {
         userMessage: payload.userMessage,
         notifyUser: "always",
         buttons: payload.buttons,
+        hooks: {
+          onNotifySucceeded: () => {
+            this.deps.updatePersistedSession(session.id, {
+              canonicalPlanPromptVersion: planDecisionVersion,
+            });
+          },
+        },
         wakeMessageOnNotifySuccess: [
           `Plan approval buttons delivered to the user.`,
           `Session: ${session.name} | ID: ${session.id}`,
@@ -267,7 +292,7 @@ export class SessionLifecycleService {
         label: payload.label,
         userMessage: payload.userMessage,
         wakeMessage: payload.wakeMessage,
-        notifyUser: "always",
+        notifyUser: "never",
         buttons: payload.buttons,
       });
       return;

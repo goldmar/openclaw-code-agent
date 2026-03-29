@@ -858,7 +858,7 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(request.buttons[0][2].label, "Reject");
   });
 
-  it("suppresses plan approval buttons when the session override delegates approval", () => {
+  it("routes delegated plan reviews through a wake-only approval stop", () => {
     setPluginConfig({ planApproval: "ask" });
 
     const s = fakeSession({
@@ -876,9 +876,11 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(calls.length, 1);
     const [_sessionArg, request] = calls[0];
     assert.equal(request.label, "plan-approval");
-    assert.match(request.userMessage, /Plan awaiting approval/);
+    assert.equal(request.notifyUser, "never");
+    assert.equal(request.userMessage, undefined);
     assert.equal(request.buttons, undefined);
     assert.match(request.wakeMessage, /DELEGATED PLAN APPROVAL/);
+    assert.match(request.wakeMessage, /Review privately/);
   });
 
   it("does not show approval buttons for Codex plan sessions when planApproval=delegate", () => {
@@ -982,6 +984,37 @@ describe("SessionManager turn-end wake", () => {
 
     const approveToken = (sm as any).interactions.consumeActionToken(request.buttons[0][0].callbackData);
     assert.equal(approveToken?.planDecisionVersion, 9);
+  });
+
+  it("suppresses duplicate delegated escalations for the same plan decision version", () => {
+    const s = fakeSession({
+      id: "s-plan-escalate-once",
+      name: "plan-escalate-once",
+      status: "running",
+      pendingPlanApproval: true,
+      planDecisionVersion: 11,
+      planApproval: "delegate",
+      deliveryState: "idle",
+    });
+    (sm as any).sessions.set(s.id, s);
+    stubDispatch(sm);
+
+    const first = sm.requestPlanApprovalFromUser(
+      s.id,
+      "Summary:\n- Touches `src/session-manager.ts`\n- Risk: medium\n- Scope matches original task",
+    );
+    assert.match(first, /Canonical plan approval prompt sent/);
+
+    const [_sessionArg, request] = (sm as any).__dispatchCalls[0];
+    request.hooks.onNotifySucceeded();
+
+    const second = sm.requestPlanApprovalFromUser(
+      s.id,
+      "Summary:\n- Touches `src/session-manager.ts`\n- Risk: medium\n- Scope matches original task",
+    );
+    assert.match(second, /already exists/);
+    assert.match(second, /Do not send a separate plain-text approval message/);
+    assert.equal((sm as any).__dispatchCalls.length, 1);
   });
 
   it("rejects duplicate summary approval prompts for ask-mode plan reviews", () => {
@@ -1532,6 +1565,33 @@ describe("SessionManager terminal wake behavior", () => {
       (request.buttons ?? []).map((row: Array<{ label: string }>) => row.map((button) => button.label)),
       [["Approve", "Revise", "Reject"]],
     );
+  });
+
+  it("keeps delegated timed-out pending plans wake-only", async () => {
+    const s = fakeSession({
+      id: "s-plan-timeout-delegate",
+      name: "delegate-timeout-plan",
+      status: "killed",
+      killReason: "idle-timeout",
+      pendingPlanApproval: true,
+      planDecisionVersion: 8,
+      planApproval: "delegate",
+      isExplicitlyResumable: true,
+      costUsd: 0,
+      startedAt: Date.now() - 2_000,
+    });
+
+    await (sm as any).onSessionTerminal(s);
+
+    const calls = (sm as any).__dispatchCalls;
+    assert.equal(calls.length, 1);
+    const [_sessionArg, request] = calls[0];
+    assert.equal(request.label, "plan-approval-timeout");
+    assert.equal(request.notifyUser, "never");
+    assert.equal(request.userMessage, undefined);
+    assert.equal(request.buttons, undefined);
+    assert.match(request.wakeMessage, /DELEGATED PLAN APPROVAL REMINDER/);
+    assert.match(request.wakeMessage, /agent_request_plan_approval/);
   });
 
   it("uses explicit stopped wording for user-terminated sessions", async () => {

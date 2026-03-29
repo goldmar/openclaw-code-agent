@@ -266,6 +266,7 @@ export function normalizePersistedEntry(raw: unknown): PersistedSessionInfo | un
     pendingPlanApproval: raw.pendingPlanApproval === true,
     planApprovalContext: toOptionalPlanApprovalContext(raw.planApprovalContext),
     planDecisionVersion: toOptionalNumber(raw.planDecisionVersion),
+    canonicalPlanPromptVersion: toOptionalNumber(raw.canonicalPlanPromptVersion),
     planApproval: toOptionalPlanApprovalMode(raw.planApproval),
     codexApprovalPolicy: toOptionalCodexApprovalPolicy(raw.codexApprovalPolicy),
     worktreePath,

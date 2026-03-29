@@ -144,6 +144,7 @@ export class Session extends EventEmitter {
   pendingPlanApproval: boolean = false;
   planApprovalContext?: PlanApprovalContext;
   planDecisionVersion: number = 0;
+  canonicalPlanPromptVersion?: number;
   planFilePath?: string;
   killReason: KillReason = "unknown";
   private planModeApproved: boolean = false;
@@ -669,6 +670,7 @@ export class Session extends EventEmitter {
       pendingPlanApproval: this.pendingPlanApproval,
       planApprovalContext: this.planApprovalContext,
       planDecisionVersion: this.planDecisionVersion,
+      canonicalPlanPromptVersion: this.canonicalPlanPromptVersion,
       planModeApproved: this.planModeApproved,
     };
   }
@@ -693,6 +695,7 @@ export class Session extends EventEmitter {
     this.pendingPlanApproval = next.pendingPlanApproval;
     this.planApprovalContext = next.planApprovalContext;
     this.planDecisionVersion = next.planDecisionVersion;
+    this.canonicalPlanPromptVersion = next.canonicalPlanPromptVersion;
     this.planModeApproved = next.planModeApproved;
   }
 }

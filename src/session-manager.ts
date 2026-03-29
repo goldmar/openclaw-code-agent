@@ -404,11 +404,24 @@ export class SessionManager {
     if (!session.pendingPlanApproval) {
       return `Error: Session "${ref}" is not awaiting plan approval.`;
     }
+    const sessionId = getPrimarySessionLookupRef(activeSession ?? persistedSession ?? { id: ref }) ?? ref;
     if (this.resolvePlanApprovalMode(session) !== "delegate") {
       return `Error: Session "${ref}" already uses direct user plan approval. Do not send a duplicate approval prompt.`;
     }
+    if (session.canonicalPlanPromptVersion === session.planDecisionVersion) {
+      return [
+        `Canonical plan approval prompt already exists for session ${session.name} [${sessionId}].`,
+        `Wait for the user's Approve, Revise, or Reject response.`,
+        `Do not send a separate plain-text approval message.`,
+      ].join(" ");
+    }
+    if (session.deliveryState === "notifying") {
+      return [
+        `A plan approval prompt is already being delivered for session ${session.name} [${sessionId}].`,
+        `Wait for delivery to finish before retrying.`,
+      ].join(" ");
+    }
 
-    const sessionId = getPrimarySessionLookupRef(activeSession ?? persistedSession ?? { id: ref }) ?? ref;
     const buttons = this.interactions.getPlanApprovalButtons(sessionId, session);
     const message = [
       `📋 [${session.name}] Plan needs your decision:`,
@@ -431,6 +444,13 @@ export class SessionManager {
         userMessage: message,
         notifyUser: "always",
         buttons,
+        hooks: {
+          onNotifySucceeded: () => {
+            this.updatePersistedSession(sessionId, {
+              canonicalPlanPromptVersion: session.planDecisionVersion,
+            });
+          },
+        },
       },
     );
 

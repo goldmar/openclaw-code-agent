@@ -23,6 +23,7 @@ export interface SessionControlState {
   pendingPlanApproval: boolean;
   planApprovalContext?: PlanApprovalContext;
   planDecisionVersion: number;
+  canonicalPlanPromptVersion?: number;
   planModeApproved: boolean;
 }
 
@@ -61,6 +62,7 @@ export interface SessionControlPatch {
   pendingPlanApproval?: boolean;
   planApprovalContext?: PlanApprovalContext;
   planDecisionVersion?: number;
+  canonicalPlanPromptVersion?: number;
   planModeApproved?: boolean;
   pendingWorktreeDecisionSince?: string;
 }
@@ -239,6 +241,7 @@ export function applySessionControlPatch(
     ...(patch.pendingPlanApproval !== undefined ? { pendingPlanApproval: patch.pendingPlanApproval } : {}),
     ...(patch.planApprovalContext !== undefined ? { planApprovalContext: patch.planApprovalContext } : {}),
     ...(patch.planDecisionVersion !== undefined ? { planDecisionVersion: patch.planDecisionVersion } : {}),
+    ...(patch.canonicalPlanPromptVersion !== undefined ? { canonicalPlanPromptVersion: patch.canonicalPlanPromptVersion } : {}),
     ...(patch.planModeApproved !== undefined ? { planModeApproved: patch.planModeApproved } : {}),
   };
 

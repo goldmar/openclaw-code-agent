@@ -318,6 +318,7 @@ export interface PersistedSessionInfo {
   pendingPlanApproval?: boolean;
   planApprovalContext?: PlanApprovalContext;
   planDecisionVersion?: number;
+  canonicalPlanPromptVersion?: number;
   planApproval?: PlanApprovalMode;
   codexApprovalPolicy?: CodexApprovalPolicy;
   /** Path to the worktree if one was created. */
