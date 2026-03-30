@@ -9,6 +9,7 @@
 - **Plan -> Review -> Execute**. `plan` is the default launch mode, with `ask`, `delegate`, and `approve` deciding how much plan approval autonomy the orchestrator gets.
 - **Optional worktree isolation**. New sessions default to `off`; opt into `ask`, `delegate`, `auto-merge`, or `auto-pr` when you want worktree-backed branch isolation and post-run branch handling.
 - **State-driven decision UX**. `ask` sends explicit action buttons for **Merge locally**, **Create PR**, **Decide later**, and **Dismiss**. The same action-token model now backs both Telegram and Discord interactive callbacks.
+- **Lifecycle-first cleanup**. Worktrees are treated as temporary task sandboxes. The plugin distinguishes `merged` from `released` so different-SHA branches whose content already landed on the base branch can still be cleaned safely.
 - **Full session lifecycle**. Suspend, resume, fork, interrupt, and recover sessions across restarts with persisted metadata and output.
 - **Real operator visibility**. `agent_sessions`, `agent_output`, and `agent_stats` show status, buffered output, duration, and USD cost.
 - **Two harnesses, one control plane**. Claude Code and Codex share the same tools, routing, notification pipeline, and worktree strategy model while each backend uses its own native execution substrate.
@@ -24,7 +25,7 @@ Need the version-pinned ACP breakdown? See [docs/ACP-COMPARISON.md](docs/ACP-COM
 
 ### Plan First
 
-The differentiator is the plan-review loop. Claude Code and Codex both feed the same review UX now: the plugin receives a structured plan artifact, keeps execution blocked until approval, and resumes the same session with `agent_respond(..., approve=true)`.
+The differentiator is the plan-review loop. Claude Code and Codex both feed the same review UX now: the plugin receives a structured plan artifact, keeps execution blocked until approval, and resumes the same session with `agent_respond(..., approve=true)`. If the user asks for revisions, the revised submission becomes the new actionable review version for that same session, and `approve=true` resolves against that latest version instead of any stale earlier change-request state.
 
 <img src="assets/ask-readme.gif" alt="Plan review in ask mode with inline approval controls">
 
@@ -37,6 +38,20 @@ When the task is done, the plugin can leave the branch for review, merge it auto
 <img src="assets/delegate-readme.gif" alt="Delegated worktree flow with autonomous follow-through">
 
 *The main checkout stays clean. The branch lifecycle happens in the worktree, and the chat thread stays current on what was shipped.*
+
+### Worktree Lifecycle
+
+Worktree-backed sessions move through product-facing lifecycle states:
+
+- `active`: sandbox still in use
+- `pending decision`: waiting for merge / PR / dismiss follow-through
+- `pr_open`: PR exists and the sandbox is being preserved
+- `merged`: branch landed by normal git ancestry
+- `released`: content is already on the base branch even though branch SHAs differ after rebase, squash, or cherry-pick
+- `dismissed`: user intentionally discarded the sandbox
+- `no_change`: session finished without a committed delta
+
+For cleanup, use `agent_worktree_cleanup(mode="preview_safe")` to preview what **Clean all safe** would remove, `mode="clean_safe"` to perform that cleanup, and `mode="preview_all"` to review both safe sandboxes and the reasons other worktrees were retained.
 
 ## Supported Harnesses
 
@@ -138,8 +153,8 @@ Prefer fully routable channel strings such as `telegram|123456789` or `telegram|
 | `agent_stats` | Show aggregate usage and cost |
 | `agent_merge` | Merge a worktree branch back to base |
 | `agent_pr` | Create or update a GitHub PR |
-| `agent_worktree_status` | Show branch, PR, and pending-decision state |
-| `agent_worktree_cleanup` | Clean up merged agent branches or dismiss a pending worktree decision |
+| `agent_worktree_status` | Show authoritative lifecycle state, derived repo evidence, cleanup safety, and retained reasons |
+| `agent_worktree_cleanup` | Clean all lifecycle-safe worktrees or dismiss one pending decision without touching live/unsafe worktrees |
 
 The chat command surface mirrors the common workflows: `/agent`, `/agent_sessions`, `/agent_output`, `/agent_respond`, `/agent_kill`, and `/agent_stats`.
 

@@ -30,6 +30,7 @@ openclaw-code-agent/
 │   ├── session-interactions.ts
 │   ├── session-notifications.ts
 │   ├── session-worktree-controller.ts
+│   ├── worktree-lifecycle-resolver.ts
 │   ├── session-store.ts
 │   ├── session-metrics.ts
 │   ├── wake-dispatcher.ts
@@ -52,6 +53,7 @@ openclaw-code-agent/
 - `src/tools/*`: OpenClaw tool implementations
 - `src/commands/*`: chat command implementations
 - `src/worktree.ts`: git worktree, merge, and PR helpers
+- `src/worktree-lifecycle-resolver.ts`: lifecycle-first cleanup and `released` detection
 
 ## Build And Test
 
@@ -109,7 +111,7 @@ Before running it:
 - Keep docs and schema text aligned. `README.md`, `docs/REFERENCE.md`, `skills/.../SKILL.md`, and `openclaw.plugin.json` should agree on defaults and parameter names.
 - Prefer source-of-truth facts from `src/config.ts`, `src/types.ts`, and the tool factories.
 - When editing docs for lifecycle behavior, verify the notification and resume flow in `src/session-manager.ts` and `src/actions/respond.ts`.
-- When editing worktree behavior, verify both the orchestration path in `src/session-manager.ts` and the git helper path in `src/worktree.ts`.
+- When editing worktree behavior, verify the orchestration path in `src/session-manager.ts`, the lifecycle resolver in `src/worktree-lifecycle-resolver.ts`, and the git helper path in `src/worktree.ts`.
 
 ## Service Lifecycle
 

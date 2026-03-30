@@ -183,6 +183,58 @@ export function hasCommitsAhead(repoDir: string, branch: string, base: string): 
   }
 }
 
+export function getAheadBehindCounts(
+  repoDir: string,
+  branch: string,
+  base: string,
+): { ahead: number; behind: number } | undefined {
+  try {
+    const result = execFileSync(
+      "git",
+      ["-C", repoDir, "rev-list", "--left-right", "--count", `${branch}...${base}`],
+      { timeout: 10_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
+    ).trim();
+    const [aheadRaw, behindRaw] = result.split(/\s+/);
+    return {
+      ahead: parseInt(aheadRaw ?? "0", 10) || 0,
+      behind: parseInt(behindRaw ?? "0", 10) || 0,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+export function isBranchAncestorOfBase(repoDir: string, branch: string, base: string): boolean {
+  try {
+    execFileSync(
+      "git",
+      ["-C", repoDir, "merge-base", "--is-ancestor", branch, base],
+      { timeout: 10_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function wouldMergeBeNoop(repoDir: string, branch: string, base: string): boolean {
+  try {
+    const mergedTree = execFileSync(
+      "git",
+      ["-C", repoDir, "merge-tree", "--write-tree", base, branch],
+      { timeout: 15_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
+    ).trim();
+    const baseTree = execFileSync(
+      "git",
+      ["-C", repoDir, "rev-parse", `${base}^{tree}`],
+      { timeout: 10_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
+    ).trim();
+    return Boolean(mergedTree) && mergedTree === baseTree;
+  } catch {
+    return false;
+  }
+}
+
 export function deleteBranch(repoDir: string, branch: string): boolean {
   try {
     execFileSync(

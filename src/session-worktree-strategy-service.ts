@@ -135,6 +135,15 @@ export class SessionWorktreeStrategyService {
         worktreePath: undefined,
         worktreeDisposition: "no-change-cleaned",
         worktreeState: "none",
+        worktreeLifecycle: {
+          state: "no_change",
+          updatedAt: new Date().toISOString(),
+          resolvedAt: new Date().toISOString(),
+          resolutionSource: "strategy_no_change",
+          baseBranch: session.worktreeBaseBranch,
+          targetRepo: session.worktreePrTargetRepo,
+          pushRemote: session.worktreePushRemote,
+        },
       });
       this.deps.dispatchSessionNotification(session, this.deps.worktreeMessages.buildNoChangeNotification({
         session,
@@ -175,6 +184,13 @@ export class SessionWorktreeStrategyService {
       pendingWorktreeDecisionSince: new Date().toISOString(),
       lifecycle: "awaiting_worktree_decision",
       worktreeState: "pending_decision",
+      worktreeLifecycle: {
+        state: "pending_decision",
+        updatedAt: new Date().toISOString(),
+        baseBranch: session.worktreeBaseBranch,
+        targetRepo: session.worktreePrTargetRepo,
+        pushRemote: session.worktreePushRemote,
+      },
     });
     return { notificationSent: true, worktreeRemoved: false };
   }
@@ -196,6 +212,13 @@ export class SessionWorktreeStrategyService {
       pendingWorktreeDecisionSince: new Date().toISOString(),
       lifecycle: "awaiting_worktree_decision",
       worktreeState: "pending_decision",
+      worktreeLifecycle: {
+        state: "pending_decision",
+        updatedAt: new Date().toISOString(),
+        baseBranch: session.worktreeBaseBranch,
+        targetRepo: session.worktreePrTargetRepo,
+        pushRemote: session.worktreePushRemote,
+      },
     });
     return { notificationSent: true, worktreeRemoved: false };
   }
@@ -228,6 +251,15 @@ export class SessionWorktreeStrategyService {
             worktreeState: "merged",
             pendingWorktreeDecisionSince: undefined,
             lastWorktreeReminderAt: undefined,
+            worktreeLifecycle: {
+              state: "merged",
+              updatedAt: new Date().toISOString(),
+              resolvedAt: new Date().toISOString(),
+              resolutionSource: "agent_merge",
+              baseBranch,
+              targetRepo: session.worktreePrTargetRepo,
+              pushRemote: session.worktreePushRemote,
+            },
           });
 
           const outcomeLine = formatWorktreeOutcomeLine({
@@ -308,6 +340,13 @@ export class SessionWorktreeStrategyService {
         pendingWorktreeDecisionSince: new Date().toISOString(),
         lifecycle: "awaiting_worktree_decision",
         worktreeState: "pending_decision",
+        worktreeLifecycle: {
+          state: "pending_decision",
+          updatedAt: new Date().toISOString(),
+          baseBranch,
+          targetRepo: session.worktreePrTargetRepo,
+          pushRemote: session.worktreePushRemote,
+        },
       });
     }
     return { notificationSent: true, worktreeRemoved: false };

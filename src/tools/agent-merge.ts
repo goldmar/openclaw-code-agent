@@ -81,7 +81,7 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
       const shouldCleanup = params.delete_branch !== false; // Default true
 
       // Idempotency guard: if already merged, return early before touching the queue
-      if (persistedSession?.worktreeMerged) {
+      if (persistedSession?.worktreeLifecycle?.state === "merged" || persistedSession?.worktreeMerged) {
         return { content: [{ type: "text", text: `ℹ️ Session "${params.session}" is already merged.` }] };
       }
 
@@ -95,7 +95,7 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
       await sessionManager.enqueueMerge(effectiveWorkdir, async () => {
         // Re-check inside the queue slot — a concurrent auto-merge may have beaten us
         const freshPersisted = sessionManager.getPersistedSession(params.session);
-        if (freshPersisted?.worktreeMerged) {
+        if (freshPersisted?.worktreeLifecycle?.state === "merged" || freshPersisted?.worktreeMerged) {
           toolResult = { content: [{ type: "text", text: `ℹ️ Session "${params.session}" was already merged while waiting in queue.` }] };
           return;
         }
@@ -136,6 +136,15 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
                 pendingWorktreeDecisionSince: undefined,
                 lastWorktreeReminderAt: undefined,
                 worktreeDisposition: "merged",
+                worktreeLifecycle: {
+                  state: "merged",
+                  updatedAt: new Date().toISOString(),
+                  resolvedAt: new Date().toISOString(),
+                  resolutionSource: "agent_merge",
+                  baseBranch: resolvedBaseBranch,
+                  targetRepo: freshPersisted.worktreePrTargetRepo,
+                  pushRemote: freshPersisted.worktreePushRemote,
+                },
               });
             }
           }

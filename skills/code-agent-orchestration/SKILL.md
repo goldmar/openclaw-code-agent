@@ -60,6 +60,15 @@ agent_output(session: "fix-auth", lines: 100)
 agent_output(session: "fix-auth", full: true)
 ```
 
+For worktree follow-through, inspect:
+
+```text
+agent_worktree_status()
+agent_worktree_status(session: "fix-auth")
+```
+
+Treat that tool's lifecycle, derived state, cleanup disposition, and retained reasons as authoritative. Do not infer cleanup safety from a transcript summary or from branch names alone.
+
 Treat these wake fields as authoritative state when present:
 
 - `requestedPermissionMode`
@@ -106,6 +115,7 @@ Use `permission_mode: "plan"` whenever the user wants a real planning checkpoint
 
 - Approval belongs to the user.
 - The plugin sends the canonical Approve / Revise / Reject prompt directly to the user.
+- If the user requests changes, wait for the revised plan from that same session; the revised submission becomes the latest actionable review version automatically.
 - Wait for the user's answer, then forward it with `agent_respond(...)`.
 - Do not send a duplicate approval recap or second approval prompt.
 
@@ -116,7 +126,6 @@ Use `permission_mode: "plan"` whenever the user wants a real planning checkpoint
 - Before deciding, read the full plan with `agent_output(session, full=true)`; do not rely on the truncated preview.
 - Approve directly with `agent_respond(..., approve=true)` only when the latest actionable plan version is clearly in-bounds and low risk.
 - If a prior version had `changes_requested`, that stale state should not block approval of the latest revised plan version.
-- If the user requests changes, wait for the revised plan from that same session; the revised submission becomes the latest actionable review version automatically.
 - If escalation is needed, call `agent_request_plan_approval(session='...', summary='...')` exactly once so the plugin sends the single canonical user approval prompt.
 - After that canonical prompt exists, wait for the user's decision; do not send a second plain-text approval summary.
 
@@ -126,6 +135,19 @@ Use `permission_mode: "plan"` whenever the user wants a real planning checkpoint
 
 ## Worktree Decisions
 
+Treat worktrees as temporary task sandboxes, not as generic branch inventory.
+
+Lifecycle meanings:
+
+- `pending_decision`: still waiting for merge / PR / dismiss follow-through
+- `pr_open`: PR exists; preserve the sandbox
+- `merged`: normal ancestry merge landed
+- `released`: content already landed on the base branch even though SHAs differ after rebase, squash, or cherry-pick
+- `dismissed`: sandbox intentionally discarded
+- `no_change`: no committed delta
+
+If `agent_worktree_status` reports `released`, treat that sandbox as already landed. Do not narrate it as “still unmerged” just because the branch appears ahead.
+
 ### `off`
 
 - No worktree. The session runs in the main checkout.
@@ -134,6 +156,7 @@ Use `permission_mode: "plan"` whenever the user wants a real planning checkpoint
 
 - The plugin owns the user-facing completion/decision message and button UI.
 - Do not call `agent_merge` or `agent_pr` unless the user explicitly asks after that.
+- A completed ask-session worktree may later resolve as `released` if its content already landed on base through another path. Confirm that with `agent_worktree_status(...)` before deciding what follow-up is still needed.
 
 ### `delegate`
 
@@ -147,10 +170,18 @@ Use `permission_mode: "plan"` whenever the user wants a real planning checkpoint
 
 - Wait for an explicit user request before calling `agent_merge` or `agent_pr`.
 
+### Cleanup
+
+- Use `agent_worktree_cleanup(mode: "preview_safe")` to review what **Clean all safe** would remove.
+- Use `agent_worktree_cleanup(mode: "clean_safe")` only when the user asked to clean up safe sandboxes.
+- Use `agent_worktree_cleanup(mode: "preview_all")` when you need both safe candidates and retained reasons.
+- Respect retained reasons from `agent_worktree_status` / `agent_worktree_cleanup`; they are the lifecycle model, not advisory prose.
+
 ### Never
 
 - Never use raw `git merge` or raw PR commands in place of plugin tools.
 - Never invent your own workaround for a pending worktree decision; use `agent_worktree_cleanup(session: "...", dismiss_session: true)` to dismiss permanently.
+- Never use `agent_worktree_cleanup` to force-delete unresolved worktrees. The supported bulk action is "clean all safe": omit `session` and let the plugin remove only lifecycle-safe worktrees while preserving anything active, pending, dirty, or PR-open.
 - Never merge or PR an `ask` worktree behind the user's back.
 
 ## File Artifact Policy

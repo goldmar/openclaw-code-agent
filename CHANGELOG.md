@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Removed the remaining plugin-side no-change/report-only embedded-eval path so worktree completion messaging is fully deterministic.
 - Changed the default `defaultWorktreeStrategy` back to `off`.
 - Completion wakes now include explicit approval/execution context plus both requested and effective permission modes for plan-gated sessions instead of expecting the orchestrator to infer approval from transcript prose.
+- Worktree status and cleanup are now lifecycle-first and repository-evidence-driven, including explicit `released` resolution, retained reasons, and deterministic clean-all-safe behavior.
 
 ### Fixed
 

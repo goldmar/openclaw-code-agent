@@ -144,13 +144,16 @@ When a session completes with changes under `ask` or `delegate`, users receive e
 
 ### Worktree Lifecycle
 
-| State | `worktreeDisposition` | Notes |
+| Lifecycle state | Meaning | Cleanup semantics |
 | --- | --- | --- |
-| Active with pending decision | `active` | Worktree preserved; decision buttons sent |
-| PR created | `pr-opened` | Worktree preserved for follow-up commits |
-| Merged | `merged` | Worktree and branch cleaned up |
-| Dismissed | `dismissed` | Branch and worktree permanently deleted |
-| No-change clean | `no-change-cleaned` | No commits made; worktree silently cleaned up |
+| `provisioned` / active | Sandbox exists and is still in play | Never auto-clean |
+| `pending_decision` | Waiting for merge / PR / dismiss follow-through | Preserved and reminded |
+| `pr_open` | PR exists and sandbox is being preserved | Preserved while PR is open |
+| `merged` | Branch landed by normal git ancestry | Safe cleanup candidate |
+| `released` | Content already exists on the base branch even though branch SHAs differ | Safe cleanup candidate |
+| `dismissed` | User intentionally discarded the sandbox | Safe cleanup candidate |
+| `no_change` | Session finished without a committed delta | Safe cleanup candidate |
+| `cleanup_failed` | Cleanup tried but could not finish cleanly | Retained for review |
 
 Notes:
 
@@ -161,6 +164,8 @@ Notes:
 - Worktrees are kept alive until explicitly resolved (merge/PR/dismiss) when using non-trivial strategies.
 - Stale-decision reminders fire every 3h; users can snooze per-session for 24h.
 - Claude Code uses plugin-managed worktrees; Codex may execute inside a native backend-managed worktree while the plugin still owns merge/PR/reminder policy.
+- `released` covers different-SHA cases where the base branch already contains the branch content after rebase, cherry-pick, or squash.
+- `agent_worktree_cleanup(mode="preview_safe")` previews what Clean all safe would remove, `mode="clean_safe"` performs it, and `mode="preview_all"` shows both safe sandboxes and retained reasons.
 
 ## Tool Reference
 
@@ -282,29 +287,50 @@ The PR path pushes the worktree branch on demand, then handles open, merged, and
 
 ### `agent_worktree_status`
 
-Show the worktree state for one session or all sessions with worktree metadata.
+Show lifecycle-first worktree status for one session or all sessions with worktree metadata.
 
 | Parameter | Type | Required | Notes |
 | --- | --- | --- | --- |
 | `session` | `string` | No | Omit to list all tracked worktrees |
 
+Status output is authoritative from persisted lifecycle plus current repository evidence. Each entry includes:
+
+- persisted lifecycle state
+- derived lifecycle state when local evidence upgrades it, including `released` when branch content already landed on base without a topology merge
+- cleanup disposition: `safe now`, `preserve`, or `blocked`
+- retained reasons such as `active session`, `pending decision`, `PR open`, `dirty worktree`, or `content already on base`
+
 ### `agent_worktree_cleanup`
 
-Clean up merged `agent/*` branches or dismiss a pending worktree decision.
+Clean managed worktree lifecycle state safely, or dismiss one pending worktree decision.
 
 | Parameter | Type | Required | Notes |
 | --- | --- | --- | --- |
 | `workdir` | `string` | No | Repository to inspect |
 | `base_branch` | `string` | No | Defaults to detected base branch |
-| `skip_session_check` | `boolean` | No | Skip only the active-session protection |
-| `dry_run` | `boolean` | No | Preview without deleting |
-| `session` | `string` | No | Clear a pending worktree decision for that session |
+| `mode` | `preview_safe \| clean_safe \| preview_all` | No | Defaults to `preview_safe` when `dry_run=true`, otherwise `clean_safe` |
+| `skip_session_check` | `boolean` | No | Deprecated; safe cleanup still never removes live sessions |
+| `force` | `boolean` | No | Deprecated alias for `skip_session_check` |
+| `dry_run` | `boolean` | No | Backward-compatible alias for `mode="preview_safe"` |
+| `session` | `string` | No | Restrict cleanup to one session |
+| `dismiss_session` | `boolean` | No | With `session`, permanently dismiss that worktree instead of resolving by repo evidence |
 
-The cleanup tool always protects:
+With no `session`, the tool performs a deterministic "clean all safe" pass over all managed worktrees in scope. It removes only sessions whose lifecycle resolves as safe now:
+
+- `merged`
+- `released`
+- `dismissed`
+- `no_change`
+
+The cleanup tool always preserves:
 
 - branches with active sessions
-- branches with unmerged commits
-- branches with open PRs
+- worktrees with dirty tracked changes
+- pending review/decision worktrees
+- branches with open PRs or PR state that has not been reflected locally yet
+- anything whose local repo evidence does not prove a safe resolved state
+
+Successful cleanup clears the tracked branch/path and persists the resolved lifecycle state plus the retained reasons used for the cleanup decision.
 
 ## Chat Commands
 

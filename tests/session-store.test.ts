@@ -590,6 +590,7 @@ describe("SessionStore new worktree lifecycle fields", () => {
     const store = new SessionStore({ indexPath, env: {} });
     const persisted = store.getPersistedSession("h-pending");
     assert.equal(persisted?.pendingWorktreeDecisionSince, ts);
+    assert.equal(persisted?.worktreeLifecycle?.state, "pending_decision");
   });
 
   it("persists and reloads planApproval", () => {
@@ -647,6 +648,33 @@ describe("SessionStore new worktree lifecycle fields", () => {
     const store = new SessionStore({ indexPath, env: {} });
     const persisted = store.getPersistedSession("h-disp");
     assert.equal(persisted?.worktreeDisposition, "pr-opened");
+    assert.equal(persisted?.worktreeLifecycle?.state, "pr_open");
+  });
+
+  it("normalizes persisted worktreeLifecycle objects", () => {
+    const updatedAt = new Date().toISOString();
+    writeStore(indexPath, [{
+      harnessSessionId: "h-lifecycle",
+      name: "lifecycle-session",
+      prompt: "p",
+      workdir: "/tmp",
+      status: "completed",
+      lifecycle: "terminal",
+      costUsd: 0,
+      worktreeLifecycle: {
+        state: "released",
+        updatedAt,
+        resolvedAt: updatedAt,
+        resolutionSource: "lifecycle_resolver",
+        baseBranch: "main",
+      },
+    }]);
+
+    const store = new SessionStore({ indexPath, env: {} });
+    const persisted = store.getPersistedSession("h-lifecycle");
+    assert.equal(persisted?.worktreeLifecycle?.state, "released");
+    assert.equal(persisted?.worktreeLifecycle?.resolutionSource, "lifecycle_resolver");
+    assert.equal(persisted?.worktreeLifecycle?.baseBranch, "main");
   });
 
   it("normalizes unknown worktreeDisposition to undefined", () => {

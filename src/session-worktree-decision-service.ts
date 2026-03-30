@@ -67,6 +67,15 @@ export class SessionWorktreeDecisionService {
         lifecycle: "terminal",
         worktreePath: undefined,
         worktreeBranch: undefined,
+        worktreeLifecycle: {
+          state: "dismissed",
+          updatedAt: new Date().toISOString(),
+          resolvedAt: new Date().toISOString(),
+          resolutionSource: "dismiss",
+          baseBranch: persistedSession?.worktreeLifecycle?.baseBranch,
+          targetRepo: persistedSession?.worktreePrTargetRepo,
+          pushRemote: persistedSession?.worktreePushRemote,
+        },
       } as Partial<PersistedSessionInfo>);
     }
 

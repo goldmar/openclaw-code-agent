@@ -267,7 +267,11 @@ export interface SessionConfig {
   approvalExecutionState?: ApprovalExecutionState;
   planModeApproved?: boolean;
   approvalState?: SessionApprovalState;
+  pendingPlanApproval?: boolean;
+  planApprovalContext?: PlanApprovalContext;
+  planDecisionVersion?: number;
   actionablePlanDecisionVersion?: number;
+  canonicalPlanPromptVersion?: number;
   approvalPromptVersion?: number;
   approvalPromptStatus?: SessionApprovalPromptStatus;
   resumeSessionId?: string;

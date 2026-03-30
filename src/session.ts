@@ -18,6 +18,7 @@ import type {
   PlanApprovalContext,
   SessionLifecycle,
   SessionApprovalState,
+  PersistedWorktreeLifecycle,
   SessionApprovalPromptStatus,
   SessionWorktreeState,
   SessionRuntimeState,
@@ -101,6 +102,7 @@ export class Session extends EventEmitter {
   worktreePrNumber?: number;
   worktreeMerged?: boolean;
   worktreeMergedAt?: string;
+  worktreeLifecycle?: PersistedWorktreeLifecycle;
   worktreeState: SessionWorktreeState = "none";
 
   // Multi-turn
@@ -145,12 +147,12 @@ export class Session extends EventEmitter {
   pendingPlanApproval: boolean = false;
   planApprovalContext?: PlanApprovalContext;
   planDecisionVersion: number = 0;
-  canonicalPlanPromptVersion?: number;
-  planFilePath?: string;
   actionablePlanDecisionVersion?: number;
-  killReason: KillReason = "unknown";
+  canonicalPlanPromptVersion?: number;
   approvalPromptVersion?: number;
   approvalPromptStatus: SessionApprovalPromptStatus = "not_sent";
+  planFilePath?: string;
+  killReason: KillReason = "unknown";
   private planModeApproved: boolean = false;
   private readonly turnRuntime: SessionTurnRuntime;
   private readonly harnessEvents: SessionHarnessEventApplier;
@@ -307,8 +309,6 @@ export class Session extends EventEmitter {
         ...(config.planModeApproved !== undefined ? { planModeApproved: config.planModeApproved } : {}),
         ...(config.approvalState !== undefined ? { approvalState: config.approvalState } : {}),
         ...(config.approvalExecutionState !== undefined ? { approvalExecutionState: config.approvalExecutionState } : {}),
-      });
-    }
         ...(config.pendingPlanApproval !== undefined ? { pendingPlanApproval: config.pendingPlanApproval } : {}),
         ...(config.planApprovalContext !== undefined ? { planApprovalContext: config.planApprovalContext } : {}),
         ...(config.planDecisionVersion !== undefined ? { planDecisionVersion: config.planDecisionVersion } : {}),
@@ -316,6 +316,8 @@ export class Session extends EventEmitter {
         ...(config.canonicalPlanPromptVersion !== undefined ? { canonicalPlanPromptVersion: config.canonicalPlanPromptVersion } : {}),
         ...(config.approvalPromptVersion !== undefined ? { approvalPromptVersion: config.approvalPromptVersion } : {}),
         ...(config.approvalPromptStatus !== undefined ? { approvalPromptStatus: config.approvalPromptStatus } : {}),
+      });
+    }
   }
 
   get status(): SessionStatus { return this._status; }
@@ -694,12 +696,12 @@ export class Session extends EventEmitter {
       pendingPlanApproval: this.pendingPlanApproval,
       planApprovalContext: this.planApprovalContext,
       planDecisionVersion: this.planDecisionVersion,
-      canonicalPlanPromptVersion: this.canonicalPlanPromptVersion,
-      planModeApproved: this.planModeApproved,
       actionablePlanDecisionVersion: this.actionablePlanDecisionVersion,
-    };
+      canonicalPlanPromptVersion: this.canonicalPlanPromptVersion,
       approvalPromptVersion: this.approvalPromptVersion,
       approvalPromptStatus: this.approvalPromptStatus,
+      planModeApproved: this.planModeApproved,
+    };
   }
 
   private applyControlEvent(event: SessionControlEvent): void {
@@ -722,10 +724,10 @@ export class Session extends EventEmitter {
     this.pendingPlanApproval = next.pendingPlanApproval;
     this.planApprovalContext = next.planApprovalContext;
     this.planDecisionVersion = next.planDecisionVersion;
-    this.canonicalPlanPromptVersion = next.canonicalPlanPromptVersion;
-    this.planModeApproved = next.planModeApproved;
     this.actionablePlanDecisionVersion = next.actionablePlanDecisionVersion;
-  }
+    this.canonicalPlanPromptVersion = next.canonicalPlanPromptVersion;
     this.approvalPromptVersion = next.approvalPromptVersion;
     this.approvalPromptStatus = next.approvalPromptStatus;
+    this.planModeApproved = next.planModeApproved;
+  }
 }

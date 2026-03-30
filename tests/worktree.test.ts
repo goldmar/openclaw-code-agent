@@ -22,6 +22,10 @@ describe("worktree utilities", () => {
     assert.ok(typeof worktree.deleteBranch === "function");
     assert.ok(typeof worktree.hasEnoughWorktreeSpace === "function");
     assert.ok(typeof worktree.checkDirtyTracked === "function");
+    assert.ok(typeof worktree.isBranchAncestorOfBase === "function");
+    assert.ok(typeof worktree.getAheadBehindCounts === "function");
+    assert.ok(typeof worktree.wouldMergeBeNoop === "function");
+    assert.ok(typeof worktree.resolveWorktreeLifecycle === "function");
     assert.ok(typeof worktree.resolveTargetRepo === "function");
     assert.ok(typeof worktree.formatWorktreeOutcomeLine === "function");
   });

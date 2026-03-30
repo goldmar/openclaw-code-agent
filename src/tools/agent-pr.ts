@@ -146,6 +146,13 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext) {
                 worktreeState: "pr_open",
                 pendingWorktreeDecisionSince: undefined,
                 lastWorktreeReminderAt: undefined,
+                worktreeLifecycle: {
+                  state: "pr_open",
+                  updatedAt: new Date().toISOString(),
+                  baseBranch,
+                  targetRepo,
+                  pushRemote: persistedSession?.worktreePushRemote,
+                },
               });
             }
             const updateOutcomeLine = formatWorktreeOutcomeLine({
@@ -184,6 +191,13 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext) {
               worktreeState: "pr_open",
               pendingWorktreeDecisionSince: undefined,
               lastWorktreeReminderAt: undefined,
+              worktreeLifecycle: {
+                state: "pr_open",
+                updatedAt: new Date().toISOString(),
+                baseBranch,
+                targetRepo,
+                pushRemote: persistedSession?.worktreePushRemote,
+              },
             });
           }
           return {
@@ -208,6 +222,15 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext) {
             pendingWorktreeDecisionSince: undefined,
             lastWorktreeReminderAt: undefined,
             worktreeDisposition: "merged",
+            worktreeLifecycle: {
+              state: "merged",
+              updatedAt: new Date().toISOString(),
+              resolvedAt: new Date().toISOString(),
+              resolutionSource: "agent_pr",
+              baseBranch,
+              targetRepo,
+              pushRemote: persistedSession?.worktreePushRemote,
+            },
           });
         }
         return {
@@ -280,6 +303,13 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext) {
               lastWorktreeReminderAt: undefined,
               worktreeState: "pr_open",
               worktreeDisposition: "pr-opened",
+              worktreeLifecycle: {
+                state: "pr_open",
+                updatedAt: new Date().toISOString(),
+                baseBranch,
+                targetRepo,
+                pushRemote: persistedSession?.worktreePushRemote,
+              },
             });
           }
 

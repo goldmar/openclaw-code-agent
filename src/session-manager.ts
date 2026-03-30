@@ -36,6 +36,7 @@ import { SessionWorktreeDecisionService } from "./session-worktree-decision-serv
 import { SessionRuntimeRegistry } from "./session-runtime-registry";
 import { SessionRuntimeBootstrapService } from "./session-runtime-bootstrap-service";
 import { SessionWorktreeMessageService } from "./session-worktree-message-service";
+import { resolveWorktreeLifecycle } from "./worktree-lifecycle-resolver";
 import {
   getStoppedStatusLabel as formatStoppedStatusLabel,
 } from "./session-notification-builder";
@@ -368,7 +369,6 @@ export class SessionManager {
     return this.interactions.consumeActionToken(tokenId);
   }
 
-  private getWorktreeDecisionButtons(sessionId: string): NotificationButton[][] | undefined {
   getActionToken(tokenId: string): SessionActionToken | undefined {
     return this.interactions.getActionToken(tokenId);
   }
@@ -377,6 +377,7 @@ export class SessionManager {
     this.interactions.clearPlanDecisionTokens(sessionId, keepVersion);
   }
 
+  private getWorktreeDecisionButtons(sessionId: string): NotificationButton[][] | undefined {
     const session = this.resolve(sessionId) ?? this.getPersistedSession(sessionId);
     if (!session || session.worktreeStrategy === "delegate") return undefined;
     return this.interactions.getWorktreeDecisionButtons(sessionId, session);
@@ -458,13 +459,13 @@ export class SessionManager {
         notifyUser: "always",
         buttons,
         hooks: {
-          onNotifySucceeded: () => {
           onNotifyStarted: () => {
             this.updatePersistedSession(sessionId, {
               approvalPromptStatus: "sending",
               approvalPromptVersion: actionableVersion,
             });
           },
+          onNotifySucceeded: () => {
             this.updatePersistedSession(sessionId, {
               canonicalPlanPromptVersion: actionableVersion,
               approvalPromptVersion: actionableVersion,
@@ -750,7 +751,10 @@ export class SessionManager {
   /** Returns true if this session's branch has already been merged (idempotency guard). */
   private isAlreadyMerged(ref: string | undefined): boolean {
     if (!ref) return false;
-    return this.store.getPersistedSession(ref)?.worktreeMerged === true;
+    const persisted = this.store.getPersistedSession(ref);
+    return persisted?.worktreeMerged === true
+      || persisted?.worktreeLifecycle?.state === "merged"
+      || persisted?.worktreeLifecycle?.state === "released";
   }
 
   /**
@@ -876,7 +880,16 @@ export class SessionManager {
     this.lastDailyMaintenanceAt = now;
 
     for (const session of this.store.listPersistedSessions()) {
-      if (!this.worktrees.isResolvedWorktreeEligibleForCleanup(session, now, RESOLVED_RETENTION_MS)) continue;
+      const resolved = resolveWorktreeLifecycle(session, {
+        activeSession: false,
+        includePrSync: session.worktreeLifecycle?.state === "pr_open" || Boolean(session.worktreePrUrl),
+      });
+      const resolvedAtIso = session.worktreeLifecycle?.resolvedAt
+        ?? session.worktreeMergedAt
+        ?? session.worktreeDismissedAt
+        ?? (session.completedAt ? new Date(session.completedAt).toISOString() : undefined);
+      const resolvedAt = resolvedAtIso ? new Date(resolvedAtIso).getTime() : 0;
+      if (!resolved.cleanupSafe || !resolvedAt || now - resolvedAt < RESOLVED_RETENTION_MS) continue;
 
       try {
         const repoDir = this.resolveWorktreeRepoDir(session.workdir, session.worktreePath);
@@ -888,7 +901,16 @@ export class SessionManager {
         for (const mutationRef of getPersistedMutationRefs(session)) {
           this.updatePersistedSession(mutationRef, {
             worktreePath: undefined,
+            worktreeBranch: undefined,
             worktreeState: "none",
+            worktreeLifecycle: {
+              ...(session.worktreeLifecycle ?? resolved.lifecycle),
+              state: resolved.derivedState,
+              updatedAt: new Date().toISOString(),
+              resolvedAt: session.worktreeLifecycle?.resolvedAt ?? new Date().toISOString(),
+              resolutionSource: session.worktreeLifecycle?.resolutionSource ?? "maintenance",
+              notes: resolved.reasons,
+            },
           });
         }
       } catch (err) {

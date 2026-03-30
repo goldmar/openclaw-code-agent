@@ -126,6 +126,7 @@ This keeps plan approval and worktree decisions inside the plugin instead of lea
 - `src/session-store.ts`: persisted metadata and output index
 - `src/session-metrics.ts`: in-memory aggregate metrics
 - `src/worktree.ts`: worktree creation, merge, PR, cleanup, diff summaries
+- `src/worktree-lifecycle-resolver.ts`: authoritative lifecycle resolution from persisted state plus live repository evidence
 - `src/actions/respond.ts`: shared respond logic for tool and command callers
 - `src/application/*`: shared presentation and session-control helpers
 - `src/config.ts`: config defaults, migration logic, and routing utilities
@@ -170,6 +171,14 @@ When a session completes with worktree metadata:
 
 `ask` and `delegate` suppress the normal turn-complete wake because the worktree decision message is the completion signal.
 
+The worktree model is lifecycle-first:
+
+- authoritative state comes from plugin actions such as `pending_decision`, `pr_open`, `merged`, `dismissed`, and `no_change`
+- derived repository evidence can upgrade a sandbox to `released` when the base branch already contains the content even though git ancestry does not show a normal merge
+- retained reasons explain why a sandbox was preserved instead of cleaned
+
+This avoids treating “ahead of main” as the only truth source for cleanup.
+
 ### Resume, Redirect, And Recovery
 
 - `agent_respond(..., interrupt=true)` aborts the current turn in place and sends a redirect notification
@@ -193,6 +202,7 @@ Stored data includes:
 - harness, model, and backend ref
 - requested and effective permission modes plus deterministic approval/execution state
 - workdir and worktree metadata
+- persisted worktree lifecycle state, resolution source, and cleanup notes
 - origin routing metadata
 - backend conversation ID for diagnostics and recovery
 - output stubs and persisted stream references
@@ -222,12 +232,20 @@ The design goal is deterministic wakes with the fewest possible duplicate pings.
 - stale worktree cleanup
 - diff summary generation for delegated decisions
 
+`src/worktree-lifecycle-resolver.ts` sits above those helpers and produces:
+
+- persisted lifecycle state
+- derived lifecycle state such as `released`
+- retained reasons
+- clean-all-safe eligibility
+
 Important constraints:
 
 - worktree creation only happens for git repos
 - Codex can execute inside a native backend-managed worktree while the plugin still owns ask/delegate/auto-merge/auto-pr policy above it
 - push and PR flows need a configured remote
 - the main checkout is not modified during isolated worktree execution
+- cleanup is lifecycle-driven: safe cleanup applies only to `merged`, `released`, `dismissed`, and `no_change`
 
 Backend capabilities intentionally differ:
 
@@ -243,6 +261,7 @@ Backend capabilities intentionally differ:
 4. Runtime GC and persisted resume are separate concerns. Eviction from memory does not mean losing the session.
 5. Worktree decisions are first-class orchestration states, not afterthoughts bolted on after completion.
 6. Codex and Claude Code share the same session-centric control plane even though their backend transports differ.
+7. Worktree cleanup is lifecycle-first and evidence-based. Tooling and maintenance only remove worktrees when local repository evidence proves a safe resolved state such as `merged`, `released`, `dismissed`, or `no_change`.
 
 ## Config Touchpoints
 
