@@ -1,6 +1,9 @@
 import { canonicalizeSessionRoute } from "./session-route";
 import type {
+  ManagedWorktreeLifecycleState,
   PersistedSessionInfo,
+  PersistedWorktreeLifecycle,
+  SessionApprovalPromptStatus,
   SessionStatus,
   KillReason,
   ReasoningEffort,
@@ -112,6 +115,7 @@ function toOptionalWorktreeState(value: unknown): SessionWorktreeState | undefin
     || value === "merge_in_progress"
     || value === "pr_in_progress"
     || value === "merged"
+    || value === "released"
     || value === "pr_open"
     || value === "dismissed"
     || value === "cleanup_failed"
@@ -119,8 +123,31 @@ function toOptionalWorktreeState(value: unknown): SessionWorktreeState | undefin
     : undefined;
 }
 
+function toOptionalManagedWorktreeLifecycleState(value: unknown): ManagedWorktreeLifecycleState | undefined {
+  return value === "none"
+    || value === "provisioned"
+    || value === "pending_decision"
+    || value === "pr_open"
+    || value === "merged"
+    || value === "released"
+    || value === "dismissed"
+    || value === "no_change"
+    || value === "cleanup_failed"
+    ? value
+    : undefined;
+}
+
 function toOptionalRuntimeState(value: unknown): SessionRuntimeState | undefined {
   return value === "live" || value === "stopped" ? value : undefined;
+}
+
+function toOptionalApprovalPromptStatus(value: unknown): SessionApprovalPromptStatus | undefined {
+  return value === "not_sent"
+    || value === "sending"
+    || value === "delivered"
+    || value === "failed"
+    ? value
+    : undefined;
 }
 
 function toOptionalDeliveryState(value: unknown): SessionDeliveryState | undefined {
@@ -197,6 +224,102 @@ function normalizeBackendRef(
   return undefined;
 }
 
+function normalizeWorktreeLifecycle(raw: unknown): PersistedWorktreeLifecycle | undefined {
+  if (!isRecord(raw)) return undefined;
+  const state = toOptionalManagedWorktreeLifecycleState(raw.state);
+  const updatedAt = toOptionalString(raw.updatedAt);
+  if (!state || !updatedAt) return undefined;
+  const resolutionSource = toOptionalString(raw.resolutionSource);
+  return {
+    state,
+    updatedAt,
+    resolvedAt: toOptionalString(raw.resolvedAt),
+    resolutionSource: resolutionSource === "agent_merge"
+      || resolutionSource === "agent_pr"
+      || resolutionSource === "strategy_no_change"
+      || resolutionSource === "lifecycle_resolver"
+      || resolutionSource === "dismiss"
+      || resolutionSource === "maintenance"
+      ? resolutionSource
+      : undefined,
+    baseBranch: toOptionalString(raw.baseBranch),
+    targetRepo: toOptionalString(raw.targetRepo),
+    pushRemote: toOptionalString(raw.pushRemote),
+    notes: Array.isArray(raw.notes) ? raw.notes.filter((note): note is string => typeof note === "string" && note.length > 0) : undefined,
+  };
+}
+
+function synthesizeLegacyWorktreeLifecycle(raw: Record<string, unknown>): PersistedWorktreeLifecycle | undefined {
+  const nowIso = new Date(0).toISOString();
+  const updatedAt =
+    toOptionalString(raw.worktreeMergedAt)
+    ?? toOptionalString(raw.worktreeDismissedAt)
+    ?? toOptionalString(raw.pendingWorktreeDecisionSince)
+    ?? nowIso;
+
+  if (raw.worktreeMerged === true) {
+    return {
+      state: "merged",
+      updatedAt,
+      resolvedAt: toOptionalString(raw.worktreeMergedAt) ?? updatedAt,
+      resolutionSource: "agent_merge",
+      baseBranch: toOptionalString(raw.worktreeBaseBranch),
+      targetRepo: toOptionalString(raw.worktreePrTargetRepo),
+      pushRemote: toOptionalString(raw.worktreePushRemote),
+    };
+  }
+  if (raw.worktreeDisposition === "dismissed") {
+    return {
+      state: "dismissed",
+      updatedAt,
+      resolvedAt: toOptionalString(raw.worktreeDismissedAt) ?? updatedAt,
+      resolutionSource: "dismiss",
+      baseBranch: toOptionalString(raw.worktreeBaseBranch),
+      targetRepo: toOptionalString(raw.worktreePrTargetRepo),
+      pushRemote: toOptionalString(raw.worktreePushRemote),
+    };
+  }
+  if (raw.worktreeDisposition === "no-change-cleaned") {
+    return {
+      state: "no_change",
+      updatedAt,
+      resolvedAt: updatedAt,
+      resolutionSource: "strategy_no_change",
+      baseBranch: toOptionalString(raw.worktreeBaseBranch),
+      targetRepo: toOptionalString(raw.worktreePrTargetRepo),
+      pushRemote: toOptionalString(raw.worktreePushRemote),
+    };
+  }
+  if (raw.worktreeDisposition === "pr-opened" || raw.worktreeState === "pr_open") {
+    return {
+      state: "pr_open",
+      updatedAt,
+      baseBranch: toOptionalString(raw.worktreeBaseBranch),
+      targetRepo: toOptionalString(raw.worktreePrTargetRepo),
+      pushRemote: toOptionalString(raw.worktreePushRemote),
+    };
+  }
+  if (raw.pendingWorktreeDecisionSince || raw.worktreeState === "pending_decision") {
+    return {
+      state: "pending_decision",
+      updatedAt,
+      baseBranch: toOptionalString(raw.worktreeBaseBranch),
+      targetRepo: toOptionalString(raw.worktreePrTargetRepo),
+      pushRemote: toOptionalString(raw.worktreePushRemote),
+    };
+  }
+  if (toOptionalString(raw.worktreePath) || toOptionalString(raw.worktreeBranch)) {
+    return {
+      state: "provisioned",
+      updatedAt,
+      baseBranch: toOptionalString(raw.worktreeBaseBranch),
+      targetRepo: toOptionalString(raw.worktreePrTargetRepo),
+      pushRemote: toOptionalString(raw.worktreePushRemote),
+    };
+  }
+  return undefined;
+}
+
 function normalizeStatus(value: unknown): SessionStatus | undefined {
   if (typeof value !== "string") return undefined;
   if (!VALID_PERSISTED_STATUSES.has(value as SessionStatus)) return undefined;
@@ -232,6 +355,7 @@ export function normalizePersistedEntry(raw: unknown): PersistedSessionInfo | un
   if (worktreePath && !persistedWorktreeBranch) return undefined;
   const harness = toOptionalString(raw.harness);
   const backendRef = normalizeBackendRef(raw.backendRef, harness, harnessSessionId);
+  const worktreeLifecycle = normalizeWorktreeLifecycle(raw.worktreeLifecycle) ?? synthesizeLegacyWorktreeLifecycle(raw);
 
   return {
     sessionId: toOptionalString(raw.sessionId),
@@ -266,7 +390,10 @@ export function normalizePersistedEntry(raw: unknown): PersistedSessionInfo | un
     pendingPlanApproval: raw.pendingPlanApproval === true,
     planApprovalContext: toOptionalPlanApprovalContext(raw.planApprovalContext),
     planDecisionVersion: toOptionalNumber(raw.planDecisionVersion),
+    actionablePlanDecisionVersion: toOptionalNumber(raw.actionablePlanDecisionVersion),
     canonicalPlanPromptVersion: toOptionalNumber(raw.canonicalPlanPromptVersion),
+    approvalPromptVersion: toOptionalNumber(raw.approvalPromptVersion),
+    approvalPromptStatus: toOptionalApprovalPromptStatus(raw.approvalPromptStatus),
     planApproval: toOptionalPlanApprovalMode(raw.planApproval),
     codexApprovalPolicy: toOptionalCodexApprovalPolicy(raw.codexApprovalPolicy),
     worktreePath,
@@ -284,6 +411,7 @@ export function normalizePersistedEntry(raw: unknown): PersistedSessionInfo | un
     worktreeDecisionSnoozedUntil: toOptionalString(raw.worktreeDecisionSnoozedUntil),
     worktreeDisposition: (raw.worktreeDisposition === "active" || raw.worktreeDisposition === "pr-opened" || raw.worktreeDisposition === "merged" || raw.worktreeDisposition === "dismissed" || raw.worktreeDisposition === "no-change-cleaned") ? raw.worktreeDisposition : undefined,
     worktreeDismissedAt: toOptionalString(raw.worktreeDismissedAt),
+    worktreeLifecycle,
     resumable: recoveredFromRunning ? true : raw.resumable === true,
   };
 }

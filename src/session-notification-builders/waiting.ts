@@ -5,7 +5,7 @@ import type { NotificationButton } from "../session-interactions";
 type OriginThreadLine = string;
 
 export function buildWaitingForInputPayload(args: {
-  session: Pick<Session, "id" | "name" | "multiTurn" | "pendingPlanApproval">;
+  session: Pick<Session, "id" | "name" | "multiTurn" | "pendingPlanApproval" | "planDecisionVersion" | "actionablePlanDecisionVersion" | "approvalPromptStatus">;
   preview: string;
   originThreadLine: OriginThreadLine;
   planApprovalMode?: PlanApprovalMode;
@@ -19,11 +19,12 @@ export function buildWaitingForInputPayload(args: {
 } {
   const { session, preview, originThreadLine, planApprovalMode, planApprovalButtons, questionButtons } = args;
   const isPlanApproval = session.pendingPlanApproval;
+  const actionableVersion = session.actionablePlanDecisionVersion ?? session.planDecisionVersion;
 
   const userMessage = isPlanApproval
     ? (
         planApprovalMode === "ask"
-          ? `📋 [${session.name}] Plan ready for approval:\n\n${preview}\n\nChoose Approve, Revise, or Reject below.`
+          ? `📋 [${session.name}] Plan v${actionableVersion ?? "?"} ready for approval:\n\n${preview}\n\n${planApprovalButtons ? "Choose Approve, Revise, or Reject below." : "Approval is still pending for this plan version."}`
           : undefined
       )
     : `❓ [${session.name}] Question waiting for reply:\n\n${preview}`;
@@ -37,7 +38,7 @@ export function buildWaitingForInputPayload(args: {
         userMessage,
         wakeMessage: [
           `[DELEGATED PLAN APPROVAL] Coding agent session has finished its plan and is requesting approval to implement.`,
-          `Name: ${session.name} | ID: ${session.id}`,
+          `Name: ${session.name} | ID: ${session.id} | Plan v${actionableVersion ?? "?"}`,
           originThreadLine,
           permissionModeLine,
           ``,
@@ -88,7 +89,7 @@ export function buildWaitingForInputPayload(args: {
         userMessage,
         wakeMessage: [
           `[USER APPROVAL REQUESTED] Coding agent session has finished its plan. The user has been notified via Telegram and must approve directly.`,
-          `Name: ${session.name} | ID: ${session.id}`,
+          `Name: ${session.name} | ID: ${session.id} | Plan v${actionableVersion ?? "?"}`,
           originThreadLine,
           permissionModeLine,
           ``,

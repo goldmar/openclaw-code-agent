@@ -114,7 +114,9 @@ Use `permission_mode: "plan"` whenever the user wants a real planning checkpoint
 - Approval belongs to the orchestrator first.
 - This is wake-first: the plugin wakes the orchestrator without user buttons.
 - Before deciding, read the full plan with `agent_output(session, full=true)`; do not rely on the truncated preview.
-- Approve directly with `agent_respond(..., approve=true)` only when the plan is clearly in-bounds and low risk.
+- Approve directly with `agent_respond(..., approve=true)` only when the latest actionable plan version is clearly in-bounds and low risk.
+- If a prior version had `changes_requested`, that stale state should not block approval of the latest revised plan version.
+- If the user requests changes, wait for the revised plan from that same session; the revised submission becomes the latest actionable review version automatically.
 - If escalation is needed, call `agent_request_plan_approval(session='...', summary='...')` exactly once so the plugin sends the single canonical user approval prompt.
 - After that canonical prompt exists, wait for the user's decision; do not send a second plain-text approval summary.
 

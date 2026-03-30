@@ -33,6 +33,9 @@ function fakeSession(overrides: Record<string, any> = {}): any {
     multiTurn: true,
     pendingPlanApproval: false,
     planDecisionVersion: 0,
+    actionablePlanDecisionVersion: undefined,
+    approvalPromptStatus: "not_sent",
+    approvalPromptVersion: undefined,
     getOutput: (n?: number) => [],
     kill: () => {},
     on: () => {},
@@ -825,7 +828,7 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(calls.length, 1);
     const [_sessionArg, request] = calls[0];
     assert.equal(request.label, "plan-approval");
-    assert.match(request.userMessage, /Plan ready for approval/);
+    assert.match(request.userMessage, /Plan v7 ready for approval/);
     assert.equal(request.buttons[0][0].label, "Approve");
     assert.equal(request.buttons[0][1].label, "Revise");
     assert.equal(request.buttons[0][2].label, "Reject");
@@ -975,7 +978,7 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(calls.length, 1);
     const [_sessionArg, request] = calls[0];
     assert.equal(request.label, "plan-approval");
-    assert.match(request.userMessage, /Plan needs your decision/);
+    assert.match(request.userMessage, /Plan v9 needs your decision/);
     assert.match(request.userMessage, /Risk: medium/);
     assert.deepEqual(
       request.buttons.map((row: Array<{ label: string }>) => row.map((button) => button.label)),
@@ -1609,7 +1612,7 @@ describe("SessionManager terminal wake behavior", () => {
     assert.equal(calls.length, 1);
     const [_sessionArg, request] = calls[0];
     assert.equal(request.label, "plan-approval-timeout");
-    assert.match(request.userMessage, /Plan still awaiting approval after idle timeout/);
+    assert.match(request.userMessage, /Plan v7 still awaiting approval after idle timeout/);
     assert.match(request.userMessage, /Approve resumes the session and starts implementation/);
     assert.match(request.userMessage, /Revise resumes it in plan mode/);
     assert.match(request.userMessage, /Reject keeps the session stopped/);

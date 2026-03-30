@@ -24,7 +24,7 @@ type InteractiveChannel = "telegram" | "discord";
 
 type PlanDecisionTarget = Pick<
   PersistedSessionInfo,
-  "approvalState" | "name" | "pendingPlanApproval" | "planDecisionVersion"
+  "approvalState" | "name" | "pendingPlanApproval" | "planDecisionVersion" | "actionablePlanDecisionVersion"
 >;
 
 function parsePayload(payload: string): string | null {
@@ -77,8 +77,8 @@ function validatePlanDecisionToken(
 
   if (
     token.planDecisionVersion != null &&
-    session.planDecisionVersion != null &&
-    token.planDecisionVersion !== session.planDecisionVersion
+    (session.actionablePlanDecisionVersion ?? session.planDecisionVersion) != null &&
+    token.planDecisionVersion !== (session.actionablePlanDecisionVersion ?? session.planDecisionVersion)
   ) {
     return "This plan decision is stale because a newer plan review state already exists.";
   }
@@ -87,7 +87,7 @@ function validatePlanDecisionToken(
     return "This plan is no longer awaiting approval.";
   }
 
-  if (token.kind === "plan-approve" && session.approvalState === "changes_requested") {
+  if (token.kind === "plan-approve" && session.approvalState === "changes_requested" && !session.pendingPlanApproval) {
     return "Changes were already requested for this plan. Wait for the revised plan before approving.";
   }
 
@@ -137,7 +137,7 @@ export function createCallbackHandler(channel: InteractiveChannel = "telegram") 
         return { handled: true };
       }
 
-      const token = sessionManager.consumeActionToken(tokenId);
+      const token = sessionManager.getActionToken(tokenId);
       if (!token) {
         await ctx.respond.reply({ text: "⚠️ This action is stale or has already been used." });
         return { handled: true };
@@ -154,8 +154,14 @@ export function createCallbackHandler(channel: InteractiveChannel = "telegram") 
         return { handled: true };
       }
 
+      const consumedToken = sessionManager.consumeActionToken(tokenId);
+      if (!consumedToken) {
+        await ctx.respond.reply({ text: "⚠️ This action is stale or has already been used." });
+        return { handled: true };
+      }
+
       // Route action
-      switch (token.kind) {
+      switch (consumedToken.kind) {
         case "worktree-merge": {
           await resolveWorktreePrompt(ctx, `✅ Merge selected for [${actionSessionName}]`);
           const result = await makeAgentMergeTool().execute("callback", { session: sessionId });
@@ -207,6 +213,7 @@ export function createCallbackHandler(channel: InteractiveChannel = "telegram") 
 
         case "plan-approve": {
           await ctx.respond.clearButtons();
+          sessionManager.clearPlanDecisionTokens(sessionId);
           const result = await executeRespond(sessionManager, {
             session: sessionId,
             message: "Approved. Go ahead.",
@@ -221,6 +228,7 @@ export function createCallbackHandler(channel: InteractiveChannel = "telegram") 
 
         case "plan-reject": {
           await ctx.respond.clearButtons();
+          sessionManager.clearPlanDecisionTokens(sessionId);
           const active = sessionManager.resolve(sessionId);
           if (active) {
             active.approvalState = "rejected";
@@ -252,11 +260,16 @@ export function createCallbackHandler(channel: InteractiveChannel = "telegram") 
           const revisePersisted = sessionManager.getPersistedSession?.(sessionId);
           const reviseName = reviseSession?.name ?? revisePersisted?.name ?? sessionId;
           const planDecisionVersion = (reviseSession?.planDecisionVersion ?? revisePersisted?.planDecisionVersion ?? 0) + 1;
+          sessionManager.clearPlanDecisionTokens(sessionId);
           sessionManager.updatePersistedSession(sessionId, {
             approvalState: "changes_requested",
-            lifecycle: "awaiting_plan_decision",
-            pendingPlanApproval: true,
+            lifecycle: "awaiting_user_input",
+            pendingPlanApproval: false,
             planDecisionVersion,
+            actionablePlanDecisionVersion: undefined,
+            canonicalPlanPromptVersion: undefined,
+            approvalPromptVersion: undefined,
+            approvalPromptStatus: "not_sent",
           });
           await ctx.respond.reply({
             text: `✏️ Type your revision feedback for [${reviseName}] and I'll forward it to the agent.`,

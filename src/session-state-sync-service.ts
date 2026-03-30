@@ -74,7 +74,10 @@ export class SessionStateSyncService {
         pendingPlanApproval: patch.pendingPlanApproval,
         planApprovalContext: patch.planApprovalContext,
         planDecisionVersion: patch.planDecisionVersion,
+        actionablePlanDecisionVersion: patch.actionablePlanDecisionVersion,
         canonicalPlanPromptVersion: patch.canonicalPlanPromptVersion,
+        approvalPromptVersion: patch.approvalPromptVersion,
+        approvalPromptStatus: patch.approvalPromptStatus,
         pendingWorktreeDecisionSince: patch.pendingWorktreeDecisionSince,
       });
     } else {
@@ -86,7 +89,10 @@ export class SessionStateSyncService {
       if (patch.pendingPlanApproval !== undefined) session.pendingPlanApproval = patch.pendingPlanApproval;
       if (patch.planApprovalContext !== undefined) session.planApprovalContext = patch.planApprovalContext;
       if (patch.planDecisionVersion !== undefined) session.planDecisionVersion = patch.planDecisionVersion;
+      if (patch.actionablePlanDecisionVersion !== undefined) session.actionablePlanDecisionVersion = patch.actionablePlanDecisionVersion;
       if (patch.canonicalPlanPromptVersion !== undefined) session.canonicalPlanPromptVersion = patch.canonicalPlanPromptVersion;
+      if (patch.approvalPromptVersion !== undefined) session.approvalPromptVersion = patch.approvalPromptVersion;
+      if (patch.approvalPromptStatus !== undefined) session.approvalPromptStatus = patch.approvalPromptStatus;
     }
     if (patch.worktreePath !== undefined) session.worktreePath = patch.worktreePath;
     if (patch.worktreeBranch !== undefined) session.worktreeBranch = patch.worktreeBranch;
@@ -97,5 +103,6 @@ export class SessionStateSyncService {
     if (patch.worktreeDisposition !== undefined) session.worktreeDisposition = patch.worktreeDisposition;
     if (patch.worktreePrTargetRepo !== undefined) session.worktreePrTargetRepo = patch.worktreePrTargetRepo;
     if (patch.worktreePushRemote !== undefined) session.worktreePushRemote = patch.worktreePushRemote;
+    if (patch.worktreeLifecycle !== undefined) session.worktreeLifecycle = patch.worktreeLifecycle;
   }
 }

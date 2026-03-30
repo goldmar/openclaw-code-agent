@@ -41,11 +41,30 @@ export type SessionWorktreeState =
   | "merge_in_progress"
   | "pr_in_progress"
   | "merged"
+  | "released"
   | "pr_open"
   | "dismissed"
   | "cleanup_failed";
+export type ManagedWorktreeLifecycleState =
+  | "none"
+  | "provisioned"
+  | "pending_decision"
+  | "pr_open"
+  | "merged"
+  | "released"
+  | "dismissed"
+  | "no_change"
+  | "cleanup_failed";
+export type WorktreeLifecycleResolutionSource =
+  | "agent_merge"
+  | "agent_pr"
+  | "strategy_no_change"
+  | "lifecycle_resolver"
+  | "dismiss"
+  | "maintenance";
 export type SessionRuntimeState = "live" | "stopped";
 export type SessionDeliveryState = "idle" | "notifying" | "wake_pending" | "failed";
+export type SessionApprovalPromptStatus = "not_sent" | "sending" | "delivered" | "failed";
 export type ApprovalExecutionState =
   | "awaiting_approval"
   | "approved_then_implemented"
@@ -124,6 +143,43 @@ export interface PendingInputState {
   allowsFreeText?: boolean;
   expiresAt?: number;
   responseMode?: "structured" | "compact";
+}
+
+export interface PersistedWorktreeLifecycle {
+  state: ManagedWorktreeLifecycleState;
+  updatedAt: string;
+  resolvedAt?: string;
+  resolutionSource?: WorktreeLifecycleResolutionSource;
+  baseBranch?: string;
+  targetRepo?: string;
+  pushRemote?: string;
+  notes?: string[];
+}
+
+export interface WorktreeRepositoryEvidence {
+  checkedAt: string;
+  repoExists: boolean;
+  branchExists: boolean;
+  worktreeExists: boolean;
+  activeSession: boolean;
+  dirtyTracked: boolean;
+  topologyMerged: boolean;
+  releaseNoopMerge: boolean;
+  branchAheadCount?: number;
+  baseAheadCount?: number;
+  prState?: "open" | "merged" | "closed" | "none";
+  prUrl?: string;
+  prNumber?: number;
+  reasons: string[];
+}
+
+export interface ResolvedWorktreeLifecycle {
+  lifecycle: PersistedWorktreeLifecycle;
+  evidence: WorktreeRepositoryEvidence;
+  derivedState: ManagedWorktreeLifecycleState;
+  cleanupSafe: boolean;
+  preserve: boolean;
+  reasons: string[];
 }
 
 export interface PlanArtifactStep {
@@ -211,6 +267,9 @@ export interface SessionConfig {
   approvalExecutionState?: ApprovalExecutionState;
   planModeApproved?: boolean;
   approvalState?: SessionApprovalState;
+  actionablePlanDecisionVersion?: number;
+  approvalPromptVersion?: number;
+  approvalPromptStatus?: SessionApprovalPromptStatus;
   resumeSessionId?: string;
   /** Original requested session ID for worktree inheritance, independent of harness thread resume.
    * Set even when resumeSessionId is cleared (e.g. Codex harness), so the D1 block can still
@@ -318,7 +377,10 @@ export interface PersistedSessionInfo {
   pendingPlanApproval?: boolean;
   planApprovalContext?: PlanApprovalContext;
   planDecisionVersion?: number;
+  actionablePlanDecisionVersion?: number;
   canonicalPlanPromptVersion?: number;
+  approvalPromptVersion?: number;
+  approvalPromptStatus?: SessionApprovalPromptStatus;
   planApproval?: PlanApprovalMode;
   codexApprovalPolicy?: CodexApprovalPolicy;
   /** Path to the worktree if one was created. */
@@ -351,6 +413,7 @@ export interface PersistedSessionInfo {
   worktreeDisposition?: "active" | "pr-opened" | "merged" | "dismissed" | "no-change-cleaned";
   /** ISO timestamp when the worktree was dismissed. */
   worktreeDismissedAt?: string;
+  worktreeLifecycle?: PersistedWorktreeLifecycle;
   resumable?: boolean;
 }
 

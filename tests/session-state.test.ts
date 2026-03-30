@@ -20,6 +20,9 @@ function baseState(overrides: Partial<SessionControlState> = {}): SessionControl
     pendingPlanApproval: false,
     planApprovalContext: undefined,
     planDecisionVersion: 0,
+    actionablePlanDecisionVersion: undefined,
+    approvalPromptVersion: undefined,
+    approvalPromptStatus: "not_sent",
     planModeApproved: false,
     ...overrides,
   };
@@ -52,6 +55,7 @@ describe("session-state reducer", () => {
     assert.equal(next.approvalState, "pending");
     assert.equal(next.approvalExecutionState, "awaiting_approval");
     assert.equal(next.planDecisionVersion, 1);
+    assert.equal(next.actionablePlanDecisionVersion, 1);
     assert.equal(next.lifecycle, "awaiting_plan_decision");
   });
 
@@ -85,7 +89,7 @@ describe("session-state reducer", () => {
     assert.equal(next.approvalExecutionState, "implemented_without_required_approval");
   });
 
-  it("preserves explicit changes_requested patches while plan approval is still pending", () => {
+  it("normalizes changes_requested patches into a non-actionable revision state", () => {
     const next = applySessionControlPatch(baseState({
       status: "running",
       lifecycle: "awaiting_plan_decision",
@@ -97,9 +101,32 @@ describe("session-state reducer", () => {
       planDecisionVersion: 3,
     });
 
-    assert.equal(next.pendingPlanApproval, true);
+    assert.equal(next.pendingPlanApproval, false);
     assert.equal(next.approvalState, "changes_requested");
     assert.equal(next.planDecisionVersion, 3);
+    assert.equal(next.actionablePlanDecisionVersion, undefined);
+    assert.equal(next.lifecycle, "awaiting_user_input");
+  });
+
+  it("treats revised-plan submission as the latest actionable version", () => {
+    const next = reduceSessionControlState(baseState({
+      status: "running",
+      lifecycle: "awaiting_user_input",
+      requestedPermissionMode: "plan",
+      currentPermissionMode: "plan",
+      approvalState: "changes_requested",
+      pendingPlanApproval: false,
+      planApprovalContext: "plan-mode",
+      planDecisionVersion: 2,
+    }), {
+      type: "plan.requested",
+      context: "plan-mode",
+    });
+
+    assert.equal(next.pendingPlanApproval, true);
+    assert.equal(next.approvalState, "pending");
+    assert.equal(next.planDecisionVersion, 2);
+    assert.equal(next.actionablePlanDecisionVersion, 2);
     assert.equal(next.lifecycle, "awaiting_plan_decision");
   });
 

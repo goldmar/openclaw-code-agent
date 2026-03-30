@@ -98,7 +98,14 @@ For Codex, approval behavior is fixed to the supported execution path and is not
 | `delegate` | Wake the orchestrator, require a full-plan review, then let it either approve directly or escalate back to the user with the same approval buttons |
 | `approve` | Auto-approve after verification |
 
-In `ask`, the plugin sends action buttons for `Approve`, `Revise`, and `Reject` when interactive callbacks are available, and the user-facing message includes the full plan text rather than the normal preview budget. The same flow still works through plain replies. In `delegate`, the orchestrator must read the full plan with `agent_output(..., full=true)` before approving anything.
+In `ask`, the plugin sends action buttons for `Approve`, `Revise`, and `Reject` when interactive callbacks are available, and the user-facing message includes the full plan text rather than the normal preview budget. Each session keeps one canonical actionable approval prompt per plan review version; later reminders for that same version are non-canonical reminders, not a fresh approval cycle. The same flow still works through plain replies. In `delegate`, the orchestrator must read the full plan with `agent_output(..., full=true)` before approving anything.
+
+Revision and approval rules are version-scoped:
+
+- `Revise` supersedes only the prior review version for that same session
+- the revised plan becomes the latest actionable review version
+- `agent_respond(..., approve=true)` resolves against that latest actionable version, even if older versions previously had `changes_requested`
+- approval-prompt delivery state is tracked separately from backend approval state, so a missing button delivery should be treated as a delivery problem, not as proof that the plan is no longer awaiting approval
 
 Terminal completion wakes and no-change worktree completion wakes now include deterministic approval context for plan-gated sessions:
 

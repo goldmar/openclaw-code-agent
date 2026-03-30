@@ -33,6 +33,11 @@ describe("createCallbackHandler()", () => {
 
   it("surfaces PR URLs through explicit view-pr actions", async () => {
     setSessionManager({
+      getActionToken: () => ({
+        sessionId: "sess-1",
+        kind: "worktree-view-pr",
+        targetUrl: "https://github.com/example/repo/pull/123",
+      }),
       consumeActionToken: () => ({
         sessionId: "sess-1",
         kind: "worktree-view-pr",
@@ -54,15 +59,18 @@ describe("createCallbackHandler()", () => {
     let switchedTo: string | undefined;
     const session = createStubSession({
       pendingPlanApproval: true,
+      actionablePlanDecisionVersion: 1,
       sendMessage: async () => {},
       switchPermissionMode: (mode: string) => { switchedTo = mode; },
     });
 
     setSessionManager({
+      getActionToken: () => ({ sessionId: "test-id", kind: "plan-approve" }),
       consumeActionToken: () => ({ sessionId: "test-id", kind: "plan-approve" }),
       resolve: () => session,
       getPersistedSession: () => undefined,
       notifySession: () => {},
+      clearPlanDecisionTokens: () => {},
     } as any);
 
     const handler = createCallbackHandler();
@@ -77,6 +85,11 @@ describe("createCallbackHandler()", () => {
   it("marks request-changes immediately so stale approvals are blocked", async () => {
     const patches: Array<Record<string, unknown>> = [];
     setSessionManager({
+      getActionToken: () => ({
+        sessionId: "test-id",
+        kind: "plan-request-changes",
+        planDecisionVersion: 4,
+      }),
       consumeActionToken: () => ({
         sessionId: "test-id",
         kind: "plan-request-changes",
@@ -90,6 +103,7 @@ describe("createCallbackHandler()", () => {
         planDecisionVersion: 4,
       }),
       getPersistedSession: () => undefined,
+      clearPlanDecisionTokens: () => {},
       updatePersistedSession: (_ref: string, patch: Record<string, unknown>) => {
         patches.push(patch);
         return true;
@@ -105,15 +119,24 @@ describe("createCallbackHandler()", () => {
     assert.match(state.replies[0], /Type your revision feedback/);
     assert.deepEqual(patches[0], {
       approvalState: "changes_requested",
-      lifecycle: "awaiting_plan_decision",
-      pendingPlanApproval: true,
+      lifecycle: "awaiting_user_input",
+      pendingPlanApproval: false,
       planDecisionVersion: 5,
+      actionablePlanDecisionVersion: undefined,
+      canonicalPlanPromptVersion: undefined,
+      approvalPromptVersion: undefined,
+      approvalPromptStatus: "not_sent",
     });
   });
 
   it("rejects timed-out pending plans without leaving them pending in persisted state", async () => {
     const patches: Array<Record<string, unknown>> = [];
     setSessionManager({
+      getActionToken: () => ({
+        sessionId: "test-id",
+        kind: "plan-reject",
+        planDecisionVersion: 4,
+      }),
       consumeActionToken: () => ({
         sessionId: "test-id",
         kind: "plan-reject",
@@ -131,6 +154,7 @@ describe("createCallbackHandler()", () => {
         patches.push(patch);
         return true;
       },
+      clearPlanDecisionTokens: () => {},
     } as any);
 
     const handler = createCallbackHandler();
@@ -151,6 +175,11 @@ describe("createCallbackHandler()", () => {
 
   it("rejects stale plan approval callbacks from an older plan-decision version", async () => {
     setSessionManager({
+      getActionToken: () => ({
+        sessionId: "test-id",
+        kind: "plan-approve",
+        planDecisionVersion: 2,
+      }),
       consumeActionToken: () => ({
         sessionId: "test-id",
         kind: "plan-approve",
@@ -162,6 +191,7 @@ describe("createCallbackHandler()", () => {
         pendingPlanApproval: true,
         approvalState: "pending",
         planDecisionVersion: 3,
+        actionablePlanDecisionVersion: 3,
       }),
       getPersistedSession: () => undefined,
     } as any);
@@ -178,6 +208,7 @@ describe("createCallbackHandler()", () => {
   it("resolves question-answer callbacks by session and option index", async () => {
     const resolved: Array<{ sessionId: string; optionIndex: number }> = [];
     setSessionManager({
+      getActionToken: () => ({ sessionId: "sess-42", kind: "question-answer", optionIndex: 1 }),
       consumeActionToken: () => ({ sessionId: "sess-42", kind: "question-answer", optionIndex: 1 }),
       resolvePendingInputOption: (sessionId: string, optionIndex: number) => {
         resolved.push({ sessionId, optionIndex });
@@ -196,6 +227,7 @@ describe("createCallbackHandler()", () => {
 
   it("rewrites worktree decision prompts to a resolved state before replying", async () => {
     setSessionManager({
+      getActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
       consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
       resolve: () => undefined,
       getPersistedSession: () => ({ name: "ux-fix" }),
@@ -214,6 +246,11 @@ describe("createCallbackHandler()", () => {
 
   it("can be registered for Discord with the same action-token contract", async () => {
     setSessionManager({
+      getActionToken: () => ({
+        sessionId: "sess-discord",
+        kind: "worktree-view-pr",
+        targetUrl: "https://github.com/example/repo/pull/999",
+      }),
       consumeActionToken: () => ({
         sessionId: "sess-discord",
         kind: "worktree-view-pr",

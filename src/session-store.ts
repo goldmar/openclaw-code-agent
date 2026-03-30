@@ -177,7 +177,10 @@ export class SessionStore {
       pendingPlanApproval: session.pendingPlanApproval,
       planApprovalContext: session.planApprovalContext,
       planDecisionVersion: session.planDecisionVersion,
+      actionablePlanDecisionVersion: session.actionablePlanDecisionVersion,
       canonicalPlanPromptVersion: session.canonicalPlanPromptVersion,
+      approvalPromptVersion: session.approvalPromptVersion,
+      approvalPromptStatus: session.approvalPromptStatus,
       planApproval: session.planApproval,
       codexApprovalPolicy: session.codexApprovalPolicy,
       worktreePath: session.worktreePath,
@@ -185,6 +188,7 @@ export class SessionStore {
       worktreeStrategy: session.worktreeStrategy,
       worktreeBaseBranch: session.worktreeBaseBranch,
       worktreePrTargetRepo: session.worktreePrTargetRepo,
+      worktreeLifecycle: session.worktreeLifecycle,
       resumable: session.isExplicitlyResumable,
     };
     assertNewSchemaEntry(stub);
@@ -267,7 +271,10 @@ export class SessionStore {
       pendingPlanApproval: session.pendingPlanApproval,
       planApprovalContext: session.planApprovalContext,
       planDecisionVersion: session.planDecisionVersion,
+      actionablePlanDecisionVersion: session.actionablePlanDecisionVersion,
       canonicalPlanPromptVersion: session.canonicalPlanPromptVersion,
+      approvalPromptVersion: session.approvalPromptVersion,
+      approvalPromptStatus: session.approvalPromptStatus,
       planApproval: session.planApproval,
       codexApprovalPolicy: session.codexApprovalPolicy,
       worktreePath: session.worktreePath,
@@ -275,6 +282,7 @@ export class SessionStore {
       worktreeStrategy: session.worktreeStrategy,
       worktreeBaseBranch: session.worktreeBaseBranch,
       worktreePrTargetRepo: session.worktreePrTargetRepo,
+      worktreeLifecycle: session.worktreeLifecycle,
       resumable: session.isExplicitlyResumable,
     };
     assertNewSchemaEntry(info);

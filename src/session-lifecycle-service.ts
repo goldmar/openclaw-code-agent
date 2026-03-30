@@ -181,6 +181,11 @@ export class SessionLifecycleService {
         ? this.deps.resolvePlanApprovalMode(session)
         : undefined;
       if (session.pendingPlanApproval) {
+        const actionableVersion = session.actionablePlanDecisionVersion ?? session.planDecisionVersion;
+        const canonicalAlreadyDelivered =
+          actionableVersion != null
+          && session.canonicalPlanPromptVersion === actionableVersion
+          && session.approvalPromptStatus === "delivered";
         if (planApprovalMode === "delegate") {
           this.deps.dispatchSessionNotification(session, {
             label: "plan-approval-timeout",
@@ -201,7 +206,7 @@ export class SessionLifecycleService {
         this.deps.dispatchSessionNotification(session, {
           label: "plan-approval-timeout",
           userMessage: [
-            `📋 [${session.name}] Plan still awaiting approval after idle timeout | ${costStr} | ${formatDuration(duration)}`,
+            `📋 [${session.name}] Plan v${actionableVersion ?? "?"} still awaiting approval after idle timeout | ${costStr} | ${formatDuration(duration)}`,
             ``,
             `The agent already produced a plan and is waiting for your decision.`,
             `Approve resumes the session and starts implementation.`,
@@ -209,8 +214,11 @@ export class SessionLifecycleService {
             `Reject keeps the session stopped.`,
           ].join("\n"),
           notifyUser: "always",
-          buttons: planApprovalMode === "ask"
-            ? this.deps.getPlanApprovalButtons(session.id, session)
+          buttons: planApprovalMode === "ask" && !canonicalAlreadyDelivered
+            ? this.deps.getPlanApprovalButtons(session.id, {
+              ...session,
+              planDecisionVersion: actionableVersion,
+            })
             : undefined,
         });
         this.deps.clearRetryTimersForSession(session.id);
@@ -236,7 +244,13 @@ export class SessionLifecycleService {
     const planApprovalMode = session.pendingPlanApproval
       ? this.deps.resolvePlanApprovalMode(session)
       : undefined;
-    const planDecisionVersion = session.planDecisionVersion;
+    const planDecisionVersion = session.actionablePlanDecisionVersion ?? session.planDecisionVersion;
+    const canonicalAlreadyDelivered =
+      session.pendingPlanApproval
+      && planApprovalMode === "ask"
+      && planDecisionVersion != null
+      && session.canonicalPlanPromptVersion === planDecisionVersion
+      && session.approvalPromptStatus === "delivered";
     const preview =
       (!session.pendingPlanApproval && session.pendingInputState?.promptText)
         ? session.pendingInputState.promptText
@@ -247,8 +261,11 @@ export class SessionLifecycleService {
               : undefined,
           );
     const waitingButtons =
-      session.pendingPlanApproval && planApprovalMode === "ask"
-        ? this.deps.getPlanApprovalButtons(session.id, session)
+      session.pendingPlanApproval && planApprovalMode === "ask" && !canonicalAlreadyDelivered
+        ? this.deps.getPlanApprovalButtons(session.id, {
+          ...session,
+          planDecisionVersion,
+        })
         : (!session.pendingPlanApproval && session.pendingInputState?.options.length)
           ? this.deps.getQuestionButtons(
               session.id,
@@ -271,9 +288,23 @@ export class SessionLifecycleService {
         notifyUser: "always",
         buttons: payload.buttons,
         hooks: {
+          onNotifyStarted: () => {
+            this.deps.updatePersistedSession(session.id, {
+              approvalPromptVersion: planDecisionVersion,
+              approvalPromptStatus: "sending",
+            });
+          },
           onNotifySucceeded: () => {
             this.deps.updatePersistedSession(session.id, {
               canonicalPlanPromptVersion: planDecisionVersion,
+              approvalPromptVersion: planDecisionVersion,
+              approvalPromptStatus: "delivered",
+            });
+          },
+          onNotifyFailed: () => {
+            this.deps.updatePersistedSession(session.id, {
+              approvalPromptVersion: planDecisionVersion,
+              approvalPromptStatus: "failed",
             });
           },
         },

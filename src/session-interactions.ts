@@ -34,6 +34,14 @@ export class SessionInteractionService {
     return this.actionTokens.consumeActionToken(tokenId);
   }
 
+  getActionToken(tokenId: string): SessionActionToken | undefined {
+    return this.actionTokens.getActionToken(tokenId);
+  }
+
+  clearPlanDecisionTokens(sessionId: string, keepVersion?: number): void {
+    this.actionTokens.deletePlanDecisionTokensForSession(sessionId, keepVersion);
+  }
+
   makeActionButton(
     sessionId: string,
     kind: SessionActionKind,

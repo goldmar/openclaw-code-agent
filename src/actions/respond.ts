@@ -35,7 +35,13 @@ type ResumableSession = ResumableSessionLike;
 
 type PlanApprovalTarget = Pick<
   ResumableSession,
-  "approvalState" | "pendingPlanApproval" | "currentPermissionMode" | "requestedPermissionMode" | "name"
+  | "approvalState"
+  | "pendingPlanApproval"
+  | "currentPermissionMode"
+  | "requestedPermissionMode"
+  | "name"
+  | "planDecisionVersion"
+  | "actionablePlanDecisionVersion"
 >;
 
 function getSessionRef(session: ResumableSession): string {
@@ -115,7 +121,7 @@ const PLAN_APPROVAL_SYSTEM_PREFIX =
   "[SYSTEM: The user has approved your plan. Exit plan mode immediately and implement the changes with full permissions. Do not ask for further confirmation.]\n\n";
 
 function approvalBlockedReason(session: PlanApprovalTarget): string | undefined {
-  if (session.approvalState === "changes_requested") {
+  if (session.approvalState === "changes_requested" && !hasLatestActionablePlan(session)) {
     return `Plan changes were already requested for session ${session.name}. Wait for the revised plan before approving.`;
   }
   if (session.approvalState === "rejected") {
@@ -124,9 +130,15 @@ function approvalBlockedReason(session: PlanApprovalTarget): string | undefined 
   return undefined;
 }
 
+function hasLatestActionablePlan(session: Pick<PlanApprovalTarget, "pendingPlanApproval" | "planDecisionVersion" | "actionablePlanDecisionVersion">): boolean {
+  if (!session.pendingPlanApproval) return false;
+  const version = session.actionablePlanDecisionVersion ?? session.planDecisionVersion ?? 0;
+  return version > 0;
+}
+
 function canAutoResumePlanApproval(session: PlanApprovalTarget): boolean {
   if (approvalBlockedReason(session)) return false;
-  return !!(session.pendingPlanApproval || session.currentPermissionMode === "plan");
+  return hasLatestActionablePlan(session) || session.currentPermissionMode === "plan";
 }
 
 async function tryAutoResume(
@@ -178,6 +190,13 @@ async function tryAutoResume(
       requestedPermissionMode: session.requestedPermissionMode ?? session.currentPermissionMode,
       planApproval: session.planApproval,
       codexApprovalPolicy: session.codexApprovalPolicy,
+      pendingPlanApproval: isPlanApproval ? false : session.pendingPlanApproval,
+      planApprovalContext: session.planApprovalContext,
+      planDecisionVersion: session.planDecisionVersion,
+      actionablePlanDecisionVersion: isPlanApproval ? undefined : session.actionablePlanDecisionVersion,
+      canonicalPlanPromptVersion: session.canonicalPlanPromptVersion,
+      approvalPromptVersion: session.approvalPromptVersion,
+      approvalPromptStatus: session.approvalPromptStatus,
       ...(isPlanApproval
         ? {
             approvalState: "approved" as const,
@@ -285,9 +304,9 @@ export async function executeRespond(
     }
 
     // Permission escalation — explicit approve flag
-    const isPlanApproval = !!(params.approve && session.pendingPlanApproval);
+    const isPlanApproval = !!(params.approve && hasLatestActionablePlan(session));
     let approvalWarning = "";
-    if (params.approve && session.pendingPlanApproval) {
+    if (params.approve && hasLatestActionablePlan(session)) {
       session.switchPermissionMode("bypassPermissions");
     } else if (params.approve && session.currentPermissionMode === "default") {
       // Non-plan mode escalation — switch to bypassPermissions
@@ -297,7 +316,7 @@ export async function executeRespond(
       approvalWarning = `\nℹ️ approve=true was set but session is already in bypassPermissions mode.`;
     } else if (params.approve) {
       approvalWarning = `\n⚠️ approve=true was set but session has no pending plan approval.`;
-    } else if (session.pendingPlanApproval) {
+    } else if (session.pendingPlanApproval || session.approvalState === "changes_requested") {
       approvalWarning = `\nℹ️ Session has a pending plan — sending as revision feedback. The agent will revise and re-submit. Set approve=true to approve instead.`;
     }
 

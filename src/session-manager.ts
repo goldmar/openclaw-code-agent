@@ -369,6 +369,14 @@ export class SessionManager {
   }
 
   private getWorktreeDecisionButtons(sessionId: string): NotificationButton[][] | undefined {
+  getActionToken(tokenId: string): SessionActionToken | undefined {
+    return this.interactions.getActionToken(tokenId);
+  }
+
+  clearPlanDecisionTokens(sessionId: string, keepVersion?: number): void {
+    this.interactions.clearPlanDecisionTokens(sessionId, keepVersion);
+  }
+
     const session = this.resolve(sessionId) ?? this.getPersistedSession(sessionId);
     if (!session || session.worktreeStrategy === "delegate") return undefined;
     return this.interactions.getWorktreeDecisionButtons(sessionId, session);
@@ -409,7 +417,8 @@ export class SessionManager {
     if (this.resolvePlanApprovalMode(session) !== "delegate") {
       return `Error: Session "${ref}" already uses direct user plan approval. Do not send a duplicate approval prompt.`;
     }
-    if (session.canonicalPlanPromptVersion === session.planDecisionVersion) {
+    const actionableVersion = session.actionablePlanDecisionVersion ?? session.planDecisionVersion;
+    if (actionableVersion != null && session.canonicalPlanPromptVersion === actionableVersion) {
       return [
         `Canonical plan approval prompt already exists for session ${session.name} [${sessionId}].`,
         `Wait for the user's Approve, Revise, or Reject response.`,
@@ -423,9 +432,12 @@ export class SessionManager {
       ].join(" ");
     }
 
-    const buttons = this.interactions.getPlanApprovalButtons(sessionId, session);
+    const buttons = this.interactions.getPlanApprovalButtons(sessionId, {
+      ...session,
+      planDecisionVersion: actionableVersion,
+    });
     const message = [
-      `📋 [${session.name}] Plan needs your decision:`,
+      `📋 [${session.name}] Plan v${actionableVersion ?? "?"} needs your decision:`,
       ``,
       trimmedSummary,
       ``,
@@ -447,8 +459,22 @@ export class SessionManager {
         buttons,
         hooks: {
           onNotifySucceeded: () => {
+          onNotifyStarted: () => {
             this.updatePersistedSession(sessionId, {
-              canonicalPlanPromptVersion: session.planDecisionVersion,
+              approvalPromptStatus: "sending",
+              approvalPromptVersion: actionableVersion,
+            });
+          },
+            this.updatePersistedSession(sessionId, {
+              canonicalPlanPromptVersion: actionableVersion,
+              approvalPromptVersion: actionableVersion,
+              approvalPromptStatus: "delivered",
+            });
+          },
+          onNotifyFailed: () => {
+            this.updatePersistedSession(sessionId, {
+              approvalPromptVersion: actionableVersion,
+              approvalPromptStatus: "failed",
             });
           },
         },

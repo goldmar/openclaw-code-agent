@@ -1,6 +1,10 @@
 import { randomUUID } from "crypto";
 import type { SessionActionKind, SessionActionToken } from "./types";
 
+function isPlanDecisionKind(kind: SessionActionKind): boolean {
+  return kind === "plan-approve" || kind === "plan-request-changes" || kind === "plan-reject";
+}
+
 /**
  * Token-only persistence layer for interactive callbacks.
  * SessionStore composes this into the shared index file without mixing token
@@ -72,6 +76,17 @@ export class SessionActionTokenStore {
         this.tokens.delete(tokenId);
         changed = true;
       }
+    }
+    if (changed) this.onChange();
+  }
+
+  deletePlanDecisionTokensForSession(sessionId: string, keepVersion?: number): void {
+    let changed = false;
+    for (const [tokenId, token] of this.tokens) {
+      if (token.sessionId !== sessionId || !isPlanDecisionKind(token.kind)) continue;
+      if (keepVersion != null && token.planDecisionVersion === keepVersion) continue;
+      this.tokens.delete(tokenId);
+      changed = true;
     }
     if (changed) this.onChange();
   }

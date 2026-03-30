@@ -4,6 +4,7 @@ import type {
   PlanApprovalContext,
   SessionApprovalState,
   SessionDeliveryState,
+  SessionApprovalPromptStatus,
   SessionLifecycle,
   SessionRuntimeState,
   SessionStatus,
@@ -23,7 +24,10 @@ export interface SessionControlState {
   pendingPlanApproval: boolean;
   planApprovalContext?: PlanApprovalContext;
   planDecisionVersion: number;
+  actionablePlanDecisionVersion?: number;
   canonicalPlanPromptVersion?: number;
+  approvalPromptVersion?: number;
+  approvalPromptStatus: SessionApprovalPromptStatus;
   planModeApproved: boolean;
 }
 
@@ -62,13 +66,17 @@ export interface SessionControlPatch {
   pendingPlanApproval?: boolean;
   planApprovalContext?: PlanApprovalContext;
   planDecisionVersion?: number;
+  actionablePlanDecisionVersion?: number;
   canonicalPlanPromptVersion?: number;
+  approvalPromptVersion?: number;
+  approvalPromptStatus?: SessionApprovalPromptStatus;
   planModeApproved?: boolean;
   pendingWorktreeDecisionSince?: string;
 }
 
 const RESOLVED_WORKTREE_STATES = new Set<SessionWorktreeState>([
   "merged",
+  "released",
   "pr_open",
   "dismissed",
   "cleanup_failed",
@@ -155,12 +163,24 @@ export function reduceSessionControlState(
           state.pendingPlanApproval
           && state.approvalState === "pending"
           && state.planApprovalContext === event.context;
+        const isRevisedPlanSubmission =
+          !state.pendingPlanApproval
+          && state.approvalState === "changes_requested"
+          && state.planApprovalContext === event.context
+          && state.planDecisionVersion > 0;
+        const nextVersion = isSamePendingPlan || isRevisedPlanSubmission
+          ? state.planDecisionVersion
+          : state.planDecisionVersion + 1;
         return finalizeState({
           ...state,
           pendingPlanApproval: true,
           planApprovalContext: event.context,
           approvalState: "pending",
-          planDecisionVersion: isSamePendingPlan ? state.planDecisionVersion : state.planDecisionVersion + 1,
+          planDecisionVersion: nextVersion,
+          actionablePlanDecisionVersion: nextVersion,
+          canonicalPlanPromptVersion: isSamePendingPlan ? state.canonicalPlanPromptVersion : undefined,
+          approvalPromptVersion: isSamePendingPlan ? state.approvalPromptVersion : undefined,
+          approvalPromptStatus: isSamePendingPlan ? state.approvalPromptStatus : "not_sent",
           lifecycle: "awaiting_plan_decision",
         });
       }
@@ -170,6 +190,7 @@ export function reduceSessionControlState(
         ...state,
         pendingPlanApproval: false,
         planApprovalContext: undefined,
+        actionablePlanDecisionVersion: undefined,
         approvalState: state.approvalState === "pending" ? "not_required" : state.approvalState,
       });
 
@@ -178,19 +199,26 @@ export function reduceSessionControlState(
         ...state,
         pendingPlanApproval: false,
         planApprovalContext: undefined,
+        actionablePlanDecisionVersion: undefined,
         planModeApproved: true,
         approvalState: "approved",
         planDecisionVersion: state.planDecisionVersion + 1,
+        approvalPromptVersion: undefined,
+        approvalPromptStatus: "not_sent",
         lifecycle: state.status === "running" ? "active" : state.lifecycle,
       });
 
     case "plan.changes_requested":
       return finalizeState({
         ...state,
-        pendingPlanApproval: true,
+        pendingPlanApproval: false,
         approvalState: "changes_requested",
         planDecisionVersion: state.planDecisionVersion + 1,
-        lifecycle: "awaiting_plan_decision",
+        actionablePlanDecisionVersion: undefined,
+        canonicalPlanPromptVersion: undefined,
+        approvalPromptVersion: undefined,
+        approvalPromptStatus: "not_sent",
+        lifecycle: "awaiting_user_input",
       });
 
     case "terminal.entered":
@@ -241,15 +269,32 @@ export function applySessionControlPatch(
     ...(patch.pendingPlanApproval !== undefined ? { pendingPlanApproval: patch.pendingPlanApproval } : {}),
     ...(patch.planApprovalContext !== undefined ? { planApprovalContext: patch.planApprovalContext } : {}),
     ...(patch.planDecisionVersion !== undefined ? { planDecisionVersion: patch.planDecisionVersion } : {}),
+    ...(patch.actionablePlanDecisionVersion !== undefined ? { actionablePlanDecisionVersion: patch.actionablePlanDecisionVersion } : {}),
     ...(patch.canonicalPlanPromptVersion !== undefined ? { canonicalPlanPromptVersion: patch.canonicalPlanPromptVersion } : {}),
+    ...(patch.approvalPromptVersion !== undefined ? { approvalPromptVersion: patch.approvalPromptVersion } : {}),
+    ...(patch.approvalPromptStatus !== undefined ? { approvalPromptStatus: patch.approvalPromptStatus } : {}),
     ...(patch.planModeApproved !== undefined ? { planModeApproved: patch.planModeApproved } : {}),
   };
+
+  if (patch.approvalState === "changes_requested" && patch.pendingPlanApproval === undefined) {
+    next = {
+      ...next,
+      pendingPlanApproval: false,
+    };
+  }
 
   if (next.pendingPlanApproval) {
     next = {
       ...next,
-      approvalState: next.approvalState === "changes_requested" ? "changes_requested" : "pending",
+      approvalState: "pending",
+      actionablePlanDecisionVersion: next.actionablePlanDecisionVersion ?? next.planDecisionVersion,
       lifecycle: "awaiting_plan_decision",
+    };
+  } else if (next.approvalState === "changes_requested") {
+    next = {
+      ...next,
+      actionablePlanDecisionVersion: undefined,
+      lifecycle: "awaiting_user_input",
     };
   }
 

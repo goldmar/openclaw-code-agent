@@ -197,6 +197,7 @@ describe("executeRespond", () => {
     assert.equal(capturedConfig.approvalState, "approved");
     assert.equal(capturedConfig.approvalExecutionState, "approved_then_implemented");
     assert.equal(capturedConfig.planModeApproved, true);
+    assert.equal(capturedConfig.pendingPlanApproval, false);
     assert.match(capturedConfig.prompt, /The user has approved your plan/i);
     assert.equal(capturedConfig.sessionIdOverride, "dead-plan");
   });
@@ -295,6 +296,7 @@ describe("executeRespond", () => {
       status: "running",
       lifecycle: "awaiting_plan_decision",
       pendingPlanApproval: true,
+      actionablePlanDecisionVersion: 2,
       sendMessage: async () => {},
       switchPermissionMode: (mode: string) => { switchedTo = mode; },
     });
@@ -311,15 +313,16 @@ describe("executeRespond", () => {
     assert.match(result.text, /Plan approved for session/);
   });
 
-  it("blocks approve=true after plan changes were already requested", async () => {
+  it("allows approve=true for the latest actionable revised plan even if changes were requested previously", async () => {
     const session = createStubSession({
       status: "running",
       lifecycle: "awaiting_plan_decision",
       pendingPlanApproval: true,
       approvalState: "changes_requested",
-      sendMessage: async () => {
-        throw new Error("sendMessage should not be called");
-      },
+      planDecisionVersion: 3,
+      actionablePlanDecisionVersion: 3,
+      sendMessage: async () => {},
+      switchPermissionMode: () => {},
     });
     const sm = createStubSessionManager({ "test-id": session });
 
@@ -329,8 +332,8 @@ describe("executeRespond", () => {
       approve: true,
     });
 
-    assert.equal(result.isError, true);
-    assert.match(result.text, /already requested/i);
+    assert.equal(result.isError, undefined);
+    assert.match(result.text, /Plan approved for session/i);
   });
 
   it("enforces the auto-respond safety cap for non-user replies", async () => {

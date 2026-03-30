@@ -18,6 +18,7 @@ import type {
   PlanApprovalContext,
   SessionLifecycle,
   SessionApprovalState,
+  SessionApprovalPromptStatus,
   SessionWorktreeState,
   SessionRuntimeState,
   SessionDeliveryState,
@@ -146,7 +147,10 @@ export class Session extends EventEmitter {
   planDecisionVersion: number = 0;
   canonicalPlanPromptVersion?: number;
   planFilePath?: string;
+  actionablePlanDecisionVersion?: number;
   killReason: KillReason = "unknown";
+  approvalPromptVersion?: number;
+  approvalPromptStatus: SessionApprovalPromptStatus = "not_sent";
   private planModeApproved: boolean = false;
   private readonly turnRuntime: SessionTurnRuntime;
   private readonly harnessEvents: SessionHarnessEventApplier;
@@ -287,13 +291,31 @@ export class Session extends EventEmitter {
       },
     });
     this.applyControlEvent({ type: "initialize", hasWorktree: !!(this.worktreeStrategy && this.worktreeStrategy !== "off") });
-    if (config.planModeApproved !== undefined || config.approvalState !== undefined || config.approvalExecutionState !== undefined) {
+    if (
+      config.planModeApproved !== undefined
+      || config.approvalState !== undefined
+      || config.approvalExecutionState !== undefined
+      || config.pendingPlanApproval !== undefined
+      || config.planApprovalContext !== undefined
+      || config.planDecisionVersion !== undefined
+      || config.actionablePlanDecisionVersion !== undefined
+      || config.canonicalPlanPromptVersion !== undefined
+      || config.approvalPromptVersion !== undefined
+      || config.approvalPromptStatus !== undefined
+    ) {
       this.applyControlPatch({
         ...(config.planModeApproved !== undefined ? { planModeApproved: config.planModeApproved } : {}),
         ...(config.approvalState !== undefined ? { approvalState: config.approvalState } : {}),
         ...(config.approvalExecutionState !== undefined ? { approvalExecutionState: config.approvalExecutionState } : {}),
       });
     }
+        ...(config.pendingPlanApproval !== undefined ? { pendingPlanApproval: config.pendingPlanApproval } : {}),
+        ...(config.planApprovalContext !== undefined ? { planApprovalContext: config.planApprovalContext } : {}),
+        ...(config.planDecisionVersion !== undefined ? { planDecisionVersion: config.planDecisionVersion } : {}),
+        ...(config.actionablePlanDecisionVersion !== undefined ? { actionablePlanDecisionVersion: config.actionablePlanDecisionVersion } : {}),
+        ...(config.canonicalPlanPromptVersion !== undefined ? { canonicalPlanPromptVersion: config.canonicalPlanPromptVersion } : {}),
+        ...(config.approvalPromptVersion !== undefined ? { approvalPromptVersion: config.approvalPromptVersion } : {}),
+        ...(config.approvalPromptStatus !== undefined ? { approvalPromptStatus: config.approvalPromptStatus } : {}),
   }
 
   get status(): SessionStatus { return this._status; }
@@ -507,8 +529,10 @@ export class Session extends EventEmitter {
       if (shouldInjectPrefix) {
         effectiveText = `[SYSTEM: The user has approved your plan. Exit plan mode immediately and implement the changes with full permissions. Do not ask for further confirmation.]\n\n${text}`;
       }
-    } else if (this.pendingPlanApproval && !this.planModeApproved) {
-      this.applyControlEvent({ type: "plan.changes_requested" });
+    } else if ((this.pendingPlanApproval || this.approvalState === "changes_requested") && !this.planModeApproved) {
+      if (this.approvalState !== "changes_requested") {
+        this.applyControlEvent({ type: "plan.changes_requested" });
+      }
       effectiveText = `[SYSTEM: The user wants changes to your plan. Revise the plan based on their feedback below, then re-submit your revised plan for approval. Do NOT start implementing yet.]\n\n${text}`;
 
       // Re-assert plan mode at the SDK level. CC's previous ExitPlanMode call
@@ -672,7 +696,10 @@ export class Session extends EventEmitter {
       planDecisionVersion: this.planDecisionVersion,
       canonicalPlanPromptVersion: this.canonicalPlanPromptVersion,
       planModeApproved: this.planModeApproved,
+      actionablePlanDecisionVersion: this.actionablePlanDecisionVersion,
     };
+      approvalPromptVersion: this.approvalPromptVersion,
+      approvalPromptStatus: this.approvalPromptStatus,
   }
 
   private applyControlEvent(event: SessionControlEvent): void {
@@ -697,5 +724,8 @@ export class Session extends EventEmitter {
     this.planDecisionVersion = next.planDecisionVersion;
     this.canonicalPlanPromptVersion = next.canonicalPlanPromptVersion;
     this.planModeApproved = next.planModeApproved;
+    this.actionablePlanDecisionVersion = next.actionablePlanDecisionVersion;
   }
+    this.approvalPromptVersion = next.approvalPromptVersion;
+    this.approvalPromptStatus = next.approvalPromptStatus;
 }
