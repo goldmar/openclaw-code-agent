@@ -1,3 +1,4 @@
+import { parseTelegramTopicConversation } from "openclaw/plugin-sdk/telegram-core";
 import type { SessionRoute } from "./types";
 
 export interface SessionRouteSource {
@@ -29,19 +30,58 @@ function routeToChannelString(route?: SessionRoute): string | undefined {
     : `${route.provider}|${route.target}`;
 }
 
+function parseThreadSuffix(value: string): { id: string; threadId?: string } {
+  const marker = ":thread:";
+  const index = value.toLowerCase().lastIndexOf(marker);
+  if (index === -1) {
+    return { id: value };
+  }
+  const id = value.slice(0, index).trim();
+  const threadId = value.slice(index + marker.length).trim() || undefined;
+  return { id: id || value, threadId };
+}
+
+function parseSessionConversationRef(
+  originSessionKey?: string,
+): { provider: string; kind: string; rawId: string } | undefined {
+  const raw = originSessionKey?.trim();
+  if (!raw) return undefined;
+
+  const rawParts = raw.split(":").filter(Boolean);
+  const bodyStartIndex =
+    rawParts.length >= 3 && rawParts[0]?.trim().toLowerCase() === "agent" ? 2 : 0;
+  const parts = rawParts.slice(bodyStartIndex);
+  if (parts.length < 3) {
+    return undefined;
+  }
+
+  const provider = parts[0]?.trim().toLowerCase();
+  const kind = parts[1]?.trim().toLowerCase();
+  const rawId = parts.slice(2).join(":").trim();
+  if (!provider || !kind || !rawId) {
+    return undefined;
+  }
+
+  return { provider, kind, rawId };
+}
+
 function routeFromSessionKey(originSessionKey?: string): SessionRoute | undefined {
   const trimmed = originSessionKey?.trim();
   if (!trimmed) return undefined;
 
-  const match = trimmed.match(/^agent:[^:]+:([^:]+):([^:]+):([^:]+)(?::topic:([^:]+))?$/i);
-  if (!match) return undefined;
+  const parsed = parseSessionConversationRef(trimmed);
+  if (!parsed) return undefined;
 
-  const [, providerRaw, kindRaw, targetRaw, threadId] = match;
-  const provider = providerRaw.toLowerCase();
-  const kind = kindRaw.toLowerCase();
+  const { provider, kind, rawId } = parsed;
+  const genericConversation = parseThreadSuffix(rawId);
+  const telegramConversation = provider === "telegram"
+    ? parseTelegramTopicConversation({ conversationId: rawId })
+    : null;
+  const baseTarget = telegramConversation?.chatId ?? genericConversation.id;
+  const threadId = telegramConversation?.topicId ?? genericConversation.threadId;
   const target = provider === "discord"
-    ? (kind === "direct" || kind === "dm" ? `user:${targetRaw}` : `channel:${targetRaw}`)
-    : targetRaw;
+    ? (kind === "direct" || kind === "dm" ? `user:${baseTarget}` : `channel:${baseTarget}`)
+    : baseTarget;
 
   return {
     provider,

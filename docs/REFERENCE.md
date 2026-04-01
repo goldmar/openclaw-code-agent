@@ -400,6 +400,8 @@ Tool launches resolve the origin channel in this order:
 
 Thread routing is separate from channel routing. When OpenClaw provides the originating session key or thread ID, notifications return to the exact thread or topic where the session started.
 
+Session-key recovery follows OpenClaw's current provider-owned grammar: Telegram `:topic:` parsing is delegated to the SDK helper, while generic `:thread:` suffixes remain available for other providers.
+
 Prefer fully routable channel strings in `fallbackChannel` and `agentChannels`. A bare provider such as `telegram` is treated as a weak fallback; the plugin will repair topic routing from `originSessionKey` when it can, but explicit channel targets remain the cleanest configuration.
 
 ## Notifications
