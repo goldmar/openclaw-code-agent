@@ -169,7 +169,7 @@ describe("GoalController", () => {
     await controller.reconcileAll();
 
     assert.equal(task.status, "failed");
-    assert.match(task.failureReason ?? "", /cannot be autonomously recovered after restart/i);
+    assert.match(task.failureReason ?? "", /cannot continue autonomously/i);
     assert.deepEqual(notifications.map((note) => note.label), ["goal-task-failed"]);
   });
 
@@ -369,7 +369,7 @@ describe("GoalController", () => {
     assert.equal(task.status, "failed");
     assert.equal(
       task.failureReason,
-      "Goal task was waiting for user input and cannot be autonomously recovered after restart",
+      "Goal task was waiting for user input and cannot continue autonomously",
     );
   });
 

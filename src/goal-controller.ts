@@ -541,7 +541,7 @@ export class GoalController {
     for (const task of this.store.list()) {
       if (!this.started) break;
       if (task.status === "waiting_for_user") {
-        this.markTaskFailed(task, "Goal task was waiting for user input and cannot be autonomously recovered after restart");
+        this.markTaskFailed(task, "Goal task was waiting for user input and cannot continue autonomously");
         continue;
       }
       if (task.status !== "waiting_for_session" && task.status !== "running") continue;
@@ -684,7 +684,7 @@ export class GoalController {
     this.notify(task, `❌ [${task.name}] Goal task failed\n\n${task.failureReason}`, "goal-task-failed");
   }
 
-  private markTaskWaitingForUser(task: GoalTaskState, reason: string): void {
+  private markTaskFailedWaitingForUser(task: GoalTaskState, reason: string): void {
     this.markTaskFailed(task, `Goal task was waiting for user input and cannot continue autonomously: ${reason}`);
   }
 
@@ -729,7 +729,7 @@ export class GoalController {
     const output = session.getOutput(30).join("\n");
     const autoReply = classifyGoalAutoReply(output);
     if (!autoReply) {
-      this.markTaskWaitingForUser(task, summarizeLines(output, 24) || "The session is waiting for user input.");
+      this.markTaskFailedWaitingForUser(task, summarizeLines(output, 24) || "The session is waiting for user input.");
       return;
     }
 
@@ -739,7 +739,7 @@ export class GoalController {
       userInitiated: false,
     });
     if (result.isError || result.text.includes("Auto-respond limit reached")) {
-      this.markTaskWaitingForUser(task, result.text);
+      this.markTaskFailedWaitingForUser(task, result.text);
       return;
     }
 
@@ -944,7 +944,7 @@ export class GoalController {
     try {
       const session = task.sessionId ? this.sessionManager.resolve(task.sessionId) : undefined;
       if (task.status === "waiting_for_user") {
-        this.markTaskFailed(task, "Goal task was waiting for user input and cannot be autonomously recovered after restart");
+        this.markTaskFailed(task, "Goal task was waiting for user input and cannot continue autonomously");
         return;
       }
       if (isInvalidVerifierTask(task)) {
