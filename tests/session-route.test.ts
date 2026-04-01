@@ -1,6 +1,9 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { routeFromOriginMetadata } from "../src/session-route";
+import {
+  routeFromOriginMetadata,
+  safeParseTelegramTopicConversation,
+} from "../src/session-route";
 
 describe("session-route", () => {
   it("defaults bare numeric discord targets to channel routes", () => {
@@ -70,6 +73,43 @@ describe("session-route", () => {
       target: "general",
       threadId: "1699999999.0001",
       sessionKey: "agent:main:slack:channel:general:thread:1699999999.0001",
+    });
+  });
+
+  it("ignores session keys without the agent prefix", () => {
+    const route = routeFromOriginMetadata(
+      "telegram",
+      undefined,
+      "telegram:group:-100123:topic:77",
+    );
+    assert.deepEqual(route, {
+      provider: "system",
+      target: "system",
+      sessionKey: "telegram:group:-100123:topic:77",
+    });
+  });
+
+  it("catches Telegram parser errors and falls back gracefully", () => {
+    assert.equal(
+      safeParseTelegramTopicConversation(
+        "-100123:topic:77",
+        () => {
+          throw new Error("boom");
+        },
+      ),
+      null,
+    );
+
+    const route = routeFromOriginMetadata(
+      "telegram",
+      undefined,
+      "agent:main:telegram:group:-100123:topic:77",
+    );
+    assert.deepEqual(route, {
+      provider: "telegram",
+      target: "-100123",
+      threadId: "77",
+      sessionKey: "agent:main:telegram:group:-100123:topic:77",
     });
   });
 });

@@ -48,8 +48,8 @@ function parseSessionConversationRef(
   if (!raw) return undefined;
 
   const rawParts = raw.split(":").filter(Boolean);
-  const bodyStartIndex =
-    rawParts.length >= 3 && rawParts[0]?.trim().toLowerCase() === "agent" ? 2 : 0;
+  if (rawParts[0]?.trim().toLowerCase() !== "agent") return undefined;
+  const bodyStartIndex = 2;
   const parts = rawParts.slice(bodyStartIndex);
   if (parts.length < 3) {
     return undefined;
@@ -65,6 +65,17 @@ function parseSessionConversationRef(
   return { provider, kind, rawId };
 }
 
+export function safeParseTelegramTopicConversation(
+  conversationId: string,
+  parseConversation: typeof parseTelegramTopicConversation = parseTelegramTopicConversation,
+) {
+  try {
+    return parseConversation({ conversationId });
+  } catch {
+    return null;
+  }
+}
+
 function routeFromSessionKey(originSessionKey?: string): SessionRoute | undefined {
   const trimmed = originSessionKey?.trim();
   if (!trimmed) return undefined;
@@ -75,7 +86,7 @@ function routeFromSessionKey(originSessionKey?: string): SessionRoute | undefine
   const { provider, kind, rawId } = parsed;
   const genericConversation = parseThreadSuffix(rawId);
   const telegramConversation = provider === "telegram"
-    ? parseTelegramTopicConversation({ conversationId: rawId })
+    ? safeParseTelegramTopicConversation(rawId)
     : null;
   const baseTarget = telegramConversation?.chatId ?? genericConversation.id;
   const threadId = telegramConversation?.topicId ?? genericConversation.threadId;
