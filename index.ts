@@ -14,6 +14,9 @@ import { makeAgentMergeTool } from "./src/tools/agent-merge";
 import { makeAgentPrTool } from "./src/tools/agent-pr";
 import { makeAgentWorktreeCleanupTool } from "./src/tools/agent-worktree-cleanup";
 import { makeAgentWorktreeStatusTool } from "./src/tools/agent-worktree-status";
+import { makeGoalLaunchTool } from "./src/tools/goal-launch";
+import { makeGoalStatusTool } from "./src/tools/goal-status";
+import { makeGoalStopTool } from "./src/tools/goal-stop";
 import { createCallbackHandler } from "./src/callback-handler";
 import { registerAgentCommand } from "./src/commands/agent";
 import { registerAgentSessionsCommand } from "./src/commands/agent-sessions";
@@ -21,8 +24,12 @@ import { registerAgentKillCommand } from "./src/commands/agent-kill";
 import { registerAgentRespondCommand } from "./src/commands/agent-respond";
 import { registerAgentStatsCommand } from "./src/commands/agent-stats";
 import { registerAgentOutputCommand } from "./src/commands/agent-output";
+import { registerGoalCommand } from "./src/commands/goal";
+import { registerGoalStatusCommand } from "./src/commands/goal-status";
+import { registerGoalStopCommand } from "./src/commands/goal-stop";
+import { GoalController } from "./src/goal-controller";
 import { SessionManager } from "./src/session-manager";
-import { setSessionManager } from "./src/singletons";
+import { setGoalController, setSessionManager } from "./src/singletons";
 import { setPluginRuntime } from "./src/runtime-store";
 import { setPluginConfig, pluginConfig } from "./src/config";
 import { definePluginEntry, type OpenClawPluginApi, type OpenClawPluginToolContext } from "./api";
@@ -106,6 +113,7 @@ function cleanupOrphanedWorktrees(sm: SessionManager): void {
 /** Register plugin tools, commands, and the background session service. */
 export function register(api: OpenClawPluginApi): void {
   let sm: SessionManager | null = null;
+  let gc: GoalController | null = null;
   let cleanupInterval: ReturnType<typeof setInterval> | null = null;
   const registerTool = api.registerTool as (
     tool: (ctx: OpenClawPluginToolContext) => unknown,
@@ -126,6 +134,9 @@ export function register(api: OpenClawPluginApi): void {
   registerTool((ctx: OpenClawPluginToolContext) => makeAgentPrTool(ctx), { optional: false });
   registerTool((ctx: OpenClawPluginToolContext) => makeAgentWorktreeCleanupTool(ctx), { optional: false });
   registerTool((ctx: OpenClawPluginToolContext) => makeAgentWorktreeStatusTool(ctx), { optional: false });
+  registerTool((ctx: OpenClawPluginToolContext) => makeGoalLaunchTool(ctx), { optional: false });
+  registerTool((ctx: OpenClawPluginToolContext) => makeGoalStatusTool(ctx), { optional: false });
+  registerTool((ctx: OpenClawPluginToolContext) => makeGoalStopTool(ctx), { optional: false });
 
   // Interactive handlers (shared action-token callbacks across chat transports)
   api.registerInteractiveHandler(createCallbackHandler("telegram"));
@@ -138,6 +149,9 @@ export function register(api: OpenClawPluginApi): void {
   registerAgentRespondCommand(api);
   registerAgentStatsCommand(api);
   registerAgentOutputCommand(api);
+  registerGoalCommand(api);
+  registerGoalStatusCommand(api);
+  registerGoalStopCommand(api);
 
   // Service
   api.registerService({
@@ -148,7 +162,10 @@ export function register(api: OpenClawPluginApi): void {
       setPluginRuntime(api.runtime);
 
       sm = new SessionManager(pluginConfig.maxSessions, pluginConfig.maxPersistedSessions);
+      gc = new GoalController(sm);
       setSessionManager(sm);
+      setGoalController(gc);
+      gc.start();
 
       // A1: Cleanup orphaned worktrees at startup (needs sm for per-repo workdir scan)
       cleanupOrphanedWorktrees(sm);
@@ -157,12 +174,15 @@ export function register(api: OpenClawPluginApi): void {
       cleanupInterval.unref?.();
     },
     stop: () => {
+      if (gc) gc.stop();
       if (sm) sm.killAll("shutdown");
       if (cleanupInterval) clearInterval(cleanupInterval);
       if (sm) sm.dispose();
       cleanupInterval = null;
+      gc = null;
       sm = null;
       setPluginRuntime(undefined);
+      setGoalController(null);
       setSessionManager(null);
     },
   });

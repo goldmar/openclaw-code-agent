@@ -23,6 +23,7 @@ import type {
   SessionActionKind,
   SessionActionToken,
   SessionRoute,
+  GoalTaskState,
 } from "./types";
 import { SessionStore } from "./session-store";
 import { SessionMetricsRecorder } from "./session-metrics";
@@ -709,6 +710,29 @@ export class SessionManager {
       userMessage: args.text,
       notifyUser: "always",
       buttons,
+    });
+  }
+
+  emitGoalTaskUpdate(
+    task: Pick<GoalTaskState, "id" | "sessionId" | "route" | "originChannel" | "originThreadId" | "originSessionKey">,
+    text: string,
+    label: string = "goal-task",
+  ): void {
+    const routingProxy = this.buildRoutingProxy({
+      id: task.sessionId ?? task.id,
+      route: task.route,
+    }) as Session & {
+      originChannel?: string;
+      originThreadId?: string | number;
+      originSessionKey?: string;
+    };
+    routingProxy.originChannel = task.originChannel;
+    routingProxy.originThreadId = task.originThreadId;
+    routingProxy.originSessionKey = task.originSessionKey;
+    this.dispatchSessionNotification(routingProxy, {
+      label,
+      userMessage: text,
+      notifyUser: "always",
     });
   }
 

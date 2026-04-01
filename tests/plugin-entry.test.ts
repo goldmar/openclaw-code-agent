@@ -25,4 +25,17 @@ describe("plugin entry source", () => {
     assert.match(indexSource, /registerInteractiveHandler\(createCallbackHandler\("discord"\)\)/);
     assert.doesNotMatch(indexSource, /registerHttpRoute\(/);
   });
+
+  it("registers goal tools, commands, and controller startup", () => {
+    const indexSource = readFileSync(join(rootDir, "index.ts"), "utf8");
+
+    assert.match(indexSource, /makeGoalLaunchTool/);
+    assert.match(indexSource, /makeGoalStatusTool/);
+    assert.match(indexSource, /makeGoalStopTool/);
+    assert.match(indexSource, /registerGoalCommand\(api\)/);
+    assert.match(indexSource, /registerGoalStatusCommand\(api\)/);
+    assert.match(indexSource, /registerGoalStopCommand\(api\)/);
+    assert.match(indexSource, /gc = new GoalController\(sm\)/);
+    assert.match(indexSource, /gc\.start\(\)/);
+  });
 });

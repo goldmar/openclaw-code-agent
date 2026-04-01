@@ -11,6 +11,7 @@
 - **State-driven decision UX**. `ask` sends explicit action buttons for **Merge locally**, **Create PR**, **Decide later**, and **Dismiss**. The same action-token model now backs both Telegram and Discord interactive callbacks.
 - **Lifecycle-first cleanup**. Worktrees are treated as temporary task sandboxes. The plugin distinguishes `merged` from `released` so different-SHA branches whose content already landed on the base branch can still be cleaned safely.
 - **Full session lifecycle**. Suspend, resume, fork, interrupt, and recover sessions across restarts with persisted metadata and output.
+- **Explicit goal-task loops**. Opt into verifier-driven repair loops or Ralph-style completion loops when you need iterative autonomous execution toward a specific goal.
 - **Real operator visibility**. `agent_sessions`, `agent_output`, and `agent_stats` show status, buffered output, duration, and USD cost.
 - **Two harnesses, one control plane**. Claude Code and Codex share the same tools, routing, notification pipeline, and worktree strategy model while each backend uses its own native execution substrate.
 - **One continuation primitive**. `agent_respond` is the only way to continue, approve, revise, or redirect an existing session. Forks still go through `agent_launch(..., resume_session_id=..., fork_session=true)`.
@@ -22,6 +23,33 @@ Need the version-pinned ACP breakdown? See [docs/ACP-COMPARISON.md](docs/ACP-COM
 1. Launch a coding session from chat with `/agent ...` or `agent_launch(...)`.
 2. Review the plan in the same thread before anything touches the repo.
 3. Let the agent finish in an isolated worktree, then merge or publish the result from chat.
+
+### Explicit Goal Tasks
+
+Goal tasks are an explicit opt-in path for iterative autonomous work. They do not replace the default `agent_launch` flow.
+
+Use the dedicated goal entrypoints:
+
+- `/goal ...`
+- `goal_launch(...)`
+
+The plugin does not automatically switch into goal mode just because a freeform prompt contains the words `goal task`.
+
+Use them when you want the plugin to keep looping toward one concrete outcome:
+
+- **Verifier mode** reruns one or more shell checks after each coding turn and keeps iterating until they pass or the iteration budget is exhausted.
+- **Ralph mode** keeps resuming the same task until the agent emits an exact completion promise, with optional verifiers run after completion is claimed.
+
+Examples:
+
+```bash
+/goal --workdir /repo --verify "npm test" --verify "npm run lint" Fix the failing auth flow
+/goal --workdir /repo --mode ralph --completion-promise DONE Ship the draft blog post workflow end to end
+goal_launch(goal="Fix the failing auth flow", verifier_commands=["npm test", "npm run lint"], workdir="/repo")
+goal_launch(goal="Ship the draft blog post workflow end to end", goal_mode="ralph", completion_promise="DONE", workdir="/repo")
+```
+
+Once launched, use `goal_status` / `/goal_status` to inspect progress and `goal_stop` / `/goal_stop` to terminate the loop. Goal-task state is persisted so recoverable loops can resume after a gateway restart.
 
 ### Plan First
 
@@ -155,8 +183,11 @@ Prefer fully routable channel strings such as `telegram|123456789` or `telegram|
 | `agent_pr` | Create or update a GitHub PR |
 | `agent_worktree_status` | Show authoritative lifecycle state, derived repo evidence, cleanup safety, and retained reasons |
 | `agent_worktree_cleanup` | Clean all lifecycle-safe worktrees or dismiss one pending decision without touching live/unsafe worktrees |
+| `goal_launch` | Start an explicit verifier or Ralph-style goal loop |
+| `goal_status` | Show one goal task or list all goal tasks |
+| `goal_stop` | Stop a running goal task |
 
-The chat command surface mirrors the common workflows: `/agent`, `/agent_sessions`, `/agent_output`, `/agent_respond`, `/agent_kill`, and `/agent_stats`.
+The chat command surface mirrors the common workflows: `/agent`, `/agent_sessions`, `/agent_output`, `/agent_respond`, `/agent_kill`, `/agent_stats`, `/goal`, `/goal_status`, and `/goal_stop`.
 
 ## Docs
 
