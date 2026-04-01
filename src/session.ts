@@ -109,6 +109,7 @@ export class Session extends EventEmitter {
 
   // Multi-turn
   readonly multiTurn: boolean;
+  readonly goalTaskId?: string;
   private messageStream?: MessageStream;
 
   // State
@@ -209,6 +210,7 @@ export class Session extends EventEmitter {
     this.resumeSessionId = config.resumeSessionId;
     this.forkSession = config.forkSession;
     this.multiTurn = config.multiTurn ?? true;
+    this.goalTaskId = config.goalTaskId;
     this.worktreeStrategy = config.worktreeStrategy;
     this.worktreeBaseBranch = config.worktreeBaseBranch;
     if (config.worktreePrTargetRepo) {

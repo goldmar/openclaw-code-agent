@@ -140,6 +140,10 @@ export class SessionLifecycleService {
       return;
     }
 
+    if (session.goalTaskId) {
+      return;
+    }
+
     if (hadQuestion || session.pendingPlanApproval) {
       this.emitWaitingForInput(session);
       return;
@@ -160,6 +164,10 @@ export class SessionLifecycleService {
   async handleSessionTerminal(session: Session): Promise<void> {
     this.deps.persistSession(session);
     this.deps.clearWaitingTimestamp(session.id);
+    if (session.goalTaskId) {
+      this.deps.clearRetryTimersForSession(session.id);
+      return;
+    }
 
     let worktreeResult: WorktreeStrategyResult = {
       notificationSent: false,

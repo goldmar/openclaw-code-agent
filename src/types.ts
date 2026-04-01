@@ -296,6 +296,8 @@ export interface SessionConfig {
   resumeWorktreeFrom?: string;
   forkSession?: boolean;
   multiTurn?: boolean;
+  /** Optional goal-task owner for explicit iterative loop orchestration. */
+  goalTaskId?: string;
   /** Agent harness to use (e.g. "claude-code"). Defaults to the built-in default. */
   harness?: string;
   /** Worktree merge-back strategy. undefined or "off" = no worktree. */
@@ -451,4 +453,91 @@ export interface SessionMetrics {
   totalDurationMs: number;
   sessionsWithDuration: number;
   mostExpensive: { id: string; name: string; costUsd: number; prompt: string } | null;
+}
+
+export type GoalTaskStatus =
+  | "running"
+  | "waiting_for_session"
+  | "waiting_for_user"
+  | "succeeded"
+  | "failed"
+  | "stopped";
+
+export type GoalLoopMode = "verifier" | "ralph";
+
+export interface GoalVerifierSpec {
+  label: string;
+  command: string;
+  timeoutMs?: number;
+}
+
+export interface GoalTaskConfig {
+  goal: string;
+  workdir: string;
+  name?: string;
+  model?: string;
+  reasoningEffort?: ReasoningEffort;
+  systemPrompt?: string;
+  allowedTools?: string[];
+  originChannel?: string;
+  originThreadId?: string | number;
+  originAgentId?: string;
+  originSessionKey?: string;
+  route?: SessionRoute;
+  harness?: string;
+  maxIterations?: number;
+  permissionMode?: PermissionMode;
+  loopMode?: GoalLoopMode;
+  completionPromise?: string;
+  verifierCommands: GoalVerifierSpec[];
+}
+
+export interface GoalVerifierStepResult {
+  label: string;
+  command: string;
+  ok: boolean;
+  exitCode: number;
+  durationMs: number;
+  output: string;
+}
+
+export interface GoalVerifierRunResult {
+  status: "pass" | "fail";
+  steps: GoalVerifierStepResult[];
+  summary: string;
+  fingerprint: string;
+}
+
+export interface GoalTaskState {
+  id: string;
+  name: string;
+  goal: string;
+  workdir: string;
+  status: GoalTaskStatus;
+  createdAt: number;
+  updatedAt: number;
+  iteration: number;
+  maxIterations: number;
+  sessionId?: string;
+  sessionName?: string;
+  harnessSessionId?: string;
+  model?: string;
+  reasoningEffort?: ReasoningEffort;
+  systemPrompt?: string;
+  allowedTools?: string[];
+  originChannel?: string;
+  originThreadId?: string | number;
+  originAgentId?: string;
+  originSessionKey?: string;
+  route?: SessionRoute;
+  harness?: string;
+  permissionMode?: PermissionMode;
+  loopMode: GoalLoopMode;
+  completionPromise?: string;
+  verifierCommands: GoalVerifierSpec[];
+  lastVerifierSummary?: string;
+  lastVerifierFingerprint?: string;
+  repeatedFailureCount: number;
+  waitingForUserReason?: string;
+  failureReason?: string;
 }
