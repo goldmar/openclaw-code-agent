@@ -106,6 +106,141 @@ describe("createCallbackHandler()", () => {
     assert.deepEqual(state.replies, []);
   });
 
+  it("accepts Discord callbacks that provide payload via callback and only expose clearButtons", async () => {
+    let switchedTo: string | undefined;
+    const session = createStubSession({
+      pendingPlanApproval: true,
+      actionablePlanDecisionVersion: 1,
+      sendMessage: async () => {},
+      switchPermissionMode: (mode: string) => { switchedTo = mode; },
+    });
+
+    let buttonsCleared = 0;
+    const replies: string[] = [];
+    const ctx = {
+      channel: "discord" as const,
+      auth: { isAuthorizedSender: true },
+      callback: { payload: "token-approve" },
+      respond: {
+        clearButtons: async () => { buttonsCleared++; },
+        reply: async ({ text }: { text: string }) => { replies.push(text); },
+      },
+    };
+
+    setSessionManager({
+      getActionToken: () => ({ sessionId: "test-id", kind: "plan-approve" }),
+      consumeActionToken: () => ({ sessionId: "test-id", kind: "plan-approve" }),
+      resolve: () => session,
+      getPersistedSession: () => undefined,
+      notifySession: () => {},
+      clearPlanDecisionTokens: () => {},
+    } as any);
+
+    const handler = createCallbackHandler("discord");
+    const result = await handler.handler(ctx as any);
+
+    assert.deepEqual(result, { handled: true });
+    assert.equal(switchedTo, "bypassPermissions");
+    assert.equal(buttonsCleared, 1);
+    assert.deepEqual(replies, []);
+  });
+
+  it("rejects plans even when Discord clearComponents falls back to acknowledge", async () => {
+    let killed: { id: string; reason: string } | undefined;
+    let acknowledged = 0;
+    const session = createStubSession({
+      id: "test-id",
+      name: "reject-me",
+      pendingPlanApproval: true,
+      approvalState: "pending",
+      planDecisionVersion: 1,
+    });
+
+    setSessionManager({
+      getActionToken: () => ({ sessionId: "test-id", kind: "plan-reject" }),
+      consumeActionToken: () => ({ sessionId: "test-id", kind: "plan-reject" }),
+      resolve: () => session,
+      getPersistedSession: () => undefined,
+      clearPlanDecisionTokens: () => {},
+      kill: (id: string, reason: string) => {
+        killed = { id, reason };
+      },
+    } as any);
+
+    const replies: string[] = [];
+    const ctx = {
+      channel: "discord" as const,
+      auth: { isAuthorizedSender: true },
+      interaction: { payload: "token-reject" },
+      respond: {
+        clearComponents: async () => {
+          throw new Error("Cannot send an empty message");
+        },
+        acknowledge: async () => { acknowledged++; },
+        reply: async ({ text }: { text: string }) => { replies.push(text); },
+      },
+    };
+
+    const handler = createCallbackHandler("discord");
+    const result = await handler.handler(ctx as any);
+
+    assert.deepEqual(result, { handled: true });
+    assert.deepEqual(killed, { id: "test-id", reason: "user" });
+    assert.equal(acknowledged, 1);
+    assert.equal(replies[0], "❌ Plan rejected for [reject-me]. Session stopped.");
+  });
+
+  it("warns when Discord clearComponents fails and no acknowledge fallback is available", async () => {
+    let killed: { id: string; reason: string } | undefined;
+    const session = createStubSession({
+      id: "test-id",
+      name: "warn-me",
+      pendingPlanApproval: true,
+      approvalState: "pending",
+      planDecisionVersion: 1,
+    });
+
+    setSessionManager({
+      getActionToken: () => ({ sessionId: "test-id", kind: "plan-reject" }),
+      consumeActionToken: () => ({ sessionId: "test-id", kind: "plan-reject" }),
+      resolve: () => session,
+      getPersistedSession: () => undefined,
+      clearPlanDecisionTokens: () => {},
+      kill: (id: string, reason: string) => {
+        killed = { id, reason };
+      },
+    } as any);
+
+    const replies: string[] = [];
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (message?: unknown) => { warnings.push(String(message)); };
+
+    try {
+      const ctx = {
+        channel: "discord" as const,
+        auth: { isAuthorizedSender: true },
+        interaction: { payload: "token-reject" },
+        respond: {
+          clearComponents: async () => {
+            throw new Error("Cannot send an empty message");
+          },
+          reply: async ({ text }: { text: string }) => { replies.push(text); },
+        },
+      };
+
+      const handler = createCallbackHandler("discord");
+      const result = await handler.handler(ctx as any);
+
+      assert.deepEqual(result, { handled: true });
+      assert.deepEqual(killed, { id: "test-id", reason: "user" });
+      assert.equal(replies[0], "❌ Plan rejected for [warn-me]. Session stopped.");
+      assert.match(warnings[0], /no acknowledge fallback available/i);
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+
   it("marks request-changes immediately so stale approvals are blocked", async () => {
     const patches: Array<Record<string, unknown>> = [];
     setSessionManager({
@@ -272,6 +407,47 @@ describe("createCallbackHandler()", () => {
     assert.deepEqual(state.editedMessages, ["⏭️ Deferred for [ux-fix]"]);
     assert.equal(state.buttonsCleared, 0);
     assert.equal(state.replies[0], "⏭️ Snoozed 24h");
+  });
+
+  it("updates Discord worktree prompts when only clearButtons is available", async () => {
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (message?: unknown) => { warnings.push(String(message)); };
+
+    try {
+      setSessionManager({
+        getActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
+        consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
+        resolve: () => undefined,
+        getPersistedSession: () => ({ name: "ux-fix" }),
+        snoozeWorktreeDecision: () => "⏭️ Reminder snoozed 24h for `agent/ux-fix` (session: ux-fix)",
+      } as any);
+
+      const replies: string[] = [];
+      const editedMessages: string[] = [];
+      let buttonsCleared = 0;
+      const ctx = {
+        channel: "discord" as const,
+        auth: { isAuthorizedSender: true },
+        callback: { payload: "token-snooze" },
+        respond: {
+          editMessage: async ({ text }: { text: string }) => { editedMessages.push(text); },
+          clearButtons: async () => { buttonsCleared++; },
+          reply: async ({ text }: { text: string }) => { replies.push(text); },
+        },
+      };
+
+      const handler = createCallbackHandler("discord");
+      const result = await handler.handler(ctx as any);
+
+      assert.deepEqual(result, { handled: true });
+      assert.deepEqual(editedMessages, ["⏭️ Deferred for [ux-fix]"]);
+      assert.equal(buttonsCleared, 1);
+      assert.equal(replies[0], "⏭️ Snoozed 24h");
+      assert.deepEqual(warnings, []);
+    } finally {
+      console.warn = originalWarn;
+    }
   });
 
   it("can be registered for Discord with the same action-token contract", async () => {

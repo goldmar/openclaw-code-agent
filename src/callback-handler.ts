@@ -21,6 +21,13 @@ type PlanDecisionTarget = Pick<
   "approvalState" | "name" | "pendingPlanApproval" | "planDecisionVersion" | "actionablePlanDecisionVersion"
 >;
 
+type InteractiveResponder = {
+  editMessage?: (message: { text: string; buttons?: [] }) => Promise<void>;
+  clearButtons?: () => Promise<void>;
+  clearComponents?: (message?: { text?: string }) => Promise<void>;
+  acknowledge?: () => Promise<void>;
+};
+
 function parsePayload(payload: string): string | null {
   const tokenId = payload.trim().replace(new RegExp(`^${CALLBACK_NAMESPACE}:`), "");
   return tokenId ? tokenId : null;
@@ -30,13 +37,21 @@ async function resolveWorktreePrompt(
   ctx: InteractiveCallbackContext,
   text: string,
 ): Promise<void> {
+  const responder = ctx.respond as InteractiveResponder;
   try {
-    if (ctx.channel === "telegram") {
-      await ctx.respond.editMessage({ text, buttons: [] });
+    if (ctx.channel === "telegram" && typeof responder.editMessage === "function") {
+      await responder.editMessage({ text, buttons: [] });
       return;
     }
-    await ctx.respond.clearComponents({ text });
-    return;
+    if (typeof responder.clearComponents === "function") {
+      await responder.clearComponents({ text });
+      return;
+    }
+    if (typeof responder.editMessage === "function") {
+      await responder.editMessage({ text });
+      await clearInteractiveState(ctx);
+      return;
+    }
   } catch (err) {
     const errText = err instanceof Error ? err.message : String(err);
     if (!/message is not modified/i.test(errText)) {
@@ -95,15 +110,40 @@ function validatePlanDecisionToken(
 }
 
 function getPayload(ctx: InteractiveCallbackContext): string {
-  return ctx.channel === "telegram" ? ctx.callback.payload : ctx.interaction.payload;
+  const callbackPayload = "callback" in ctx ? ctx.callback?.payload : undefined;
+  const interactionPayload = "interaction" in ctx ? ctx.interaction?.payload : undefined;
+  return callbackPayload ?? interactionPayload ?? "";
+}
+
+function isDiscordEmptyMessageError(err: unknown): boolean {
+  const errText = err instanceof Error ? err.message : String(err);
+  return /empty message/i.test(errText);
 }
 
 async function clearInteractiveState(ctx: InteractiveCallbackContext): Promise<void> {
-  if (ctx.channel === "telegram") {
-    await ctx.respond.clearButtons();
+  const responder = ctx.respond as InteractiveResponder;
+  if (ctx.channel === "telegram" && typeof responder.clearButtons === "function") {
+    await responder.clearButtons();
     return;
   }
-  await ctx.respond.clearComponents();
+  if (typeof responder.clearComponents === "function") {
+    try {
+      await responder.clearComponents();
+      return;
+    } catch (err) {
+      if (!isDiscordEmptyMessageError(err)) {
+        throw err;
+      }
+      if (typeof responder.acknowledge === "function") {
+        await responder.acknowledge();
+        return;
+      }
+      console.warn("[callback-handler] clearComponents failed with empty-message error and no acknowledge fallback available");
+    }
+  }
+  if (typeof responder.clearButtons === "function") {
+    await responder.clearButtons();
+  }
 }
 
 async function replyText(ctx: InteractiveCallbackContext, text: string): Promise<void> {
