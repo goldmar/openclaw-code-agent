@@ -3,7 +3,9 @@ import type {
   PermissionMode,
   PlanApprovalContext,
   SessionApprovalState,
+  SessionApprovalPromptMessageKind,
   SessionDeliveryState,
+  SessionApprovalPromptTransport,
   SessionApprovalPromptStatus,
   SessionLifecycle,
   SessionRuntimeState,
@@ -26,8 +28,14 @@ export interface SessionControlState {
   planDecisionVersion: number;
   actionablePlanDecisionVersion?: number;
   canonicalPlanPromptVersion?: number;
+  approvalPromptRequiredVersion?: number;
   approvalPromptVersion?: number;
   approvalPromptStatus: SessionApprovalPromptStatus;
+  approvalPromptTransport: SessionApprovalPromptTransport;
+  approvalPromptMessageKind: SessionApprovalPromptMessageKind;
+  approvalPromptLastAttemptAt?: string;
+  approvalPromptDeliveredAt?: string;
+  approvalPromptFailedAt?: string;
   planModeApproved: boolean;
 }
 
@@ -68,8 +76,14 @@ export interface SessionControlPatch {
   planDecisionVersion?: number;
   actionablePlanDecisionVersion?: number;
   canonicalPlanPromptVersion?: number;
+  approvalPromptRequiredVersion?: number;
   approvalPromptVersion?: number;
   approvalPromptStatus?: SessionApprovalPromptStatus;
+  approvalPromptTransport?: SessionApprovalPromptTransport;
+  approvalPromptMessageKind?: SessionApprovalPromptMessageKind;
+  approvalPromptLastAttemptAt?: string;
+  approvalPromptDeliveredAt?: string;
+  approvalPromptFailedAt?: string;
   planModeApproved?: boolean;
   pendingWorktreeDecisionSince?: string;
 }
@@ -95,7 +109,7 @@ function deriveApprovalExecutionState(state: SessionControlState): ApprovalExecu
   if (state.currentPermissionMode !== "plan") {
     return "implemented_without_required_approval";
   }
-  return "awaiting_approval";
+  return "awaiting_plan_output";
 }
 
 function finalizeState(next: SessionControlState): SessionControlState {
@@ -184,8 +198,14 @@ export function reduceSessionControlState(
           planDecisionVersion: nextVersion,
           actionablePlanDecisionVersion: nextVersion,
           canonicalPlanPromptVersion: isSamePendingPlan ? state.canonicalPlanPromptVersion : undefined,
+          approvalPromptRequiredVersion: isSamePendingPlan ? state.approvalPromptRequiredVersion : undefined,
           approvalPromptVersion: isSamePendingPlan ? state.approvalPromptVersion : undefined,
           approvalPromptStatus: isSamePendingPlan ? state.approvalPromptStatus : "not_sent",
+          approvalPromptTransport: isSamePendingPlan ? state.approvalPromptTransport : "none",
+          approvalPromptMessageKind: isSamePendingPlan ? state.approvalPromptMessageKind : "none",
+          approvalPromptLastAttemptAt: isSamePendingPlan ? state.approvalPromptLastAttemptAt : undefined,
+          approvalPromptDeliveredAt: isSamePendingPlan ? state.approvalPromptDeliveredAt : undefined,
+          approvalPromptFailedAt: isSamePendingPlan ? state.approvalPromptFailedAt : undefined,
           lifecycle: "awaiting_plan_decision",
         });
       }
@@ -221,8 +241,14 @@ export function reduceSessionControlState(
         planDecisionVersion: state.planDecisionVersion + 1,
         actionablePlanDecisionVersion: undefined,
         canonicalPlanPromptVersion: undefined,
+        approvalPromptRequiredVersion: undefined,
         approvalPromptVersion: undefined,
         approvalPromptStatus: "not_sent",
+        approvalPromptTransport: "none",
+        approvalPromptMessageKind: "none",
+        approvalPromptLastAttemptAt: undefined,
+        approvalPromptDeliveredAt: undefined,
+        approvalPromptFailedAt: undefined,
         lifecycle: "awaiting_plan_decision",
       });
 
@@ -276,8 +302,14 @@ export function applySessionControlPatch(
     ...(patch.planDecisionVersion !== undefined ? { planDecisionVersion: patch.planDecisionVersion } : {}),
     ...(patch.actionablePlanDecisionVersion !== undefined ? { actionablePlanDecisionVersion: patch.actionablePlanDecisionVersion } : {}),
     ...(patch.canonicalPlanPromptVersion !== undefined ? { canonicalPlanPromptVersion: patch.canonicalPlanPromptVersion } : {}),
+    ...(patch.approvalPromptRequiredVersion !== undefined ? { approvalPromptRequiredVersion: patch.approvalPromptRequiredVersion } : {}),
     ...(patch.approvalPromptVersion !== undefined ? { approvalPromptVersion: patch.approvalPromptVersion } : {}),
     ...(patch.approvalPromptStatus !== undefined ? { approvalPromptStatus: patch.approvalPromptStatus } : {}),
+    ...(patch.approvalPromptTransport !== undefined ? { approvalPromptTransport: patch.approvalPromptTransport } : {}),
+    ...(patch.approvalPromptMessageKind !== undefined ? { approvalPromptMessageKind: patch.approvalPromptMessageKind } : {}),
+    ...(patch.approvalPromptLastAttemptAt !== undefined ? { approvalPromptLastAttemptAt: patch.approvalPromptLastAttemptAt } : {}),
+    ...(patch.approvalPromptDeliveredAt !== undefined ? { approvalPromptDeliveredAt: patch.approvalPromptDeliveredAt } : {}),
+    ...(patch.approvalPromptFailedAt !== undefined ? { approvalPromptFailedAt: patch.approvalPromptFailedAt } : {}),
     ...(patch.planModeApproved !== undefined ? { planModeApproved: patch.planModeApproved } : {}),
   };
 

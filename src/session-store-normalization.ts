@@ -3,7 +3,9 @@ import type {
   ManagedWorktreeLifecycleState,
   PersistedSessionInfo,
   PersistedWorktreeLifecycle,
+  SessionApprovalPromptMessageKind,
   SessionApprovalPromptStatus,
+  SessionApprovalPromptTransport,
   SessionStatus,
   KillReason,
   ReasoningEffort,
@@ -145,7 +147,20 @@ function toOptionalApprovalPromptStatus(value: unknown): SessionApprovalPromptSt
   return value === "not_sent"
     || value === "sending"
     || value === "delivered"
+    || value === "fallback_delivered"
     || value === "failed"
+    ? value
+    : undefined;
+}
+
+function toOptionalApprovalPromptTransport(value: unknown): SessionApprovalPromptTransport | undefined {
+  return value === "none" || value === "direct-telegram" || value === "wake-only"
+    ? value
+    : undefined;
+}
+
+function toOptionalApprovalPromptMessageKind(value: unknown): SessionApprovalPromptMessageKind | undefined {
+  return value === "none" || value === "canonical_buttons" || value === "explicit_fallback_text"
     ? value
     : undefined;
 }
@@ -157,7 +172,8 @@ function toOptionalDeliveryState(value: unknown): SessionDeliveryState | undefin
 }
 
 function toOptionalApprovalExecutionState(value: unknown): ApprovalExecutionState | undefined {
-  return value === "awaiting_approval"
+  return value === "awaiting_plan_output"
+    || value === "awaiting_approval"
     || value === "approved_then_implemented"
     || value === "implemented_without_required_approval"
     || value === "not_plan_gated"
@@ -394,8 +410,14 @@ export function normalizePersistedEntry(raw: unknown): PersistedSessionInfo | un
     planDecisionVersion: toOptionalNumber(raw.planDecisionVersion),
     actionablePlanDecisionVersion: toOptionalNumber(raw.actionablePlanDecisionVersion),
     canonicalPlanPromptVersion: toOptionalNumber(raw.canonicalPlanPromptVersion),
+    approvalPromptRequiredVersion: toOptionalNumber(raw.approvalPromptRequiredVersion),
     approvalPromptVersion: toOptionalNumber(raw.approvalPromptVersion),
     approvalPromptStatus: toOptionalApprovalPromptStatus(raw.approvalPromptStatus),
+    approvalPromptTransport: toOptionalApprovalPromptTransport(raw.approvalPromptTransport),
+    approvalPromptMessageKind: toOptionalApprovalPromptMessageKind(raw.approvalPromptMessageKind),
+    approvalPromptLastAttemptAt: toOptionalString(raw.approvalPromptLastAttemptAt),
+    approvalPromptDeliveredAt: toOptionalString(raw.approvalPromptDeliveredAt),
+    approvalPromptFailedAt: toOptionalString(raw.approvalPromptFailedAt),
     planApproval: toOptionalPlanApprovalMode(raw.planApproval),
     codexApprovalPolicy: toOptionalCodexApprovalPolicy(raw.codexApprovalPolicy),
     worktreePath,

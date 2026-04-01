@@ -281,8 +281,14 @@ export function createCallbackHandler(channel: InteractiveChannel = "telegram") 
             planDecisionVersion,
             actionablePlanDecisionVersion: undefined,
             canonicalPlanPromptVersion: undefined,
+            approvalPromptRequiredVersion: undefined,
             approvalPromptVersion: undefined,
             approvalPromptStatus: "not_sent",
+            approvalPromptTransport: "none",
+            approvalPromptMessageKind: "none",
+            approvalPromptLastAttemptAt: undefined,
+            approvalPromptDeliveredAt: undefined,
+            approvalPromptFailedAt: undefined,
           });
           await replyText(ctx, `✏️ Type your revision feedback for [${reviseName}] and I'll forward it to the agent.`);
           break;

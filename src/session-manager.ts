@@ -33,6 +33,7 @@ import { SessionWorktreeController } from "./session-worktree-controller";
 import { SessionQuestionService, type PendingAskUserQuestion } from "./session-question-service";
 import { SessionReminderService } from "./session-reminder-service";
 import { SessionLifecycleService } from "./session-lifecycle-service";
+import { buildPlanApprovalFallbackText } from "./session-notification-builder";
 import { SessionWorktreeDecisionService } from "./session-worktree-decision-service";
 import { SessionRuntimeRegistry } from "./session-runtime-registry";
 import { SessionRuntimeBootstrapService } from "./session-runtime-bootstrap-service";
@@ -378,6 +379,93 @@ export class SessionManager {
     this.interactions.clearPlanDecisionTokens(sessionId, keepVersion);
   }
 
+  private hasProvablePlanReviewPrompt(
+    session: Pick<PersistedSessionInfo, "approvalPromptRequiredVersion" | "approvalPromptStatus"> | Pick<Session, "approvalPromptRequiredVersion" | "approvalPromptStatus">,
+    planDecisionVersion?: number,
+  ): boolean {
+    return planDecisionVersion != null
+      && session.approvalPromptRequiredVersion === planDecisionVersion
+      && (session.approvalPromptStatus === "delivered" || session.approvalPromptStatus === "fallback_delivered");
+  }
+
+  private buildPlanApprovalWakeText(
+    session: Pick<Session, "id" | "name">,
+    planDecisionVersion: number | undefined,
+    explicitFallback: boolean = false,
+  ): string {
+    return [
+      explicitFallback
+        ? `Plan review fallback text delivered to the user because interactive buttons could not be delivered.`
+        : `Plan approval buttons delivered to the user.`,
+      `Session: ${session.name} | ID: ${session.id} | Plan v${planDecisionVersion ?? "?"}`,
+      `Wait for their ${explicitFallback ? "explicit reply" : "button callback"} — do NOT approve or reject this plan yourself.`,
+    ].join("\n");
+  }
+
+  private buildPlanApprovalDeliveryFailureWake(
+    session: Pick<Session, "id" | "name" | "originThreadId">,
+    planDecisionVersion: number | undefined,
+  ): string {
+    return [
+      `[PLAN APPROVAL DELIVERY FAILED] The plugin could not deliver the canonical plan review buttons or the explicit fallback text to the user.`,
+      `Name: ${session.name} | ID: ${session.id} | Plan v${planDecisionVersion ?? "?"}`,
+      session.originThreadId != null ? `Origin thread: ${session.originThreadId}` : "",
+      ``,
+      `No user-visible actionable review prompt is confirmed for this plan version.`,
+      `Intervene manually before assuming the user saw the plan review request.`,
+    ].filter(Boolean).join("\n");
+  }
+
+  private dispatchPlanApprovalFallback(
+    session: Session,
+    planDecisionVersion: number | undefined,
+    summary: string,
+  ): void {
+    const attemptedAt = new Date().toISOString();
+    this.notifications.dispatch(session, {
+      label: "plan-approval-fallback",
+      userMessage: buildPlanApprovalFallbackText({ session, summary }),
+      notifyUser: "always",
+      hooks: {
+        onNotifyStarted: () => {
+          this.updatePersistedSession(session.id, {
+            approvalPromptRequiredVersion: planDecisionVersion,
+            approvalPromptVersion: planDecisionVersion,
+            approvalPromptStatus: "sending",
+            approvalPromptTransport: "direct-telegram",
+            approvalPromptMessageKind: "explicit_fallback_text",
+            approvalPromptLastAttemptAt: attemptedAt,
+          });
+        },
+        onNotifySucceeded: () => {
+          this.updatePersistedSession(session.id, {
+            approvalPromptRequiredVersion: planDecisionVersion,
+            approvalPromptVersion: planDecisionVersion,
+            approvalPromptStatus: "fallback_delivered",
+            approvalPromptTransport: "direct-telegram",
+            approvalPromptMessageKind: "explicit_fallback_text",
+            approvalPromptLastAttemptAt: attemptedAt,
+            approvalPromptDeliveredAt: new Date().toISOString(),
+            approvalPromptFailedAt: undefined,
+          });
+        },
+        onNotifyFailed: () => {
+          this.updatePersistedSession(session.id, {
+            approvalPromptRequiredVersion: planDecisionVersion,
+            approvalPromptVersion: planDecisionVersion,
+            approvalPromptStatus: "failed",
+            approvalPromptTransport: "direct-telegram",
+            approvalPromptMessageKind: "explicit_fallback_text",
+            approvalPromptLastAttemptAt: attemptedAt,
+            approvalPromptFailedAt: new Date().toISOString(),
+          });
+        },
+      },
+      wakeMessageOnNotifySuccess: this.buildPlanApprovalWakeText(session, planDecisionVersion, true),
+      wakeMessageOnNotifyFailed: this.buildPlanApprovalDeliveryFailureWake(session, planDecisionVersion),
+    });
+  }
+
   private getWorktreeDecisionButtons(sessionId: string): NotificationButton[][] | undefined {
     const session = this.resolve(sessionId) ?? this.getPersistedSession(sessionId);
     if (!session || session.worktreeStrategy === "delegate") return undefined;
@@ -420,9 +508,9 @@ export class SessionManager {
       return `Error: Session "${ref}" already uses direct user plan approval. Do not send a duplicate approval prompt.`;
     }
     const actionableVersion = session.actionablePlanDecisionVersion ?? session.planDecisionVersion;
-    if (actionableVersion != null && session.canonicalPlanPromptVersion === actionableVersion) {
+    if (this.hasProvablePlanReviewPrompt(session, actionableVersion)) {
       return [
-        `Canonical plan approval prompt already exists for session ${session.name} [${sessionId}].`,
+        `An actionable plan review prompt already exists for session ${session.name} [${sessionId}].`,
         `Wait for the user's Approve, Revise, or Reject response.`,
         `Do not send a separate plain-text approval message.`,
       ].join(" ");
@@ -449,6 +537,7 @@ export class SessionManager {
     this.notifications.dispatch(
       this.buildRoutingProxy({
         id: sessionId,
+        name: session.name,
         sessionId: persistedSession?.sessionId,
         harnessSessionId: activeSession?.harnessSessionId ?? persistedSession?.harnessSessionId,
         backendRef: activeSession?.backendRef ?? persistedSession?.backendRef,
@@ -462,24 +551,50 @@ export class SessionManager {
         hooks: {
           onNotifyStarted: () => {
             this.updatePersistedSession(sessionId, {
+              approvalPromptRequiredVersion: actionableVersion,
               approvalPromptStatus: "sending",
               approvalPromptVersion: actionableVersion,
+              approvalPromptTransport: "direct-telegram",
+              approvalPromptMessageKind: "canonical_buttons",
+              approvalPromptLastAttemptAt: new Date().toISOString(),
             });
           },
           onNotifySucceeded: () => {
             this.updatePersistedSession(sessionId, {
               canonicalPlanPromptVersion: actionableVersion,
+              approvalPromptRequiredVersion: actionableVersion,
               approvalPromptVersion: actionableVersion,
               approvalPromptStatus: "delivered",
+              approvalPromptTransport: "direct-telegram",
+              approvalPromptMessageKind: "canonical_buttons",
+              approvalPromptDeliveredAt: new Date().toISOString(),
+              approvalPromptFailedAt: undefined,
             });
           },
           onNotifyFailed: () => {
             this.updatePersistedSession(sessionId, {
+              approvalPromptRequiredVersion: actionableVersion,
               approvalPromptVersion: actionableVersion,
               approvalPromptStatus: "failed",
+              approvalPromptTransport: "direct-telegram",
+              approvalPromptMessageKind: "canonical_buttons",
+              approvalPromptFailedAt: new Date().toISOString(),
             });
           },
         },
+        onUserNotifyFailed: () => this.dispatchPlanApprovalFallback(
+          this.buildRoutingProxy({
+            id: sessionId,
+            name: session.name,
+            sessionId: persistedSession?.sessionId,
+            harnessSessionId: activeSession?.harnessSessionId ?? persistedSession?.harnessSessionId,
+            backendRef: activeSession?.backendRef ?? persistedSession?.backendRef,
+            route: activeSession?.route ?? persistedSession?.route,
+          }),
+          actionableVersion,
+          trimmedSummary,
+        ),
+        wakeMessageOnNotifySuccess: this.buildPlanApprovalWakeText({ id: sessionId, name: session.name } as Session, actionableVersion),
       },
     );
 
@@ -492,6 +607,7 @@ export class SessionManager {
 
   private buildRoutingProxy(session: {
     id?: string;
+    name?: string;
     sessionId?: string;
     harnessSessionId?: string;
     backendRef?: PersistedSessionInfo["backendRef"];
@@ -499,6 +615,7 @@ export class SessionManager {
   }): Session {
     return {
       id: getPrimarySessionLookupRef(session) ?? getBackendConversationId(session) ?? session.harnessSessionId ?? "unknown-session",
+      name: session.name,
       harnessSessionId: session.harnessSessionId,
       backendRef: session.backendRef ? { ...session.backendRef } : undefined,
       route: session.route,

@@ -64,8 +64,11 @@ export type WorktreeLifecycleResolutionSource =
   | "maintenance";
 export type SessionRuntimeState = "live" | "stopped";
 export type SessionDeliveryState = "idle" | "notifying" | "wake_pending" | "failed";
-export type SessionApprovalPromptStatus = "not_sent" | "sending" | "delivered" | "failed";
+export type SessionApprovalPromptStatus = "not_sent" | "sending" | "delivered" | "fallback_delivered" | "failed";
+export type SessionApprovalPromptTransport = "none" | "direct-telegram" | "wake-only";
+export type SessionApprovalPromptMessageKind = "none" | "canonical_buttons" | "explicit_fallback_text";
 export type ApprovalExecutionState =
+  | "awaiting_plan_output"
   | "awaiting_approval"
   | "approved_then_implemented"
   | "implemented_without_required_approval"
@@ -278,8 +281,14 @@ export interface SessionConfig {
   planDecisionVersion?: number;
   actionablePlanDecisionVersion?: number;
   canonicalPlanPromptVersion?: number;
+  approvalPromptRequiredVersion?: number;
   approvalPromptVersion?: number;
   approvalPromptStatus?: SessionApprovalPromptStatus;
+  approvalPromptTransport?: SessionApprovalPromptTransport;
+  approvalPromptMessageKind?: SessionApprovalPromptMessageKind;
+  approvalPromptLastAttemptAt?: string;
+  approvalPromptDeliveredAt?: string;
+  approvalPromptFailedAt?: string;
   resumeSessionId?: string;
   /** Original requested session ID for worktree inheritance, independent of harness thread resume.
    * Set even when resumeSessionId is cleared (e.g. Codex harness), so the D1 block can still
@@ -389,8 +398,14 @@ export interface PersistedSessionInfo {
   planDecisionVersion?: number;
   actionablePlanDecisionVersion?: number;
   canonicalPlanPromptVersion?: number;
+  approvalPromptRequiredVersion?: number;
   approvalPromptVersion?: number;
   approvalPromptStatus?: SessionApprovalPromptStatus;
+  approvalPromptTransport?: SessionApprovalPromptTransport;
+  approvalPromptMessageKind?: SessionApprovalPromptMessageKind;
+  approvalPromptLastAttemptAt?: string;
+  approvalPromptDeliveredAt?: string;
+  approvalPromptFailedAt?: string;
   planApproval?: PlanApprovalMode;
   codexApprovalPolicy?: CodexApprovalPolicy;
   /** Path to the worktree if one was created. */

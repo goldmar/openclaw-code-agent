@@ -18,6 +18,8 @@ import type {
   PlanApprovalContext,
   SessionLifecycle,
   SessionApprovalState,
+  SessionApprovalPromptMessageKind,
+  SessionApprovalPromptTransport,
   PersistedWorktreeLifecycle,
   SessionApprovalPromptStatus,
   SessionWorktreeState,
@@ -149,8 +151,14 @@ export class Session extends EventEmitter {
   planDecisionVersion: number = 0;
   actionablePlanDecisionVersion?: number;
   canonicalPlanPromptVersion?: number;
+  approvalPromptRequiredVersion?: number;
   approvalPromptVersion?: number;
   approvalPromptStatus: SessionApprovalPromptStatus = "not_sent";
+  approvalPromptTransport: SessionApprovalPromptTransport = "none";
+  approvalPromptMessageKind: SessionApprovalPromptMessageKind = "none";
+  approvalPromptLastAttemptAt?: string;
+  approvalPromptDeliveredAt?: string;
+  approvalPromptFailedAt?: string;
   planFilePath?: string;
   killReason: KillReason = "unknown";
   private planModeApproved: boolean = false;
@@ -302,8 +310,14 @@ export class Session extends EventEmitter {
       || config.planDecisionVersion !== undefined
       || config.actionablePlanDecisionVersion !== undefined
       || config.canonicalPlanPromptVersion !== undefined
+      || config.approvalPromptRequiredVersion !== undefined
       || config.approvalPromptVersion !== undefined
       || config.approvalPromptStatus !== undefined
+      || config.approvalPromptTransport !== undefined
+      || config.approvalPromptMessageKind !== undefined
+      || config.approvalPromptLastAttemptAt !== undefined
+      || config.approvalPromptDeliveredAt !== undefined
+      || config.approvalPromptFailedAt !== undefined
     ) {
       this.applyControlPatch({
         ...(config.planModeApproved !== undefined ? { planModeApproved: config.planModeApproved } : {}),
@@ -314,8 +328,14 @@ export class Session extends EventEmitter {
         ...(config.planDecisionVersion !== undefined ? { planDecisionVersion: config.planDecisionVersion } : {}),
         ...(config.actionablePlanDecisionVersion !== undefined ? { actionablePlanDecisionVersion: config.actionablePlanDecisionVersion } : {}),
         ...(config.canonicalPlanPromptVersion !== undefined ? { canonicalPlanPromptVersion: config.canonicalPlanPromptVersion } : {}),
+        ...(config.approvalPromptRequiredVersion !== undefined ? { approvalPromptRequiredVersion: config.approvalPromptRequiredVersion } : {}),
         ...(config.approvalPromptVersion !== undefined ? { approvalPromptVersion: config.approvalPromptVersion } : {}),
         ...(config.approvalPromptStatus !== undefined ? { approvalPromptStatus: config.approvalPromptStatus } : {}),
+        ...(config.approvalPromptTransport !== undefined ? { approvalPromptTransport: config.approvalPromptTransport } : {}),
+        ...(config.approvalPromptMessageKind !== undefined ? { approvalPromptMessageKind: config.approvalPromptMessageKind } : {}),
+        ...(config.approvalPromptLastAttemptAt !== undefined ? { approvalPromptLastAttemptAt: config.approvalPromptLastAttemptAt } : {}),
+        ...(config.approvalPromptDeliveredAt !== undefined ? { approvalPromptDeliveredAt: config.approvalPromptDeliveredAt } : {}),
+        ...(config.approvalPromptFailedAt !== undefined ? { approvalPromptFailedAt: config.approvalPromptFailedAt } : {}),
       });
     }
   }
@@ -698,8 +718,14 @@ export class Session extends EventEmitter {
       planDecisionVersion: this.planDecisionVersion,
       actionablePlanDecisionVersion: this.actionablePlanDecisionVersion,
       canonicalPlanPromptVersion: this.canonicalPlanPromptVersion,
+      approvalPromptRequiredVersion: this.approvalPromptRequiredVersion,
       approvalPromptVersion: this.approvalPromptVersion,
       approvalPromptStatus: this.approvalPromptStatus,
+      approvalPromptTransport: this.approvalPromptTransport,
+      approvalPromptMessageKind: this.approvalPromptMessageKind,
+      approvalPromptLastAttemptAt: this.approvalPromptLastAttemptAt,
+      approvalPromptDeliveredAt: this.approvalPromptDeliveredAt,
+      approvalPromptFailedAt: this.approvalPromptFailedAt,
       planModeApproved: this.planModeApproved,
     };
   }
@@ -726,8 +752,14 @@ export class Session extends EventEmitter {
     this.planDecisionVersion = next.planDecisionVersion;
     this.actionablePlanDecisionVersion = next.actionablePlanDecisionVersion;
     this.canonicalPlanPromptVersion = next.canonicalPlanPromptVersion;
+    this.approvalPromptRequiredVersion = next.approvalPromptRequiredVersion;
     this.approvalPromptVersion = next.approvalPromptVersion;
     this.approvalPromptStatus = next.approvalPromptStatus;
+    this.approvalPromptTransport = next.approvalPromptTransport;
+    this.approvalPromptMessageKind = next.approvalPromptMessageKind;
+    this.approvalPromptLastAttemptAt = next.approvalPromptLastAttemptAt;
+    this.approvalPromptDeliveredAt = next.approvalPromptDeliveredAt;
+    this.approvalPromptFailedAt = next.approvalPromptFailedAt;
     this.planModeApproved = next.planModeApproved;
   }
 }

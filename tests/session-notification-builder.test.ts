@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+  buildPlanApprovalFallbackText,
   buildCompletedPayload,
   buildDelegateWorktreeWakeMessage,
   buildNoChangeWakeMessage,
@@ -48,6 +49,42 @@ describe("session-notification-builder", () => {
     assert.match(payload.wakeMessage, /agent_respond\(session='session-delegate', message='Approved\. Go ahead\.', approve=true\)/);
     assert.match(payload.wakeMessage, /agent_request_plan_approval\(session='session-delegate'/);
     assert.match(payload.wakeMessage, /do NOT send a second plain-text recap/i);
+  });
+
+  it("suppresses extra ask-mode plan summaries once a user-visible prompt is proven", () => {
+    const payload = buildWaitingForInputPayload({
+      session: {
+        id: "session-ask",
+        name: "ask-session",
+        multiTurn: true,
+        pendingPlanApproval: true,
+        planDecisionVersion: 4,
+        actionablePlanDecisionVersion: 4,
+        approvalPromptRequiredVersion: 4,
+        approvalPromptStatus: "fallback_delivered",
+      } as any,
+      preview: "Plan preview",
+      originThreadLine: "Origin thread: telegram topic 42",
+      planApprovalMode: "ask",
+      planApprovalButtons: undefined,
+    });
+
+    assert.equal(payload.userMessage, undefined);
+  });
+
+  it("builds explicit plugin-owned fallback text for plan review", () => {
+    const message = buildPlanApprovalFallbackText({
+      session: {
+        id: "session-fallback",
+        name: "fallback-session",
+        planDecisionVersion: 7,
+      } as any,
+      summary: "Summary of the plan",
+    });
+
+    assert.match(message, /Interactive Approve \/ Revise \/ Reject buttons could not be delivered/);
+    assert.match(message, /Reply "approve"/);
+    assert.match(message, /Summary of the plan/);
   });
 
   it("preserves terminal completion payload formatting", () => {

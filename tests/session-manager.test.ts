@@ -34,8 +34,14 @@ function fakeSession(overrides: Record<string, any> = {}): any {
     pendingPlanApproval: false,
     planDecisionVersion: 0,
     actionablePlanDecisionVersion: undefined,
+    approvalPromptRequiredVersion: undefined,
     approvalPromptStatus: "not_sent",
     approvalPromptVersion: undefined,
+    approvalPromptTransport: "none",
+    approvalPromptMessageKind: "none",
+    approvalPromptLastAttemptAt: undefined,
+    approvalPromptDeliveredAt: undefined,
+    approvalPromptFailedAt: undefined,
     getOutput: (n?: number) => [],
     kill: () => {},
     on: () => {},
@@ -1020,6 +1026,64 @@ describe("SessionManager turn-end wake", () => {
     assert.equal((sm as any).__dispatchCalls.length, 1);
   });
 
+  it("dispatches an explicit fallback prompt when delegated interactive delivery fails", () => {
+    const s = fakeSession({
+      id: "s-plan-escalate-fallback",
+      name: "plan-escalate-fallback",
+      status: "running",
+      pendingPlanApproval: true,
+      planDecisionVersion: 12,
+      actionablePlanDecisionVersion: 12,
+      planApproval: "delegate",
+      originThreadId: "42",
+    });
+    (sm as any).sessions.set(s.id, s);
+    stubDispatch(sm);
+
+    sm.requestPlanApprovalFromUser(
+      s.id,
+      "Summary:\n- Touches `src/session-manager.ts`\n- Risk: medium\n- Scope matches original task",
+    );
+
+    const calls = (sm as any).__dispatchCalls;
+    assert.equal(calls.length, 1);
+    const [_sessionArg, request] = calls[0];
+    request.onUserNotifyFailed();
+
+    assert.equal(calls.length, 2);
+    const [_fallbackSession, fallbackRequest] = calls[1];
+    assert.equal(fallbackRequest.label, "plan-approval-fallback");
+    assert.equal(fallbackRequest.buttons, undefined);
+    assert.match(fallbackRequest.userMessage, /buttons could not be delivered/i);
+    fallbackRequest.hooks.onNotifySucceeded();
+    assert.equal(s.approvalPromptStatus, "fallback_delivered");
+    assert.equal(s.approvalPromptMessageKind, "explicit_fallback_text");
+  });
+
+  it("treats a delivered fallback prompt as an existing actionable review prompt", () => {
+    const s = fakeSession({
+      id: "s-plan-fallback-present",
+      name: "plan-fallback-present",
+      status: "running",
+      pendingPlanApproval: true,
+      planDecisionVersion: 13,
+      actionablePlanDecisionVersion: 13,
+      planApproval: "delegate",
+      approvalPromptRequiredVersion: 13,
+      approvalPromptStatus: "fallback_delivered",
+    });
+    (sm as any).sessions.set(s.id, s);
+    stubDispatch(sm);
+
+    const result = sm.requestPlanApprovalFromUser(
+      s.id,
+      "Summary:\n- Touches `src/session-manager.ts`\n- Risk: low\n- Scope matches original task",
+    );
+
+    assert.match(result, /already exists/);
+    assert.equal((sm as any).__dispatchCalls.length, 0);
+  });
+
   it("rejects duplicate summary approval prompts for ask-mode plan reviews", () => {
     const s = fakeSession({
       id: "s-plan-ask-duplicate",
@@ -1620,6 +1684,31 @@ describe("SessionManager terminal wake behavior", () => {
       (request.buttons ?? []).map((row: Array<{ label: string }>) => row.map((button) => button.label)),
       [["Approve", "Revise", "Reject"]],
     );
+  });
+
+  it("suppresses duplicate timed-out ask-mode summaries once a provable review prompt exists", async () => {
+    const s = fakeSession({
+      id: "s-plan-timeout-known-prompt",
+      name: "known-prompt-plan",
+      status: "killed",
+      killReason: "idle-timeout",
+      pendingPlanApproval: true,
+      planDecisionVersion: 9,
+      actionablePlanDecisionVersion: 9,
+      planApproval: "ask",
+      approvalPromptRequiredVersion: 9,
+      approvalPromptStatus: "fallback_delivered",
+      startedAt: Date.now() - 2_000,
+    });
+
+    await (sm as any).onSessionTerminal(s);
+
+    const calls = (sm as any).__dispatchCalls;
+    assert.equal(calls.length, 1);
+    const [_sessionArg, request] = calls[0];
+    assert.equal(request.notifyUser, "never");
+    assert.equal(request.userMessage, undefined);
+    assert.match(request.wakeMessage, /already has an actionable plan review prompt/i);
   });
 
   it("keeps delegated timed-out pending plans wake-only", async () => {

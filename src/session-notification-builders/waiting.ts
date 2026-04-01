@@ -1,11 +1,35 @@
-import type { PlanApprovalMode } from "../types";
 import type { Session } from "../session";
 import type { NotificationButton } from "../session-interactions";
+import type { PlanApprovalMode } from "../types";
 
 type OriginThreadLine = string;
 
+function hasProvableUserVisiblePrompt(session: Pick<Session, "approvalPromptRequiredVersion" | "approvalPromptStatus">, actionableVersion?: number): boolean {
+  return actionableVersion != null
+    && session.approvalPromptRequiredVersion === actionableVersion
+    && (session.approvalPromptStatus === "delivered" || session.approvalPromptStatus === "fallback_delivered");
+}
+
+export function buildPlanApprovalFallbackText(args: {
+  session: Pick<Session, "id" | "name" | "planDecisionVersion" | "actionablePlanDecisionVersion">;
+  summary: string;
+}): string {
+  const { session, summary } = args;
+  const actionableVersion = session.actionablePlanDecisionVersion ?? session.planDecisionVersion;
+  return [
+    `📋 [${session.name}] Plan v${actionableVersion ?? "?"} needs your decision.`,
+    ``,
+    `Interactive Approve / Revise / Reject buttons could not be delivered, so reply here instead:`,
+    `- Reply "approve" to approve and start implementation`,
+    `- Reply "reject" to reject and stop the session`,
+    `- Any other reply will be sent back as revision feedback`,
+    ``,
+    summary,
+  ].join("\n");
+}
+
 export function buildWaitingForInputPayload(args: {
-  session: Pick<Session, "id" | "name" | "multiTurn" | "pendingPlanApproval" | "planDecisionVersion" | "actionablePlanDecisionVersion" | "approvalPromptStatus">;
+  session: Pick<Session, "id" | "name" | "multiTurn" | "pendingPlanApproval" | "planDecisionVersion" | "actionablePlanDecisionVersion" | "approvalPromptRequiredVersion" | "approvalPromptStatus">;
   preview: string;
   originThreadLine: OriginThreadLine;
   planApprovalMode?: PlanApprovalMode;
@@ -20,11 +44,16 @@ export function buildWaitingForInputPayload(args: {
   const { session, preview, originThreadLine, planApprovalMode, planApprovalButtons, questionButtons } = args;
   const isPlanApproval = session.pendingPlanApproval;
   const actionableVersion = session.actionablePlanDecisionVersion ?? session.planDecisionVersion;
+  const promptAlreadyProven = hasProvableUserVisiblePrompt(session, actionableVersion);
 
   const userMessage = isPlanApproval
     ? (
         planApprovalMode === "ask"
-          ? `📋 [${session.name}] Plan v${actionableVersion ?? "?"} ready for approval:\n\n${preview}\n\n${planApprovalButtons ? "Choose Approve, Revise, or Reject below." : "Approval is still pending for this plan version."}`
+          ? (
+              promptAlreadyProven
+                ? undefined
+                : `📋 [${session.name}] Plan v${actionableVersion ?? "?"} ready for approval:\n\n${preview}\n\n${planApprovalButtons ? "Choose Approve, Revise, or Reject below." : "Approval is still pending for this plan version."}`
+            )
           : undefined
       )
     : `❓ [${session.name}] Question waiting for reply:\n\n${preview}`;

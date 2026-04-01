@@ -76,8 +76,14 @@ export class SessionStateSyncService {
         planDecisionVersion: patch.planDecisionVersion,
         actionablePlanDecisionVersion: patch.actionablePlanDecisionVersion,
         canonicalPlanPromptVersion: patch.canonicalPlanPromptVersion,
+        approvalPromptRequiredVersion: patch.approvalPromptRequiredVersion,
         approvalPromptVersion: patch.approvalPromptVersion,
         approvalPromptStatus: patch.approvalPromptStatus,
+        approvalPromptTransport: patch.approvalPromptTransport,
+        approvalPromptMessageKind: patch.approvalPromptMessageKind,
+        approvalPromptLastAttemptAt: patch.approvalPromptLastAttemptAt,
+        approvalPromptDeliveredAt: patch.approvalPromptDeliveredAt,
+        approvalPromptFailedAt: patch.approvalPromptFailedAt,
         pendingWorktreeDecisionSince: patch.pendingWorktreeDecisionSince,
       });
     } else {
@@ -91,8 +97,14 @@ export class SessionStateSyncService {
       if (patch.planDecisionVersion !== undefined) session.planDecisionVersion = patch.planDecisionVersion;
       if (patch.actionablePlanDecisionVersion !== undefined) session.actionablePlanDecisionVersion = patch.actionablePlanDecisionVersion;
       if (patch.canonicalPlanPromptVersion !== undefined) session.canonicalPlanPromptVersion = patch.canonicalPlanPromptVersion;
+      if (patch.approvalPromptRequiredVersion !== undefined) session.approvalPromptRequiredVersion = patch.approvalPromptRequiredVersion;
       if (patch.approvalPromptVersion !== undefined) session.approvalPromptVersion = patch.approvalPromptVersion;
       if (patch.approvalPromptStatus !== undefined) session.approvalPromptStatus = patch.approvalPromptStatus;
+      if (patch.approvalPromptTransport !== undefined) session.approvalPromptTransport = patch.approvalPromptTransport;
+      if (patch.approvalPromptMessageKind !== undefined) session.approvalPromptMessageKind = patch.approvalPromptMessageKind;
+      if (patch.approvalPromptLastAttemptAt !== undefined) session.approvalPromptLastAttemptAt = patch.approvalPromptLastAttemptAt;
+      if (patch.approvalPromptDeliveredAt !== undefined) session.approvalPromptDeliveredAt = patch.approvalPromptDeliveredAt;
+      if (patch.approvalPromptFailedAt !== undefined) session.approvalPromptFailedAt = patch.approvalPromptFailedAt;
     }
     if (patch.worktreePath !== undefined) session.worktreePath = patch.worktreePath;
     if (patch.worktreeBranch !== undefined) session.worktreeBranch = patch.worktreeBranch;

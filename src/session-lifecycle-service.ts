@@ -4,6 +4,7 @@ import { getPersistedMutationRefs, usesNativeBackendWorktree } from "./session-b
 import {
   buildCompletedPayload,
   buildFailedPayload,
+  buildPlanApprovalFallbackText,
   buildTurnCompletePayload,
   buildWaitingForInputPayload,
   getStoppedStatusLabel,
@@ -19,6 +20,12 @@ type WorktreeStrategyResult = {
 };
 
 type DispatchNotification = (session: Session, request: SessionNotificationRequest) => void;
+
+function hasProvablePlanReviewPrompt(session: Pick<Session, "approvalPromptRequiredVersion" | "approvalPromptStatus">, planDecisionVersion?: number): boolean {
+  return planDecisionVersion != null
+    && session.approvalPromptRequiredVersion === planDecisionVersion
+    && (session.approvalPromptStatus === "delivered" || session.approvalPromptStatus === "fallback_delivered");
+}
 
 export class SessionLifecycleService {
   constructor(
@@ -56,6 +63,73 @@ export class SessionLifecycleService {
       isAlreadyMerged: (ref: string | undefined) => boolean;
     },
   ) {}
+
+  private buildPlanApprovalWakeText(session: Session, planDecisionVersion?: number, explicitFallback: boolean = false): string {
+    return [
+      explicitFallback
+        ? `Plan review fallback text delivered to the user because interactive buttons could not be delivered.`
+        : `Plan approval buttons delivered to the user.`,
+      `Session: ${session.name} | ID: ${session.id} | Plan v${planDecisionVersion ?? "?"}`,
+      `Wait for their ${explicitFallback ? "explicit reply" : "button callback"} — do NOT approve or reject this plan yourself.`,
+    ].join("\n");
+  }
+
+  private buildPlanApprovalDeliveryFailureWake(session: Session, planDecisionVersion?: number): string {
+    return [
+      `[PLAN APPROVAL DELIVERY FAILED] The plugin could not deliver the canonical plan review buttons or the explicit fallback text to the user.`,
+      `Name: ${session.name} | ID: ${session.id} | Plan v${planDecisionVersion ?? "?"}`,
+      this.deps.originThreadLine(session),
+      ``,
+      `No user-visible actionable review prompt is confirmed for this plan version.`,
+      `Intervene manually before assuming the user saw the plan review request.`,
+    ].join("\n");
+  }
+
+  private dispatchPlanApprovalFallback(session: Session, planDecisionVersion: number | undefined, summary: string): void {
+    const now = new Date().toISOString();
+    this.deps.dispatchSessionNotification(session, {
+      label: "plan-approval-fallback",
+      userMessage: buildPlanApprovalFallbackText({ session, summary }),
+      notifyUser: "always",
+      hooks: {
+        onNotifyStarted: () => {
+          this.deps.updatePersistedSession(session.id, {
+            approvalPromptRequiredVersion: planDecisionVersion,
+            approvalPromptVersion: planDecisionVersion,
+            approvalPromptStatus: "sending",
+            approvalPromptTransport: "direct-telegram",
+            approvalPromptMessageKind: "explicit_fallback_text",
+            approvalPromptLastAttemptAt: now,
+          });
+        },
+        onNotifySucceeded: () => {
+          this.deps.updatePersistedSession(session.id, {
+            approvalPromptRequiredVersion: planDecisionVersion,
+            approvalPromptVersion: planDecisionVersion,
+            approvalPromptStatus: "fallback_delivered",
+            approvalPromptTransport: "direct-telegram",
+            approvalPromptMessageKind: "explicit_fallback_text",
+            approvalPromptLastAttemptAt: now,
+            approvalPromptDeliveredAt: new Date().toISOString(),
+            approvalPromptFailedAt: undefined,
+          });
+        },
+        onNotifyFailed: () => {
+          this.deps.updatePersistedSession(session.id, {
+            approvalPromptRequiredVersion: planDecisionVersion,
+            approvalPromptVersion: planDecisionVersion,
+            approvalPromptStatus: "failed",
+            approvalPromptTransport: "direct-telegram",
+            approvalPromptMessageKind: "explicit_fallback_text",
+            approvalPromptLastAttemptAt: now,
+            approvalPromptFailedAt: new Date().toISOString(),
+          });
+        },
+      },
+      wakeMessageOnNotifySuccess: this.buildPlanApprovalWakeText(session, planDecisionVersion, true),
+      wakeMessageOnNotifyFailed: this.buildPlanApprovalDeliveryFailureWake(session, planDecisionVersion),
+    });
+  }
 
   handleTurnEnd(session: Session, hadQuestion: boolean): void {
     if (session.status !== "running") {
@@ -182,10 +256,7 @@ export class SessionLifecycleService {
         : undefined;
       if (session.pendingPlanApproval) {
         const actionableVersion = session.actionablePlanDecisionVersion ?? session.planDecisionVersion;
-        const canonicalAlreadyDelivered =
-          actionableVersion != null
-          && session.canonicalPlanPromptVersion === actionableVersion
-          && session.approvalPromptStatus === "delivered";
+        const promptAlreadyProven = hasProvablePlanReviewPrompt(session, actionableVersion);
         if (planApprovalMode === "delegate") {
           this.deps.dispatchSessionNotification(session, {
             label: "plan-approval-timeout",
@@ -203,6 +274,20 @@ export class SessionLifecycleService {
           this.deps.clearRetryTimersForSession(session.id);
           return;
         }
+        if (planApprovalMode === "ask" && promptAlreadyProven) {
+          this.deps.dispatchSessionNotification(session, {
+            label: "plan-approval-timeout",
+            notifyUser: "never",
+            wakeMessage: [
+              `[PLAN APPROVAL REMINDER] The user already has an actionable plan review prompt for this plan version.`,
+              `Name: ${session.name} | ID: ${session.id} | Plan v${actionableVersion ?? "?"}`,
+              this.deps.originThreadLine(session),
+              `Do NOT post another approval summary unless canonical delivery is known to be missing.`,
+            ].join("\n"),
+          });
+          this.deps.clearRetryTimersForSession(session.id);
+          return;
+        }
         this.deps.dispatchSessionNotification(session, {
           label: "plan-approval-timeout",
           userMessage: [
@@ -214,7 +299,7 @@ export class SessionLifecycleService {
             `Reject keeps the session stopped.`,
           ].join("\n"),
           notifyUser: "always",
-          buttons: planApprovalMode === "ask" && !canonicalAlreadyDelivered
+          buttons: planApprovalMode === "ask" && !promptAlreadyProven
             ? this.deps.getPlanApprovalButtons(session.id, {
               ...session,
               planDecisionVersion: actionableVersion,
@@ -245,12 +330,10 @@ export class SessionLifecycleService {
       ? this.deps.resolvePlanApprovalMode(session)
       : undefined;
     const planDecisionVersion = session.actionablePlanDecisionVersion ?? session.planDecisionVersion;
-    const canonicalAlreadyDelivered =
+    const promptAlreadyProven =
       session.pendingPlanApproval
       && planApprovalMode === "ask"
-      && planDecisionVersion != null
-      && session.canonicalPlanPromptVersion === planDecisionVersion
-      && session.approvalPromptStatus === "delivered";
+      && hasProvablePlanReviewPrompt(session, planDecisionVersion);
     const preview =
       (!session.pendingPlanApproval && session.pendingInputState?.promptText)
         ? session.pendingInputState.promptText
@@ -261,7 +344,7 @@ export class SessionLifecycleService {
               : undefined,
           );
     const waitingButtons =
-      session.pendingPlanApproval && planApprovalMode === "ask" && !canonicalAlreadyDelivered
+      session.pendingPlanApproval && planApprovalMode === "ask" && !promptAlreadyProven
         ? this.deps.getPlanApprovalButtons(session.id, {
           ...session,
           planDecisionVersion,
@@ -290,30 +373,39 @@ export class SessionLifecycleService {
         hooks: {
           onNotifyStarted: () => {
             this.deps.updatePersistedSession(session.id, {
+              approvalPromptRequiredVersion: planDecisionVersion,
               approvalPromptVersion: planDecisionVersion,
               approvalPromptStatus: "sending",
+              approvalPromptTransport: "direct-telegram",
+              approvalPromptMessageKind: "canonical_buttons",
+              approvalPromptLastAttemptAt: new Date().toISOString(),
             });
           },
           onNotifySucceeded: () => {
             this.deps.updatePersistedSession(session.id, {
               canonicalPlanPromptVersion: planDecisionVersion,
+              approvalPromptRequiredVersion: planDecisionVersion,
               approvalPromptVersion: planDecisionVersion,
               approvalPromptStatus: "delivered",
+              approvalPromptTransport: "direct-telegram",
+              approvalPromptMessageKind: "canonical_buttons",
+              approvalPromptDeliveredAt: new Date().toISOString(),
+              approvalPromptFailedAt: undefined,
             });
           },
           onNotifyFailed: () => {
             this.deps.updatePersistedSession(session.id, {
+              approvalPromptRequiredVersion: planDecisionVersion,
               approvalPromptVersion: planDecisionVersion,
               approvalPromptStatus: "failed",
+              approvalPromptTransport: "direct-telegram",
+              approvalPromptMessageKind: "canonical_buttons",
+              approvalPromptFailedAt: new Date().toISOString(),
             });
           },
         },
-        wakeMessageOnNotifySuccess: [
-          `Plan approval buttons delivered to the user.`,
-          `Session: ${session.name} | ID: ${session.id}`,
-          `Wait for their button callback — do NOT approve or reject this plan yourself.`,
-        ].join("\n"),
-        wakeMessageOnNotifyFailed: payload.wakeMessage,
+        onUserNotifyFailed: () => this.dispatchPlanApprovalFallback(session, planDecisionVersion, preview),
+        wakeMessageOnNotifySuccess: this.buildPlanApprovalWakeText(session, planDecisionVersion),
       });
       return;
     }

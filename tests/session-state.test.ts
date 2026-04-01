@@ -21,8 +21,15 @@ function baseState(overrides: Partial<SessionControlState> = {}): SessionControl
     planApprovalContext: undefined,
     planDecisionVersion: 0,
     actionablePlanDecisionVersion: undefined,
+    canonicalPlanPromptVersion: undefined,
+    approvalPromptRequiredVersion: undefined,
     approvalPromptVersion: undefined,
     approvalPromptStatus: "not_sent",
+    approvalPromptTransport: "none",
+    approvalPromptMessageKind: "none",
+    approvalPromptLastAttemptAt: undefined,
+    approvalPromptDeliveredAt: undefined,
+    approvalPromptFailedAt: undefined,
     planModeApproved: false,
     ...overrides,
   };
@@ -87,6 +94,19 @@ describe("session-state reducer", () => {
     });
 
     assert.equal(next.approvalExecutionState, "implemented_without_required_approval");
+  });
+
+  it("keeps plan-gated sessions in awaiting_plan_output until a plan review is actually requested", () => {
+    const next = reduceSessionControlState(baseState({
+      status: "running",
+      lifecycle: "active",
+      requestedPermissionMode: "plan",
+      currentPermissionMode: "plan",
+    }), {
+      type: "turn.started",
+    });
+
+    assert.equal(next.approvalExecutionState, "awaiting_plan_output");
   });
 
   it("normalizes changes_requested patches into a non-actionable revision state", () => {

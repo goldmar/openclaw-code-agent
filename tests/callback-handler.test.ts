@@ -148,8 +148,14 @@ describe("createCallbackHandler()", () => {
       planDecisionVersion: 5,
       actionablePlanDecisionVersion: undefined,
       canonicalPlanPromptVersion: undefined,
+      approvalPromptRequiredVersion: undefined,
       approvalPromptVersion: undefined,
       approvalPromptStatus: "not_sent",
+      approvalPromptTransport: "none",
+      approvalPromptMessageKind: "none",
+      approvalPromptLastAttemptAt: undefined,
+      approvalPromptDeliveredAt: undefined,
+      approvalPromptFailedAt: undefined,
     });
   });
 

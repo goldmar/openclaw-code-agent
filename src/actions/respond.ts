@@ -197,8 +197,14 @@ async function tryAutoResume(
       planDecisionVersion: session.planDecisionVersion,
       actionablePlanDecisionVersion: isPlanApproval ? undefined : session.actionablePlanDecisionVersion,
       canonicalPlanPromptVersion: session.canonicalPlanPromptVersion,
+      approvalPromptRequiredVersion: session.approvalPromptRequiredVersion,
       approvalPromptVersion: session.approvalPromptVersion,
       approvalPromptStatus: session.approvalPromptStatus,
+      approvalPromptTransport: session.approvalPromptTransport,
+      approvalPromptMessageKind: session.approvalPromptMessageKind,
+      approvalPromptLastAttemptAt: session.approvalPromptLastAttemptAt,
+      approvalPromptDeliveredAt: session.approvalPromptDeliveredAt,
+      approvalPromptFailedAt: session.approvalPromptFailedAt,
       ...(isPlanApproval
         ? {
             approvalState: "approved" as const,
