@@ -132,4 +132,33 @@ describe("ClaudeCodeHarness", () => {
     assert.equal(streamedInputs[0]?.[0]?.type, "user");
     assert.equal(wasInterrupted(), true);
   });
+
+  it("maps Claude error result messages from errors[] when result is absent", async () => {
+    const { handle } = createQueryHandle([
+      {
+        type: "result",
+        subtype: "error_during_execution",
+        session_id: "claude-session-3",
+        duration_ms: 9,
+        total_cost_usd: 0,
+        num_turns: 1,
+        errors: ["Tool execution failed", "Bash exited with status 1"],
+      },
+    ]);
+    const harness = new ClaudeCodeHarness({
+      startup: async () => ({
+        query: () => handle as any,
+      }),
+    });
+
+    const messages = await collectMessages(harness.launch({
+      prompt: "break it",
+      cwd: "/tmp/project",
+    }));
+    const result = messages.find((message) => message.type === "run_completed");
+
+    assert.equal(result?.type, "run_completed");
+    assert.equal(result?.data.success, false);
+    assert.equal(result?.data.result, "Tool execution failed\nBash exited with status 1");
+  });
 });

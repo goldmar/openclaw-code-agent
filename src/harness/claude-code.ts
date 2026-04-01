@@ -69,6 +69,20 @@ interface ClaudeMessageEnvelope {
   total_cost_usd?: number;
   num_turns?: number;
   result?: string;
+  errors?: string[];
+}
+
+function resolveResultText(msg: ClaudeMessageEnvelope): string | undefined {
+  if (typeof msg.result === "string" && msg.result.length > 0) {
+    return msg.result;
+  }
+  if (Array.isArray(msg.errors)) {
+    const errors = msg.errors.filter((value): value is string => typeof value === "string" && value.length > 0);
+    if (errors.length > 0) {
+      return errors.join("\n");
+    }
+  }
+  return undefined;
 }
 
 function buildPendingInputState(
@@ -252,7 +266,7 @@ export class ClaudeCodeHarness implements AgentHarness {
               duration_ms: msg.duration_ms ?? 0,
               total_cost_usd: msg.total_cost_usd ?? 0,
               num_turns: msg.num_turns ?? 0,
-              result: msg.result,
+              result: resolveResultText(msg),
               session_id: msg.session_id ?? currentSessionId,
             }));
             currentTurnText = "";
