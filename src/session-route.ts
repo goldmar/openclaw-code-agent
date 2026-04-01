@@ -31,14 +31,18 @@ function routeToChannelString(route?: SessionRoute): string | undefined {
 }
 
 function parseThreadSuffix(value: string): { id: string; threadId?: string } {
-  const marker = ":thread:";
-  const index = value.toLowerCase().lastIndexOf(marker);
-  if (index === -1) {
-    return { id: value };
+  const normalizedValue = value.toLowerCase();
+  const markers = [":thread:", ":topic:"];
+
+  for (const marker of markers) {
+    const index = normalizedValue.lastIndexOf(marker);
+    if (index === -1) continue;
+    const id = value.slice(0, index).trim();
+    const threadId = value.slice(index + marker.length).trim() || undefined;
+    return { id: id || value, threadId };
   }
-  const id = value.slice(0, index).trim();
-  const threadId = value.slice(index + marker.length).trim() || undefined;
-  return { id: id || value, threadId };
+
+  return { id: value };
 }
 
 function parseSessionConversationRef(
@@ -76,6 +80,10 @@ export function safeParseTelegramTopicConversation(
   }
 }
 
+export const sessionRouteInternals = {
+  safeParseTelegramTopicConversation,
+};
+
 function routeFromSessionKey(originSessionKey?: string): SessionRoute | undefined {
   const trimmed = originSessionKey?.trim();
   if (!trimmed) return undefined;
@@ -85,9 +93,14 @@ function routeFromSessionKey(originSessionKey?: string): SessionRoute | undefine
 
   const { provider, kind, rawId } = parsed;
   const genericConversation = parseThreadSuffix(rawId);
-  const telegramConversation = provider === "telegram"
-    ? safeParseTelegramTopicConversation(rawId)
-    : null;
+  let telegramConversation = null;
+  if (provider === "telegram") {
+    try {
+      telegramConversation = sessionRouteInternals.safeParseTelegramTopicConversation(rawId);
+    } catch {
+      telegramConversation = null;
+    }
+  }
   const baseTarget = telegramConversation?.chatId ?? genericConversation.id;
   const threadId = telegramConversation?.topicId ?? genericConversation.threadId;
   const target = provider === "discord"

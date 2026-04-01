@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   routeFromOriginMetadata,
   safeParseTelegramTopicConversation,
+  sessionRouteInternals,
 } from "../src/session-route";
 
 describe("session-route", () => {
@@ -89,7 +90,7 @@ describe("session-route", () => {
     });
   });
 
-  it("catches Telegram parser errors and falls back gracefully", () => {
+  it("catches Telegram parser errors and falls back gracefully", (t) => {
     assert.equal(
       safeParseTelegramTopicConversation(
         "-100123:topic:77",
@@ -99,6 +100,10 @@ describe("session-route", () => {
       ),
       null,
     );
+
+    t.mock.method(sessionRouteInternals, "safeParseTelegramTopicConversation", () => {
+      throw new Error("boom");
+    });
 
     const route = routeFromOriginMetadata(
       "telegram",
