@@ -63,11 +63,13 @@ function normalizeRoute(task: Pick<GoalTaskState, "route" | "originChannel" | "o
 }
 
 export function normalizeVerifierCommands(commands: GoalVerifierSpec[]): GoalVerifierSpec[] {
-  return commands.map((command, index) => ({
-    label: command.label.trim() || `check-${index + 1}`,
-    command: command.command.trim(),
-    timeoutMs: command.timeoutMs ?? DEFAULT_VERIFIER_TIMEOUT_MS,
-  }));
+  return commands
+    .map((command, index) => ({
+      label: command.label.trim() || `check-${index + 1}`,
+      command: command.command.trim(),
+      timeoutMs: command.timeoutMs ?? DEFAULT_VERIFIER_TIMEOUT_MS,
+    }))
+    .filter((command) => command.command.length > 0);
 }
 
 function requiresVerifierCommands(task: Pick<GoalTaskState, "loopMode">): boolean {
@@ -75,7 +77,7 @@ function requiresVerifierCommands(task: Pick<GoalTaskState, "loopMode">): boolea
 }
 
 function hasVerifierCommands(task: Pick<GoalTaskState, "verifierCommands">): boolean {
-  return task.verifierCommands.length > 0;
+  return normalizeVerifierCommands(task.verifierCommands).length > 0;
 }
 
 function isInvalidVerifierTask(task: Pick<GoalTaskState, "loopMode" | "verifierCommands">): boolean {
@@ -383,7 +385,8 @@ export class GoalController {
 
   async launchTask(config: GoalTaskConfig): Promise<GoalTaskState> {
     const loopMode = config.loopMode ?? "verifier";
-    if (loopMode === "verifier" && config.verifierCommands.length === 0) {
+    const verifierCommands = normalizeVerifierCommands(config.verifierCommands);
+    if (loopMode === "verifier" && verifierCommands.length === 0) {
       throw new Error(zeroVerifierFailureReason());
     }
 
@@ -411,7 +414,7 @@ export class GoalController {
       permissionMode: config.permissionMode ?? "bypassPermissions",
       loopMode,
       completionPromise: normalizeCompletionPromise(config.completionPromise),
-      verifierCommands: normalizeVerifierCommands(config.verifierCommands),
+      verifierCommands,
       repeatedFailureCount: 0,
     };
 
@@ -592,7 +595,8 @@ export class GoalController {
   }
 
   private async runVerifiers(task: GoalTaskState): Promise<GoalVerifierRunResult> {
-    if (!hasVerifierCommands(task)) {
+    const verifierCommands = normalizeVerifierCommands(task.verifierCommands);
+    if (verifierCommands.length === 0) {
       const result: GoalVerifierRunResult = {
         status: "fail",
         steps: [{
@@ -612,7 +616,7 @@ export class GoalController {
     }
 
     const steps: GoalVerifierStepResult[] = [];
-    for (const command of task.verifierCommands) {
+    for (const command of verifierCommands) {
       steps.push(await runCommand(task.workdir, command));
     }
 
@@ -773,14 +777,26 @@ export class GoalController {
     if (session.status === "killed" && session.killReason === "idle-timeout") {
       const output = session.getOutput(60).join("\n");
       if (session.pendingPlanApproval) {
-        await this.resumeAfterIdleTimeout(
-          task,
-          session,
-          [
-            `The previous session hit idle timeout while it was waiting at the plan review step.`,
-            `Treat that plan as approved and continue implementation from the existing repository state.`,
-          ].join("\n"),
-        );
+        const result = await executeRespond(this.sessionManager, {
+          session: session.id,
+          message: "Approved. Implement the plan.",
+          approve: true,
+          userInitiated: false,
+        });
+        if (result.isError) {
+          this.markTaskFailed(task, result.text);
+          return;
+        }
+
+        const resumed = this.sessionManager.resolve(session.id);
+        if (!resumed) {
+          this.markTaskFailed(task, "Failed to resolve the resumed goal task session after idle timeout plan approval.");
+          return;
+        }
+
+        this.attachSessionObservers(task, resumed);
+        this.setTaskRunningWithSession(task, resumed);
+        this.notifyIterationStatus(task, `🔄 [${task.name}] Goal task resumed after idle timeout`, resumed);
         return;
       }
       if (session.pendingInputState) {

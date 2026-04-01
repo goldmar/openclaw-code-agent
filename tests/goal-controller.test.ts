@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { GoalController } from "../src/goal-controller";
+import { GoalController, normalizeVerifierCommands } from "../src/goal-controller";
 import { GoalTaskStore } from "../src/goal-store";
 import type { GoalTaskState } from "../src/types";
 import { createStubSession, tick } from "./helpers";
@@ -351,6 +351,70 @@ describe("GoalController", () => {
     assert.deepEqual(messages, ["Approved. Implement the plan."]);
   });
 
+  it("auto-approves idle-timeout plan review by resuming in bypassPermissions mode", async () => {
+    let capturedConfig: any;
+    const resumed = createStubSession({
+      id: "session-1",
+      name: "goal-task",
+      harnessSessionId: "hs-2",
+      route: undefined,
+      status: "running",
+      on: () => resumed,
+      getOutput: () => ["Implementing the approved plan."],
+    });
+    const session = createStubSession({
+      id: "session-1",
+      name: "goal-task",
+      status: "killed",
+      lifecycle: "terminal",
+      runtimeState: "stopped",
+      killReason: "idle-timeout",
+      pendingPlanApproval: true,
+      currentPermissionMode: "plan",
+      requestedPermissionMode: "plan",
+      planDecisionVersion: 1,
+      actionablePlanDecisionVersion: 1,
+      harnessSessionId: "hs-1",
+      backendRef: { kind: "claude-code", conversationId: "hs-1" },
+      route: undefined,
+      on: () => session,
+      getOutput: () => ["Plan ready for review."],
+    });
+    const sessions = new Map<string, any>([["session-1", session]]);
+    const controller = new GoalController({
+      resolve: (id: string) => sessions.get(id),
+      getPersistedSession: () => undefined,
+      spawnAndAwaitRunning: async (config: any) => {
+        capturedConfig = config;
+        sessions.set("session-1", resumed);
+        return resumed;
+      },
+      notifySession: () => {},
+      emitGoalTaskUpdate: () => {},
+    } as any);
+    const store = createStore();
+    (controller as any).store = store;
+
+    const task = buildTask({
+      sessionId: "session-1",
+      sessionName: "goal-task",
+      harnessSessionId: "hs-1",
+      permissionMode: "plan",
+    });
+
+    await (controller as any).handleTerminalSession(task, session);
+
+    assert.equal(task.status, "running");
+    assert.equal(task.sessionId, "session-1");
+    assert.equal(task.harnessSessionId, "hs-2");
+    assert.equal(capturedConfig.resumeSessionId, "hs-1");
+    assert.equal(capturedConfig.permissionMode, "bypassPermissions");
+    assert.equal(capturedConfig.pendingPlanApproval, false);
+    assert.equal(capturedConfig.planModeApproved, true);
+    assert.match(capturedConfig.prompt, /approved your plan/i);
+    assert.doesNotMatch(capturedConfig.prompt, /Treat that plan as approved/i);
+  });
+
   it("fails waiting_for_user tasks during restore", async () => {
     const controller = new GoalController({ emitGoalTaskUpdate: () => {} } as any);
     const store = createStore();
@@ -392,6 +456,40 @@ describe("GoalController", () => {
       /require at least one verifier command/i,
     );
     assert.equal(spawned, false);
+  });
+
+  it("rejects whitespace-only verifier commands before creating a session", async () => {
+    let spawned = false;
+    const controller = new GoalController({
+      spawnAndAwaitRunning: async () => {
+        spawned = true;
+        throw new Error("spawnAndAwaitRunning should not be called");
+      },
+    } as any);
+
+    await assert.rejects(
+      () => controller.launchTask({
+        goal: "Ship it",
+        workdir: "/tmp/project",
+        loopMode: "verifier",
+        verifierCommands: [{ label: "x", command: "   " }],
+      }),
+      /require at least one verifier command/i,
+    );
+    assert.equal(spawned, false);
+  });
+
+  it("filters whitespace-only verifier commands during normalization", () => {
+    const normalized = normalizeVerifierCommands([
+      { label: " x ", command: "   " },
+      { label: " build ", command: " pnpm verify " },
+    ]);
+
+    assert.deepEqual(normalized, [{
+      label: "build",
+      command: "pnpm verify",
+      timeoutMs: 10 * 60 * 1000,
+    }]);
   });
 
   it("returns a synthetic verifier failure when verifier-mode tasks have no verifier commands", async () => {
