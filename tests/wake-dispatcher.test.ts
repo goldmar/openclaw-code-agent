@@ -90,14 +90,18 @@ function parseMessageSendArgs(call: string[]) {
 describe("WakeDispatcher", () => {
   const originalPath = process.env.PATH ?? "";
   const originalLogPath = process.env.OPENCLAW_TEST_LOG;
+  const originalDiscordSdkModuleUrl = process.env.OPENCLAW_CODE_AGENT_DISCORD_SDK_MODULE_URL;
   const originalConsoleInfo = console.info;
   let tempDir: string;
   let logPath: string;
+  let discordLogPath: string;
 
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), "wake-dispatcher-test-"));
     logPath = join(tempDir, "openclaw-calls.log");
+    discordLogPath = join(tempDir, "discord-components.log");
     writeFileSync(logPath, "");
+    writeFileSync(discordLogPath, "");
 
     const fakeOpenClawPath = join(tempDir, "openclaw");
     writeFileSync(fakeOpenClawPath, `#!/usr/bin/env node
@@ -107,7 +111,22 @@ appendFileSync(process.env.OPENCLAW_TEST_LOG, JSON.stringify(process.argv.slice(
 `);
     chmodSync(fakeOpenClawPath, 0o755);
 
+    const fakeDiscordSdkPath = join(tempDir, "fake-discord-sdk.mjs");
+    writeFileSync(fakeDiscordSdkPath, `#!/usr/bin/env node
+import { appendFileSync } from "node:fs";
+
+export async function sendDiscordComponentMessage(target, spec, opts = {}) {
+  appendFileSync(
+    process.env.OPENCLAW_TEST_DISCORD_LOG,
+    JSON.stringify({ target, spec, opts }) + "\\n",
+  );
+  return { channel: "discord", target, spec, opts };
+}
+`);
+
     process.env.OPENCLAW_TEST_LOG = logPath;
+    process.env.OPENCLAW_TEST_DISCORD_LOG = discordLogPath;
+    process.env.OPENCLAW_CODE_AGENT_DISCORD_SDK_MODULE_URL = `file://${fakeDiscordSdkPath}`;
     process.env.PATH = `${tempDir}:${originalPath}`;
   });
 
@@ -119,8 +138,39 @@ appendFileSync(process.env.OPENCLAW_TEST_LOG, JSON.stringify(process.argv.slice(
     } else {
       process.env.OPENCLAW_TEST_LOG = originalLogPath;
     }
+    if (originalDiscordSdkModuleUrl == null) {
+      delete process.env.OPENCLAW_CODE_AGENT_DISCORD_SDK_MODULE_URL;
+    } else {
+      process.env.OPENCLAW_CODE_AGENT_DISCORD_SDK_MODULE_URL = originalDiscordSdkModuleUrl;
+    }
+    delete process.env.OPENCLAW_TEST_DISCORD_LOG;
     rmSync(tempDir, { recursive: true, force: true });
   });
+
+  function readDiscordCalls(path: string): Array<{
+    target: string;
+    spec: {
+      blocks: Array<{
+        type: string;
+        buttons: Array<{ label: string; callbackData: string; style: string }>;
+      }>;
+    };
+    opts: { accountId?: string };
+  }> {
+    const raw = readFileSync(path, "utf8").trim();
+    if (!raw) return [];
+    return raw.split("\n").map((line) => JSON.parse(line));
+  }
+
+  async function waitForDiscordCalls(path: string, count: number) {
+    const deadline = Date.now() + WAIT_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      const calls = readDiscordCalls(path);
+      if (calls.length >= count) return calls;
+      await new Promise((resolve) => setTimeout(resolve, WAIT_STEP_MS));
+    }
+    throw new Error(`Timed out waiting for ${count} Discord component call(s) in ${path}`);
+  }
 
   it("uses message.send for direct user notifications and logs completion", async () => {
     const dispatcher = new WakeDispatcher();
@@ -495,6 +545,52 @@ appendFileSync(process.env.OPENCLAW_TEST_LOG, JSON.stringify(process.argv.slice(
     assert.equal(params.channel, "discord");
     assert.equal(params.target, "user:774236449288749097");
     assert.equal(params.message, "🚀 launched");
+  });
+
+  it("sends Discord buttons as a separate native component notification", async () => {
+    const dispatcher = new WakeDispatcher();
+    const session: FakeSession = {
+      id: "session-10",
+      route: buildRoute({
+        provider: "discord",
+        accountId: undefined,
+        target: "channel:1481874223294054540",
+        threadId: "1481999999999999999",
+        sessionKey: undefined,
+      }),
+      originChannel: "discord|1481874223294054540",
+      originThreadId: "1481999999999999999",
+      originSessionKey: "agent:main:discord:channel:1481874223294054540",
+    };
+
+    dispatcher.dispatchSessionNotification(session as any, {
+      label: "plan-approval",
+      userMessage: "📋 Plan ready",
+      notifyUser: "always",
+      buttons: [[
+        { label: "Approve", callbackData: "token-approve" },
+        { label: "Reject", callbackData: "token-reject" },
+      ]],
+    });
+
+    const textCalls = await waitForCalls(logPath, 1);
+    const componentCalls = await waitForDiscordCalls(discordLogPath, 1);
+
+    const textArgs = parseMessageSendArgs(textCalls[0] ?? []);
+    assert.equal(textArgs.channel, "discord");
+    assert.equal(textArgs.target, "channel:1481874223294054540");
+    assert.equal(textArgs.message, "📋 Plan ready");
+    assert.equal(textArgs["thread-id"], "1481999999999999999");
+
+    const component = componentCalls[0];
+    assert.equal(component?.target, "channel:1481999999999999999");
+    assert.deepEqual(component?.spec.blocks, [{
+      type: "actions",
+      buttons: [
+        { label: "Approve", callbackData: "code-agent:token-approve", style: "primary" },
+        { label: "Reject", callbackData: "code-agent:token-reject", style: "danger" },
+      ],
+    }]);
   });
 
   it("falls back to system notify when no explicit route is present", async () => {
