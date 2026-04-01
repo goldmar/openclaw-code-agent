@@ -72,7 +72,7 @@ describe("GoalController", () => {
     controller.stop();
   });
 
-  it("treats idle-timeout while waiting for human input as waiting_for_user instead of a hard failure", async () => {
+  it("fails idle-timeout sessions that were waiting for human input", async () => {
     const notifications: Array<{ label: string; text: string }> = [];
     const controller = new GoalController({
       emitGoalTaskUpdate: (_task: GoalTaskState, text: string, label: string) => {
@@ -104,10 +104,10 @@ describe("GoalController", () => {
 
     await (controller as any).handleTerminalSession(task, session);
 
-    assert.equal(task.status, "waiting_for_user");
-    assert.equal(task.failureReason, undefined);
-    assert.match(task.waitingForUserReason ?? "", /api key/i);
-    assert.deepEqual(notifications.map((note) => note.label), ["goal-task-waiting"]);
+    assert.equal(task.status, "failed");
+    assert.match(task.failureReason ?? "", /waiting for user input/i);
+    assert.match(task.failureReason ?? "", /api key/i);
+    assert.deepEqual(notifications.map((note) => note.label), ["goal-task-failed"]);
   });
 
   it("emits a stopped notification when a goal session is killed outside goal_stop", async () => {
@@ -140,13 +140,12 @@ describe("GoalController", () => {
     assert.match(notifications[0]?.text ?? "", /Stopped by user/i);
   });
 
-  it("does not keep reprocessing terminal waiting_for_user tasks on every reconcile tick", async () => {
+  it("fails waiting_for_user tasks during reconcile instead of leaving them recoverable", async () => {
     const notifications: Array<{ label: string; text: string }> = [];
     const session = createStubSession({
       id: "session-1",
       name: "goal-task",
-      status: "killed",
-      killReason: "idle-timeout",
+      status: "running",
       getOutput: () => ["Waiting on a human response."],
     });
     const controller = new GoalController({
@@ -169,9 +168,9 @@ describe("GoalController", () => {
 
     await controller.reconcileAll();
 
-    assert.equal(notifications.length, 0);
-    assert.equal(task.status, "waiting_for_user");
-    assert.equal(task.failureReason, undefined);
+    assert.equal(task.status, "failed");
+    assert.match(task.failureReason ?? "", /cannot be autonomously recovered after restart/i);
+    assert.deepEqual(notifications.map((note) => note.label), ["goal-task-failed"]);
   });
 
   it("drops observed session ids after the attached session reaches a terminal state", () => {
@@ -221,11 +220,206 @@ describe("GoalController", () => {
 
     const returned = controller.stopTask(task.id);
 
-    assert.equal(returned?.status, "succeeded");
-    assert.equal(returned?.failureReason, undefined);
-    assert.equal(returned?.lastVerifierSummary, "PASS verify");
+    assert.equal(returned?.action, "already_terminal");
+    assert.equal(returned?.task.status, "succeeded");
+    assert.equal(returned?.task.failureReason, undefined);
+    assert.equal(returned?.task.lastVerifierSummary, "PASS verify");
     assert.deepEqual(killed, []);
     assert.deepEqual(notifications, []);
+  });
+
+  it("fast-fails verifier-loop tasks when the underlying session fails", async () => {
+    const controller = new GoalController({ emitGoalTaskUpdate: () => {} } as any);
+    const store = createStore();
+    (controller as any).store = store;
+
+    let ranVerifiers = false;
+    (controller as any).runVerifiers = async () => {
+      ranVerifiers = true;
+      throw new Error("runVerifiers should not be called");
+    };
+
+    const task = buildTask({
+      loopMode: "verifier",
+      sessionId: "session-1",
+      verifierCommands: [{ label: "test", command: "pnpm test" }],
+    });
+    const session = createStubSession({
+      id: "session-1",
+      status: "failed",
+      error: "Verifier session exploded",
+    });
+
+    await (controller as any).handleTerminalSession(task, session);
+
+    assert.equal(task.status, "failed");
+    assert.equal(task.failureReason, "Verifier session exploded");
+    assert.equal(ranVerifiers, false);
+  });
+
+  it("fast-fails Ralph tasks when the underlying session fails", async () => {
+    const controller = new GoalController({ emitGoalTaskUpdate: () => {} } as any);
+    const store = createStore();
+    (controller as any).store = store;
+
+    let resumed = false;
+    (controller as any).resumeTaskSession = async () => {
+      resumed = true;
+      throw new Error("resumeTaskSession should not be called");
+    };
+
+    const task = buildTask({
+      loopMode: "ralph",
+      completionPromise: "DONE",
+      sessionId: "session-1",
+    });
+    const session = createStubSession({
+      id: "session-1",
+      status: "failed",
+      error: "Ralph session failed hard",
+      getOutput: () => ["DONE"],
+    });
+
+    await (controller as any).handleTerminalSession(task, session);
+
+    assert.equal(task.status, "failed");
+    assert.equal(task.failureReason, "Ralph session failed hard");
+    assert.equal(resumed, false);
+  });
+
+  it("auto-approves goal-loop plan review even when the session requested ask approval", async () => {
+    const messages: string[] = [];
+    const permissionModes: string[] = [];
+    const session = createStubSession({
+      id: "session-1",
+      status: "running",
+      pendingPlanApproval: true,
+      planApproval: "ask",
+      currentPermissionMode: "plan",
+      planDecisionVersion: 1,
+      actionablePlanDecisionVersion: 1,
+      sendMessage: async (message: string) => {
+        messages.push(message);
+      },
+      switchPermissionMode: (mode: string) => {
+        permissionModes.push(mode);
+      },
+    });
+    const controller = new GoalController({
+      resolve: (id: string) => (id === "session-1" ? session : undefined),
+      getPersistedSession: () => undefined,
+      notifySession: () => {},
+    } as any);
+    const store = createStore();
+    (controller as any).store = store;
+
+    await (controller as any).handleRunningSession(buildTask({ sessionId: "session-1" }), session);
+
+    assert.deepEqual(permissionModes, ["bypassPermissions"]);
+    assert.deepEqual(messages, ["Approved. Implement the plan."]);
+  });
+
+  it("auto-approves goal-loop plan review even when the session requested delegate approval", async () => {
+    const messages: string[] = [];
+    const permissionModes: string[] = [];
+    const session = createStubSession({
+      id: "session-2",
+      status: "running",
+      pendingPlanApproval: true,
+      planApproval: "delegate",
+      currentPermissionMode: "plan",
+      planDecisionVersion: 1,
+      actionablePlanDecisionVersion: 1,
+      sendMessage: async (message: string) => {
+        messages.push(message);
+      },
+      switchPermissionMode: (mode: string) => {
+        permissionModes.push(mode);
+      },
+    });
+    const controller = new GoalController({
+      resolve: (id: string) => (id === "session-2" ? session : undefined),
+      getPersistedSession: () => undefined,
+      notifySession: () => {},
+    } as any);
+    const store = createStore();
+    (controller as any).store = store;
+
+    await (controller as any).handleRunningSession(buildTask({ sessionId: "session-2" }), session);
+
+    assert.deepEqual(permissionModes, ["bypassPermissions"]);
+    assert.deepEqual(messages, ["Approved. Implement the plan."]);
+  });
+
+  it("fails waiting_for_user tasks during restore", async () => {
+    const controller = new GoalController({ emitGoalTaskUpdate: () => {} } as any);
+    const store = createStore();
+    (controller as any).store = store;
+    (controller as any).started = true;
+
+    const task = buildTask({
+      status: "waiting_for_user",
+      waitingForUserReason: "Need a human decision.",
+      sessionId: "session-1",
+    });
+    store.upsert(task);
+
+    await (controller as any).restoreRecoverableTasks();
+
+    assert.equal(task.status, "failed");
+    assert.equal(
+      task.failureReason,
+      "Goal task was waiting for user input and cannot be autonomously recovered after restart",
+    );
+  });
+
+  it("rejects zero-verifier verifier-mode tasks before creating a session", async () => {
+    let spawned = false;
+    const controller = new GoalController({
+      spawnAndAwaitRunning: async () => {
+        spawned = true;
+        throw new Error("spawnAndAwaitRunning should not be called");
+      },
+    } as any);
+
+    await assert.rejects(
+      () => controller.launchTask({
+        goal: "Ship it",
+        workdir: "/tmp/project",
+        loopMode: "verifier",
+        verifierCommands: [],
+      }),
+      /require at least one verifier command/i,
+    );
+    assert.equal(spawned, false);
+  });
+
+  it("returns a synthetic verifier failure when verifier-mode tasks have no verifier commands", async () => {
+    const controller = new GoalController({} as any);
+    const result = await (controller as any).runVerifiers(buildTask({ verifierCommands: [] }));
+
+    assert.equal(result.status, "fail");
+    assert.equal(result.steps.length, 1);
+    assert.equal(result.steps[0]?.label, "verifier-config");
+    assert.match(result.steps[0]?.output ?? "", /require at least one verifier command/i);
+  });
+
+  it("fails zero-verifier verifier-mode tasks during restore before reconcile can run", async () => {
+    const controller = new GoalController({ emitGoalTaskUpdate: () => {} } as any);
+    const store = createStore();
+    (controller as any).store = store;
+    (controller as any).started = true;
+
+    const task = buildTask({
+      status: "waiting_for_session",
+      verifierCommands: [],
+    });
+    store.upsert(task);
+
+    await (controller as any).restoreRecoverableTasks();
+
+    assert.equal(task.status, "failed");
+    assert.equal(task.failureReason, "Verifier-mode goal tasks require at least one verifier command.");
   });
 
   it("passes persisted backend refs into resume-session selection for goal recovery", async () => {
@@ -271,6 +465,7 @@ describe("GoalController", () => {
       harnessSessionId: "resume-thread-1",
       sessionId: undefined,
       sessionName: undefined,
+      verifierCommands: [{ label: "test", command: "pnpm test" }],
     });
     store.upsert(task);
 

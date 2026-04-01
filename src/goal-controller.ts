@@ -70,6 +70,22 @@ export function normalizeVerifierCommands(commands: GoalVerifierSpec[]): GoalVer
   }));
 }
 
+function requiresVerifierCommands(task: Pick<GoalTaskState, "loopMode">): boolean {
+  return task.loopMode === "verifier";
+}
+
+function hasVerifierCommands(task: Pick<GoalTaskState, "verifierCommands">): boolean {
+  return task.verifierCommands.length > 0;
+}
+
+function isInvalidVerifierTask(task: Pick<GoalTaskState, "loopMode" | "verifierCommands">): boolean {
+  return requiresVerifierCommands(task) && !hasVerifierCommands(task);
+}
+
+function zeroVerifierFailureReason(): string {
+  return "Verifier-mode goal tasks require at least one verifier command.";
+}
+
 function outputFingerprint(result: GoalVerifierRunResult): string {
   const base = result.steps
     .filter((step) => !step.ok)
@@ -279,6 +295,10 @@ function isTerminalGoalTaskStatus(status: GoalTaskStatus): boolean {
   return status === "succeeded" || status === "failed" || status === "stopped";
 }
 
+function sessionFailureReason(session: Pick<Session, "error">): string {
+  return truncate(session.error?.trim() || "Underlying session failed.", MAX_REASON_CHARS);
+}
+
 function runCommand(workdir: string, spec: GoalVerifierSpec): Promise<GoalVerifierStepResult> {
   return new Promise((resolve) => {
     const startedAt = Date.now();
@@ -362,6 +382,11 @@ export class GoalController {
   }
 
   async launchTask(config: GoalTaskConfig): Promise<GoalTaskState> {
+    const loopMode = config.loopMode ?? "verifier";
+    if (loopMode === "verifier" && config.verifierCommands.length === 0) {
+      throw new Error(zeroVerifierFailureReason());
+    }
+
     const id = nanoid(8);
     const task: GoalTaskState = {
       id,
@@ -384,7 +409,7 @@ export class GoalController {
       route: config.route,
       harness: config.harness,
       permissionMode: config.permissionMode ?? "bypassPermissions",
-      loopMode: config.loopMode ?? "verifier",
+      loopMode,
       completionPromise: normalizeCompletionPromise(config.completionPromise),
       verifierCommands: normalizeVerifierCommands(config.verifierCommands),
       repeatedFailureCount: 0,
@@ -403,17 +428,19 @@ export class GoalController {
     return task;
   }
 
-  stopTask(ref: string): GoalTaskState | undefined {
+  stopTask(ref: string): { task: GoalTaskState; action: "stopped" | "already_terminal" } | undefined {
     const task = this.store.get(ref);
     if (!task) return undefined;
-    if (isTerminalGoalTaskStatus(task.status)) return task;
+    if (isTerminalGoalTaskStatus(task.status)) {
+      return { task, action: "already_terminal" };
+    }
 
     if (task.sessionId) {
       this.sessionManager.kill(task.sessionId, "user");
     }
 
     this.markTaskStopped(task, "Stopped by user.");
-    return task;
+    return { task, action: "stopped" };
   }
 
   private async spawnTaskSession(task: GoalTaskState, prompt: string): Promise<Session> {
@@ -513,7 +540,15 @@ export class GoalController {
   private async restoreRecoverableTasks(): Promise<void> {
     for (const task of this.store.list()) {
       if (!this.started) break;
+      if (task.status === "waiting_for_user") {
+        this.markTaskFailed(task, "Goal task was waiting for user input and cannot be autonomously recovered after restart");
+        continue;
+      }
       if (task.status !== "waiting_for_session" && task.status !== "running") continue;
+      if (isInvalidVerifierTask(task)) {
+        this.markTaskFailed(task, zeroVerifierFailureReason());
+        continue;
+      }
 
       if (task.sessionId) {
         const active = this.sessionManager.resolve(task.sessionId);
@@ -557,6 +592,25 @@ export class GoalController {
   }
 
   private async runVerifiers(task: GoalTaskState): Promise<GoalVerifierRunResult> {
+    if (!hasVerifierCommands(task)) {
+      const result: GoalVerifierRunResult = {
+        status: "fail",
+        steps: [{
+          label: "verifier-config",
+          command: "(none configured)",
+          ok: false,
+          exitCode: 1,
+          durationMs: 0,
+          output: zeroVerifierFailureReason(),
+        }],
+        summary: "",
+        fingerprint: "",
+      };
+      result.fingerprint = outputFingerprint(result);
+      result.summary = buildVerifierSummary(result);
+      return result;
+    }
+
     const steps: GoalVerifierStepResult[] = [];
     for (const command of task.verifierCommands) {
       steps.push(await runCommand(task.workdir, command));
@@ -631,11 +685,7 @@ export class GoalController {
   }
 
   private markTaskWaitingForUser(task: GoalTaskState, reason: string): void {
-    task.status = "waiting_for_user";
-    task.waitingForUserReason = truncate(reason, MAX_REASON_CHARS);
-    task.updatedAt = Date.now();
-    this.store.upsert(task);
-    this.notify(task, `👋 [${task.name}] Goal task needs human input\n\n${task.waitingForUserReason}`, "goal-task-waiting");
+    this.markTaskFailed(task, `Goal task was waiting for user input and cannot continue autonomously: ${reason}`);
   }
 
   private markTaskSucceeded(task: GoalTaskState, summary: string): void {
@@ -656,6 +706,9 @@ export class GoalController {
 
   private async handleRunningSession(task: GoalTaskState, session: Session): Promise<void> {
     if (session.pendingPlanApproval) {
+      // Goal loops are autonomous by design. Approval is resolved before the loop starts;
+      // once inside the loop, verifier checks are the approval mechanism and human review
+      // would break the contract by stalling the controller.
       const result = await executeRespond(this.sessionManager, {
         session: session.id,
         message: "Approved. Implement the plan.",
@@ -702,11 +755,16 @@ export class GoalController {
       this.setTaskRunningWithSession(task, resumed);
       this.notifyIterationStatus(task, `🔄 [${task.name}] Goal task resumed after idle timeout`, resumed);
     } catch (err: unknown) {
-      this.markTaskWaitingForUser(task, `Failed to resume the goal task after idle timeout: ${errorMessage(err)}`);
+      this.markTaskFailed(task, `Failed to resume the goal task after idle timeout: ${errorMessage(err)}`);
     }
   }
 
   private async handleTerminalSession(task: GoalTaskState, session: Session): Promise<void> {
+    if (session.status === "failed") {
+      this.markTaskFailed(task, sessionFailureReason(session));
+      return;
+    }
+
     if (session.status === "killed" && session.killReason === "user") {
       this.markTaskStopped(task, "Stopped by user.");
       return;
@@ -728,9 +786,9 @@ export class GoalController {
       if (session.pendingInputState) {
         const autoReply = classifyGoalAutoReply(output);
         if (!autoReply) {
-          this.markTaskWaitingForUser(
+          this.markTaskFailed(
             task,
-            summarizeLines(output, 24) || "The goal task hit idle timeout while waiting for user input.",
+            `Goal task was waiting for user input and cannot continue autonomously: ${summarizeLines(output, 24) || "The goal task hit idle timeout while waiting for user input."}`,
           );
           return;
         }
@@ -885,10 +943,12 @@ export class GoalController {
     this.inFlight.add(task.id);
     try {
       const session = task.sessionId ? this.sessionManager.resolve(task.sessionId) : undefined;
-      if (
-        task.status === "waiting_for_user"
-        && (!session || (session.status !== "starting" && session.status !== "running"))
-      ) {
+      if (task.status === "waiting_for_user") {
+        this.markTaskFailed(task, "Goal task was waiting for user input and cannot be autonomously recovered after restart");
+        return;
+      }
+      if (isInvalidVerifierTask(task)) {
+        this.markTaskFailed(task, zeroVerifierFailureReason());
         return;
       }
       if (!session) {

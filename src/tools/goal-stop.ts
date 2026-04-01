@@ -26,15 +26,19 @@ export function makeGoalStopTool(_ctx: OpenClawPluginToolContext) {
         return { content: [{ type: "text", text: "Error: Invalid parameters. Expected { task }." }] };
       }
 
-      const task = goalController.stopTask(params.task);
-      if (!task) {
+      const result = goalController.stopTask(params.task);
+      if (!result) {
         return { content: [{ type: "text", text: `Error: Goal task "${params.task}" not found.` }] };
       }
+
+      const text = result.action === "already_terminal"
+        ? `Task is already ${result.task.status}.`
+        : "Task stopped.";
 
       return {
         content: [{
           type: "text",
-          text: `Goal task ${task.name} [${task.id}] stopped.`,
+          text,
         }],
       };
     },

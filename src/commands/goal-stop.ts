@@ -16,12 +16,16 @@ export function registerGoalStopCommand(api: any): void {
         return { text: "Usage: /goal_stop <task-id-or-name>" };
       }
 
-      const task = goalController.stopTask(ref);
-      if (!task) {
+      const result = goalController.stopTask(ref);
+      if (!result) {
         return { text: `Error: Goal task "${ref}" not found.` };
       }
 
-      return { text: `Goal task ${task.name} [${task.id}] stopped.` };
+      if (result.action === "already_terminal") {
+        return { text: `Task is already ${result.task.status}.` };
+      }
+
+      return { text: "Task stopped." };
     },
   });
 }
