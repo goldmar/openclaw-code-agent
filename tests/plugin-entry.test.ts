@@ -1,11 +1,9 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import path, { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const rootDir = join(__dirname, "..");
+const rootDir = join(import.meta.dirname, "..");
 
 describe("plugin entry source", () => {
   it("uses the canonical SDK entry helper", () => {
