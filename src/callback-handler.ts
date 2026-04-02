@@ -139,15 +139,20 @@ async function clearInteractiveState(
       return;
     } catch (err) {
       if (isMessageNotModifiedError(err)) return;
-      if (!isDiscordEmptyMessageError(err)) {
-        if (typeof text !== "string") {
-          throw err;
+
+      if (isDiscordEmptyMessageError(err)) {
+        if (typeof text !== "string" && typeof responder.acknowledge === "function") {
+          await responder.acknowledge();
+          return;
         }
-      } else if (typeof text !== "string" && typeof responder.acknowledge === "function") {
-        await responder.acknowledge();
-        return;
-      } else if (typeof text !== "string" && typeof responder.acknowledge !== "function") {
-        console.warn("[callback-handler] clearComponents failed with empty-message error and no acknowledge fallback available");
+        if (typeof text !== "string" && typeof responder.acknowledge !== "function") {
+          console.warn("[callback-handler] clearComponents failed with empty-message error and no acknowledge fallback available");
+        }
+      } else if (typeof text !== "string") {
+        throw err;
+      } else {
+        const errText = err instanceof Error ? err.message : String(err);
+        console.warn(`[callback-handler] clearComponents failed before text fallback: ${errText}`);
       }
     }
   }

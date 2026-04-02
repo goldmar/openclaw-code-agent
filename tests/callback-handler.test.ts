@@ -529,7 +529,7 @@ describe("createCallbackHandler()", () => {
       assert.deepEqual(result, { handled: true });
       assert.equal(buttonsCleared, 1);
       assert.equal(replies[0], "⏭️ Snoozed 24h");
-      assert.deepEqual(warnings, []);
+      assert.match(warnings[0], /clearComponents failed before text fallback: clearComponents failed/);
     } finally {
       console.warn = originalWarn;
     }
