@@ -33,7 +33,7 @@ export function makeGoalStopTool(_ctx: OpenClawPluginToolContext) {
 
       const text = result.action === "already_terminal"
         ? `Task is already ${result.task.status}.`
-        : "Task stopped.";
+        : `Task "${result.task.name}" (${result.task.id}) stopped.`;
 
       return {
         content: [{
