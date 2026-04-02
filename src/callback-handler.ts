@@ -38,6 +38,7 @@ async function resolveWorktreePrompt(
   text: string,
 ): Promise<void> {
   const responder = ctx.respond as InteractiveResponder;
+  let editAttempted = false;
   try {
     if (ctx.channel === "telegram" && typeof responder.editMessage === "function") {
       await responder.editMessage({ text, buttons: [] });
@@ -48,6 +49,7 @@ async function resolveWorktreePrompt(
       return;
     }
     if (typeof responder.editMessage === "function") {
+      editAttempted = true;
       await responder.editMessage({ text });
       await clearInteractiveState(ctx);
       return;
@@ -57,6 +59,8 @@ async function resolveWorktreePrompt(
     if (!/message is not modified/i.test(errText)) {
       console.warn(`[callback-handler] Failed to edit worktree prompt: ${errText}`);
     }
+    // If clearInteractiveState already ran inside the try block, don't call it again
+    if (editAttempted) return;
   }
   await clearInteractiveState(ctx);
 }
