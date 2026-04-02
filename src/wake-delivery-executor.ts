@@ -15,6 +15,7 @@ type ExecuteOptions = {
   phase: DispatchPhase;
   routeSummary: string;
   messageKind: "notify" | "wake";
+  orderingKey?: string;
   onStarted?: () => void;
   onSuccess?: () => void;
   onFinalFailure?: () => void;
@@ -28,28 +29,62 @@ function createDispatchTimeoutError(): Error {
   return new Error(`Dispatch timed out after ${WAKE_CLI_TIMEOUT_MS}ms`);
 }
 
+type RetryTimerEntry = {
+  timer: ReturnType<typeof setTimeout>;
+  onCleared?: () => void;
+};
+
 export class WakeDeliveryExecutor {
-  private pendingRetryTimers: Map<string, Set<ReturnType<typeof setTimeout>>> = new Map();
+  private pendingRetryTimers: Map<string, Set<RetryTimerEntry>> = new Map();
+  private orderedDispatchTails: Map<string, Promise<void>> = new Map();
 
   clearPendingRetries(): void {
-    for (const timers of this.pendingRetryTimers.values()) {
-      for (const timer of timers) clearTimeout(timer);
+    for (const entries of this.pendingRetryTimers.values()) {
+      for (const entry of entries) {
+        clearTimeout(entry.timer);
+        entry.onCleared?.();
+      }
     }
     this.pendingRetryTimers.clear();
   }
 
   clearRetryTimersForSession(sessionId: string): void {
-    const timers = this.pendingRetryTimers.get(sessionId);
-    if (!timers) return;
-    for (const timer of timers) clearTimeout(timer);
+    const entries = this.pendingRetryTimers.get(sessionId);
+    if (!entries) return;
+    for (const entry of entries) {
+      clearTimeout(entry.timer);
+      entry.onCleared?.();
+    }
     this.pendingRetryTimers.delete(sessionId);
   }
 
   dispose(): void {
     this.clearPendingRetries();
+    this.orderedDispatchTails.clear();
   }
 
   execute(args: string[], opts: ExecuteOptions, attempt: number = 1): void {
+    if (attempt === 1 && opts.orderingKey) {
+      this.enqueueOrderedDispatch(opts.orderingKey, (onSettled) => this.executeNow(args, opts, onSettled, attempt));
+      return;
+    }
+    this.executeNow(args, opts, undefined, attempt);
+  }
+
+  executePromise(task: () => Promise<void>, opts: ExecuteOptions, attempt: number = 1): void {
+    if (attempt === 1 && opts.orderingKey) {
+      this.enqueueOrderedDispatch(opts.orderingKey, (onSettled) => this.executePromiseNow(task, opts, onSettled, attempt));
+      return;
+    }
+    this.executePromiseNow(task, opts, undefined, attempt);
+  }
+
+  private executeNow(
+    args: string[],
+    opts: ExecuteOptions,
+    onSettled?: () => void,
+    attempt: number = 1,
+  ): void {
     const startedAt = Date.now();
     if (attempt === 1) opts.onStarted?.();
     this.log("info", "dispatch_started", {
@@ -78,6 +113,7 @@ export class WakeDeliveryExecutor {
           elapsedMs,
         });
         opts.onSuccess?.();
+        onSettled?.();
         return;
       }
 
@@ -97,6 +133,7 @@ export class WakeDeliveryExecutor {
           terminal: true,
         });
         opts.onFinalFailure?.();
+        onSettled?.();
         return;
       }
 
@@ -114,23 +151,31 @@ export class WakeDeliveryExecutor {
         retryDelayMs: delay,
         error: `${errorMessage(err)}${stderrSuffix}`,
       });
-      const timer = setTimeout(() => {
-        const timers = this.pendingRetryTimers.get(opts.sessionId);
-        if (timers) {
-          timers.delete(timer);
-          if (timers.size === 0) this.pendingRetryTimers.delete(opts.sessionId);
-        }
-        this.execute(args, opts, attempt + 1);
-      }, delay);
-      timer.unref?.();
+      const entry: RetryTimerEntry = {
+        timer: setTimeout(() => {
+          const entries = this.pendingRetryTimers.get(opts.sessionId);
+          if (entries) {
+            entries.delete(entry);
+            if (entries.size === 0) this.pendingRetryTimers.delete(opts.sessionId);
+          }
+          this.executeNow(args, opts, onSettled, attempt + 1);
+        }, delay),
+        onCleared: onSettled,
+      };
+      entry.timer.unref?.();
       if (!this.pendingRetryTimers.has(opts.sessionId)) {
         this.pendingRetryTimers.set(opts.sessionId, new Set());
       }
-      this.pendingRetryTimers.get(opts.sessionId)!.add(timer);
+      this.pendingRetryTimers.get(opts.sessionId)!.add(entry);
     });
   }
 
-  executePromise(task: () => Promise<void>, opts: ExecuteOptions, attempt: number = 1): void {
+  private executePromiseNow(
+    task: () => Promise<void>,
+    opts: ExecuteOptions,
+    onSettled?: () => void,
+    attempt: number = 1,
+  ): void {
     const startedAt = Date.now();
     if (attempt === 1) opts.onStarted?.();
     this.log("info", "dispatch_started", {
@@ -159,6 +204,7 @@ export class WakeDeliveryExecutor {
           elapsedMs,
         });
         opts.onSuccess?.();
+        onSettled?.();
       })
       .catch((err) => {
         const elapsedMs = Date.now() - startedAt;
@@ -177,6 +223,7 @@ export class WakeDeliveryExecutor {
             terminal: true,
           });
           opts.onFinalFailure?.();
+          onSettled?.();
           return;
         }
 
@@ -194,19 +241,22 @@ export class WakeDeliveryExecutor {
           retryDelayMs: delay,
           error: errorMessage(err),
         });
-        const timer = setTimeout(() => {
-          const timers = this.pendingRetryTimers.get(opts.sessionId);
-          if (timers) {
-            timers.delete(timer);
-            if (timers.size === 0) this.pendingRetryTimers.delete(opts.sessionId);
-          }
-          this.executePromise(task, opts, attempt + 1);
-        }, delay);
-        timer.unref?.();
+        const entry: RetryTimerEntry = {
+          timer: setTimeout(() => {
+            const entries = this.pendingRetryTimers.get(opts.sessionId);
+            if (entries) {
+              entries.delete(entry);
+              if (entries.size === 0) this.pendingRetryTimers.delete(opts.sessionId);
+            }
+            this.executePromiseNow(task, opts, onSettled, attempt + 1);
+          }, delay),
+          onCleared: onSettled,
+        };
+        entry.timer.unref?.();
         if (!this.pendingRetryTimers.has(opts.sessionId)) {
           this.pendingRetryTimers.set(opts.sessionId, new Set());
         }
-        this.pendingRetryTimers.get(opts.sessionId)!.add(timer);
+        this.pendingRetryTimers.get(opts.sessionId)!.add(entry);
       });
   }
 
@@ -241,6 +291,23 @@ export class WakeDeliveryExecutor {
     const exp = Math.max(0, attempt - 1);
     const delay = WAKE_RETRY_BASE_DELAY_MS * (2 ** exp);
     return Math.min(delay, WAKE_RETRY_MAX_DELAY_MS);
+  }
+
+  private enqueueOrderedDispatch(orderingKey: string, task: (onSettled: () => void) => void): void {
+    const previous = this.orderedDispatchTails.get(orderingKey) ?? Promise.resolve();
+    const next = previous
+      .catch(() => {})
+      .then(async () => {
+        await new Promise<void>((resolve) => {
+          task(resolve);
+        });
+      });
+    this.orderedDispatchTails.set(orderingKey, next);
+    void next.finally(() => {
+      if (this.orderedDispatchTails.get(orderingKey) === next) {
+        this.orderedDispatchTails.delete(orderingKey);
+      }
+    });
   }
 
   private log(level: "info" | "error", event: string, details: Record<string, unknown>): void {

@@ -33,7 +33,7 @@ function buildRoute(overrides: Partial<NonNullable<FakeSession["route"]>> = {}):
 }
 
 const WAIT_STEP_MS = 25;
-const WAIT_TIMEOUT_MS = 2_000;
+const WAIT_TIMEOUT_MS = 7_000;
 
 function readCalls(logPath: string): string[][] {
   const raw = readFileSync(logPath, "utf8").trim();
@@ -95,19 +95,42 @@ describe("WakeDispatcher", () => {
   let tempDir: string;
   let logPath: string;
   let discordLogPath: string;
+  let failStatePath: string;
 
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), "wake-dispatcher-test-"));
     logPath = join(tempDir, "openclaw-calls.log");
     discordLogPath = join(tempDir, "discord-components.log");
+    failStatePath = join(tempDir, "openclaw-fail-state.json");
     writeFileSync(logPath, "");
     writeFileSync(discordLogPath, "");
 
     const fakeOpenClawPath = join(tempDir, "openclaw");
     writeFileSync(fakeOpenClawPath, `#!/usr/bin/env node
-const { appendFileSync } = require("node:fs");
+const { appendFileSync, existsSync, readFileSync, writeFileSync } = require("node:fs");
 
-appendFileSync(process.env.OPENCLAW_TEST_LOG, JSON.stringify(process.argv.slice(2)) + "\\n");
+const args = process.argv.slice(2);
+appendFileSync(process.env.OPENCLAW_TEST_LOG, JSON.stringify(args) + "\\n");
+
+const failConfigRaw = process.env.OPENCLAW_TEST_FAIL_ONCE_FOR;
+if (failConfigRaw) {
+  const failConfig = JSON.parse(failConfigRaw);
+  const joined = args.join(" ");
+  const statePath = process.env.OPENCLAW_TEST_FAIL_ONCE_STATE;
+  const state = statePath && existsSync(statePath)
+    ? new Set(JSON.parse(readFileSync(statePath, "utf8")))
+    : new Set();
+  if (joined.includes(failConfig.match) && !state.has(failConfig.match)) {
+    state.add(failConfig.match);
+    if (statePath) writeFileSync(statePath, JSON.stringify([...state]));
+    const delayMs = Number(failConfig.delayMs ?? 0);
+    setTimeout(() => {
+      process.stderr.write(String(failConfig.stderr ?? "forced failure"));
+      process.exit(Number(failConfig.exitCode ?? 1));
+    }, delayMs);
+    return;
+  }
+}
 `);
     chmodSync(fakeOpenClawPath, 0o755);
 
@@ -126,6 +149,7 @@ export async function sendDiscordComponentMessage(target, spec, opts = {}) {
 
     process.env.OPENCLAW_TEST_LOG = logPath;
     process.env.OPENCLAW_TEST_DISCORD_LOG = discordLogPath;
+    process.env.OPENCLAW_TEST_FAIL_ONCE_STATE = failStatePath;
     process.env.OPENCLAW_CODE_AGENT_DISCORD_SDK_MODULE_URL = `file://${fakeDiscordSdkPath}`;
     process.env.PATH = `${tempDir}:${originalPath}`;
   });
@@ -144,6 +168,8 @@ export async function sendDiscordComponentMessage(target, spec, opts = {}) {
       process.env.OPENCLAW_CODE_AGENT_DISCORD_SDK_MODULE_URL = originalDiscordSdkModuleUrl;
     }
     delete process.env.OPENCLAW_TEST_DISCORD_LOG;
+    delete process.env.OPENCLAW_TEST_FAIL_ONCE_FOR;
+    delete process.env.OPENCLAW_TEST_FAIL_ONCE_STATE;
     rmSync(tempDir, { recursive: true, force: true });
   });
 
@@ -205,6 +231,38 @@ export async function sendDiscordComponentMessage(target, spec, opts = {}) {
       "dispatcher completion log",
     );
     assert.ok(infoLogs.some((line) => line.includes("\"route\":\"telegram|bot|12345#11239\"")));
+  });
+
+  it("preserves direct notification order when an earlier delivery retries", async () => {
+    process.env.OPENCLAW_TEST_FAIL_ONCE_FOR = JSON.stringify({
+      match: "🚀 launched",
+      delayMs: 50,
+      stderr: "launch delivery failed once",
+      exitCode: 1,
+    });
+    const dispatcher = new WakeDispatcher();
+    const session: FakeSession = {
+      id: "session-ordering",
+      route: buildRoute(),
+      originChannel: "telegram|bot|12345",
+      originThreadId: 11239,
+      originSessionKey: "agent:main:telegram:group:-1003863755361:topic:11239",
+    };
+
+    dispatcher.dispatchSessionNotification(session as any, {
+      label: "launch",
+      userMessage: "🚀 launched",
+      notifyUser: "always",
+    });
+    dispatcher.dispatchSessionNotification(session as any, {
+      label: "completed",
+      userMessage: "✅ completed",
+      notifyUser: "always",
+    });
+
+    const calls = await waitForCalls(logPath, 3);
+    const messages = calls.map((call) => parseMessageSendArgs(call).message);
+    assert.deepEqual(messages, ["🚀 launched", "🚀 launched", "✅ completed"]);
   });
 
   it("treats explicit system routes as non-routable and falls back to system.event", async () => {

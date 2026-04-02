@@ -109,6 +109,9 @@ export class WakeDispatcher {
   ): void {
     const hasInteractiveButtons = Boolean(buttons && buttons.length > 0);
     const route = this.routes.resolve(session);
+    const orderingKey = route
+      ? `notify:${route.channel}|${route.accountId ?? ""}|${route.target}|${route.threadId ?? ""}`
+      : `notify:system:${session.id}`;
     if (!route) {
       if (hasInteractiveButtons) {
         console.warn(
@@ -127,6 +130,7 @@ export class WakeDispatcher {
           phase: "notify",
           routeSummary: "system",
           messageKind: "notify",
+          orderingKey,
           onSuccess,
           onFinalFailure: onAllFailed,
         },
@@ -167,6 +171,7 @@ export class WakeDispatcher {
             phase: "notify",
             routeSummary: this.routes.summary(route),
             messageKind: "notify",
+            orderingKey,
             onSuccess: sendComponents,
             onFinalFailure: onAllFailed,
           },
@@ -187,6 +192,7 @@ export class WakeDispatcher {
         phase: "notify",
         routeSummary: this.routes.summary(route),
         messageKind: "notify",
+        orderingKey,
         onSuccess,
         onFinalFailure: () => {
           if (hasInteractiveButtons) {
@@ -206,6 +212,7 @@ export class WakeDispatcher {
               phase: "notify",
               routeSummary: "system",
               messageKind: "notify",
+              orderingKey,
               onSuccess,
               onFinalFailure: onAllFailed,
             },
