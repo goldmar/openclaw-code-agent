@@ -25,7 +25,7 @@ export function registerGoalStopCommand(api: any): void {
         return { text: `Task is already ${result.task.status}.` };
       }
 
-      return { text: "Task stopped." };
+      return { text: `Task "${result.task.name}" (${result.task.id}) stopped.` };
     },
   });
 }
