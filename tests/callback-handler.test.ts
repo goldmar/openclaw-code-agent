@@ -450,6 +450,91 @@ describe("createCallbackHandler()", () => {
     }
   });
 
+  it("clears Discord worktree prompts when editMessage reports message is not modified", async () => {
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (message?: unknown) => { warnings.push(String(message)); };
+
+    try {
+      setSessionManager({
+        getActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
+        consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
+        resolve: () => undefined,
+        getPersistedSession: () => ({ name: "ux-fix" }),
+        snoozeWorktreeDecision: () => "⏭️ Reminder snoozed 24h for `agent/ux-fix` (session: ux-fix)",
+      } as any);
+
+      const replies: string[] = [];
+      let buttonsCleared = 0;
+      const ctx = {
+        channel: "discord" as const,
+        auth: { isAuthorizedSender: true },
+        callback: { payload: "token-snooze" },
+        respond: {
+          editMessage: async () => {
+            throw new Error("Message is not modified");
+          },
+          clearButtons: async () => { buttonsCleared++; },
+          reply: async ({ text }: { text: string }) => { replies.push(text); },
+        },
+      };
+
+      const handler = createCallbackHandler("discord");
+      const result = await handler.handler(ctx as any);
+
+      assert.deepEqual(result, { handled: true });
+      assert.equal(buttonsCleared, 1);
+      assert.equal(replies[0], "⏭️ Snoozed 24h");
+      assert.deepEqual(warnings, []);
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+
+  it("does not retry Discord worktree prompt cleanup after a post-edit clear failure", async () => {
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (message?: unknown) => { warnings.push(String(message)); };
+
+    try {
+      setSessionManager({
+        getActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
+        consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
+        resolve: () => undefined,
+        getPersistedSession: () => ({ name: "ux-fix" }),
+        snoozeWorktreeDecision: () => "⏭️ Reminder snoozed 24h for `agent/ux-fix` (session: ux-fix)",
+      } as any);
+
+      const replies: string[] = [];
+      const editedMessages: string[] = [];
+      let clearAttempts = 0;
+      const ctx = {
+        channel: "discord" as const,
+        auth: { isAuthorizedSender: true },
+        callback: { payload: "token-snooze" },
+        respond: {
+          editMessage: async ({ text }: { text: string }) => { editedMessages.push(text); },
+          clearButtons: async () => {
+            clearAttempts++;
+            throw new Error("clear failed");
+          },
+          reply: async ({ text }: { text: string }) => { replies.push(text); },
+        },
+      };
+
+      const handler = createCallbackHandler("discord");
+      const result = await handler.handler(ctx as any);
+
+      assert.deepEqual(result, { handled: true });
+      assert.deepEqual(editedMessages, ["⏭️ Deferred for [ux-fix]"]);
+      assert.equal(clearAttempts, 1);
+      assert.equal(replies[0], "⏭️ Snoozed 24h");
+      assert.match(warnings[0], /Failed to resolve worktree prompt via editMessage \+ dismissInteractiveState: clear failed/);
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+
   it("can be registered for Discord with the same action-token contract", async () => {
     setSessionManager({
       getActionToken: () => ({
