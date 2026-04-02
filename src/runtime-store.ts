@@ -2,6 +2,19 @@ type EmbeddedRunResult = {
   payloads?: Array<{ text?: string }>;
 };
 
+type TaskFlowHandle = {
+  id?: string;
+  lookupKey?: string;
+  [key: string]: unknown;
+};
+
+type TaskFlowRuntime = {
+  get?: (lookup: string) => Promise<TaskFlowHandle | undefined>;
+  lookup?: (lookup: string) => Promise<TaskFlowHandle | undefined>;
+  show?: (lookup: string) => Promise<TaskFlowHandle | undefined>;
+  [key: string]: unknown;
+};
+
 type EmbeddedRunParams = {
   sessionId: string;
   sessionKey?: string;
@@ -19,6 +32,7 @@ export interface PluginRuntimeStore {
   agent?: {
     runEmbeddedPiAgent?: (params: EmbeddedRunParams) => Promise<EmbeddedRunResult>;
   };
+  taskFlow?: TaskFlowRuntime;
 }
 
 let pluginRuntime: PluginRuntimeStore | undefined;

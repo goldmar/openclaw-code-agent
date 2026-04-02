@@ -77,6 +77,20 @@ describe("session-route", () => {
     });
   });
 
+  it("tolerates rebound agent session keys and still extracts the provider route", () => {
+    const route = routeFromOriginMetadata(
+      "telegram",
+      undefined,
+      "agent:hook-runner:target-agent:telegram:group:-100123:topic:77",
+    );
+    assert.deepEqual(route, {
+      provider: "telegram",
+      target: "-100123",
+      threadId: "77",
+      sessionKey: "agent:hook-runner:target-agent:telegram:group:-100123:topic:77",
+    });
+  });
+
   it("ignores session keys without the agent prefix", () => {
     const route = routeFromOriginMetadata(
       "telegram",

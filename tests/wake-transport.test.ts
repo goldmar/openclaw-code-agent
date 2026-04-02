@@ -27,6 +27,39 @@ afterEach(() => {
 });
 
 describe("WakeTransport", () => {
+  it("includes explicit route metadata in chat.send payloads while keeping sessionKey", () => {
+    const transport = new WakeTransport();
+    const args = transport.buildChatSendArgs(
+      "agent:main:telegram:group:-1003863755361:topic:13832",
+      "wake up",
+      true,
+      {
+        channel: "telegram",
+        accountId: "bot",
+        target: "-1003863755361",
+        threadId: "13832",
+        sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+      },
+    );
+
+    assert.deepEqual(args.slice(0, 6), [
+      "gateway",
+      "call",
+      "chat.send",
+      "--expect-final",
+      "--timeout",
+      "30000",
+    ]);
+    const payload = JSON.parse(args[7] ?? "{}") as Record<string, unknown>;
+    assert.equal(payload.sessionKey, "agent:main:telegram:group:-1003863755361:topic:13832");
+    assert.equal(payload.channel, "telegram");
+    assert.equal(payload.accountId, "bot");
+    assert.equal(payload.target, "-1003863755361");
+    assert.equal(payload.threadId, "13832");
+    assert.equal(payload.message, "wake up");
+    assert.equal(payload.deliver, true);
+  });
+
   it("retries loading the Discord component sender after a transient module failure", async () => {
     const dir = mkdtempSync(join(tmpdir(), "wake-transport-test-"));
     tempDirs.push(dir);
