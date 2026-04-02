@@ -444,7 +444,10 @@ describe("createCallbackHandler()", () => {
       assert.deepEqual(result, { handled: true });
       assert.equal(buttonsCleared, 1);
       assert.equal(replies[0], "⏭️ Snoozed 24h");
-      assert.deepEqual(warnings, []);
+      assert.match(
+        warnings[0],
+        /Failed to edit Telegram worktree prompt before clearing buttons: telegram edit failed/,
+      );
     } finally {
       console.warn = originalWarn;
     }

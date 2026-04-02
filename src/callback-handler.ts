@@ -123,6 +123,8 @@ async function clearInteractiveState(
         return;
       } catch (err) {
         if (isMessageNotModifiedError(err)) return;
+        const errText = err instanceof Error ? err.message : String(err);
+        console.warn(`[callback-handler] Failed to edit Telegram worktree prompt before clearing buttons: ${errText}`);
       }
     }
     if (typeof responder.clearButtons === "function") {
