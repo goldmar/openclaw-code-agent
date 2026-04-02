@@ -8,6 +8,23 @@ export interface SessionRouteSource {
   originSessionKey?: string;
 }
 
+const KNOWN_SESSION_ROUTE_PROVIDERS = new Set([
+  "telegram",
+  "discord",
+  "slack",
+  "system",
+  "mattermost",
+  "feishu",
+  "line",
+  "whatsapp",
+  "signal",
+  "matrix",
+  "googlechat",
+  "bluebubbles",
+  "imessage",
+  "msteams",
+]);
+
 function parseDiscordTargetKind(sessionKey?: string): "channel" | "user" | undefined {
   if (!sessionKey) return undefined;
   const match = sessionKey.match(/^agent:[^:]+:discord:(direct|dm|channel|group):/i);
@@ -53,20 +70,17 @@ function parseSessionConversationRef(
 
   const rawParts = raw.split(":").filter(Boolean);
   if (rawParts[0]?.trim().toLowerCase() !== "agent") return undefined;
-  const bodyStartIndex = 2;
-  const parts = rawParts.slice(bodyStartIndex);
-  if (parts.length < 3) {
-    return undefined;
+  // Accept canonical agent keys and tolerate additional upstream routing layers
+  // ahead of the provider/kind pair, while still requiring an `agent:` prefix.
+  for (let index = 2; index <= rawParts.length - 3; index += 1) {
+    const provider = rawParts[index]?.trim().toLowerCase();
+    if (!provider || !KNOWN_SESSION_ROUTE_PROVIDERS.has(provider)) continue;
+    const kind = rawParts[index + 1]?.trim().toLowerCase();
+    const rawId = rawParts.slice(index + 2).join(":").trim();
+    if (!kind || !rawId) continue;
+    return { provider, kind, rawId };
   }
-
-  const provider = parts[0]?.trim().toLowerCase();
-  const kind = parts[1]?.trim().toLowerCase();
-  const rawId = parts.slice(2).join(":").trim();
-  if (!provider || !kind || !rawId) {
-    return undefined;
-  }
-
-  return { provider, kind, rawId };
+  return undefined;
 }
 
 export function safeParseTelegramTopicConversation(

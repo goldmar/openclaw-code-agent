@@ -70,4 +70,11 @@ describe("codex protocol turn payloads", () => {
       sandbox: "danger-full-access",
     });
   });
+
+  it("keeps bypassPermissions on the same explicit execution policy instead of relying on upstream defaults", () => {
+    assert.deepEqual(codexExecutionPolicyForMode("bypassPermissions"), {
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+    });
+  });
 });

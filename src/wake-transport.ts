@@ -27,7 +27,12 @@ function getDiscordSdkModuleUrl(): string {
 export class WakeTransport {
   private discordComponentSenderPromise: Promise<DiscordComponentSender> | null = null;
 
-  buildChatSendArgs(sessionKey: string, text: string, deliver: boolean): string[] {
+  buildChatSendArgs(
+    sessionKey: string,
+    text: string,
+    deliver: boolean,
+    route?: NotificationRoute,
+  ): string[] {
     return [
       "gateway",
       "call",
@@ -38,6 +43,10 @@ export class WakeTransport {
       "--params",
       JSON.stringify({
         sessionKey,
+        ...(route?.channel ? { channel: route.channel } : {}),
+        ...(route?.target ? { target: route.target } : {}),
+        ...(route?.accountId ? { accountId: route.accountId } : {}),
+        ...(route?.threadId ? { threadId: route.threadId } : {}),
         message: text,
         deliver,
         idempotencyKey: randomUUID(),
