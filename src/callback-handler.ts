@@ -28,11 +28,6 @@ type InteractiveResponder = {
   acknowledge?: () => Promise<void>;
 };
 
-type WorktreePromptResolutionPlan = {
-  description: string;
-  run: () => Promise<void>;
-};
-
 function parsePayload(payload: string): string | null {
   const tokenId = payload.trim().replace(new RegExp(`^${CALLBACK_NAMESPACE}:`), "");
   return tokenId ? tokenId : null;
@@ -42,13 +37,11 @@ async function resolveWorktreePrompt(
   ctx: InteractiveCallbackContext,
   text: string,
 ): Promise<void> {
-  const plan = createWorktreePromptResolutionPlan(ctx, text);
   try {
-    await plan.run();
+    await clearInteractiveState(ctx, { text });
   } catch (err) {
-    if (isMessageNotModifiedError(err)) return;
     const errText = err instanceof Error ? err.message : String(err);
-    console.warn(`[callback-handler] Failed to resolve worktree prompt via ${plan.description}: ${errText}`);
+    console.warn(`[callback-handler] Failed to resolve worktree prompt: ${errText}`);
   }
 }
 
@@ -116,71 +109,58 @@ function isDiscordEmptyMessageError(err: unknown): boolean {
   return /empty message/i.test(errText);
 }
 
-function createWorktreePromptResolutionPlan(
+async function clearInteractiveState(
   ctx: InteractiveCallbackContext,
-  text: string,
-): WorktreePromptResolutionPlan {
+  options: { text?: string } = {},
+): Promise<void> {
   const responder = ctx.respond as InteractiveResponder;
-  if (ctx.channel === "telegram" && typeof responder.editMessage === "function") {
-    return {
-      description: "telegram editMessage",
-      run: async () => {
-        await responder.editMessage({ text, buttons: [] });
-      },
-    };
-  }
-  if (typeof responder.clearComponents === "function") {
-    return {
-      description: "clearComponents",
-      run: async () => {
-        await responder.clearComponents({ text });
-      },
-    };
-  }
-  if (typeof responder.editMessage === "function") {
-    return {
-      description: "editMessage + dismissInteractiveState",
-      run: async () => {
-        try {
-          await responder.editMessage({ text });
-        } catch (err) {
-          if (!isMessageNotModifiedError(err)) {
-            throw err;
-          }
-        }
-        await dismissInteractiveState(ctx);
-      },
-    };
-  }
-  return {
-    description: "dismissInteractiveState",
-    run: async () => {
-      await dismissInteractiveState(ctx);
-    },
-  };
-}
+  const { text } = options;
 
-async function dismissInteractiveState(ctx: InteractiveCallbackContext): Promise<void> {
-  const responder = ctx.respond as InteractiveResponder;
-  if (ctx.channel === "telegram" && typeof responder.clearButtons === "function") {
-    await responder.clearButtons();
+  if (ctx.channel === "telegram") {
+    if (typeof text === "string" && typeof responder.editMessage === "function") {
+      try {
+        await responder.editMessage({ text, buttons: [] });
+        return;
+      } catch (err) {
+        if (isMessageNotModifiedError(err)) return;
+      }
+    }
+    if (typeof responder.clearButtons === "function") {
+      await responder.clearButtons();
+    }
     return;
   }
+
   if (typeof responder.clearComponents === "function") {
     try {
-      await responder.clearComponents();
+      await responder.clearComponents(typeof text === "string" ? { text } : undefined);
       return;
     } catch (err) {
+      if (isMessageNotModifiedError(err)) return;
       if (!isDiscordEmptyMessageError(err)) {
-        throw err;
-      }
-      if (typeof responder.acknowledge === "function") {
+        if (typeof text !== "string") {
+          throw err;
+        }
+      } else if (typeof text !== "string" && typeof responder.acknowledge === "function") {
         await responder.acknowledge();
         return;
+      } else if (typeof text !== "string" && typeof responder.acknowledge !== "function") {
+        console.warn("[callback-handler] clearComponents failed with empty-message error and no acknowledge fallback available");
       }
-      console.warn("[callback-handler] clearComponents failed with empty-message error and no acknowledge fallback available");
     }
   }
+
+  if (typeof text === "string" && typeof responder.editMessage === "function") {
+    try {
+      await responder.editMessage({ text });
+    } catch (err) {
+      if (!isMessageNotModifiedError(err)) {
+        const errText = err instanceof Error ? err.message : String(err);
+        console.warn(`[callback-handler] Failed to edit worktree prompt before clearing interactive state: ${errText}`);
+      }
+    }
+  }
+
   if (typeof responder.clearButtons === "function") {
     await responder.clearButtons();
   }
@@ -244,7 +224,7 @@ export function createCallbackHandler(channel: InteractiveChannel = "telegram") 
       const invalidPlanDecision = validatePlanDecisionToken(token, actionSession);
 
       if (invalidPlanDecision) {
-        await dismissInteractiveState(ctx);
+        await clearInteractiveState(ctx);
         await replyText(ctx, `⚠️ ${invalidPlanDecision}`);
         return { handled: true };
       }
@@ -299,7 +279,7 @@ export function createCallbackHandler(channel: InteractiveChannel = "telegram") 
         }
 
         case "worktree-view-pr": {
-          await dismissInteractiveState(ctx);
+          await clearInteractiveState(ctx);
           const persisted = sessionManager.getPersistedSession?.(sessionId);
           const url = token.targetUrl ?? persisted?.worktreePrUrl;
           await replyText(ctx, url ? `PR: ${url}` : "⚠️ PR URL is no longer available.");
@@ -307,7 +287,7 @@ export function createCallbackHandler(channel: InteractiveChannel = "telegram") 
         }
 
         case "plan-approve": {
-          await dismissInteractiveState(ctx);
+          await clearInteractiveState(ctx);
           sessionManager.clearPlanDecisionTokens(sessionId);
           const result = await executeRespond(sessionManager, {
             session: sessionId,
@@ -322,7 +302,7 @@ export function createCallbackHandler(channel: InteractiveChannel = "telegram") 
         }
 
         case "plan-reject": {
-          await dismissInteractiveState(ctx);
+          await clearInteractiveState(ctx);
           sessionManager.clearPlanDecisionTokens(sessionId);
           const active = sessionManager.resolve(sessionId);
           if (active) {
@@ -348,7 +328,7 @@ export function createCallbackHandler(channel: InteractiveChannel = "telegram") 
         }
 
         case "plan-request-changes": {
-          await dismissInteractiveState(ctx);
+          await clearInteractiveState(ctx);
           const reviseSession = sessionManager.resolve?.(sessionId);
           const revisePersisted = sessionManager.getPersistedSession?.(sessionId);
           const reviseName = reviseSession?.name ?? revisePersisted?.name ?? sessionId;
@@ -375,7 +355,7 @@ export function createCallbackHandler(channel: InteractiveChannel = "telegram") 
         }
 
         case "monitor-start-plan": {
-          await dismissInteractiveState(ctx);
+          await clearInteractiveState(ctx);
           if (!consumedToken.launchPrompt || !consumedToken.launchWorkdir) {
             await replyText(ctx, "⚠️ This release action is missing the plan launch context.");
             break;
@@ -391,14 +371,14 @@ export function createCallbackHandler(channel: InteractiveChannel = "telegram") 
         }
 
         case "monitor-dismiss": {
-          await dismissInteractiveState(ctx);
+          await clearInteractiveState(ctx);
           await replyText(ctx, `✅ Dismissed.`);
           break;
         }
 
         case "session-restart":
         case "session-resume": {
-          await dismissInteractiveState(ctx);
+          await clearInteractiveState(ctx);
           const result = await executeRespond(sessionManager, {
             session: sessionId,
             message: "Continue where you left off.",
@@ -409,14 +389,14 @@ export function createCallbackHandler(channel: InteractiveChannel = "telegram") 
         }
 
         case "view-output": {
-          await dismissInteractiveState(ctx);
+          await clearInteractiveState(ctx);
           const result = await makeAgentOutputTool().execute("callback", { session: sessionId, lines: 50 });
           await replyText(ctx, toolResultText(result));
           break;
         }
 
         case "question-answer": {
-          await dismissInteractiveState(ctx);
+          await clearInteractiveState(ctx);
           if (token.optionIndex == null) {
             await replyText(ctx, `⚠️ Invalid question-answer action.`);
             break;
@@ -427,7 +407,7 @@ export function createCallbackHandler(channel: InteractiveChannel = "telegram") 
         }
 
         default: {
-          await dismissInteractiveState(ctx);
+          await clearInteractiveState(ctx);
           await replyText(ctx, `⚠️ Unknown callback action.`);
           break;
         }
