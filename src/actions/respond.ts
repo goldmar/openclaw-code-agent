@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import type { SessionManager } from "../session-manager";
 import { pluginConfig } from "../config";
-import { firstCompleteLines, truncateText } from "../format";
+import { truncateText } from "../format";
 import type { Session } from "../session";
 import { getBackendConversationId, getPrimarySessionLookupRef } from "../session-backend-ref";
 import {
@@ -121,6 +121,38 @@ async function spawnFreshRelaunch(
 const PLAN_APPROVAL_SYSTEM_PREFIX =
   "[SYSTEM: The user has approved your plan. Exit plan mode immediately and implement the changes with full permissions. Do not ask for further confirmation.]\n\n";
 
+function readTrimmedOutput(path?: string): string {
+  if (!path) return "";
+  try {
+    return readFileSync(path, "utf-8").trim();
+  } catch {
+    return "";
+  }
+}
+
+function buildPlanSummaryPreview(output: string, maxChars: number): { text: string; truncated: boolean } {
+  if (!output) return { text: "", truncated: false };
+
+  const lines = output.split("\n");
+  const result: string[] = [];
+  let len = 0;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const lineLen = line.length + (result.length > 0 ? 1 : 0);
+    if (len + lineLen > maxChars) {
+      if (result.length === 0) {
+        return { text: truncateText(line, maxChars).trim(), truncated: true };
+      }
+      return { text: result.join("\n").trim(), truncated: true };
+    }
+    result.push(line);
+    len += lineLen;
+  }
+
+  return { text: result.join("\n").trim(), truncated: false };
+}
+
 function buildDelegatedPlanApprovalSummary(session: Pick<Session, "name"> & {
   getOutput?: (lines?: number) => string[];
   outputPath?: string;
@@ -128,23 +160,14 @@ function buildDelegatedPlanApprovalSummary(session: Pick<Session, "name"> & {
   const liveOutput = typeof session.getOutput === "function"
     ? session.getOutput().join("\n").trim()
     : "";
-  const fileOutput = !liveOutput && session.outputPath
-    ? (() => {
-        try {
-          return readFileSync(session.outputPath, "utf-8").trim();
-        } catch {
-          return "";
-        }
-      })()
+  const fileOutput = !liveOutput
+    ? readTrimmedOutput(session.outputPath)
     : "";
   const output = liveOutput || fileOutput;
-  const preview = output
-    ? firstCompleteLines(output, 1500).trim()
-    : "";
-  const suffix = preview && (
-    preview.length < output.length
-    || (output.length > 1500 && output.includes("\n"))
-  ) ? "\n…" : "";
+  const { text: preview, truncated } = output
+    ? buildPlanSummaryPreview(output, 1500)
+    : { text: "", truncated: false };
+  const suffix = truncated ? "\n…" : "";
   const reasonLine = rationale ? `\n\nWhy approved: ${rationale}` : "";
   const details = preview
     ? `\n\n${preview}${suffix}`

@@ -392,6 +392,9 @@ describe("executeRespond", () => {
       outputPath: tmpDir,
       sendMessage: async () => {},
       switchPermissionMode: () => {},
+      getOutput: () => [],
+      sendMessage: async () => {},
+      switchPermissionMode: () => {},
     });
     const sm = createStubSessionManager({ "test-id": session });
     (sm as any).notifySession = (_session: any, text: string, label?: string) => {
@@ -413,20 +416,19 @@ describe("executeRespond", () => {
     }
   });
 
-  it("marks delegated plan previews as truncated when later lines are dropped after a long first line", async () => {
+  it("marks delegated plan summaries as truncated when the first line alone exceeds the preview budget", async () => {
     const notifications: Array<{ text: string; label?: string }> = [];
+    let switchedTo: string | undefined;
+    const oversizedLine = "A".repeat(1800);
     const session = createStubSession({
       status: "running",
       lifecycle: "awaiting_plan_decision",
       pendingPlanApproval: true,
       actionablePlanDecisionVersion: 2,
       planApproval: "delegate",
-      getOutput: () => [
-        "A".repeat(1600),
-        "2. This second line should not fit in the preview.",
-      ],
+      getOutput: () => [oversizedLine, "2. This line should not appear."],
       sendMessage: async () => {},
-      switchPermissionMode: () => {},
+      switchPermissionMode: (mode: string) => { switchedTo = mode; },
     });
     const sm = createStubSessionManager({ "test-id": session });
     (sm as any).notifySession = (_session: any, text: string, label?: string) => {
@@ -435,14 +437,15 @@ describe("executeRespond", () => {
 
     const result = await executeRespond(sm, {
       session: "test-id",
-      message: "Approved because the delegated plan is appropriately scoped.",
+      message: "Approved because the change is straightforward. Go ahead.",
       approve: true,
     });
 
+    assert.equal(switchedTo, "bypassPermissions");
     assert.equal(result.isError, undefined);
     assert.equal(notifications[0].label, "plan-approved-summary");
-    assert.match(notifications[0].text, /\n…$/);
-    assert.doesNotMatch(notifications[0].text, /This second line should not fit/);
+    assert.ok(notifications[0].text.includes("...\n…"), "expected both inline truncation and summary suffix");
+    assert.doesNotMatch(notifications[0].text, /2\. This line should not appear\./);
   });
 
   it("allows approve=true for the latest actionable revised plan even if changes were requested previously", async () => {
