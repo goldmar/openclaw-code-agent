@@ -88,6 +88,9 @@ export interface HarnessSession {
   /** Resolve an active structured pending-input request via option index. */
   submitPendingInputOption?(index: number): Promise<boolean>;
 
+  /** Resolve an active free-text pending-input request. */
+  submitPendingInputText?(text: string): Promise<boolean>;
+
   /** Interrupt the current turn. */
   interrupt?(): Promise<void>;
 }

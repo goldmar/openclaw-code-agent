@@ -306,6 +306,29 @@ export async function executeRespond(
       }
     }
 
+    const submittedPendingText =
+      !params.approve
+      && session.pendingInputState?.allowsFreeText
+      && await session.submitPendingInputText?.(params.message) === true;
+
+    if (submittedPendingText) {
+      if (params.userInitiated) {
+        const notifyPreview = truncateText(params.message, 100);
+        sm.notifySession(session, `↪️ [${session.name}] "${notifyPreview}"`, "agent-respond");
+      }
+      if (!params.userInitiated) {
+        session.incrementAutoRespond();
+      }
+      const msgSummary = truncateText(params.message, 80);
+      return {
+        text: [
+          `Pending input answered for session ${session.name} [${session.id}].`,
+          `  Message: "${msgSummary}"`,
+          `Use agent_output to see the response.`,
+        ].join("\n"),
+      };
+    }
+
     let redirectedActiveTurn = false;
     if (params.interrupt) {
       redirectedActiveTurn = await session.interrupt();

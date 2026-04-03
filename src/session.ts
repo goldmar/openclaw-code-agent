@@ -607,6 +607,17 @@ export class Session extends EventEmitter {
     return submitted;
   }
 
+  async submitPendingInputText(text: string): Promise<boolean> {
+    if (!this.pendingInputState || !this.harnessHandle?.submitPendingInputText) {
+      return false;
+    }
+    const submitted = await this.harnessHandle.submitPendingInputText(text);
+    if (submitted) {
+      this.waitingForInputFired = false;
+    }
+    return submitted;
+  }
+
   /** Queue a permission mode switch to apply on the next user message. */
   switchPermissionMode(mode: PermissionMode): void {
     this.pendingModeSwitch = mode;

@@ -475,6 +475,10 @@ export class CodexHarness implements AgentHarness {
         return submitPendingInputOption(index);
       },
 
+      async submitPendingInputText(text: string): Promise<boolean> {
+        return submitPendingInputText(text);
+      },
+
       async interrupt(): Promise<void> {
         if (!threadId || !turnId) return;
         await requestWithFallbacks({

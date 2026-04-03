@@ -202,6 +202,45 @@ describe("executeRespond", () => {
     assert.equal(capturedConfig.sessionIdOverride, "dead-plan");
   });
 
+  it("routes free-text replies into a live native pending-input request", async () => {
+    let submittedText: string | undefined;
+    let sendMessageCalled = false;
+    let interruptCalled = false;
+    const session = createStubSession({
+      pendingInputState: {
+        requestId: "req-1",
+        kind: "question",
+        promptText: "What should the renamed skill set optimize first?",
+        options: ["Clarity first", "Short names"],
+        allowsFreeText: true,
+      },
+      submitPendingInputText: async (text: string) => {
+        submittedText = text;
+        return true;
+      },
+      sendMessage: async () => {
+        sendMessageCalled = true;
+      },
+      interrupt: async () => {
+        interruptCalled = true;
+        return true;
+      },
+    });
+    const sm = createStubSessionManager({ "test-id": session });
+
+    const result = await executeRespond(sm, {
+      session: "test-id",
+      message: "Optimize first for accurate names and following best practices.",
+      userInitiated: true,
+      interrupt: true,
+    });
+
+    assert.equal(submittedText, "Optimize first for accurate names and following best practices.");
+    assert.equal(sendMessageCalled, false);
+    assert.equal(interruptCalled, false);
+    assert.match(result.text, /Pending input answered/);
+  });
+
   it("auto-resumes a shutdown-killed pending-plan session when approve=true is sent", async () => {
     const sm = createStubSessionManager();
     sm.persisted.set("harness-plan-shutdown", {

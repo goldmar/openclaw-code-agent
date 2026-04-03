@@ -322,6 +322,47 @@ describe("CodexHarness App Server mapping", () => {
     assert.deepEqual(client.pendingInputResponses[0], { option: "Production", index: 1 });
   });
 
+  it("submits free-text answers into a live pending-input request", async () => {
+    const client = new MockJsonRpcClient({
+      pendingInput: {
+        method: "turn/requestUserInput",
+        params: {
+          threadId: "thread-123",
+          turnId: "turn-1",
+          requestId: "req-1",
+          question: "Need rationale",
+          options: ["Short", "Long"],
+        },
+      },
+    });
+    const harness = new CodexHarness({
+      createClient: () => client as any,
+    });
+    const session = harness.launch({ prompt: "plan it", cwd: "/tmp" });
+    const iter = session.messages[Symbol.asyncIterator]();
+
+    const seen: HarnessMessage[] = [];
+    for (let i = 0; i < 8; i += 1) {
+      const next = await iter.next();
+      if (next.done) break;
+      seen.push(next.value);
+      if (next.value.type === "pending_input") {
+        const submitted = await session.submitPendingInputText?.("Use explicit names");
+        assert.equal(submitted, true);
+      }
+      if (
+        next.value.type === "run_completed"
+        && seen.some((message) => message.type === "pending_input_resolved")
+      ) {
+        break;
+      }
+    }
+
+    const pending = seen.find((message) => message.type === "pending_input") as Extract<HarnessMessage, { type: "pending_input" }> | undefined;
+    assert.equal(pending?.state.promptText, "Need rationale");
+    assert.deepEqual(client.pendingInputResponses[0], { text: "Use explicit names" });
+  });
+
   it("emits finalized plan artifacts from Codex plan notifications", async () => {
     const client = new MockJsonRpcClient({
       finalPlanMarkdown: "1. Update code\n2. Add tests\n\nShould I proceed?",
