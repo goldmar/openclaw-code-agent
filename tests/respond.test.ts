@@ -1,5 +1,8 @@
 import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { SessionManager } from "../src/session-manager";
 import { setPluginConfig } from "../src/config";
 import { registerHarness } from "../src/harness";
@@ -204,6 +207,13 @@ describe("executeRespond", () => {
 
   it("auto-resumes a shutdown-killed pending-plan session when approve=true is sent", async () => {
     const sm = createStubSessionManager();
+    const tmpDir = mkdtempSync(join(tmpdir(), "respond-plan-approval-"));
+    const outputPath = join(tmpDir, "plan-output.txt");
+    writeFileSync(
+      outputPath,
+      "# Restored plan\n\n1. Reopen the suspended session.\n2. Mirror the approved plan summary into the user topic.\n3. Continue in bypassPermissions mode.\n",
+      "utf-8",
+    );
     sm.persisted.set("harness-plan-shutdown", {
       sessionId: "dead-plan-shutdown",
       harnessSessionId: "harness-plan-shutdown",
@@ -216,28 +226,43 @@ describe("executeRespond", () => {
       killReason: "shutdown",
       currentPermissionMode: "plan",
       pendingPlanApproval: true,
+      planApproval: "delegate",
+      outputPath,
       costUsd: 0.05,
       harness: "respond-resume-harness",
     } as any);
     sm.idIndex.set("dead-plan-shutdown", "harness-plan-shutdown");
 
+    const notifications: Array<{ text: string; label?: string }> = [];
     let capturedConfig: any;
     sm.spawn = (config: any) => {
       capturedConfig = config;
       return createStubSession({ name: "plan-session-shutdown", id: "dead-plan-shutdown" });
     };
+    (sm as any).notifySession = (_session: any, text: string, label?: string) => {
+      notifications.push({ text, label });
+    };
 
-    const result = await executeRespond(sm, {
-      session: "dead-plan-shutdown",
-      message: "Approved. Go ahead.",
-      approve: true,
-    });
+    try {
+      const result = await executeRespond(sm, {
+        session: "dead-plan-shutdown",
+        message: "Approved. Go ahead.",
+        approve: true,
+      });
 
-    assert.match(result.text, /Plan approved for session/);
-    assert.equal(capturedConfig.resumeSessionId, "harness-plan-shutdown");
-    assert.equal(capturedConfig.permissionMode, "bypassPermissions");
-    assert.match(capturedConfig.prompt, /The user has approved your plan/i);
-    assert.equal(capturedConfig.sessionIdOverride, "dead-plan-shutdown");
+      assert.match(result.text, /Plan approved for session/);
+      assert.equal(capturedConfig.resumeSessionId, "harness-plan-shutdown");
+      assert.equal(capturedConfig.permissionMode, "bypassPermissions");
+      assert.match(capturedConfig.prompt, /The user has approved your plan/i);
+      assert.equal(capturedConfig.sessionIdOverride, "dead-plan-shutdown");
+      assert.equal(notifications.length, 2);
+      assert.equal(notifications[0].label, "plan-approved-summary");
+      assert.match(notifications[0].text, /Mirror the approved plan summary into the user topic/);
+      assert.equal(notifications[1].label, "plan-approved");
+      assert.equal(notifications[1].text, "👍 [plan-session-shutdown] Plan approved (resumed)");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 
   it("auto-resumes a shutdown-killed pending-plan session for revision feedback too", async () => {

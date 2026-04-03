@@ -1,3 +1,4 @@
+import { existsSync, readFileSync } from "node:fs";
 import type { SessionManager } from "../session-manager";
 import { pluginConfig } from "../config";
 import { firstCompleteLines, truncateText } from "../format";
@@ -122,10 +123,15 @@ const PLAN_APPROVAL_SYSTEM_PREFIX =
 
 function buildDelegatedPlanApprovalSummary(session: Pick<Session, "name"> & {
   getOutput?: (lines?: number) => string[];
+  outputPath?: string;
 }): string {
-  const output = typeof session.getOutput === "function"
+  const liveOutput = typeof session.getOutput === "function"
     ? session.getOutput().join("\n").trim()
     : "";
+  const fileOutput = !liveOutput && session.outputPath && existsSync(session.outputPath)
+    ? readFileSync(session.outputPath, "utf-8").trim()
+    : "";
+  const output = liveOutput || fileOutput;
   const preview = output
     ? firstCompleteLines(output, 1500).trim()
     : "";
@@ -232,6 +238,9 @@ async function tryAutoResume(
     };
     const resumed = await sm.spawnAndAwaitRunning(resumeConfig, { notifyLaunch: false });
     if (isPlanApproval) {
+      if (session.planApproval === "delegate") {
+        sm.notifySession(resumed, buildDelegatedPlanApprovalSummary(session), "plan-approved-summary");
+      }
       sm.notifySession(resumed, `👍 [${resumed.name}] Plan approved (resumed)`, "plan-approved");
       return {
         text: `Plan approved for session ${resumed.name} [${resumed.id}]. Session resumed in bypassPermissions mode. Use agent_output to see the response.`,
