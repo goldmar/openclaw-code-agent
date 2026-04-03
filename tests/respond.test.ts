@@ -425,6 +425,7 @@ describe("executeRespond", () => {
   });
 
   it("allows approve=true for the latest actionable revised plan even if changes were requested previously", async () => {
+
     const session = createStubSession({
       status: "running",
       lifecycle: "awaiting_plan_decision",
