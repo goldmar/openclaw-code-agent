@@ -297,7 +297,7 @@ describe("executeRespond", () => {
       assert.equal(notifications.length, 2);
       assert.equal(notifications[0].label, "plan-approved-summary");
       assert.match(notifications[0].text, /Why approved: Approved because the plan stays in bounds and only touches low-risk files\. Go ahead\./);
-      assert.match(notifications[0].text, /Mirror the approved plan summary into the user topic/);
+      assert.doesNotMatch(notifications[0].text, /Mirror the approved plan summary into the user topic/);
       assert.equal(notifications[1].label, "plan-approved");
       assert.equal(notifications[1].text, "👍 [plan-session-shutdown] Plan approved (resumed)");
     } finally {
@@ -378,7 +378,7 @@ describe("executeRespond", () => {
     assert.match(result.text, /Plan approved for session/);
   });
 
-  it("posts a visible delegated plan summary before the approval marker", async () => {
+  it("posts only the delegated approval rationale before the approval marker", async () => {
     const notifications: Array<{ text: string; label?: string }> = [];
     let switchedTo: string | undefined;
     const session = createStubSession({
@@ -414,12 +414,12 @@ describe("executeRespond", () => {
     assert.equal(notifications[0].label, "plan-approved-summary");
     assert.match(notifications[0].text, /Delegated review approved this plan for implementation/);
     assert.match(notifications[0].text, /Why approved: Approved because the scope matches the request and the change is low risk\. Go ahead\./);
-    assert.match(notifications[0].text, /Inspect the approval delivery path/);
+    assert.doesNotMatch(notifications[0].text, /Inspect the approval delivery path/);
     assert.equal(notifications[1].label, "plan-approved");
     assert.equal(notifications[1].text, "👍 [test-session] Plan approved");
   });
 
-  it("tolerates unreadable delegated plan output fallbacks", async () => {
+  it("does not append delegated plan output fallbacks to approval summaries", async () => {
     const tmpDir = mkdtempSync(join(tmpdir(), "respond-plan-output-dir-"));
     const notifications: Array<{ text: string; label?: string }> = [];
     const session = createStubSession({
@@ -449,13 +449,16 @@ describe("executeRespond", () => {
 
       assert.equal(result.isError, undefined);
       assert.equal(notifications[0].label, "plan-approved-summary");
-      assert.match(notifications[0].text, /\(Plan details were not available in the live session buffer\.\)/);
+      assert.equal(
+        notifications[0].text,
+        "📋 [test-session] Delegated review approved this plan for implementation.\n\nWhy approved: Approved because the delegated plan is appropriately scoped.",
+      );
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }
   });
 
-  it("marks delegated plan summaries as truncated when the first line alone exceeds the preview budget", async () => {
+  it("does not append delegated plan previews even when the underlying plan output is oversized", async () => {
     const notifications: Array<{ text: string; label?: string }> = [];
     let switchedTo: string | undefined;
     const oversizedLine = "A".repeat(1800);
@@ -483,8 +486,10 @@ describe("executeRespond", () => {
     assert.equal(switchedTo, "bypassPermissions");
     assert.equal(result.isError, undefined);
     assert.equal(notifications[0].label, "plan-approved-summary");
-    assert.ok(notifications[0].text.includes("...\n…"), "expected both inline truncation and summary suffix");
-    assert.doesNotMatch(notifications[0].text, /2\. This line should not appear\./);
+    assert.equal(
+      notifications[0].text,
+      "📋 [test-session] Delegated review approved this plan for implementation.\n\nWhy approved: Approved because the change is straightforward. Go ahead.",
+    );
   });
 
   it("allows approve=true for the latest actionable revised plan even if changes were requested previously", async () => {
