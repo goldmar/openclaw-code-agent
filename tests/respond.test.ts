@@ -313,6 +313,46 @@ describe("executeRespond", () => {
     assert.match(result.text, /Plan approved for session/);
   });
 
+  it("posts a visible delegated plan summary before the approval marker", async () => {
+    const notifications: Array<{ text: string; label?: string }> = [];
+    let switchedTo: string | undefined;
+    const session = createStubSession({
+      status: "running",
+      lifecycle: "awaiting_plan_decision",
+      pendingPlanApproval: true,
+      actionablePlanDecisionVersion: 2,
+      planApproval: "delegate",
+      getOutput: () => [
+        "# Implementation plan",
+        "",
+        "1. Inspect the approval delivery path.",
+        "2. Send a concise in-topic summary before implementation starts.",
+        "3. Preserve the existing approval transition into bypassPermissions.",
+      ],
+      sendMessage: async () => {},
+      switchPermissionMode: (mode: string) => { switchedTo = mode; },
+    });
+    const sm = createStubSessionManager({ "test-id": session });
+    (sm as any).notifySession = (_session: any, text: string, label?: string) => {
+      notifications.push({ text, label });
+    };
+
+    const result = await executeRespond(sm, {
+      session: "test-id",
+      message: "Approved. Go ahead.",
+      approve: true,
+    });
+
+    assert.equal(switchedTo, "bypassPermissions");
+    assert.equal(result.isError, undefined);
+    assert.equal(notifications.length, 2);
+    assert.equal(notifications[0].label, "plan-approved-summary");
+    assert.match(notifications[0].text, /Delegated review approved this plan for implementation/);
+    assert.match(notifications[0].text, /Inspect the approval delivery path/);
+    assert.equal(notifications[1].label, "plan-approved");
+    assert.equal(notifications[1].text, "👍 [test-session] Plan approved");
+  });
+
   it("allows approve=true for the latest actionable revised plan even if changes were requested previously", async () => {
     const session = createStubSession({
       status: "running",

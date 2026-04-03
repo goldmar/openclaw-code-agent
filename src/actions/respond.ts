@@ -1,6 +1,6 @@
 import type { SessionManager } from "../session-manager";
 import { pluginConfig } from "../config";
-import { truncateText } from "../format";
+import { firstCompleteLines, truncateText } from "../format";
 import type { Session } from "../session";
 import { getBackendConversationId, getPrimarySessionLookupRef } from "../session-backend-ref";
 import {
@@ -119,6 +119,22 @@ async function spawnFreshRelaunch(
 
 const PLAN_APPROVAL_SYSTEM_PREFIX =
   "[SYSTEM: The user has approved your plan. Exit plan mode immediately and implement the changes with full permissions. Do not ask for further confirmation.]\n\n";
+
+function buildDelegatedPlanApprovalSummary(session: Pick<Session, "name"> & {
+  getOutput?: (lines?: number) => string[];
+}): string {
+  const output = typeof session.getOutput === "function"
+    ? session.getOutput().join("\n").trim()
+    : "";
+  const preview = output
+    ? firstCompleteLines(output, 1500).trim()
+    : "";
+  const suffix = preview && preview.length < output.length ? "\n…" : "";
+  const details = preview
+    ? `\n\n${preview}${suffix}`
+    : "\n\n(Plan details were not available in the live session buffer.)";
+  return `📋 [${session.name}] Delegated review approved this plan for implementation:${details}`;
+}
 
 function approvalBlockedReason(session: PlanApprovalTarget): string | undefined {
   if (session.approvalState === "changes_requested" && !hasLatestActionablePlan(session)) {
@@ -333,6 +349,9 @@ export async function executeRespond(
     // Single notification: plan approval gets a dedicated icon; everything else
     // (including interrupt/redirect) collapses into one ↪️ message with preview.
     if (isPlanApproval) {
+      if (session.planApproval === "delegate") {
+        sm.notifySession(session, buildDelegatedPlanApprovalSummary(session), "plan-approved-summary");
+      }
       sm.notifySession(session, `👍 [${session.name}] Plan approved`, "plan-approved");
     } else if (params.userInitiated) {
       const notifyPreview = truncateText(params.message, 100);
