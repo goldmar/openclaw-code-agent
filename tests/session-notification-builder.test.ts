@@ -31,7 +31,7 @@ describe("session-notification-builder", () => {
     assert.match(payload.wakeMessage, /USER APPROVAL REQUESTED/);
   });
 
-  it("instructs delegated plan reviews to use the buttoned approval prompt", () => {
+  it("instructs delegated plan reviews to use structured approval rationale plus follow-up", () => {
     const payload = buildWaitingForInputPayload({
       session: {
         id: "session-delegate",
@@ -47,7 +47,8 @@ describe("session-notification-builder", () => {
     assert.equal(payload.userMessage, undefined);
     assert.match(payload.wakeMessage, /Review privately/);
     assert.match(payload.wakeMessage, /If you approve directly, you still owe the user a concise rationale/);
-    assert.match(payload.wakeMessage, /agent_respond\(session='session-delegate', message='Approved because <brief reason>\. Go ahead\.', approve=true\)/);
+    assert.match(payload.wakeMessage, /agent_respond\(session='session-delegate', message='Approved\. Go ahead\.', approve=true, approval_rationale='<brief reason>'\)/);
+    assert.match(payload.wakeMessage, /Do not rely on the plugin's fallback thumbs-up line as the full explanation/i);
     assert.match(payload.wakeMessage, /agent_request_plan_approval\(session='session-delegate'/);
     assert.match(payload.wakeMessage, /must concisely explain why this was escalated/i);
     assert.match(payload.wakeMessage, /do NOT send a second plain-text recap/i);

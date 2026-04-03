@@ -404,6 +404,7 @@ export function normalizePersistedEntry(raw: unknown): PersistedSessionInfo | un
     requestedPermissionMode: toOptionalPermissionMode(raw.requestedPermissionMode),
     currentPermissionMode: toOptionalPermissionMode(raw.currentPermissionMode),
     approvalExecutionState: toOptionalApprovalExecutionState(raw.approvalExecutionState),
+    approvalRationale: toOptionalString(raw.approvalRationale),
     planModeApproved: raw.planModeApproved === true,
     pendingPlanApproval: raw.pendingPlanApproval === true,
     planApprovalContext: toOptionalPlanApprovalContext(raw.planApprovalContext),

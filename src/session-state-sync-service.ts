@@ -106,6 +106,7 @@ export class SessionStateSyncService {
       if (patch.approvalPromptDeliveredAt !== undefined) session.approvalPromptDeliveredAt = patch.approvalPromptDeliveredAt;
       if (patch.approvalPromptFailedAt !== undefined) session.approvalPromptFailedAt = patch.approvalPromptFailedAt;
     }
+    if (patch.approvalRationale !== undefined) session.approvalRationale = patch.approvalRationale;
     if (patch.worktreePath !== undefined) session.worktreePath = patch.worktreePath;
     if (patch.worktreeBranch !== undefined) session.worktreeBranch = patch.worktreeBranch;
     if (patch.worktreePrUrl !== undefined) session.worktreePrUrl = patch.worktreePrUrl;
