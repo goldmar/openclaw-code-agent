@@ -115,4 +115,44 @@ describe("WakeDeliveryExecutor", () => {
     assert.equal(firstAttempts, 1);
     assert.equal(secondDispatchRuns, 0);
   });
+
+  it("clears pending non-ordered retries without throwing during dispose", async () => {
+    const executor = new WakeDeliveryExecutor();
+    const scheduledTimers: Array<{ cleared: boolean; unref?: () => void }> = [];
+    let attempts = 0;
+
+    global.setTimeout = (((fn: (...args: any[]) => void, _delay?: number) => {
+      const timer = {
+        cleared: false,
+        unref: () => timer,
+      };
+      scheduledTimers.push(timer);
+      return timer as any;
+    }) as typeof setTimeout);
+    global.clearTimeout = (((timer: { cleared?: boolean }) => {
+      if (timer) timer.cleared = true;
+    }) as typeof clearTimeout);
+
+    executor.executePromise(
+      () => {
+        attempts += 1;
+        return Promise.reject(new Error("retry once"));
+      },
+      {
+        label: "wake-retry",
+        sessionId: "session-wake-dispose",
+        target: "message.send",
+        phase: "wake",
+        routeSummary: "telegram|bot|12345",
+        messageKind: "wake",
+      },
+    );
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    assert.equal(attempts, 1);
+    assert.ok(scheduledTimers.length > 0, "expected a non-ordered dispatch retry to be scheduled");
+    assert.doesNotThrow(() => executor.dispose());
+  });
 });

@@ -31,7 +31,7 @@ function createDispatchTimeoutError(): Error {
 
 type RetryTimerEntry = {
   timer: ReturnType<typeof setTimeout>;
-  onCleared: () => void;
+  onCleared?: () => void;
 };
 
 export class WakeDeliveryExecutor {
@@ -43,7 +43,7 @@ export class WakeDeliveryExecutor {
     for (const entries of this.pendingRetryTimers.values()) {
       for (const entry of entries) {
         clearTimeout(entry.timer);
-        entry.onCleared();
+        entry.onCleared?.();
       }
     }
     this.pendingRetryTimers.clear();
@@ -54,7 +54,7 @@ export class WakeDeliveryExecutor {
     if (!entries) return;
     for (const entry of entries) {
       clearTimeout(entry.timer);
-      entry.onCleared();
+      entry.onCleared?.();
     }
     this.pendingRetryTimers.delete(sessionId);
   }
