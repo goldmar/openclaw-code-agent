@@ -49,4 +49,70 @@ describe("WakeDeliveryExecutor", () => {
     assert.equal(finalFailureCount, 1);
     assert.ok(errors.some((line) => line.includes("Dispatch timed out after 30000ms")));
   });
+
+  it("does not start queued ordered dispatches after dispose clears a pending retry", async () => {
+    const executor = new WakeDeliveryExecutor();
+    const scheduledTimers: Array<{ cleared: boolean; unref?: () => void }> = [];
+    let firstAttempts = 0;
+    let secondDispatchRuns = 0;
+
+    global.setTimeout = (((fn: (...args: any[]) => void, _delay?: number) => {
+      const timer = {
+        cleared: false,
+        unref: () => timer,
+      };
+      scheduledTimers.push(timer);
+      return timer as any;
+    }) as typeof setTimeout);
+    global.clearTimeout = (((timer: { cleared?: boolean }) => {
+      if (timer) timer.cleared = true;
+    }) as typeof clearTimeout);
+
+    executor.executePromise(
+      () => {
+        firstAttempts += 1;
+        if (firstAttempts === 1) {
+          return Promise.reject(new Error("retry once"));
+        }
+        return Promise.resolve();
+      },
+      {
+        label: "first",
+        sessionId: "session-ordered-dispose",
+        target: "discord.components",
+        phase: "notify",
+        routeSummary: "discord|channel:123",
+        messageKind: "notify",
+        orderingKey: "notify:discord|channel:123",
+      },
+    );
+
+    executor.executePromise(
+      () => {
+        secondDispatchRuns += 1;
+        return Promise.resolve();
+      },
+      {
+        label: "second",
+        sessionId: "session-ordered-dispose",
+        target: "discord.components",
+        phase: "notify",
+        routeSummary: "discord|channel:123",
+        messageKind: "notify",
+        orderingKey: "notify:discord|channel:123",
+      },
+    );
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    executor.dispose();
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    assert.ok(scheduledTimers.length > 0, "expected the first dispatch to schedule a retry");
+    assert.equal(firstAttempts, 1);
+    assert.equal(secondDispatchRuns, 0);
+  });
 });

@@ -31,18 +31,19 @@ function createDispatchTimeoutError(): Error {
 
 type RetryTimerEntry = {
   timer: ReturnType<typeof setTimeout>;
-  onCleared?: () => void;
+  onCleared: () => void;
 };
 
 export class WakeDeliveryExecutor {
   private pendingRetryTimers: Map<string, Set<RetryTimerEntry>> = new Map();
   private orderedDispatchTails: Map<string, Promise<void>> = new Map();
+  private disposed = false;
 
   clearPendingRetries(): void {
     for (const entries of this.pendingRetryTimers.values()) {
       for (const entry of entries) {
         clearTimeout(entry.timer);
-        entry.onCleared?.();
+        entry.onCleared();
       }
     }
     this.pendingRetryTimers.clear();
@@ -53,17 +54,19 @@ export class WakeDeliveryExecutor {
     if (!entries) return;
     for (const entry of entries) {
       clearTimeout(entry.timer);
-      entry.onCleared?.();
+      entry.onCleared();
     }
     this.pendingRetryTimers.delete(sessionId);
   }
 
   dispose(): void {
+    this.disposed = true;
     this.clearPendingRetries();
     this.orderedDispatchTails.clear();
   }
 
   execute(args: string[], opts: ExecuteOptions, attempt: number = 1): void {
+    if (this.disposed) return;
     if (attempt === 1 && opts.orderingKey) {
       this.enqueueOrderedDispatch(opts.orderingKey, (onSettled) => this.executeNow(args, opts, onSettled, attempt));
       return;
@@ -72,6 +75,7 @@ export class WakeDeliveryExecutor {
   }
 
   executePromise(task: () => Promise<void>, opts: ExecuteOptions, attempt: number = 1): void {
+    if (this.disposed) return;
     if (attempt === 1 && opts.orderingKey) {
       this.enqueueOrderedDispatch(opts.orderingKey, (onSettled) => this.executePromiseNow(task, opts, onSettled, attempt));
       return;
@@ -85,6 +89,10 @@ export class WakeDeliveryExecutor {
     onSettled?: () => void,
     attempt: number = 1,
   ): void {
+    if (this.disposed) {
+      onSettled?.();
+      return;
+    }
     const startedAt = Date.now();
     if (attempt === 1) opts.onStarted?.();
     this.log("info", "dispatch_started", {
@@ -99,6 +107,10 @@ export class WakeDeliveryExecutor {
     });
 
     execFile("openclaw", args, { timeout: WAKE_CLI_TIMEOUT_MS }, (err, _stdout, stderr) => {
+      if (this.disposed) {
+        onSettled?.();
+        return;
+      }
       const elapsedMs = Date.now() - startedAt;
       if (!err) {
         this.log("info", "dispatch_succeeded", {
@@ -176,6 +188,10 @@ export class WakeDeliveryExecutor {
     onSettled?: () => void,
     attempt: number = 1,
   ): void {
+    if (this.disposed) {
+      onSettled?.();
+      return;
+    }
     const startedAt = Date.now();
     if (attempt === 1) opts.onStarted?.();
     this.log("info", "dispatch_started", {
@@ -191,6 +207,10 @@ export class WakeDeliveryExecutor {
 
     this.executePromiseWithTimeout(task)
       .then(() => {
+        if (this.disposed) {
+          onSettled?.();
+          return;
+        }
         const elapsedMs = Date.now() - startedAt;
         this.log("info", "dispatch_succeeded", {
           label: opts.label,
@@ -207,6 +227,10 @@ export class WakeDeliveryExecutor {
         onSettled?.();
       })
       .catch((err) => {
+        if (this.disposed) {
+          onSettled?.();
+          return;
+        }
         const elapsedMs = Date.now() - startedAt;
         if (attempt >= WAKE_MAX_ATTEMPTS) {
           this.log("error", "dispatch_failed", {
@@ -297,9 +321,16 @@ export class WakeDeliveryExecutor {
     const previous = this.orderedDispatchTails.get(orderingKey) ?? Promise.resolve();
     const next = previous
       .catch(() => {})
-      .then(async () => {
-        await new Promise<void>((resolve) => {
-          task(resolve);
+      .then(() => {
+        if (this.disposed) return;
+        return new Promise<void>((resolve) => {
+          let settled = false;
+          const onSettled = () => {
+            if (settled) return;
+            settled = true;
+            resolve();
+          };
+          task(onSettled);
         });
       });
     this.orderedDispatchTails.set(orderingKey, next);
