@@ -18,6 +18,7 @@ interface RespondParams {
   interrupt?: boolean;
   userInitiated?: boolean;
   approve?: boolean;
+  approvalRationale?: string;
 }
 
 interface RespondResult {
@@ -120,20 +121,9 @@ async function spawnFreshRelaunch(
 const PLAN_APPROVAL_SYSTEM_PREFIX =
   "[SYSTEM: The user has approved your plan. Exit plan mode immediately and implement the changes with full permissions. Do not ask for further confirmation.]\n\n";
 
-function buildDelegatedPlanApprovalSummary(session: Pick<Session, "name"> & {
-  getOutput?: (lines?: number) => string[];
-  outputPath?: string;
-}, rationale?: string): string {
-  const reasonLine = rationale ? `\n\nWhy approved: ${rationale}` : "";
-  return `📋 [${session.name}] Delegated review approved this plan for implementation.${reasonLine}`;
-}
-
-function extractDelegatedApprovalRationale(message: string): string | undefined {
-  const normalized = message.replace(/\s+/g, " ").trim();
+function normalizeApprovalRationale(rationale?: string): string | undefined {
+  const normalized = rationale?.replace(/\s+/g, " ").trim();
   if (!normalized) return undefined;
-  if (/^approved(?:\.)?(?:\s+go ahead\.?)?$/i.test(normalized)) return undefined;
-  if (/^approve(?:\.)?$/i.test(normalized)) return undefined;
-  if (/^yes(?:,)?\s+go ahead\.?$/i.test(normalized)) return undefined;
   return truncateText(normalized, 240);
 }
 
@@ -164,7 +154,7 @@ async function tryAutoResume(
   sm: SessionManager,
   session: ResumableSession,
   message: string,
-  options: { approve?: boolean } = {},
+  options: { approve?: boolean; approvalRationale?: string } = {},
 ): Promise<RespondResult | undefined> {
   const assessment = assessResumeCandidate(session);
   const resumable = assessment.kind === "resume" || canAutoResumeStoppedPlanDecision(session);
@@ -176,7 +166,7 @@ async function tryAutoResume(
   // inherit permissionMode="plan", the first turn-end would re-set
   // pendingPlanApproval=true, and Alice would be asked to approve a second time.
   const isPlanApproval = !!(options.approve && canAutoResumePlanApproval(session));
-  const approvalRationale = isPlanApproval ? extractDelegatedApprovalRationale(message) : undefined;
+  const approvalRationale = isPlanApproval ? normalizeApprovalRationale(options.approvalRationale) : undefined;
 
   try {
     if (assessment.kind !== "resume") {
@@ -227,6 +217,7 @@ async function tryAutoResume(
         ? {
             approvalState: "approved" as const,
             approvalExecutionState: "approved_then_implemented" as const,
+            approvalRationale,
             planModeApproved: true,
           }
         : {}),
@@ -234,9 +225,6 @@ async function tryAutoResume(
     };
     const resumed = await sm.spawnAndAwaitRunning(resumeConfig, { notifyLaunch: false });
     if (isPlanApproval) {
-      if (session.planApproval === "delegate") {
-        sm.notifySession(resumed, buildDelegatedPlanApprovalSummary(session, approvalRationale), "plan-approved-summary");
-      }
       sm.notifySession(resumed, `👍 [${resumed.name}] Plan approved (resumed)`, "plan-approved");
       return {
         text: `Plan approved for session ${resumed.name} [${resumed.id}]. Session resumed in bypassPermissions mode. Use agent_output to see the response.`,
@@ -277,7 +265,10 @@ export async function executeRespond(
   }
 
   if (resumeAssessment.kind === "resume" || canAutoResumeStoppedPlanDecision(target)) {
-    const autoResumeResult = await tryAutoResume(sm, target, params.message, { approve: params.approve });
+    const autoResumeResult = await tryAutoResume(sm, target, params.message, {
+      approve: params.approve,
+      approvalRationale: params.approvalRationale,
+    });
     if (autoResumeResult) {
       return autoResumeResult;
     }
@@ -357,10 +348,11 @@ export async function executeRespond(
 
     // Permission escalation — explicit approve flag
     const isPlanApproval = !!(params.approve && hasLatestActionablePlan(session));
-    const approvalRationale = isPlanApproval ? extractDelegatedApprovalRationale(params.message) : undefined;
+    const approvalRationale = isPlanApproval ? normalizeApprovalRationale(params.approvalRationale) : undefined;
     let approvalWarning = "";
     if (params.approve && hasLatestActionablePlan(session)) {
       session.switchPermissionMode("bypassPermissions");
+      session.approvalRationale = approvalRationale;
     } else if (params.approve && session.currentPermissionMode === "default") {
       // Non-plan mode escalation — switch to bypassPermissions
       session.switchPermissionMode("bypassPermissions");
@@ -378,9 +370,6 @@ export async function executeRespond(
     // Single notification: plan approval gets a dedicated icon; everything else
     // (including interrupt/redirect) collapses into one ↪️ message with preview.
     if (isPlanApproval) {
-      if (session.planApproval === "delegate") {
-        sm.notifySession(session, buildDelegatedPlanApprovalSummary(session, approvalRationale), "plan-approved-summary");
-      }
       sm.notifySession(session, `👍 [${session.name}] Plan approved`, "plan-approved");
     } else if (params.userInitiated) {
       const notifyPreview = truncateText(params.message, 100);

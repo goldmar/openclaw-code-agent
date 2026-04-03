@@ -131,7 +131,8 @@ Use `permission_mode: "plan"` whenever the user wants a real planning checkpoint
 - This is wake-first: the plugin wakes the orchestrator without user buttons.
 - Before deciding, read the full plan with `agent_output(session, full=true)`; do not rely on the truncated preview.
 - Approve directly with `agent_respond(..., approve=true)` only when the latest actionable plan version is clearly in-bounds and low risk.
-- When approving directly, include a brief reason in the approval message, for example: `Approved because the scope matches the request and the changes are low risk. Go ahead.`
+- When approving directly, pass a structured rationale with `approval_rationale`, for example: `agent_respond(session='...', message='Approved. Go ahead.', approve=true, approval_rationale='Scope matches the request and the changes are low risk.')`
+- After approving directly, send the user a short plain-text follow-up explaining what was approved and why. The plugin's `👍 Plan approved` line is only a fallback signal, not the full explanation.
 - If a prior version had `changes_requested`, that stale state should not block approval of the latest revised plan version.
 - If escalation is needed, call `agent_request_plan_approval(session='...', summary='...')` exactly once so the plugin sends the single canonical user approval prompt.
 - That escalation summary must concisely explain why you are escalating, plus risk/scope notes the user needs to decide.

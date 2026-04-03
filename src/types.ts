@@ -274,6 +274,7 @@ export interface SessionConfig {
   planApproval?: PlanApprovalMode;
   codexApprovalPolicy?: CodexApprovalPolicy;
   approvalExecutionState?: ApprovalExecutionState;
+  approvalRationale?: string;
   planModeApproved?: boolean;
   approvalState?: SessionApprovalState;
   pendingPlanApproval?: boolean;
@@ -394,6 +395,7 @@ export interface PersistedSessionInfo {
   requestedPermissionMode?: PermissionMode;
   currentPermissionMode?: PermissionMode;
   approvalExecutionState?: ApprovalExecutionState;
+  approvalRationale?: string;
   planModeApproved?: boolean;
   pendingPlanApproval?: boolean;
   planApprovalContext?: PlanApprovalContext;

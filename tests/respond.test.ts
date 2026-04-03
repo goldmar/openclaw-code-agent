@@ -1,8 +1,5 @@
 import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { SessionManager } from "../src/session-manager";
 import { setPluginConfig } from "../src/config";
 import { registerHarness } from "../src/harness";
@@ -246,13 +243,6 @@ describe("executeRespond", () => {
 
   it("auto-resumes a shutdown-killed pending-plan session when approve=true is sent", async () => {
     const sm = createStubSessionManager();
-    const tmpDir = mkdtempSync(join(tmpdir(), "respond-plan-approval-"));
-    const outputPath = join(tmpDir, "plan-output.txt");
-    writeFileSync(
-      outputPath,
-      "# Restored plan\n\n1. Reopen the suspended session.\n2. Mirror the approved plan summary into the user topic.\n3. Continue in bypassPermissions mode.\n",
-      "utf-8",
-    );
     sm.persisted.set("harness-plan-shutdown", {
       sessionId: "dead-plan-shutdown",
       harnessSessionId: "harness-plan-shutdown",
@@ -266,7 +256,6 @@ describe("executeRespond", () => {
       currentPermissionMode: "plan",
       pendingPlanApproval: true,
       planApproval: "delegate",
-      outputPath,
       costUsd: 0.05,
       harness: "respond-resume-harness",
     } as any);
@@ -282,27 +271,22 @@ describe("executeRespond", () => {
       notifications.push({ text, label });
     };
 
-    try {
-      const result = await executeRespond(sm, {
-        session: "dead-plan-shutdown",
-        message: "Approved because the plan stays in bounds and only touches low-risk files. Go ahead.",
-        approve: true,
-      });
+    const result = await executeRespond(sm, {
+      session: "dead-plan-shutdown",
+      message: "Approved. Go ahead.",
+      approve: true,
+      approvalRationale: "The plan stays in bounds and only touches low-risk files.",
+    });
 
-      assert.match(result.text, /Plan approved for session/);
-      assert.equal(capturedConfig.resumeSessionId, "harness-plan-shutdown");
-      assert.equal(capturedConfig.permissionMode, "bypassPermissions");
-      assert.match(capturedConfig.prompt, /The user has approved your plan/i);
-      assert.equal(capturedConfig.sessionIdOverride, "dead-plan-shutdown");
-      assert.equal(notifications.length, 2);
-      assert.equal(notifications[0].label, "plan-approved-summary");
-      assert.match(notifications[0].text, /Why approved: Approved because the plan stays in bounds and only touches low-risk files\. Go ahead\./);
-      assert.doesNotMatch(notifications[0].text, /Mirror the approved plan summary into the user topic/);
-      assert.equal(notifications[1].label, "plan-approved");
-      assert.equal(notifications[1].text, "👍 [plan-session-shutdown] Plan approved (resumed)");
-    } finally {
-      rmSync(tmpDir, { recursive: true, force: true });
-    }
+    assert.match(result.text, /Plan approved for session/);
+    assert.equal(capturedConfig.resumeSessionId, "harness-plan-shutdown");
+    assert.equal(capturedConfig.permissionMode, "bypassPermissions");
+    assert.match(capturedConfig.prompt, /The user has approved your plan/i);
+    assert.equal(capturedConfig.sessionIdOverride, "dead-plan-shutdown");
+    assert.equal(capturedConfig.approvalRationale, "The plan stays in bounds and only touches low-risk files.");
+    assert.equal(notifications.length, 1);
+    assert.equal(notifications[0].label, "plan-approved");
+    assert.equal(notifications[0].text, "👍 [plan-session-shutdown] Plan approved (resumed)");
   });
 
   it("auto-resumes a shutdown-killed pending-plan session for revision feedback too", async () => {
@@ -369,16 +353,18 @@ describe("executeRespond", () => {
 
     const result = await executeRespond(sm, {
       session: "test-id",
-      message: "Approved because the scope matches the request and the change is low risk. Go ahead.",
+      message: "Approved. Go ahead.",
       approve: true,
+      approvalRationale: "The scope matches the request and the change is low risk.",
     });
 
     assert.equal(switchedTo, "bypassPermissions");
     assert.equal(result.isError, undefined);
     assert.match(result.text, /Plan approved for session/);
+    assert.equal(session.approvalRationale, "The scope matches the request and the change is low risk.");
   });
 
-  it("posts only the delegated approval rationale before the approval marker", async () => {
+  it("keeps only the delegated approval thumbs-up fallback for active sessions", async () => {
     const notifications: Array<{ text: string; label?: string }> = [];
     let switchedTo: string | undefined;
     const session = createStubSession({
@@ -387,13 +373,6 @@ describe("executeRespond", () => {
       pendingPlanApproval: true,
       actionablePlanDecisionVersion: 2,
       planApproval: "delegate",
-      getOutput: () => [
-        "# Implementation plan",
-        "",
-        "1. Inspect the approval delivery path.",
-        "2. Send a concise in-topic summary before implementation starts.",
-        "3. Preserve the existing approval transition into bypassPermissions.",
-      ],
       sendMessage: async () => {},
       switchPermissionMode: (mode: string) => { switchedTo = mode; },
     });
@@ -404,23 +383,20 @@ describe("executeRespond", () => {
 
     const result = await executeRespond(sm, {
       session: "test-id",
-      message: "Approved because the scope matches the request and the change is low risk. Go ahead.",
+      message: "Approved. Go ahead.",
       approve: true,
+      approvalRationale: "The scope matches the request and the change is low risk.",
     });
 
     assert.equal(switchedTo, "bypassPermissions");
     assert.equal(result.isError, undefined);
-    assert.equal(notifications.length, 2);
-    assert.equal(notifications[0].label, "plan-approved-summary");
-    assert.match(notifications[0].text, /Delegated review approved this plan for implementation/);
-    assert.match(notifications[0].text, /Why approved: Approved because the scope matches the request and the change is low risk\. Go ahead\./);
-    assert.doesNotMatch(notifications[0].text, /Inspect the approval delivery path/);
-    assert.equal(notifications[1].label, "plan-approved");
-    assert.equal(notifications[1].text, "👍 [test-session] Plan approved");
+    assert.equal(session.approvalRationale, "The scope matches the request and the change is low risk.");
+    assert.equal(notifications.length, 1);
+    assert.equal(notifications[0].label, "plan-approved");
+    assert.equal(notifications[0].text, "👍 [test-session] Plan approved");
   });
 
-  it("does not append delegated plan output fallbacks to approval summaries", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "respond-plan-output-dir-"));
+  it("does not infer delegated approval rationale from arbitrary message text", async () => {
     const notifications: Array<{ text: string; label?: string }> = [];
     const session = createStubSession({
       status: "running",
@@ -428,49 +404,8 @@ describe("executeRespond", () => {
       pendingPlanApproval: true,
       actionablePlanDecisionVersion: 2,
       planApproval: "delegate",
-      outputPath: tmpDir,
       sendMessage: async () => {},
       switchPermissionMode: () => {},
-      getOutput: () => [],
-      sendMessage: async () => {},
-      switchPermissionMode: () => {},
-    });
-    const sm = createStubSessionManager({ "test-id": session });
-    (sm as any).notifySession = (_session: any, text: string, label?: string) => {
-      notifications.push({ text, label });
-    };
-
-    try {
-      const result = await executeRespond(sm, {
-        session: "test-id",
-        message: "Approved because the delegated plan is appropriately scoped.",
-        approve: true,
-      });
-
-      assert.equal(result.isError, undefined);
-      assert.equal(notifications[0].label, "plan-approved-summary");
-      assert.equal(
-        notifications[0].text,
-        "📋 [test-session] Delegated review approved this plan for implementation.\n\nWhy approved: Approved because the delegated plan is appropriately scoped.",
-      );
-    } finally {
-      rmSync(tmpDir, { recursive: true, force: true });
-    }
-  });
-
-  it("does not append delegated plan previews even when the underlying plan output is oversized", async () => {
-    const notifications: Array<{ text: string; label?: string }> = [];
-    let switchedTo: string | undefined;
-    const oversizedLine = "A".repeat(1800);
-    const session = createStubSession({
-      status: "running",
-      lifecycle: "awaiting_plan_decision",
-      pendingPlanApproval: true,
-      actionablePlanDecisionVersion: 2,
-      planApproval: "delegate",
-      getOutput: () => [oversizedLine, "2. This line should not appear."],
-      sendMessage: async () => {},
-      switchPermissionMode: (mode: string) => { switchedTo = mode; },
     });
     const sm = createStubSessionManager({ "test-id": session });
     (sm as any).notifySession = (_session: any, text: string, label?: string) => {
@@ -483,13 +418,10 @@ describe("executeRespond", () => {
       approve: true,
     });
 
-    assert.equal(switchedTo, "bypassPermissions");
     assert.equal(result.isError, undefined);
-    assert.equal(notifications[0].label, "plan-approved-summary");
-    assert.equal(
-      notifications[0].text,
-      "📋 [test-session] Delegated review approved this plan for implementation.\n\nWhy approved: Approved because the change is straightforward. Go ahead.",
-    );
+    assert.equal(session.approvalRationale, undefined);
+    assert.equal(notifications.length, 1);
+    assert.equal(notifications[0].label, "plan-approved");
   });
 
   it("allows approve=true for the latest actionable revised plan even if changes were requested previously", async () => {

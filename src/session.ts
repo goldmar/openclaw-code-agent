@@ -168,6 +168,7 @@ export class Session extends EventEmitter {
   lifecycle: SessionLifecycle = "starting";
   approvalState: SessionApprovalState = "not_required";
   approvalExecutionState: ApprovalExecutionState = "not_plan_gated";
+  approvalRationale?: string;
   runtimeState: SessionRuntimeState = "live";
   deliveryState: SessionDeliveryState = "idle";
 
@@ -307,6 +308,7 @@ export class Session extends EventEmitter {
       config.planModeApproved !== undefined
       || config.approvalState !== undefined
       || config.approvalExecutionState !== undefined
+      || config.approvalRationale !== undefined
       || config.pendingPlanApproval !== undefined
       || config.planApprovalContext !== undefined
       || config.planDecisionVersion !== undefined
@@ -340,6 +342,7 @@ export class Session extends EventEmitter {
         ...(config.approvalPromptFailedAt !== undefined ? { approvalPromptFailedAt: config.approvalPromptFailedAt } : {}),
       });
     }
+    this.approvalRationale = config.approvalRationale;
   }
 
   get status(): SessionStatus { return this._status; }
@@ -440,6 +443,7 @@ export class Session extends EventEmitter {
   }
 
   private markPendingPlanApproval(context: PlanApprovalContext): void {
+    this.approvalRationale = undefined;
     this.applyControlEvent({ type: "plan.requested", context });
   }
 

@@ -9,12 +9,15 @@ interface AgentRespondParams {
   interrupt?: boolean;
   userInitiated?: boolean;
   approve?: boolean;
+  approval_rationale?: string;
 }
 
 function isAgentRespondParams(value: unknown): value is AgentRespondParams {
   if (!value || typeof value !== "object") return false;
   const params = value as Record<string, unknown>;
-  return typeof params.session === "string" && typeof params.message === "string";
+  return typeof params.session === "string"
+    && typeof params.message === "string"
+    && (params.approval_rationale === undefined || typeof params.approval_rationale === "string");
 }
 
 /** Create `agent_respond` tool definition. */
@@ -35,16 +38,26 @@ export function makeAgentRespondTool(_ctx?: OpenClawPluginToolContext) {
       approve: Type.Optional(
         Type.Boolean({ description: "Set to true to escalate session permissions to bypassPermissions. Works in two scenarios: (1) approve a pending plan in plan mode, or (2) escalate a default-mode session to skip remaining OpenClaw approval checkpoints. No-op if already in bypassPermissions mode. In plan mode without a pending plan, this flag is ignored." }),
       ),
+      approval_rationale: Type.Optional(
+        Type.String({ description: "Optional structured rationale for a direct delegated plan approval. Use this instead of embedding the rationale in message text when approve=true for a pending plan." }),
+      ),
     }),
     async execute(_id: string, params: unknown) {
       if (!sessionManager) {
         return { content: [{ type: "text", text: "Error: SessionManager not initialized. The code-agent service must be running." }] };
       }
       if (!isAgentRespondParams(params)) {
-        return { content: [{ type: "text", text: "Error: Invalid parameters. Expected { session, message, interrupt?, userInitiated?, approve? }." }] };
+        return { content: [{ type: "text", text: "Error: Invalid parameters. Expected { session, message, interrupt?, userInitiated?, approve?, approval_rationale? }." }] };
       }
 
-      const result = await executeRespond(sessionManager, params);
+      const result = await executeRespond(sessionManager, {
+        session: params.session,
+        message: params.message,
+        interrupt: params.interrupt,
+        userInitiated: params.userInitiated,
+        approve: params.approve,
+        approvalRationale: params.approval_rationale,
+      });
 
       return {
         isError: result.isError ?? false,
