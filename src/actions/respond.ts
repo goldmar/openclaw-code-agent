@@ -309,7 +309,7 @@ export async function executeRespond(
     const submittedPendingText =
       !params.approve
       && session.pendingInputState?.allowsFreeText
-      && await session.submitPendingInputText?.(params.message) === true;
+      && (await session.submitPendingInputText?.(params.message)) === true;
 
     if (submittedPendingText) {
       if (params.userInitiated) {
