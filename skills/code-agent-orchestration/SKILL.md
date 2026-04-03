@@ -87,8 +87,14 @@ Approval/execution meanings:
 Completion ownership:
 
 - The plugin sends the canonical completion notification.
-- The orchestrator should only add user-facing follow-up when there is real extra value: synthesis, risk framing, or concrete next steps.
-- Do not generate your own heuristic completion summary from transcript tail lines.
+- The plugin owns the canonical completion status line; the orchestrator owns any additional plain-text follow-up.
+- After a coding-agent session completes, the orchestrator should usually add at least a short human-useful summary of what changed, what was done, or the concrete outcome.
+- That summary can be brief; one sentence is often enough.
+- Extra synthesis, risk framing, and next-step guidance are optional. Add them when useful; do not force them every time.
+- Do not generate your own heuristic completion summary from transcript tail lines. Base any summary on reliable result data such as `agent_output(..., full=true)`, diff context, or deterministic tool state.
+- Skip the summary only in narrow cases:
+  - no user-facing follow-up will be sent at all because the orchestrator is silently continuing an internal multi-phase pipeline
+  - the completion produced no meaningful outcome to report, or the reliable result data is still too incomplete to support even a short factual summary
 
 ## Respond Rules
 
@@ -164,7 +170,7 @@ If `agent_worktree_status` reports `released`, treat that sandbox as already lan
 - Read the diff context and decide whether a local merge is clearly safe.
 - `agent_merge` is acceptable for low-risk, clearly scoped changes that match the task.
 - Never call `agent_pr()` autonomously in delegate flows. Escalate PR decisions to the user.
-- If the wake already says the plugin sent the canonical completion notification, only add user-facing follow-up when you have real extra value.
+- If the wake already says the plugin sent the canonical completion notification, do not repeat that status line, but you should still usually add a short summary of the completed outcome.
 
 ### `manual`
 

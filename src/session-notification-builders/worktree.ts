@@ -108,7 +108,9 @@ export function buildNoChangeWakeMessage(args: {
     `1. Use agent_output(session='${sessionId}', full=true) to read the full result.`,
     `2. If this is part of a multi-phase pipeline, launch the next phase NOW — do not wait for user input.`,
     `3. The plugin already sent the canonical completion notification to the user, including that no repo changes were kept.`,
-    `4. Do NOT send a duplicate plain-text recap unless you need real synthesis, a concrete risk callout, or next-step guidance beyond that canonical message.`,
+    `4. Do NOT repeat the plugin's completion status line, but you should usually send a short plain-text summary of what was done or the concrete outcome after reading the full result.`,
+    `5. Keep that summary concise; one sentence is often enough. Extra synthesis, risk framing, or next steps are optional when they add value.`,
+    `6. Skip the summary only when you are not sending any user-facing follow-up at all because you are silently continuing an internal pipeline, or when reliable result data is still too incomplete to support a factual summary.`,
   ].join("\n");
 }
 
