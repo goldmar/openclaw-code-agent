@@ -246,7 +246,7 @@ describe("executeRespond", () => {
     try {
       const result = await executeRespond(sm, {
         session: "dead-plan-shutdown",
-        message: "Approved. Go ahead.",
+        message: "Approved because the plan stays in bounds and only touches low-risk files. Go ahead.",
         approve: true,
       });
 
@@ -257,6 +257,7 @@ describe("executeRespond", () => {
       assert.equal(capturedConfig.sessionIdOverride, "dead-plan-shutdown");
       assert.equal(notifications.length, 2);
       assert.equal(notifications[0].label, "plan-approved-summary");
+      assert.match(notifications[0].text, /Why approved: Approved because the plan stays in bounds and only touches low-risk files\. Go ahead\./);
       assert.match(notifications[0].text, /Mirror the approved plan summary into the user topic/);
       assert.equal(notifications[1].label, "plan-approved");
       assert.equal(notifications[1].text, "👍 [plan-session-shutdown] Plan approved (resumed)");
@@ -329,7 +330,7 @@ describe("executeRespond", () => {
 
     const result = await executeRespond(sm, {
       session: "test-id",
-      message: "Approved. Go ahead.",
+      message: "Approved because the scope matches the request and the change is low risk. Go ahead.",
       approve: true,
     });
 
@@ -364,7 +365,7 @@ describe("executeRespond", () => {
 
     const result = await executeRespond(sm, {
       session: "test-id",
-      message: "Approved. Go ahead.",
+      message: "Approved because the scope matches the request and the change is low risk. Go ahead.",
       approve: true,
     });
 
@@ -373,6 +374,7 @@ describe("executeRespond", () => {
     assert.equal(notifications.length, 2);
     assert.equal(notifications[0].label, "plan-approved-summary");
     assert.match(notifications[0].text, /Delegated review approved this plan for implementation/);
+    assert.match(notifications[0].text, /Why approved: Approved because the scope matches the request and the change is low risk\. Go ahead\./);
     assert.match(notifications[0].text, /Inspect the approval delivery path/);
     assert.equal(notifications[1].label, "plan-approved");
     assert.equal(notifications[1].text, "👍 [test-session] Plan approved");

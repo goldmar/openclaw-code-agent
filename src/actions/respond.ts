@@ -124,7 +124,7 @@ const PLAN_APPROVAL_SYSTEM_PREFIX =
 function buildDelegatedPlanApprovalSummary(session: Pick<Session, "name"> & {
   getOutput?: (lines?: number) => string[];
   outputPath?: string;
-}): string {
+}, rationale?: string): string {
   const liveOutput = typeof session.getOutput === "function"
     ? session.getOutput().join("\n").trim()
     : "";
@@ -136,10 +136,20 @@ function buildDelegatedPlanApprovalSummary(session: Pick<Session, "name"> & {
     ? firstCompleteLines(output, 1500).trim()
     : "";
   const suffix = preview && preview.length < output.length ? "\n…" : "";
+  const reasonLine = rationale ? `\n\nWhy approved: ${rationale}` : "";
   const details = preview
     ? `\n\n${preview}${suffix}`
     : "\n\n(Plan details were not available in the live session buffer.)";
-  return `📋 [${session.name}] Delegated review approved this plan for implementation:${details}`;
+  return `📋 [${session.name}] Delegated review approved this plan for implementation.${reasonLine}${details}`;
+}
+
+function extractDelegatedApprovalRationale(message: string): string | undefined {
+  const normalized = message.replace(/\s+/g, " ").trim();
+  if (!normalized) return undefined;
+  if (/^approved(?:\.)?(?:\s+go ahead\.?)?$/i.test(normalized)) return undefined;
+  if (/^approve(?:\.)?$/i.test(normalized)) return undefined;
+  if (/^yes(?:,)?\s+go ahead\.?$/i.test(normalized)) return undefined;
+  return truncateText(normalized, 240);
 }
 
 function approvalBlockedReason(session: PlanApprovalTarget): string | undefined {
@@ -181,6 +191,7 @@ async function tryAutoResume(
   // inherit permissionMode="plan", the first turn-end would re-set
   // pendingPlanApproval=true, and Alice would be asked to approve a second time.
   const isPlanApproval = !!(options.approve && canAutoResumePlanApproval(session));
+  const approvalRationale = isPlanApproval ? extractDelegatedApprovalRationale(message) : undefined;
 
   try {
     if (assessment.kind !== "resume") {
@@ -239,7 +250,7 @@ async function tryAutoResume(
     const resumed = await sm.spawnAndAwaitRunning(resumeConfig, { notifyLaunch: false });
     if (isPlanApproval) {
       if (session.planApproval === "delegate") {
-        sm.notifySession(resumed, buildDelegatedPlanApprovalSummary(session), "plan-approved-summary");
+        sm.notifySession(resumed, buildDelegatedPlanApprovalSummary(session, approvalRationale), "plan-approved-summary");
       }
       sm.notifySession(resumed, `👍 [${resumed.name}] Plan approved (resumed)`, "plan-approved");
       return {
@@ -338,6 +349,7 @@ export async function executeRespond(
 
     // Permission escalation — explicit approve flag
     const isPlanApproval = !!(params.approve && hasLatestActionablePlan(session));
+    const approvalRationale = isPlanApproval ? extractDelegatedApprovalRationale(params.message) : undefined;
     let approvalWarning = "";
     if (params.approve && hasLatestActionablePlan(session)) {
       session.switchPermissionMode("bypassPermissions");
@@ -359,7 +371,7 @@ export async function executeRespond(
     // (including interrupt/redirect) collapses into one ↪️ message with preview.
     if (isPlanApproval) {
       if (session.planApproval === "delegate") {
-        sm.notifySession(session, buildDelegatedPlanApprovalSummary(session), "plan-approved-summary");
+        sm.notifySession(session, buildDelegatedPlanApprovalSummary(session, approvalRationale), "plan-approved-summary");
       }
       sm.notifySession(session, `👍 [${session.name}] Plan approved`, "plan-approved");
     } else if (params.userInitiated) {
