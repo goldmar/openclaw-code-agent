@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import type { SessionManager } from "../session-manager";
 import { pluginConfig } from "../config";
 import { firstCompleteLines, truncateText } from "../format";
@@ -128,14 +128,23 @@ function buildDelegatedPlanApprovalSummary(session: Pick<Session, "name"> & {
   const liveOutput = typeof session.getOutput === "function"
     ? session.getOutput().join("\n").trim()
     : "";
-  const fileOutput = !liveOutput && session.outputPath && existsSync(session.outputPath)
-    ? readFileSync(session.outputPath, "utf-8").trim()
+  const fileOutput = !liveOutput && session.outputPath
+    ? (() => {
+        try {
+          return readFileSync(session.outputPath, "utf-8").trim();
+        } catch {
+          return "";
+        }
+      })()
     : "";
   const output = liveOutput || fileOutput;
   const preview = output
     ? firstCompleteLines(output, 1500).trim()
     : "";
-  const suffix = preview && preview.length < output.length ? "\n…" : "";
+  const suffix = preview && (
+    preview.length < output.length
+    || (output.length > 1500 && output.includes("\n"))
+  ) ? "\n…" : "";
   const reasonLine = rationale ? `\n\nWhy approved: ${rationale}` : "";
   const details = preview
     ? `\n\n${preview}${suffix}`

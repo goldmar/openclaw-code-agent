@@ -380,6 +380,71 @@ describe("executeRespond", () => {
     assert.equal(notifications[1].text, "👍 [test-session] Plan approved");
   });
 
+  it("tolerates unreadable delegated plan output fallbacks", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "respond-plan-output-dir-"));
+    const notifications: Array<{ text: string; label?: string }> = [];
+    const session = createStubSession({
+      status: "running",
+      lifecycle: "awaiting_plan_decision",
+      pendingPlanApproval: true,
+      actionablePlanDecisionVersion: 2,
+      planApproval: "delegate",
+      outputPath: tmpDir,
+      sendMessage: async () => {},
+      switchPermissionMode: () => {},
+    });
+    const sm = createStubSessionManager({ "test-id": session });
+    (sm as any).notifySession = (_session: any, text: string, label?: string) => {
+      notifications.push({ text, label });
+    };
+
+    try {
+      const result = await executeRespond(sm, {
+        session: "test-id",
+        message: "Approved because the delegated plan is appropriately scoped.",
+        approve: true,
+      });
+
+      assert.equal(result.isError, undefined);
+      assert.equal(notifications[0].label, "plan-approved-summary");
+      assert.match(notifications[0].text, /\(Plan details were not available in the live session buffer\.\)/);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("marks delegated plan previews as truncated when later lines are dropped after a long first line", async () => {
+    const notifications: Array<{ text: string; label?: string }> = [];
+    const session = createStubSession({
+      status: "running",
+      lifecycle: "awaiting_plan_decision",
+      pendingPlanApproval: true,
+      actionablePlanDecisionVersion: 2,
+      planApproval: "delegate",
+      getOutput: () => [
+        "A".repeat(1600),
+        "2. This second line should not fit in the preview.",
+      ],
+      sendMessage: async () => {},
+      switchPermissionMode: () => {},
+    });
+    const sm = createStubSessionManager({ "test-id": session });
+    (sm as any).notifySession = (_session: any, text: string, label?: string) => {
+      notifications.push({ text, label });
+    };
+
+    const result = await executeRespond(sm, {
+      session: "test-id",
+      message: "Approved because the delegated plan is appropriately scoped.",
+      approve: true,
+    });
+
+    assert.equal(result.isError, undefined);
+    assert.equal(notifications[0].label, "plan-approved-summary");
+    assert.match(notifications[0].text, /\n…$/);
+    assert.doesNotMatch(notifications[0].text, /This second line should not fit/);
+  });
+
   it("allows approve=true for the latest actionable revised plan even if changes were requested previously", async () => {
     const session = createStubSession({
       status: "running",
