@@ -530,6 +530,8 @@ export class SessionManager {
     const message = [
       `📋 [${session.name}] Plan v${actionableVersion ?? "?"} needs your decision:`,
       ``,
+      `Why this was escalated:`,
+      ``,
       trimmedSummary,
       ``,
       `Choose Approve, Revise, or Reject below.`,

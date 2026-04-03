@@ -46,8 +46,10 @@ describe("session-notification-builder", () => {
 
     assert.equal(payload.userMessage, undefined);
     assert.match(payload.wakeMessage, /Review privately/);
-    assert.match(payload.wakeMessage, /agent_respond\(session='session-delegate', message='Approved\. Go ahead\.', approve=true\)/);
+    assert.match(payload.wakeMessage, /If you approve directly, you still owe the user a concise rationale/);
+    assert.match(payload.wakeMessage, /agent_respond\(session='session-delegate', message='Approved because <brief reason>\. Go ahead\.', approve=true\)/);
     assert.match(payload.wakeMessage, /agent_request_plan_approval\(session='session-delegate'/);
+    assert.match(payload.wakeMessage, /must concisely explain why this was escalated/i);
     assert.match(payload.wakeMessage, /do NOT send a second plain-text recap/i);
   });
 
@@ -84,6 +86,7 @@ describe("session-notification-builder", () => {
 
     assert.match(message, /Interactive Approve \/ Revise \/ Reject buttons could not be delivered/);
     assert.match(message, /Reply "approve"/);
+    assert.match(message, /Why this was escalated:/);
     assert.match(message, /Summary of the plan/);
   });
 

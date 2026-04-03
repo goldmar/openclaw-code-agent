@@ -985,6 +985,7 @@ describe("SessionManager turn-end wake", () => {
     const [_sessionArg, request] = calls[0];
     assert.equal(request.label, "plan-approval");
     assert.match(request.userMessage, /Plan v9 needs your decision/);
+    assert.match(request.userMessage, /Why this was escalated:/);
     assert.match(request.userMessage, /Risk: medium/);
     assert.deepEqual(
       request.buttons.map((row: Array<{ label: string }>) => row.map((button) => button.label)),
