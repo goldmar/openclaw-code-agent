@@ -5,6 +5,7 @@ import {
   buildCompletedPayload,
   buildFailedPayload,
   buildPlanApprovalFallbackText,
+  buildPlanReviewSummary,
   buildTurnCompletePayload,
   buildWaitingForInputPayload,
   getStoppedStatusLabel,
@@ -275,7 +276,7 @@ export class SessionLifecycleService {
               `The agent already produced a plan and is waiting for a delegated decision.`,
               `Review privately first. Approve directly with agent_respond(..., approve=true, approval_rationale='...') if the plan is clearly within scope and low risk.`,
               `Escalate only if needed via agent_request_plan_approval(summary='...').`,
-              `If you approve directly, follow up with a short user-facing explanation; the plugin's thumbs-up line is only a fallback signal.`,
+              `If you approve directly, follow up with a short user-facing explanation; the plugin's thumbs-up line is only the minimal approval acknowledgment.`,
               `If a canonical approval prompt was already posted for this plan version, do not restate it in plain text.`,
             ].join("\n"),
             notifyUser: "never",
@@ -367,11 +368,18 @@ export class SessionLifecycleService {
     const payload = buildWaitingForInputPayload({
       session,
       preview,
+      planArtifact: session.latestPlanArtifact,
       originThreadLine: this.deps.originThreadLine(session),
       planApprovalMode,
       planApprovalButtons: waitingButtons,
       questionButtons: !session.pendingPlanApproval ? waitingButtons : undefined,
     });
+    const planReviewSummary = session.pendingPlanApproval
+      ? buildPlanReviewSummary({
+        preview,
+        artifact: session.latestPlanArtifact,
+      })
+      : preview;
 
     if (payload.label === "plan-approval" && planApprovalMode === "ask") {
       this.deps.dispatchSessionNotification(session, {
@@ -413,7 +421,7 @@ export class SessionLifecycleService {
             });
           },
         },
-        onUserNotifyFailed: () => this.dispatchPlanApprovalFallback(session, planDecisionVersion, preview),
+        onUserNotifyFailed: () => this.dispatchPlanApprovalFallback(session, planDecisionVersion, planReviewSummary),
         wakeMessageOnNotifySuccess: this.buildPlanApprovalWakeText(session, planDecisionVersion),
       });
       return;

@@ -225,7 +225,7 @@ async function tryAutoResume(
     };
     const resumed = await sm.spawnAndAwaitRunning(resumeConfig, { notifyLaunch: false });
     if (isPlanApproval) {
-      sm.notifySession(resumed, `👍 [${resumed.name}] Plan approved (resumed)`, "plan-approved");
+      sm.notifySession(resumed, "👍 Plan approved", "plan-approved");
       return {
         text: `Plan approved for session ${resumed.name} [${resumed.id}]. Session resumed in bypassPermissions mode. Use agent_output to see the response.`,
       };
@@ -370,7 +370,7 @@ export async function executeRespond(
     // Single notification: plan approval gets a dedicated icon; everything else
     // (including interrupt/redirect) collapses into one ↪️ message with preview.
     if (isPlanApproval) {
-      sm.notifySession(session, `👍 [${session.name}] Plan approved`, "plan-approved");
+      sm.notifySession(session, "👍 Plan approved", "plan-approved");
     } else if (params.userInitiated) {
       const notifyPreview = truncateText(params.message, 100);
       sm.notifySession(session, `↪️ [${session.name}] "${notifyPreview}"`, "agent-respond");

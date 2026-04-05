@@ -835,6 +835,8 @@ describe("SessionManager turn-end wake", () => {
     const [_sessionArg, request] = calls[0];
     assert.equal(request.label, "plan-approval");
     assert.match(request.userMessage, /Plan v7 ready for approval/);
+    assert.match(request.userMessage, /Review summary:/);
+    assert.match(request.userMessage, /- Plan preview/);
     assert.equal(request.buttons[0][0].label, "Approve");
     assert.equal(request.buttons[0][1].label, "Revise");
     assert.equal(request.buttons[0][2].label, "Reject");
@@ -933,7 +935,7 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(request.buttons[0][2].label, "Reject");
   });
 
-  it("shows the full plan text for non-delegate plan approvals instead of truncating to the default preview budget", () => {
+  it("builds a plugin-owned plan review summary for non-delegate plan approvals", () => {
     const longLine = "A".repeat(600);
     const fullPlan = [
       `Plan line 1: ${longLine}`,
@@ -955,7 +957,8 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(calls.length, 1);
     const [_sessionArg, request] = calls[0];
     assert.equal(request.label, "plan-approval");
-    assert.match(request.userMessage, new RegExp(longLine.slice(0, 120)));
+    assert.match(request.userMessage, /Review summary:/);
+    assert.match(request.userMessage, /Plan line 1:/);
     assert.match(request.userMessage, /Plan line 3:/);
     assert.doesNotMatch(request.userMessage, /\.\.\.$/);
   });
@@ -1322,9 +1325,9 @@ describe("SessionManager turn-end wake", () => {
     const [_sessionArg, request] = calls[0];
     assert.equal(request.label, "completed");
     assert.equal(request.userMessage, "✅ [normal-session] Completed | $0.00 | 8s");
-    assert.match(request.wakeMessage, /plugin already sent the canonical completion notification/i);
-    assert.match(request.wakeMessage, /do NOT repeat the plugin's completion status line/i);
-    assert.match(request.wakeMessage, /usually send a short plain-text summary of what was done or the outcome/i);
+    assert.match(request.wakeMessage, /plugin already sent the canonical completion status/i);
+    assert.match(request.wakeMessage, /you own that summary entirely/i);
+    assert.match(request.wakeMessage, /do NOT repeat the plugin's status line/i);
   });
 
   it("does not derive completion summaries from terminal transcript lines", async () => {

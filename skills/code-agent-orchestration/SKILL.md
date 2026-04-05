@@ -132,7 +132,7 @@ Use `permission_mode: "plan"` whenever the user wants a real planning checkpoint
 - Before deciding, read the full plan with `agent_output(session, full=true)`; do not rely on the truncated preview.
 - Approve directly with `agent_respond(..., approve=true)` only when the latest actionable plan version is clearly in-bounds and low risk.
 - When approving directly, pass a structured rationale with `approval_rationale`, for example: `agent_respond(session='...', message='Approved. Go ahead.', approve=true, approval_rationale='Scope matches the request and the changes are low risk.')`
-- After approving directly, send the user a short plain-text follow-up explaining what was approved and why. The plugin's `👍 Plan approved` line is only a fallback signal, not the full explanation.
+- After approving directly, send the user a short plain-text follow-up explaining what was approved and why. The plugin's `👍 Plan approved` line is only the minimal approval acknowledgment, not the explanation.
 - If a prior version had `changes_requested`, that stale state should not block approval of the latest revised plan version.
 - If escalation is needed, call `agent_request_plan_approval(session='...', summary='...')` exactly once so the plugin sends the single canonical user approval prompt.
 - That escalation summary must concisely explain why you are escalating, plus risk/scope notes the user needs to decide.
@@ -173,7 +173,7 @@ If `agent_worktree_status` reports `released`, treat that sandbox as already lan
 - Read the diff context and decide whether a local merge is clearly safe.
 - `agent_merge` is acceptable for low-risk, clearly scoped changes that match the task.
 - Never call `agent_pr()` autonomously in delegate flows. Escalate PR decisions to the user.
-- If the wake already says the plugin sent the canonical completion notification, do not repeat that status line, but you should still usually add a short summary of the completed outcome.
+- If you send any user-facing completion follow-up, you own that summary entirely. Do not repeat the plugin's status line or rely on the plugin to summarize the completed outcome for you.
 
 ### `manual`
 

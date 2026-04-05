@@ -169,6 +169,7 @@ export class Session extends EventEmitter {
   approvalState: SessionApprovalState = "not_required";
   approvalExecutionState: ApprovalExecutionState = "not_plan_gated";
   approvalRationale?: string;
+  latestPlanArtifact?: PlanArtifact;
   runtimeState: SessionRuntimeState = "live";
   deliveryState: SessionDeliveryState = "idle";
 
@@ -233,6 +234,7 @@ export class Session extends EventEmitter {
         this.complete("done");
       },
       setPlanFilePath: (path) => { this.planFilePath = path; },
+      setLatestPlanArtifact: (artifact) => { this.latestPlanArtifact = artifact; },
     });
     this.harnessEvents = new SessionHarnessEventApplier({
       clearStartupTimer: () => this.clearTimer("startup"),

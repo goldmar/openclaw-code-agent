@@ -286,7 +286,7 @@ describe("executeRespond", () => {
     assert.equal(capturedConfig.approvalRationale, "The plan stays in bounds and only touches low-risk files.");
     assert.equal(notifications.length, 1);
     assert.equal(notifications[0].label, "plan-approved");
-    assert.equal(notifications[0].text, "👍 [plan-session-shutdown] Plan approved (resumed)");
+    assert.equal(notifications[0].text, "👍 Plan approved");
   });
 
   it("auto-resumes a shutdown-killed pending-plan session for revision feedback too", async () => {
@@ -393,7 +393,7 @@ describe("executeRespond", () => {
     assert.equal(session.approvalRationale, "The scope matches the request and the change is low risk.");
     assert.equal(notifications.length, 1);
     assert.equal(notifications[0].label, "plan-approved");
-    assert.equal(notifications[0].text, "👍 [test-session] Plan approved");
+    assert.equal(notifications[0].text, "👍 Plan approved");
   });
 
   it("does not infer delegated approval rationale from arbitrary message text", async () => {
