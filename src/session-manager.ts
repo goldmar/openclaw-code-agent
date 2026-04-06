@@ -251,8 +251,8 @@ export class SessionManager {
     this.maintenance.schedule(key, session.completedAt + cleanupMaxAgeMs, () => {
       const active = this.sessions.get(session.id);
       if (!active || !this.store.shouldGcActiveSession(active, Date.now(), cleanupMaxAgeMs)) return;
-      this.persistSession(active);
       this.registry.remove(session.id);
+      this.persistSession(active, { scheduleRuntimeGc: false });
       this.lastWaitingEventTimestamps.delete(session.id);
       this.lastTurnCompleteMarkers.delete(session.id);
       this.lastTerminalWakeMarkers.delete(session.id);
@@ -381,7 +381,7 @@ export class SessionManager {
     this.store.cleanupOrphanOutputFiles();
   }
 
-  disposeMaintenance(): void {
+  private disposeMaintenance(): void {
     this.maintenance.dispose();
   }
 
@@ -825,7 +825,8 @@ export class SessionManager {
     return formatStoppedStatusLabel(killReason);
   }
 
-  private persistSession(session: Session): void {
+  private persistSession(session: Session, options: { scheduleRuntimeGc?: boolean } = {}): void {
+    const scheduleRuntimeGc = options.scheduleRuntimeGc ?? true;
     // Record metrics once
     const alreadyPersisted = this.store.hasRecordedSession(session.id);
     if (!alreadyPersisted) {
@@ -833,7 +834,9 @@ export class SessionManager {
     }
 
     this.store.persistTerminal(session);
-    this.syncRuntimeGcDeadline(session);
+    if (scheduleRuntimeGc) {
+      this.syncRuntimeGcDeadline(session);
+    }
     this.onPersistedSessionChanged(this.store.getPersistedSession(session.id));
   }
 

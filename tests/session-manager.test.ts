@@ -805,6 +805,32 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     assert.ok(scheduledKeys.includes("persisted:resolved-session:worktree-retention"));
     assert.ok(scheduledKeys.includes("tokens:expiry"));
   });
+
+  it("does not arm another runtime GC deadline while evicting a session from the GC callback", () => {
+    const sm = new SessionManager(5, 5);
+    const now = Date.now();
+    const scheduledKeys: string[] = [];
+    let runtimeGcCallback: (() => void) | undefined;
+
+    (sm as any).maintenance.schedule = ((key: string, _at: number, cb: () => void) => {
+      scheduledKeys.push(key);
+      runtimeGcCallback = cb;
+    }) as any;
+    (sm as any).store.shouldGcActiveSession = () => true;
+    (sm as any).store.hasRecordedSession = () => true;
+    (sm as any).store.persistTerminal = () => {};
+    (sm as any).store.getPersistedSession = () => undefined;
+    (sm as any).registry.remove = () => {};
+
+    const session = fakeSession({ id: "gc-session", status: "completed", completedAt: now });
+    (sm as any).sessions.set(session.id, session);
+
+    (sm as any).syncRuntimeGcDeadline(session);
+    assert.deepEqual(scheduledKeys, ["runtime-gc:gc-session"]);
+
+    runtimeGcCallback?.();
+    assert.deepEqual(scheduledKeys, ["runtime-gc:gc-session"]);
+  });
 });
 
 // =========================================================================
