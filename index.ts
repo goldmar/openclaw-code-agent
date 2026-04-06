@@ -114,7 +114,6 @@ function cleanupOrphanedWorktrees(sm: SessionManager): void {
 export function register(api: OpenClawPluginApi): void {
   let sm: SessionManager | null = null;
   let gc: GoalController | null = null;
-  let cleanupInterval: ReturnType<typeof setInterval> | null = null;
   const registerTool = api.registerTool as (
     tool: (ctx: OpenClawPluginToolContext) => unknown,
     options?: { optional?: boolean },
@@ -169,16 +168,12 @@ export function register(api: OpenClawPluginApi): void {
 
       // A1: Cleanup orphaned worktrees at startup (needs sm for per-repo workdir scan)
       cleanupOrphanedWorktrees(sm);
-
-      cleanupInterval = setInterval(() => sm!.cleanup(), 5 * 60 * 1000);
-      cleanupInterval.unref?.();
+      sm.bootstrapMaintenanceSchedules();
     },
     stop: () => {
       if (gc) gc.stop();
       if (sm) sm.killAll("shutdown");
-      if (cleanupInterval) clearInterval(cleanupInterval);
       if (sm) sm.dispose();
-      cleanupInterval = null;
       gc = null;
       sm = null;
       setPluginRuntime(undefined);

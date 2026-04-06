@@ -27,48 +27,58 @@ export class SessionReminderService {
     private readonly getWorktreeDecisionButtons: (sessionId: string) => NotificationButton[][] | undefined,
   ) {}
 
-  remindStaleDecisions(
-    sessions: PersistedSessionInfo[],
-    now: number = Date.now(),
-  ): void {
-    const REMINDER_THRESHOLD_MS = 3 * 60 * 60 * 1000;
-    const REMINDER_INTERVAL_MS = 3 * 60 * 60 * 1000;
+  static readonly REMINDER_THRESHOLD_MS = 3 * 60 * 60 * 1000;
+  static readonly REMINDER_INTERVAL_MS = 3 * 60 * 60 * 1000;
 
-    for (const session of sessions) {
-      if (!session.pendingWorktreeDecisionSince) continue;
-      const explicitlyPending =
-        session.worktreeState === "pending_decision" || session.lifecycle === "awaiting_worktree_decision";
-      const unresolvedWithoutExplicitState =
-        session.worktreeState == null && session.lifecycle == null && !session.worktreeMerged && !session.worktreePrUrl;
-      if (!explicitlyPending && !unresolvedWithoutExplicitState) continue;
-      if (session.worktreeDecisionSnoozedUntil) {
-        const snoozedUntil = new Date(session.worktreeDecisionSnoozedUntil).getTime();
-        if (Number.isFinite(snoozedUntil) && snoozedUntil > now) continue;
-      }
+  getNextReminderAt(session: PersistedSessionInfo): number | undefined {
+    if (!session.pendingWorktreeDecisionSince) return undefined;
+    const explicitlyPending =
+      session.worktreeState === "pending_decision" || session.lifecycle === "awaiting_worktree_decision";
+    const unresolvedWithoutExplicitState =
+      session.worktreeState == null && session.lifecycle == null && !session.worktreeMerged && !session.worktreePrUrl;
+    if (!explicitlyPending && !unresolvedWithoutExplicitState) return undefined;
 
-      const pendingMs = now - new Date(session.pendingWorktreeDecisionSince).getTime();
-      if (!Number.isFinite(pendingMs) || pendingMs < REMINDER_THRESHOLD_MS) continue;
+    const pendingSince = new Date(session.pendingWorktreeDecisionSince).getTime();
+    if (!Number.isFinite(pendingSince)) return undefined;
 
-      if (session.lastWorktreeReminderAt) {
-        const lastReminderMs = now - new Date(session.lastWorktreeReminderAt).getTime();
-        if (lastReminderMs < REMINDER_INTERVAL_MS) continue;
-      }
-
-      const pendingHours = Math.floor(pendingMs / (60 * 60 * 1000));
-      try {
-        this.sendReminderNotification(session, pendingHours);
-      } catch (err) {
-        console.warn(
-          `[SessionReminderService] Failed to send stale-decision reminder for session ${session.name}: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
-
-      for (const mutationRef of getPersistedMutationRefs(session)) {
-        this.updatePersistedSession(mutationRef, {
-          lastWorktreeReminderAt: new Date(now).toISOString(),
-        });
+    const candidates = [pendingSince + SessionReminderService.REMINDER_THRESHOLD_MS];
+    if (session.worktreeDecisionSnoozedUntil) {
+      const snoozedUntil = new Date(session.worktreeDecisionSnoozedUntil).getTime();
+      if (Number.isFinite(snoozedUntil)) candidates.push(snoozedUntil);
+    }
+    if (session.lastWorktreeReminderAt) {
+      const lastReminderAt = new Date(session.lastWorktreeReminderAt).getTime();
+      if (Number.isFinite(lastReminderAt)) {
+        candidates.push(lastReminderAt + SessionReminderService.REMINDER_INTERVAL_MS);
       }
     }
+    return Math.max(...candidates);
+  }
+
+  sendReminderIfDue(
+    session: PersistedSessionInfo,
+    now: number = Date.now(),
+  ): boolean {
+    const nextReminderAt = this.getNextReminderAt(session);
+    if (nextReminderAt == null || nextReminderAt > now) return false;
+
+    const pendingMs = now - new Date(session.pendingWorktreeDecisionSince!).getTime();
+    const pendingHours = Math.floor(Math.max(0, pendingMs) / (60 * 60 * 1000));
+    try {
+      this.sendReminderNotification(session, pendingHours);
+    } catch (err) {
+      console.warn(
+        `[SessionReminderService] Failed to send stale-decision reminder for session ${session.name}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return false;
+    }
+
+    for (const mutationRef of getPersistedMutationRefs(session)) {
+      this.updatePersistedSession(mutationRef, {
+        lastWorktreeReminderAt: new Date(now).toISOString(),
+      });
+    }
+    return true;
   }
 
   private sendReminderNotification(session: PersistedSessionInfo, pendingHours: number): void {

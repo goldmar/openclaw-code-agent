@@ -86,6 +86,25 @@ export function cleanupTmpOutputFiles(now: number, maxAgeMs: number): void {
   }
 }
 
+export function cleanupOrphanOutputFiles(referencedPaths: Iterable<string>): void {
+  try {
+    const referenced = new Set(referencedPaths);
+    const tmpDir = tmpdir();
+    const tmpFiles = readdirSync(tmpDir).filter((f) => f.startsWith("openclaw-agent-") && f.endsWith(".txt"));
+    for (const file of tmpFiles) {
+      const filePath = join(tmpDir, file);
+      if (referenced.has(filePath)) continue;
+      try {
+        unlinkSync(filePath);
+      } catch {
+        // best-effort
+      }
+    }
+  } catch {
+    // best-effort
+  }
+}
+
 type LoadIndexArgs = {
   indexPath: string;
   clearAll: () => void;

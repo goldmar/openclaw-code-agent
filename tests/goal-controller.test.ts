@@ -46,8 +46,8 @@ function buildTask(overrides: Partial<GoalTaskState> = {}): GoalTaskState {
 }
 
 describe("GoalController", () => {
-  it("waits for recoverable-task restoration before arming the reconcile timer", async () => {
-    const controller = new GoalController({} as any);
+  it("waits for recoverable-task restoration before finishing startup", async () => {
+    const controller = new GoalController({ emitGoalTaskUpdate: () => {}, resolve: () => undefined } as any);
     const store = createStore();
     (controller as any).store = store;
 
@@ -63,12 +63,12 @@ describe("GoalController", () => {
     controller.start();
 
     assert.equal(restoreCalls, 1);
-    assert.equal((controller as any).reconcileTimer, null);
+    assert.ok((controller as any).restorePromise);
 
     resolveRestore?.();
     await tick(20);
 
-    assert.notEqual((controller as any).reconcileTimer, null);
+    assert.equal((controller as any).restorePromise, null);
     controller.stop();
   });
 
@@ -186,6 +186,7 @@ describe("GoalController", () => {
       name: "goal-task",
       harnessSessionId: "hs-1",
       route: undefined,
+      getOutput: () => [],
     });
 
     (controller as any).attachSessionObservers(task, session);
@@ -194,6 +195,40 @@ describe("GoalController", () => {
     session.emit("statusChange", session, "completed", "running");
 
     assert.equal((controller as any).observedSessions.has("session-1"), false);
+  });
+
+  it("coalesces duplicate turn-end evaluations for the same task", async () => {
+    const controller = new GoalController({ emitGoalTaskUpdate: () => {}, resolve: () => undefined } as any);
+    const store = createStore();
+    (controller as any).store = store;
+    (controller as any).restoreRecoverableTasks = async () => {};
+
+    const evaluations: Array<{ taskId: string; trigger: string; sessionId?: string }> = [];
+    (controller as any).evaluateTask = async (taskId: string, trigger: string, sessionId?: string) => {
+      evaluations.push({ taskId, trigger, sessionId });
+    };
+
+    const task = buildTask({ status: "running" });
+    store.upsert(task);
+
+    const session = Object.assign(new EventEmitter(), {
+      id: "session-1",
+      name: "goal-task",
+      harnessSessionId: "hs-1",
+      route: undefined,
+      getOutput: () => [],
+    });
+
+    controller.start();
+    await tick(20);
+    (controller as any).attachSessionObservers(task, session);
+
+    session.emit("turnEnd");
+    session.emit("turnEnd");
+    await tick(20);
+
+    assert.deepEqual(evaluations, [{ taskId: "goal-1", trigger: "turnEnd", sessionId: "session-1" }]);
+    controller.stop();
   });
 
   it("does not overwrite a terminal task when stopTask is called again", () => {
@@ -593,25 +628,15 @@ describe("GoalController", () => {
     assert.equal(task.sessionId, "session-restored");
   });
 
-  it("logs reconcile loop errors instead of dropping the rejection from the interval callback", async () => {
+  it("logs queued evaluation errors instead of dropping the rejection", async () => {
     const controller = new GoalController({} as any);
-    const originalSetInterval = global.setInterval;
-    const originalClearInterval = global.clearInterval;
     const originalWarn = console.warn;
-
-    let scheduled: (() => void) | null = null;
     const warnings: string[] = [];
 
     (controller as any).restoreRecoverableTasks = async () => {};
-    (controller as any).reconcileAll = async () => {
+    (controller as any).evaluateTask = async () => {
       throw new Error("boom");
     };
-
-    global.setInterval = (((fn: () => void) => {
-      scheduled = fn;
-      return { fake: true } as any;
-    }) as typeof setInterval);
-    global.clearInterval = ((() => {}) as typeof clearInterval);
     console.warn = (message?: unknown, ...rest: unknown[]) => {
       warnings.push([message, ...rest].map((value) => String(value)).join(" "));
     };
@@ -619,16 +644,12 @@ describe("GoalController", () => {
     try {
       controller.start();
       await tick(20);
-      assert.ok(scheduled, "expected reconcile interval to be scheduled");
-
-      scheduled?.();
+      (controller as any).scheduleTaskEvaluation("goal-1", "test-trigger");
       await tick(20);
 
-      assert.ok(warnings.some((line) => line.includes("[GoalController] reconcileAll error: boom")));
+      assert.ok(warnings.some((line) => line.includes("[GoalController] evaluateTask error (test-trigger): boom")));
     } finally {
       controller.stop();
-      global.setInterval = originalSetInterval;
-      global.clearInterval = originalClearInterval;
       console.warn = originalWarn;
     }
   });

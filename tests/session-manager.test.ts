@@ -735,6 +735,78 @@ describe("SessionManager.cleanup()", () => {
   });
 });
 
+describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
+  it("seeds persisted reminder, retention, and token-expiry deadlines", () => {
+    const sm = new SessionManager(5, 5);
+    const now = Date.now();
+    const scheduledKeys: string[] = [];
+
+    (sm as any).store.cleanupOrphanOutputFiles = () => {};
+    (sm as any).maintenance.schedule = ((key: string) => {
+      scheduledKeys.push(key);
+    }) as any;
+
+    const pending = {
+      sessionId: "pending-session",
+      harnessSessionId: "pending-thread",
+      backendRef: { kind: "claude-code", conversationId: "pending-thread" },
+      name: "pending-session",
+      prompt: "test",
+      workdir: "/tmp",
+      createdAt: now,
+      completedAt: now,
+      status: "completed",
+      lifecycle: "awaiting_worktree_decision",
+      approvalState: "not_required",
+      worktreeState: "pending_decision",
+      runtimeState: "stopped",
+      deliveryState: "idle",
+      costUsd: 0,
+      pendingWorktreeDecisionSince: new Date(now - 4 * 60 * 60 * 1000).toISOString(),
+    };
+    const resolved = {
+      sessionId: "resolved-session",
+      harnessSessionId: "resolved-thread",
+      backendRef: { kind: "claude-code", conversationId: "resolved-thread" },
+      name: "resolved-session",
+      prompt: "test",
+      workdir: "/tmp",
+      createdAt: now,
+      completedAt: now,
+      status: "completed",
+      lifecycle: "terminal",
+      approvalState: "not_required",
+      worktreeState: "merged",
+      runtimeState: "stopped",
+      deliveryState: "idle",
+      costUsd: 0,
+      worktreeLifecycle: {
+        state: "merged",
+        updatedAt: new Date(now).toISOString(),
+        resolvedAt: new Date(now).toISOString(),
+      },
+    };
+
+    (sm as any).persisted.set(pending.harnessSessionId, pending);
+    (sm as any).persisted.set(resolved.harnessSessionId, resolved);
+    (sm as any).idIndex.set(pending.sessionId, pending.harnessSessionId);
+    (sm as any).idIndex.set(resolved.sessionId, resolved.harnessSessionId);
+    (sm as any).store.actionTokens.set("token-1", {
+      id: "token-1",
+      sessionId: "pending-session",
+      kind: "view-output",
+      createdAt: now,
+      expiresAt: now + 60_000,
+    });
+
+    sm.bootstrapMaintenanceSchedules();
+
+    assert.ok(scheduledKeys.includes("persisted:pending-session:worktree-reminder"));
+    assert.ok(scheduledKeys.includes("persisted:resolved-session:worktree-retention"));
+    assert.ok(scheduledKeys.includes("tokens:expiry"));
+  });
+});
+
 // =========================================================================
 // notifySession
 // =========================================================================

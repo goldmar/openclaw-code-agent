@@ -487,7 +487,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
         worktreeMergedAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString(),
       });
 
-      (sm as any).runDailyWorktreeMaintenance(Date.now());
+      (sm as any).reconcileResolvedWorktreeRetention((sm as any).store.persisted.get("h-resolved"), Date.now());
 
       assert.equal(existsSync(worktreePath), false);
       const persisted = (sm as any).store.persisted.get("h-resolved");
@@ -498,7 +498,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
     }
   });
 
-  it("daily cleanup never deletes pending-decision worktrees", () => {
+  it("retention cleanup never deletes pending-decision worktrees", () => {
     const repoDir = mkdtempSync(join(tmpdir(), "sm-worktree-pending-"));
     try {
       git(repoDir, "init", "-b", "main");
@@ -532,7 +532,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
         pendingWorktreeDecisionSince: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString(),
       });
 
-      (sm as any).runDailyWorktreeMaintenance(Date.now());
+      (sm as any).reconcileResolvedWorktreeRetention((sm as any).store.persisted.get("h-pending"), Date.now());
 
       assert.equal(existsSync(worktreePath), true);
       const persisted = (sm as any).store.persisted.get("h-pending");
