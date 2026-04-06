@@ -42,6 +42,8 @@ function fakeSession(overrides: Record<string, any> = {}): any {
     approvalPromptLastAttemptAt: undefined,
     approvalPromptDeliveredAt: undefined,
     approvalPromptFailedAt: undefined,
+    latestPlanArtifact: undefined,
+    latestPlanArtifactVersion: undefined,
     getOutput: (n?: number) => [],
     kill: () => {},
     on: () => {},
@@ -835,6 +837,8 @@ describe("SessionManager turn-end wake", () => {
     const [_sessionArg, request] = calls[0];
     assert.equal(request.label, "plan-approval");
     assert.match(request.userMessage, /Plan v7 ready for approval/);
+    assert.match(request.userMessage, /Review summary:/);
+    assert.match(request.userMessage, /- Plan preview/);
     assert.equal(request.buttons[0][0].label, "Approve");
     assert.equal(request.buttons[0][1].label, "Revise");
     assert.equal(request.buttons[0][2].label, "Reject");
@@ -933,20 +937,25 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(request.buttons[0][2].label, "Reject");
   });
 
-  it("shows the full plan text for non-delegate plan approvals instead of truncating to the default preview budget", () => {
-    const longLine = "A".repeat(600);
-    const fullPlan = [
-      `Plan line 1: ${longLine}`,
-      `Plan line 2: ${longLine}`,
-      `Plan line 3: ${longLine}`,
-    ];
+  it("uses matching structured artifacts to build ask-mode plan review summaries", () => {
     const s = fakeSession({
-      id: "s-plan-full",
-      name: "plan-full",
+      id: "s-plan-structured",
+      name: "plan-structured",
       status: "running",
       pendingPlanApproval: true,
+      planDecisionVersion: 4,
+      actionablePlanDecisionVersion: 4,
       planApproval: "ask",
-      getOutput: (n?: number) => n === undefined ? fullPlan : fullPlan.slice(-n),
+      latestPlanArtifactVersion: 4,
+      latestPlanArtifact: {
+        explanation: "Keep the scope inside the approval flow.",
+        markdown: "1. Update prompt\n2. Add tests",
+        steps: [
+          { step: "Update the prompt copy", status: "pending" },
+          { step: "Add focused regression tests", status: "pending" },
+        ],
+      },
+      getOutput: () => ["Plan preview that should not be used when structured data matches."],
     });
 
     (sm as any).triggerWaitingForInputEvent(s);
@@ -955,9 +964,47 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(calls.length, 1);
     const [_sessionArg, request] = calls[0];
     assert.equal(request.label, "plan-approval");
-    assert.match(request.userMessage, new RegExp(longLine.slice(0, 120)));
-    assert.match(request.userMessage, /Plan line 3:/);
-    assert.doesNotMatch(request.userMessage, /\.\.\.$/);
+    assert.match(request.userMessage, /Review summary:/);
+    assert.match(request.userMessage, /Keep the scope inside the approval flow\./);
+    assert.match(request.userMessage, /- Update the prompt copy/);
+    assert.match(request.userMessage, /- Add focused regression tests/);
+  });
+
+  it("ignores stale structured artifacts and falls back to preview-derived summaries", () => {
+    const s = fakeSession({
+      id: "s-plan-stale",
+      name: "plan-stale",
+      status: "running",
+      pendingPlanApproval: true,
+      planDecisionVersion: 5,
+      actionablePlanDecisionVersion: 5,
+      planApproval: "ask",
+      latestPlanArtifactVersion: 4,
+      latestPlanArtifact: {
+        explanation: "Stale explanation",
+        markdown: "1. stale",
+        steps: [{ step: "Stale step", status: "pending" }],
+      },
+      getOutput: () => [
+        "Proposed plan:",
+        "1. Inspect the current notification flow",
+        "2. Add a safe fallback summary",
+        "Should I proceed?",
+      ],
+    });
+
+    (sm as any).triggerWaitingForInputEvent(s);
+
+    const calls = (sm as any).__dispatchCalls;
+    assert.equal(calls.length, 1);
+    const [_sessionArg, request] = calls[0];
+    assert.equal(request.label, "plan-approval");
+    assert.match(request.userMessage, /Review summary:/);
+    assert.match(request.userMessage, /- Inspect the current notification flow/);
+    assert.match(request.userMessage, /- Add a safe fallback summary/);
+    assert.doesNotMatch(request.userMessage, /Stale explanation/);
+    assert.doesNotMatch(request.userMessage, /Stale step/);
+    assert.doesNotMatch(request.userMessage, /Should I proceed\?/);
   });
 
   it("reuses plan approval buttons when delegated review escalates back to the user", () => {
@@ -1322,9 +1369,9 @@ describe("SessionManager turn-end wake", () => {
     const [_sessionArg, request] = calls[0];
     assert.equal(request.label, "completed");
     assert.equal(request.userMessage, "✅ [normal-session] Completed | $0.00 | 8s");
-    assert.match(request.wakeMessage, /plugin already sent the canonical completion notification/i);
-    assert.match(request.wakeMessage, /do NOT repeat the plugin's completion status line/i);
-    assert.match(request.wakeMessage, /usually send a short plain-text summary of what was done or the outcome/i);
+    assert.match(request.wakeMessage, /plugin already sent the canonical completion status/i);
+    assert.match(request.wakeMessage, /you own that summary entirely/i);
+    assert.match(request.wakeMessage, /do NOT repeat the plugin's status line/i);
   });
 
   it("does not derive completion summaries from terminal transcript lines", async () => {

@@ -15,6 +15,7 @@ type TurnRuntimeDeps = {
   applyInputRequested: () => void;
   completeTurn: () => void;
   setPlanFilePath: (path: string) => void;
+  setLatestPlanArtifact: (artifact: PlanArtifact) => void;
 };
 
 /**
@@ -94,6 +95,7 @@ export class SessionTurnRuntime {
 
   notePlanArtifact(artifact: PlanArtifact, finalized: boolean): void {
     this.currentTurnPlanArtifact = artifact;
+    this.deps.setLatestPlanArtifact(artifact);
     if (!finalized) return;
     const markdown = artifact.markdown.trim();
     if (!markdown || this.currentTurnText.trim() === markdown) return;

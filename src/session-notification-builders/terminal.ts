@@ -63,10 +63,9 @@ export function buildCompletedPayload(args: {
       `[ACTION REQUIRED] Follow your autonomy rules for session completion:`,
       `1. Use agent_output(session='${session.id}', full=true) to read the full result.`,
       `2. If this is part of a multi-phase pipeline, launch the next phase NOW — do not wait for user input.`,
-      `3. The plugin already sent the canonical completion notification to the user.`,
-      `4. Do NOT repeat the plugin's completion status line, but you should usually send a short plain-text summary of what was done or the outcome after reading the full result.`,
-      `5. Keep that summary concise; one sentence is often enough. Extra synthesis, risk framing, or next steps are optional when they add value.`,
-      `6. Skip the summary only when you are not sending any user-facing follow-up at all because you are silently continuing an internal pipeline, or when reliable result data is still too incomplete to support a factual summary.`,
+      `3. The plugin already sent the canonical completion status to the user.`,
+      `4. If you send any user-facing completion follow-up, you own that summary entirely.`,
+      `5. Do NOT repeat the plugin's status line or rely on the plugin to summarize the completed work for you.`,
     ].join("\n"),
   };
 }

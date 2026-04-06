@@ -62,6 +62,17 @@ describe("session-route", () => {
     });
   });
 
+  it("parses direct Telegram topic conversation ids", () => {
+    assert.deepEqual(
+      safeParseTelegramTopicConversation("-100123:topic:77"),
+      {
+        chatId: "-100123",
+        topicId: "77",
+        canonicalConversationId: "-100123:topic:77",
+      },
+    );
+  });
+
   it("keeps generic thread suffix parsing available for non-Telegram providers", () => {
     const route = routeFromOriginMetadata(
       "slack|general",

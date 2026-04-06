@@ -15,6 +15,7 @@ describe("SessionTurnRuntime", () => {
       applyInputRequested: () => {},
       completeTurn: () => {},
       setPlanFilePath: () => {},
+      setLatestPlanArtifact: () => {},
     });
 
     runtime.notePendingInput();
@@ -36,6 +37,7 @@ describe("SessionTurnRuntime", () => {
       applyInputRequested: () => {},
       completeTurn: () => {},
       setPlanFilePath: () => {},
+      setLatestPlanArtifact: () => {},
     });
 
     runtime.noteToolCall({
@@ -62,6 +64,7 @@ describe("SessionTurnRuntime", () => {
       applyInputRequested: () => {},
       completeTurn: () => { events.push("complete"); },
       setPlanFilePath: () => {},
+      setLatestPlanArtifact: () => {},
     });
 
     runtime.finishSuccessfulTurn({
