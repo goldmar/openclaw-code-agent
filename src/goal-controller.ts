@@ -694,7 +694,7 @@ export class GoalController {
     });
   }
 
-  scheduleTaskEvaluation(taskId: string, trigger: string, sessionId?: string): void {
+  private scheduleTaskEvaluation(taskId: string, trigger: string, sessionId?: string): void {
     if (!this.started) return;
     const existing = this.scheduledEvaluations.get(taskId);
     if (existing) {

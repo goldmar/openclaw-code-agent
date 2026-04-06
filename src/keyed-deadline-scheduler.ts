@@ -11,7 +11,7 @@ export class KeyedDeadlineScheduler {
     const timer = setTimeout(() => {
       this.timers.delete(key);
       if (this.disposed) return;
-      if (at - Date.now() > KeyedDeadlineScheduler.MAX_DELAY_MS) {
+      if (at - Date.now() > 0) {
         this.schedule(key, at, cb);
         return;
       }
