@@ -117,7 +117,9 @@ Treat those fields as authoritative in orchestration logic:
 
 - `approved_then_implemented` is normal approved execution and should not be narrated as an approval bypass
 - `implemented_without_required_approval` is the explicit approval-bypass case
-- successful completion wakes already correspond to a canonical plugin-sent completion notification, so any extra plain-text follow-up should only be sent when you need added synthesis, risk framing, or next-step guidance
+- successful completion wakes already correspond to a canonical plugin-sent completion notification, and the orchestrator should usually follow that with a short factual outcome summary
+- that expectation applies to ordinary terminal/manual completions and no-change completion wakes too, not just delegated worktree flows
+- skip the summary only when the orchestrator is silently continuing an internal pipeline or there is no meaningful confirmed outcome to report yet
 
 ## Worktree Strategies
 

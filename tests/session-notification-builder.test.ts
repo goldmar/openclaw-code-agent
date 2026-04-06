@@ -138,7 +138,8 @@ describe("session-notification-builder", () => {
     assert.match(payload.wakeMessage, /Deterministic approval\/execution state: approved_then_implemented/);
     assert.match(payload.wakeMessage, /Output preview:/);
     assert.match(payload.wakeMessage, /plugin already sent the canonical completion status/i);
-    assert.match(payload.wakeMessage, /you own that summary entirely/i);
+    assert.match(payload.wakeMessage, /should usually send the user a short factual completion summary/i);
+    assert.match(payload.wakeMessage, /ordinary terminal\/manual completions too/i);
     assert.match(payload.wakeMessage, /do NOT repeat the plugin's status line/i);
   });
 
@@ -206,7 +207,8 @@ describe("session-notification-builder", () => {
     assert.match(message, /Output preview:/);
     assert.match(message, /agent_output\(session='session-4', full=true\)/);
     assert.match(message, /plugin already sent the canonical completion status/i);
-    assert.match(message, /you own that summary entirely/i);
+    assert.match(message, /should usually send the user a short factual completion summary/i);
+    assert.match(message, /ordinary terminal\/manual completions too/i);
     assert.match(message, /do NOT repeat the plugin's status line/i);
   });
 });

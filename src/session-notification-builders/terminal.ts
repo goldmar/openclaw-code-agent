@@ -37,6 +37,24 @@ export function getStoppedStatusLabel(killReason?: KillReason): string {
   }
 }
 
+export function buildCompletionFollowupInstructionLines(args: {
+  sessionId: string;
+  canonicalStatusDetail?: string;
+}): string[] {
+  const { sessionId, canonicalStatusDetail } = args;
+  return [
+    `[ACTION REQUIRED] Follow your autonomy rules for session completion:`,
+    `1. Use agent_output(session='${sessionId}', full=true) to read the full result.`,
+    `2. If this is part of a multi-phase pipeline, launch the next phase NOW — do not wait for user input.`,
+    `3. ${canonicalStatusDetail ?? "The plugin already sent the canonical completion status to the user."}`,
+    `4. After that canonical status line, you should usually send the user a short factual completion summary for this completed session.`,
+    `5. This expectation applies to ordinary terminal/manual completions too, not just delegated worktree decisions.`,
+    `6. That follow-up belongs to you alone; keep it brief and concrete, and base it on reliable result data.`,
+    `7. Skip the summary only if you are silently continuing an internal multi-phase pipeline or there is no meaningful confirmed outcome to report yet.`,
+    `8. Do NOT repeat the plugin's status line, and do NOT rely on the plugin to summarize the completed work for you.`,
+  ];
+}
+
 export function buildCompletedPayload(args: {
   session: Pick<
     Session,
@@ -60,12 +78,7 @@ export function buildCompletedPayload(args: {
       `Output preview:`,
       preview,
       ``,
-      `[ACTION REQUIRED] Follow your autonomy rules for session completion:`,
-      `1. Use agent_output(session='${session.id}', full=true) to read the full result.`,
-      `2. If this is part of a multi-phase pipeline, launch the next phase NOW — do not wait for user input.`,
-      `3. The plugin already sent the canonical completion status to the user.`,
-      `4. If you send any user-facing completion follow-up, you own that summary entirely.`,
-      `5. Do NOT repeat the plugin's status line or rely on the plugin to summarize the completed work for you.`,
+      ...buildCompletionFollowupInstructionLines({ sessionId: session.id }),
     ].join("\n"),
   };
 }

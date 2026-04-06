@@ -89,6 +89,8 @@ Completion ownership:
 - The plugin sends the canonical completion notification.
 - The plugin owns the canonical completion status line; the orchestrator owns any additional plain-text follow-up.
 - After a coding-agent session completes, the orchestrator should usually add at least a short human-useful summary of what changed, what was done, or the concrete outcome.
+- That expectation applies to ordinary terminal/manual completions, manual no-change completions, and delegated worktree completions alike.
+- Treat the plugin's canonical `✅` as the status signal and your follow-up as the factual outcome summary that should usually come right after it.
 - That summary can be brief; one sentence is often enough.
 - Extra synthesis, risk framing, and next-step guidance are optional. Add them when useful; do not force them every time.
 - Do not generate your own heuristic completion summary from transcript tail lines. Base any summary on reliable result data such as `agent_output(..., full=true)`, diff context, or deterministic tool state.

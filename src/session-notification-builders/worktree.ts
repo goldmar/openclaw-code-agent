@@ -1,5 +1,5 @@
 import type { PersistedSessionInfo } from "../types";
-import { formatApprovalExecutionContextLines } from "./terminal";
+import { buildCompletionFollowupInstructionLines, formatApprovalExecutionContextLines } from "./terminal";
 
 export function buildDelegateWorktreeWakeMessage(args: {
   sessionName: string;
@@ -104,12 +104,10 @@ export function buildNoChangeWakeMessage(args: {
     }),
     ...previewSection,
     ``,
-    `[ACTION REQUIRED] Follow your autonomy rules for session completion:`,
-    `1. Use agent_output(session='${sessionId}', full=true) to read the full result.`,
-    `2. If this is part of a multi-phase pipeline, launch the next phase NOW — do not wait for user input.`,
-    `3. The plugin already sent the canonical completion status to the user, including that no repo changes were kept.`,
-    `4. If you send any user-facing completion follow-up, you own that summary entirely.`,
-    `5. Do NOT repeat the plugin's status line or rely on the plugin to summarize the completed work for you.`,
+    ...buildCompletionFollowupInstructionLines({
+      sessionId,
+      canonicalStatusDetail: "The plugin already sent the canonical completion status to the user, including that no repo changes were kept.",
+    }),
   ].join("\n");
 }
 

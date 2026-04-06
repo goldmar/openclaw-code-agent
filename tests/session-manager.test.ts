@@ -1370,7 +1370,8 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(request.label, "completed");
     assert.equal(request.userMessage, "✅ [normal-session] Completed | $0.00 | 8s");
     assert.match(request.wakeMessage, /plugin already sent the canonical completion status/i);
-    assert.match(request.wakeMessage, /you own that summary entirely/i);
+    assert.match(request.wakeMessage, /should usually send the user a short factual completion summary/i);
+    assert.match(request.wakeMessage, /ordinary terminal\/manual completions too/i);
     assert.match(request.wakeMessage, /do NOT repeat the plugin's status line/i);
   });
 
