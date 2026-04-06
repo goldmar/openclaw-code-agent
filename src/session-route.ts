@@ -1,4 +1,4 @@
-import { parseTelegramTopicConversation } from "openclaw/plugin-sdk/telegram-core";
+import { parseTelegramTopicConversation } from "openclaw/plugin-sdk/telegram";
 import type { SessionRoute } from "./types";
 
 export interface SessionRouteSource {

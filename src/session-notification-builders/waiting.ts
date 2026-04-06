@@ -1,8 +1,59 @@
 import type { Session } from "../session";
 import type { NotificationButton } from "../session-interactions";
-import type { PlanApprovalMode } from "../types";
+import type { PlanApprovalMode, PlanArtifact } from "../types";
 
 type OriginThreadLine = string;
+
+function normalizeSummaryItem(line: string): string {
+  return line
+    .replace(/^#{1,6}\s+/, "")
+    .replace(/^[-*+]\s+/, "")
+    .replace(/^\d+[.)]\s+/, "")
+    .replace(/^`([^`]+)`$/, "$1")
+    .trim();
+}
+
+function buildFallbackPlanSummary(preview: string): string[] {
+  const bulletCandidates = preview
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map(normalizeSummaryItem)
+    .filter((line) => line.length > 0)
+    .filter((line) => !/^(plan|proposed plan|implementation plan|review summary)[:]?$/i.test(line));
+  const summaryCandidates = bulletCandidates.filter((line) => !/^(should|can|could|would|will)\b.*\?$/i.test(line));
+
+  if (summaryCandidates.length === 0) {
+    return ["- Plan details are available in the full session output."];
+  }
+
+  return summaryCandidates.slice(0, 5).map((line) => `- ${line}`);
+}
+
+export function buildPlanReviewSummary(args: {
+  preview: string;
+  artifact?: PlanArtifact;
+}): string {
+  const { preview, artifact } = args;
+  const lines: string[] = ["Review summary:"];
+
+  const explanation = artifact?.explanation?.trim();
+  if (explanation) {
+    lines.push(`- ${explanation}`);
+  }
+
+  const structuredSteps = artifact?.steps
+    ?.map((step) => step.step.trim())
+    .filter(Boolean)
+    .slice(0, 5) ?? [];
+  if (structuredSteps.length > 0) {
+    lines.push(...structuredSteps.map((step) => `- ${step}`));
+  } else {
+    lines.push(...buildFallbackPlanSummary(preview));
+  }
+
+  return lines.join("\n");
+}
 
 function hasProvableUserVisiblePrompt(session: Pick<Session, "approvalPromptRequiredVersion" | "approvalPromptStatus">, actionableVersion?: number): boolean {
   return actionableVersion != null
@@ -33,6 +84,7 @@ export function buildPlanApprovalFallbackText(args: {
 export function buildWaitingForInputPayload(args: {
   session: Pick<Session, "id" | "name" | "multiTurn" | "pendingPlanApproval" | "planDecisionVersion" | "actionablePlanDecisionVersion" | "approvalPromptRequiredVersion" | "approvalPromptStatus">;
   preview: string;
+  planArtifact?: PlanArtifact;
   originThreadLine: OriginThreadLine;
   planApprovalMode?: PlanApprovalMode;
   planApprovalButtons?: NotificationButton[][];
@@ -43,10 +95,13 @@ export function buildWaitingForInputPayload(args: {
   wakeMessage: string;
   buttons?: NotificationButton[][];
 } {
-  const { session, preview, originThreadLine, planApprovalMode, planApprovalButtons, questionButtons } = args;
+  const { session, preview, planArtifact, originThreadLine, planApprovalMode, planApprovalButtons, questionButtons } = args;
   const isPlanApproval = session.pendingPlanApproval;
   const actionableVersion = session.actionablePlanDecisionVersion ?? session.planDecisionVersion;
   const promptAlreadyProven = hasProvableUserVisiblePrompt(session, actionableVersion);
+  const planReviewSummary = isPlanApproval
+    ? buildPlanReviewSummary({ preview, artifact: planArtifact })
+    : undefined;
 
   const userMessage = isPlanApproval
     ? (
@@ -54,7 +109,7 @@ export function buildWaitingForInputPayload(args: {
           ? (
               promptAlreadyProven
                 ? undefined
-                : `📋 [${session.name}] Plan v${actionableVersion ?? "?"} ready for approval:\n\n${preview}\n\n${planApprovalButtons ? "Choose Approve, Revise, or Reject below." : "Approval is still pending for this plan version."}`
+                : `📋 [${session.name}] Plan v${actionableVersion ?? "?"} ready for approval:\n\n${planReviewSummary}\n\n${planApprovalButtons ? "Choose Approve, Revise, or Reject below." : "Approval is still pending for this plan version."}`
             )
           : undefined
       )
@@ -84,7 +139,7 @@ export function buildWaitingForInputPayload(args: {
           ``,
           `━━━ STEP 2 (MANDATORY): Review privately ━━━`,
           `You are the delegated decision-maker. Review the plan yourself before involving the user.`,
-          `If you approve directly, you still owe the user a concise rationale for why you approved.`,
+          `If you approve directly, you own the user-facing explanation of what was approved and why.`,
           `Keep it short and user-facing: one sentence is usually enough.`,
           ``,
           `━━━ STEP 3 (ONLY AFTER steps 1 and 2): Decide ━━━`,
@@ -108,7 +163,8 @@ export function buildWaitingForInputPayload(args: {
           ``,
           `If approving: call agent_respond(session='${session.id}', message='Approved. Go ahead.', approve=true, approval_rationale='<brief reason>').`,
           `That rationale should say why approval was safe: for example scope match, low risk, or no meaningful ambiguity.`,
-          `After approving directly, send the user a short plain-text follow-up explaining what was approved and why. Do not rely on the plugin's fallback thumbs-up line as the full explanation.`,
+          `After approving directly, send the user a short plain-text follow-up explaining what was approved and why.`,
+          `The plugin's thumbs-up line is only the minimal approval acknowledgment, not the explanation.`,
           `If escalating: call agent_request_plan_approval(session='${session.id}', summary='...') exactly once so the plugin posts the single canonical Approve / Revise / Reject prompt.`,
           `That summary must concisely explain why this was escalated, plus changed files/components, risk level and why, scope match/expansion, and any concerns or assumptions.`,
           `After the canonical prompt exists, WAIT for the user's button click or explicit response and do NOT send a second plain-text recap.`,

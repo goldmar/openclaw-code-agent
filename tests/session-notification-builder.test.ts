@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+  buildPlanReviewSummary,
   buildPlanApprovalFallbackText,
   buildCompletedPayload,
   buildDelegateWorktreeWakeMessage,
@@ -10,7 +11,7 @@ import {
 } from "../src/session-notification-builder";
 
 describe("session-notification-builder", () => {
-  it("preserves waiting payloads for explicit plan approvals", () => {
+  it("builds plugin-owned review summaries for explicit plan approvals", () => {
     const buttons = [[{ label: "Approve", callback_data: "token-1" }]];
     const payload = buildWaitingForInputPayload({
       session: {
@@ -19,19 +20,41 @@ describe("session-notification-builder", () => {
         multiTurn: true,
         pendingPlanApproval: true,
       } as any,
-      preview: "Plan preview",
+      preview: "1. Inspect the state flow\n2. Update the approval builder\n\nShould I proceed?",
       originThreadLine: "Origin thread: telegram topic 42",
       planApprovalMode: "ask",
       planApprovalButtons: buttons as any,
     });
 
     assert.equal(payload.label, "plan-approval");
-    assert.equal(payload.userMessage, "📋 [plan-session] Plan v? ready for approval:\n\nPlan preview\n\nChoose Approve, Revise, or Reject below.");
+    assert.match(payload.userMessage ?? "", /Review summary:/);
+    assert.match(payload.userMessage ?? "", /- Inspect the state flow/);
+    assert.match(payload.userMessage ?? "", /- Update the approval builder/);
+    assert.doesNotMatch(payload.userMessage ?? "", /Should I proceed\?/);
     assert.equal(payload.buttons, buttons);
     assert.match(payload.wakeMessage, /USER APPROVAL REQUESTED/);
   });
 
-  it("instructs delegated plan reviews to use structured approval rationale plus follow-up", () => {
+  it("builds review summaries from structured plan artifacts", () => {
+    const summary = buildPlanReviewSummary({
+      preview: "ignored preview",
+      artifact: {
+        explanation: "Keep the scope inside the approval workflow.",
+        markdown: "1. Update code\n2. Add tests",
+        steps: [
+          { step: "Update the plan-approval prompt", status: "pending" },
+          { step: "Add focused regression tests", status: "pending" },
+        ],
+      },
+    });
+
+    assert.match(summary, /Review summary:/);
+    assert.match(summary, /Keep the scope inside the approval workflow\./);
+    assert.match(summary, /- Update the plan-approval prompt/);
+    assert.match(summary, /- Add focused regression tests/);
+  });
+
+  it("instructs delegated plan reviews to use structured approval rationale plus orchestrator-owned follow-up", () => {
     const payload = buildWaitingForInputPayload({
       session: {
         id: "session-delegate",
@@ -46,9 +69,9 @@ describe("session-notification-builder", () => {
 
     assert.equal(payload.userMessage, undefined);
     assert.match(payload.wakeMessage, /Review privately/);
-    assert.match(payload.wakeMessage, /If you approve directly, you still owe the user a concise rationale/);
+    assert.match(payload.wakeMessage, /you own the user-facing explanation of what was approved and why/i);
     assert.match(payload.wakeMessage, /agent_respond\(session='session-delegate', message='Approved\. Go ahead\.', approve=true, approval_rationale='<brief reason>'\)/);
-    assert.match(payload.wakeMessage, /Do not rely on the plugin's fallback thumbs-up line as the full explanation/i);
+    assert.match(payload.wakeMessage, /minimal approval acknowledgment, not the explanation/i);
     assert.match(payload.wakeMessage, /agent_request_plan_approval\(session='session-delegate'/);
     assert.match(payload.wakeMessage, /must concisely explain why this was escalated/i);
     assert.match(payload.wakeMessage, /do NOT send a second plain-text recap/i);
@@ -113,9 +136,9 @@ describe("session-notification-builder", () => {
     assert.match(payload.wakeMessage, /Effective permission mode: bypassPermissions/);
     assert.match(payload.wakeMessage, /Deterministic approval\/execution state: approved_then_implemented/);
     assert.match(payload.wakeMessage, /Output preview:/);
-    assert.match(payload.wakeMessage, /plugin already sent the canonical completion notification/i);
-    assert.match(payload.wakeMessage, /do NOT repeat the plugin's completion status line/i);
-    assert.match(payload.wakeMessage, /usually send a short plain-text summary of what was done or the outcome/i);
+    assert.match(payload.wakeMessage, /plugin already sent the canonical completion status/i);
+    assert.match(payload.wakeMessage, /you own that summary entirely/i);
+    assert.match(payload.wakeMessage, /do NOT repeat the plugin's status line/i);
   });
 
   it("uses agent_respond as the primary continuation path in failure wakes", () => {
@@ -181,8 +204,8 @@ describe("session-notification-builder", () => {
     assert.match(message, /Deterministic approval\/execution state: approved_then_implemented/);
     assert.match(message, /Output preview:/);
     assert.match(message, /agent_output\(session='session-4', full=true\)/);
-    assert.match(message, /plugin already sent the canonical completion notification/i);
-    assert.match(message, /do NOT repeat the plugin's completion status line/i);
-    assert.match(message, /usually send a short plain-text summary of what was done or the concrete outcome/i);
+    assert.match(message, /plugin already sent the canonical completion status/i);
+    assert.match(message, /you own that summary entirely/i);
+    assert.match(message, /do NOT repeat the plugin's status line/i);
   });
 });

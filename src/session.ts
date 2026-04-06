@@ -169,6 +169,8 @@ export class Session extends EventEmitter {
   approvalState: SessionApprovalState = "not_required";
   approvalExecutionState: ApprovalExecutionState = "not_plan_gated";
   approvalRationale?: string;
+  latestPlanArtifact?: PlanArtifact;
+  latestPlanArtifactVersion?: number;
   runtimeState: SessionRuntimeState = "live";
   deliveryState: SessionDeliveryState = "idle";
 
@@ -233,6 +235,13 @@ export class Session extends EventEmitter {
         this.complete("done");
       },
       setPlanFilePath: (path) => { this.planFilePath = path; },
+      setLatestPlanArtifact: (artifact) => {
+        this.latestPlanArtifact = artifact;
+        const version = this.pendingPlanApproval
+          ? (this.actionablePlanDecisionVersion ?? this.planDecisionVersion)
+          : undefined;
+        this.latestPlanArtifactVersion = version && version > 0 ? version : undefined;
+      },
     });
     this.harnessEvents = new SessionHarnessEventApplier({
       clearStartupTimer: () => this.clearTimer("startup"),
@@ -443,8 +452,17 @@ export class Session extends EventEmitter {
   }
 
   private markPendingPlanApproval(context: PlanApprovalContext): void {
+    const previousCachedVersion = this.latestPlanArtifactVersion;
     this.approvalRationale = undefined;
     this.applyControlEvent({ type: "plan.requested", context });
+    const nextVersion = this.actionablePlanDecisionVersion ?? this.planDecisionVersion;
+    if (this.currentTurnPlanArtifact && nextVersion > 0) {
+      this.latestPlanArtifact = this.currentTurnPlanArtifact;
+      this.latestPlanArtifactVersion = nextVersion;
+    } else if (previousCachedVersion !== nextVersion) {
+      this.latestPlanArtifact = undefined;
+      this.latestPlanArtifactVersion = undefined;
+    }
   }
 
   private clearPendingPlanApproval(): void {
