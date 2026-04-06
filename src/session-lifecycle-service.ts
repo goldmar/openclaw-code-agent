@@ -5,7 +5,6 @@ import {
   buildCompletedPayload,
   buildFailedPayload,
   buildPlanApprovalFallbackText,
-  buildPlanReviewSummary,
   buildTurnCompletePayload,
   buildWaitingForInputPayload,
   getStoppedStatusLabel,
@@ -377,12 +376,7 @@ export class SessionLifecycleService {
       planApprovalButtons: waitingButtons,
       questionButtons: !session.pendingPlanApproval ? waitingButtons : undefined,
     });
-    const planReviewSummary = session.pendingPlanApproval
-      ? buildPlanReviewSummary({
-        preview,
-        artifact: matchingPlanArtifact,
-      })
-      : preview;
+    const planReviewSummary = payload.planReviewSummary ?? preview;
 
     if (payload.label === "plan-approval" && planApprovalMode === "ask") {
       this.deps.dispatchSessionNotification(session, {

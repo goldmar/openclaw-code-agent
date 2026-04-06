@@ -32,6 +32,7 @@ describe("session-notification-builder", () => {
     assert.match(payload.userMessage ?? "", /- Update the approval builder/);
     assert.doesNotMatch(payload.userMessage ?? "", /Should I proceed\?/);
     assert.equal(payload.buttons, buttons);
+    assert.match(payload.planReviewSummary ?? "", /Review summary:/);
     assert.match(payload.wakeMessage, /USER APPROVAL REQUESTED/);
   });
 

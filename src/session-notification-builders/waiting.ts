@@ -94,6 +94,7 @@ export function buildWaitingForInputPayload(args: {
   userMessage?: string;
   wakeMessage: string;
   buttons?: NotificationButton[][];
+  planReviewSummary?: string;
 } {
   const { session, preview, planArtifact, originThreadLine, planApprovalMode, planApprovalButtons, questionButtons } = args;
   const isPlanApproval = session.pendingPlanApproval;
@@ -122,6 +123,7 @@ export function buildWaitingForInputPayload(args: {
       return {
         label: "plan-approval",
         userMessage,
+        planReviewSummary,
         wakeMessage: [
           `[DELEGATED PLAN APPROVAL] Coding agent session has finished its plan and is requesting approval to implement.`,
           `Name: ${session.name} | ID: ${session.id} | Plan v${actionableVersion ?? "?"}`,
@@ -177,6 +179,7 @@ export function buildWaitingForInputPayload(args: {
       return {
         label: "plan-approval",
         userMessage,
+        planReviewSummary,
         wakeMessage: [
           `[USER APPROVAL REQUESTED] Coding agent session has finished its plan. The user has been notified via Telegram and must approve directly.`,
           `Name: ${session.name} | ID: ${session.id} | Plan v${actionableVersion ?? "?"}`,
@@ -198,6 +201,7 @@ export function buildWaitingForInputPayload(args: {
     return {
       label: "plan-approval",
       userMessage,
+      planReviewSummary,
       wakeMessage: [
         `[AUTO-APPROVE] Session has a plan ready. Approve it now:`,
         `agent_respond(session='${session.id}', message='Approved. Go ahead.', approve=true)`,
