@@ -736,12 +736,16 @@ describe("SessionManager.cleanup()", () => {
 });
 
 describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
-  it("seeds persisted reminder, retention, and token-expiry deadlines", () => {
+  it("seeds persisted reminder, retention, token-expiry deadlines, and tmp-output cleanup", () => {
     const sm = new SessionManager(5, 5);
     const now = Date.now();
     const scheduledKeys: string[] = [];
+    const cleanupTimes: number[] = [];
 
     (sm as any).store.cleanupOrphanOutputFiles = () => {};
+    (sm as any).store.cleanupTmpOutputFiles = (cleanupNow: number) => {
+      cleanupTimes.push(cleanupNow);
+    };
     (sm as any).maintenance.schedule = ((key: string) => {
       scheduledKeys.push(key);
     }) as any;
@@ -804,6 +808,8 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     assert.ok(scheduledKeys.includes("persisted:pending-session:worktree-reminder"));
     assert.ok(scheduledKeys.includes("persisted:resolved-session:worktree-retention"));
     assert.ok(scheduledKeys.includes("tokens:expiry"));
+    assert.equal(cleanupTimes.length, 1);
+    assert.equal(typeof cleanupTimes[0], "number");
   });
 
   it("does not arm another runtime GC deadline while evicting a session from the GC callback", () => {

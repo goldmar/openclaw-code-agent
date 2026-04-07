@@ -387,6 +387,7 @@ export class SessionManager {
   }
 
   bootstrapMaintenanceSchedules(): void {
+    this.store.cleanupTmpOutputFiles(Date.now());
     for (const session of this.store.listPersistedSessions()) {
       this.syncPersistedSessionMaintenance(session);
     }
