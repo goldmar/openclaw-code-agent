@@ -15,6 +15,7 @@ import {
   archiveLegacySessionIndex,
   cleanupOrphanOutputFiles,
   cleanupTmpOutputFiles,
+  getNextTmpOutputCleanupAt,
   loadSessionStoreIndex,
   resolveSessionIndexPath,
   saveSessionStoreIndex,
@@ -335,6 +336,10 @@ export class SessionStore {
   cleanupTmpOutputFiles(now: number): void {
     this.actionTokenStore.purgeExpiredActionTokens(now);
     cleanupTmpOutputFiles(now, TMP_OUTPUT_MAX_AGE_MS);
+  }
+
+  getNextTmpOutputCleanupAt(now: number): number | undefined {
+    return getNextTmpOutputCleanupAt(now, TMP_OUTPUT_MAX_AGE_MS);
   }
 
   /** Enforce max persisted session retention by evicting oldest records and indexes. */

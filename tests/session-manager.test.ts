@@ -663,6 +663,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     (sm as any).store.cleanupTmpOutputFiles = (cleanupNow: number) => {
       cleanupTimes.push(cleanupNow);
     };
+    (sm as any).store.getNextTmpOutputCleanupAt = () => now + 30_000;
     (sm as any).maintenance.schedule = ((key: string) => {
       scheduledKeys.push(key);
     }) as any;
@@ -725,8 +726,53 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     assert.ok(scheduledKeys.includes("persisted:pending-session:worktree-reminder"));
     assert.ok(scheduledKeys.includes("persisted:resolved-session:worktree-retention"));
     assert.ok(scheduledKeys.includes("tokens:expiry"));
+    assert.ok(scheduledKeys.includes("tmp-output:cleanup"));
     assert.equal(cleanupTimes.length, 1);
     assert.equal(typeof cleanupTimes[0], "number");
+  });
+
+  it("re-arms tmp-output cleanup from the next actual expiry after each cleanup run", () => {
+    const sm = new SessionManager(5, 5);
+    const originalDateNow = Date.now;
+    const now = 1_700_000_000_000;
+    let currentNow = now;
+    const scheduled: Array<{ key: string; at: number; cb: () => void }> = [];
+    const cleanupTimes: number[] = [];
+    const nextDeadlines = [now + 60_000, now + 120_000, undefined];
+
+    Date.now = () => currentNow;
+
+    try {
+      (sm as any).store.getNextTmpOutputCleanupAt = () => nextDeadlines.shift();
+      (sm as any).store.cleanupTmpOutputFiles = (cleanupNow: number) => {
+        cleanupTimes.push(cleanupNow);
+      };
+      (sm as any).maintenance.cancel = (() => {}) as any;
+      (sm as any).maintenance.schedule = ((key: string, at: number, cb: () => void) => {
+        scheduled.push({ key, at, cb });
+      }) as any;
+
+      (sm as any).syncTmpOutputCleanupDeadline(now);
+      assert.equal(scheduled.length, 1);
+      assert.equal(scheduled[0].key, "tmp-output:cleanup");
+      assert.equal(scheduled[0].at, now + 60_000);
+
+      currentNow = now + 60_000;
+      scheduled[0].cb();
+
+      assert.deepEqual(cleanupTimes, [now + 60_000]);
+      assert.equal(scheduled.length, 2);
+      assert.equal(scheduled[1].key, "tmp-output:cleanup");
+      assert.equal(scheduled[1].at, now + 120_000);
+
+      currentNow = now + 120_000;
+      scheduled[1].cb();
+
+      assert.deepEqual(cleanupTimes, [now + 60_000, now + 120_000]);
+      assert.equal(scheduled.length, 2);
+    } finally {
+      Date.now = originalDateNow;
+    }
   });
 
   it("seeds retention for legacy merged sessions without worktreeLifecycle metadata", () => {
@@ -774,6 +820,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     const scheduledKeys: string[] = [];
     let runtimeGcCallback: (() => void) | undefined;
 
+    (sm as any).store.getNextTmpOutputCleanupAt = () => undefined;
     (sm as any).maintenance.schedule = ((key: string, _at: number, cb: () => void) => {
       scheduledKeys.push(key);
       runtimeGcCallback = cb;

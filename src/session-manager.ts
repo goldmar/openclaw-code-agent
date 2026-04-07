@@ -58,6 +58,7 @@ const KILLABLE_STATUSES = new Set<SessionStatus>(["starting", "running"]);
 const WAITING_EVENT_DEBOUNCE_MS = 5_000;
 const RESOLVED_WORKTREE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const WORKTREE_REMINDER_RETRY_BACKOFF_MS = 5 * 60 * 1000;
+const TMP_OUTPUT_CLEANUP_KEY = "tmp-output:cleanup";
 
 
 type SpawnOptions = {
@@ -393,6 +394,17 @@ export class SessionManager {
     });
   }
 
+  private syncTmpOutputCleanupDeadline(now: number = Date.now()): void {
+    this.maintenance.cancel(TMP_OUTPUT_CLEANUP_KEY);
+    const nextCleanupAt = this.store.getNextTmpOutputCleanupAt(now);
+    if (nextCleanupAt == null) return;
+    this.maintenance.schedule(TMP_OUTPUT_CLEANUP_KEY, nextCleanupAt, () => {
+      const cleanupNow = Date.now();
+      this.store.cleanupTmpOutputFiles(cleanupNow);
+      this.syncTmpOutputCleanupDeadline(cleanupNow);
+    });
+  }
+
   private cleanupOutputPathIfUnreferenced(outputPath: string | undefined): void {
     if (!outputPath || this.store.hasOutputPathReference(outputPath)) return;
     try {
@@ -414,12 +426,14 @@ export class SessionManager {
   }
 
   bootstrapMaintenanceSchedules(): void {
-    this.store.cleanupTmpOutputFiles(Date.now());
+    const now = Date.now();
+    this.store.cleanupTmpOutputFiles(now);
     for (const session of this.store.listPersistedSessions()) {
       this.syncPersistedSessionMaintenance(session);
     }
     this.syncActionTokenExpiryDeadline();
     this.store.cleanupOrphanOutputFiles();
+    this.syncTmpOutputCleanupDeadline(now);
   }
 
   private disposeMaintenance(): void {
@@ -879,6 +893,7 @@ export class SessionManager {
       this.syncRuntimeGcDeadline(session);
     }
     this.onPersistedSessionChanged(this.store.getPersistedSession(session.id));
+    this.syncTmpOutputCleanupDeadline();
   }
 
   getMetrics(): SessionMetrics { return this.metrics.getMetrics(); }
