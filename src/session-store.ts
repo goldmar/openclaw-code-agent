@@ -27,7 +27,7 @@ import {
 const TERMINAL_STATUSES = new Set<SessionStatus>(["completed", "failed", "killed"]);
 const TMP_OUTPUT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
-interface SessionStoreOptions {
+export interface SessionStoreOptions {
   env?: NodeJS.ProcessEnv;
   indexPath?: string;
 }

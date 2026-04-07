@@ -26,6 +26,7 @@ import type {
   GoalTaskState,
 } from "./types";
 import { SessionStore } from "./session-store";
+import type { SessionStoreOptions } from "./session-store";
 import { SessionMetricsRecorder } from "./session-metrics";
 import { WakeDispatcher, type SessionNotificationRequest } from "./wake-dispatcher";
 import { SessionInteractionService, type NotificationButton } from "./session-interactions";
@@ -103,12 +104,16 @@ export class SessionManager {
   private readonly worktreeMessages: SessionWorktreeMessageService;
   private readonly maintenance = new KeyedDeadlineScheduler();
 
-  constructor(maxSessions: number = 20, maxPersistedSessions: number = 50) {
+  constructor(
+    maxSessions: number = 20,
+    maxPersistedSessions: number = 50,
+    options: { store?: SessionStoreOptions } = {},
+  ) {
     this.maxSessions = maxSessions;
     this.maxPersistedSessions = maxPersistedSessions;
     this.registry = new SessionRuntimeRegistry();
     this.sessions = this.registry.sessions;
-    this.store = new SessionStore();
+    this.store = new SessionStore(options.store);
     this.metrics = new SessionMetricsRecorder();
     this.wakeDispatcher = new WakeDispatcher();
     this.interactions = new SessionInteractionService(this.store.actionTokenStore, isGitHubCLIAvailable);
@@ -1183,19 +1188,6 @@ export class SessionManager {
     for (const session of this.store.listPersistedSessions()) {
       this.reminders.sendReminderIfDue(session, now);
     }
-  }
-
-  /** Send a notification for a persisted (not active) session using its stored origin channel. */
-  private sendReminderNotification(session: PersistedSessionInfo, text: string): void {
-    const now = Date.now();
-    const pendingSince = session.pendingWorktreeDecisionSince
-      ? new Date(session.pendingWorktreeDecisionSince).getTime()
-      : now - 4 * 60 * 60 * 1000;
-    this.reminders.sendReminderIfDue({
-      ...session,
-      pendingWorktreeDecisionSince: new Date(pendingSince).toISOString(),
-      lastWorktreeReminderAt: undefined,
-    }, now);
   }
 
   /**
