@@ -831,6 +831,54 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     runtimeGcCallback?.();
     assert.deepEqual(scheduledKeys, ["runtime-gc:gc-session"]);
   });
+
+  it("backs off reminder retries after a delivery failure instead of rescheduling immediately", () => {
+    const sm = new SessionManager(5, 5);
+    const originalDateNow = Date.now;
+    const now = 1_700_000_000_000;
+    Date.now = () => now;
+
+    try {
+      const scheduled: Array<{ key: string; at: number; cb: () => void }> = [];
+      const pending = {
+        sessionId: "pending-session",
+        harnessSessionId: "pending-thread",
+        backendRef: { kind: "claude-code", conversationId: "pending-thread" },
+        name: "pending-session",
+        prompt: "test",
+        workdir: "/tmp",
+        createdAt: now,
+        completedAt: now,
+        status: "completed",
+        lifecycle: "awaiting_worktree_decision",
+        approvalState: "not_required",
+        worktreeState: "pending_decision",
+        runtimeState: "stopped",
+        deliveryState: "idle",
+        costUsd: 0,
+        pendingWorktreeDecisionSince: new Date(now - 4 * 60 * 60 * 1000).toISOString(),
+      };
+
+      (sm as any).persisted.set(pending.harnessSessionId, pending);
+      (sm as any).idIndex.set(pending.sessionId, pending.harnessSessionId);
+      (sm as any).maintenance.cancel = (() => {}) as any;
+      (sm as any).maintenance.schedule = ((key: string, at: number, cb: () => void) => {
+        scheduled.push({ key, at, cb });
+      }) as any;
+      (sm as any).reminders.sendReminderIfDue = (() => false) as any;
+
+      (sm as any).syncPersistedSessionMaintenance(pending);
+      assert.equal(scheduled.length, 1);
+
+      scheduled[0].cb();
+
+      assert.equal(scheduled.length, 2);
+      assert.equal(scheduled[1].key, "persisted:pending-session:worktree-reminder");
+      assert.equal(scheduled[1].at, now + 5 * 60 * 1000);
+    } finally {
+      Date.now = originalDateNow;
+    }
+  });
 });
 
 // =========================================================================

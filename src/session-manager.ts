@@ -56,6 +56,7 @@ const TERMINAL_STATUSES = new Set<SessionStatus>(["completed", "failed", "killed
 const KILLABLE_STATUSES = new Set<SessionStatus>(["starting", "running"]);
 const WAITING_EVENT_DEBOUNCE_MS = 5_000;
 const RESOLVED_WORKTREE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+const WORKTREE_REMINDER_RETRY_BACKOFF_MS = 5 * 60 * 1000;
 
 
 type SpawnOptions = {
@@ -278,14 +279,7 @@ export class SessionManager {
     this.maintenance.cancel(this.persistedMaintenanceKey(ref, "worktree-reminder"));
     const nextReminderAt = this.reminders.getNextReminderAt(session);
     if (nextReminderAt != null) {
-      this.maintenance.schedule(this.persistedMaintenanceKey(ref, "worktree-reminder"), nextReminderAt, () => {
-        const latest = this.store.getPersistedSession(ref);
-        if (!latest) return;
-        const delivered = this.reminders.sendReminderIfDue(latest, Date.now());
-        if (!delivered) {
-          this.syncPersistedSessionMaintenance(latest);
-        }
-      });
+      this.schedulePersistedWorktreeReminder(ref, nextReminderAt);
     }
 
     this.maintenance.cancel(this.persistedMaintenanceKey(ref, "worktree-retention"));
@@ -304,6 +298,20 @@ export class SessionManager {
         });
       }
     }
+  }
+
+  private schedulePersistedWorktreeReminder(ref: string, at: number): void {
+    const key = this.persistedMaintenanceKey(ref, "worktree-reminder");
+    this.maintenance.schedule(key, at, () => {
+      const latest = this.store.getPersistedSession(ref);
+      if (!latest) return;
+      const delivered = this.reminders.sendReminderIfDue(latest, Date.now());
+      if (delivered) return;
+
+      const nextReminderAt = this.reminders.getNextReminderAt(latest);
+      if (nextReminderAt == null) return;
+      this.schedulePersistedWorktreeReminder(ref, Math.max(nextReminderAt, Date.now() + WORKTREE_REMINDER_RETRY_BACKOFF_MS));
+    });
   }
 
   private reconcileResolvedWorktreeRetention(session: PersistedSessionInfo, now: number): void {
