@@ -1079,7 +1079,7 @@ export class GoalController {
     }
   }
 
-  async reconcileAll(): Promise<void> {
+  private async reconcileAll(): Promise<void> {
     if (this.restorePromise) {
       await this.restorePromise;
     }
