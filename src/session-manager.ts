@@ -406,6 +406,9 @@ export class SessionManager {
     const evicted = this.store.evictOldestPersisted(this.maxPersistedSessions);
     for (const session of evicted) {
       this.cancelPersistedMaintenance(session);
+      if (session.sessionId) {
+        this.maintenance.cancel(this.runtimeGcKey(session.sessionId));
+      }
       this.cleanupOutputPathIfUnreferenced(session.outputPath);
     }
   }

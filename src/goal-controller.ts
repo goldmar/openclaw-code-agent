@@ -339,7 +339,6 @@ export class GoalController {
   private readonly sessionManager: SessionManager;
   private restorePromise: Promise<void> | null = null;
   private readonly inFlight: Set<string> = new Set();
-  private readonly observedSessions: Set<string> = new Set();
   private readonly observerDisposers: Map<string, () => void> = new Map();
   private readonly scheduledEvaluations = new Map<string, {
     timer: ReturnType<typeof setTimeout>;
@@ -657,7 +656,6 @@ export class GoalController {
 
   private attachSessionObservers(task: GoalTaskState, session: Session): void {
     if (this.observerDisposers.has(session.id)) return;
-    this.observedSessions.add(session.id);
     const onStatusChange = (_current: Session, nextStatus: Session["status"]) => {
       if (nextStatus === "completed" || nextStatus === "failed" || nextStatus === "killed") {
         this.removeSessionObserver(session.id);
@@ -686,7 +684,6 @@ export class GoalController {
     session.on("statusChange", onStatusChange);
     session.on("turnEnd", onTurnEnd);
     this.observerDisposers.set(session.id, () => {
-      this.observedSessions.delete(session.id);
       session.off?.("statusChange", onStatusChange);
       session.off?.("turnEnd", onTurnEnd);
       session.removeListener?.("statusChange", onStatusChange);

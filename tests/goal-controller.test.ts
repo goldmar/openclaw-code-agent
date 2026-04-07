@@ -173,7 +173,7 @@ describe("GoalController", () => {
     assert.deepEqual(notifications.map((note) => note.label), ["goal-task-failed"]);
   });
 
-  it("drops observed session ids after the attached session reaches a terminal state", () => {
+  it("drops attached session observers after the attached session reaches a terminal state", () => {
     const controller = new GoalController({} as any);
     const store = createStore();
     (controller as any).store = store;
@@ -190,11 +190,11 @@ describe("GoalController", () => {
     });
 
     (controller as any).attachSessionObservers(task, session);
-    assert.equal((controller as any).observedSessions.has("session-1"), true);
+    assert.equal((controller as any).observerDisposers.has("session-1"), true);
 
     session.emit("statusChange", session, "completed", "running");
 
-    assert.equal((controller as any).observedSessions.has("session-1"), false);
+    assert.equal((controller as any).observerDisposers.has("session-1"), false);
   });
 
   it("coalesces duplicate turn-end evaluations for the same task", async () => {

@@ -794,6 +794,26 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     assert.deepEqual(scheduledKeys, ["runtime-gc:gc-session"]);
   });
 
+  it("cancels runtime GC deadlines for persisted sessions evicted by retention", () => {
+    const sm = new SessionManager(5, 1);
+    const cancelledKeys: string[] = [];
+
+    (sm as any).maintenance.cancel = ((key: string) => {
+      cancelledKeys.push(key);
+    }) as any;
+    (sm as any).maintenance.cancelPrefix = (() => {}) as any;
+    (sm as any).store.evictOldestPersisted = () => [{
+      sessionId: "evicted-session",
+      harnessSessionId: "evicted-thread",
+      backendRef: { kind: "claude-code", conversationId: "evicted-thread" },
+      outputPath: undefined,
+    }];
+
+    (sm as any).enforcePersistedRetention();
+
+    assert.ok(cancelledKeys.includes("runtime-gc:evicted-session"));
+  });
+
   it("re-arms runtime GC when the configured max age increases after scheduling", () => {
     setPluginConfig({ sessionGcAgeMinutes: 1 });
     const sm = new SessionManager(5, 5);
