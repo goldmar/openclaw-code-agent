@@ -629,7 +629,7 @@ describe("GoalController", () => {
   });
 
   it("logs queued evaluation errors instead of dropping the rejection", async () => {
-    const controller = new GoalController({} as any);
+    const controller = new GoalController({ resolve: () => undefined } as any);
     const originalWarn = console.warn;
     const warnings: string[] = [];
 
