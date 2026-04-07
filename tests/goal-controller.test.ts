@@ -231,6 +231,25 @@ describe("GoalController", () => {
     controller.stop();
   });
 
+  it("preserves the first concrete dirty session hint while a task is in flight", async () => {
+    const controller = new GoalController({ resolve: () => undefined } as any);
+    const store = createStore();
+    (controller as any).store = store;
+
+    const task = buildTask({ status: "running" });
+    store.upsert(task);
+    (controller as any).inFlight.add(task.id);
+
+    await (controller as any).reconcileTask(task, "dirty-1");
+    assert.equal((controller as any).dirtyEvaluationSessionIds.get(task.id), undefined);
+
+    await (controller as any).reconcileTask(task, "dirty-2", "session-current");
+    assert.equal((controller as any).dirtyEvaluationSessionIds.get(task.id), "session-current");
+
+    await (controller as any).reconcileTask(task, "dirty-3", "session-stale");
+    assert.equal((controller as any).dirtyEvaluationSessionIds.get(task.id), "session-current");
+  });
+
   it("does not overwrite a terminal task when stopTask is called again", () => {
     const killed: Array<{ id: string; reason: string }> = [];
     const notifications: string[] = [];

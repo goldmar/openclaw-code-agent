@@ -1027,7 +1027,12 @@ export class GoalController {
     }
     if (this.inFlight.has(task.id)) {
       this.dirtyEvaluations.add(task.id);
-      this.dirtyEvaluationSessionIds.set(task.id, hintedSessionId);
+      const existingDirtySessionId = this.dirtyEvaluationSessionIds.get(task.id);
+      if (!existingDirtySessionId && hintedSessionId) {
+        this.dirtyEvaluationSessionIds.set(task.id, hintedSessionId);
+      } else if (!this.dirtyEvaluationSessionIds.has(task.id)) {
+        this.dirtyEvaluationSessionIds.set(task.id, hintedSessionId);
+      }
       return;
     }
 
