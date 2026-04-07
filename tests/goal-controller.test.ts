@@ -166,7 +166,7 @@ describe("GoalController", () => {
     });
     store.upsert(task);
 
-    await (controller as any).reconcileAll();
+    await (controller as any).reconcileTask(task);
 
     assert.equal(task.status, "failed");
     assert.match(task.failureReason ?? "", /cannot continue autonomously/i);

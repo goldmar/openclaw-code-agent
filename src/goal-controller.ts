@@ -1084,12 +1084,4 @@ export class GoalController {
     }
   }
 
-  private async reconcileAll(): Promise<void> {
-    if (this.restorePromise) {
-      await this.restorePromise;
-    }
-    for (const task of this.store.list()) {
-      await this.reconcileTask(task);
-    }
-  }
 }
