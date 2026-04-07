@@ -729,6 +729,45 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     assert.equal(typeof cleanupTimes[0], "number");
   });
 
+  it("seeds retention for legacy merged sessions without worktreeLifecycle metadata", () => {
+    const sm = new SessionManager(5, 5);
+    const now = Date.now();
+    const scheduledKeys: string[] = [];
+
+    (sm as any).store.cleanupOrphanOutputFiles = () => {};
+    (sm as any).store.cleanupTmpOutputFiles = () => {};
+    (sm as any).maintenance.schedule = ((key: string) => {
+      scheduledKeys.push(key);
+    }) as any;
+
+    const legacyResolved = {
+      sessionId: "legacy-resolved-session",
+      harnessSessionId: "legacy-resolved-thread",
+      backendRef: { kind: "claude-code", conversationId: "legacy-resolved-thread" },
+      name: "legacy-resolved-session",
+      prompt: "test",
+      workdir: "/tmp",
+      createdAt: now - 60_000,
+      completedAt: now - 30_000,
+      status: "completed",
+      lifecycle: "terminal",
+      approvalState: "not_required",
+      worktreeState: "merged",
+      runtimeState: "stopped",
+      deliveryState: "idle",
+      costUsd: 0,
+      worktreeBranch: "feature/legacy-resolved",
+      worktreeMergedAt: new Date(now - 10_000).toISOString(),
+    };
+
+    (sm as any).persisted.set(legacyResolved.harnessSessionId, legacyResolved);
+    (sm as any).idIndex.set(legacyResolved.sessionId, legacyResolved.harnessSessionId);
+
+    sm.bootstrapMaintenanceSchedules();
+
+    assert.ok(scheduledKeys.includes("persisted:legacy-resolved-session:worktree-retention"));
+  });
+
   it("does not arm another runtime GC deadline while evicting a session from the GC callback", () => {
     const sm = new SessionManager(5, 5);
     const now = Date.now();
@@ -753,6 +792,27 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
 
     runtimeGcCallback?.();
     assert.deepEqual(scheduledKeys, ["runtime-gc:gc-session"]);
+  });
+
+  it("does not re-arm the token-expiry deadline after purge already triggered a resync", () => {
+    const sm = new SessionManager(5, 5);
+    const scheduledKeys: string[] = [];
+    let tokenExpiryCallback: (() => void) | undefined;
+
+    (sm as any).maintenance.schedule = ((key: string, _at: number, cb: () => void) => {
+      scheduledKeys.push(key);
+      tokenExpiryCallback = cb;
+    }) as any;
+    (sm as any).store.getNextActionTokenExpiry = () => Date.now() + 60_000;
+    (sm as any).store.purgeExpiredActionTokens = () => {
+      (sm as any).syncActionTokenExpiryDeadline();
+    };
+
+    (sm as any).syncActionTokenExpiryDeadline();
+    assert.deepEqual(scheduledKeys, ["tokens:expiry"]);
+
+    tokenExpiryCallback?.();
+    assert.deepEqual(scheduledKeys, ["tokens:expiry", "tokens:expiry"]);
   });
 
   it("backs off reminder retries after a delivery failure instead of rescheduling immediately", () => {

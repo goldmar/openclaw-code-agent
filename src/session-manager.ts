@@ -288,12 +288,21 @@ export class SessionManager {
     }
 
     this.maintenance.cancel(this.persistedMaintenanceKey(ref, "worktree-retention"));
-    const lifecycleState = session.worktreeLifecycle?.state;
-    const resolvedAtIso = session.worktreeLifecycle?.resolvedAt;
-    if (
-      (lifecycleState === "merged" || lifecycleState === "released" || lifecycleState === "dismissed" || lifecycleState === "no_change")
-      && typeof resolvedAtIso === "string"
-    ) {
+    const resolved = resolveWorktreeLifecycle(session, {
+      activeSession: false,
+      includePrSync: session.worktreeLifecycle?.state === "pr_open" || Boolean(session.worktreePrUrl),
+    });
+    const resolvedAtIso = session.worktreeLifecycle?.resolvedAt
+      ?? session.worktreeMergedAt
+      ?? session.worktreeDismissedAt
+      ?? (session.completedAt ? new Date(session.completedAt).toISOString() : undefined);
+    const legacyResolved =
+      session.worktreeMerged === true
+      || session.worktreeDisposition === "dismissed"
+      || session.worktreeDisposition === "no-change-cleaned"
+      || session.worktreeState === "merged"
+      || session.worktreeState === "dismissed";
+    if ((resolved.cleanupSafe || legacyResolved) && typeof resolvedAtIso === "string") {
       const resolvedAt = new Date(resolvedAtIso).getTime();
       if (Number.isFinite(resolvedAt)) {
         this.maintenance.schedule(this.persistedMaintenanceKey(ref, "worktree-retention"), resolvedAt + RESOLVED_WORKTREE_RETENTION_MS, () => {
@@ -365,7 +374,6 @@ export class SessionManager {
     if (nextExpiryAt == null) return;
     this.maintenance.schedule(key, nextExpiryAt, () => {
       this.store.purgeExpiredActionTokens(Date.now());
-      this.syncActionTokenExpiryDeadline();
     });
   }
 
