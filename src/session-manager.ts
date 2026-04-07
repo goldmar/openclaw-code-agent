@@ -26,6 +26,7 @@ import type {
   GoalTaskState,
 } from "./types";
 import { SessionStore } from "./session-store";
+import type { SessionStoreOptions } from "./session-store";
 import { SessionMetricsRecorder } from "./session-metrics";
 import { WakeDispatcher, type SessionNotificationRequest } from "./wake-dispatcher";
 import { SessionInteractionService, type NotificationButton } from "./session-interactions";
@@ -48,11 +49,16 @@ import {
   isGitHubCLIAvailable,
   removeWorktree,
 } from "./worktree";
+import { KeyedDeadlineScheduler } from "./keyed-deadline-scheduler";
+import { unlinkSync } from "fs";
 
 
 const TERMINAL_STATUSES = new Set<SessionStatus>(["completed", "failed", "killed"]);
 const KILLABLE_STATUSES = new Set<SessionStatus>(["starting", "running"]);
 const WAITING_EVENT_DEBOUNCE_MS = 5_000;
+const RESOLVED_WORKTREE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+const WORKTREE_REMINDER_RETRY_BACKOFF_MS = 5 * 60 * 1000;
+const TMP_OUTPUT_CLEANUP_KEY = "tmp-output:cleanup";
 
 
 type SpawnOptions = {
@@ -73,7 +79,6 @@ export class SessionManager {
   private sessions: Map<string, Session>;
   maxSessions: number;
   maxPersistedSessions: number;
-  private lastDailyMaintenanceAt = 0;
 
   private lastWaitingEventTimestamps: Map<string, number> = new Map();
   private lastTurnCompleteMarkers: Map<string, string> = new Map();
@@ -98,13 +103,18 @@ export class SessionManager {
   private readonly worktreeDecisions: SessionWorktreeDecisionService;
   private readonly runtimeBootstrap: SessionRuntimeBootstrapService;
   private readonly worktreeMessages: SessionWorktreeMessageService;
+  private readonly maintenance = new KeyedDeadlineScheduler();
 
-  constructor(maxSessions: number = 20, maxPersistedSessions: number = 50) {
+  constructor(
+    maxSessions: number = 20,
+    maxPersistedSessions: number = 50,
+    options: { store?: SessionStoreOptions } = {},
+  ) {
     this.maxSessions = maxSessions;
     this.maxPersistedSessions = maxPersistedSessions;
     this.registry = new SessionRuntimeRegistry();
     this.sessions = this.registry.sessions;
-    this.store = new SessionStore();
+    this.store = new SessionStore(options.store);
     this.metrics = new SessionMetricsRecorder();
     this.wakeDispatcher = new WakeDispatcher();
     this.interactions = new SessionInteractionService(this.store.actionTokenStore, isGitHubCLIAvailable);
@@ -118,6 +128,7 @@ export class SessionManager {
       this.wakeDispatcher,
       (ref, patch) => this.stateSync.applySessionPatch(ref, patch),
     );
+    this.store.onActionTokensChanged(() => this.syncActionTokenExpiryDeadline());
     this.worktrees = new SessionWorktreeController();
     this.restore = new SessionRestoreService((ref) => this.store.getPersistedSession(ref));
     this.worktreeMessages = new SessionWorktreeMessageService();
@@ -206,7 +217,10 @@ export class SessionManager {
       hydrateSpawnedSession: (session, preparedLaunch, config) => {
         this.restore.hydrateSpawnedSession(session, preparedLaunch, config);
       },
-      markRunning: (session) => this.store.markRunning(session),
+      markRunning: (session) => {
+        this.store.markRunning(session);
+        this.onPersistedSessionChanged(this.store.getPersistedSession(session.id));
+      },
       handleTerminal: async (session) => this.onSessionTerminal(session),
       handleTurnEnd: (session, hadQuestion) => this.onTurnEnd(session, hadQuestion),
       formatLaunchWorkdirLabel: (session) => this.formatLaunchWorkdirLabel(session),
@@ -221,6 +235,209 @@ export class SessionManager {
 
   private uniqueName(baseName: string): string {
     return this.registry.uniqueName(baseName);
+  }
+
+  private persistedMaintenanceRef(
+    session: Pick<PersistedSessionInfo, "sessionId" | "harnessSessionId" | "backendRef">,
+  ): string | undefined {
+    return session.sessionId ?? getBackendConversationId(session) ?? session.harnessSessionId;
+  }
+
+  private runtimeGcKey(sessionId: string): string {
+    return `runtime-gc:${sessionId}`;
+  }
+
+  private persistedMaintenanceKey(ref: string, kind: "worktree-reminder" | "worktree-retention"): string {
+    return `persisted:${ref}:${kind}`;
+  }
+
+  private runtimeGcMaxAgeMs(): number {
+    return (pluginConfig.sessionGcAgeMinutes ?? 1440) * 60_000;
+  }
+
+  private syncRuntimeGcDeadline(session: Pick<Session, "id" | "completedAt">): void {
+    if (!session.completedAt) return;
+    const key = this.runtimeGcKey(session.id);
+    this.maintenance.schedule(key, session.completedAt + this.runtimeGcMaxAgeMs(), () => {
+      const active = this.sessions.get(session.id);
+      if (!active || !active.completedAt) return;
+      const cleanupMaxAgeMs = this.runtimeGcMaxAgeMs();
+      if (!this.store.shouldGcActiveSession(active, Date.now(), cleanupMaxAgeMs)) {
+        this.syncRuntimeGcDeadline(active);
+        return;
+      }
+      this.registry.remove(session.id);
+      this.persistSession(active, { scheduleRuntimeGc: false });
+      this.lastWaitingEventTimestamps.delete(session.id);
+      this.lastTurnCompleteMarkers.delete(session.id);
+      this.lastTerminalWakeMarkers.delete(session.id);
+    });
+  }
+
+  private cancelPersistedMaintenance(session: Pick<PersistedSessionInfo, "sessionId" | "harnessSessionId" | "backendRef">): void {
+    const ref = this.persistedMaintenanceRef(session);
+    if (!ref) return;
+    this.maintenance.cancelPrefix(`persisted:${ref}:`);
+  }
+
+  private onPersistedSessionChanged(session?: PersistedSessionInfo): void {
+    if (!session) return;
+    this.syncPersistedSessionMaintenance(session);
+    this.enforcePersistedRetention();
+  }
+
+  private isLegacyResolvedWorktree(session: Pick<
+    PersistedSessionInfo,
+    "worktreeMerged" | "worktreeDisposition" | "worktreeState"
+  >): boolean {
+    return session.worktreeMerged === true
+      || session.worktreeDisposition === "dismissed"
+      || session.worktreeDisposition === "no-change-cleaned"
+      || session.worktreeState === "merged"
+      || session.worktreeState === "dismissed";
+  }
+
+  private syncPersistedSessionMaintenance(session: PersistedSessionInfo): void {
+    const ref = this.persistedMaintenanceRef(session);
+    if (!ref) return;
+
+    this.maintenance.cancel(this.persistedMaintenanceKey(ref, "worktree-reminder"));
+    const nextReminderAt = this.reminders.getNextReminderAt(session);
+    if (nextReminderAt != null) {
+      this.schedulePersistedWorktreeReminder(ref, nextReminderAt);
+    }
+
+    this.maintenance.cancel(this.persistedMaintenanceKey(ref, "worktree-retention"));
+    const resolved = resolveWorktreeLifecycle(session, {
+      activeSession: false,
+      includePrSync: session.worktreeLifecycle?.state === "pr_open" || Boolean(session.worktreePrUrl),
+    });
+    const resolvedAtIso = session.worktreeLifecycle?.resolvedAt
+      ?? session.worktreeMergedAt
+      ?? session.worktreeDismissedAt
+      ?? (session.completedAt ? new Date(session.completedAt).toISOString() : undefined);
+    const legacyResolved = this.isLegacyResolvedWorktree(session);
+    if ((resolved.cleanupSafe || legacyResolved) && typeof resolvedAtIso === "string") {
+      const resolvedAt = new Date(resolvedAtIso).getTime();
+      if (Number.isFinite(resolvedAt)) {
+        this.maintenance.schedule(this.persistedMaintenanceKey(ref, "worktree-retention"), resolvedAt + RESOLVED_WORKTREE_RETENTION_MS, () => {
+          const latest = this.store.getPersistedSession(ref);
+          if (!latest) return;
+          this.reconcileResolvedWorktreeRetention(latest, Date.now());
+        });
+      }
+    }
+  }
+
+  private schedulePersistedWorktreeReminder(ref: string, at: number): void {
+    const key = this.persistedMaintenanceKey(ref, "worktree-reminder");
+    this.maintenance.schedule(key, at, () => {
+      const latest = this.store.getPersistedSession(ref);
+      if (!latest) return;
+      const delivered = this.reminders.sendReminderIfDue(latest, Date.now());
+      if (delivered) return;
+
+      const nextReminderAt = this.reminders.getNextReminderAt(latest);
+      if (nextReminderAt == null) return;
+      this.schedulePersistedWorktreeReminder(ref, Math.max(nextReminderAt, Date.now() + WORKTREE_REMINDER_RETRY_BACKOFF_MS));
+    });
+  }
+
+  private reconcileResolvedWorktreeRetention(session: PersistedSessionInfo, now: number): void {
+    const resolved = resolveWorktreeLifecycle(session, {
+      activeSession: false,
+      includePrSync: session.worktreeLifecycle?.state === "pr_open" || Boolean(session.worktreePrUrl),
+    });
+    const resolvedAtIso = session.worktreeLifecycle?.resolvedAt
+      ?? session.worktreeMergedAt
+      ?? session.worktreeDismissedAt
+      ?? (session.completedAt ? new Date(session.completedAt).toISOString() : undefined);
+    const resolvedAt = resolvedAtIso ? new Date(resolvedAtIso).getTime() : 0;
+    const legacyResolved = this.isLegacyResolvedWorktree(session);
+    if ((!resolved.cleanupSafe && !legacyResolved) || !resolvedAt || now - resolvedAt < RESOLVED_WORKTREE_RETENTION_MS) return;
+
+    try {
+      if (!session.worktreePath && !usesNativeBackendWorktree(session)) return;
+      const repoDir = this.resolveWorktreeRepoDir(session.workdir, session.worktreePath);
+      if (!repoDir) return;
+      const removed = usesNativeBackendWorktree(session)
+        ? false
+        : removeWorktree(repoDir, session.worktreePath!);
+      if (!usesNativeBackendWorktree(session) && !removed) return;
+      for (const mutationRef of getPersistedMutationRefs(session)) {
+        this.updatePersistedSession(mutationRef, {
+          worktreePath: undefined,
+          worktreeBranch: undefined,
+          worktreeState: "none",
+          worktreeLifecycle: {
+            ...(session.worktreeLifecycle ?? resolved.lifecycle),
+            state: resolved.derivedState,
+            updatedAt: new Date(now).toISOString(),
+            resolvedAt: session.worktreeLifecycle?.resolvedAt ?? new Date(now).toISOString(),
+            resolutionSource: session.worktreeLifecycle?.resolutionSource ?? "maintenance",
+            notes: resolved.reasons,
+          },
+        });
+      }
+    } catch (err) {
+      console.warn(`[SessionManager] Failed maintenance cleanup for worktree ${session.worktreePath}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  private syncActionTokenExpiryDeadline(): void {
+    const key = "tokens:expiry";
+    this.maintenance.cancel(key);
+    const nextExpiryAt = this.store.getNextActionTokenExpiry();
+    if (nextExpiryAt == null) return;
+    this.maintenance.schedule(key, nextExpiryAt, () => {
+      this.store.purgeExpiredActionTokens(Date.now());
+    });
+  }
+
+  private syncTmpOutputCleanupDeadline(now: number = Date.now()): void {
+    this.maintenance.cancel(TMP_OUTPUT_CLEANUP_KEY);
+    const nextCleanupAt = this.store.getNextTmpOutputCleanupAt(now);
+    if (nextCleanupAt == null) return;
+    this.maintenance.schedule(TMP_OUTPUT_CLEANUP_KEY, nextCleanupAt, () => {
+      const cleanupNow = Date.now();
+      this.store.cleanupTmpOutputFiles(cleanupNow);
+      this.syncTmpOutputCleanupDeadline(cleanupNow);
+    });
+  }
+
+  private cleanupOutputPathIfUnreferenced(outputPath: string | undefined): void {
+    if (!outputPath || this.store.hasOutputPathReference(outputPath)) return;
+    try {
+      unlinkSync(outputPath);
+    } catch {
+      // best-effort
+    }
+  }
+
+  private enforcePersistedRetention(): void {
+    const evicted = this.store.evictOldestPersisted(this.maxPersistedSessions);
+    for (const session of evicted) {
+      this.cancelPersistedMaintenance(session);
+      if (session.sessionId) {
+        this.maintenance.cancel(this.runtimeGcKey(session.sessionId));
+      }
+      this.cleanupOutputPathIfUnreferenced(session.outputPath);
+    }
+  }
+
+  bootstrapMaintenanceSchedules(): void {
+    const now = Date.now();
+    this.store.cleanupTmpOutputFiles(now);
+    for (const session of this.store.listPersistedSessions()) {
+      this.syncPersistedSessionMaintenance(session);
+    }
+    this.syncActionTokenExpiryDeadline();
+    this.store.cleanupOrphanOutputFiles();
+    this.syncTmpOutputCleanupDeadline(now);
+  }
+
+  private disposeMaintenance(): void {
+    this.maintenance.dispose();
   }
 
   /** Spawn and start a new session, wiring lifecycle listeners and launch notification. */
@@ -241,6 +458,7 @@ export class SessionManager {
       this.lastWaitingEventTimestamps.delete(config.sessionIdOverride);
       this.lastTurnCompleteMarkers.delete(config.sessionIdOverride);
       this.lastTerminalWakeMarkers.delete(config.sessionIdOverride);
+      this.maintenance.cancel(this.runtimeGcKey(config.sessionIdOverride));
     }
 
     const baseName = config.name || generateSessionName(config.prompt);
@@ -662,7 +880,8 @@ export class SessionManager {
     return formatStoppedStatusLabel(killReason);
   }
 
-  private persistSession(session: Session): void {
+  private persistSession(session: Session, options: { scheduleRuntimeGc?: boolean } = {}): void {
+    const scheduleRuntimeGc = options.scheduleRuntimeGc ?? true;
     // Record metrics once
     const alreadyPersisted = this.store.hasRecordedSession(session.id);
     if (!alreadyPersisted) {
@@ -670,6 +889,11 @@ export class SessionManager {
     }
 
     this.store.persistTerminal(session);
+    if (scheduleRuntimeGc) {
+      this.syncRuntimeGcDeadline(session);
+    }
+    this.onPersistedSessionChanged(this.store.getPersistedSession(session.id));
+    this.syncTmpOutputCleanupDeadline();
   }
 
   getMetrics(): SessionMetrics { return this.metrics.getMetrics(); }
@@ -989,30 +1213,16 @@ export class SessionManager {
 
   /** Update fields on a persisted session record and flush to disk. */
   updatePersistedSession(ref: string, patch: Partial<PersistedSessionInfo>): boolean {
-    return this.stateSync.applySessionPatch(ref, patch);
+    const updated = this.stateSync.applySessionPatch(ref, patch);
+    if (updated) {
+      this.onPersistedSessionChanged(this.store.getPersistedSession(ref));
+    }
+    return updated;
   }
 
   /** Return persisted sessions newest-first. */
   listPersistedSessions(): PersistedSessionInfo[] {
     return this.store.listPersistedSessions();
-  }
-
-  /** Send periodic reminders for sessions with unresolved pending worktree decisions. */
-  private remindStaleDecisions(): void {
-    this.reminders.remindStaleDecisions(this.store.listPersistedSessions());
-  }
-
-  /** Send a notification for a persisted (not active) session using its stored origin channel. */
-  private sendReminderNotification(session: PersistedSessionInfo, text: string): void {
-    const now = Date.now();
-    const pendingSince = session.pendingWorktreeDecisionSince
-      ? new Date(session.pendingWorktreeDecisionSince).getTime()
-      : now - 4 * 60 * 60 * 1000;
-    this.reminders.remindStaleDecisions([{
-      ...session,
-      pendingWorktreeDecisionSince: new Date(pendingSince).toISOString(),
-      lastWorktreeReminderAt: undefined,
-    }], now);
   }
 
   /**
@@ -1048,76 +1258,8 @@ export class SessionManager {
     return true;
   }
 
-  /** Evict stale runtime records and enforce persisted/session-output retention limits. */
-  cleanup(): void {
-    const now = Date.now();
-    this.remindStaleDecisions();
-    this.runDailyWorktreeMaintenance(now);
-    // GC only evicts terminal sessions from the runtime in-memory map.
-    // Persisted entries stay in SessionStore for resume/list/output lookups.
-    // "evicted from runtime cache" means removed from `this.sessions`, not lost.
-    const cleanupMaxAgeMs = (pluginConfig.sessionGcAgeMinutes ?? 1440) * 60_000;
-    for (const [id, session] of this.sessions) {
-      if (this.store.shouldGcActiveSession(session, now, cleanupMaxAgeMs)) {
-        this.persistSession(session);
-        this.registry.remove(id);
-        this.lastWaitingEventTimestamps.delete(id);
-        this.lastTurnCompleteMarkers.delete(id);
-        this.lastTerminalWakeMarkers.delete(id);
-      }
-    }
-
-    this.store.cleanupTmpOutputFiles(now);
-    this.store.evictOldestPersisted(this.maxPersistedSessions);
-  }
-
-  private runDailyWorktreeMaintenance(now: number): void {
-    const DAY_MS = 24 * 60 * 60 * 1000;
-    const RESOLVED_RETENTION_MS = 7 * DAY_MS;
-    if (now - this.lastDailyMaintenanceAt < DAY_MS) return;
-    this.lastDailyMaintenanceAt = now;
-
-    for (const session of this.store.listPersistedSessions()) {
-      const resolved = resolveWorktreeLifecycle(session, {
-        activeSession: false,
-        includePrSync: session.worktreeLifecycle?.state === "pr_open" || Boolean(session.worktreePrUrl),
-      });
-      const resolvedAtIso = session.worktreeLifecycle?.resolvedAt
-        ?? session.worktreeMergedAt
-        ?? session.worktreeDismissedAt
-        ?? (session.completedAt ? new Date(session.completedAt).toISOString() : undefined);
-      const resolvedAt = resolvedAtIso ? new Date(resolvedAtIso).getTime() : 0;
-      if (!resolved.cleanupSafe || !resolvedAt || now - resolvedAt < RESOLVED_RETENTION_MS) continue;
-
-      try {
-        const repoDir = this.resolveWorktreeRepoDir(session.workdir, session.worktreePath);
-        if (!repoDir) continue;
-        const removed = usesNativeBackendWorktree(session)
-          ? false
-          : removeWorktree(repoDir, session.worktreePath);
-        if (!usesNativeBackendWorktree(session) && !removed) continue;
-        for (const mutationRef of getPersistedMutationRefs(session)) {
-          this.updatePersistedSession(mutationRef, {
-            worktreePath: undefined,
-            worktreeBranch: undefined,
-            worktreeState: "none",
-            worktreeLifecycle: {
-              ...(session.worktreeLifecycle ?? resolved.lifecycle),
-              state: resolved.derivedState,
-              updatedAt: new Date().toISOString(),
-              resolvedAt: session.worktreeLifecycle?.resolvedAt ?? new Date().toISOString(),
-              resolutionSource: session.worktreeLifecycle?.resolutionSource ?? "maintenance",
-              notes: resolved.reasons,
-            },
-          });
-        }
-      } catch (err) {
-        console.warn(`[SessionManager] Failed daily cleanup for worktree ${session.worktreePath}: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    }
-  }
-
   dispose(): void {
+    this.disposeMaintenance();
     this.questions.dispose();
     this.notifications.dispose();
   }

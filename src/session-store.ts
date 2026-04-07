@@ -13,7 +13,9 @@ import { SessionStoreQueries } from "./session-store-queries";
 import {
   archiveLegacyCodexEntries,
   archiveLegacySessionIndex,
+  cleanupOrphanOutputFiles,
   cleanupTmpOutputFiles,
+  getNextTmpOutputCleanupAt,
   loadSessionStoreIndex,
   resolveSessionIndexPath,
   saveSessionStoreIndex,
@@ -26,7 +28,7 @@ import {
 const TERMINAL_STATUSES = new Set<SessionStatus>(["completed", "failed", "killed"]);
 const TMP_OUTPUT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
-interface SessionStoreOptions {
+export interface SessionStoreOptions {
   env?: NodeJS.ProcessEnv;
   indexPath?: string;
 }
@@ -336,16 +338,21 @@ export class SessionStore {
     cleanupTmpOutputFiles(now, TMP_OUTPUT_MAX_AGE_MS);
   }
 
+  getNextTmpOutputCleanupAt(now: number): number | undefined {
+    return getNextTmpOutputCleanupAt(now, TMP_OUTPUT_MAX_AGE_MS);
+  }
+
   /** Enforce max persisted session retention by evicting oldest records and indexes. */
-  evictOldestPersisted(maxPersistedSessions: number): void {
+  evictOldestPersisted(maxPersistedSessions: number): PersistedSessionInfo[] {
     const all = this.listPersistedSessions();
-    if (all.length <= maxPersistedSessions) return;
+    if (all.length <= maxPersistedSessions) return [];
 
     const toEvict = all.slice(maxPersistedSessions);
     for (const info of toEvict) {
       this.removePersistedIndexes(info);
     }
     this.saveIndex();
+    return toEvict;
   }
 
   /** True when a runtime terminal session exceeded the configured in-memory TTL. */
@@ -369,5 +376,32 @@ export class SessionStore {
 
   purgeExpiredActionTokens(now: number = Date.now()): void {
     this.actionTokenStore.purgeExpiredActionTokens(now);
+  }
+
+  getNextActionTokenExpiry(): number | undefined {
+    return this.actionTokenStore.nextExpiryAt();
+  }
+
+  onActionTokensChanged(listener: (() => void) | undefined): void {
+    this.actionTokenStore.setAfterChangeListener(listener);
+  }
+
+  hasOutputPathReference(outputPath: string): boolean {
+    for (const session of this.persisted.values()) {
+      if (session.outputPath === outputPath) return true;
+    }
+    return false;
+  }
+
+  getReferencedOutputPaths(): string[] {
+    return [...new Set(
+      [...this.persisted.values()]
+        .map((session) => session.outputPath)
+        .filter((path): path is string => typeof path === "string" && path.length > 0),
+    )];
+  }
+
+  cleanupOrphanOutputFiles(): void {
+    cleanupOrphanOutputFiles(this.getReferencedOutputPaths());
   }
 }

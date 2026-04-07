@@ -337,10 +337,15 @@ function runCommand(workdir: string, spec: GoalVerifierSpec): Promise<GoalVerifi
 export class GoalController {
   private readonly store: GoalTaskStore;
   private readonly sessionManager: SessionManager;
-  private reconcileTimer: ReturnType<typeof setInterval> | null = null;
   private restorePromise: Promise<void> | null = null;
   private readonly inFlight: Set<string> = new Set();
-  private readonly observedSessions: Set<string> = new Set();
+  private readonly observerDisposers: Map<string, () => void> = new Map();
+  private readonly scheduledEvaluations = new Map<string, {
+    timer: ReturnType<typeof setTimeout>;
+    sessionId?: string;
+  }>();
+  private readonly dirtyEvaluations = new Set<string>();
+  private readonly dirtyEvaluationSessionIds = new Map<string, string | undefined>();
   private started = false;
 
   constructor(sessionManager: SessionManager) {
@@ -351,26 +356,20 @@ export class GoalController {
   start(): void {
     if (this.started) return;
     this.started = true;
-    if (this.reconcileTimer || this.restorePromise) return;
+    if (this.restorePromise) return;
     this.restorePromise = this.restoreRecoverableTasks()
       .catch((err: unknown) => {
         console.warn(`[GoalController] Failed to restore recoverable tasks: ${errorMessage(err)}`);
       })
       .finally(() => {
         this.restorePromise = null;
-        if (!this.started || this.reconcileTimer) return;
-        this.reconcileTimer = setInterval(() => {
-          void this.reconcileAll().catch((err: unknown) => {
-            console.warn(`[GoalController] reconcileAll error: ${errorMessage(err)}`);
-          });
-        }, 5_000);
       });
   }
 
   stop(): void {
     this.started = false;
-    if (this.reconcileTimer) clearInterval(this.reconcileTimer);
-    this.reconcileTimer = null;
+    this.clearScheduledEvaluations();
+    this.detachSessionObservers();
     this.captureRecoverableTasks();
     this.store.save();
   }
@@ -426,6 +425,7 @@ export class GoalController {
     task.status = "running";
     task.updatedAt = Date.now();
     this.store.upsert(task);
+    this.scheduleTaskEvaluation(task.id, "launch", session.id);
 
     this.notify(task, `🎯 [${task.name}] Goal task started\n\nGoal:\n${truncate(task.goal, 500)}`, "goal-task-started");
     return task;
@@ -588,6 +588,7 @@ export class GoalController {
         task.updatedAt = Date.now();
         this.store.upsert(task);
         this.notifyIterationStatus(task, `🔄 [${task.name}] Goal task resumed after gateway restart`, resumed);
+        this.scheduleTaskEvaluation(task.id, "restore", resumed.id);
       } catch (err: unknown) {
         this.markTaskFailed(task, `Failed to resume the goal task after gateway restart: ${errorMessage(err)}`);
       }
@@ -654,15 +655,15 @@ export class GoalController {
   }
 
   private attachSessionObservers(task: GoalTaskState, session: Session): void {
-    if (this.observedSessions.has(session.id)) return;
-    this.observedSessions.add(session.id);
-    session.on("statusChange", (_current, nextStatus) => {
+    if (this.observerDisposers.has(session.id)) return;
+    const onStatusChange = (_current: Session, nextStatus: Session["status"]) => {
       if (nextStatus === "completed" || nextStatus === "failed" || nextStatus === "killed") {
-        this.observedSessions.delete(session.id);
+        this.removeSessionObserver(session.id);
+        this.scheduleTaskEvaluation(task.id, `status:${nextStatus}`, session.id);
       }
-    });
+    };
 
-    session.on("turnEnd", () => {
+    const onTurnEnd = () => {
       const current = this.store.get(task.id);
       if (!current) return;
 
@@ -677,7 +678,60 @@ export class GoalController {
       this.store.upsert(current);
 
       this.notifyIterationStatus(current, `🔄 [${current.name}] Coding turn complete`, session);
+      this.scheduleTaskEvaluation(task.id, "turnEnd", session.id);
+    };
+
+    session.on("statusChange", onStatusChange);
+    session.on("turnEnd", onTurnEnd);
+    this.observerDisposers.set(session.id, () => {
+      session.off?.("statusChange", onStatusChange);
+      session.off?.("turnEnd", onTurnEnd);
+      session.removeListener?.("statusChange", onStatusChange);
+      session.removeListener?.("turnEnd", onTurnEnd);
     });
+  }
+
+  private scheduleTaskEvaluation(taskId: string, trigger: string, sessionId?: string): void {
+    if (!this.started) return;
+    const existing = this.scheduledEvaluations.get(taskId);
+    if (existing) {
+      if (!existing.sessionId && sessionId) existing.sessionId = sessionId;
+      return;
+    }
+
+    const entry = {
+      timer: setTimeout(() => {
+        this.scheduledEvaluations.delete(taskId);
+        void this.evaluateTask(taskId, trigger, entry.sessionId).catch((err: unknown) => {
+          console.warn(`[GoalController] evaluateTask error (${trigger}): ${errorMessage(err)}`);
+        });
+      }, 0),
+      sessionId,
+    };
+    entry.timer.unref?.();
+    this.scheduledEvaluations.set(taskId, entry);
+  }
+
+  private clearScheduledEvaluations(): void {
+    for (const entry of this.scheduledEvaluations.values()) {
+      clearTimeout(entry.timer);
+    }
+    this.scheduledEvaluations.clear();
+    this.dirtyEvaluations.clear();
+    this.dirtyEvaluationSessionIds.clear();
+  }
+
+  private detachSessionObservers(): void {
+    for (const sessionId of [...this.observerDisposers.keys()]) {
+      this.removeSessionObserver(sessionId);
+    }
+  }
+
+  private removeSessionObserver(sessionId: string): void {
+    const dispose = this.observerDisposers.get(sessionId);
+    if (!dispose) return;
+    this.observerDisposers.delete(sessionId);
+    dispose();
   }
 
   private markTaskFailed(task: GoalTaskState, reason: string): void {
@@ -758,6 +812,7 @@ export class GoalController {
       const resumed = await this.resumeTaskSession(task, prompt, session);
       this.setTaskRunningWithSession(task, resumed);
       this.notifyIterationStatus(task, `🔄 [${task.name}] Goal task resumed after idle timeout`, resumed);
+      this.scheduleTaskEvaluation(task.id, "idle-timeout-resume", resumed.id);
     } catch (err: unknown) {
       this.markTaskFailed(task, `Failed to resume the goal task after idle timeout: ${errorMessage(err)}`);
     }
@@ -797,6 +852,7 @@ export class GoalController {
         this.attachSessionObservers(task, resumed);
         this.setTaskRunningWithSession(task, resumed);
         this.notifyIterationStatus(task, `🔄 [${task.name}] Goal task resumed after idle timeout`, resumed);
+        this.scheduleTaskEvaluation(task.id, "idle-timeout-plan-resume", resumed.id);
         return;
       }
       if (session.pendingInputState) {
@@ -874,6 +930,7 @@ export class GoalController {
           const resumed = await this.resumeTaskSession(task, prompt, session);
           this.setTaskRunningWithSession(task, resumed);
           this.notifyIterationStatus(task, `🔁 [${task.name}] Completion claimed but verifiers still failed`);
+          this.scheduleTaskEvaluation(task.id, "ralph-verifier-resume", resumed.id);
         } catch (err: unknown) {
           this.markTaskFailed(task, `Failed to resume the Ralph goal task after verifier failure: ${errorMessage(err)}`);
         }
@@ -906,6 +963,7 @@ export class GoalController {
         const resumed = await this.resumeTaskSession(task, prompt, session);
         this.setTaskRunningWithSession(task, resumed);
         this.notifyIterationStatus(task, `🔁 [${task.name}] Ralph iteration continued`);
+        this.scheduleTaskEvaluation(task.id, "ralph-continue", resumed.id);
       } catch (err: unknown) {
         this.markTaskFailed(task, `Failed to continue the Ralph goal task: ${errorMessage(err)}`);
       }
@@ -945,20 +1003,48 @@ export class GoalController {
       const resumed = await this.resumeTaskSession(task, prompt, session);
       this.setTaskRunningWithSession(task, resumed);
       this.notifyIterationStatus(task, `🔁 [${task.name}] Repair iteration started after verifier failure`);
+      this.scheduleTaskEvaluation(task.id, "repair-resume", resumed.id);
     } catch (err: unknown) {
       this.markTaskFailed(task, `Failed to resume the goal task: ${errorMessage(err)}`);
     }
   }
 
-  private async reconcileTask(task: GoalTaskState): Promise<void> {
+  private async evaluateTask(taskId: string, trigger: string, hintedSessionId?: string): Promise<void> {
+    if (this.restorePromise) {
+      await this.restorePromise;
+    }
+    const task = this.store.get(taskId);
+    if (!task) return;
+    await this.reconcileTask(task, trigger, hintedSessionId);
+  }
+
+  private async reconcileTask(task: GoalTaskState, trigger: string = "manual", hintedSessionId?: string): Promise<void> {
     if (task.status === "succeeded" || task.status === "failed" || task.status === "stopped") {
       return;
     }
-    if (this.inFlight.has(task.id)) return;
+    if (this.inFlight.has(task.id)) {
+      this.dirtyEvaluations.add(task.id);
+      const existingDirtySessionId = this.dirtyEvaluationSessionIds.get(task.id);
+      if (!existingDirtySessionId && hintedSessionId) {
+        this.dirtyEvaluationSessionIds.set(task.id, hintedSessionId);
+      } else if (!this.dirtyEvaluationSessionIds.has(task.id)) {
+        this.dirtyEvaluationSessionIds.set(task.id, hintedSessionId);
+      }
+      return;
+    }
 
     this.inFlight.add(task.id);
     try {
-      const session = task.sessionId ? this.sessionManager.resolve(task.sessionId) : undefined;
+      if (hintedSessionId && task.sessionId && task.sessionId !== hintedSessionId) {
+        const hintedSession = this.sessionManager.resolve(hintedSessionId);
+        if (hintedSession && (hintedSession.status === "completed" || hintedSession.status === "failed" || hintedSession.status === "killed")) {
+          return;
+        }
+      }
+
+      const session = hintedSessionId
+        ? (this.sessionManager.resolve(hintedSessionId) ?? (task.sessionId ? this.sessionManager.resolve(task.sessionId) : undefined))
+        : (task.sessionId ? this.sessionManager.resolve(task.sessionId) : undefined);
       if (task.status === "waiting_for_user") {
         this.markTaskFailed(task, "Goal task was waiting for user input and cannot continue autonomously");
         return;
@@ -986,15 +1072,13 @@ export class GoalController {
       await this.handleTerminalSession(task, session);
     } finally {
       this.inFlight.delete(task.id);
+      if (this.dirtyEvaluations.has(task.id)) {
+        this.dirtyEvaluations.delete(task.id);
+        const dirtySessionId = this.dirtyEvaluationSessionIds.get(task.id);
+        this.dirtyEvaluationSessionIds.delete(task.id);
+        this.scheduleTaskEvaluation(task.id, `${trigger}:dirty`, dirtySessionId);
+      }
     }
   }
 
-  async reconcileAll(): Promise<void> {
-    if (this.restorePromise) {
-      await this.restorePromise;
-    }
-    for (const task of this.store.list()) {
-      await this.reconcileTask(task);
-    }
-  }
 }

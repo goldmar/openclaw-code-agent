@@ -652,86 +652,321 @@ describe("SessionManager.debounceWaitingEvent()", () => {
   });
 });
 
-// =========================================================================
-// cleanup
-// =========================================================================
+describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
+  it("seeds persisted reminder, retention, token-expiry deadlines, and tmp-output cleanup", () => {
+    const sm = new SessionManager(5, 5);
+    const now = Date.now();
+    const scheduledKeys: string[] = [];
+    const cleanupTimes: number[] = [];
 
-describe("SessionManager.cleanup()", () => {
-  let sm: SessionManager;
+    (sm as any).store.cleanupOrphanOutputFiles = () => {};
+    (sm as any).store.cleanupTmpOutputFiles = (cleanupNow: number) => {
+      cleanupTimes.push(cleanupNow);
+    };
+    (sm as any).store.getNextTmpOutputCleanupAt = () => now + 30_000;
+    (sm as any).maintenance.schedule = ((key: string) => {
+      scheduledKeys.push(key);
+    }) as any;
 
-  beforeEach(() => {
-    setPluginConfig({ sessionGcAgeMinutes: 60 });
-    sm = new SessionManager(5, 2); // maxPersistedSessions = 2
-    (sm as any).persisted.clear();
-    (sm as any).idIndex.clear();
-    (sm as any).nameIndex.clear();
-  });
-
-  it("removes terminal sessions older than configured TTL from sessions map", () => {
-    const oldTime = Date.now() - 2 * 60 * 60 * 1000; // 2 hours ago
-    const s = fakeSession({
-      id: "old-s",
+    const pending = {
+      sessionId: "pending-session",
+      harnessSessionId: "pending-thread",
+      backendRef: { kind: "claude-code", conversationId: "pending-thread" },
+      name: "pending-session",
+      prompt: "test",
+      workdir: "/tmp",
+      createdAt: now,
+      completedAt: now,
       status: "completed",
-      completedAt: oldTime,
-      harnessSessionId: undefined,
-      getOutput: () => [],
+      lifecycle: "awaiting_worktree_decision",
+      approvalState: "not_required",
+      worktreeState: "pending_decision",
+      runtimeState: "stopped",
+      deliveryState: "idle",
+      costUsd: 0,
+      pendingWorktreeDecisionSince: new Date(now - 4 * 60 * 60 * 1000).toISOString(),
+    };
+    const resolved = {
+      sessionId: "resolved-session",
+      harnessSessionId: "resolved-thread",
+      backendRef: { kind: "claude-code", conversationId: "resolved-thread" },
+      name: "resolved-session",
+      prompt: "test",
+      workdir: "/tmp",
+      createdAt: now,
+      completedAt: now,
+      status: "completed",
+      lifecycle: "terminal",
+      approvalState: "not_required",
+      worktreeState: "merged",
+      runtimeState: "stopped",
+      deliveryState: "idle",
+      costUsd: 0,
+      worktreeLifecycle: {
+        state: "merged",
+        updatedAt: new Date(now).toISOString(),
+        resolvedAt: new Date(now).toISOString(),
+      },
+    };
+
+    (sm as any).persisted.set(pending.harnessSessionId, pending);
+    (sm as any).persisted.set(resolved.harnessSessionId, resolved);
+    (sm as any).idIndex.set(pending.sessionId, pending.harnessSessionId);
+    (sm as any).idIndex.set(resolved.sessionId, resolved.harnessSessionId);
+    (sm as any).store.actionTokens.set("token-1", {
+      id: "token-1",
+      sessionId: "pending-session",
+      kind: "view-output",
+      createdAt: now,
+      expiresAt: now + 60_000,
     });
-    (sm as any).sessions.set("old-s", s);
-    sm.cleanup();
-    assert.equal((sm as any).sessions.has("old-s"), false);
+
+    sm.bootstrapMaintenanceSchedules();
+
+    assert.ok(scheduledKeys.includes("persisted:pending-session:worktree-reminder"));
+    assert.ok(scheduledKeys.includes("persisted:resolved-session:worktree-retention"));
+    assert.ok(scheduledKeys.includes("tokens:expiry"));
+    assert.ok(scheduledKeys.includes("tmp-output:cleanup"));
+    assert.equal(cleanupTimes.length, 1);
+    assert.equal(typeof cleanupTimes[0], "number");
   });
 
-  it("keeps terminal sessions that are less than configured TTL", () => {
-    const recentTime = Date.now() - 10 * 60 * 1000; // 10 minutes ago
-    const s = fakeSession({ id: "new-s", status: "completed", completedAt: recentTime });
-    (sm as any).sessions.set("new-s", s);
-    sm.cleanup();
-    assert.equal((sm as any).sessions.has("new-s"), true);
-  });
-
-  it("uses sessionGcAgeMinutes from plugin config", () => {
-    setPluginConfig({ sessionGcAgeMinutes: 5 });
-    const oldTime = Date.now() - 10 * 60 * 1000; // 10 minutes ago
-    const s = fakeSession({ id: "old-short-ttl", status: "completed", completedAt: oldTime });
-    (sm as any).sessions.set("old-short-ttl", s);
-    sm.cleanup();
-    assert.equal((sm as any).sessions.has("old-short-ttl"), false);
-  });
-
-  it("keeps sessions exactly on the TTL boundary", () => {
-    setPluginConfig({ sessionGcAgeMinutes: 5 });
+  it("re-arms tmp-output cleanup from the next actual expiry after each cleanup run", () => {
+    const sm = new SessionManager(5, 5);
     const originalDateNow = Date.now;
     const now = 1_700_000_000_000;
-    Date.now = () => now;
+    let currentNow = now;
+    const scheduled: Array<{ key: string; at: number; cb: () => void }> = [];
+    const cleanupTimes: number[] = [];
+    const nextDeadlines = [now + 60_000, now + 120_000, undefined];
+
+    Date.now = () => currentNow;
+
     try {
-      const boundaryTime = now - 5 * 60 * 1000;
-      const s = fakeSession({ id: "ttl-boundary", status: "completed", completedAt: boundaryTime });
-      (sm as any).sessions.set("ttl-boundary", s);
-      sm.cleanup();
-      assert.equal((sm as any).sessions.has("ttl-boundary"), true);
+      (sm as any).store.getNextTmpOutputCleanupAt = () => nextDeadlines.shift();
+      (sm as any).store.cleanupTmpOutputFiles = (cleanupNow: number) => {
+        cleanupTimes.push(cleanupNow);
+      };
+      (sm as any).maintenance.cancel = (() => {}) as any;
+      (sm as any).maintenance.schedule = ((key: string, at: number, cb: () => void) => {
+        scheduled.push({ key, at, cb });
+      }) as any;
+
+      (sm as any).syncTmpOutputCleanupDeadline(now);
+      assert.equal(scheduled.length, 1);
+      assert.equal(scheduled[0].key, "tmp-output:cleanup");
+      assert.equal(scheduled[0].at, now + 60_000);
+
+      currentNow = now + 60_000;
+      scheduled[0].cb();
+
+      assert.deepEqual(cleanupTimes, [now + 60_000]);
+      assert.equal(scheduled.length, 2);
+      assert.equal(scheduled[1].key, "tmp-output:cleanup");
+      assert.equal(scheduled[1].at, now + 120_000);
+
+      currentNow = now + 120_000;
+      scheduled[1].cb();
+
+      assert.deepEqual(cleanupTimes, [now + 60_000, now + 120_000]);
+      assert.equal(scheduled.length, 2);
     } finally {
       Date.now = originalDateNow;
     }
   });
 
-  it("evicts oldest persisted sessions when exceeding maxPersistedSessions", () => {
-    // maxPersistedSessions = 2, add 3
-    (sm as any).persisted.set("h1", { harnessSessionId: "h1", completedAt: 1000 });
-    (sm as any).persisted.set("h2", { harnessSessionId: "h2", completedAt: 3000 });
-    (sm as any).persisted.set("h3", { harnessSessionId: "h3", completedAt: 2000 });
-    // Set up indexes for evicted session
-    (sm as any).idIndex.set("id-h1", "h1");
-    (sm as any).nameIndex.set("name-h1", "h1");
+  it("seeds retention for legacy merged sessions without worktreeLifecycle metadata", () => {
+    const sm = new SessionManager(5, 5);
+    const now = Date.now();
+    const scheduledKeys: string[] = [];
 
-    sm.cleanup();
+    (sm as any).store.cleanupOrphanOutputFiles = () => {};
+    (sm as any).store.cleanupTmpOutputFiles = () => {};
+    (sm as any).maintenance.schedule = ((key: string) => {
+      scheduledKeys.push(key);
+    }) as any;
 
-    // Should keep the 2 most recent (h2: 3000, h3: 2000), evict h1 (1000)
-    assert.equal((sm as any).persisted.has("h1"), false, "oldest should be evicted");
-    assert.equal((sm as any).persisted.has("h2"), true);
-    assert.equal((sm as any).persisted.has("h3"), true);
-    // Indexes for evicted session should be cleaned
-    assert.equal((sm as any).idIndex.has("id-h1"), false);
-    assert.equal((sm as any).nameIndex.has("name-h1"), false);
+    const legacyResolved = {
+      sessionId: "legacy-resolved-session",
+      harnessSessionId: "legacy-resolved-thread",
+      backendRef: { kind: "claude-code", conversationId: "legacy-resolved-thread" },
+      name: "legacy-resolved-session",
+      prompt: "test",
+      workdir: "/tmp",
+      createdAt: now - 60_000,
+      completedAt: now - 30_000,
+      status: "completed",
+      lifecycle: "terminal",
+      approvalState: "not_required",
+      worktreeState: "merged",
+      runtimeState: "stopped",
+      deliveryState: "idle",
+      costUsd: 0,
+      worktreeBranch: "feature/legacy-resolved",
+      worktreeMergedAt: new Date(now - 10_000).toISOString(),
+    };
+
+    (sm as any).persisted.set(legacyResolved.harnessSessionId, legacyResolved);
+    (sm as any).idIndex.set(legacyResolved.sessionId, legacyResolved.harnessSessionId);
+
+    sm.bootstrapMaintenanceSchedules();
+
+    assert.ok(scheduledKeys.includes("persisted:legacy-resolved-session:worktree-retention"));
+  });
+
+  it("does not arm another runtime GC deadline while evicting a session from the GC callback", () => {
+    const sm = new SessionManager(5, 5);
+    const now = Date.now();
+    const scheduledKeys: string[] = [];
+    let runtimeGcCallback: (() => void) | undefined;
+
+    (sm as any).store.getNextTmpOutputCleanupAt = () => undefined;
+    (sm as any).maintenance.schedule = ((key: string, _at: number, cb: () => void) => {
+      scheduledKeys.push(key);
+      runtimeGcCallback = cb;
+    }) as any;
+    (sm as any).store.shouldGcActiveSession = () => true;
+    (sm as any).store.hasRecordedSession = () => true;
+    (sm as any).store.persistTerminal = () => {};
+    (sm as any).store.getPersistedSession = () => undefined;
+    (sm as any).registry.remove = () => {};
+
+    const session = fakeSession({ id: "gc-session", status: "completed", completedAt: now });
+    (sm as any).sessions.set(session.id, session);
+
+    (sm as any).syncRuntimeGcDeadline(session);
+    assert.deepEqual(scheduledKeys, ["runtime-gc:gc-session"]);
+
+    runtimeGcCallback?.();
+    assert.deepEqual(scheduledKeys, ["runtime-gc:gc-session"]);
+  });
+
+  it("cancels runtime GC deadlines for persisted sessions evicted by retention", () => {
+    const sm = new SessionManager(5, 1);
+    const cancelledKeys: string[] = [];
+
+    (sm as any).maintenance.cancel = ((key: string) => {
+      cancelledKeys.push(key);
+    }) as any;
+    (sm as any).maintenance.cancelPrefix = (() => {}) as any;
+    (sm as any).store.evictOldestPersisted = () => [{
+      sessionId: "evicted-session",
+      harnessSessionId: "evicted-thread",
+      backendRef: { kind: "claude-code", conversationId: "evicted-thread" },
+      outputPath: undefined,
+    }];
+
+    (sm as any).enforcePersistedRetention();
+
+    assert.ok(cancelledKeys.includes("runtime-gc:evicted-session"));
+  });
+
+  it("re-arms runtime GC when the configured max age increases after scheduling", () => {
+    setPluginConfig({ sessionGcAgeMinutes: 1 });
+    const sm = new SessionManager(5, 5);
+    const now = 1_700_000_000_000;
+    const originalDateNow = Date.now;
+    const scheduled: Array<{ key: string; at: number; cb: () => void }> = [];
+
+    Date.now = () => now + 60_000;
+
+    try {
+      (sm as any).maintenance.schedule = ((key: string, at: number, cb: () => void) => {
+        scheduled.push({ key, at, cb });
+      }) as any;
+      (sm as any).store.shouldGcActiveSession = ((_session: any, currentNow: number, cleanupMaxAgeMs: number) => (
+        currentNow - now > cleanupMaxAgeMs
+      )) as any;
+      (sm as any).registry.remove = () => {
+        throw new Error("runtime GC should not evict while config was extended");
+      };
+
+      const session = fakeSession({ id: "gc-session", status: "completed", completedAt: now });
+      (sm as any).sessions.set(session.id, session);
+
+      (sm as any).syncRuntimeGcDeadline(session);
+      assert.equal(scheduled.length, 1);
+      assert.equal(scheduled[0].at, now + 60_000);
+
+      setPluginConfig({ sessionGcAgeMinutes: 2 });
+      scheduled[0].cb();
+
+      assert.equal(scheduled.length, 2);
+      assert.equal(scheduled[1].key, "runtime-gc:gc-session");
+      assert.equal(scheduled[1].at, now + 120_000);
+    } finally {
+      Date.now = originalDateNow;
+      setPluginConfig({});
+    }
+  });
+
+  it("does not re-arm the token-expiry deadline after purge already triggered a resync", () => {
+    const sm = new SessionManager(5, 5);
+    const scheduledKeys: string[] = [];
+    let tokenExpiryCallback: (() => void) | undefined;
+
+    (sm as any).maintenance.schedule = ((key: string, _at: number, cb: () => void) => {
+      scheduledKeys.push(key);
+      tokenExpiryCallback = cb;
+    }) as any;
+    (sm as any).store.getNextActionTokenExpiry = () => Date.now() + 60_000;
+    (sm as any).store.purgeExpiredActionTokens = () => {
+      (sm as any).syncActionTokenExpiryDeadline();
+    };
+
+    (sm as any).syncActionTokenExpiryDeadline();
+    assert.deepEqual(scheduledKeys, ["tokens:expiry"]);
+
+    tokenExpiryCallback?.();
+    assert.deepEqual(scheduledKeys, ["tokens:expiry", "tokens:expiry"]);
+  });
+
+  it("backs off reminder retries after a delivery failure instead of rescheduling immediately", () => {
+    const sm = new SessionManager(5, 5);
+    const originalDateNow = Date.now;
+    const now = 1_700_000_000_000;
+    Date.now = () => now;
+
+    try {
+      const scheduled: Array<{ key: string; at: number; cb: () => void }> = [];
+      const pending = {
+        sessionId: "pending-session",
+        harnessSessionId: "pending-thread",
+        backendRef: { kind: "claude-code", conversationId: "pending-thread" },
+        name: "pending-session",
+        prompt: "test",
+        workdir: "/tmp",
+        createdAt: now,
+        completedAt: now,
+        status: "completed",
+        lifecycle: "awaiting_worktree_decision",
+        approvalState: "not_required",
+        worktreeState: "pending_decision",
+        runtimeState: "stopped",
+        deliveryState: "idle",
+        costUsd: 0,
+        pendingWorktreeDecisionSince: new Date(now - 4 * 60 * 60 * 1000).toISOString(),
+      };
+
+      (sm as any).persisted.set(pending.harnessSessionId, pending);
+      (sm as any).idIndex.set(pending.sessionId, pending.harnessSessionId);
+      (sm as any).maintenance.cancel = (() => {}) as any;
+      (sm as any).maintenance.schedule = ((key: string, at: number, cb: () => void) => {
+        scheduled.push({ key, at, cb });
+      }) as any;
+      (sm as any).reminders.sendReminderIfDue = (() => false) as any;
+
+      (sm as any).syncPersistedSessionMaintenance(pending);
+      assert.equal(scheduled.length, 1);
+
+      scheduled[0].cb();
+
+      assert.equal(scheduled.length, 2);
+      assert.equal(scheduled[1].key, "persisted:pending-session:worktree-reminder");
+      assert.equal(scheduled[1].at, now + 5 * 60 * 1000);
+    } finally {
+      Date.now = originalDateNow;
+    }
   });
 });
 
@@ -1950,114 +2185,5 @@ describe("SessionManager.handleAskUserQuestion()", () => {
 
     sm.resolveAskUserQuestion(session.id, 0);
     await pending;
-  });
-});
-
-// =========================================================================
-// remindStaleDecisions - 3h interval check
-// =========================================================================
-
-describe("SessionManager remindStaleDecisions interval", () => {
-  it("uses 3-hour interval constant", () => {
-    const sm = new SessionManager(5);
-    // Verify the 3h constant by checking a stub session just under 3h doesn't trigger
-    const harnessId = "h-stale";
-    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
-    sm.store.persisted.set(harnessId, {
-      harnessSessionId: harnessId,
-      backendRef: { kind: "claude-code", conversationId: harnessId },
-      name: "stale-session",
-      prompt: "p",
-      workdir: "/tmp",
-      status: "completed",
-      costUsd: 0,
-      pendingWorktreeDecisionSince: twoHoursAgo,
-      worktreeBranch: "agent/stale",
-    } as any);
-
-    const dispatched: any[] = [];
-    (sm as any).notifications = {
-      dispatch: (...args: any[]) => dispatched.push(args),
-      notifyWorktreeOutcome: (...args: any[]) => dispatched.push(args),
-      dispose: () => {},
-    };
-    (sm as any).wakeDispatcher = { clearRetryTimersForSession: () => {}, dispose: () => {} };
-
-    (sm as any).remindStaleDecisions();
-    // Should NOT send reminder since only 2h elapsed (interval is 3h)
-    assert.equal(dispatched.length, 0);
-  });
-
-  it("skips snoozed sessions even if past interval", () => {
-    const sm = new SessionManager(5);
-    const harnessId = "h-snoozed";
-    const fourHoursAgo = new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString();
-    const snoozedUntilFuture = new Date(Date.now() + 20 * 60 * 60 * 1000).toISOString();
-    sm.store.persisted.set(harnessId, {
-      harnessSessionId: harnessId,
-      backendRef: { kind: "claude-code", conversationId: harnessId },
-      name: "snoozed-session",
-      prompt: "p",
-      workdir: "/tmp",
-      status: "completed",
-      costUsd: 0,
-      pendingWorktreeDecisionSince: fourHoursAgo,
-      worktreeDecisionSnoozedUntil: snoozedUntilFuture,
-      worktreeBranch: "agent/snoozed",
-    } as any);
-
-    const dispatched: any[] = [];
-    (sm as any).notifications = {
-      dispatch: (...args: any[]) => dispatched.push(args),
-      notifyWorktreeOutcome: (...args: any[]) => dispatched.push(args),
-      dispose: () => {},
-    };
-    (sm as any).wakeDispatcher = { clearRetryTimersForSession: () => {}, dispose: () => {} };
-
-    (sm as any).remindStaleDecisions();
-    // Should NOT send reminder — snoozed until the future
-    assert.equal(dispatched.length, 0);
-  });
-
-  it("re-wakes the orchestrator for stale delegate decisions without user buttons", () => {
-    const sm = new SessionManager(5);
-    const harnessId = "h-delegate-reminder";
-    const fourHoursAgo = new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString();
-    sm.store.persisted.set(harnessId, {
-      harnessSessionId: harnessId,
-      backendRef: { kind: "claude-code", conversationId: harnessId },
-      sessionId: "s-delegate-reminder",
-      name: "delegate-reminder",
-      prompt: "p",
-      workdir: "/tmp",
-      status: "completed",
-      costUsd: 0,
-      pendingWorktreeDecisionSince: fourHoursAgo,
-      worktreeBranch: "agent/delegate-reminder",
-      worktreeStrategy: "delegate",
-      route: {
-        provider: "telegram",
-        target: "12345",
-        sessionKey: "agent:main:telegram:group:12345",
-      },
-    } as any);
-
-    const dispatched: any[] = [];
-    (sm as any).notifications = {
-      dispatch: (...args: any[]) => dispatched.push(args),
-      notifyWorktreeOutcome: (...args: any[]) => dispatched.push(args),
-      dispose: () => {},
-    };
-    (sm as any).wakeDispatcher = { clearRetryTimersForSession: () => {}, dispose: () => {} };
-
-    (sm as any).remindStaleDecisions();
-
-    assert.equal(dispatched.length, 1);
-    const [_sessionArg, request] = dispatched[0];
-    assert.equal(request.notifyUser, "never");
-    assert.equal(request.userMessage, undefined);
-    assert.equal(request.buttons, undefined);
-    assert.match(request.wakeMessage, /DELEGATED WORKTREE DECISION REMINDER/);
-    assert.match(request.wakeMessage, /Never call agent_pr\(\) autonomously/);
   });
 });

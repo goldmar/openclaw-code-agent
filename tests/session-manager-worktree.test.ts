@@ -11,6 +11,20 @@ function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf-8" }).trim();
 }
 
+function createTestSessionManager(maxSessions = 5): { sm: SessionManager; cleanup: () => void } {
+  const storeDir = mkdtempSync(join(tmpdir(), "sm-session-store-"));
+  const sm = new SessionManager(maxSessions, 50, {
+    store: {
+      env: {},
+      indexPath: join(storeDir, "sessions.json"),
+    },
+  });
+  return {
+    sm,
+    cleanup: () => rmSync(storeDir, { recursive: true, force: true }),
+  };
+}
+
 function stubDispatch(sm: SessionManager): void {
   (sm as any).__dispatchCalls = [];
   (sm as any).notifications = {
@@ -24,6 +38,7 @@ function stubDispatch(sm: SessionManager): void {
 describe("SessionManager.handleWorktreeStrategy()", () => {
   it("notifies no-change cleanup only after the worktree is actually deleted", async () => {
     const repoDir = mkdtempSync(join(tmpdir(), "sm-worktree-"));
+    let cleanup = () => {};
     try {
       git(repoDir, "init", "-b", "main");
       git(repoDir, "config", "user.name", "Test User");
@@ -36,7 +51,9 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       const branchName = getBranchName(worktreePath);
       assert.ok(branchName, "worktree branch should exist");
 
-      const sm = new SessionManager(5);
+      const created = createTestSessionManager(5);
+      const sm = created.sm;
+      cleanup = created.cleanup;
       stubDispatch(sm);
       (sm as any).store.persisted.set("h-no-change", {
         harnessSessionId: "h-no-change",
@@ -93,11 +110,13 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       assert.equal(persisted.worktreeDisposition, "no-change-cleaned");
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
+      cleanup();
     }
   });
 
   it("uses the generic cleanup message for no-change plan sessions", async () => {
     const repoDir = mkdtempSync(join(tmpdir(), "sm-worktree-plan-report-"));
+    let cleanup = () => {};
     try {
       git(repoDir, "init", "-b", "main");
       git(repoDir, "config", "user.name", "Test User");
@@ -110,7 +129,9 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       const branchName = getBranchName(worktreePath);
       assert.ok(branchName, "worktree branch should exist");
 
-      const sm = new SessionManager(5);
+      const created = createTestSessionManager(5);
+      const sm = created.sm;
+      cleanup = created.cleanup;
       stubDispatch(sm);
       (sm as any).store.persisted.set("h-plan-report", {
         harnessSessionId: "h-plan-report",
@@ -166,11 +187,13 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       assert.match(request.wakeMessage, /do NOT repeat the plugin's status line/i);
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
+      cleanup();
     }
   });
 
   it("uses the generic cleanup message for no-change investigation sessions outside explicit plan mode", async () => {
     const repoDir = mkdtempSync(join(tmpdir(), "sm-worktree-investigation-report-"));
+    let cleanup = () => {};
     try {
       git(repoDir, "init", "-b", "main");
       git(repoDir, "config", "user.name", "Test User");
@@ -183,7 +206,9 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       const branchName = getBranchName(worktreePath);
       assert.ok(branchName, "worktree branch should exist");
 
-      const sm = new SessionManager(5);
+      const created = createTestSessionManager(5);
+      const sm = created.sm;
+      cleanup = created.cleanup;
       stubDispatch(sm);
       const session = {
         id: "s-investigation-report",
@@ -221,12 +246,14 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       assert.match(request.wakeMessage, /do NOT repeat the plugin's status line/i);
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
+      cleanup();
     }
   });
 
   it("releases native Codex worktrees to backend cleanup instead of deleting them directly", async () => {
     const repoDir = mkdtempSync(join(tmpdir(), "sm-worktree-native-codex-"));
     const nativeWorktreePath = join(tmpdir(), "codex-native-worktree-release");
+    let cleanup = () => {};
     try {
       git(repoDir, "init", "-b", "main");
       git(repoDir, "config", "user.name", "Test User");
@@ -235,7 +262,9 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       git(repoDir, "add", "README.md");
       git(repoDir, "commit", "-m", "init");
 
-      const sm = new SessionManager(5);
+      const created = createTestSessionManager(5);
+      const sm = created.sm;
+      cleanup = created.cleanup;
       stubDispatch(sm);
       (sm as any).store.persisted.set("legacy-native-thread", {
         sessionId: "s-native-codex",
@@ -298,11 +327,13 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       assert.equal(persisted?.worktreeDisposition, "no-change-cleaned");
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
+      cleanup();
     }
   });
 
   it("routes delegate mode to the orchestrator without user buttons", async () => {
     const repoDir = mkdtempSync(join(tmpdir(), "sm-worktree-delegate-"));
+    let cleanup = () => {};
     try {
       git(repoDir, "init", "-b", "main");
       git(repoDir, "config", "user.name", "Test User");
@@ -319,7 +350,9 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       git(worktreePath, "add", "README.md");
       git(worktreePath, "commit", "-m", "update readme");
 
-      const sm = new SessionManager(5);
+      const created = createTestSessionManager(5);
+      const sm = created.sm;
+      cleanup = created.cleanup;
       stubDispatch(sm);
       (sm as any).store.persisted.set("h-delegate", {
         harnessSessionId: "h-delegate",
@@ -372,11 +405,13 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       assert.match(persisted.pendingWorktreeDecisionSince, /^\d{4}-\d{2}-\d{2}T/);
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
+      cleanup();
     }
   });
 
   it("adds a concise implementation summary and shorter button rows for ask-mode worktree prompts", async () => {
     const repoDir = mkdtempSync(join(tmpdir(), "sm-worktree-ask-summary-"));
+    let cleanup = () => {};
     try {
       git(repoDir, "init", "-b", "main");
       git(repoDir, "config", "user.name", "Test User");
@@ -395,7 +430,9 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       git(worktreePath, "add", "README.md", "src-note.txt");
       git(worktreePath, "commit", "-m", "tighten worktree decision UX");
 
-      const sm = new SessionManager(5);
+      const created = createTestSessionManager(5);
+      const sm = created.sm;
+      cleanup = created.cleanup;
       stubDispatch(sm);
       (sm as any).store.persisted.set("h-ask-summary", {
         harnessSessionId: "h-ask-summary",
@@ -452,11 +489,13 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       );
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
+      cleanup();
     }
   });
 
   it("daily cleanup removes resolved worktrees after retention", () => {
     const repoDir = mkdtempSync(join(tmpdir(), "sm-worktree-retention-"));
+    let cleanup = () => {};
     try {
       git(repoDir, "init", "-b", "main");
       git(repoDir, "config", "user.name", "Test User");
@@ -469,7 +508,9 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       const branchName = getBranchName(worktreePath);
       assert.ok(branchName, "worktree branch should exist");
 
-      const sm = new SessionManager(5);
+      const created = createTestSessionManager(5);
+      const sm = created.sm;
+      cleanup = created.cleanup;
       (sm as any).store.persisted.set("h-resolved", {
         harnessSessionId: "h-resolved",
         backendRef: { kind: "claude-code", conversationId: "h-resolved" },
@@ -487,21 +528,28 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
         worktreeBranch: branchName,
         worktreeState: "merged",
         worktreeMergedAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString(),
+        worktreeLifecycle: {
+          state: "pr_open",
+          updatedAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString(),
+        },
       });
 
-      (sm as any).runDailyWorktreeMaintenance(Date.now());
+      (sm as any).reconcileResolvedWorktreeRetention((sm as any).store.persisted.get("h-resolved"), Date.now());
 
       assert.equal(existsSync(worktreePath), false);
       const persisted = (sm as any).store.persisted.get("h-resolved");
       assert.equal(persisted.worktreePath, undefined);
       assert.equal(persisted.worktreeState, "none");
+      assert.equal(persisted.worktreeLifecycle?.state, "merged");
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
+      cleanup();
     }
   });
 
-  it("daily cleanup never deletes pending-decision worktrees", () => {
+  it("retention cleanup never deletes pending-decision worktrees", () => {
     const repoDir = mkdtempSync(join(tmpdir(), "sm-worktree-pending-"));
+    let cleanup = () => {};
     try {
       git(repoDir, "init", "-b", "main");
       git(repoDir, "config", "user.name", "Test User");
@@ -514,7 +562,9 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       const branchName = getBranchName(worktreePath);
       assert.ok(branchName, "worktree branch should exist");
 
-      const sm = new SessionManager(5);
+      const created = createTestSessionManager(5);
+      const sm = created.sm;
+      cleanup = created.cleanup;
       (sm as any).store.persisted.set("h-pending", {
         harnessSessionId: "h-pending",
         backendRef: { kind: "claude-code", conversationId: "h-pending" },
@@ -534,7 +584,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
         pendingWorktreeDecisionSince: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString(),
       });
 
-      (sm as any).runDailyWorktreeMaintenance(Date.now());
+      (sm as any).reconcileResolvedWorktreeRetention((sm as any).store.persisted.get("h-pending"), Date.now());
 
       assert.equal(existsSync(worktreePath), true);
       const persisted = (sm as any).store.persisted.get("h-pending");
@@ -542,6 +592,56 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       assert.equal(persisted.worktreeState, "pending_decision");
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
+      cleanup();
+    }
+  });
+
+  it("retention cleanup removes legacy dismissed worktrees without lifecycle metadata", () => {
+    const repoDir = mkdtempSync(join(tmpdir(), "sm-worktree-legacy-dismissed-"));
+    let cleanup = () => {};
+    try {
+      git(repoDir, "init", "-b", "main");
+      git(repoDir, "config", "user.name", "Test User");
+      git(repoDir, "config", "user.email", "test@example.com");
+      writeFileSync(join(repoDir, "README.md"), "hello\n", "utf-8");
+      git(repoDir, "add", "README.md");
+      git(repoDir, "commit", "-m", "init");
+
+      const worktreePath = createWorktree(repoDir, "legacy-dismissed-cleanup");
+      const branchName = getBranchName(worktreePath);
+      assert.ok(branchName, "worktree branch should exist");
+
+      const created = createTestSessionManager(5);
+      const sm = created.sm;
+      cleanup = created.cleanup;
+      (sm as any).store.persisted.set("h-legacy-dismissed", {
+        harnessSessionId: "h-legacy-dismissed",
+        backendRef: { kind: "claude-code", conversationId: "h-legacy-dismissed" },
+        name: "legacy-dismissed-cleanup",
+        prompt: "test",
+        workdir: repoDir,
+        route: {
+          provider: "telegram",
+          target: "12345",
+          sessionKey: "agent:main:telegram:group:12345",
+        },
+        status: "completed",
+        costUsd: 0,
+        worktreePath,
+        worktreeBranch: branchName,
+        worktreeDisposition: "dismissed",
+        worktreeDismissedAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString(),
+      });
+
+      (sm as any).reconcileResolvedWorktreeRetention((sm as any).store.persisted.get("h-legacy-dismissed"), Date.now());
+
+      assert.equal(existsSync(worktreePath), false);
+      const persisted = (sm as any).store.persisted.get("h-legacy-dismissed");
+      assert.equal(persisted.worktreePath, undefined);
+      assert.equal(persisted.worktreeState, "none");
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+      cleanup();
     }
   });
 });

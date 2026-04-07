@@ -12,6 +12,7 @@ function isPlanDecisionKind(kind: SessionActionKind): boolean {
  */
 export class SessionActionTokenStore {
   readonly tokens: Map<string, SessionActionToken> = new Map();
+  private afterChange?: () => void;
 
   constructor(
     private readonly onChange: () => void,
@@ -27,6 +28,7 @@ export class SessionActionTokenStore {
 
   clear(): void {
     this.tokens.clear();
+    this.notifyChanged();
   }
 
   listForPersistence(): SessionActionToken[] {
@@ -46,7 +48,7 @@ export class SessionActionTokenStore {
       ...options,
     };
     this.tokens.set(token.id, token);
-    this.onChange();
+    this.notifyChanged();
     return token;
   }
 
@@ -55,7 +57,7 @@ export class SessionActionTokenStore {
     if (!token) return undefined;
     if (token.expiresAt != null && token.expiresAt <= Date.now()) {
       this.tokens.delete(tokenId);
-      this.onChange();
+      this.notifyChanged();
       return undefined;
     }
     return token;
@@ -65,7 +67,7 @@ export class SessionActionTokenStore {
     const token = this.getActionToken(tokenId);
     if (!token || token.consumedAt != null) return undefined;
     token.consumedAt = Date.now();
-    this.onChange();
+    this.notifyChanged();
     return token;
   }
 
@@ -77,7 +79,7 @@ export class SessionActionTokenStore {
         changed = true;
       }
     }
-    if (changed) this.onChange();
+    if (changed) this.notifyChanged();
   }
 
   deletePlanDecisionTokensForSession(sessionId: string, keepVersion?: number): void {
@@ -88,7 +90,7 @@ export class SessionActionTokenStore {
       this.tokens.delete(tokenId);
       changed = true;
     }
-    if (changed) this.onChange();
+    if (changed) this.notifyChanged();
   }
 
   purgeExpiredActionTokens(now: number = Date.now()): void {
@@ -101,6 +103,32 @@ export class SessionActionTokenStore {
         changed = true;
       }
     }
-    if (changed) this.onChange();
+    if (changed) this.notifyChanged();
+  }
+
+  nextExpiryAt(): number | undefined {
+    let nextExpiryAt: number | undefined;
+    for (const token of this.tokens.values()) {
+      const candidates = [
+        token.expiresAt,
+        token.consumedAt != null ? token.consumedAt + this.retentionMs : undefined,
+      ].filter((value): value is number => value != null && Number.isFinite(value));
+
+      for (const candidate of candidates) {
+        if (nextExpiryAt == null || candidate < nextExpiryAt) {
+          nextExpiryAt = candidate;
+        }
+      }
+    }
+    return nextExpiryAt;
+  }
+
+  setAfterChangeListener(listener: (() => void) | undefined): void {
+    this.afterChange = listener;
+  }
+
+  private notifyChanged(): void {
+    this.onChange();
+    this.afterChange?.();
   }
 }
