@@ -677,7 +677,7 @@ describe("SessionManager.cleanup()", () => {
       getOutput: () => [],
     });
     (sm as any).sessions.set("old-s", s);
-    sm.cleanup();
+    (sm as any).cleanup();
     assert.equal((sm as any).sessions.has("old-s"), false);
   });
 
@@ -685,7 +685,7 @@ describe("SessionManager.cleanup()", () => {
     const recentTime = Date.now() - 10 * 60 * 1000; // 10 minutes ago
     const s = fakeSession({ id: "new-s", status: "completed", completedAt: recentTime });
     (sm as any).sessions.set("new-s", s);
-    sm.cleanup();
+    (sm as any).cleanup();
     assert.equal((sm as any).sessions.has("new-s"), true);
   });
 
@@ -694,7 +694,7 @@ describe("SessionManager.cleanup()", () => {
     const oldTime = Date.now() - 10 * 60 * 1000; // 10 minutes ago
     const s = fakeSession({ id: "old-short-ttl", status: "completed", completedAt: oldTime });
     (sm as any).sessions.set("old-short-ttl", s);
-    sm.cleanup();
+    (sm as any).cleanup();
     assert.equal((sm as any).sessions.has("old-short-ttl"), false);
   });
 
@@ -707,7 +707,7 @@ describe("SessionManager.cleanup()", () => {
       const boundaryTime = now - 5 * 60 * 1000;
       const s = fakeSession({ id: "ttl-boundary", status: "completed", completedAt: boundaryTime });
       (sm as any).sessions.set("ttl-boundary", s);
-      sm.cleanup();
+      (sm as any).cleanup();
       assert.equal((sm as any).sessions.has("ttl-boundary"), true);
     } finally {
       Date.now = originalDateNow;
@@ -723,7 +723,7 @@ describe("SessionManager.cleanup()", () => {
     (sm as any).idIndex.set("id-h1", "h1");
     (sm as any).nameIndex.set("name-h1", "h1");
 
-    sm.cleanup();
+    (sm as any).cleanup();
 
     // Should keep the 2 most recent (h2: 3000, h3: 2000), evict h1 (1000)
     assert.equal((sm as any).persisted.has("h1"), false, "oldest should be evicted");

@@ -1224,7 +1224,7 @@ export class SessionManager {
   }
 
   /** Evict stale runtime records and enforce persisted/session-output retention limits. */
-  cleanup(): void {
+  private cleanup(): void {
     const now = Date.now();
     this.remindStaleDecisions();
     for (const session of this.store.listPersistedSessions()) {
