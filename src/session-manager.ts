@@ -362,6 +362,7 @@ export class SessionManager {
           worktreeState: "none",
           worktreeLifecycle: {
             ...(session.worktreeLifecycle ?? resolved.lifecycle),
+            state: resolved.derivedState,
             updatedAt: new Date(now).toISOString(),
             resolvedAt: session.worktreeLifecycle?.resolvedAt ?? new Date().toISOString(),
             resolutionSource: session.worktreeLifecycle?.resolutionSource ?? "maintenance",
