@@ -794,6 +794,45 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     assert.deepEqual(scheduledKeys, ["runtime-gc:gc-session"]);
   });
 
+  it("re-arms runtime GC when the configured max age increases after scheduling", () => {
+    setPluginConfig({ sessionGcAgeMinutes: 1 });
+    const sm = new SessionManager(5, 5);
+    const now = 1_700_000_000_000;
+    const originalDateNow = Date.now;
+    const scheduled: Array<{ key: string; at: number; cb: () => void }> = [];
+
+    Date.now = () => now + 60_000;
+
+    try {
+      (sm as any).maintenance.schedule = ((key: string, at: number, cb: () => void) => {
+        scheduled.push({ key, at, cb });
+      }) as any;
+      (sm as any).store.shouldGcActiveSession = ((_session: any, currentNow: number, cleanupMaxAgeMs: number) => (
+        currentNow - now > cleanupMaxAgeMs
+      )) as any;
+      (sm as any).registry.remove = () => {
+        throw new Error("runtime GC should not evict while config was extended");
+      };
+
+      const session = fakeSession({ id: "gc-session", status: "completed", completedAt: now });
+      (sm as any).sessions.set(session.id, session);
+
+      (sm as any).syncRuntimeGcDeadline(session);
+      assert.equal(scheduled.length, 1);
+      assert.equal(scheduled[0].at, now + 60_000);
+
+      setPluginConfig({ sessionGcAgeMinutes: 2 });
+      scheduled[0].cb();
+
+      assert.equal(scheduled.length, 2);
+      assert.equal(scheduled[1].key, "runtime-gc:gc-session");
+      assert.equal(scheduled[1].at, now + 120_000);
+    } finally {
+      Date.now = originalDateNow;
+      setPluginConfig({});
+    }
+  });
+
   it("does not re-arm the token-expiry deadline after purge already triggered a resync", () => {
     const sm = new SessionManager(5, 5);
     const scheduledKeys: string[] = [];

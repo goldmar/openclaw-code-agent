@@ -250,13 +250,21 @@ export class SessionManager {
     return `persisted:${ref}:${kind}`;
   }
 
+  private runtimeGcMaxAgeMs(): number {
+    return (pluginConfig.sessionGcAgeMinutes ?? 1440) * 60_000;
+  }
+
   private syncRuntimeGcDeadline(session: Pick<Session, "id" | "completedAt">): void {
     if (!session.completedAt) return;
-    const cleanupMaxAgeMs = (pluginConfig.sessionGcAgeMinutes ?? 1440) * 60_000;
     const key = this.runtimeGcKey(session.id);
-    this.maintenance.schedule(key, session.completedAt + cleanupMaxAgeMs, () => {
+    this.maintenance.schedule(key, session.completedAt + this.runtimeGcMaxAgeMs(), () => {
       const active = this.sessions.get(session.id);
-      if (!active || !this.store.shouldGcActiveSession(active, Date.now(), cleanupMaxAgeMs)) return;
+      if (!active || !active.completedAt) return;
+      const cleanupMaxAgeMs = this.runtimeGcMaxAgeMs();
+      if (!this.store.shouldGcActiveSession(active, Date.now(), cleanupMaxAgeMs)) {
+        this.syncRuntimeGcDeadline(active);
+        return;
+      }
       this.registry.remove(session.id);
       this.persistSession(active, { scheduleRuntimeGc: false });
       this.lastWaitingEventTimestamps.delete(session.id);
