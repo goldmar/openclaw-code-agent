@@ -1183,14 +1183,6 @@ export class SessionManager {
     return this.store.listPersistedSessions();
   }
 
-  /** Send periodic reminders for sessions with unresolved pending worktree decisions. */
-  private remindStaleDecisions(): void {
-    const now = Date.now();
-    for (const session of this.store.listPersistedSessions()) {
-      this.reminders.sendReminderIfDue(session, now);
-    }
-  }
-
   /**
    * Intercept an AskUserQuestion tool call from a CC session.
    * Sends inline buttons to the user and returns a Promise that resolves when
@@ -1222,28 +1214,6 @@ export class SessionManager {
     }
     this.questions.resolveAskUserQuestion(sessionId, optionIndex);
     return true;
-  }
-
-  /** Evict stale runtime records and enforce persisted/session-output retention limits. */
-  private cleanup(): void {
-    const now = Date.now();
-    this.remindStaleDecisions();
-    for (const session of this.store.listPersistedSessions()) {
-      this.reconcileResolvedWorktreeRetention(session, now);
-    }
-    const cleanupMaxAgeMs = (pluginConfig.sessionGcAgeMinutes ?? 1440) * 60_000;
-    for (const [id, session] of this.sessions) {
-      if (this.store.shouldGcActiveSession(session, now, cleanupMaxAgeMs)) {
-        this.persistSession(session);
-        this.registry.remove(id);
-        this.lastWaitingEventTimestamps.delete(id);
-        this.lastTurnCompleteMarkers.delete(id);
-        this.lastTerminalWakeMarkers.delete(id);
-      }
-    }
-    this.store.cleanupTmpOutputFiles(now);
-    this.syncActionTokenExpiryDeadline();
-    this.enforcePersistedRetention();
   }
 
   dispose(): void {
