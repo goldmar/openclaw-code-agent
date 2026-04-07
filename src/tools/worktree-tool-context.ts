@@ -1,7 +1,9 @@
 import type { PersistedSessionInfo } from "../types";
+import type { ResolvedWorktreeLifecycle } from "../types";
 import type { Session } from "../session";
 import { getBackendConversationId, getPersistedMutationRefs, getPrimarySessionLookupRef } from "../session-backend-ref";
 import type { SessionManager } from "../session-manager";
+import { resolveWorktreeLifecycle } from "../worktree-lifecycle-resolver";
 
 export interface ResolvedWorktreeToolTarget {
   activeSession?: Session;
@@ -87,6 +89,40 @@ export function resolveWorktreeToolSessions(
   }
 
   return { activeSession, persistedSession };
+}
+
+export function resolveWorktreeToolLifecycle(
+  sessionManager: SessionManager,
+  target: WorktreeToolListingTarget,
+  options: {
+    baseBranch?: string;
+  } = {},
+): {
+  activeSession?: Session;
+  persistedSession?: PersistedSessionInfo;
+  resolvedLifecycle: ResolvedWorktreeLifecycle;
+} {
+  const { activeSession, persistedSession } = resolveWorktreeToolSessions(sessionManager, target);
+  const resolvedLifecycle = resolveWorktreeLifecycle({
+    workdir: target.workdir,
+    worktreePath: target.worktreePath,
+    worktreeBranch: target.worktreeBranch,
+    worktreeBaseBranch: options.baseBranch ?? persistedSession?.worktreeBaseBranch,
+    worktreePrTargetRepo: persistedSession?.worktreePrTargetRepo,
+    worktreePushRemote: persistedSession?.worktreePushRemote,
+    worktreePrUrl: persistedSession?.worktreePrUrl,
+    worktreePrNumber: persistedSession?.worktreePrNumber,
+    worktreeLifecycle: persistedSession?.worktreeLifecycle,
+  }, {
+    activeSession: Boolean(activeSession && (activeSession.status === "starting" || activeSession.status === "running")),
+    includePrSync: Boolean(persistedSession?.worktreeLifecycle?.state === "pr_open" || persistedSession?.worktreePrUrl),
+  });
+
+  return {
+    activeSession,
+    persistedSession,
+    resolvedLifecycle,
+  };
 }
 
 export function listWorktreeToolTargets(sessionManager: SessionManager): WorktreeToolListingTarget[] {

@@ -1,15 +1,14 @@
 import { Type } from "@sinclair/typebox";
-import type { ManagedWorktreeLifecycleState, OpenClawPluginToolContext } from "../types";
+import type { OpenClawPluginToolContext } from "../types";
 import { sessionManager } from "../singletons";
 import { usesNativeBackendWorktree } from "../session-backend-ref";
-import { resolveWorktreeLifecycle } from "../worktree-lifecycle-resolver";
 import { deleteBranch, removeWorktree } from "../worktree";
 import {
   formatWorktreeLifecycleState,
   formatWorktreePreserveReason,
   listWorktreeToolTargets,
   matchesWorktreeToolRef,
-  resolveWorktreeToolSessions,
+  resolveWorktreeToolLifecycle,
   resolveWorktreeToolTarget,
 } from "./worktree-tool-context";
 
@@ -88,21 +87,8 @@ export function makeAgentWorktreeCleanupTool(_ctx?: OpenClawPluginToolContext) {
       const failures: string[] = [];
 
       for (const target of targets) {
-        const { persistedSession: persisted, activeSession: active } = resolveWorktreeToolSessions(sessionManager, target);
-
-        const resolved = resolveWorktreeLifecycle({
-          workdir: target.workdir,
-          worktreePath: target.worktreePath,
-          worktreeBranch: target.worktreeBranch,
-          worktreeBaseBranch: params.base_branch ?? persisted?.worktreeBaseBranch,
-          worktreePrTargetRepo: persisted?.worktreePrTargetRepo,
-          worktreePushRemote: persisted?.worktreePushRemote,
-          worktreePrUrl: persisted?.worktreePrUrl,
-          worktreePrNumber: persisted?.worktreePrNumber,
-          worktreeLifecycle: persisted?.worktreeLifecycle,
-        }, {
-          activeSession: Boolean(active && (active.status === "starting" || active.status === "running")),
-          includePrSync: Boolean(persisted?.worktreeLifecycle?.state === "pr_open" || persisted?.worktreePrUrl),
+        const { persistedSession: persisted, activeSession: active, resolvedLifecycle: resolved } = resolveWorktreeToolLifecycle(sessionManager, target, {
+          baseBranch: params.base_branch,
         });
 
         if (!resolved.cleanupSafe) {

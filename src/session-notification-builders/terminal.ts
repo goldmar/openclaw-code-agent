@@ -11,6 +11,12 @@ type ApprovalExecutionContext = {
   approvalExecutionState?: ApprovalExecutionState;
 };
 
+export interface CompletionFollowupContract {
+  requiresShortFactualSummary: true;
+  owner: "agent";
+  appliesToOrdinaryTerminalCompletions: true;
+}
+
 export function formatApprovalExecutionContextLines(
   context: ApprovalExecutionContext,
 ): string[] {
@@ -37,21 +43,46 @@ export function getStoppedStatusLabel(killReason?: KillReason): string {
   }
 }
 
+export function buildCompletionFollowupContract(): CompletionFollowupContract {
+  return {
+    requiresShortFactualSummary: true,
+    owner: "agent",
+    appliesToOrdinaryTerminalCompletions: true,
+  };
+}
+
 export function buildCompletionFollowupInstructionLines(args: {
   sessionId: string;
   canonicalStatusDetail?: string;
+  canonicalStatusDelivered?: boolean;
 }): string[] {
-  const { sessionId, canonicalStatusDetail } = args;
+  const { sessionId, canonicalStatusDetail, canonicalStatusDelivered = true } = args;
   return [
     `[ACTION REQUIRED] Follow your autonomy rules for session completion:`,
     `1. Use agent_output(session='${sessionId}', full=true) to read the full result.`,
     `2. If this is part of a multi-phase pipeline, launch the next phase NOW — do not wait for user input.`,
-    `3. ${canonicalStatusDetail ?? "The plugin already sent the canonical completion status to the user."}`,
-    `4. After that canonical status line, you should usually send the user a short factual completion summary for this completed session.`,
-    `5. This expectation applies to ordinary terminal/manual completions too, not just delegated worktree decisions.`,
-    `6. That follow-up belongs to you alone; keep it brief and concrete, and base it on reliable result data.`,
-    `7. Skip the summary only if you are silently continuing an internal multi-phase pipeline or there is no meaningful confirmed outcome to report yet.`,
-    `8. Do NOT repeat the plugin's status line, and do NOT rely on the plugin to summarize the completed work for you.`,
+    `3. ${canonicalStatusDetail ?? (canonicalStatusDelivered
+      ? "The plugin already sent the canonical completion status to the user."
+      : "The plugin did not confirm delivery of the canonical completion status to the user.")}`,
+    `4. Unless you are silently continuing an internal multi-phase pipeline or there is still no meaningful confirmed outcome to report, you must send the user a short factual completion summary for this completed session.`,
+    `5. This requirement applies to ordinary terminal/manual completions too, not just delegated worktree decisions.`,
+    `6. That follow-up belongs to you alone; keep it brief, concrete, and grounded in reliable result data.`,
+    ...(canonicalStatusDelivered
+      ? [`7. Do NOT repeat the plugin's status line, and do NOT rely on the plugin to summarize the completed work for you.`]
+      : [`7. Because canonical status delivery was not confirmed, account for that gap yourself when you follow up; do NOT assume the plugin already reached the user.`]),
+  ];
+}
+
+function buildCompletionDiagnosticsLines(args: {
+  contract: CompletionFollowupContract;
+  canonicalStatusDelivered: boolean;
+}): string[] {
+  const { contract, canonicalStatusDelivered } = args;
+  return [
+    `Completion diagnostics:`,
+    `- Canonical completion status delivered to user: ${canonicalStatusDelivered ? "yes" : "no"}`,
+    `- Plugin requested short factual follow-up summary: ${contract.requiresShortFactualSummary ? "yes" : "no"}`,
+    `- Contract applies to ordinary terminal/manual completions: ${contract.appliesToOrdinaryTerminalCompletions ? "yes" : "no"}`,
   ];
 }
 
@@ -62,24 +93,36 @@ export function buildCompletedPayload(args: {
   >;
   originThreadLine: OriginThreadLine;
   preview: string;
-}): { userMessage: string; wakeMessage: string } {
+}): {
+  userMessage: string;
+  wakeMessageOnNotifySuccess: string;
+  wakeMessageOnNotifyFailed: string;
+  followupContract: CompletionFollowupContract;
+} {
   const { session, originThreadLine, preview } = args;
   const costStr = `$${(session.costUsd ?? 0).toFixed(2)}`;
   const duration = formatDuration(session.duration);
+  const followupContract = buildCompletionFollowupContract();
+  const buildWakeMessage = (canonicalStatusDelivered: boolean): string => [
+    `Coding agent session completed.`,
+    `Name: ${session.name} | ID: ${session.id}`,
+    `Status: ${session.status}`,
+    originThreadLine,
+    ...formatApprovalExecutionContextLines(session),
+    ``,
+    `Output preview:`,
+    preview,
+    ``,
+    ...buildCompletionDiagnosticsLines({ contract: followupContract, canonicalStatusDelivered }),
+    ``,
+    ...buildCompletionFollowupInstructionLines({ sessionId: session.id, canonicalStatusDelivered }),
+  ].join("\n");
+
   return {
     userMessage: `✅ [${session.name}] Completed | ${costStr} | ${duration}`,
-    wakeMessage: [
-      `Coding agent session completed.`,
-      `Name: ${session.name} | ID: ${session.id}`,
-      `Status: ${session.status}`,
-      originThreadLine,
-      ...formatApprovalExecutionContextLines(session),
-      ``,
-      `Output preview:`,
-      preview,
-      ``,
-      ...buildCompletionFollowupInstructionLines({ sessionId: session.id }),
-    ].join("\n"),
+    wakeMessageOnNotifySuccess: buildWakeMessage(true),
+    wakeMessageOnNotifyFailed: buildWakeMessage(false),
+    followupContract,
   };
 }
 

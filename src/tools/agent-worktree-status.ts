@@ -1,13 +1,12 @@
 import { Type } from "@sinclair/typebox";
 import { sessionManager } from "../singletons";
-import type { ManagedWorktreeLifecycleState, OpenClawPluginToolContext } from "../types";
-import { resolveWorktreeLifecycle } from "../worktree-lifecycle-resolver";
+import type { OpenClawPluginToolContext } from "../types";
 import {
   formatWorktreeLifecycleState,
   formatWorktreePreserveReason,
   listWorktreeToolTargets,
   matchesWorktreeToolRef,
-  resolveWorktreeToolSessions,
+  resolveWorktreeToolLifecycle,
 } from "./worktree-tool-context";
 
 interface AgentWorktreeStatusParams {
@@ -48,22 +47,7 @@ export function makeAgentWorktreeStatusTool(_ctx?: OpenClawPluginToolContext) {
 
       const lines: string[] = [];
       for (const target of sessionsToShow) {
-        const { persistedSession: persisted, activeSession: active } = resolveWorktreeToolSessions(sessionManager, target);
-
-        const resolved = resolveWorktreeLifecycle({
-          workdir: target.workdir,
-          worktreePath: target.worktreePath,
-          worktreeBranch: target.worktreeBranch,
-          worktreeBaseBranch: persisted?.worktreeBaseBranch,
-          worktreePrTargetRepo: persisted?.worktreePrTargetRepo,
-          worktreePushRemote: persisted?.worktreePushRemote,
-          worktreePrUrl: persisted?.worktreePrUrl,
-          worktreePrNumber: persisted?.worktreePrNumber,
-          worktreeLifecycle: persisted?.worktreeLifecycle,
-        }, {
-          activeSession: Boolean(active && (active.status === "starting" || active.status === "running")),
-          includePrSync: Boolean(persisted?.worktreeLifecycle?.state === "pr_open" || persisted?.worktreePrUrl),
-        });
+        const { persistedSession: persisted, resolvedLifecycle: resolved } = resolveWorktreeToolLifecycle(sessionManager, target);
 
         const cleanup = resolved.cleanupSafe
           ? "safe now"

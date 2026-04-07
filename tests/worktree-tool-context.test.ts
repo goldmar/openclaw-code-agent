@@ -5,6 +5,7 @@ import {
   formatWorktreePreserveReason,
   listWorktreeToolTargets,
   matchesWorktreeToolRef,
+  resolveWorktreeToolLifecycle,
   resolveWorktreeToolSessions,
 } from "../src/tools/worktree-tool-context";
 
@@ -91,6 +92,50 @@ describe("worktree-tool-context", () => {
         activeSession: { id: "active-1", name: "feature-work" },
         persistedSession: { sessionId: "persisted-1", name: "feature-work" },
       },
+    );
+  });
+
+  it("resolves worktree lifecycle from the shared tool helper", () => {
+    const resolved = resolveWorktreeToolLifecycle({
+      resolve(ref: string) {
+        return ref === "feature-work"
+          ? { id: "active-1", name: "feature-work", status: "running" }
+          : undefined;
+      },
+      getPersistedSession(ref: string) {
+        return ref === "persisted-1"
+          ? {
+              sessionId: "persisted-1",
+              name: "feature-work",
+              workdir: "/definitely/missing/repo",
+              worktreePath: "/definitely/missing/repo/.worktrees/feature-work",
+              worktreeBranch: "agent/feature-work",
+              worktreeBaseBranch: "main",
+              worktreeLifecycle: {
+                state: "pending_decision",
+                updatedAt: "2026-04-07T00:00:00.000Z",
+                baseBranch: "main",
+              },
+            }
+          : undefined;
+      },
+    } as any, {
+      id: "persisted-1",
+      name: "feature-work",
+      worktreePath: "/definitely/missing/repo/.worktrees/feature-work",
+      worktreeBranch: "agent/feature-work",
+      workdir: "/definitely/missing/repo",
+      backendConversationId: undefined,
+      harnessSessionId: undefined,
+    });
+
+    assert.equal(resolved.activeSession?.id, "active-1");
+    assert.equal(resolved.persistedSession?.sessionId, "persisted-1");
+    assert.equal(resolved.resolvedLifecycle.lifecycle.state, "pending_decision");
+    assert.equal(resolved.resolvedLifecycle.preserve, true);
+    assert.deepEqual(
+      resolved.resolvedLifecycle.reasons,
+      ["repo_missing", "worktree_missing", "active_session", "pending_decision"],
     );
   });
 

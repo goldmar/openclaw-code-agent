@@ -131,6 +131,22 @@ export class SessionLifecycleService {
     });
   }
 
+  private logCompletionWakeDiagnostic(args: {
+    session: Pick<Session, "id" | "name">;
+    event: string;
+    canonicalStatusDelivered?: boolean;
+    followupSummaryRequired: boolean;
+  }): void {
+    console.info(JSON.stringify({
+      event: args.event,
+      sessionId: args.session.id,
+      sessionName: args.session.name,
+      canonicalStatusDelivered: args.canonicalStatusDelivered,
+      requestedShortFactualSummary: args.followupSummaryRequired,
+      completionKind: "terminal",
+    }));
+  }
+
   handleTurnEnd(session: Session, hadQuestion: boolean): void {
     if (session.status !== "running") {
       console.info(
@@ -477,11 +493,41 @@ export class SessionLifecycleService {
       originThreadLine: this.deps.originThreadLine(session),
       preview,
     });
+    let canonicalStatusDelivered: boolean | undefined;
     this.deps.dispatchSessionNotification(session, {
       label: "completed",
       userMessage: payload.userMessage,
-      wakeMessage: payload.wakeMessage,
       notifyUser: "always",
+      wakeMessageOnNotifySuccess: payload.wakeMessageOnNotifySuccess,
+      wakeMessageOnNotifyFailed: payload.wakeMessageOnNotifyFailed,
+      hooks: {
+        onNotifySucceeded: () => {
+          canonicalStatusDelivered = true;
+          this.logCompletionWakeDiagnostic({
+            session,
+            event: "completion_notify_succeeded",
+            canonicalStatusDelivered,
+            followupSummaryRequired: payload.followupContract.requiresShortFactualSummary,
+          });
+        },
+        onNotifyFailed: () => {
+          canonicalStatusDelivered = false;
+          this.logCompletionWakeDiagnostic({
+            session,
+            event: "completion_notify_failed",
+            canonicalStatusDelivered,
+            followupSummaryRequired: payload.followupContract.requiresShortFactualSummary,
+          });
+        },
+        onWakeSucceeded: () => {
+          this.logCompletionWakeDiagnostic({
+            session,
+            event: "completion_wake_succeeded",
+            canonicalStatusDelivered,
+            followupSummaryRequired: payload.followupContract.requiresShortFactualSummary,
+          });
+        },
+      },
     });
   }
 

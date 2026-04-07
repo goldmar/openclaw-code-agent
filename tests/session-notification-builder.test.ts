@@ -132,15 +132,21 @@ describe("session-notification-builder", () => {
     });
 
     assert.equal(payload.userMessage, "✅ [done-session] Completed | $1.25 | 1m1s");
-    assert.match(payload.wakeMessage, /Coding agent session completed\./);
-    assert.match(payload.wakeMessage, /Requested permission mode: plan/);
-    assert.match(payload.wakeMessage, /Effective permission mode: bypassPermissions/);
-    assert.match(payload.wakeMessage, /Deterministic approval\/execution state: approved_then_implemented/);
-    assert.match(payload.wakeMessage, /Output preview:/);
-    assert.match(payload.wakeMessage, /plugin already sent the canonical completion status/i);
-    assert.match(payload.wakeMessage, /should usually send the user a short factual completion summary/i);
-    assert.match(payload.wakeMessage, /ordinary terminal\/manual completions too/i);
-    assert.match(payload.wakeMessage, /do NOT repeat the plugin's status line/i);
+    assert.equal(payload.followupContract.requiresShortFactualSummary, true);
+    assert.equal(payload.followupContract.appliesToOrdinaryTerminalCompletions, true);
+    assert.match(payload.wakeMessageOnNotifySuccess, /Coding agent session completed\./);
+    assert.match(payload.wakeMessageOnNotifySuccess, /Requested permission mode: plan/);
+    assert.match(payload.wakeMessageOnNotifySuccess, /Effective permission mode: bypassPermissions/);
+    assert.match(payload.wakeMessageOnNotifySuccess, /Deterministic approval\/execution state: approved_then_implemented/);
+    assert.match(payload.wakeMessageOnNotifySuccess, /Output preview:/);
+    assert.match(payload.wakeMessageOnNotifySuccess, /Canonical completion status delivered to user: yes/);
+    assert.match(payload.wakeMessageOnNotifySuccess, /Plugin requested short factual follow-up summary: yes/);
+    assert.match(payload.wakeMessageOnNotifySuccess, /must send the user a short factual completion summary/i);
+    assert.match(payload.wakeMessageOnNotifySuccess, /ordinary terminal\/manual completions too/i);
+    assert.match(payload.wakeMessageOnNotifySuccess, /do NOT repeat the plugin's status line/i);
+    assert.match(payload.wakeMessageOnNotifyFailed, /Canonical completion status delivered to user: no/);
+    assert.match(payload.wakeMessageOnNotifyFailed, /did not confirm delivery of the canonical completion status/i);
+    assert.match(payload.wakeMessageOnNotifyFailed, /do NOT assume the plugin already reached the user/i);
   });
 
   it("uses agent_respond as the primary continuation path in failure wakes", () => {
@@ -207,7 +213,7 @@ describe("session-notification-builder", () => {
     assert.match(message, /Output preview:/);
     assert.match(message, /agent_output\(session='session-4', full=true\)/);
     assert.match(message, /plugin already sent the canonical completion status/i);
-    assert.match(message, /should usually send the user a short factual completion summary/i);
+    assert.match(message, /must send the user a short factual completion summary/i);
     assert.match(message, /ordinary terminal\/manual completions too/i);
     assert.match(message, /do NOT repeat the plugin's status line/i);
   });
