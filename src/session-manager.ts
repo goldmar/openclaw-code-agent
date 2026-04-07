@@ -372,7 +372,7 @@ export class SessionManager {
             ...(session.worktreeLifecycle ?? resolved.lifecycle),
             state: resolved.derivedState,
             updatedAt: new Date(now).toISOString(),
-            resolvedAt: session.worktreeLifecycle?.resolvedAt ?? new Date().toISOString(),
+            resolvedAt: session.worktreeLifecycle?.resolvedAt ?? new Date(now).toISOString(),
             resolutionSource: session.worktreeLifecycle?.resolutionSource ?? "maintenance",
             notes: resolved.reasons,
           },
