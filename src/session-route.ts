@@ -160,6 +160,21 @@ export const sessionRouteInternals = {
   safeParseTelegramTopicConversation,
 };
 
+function buildSystemRoute(originSessionKey?: string): SessionRoute {
+  return {
+    provider: "system",
+    target: "system",
+    sessionKey: originSessionKey?.trim() || undefined,
+  };
+}
+
+function withThreadOverride(route: SessionRoute, explicitThreadId?: string): SessionRoute {
+  return {
+    ...route,
+    threadId: explicitThreadId ?? route.threadId,
+  };
+}
+
 function routeFromSessionKey(originSessionKey?: string): SessionRoute | undefined {
   const trimmed = originSessionKey?.trim();
   if (!trimmed) return undefined;
@@ -208,49 +223,38 @@ export function routeFromOriginMetadata(
   const sessionKeyRoute = routeFromSessionKey(originSessionKey);
   const explicitThreadId = originThreadId != null ? String(originThreadId) : undefined;
   const normalizedChannel = originChannel?.trim();
-  if (!normalizedChannel || normalizedChannel === "unknown") {
-    if (sessionKeyRoute) {
-      return {
-        ...sessionKeyRoute,
-        threadId: explicitThreadId ?? sessionKeyRoute.threadId,
-      };
-    }
-    return {
-      provider: "system",
-      target: "system",
-      sessionKey: originSessionKey?.trim() || undefined,
-    };
+  if (!normalizedChannel || normalizedChannel.toLowerCase() === "unknown") {
+    return sessionKeyRoute
+      ? withThreadOverride(sessionKeyRoute, explicitThreadId)
+      : buildSystemRoute(originSessionKey);
   }
 
-  const parts = normalizedChannel.split("|").map((part) => part.trim()).filter(Boolean);
+  const parts = normalizedChannel.split("|").map((part) => part.trim());
   if (parts.length < 2) {
-    if (sessionKeyRoute) {
-      return {
-        ...sessionKeyRoute,
-        threadId: explicitThreadId ?? sessionKeyRoute.threadId,
-      };
-    }
-    return {
-      provider: "system",
-      target: "system",
-      sessionKey: originSessionKey?.trim() || undefined,
-    };
+    return sessionKeyRoute
+      ? withThreadOverride(sessionKeyRoute, explicitThreadId)
+      : buildSystemRoute(originSessionKey);
   }
 
   const [provider, second, third] = parts;
-  const rawTarget = third ?? second;
-  const accountId = third ? second : undefined;
-  if (!provider || !rawTarget) return undefined;
+  const rawTarget = parts.length >= 3 ? third : second;
+  const accountId = parts.length >= 3 ? second : undefined;
+  const normalizedProvider = provider?.toLowerCase();
+  if (!normalizedProvider || !rawTarget) {
+    return sessionKeyRoute
+      ? withThreadOverride(sessionKeyRoute, explicitThreadId)
+      : buildSystemRoute(originSessionKey);
+  }
 
-  const target = provider === "discord"
+  const target = normalizedProvider === "discord"
     ? normalizeDiscordTarget(rawTarget, originSessionKey)
     : rawTarget;
 
   return {
-    provider,
+    provider: normalizedProvider,
     accountId,
     target,
-    threadId: explicitThreadId ?? (sessionKeyRoute?.provider === provider ? sessionKeyRoute.threadId : undefined),
+    threadId: explicitThreadId ?? (sessionKeyRoute?.provider === normalizedProvider ? sessionKeyRoute.threadId : undefined),
     sessionKey: originSessionKey?.trim() || undefined,
   };
 }

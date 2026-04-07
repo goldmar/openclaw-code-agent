@@ -23,17 +23,9 @@ export class SessionReferenceService {
     const byId = this.sessions.get(ref);
     if (byId) return byId;
 
-    const sessions = [...this.sessions.values()];
-    const byName = sessions.filter((session) => session.name === ref);
-    if (byName.length > 0) return this.pickPreferredSession(byName);
-
-    const byBackendConversation = sessions.filter((session) => getBackendConversationId(session) === ref);
-    if (byBackendConversation.length > 0) return this.pickPreferredSession(byBackendConversation);
-
-    const byLegacyHarnessId = sessions.filter((session) => session.harnessSessionId === ref);
-    if (byLegacyHarnessId.length > 0) return this.pickPreferredSession(byLegacyHarnessId);
-
-    return undefined;
+    return this.findPreferredMatch(ref, (session) => session.name === ref)
+      ?? this.findPreferredMatch(ref, (session) => getBackendConversationId(session) === ref)
+      ?? this.findPreferredMatch(ref, (session) => session.harnessSessionId === ref);
   }
 
   getPersistedSession(ref: string): PersistedSessionInfo | undefined {
@@ -48,9 +40,20 @@ export class SessionReferenceService {
     );
   }
 
-  private pickPreferredSession(matches: Session[]): Session | undefined {
-    const activeMatches = matches.filter((session) => ACTIVE_STATUSES.has(session.status));
-    const candidates = activeMatches.length > 0 ? activeMatches : matches;
-    return candidates.sort((a, b) => b.startedAt - a.startedAt)[0];
+  private findPreferredMatch(ref: string, predicate: (session: Session, ref: string) => boolean): Session | undefined {
+    let preferredActive: Session | undefined;
+    let preferredAny: Session | undefined;
+
+    for (const session of this.sessions.values()) {
+      if (!predicate(session, ref)) continue;
+      if (!preferredAny || session.startedAt > preferredAny.startedAt) {
+        preferredAny = session;
+      }
+      if (ACTIVE_STATUSES.has(session.status) && (!preferredActive || session.startedAt > preferredActive.startedAt)) {
+        preferredActive = session;
+      }
+    }
+
+    return preferredActive ?? preferredAny;
   }
 }

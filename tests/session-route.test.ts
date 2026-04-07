@@ -48,6 +48,21 @@ describe("session-route", () => {
     });
   });
 
+  it("canonicalizes mixed-case discord providers before target normalization", () => {
+    const route = routeFromOriginMetadata(
+      "Discord|1481874223294054540",
+      undefined,
+      "agent:main:discord:dm:1481874223294054540",
+    );
+    assert.deepEqual(route, {
+      provider: "discord",
+      accountId: undefined,
+      target: "user:1481874223294054540",
+      threadId: undefined,
+      sessionKey: "agent:main:discord:dm:1481874223294054540",
+    });
+  });
+
   it("recovers Telegram topic routing from session keys when originChannel is weak", () => {
     const route = routeFromOriginMetadata(
       "telegram",
@@ -58,6 +73,35 @@ describe("session-route", () => {
       provider: "telegram",
       target: "-100123",
       threadId: "77",
+      sessionKey: "agent:main:telegram:group:-100123:topic:77",
+    });
+  });
+
+  it("canonicalizes mixed-case providers before reusing recovered session-key threads", () => {
+    const route = routeFromOriginMetadata(
+      "Telegram|-100123",
+      undefined,
+      "agent:main:telegram:group:-100123:topic:77",
+    );
+    assert.deepEqual(route, {
+      provider: "telegram",
+      accountId: undefined,
+      target: "-100123",
+      threadId: "77",
+      sessionKey: "agent:main:telegram:group:-100123:topic:77",
+    });
+  });
+
+  it("lets an explicit origin thread override the recovered session-key thread", () => {
+    const route = routeFromOriginMetadata(
+      "telegram",
+      88,
+      "agent:main:telegram:group:-100123:topic:77",
+    );
+    assert.deepEqual(route, {
+      provider: "telegram",
+      target: "-100123",
+      threadId: "88",
       sessionKey: "agent:main:telegram:group:-100123:topic:77",
     });
   });
@@ -112,6 +156,57 @@ describe("session-route", () => {
       provider: "system",
       target: "system",
       sessionKey: "telegram:group:-100123:topic:77",
+    });
+  });
+
+  it("falls back to a recovered session-key route when originChannel is malformed", () => {
+    const route = routeFromOriginMetadata(
+      "telegram-only",
+      undefined,
+      "agent:main:telegram:group:-100123:topic:77",
+    );
+    assert.deepEqual(route, {
+      provider: "telegram",
+      target: "-100123",
+      threadId: "77",
+      sessionKey: "agent:main:telegram:group:-100123:topic:77",
+    });
+  });
+
+  it("treats mixed-case unknown origin channels as weak metadata", () => {
+    const route = routeFromOriginMetadata(
+      "Unknown",
+      undefined,
+      "agent:main:telegram:group:-100123:topic:77",
+    );
+    assert.deepEqual(route, {
+      provider: "telegram",
+      target: "-100123",
+      threadId: "77",
+      sessionKey: "agent:main:telegram:group:-100123:topic:77",
+    });
+  });
+
+  it("falls back when a three-part origin channel is missing its target segment", () => {
+    const route = routeFromOriginMetadata(
+      "telegram|bot|",
+      undefined,
+      "agent:main:telegram:group:-100123:topic:77",
+    );
+    assert.deepEqual(route, {
+      provider: "telegram",
+      target: "-100123",
+      threadId: "77",
+      sessionKey: "agent:main:telegram:group:-100123:topic:77",
+    });
+  });
+
+  it("falls back to a system route when malformed origin metadata has no usable session key", () => {
+    const route = routeFromOriginMetadata("telegram|bot|", undefined, "not-an-agent-key");
+    assert.deepEqual(route, {
+      provider: "system",
+      target: "system",
+      sessionKey: "not-an-agent-key",
     });
   });
 

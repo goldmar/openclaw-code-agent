@@ -4,7 +4,14 @@ import { sessionManager } from "../singletons";
 import { usesNativeBackendWorktree } from "../session-backend-ref";
 import { resolveWorktreeLifecycle } from "../worktree-lifecycle-resolver";
 import { deleteBranch, removeWorktree } from "../worktree";
-import { listWorktreeToolTargets, matchesWorktreeToolRef, resolveWorktreeToolTarget } from "./worktree-tool-context";
+import {
+  formatWorktreeLifecycleState,
+  formatWorktreePreserveReason,
+  listWorktreeToolTargets,
+  matchesWorktreeToolRef,
+  resolveWorktreeToolSessions,
+  resolveWorktreeToolTarget,
+} from "./worktree-tool-context";
 
 interface AgentWorktreeCleanupParams {
   workdir?: string;
@@ -19,60 +26,6 @@ interface AgentWorktreeCleanupParams {
 
 function isAgentWorktreeCleanupParams(value: unknown): value is AgentWorktreeCleanupParams {
   return Boolean(value) && typeof value === "object";
-}
-
-function formatLifecycleState(state: ManagedWorktreeLifecycleState): string {
-  switch (state) {
-    case "none":
-      return "none";
-    case "provisioned":
-      return "active";
-    case "pending_decision":
-      return "needs decision";
-    case "pr_open":
-      return "pr open";
-    case "merged":
-      return "merged";
-    case "released":
-      return "released";
-    case "dismissed":
-      return "dismissed";
-    case "no_change":
-      return "no change";
-    case "cleanup_failed":
-      return "cleanup failed";
-  }
-}
-
-function formatReason(reason: string): string {
-  switch (reason) {
-    case "active_session":
-      return "active session";
-    case "pending_decision":
-      return "pending decision";
-    case "dirty_tracked_changes":
-      return "dirty worktree";
-    case "unique_content":
-      return "still has unique content";
-    case "topology_merged":
-      return "merged by ancestry";
-    case "merge_noop_content_already_on_base":
-      return "content already on base";
-    case "pr_open":
-      return "PR open";
-    case "pr_merged_not_reflected_locally":
-      return "merged PR not reflected locally";
-    case "repo_missing":
-      return "repo missing";
-    case "branch_missing":
-      return "branch missing";
-    case "worktree_missing":
-      return "worktree missing";
-    case "base_branch_missing":
-      return "base branch missing";
-    default:
-      return reason.replaceAll("_", " ");
-  }
 }
 
 export function makeAgentWorktreeCleanupTool(_ctx?: OpenClawPluginToolContext) {
@@ -135,14 +88,7 @@ export function makeAgentWorktreeCleanupTool(_ctx?: OpenClawPluginToolContext) {
       const failures: string[] = [];
 
       for (const target of targets) {
-        const persisted = sessionManager.getPersistedSession(target.id)
-          ?? (target.backendConversationId ? sessionManager.getPersistedSession(target.backendConversationId) : undefined)
-          ?? (target.harnessSessionId ? sessionManager.getPersistedSession(target.harnessSessionId) : undefined)
-          ?? sessionManager.getPersistedSession(target.name);
-        const active = sessionManager.resolve(target.id)
-          ?? (target.backendConversationId ? sessionManager.resolve(target.backendConversationId) : undefined)
-          ?? (target.harnessSessionId ? sessionManager.resolve(target.harnessSessionId) : undefined)
-          ?? sessionManager.resolve(target.name);
+        const { persistedSession: persisted, activeSession: active } = resolveWorktreeToolSessions(sessionManager, target);
 
         const resolved = resolveWorktreeLifecycle({
           workdir: target.workdir,
@@ -162,14 +108,14 @@ export function makeAgentWorktreeCleanupTool(_ctx?: OpenClawPluginToolContext) {
         if (!resolved.cleanupSafe) {
           if (includeRetained) {
             const retainedReasons = resolved.reasons.length > 0
-              ? resolved.reasons.map(formatReason).join(", ")
-              : formatLifecycleState(resolved.derivedState);
+              ? resolved.reasons.map(formatWorktreePreserveReason).join(", ")
+              : formatWorktreeLifecycleState(resolved.derivedState);
             preserved.push(`${target.name} [kept: ${retainedReasons}]`);
           }
           continue;
         }
 
-        safeNow.push(`${target.name} (${formatLifecycleState(resolved.derivedState)})`);
+        safeNow.push(`${target.name} (${formatWorktreeLifecycleState(resolved.derivedState)})`);
         if (dryRun) continue;
 
         try {
@@ -204,7 +150,7 @@ export function makeAgentWorktreeCleanupTool(_ctx?: OpenClawPluginToolContext) {
               },
             });
           }
-          cleaned.push(`${target.name} (${formatLifecycleState(resolved.derivedState)})`);
+          cleaned.push(`${target.name} (${formatWorktreeLifecycleState(resolved.derivedState)})`);
         } catch (err) {
           failures.push(`${target.name}: ${err instanceof Error ? err.message : String(err)}`);
         }

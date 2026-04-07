@@ -1,6 +1,12 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { listWorktreeToolTargets, matchesWorktreeToolRef } from "../src/tools/worktree-tool-context";
+import {
+  formatWorktreeLifecycleState,
+  formatWorktreePreserveReason,
+  listWorktreeToolTargets,
+  matchesWorktreeToolRef,
+  resolveWorktreeToolSessions,
+} from "../src/tools/worktree-tool-context";
 
 describe("worktree-tool-context", () => {
   it("merges active and persisted worktree targets while preferring active sessions", () => {
@@ -58,5 +64,40 @@ describe("worktree-tool-context", () => {
     assert.equal(matchesWorktreeToolRef(target, "backend-1"), true);
     assert.equal(matchesWorktreeToolRef(target, "legacy-1"), true);
     assert.equal(matchesWorktreeToolRef(target, "missing"), false);
+  });
+
+  it("resolves active and persisted worktree sessions across all supported refs", () => {
+    const sessionManager = {
+      resolve(ref: string) {
+        return ref === "backend-1"
+          ? { id: "active-1", name: "feature-work" }
+          : undefined;
+      },
+      getPersistedSession(ref: string) {
+        return ref === "legacy-1"
+          ? { sessionId: "persisted-1", name: "feature-work" }
+          : undefined;
+      },
+    };
+
+    assert.deepEqual(
+      resolveWorktreeToolSessions(sessionManager as any, {
+        id: "session-1",
+        name: "feature-work",
+        backendConversationId: "backend-1",
+        harnessSessionId: "legacy-1",
+      }),
+      {
+        activeSession: { id: "active-1", name: "feature-work" },
+        persistedSession: { sessionId: "persisted-1", name: "feature-work" },
+      },
+    );
+  });
+
+  it("formats lifecycle states and preserve reasons for worktree tools", () => {
+    assert.equal(formatWorktreeLifecycleState("provisioned"), "active");
+    assert.equal(formatWorktreeLifecycleState("custom"), "custom");
+    assert.equal(formatWorktreePreserveReason("dirty_tracked_changes"), "dirty worktree");
+    assert.equal(formatWorktreePreserveReason("custom_reason"), "custom reason");
   });
 });
