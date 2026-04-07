@@ -277,6 +277,17 @@ export class SessionManager {
     this.enforcePersistedRetention();
   }
 
+  private isLegacyResolvedWorktree(session: Pick<
+    PersistedSessionInfo,
+    "worktreeMerged" | "worktreeDisposition" | "worktreeState"
+  >): boolean {
+    return session.worktreeMerged === true
+      || session.worktreeDisposition === "dismissed"
+      || session.worktreeDisposition === "no-change-cleaned"
+      || session.worktreeState === "merged"
+      || session.worktreeState === "dismissed";
+  }
+
   private syncPersistedSessionMaintenance(session: PersistedSessionInfo): void {
     const ref = this.persistedMaintenanceRef(session);
     if (!ref) return;
@@ -296,12 +307,7 @@ export class SessionManager {
       ?? session.worktreeMergedAt
       ?? session.worktreeDismissedAt
       ?? (session.completedAt ? new Date(session.completedAt).toISOString() : undefined);
-    const legacyResolved =
-      session.worktreeMerged === true
-      || session.worktreeDisposition === "dismissed"
-      || session.worktreeDisposition === "no-change-cleaned"
-      || session.worktreeState === "merged"
-      || session.worktreeState === "dismissed";
+    const legacyResolved = this.isLegacyResolvedWorktree(session);
     if ((resolved.cleanupSafe || legacyResolved) && typeof resolvedAtIso === "string") {
       const resolvedAt = new Date(resolvedAtIso).getTime();
       if (Number.isFinite(resolvedAt)) {
@@ -338,7 +344,8 @@ export class SessionManager {
       ?? session.worktreeDismissedAt
       ?? (session.completedAt ? new Date(session.completedAt).toISOString() : undefined);
     const resolvedAt = resolvedAtIso ? new Date(resolvedAtIso).getTime() : 0;
-    if (!resolved.cleanupSafe || !resolvedAt || now - resolvedAt < RESOLVED_WORKTREE_RETENTION_MS) return;
+    const legacyResolved = this.isLegacyResolvedWorktree(session);
+    if ((!resolved.cleanupSafe && !legacyResolved) || !resolvedAt || now - resolvedAt < RESOLVED_WORKTREE_RETENTION_MS) return;
 
     try {
       if (!session.worktreePath && !usesNativeBackendWorktree(session)) return;
