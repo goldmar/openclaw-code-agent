@@ -28,7 +28,6 @@ export class SessionNotificationService {
     request: SessionNotificationRequest,
   ): void {
     const deliveryRef = this.getDeliveryRef(session);
-    const completionWakePatch = this.buildCompletionWakePatch(request);
     const hasWakeAfterNotifySuccess = Boolean(request.wakeMessage?.trim() || request.wakeMessageOnNotifySuccess?.trim());
     const hasWakeAfterNotifyFailure = Boolean(request.wakeMessage?.trim() || request.wakeMessageOnNotifyFailed?.trim());
 
@@ -46,24 +45,15 @@ export class SessionNotificationService {
         request.hooks?.onNotifyFailed?.();
       },
       onWakeStarted: () => {
-        this.applyPersistedPatchWithCompletionWake(deliveryRef, "wake_pending", completionWakePatch, {
-          completionWakeIssuedAt: new Date().toISOString(),
-          completionWakeSucceededAt: undefined,
-          completionWakeFailedAt: undefined,
-        });
+        this.applyDeliveryState(deliveryRef, "wake_pending");
         request.hooks?.onWakeStarted?.();
       },
       onWakeSucceeded: () => {
-        this.applyPersistedPatchWithCompletionWake(deliveryRef, "idle", completionWakePatch, {
-          completionWakeSucceededAt: new Date().toISOString(),
-          completionWakeFailedAt: undefined,
-        });
+        this.applyDeliveryState(deliveryRef, "idle");
         request.hooks?.onWakeSucceeded?.();
       },
       onWakeFailed: () => {
-        this.applyPersistedPatchWithCompletionWake(deliveryRef, "failed", completionWakePatch, {
-          completionWakeFailedAt: new Date().toISOString(),
-        });
+        this.applyDeliveryState(deliveryRef, "failed");
         request.hooks?.onWakeFailed?.();
       },
     };
@@ -99,33 +89,5 @@ export class SessionNotificationService {
   ): void {
     if (!ref || !deliveryState) return;
     this.applyPersistedPatch(ref, { deliveryState });
-  }
-
-  private applyPersistedPatchWithCompletionWake(
-    ref: string,
-    deliveryState: PersistedSessionInfo["deliveryState"],
-    completionWakePatch: Pick<PersistedSessionInfo, "completionWakeSummaryRequired"> | undefined,
-    extraPatch: Partial<
-      Pick<
-        PersistedSessionInfo,
-        "completionWakeIssuedAt" | "completionWakeSucceededAt" | "completionWakeFailedAt"
-      >
-    >,
-  ): void {
-    if (!ref || !deliveryState) return;
-    this.applyPersistedPatch(ref, completionWakePatch
-      ? {
-          deliveryState,
-          ...completionWakePatch,
-          ...extraPatch,
-        }
-      : { deliveryState });
-  }
-
-  private buildCompletionWakePatch(
-    request: SessionNotificationRequest,
-  ): Pick<PersistedSessionInfo, "completionWakeSummaryRequired"> | undefined {
-    if (request.label !== "completed") return undefined;
-    return { completionWakeSummaryRequired: true };
   }
 }
