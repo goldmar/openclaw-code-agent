@@ -55,6 +55,33 @@ describe("session-notification-builder", () => {
     assert.match(summary, /- Add focused regression tests/);
   });
 
+  it("prefers finalized artifact markdown over preview transcript when structured fields are absent", () => {
+    const summary = buildPlanReviewSummary({
+      preview: [
+        "Thinking through the approval flow",
+        "Checking whether the last wake already contains the summary",
+        "Review summary:",
+        "Plan:",
+        "1. This is raw running progress, not the final plan",
+      ].join("\n"),
+      artifact: {
+        markdown: [
+          "Proposed plan:",
+          "1. Trace the approval summary source",
+          "2. Use finalized plan text for the review summary fallback",
+          "3. Add a focused regression test",
+        ].join("\n"),
+        steps: [],
+      },
+    });
+
+    assert.match(summary, /- Trace the approval summary source/);
+    assert.match(summary, /- Use finalized plan text for the review summary fallback/);
+    assert.match(summary, /- Add a focused regression test/);
+    assert.doesNotMatch(summary, /Thinking through the approval flow/);
+    assert.doesNotMatch(summary, /raw running progress/);
+  });
+
   it("instructs delegated plan reviews to use structured approval rationale plus orchestrator-owned follow-up", () => {
     const payload = buildWaitingForInputPayload({
       session: {

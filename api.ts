@@ -28,10 +28,12 @@ export type PluginInteractiveDiscordHandlerContext = {
   channel: "discord";
   auth: { isAuthorizedSender: boolean };
   interaction?: { payload?: string };
+  callback?: { payload?: string };
   respond: {
     acknowledge?: () => Promise<void>;
     reply: (params: { text: string; ephemeral?: boolean }) => Promise<void>;
     editMessage?: (params: { text?: string; components?: unknown }) => Promise<void>;
+    clearButtons?: () => Promise<void>;
     clearComponents?: (params?: { text?: string }) => Promise<void>;
     followUp?: (params: { text: string; ephemeral?: boolean }) => Promise<void>;
   };
@@ -40,13 +42,17 @@ export type PluginInteractiveDiscordHandlerContext = {
 export type PluginInteractiveTelegramHandlerRegistration = {
   channel: "telegram";
   namespace: string;
-  handler: (ctx: PluginInteractiveTelegramHandlerContext) => Promise<PluginInteractiveHandlerResult> | PluginInteractiveHandlerResult;
+  handler:
+    | ((ctx: PluginInteractiveTelegramHandlerContext) => Promise<PluginInteractiveHandlerResult>)
+    | ((ctx: PluginInteractiveTelegramHandlerContext) => PluginInteractiveHandlerResult);
 };
 
 export type PluginInteractiveDiscordHandlerRegistration = {
   channel: "discord";
   namespace: string;
-  handler: (ctx: PluginInteractiveDiscordHandlerContext) => Promise<PluginInteractiveHandlerResult> | PluginInteractiveHandlerResult;
+  handler:
+    | ((ctx: PluginInteractiveDiscordHandlerContext) => Promise<PluginInteractiveHandlerResult>)
+    | ((ctx: PluginInteractiveDiscordHandlerContext) => PluginInteractiveHandlerResult);
 };
 
 export type PluginInteractiveTelegramHandlerResult = PluginInteractiveHandlerResult;
