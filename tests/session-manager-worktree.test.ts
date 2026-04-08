@@ -182,7 +182,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       assert.equal(request.label, "worktree-no-changes");
       assert.equal(request.userMessage, "ℹ️ [plan-report] Session completed with no changes — worktree cleaned up");
       assert.match(request.wakeMessage, /plugin already sent the canonical completion status/i);
-      assert.match(request.wakeMessage, /should usually send the user a short factual completion summary/i);
+      assert.match(request.wakeMessage, /must send the user a short factual completion summary/i);
       assert.match(request.wakeMessage, /ordinary terminal\/manual completions too/i);
       assert.match(request.wakeMessage, /do NOT repeat the plugin's status line/i);
     } finally {
@@ -241,7 +241,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       assert.equal(request.label, "worktree-no-changes");
       assert.equal(request.userMessage, "ℹ️ [investigation-report] Session completed with no changes — worktree cleaned up");
       assert.match(request.wakeMessage, /plugin already sent the canonical completion status/i);
-      assert.match(request.wakeMessage, /should usually send the user a short factual completion summary/i);
+      assert.match(request.wakeMessage, /must send the user a short factual completion summary/i);
       assert.match(request.wakeMessage, /ordinary terminal\/manual completions too/i);
       assert.match(request.wakeMessage, /do NOT repeat the plugin's status line/i);
     } finally {

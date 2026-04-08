@@ -1579,8 +1579,8 @@ describe("SessionManager turn-end wake", () => {
     const [_sessionArg, request] = calls[0];
     assert.equal(request.label, "completed");
     assert.equal(request.userMessage, "✅ [review-session] Completed | $0.00 | 12s");
-    assert.match(request.wakeMessage, /Output preview:/);
-    assert.doesNotMatch(request.wakeMessage, /Completion summary:/);
+    assert.match(request.wakeMessageOnNotifySuccess, /Output preview:/);
+    assert.doesNotMatch(request.wakeMessageOnNotifySuccess, /Completion summary:/);
   });
 
   it("keeps normal completion notifications deterministic", async () => {
@@ -1604,10 +1604,11 @@ describe("SessionManager turn-end wake", () => {
     const [_sessionArg, request] = calls[0];
     assert.equal(request.label, "completed");
     assert.equal(request.userMessage, "✅ [normal-session] Completed | $0.00 | 8s");
-    assert.match(request.wakeMessage, /plugin already sent the canonical completion status/i);
-    assert.match(request.wakeMessage, /should usually send the user a short factual completion summary/i);
-    assert.match(request.wakeMessage, /ordinary terminal\/manual completions too/i);
-    assert.match(request.wakeMessage, /do NOT repeat the plugin's status line/i);
+    assert.match(request.wakeMessageOnNotifySuccess, /plugin already sent the canonical completion status/i);
+    assert.match(request.wakeMessageOnNotifySuccess, /must send the user a short factual completion summary/i);
+    assert.match(request.wakeMessageOnNotifySuccess, /ordinary terminal\/manual completions too/i);
+    assert.match(request.wakeMessageOnNotifySuccess, /do NOT repeat the plugin's status line/i);
+    assert.match(request.wakeMessageOnNotifyFailed, /did not confirm delivery of the canonical completion status/i);
   });
 
   it("does not derive completion summaries from terminal transcript lines", async () => {
@@ -1633,7 +1634,7 @@ describe("SessionManager turn-end wake", () => {
     const [_sessionArg, request] = calls[0];
     assert.equal(request.label, "completed");
     assert.equal(request.userMessage, "✅ [tail-summary-session] Completed | $0.00 | 9s");
-    assert.doesNotMatch(request.wakeMessage, /Completion summary:/);
+    assert.doesNotMatch(request.wakeMessageOnNotifySuccess, /Completion summary:/);
   });
 
   it("suppresses turn-complete when the session is already terminal and relies on the final completed notification", async () => {
@@ -1761,7 +1762,8 @@ describe("SessionManager terminal wakes", () => {
     assert.equal(request.label, "completed");
     assert.equal(request.notifyUser, "always");
     assert.match(request.userMessage, /✅ \[done\] Completed/);
-    assert.match(request.wakeMessage, /Coding agent session completed/);
+    assert.match(request.wakeMessageOnNotifySuccess, /Coding agent session completed/);
+    assert.match(request.wakeMessageOnNotifyFailed, /Coding agent session completed/);
   });
 });
 
@@ -1845,8 +1847,8 @@ describe("SessionManager terminal wake behavior", () => {
     const calls = (sm as any).__dispatchCalls;
     assert.equal(calls.length, 1);
     const [_sessionArg, request] = calls[0];
-    assert.match(request.wakeMessage, /Implementation complete:/);
-    assert.doesNotMatch(request.wakeMessage, /review requirements/);
+    assert.match(request.wakeMessageOnNotifySuccess, /Implementation complete:/);
+    assert.doesNotMatch(request.wakeMessageOnNotifySuccess, /review requirements/);
   });
 
   it("prefers post-approval execution output over earlier plan text in completion wakes", async () => {
@@ -1872,8 +1874,8 @@ describe("SessionManager terminal wake behavior", () => {
     const calls = (sm as any).__dispatchCalls;
     assert.equal(calls.length, 1);
     const [_sessionArg, request] = calls[0];
-    assert.match(request.wakeMessage, /Completed work after approval:/);
-    assert.doesNotMatch(request.wakeMessage, /collect requirements/);
+    assert.match(request.wakeMessageOnNotifySuccess, /Completed work after approval:/);
+    assert.doesNotMatch(request.wakeMessageOnNotifySuccess, /collect requirements/);
   });
 
   it("includes deterministic approval/execution context in terminal completion wakes", async () => {
@@ -1893,9 +1895,9 @@ describe("SessionManager terminal wake behavior", () => {
     const calls = (sm as any).__dispatchCalls;
     assert.equal(calls.length, 1);
     const [_sessionArg, request] = calls[0];
-    assert.match(request.wakeMessage, /Requested permission mode: plan/);
-    assert.match(request.wakeMessage, /Effective permission mode: bypassPermissions/);
-    assert.match(request.wakeMessage, /Deterministic approval\/execution state: approved_then_implemented/);
+    assert.match(request.wakeMessageOnNotifySuccess, /Requested permission mode: plan/);
+    assert.match(request.wakeMessageOnNotifySuccess, /Effective permission mode: bypassPermissions/);
+    assert.match(request.wakeMessageOnNotifySuccess, /Deterministic approval\/execution state: approved_then_implemented/);
   });
 
   it("de-dupes duplicate failed wake for the same terminal marker", async () => {

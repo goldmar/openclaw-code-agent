@@ -21,7 +21,7 @@ function collectTestFiles(dir) {
 
 const cwd = process.cwd();
 const requested = process.argv.slice(2)
-  .filter((arg, index) => arg !== "--" || index !== 0)
+  .filter((arg) => arg !== "--")
   .map((arg) => arg.trim())
   .filter(Boolean);
 

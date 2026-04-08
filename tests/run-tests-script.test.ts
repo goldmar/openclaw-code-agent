@@ -28,4 +28,11 @@ describe("run-tests script", () => {
     assert.match(result.stdout, /Test files run: 1/);
     assert.match(result.stdout, /Status: PASS/);
   });
+
+  it("ignores separators that appear between file arguments", () => {
+    const result = runScript([sampleTest, "--", sampleTest]);
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    assert.match(result.stdout, /Test files run: 2/);
+    assert.match(result.stdout, /Status: PASS/);
+  });
 });
