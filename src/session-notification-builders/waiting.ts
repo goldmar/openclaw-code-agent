@@ -49,7 +49,8 @@ export function buildPlanReviewSummary(args: {
   if (structuredSteps.length > 0) {
     lines.push(...structuredSteps.map((step) => `- ${step}`));
   } else {
-    lines.push(...buildFallbackPlanSummary(preview));
+    const fallbackSource = artifact?.markdown?.trim() || preview;
+    lines.push(...buildFallbackPlanSummary(fallbackSource));
   }
 
   return lines.join("\n");

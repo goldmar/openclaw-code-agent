@@ -1205,6 +1205,43 @@ describe("SessionManager turn-end wake", () => {
     assert.match(request.userMessage, /- Add focused regression tests/);
   });
 
+  it("uses finalized artifact markdown instead of preview transcript when structured plan fields are absent", () => {
+    const s = fakeSession({
+      id: "s-plan-markdown-fallback",
+      name: "plan-markdown-fallback",
+      status: "running",
+      pendingPlanApproval: true,
+      planDecisionVersion: 6,
+      actionablePlanDecisionVersion: 6,
+      planApproval: "ask",
+      latestPlanArtifactVersion: 6,
+      latestPlanArtifact: {
+        markdown: [
+          "Proposed plan:",
+          "1. Keep only the distilled final plan in the approval summary",
+          "2. Add a regression test for transcript leakage",
+        ].join("\n"),
+        steps: [],
+      },
+      getOutput: () => [
+        "Thinking through the notification path",
+        "Inspecting the wake payloads",
+        "This is running progress and should not leak into review summary",
+      ],
+    });
+
+    (sm as any).triggerWaitingForInputEvent(s);
+
+    const calls = (sm as any).__dispatchCalls;
+    assert.equal(calls.length, 1);
+    const [_sessionArg, request] = calls[0];
+    assert.equal(request.label, "plan-approval");
+    assert.match(request.userMessage, /- Keep only the distilled final plan in the approval summary/);
+    assert.match(request.userMessage, /- Add a regression test for transcript leakage/);
+    assert.doesNotMatch(request.userMessage, /Thinking through the notification path/);
+    assert.doesNotMatch(request.userMessage, /running progress/);
+  });
+
   it("ignores stale structured artifacts and falls back to preview-derived summaries", () => {
     const s = fakeSession({
       id: "s-plan-stale",
