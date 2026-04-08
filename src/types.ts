@@ -383,6 +383,10 @@ export interface PersistedSessionInfo {
   worktreeState?: SessionWorktreeState;
   runtimeState?: SessionRuntimeState;
   deliveryState?: SessionDeliveryState;
+  completionWakeIssuedAt?: string;
+  completionWakeSucceededAt?: string;
+  completionWakeFailedAt?: string;
+  completionWakeSummaryRequired?: boolean;
   killReason?: KillReason;
   costUsd: number;
   originAgentId?: string;

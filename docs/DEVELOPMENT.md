@@ -63,6 +63,8 @@ pnpm verify
 
 Use `pnpm verify` before merging behavior changes. CI and release workflows both gate on that exact command. `pnpm test` runs the stable per-file suite without force-exit, and `pnpm test:file tests/foo.test.ts` is the fastest way to rerun one file while debugging orchestration edge cases.
 
+Release metadata for external plugin installs lives in `package.json` under `openclaw.compat` and `openclaw.build`. When bumping the supported OpenClaw baseline, update those fields together with `peerDependencies.openclaw`.
+
 Additional smoke entry points:
 
 - `pnpm smoke:backend-parity` for the shared backend-contract surface
@@ -126,3 +128,4 @@ Before merging a behavior change, confirm:
 2. Config defaults match `src/config.ts` and `openclaw.plugin.json`.
 3. README only links to deeper docs; it should not become the full reference again.
 4. Historical implementation plans stay out of the main docs surface.
+5. `package.json` compatibility/build metadata matches the intended OpenClaw release floor.
