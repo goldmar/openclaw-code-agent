@@ -60,6 +60,48 @@ describe("codex protocol turn payloads", () => {
     });
   });
 
+  it("forwards Codex system prompts through collaboration-mode developer instructions", () => {
+    const payloads = buildTurnStartPayloads({
+      threadId: "thread-3",
+      prompt: "Implement it",
+      model: "gpt-5.4",
+      systemPrompt: "Follow OpenClaw orchestration rules.",
+      permissionMode: "default",
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+    });
+
+    assert.deepEqual(payloads[0], {
+      threadId: "thread-3",
+      input: [{ type: "text", text: "Implement it" }],
+      model: "gpt-5.4",
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+      collaborationMode: {
+        mode: "default",
+        settings: {
+          model: "gpt-5.4",
+          developerInstructions: "Follow OpenClaw orchestration rules.",
+        },
+      },
+    });
+
+    assert.deepEqual(payloads[1], {
+      threadId: "thread-3",
+      input: [{ type: "text", text: "Implement it" }],
+      model: "gpt-5.4",
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+      collaboration_mode: {
+        mode: "default",
+        settings: {
+          model: "gpt-5.4",
+          developer_instructions: "Follow OpenClaw orchestration rules.",
+        },
+      },
+    });
+  });
+
   it("defaults Codex execution policy to never so OpenClaw plan/default sessions do not fall back to on-request", () => {
     assert.deepEqual(codexExecutionPolicyForMode("plan"), {
       approvalPolicy: "never",
