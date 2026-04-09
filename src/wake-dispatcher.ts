@@ -71,7 +71,7 @@ export class WakeDispatcher {
     }
 
     this.executor.execute(
-      this.transport.buildChatSendArgs(sessionKey, text, true, route),
+      this.transport.buildChatSendArgs(sessionKey, text, true),
       {
         label,
         sessionId: session.id,

@@ -27,19 +27,12 @@ afterEach(() => {
 });
 
 describe("WakeTransport", () => {
-  it("includes explicit route metadata in chat.send payloads while keeping sessionKey", () => {
+  it("keeps chat.send payloads limited to the gateway-supported session wake shape", () => {
     const transport = new WakeTransport();
     const args = transport.buildChatSendArgs(
       "agent:main:telegram:group:-1003863755361:topic:13832",
       "wake up",
       true,
-      {
-        channel: "telegram",
-        accountId: "bot",
-        target: "-1003863755361",
-        threadId: "13832",
-        sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
-      },
     );
 
     assert.deepEqual(args.slice(0, 6), [
@@ -52,12 +45,12 @@ describe("WakeTransport", () => {
     ]);
     const payload = JSON.parse(args[7] ?? "{}") as Record<string, unknown>;
     assert.equal(payload.sessionKey, "agent:main:telegram:group:-1003863755361:topic:13832");
-    assert.equal(payload.channel, "telegram");
-    assert.equal(payload.accountId, "bot");
-    assert.equal(payload.target, "-1003863755361");
-    assert.equal(payload.threadId, "13832");
     assert.equal(payload.message, "wake up");
     assert.equal(payload.deliver, true);
+    assert.equal(payload.channel, undefined);
+    assert.equal(payload.accountId, undefined);
+    assert.equal(payload.target, undefined);
+    assert.equal(payload.threadId, undefined);
   });
 
   it("retries loading the Discord component sender after a transient module failure", async () => {
