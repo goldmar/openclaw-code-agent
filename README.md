@@ -100,7 +100,7 @@ openclaw plugins enable openclaw-code-agent
 openclaw gateway restart
 ```
 
-This release targets the OpenClaw `v2026.4.8` external plugin contract. `package.json` now carries the plugin API compatibility and build metadata used by modern OpenClaw / ClawHub installs, so keep those fields in sync when bumping the plugin release baseline.
+This release targets the OpenClaw `v2026.4.9` external plugin contract. `package.json` now carries the plugin API compatibility and build metadata used by modern OpenClaw / ClawHub installs, so keep those fields in sync when bumping the plugin release baseline.
 
 Add a minimal config block under `plugins.entries["openclaw-code-agent"]` in `~/.openclaw/openclaw.json`:
 
@@ -162,7 +162,7 @@ Prefer fully routable channel strings such as `telegram|123456789` or `telegram|
 - Upgrading archives old or invalid persisted session stores to a timestamped `.legacy-*.json` backup and starts with a fresh index.
 - Legacy Codex SDK session entries are archived and not loaded by the App Server backend.
 - App Server-backed Codex sessions are now the only supported Codex runtime path.
-- The package now advertises OpenClaw external-plugin compatibility metadata for the `v2026.4.8` plugin API baseline.
+- The package now advertises OpenClaw external-plugin compatibility metadata for the `v2026.4.9` plugin API baseline.
 - Contributors and release automation should use `pnpm verify` as the canonical validation gate.
 
 ### Backend Capabilities

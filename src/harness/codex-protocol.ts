@@ -329,26 +329,32 @@ export function buildTurnInput(prompt: string): Array<Record<string, unknown>> {
   return [{ type: "text", text: prompt }];
 }
 
-export function buildCollaborationMode(mode: string, model?: string, reasoningEffort?: string): Record<string, unknown> | undefined {
+export function buildCollaborationMode(
+  mode: string,
+  model?: string,
+  reasoningEffort?: string,
+  developerInstructions?: string,
+): Record<string, unknown> | undefined {
   const normalizedModel = model?.trim();
+  const normalizedDeveloperInstructions = developerInstructions?.trim();
   if (mode !== "plan") {
-    return normalizedModel ? {
+    return normalizedModel || normalizedDeveloperInstructions ? {
       mode: "default",
       settings: {
-        model: normalizedModel,
+        ...(normalizedModel ? { model: normalizedModel } : {}),
         ...(reasoningEffort?.trim() ? { reasoningEffort: reasoningEffort.trim() } : {}),
-        developerInstructions: null,
+        developerInstructions: normalizedDeveloperInstructions ?? null,
       },
     } : undefined;
   }
 
-  if (!normalizedModel) return undefined;
+  if (!normalizedModel && !normalizedDeveloperInstructions) return undefined;
   return {
     mode: "plan",
     settings: {
-      model: normalizedModel,
+      ...(normalizedModel ? { model: normalizedModel } : {}),
       ...(reasoningEffort?.trim() ? { reasoningEffort: reasoningEffort.trim() } : {}),
-      developerInstructions: null,
+      developerInstructions: normalizedDeveloperInstructions ?? null,
     },
   };
 }
@@ -358,6 +364,7 @@ export function buildTurnStartPayloads(params: {
   prompt: string;
   model?: string;
   reasoningEffort?: string;
+  systemPrompt?: string;
   permissionMode?: string;
   approvalPolicy?: string;
   sandbox?: string;
@@ -369,7 +376,12 @@ export function buildTurnStartPayloads(params: {
   if (params.model?.trim()) base.model = params.model.trim();
   if (params.approvalPolicy?.trim()) base.approvalPolicy = params.approvalPolicy.trim();
   if (params.sandbox?.trim()) base.sandbox = params.sandbox.trim();
-  const collaborationMode = buildCollaborationMode(params.permissionMode ?? "default", params.model, params.reasoningEffort);
+  const collaborationMode = buildCollaborationMode(
+    params.permissionMode ?? "default",
+    params.model,
+    params.reasoningEffort,
+    params.systemPrompt,
+  );
   if (!collaborationMode) return [base];
   return [
     { ...base, collaborationMode },
@@ -378,11 +390,14 @@ export function buildTurnStartPayloads(params: {
       collaboration_mode: {
         mode: collaborationMode.mode,
         settings: {
-          model: (collaborationMode.settings as { model: string }).model,
+          ...((typeof (collaborationMode.settings as { model?: string }).model === "string")
+            ? { model: (collaborationMode.settings as { model: string }).model }
+            : {}),
           ...(typeof (collaborationMode.settings as { reasoningEffort?: string }).reasoningEffort === "string"
             ? { reasoning_effort: (collaborationMode.settings as { reasoningEffort: string }).reasoningEffort }
             : {}),
-          developer_instructions: null,
+          developer_instructions:
+            (collaborationMode.settings as { developerInstructions?: string | null }).developerInstructions ?? null,
         },
       },
     },

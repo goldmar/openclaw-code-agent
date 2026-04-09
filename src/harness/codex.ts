@@ -362,6 +362,7 @@ export class CodexHarness implements AgentHarness {
             prompt,
             model: options.model,
             reasoningEffort: options.reasoningEffort,
+            systemPrompt: options.systemPrompt,
             permissionMode: currentPermissionMode,
             approvalPolicy: executionPolicy.approvalPolicy,
             sandbox: executionPolicy.sandbox,

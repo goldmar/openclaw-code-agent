@@ -702,4 +702,36 @@ export async function sendDiscordComponentMessage(target, spec, opts = {}) {
     assert.equal(params.message, "🚀 launched");
     assert.equal(params["thread-id"], "11239");
   });
+
+  it("preserves Telegram topic routing for follow-up notifications", async () => {
+    const dispatcher = new WakeDispatcher();
+    const session: FakeSession = {
+      id: "session-10",
+      route: {
+        provider: "telegram",
+        accountId: "bot",
+        target: "-1003863755361",
+        threadId: "13832",
+        sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+      },
+      originChannel: "telegram|bot|-1003863755361",
+      originThreadId: 13832,
+      originSessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+    };
+
+    dispatcher.dispatchSessionNotification(session as any, {
+      label: "completed",
+      userMessage: "✅ completed",
+      notifyUser: "always",
+    });
+    const calls = await waitForCalls(logPath, 1);
+
+    assert.equal(calls.length, 1);
+    const params = parseMessageSendArgs(calls[0] ?? []);
+    assert.equal(params.channel, "telegram");
+    assert.equal(params.account, "bot");
+    assert.equal(params.target, "-1003863755361");
+    assert.equal(params.message, "✅ completed");
+    assert.equal(params["thread-id"], "13832");
+  });
 });
