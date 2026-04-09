@@ -355,10 +355,10 @@ export async function sendDiscordComponentMessage(target, spec, opts = {}) {
     const wakeParams = parseChatSendParams(wakeCall);
     assert.equal(wakeParams.message, "Coding agent session completed.");
     assert.equal(wakeParams.deliver, true);
-    assert.equal(wakeParams.channel, "telegram");
-    assert.equal(wakeParams.accountId, "bot");
-    assert.equal(wakeParams.target, "12345");
-    assert.equal(wakeParams.threadId, "11239");
+    assert.equal(wakeParams.channel, undefined);
+    assert.equal(wakeParams.accountId, undefined);
+    assert.equal(wakeParams.target, undefined);
+    assert.equal(wakeParams.threadId, undefined);
   });
 
   it("preserves Telegram inline buttons when a notification also sends a wake", async () => {
@@ -532,8 +532,8 @@ export async function sendDiscordComponentMessage(target, spec, opts = {}) {
     assert.equal(calls[0]?.[0], "gateway");
     const wakeParams = parseChatSendParams(calls[0] ?? []);
     assert.equal(wakeParams.sessionKey, "agent:main:telegram:group:-1003863755361:topic:11239");
-    assert.equal(wakeParams.channel, "telegram");
-    assert.equal(wakeParams.threadId, "11239");
+    assert.equal(wakeParams.channel, undefined);
+    assert.equal(wakeParams.threadId, undefined);
   });
 
   it("uses system event for notify-only sessions when originSessionKey is missing", async () => {
