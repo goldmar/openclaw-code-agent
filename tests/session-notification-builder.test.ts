@@ -183,6 +183,33 @@ describe("session-notification-builder", () => {
     assert.match(payload.wakeMessageOnNotifyFailed, /do NOT assume the plugin already reached the user/i);
   });
 
+  it("includes fallback approval interpretation when approval was recorded without canonical buttons", () => {
+    const payload = buildCompletedPayload({
+      session: {
+        id: "session-3",
+        name: "approved-no-buttons",
+        status: "completed",
+        costUsd: 0.5,
+        duration: 30_000,
+        approvalState: "approved",
+        requestedPermissionMode: "plan",
+        currentPermissionMode: "bypassPermissions",
+        approvalExecutionState: "approved_then_implemented",
+        planApproval: "delegate",
+        approvalPromptStatus: "not_sent",
+        approvalPromptMessageKind: "none",
+        approvalPromptDeliveredAt: undefined,
+      } as any,
+      originThreadLine: "Origin thread: telegram topic 10",
+      preview: "Output",
+    });
+
+    assert.match(
+      payload.wakeMessageOnNotifySuccess,
+      /explicit plan approval was recorded before implementation/i,
+    );
+  });
+
   it("uses agent_respond as the primary continuation path in failure wakes", () => {
     const payload = buildFailedPayload({
       session: {
