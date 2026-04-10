@@ -1,8 +1,13 @@
 import type { Session } from "../session";
 import type { NotificationButton } from "../session-interactions";
 import type { PlanApprovalMode, PlanArtifact } from "../types";
+import { truncateText } from "../format";
 
 type OriginThreadLine = string;
+const MAX_PLAN_SUMMARY_ITEMS = 5;
+const MAX_PLAN_SUMMARY_ITEM_CHARS = 280;
+const MAX_PLAN_SUMMARY_BODY_CHARS = 1400;
+const OMITTED_PLAN_SUMMARY_LINE = "- Additional plan details omitted for brevity.";
 
 function normalizeSummaryItem(line: string): string {
   return line
@@ -13,21 +18,50 @@ function normalizeSummaryItem(line: string): string {
     .trim();
 }
 
-function buildFallbackPlanSummary(preview: string): string[] {
-  const bulletCandidates = preview
+function summarizePlanText(text: string): string[] {
+  return text
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean)
     .map(normalizeSummaryItem)
     .filter((line) => line.length > 0)
-    .filter((line) => !/^(plan|proposed plan|implementation plan|review summary)[:]?$/i.test(line));
-  const summaryCandidates = bulletCandidates.filter((line) => !/^(should|can|could|would|will)\b.*\?$/i.test(line));
+    .filter((line) => !/^(plan|proposed plan|implementation plan|review summary|summary|why this was escalated)[:]?$/i.test(line))
+    .filter((line) => !/^(should|can|could|would|will)\b.*\?$/i.test(line));
+}
 
-  if (summaryCandidates.length === 0) {
+function formatPlanSummaryItems(items: string[]): string[] {
+  const lines: string[] = [];
+  let omitted = false;
+
+  for (const item of items) {
+    const normalized = item.replace(/\s+/g, " ").trim();
+    if (!normalized) continue;
+    const truncated = truncateText(normalized, MAX_PLAN_SUMMARY_ITEM_CHARS);
+    if (truncated.length < normalized.length) omitted = true;
+    const line = `- ${truncated}`;
+
+    if (lines.length >= MAX_PLAN_SUMMARY_ITEMS || [...lines, line].join("\n").length > MAX_PLAN_SUMMARY_BODY_CHARS) {
+      omitted = true;
+      break;
+    }
+    lines.push(line);
+  }
+
+  if (lines.length === 0) {
     return ["- Plan details are available in the full session output."];
   }
 
-  return summaryCandidates.slice(0, 5).map((line) => `- ${line}`);
+  if (!omitted) return lines;
+
+  const boundedLines = [...lines];
+  while (boundedLines.length > 0 && [...boundedLines, OMITTED_PLAN_SUMMARY_LINE].join("\n").length > MAX_PLAN_SUMMARY_BODY_CHARS) {
+    boundedLines.pop();
+  }
+  return [...boundedLines, OMITTED_PLAN_SUMMARY_LINE];
+}
+
+export function formatPlanApprovalSummary(summary: string): string {
+  return formatPlanSummaryItems(summarizePlanText(summary)).join("\n");
 }
 
 export function buildPlanReviewSummary(args: {
@@ -36,22 +70,24 @@ export function buildPlanReviewSummary(args: {
 }): string {
   const { preview, artifact } = args;
   const lines: string[] = ["Review summary:"];
+  const summaryItems: string[] = [];
 
   const explanation = artifact?.explanation?.trim();
   if (explanation) {
-    lines.push(`- ${explanation}`);
+    summaryItems.push(explanation);
   }
 
   const structuredSteps = artifact?.steps
     ?.map((step) => step.step.trim())
-    .filter(Boolean)
-    .slice(0, 5) ?? [];
+    .filter(Boolean) ?? [];
   if (structuredSteps.length > 0) {
-    lines.push(...structuredSteps.map((step) => `- ${step}`));
+    summaryItems.push(...structuredSteps);
   } else {
     const fallbackSource = artifact?.markdown?.trim() || preview;
-    lines.push(...buildFallbackPlanSummary(fallbackSource));
+    summaryItems.push(...summarizePlanText(fallbackSource));
   }
+
+  lines.push(...formatPlanSummaryItems(summaryItems));
 
   return lines.join("\n");
 }
@@ -78,7 +114,7 @@ export function buildPlanApprovalFallbackText(args: {
     ``,
     `Why this was escalated:`,
     ``,
-    summary,
+    formatPlanApprovalSummary(summary),
   ].join("\n");
 }
 

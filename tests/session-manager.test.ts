@@ -1315,6 +1315,31 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(approveToken?.planDecisionVersion, 9);
   });
 
+  it("bounds delegated approval summaries before sending button prompts", () => {
+    const s = fakeSession({
+      id: "s-plan-escalate-long",
+      name: "plan-escalate-long",
+      status: "running",
+      pendingPlanApproval: true,
+      planDecisionVersion: 10,
+      planApproval: "delegate",
+    });
+    (sm as any).sessions.set(s.id, s);
+    stubDispatch(sm);
+
+    sm.requestPlanApprovalFromUser(
+      s.id,
+      `Summary:\n- ${"oversized transcript detail ".repeat(100)}`,
+    );
+
+    const calls = (sm as any).__dispatchCalls;
+    assert.equal(calls.length, 1);
+    const [_sessionArg, request] = calls[0];
+    assert.equal(request.label, "plan-approval");
+    assert.ok((request.userMessage ?? "").length < 2000);
+    assert.match(request.userMessage, /Additional plan details omitted for brevity/);
+  });
+
   it("suppresses duplicate delegated escalations for the same plan decision version", () => {
     const s = fakeSession({
       id: "s-plan-escalate-once",

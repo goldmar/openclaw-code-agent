@@ -82,6 +82,27 @@ describe("session-notification-builder", () => {
     assert.doesNotMatch(summary, /raw running progress/);
   });
 
+  it("bounds oversized single-line plan summaries so button prompts stay compact", () => {
+    const payload = buildWaitingForInputPayload({
+      session: {
+        id: "session-long",
+        name: "long-session",
+        multiTurn: true,
+        pendingPlanApproval: true,
+        planDecisionVersion: 8,
+      } as any,
+      preview: `I’m grounding this in the actual code first: ${"very long transcript sentence ".repeat(80)}`,
+      originThreadLine: "Origin thread: telegram topic 42",
+      planApprovalMode: "ask",
+      planApprovalButtons: [[{ label: "Approve", callbackData: "token-1" }]],
+    });
+
+    assert.equal(payload.label, "plan-approval");
+    assert.ok((payload.userMessage ?? "").length < 2000);
+    assert.match(payload.userMessage ?? "", /Additional plan details omitted for brevity/);
+    assert.doesNotMatch(payload.userMessage ?? "", /very long transcript sentence very long transcript sentence very long transcript sentence very long transcript sentence very long transcript sentence very long transcript sentence very long transcript sentence very long transcript sentence very long transcript sentence very long transcript sentence/);
+  });
+
   it("instructs delegated plan reviews to use structured approval rationale plus orchestrator-owned follow-up", () => {
     const payload = buildWaitingForInputPayload({
       session: {

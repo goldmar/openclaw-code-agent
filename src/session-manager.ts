@@ -35,7 +35,7 @@ import { SessionWorktreeController } from "./session-worktree-controller";
 import { SessionQuestionService, type PendingAskUserQuestion } from "./session-question-service";
 import { SessionReminderService } from "./session-reminder-service";
 import { SessionLifecycleService } from "./session-lifecycle-service";
-import { buildPlanApprovalFallbackText } from "./session-notification-builder";
+import { buildPlanApprovalFallbackText, formatPlanApprovalSummary } from "./session-notification-builder";
 import { SessionWorktreeDecisionService } from "./session-worktree-decision-service";
 import { SessionRuntimeRegistry } from "./session-runtime-registry";
 import { SessionRuntimeBootstrapService } from "./session-runtime-bootstrap-service";
@@ -714,6 +714,7 @@ export class SessionManager {
   requestPlanApprovalFromUser(ref: string, summary: string): string {
     const trimmedSummary = summary.trim();
     if (!trimmedSummary) return "Error: summary must not be empty.";
+    const formattedSummary = formatPlanApprovalSummary(trimmedSummary);
 
     const activeSession = this.resolve(ref);
     const persistedSession = activeSession ? undefined : this.getPersistedSession(ref);
@@ -750,7 +751,7 @@ export class SessionManager {
       ``,
       `Why this was escalated:`,
       ``,
-      trimmedSummary,
+      formattedSummary,
       ``,
       `Choose Approve, Revise, or Reject below.`,
     ].join("\n");
@@ -813,7 +814,7 @@ export class SessionManager {
             route: activeSession?.route ?? persistedSession?.route,
           }),
           actionableVersion,
-          trimmedSummary,
+          formattedSummary,
         ),
         wakeMessageOnNotifySuccess: this.buildPlanApprovalWakeText({ id: sessionId, name: session.name } as Session, actionableVersion),
       },

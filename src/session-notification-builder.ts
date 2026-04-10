@@ -5,6 +5,7 @@ export {
   buildWorktreeDecisionSummary,
 } from "./session-notification-builders/worktree";
 export {
+  formatPlanApprovalSummary,
   buildPlanReviewSummary,
   buildPlanApprovalFallbackText,
   buildWaitingForInputPayload,
