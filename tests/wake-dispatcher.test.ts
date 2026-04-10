@@ -770,8 +770,8 @@ export async function sendDiscordComponentMessage(target, spec, opts = {}) {
     assert.equal(notifyArgs["thread-id"], "13832");
 
     const wakeParams = parseChatSendParams(wakeCall);
-    assert.equal(wakeParams.target, "-1003863755361");
-    assert.equal(wakeParams.threadId, "13832");
-    assert.notEqual(wakeParams.target, "5551234");
+    assert.equal(wakeParams.sessionKey, "agent:main:telegram:group:-1003863755361:topic:13832");
+    assert.equal(wakeParams.target, undefined);
+    assert.equal(wakeParams.threadId, undefined);
   });
 });
