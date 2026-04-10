@@ -213,13 +213,22 @@ export function extractCompletedPlanText(value: unknown): { itemId?: string; tex
 }
 
 export function normalizeTerminalStatus(method: string, params: unknown): HarnessResult["success"] {
+  return classifyTerminalOutcome(method, params) === "completed";
+}
+
+export function classifyTerminalOutcome(
+  method: string,
+  params: unknown,
+): NonNullable<HarnessResult["outcome"]> {
   const methodLower = method.trim().toLowerCase();
-  if (methodLower === "turn/failed") return false;
-  if (methodLower === "turn/cancelled") return false;
+  if (methodLower === "turn/failed") return "failed";
+  if (methodLower === "turn/cancelled") return "interrupted";
   const record = asRecord(params) ?? {};
   const turn = asRecord(record.turn) ?? record;
   const status = pickString(turn, ["status"])?.toLowerCase();
-  return status !== "failed" && status !== "interrupted" && status !== "cancelled";
+  if (status === "failed") return "failed";
+  if (status === "interrupted" || status === "cancelled") return "interrupted";
+  return "completed";
 }
 
 export function extractTerminalMessage(method: string, params: unknown): string | undefined {

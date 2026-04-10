@@ -2,6 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   buildTurnStartPayloads,
+  classifyTerminalOutcome,
   codexExecutionPolicyForMode,
 } from "../src/harness/codex-protocol";
 
@@ -118,5 +119,16 @@ describe("codex protocol turn payloads", () => {
       approvalPolicy: "never",
       sandbox: "danger-full-access",
     });
+  });
+
+  it("classifies interrupted and cancelled Codex turn outcomes as interrupted, not failed", () => {
+    assert.equal(
+      classifyTerminalOutcome("turn/completed", { turn: { status: "interrupted" } }),
+      "interrupted",
+    );
+    assert.equal(
+      classifyTerminalOutcome("turn/cancelled", { turn: { status: "cancelled" } }),
+      "interrupted",
+    );
   });
 });

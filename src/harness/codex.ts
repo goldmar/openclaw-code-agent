@@ -34,6 +34,7 @@ import {
   codexExecutionPolicyForMode,
   deriveWorktreeIdFromPath,
   extractAssistantNotificationText,
+  classifyTerminalOutcome,
   extractCompletedPlanText,
   extractIds,
   extractPlanDeltaNotification,
@@ -378,8 +379,10 @@ export class CodexHarness implements AgentHarness {
         await completion;
         terminalMethod = activeTurnCompletion?.method ?? "turn/failed";
         terminalParams = activeTurnCompletion?.params;
+        const outcome = classifyTerminalOutcome(terminalMethod, terminalParams);
         queue.enqueue(createRunCompletedEvent({
-          success: normalizeTerminalStatus(terminalMethod, terminalParams),
+          success: outcome === "completed",
+          outcome,
           duration_ms: 0,
           total_cost_usd: 0,
           num_turns: runCounter,

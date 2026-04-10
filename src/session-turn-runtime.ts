@@ -159,6 +159,14 @@ export class SessionTurnRuntime {
     this.turnInProgress = false;
   }
 
+  finishInterruptedTurn(hasPendingMessages: boolean): void {
+    this.turnInProgress = hasPendingMessages;
+    this.waitingForInputFired = false;
+    this.lastTurnHadQuestion = false;
+    this.currentTurnText = "";
+    this.currentTurnPlanArtifact = undefined;
+  }
+
   resetAfterRun(): void {
     this.lastTurnHadQuestion = false;
     this.currentTurnText = "";

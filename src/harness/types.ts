@@ -23,6 +23,7 @@ import type {
 
 export interface HarnessResult {
   success: boolean;
+  outcome?: "completed" | "failed" | "interrupted";
   duration_ms: number;
   total_cost_usd: number;
   num_turns: number;

@@ -25,6 +25,8 @@ class MockJsonRpcClient {
         params: unknown;
       };
       failTurn?: string;
+      turnCompletionMethod?: "turn/completed" | "turn/failed" | "turn/cancelled";
+      turnStatus?: "completed" | "failed" | "interrupted" | "cancelled";
     } = {},
   ) {}
 
@@ -102,13 +104,13 @@ class MockJsonRpcClient {
       }
 
       await this.notificationHandler(
-        this.options.failTurn ? "turn/failed" : "turn/completed",
+        this.options.turnCompletionMethod ?? (this.options.failTurn ? "turn/failed" : "turn/completed"),
         {
           threadId,
           turnId: runId,
           turn: this.options.failTurn
             ? { id: runId, status: "failed", error: { message: this.options.failTurn } }
-            : { id: runId, status: "completed" },
+            : { id: runId, status: this.options.turnStatus ?? "completed" },
         },
       );
     });
@@ -187,6 +189,7 @@ describe("CodexHarness App Server mapping", () => {
     assert.equal(ref?.ref.conversationId, "thread-123");
     assert.equal(text?.text, "Done.");
     assert.equal(result?.data.success, true);
+    assert.equal(result?.data.outcome, "completed");
     assert.equal(result?.data.session_id, "thread-123");
   });
 
@@ -276,6 +279,25 @@ describe("CodexHarness App Server mapping", () => {
 
     assert.equal(ref?.ref.worktreePath, "/Users/test/.codex/worktrees/abcd/openclaw");
     assert.equal(ref?.ref.worktreeId, "abcd");
+  });
+
+  it("emits an interrupted outcome for cancelled Codex turns", async () => {
+    const client = new MockJsonRpcClient({
+      threadId: "thread-interrupt",
+      runId: "turn-interrupt",
+      turnCompletionMethod: "turn/completed",
+      turnStatus: "interrupted",
+    });
+    const harness = new CodexHarness({
+      createClient: () => client as any,
+    });
+
+    const messages = await collectMessages(harness.launch({ prompt: "redirect", cwd: "/tmp" }));
+    const result = messages.find((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }> | undefined;
+
+    assert.equal(result?.data.success, false);
+    assert.equal(result?.data.outcome, "interrupted");
+    assert.equal(result?.data.result, undefined);
   });
 
   it("emits structured pending input and resolves button selections", async () => {

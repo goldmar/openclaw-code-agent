@@ -231,6 +231,35 @@ describe("Session consumeMessages — result message (multi-turn)", () => {
     assert.equal(session.killReason, "done");
   });
 
+  it("keeps the session running when a Codex-style interrupted turn completes after redirect", async () => {
+    const session = await startSession({ multiTurn: true, permissionMode: "bypassPermissions" });
+    const turnEndEvents: boolean[] = [];
+    session.on("turnEnd", (_s: any, hadQuestion: boolean) => { turnEndEvents.push(hadQuestion); });
+
+    fakeHarness.setPromptConsumptionPaused(true);
+    await session.sendMessage("redirect target");
+
+    fakeHarness.pushMessage({
+      type: "result",
+      data: {
+        success: false,
+        outcome: "interrupted",
+        duration_ms: 100,
+        total_cost_usd: 0.01,
+        num_turns: 1,
+        session_id: session.harnessSessionId!,
+      },
+    });
+    await tick(50);
+
+    assert.equal(session.status, "running");
+    assert.equal(session.result?.subtype, "interrupted");
+    assert.equal(session.result?.is_error, false);
+    assert.equal(turnEndEvents.length, 0, "interrupted redirect should not emit turnEnd notifications");
+
+    session.kill("user");
+  });
+
   it("emits turnEnd(true) for user-question turns even when follow-up messages are queued", async () => {
     const session = await startSession({ multiTurn: true, permissionMode: "bypassPermissions" });
     const turnEndEvents: boolean[] = [];

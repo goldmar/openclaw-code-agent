@@ -281,20 +281,25 @@ export class Session extends EventEmitter {
         this.applyControlEvent({ type: "permission.mode_changed", currentPermissionMode: mode });
       },
       handleRunCompleted: (data) => {
+        const outcome = data.outcome ?? (data.success ? "completed" : "failed");
         this.result = {
-          subtype: data.success ? "success" : "error",
+          subtype: outcome === "interrupted" ? "interrupted" : (data.success ? "success" : "error"),
           duration_ms: data.duration_ms,
           total_cost_usd: data.total_cost_usd,
           num_turns: data.num_turns,
           result: data.result,
-          is_error: !data.success,
+          is_error: outcome === "failed",
           session_id: data.session_id,
         };
         this.costUsd = data.total_cost_usd;
 
-        const isMultiTurnEndOfTurn = this.multiTurn && this.messageStream && data.success;
+        const isInterruptedTurn = this.multiTurn && this.messageStream && outcome === "interrupted";
+        const isMultiTurnEndOfTurn = this.multiTurn && this.messageStream && outcome === "completed";
 
-        if (isMultiTurnEndOfTurn) {
+        if (isInterruptedTurn) {
+          this.resetIdleTimer();
+          this.turnRuntime.finishInterruptedTurn(this.messageStream?.hasPending() === true);
+        } else if (isMultiTurnEndOfTurn) {
           this.resetIdleTimer();
           this.turnRuntime.finishSuccessfulTurn({
             currentPermissionMode: this.currentPermissionMode,
@@ -306,7 +311,7 @@ export class Session extends EventEmitter {
           });
         } else {
           this.turnRuntime.finishTerminalTurn();
-          this.transitionToTerminal(data.success ? "completed" : "failed");
+          this.transitionToTerminal(outcome === "completed" ? "completed" : "failed");
         }
         this.turnRuntime.resetAfterRun();
         this.pendingInputState = undefined;
