@@ -398,6 +398,7 @@ export class SessionLifecycleService {
       this.deps.dispatchSessionNotification(session, {
         label: payload.label,
         userMessage: payload.userMessage,
+        userMessages: payload.userMessages,
         notifyUser: "always",
         buttons: payload.buttons,
         hooks: {

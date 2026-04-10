@@ -80,6 +80,46 @@ describe("session-notification-builder", () => {
     assert.match(summary, /Add focused tests/);
   });
 
+  it("paginates the full finalized plan across multiple approval messages and keeps buttons for the final chunk", async () => {
+    const buttons = [[
+      { label: "Approve", callback_data: "approve-token" },
+      { label: "Revise", callback_data: "revise-token" },
+      { label: "Reject", callback_data: "reject-token" },
+    ]];
+    const mediumPlanItems = Array.from({ length: 32 }, (_, index) =>
+      `${index + 1}. Step ${index + 1}: update a specific approval path detail while keeping the final plan explicit enough for human review without leaking transcript chatter.`,
+    );
+
+    const payload = await buildWaitingForInputPayload({
+      session: {
+        id: "session-chunked",
+        name: "chunked-plan",
+        multiTurn: true,
+        pendingPlanApproval: true,
+        planDecisionVersion: 9,
+        actionablePlanDecisionVersion: 9,
+      } as any,
+      preview: "running progress that should not be used here",
+      planArtifact: {
+        markdown: ["## Proposed plan", ...mediumPlanItems].join("\n"),
+        steps: [],
+      },
+      originThreadLine: "Origin thread: telegram topic 42",
+      planApprovalMode: "ask",
+      planApprovalButtons: buttons as any,
+    });
+
+    assert.equal(payload.userMessage, undefined);
+    assert.ok(payload.userMessages);
+    assert.ok((payload.userMessages?.length ?? 0) > 1);
+    assert.match(payload.userMessages?.[0]?.text ?? "", /ready for approval \(1\//);
+    assert.match(payload.userMessages?.[0]?.text ?? "", /Full plan:/);
+    assert.match(payload.userMessages?.at(-1)?.text ?? "", /Choose Approve, Revise, or Reject below\./);
+    assert.equal(payload.userMessages?.[0]?.buttons, undefined);
+    assert.deepEqual(payload.userMessages?.at(-1)?.buttons, buttons);
+    assert.match(payload.planReviewSummary ?? "", /Review summary:/);
+  });
+
   it("prefers finalized artifact markdown over preview transcript when structured fields are absent", async () => {
     const summary = await buildPlanReviewSummary({
       preview: [
@@ -267,6 +307,65 @@ describe("session-notification-builder", () => {
     assert.match(summary, /- Add a safe fallback summary/);
     assert.doesNotMatch(summary, /Thinking through the notification path/);
     assert.doesNotMatch(summary, /Should I proceed\?/);
+  });
+
+  it("uses a semantic summary instead of chunking when the finalized plan exceeds the full-plan pagination budget", async () => {
+    setOpenClawConfig({
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.4-mini",
+          workspace: "/tmp/openclaw",
+        },
+      },
+    });
+    setPluginRuntime({
+      agent: {
+        async runEmbeddedPiAgent() {
+          return {
+            payloads: [{
+              text: JSON.stringify({
+                summary: [
+                  "Review summary:",
+                  "- Scope: keep plan approvals reviewable when the finalized plan is too large to send in full.",
+                  "- Planned changes: deliver a semantic summary instead of a sampled bullet slice.",
+                  "- Risks or limitations: large plans still depend on the finalized artifact quality.",
+                  "- Validation: add pagination and semantic-summary regression tests.",
+                ].join("\n"),
+              }),
+            }],
+          };
+        },
+      },
+    });
+
+    const hugePlanItems = Array.from({ length: 90 }, (_, index) =>
+      `${index + 1}. Step ${index + 1}: update a distinct approval-review surface with explicit wording and detailed validation notes so the finalized plan is intentionally larger than the full-plan pagination budget for a single approval prompt flow.`,
+    );
+    const buttons = [[{ label: "Approve", callback_data: "approve-token" }]];
+
+    const payload = await buildWaitingForInputPayload({
+      session: {
+        id: "session-summary",
+        name: "summary-plan",
+        multiTurn: true,
+        pendingPlanApproval: true,
+        planDecisionVersion: 11,
+        actionablePlanDecisionVersion: 11,
+      } as any,
+      preview: "running progress should not be used",
+      planArtifact: {
+        markdown: ["## Proposed plan", ...hugePlanItems].join("\n"),
+        steps: [],
+      },
+      originThreadLine: "Origin thread: telegram topic 42",
+      planApprovalMode: "ask",
+      planApprovalButtons: buttons as any,
+    });
+
+    assert.match(payload.userMessage ?? "", /Review summary:/);
+    assert.equal(payload.userMessages, undefined);
+    assert.deepEqual(payload.buttons, buttons);
+    assert.match(payload.userMessage ?? "", /deliver a semantic summary instead of a sampled bullet slice/);
   });
 
   it("instructs delegated plan reviews to use structured approval rationale plus orchestrator-owned follow-up", async () => {

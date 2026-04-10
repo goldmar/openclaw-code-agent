@@ -1,12 +1,14 @@
 import type { Session } from "../session";
 import type { NotificationButton } from "../session-interactions";
 import type { PlanApprovalMode, PlanArtifact } from "../types";
-import { buildPlanReviewSummary } from "../plan-review-summary";
+import { buildPlanApprovalPromptContent, buildPlanReviewSummary } from "../plan-review-summary";
+import type { SessionNotificationMessage } from "../wake-dispatcher";
 
 type OriginThreadLine = string;
 type WaitingForInputPayload = {
   label: "plan-approval" | "waiting";
   userMessage?: string;
+  userMessages?: SessionNotificationMessage[];
   wakeMessage: string;
   buttons?: NotificationButton[][];
   planReviewSummary?: string;
@@ -52,8 +54,17 @@ export async function buildWaitingForInputPayload(args: {
   const actionableVersion = session.actionablePlanDecisionVersion ?? session.planDecisionVersion;
   const promptAlreadyProven = hasProvableUserVisiblePrompt(session, actionableVersion);
   const resolvedPlanApprovalMode = planApprovalMode ?? "delegate";
+  const planPrompt = isPlanApproval && resolvedPlanApprovalMode === "ask" && !promptAlreadyProven
+    ? await buildPlanApprovalPromptContent({
+        sessionName: session.name,
+        actionableVersion,
+        preview,
+        artifact: planArtifact,
+        hasButtons: Boolean(planApprovalButtons),
+      })
+    : undefined;
   const planReviewSummary = isPlanApproval
-    ? await buildPlanReviewSummary({
+    ? planPrompt?.reviewSummary ?? await buildPlanReviewSummary({
         preview,
         artifact: planArtifact,
         skipLlm: resolvedPlanApprovalMode !== "ask",
@@ -62,15 +73,21 @@ export async function buildWaitingForInputPayload(args: {
 
   const userMessage = isPlanApproval
     ? (
-        planApprovalMode === "ask"
-          ? (
-              promptAlreadyProven
-                ? undefined
-                : `📋 [${session.name}] Plan v${actionableVersion ?? "?"} ready for approval:\n\n${planReviewSummary}\n\n${planApprovalButtons ? "Choose Approve, Revise, or Reject below." : "Approval is still pending for this plan version."}`
-            )
+        planPrompt && planPrompt.userMessages.length === 1
+          ? planPrompt.userMessages[0]
           : undefined
       )
     : `❓ [${session.name}] Question waiting for reply:\n\n${preview}`;
+  const userMessages = isPlanApproval
+    ? (
+        planPrompt && planPrompt.userMessages.length > 1
+          ? planPrompt.userMessages.map((text, index, all) => ({
+              text,
+              buttons: index === all.length - 1 ? planApprovalButtons : undefined,
+            }))
+          : undefined
+      )
+    : undefined;
 
   if (isPlanApproval) {
     const resolvedMode = resolvedPlanApprovalMode;
@@ -79,6 +96,7 @@ export async function buildWaitingForInputPayload(args: {
       return {
         label: "plan-approval",
         userMessage,
+        userMessages,
         planReviewSummary,
         wakeMessage: [
           `[DELEGATED PLAN APPROVAL] Coding agent session has finished its plan and is requesting approval to implement.`,
@@ -135,6 +153,7 @@ export async function buildWaitingForInputPayload(args: {
       return {
         label: "plan-approval",
         userMessage,
+        userMessages,
         planReviewSummary,
         wakeMessage: [
           `[USER APPROVAL REQUESTED] Coding agent session has finished its plan. The user has been notified via Telegram and must approve directly.`,
@@ -150,7 +169,7 @@ export async function buildWaitingForInputPayload(args: {
           `Preview (truncated):`,
           preview,
         ].join("\n"),
-        buttons: planApprovalButtons,
+        buttons: userMessages ? undefined : planApprovalButtons,
       };
     }
 

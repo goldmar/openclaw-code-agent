@@ -657,6 +657,51 @@ export async function sendDiscordComponentMessage(target, spec, opts = {}) {
     }]);
   });
 
+  it("delivers paginated user notifications in order and keeps buttons only on the final chunk", async () => {
+    const dispatcher = new WakeDispatcher();
+    const session: FakeSession = {
+      id: "session-paginated",
+      route: buildRoute(),
+      originChannel: "telegram|bot|-1003863755361",
+      originThreadId: 11239,
+      originSessionKey: "agent:main:telegram:group:-1003863755361:topic:11239",
+    };
+
+    dispatcher.dispatchSessionNotification(session as any, {
+      label: "plan-approval",
+      notifyUser: "always",
+      userMessages: [
+        { text: "📋 Plan part 1\n\nFull plan:\nchunk one" },
+        { text: "📋 Plan part 2\n\nchunk two" },
+        {
+          text: "📋 Plan part 3\n\nchunk three\n\nChoose Approve, Revise, or Reject below.",
+          buttons: [[
+            { label: "Approve", callbackData: "token-approve" },
+            { label: "Revise", callbackData: "token-revise" },
+            { label: "Reject", callbackData: "token-reject" },
+          ]],
+        },
+      ],
+    });
+
+    const calls = await waitForCalls(logPath, 3);
+    assert.equal(calls.length, 3);
+
+    const first = parseMessageSendArgs(calls[0] ?? []);
+    const second = parseMessageSendArgs(calls[1] ?? []);
+    const third = parseMessageSendArgs(calls[2] ?? []);
+
+    assert.equal(first.message, "📋 Plan part 1\n\nFull plan:\nchunk one");
+    assert.equal(first.buttons, undefined);
+    assert.equal(second.message, "📋 Plan part 2\n\nchunk two");
+    assert.equal(second.buttons, undefined);
+    assert.equal(third.message, "📋 Plan part 3\n\nchunk three\n\nChoose Approve, Revise, or Reject below.");
+    assert.ok(third.buttons);
+    assert.match(third.buttons, /Approve/);
+    assert.match(third.buttons, /Revise/);
+    assert.match(third.buttons, /Reject/);
+  });
+
   it("falls back to system notify when no explicit route is present", async () => {
     const dispatcher = new WakeDispatcher();
     const session: FakeSession = {

@@ -68,6 +68,7 @@ function stubDispatch(sm: SessionManager): void {
 async function flushAsyncWork(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
+  await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 afterEach(() => {
@@ -1289,7 +1290,46 @@ describe("SessionManager turn-end wake", () => {
     assert.doesNotMatch(request.userMessage, /running progress/);
   });
 
-  it("uses embedded LLM summaries for long ask-mode plan approvals", async () => {
+  it("paginates medium full plans across multiple ask-mode approval messages and keeps buttons on the final chunk", async () => {
+    const mediumPlanItems = Array.from({ length: 32 }, (_, index) =>
+      `${index + 1}. Step ${index + 1}: update a specific approval path detail while keeping the final plan explicit enough for human review without leaking transcript chatter.`,
+    );
+    const s = fakeSession({
+      id: "s-plan-paginated",
+      name: "plan-paginated",
+      status: "running",
+      pendingPlanApproval: true,
+      planDecisionVersion: 9,
+      actionablePlanDecisionVersion: 9,
+      planApproval: "ask",
+      latestPlanArtifactVersion: 9,
+      latestPlanArtifact: {
+        markdown: ["## Proposed plan", ...mediumPlanItems].join("\n"),
+        steps: [],
+      },
+      getOutput: () => ["running progress that should not be used here"],
+    });
+
+    await (sm as any).triggerWaitingForInputEvent(s);
+
+    const calls = (sm as any).__dispatchCalls;
+    assert.equal(calls.length, 1);
+    const [_sessionArg, request] = calls[0];
+    assert.equal(request.label, "plan-approval");
+    assert.equal(request.userMessage, undefined);
+    assert.ok(Array.isArray(request.userMessages));
+    assert.ok(request.userMessages.length > 1);
+    assert.match(request.userMessages[0].text, /ready for approval \(1\//);
+    assert.match(request.userMessages[0].text, /Full plan:/);
+    assert.equal(request.userMessages[0].buttons, undefined);
+    assert.deepEqual(
+      request.userMessages.at(-1).buttons.map((row: Array<{ label: string }>) => row.map((button) => button.label)),
+      [["Approve", "Revise", "Reject"]],
+    );
+    assert.match(request.userMessages.at(-1).text, /Choose Approve, Revise, or Reject below\./);
+  });
+
+  it("uses embedded LLM summaries when the finalized plan exceeds the full-plan chunk budget", async () => {
     setOpenClawConfig({
       agents: {
         defaults: {
@@ -1318,8 +1358,8 @@ describe("SessionManager turn-end wake", () => {
       },
     });
 
-    const longPlanItems = Array.from({ length: 18 }, (_, index) =>
-      `${index + 1}. Step ${index + 1}: capture a distinct part of the approval review, keep the wording explicit for users, and preserve enough detail for a usable decision without forcing them back into raw logs.`,
+    const longPlanItems = Array.from({ length: 90 }, (_, index) =>
+      `${index + 1}. Step ${index + 1}: capture a distinct part of the approval review, keep the wording explicit for users, preserve enough detail for a usable decision, and include validation notes so the finalized plan is intentionally larger than the full-plan pagination budget.`,
     );
     const s = fakeSession({
       id: "s-plan-balanced",
@@ -1351,6 +1391,7 @@ describe("SessionManager turn-end wake", () => {
     const [_sessionArg, request] = calls[0];
     assert.equal(request.label, "plan-approval");
     assert.match(request.userMessage, /Review summary:/);
+    assert.equal(request.userMessages, undefined);
     assert.match(request.userMessage, /Scope: make long plan approvals reviewable/);
     assert.match(request.userMessage, /Planned changes: generate an approval-focused summary/);
     assert.match(request.userMessage, /Validation: cover the long-plan approval path/);

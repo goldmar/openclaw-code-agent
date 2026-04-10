@@ -5,9 +5,15 @@ import { WakeTransport } from "./wake-transport";
 
 export type SessionNotificationPolicy = "always" | "on-wake-fallback" | "never";
 
+export interface SessionNotificationMessage {
+  text: string;
+  buttons?: Array<Array<{ label: string; callbackData: string }>>;
+}
+
 export interface SessionNotificationRequest {
   label: string;
   userMessage?: string;
+  userMessages?: SessionNotificationMessage[];
   wakeMessage?: string;
   wakeMessageOnNotifySuccess?: string;
   wakeMessageOnNotifyFailed?: string;
@@ -222,12 +228,60 @@ export class WakeDispatcher {
     );
   }
 
+  private sendUserNotificationSequence(
+    session: Session,
+    messages: SessionNotificationMessage[],
+    label: string,
+    onAllFailed?: () => void,
+    onSuccess?: () => void,
+  ): void {
+    const normalizedMessages = messages
+      .map((message) => ({
+        text: message.text.trim(),
+        buttons: message.buttons,
+      }))
+      .filter((message) => message.text.length > 0);
+
+    if (normalizedMessages.length === 0) {
+      onAllFailed?.();
+      return;
+    }
+
+    const sendAt = (index: number): void => {
+      const message = normalizedMessages[index];
+      if (!message) {
+        onSuccess?.();
+        return;
+      }
+
+      this.sendUserNotification(
+        session,
+        message.text,
+        `${label}-part-${index + 1}`,
+        message.buttons,
+        onAllFailed,
+        () => sendAt(index + 1),
+      );
+    };
+
+    sendAt(0);
+  }
+
   dispatchSessionNotification(session: Session, request: SessionNotificationRequest): void {
     const hooks = request.hooks;
     const hasConditionalWake =
       request.wakeMessageOnNotifySuccess != null || request.wakeMessageOnNotifyFailed != null;
     const notifyUser = request.notifyUser ?? (request.wakeMessage ? "on-wake-fallback" : "always");
-    const userMessage = request.userMessage?.trim();
+    const userMessages = (request.userMessages?.length
+      ? request.userMessages
+      : request.userMessage?.trim()
+        ? [{ text: request.userMessage.trim(), buttons: request.buttons }]
+        : []
+    ).map((message) => ({
+      text: message.text.trim(),
+      buttons: message.buttons,
+    })).filter((message) => message.text.length > 0);
+    const userMessage = userMessages[0]?.text;
     const wakeMessage = request.wakeMessage?.trim();
 
     if (hasConditionalWake) {
@@ -262,22 +316,21 @@ export class WakeDispatcher {
             request.onUserNotifyFailed?.();
           };
 
-      if (userMessage) {
+      if (userMessages.length > 0) {
         hooks?.onNotifyStarted?.();
-        this.sendUserNotification(session, userMessage, request.label, request.buttons, onFailed, onSuccess);
+        this.sendUserNotificationSequence(session, userMessages, request.label, onFailed, onSuccess);
       } else {
         onFailed();
       }
       return;
     }
 
-    if (notifyUser === "always" && userMessage) {
+    if (notifyUser === "always" && userMessages.length > 0) {
       hooks?.onNotifyStarted?.();
-      this.sendUserNotification(
+      this.sendUserNotificationSequence(
         session,
-        userMessage,
+        userMessages,
         request.label,
-        request.buttons,
         () => {
           hooks?.onNotifyFailed?.();
           request.onUserNotifyFailed?.();
@@ -289,13 +342,12 @@ export class WakeDispatcher {
     if (!wakeMessage) return;
     hooks?.onWakeStarted?.();
 
-    if (notifyUser === "on-wake-fallback" && userMessage && !this.routes.resolve(session)?.sessionKey) {
+    if (notifyUser === "on-wake-fallback" && userMessages.length > 0 && !this.routes.resolve(session)?.sessionKey) {
       hooks?.onNotifyStarted?.();
-      this.sendUserNotification(
+      this.sendUserNotificationSequence(
         session,
-        userMessage,
+        userMessages,
         request.label,
-        request.buttons,
         () => {
           hooks?.onNotifyFailed?.();
           request.onUserNotifyFailed?.();

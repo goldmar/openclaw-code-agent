@@ -8,12 +8,21 @@ import { getOpenClawConfig, getPluginRuntime } from "./runtime-store";
 import type { PlanArtifact } from "./types";
 
 const PLAN_APPROVAL_FULL_PLAN_MAX_CHARS = 3_200;
+const PLAN_APPROVAL_FULL_PLAN_CHUNK_MAX_CHARS = 3_000;
+const PLAN_APPROVAL_FULL_PLAN_CHUNK_BODY_MAX_CHARS = 2_400;
+const PLAN_APPROVAL_FULL_PLAN_MAX_CHUNKS = 3;
 const PLAN_APPROVAL_SUMMARY_MAX_CHARS = 2_400;
 const PLAN_APPROVAL_SUMMARY_SOURCE_MAX_CHARS = 16_000;
 const PLAN_APPROVAL_SUMMARY_TIMEOUT_MS = 45_000;
 const PLAN_APPROVAL_MISSING_PROVIDER_WARNING =
   "[plan-review-summary] Embedded model defaults must use \"provider/model\". " +
   "Skipping LLM summary generation.";
+
+export type PlanApprovalPromptContent = {
+  displayMode: "single-full-plan" | "chunked-full-plan" | "summary";
+  userMessages: string[];
+  reviewSummary: string;
+};
 
 function stripCodeFences(text: string): string {
   const trimmed = text.trim();
@@ -60,6 +69,86 @@ function buildSafeFallbackSummary(source: string): string {
     "Review summary:",
     ...summaryCandidates.slice(0, 6).map((line) => `- ${line}`),
   ].join("\n");
+}
+
+function splitLongLine(text: string, maxChars: number): string[] {
+  const parts: string[] = [];
+  let remaining = text.trim();
+
+  while (remaining.length > maxChars) {
+    let splitAt = remaining.lastIndexOf(" ", maxChars);
+    if (splitAt < Math.floor(maxChars * 0.6)) {
+      splitAt = maxChars;
+    }
+    parts.push(remaining.slice(0, splitAt).trimEnd());
+    remaining = remaining.slice(splitAt).trimStart();
+  }
+
+  if (remaining.length > 0) {
+    parts.push(remaining);
+  }
+
+  return parts;
+}
+
+function splitPlanBodyIntoChunks(text: string, maxChars: number): string[] {
+  const lines = text.split("\n");
+  const chunks: string[] = [];
+  let current = "";
+
+  const pushCurrent = (): void => {
+    if (current.trim().length > 0) {
+      chunks.push(current.trimEnd());
+      current = "";
+    }
+  };
+
+  for (const line of lines) {
+    if (line.length > maxChars) {
+      pushCurrent();
+      for (const part of splitLongLine(line, maxChars)) {
+        chunks.push(part);
+      }
+      continue;
+    }
+
+    const candidate = current.length > 0 ? `${current}\n${line}` : line;
+    if (candidate.length > maxChars) {
+      pushCurrent();
+      current = line;
+      continue;
+    }
+
+    current = candidate;
+  }
+
+  pushCurrent();
+  return chunks;
+}
+
+function buildChunkedFullPlanMessages(sessionName: string, actionableVersion: number | undefined, fullPlanText: string, hasButtons: boolean): string[] | undefined {
+  const bodyChunks = splitPlanBodyIntoChunks(fullPlanText, PLAN_APPROVAL_FULL_PLAN_CHUNK_BODY_MAX_CHARS);
+  if (bodyChunks.length === 0 || bodyChunks.length > PLAN_APPROVAL_FULL_PLAN_MAX_CHUNKS) {
+    return undefined;
+  }
+
+  const total = bodyChunks.length;
+  const messages = bodyChunks.map((body, index) => {
+    const partLabel = total > 1 ? ` (${index + 1}/${total})` : "";
+    const header = [
+      `📋 [${sessionName}] Plan v${actionableVersion ?? "?"} ready for approval${partLabel}:`,
+      "",
+      index === 0 ? "Full plan:" : "",
+    ].filter(Boolean).join("\n");
+    const footer = index === total - 1
+      ? (hasButtons ? "\n\nChoose Approve, Revise, or Reject below." : "\n\nApproval is still pending for this plan version.")
+      : "\n\nContinued in next message.";
+    return `${header}\n${body}${footer}`;
+  });
+
+  return messages.every((message) => message.length <= PLAN_APPROVAL_FULL_PLAN_CHUNK_MAX_CHARS)
+    ? messages
+    : undefined;
 }
 
 function sanitizeLlmSummary(summary: string): string {
@@ -187,4 +276,45 @@ export async function buildPlanReviewSummary(args: {
   }
 
   return buildSafeFallbackSummary(summarySource);
+}
+
+export async function buildPlanApprovalPromptContent(args: {
+  sessionName: string;
+  actionableVersion?: number;
+  preview: string;
+  artifact?: PlanArtifact;
+  hasButtons: boolean;
+  skipLlm?: boolean;
+}): Promise<PlanApprovalPromptContent> {
+  const { sessionName, actionableVersion, preview, artifact, hasButtons, skipLlm = false } = args;
+  const fullPlanText = artifact?.markdown?.trim();
+
+  if (fullPlanText) {
+    const singleMessage = `📋 [${sessionName}] Plan v${actionableVersion ?? "?"} ready for approval:\n\nFull plan:\n${fullPlanText}\n\n${hasButtons ? "Choose Approve, Revise, or Reject below." : "Approval is still pending for this plan version."}`;
+    if (singleMessage.length <= PLAN_APPROVAL_FULL_PLAN_MAX_CHARS) {
+      return {
+        displayMode: "single-full-plan",
+        userMessages: [singleMessage],
+        reviewSummary: `Full plan:\n${fullPlanText}`,
+      };
+    }
+
+    const chunkedMessages = buildChunkedFullPlanMessages(sessionName, actionableVersion, fullPlanText, hasButtons);
+    if (chunkedMessages) {
+      return {
+        displayMode: "chunked-full-plan",
+        userMessages: chunkedMessages,
+        reviewSummary: await buildPlanReviewSummary({ preview, artifact, skipLlm }),
+      };
+    }
+  }
+
+  const reviewSummary = await buildPlanReviewSummary({ preview, artifact, skipLlm });
+  return {
+    displayMode: "summary",
+    userMessages: [
+      `📋 [${sessionName}] Plan v${actionableVersion ?? "?"} ready for approval:\n\n${reviewSummary}\n\n${hasButtons ? "Choose Approve, Revise, or Reject below." : "Approval is still pending for this plan version."}`,
+    ],
+    reviewSummary,
+  };
 }
