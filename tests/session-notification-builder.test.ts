@@ -214,6 +214,39 @@ describe("session-notification-builder", () => {
     assert.deepEqual(payload.userMessages?.at(-1)?.buttons, buttons);
   });
 
+  it("rebalances chunk sizes instead of dropping oversized approval messages", () => {
+    const buttons = [[{ label: "Approve", callback_data: "approve-token" }]];
+    const payload = buildWaitingForInputPayload({
+      session: {
+        id: "session-long-name",
+        name: "plan-session-with-an-intentionally-very-long-name-that-would-otherwise-push-chunk-headers-over-the-message-budget-when-combined-with-large-plan-bodies",
+        multiTurn: true,
+        pendingPlanApproval: true,
+        planDecisionVersion: 12,
+        actionablePlanDecisionVersion: 12,
+      } as any,
+      preview: "running progress should not be used",
+      planArtifact: {
+        markdown: Array.from({ length: 24 }, (_, index) =>
+          `${index + 1}. ${"Detailed implementation note ".repeat(12)}${index + 1}`,
+        ).join("\n"),
+        steps: [],
+      },
+      originThreadLine: "Origin thread: telegram topic 42",
+      planApprovalMode: "ask",
+      planApprovalButtons: buttons as any,
+    });
+
+    assert.equal(payload.userMessage, undefined);
+    assert.ok(payload.userMessages);
+    assert.ok((payload.userMessages?.length ?? 0) > 1);
+    for (const [index, message] of (payload.userMessages ?? []).entries()) {
+      assert.ok(message.text.length <= 3_000, `chunk ${index + 1} exceeded the message budget`);
+      assert.match(message.text, new RegExp(`ready for approval \\(${index + 1}/${payload.userMessages?.length}\\):`));
+    }
+    assert.deepEqual(payload.userMessages?.at(-1)?.buttons, buttons);
+  });
+
   it("instructs delegated plan reviews to use structured approval rationale plus orchestrator-owned follow-up", () => {
     const payload = buildWaitingForInputPayload({
       session: {

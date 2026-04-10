@@ -107,21 +107,34 @@ function buildChunkedFullPlanMessages(args: {
   hasButtons: boolean;
 }): string[] {
   const { sessionName, actionableVersion, fullPlanText, hasButtons } = args;
-  const bodyChunks = splitPlanBodyIntoChunks(fullPlanText, PLAN_APPROVAL_FULL_PLAN_CHUNK_BODY_MAX_CHARS);
+  let chunkBodyMaxChars = PLAN_APPROVAL_FULL_PLAN_CHUNK_BODY_MAX_CHARS;
 
-  return bodyChunks.map((body, index) => {
-    const total = bodyChunks.length;
-    const header = [
-      `📋 [${sessionName}] Plan v${actionableVersion ?? "?"} ready for approval (${index + 1}/${total}):`,
-      "",
-      index === 0 ? "Full plan:" : "",
-    ].filter(Boolean).join("\n");
-    const footer = index === total - 1
-      ? (hasButtons ? "\n\nChoose Approve, Revise, or Reject below." : "\n\nApproval is still pending for this plan version.")
-      : "\n\nContinued in next message.";
+  while (chunkBodyMaxChars > 0) {
+    const bodyChunks = splitPlanBodyIntoChunks(fullPlanText, chunkBodyMaxChars);
+    const messages = bodyChunks.map((body, index) => {
+      const total = bodyChunks.length;
+      const header = [
+        `📋 [${sessionName}] Plan v${actionableVersion ?? "?"} ready for approval (${index + 1}/${total}):`,
+        "",
+        index === 0 ? "Full plan:" : "",
+      ].filter(Boolean).join("\n");
+      const footer = index === total - 1
+        ? (hasButtons ? "\n\nChoose Approve, Revise, or Reject below." : "\n\nApproval is still pending for this plan version.")
+        : "\n\nContinued in next message.";
 
-    return `${header}\n${body}${footer}`;
-  }).filter((message) => message.length <= PLAN_APPROVAL_FULL_PLAN_CHUNK_MAX_CHARS);
+      return `${header}\n${body}${footer}`;
+    });
+
+    const longestMessageLength = messages.reduce((max, message) => Math.max(max, message.length), 0);
+    if (longestMessageLength <= PLAN_APPROVAL_FULL_PLAN_CHUNK_MAX_CHARS) {
+      return messages;
+    }
+
+    const overshoot = longestMessageLength - PLAN_APPROVAL_FULL_PLAN_CHUNK_MAX_CHARS;
+    chunkBodyMaxChars -= Math.max(overshoot, 50);
+  }
+
+  return [];
 }
 
 export function buildPlanReviewSummary(args: {
