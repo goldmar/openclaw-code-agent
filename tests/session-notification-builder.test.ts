@@ -150,9 +150,14 @@ describe("session-notification-builder", () => {
         status: "completed",
         costUsd: 1.25,
         duration: 61_000,
+        approvalState: "approved",
         requestedPermissionMode: "plan",
         currentPermissionMode: "bypassPermissions",
         approvalExecutionState: "approved_then_implemented",
+        planApproval: "ask",
+        approvalPromptStatus: "delivered",
+        approvalPromptMessageKind: "canonical_buttons",
+        approvalPromptDeliveredAt: "2026-04-10T07:43:13.161Z",
       } as any,
       originThreadLine: "Origin thread: telegram topic 42",
       preview: "Final output",
@@ -165,6 +170,8 @@ describe("session-notification-builder", () => {
     assert.match(payload.wakeMessageOnNotifySuccess, /Requested permission mode: plan/);
     assert.match(payload.wakeMessageOnNotifySuccess, /Effective permission mode: bypassPermissions/);
     assert.match(payload.wakeMessageOnNotifySuccess, /Deterministic approval\/execution state: approved_then_implemented/);
+    assert.match(payload.wakeMessageOnNotifySuccess, /canonical Approve\/Revise\/Reject buttons were delivered/i);
+    assert.match(payload.wakeMessageOnNotifySuccess, /implementation after approval was expected/i);
     assert.match(payload.wakeMessageOnNotifySuccess, /Output preview:/);
     assert.match(payload.wakeMessageOnNotifySuccess, /Canonical completion status delivered to user: yes/);
     assert.match(payload.wakeMessageOnNotifySuccess, /Plugin requested short factual follow-up summary: yes/);
@@ -185,6 +192,7 @@ describe("session-notification-builder", () => {
         costUsd: 0,
         duration: 10_000,
         harnessSessionId: "backend-thread-1",
+        approvalState: "not_required",
         requestedPermissionMode: "plan",
         currentPermissionMode: "default",
         approvalExecutionState: "implemented_without_required_approval",
@@ -199,6 +207,7 @@ describe("session-notification-builder", () => {
     assert.match(payload.wakeMessage, /agent_launch\(resume_session_id='session-2', fork_session=true/);
     assert.match(payload.wakeMessage, /Backend conversation ID: backend-thread-1/);
     assert.match(payload.wakeMessage, /Deterministic approval\/execution state: implemented_without_required_approval/);
+    assert.match(payload.wakeMessage, /implementation left plan-only mode without a recorded approval/i);
   });
 
   it("preserves delegate worktree wake instructions", () => {

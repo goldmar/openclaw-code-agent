@@ -9,7 +9,38 @@ type ApprovalExecutionContext = {
   requestedPermissionMode?: PermissionMode;
   currentPermissionMode?: PermissionMode;
   approvalExecutionState?: ApprovalExecutionState;
+  approvalState?: Session["approvalState"];
+  planApproval?: Session["planApproval"];
+  approvalPromptStatus?: Session["approvalPromptStatus"];
+  approvalPromptMessageKind?: Session["approvalPromptMessageKind"];
+  approvalPromptDeliveredAt?: Session["approvalPromptDeliveredAt"];
 };
+
+function describeApprovalInterpretation(
+  context: ApprovalExecutionContext,
+): string | undefined {
+  if (context.requestedPermissionMode !== "plan") return undefined;
+
+  if (context.approvalExecutionState === "approved_then_implemented") {
+    if (
+      context.planApproval === "ask"
+      && context.approvalPromptStatus === "delivered"
+      && context.approvalPromptMessageKind === "canonical_buttons"
+      && context.approvalPromptDeliveredAt
+    ) {
+      return "Approval interpretation: canonical Approve/Revise/Reject buttons were delivered, and implementation after approval was expected.";
+    }
+    if (context.approvalState === "approved") {
+      return "Approval interpretation: explicit plan approval was recorded before implementation, so leaving plan-only mode was expected.";
+    }
+  }
+
+  if (context.approvalExecutionState === "implemented_without_required_approval") {
+    return "Approval interpretation: implementation left plan-only mode without a recorded approval.";
+  }
+
+  return undefined;
+}
 
 export interface CompletionFollowupContract {
   requiresShortFactualSummary: true;
@@ -20,10 +51,12 @@ export interface CompletionFollowupContract {
 export function formatApprovalExecutionContextLines(
   context: ApprovalExecutionContext,
 ): string[] {
+  const interpretation = describeApprovalInterpretation(context);
   return [
     `Requested permission mode: ${context.requestedPermissionMode ?? "unknown"}`,
     `Effective permission mode: ${context.currentPermissionMode ?? "unknown"}`,
     `Deterministic approval/execution state: ${context.approvalExecutionState ?? "unknown"}`,
+    ...(interpretation ? [interpretation] : []),
   ];
 }
 
@@ -89,7 +122,19 @@ function buildCompletionDiagnosticsLines(args: {
 export function buildCompletedPayload(args: {
   session: Pick<
     Session,
-    "id" | "name" | "status" | "costUsd" | "duration" | "requestedPermissionMode" | "currentPermissionMode" | "approvalExecutionState"
+    | "id"
+    | "name"
+    | "status"
+    | "costUsd"
+    | "duration"
+    | "requestedPermissionMode"
+    | "currentPermissionMode"
+    | "approvalExecutionState"
+    | "approvalState"
+    | "planApproval"
+    | "approvalPromptStatus"
+    | "approvalPromptMessageKind"
+    | "approvalPromptDeliveredAt"
   >;
   originThreadLine: OriginThreadLine;
   preview: string;
@@ -129,7 +174,19 @@ export function buildCompletedPayload(args: {
 export function buildFailedPayload(args: {
   session: Pick<
     Session,
-    "id" | "name" | "status" | "costUsd" | "duration" | "requestedPermissionMode" | "currentPermissionMode" | "approvalExecutionState"
+    | "id"
+    | "name"
+    | "status"
+    | "costUsd"
+    | "duration"
+    | "requestedPermissionMode"
+    | "currentPermissionMode"
+    | "approvalExecutionState"
+    | "approvalState"
+    | "planApproval"
+    | "approvalPromptStatus"
+    | "approvalPromptMessageKind"
+    | "approvalPromptDeliveredAt"
   > & { harnessSessionId?: string };
   originThreadLine: OriginThreadLine;
   errorSummary: string;
