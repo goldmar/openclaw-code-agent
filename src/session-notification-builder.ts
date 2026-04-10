@@ -8,7 +8,7 @@ export {
   buildPlanApprovalFallbackText,
   buildWaitingForInputPayload,
 } from "./session-notification-builders/waiting";
-export { buildPlanReviewSummary } from "./plan-review-summary";
+export { buildPlanReviewSummary, formatPlanApprovalSummary } from "./plan-review-summary";
 export {
   buildCompletedPayload,
   buildFailedPayload,

@@ -5,6 +5,10 @@ const PLAN_APPROVAL_FULL_PLAN_MAX_CHARS = 3_200;
 const PLAN_APPROVAL_FULL_PLAN_CHUNK_MAX_CHARS = 3_000;
 const PLAN_APPROVAL_FULL_PLAN_CHUNK_BODY_MAX_CHARS = 2_400;
 const PLAN_APPROVAL_SESSION_NAME_MAX_CHARS = 120;
+const PLAN_APPROVAL_FALLBACK_SUMMARY_MAX_ITEMS = 5;
+const PLAN_APPROVAL_FALLBACK_SUMMARY_MAX_LINE_CHARS = 280;
+const PLAN_APPROVAL_FALLBACK_SUMMARY_MAX_CHARS = 1_400;
+const OMITTED_PLAN_SUMMARY_LINE = "- Additional plan details omitted for brevity.";
 
 export type PlanApprovalPromptContent = {
   displayMode: "single-full-plan" | "chunked-full-plan" | "summary";
@@ -34,6 +38,18 @@ function extractPlanSummaryCandidates(text: string): string[] {
     .filter((line) => !/^(thinking|checking|considering|analyzing)\b/i.test(line));
 }
 
+function extractFallbackSummaryCandidates(text: string): string[] {
+  return text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map(normalizeSummaryItem)
+    .filter((line) => line.length > 0)
+    .filter((line) => !/^(plan|proposed plan|implementation plan|review summary|summary|why this was escalated|full plan)[:]?$/i.test(line))
+    .filter((line) => !/^(should|can|could|would|will)\b.*\?$/i.test(line))
+    .filter((line) => !/^(thinking|checking|considering|analyzing)\b/i.test(line));
+}
+
 function buildDeterministicFallbackSummary(source: string): string {
   const summaryCandidates = extractPlanSummaryCandidates(source);
   if (summaryCandidates.length === 0) {
@@ -44,6 +60,41 @@ function buildDeterministicFallbackSummary(source: string): string {
     "Review summary:",
     ...summaryCandidates.slice(0, 6).map((line) => `- ${line}`),
   ].join("\n");
+}
+
+function formatPlanSummaryItems(items: string[]): string[] {
+  const lines: string[] = [];
+  let omitted = false;
+
+  for (const item of items) {
+    const normalized = item.replace(/\s+/g, " ").trim();
+    if (!normalized) continue;
+    const truncated = truncateText(normalized, PLAN_APPROVAL_FALLBACK_SUMMARY_MAX_LINE_CHARS);
+    if (truncated.length < normalized.length) omitted = true;
+    const line = `- ${truncated}`;
+
+    if (lines.length >= PLAN_APPROVAL_FALLBACK_SUMMARY_MAX_ITEMS || [...lines, line].join("\n").length > PLAN_APPROVAL_FALLBACK_SUMMARY_MAX_CHARS) {
+      omitted = true;
+      break;
+    }
+    lines.push(line);
+  }
+
+  if (lines.length === 0) {
+    return ["- Plan details are available in the full session output."];
+  }
+
+  if (!omitted) return lines;
+
+  const boundedLines = [...lines];
+  while (boundedLines.length > 0 && [...boundedLines, OMITTED_PLAN_SUMMARY_LINE].join("\n").length > PLAN_APPROVAL_FALLBACK_SUMMARY_MAX_CHARS) {
+    boundedLines.pop();
+  }
+  return [...boundedLines, OMITTED_PLAN_SUMMARY_LINE];
+}
+
+export function formatPlanApprovalSummary(summary: string): string {
+  return formatPlanSummaryItems(extractFallbackSummaryCandidates(summary)).join("\n");
 }
 
 function splitLongLine(text: string, maxChars: number): string[] {
