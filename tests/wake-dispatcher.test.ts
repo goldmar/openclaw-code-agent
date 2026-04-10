@@ -25,7 +25,7 @@ function buildRoute(overrides: Partial<NonNullable<FakeSession["route"]>> = {}):
   return {
     provider: "telegram",
     accountId: "bot",
-    target: "12345",
+    target: "-1003863755361",
     threadId: "11239",
     sessionKey: "agent:main:telegram:group:-1003863755361:topic:11239",
     ...overrides,
@@ -203,7 +203,7 @@ export async function sendDiscordComponentMessage(target, spec, opts = {}) {
     const session: FakeSession = {
       id: "session-1",
       route: buildRoute(),
-      originChannel: "telegram|bot|12345",
+      originChannel: "telegram|bot|-1003863755361",
       originThreadId: 11239,
       originSessionKey: "agent:main:telegram:group:-1003863755361:topic:11239",
     };
@@ -223,14 +223,14 @@ export async function sendDiscordComponentMessage(target, spec, opts = {}) {
     const params = parseMessageSendArgs(calls[0] ?? []);
     assert.equal(params.channel, "telegram");
     assert.equal(params.account, "bot");
-    assert.equal(params.target, "12345");
+    assert.equal(params.target, "-1003863755361");
     assert.equal(params.message, "🚀 launched");
     assert.equal(params["thread-id"], "11239");
     await waitFor(
       () => infoLogs.some((line) => line.includes("\"event\":\"dispatch_succeeded\"") && line.includes("\"target\":\"message.send\"")),
       "dispatcher completion log",
     );
-    assert.ok(infoLogs.some((line) => line.includes("\"route\":\"telegram|bot|12345#11239\"")));
+    assert.ok(infoLogs.some((line) => line.includes("\"route\":\"telegram|bot|-1003863755361#11239\"")));
   });
 
   it("preserves direct notification order when an earlier delivery retries", async () => {
@@ -331,7 +331,7 @@ export async function sendDiscordComponentMessage(target, spec, opts = {}) {
     const session: FakeSession = {
       id: "session-2",
       route: buildRoute(),
-      originChannel: "telegram|bot|12345",
+      originChannel: "telegram|bot|-1003863755361",
       originThreadId: 11239,
       originSessionKey: "agent:main:telegram:group:-1003863755361:topic:11239",
       originAgentId: "main",
@@ -698,7 +698,7 @@ export async function sendDiscordComponentMessage(target, spec, opts = {}) {
     const params = parseMessageSendArgs(calls[0] ?? []);
     assert.equal(params.channel, "telegram");
     assert.equal(params.account, "bot");
-    assert.equal(params.target, "12345");
+    assert.equal(params.target, "-1003863755361");
     assert.equal(params.message, "🚀 launched");
     assert.equal(params["thread-id"], "11239");
   });
@@ -733,5 +733,45 @@ export async function sendDiscordComponentMessage(target, spec, opts = {}) {
     assert.equal(params.target, "-1003863755361");
     assert.equal(params.message, "✅ completed");
     assert.equal(params["thread-id"], "13832");
+  });
+
+  it("repairs Telegram topic follow-ups before notifying or waking", async () => {
+    const dispatcher = new WakeDispatcher();
+    const session: FakeSession = {
+      id: "session-telegram-topic-repair",
+      route: {
+        provider: "telegram",
+        accountId: "bot",
+        target: "5551234",
+        threadId: "13832",
+        sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+      },
+      originChannel: "telegram",
+      originThreadId: 13832,
+      originSessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+    };
+
+    dispatcher.dispatchSessionNotification(session as any, {
+      label: "completed",
+      userMessage: "✅ completed",
+      wakeMessage: "Coding agent session completed.",
+      notifyUser: "always",
+    });
+    const calls = await waitForCalls(logPath, 2);
+
+    assert.equal(calls.length, 2);
+    const notifyCall = calls.find((call) => call[0] === "message");
+    const wakeCall = calls.find((call) => call[0] === "gateway");
+    assert.ok(notifyCall, "expected a message.send notification call");
+    assert.ok(wakeCall, "expected a chat.send wake call");
+
+    const notifyArgs = parseMessageSendArgs(notifyCall);
+    assert.equal(notifyArgs.target, "-1003863755361");
+    assert.equal(notifyArgs["thread-id"], "13832");
+
+    const wakeParams = parseChatSendParams(wakeCall);
+    assert.equal(wakeParams.target, "-1003863755361");
+    assert.equal(wakeParams.threadId, "13832");
+    assert.notEqual(wakeParams.target, "5551234");
   });
 });

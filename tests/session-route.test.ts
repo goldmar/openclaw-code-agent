@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+  canonicalizeSessionRoute,
   routeFromOriginMetadata,
   safeParseTelegramTopicConversation,
   sessionRouteInternals,
@@ -102,6 +103,42 @@ describe("session-route", () => {
       provider: "telegram",
       target: "-100123",
       threadId: "88",
+      sessionKey: "agent:main:telegram:group:-100123:topic:77",
+    });
+  });
+
+  it("prefers Telegram group-topic session keys over conflicting DM-like origin targets", () => {
+    const route = routeFromOriginMetadata(
+      "telegram|5551234",
+      undefined,
+      "agent:main:telegram:group:-100123:topic:77",
+    );
+    assert.deepEqual(route, {
+      provider: "telegram",
+      accountId: undefined,
+      target: "-100123",
+      threadId: "77",
+      sessionKey: "agent:main:telegram:group:-100123:topic:77",
+    });
+  });
+
+  it("repairs persisted Telegram routes whose target drifted to a DM", () => {
+    const route = canonicalizeSessionRoute({
+      route: {
+        provider: "telegram",
+        target: "5551234",
+        threadId: "77",
+        sessionKey: "agent:main:telegram:group:-100123:topic:77",
+      },
+      originChannel: "telegram",
+      originThreadId: 77,
+      originSessionKey: "agent:main:telegram:group:-100123:topic:77",
+    });
+    assert.deepEqual(route, {
+      provider: "telegram",
+      accountId: undefined,
+      target: "-100123",
+      threadId: "77",
       sessionKey: "agent:main:telegram:group:-100123:topic:77",
     });
   });

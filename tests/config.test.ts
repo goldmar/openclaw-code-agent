@@ -117,6 +117,17 @@ describe("resolveOriginChannel", () => {
     assert.equal(resolveOriginChannel({ messageChannel: "telegram", chatId: "-1003863755361" }), "telegram|-1003863755361");
   });
 
+  it("keeps Telegram topic sessions weak when only senderId is available", () => {
+    assert.equal(
+      resolveOriginChannel({
+        messageChannel: "telegram",
+        senderId: "5551234",
+        sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+      }),
+      "unknown",
+    );
+  });
+
   it("prefers ctx.channelId over lossy ctx.channel + chatId reconstruction", () => {
     assert.equal(
       resolveOriginChannel({
@@ -167,6 +178,22 @@ describe("resolveSessionRoute", () => {
     );
   });
 
+  it("ignores Telegram senderId fallback when a topic session key is available", () => {
+    assert.deepEqual(
+      resolveSessionRoute({
+        messageChannel: "telegram",
+        senderId: "5551234",
+        sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+      }),
+      {
+        provider: "telegram",
+        target: "-1003863755361",
+        threadId: "13832",
+        sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+      },
+    );
+  });
+
   it("falls back to an explicit system route when chat metadata is unavailable", () => {
     assert.deepEqual(resolveSessionRoute({}), {
       provider: "system",
@@ -201,6 +228,15 @@ describe("resolveToolChannel", () => {
   it("builds from provider-only messageChannel + chatId", () => {
     const ctx = { messageChannel: "telegram", chatId: "-1003863755361" };
     assert.equal(resolveToolChannel(ctx), "telegram|-1003863755361");
+  });
+
+  it("does not derive Telegram topic routes from senderId", () => {
+    const ctx = {
+      messageChannel: "telegram",
+      senderId: "5551234",
+      sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+    };
+    assert.equal(resolveToolChannel(ctx), undefined);
   });
 
   it("returns undefined when nothing matches", () => {

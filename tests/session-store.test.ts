@@ -291,6 +291,44 @@ describe("SessionStore path resolution", () => {
     });
   });
 
+  it("repairs persisted Telegram routes whose target drifted to a DM", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-store-telegram-dm-repair-"));
+    const indexPath = join(dir, "sessions.json");
+    writeStore(indexPath, [{
+      sessionId: "telegram-dm-repair",
+      harnessSessionId: "h-telegram-dm-repair",
+      name: "telegram-dm-repair",
+      prompt: "p",
+      workdir: "/tmp",
+      status: "completed",
+      lifecycle: "terminal",
+      costUsd: 0,
+      originChannel: "telegram",
+      originThreadId: 13832,
+      originSessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+      route: {
+        provider: "telegram",
+        target: "5551234",
+        threadId: "13832",
+        sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+      },
+    }]);
+
+    const store = new SessionStore({
+      indexPath,
+      env: {},
+    });
+
+    const persisted = store.getPersistedSession("telegram-dm-repair");
+    assert.deepEqual(persisted?.route, {
+      provider: "telegram",
+      accountId: undefined,
+      target: "-1003863755361",
+      threadId: "13832",
+      sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+    });
+  });
+
   it("normalizes legacy plan-context values to plan-mode", () => {
     const dir = mkdtempSync(join(tmpdir(), "openclaw-store-plan-context-"));
     const indexPath = join(dir, "sessions.json");

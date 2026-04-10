@@ -175,6 +175,17 @@ function withThreadOverride(route: SessionRoute, explicitThreadId?: string): Ses
   };
 }
 
+function shouldPreferTelegramSessionKeyRoute(
+  provider: string,
+  explicitTarget: string,
+  sessionKeyRoute?: SessionRoute,
+): boolean {
+  return provider === "telegram"
+    && sessionKeyRoute?.provider === "telegram"
+    && Boolean(sessionKeyRoute.target)
+    && explicitTarget !== sessionKeyRoute.target;
+}
+
 function routeFromSessionKey(originSessionKey?: string): SessionRoute | undefined {
   const trimmed = originSessionKey?.trim();
   if (!trimmed) return undefined;
@@ -249,6 +260,15 @@ export function routeFromOriginMetadata(
   const target = normalizedProvider === "discord"
     ? normalizeDiscordTarget(rawTarget, originSessionKey)
     : rawTarget;
+  if (shouldPreferTelegramSessionKeyRoute(normalizedProvider, target, sessionKeyRoute)) {
+    return {
+      provider: normalizedProvider,
+      accountId,
+      target: sessionKeyRoute.target,
+      threadId: explicitThreadId ?? sessionKeyRoute.threadId,
+      sessionKey: originSessionKey?.trim() || undefined,
+    };
+  }
 
   return {
     provider: normalizedProvider,

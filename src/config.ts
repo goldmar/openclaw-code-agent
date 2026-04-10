@@ -193,6 +193,14 @@ interface OriginContextLike {
   sessionKey?: string;
 }
 
+function shouldAvoidTelegramSenderFallback(
+  ctx: Pick<OriginContextLike, "messageChannel" | "channel" | "sessionKey">,
+): boolean {
+  const provider = ctx.messageChannel ?? ctx.channel;
+  if (provider?.toLowerCase() !== "telegram") return false;
+  return Boolean(parseThreadIdFromRouteSessionKey(ctx.sessionKey));
+}
+
 /**
  * Resolve the notification channel for a tool context.
  * Deduplicates the 7 copies of channel resolution from tool factories.
@@ -211,7 +219,7 @@ export function resolveToolChannel(ctx: OpenClawPluginToolContext): string | und
     if (parts.length === 1 && ctx.chatId) {
       return `${parts[0]}|${ctx.chatId}`;
     }
-    if (parts.length === 1 && ctx.senderId) {
+    if (parts.length === 1 && ctx.senderId && !shouldAvoidTelegramSenderFallback(ctx)) {
       return `${parts[0]}|${ctx.senderId}`;
     }
   }
@@ -243,14 +251,14 @@ export function resolveOriginChannel(ctx: OriginContextLike | undefined, explici
     if (ctx.chatId) {
       return `${messageChannel}|${ctx.chatId}`;
     }
-    if (ctx.senderId) {
+    if (ctx.senderId && !shouldAvoidTelegramSenderFallback(ctx)) {
       return `${messageChannel}|${ctx.senderId}`;
     }
   }
   if (ctx?.channel && ctx?.chatId) {
     return `${ctx.channel}|${ctx.chatId}`;
   }
-  if (ctx?.channel && ctx?.senderId) {
+  if (ctx?.channel && ctx?.senderId && !shouldAvoidTelegramSenderFallback(ctx)) {
     return `${ctx.channel}|${ctx.senderId}`;
   }
   if (ctx?.id && /^-?\d+$/.test(String(ctx.id))) {
