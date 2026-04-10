@@ -40,7 +40,7 @@ export function buildPlanApprovalFallbackText(args: {
   ].join("\n");
 }
 
-export async function buildWaitingForInputPayload(args: {
+export function buildWaitingForInputPayload(args: {
   session: Pick<Session, "id" | "name" | "multiTurn" | "pendingPlanApproval" | "planDecisionVersion" | "actionablePlanDecisionVersion" | "approvalPromptRequiredVersion" | "approvalPromptStatus">;
   preview: string;
   planArtifact?: PlanArtifact;
@@ -48,14 +48,14 @@ export async function buildWaitingForInputPayload(args: {
   planApprovalMode?: PlanApprovalMode;
   planApprovalButtons?: NotificationButton[][];
   questionButtons?: NotificationButton[][];
-}): Promise<WaitingForInputPayload> {
+}): WaitingForInputPayload {
   const { session, preview, planArtifact, originThreadLine, planApprovalMode, planApprovalButtons, questionButtons } = args;
   const isPlanApproval = session.pendingPlanApproval;
   const actionableVersion = session.actionablePlanDecisionVersion ?? session.planDecisionVersion;
   const promptAlreadyProven = hasProvableUserVisiblePrompt(session, actionableVersion);
   const resolvedPlanApprovalMode = planApprovalMode ?? "delegate";
   const planPrompt = isPlanApproval && resolvedPlanApprovalMode === "ask" && !promptAlreadyProven
-    ? await buildPlanApprovalPromptContent({
+    ? buildPlanApprovalPromptContent({
         sessionName: session.name,
         actionableVersion,
         preview,
@@ -64,10 +64,9 @@ export async function buildWaitingForInputPayload(args: {
       })
     : undefined;
   const planReviewSummary = isPlanApproval
-    ? planPrompt?.reviewSummary ?? await buildPlanReviewSummary({
+    ? planPrompt?.reviewSummary ?? buildPlanReviewSummary({
         preview,
         artifact: planArtifact,
-        skipLlm: resolvedPlanApprovalMode !== "ask",
       })
     : undefined;
 

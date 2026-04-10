@@ -1,11 +1,10 @@
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { getTaskFlowRuntimeAvailability, resolveTaskFlowRuntime } from "../src/task-flow-runtime";
-import { setOpenClawConfig, setPluginRuntime } from "../src/runtime-store";
+import { setPluginRuntime } from "../src/runtime-store";
 
 afterEach(() => {
   setPluginRuntime(undefined);
-  setOpenClawConfig(undefined);
 });
 
 describe("task-flow runtime seam", () => {

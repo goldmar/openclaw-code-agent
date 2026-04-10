@@ -30,7 +30,7 @@ import { registerGoalStopCommand } from "./src/commands/goal-stop";
 import { GoalController } from "./src/goal-controller";
 import { SessionManager } from "./src/session-manager";
 import { setGoalController, setSessionManager } from "./src/singletons";
-import { setPluginRuntime, setOpenClawConfig } from "./src/runtime-store";
+import { setPluginRuntime } from "./src/runtime-store";
 import { setPluginConfig, pluginConfig } from "./src/config";
 import { definePluginEntry, type OpenClawPluginApi, type OpenClawPluginToolContext } from "./api";
 
@@ -119,7 +119,6 @@ export function register(api: OpenClawPluginApi): void {
     options?: { optional?: boolean },
   ) => void;
   setPluginRuntime(api.runtime);
-  setOpenClawConfig(api.config);
 
   // Tools
   registerTool((ctx: OpenClawPluginToolContext) => makeAgentLaunchTool(ctx), { optional: false });
@@ -160,7 +159,6 @@ export function register(api: OpenClawPluginApi): void {
       const config = api.pluginConfig ?? {};
       setPluginConfig(config);
       setPluginRuntime(api.runtime);
-      setOpenClawConfig(api.config);
 
       sm = new SessionManager(pluginConfig.maxSessions, pluginConfig.maxPersistedSessions);
       gc = new GoalController(sm);
@@ -179,7 +177,6 @@ export function register(api: OpenClawPluginApi): void {
       gc = null;
       sm = null;
       setPluginRuntime(undefined);
-      setOpenClawConfig(undefined);
       setGoalController(null);
       setSessionManager(null);
     },

@@ -1080,8 +1080,8 @@ export class SessionManager {
     this.lifecycle.emitFailed(session, errorSummary, worktreeAutoCleaned);
   }
 
-  private async triggerWaitingForInputEvent(session: Session): Promise<void> {
-    await this.lifecycle.emitWaitingForInput(session);
+  private triggerWaitingForInputEvent(session: Session): void {
+    this.lifecycle.emitWaitingForInput(session);
   }
 
   private resolvePlanApprovalMode(session: Session | PersistedSessionInfo): PlanApprovalMode {

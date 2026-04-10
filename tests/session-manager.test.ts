@@ -1,8 +1,7 @@
-import { describe, it, beforeEach, afterEach } from "node:test";
+import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { SessionManager } from "../src/session-manager";
 import { setPluginConfig } from "../src/config";
-import { setOpenClawConfig, setPluginRuntime } from "../src/runtime-store";
 
 // ---------------------------------------------------------------------------
 // Helper to create a fake session-like object for injection
@@ -64,17 +63,6 @@ function stubDispatch(sm: SessionManager): void {
     dispose: () => {},
   };
 }
-
-async function flushAsyncWork(): Promise<void> {
-  await Promise.resolve();
-  await Promise.resolve();
-  await new Promise((resolve) => setTimeout(resolve, 0));
-}
-
-afterEach(() => {
-  setPluginRuntime(undefined);
-  setOpenClawConfig(undefined);
-});
 
 // =========================================================================
 // uniqueName
@@ -1052,7 +1040,6 @@ describe("SessionManager turn-end wake", () => {
     });
 
     (sm as any).onTurnEnd(s, true);
-    await flushAsyncWork();
 
     const calls = (sm as any).__dispatchCalls;
     assert.equal(calls.length, 1);
@@ -1329,35 +1316,7 @@ describe("SessionManager turn-end wake", () => {
     assert.match(request.userMessages.at(-1).text, /Choose Approve, Revise, or Reject below\./);
   });
 
-  it("uses embedded LLM summaries when the finalized plan exceeds the full-plan chunk budget", async () => {
-    setOpenClawConfig({
-      agents: {
-        defaults: {
-          model: "openai/gpt-5.4-mini",
-          workspace: "/tmp/openclaw",
-        },
-      },
-    });
-    setPluginRuntime({
-      agent: {
-        async runEmbeddedPiAgent() {
-          return {
-            payloads: [{
-              text: JSON.stringify({
-                summary: [
-                  "Review summary:",
-                  "- Scope: make long plan approvals reviewable without showing raw transcript output.",
-                  "- Planned changes: generate an approval-focused summary from the finalized plan content.",
-                  "- Risks or limitations: summary quality depends on the finalized plan only.",
-                  "- Validation: cover the long-plan approval path with focused tests.",
-                ].join("\n"),
-              }),
-            }],
-          };
-        },
-      },
-    });
-
+  it("keeps paginating finalized plans when they exceed the single-message budget", async () => {
     const longPlanItems = Array.from({ length: 90 }, (_, index) =>
       `${index + 1}. Step ${index + 1}: capture a distinct part of the approval review, keep the wording explicit for users, preserve enough detail for a usable decision, and include validation notes so the finalized plan is intentionally larger than the full-plan pagination budget.`,
     );
@@ -1390,11 +1349,16 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(calls.length, 1);
     const [_sessionArg, request] = calls[0];
     assert.equal(request.label, "plan-approval");
-    assert.match(request.userMessage, /Review summary:/);
-    assert.equal(request.userMessages, undefined);
-    assert.match(request.userMessage, /Scope: make long plan approvals reviewable/);
-    assert.match(request.userMessage, /Planned changes: generate an approval-focused summary/);
-    assert.match(request.userMessage, /Validation: cover the long-plan approval path/);
+    assert.equal(request.userMessage, undefined);
+    assert.ok(Array.isArray(request.userMessages));
+    assert.ok(request.userMessages.length > 2);
+    assert.match(request.userMessages[0].text, /Full plan:/);
+    assert.equal(request.userMessages[0].buttons, undefined);
+    assert.deepEqual(
+      request.userMessages.at(-1).buttons.map((row: Array<{ label: string }>) => row.map((button) => button.label)),
+      [["Approve", "Revise", "Reject"]],
+    );
+    assert.match(request.userMessages.at(-1).text, /Choose Approve, Revise, or Reject below\./);
   });
 
   it("ignores stale structured artifacts and falls back to preview-derived summaries", async () => {
@@ -1617,7 +1581,6 @@ describe("SessionManager turn-end wake", () => {
     });
 
     (sm as any).onTurnEnd(s, true);
-    await flushAsyncWork();
 
     const calls = (sm as any).__dispatchCalls;
     assert.equal(calls.length, 1);
@@ -1716,7 +1679,6 @@ describe("SessionManager turn-end wake", () => {
     });
 
     (sm as any).onTurnEnd(s, true);
-    await flushAsyncWork();
 
     const calls = (sm as any).__dispatchCalls;
     assert.equal(calls.length, 1);
