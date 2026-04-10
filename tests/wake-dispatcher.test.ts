@@ -702,6 +702,70 @@ export async function sendDiscordComponentMessage(target, spec, opts = {}) {
     assert.match(third.buttons, /Reject/);
   });
 
+  it("treats mid-sequence notification failures as partial success instead of triggering the all-failed fallback", () => {
+    const dispatcher = new WakeDispatcher();
+    const session: FakeSession = {
+      id: "session-partial-sequence-failure",
+      route: buildRoute(),
+      originChannel: "telegram|bot|-1003863755361",
+      originThreadId: 11239,
+      originSessionKey: "agent:main:telegram:group:-1003863755361:topic:11239",
+    };
+
+    const deliveries: string[] = [];
+    const wakeEvents: string[] = [];
+    let notifyFailed = 0;
+    let notifySucceeded = 0;
+
+    (dispatcher as any).sendUserNotification = (
+      _session: FakeSession,
+      text: string,
+      _label: string,
+      _buttons: unknown,
+      onAllFailed?: () => void,
+      onSuccess?: () => void,
+    ) => {
+      deliveries.push(text);
+      if (deliveries.length === 1) {
+        onSuccess?.();
+        return;
+      }
+      onAllFailed?.();
+    };
+
+    (dispatcher as any).sendWake = (
+      _session: FakeSession,
+      text: string,
+      _label: string,
+      _phase: string,
+      _onFinalFailure?: () => void,
+      onSuccess?: () => void,
+    ) => {
+      wakeEvents.push(text);
+      onSuccess?.();
+    };
+
+    dispatcher.dispatchSessionNotification(session as any, {
+      label: "plan-approval",
+      userMessages: [
+        { text: "part 1" },
+        { text: "part 2" },
+        { text: "part 3" },
+      ],
+      wakeMessageOnNotifySuccess: "notify success wake",
+      wakeMessageOnNotifyFailed: "notify failed wake",
+      hooks: {
+        onNotifyFailed: () => { notifyFailed += 1; },
+        onNotifySucceeded: () => { notifySucceeded += 1; },
+      },
+    });
+
+    assert.deepEqual(deliveries, ["part 1", "part 2"]);
+    assert.equal(notifyFailed, 0);
+    assert.equal(notifySucceeded, 1);
+    assert.deepEqual(wakeEvents, ["notify success wake"]);
+  });
+
   it("falls back to system notify when no explicit route is present", async () => {
     const dispatcher = new WakeDispatcher();
     const session: FakeSession = {

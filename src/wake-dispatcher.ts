@@ -253,13 +253,14 @@ export class WakeDispatcher {
         onSuccess?.();
         return;
       }
+      const onFailure = index === 0 ? onAllFailed : onSuccess;
 
       this.sendUserNotification(
         session,
         message.text,
         `${label}-part-${index + 1}`,
         message.buttons,
-        onAllFailed,
+        onFailure,
         () => sendAt(index + 1),
       );
     };
