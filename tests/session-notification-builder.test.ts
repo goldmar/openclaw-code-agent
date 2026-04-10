@@ -244,6 +244,39 @@ describe("session-notification-builder", () => {
       assert.ok(message.text.length <= 3_000, `chunk ${index + 1} exceeded the message budget`);
       assert.match(message.text, new RegExp(`ready for approval \\(${index + 1}/${payload.userMessages?.length}\\):`));
     }
+    assert.match(payload.userMessages?.at(-1)?.text ?? "", /Choose Approve, Revise, or Reject below\./);
+    assert.deepEqual(payload.userMessages?.at(-1)?.buttons, buttons);
+  });
+
+  it("keeps ask-mode approval prompts deliverable for extreme session names", () => {
+    const buttons = [[{ label: "Approve", callback_data: "approve-token" }]];
+    const payload = buildWaitingForInputPayload({
+      session: {
+        id: "session-long-name-truncated",
+        name: "session-".repeat(80),
+        multiTurn: true,
+        pendingPlanApproval: true,
+        planDecisionVersion: 13,
+        actionablePlanDecisionVersion: 13,
+      } as any,
+      preview: "running progress should not be used",
+      planArtifact: {
+        markdown: Array.from(
+          { length: 48 },
+          (_, index) => `${index + 1}. Keep the prompt resilient even when the session name is excessively long.`,
+        ).join("\n"),
+        steps: [],
+      },
+      originThreadLine: "Origin thread: telegram topic 42",
+      planApprovalMode: "ask",
+      planApprovalButtons: buttons as any,
+    });
+
+    assert.equal(payload.userMessage, undefined);
+    assert.ok(payload.userMessages);
+    assert.match(payload.userMessages?.[0]?.text ?? "", /ready for approval \(1\//);
+    assert.match(payload.userMessages?.[0]?.text ?? "", /\.\.\./);
+    assert.match(payload.userMessages?.at(-1)?.text ?? "", /Choose Approve, Revise, or Reject below\./);
     assert.deepEqual(payload.userMessages?.at(-1)?.buttons, buttons);
   });
 
