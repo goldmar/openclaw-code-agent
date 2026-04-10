@@ -51,8 +51,13 @@ export async function buildWaitingForInputPayload(args: {
   const isPlanApproval = session.pendingPlanApproval;
   const actionableVersion = session.actionablePlanDecisionVersion ?? session.planDecisionVersion;
   const promptAlreadyProven = hasProvableUserVisiblePrompt(session, actionableVersion);
+  const resolvedPlanApprovalMode = planApprovalMode ?? "delegate";
   const planReviewSummary = isPlanApproval
-    ? await buildPlanReviewSummary({ preview, artifact: planArtifact })
+    ? await buildPlanReviewSummary({
+        preview,
+        artifact: planArtifact,
+        skipLlm: resolvedPlanApprovalMode !== "ask",
+      })
     : undefined;
 
   const userMessage = isPlanApproval
@@ -68,7 +73,7 @@ export async function buildWaitingForInputPayload(args: {
     : `❓ [${session.name}] Question waiting for reply:\n\n${preview}`;
 
   if (isPlanApproval) {
-    const resolvedMode = planApprovalMode ?? "delegate";
+    const resolvedMode = resolvedPlanApprovalMode;
     const permissionModeLine = `Permission mode: plan → will switch to bypassPermissions on approval`;
     if (resolvedMode === "delegate") {
       return {

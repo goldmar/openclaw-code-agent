@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 import { mkdtemp, rm } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -10,6 +11,9 @@ const PLAN_APPROVAL_FULL_PLAN_MAX_CHARS = 3_200;
 const PLAN_APPROVAL_SUMMARY_MAX_CHARS = 2_400;
 const PLAN_APPROVAL_SUMMARY_SOURCE_MAX_CHARS = 16_000;
 const PLAN_APPROVAL_SUMMARY_TIMEOUT_MS = 45_000;
+const PLAN_APPROVAL_MISSING_PROVIDER_WARNING =
+  "[plan-review-summary] Embedded model defaults must use \"provider/model\". " +
+  "Skipping LLM summary generation.";
 
 function stripCodeFences(text: string): string {
   const trimmed = text.trim();
@@ -79,8 +83,15 @@ function resolveEmbeddedModelDefaults(): { provider?: string; model?: string; wo
   const configuredModel = typeof defaults?.model === "string"
     ? defaults.model.trim()
     : defaults?.model?.primary?.trim();
-  const provider = configuredModel?.split("/")[0];
-  const model = configuredModel?.split("/").slice(1).join("/");
+  if (configuredModel && !configuredModel.includes("/")) {
+    console.warn(`${PLAN_APPROVAL_MISSING_PROVIDER_WARNING} Received: "${configuredModel}".`);
+    return {
+      workspaceDir: defaults?.workspace || process.cwd(),
+      config,
+    };
+  }
+  const [provider, ...modelParts] = configuredModel?.split("/") ?? [];
+  const model = modelParts.join("/");
   return {
     provider: provider || undefined,
     model: model || undefined,
@@ -116,11 +127,12 @@ async function summarizeWithEmbeddedAgent(finalizedPlanSource: string): Promise<
   ].join("\n");
 
   const { provider, model, workspaceDir, config } = resolveEmbeddedModelDefaults();
+  if (!provider || !model) return undefined;
   let tempDir: string | undefined;
 
   try {
     tempDir = await mkdtemp(join(tmpdir(), "openclaw-plan-review-"));
-    const sessionId = `plan-review-summary-${Date.now()}`;
+    const sessionId = `plan-review-summary-${randomUUID()}`;
     const sessionFile = join(tempDir, "session.json");
     const text = collectText((await runEmbeddedPiAgent({
       sessionId,
@@ -154,8 +166,9 @@ async function summarizeWithEmbeddedAgent(finalizedPlanSource: string): Promise<
 export async function buildPlanReviewSummary(args: {
   preview: string;
   artifact?: PlanArtifact;
+  skipLlm?: boolean;
 }): Promise<string> {
-  const { preview, artifact } = args;
+  const { preview, artifact, skipLlm = false } = args;
   const fullPlanText = artifact?.markdown?.trim();
   if (fullPlanText && fullPlanText.length <= PLAN_APPROVAL_FULL_PLAN_MAX_CHARS) {
     return `Full plan:\n${fullPlanText}`;
@@ -166,9 +179,11 @@ export async function buildPlanReviewSummary(args: {
     return buildSafeFallbackSummary(preview);
   }
 
-  const llmSummary = await summarizeWithEmbeddedAgent(summarySource);
-  if (llmSummary) {
-    return llmSummary;
+  if (!skipLlm) {
+    const llmSummary = await summarizeWithEmbeddedAgent(summarySource);
+    if (llmSummary) {
+      return llmSummary;
+    }
   }
 
   return buildSafeFallbackSummary(summarySource);

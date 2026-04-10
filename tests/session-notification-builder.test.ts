@@ -170,6 +170,80 @@ describe("session-notification-builder", () => {
     assert.match(summary, /Validation: add focused regression tests/);
   });
 
+  it("skips the embedded agent for delegated plan approvals and falls back immediately", async () => {
+    let llmCalls = 0;
+    setPluginRuntime({
+      agent: {
+        async runEmbeddedPiAgent() {
+          llmCalls += 1;
+          throw new Error("should not be called");
+        },
+      },
+    });
+
+    const payload = await buildWaitingForInputPayload({
+      session: {
+        id: "session-delegate-fast",
+        name: "delegate-fast",
+        multiTurn: true,
+        pendingPlanApproval: true,
+      } as any,
+      preview: [
+        "1. Inspect the current notification flow",
+        "2. Skip the LLM for delegate mode wakeups",
+        "Should I proceed?",
+      ].join("\n"),
+      originThreadLine: "Origin thread: telegram topic 42",
+      planApprovalMode: "delegate",
+    });
+
+    assert.equal(llmCalls, 0);
+    assert.equal(payload.userMessage, undefined);
+    assert.match(payload.planReviewSummary ?? "", /Review summary:/);
+    assert.match(payload.planReviewSummary ?? "", /Skip the LLM for delegate mode wakeups/);
+  });
+
+  it("skips embedded summaries when the configured model omits a provider prefix", async () => {
+    let llmCalls = 0;
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (message?: unknown, ...rest: unknown[]) => {
+      warnings.push([message, ...rest].map((value) => String(value)).join(" "));
+    };
+    setOpenClawConfig({
+      agents: {
+        defaults: {
+          model: "gpt-5.4-mini",
+          workspace: "/tmp/openclaw",
+        },
+      },
+    });
+    setPluginRuntime({
+      agent: {
+        async runEmbeddedPiAgent() {
+          llmCalls += 1;
+          return { payloads: [] };
+        },
+      },
+    });
+
+    try {
+      const summary = await buildPlanReviewSummary({
+        preview: [
+          "1. Inspect the current notification flow",
+          "2. Add a clear warning for malformed model defaults",
+        ].join("\n"),
+      });
+
+      assert.equal(llmCalls, 0);
+      assert.match(summary, /Review summary:/);
+      assert.ok(warnings.some((warning) => warning.includes("provider/model")));
+      assert.ok(warnings.some((warning) => warning.includes("gpt-5.4-mini")));
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+
   it("falls back to a filtered deterministic summary if embedded generation fails", async () => {
     setPluginRuntime({
       agent: {
