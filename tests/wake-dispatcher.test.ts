@@ -771,6 +771,8 @@ export async function sendDiscordComponentMessage(target, spec, opts = {}) {
 
     const wakeParams = parseChatSendParams(wakeCall);
     assert.equal(wakeParams.sessionKey, "agent:main:telegram:group:-1003863755361:topic:13832");
+    assert.equal(wakeParams.channel, undefined);
+    assert.equal(wakeParams.accountId, undefined);
     assert.equal(wakeParams.target, undefined);
     assert.equal(wakeParams.threadId, undefined);
   });
