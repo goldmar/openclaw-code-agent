@@ -161,7 +161,7 @@ export class SessionLifecycleService {
     }
 
     if (hadQuestion || session.pendingPlanApproval) {
-      this.emitWaitingForInput(session);
+      void this.emitWaitingForInput(session);
       return;
     }
 
@@ -348,7 +348,7 @@ export class SessionLifecycleService {
     this.deps.clearRetryTimersForSession(session.id);
   }
 
-  emitWaitingForInput(session: Session): void {
+  async emitWaitingForInput(session: Session): Promise<void> {
     if (!this.deps.debounceWaitingEvent(session.id)) return;
 
     const planApprovalMode = session.pendingPlanApproval
@@ -383,7 +383,7 @@ export class SessionLifecycleService {
     const matchingPlanArtifact = session.latestPlanArtifactVersion === planDecisionVersion
       ? session.latestPlanArtifact
       : undefined;
-    const payload = buildWaitingForInputPayload({
+    const payload = await buildWaitingForInputPayload({
       session,
       preview,
       planArtifact: matchingPlanArtifact,

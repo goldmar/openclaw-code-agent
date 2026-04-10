@@ -2,6 +2,25 @@ type EmbeddedRunResult = {
   payloads?: Array<{ text?: string }>;
 };
 
+type AgentDefaultsModel =
+  | string
+  | {
+      primary?: string;
+      [key: string]: unknown;
+    };
+
+export interface OpenClawConfigLike {
+  agents?: {
+    defaults?: {
+      model?: AgentDefaultsModel;
+      workspace?: string;
+      [key: string]: unknown;
+    };
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+}
+
 type TaskFlowHandle = {
   id?: string;
   lookupKey?: string;
@@ -22,10 +41,17 @@ type EmbeddedRunParams = {
   sessionFile: string;
   workspaceDir: string;
   agentDir?: string;
+  config?: OpenClawConfigLike;
   prompt: string;
   disableTools?: boolean;
   timeoutMs: number;
   runId: string;
+  provider?: string;
+  model?: string;
+  authProfileId?: string;
+  authProfileIdSource?: "auto" | "user";
+  thinkLevel?: string;
+  streamParams?: Record<string, unknown>;
 };
 
 export interface PluginRuntimeStore {
@@ -36,6 +62,7 @@ export interface PluginRuntimeStore {
 }
 
 let pluginRuntime: PluginRuntimeStore | undefined;
+let openClawConfig: OpenClawConfigLike | undefined;
 
 export function setPluginRuntime(runtime: unknown): void {
   if (runtime && typeof runtime === "object") {
@@ -47,4 +74,16 @@ export function setPluginRuntime(runtime: unknown): void {
 
 export function getPluginRuntime(): PluginRuntimeStore | undefined {
   return pluginRuntime;
+}
+
+export function setOpenClawConfig(config: unknown): void {
+  if (config && typeof config === "object") {
+    openClawConfig = config as OpenClawConfigLike;
+    return;
+  }
+  openClawConfig = undefined;
+}
+
+export function getOpenClawConfig(): OpenClawConfigLike | undefined {
+  return openClawConfig;
 }

@@ -1,4 +1,4 @@
-import { describe, it } from "node:test";
+import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   buildPlanReviewSummary,
@@ -9,11 +9,17 @@ import {
   buildFailedPayload,
   buildWaitingForInputPayload,
 } from "../src/session-notification-builder";
+import { setOpenClawConfig, setPluginRuntime } from "../src/runtime-store";
+
+afterEach(() => {
+  setPluginRuntime(undefined);
+  setOpenClawConfig(undefined);
+});
 
 describe("session-notification-builder", () => {
-  it("builds plugin-owned review summaries for explicit plan approvals", () => {
+  it("builds plugin-owned review summaries for explicit plan approvals", async () => {
     const buttons = [[{ label: "Approve", callback_data: "token-1" }]];
-    const payload = buildWaitingForInputPayload({
+    const payload = await buildWaitingForInputPayload({
       session: {
         id: "session-1",
         name: "plan-session",
@@ -36,8 +42,8 @@ describe("session-notification-builder", () => {
     assert.match(payload.wakeMessage, /USER APPROVAL REQUESTED/);
   });
 
-  it("builds review summaries from structured plan artifacts", () => {
-    const summary = buildPlanReviewSummary({
+  it("builds review summaries from structured plan artifacts", async () => {
+    const summary = await buildPlanReviewSummary({
       preview: "ignored preview",
       artifact: {
         explanation: "Keep the scope inside the approval workflow.",
@@ -54,8 +60,8 @@ describe("session-notification-builder", () => {
     assert.match(summary, /2\. Add tests/);
   });
 
-  it("shows the full finalized plan when it fits the approval prompt budget", () => {
-    const summary = buildPlanReviewSummary({
+  it("shows the full finalized plan when it fits the approval prompt budget", async () => {
+    const summary = await buildPlanReviewSummary({
       preview: "ignored preview",
       artifact: {
         markdown: [
@@ -74,8 +80,8 @@ describe("session-notification-builder", () => {
     assert.match(summary, /Add focused tests/);
   });
 
-  it("prefers finalized artifact markdown over preview transcript when structured fields are absent", () => {
-    const summary = buildPlanReviewSummary({
+  it("prefers finalized artifact markdown over preview transcript when structured fields are absent", async () => {
+    const summary = await buildPlanReviewSummary({
       preview: [
         "Thinking through the approval flow",
         "Checking whether the last wake already contains the summary",
@@ -102,12 +108,45 @@ describe("session-notification-builder", () => {
     assert.doesNotMatch(summary, /raw running progress/);
   });
 
-  it("builds balanced long-plan summaries instead of only front-loading the opening bullets", () => {
+  it("uses the embedded agent to summarize long plans for approval review", async () => {
+    const llmCalls: Array<{ prompt: string }> = [];
+    setOpenClawConfig({
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.4-mini",
+          workspace: "/tmp/openclaw",
+        },
+      },
+    });
+    setPluginRuntime({
+      agent: {
+        async runEmbeddedPiAgent(params: any) {
+          llmCalls.push({ prompt: params.prompt });
+          return {
+            payloads: [{
+              text: JSON.stringify({
+                summary: [
+                  "Review summary:",
+                  "- Scope: fix the approval prompt so long plans remain reviewable.",
+                  "- Planned changes: summarize the finalized plan with balanced coverage of implementation, limitations, and validation.",
+                  "- Risks or limitations: summary quality depends on the finalized plan content only.",
+                  "- Validation: add focused regression tests for long-plan approval prompts.",
+                ].join("\n"),
+              }),
+            }],
+          };
+        },
+      },
+    });
+
     const longPlanItems = Array.from({ length: 18 }, (_, index) =>
       `${index + 1}. Step ${index + 1}: capture a distinct part of the approval review, keep the wording explicit for users, and preserve enough detail for a usable decision without forcing them back into raw logs.`,
     );
-    const summary = buildPlanReviewSummary({
-      preview: "ignored preview",
+    const summary = await buildPlanReviewSummary({
+      preview: [
+        "Thinking through the approval flow",
+        "Should I proceed?",
+      ].join("\n"),
       artifact: {
         markdown: [
           "Proposed plan:",
@@ -121,16 +160,43 @@ describe("session-notification-builder", () => {
       },
     });
 
+    assert.equal(llmCalls.length, 1);
+    assert.match(llmCalls[0]?.prompt ?? "", /FINALIZED_PLAN:/);
+    assert.match(llmCalls[0]?.prompt ?? "", /Tail sections are not visible today/);
+    assert.doesNotMatch(llmCalls[0]?.prompt ?? "", /Thinking through the approval flow/);
     assert.match(summary, /Review summary:/);
-    assert.match(summary, /- Step 1: capture a distinct part of the approval review/);
-    assert.match(summary, /- Step 10: capture a distinct part of the approval review/);
-    assert.match(summary, /- Current limitations:/);
-    assert.match(summary, /- Tail sections are not visible today/);
-    assert.match(summary, /additional plan items omitted from this prompt/);
+    assert.match(summary, /Scope: fix the approval prompt/);
+    assert.match(summary, /Planned changes: summarize the finalized plan/);
+    assert.match(summary, /Validation: add focused regression tests/);
   });
 
-  it("instructs delegated plan reviews to use structured approval rationale plus orchestrator-owned follow-up", () => {
-    const payload = buildWaitingForInputPayload({
+  it("falls back to a filtered deterministic summary if embedded generation fails", async () => {
+    setPluginRuntime({
+      agent: {
+        async runEmbeddedPiAgent() {
+          throw new Error("provider overloaded");
+        },
+      },
+    });
+
+    const summary = await buildPlanReviewSummary({
+      preview: [
+        "Thinking through the notification path",
+        "1. Inspect the current notification flow",
+        "2. Add a safe fallback summary",
+        "Should I proceed?",
+      ].join("\n"),
+    });
+
+    assert.match(summary, /Review summary:/);
+    assert.match(summary, /- Inspect the current notification flow/);
+    assert.match(summary, /- Add a safe fallback summary/);
+    assert.doesNotMatch(summary, /Thinking through the notification path/);
+    assert.doesNotMatch(summary, /Should I proceed\?/);
+  });
+
+  it("instructs delegated plan reviews to use structured approval rationale plus orchestrator-owned follow-up", async () => {
+    const payload = await buildWaitingForInputPayload({
       session: {
         id: "session-delegate",
         name: "delegate-session",
@@ -152,8 +218,8 @@ describe("session-notification-builder", () => {
     assert.match(payload.wakeMessage, /do NOT send a second plain-text recap/i);
   });
 
-  it("suppresses extra ask-mode plan summaries once a user-visible prompt is proven", () => {
-    const payload = buildWaitingForInputPayload({
+  it("suppresses extra ask-mode plan summaries once a user-visible prompt is proven", async () => {
+    const payload = await buildWaitingForInputPayload({
       session: {
         id: "session-ask",
         name: "ask-session",
