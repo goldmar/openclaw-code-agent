@@ -1199,10 +1199,9 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(calls.length, 1);
     const [_sessionArg, request] = calls[0];
     assert.equal(request.label, "plan-approval");
-    assert.match(request.userMessage, /Review summary:/);
-    assert.match(request.userMessage, /Keep the scope inside the approval flow\./);
-    assert.match(request.userMessage, /- Update the prompt copy/);
-    assert.match(request.userMessage, /- Add focused regression tests/);
+    assert.match(request.userMessage, /Full plan:/);
+    assert.match(request.userMessage, /1\. Update prompt/);
+    assert.match(request.userMessage, /2\. Add tests/);
   });
 
   it("uses finalized artifact markdown instead of preview transcript when structured plan fields are absent", () => {
@@ -1236,10 +1235,87 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(calls.length, 1);
     const [_sessionArg, request] = calls[0];
     assert.equal(request.label, "plan-approval");
-    assert.match(request.userMessage, /- Keep only the distilled final plan in the approval summary/);
-    assert.match(request.userMessage, /- Add a regression test for transcript leakage/);
+    assert.match(request.userMessage, /Full plan:/);
+    assert.match(request.userMessage, /1\. Keep only the distilled final plan in the approval summary/);
+    assert.match(request.userMessage, /2\. Add a regression test for transcript leakage/);
     assert.doesNotMatch(request.userMessage, /Thinking through the notification path/);
     assert.doesNotMatch(request.userMessage, /running progress/);
+  });
+
+  it("shows the full finalized plan in ask-mode approval prompts when it fits", () => {
+    const s = fakeSession({
+      id: "s-plan-full",
+      name: "plan-full",
+      status: "running",
+      pendingPlanApproval: true,
+      planDecisionVersion: 8,
+      actionablePlanDecisionVersion: 8,
+      planApproval: "ask",
+      latestPlanArtifactVersion: 8,
+      latestPlanArtifact: {
+        markdown: [
+          "## Proposed plan",
+          "1. Trace the approval path",
+          "2. Render the full plan in the prompt",
+          "3. Add a regression test",
+        ].join("\n"),
+        steps: [],
+      },
+      getOutput: () => ["running progress that should not be used here"],
+    });
+
+    (sm as any).triggerWaitingForInputEvent(s);
+
+    const calls = (sm as any).__dispatchCalls;
+    assert.equal(calls.length, 1);
+    const [_sessionArg, request] = calls[0];
+    assert.equal(request.label, "plan-approval");
+    assert.match(request.userMessage, /Full plan:/);
+    assert.match(request.userMessage, /Trace the approval path/);
+    assert.match(request.userMessage, /Render the full plan in the prompt/);
+    assert.match(request.userMessage, /Add a regression test/);
+    assert.doesNotMatch(request.userMessage, /running progress/);
+  });
+
+  it("builds balanced long ask-mode plan summaries instead of only showing the opening bullets", () => {
+    const longPlanItems = Array.from({ length: 18 }, (_, index) =>
+      `${index + 1}. Step ${index + 1}: capture a distinct part of the approval review, keep the wording explicit for users, and preserve enough detail for a usable decision without forcing them back into raw logs.`,
+    );
+    const s = fakeSession({
+      id: "s-plan-balanced",
+      name: "plan-balanced",
+      status: "running",
+      pendingPlanApproval: true,
+      planDecisionVersion: 10,
+      actionablePlanDecisionVersion: 10,
+      planApproval: "ask",
+      latestPlanArtifactVersion: 10,
+      latestPlanArtifact: {
+        markdown: [
+          "Proposed plan:",
+          ...longPlanItems,
+          "",
+          "Current limitations:",
+          "- Early bullets dominate the current UX",
+          "- Tail sections are not visible today",
+        ].join("\n"),
+        steps: [],
+      },
+      getOutput: () => ["running progress that should not be used here"],
+    });
+
+    (sm as any).triggerWaitingForInputEvent(s);
+
+    const calls = (sm as any).__dispatchCalls;
+    assert.equal(calls.length, 1);
+    const [_sessionArg, request] = calls[0];
+    assert.equal(request.label, "plan-approval");
+    assert.match(request.userMessage, /Review summary:/);
+    assert.match(request.userMessage, /- Step 1: capture a distinct part of the approval review/);
+    assert.match(request.userMessage, /- Step 10: capture a distinct part of the approval review/);
+    assert.match(request.userMessage, /- Current limitations:/);
+    assert.match(request.userMessage, /- Tail sections are not visible today/);
+    assert.match(request.userMessage, /additional plan items omitted from this prompt/);
   });
 
   it("ignores stale structured artifacts and falls back to preview-derived summaries", () => {

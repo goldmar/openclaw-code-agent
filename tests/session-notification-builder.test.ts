@@ -49,10 +49,29 @@ describe("session-notification-builder", () => {
       },
     });
 
-    assert.match(summary, /Review summary:/);
-    assert.match(summary, /Keep the scope inside the approval workflow\./);
-    assert.match(summary, /- Update the plan-approval prompt/);
-    assert.match(summary, /- Add focused regression tests/);
+    assert.match(summary, /^Full plan:/);
+    assert.match(summary, /1\. Update code/);
+    assert.match(summary, /2\. Add tests/);
+  });
+
+  it("shows the full finalized plan when it fits the approval prompt budget", () => {
+    const summary = buildPlanReviewSummary({
+      preview: "ignored preview",
+      artifact: {
+        markdown: [
+          "## Proposed plan",
+          "1. Trace the current approval path",
+          "2. Render the full plan when it is short enough",
+          "3. Add focused tests",
+        ].join("\n"),
+        steps: [],
+      },
+    });
+
+    assert.match(summary, /^Full plan:/);
+    assert.match(summary, /Trace the current approval path/);
+    assert.match(summary, /Render the full plan when it is short enough/);
+    assert.match(summary, /Add focused tests/);
   });
 
   it("prefers finalized artifact markdown over preview transcript when structured fields are absent", () => {
@@ -75,32 +94,39 @@ describe("session-notification-builder", () => {
       },
     });
 
-    assert.match(summary, /- Trace the approval summary source/);
-    assert.match(summary, /- Use finalized plan text for the review summary fallback/);
-    assert.match(summary, /- Add a focused regression test/);
+    assert.match(summary, /^Full plan:/);
+    assert.match(summary, /1\. Trace the approval summary source/);
+    assert.match(summary, /2\. Use finalized plan text for the review summary fallback/);
+    assert.match(summary, /3\. Add a focused regression test/);
     assert.doesNotMatch(summary, /Thinking through the approval flow/);
     assert.doesNotMatch(summary, /raw running progress/);
   });
 
-  it("bounds oversized single-line plan summaries so button prompts stay compact", () => {
-    const payload = buildWaitingForInputPayload({
-      session: {
-        id: "session-long",
-        name: "long-session",
-        multiTurn: true,
-        pendingPlanApproval: true,
-        planDecisionVersion: 8,
-      } as any,
-      preview: `I’m grounding this in the actual code first: ${"very long transcript sentence ".repeat(80)}`,
-      originThreadLine: "Origin thread: telegram topic 42",
-      planApprovalMode: "ask",
-      planApprovalButtons: [[{ label: "Approve", callbackData: "token-1" }]],
+  it("builds balanced long-plan summaries instead of only front-loading the opening bullets", () => {
+    const longPlanItems = Array.from({ length: 18 }, (_, index) =>
+      `${index + 1}. Step ${index + 1}: capture a distinct part of the approval review, keep the wording explicit for users, and preserve enough detail for a usable decision without forcing them back into raw logs.`,
+    );
+    const summary = buildPlanReviewSummary({
+      preview: "ignored preview",
+      artifact: {
+        markdown: [
+          "Proposed plan:",
+          ...longPlanItems,
+          "",
+          "Current limitations:",
+          "- Early bullets dominate the current UX",
+          "- Tail sections are not visible today",
+        ].join("\n"),
+        steps: [],
+      },
     });
 
-    assert.equal(payload.label, "plan-approval");
-    assert.ok((payload.userMessage ?? "").length < 2000);
-    assert.match(payload.userMessage ?? "", /Additional plan details omitted for brevity/);
-    assert.doesNotMatch(payload.userMessage ?? "", /very long transcript sentence very long transcript sentence very long transcript sentence very long transcript sentence very long transcript sentence very long transcript sentence very long transcript sentence very long transcript sentence very long transcript sentence very long transcript sentence/);
+    assert.match(summary, /Review summary:/);
+    assert.match(summary, /- Step 1: capture a distinct part of the approval review/);
+    assert.match(summary, /- Step 10: capture a distinct part of the approval review/);
+    assert.match(summary, /- Current limitations:/);
+    assert.match(summary, /- Tail sections are not visible today/);
+    assert.match(summary, /additional plan items omitted from this prompt/);
   });
 
   it("instructs delegated plan reviews to use structured approval rationale plus orchestrator-owned follow-up", () => {
@@ -171,14 +197,9 @@ describe("session-notification-builder", () => {
         status: "completed",
         costUsd: 1.25,
         duration: 61_000,
-        approvalState: "approved",
         requestedPermissionMode: "plan",
         currentPermissionMode: "bypassPermissions",
         approvalExecutionState: "approved_then_implemented",
-        planApproval: "ask",
-        approvalPromptStatus: "delivered",
-        approvalPromptMessageKind: "canonical_buttons",
-        approvalPromptDeliveredAt: "2026-04-10T07:43:13.161Z",
       } as any,
       originThreadLine: "Origin thread: telegram topic 42",
       preview: "Final output",
@@ -191,8 +212,6 @@ describe("session-notification-builder", () => {
     assert.match(payload.wakeMessageOnNotifySuccess, /Requested permission mode: plan/);
     assert.match(payload.wakeMessageOnNotifySuccess, /Effective permission mode: bypassPermissions/);
     assert.match(payload.wakeMessageOnNotifySuccess, /Deterministic approval\/execution state: approved_then_implemented/);
-    assert.match(payload.wakeMessageOnNotifySuccess, /canonical Approve\/Revise\/Reject buttons were delivered/i);
-    assert.match(payload.wakeMessageOnNotifySuccess, /implementation after approval was expected/i);
     assert.match(payload.wakeMessageOnNotifySuccess, /Output preview:/);
     assert.match(payload.wakeMessageOnNotifySuccess, /Canonical completion status delivered to user: yes/);
     assert.match(payload.wakeMessageOnNotifySuccess, /Plugin requested short factual follow-up summary: yes/);
@@ -204,33 +223,6 @@ describe("session-notification-builder", () => {
     assert.match(payload.wakeMessageOnNotifyFailed, /do NOT assume the plugin already reached the user/i);
   });
 
-  it("includes fallback approval interpretation when approval was recorded without canonical buttons", () => {
-    const payload = buildCompletedPayload({
-      session: {
-        id: "session-3",
-        name: "approved-no-buttons",
-        status: "completed",
-        costUsd: 0.5,
-        duration: 30_000,
-        approvalState: "approved",
-        requestedPermissionMode: "plan",
-        currentPermissionMode: "bypassPermissions",
-        approvalExecutionState: "approved_then_implemented",
-        planApproval: "delegate",
-        approvalPromptStatus: "not_sent",
-        approvalPromptMessageKind: "none",
-        approvalPromptDeliveredAt: undefined,
-      } as any,
-      originThreadLine: "Origin thread: telegram topic 10",
-      preview: "Output",
-    });
-
-    assert.match(
-      payload.wakeMessageOnNotifySuccess,
-      /explicit plan approval was recorded before implementation/i,
-    );
-  });
-
   it("uses agent_respond as the primary continuation path in failure wakes", () => {
     const payload = buildFailedPayload({
       session: {
@@ -240,7 +232,6 @@ describe("session-notification-builder", () => {
         costUsd: 0,
         duration: 10_000,
         harnessSessionId: "backend-thread-1",
-        approvalState: "not_required",
         requestedPermissionMode: "plan",
         currentPermissionMode: "default",
         approvalExecutionState: "implemented_without_required_approval",
@@ -255,7 +246,6 @@ describe("session-notification-builder", () => {
     assert.match(payload.wakeMessage, /agent_launch\(resume_session_id='session-2', fork_session=true/);
     assert.match(payload.wakeMessage, /Backend conversation ID: backend-thread-1/);
     assert.match(payload.wakeMessage, /Deterministic approval\/execution state: implemented_without_required_approval/);
-    assert.match(payload.wakeMessage, /implementation left plan-only mode without a recorded approval/i);
   });
 
   it("preserves delegate worktree wake instructions", () => {
@@ -285,46 +275,20 @@ describe("session-notification-builder", () => {
       cleanupSummary: "worktree cleaned up",
       preview: "Built the project and verified the binary prints hello world.",
       originThreadLine: "Origin thread: telegram topic 42",
-      approvalState: "approved",
       requestedPermissionMode: "plan",
       currentPermissionMode: "bypassPermissions",
       approvalExecutionState: "approved_then_implemented",
-      planApproval: "ask",
-      approvalPromptStatus: "delivered",
-      approvalPromptMessageKind: "canonical_buttons",
-      approvalPromptDeliveredAt: "2026-04-10T07:43:13.161Z",
     });
 
     assert.match(message, /completed with no repository changes/);
     assert.match(message, /Worktree outcome: worktree cleaned up/);
     assert.match(message, /Requested permission mode: plan/);
     assert.match(message, /Deterministic approval\/execution state: approved_then_implemented/);
-    assert.match(message, /canonical Approve\/Revise\/Reject buttons were delivered/i);
-    assert.match(message, /implementation after approval was expected/i);
     assert.match(message, /Output preview:/);
     assert.match(message, /agent_output\(session='session-4', full=true\)/);
     assert.match(message, /plugin already sent the canonical completion status/i);
     assert.match(message, /must send the user a short factual completion summary/i);
     assert.match(message, /ordinary terminal\/manual completions too/i);
     assert.match(message, /do NOT repeat the plugin's status line/i);
-  });
-
-  it("includes fallback approval interpretation in no-change worktree wakes without canonical buttons", () => {
-    const message = buildNoChangeWakeMessage({
-      sessionName: "rust-hello-world",
-      sessionId: "session-5",
-      cleanupSummary: "worktree cleaned up",
-      preview: "",
-      approvalState: "approved",
-      requestedPermissionMode: "plan",
-      currentPermissionMode: "bypassPermissions",
-      approvalExecutionState: "approved_then_implemented",
-      planApproval: "delegate",
-      approvalPromptStatus: "not_sent",
-      approvalPromptMessageKind: "none",
-      approvalPromptDeliveredAt: undefined,
-    });
-
-    assert.match(message, /explicit plan approval was recorded before implementation/i);
   });
 });

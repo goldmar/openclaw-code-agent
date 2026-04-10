@@ -4,6 +4,9 @@ import type { PlanApprovalMode, PlanArtifact } from "../types";
 import { truncateText } from "../format";
 
 type OriginThreadLine = string;
+const PLAN_APPROVAL_FULL_PLAN_MAX_CHARS = 3_200;
+const PLAN_APPROVAL_SUMMARY_MAX_CHARS = 2_400;
+const PLAN_APPROVAL_SUMMARY_MAX_ITEMS = 9;
 const MAX_PLAN_SUMMARY_ITEMS = 5;
 const MAX_PLAN_SUMMARY_ITEM_CHARS = 280;
 const MAX_PLAN_SUMMARY_BODY_CHARS = 1400;
@@ -16,6 +19,17 @@ function normalizeSummaryItem(line: string): string {
     .replace(/^\d+[.)]\s+/, "")
     .replace(/^`([^`]+)`$/, "$1")
     .trim();
+}
+
+function extractPlanSummaryCandidates(preview: string): string[] {
+  return preview
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map(normalizeSummaryItem)
+    .map((line) => truncateText(line, 220))
+    .filter((line) => line.length > 0)
+    .filter((line) => !/^(plan|proposed plan|implementation plan|review summary)[:]?$/i.test(line));
 }
 
 function summarizePlanText(text: string): string[] {
@@ -64,30 +78,120 @@ export function formatPlanApprovalSummary(summary: string): string {
   return formatPlanSummaryItems(summarizePlanText(summary)).join("\n");
 }
 
+function buildFallbackPlanSummary(preview: string): string[] {
+  const summaryCandidates = extractPlanSummaryCandidates(preview)
+    .filter((line) => !/^(should|can|could|would|will)\b.*\?$/i.test(line));
+
+  if (summaryCandidates.length === 0) {
+    return ["- Plan details are available in the full session output."];
+  }
+
+  return summaryCandidates.slice(0, 5).map((line) => `- ${line}`);
+}
+
+function buildBulletedBody(lines: string[]): string {
+  return lines.map((line) => `- ${line}`).join("\n");
+}
+
+function selectBalancedPlanItems(lines: string[], maxItems: number): { items: string[]; omittedCount: number } {
+  if (lines.length <= maxItems) {
+    return { items: lines, omittedCount: 0 };
+  }
+
+  const selected = new Set<number>();
+  const headCount = Math.min(3, maxItems);
+  const tailCount = Math.min(3, Math.max(0, maxItems - headCount));
+  const middleCount = Math.max(0, maxItems - headCount - tailCount);
+
+  for (let index = 0; index < headCount; index += 1) {
+    selected.add(index);
+  }
+
+  if (middleCount > 0) {
+    const middleStart = Math.max(headCount, Math.floor((lines.length - middleCount) / 2));
+    for (let index = 0; index < middleCount; index += 1) {
+      selected.add(middleStart + index);
+    }
+  }
+
+  for (let index = Math.max(lines.length - tailCount, headCount); index < lines.length; index += 1) {
+    selected.add(index);
+  }
+
+  const items = Array.from(selected)
+    .sort((left, right) => left - right)
+    .map((index) => lines[index]);
+
+  return {
+    items,
+    omittedCount: Math.max(0, lines.length - items.length),
+  };
+}
+
+function buildBalancedPlanSummaryLines(lines: string[], maxChars: number): string[] {
+  if (lines.length === 0) {
+    return ["- Plan details are available in the full session output."];
+  }
+
+  const selected = selectBalancedPlanItems(lines, PLAN_APPROVAL_SUMMARY_MAX_ITEMS);
+  const summaryLines = buildBulletedBody(selected.items).split("\n");
+  const omissionLine = selected.omittedCount > 0
+    ? `- ... ${selected.omittedCount} additional plan item${selected.omittedCount === 1 ? "" : "s"} omitted from this prompt.`
+    : undefined;
+  const withOmission = omissionLine ? [...summaryLines, omissionLine] : summaryLines;
+
+  if (withOmission.join("\n").length <= maxChars) {
+    return withOmission;
+  }
+
+  const compactSelection = selectBalancedPlanItems(lines, Math.max(3, PLAN_APPROVAL_SUMMARY_MAX_ITEMS - 2));
+  const compactLines = buildBulletedBody(compactSelection.items).split("\n");
+  const compactOmissionLine = compactSelection.omittedCount > 0
+    ? `- ... ${compactSelection.omittedCount} additional plan item${compactSelection.omittedCount === 1 ? "" : "s"} omitted from this prompt.`
+    : undefined;
+  const compactWithOmission = compactOmissionLine ? [...compactLines, compactOmissionLine] : compactLines;
+
+  return compactWithOmission;
+}
+
 export function buildPlanReviewSummary(args: {
   preview: string;
   artifact?: PlanArtifact;
 }): string {
   const { preview, artifact } = args;
+  const fullPlanText = artifact?.markdown?.trim();
+  if (fullPlanText && fullPlanText.length <= PLAN_APPROVAL_FULL_PLAN_MAX_CHARS) {
+    return `Full plan:\n${fullPlanText}`;
+  }
+
   const lines: string[] = ["Review summary:"];
-  const summaryItems: string[] = [];
 
   const explanation = artifact?.explanation?.trim();
   if (explanation) {
-    summaryItems.push(explanation);
+    lines.push(`- ${explanation}`);
   }
 
   const structuredSteps = artifact?.steps
     ?.map((step) => step.step.trim())
     .filter(Boolean) ?? [];
   if (structuredSteps.length > 0) {
-    summaryItems.push(...structuredSteps);
+    const allStructuredStepLines = structuredSteps.map((step) => `- ${step}`);
+    const explanationBudget = lines.join("\n").length + (lines.length > 0 && allStructuredStepLines.length > 0 ? 1 : 0);
+    const availableStepChars = Math.max(0, PLAN_APPROVAL_SUMMARY_MAX_CHARS - explanationBudget);
+    if (allStructuredStepLines.join("\n").length <= availableStepChars) {
+      lines.push(...allStructuredStepLines);
+    } else {
+      lines.push(...buildBalancedPlanSummaryLines(structuredSteps, availableStepChars));
+    }
   } else {
     const fallbackSource = artifact?.markdown?.trim() || preview;
-    summaryItems.push(...summarizePlanText(fallbackSource));
+    const fallbackCandidates = extractPlanSummaryCandidates(fallbackSource)
+      .filter((line) => !/^(should|can|could|would|will)\b.*\?$/i.test(line));
+    const fallbackSummary = fallbackCandidates.length > 0
+      ? buildBalancedPlanSummaryLines(fallbackCandidates, PLAN_APPROVAL_SUMMARY_MAX_CHARS - lines.join("\n").length)
+      : buildFallbackPlanSummary(fallbackSource);
+    lines.push(...fallbackSummary);
   }
-
-  lines.push(...formatPlanSummaryItems(summaryItems));
 
   return lines.join("\n");
 }
