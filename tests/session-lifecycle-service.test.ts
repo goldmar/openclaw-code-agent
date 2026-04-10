@@ -122,4 +122,74 @@ describe("SessionLifecycleService", () => {
     assert.ok(infoLogs.some((line) => line.includes("\"event\":\"completion_notify_succeeded\"") && line.includes("\"requestedShortFactualSummary\":true")));
     assert.ok(infoLogs.some((line) => line.includes("\"event\":\"completion_wake_succeeded\"") && line.includes("\"canonicalStatusDelivered\":true")));
   });
+
+  it("does not re-enter ask-mode prompt delivery once the current plan prompt is already proven", () => {
+    const requests: Array<Record<string, unknown>> = [];
+    const persistedUpdates: Array<Record<string, unknown>> = [];
+
+    const service = new SessionLifecycleService({
+      persistSession: () => {},
+      clearWaitingTimestamp: () => {},
+      handleWorktreeStrategy: async () => ({
+        notificationSent: false,
+        worktreeRemoved: false,
+      }),
+      resolveWorktreeRepoDir: () => undefined,
+      updatePersistedSession: (_sessionId, patch) => {
+        persistedUpdates.push(patch as Record<string, unknown>);
+        return true;
+      },
+      dispatchSessionNotification: (_session, request) => {
+        requests.push(request as unknown as Record<string, unknown>);
+      },
+      notifySession: () => {},
+      clearRetryTimersForSession: () => {},
+      hasTurnCompleteWakeMarker: () => false,
+      shouldEmitTurnCompleteWake: () => true,
+      shouldEmitTerminalWake: () => true,
+      resolvePlanApprovalMode: () => "ask",
+      getPlanApprovalButtons: () => [[{ label: "Approve", callbackData: "approve-token" }]],
+      getResumeButtons: () => [],
+      getQuestionButtons: () => undefined,
+      extractLastOutputLine: () => undefined,
+      getOutputPreview: () => "Plan preview",
+      originThreadLine: () => "Origin thread: telegram topic 42",
+      debounceWaitingEvent: () => true,
+      isAlreadyMerged: () => false,
+    });
+
+    service.emitWaitingForInput(createStubSession({
+      id: "session-proven-prompt",
+      name: "proven-prompt",
+      pendingPlanApproval: true,
+      planDecisionVersion: 5,
+      actionablePlanDecisionVersion: 5,
+      approvalPromptRequiredVersion: 5,
+      approvalPromptStatus: "delivered",
+      latestPlanArtifactVersion: 5,
+      latestPlanArtifact: {
+        markdown: "1. Keep using the existing prompt",
+        steps: [],
+      },
+    }));
+
+    assert.equal(requests.length, 1);
+    const request = requests[0] as {
+      notifyUser?: string;
+      wakeMessage?: string;
+      wakeMessageOnNotifySuccess?: string;
+      onUserNotifyFailed?: () => void;
+      hooks?: Record<string, unknown>;
+      userMessage?: string;
+      userMessages?: unknown[];
+    };
+    assert.equal(request.notifyUser, "never");
+    assert.match(request.wakeMessage ?? "", /USER APPROVAL REQUESTED/);
+    assert.equal(request.wakeMessageOnNotifySuccess, undefined);
+    assert.equal(request.onUserNotifyFailed, undefined);
+    assert.equal(request.userMessage, undefined);
+    assert.equal(request.userMessages, undefined);
+    assert.equal(request.hooks, undefined);
+    assert.deepEqual(persistedUpdates, []);
+  });
 });
