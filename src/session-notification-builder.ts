@@ -5,11 +5,10 @@ export {
   buildWorktreeDecisionSummary,
 } from "./session-notification-builders/worktree";
 export {
-  formatPlanApprovalSummary,
-  buildPlanReviewSummary,
   buildPlanApprovalFallbackText,
   buildWaitingForInputPayload,
 } from "./session-notification-builders/waiting";
+export { buildPlanReviewSummary, formatPlanApprovalSummary } from "./plan-review-summary";
 export {
   buildCompletedPayload,
   buildFailedPayload,

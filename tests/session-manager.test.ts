@@ -1030,7 +1030,7 @@ describe("SessionManager turn-end wake", () => {
     assert.match(request.userMessage, /⏸️ \[deterministic\] Turn completed/);
   });
 
-  it("routes explicit question turns to waiting wake path", () => {
+  it("routes explicit question turns to waiting wake path", async () => {
     const s = fakeSession({
       id: "s-wait",
       name: "waiter",
@@ -1052,7 +1052,7 @@ describe("SessionManager turn-end wake", () => {
     assert.match(request.wakeMessageOnNotifyFailed, /genuine user reply/i);
   });
 
-  it("uses session planApproval override for plan approval buttons", () => {
+  it("uses session planApproval override for plan approval buttons", async () => {
     setPluginConfig({ planApproval: "delegate" });
 
     const s = fakeSession({
@@ -1065,7 +1065,7 @@ describe("SessionManager turn-end wake", () => {
       getOutput: () => ["Plan preview"],
     });
 
-    (sm as any).triggerWaitingForInputEvent(s);
+    await (sm as any).triggerWaitingForInputEvent(s);
 
     const calls = (sm as any).__dispatchCalls;
     assert.equal(calls.length, 1);
@@ -1084,7 +1084,7 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(approveToken.planDecisionVersion, 7);
   });
 
-  it("shows approval buttons for Codex plan sessions when planApproval=ask", () => {
+  it("shows approval buttons for Codex plan sessions when planApproval=ask", async () => {
     const s = fakeSession({
       id: "s-codex-plan-ask",
       name: "codex-plan-ask",
@@ -1095,7 +1095,7 @@ describe("SessionManager turn-end wake", () => {
       getOutput: () => ["Codex plan preview"],
     });
 
-    (sm as any).triggerWaitingForInputEvent(s);
+    await (sm as any).triggerWaitingForInputEvent(s);
 
     const calls = (sm as any).__dispatchCalls;
     assert.equal(calls.length, 1);
@@ -1106,7 +1106,7 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(request.buttons[0][2].label, "Reject");
   });
 
-  it("routes delegated plan reviews through a wake-only approval stop", () => {
+  it("routes delegated plan reviews through a wake-only approval stop", async () => {
     setPluginConfig({ planApproval: "ask" });
 
     const s = fakeSession({
@@ -1118,7 +1118,7 @@ describe("SessionManager turn-end wake", () => {
       getOutput: () => ["Plan preview"],
     });
 
-    (sm as any).triggerWaitingForInputEvent(s);
+    await (sm as any).triggerWaitingForInputEvent(s);
 
     const calls = (sm as any).__dispatchCalls;
     assert.equal(calls.length, 1);
@@ -1131,7 +1131,7 @@ describe("SessionManager turn-end wake", () => {
     assert.match(request.wakeMessage, /Review privately/);
   });
 
-  it("does not show approval buttons for Codex plan sessions when planApproval=delegate", () => {
+  it("does not show approval buttons for Codex plan sessions when planApproval=delegate", async () => {
     const s = fakeSession({
       id: "s-codex-plan-delegate",
       name: "codex-plan-delegate",
@@ -1142,7 +1142,7 @@ describe("SessionManager turn-end wake", () => {
       getOutput: () => ["Codex plan preview"],
     });
 
-    (sm as any).triggerWaitingForInputEvent(s);
+    await (sm as any).triggerWaitingForInputEvent(s);
 
     const calls = (sm as any).__dispatchCalls;
     assert.equal(calls.length, 1);
@@ -1151,7 +1151,7 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(request.buttons, undefined);
   });
 
-  it("shows approval buttons for explicit plan approval sessions when planApproval=ask", () => {
+  it("shows approval buttons for explicit plan approval sessions when planApproval=ask", async () => {
     const s = fakeSession({
       id: "s-plan-ask",
       name: "plan-ask",
@@ -1161,7 +1161,7 @@ describe("SessionManager turn-end wake", () => {
       getOutput: () => ["Proposed plan:\n- Inspect state flow\n- Add buttons"],
     });
 
-    (sm as any).triggerWaitingForInputEvent(s);
+    await (sm as any).triggerWaitingForInputEvent(s);
 
     const calls = (sm as any).__dispatchCalls;
     assert.equal(calls.length, 1);
@@ -1172,7 +1172,7 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(request.buttons[0][2].label, "Reject");
   });
 
-  it("uses matching structured artifacts to build ask-mode plan review summaries", () => {
+  it("uses matching structured artifacts to build ask-mode plan review summaries", async () => {
     const s = fakeSession({
       id: "s-plan-structured",
       name: "plan-structured",
@@ -1193,19 +1193,18 @@ describe("SessionManager turn-end wake", () => {
       getOutput: () => ["Plan preview that should not be used when structured data matches."],
     });
 
-    (sm as any).triggerWaitingForInputEvent(s);
+    await (sm as any).triggerWaitingForInputEvent(s);
 
     const calls = (sm as any).__dispatchCalls;
     assert.equal(calls.length, 1);
     const [_sessionArg, request] = calls[0];
     assert.equal(request.label, "plan-approval");
-    assert.match(request.userMessage, /Review summary:/);
-    assert.match(request.userMessage, /Keep the scope inside the approval flow\./);
-    assert.match(request.userMessage, /- Update the prompt copy/);
-    assert.match(request.userMessage, /- Add focused regression tests/);
+    assert.match(request.userMessage, /Full plan:/);
+    assert.match(request.userMessage, /1\. Update prompt/);
+    assert.match(request.userMessage, /2\. Add tests/);
   });
 
-  it("uses finalized artifact markdown instead of preview transcript when structured plan fields are absent", () => {
+  it("uses finalized artifact markdown instead of preview transcript when structured plan fields are absent", async () => {
     const s = fakeSession({
       id: "s-plan-markdown-fallback",
       name: "plan-markdown-fallback",
@@ -1230,19 +1229,139 @@ describe("SessionManager turn-end wake", () => {
       ],
     });
 
-    (sm as any).triggerWaitingForInputEvent(s);
+    await (sm as any).triggerWaitingForInputEvent(s);
 
     const calls = (sm as any).__dispatchCalls;
     assert.equal(calls.length, 1);
     const [_sessionArg, request] = calls[0];
     assert.equal(request.label, "plan-approval");
-    assert.match(request.userMessage, /- Keep only the distilled final plan in the approval summary/);
-    assert.match(request.userMessage, /- Add a regression test for transcript leakage/);
+    assert.match(request.userMessage, /Full plan:/);
+    assert.match(request.userMessage, /1\. Keep only the distilled final plan in the approval summary/);
+    assert.match(request.userMessage, /2\. Add a regression test for transcript leakage/);
     assert.doesNotMatch(request.userMessage, /Thinking through the notification path/);
     assert.doesNotMatch(request.userMessage, /running progress/);
   });
 
-  it("ignores stale structured artifacts and falls back to preview-derived summaries", () => {
+  it("shows the full finalized plan in ask-mode approval prompts when it fits", async () => {
+    const s = fakeSession({
+      id: "s-plan-full",
+      name: "plan-full",
+      status: "running",
+      pendingPlanApproval: true,
+      planDecisionVersion: 8,
+      actionablePlanDecisionVersion: 8,
+      planApproval: "ask",
+      latestPlanArtifactVersion: 8,
+      latestPlanArtifact: {
+        markdown: [
+          "## Proposed plan",
+          "1. Trace the approval path",
+          "2. Render the full plan in the prompt",
+          "3. Add a regression test",
+        ].join("\n"),
+        steps: [],
+      },
+      getOutput: () => ["running progress that should not be used here"],
+    });
+
+    await (sm as any).triggerWaitingForInputEvent(s);
+
+    const calls = (sm as any).__dispatchCalls;
+    assert.equal(calls.length, 1);
+    const [_sessionArg, request] = calls[0];
+    assert.equal(request.label, "plan-approval");
+    assert.match(request.userMessage, /Full plan:/);
+    assert.match(request.userMessage, /Trace the approval path/);
+    assert.match(request.userMessage, /Render the full plan in the prompt/);
+    assert.match(request.userMessage, /Add a regression test/);
+    assert.doesNotMatch(request.userMessage, /running progress/);
+  });
+
+  it("paginates medium full plans across multiple ask-mode approval messages and keeps buttons on the final chunk", async () => {
+    const mediumPlanItems = Array.from({ length: 32 }, (_, index) =>
+      `${index + 1}. Step ${index + 1}: update a specific approval path detail while keeping the final plan explicit enough for human review without leaking transcript chatter.`,
+    );
+    const s = fakeSession({
+      id: "s-plan-paginated",
+      name: "plan-paginated",
+      status: "running",
+      pendingPlanApproval: true,
+      planDecisionVersion: 9,
+      actionablePlanDecisionVersion: 9,
+      planApproval: "ask",
+      latestPlanArtifactVersion: 9,
+      latestPlanArtifact: {
+        markdown: ["## Proposed plan", ...mediumPlanItems].join("\n"),
+        steps: [],
+      },
+      getOutput: () => ["running progress that should not be used here"],
+    });
+
+    await (sm as any).triggerWaitingForInputEvent(s);
+
+    const calls = (sm as any).__dispatchCalls;
+    assert.equal(calls.length, 1);
+    const [_sessionArg, request] = calls[0];
+    assert.equal(request.label, "plan-approval");
+    assert.equal(request.userMessage, undefined);
+    assert.ok(Array.isArray(request.userMessages));
+    assert.ok(request.userMessages.length > 1);
+    assert.match(request.userMessages[0].text, /ready for approval \(1\//);
+    assert.match(request.userMessages[0].text, /Full plan:/);
+    assert.equal(request.userMessages[0].buttons, undefined);
+    assert.deepEqual(
+      request.userMessages.at(-1).buttons.map((row: Array<{ label: string }>) => row.map((button) => button.label)),
+      [["Approve", "Revise", "Reject"]],
+    );
+    assert.match(request.userMessages.at(-1).text, /Choose Approve, Revise, or Reject below\./);
+  });
+
+  it("keeps paginating finalized plans when they exceed the single-message budget", async () => {
+    const longPlanItems = Array.from({ length: 90 }, (_, index) =>
+      `${index + 1}. Step ${index + 1}: capture a distinct part of the approval review, keep the wording explicit for users, preserve enough detail for a usable decision, and include validation notes so the finalized plan is intentionally larger than the full-plan pagination budget.`,
+    );
+    const s = fakeSession({
+      id: "s-plan-balanced",
+      name: "plan-balanced",
+      status: "running",
+      pendingPlanApproval: true,
+      planDecisionVersion: 10,
+      actionablePlanDecisionVersion: 10,
+      planApproval: "ask",
+      latestPlanArtifactVersion: 10,
+      latestPlanArtifact: {
+        markdown: [
+          "Proposed plan:",
+          ...longPlanItems,
+          "",
+          "Current limitations:",
+          "- Early bullets dominate the current UX",
+          "- Tail sections are not visible today",
+        ].join("\n"),
+        steps: [],
+      },
+      getOutput: () => ["running progress that should not be used here"],
+    });
+
+    await (sm as any).triggerWaitingForInputEvent(s);
+
+    const calls = (sm as any).__dispatchCalls;
+    assert.equal(calls.length, 1);
+    const [_sessionArg, request] = calls[0];
+    assert.equal(request.label, "plan-approval");
+    assert.equal(request.userMessage, undefined);
+    assert.ok(Array.isArray(request.userMessages));
+    assert.ok(request.userMessages.length > 2);
+    assert.match(request.userMessages[0].text, /Full plan:/);
+    assert.equal(request.userMessages[0].buttons, undefined);
+    assert.deepEqual(
+      request.userMessages.at(-1).buttons.map((row: Array<{ label: string }>) => row.map((button) => button.label)),
+      [["Approve", "Revise", "Reject"]],
+    );
+    assert.match(request.userMessages.at(-1).text, /Choose Approve, Revise, or Reject below\./);
+  });
+
+  it("ignores stale structured artifacts and falls back to preview-derived summaries", async () => {
     const s = fakeSession({
       id: "s-plan-stale",
       name: "plan-stale",
@@ -1265,7 +1384,7 @@ describe("SessionManager turn-end wake", () => {
       ],
     });
 
-    (sm as any).triggerWaitingForInputEvent(s);
+    await (sm as any).triggerWaitingForInputEvent(s);
 
     const calls = (sm as any).__dispatchCalls;
     assert.equal(calls.length, 1);
@@ -1451,7 +1570,7 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(calls.length, 0);
   });
 
-  it("routes bypass-permissions 'should I continue?' prompts through generic waiting only", () => {
+  it("routes bypass-permissions 'should I continue?' prompts through generic waiting only", async () => {
     const s = fakeSession({
       id: "s-continue",
       name: "continue-session",
@@ -1473,7 +1592,7 @@ describe("SessionManager turn-end wake", () => {
     assert.doesNotMatch(request.userMessage, /Plan ready for approval/);
   });
 
-  it("sends waiting questions as a single user notification with wake fallback only", () => {
+  it("sends waiting questions as a single user notification with wake fallback only", async () => {
     const s = fakeSession({
       id: "s-pending-input",
       name: "pending-input-session",
@@ -1488,7 +1607,7 @@ describe("SessionManager turn-end wake", () => {
       getOutput: () => ["Do you want to allow read-only workspace inspection so I can gather the files needed for the investigation memo?"],
     });
 
-    (sm as any).triggerWaitingForInputEvent(s);
+    await (sm as any).triggerWaitingForInputEvent(s);
 
     const calls = (sm as any).__dispatchCalls;
     assert.equal(calls.length, 1);
@@ -1517,7 +1636,7 @@ describe("SessionManager turn-end wake", () => {
     });
     (sm as any).sessions.set(s.id, s);
 
-    (sm as any).triggerWaitingForInputEvent(s);
+    await (sm as any).triggerWaitingForInputEvent(s);
     const firstRequest = (sm as any).__dispatchCalls[0][1];
     assert.equal(firstRequest.label, "waiting");
     assert.deepEqual(
@@ -1535,7 +1654,7 @@ describe("SessionManager turn-end wake", () => {
       options: ["Preview", "Prod"],
     };
 
-    (sm as any).triggerWaitingForInputEvent(s);
+    await (sm as any).triggerWaitingForInputEvent(s);
 
     const calls = (sm as any).__dispatchCalls;
     assert.equal(calls.length, 2);
@@ -1548,7 +1667,7 @@ describe("SessionManager turn-end wake", () => {
     );
   });
 
-  it("keeps plan approval routing ahead of worktree delegate suppression", () => {
+  it("keeps plan approval routing ahead of worktree delegate suppression", async () => {
     const s = fakeSession({
       id: "s-plan-worktree",
       name: "planner-worktree",
@@ -1591,7 +1710,7 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(request.label, "turn-complete");
   });
 
-  it("preserves plan approvals as normal ask-mode buttons", () => {
+  it("preserves plan approvals as normal ask-mode buttons", async () => {
     const s = fakeSession({
       id: "s-plan-mode",
       name: "plan-mode",
@@ -1603,7 +1722,7 @@ describe("SessionManager turn-end wake", () => {
       getOutput: () => ["Codex first-turn plan preview"],
     });
 
-    (sm as any).triggerWaitingForInputEvent(s);
+    await (sm as any).triggerWaitingForInputEvent(s);
 
     const calls = (sm as any).__dispatchCalls;
     assert.equal(calls.length, 1);

@@ -394,10 +394,23 @@ export class SessionLifecycleService {
     });
     const planReviewSummary = payload.planReviewSummary ?? preview;
 
+    if (payload.label === "plan-approval" && planApprovalMode === "ask" && promptAlreadyProven) {
+      this.deps.dispatchSessionNotification(session, {
+        label: payload.label,
+        userMessage: payload.userMessage,
+        userMessages: payload.userMessages,
+        notifyUser: "never",
+        buttons: payload.buttons,
+        wakeMessage: payload.wakeMessage,
+      });
+      return;
+    }
+
     if (payload.label === "plan-approval" && planApprovalMode === "ask") {
       this.deps.dispatchSessionNotification(session, {
         label: payload.label,
         userMessage: payload.userMessage,
+        userMessages: payload.userMessages,
         notifyUser: "always",
         buttons: payload.buttons,
         hooks: {
