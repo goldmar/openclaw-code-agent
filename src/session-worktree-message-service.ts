@@ -22,7 +22,19 @@ type DiffSummary = {
  */
 export class SessionWorktreeMessageService {
   buildNoChangeNotification(args: {
-    session: Pick<Session, "id" | "name" | "requestedPermissionMode" | "currentPermissionMode" | "approvalExecutionState">;
+    session: Pick<
+      Session,
+      | "id"
+      | "name"
+      | "requestedPermissionMode"
+      | "currentPermissionMode"
+      | "approvalExecutionState"
+      | "approvalState"
+      | "planApproval"
+      | "approvalPromptStatus"
+      | "approvalPromptMessageKind"
+      | "approvalPromptDeliveredAt"
+    >;
     nativeBackendWorktree: boolean;
     cleanupSucceeded: boolean;
     worktreePath: string;
@@ -59,6 +71,11 @@ export class SessionWorktreeMessageService {
         requestedPermissionMode: session.requestedPermissionMode,
         currentPermissionMode: session.currentPermissionMode,
         approvalExecutionState: session.approvalExecutionState,
+        approvalState: session.approvalState,
+        planApproval: session.planApproval,
+        approvalPromptStatus: session.approvalPromptStatus,
+        approvalPromptMessageKind: session.approvalPromptMessageKind,
+        approvalPromptDeliveredAt: session.approvalPromptDeliveredAt,
       }),
       notifyUser: "always",
     };

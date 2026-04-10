@@ -77,6 +77,11 @@ export function buildNoChangeWakeMessage(args: {
   requestedPermissionMode?: PersistedSessionInfo["requestedPermissionMode"];
   currentPermissionMode?: PersistedSessionInfo["currentPermissionMode"];
   approvalExecutionState?: PersistedSessionInfo["approvalExecutionState"];
+  approvalState?: PersistedSessionInfo["approvalState"];
+  planApproval?: PersistedSessionInfo["planApproval"];
+  approvalPromptStatus?: PersistedSessionInfo["approvalPromptStatus"];
+  approvalPromptMessageKind?: PersistedSessionInfo["approvalPromptMessageKind"];
+  approvalPromptDeliveredAt?: PersistedSessionInfo["approvalPromptDeliveredAt"];
 }): string {
   const {
     sessionName,
@@ -87,6 +92,11 @@ export function buildNoChangeWakeMessage(args: {
     requestedPermissionMode,
     currentPermissionMode,
     approvalExecutionState,
+    approvalState,
+    planApproval,
+    approvalPromptStatus,
+    approvalPromptMessageKind,
+    approvalPromptDeliveredAt,
   } = args;
   const previewSection = preview.trim()
     ? ["", "Output preview:", preview]
@@ -101,6 +111,11 @@ export function buildNoChangeWakeMessage(args: {
       requestedPermissionMode,
       currentPermissionMode,
       approvalExecutionState,
+      approvalState,
+      planApproval,
+      approvalPromptStatus,
+      approvalPromptMessageKind,
+      approvalPromptDeliveredAt,
     }),
     ...previewSection,
     ``,

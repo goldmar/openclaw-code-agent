@@ -264,20 +264,46 @@ describe("session-notification-builder", () => {
       cleanupSummary: "worktree cleaned up",
       preview: "Built the project and verified the binary prints hello world.",
       originThreadLine: "Origin thread: telegram topic 42",
+      approvalState: "approved",
       requestedPermissionMode: "plan",
       currentPermissionMode: "bypassPermissions",
       approvalExecutionState: "approved_then_implemented",
+      planApproval: "ask",
+      approvalPromptStatus: "delivered",
+      approvalPromptMessageKind: "canonical_buttons",
+      approvalPromptDeliveredAt: "2026-04-10T07:43:13.161Z",
     });
 
     assert.match(message, /completed with no repository changes/);
     assert.match(message, /Worktree outcome: worktree cleaned up/);
     assert.match(message, /Requested permission mode: plan/);
     assert.match(message, /Deterministic approval\/execution state: approved_then_implemented/);
+    assert.match(message, /canonical Approve\/Revise\/Reject buttons were delivered/i);
+    assert.match(message, /implementation after approval was expected/i);
     assert.match(message, /Output preview:/);
     assert.match(message, /agent_output\(session='session-4', full=true\)/);
     assert.match(message, /plugin already sent the canonical completion status/i);
     assert.match(message, /must send the user a short factual completion summary/i);
     assert.match(message, /ordinary terminal\/manual completions too/i);
     assert.match(message, /do NOT repeat the plugin's status line/i);
+  });
+
+  it("includes fallback approval interpretation in no-change worktree wakes without canonical buttons", () => {
+    const message = buildNoChangeWakeMessage({
+      sessionName: "rust-hello-world",
+      sessionId: "session-5",
+      cleanupSummary: "worktree cleaned up",
+      preview: "",
+      approvalState: "approved",
+      requestedPermissionMode: "plan",
+      currentPermissionMode: "bypassPermissions",
+      approvalExecutionState: "approved_then_implemented",
+      planApproval: "delegate",
+      approvalPromptStatus: "not_sent",
+      approvalPromptMessageKind: "none",
+      approvalPromptDeliveredAt: undefined,
+    });
+
+    assert.match(message, /explicit plan approval was recorded before implementation/i);
   });
 });
