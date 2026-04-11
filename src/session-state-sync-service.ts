@@ -64,63 +64,88 @@ export class SessionStateSyncService {
   }
 
   private applyPatchToActiveSession(session: Session, patch: Partial<PersistedSessionInfo>): void {
+    this.applyControlStatePatch(session, patch);
+    this.applySessionMetadataPatch(session, patch);
+    this.applyWorktreeMetadataPatch(session, patch);
+  }
+
+  private applyControlStatePatch(session: Session, patch: Partial<PersistedSessionInfo>): void {
+    const controlPatch = {
+      lifecycle: patch.lifecycle,
+      approvalState: patch.approvalState,
+      worktreeState: patch.worktreeState,
+      runtimeState: patch.runtimeState,
+      deliveryState: patch.deliveryState,
+      pendingPlanApproval: patch.pendingPlanApproval,
+      planApprovalContext: patch.planApprovalContext,
+      planDecisionVersion: patch.planDecisionVersion,
+      actionablePlanDecisionVersion: patch.actionablePlanDecisionVersion,
+      canonicalPlanPromptVersion: patch.canonicalPlanPromptVersion,
+      approvalPromptRequiredVersion: patch.approvalPromptRequiredVersion,
+      approvalPromptVersion: patch.approvalPromptVersion,
+      approvalPromptStatus: patch.approvalPromptStatus,
+      approvalPromptTransport: patch.approvalPromptTransport,
+      approvalPromptMessageKind: patch.approvalPromptMessageKind,
+      approvalPromptLastAttemptAt: patch.approvalPromptLastAttemptAt,
+      approvalPromptDeliveredAt: patch.approvalPromptDeliveredAt,
+      approvalPromptFailedAt: patch.approvalPromptFailedAt,
+      pendingWorktreeDecisionSince: patch.pendingWorktreeDecisionSince,
+    };
+
     if (typeof (session as Session & { applyControlPatch?: unknown }).applyControlPatch === "function") {
-      session.applyControlPatch({
-        lifecycle: patch.lifecycle,
-        approvalState: patch.approvalState,
-        worktreeState: patch.worktreeState,
-        runtimeState: patch.runtimeState,
-        deliveryState: patch.deliveryState,
-        pendingPlanApproval: patch.pendingPlanApproval,
-        planApprovalContext: patch.planApprovalContext,
-        planDecisionVersion: patch.planDecisionVersion,
-        actionablePlanDecisionVersion: patch.actionablePlanDecisionVersion,
-        canonicalPlanPromptVersion: patch.canonicalPlanPromptVersion,
-        approvalPromptRequiredVersion: patch.approvalPromptRequiredVersion,
-        approvalPromptVersion: patch.approvalPromptVersion,
-        approvalPromptStatus: patch.approvalPromptStatus,
-        approvalPromptTransport: patch.approvalPromptTransport,
-        approvalPromptMessageKind: patch.approvalPromptMessageKind,
-        approvalPromptLastAttemptAt: patch.approvalPromptLastAttemptAt,
-        approvalPromptDeliveredAt: patch.approvalPromptDeliveredAt,
-        approvalPromptFailedAt: patch.approvalPromptFailedAt,
-        pendingWorktreeDecisionSince: patch.pendingWorktreeDecisionSince,
-      });
-    } else {
-      if (patch.lifecycle !== undefined) session.lifecycle = patch.lifecycle;
-      if (patch.approvalState !== undefined) session.approvalState = patch.approvalState;
-      if (patch.worktreeState !== undefined) session.worktreeState = patch.worktreeState;
-      if (patch.runtimeState !== undefined) session.runtimeState = patch.runtimeState;
-      if (patch.deliveryState !== undefined) session.deliveryState = patch.deliveryState;
-      if (patch.pendingPlanApproval !== undefined) session.pendingPlanApproval = patch.pendingPlanApproval;
-      if (patch.planApprovalContext !== undefined) session.planApprovalContext = patch.planApprovalContext;
-      if (patch.planDecisionVersion !== undefined) session.planDecisionVersion = patch.planDecisionVersion;
-      if (patch.actionablePlanDecisionVersion !== undefined) session.actionablePlanDecisionVersion = patch.actionablePlanDecisionVersion;
-      if (patch.canonicalPlanPromptVersion !== undefined) session.canonicalPlanPromptVersion = patch.canonicalPlanPromptVersion;
-      if (patch.approvalPromptRequiredVersion !== undefined) session.approvalPromptRequiredVersion = patch.approvalPromptRequiredVersion;
-      if (patch.approvalPromptVersion !== undefined) session.approvalPromptVersion = patch.approvalPromptVersion;
-      if (patch.approvalPromptStatus !== undefined) session.approvalPromptStatus = patch.approvalPromptStatus;
-      if (patch.approvalPromptTransport !== undefined) session.approvalPromptTransport = patch.approvalPromptTransport;
-      if (patch.approvalPromptMessageKind !== undefined) session.approvalPromptMessageKind = patch.approvalPromptMessageKind;
-      if (patch.approvalPromptLastAttemptAt !== undefined) session.approvalPromptLastAttemptAt = patch.approvalPromptLastAttemptAt;
-      if (patch.approvalPromptDeliveredAt !== undefined) session.approvalPromptDeliveredAt = patch.approvalPromptDeliveredAt;
-      if (patch.approvalPromptFailedAt !== undefined) session.approvalPromptFailedAt = patch.approvalPromptFailedAt;
+      session.applyControlPatch(controlPatch);
+      return;
     }
-    if (patch.approvalRationale !== undefined) session.approvalRationale = patch.approvalRationale;
-    if (patch.worktreePath !== undefined) session.worktreePath = patch.worktreePath;
-    if (patch.worktreeBranch !== undefined) session.worktreeBranch = patch.worktreeBranch;
-    if (patch.worktreePrUrl !== undefined) session.worktreePrUrl = patch.worktreePrUrl;
-    if (patch.worktreePrNumber !== undefined) session.worktreePrNumber = patch.worktreePrNumber;
-    if (patch.worktreeMerged !== undefined) session.worktreeMerged = patch.worktreeMerged;
-    if (patch.worktreeMergedAt !== undefined) session.worktreeMergedAt = patch.worktreeMergedAt;
-    if (patch.worktreeDisposition !== undefined) session.worktreeDisposition = patch.worktreeDisposition;
-    if (patch.worktreePrTargetRepo !== undefined) session.worktreePrTargetRepo = patch.worktreePrTargetRepo;
-    if ("autoMergeParentSessionId" in patch) session.autoMergeParentSessionId = patch.autoMergeParentSessionId;
+
+    this.assignIfDefined(session, "lifecycle", patch.lifecycle);
+    this.assignIfDefined(session, "approvalState", patch.approvalState);
+    this.assignIfDefined(session, "worktreeState", patch.worktreeState);
+    this.assignIfDefined(session, "runtimeState", patch.runtimeState);
+    this.assignIfDefined(session, "deliveryState", patch.deliveryState);
+    this.assignIfDefined(session, "pendingPlanApproval", patch.pendingPlanApproval);
+    this.assignIfDefined(session, "planApprovalContext", patch.planApprovalContext);
+    this.assignIfDefined(session, "planDecisionVersion", patch.planDecisionVersion);
+    this.assignIfDefined(session, "actionablePlanDecisionVersion", patch.actionablePlanDecisionVersion);
+    this.assignIfDefined(session, "canonicalPlanPromptVersion", patch.canonicalPlanPromptVersion);
+    this.assignIfDefined(session, "approvalPromptRequiredVersion", patch.approvalPromptRequiredVersion);
+    this.assignIfDefined(session, "approvalPromptVersion", patch.approvalPromptVersion);
+    this.assignIfDefined(session, "approvalPromptStatus", patch.approvalPromptStatus);
+    this.assignIfDefined(session, "approvalPromptTransport", patch.approvalPromptTransport);
+    this.assignIfDefined(session, "approvalPromptMessageKind", patch.approvalPromptMessageKind);
+    this.assignIfDefined(session, "approvalPromptLastAttemptAt", patch.approvalPromptLastAttemptAt);
+    this.assignIfDefined(session, "approvalPromptDeliveredAt", patch.approvalPromptDeliveredAt);
+    this.assignIfDefined(session, "approvalPromptFailedAt", patch.approvalPromptFailedAt);
+  }
+
+  private applySessionMetadataPatch(session: Session, patch: Partial<PersistedSessionInfo>): void {
+    this.assignIfDefined(session, "approvalRationale", patch.approvalRationale);
+  }
+
+  private applyWorktreeMetadataPatch(session: Session, patch: Partial<PersistedSessionInfo>): void {
+    this.assignIfDefined(session, "worktreePath", patch.worktreePath);
+    this.assignIfDefined(session, "worktreeBranch", patch.worktreeBranch);
+    this.assignIfDefined(session, "worktreePrUrl", patch.worktreePrUrl);
+    this.assignIfDefined(session, "worktreePrNumber", patch.worktreePrNumber);
+    this.assignIfDefined(session, "worktreeMerged", patch.worktreeMerged);
+    this.assignIfDefined(session, "worktreeMergedAt", patch.worktreeMergedAt);
+    this.assignIfDefined(session, "worktreeDisposition", patch.worktreeDisposition);
+    this.assignIfDefined(session, "worktreePrTargetRepo", patch.worktreePrTargetRepo);
+    this.assignIfDefined(session, "worktreePushRemote", patch.worktreePushRemote);
+    this.assignIfDefined(session, "worktreeLifecycle", patch.worktreeLifecycle);
+    if ("autoMergeParentSessionId" in patch) {
+      session.autoMergeParentSessionId = patch.autoMergeParentSessionId;
+    }
     if ("autoMergeConflictResolutionAttemptCount" in patch) {
       session.autoMergeConflictResolutionAttemptCount = patch.autoMergeConflictResolutionAttemptCount;
     }
-    if ("autoMergeResolverSessionId" in patch) session.autoMergeResolverSessionId = patch.autoMergeResolverSessionId;
-    if (patch.worktreePushRemote !== undefined) session.worktreePushRemote = patch.worktreePushRemote;
-    if (patch.worktreeLifecycle !== undefined) session.worktreeLifecycle = patch.worktreeLifecycle;
+    if ("autoMergeResolverSessionId" in patch) {
+      session.autoMergeResolverSessionId = patch.autoMergeResolverSessionId;
+    }
+  }
+
+  private assignIfDefined<K extends keyof Session>(session: Session, key: K, value: Session[K] | undefined): void {
+    if (value !== undefined) {
+      session[key] = value;
+    }
   }
 }

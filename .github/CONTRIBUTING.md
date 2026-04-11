@@ -6,7 +6,7 @@ Thank you for your interest in contributing! This guide covers everything you ne
 
 ## Prerequisites
 
-- **Node.js** 18, 20, or 22 (LTS)
+- **Node.js** 22
 - **pnpm** 10+ — install with `npm install -g pnpm`
 
 ---
@@ -19,22 +19,19 @@ Thank you for your interest in contributing! This guide covers everything you ne
 pnpm install
 ```
 
-### Build the bundle
+### Canonical local validation
 
 ```bash
-pnpm run build
-# Output: dist/index.js (esbuild, ESM, minified, targeting Node 18)
+pnpm verify
 ```
 
-### Run the type checker
+`pnpm verify` is the contributor and release gate. It runs typecheck, build, and the full test suite in the same order CI uses.
+
+### Individual commands
 
 ```bash
 pnpm run typecheck
-```
-
-### Run tests
-
-```bash
+pnpm run build
 pnpm run test
 ```
 
@@ -45,13 +42,11 @@ All `*.test.ts` files under `tests/` are discovered and run automatically.
 
 ## All CI checks must pass before merging
 
-Every PR must pass the following checks (enforced automatically by GitHub Actions):
+Every PR must pass `pnpm verify` locally and in CI. The current automated checks are:
 
 | Check | Command | Notes |
 |-------|---------|-------|
-| Typecheck | `pnpm run typecheck` | TypeScript strict mode |
-| Build | `pnpm run build` | esbuild bundle must succeed |
-| Tests | `pnpm run test` | Run on Node 18 **and** Node 20 |
+| Verify | `pnpm verify` | Canonical typecheck + build + test gate on Node 22 |
 | Bundle size | — | `dist/index.js` must be < 500 KB |
 | Lockfile integrity | — | `pnpm-lock.yaml` must be in sync with `package.json` |
 
@@ -63,7 +58,7 @@ git add pnpm-lock.yaml
 git commit -m "chore: update pnpm lockfile"
 ```
 
-> Always commit `pnpm-lock.yaml` alongside any changes to `package.json`.
+> This repo standardizes on `pnpm`. Commit `pnpm-lock.yaml` alongside any changes to `package.json`.
 
 ---
 
@@ -116,7 +111,7 @@ Releases are handled via the `release.yml` GitHub Actions workflow:
 - **Tag push**: push a `v*` tag (e.g. `v2.3.2`) to trigger an automated release
 - **Manual dispatch**: use the "Release" workflow in the Actions tab and supply the version
 
-The workflow runs the full CI gate (typecheck + build + test), publishes to npm using
+The workflow runs the full CI gate (`pnpm verify`), publishes to npm using
 Trusted Publishing (OIDC — no secrets or tokens required), and creates a GitHub release
 with notes extracted from `CHANGELOG.md`.
 

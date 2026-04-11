@@ -1,5 +1,5 @@
 import { execFileSync } from "child_process";
-import { statfsSync } from "fs";
+import * as fs from "fs";
 import { tmpdir } from "os";
 import { dirname, join } from "path";
 import { pluginConfig } from "./config";
@@ -88,11 +88,14 @@ export function isGitRepo(dir: string): boolean {
 
 export function hasEnoughWorktreeSpace(repoDir?: string): boolean {
   try {
-    const baseDir = getWorktreeBaseDir(repoDir);
-    const stats = statfsSync(baseDir);
+    const probePath = getWorktreeSpaceProbePath(repoDir);
+    if (!probePath) {
+      console.warn(`[worktree] Failed to resolve free-space probe path for ${getWorktreeBaseDir(repoDir)}`);
+      return true;
+    }
+    const stats = fs.statfsSync(probePath);
     const freeBytes = stats.bavail * stats.bsize;
-    const minBytes = 100 * 1024 * 1024;
-    return freeBytes >= minBytes;
+    return hasEnoughFreeBytes(freeBytes);
   } catch (err) {
     console.warn(`[worktree] Failed to check free space: ${err instanceof Error ? err.message : String(err)}`);
     return true;
@@ -110,6 +113,25 @@ export function branchExists(repoDir: string, branchName: string): boolean {
   } catch {
     return false;
   }
+}
+
+function resolveExistingAncestorPath(targetPath: string): string | undefined {
+  let currentPath = targetPath;
+  while (true) {
+    if (fs.existsSync(currentPath)) return currentPath;
+    const parentPath = dirname(currentPath);
+    if (parentPath === currentPath) return undefined;
+    currentPath = parentPath;
+  }
+}
+
+export function getWorktreeSpaceProbePath(repoDir?: string): string | undefined {
+  return resolveExistingAncestorPath(getWorktreeBaseDir(repoDir));
+}
+
+export function hasEnoughFreeBytes(freeBytes: number): boolean {
+  const minBytes = 100 * 1024 * 1024;
+  return freeBytes >= minBytes;
 }
 
 export function detectDefaultBranch(repoDir: string): string {

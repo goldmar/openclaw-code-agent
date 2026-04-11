@@ -23,7 +23,7 @@ Sessions are multi-turn. Active sessions accept follow-up messages via `agent_re
 
 ## Upgrade Note
 
-`3.1.0` treats persisted session storage as new-schema-only. If startup finds an older or invalid session store, the plugin archives it to a timestamped `.legacy-*.json` backup and starts with a fresh index instead of migrating rows in place.
+Current releases treat persisted session storage as new-schema-only. If startup finds an older or invalid session store, the plugin archives it to a timestamped `.legacy-*.json` backup and starts with a fresh index instead of migrating rows in place.
 
 Old Codex SDK persisted sessions are archived separately and are not resumed. App Server-backed Codex sessions are the only supported Codex runtime going forward.
 

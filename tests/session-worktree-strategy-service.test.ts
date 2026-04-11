@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { SessionWorktreeMessageService } from "../src/session-worktree-message-service";
 import { SessionWorktreeStrategyService } from "../src/session-worktree-strategy-service";
-import { createWorktree, getBranchName, getDiffSummary } from "../src/worktree";
+import { createWorktree, getBranchName, getDiffSummary, mergeBranch } from "../src/worktree";
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }).trim();
@@ -66,6 +66,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         makeOpenPrButton: () => ({ label: "Open PR", callbackData: "open-pr" }),
         worktreeMessages: new SessionWorktreeMessageService(),
         enqueueMerge: async (_repoDir, fn) => { await fn(); },
+        mergeBranch,
         spawnConflictResolver: async (args) => {
           spawnCalls.push(args as unknown as Record<string, unknown>);
           return { id: "resolver-1", name: "resolver-first-conflict-resolver" };
@@ -130,6 +131,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         makeOpenPrButton: () => ({ label: "Open PR", callbackData: "open-pr" }),
         worktreeMessages: new SessionWorktreeMessageService(),
         enqueueMerge: async (_repoDir, fn) => { await fn(); },
+        mergeBranch,
         spawnConflictResolver: async () => {
           spawnCalled = true;
           return { id: "resolver-2", name: "resolver-exhausted-conflict-resolver" };
@@ -190,7 +192,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       makeOpenPrButton: () => ({ label: "Open PR", callbackData: "open-pr" }),
       worktreeMessages: new SessionWorktreeMessageService(),
       enqueueMerge: async (_repoDir, fn) => { await fn(); },
-      mergeBranchFn: () => ({ success: false, error: "ff-only merge failed" }),
+      mergeBranch: () => ({ success: false, error: "ff-only merge failed" }),
       spawnConflictResolver: async () => ({ id: "resolver-3", name: "unused" }),
       runAutoPr: async () => ({ success: true }),
     });

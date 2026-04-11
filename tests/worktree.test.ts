@@ -1,7 +1,7 @@
-import { describe, it, mock } from "node:test";
+import { describe, it } from "node:test";
 import assert from "node:assert";
 import { execFileSync } from "child_process";
-import { mkdtempSync, rmSync, writeFileSync, existsSync } from "fs";
+import { mkdtempSync, rmSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 
@@ -112,6 +112,51 @@ describe("worktree base dir and PR target resolution", () => {
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }
+  });
+
+  it("checks free space against the repo root before the first .worktrees directory exists", async () => {
+    const { getWorktreeSpaceProbePath } = await import("../src/worktree.js");
+    const repoDir = mkdtempSync(join(tmpdir(), "openclaw-worktree-space-first-run-"));
+
+    try {
+      execFileSync("git", ["init", "-b", "main"], { cwd: repoDir, stdio: "ignore" });
+      const canonicalRoot = execFileSync("git", ["-C", repoDir, "rev-parse", "--show-toplevel"], {
+        encoding: "utf-8",
+        stdio: ["pipe", "pipe", "pipe"],
+      }).trim();
+      assert.equal(getWorktreeSpaceProbePath(repoDir), canonicalRoot);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it("walks up to the nearest existing ancestor for custom worktree dirs", async () => {
+    const { getWorktreeSpaceProbePath } = await import("../src/worktree.js");
+    const repoDir = mkdtempSync(join(tmpdir(), "openclaw-worktree-space-custom-"));
+    const previousWorktreeDir = process.env.OPENCLAW_WORKTREE_DIR;
+
+    try {
+      execFileSync("git", ["init", "-b", "main"], { cwd: repoDir, stdio: "ignore" });
+      const existingParent = join(repoDir, "custom-worktrees");
+      mkdirSync(existingParent);
+      writeFileSync(join(existingParent, ".gitkeep"), "", { encoding: "utf-8", flag: "w" });
+      process.env.OPENCLAW_WORKTREE_DIR = join(existingParent, "nested", "agent-worktrees");
+      assert.equal(getWorktreeSpaceProbePath(repoDir), existingParent);
+    } finally {
+      if (previousWorktreeDir === undefined) {
+        delete process.env.OPENCLAW_WORKTREE_DIR;
+      } else {
+        process.env.OPENCLAW_WORKTREE_DIR = previousWorktreeDir;
+      }
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it("applies the 100 MB worktree free-space threshold", async () => {
+    const { hasEnoughFreeBytes } = await import("../src/worktree.js");
+    assert.equal(hasEnoughFreeBytes(99 * 1024 * 1024), false);
+    assert.equal(hasEnoughFreeBytes(100 * 1024 * 1024), true);
+    assert.equal(hasEnoughFreeBytes(500 * 1024 * 1024), true);
   });
 
   it("prefers an explicit PR target repo override", async () => {

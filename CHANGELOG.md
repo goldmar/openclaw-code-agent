@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.2.0] - 2026-04-10
+
 ### Changed
 
 - Returned ordinary successful terminal notifications to deterministic completion messaging only; the plugin no longer generates transcript-based completion summaries for users or wakes.
@@ -14,12 +16,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Changed the default `defaultWorktreeStrategy` back to `off`.
 - Completion wakes now include explicit approval/execution context plus both requested and effective permission modes for plan-gated sessions instead of expecting the orchestrator to infer approval from transcript prose.
 - Worktree status and cleanup are now lifecycle-first and repository-evidence-driven, including explicit `released` resolution, retained reasons, and deterministic clean-all-safe behavior.
+- Simplified worktree transition handling around shared pending-decision, conflict-resolving, and merged patch builders.
+- Standardized contributor and release validation around `pnpm verify` and removed the npm lockfile from the repo.
 
 ### Fixed
 
 - Normalized bare numeric Discord route targets to `channel:<id>` consistently across route/session-key handling and documentation.
 - Preserved the dirty-worktree implicit-cleanup guard while removing the unshipped heuristic completion-summary behavior.
 - Persisted deterministic approval/execution state so approved plan sessions now surface as `approved_then_implemented`, and plan-gate violations surface as `implemented_without_required_approval`, across terminal and no-change worktree completion paths.
+- `auto-merge` now performs one autonomous conflict-resolution attempt and retries automatically instead of falling through a dead resolver path.
+- Worktree free-space checks now probe the nearest existing ancestor of the configured base dir, so first-run and custom-dir launches validate the correct filesystem.
+- Grouped live-session patch application to keep control-state, metadata, and worktree sync behavior consistent, including explicit auto-merge field clears.
+- Cross-repo PR auto-targeting now works when only `upstream` is configured.
 
 ## [3.1.0] - 2026-03-28
 
@@ -164,7 +172,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Default Codex approval policy to `on-request`.
 - Raised the default session limit.
 
-[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v3.1.0...HEAD
+[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v3.2.0...HEAD
+[3.2.0]: https://github.com/goldmar/openclaw-code-agent/compare/v3.1.0...v3.2.0
 [3.1.0]: https://github.com/goldmar/openclaw-code-agent/compare/v3.0.0...v3.1.0
 [3.0.0]: https://github.com/goldmar/openclaw-code-agent/compare/v2.4.0...v3.0.0
 [2.4.0]: https://github.com/goldmar/openclaw-code-agent/compare/v2.3.1...v2.4.0

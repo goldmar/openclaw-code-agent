@@ -7,6 +7,11 @@ import { SessionWorktreeMessageService } from "./session-worktree-message-servic
 import { getPersistedMutationRefs, getPrimarySessionLookupRef, usesNativeBackendWorktree } from "./session-backend-ref";
 import { SessionWorktreeActionService } from "./session-worktree-action-service";
 import {
+  buildMergeConflictResolvingPatch,
+  buildMergedPatch,
+  buildPendingDecisionPatch,
+} from "./worktree-session-patches";
+import {
   removeWorktree,
   getDiffSummary,
   mergeBranch,
@@ -50,7 +55,7 @@ export class SessionWorktreeStrategyService {
         fn: () => Promise<void>,
         onQueued?: () => void,
       ) => Promise<void>;
-      mergeBranchFn?: typeof mergeBranch;
+      mergeBranch: typeof mergeBranch;
       spawnConflictResolver: (args: {
         session: Session;
         repoDir: string;
@@ -127,6 +132,35 @@ export class SessionWorktreeStrategyService {
     for (const mutationRef of getPersistedMutationRefs(session)) {
       this.deps.updatePersistedSession(mutationRef, patch);
     }
+  }
+
+  private markPendingDecision(
+    session: Session,
+    options: {
+      notes?: string[];
+      clearResolverSessionId?: boolean;
+    } = {},
+  ): void {
+    this.updatePersistedSessionFor(session, buildPendingDecisionPatch(session, options));
+  }
+
+  private markAutoMergeConflictResolving(
+    session: Session,
+    resolverSessionId: string,
+    attemptsUsed: number,
+  ): void {
+    this.updatePersistedSessionFor(
+      session,
+      buildMergeConflictResolvingPatch(session, resolverSessionId, attemptsUsed, {
+        notes: [`resolver_session:${resolverSessionId}`],
+      }),
+    );
+  }
+
+  private markMerged(session: Session): void {
+    this.updatePersistedSessionFor(session, buildMergedPatch(session, {
+      clearResolverSessionId: true,
+    }));
   }
 
   async handleWorktreeStrategy(session: Session): Promise<WorktreeStrategyResult> {
@@ -236,19 +270,7 @@ export class SessionWorktreeStrategyService {
       diffSummary,
       buttons: this.deps.getWorktreeDecisionButtons(session.id),
     }));
-
-    this.updatePersistedSessionFor(session, {
-      pendingWorktreeDecisionSince: new Date().toISOString(),
-      lifecycle: "awaiting_worktree_decision",
-      worktreeState: "pending_decision",
-      worktreeLifecycle: {
-        state: "pending_decision",
-        updatedAt: new Date().toISOString(),
-        baseBranch: session.worktreeBaseBranch,
-        targetRepo: session.worktreePrTargetRepo,
-        pushRemote: session.worktreePushRemote,
-      },
-    });
+    this.markPendingDecision(session);
     return { notificationSent: true, worktreeRemoved: false };
   }
 
@@ -264,20 +286,119 @@ export class SessionWorktreeStrategyService {
       baseBranch,
       diffSummary,
     }));
-
-    this.updatePersistedSessionFor(session, {
-      pendingWorktreeDecisionSince: new Date().toISOString(),
-      lifecycle: "awaiting_worktree_decision",
-      worktreeState: "pending_decision",
-      worktreeLifecycle: {
-        state: "pending_decision",
-        updatedAt: new Date().toISOString(),
-        baseBranch: session.worktreeBaseBranch,
-        targetRepo: session.worktreePrTargetRepo,
-        pushRemote: session.worktreePushRemote,
-      },
-    });
+    this.markPendingDecision(session);
     return { notificationSent: true, worktreeRemoved: false };
+  }
+
+  private handleAutoMergeSuccess(
+    session: Session,
+    repoDir: string,
+    branchName: string,
+    baseBranch: string,
+    diffSummary: DiffSummary,
+    mergeResult: ReturnType<typeof mergeBranch>,
+  ): void {
+    deleteBranch(repoDir, branchName);
+    this.markMerged(session);
+
+    const outcomeLine = formatWorktreeOutcomeLine({
+      kind: "merge",
+      branch: branchName,
+      base: baseBranch,
+      filesChanged: diffSummary.filesChanged,
+      insertions: diffSummary.insertions,
+      deletions: diffSummary.deletions,
+    });
+    let successMsg = outcomeLine;
+    if (mergeResult.stashPopConflict) {
+      successMsg += `\n⚠️ Pre-merge stash pop conflicted — run \`git stash show ${mergeResult.stashRef ?? "stash@{0}"}\` in ${repoDir} to review stashed changes.`;
+    } else if (mergeResult.stashed) {
+      successMsg += `\n(Pre-existing changes on ${baseBranch} were auto-stashed and restored.)`;
+    }
+
+    this.deps.dispatchSessionNotification(session, {
+      label: "worktree-merge-success",
+      userMessage: successMsg,
+    });
+  }
+
+  private async handleInitialAutoMergeConflict(
+    session: Session,
+    repoDir: string,
+    worktreePath: string,
+    branchName: string,
+    baseBranch: string,
+    mergeError?: string,
+  ): Promise<void> {
+    const attemptsUsed = session.autoMergeConflictResolutionAttemptCount ?? 0;
+    if (attemptsUsed >= 1) {
+      this.markPendingDecision(session, {
+        notes: ["auto_merge_conflict_retry_exhausted"],
+        clearResolverSessionId: true,
+      });
+      this.notifyAutoMergeConflictEscalation(
+        session,
+        branchName,
+        `The rebased branch still conflicts with \`${baseBranch}\`. Open a PR or resolve manually in ${worktreePath}.`,
+      );
+      return;
+    }
+
+    const conflictPrompt = this.buildConflictResolverPrompt({
+      session,
+      repoDir,
+      worktreePath,
+      branchName,
+      baseBranch,
+      mergeError,
+    });
+
+    try {
+      const resolverSession = await this.deps.spawnConflictResolver({
+        session,
+        repoDir,
+        worktreePath,
+        branchName,
+        baseBranch,
+        prompt: conflictPrompt,
+      });
+      this.markAutoMergeConflictResolving(session, resolverSession.id, attemptsUsed + 1);
+      this.deps.dispatchSessionNotification(session, {
+        label: "worktree-merge-conflict-resolving",
+        userMessage: `⚠️ [${session.name}] Auto-merge hit a rebase conflict. Started resolver session ${resolverSession.name} and will retry automatically if it succeeds.`,
+      });
+    } catch (err) {
+      this.markPendingDecision(session, {
+        notes: ["auto_merge_conflict_resolver_spawn_failed"],
+      });
+      this.deps.dispatchSessionNotification(session, {
+        label: "worktree-merge-conflict-spawn-failed",
+        userMessage: `❌ [${session.name}] Auto-merge hit a rebase conflict and failed to start the resolver: ${err instanceof Error ? err.message : String(err)}`,
+        buttons: [[this.deps.makeOpenPrButton(session.id)]],
+      });
+    }
+  }
+
+  private handleAutoMergeRetryFailure(
+    session: Session,
+    branchName: string,
+    worktreePath: string,
+    errorMsg: string,
+  ): void {
+    this.markPendingDecision(session, {
+      notes: ["auto_merge_conflict_retry_failed"],
+      clearResolverSessionId: true,
+    });
+    this.deps.dispatchSessionNotification(session, {
+      label: "worktree-merge-error",
+      userMessage: [
+        errorMsg,
+        "",
+        `Auto-merge retry did not complete after conflict resolution.`,
+        `Branch \`${branchName}\` was preserved for manual follow-up in ${worktreePath}.`,
+      ].join("\n"),
+      buttons: [[this.deps.makeOpenPrButton(session.id)]],
+    });
   }
 
   private async handleAutoMergeStrategy(
@@ -297,137 +418,22 @@ export class SessionWorktreeStrategyService {
       async () => {
         if (this.deps.isAlreadyMerged(sessionRef)) return;
 
-        const mergeResult = (this.deps.mergeBranchFn ?? mergeBranch)(repoDir, branchName, baseBranch, "merge", worktreePath);
+        const mergeResult = this.deps.mergeBranch(repoDir, branchName, baseBranch, "merge", worktreePath);
 
         if (mergeResult.success) {
-          this.updatePersistedSessionFor(session, {
-            autoMergeResolverSessionId: undefined,
-          });
-          deleteBranch(repoDir, branchName);
-
-          this.updatePersistedSessionFor(session, {
-            worktreeMerged: true,
-            worktreeMergedAt: new Date().toISOString(),
-            lifecycle: "terminal",
-            worktreeState: "merged",
-            pendingWorktreeDecisionSince: undefined,
-            lastWorktreeReminderAt: undefined,
-            worktreeLifecycle: {
-              state: "merged",
-              updatedAt: new Date().toISOString(),
-              resolvedAt: new Date().toISOString(),
-              resolutionSource: "agent_merge",
-              baseBranch,
-              targetRepo: session.worktreePrTargetRepo,
-              pushRemote: session.worktreePushRemote,
-            },
-          });
-
-          const outcomeLine = formatWorktreeOutcomeLine({
-            kind: "merge",
-            branch: branchName,
-            base: baseBranch,
-            filesChanged: diffSummary.filesChanged,
-            insertions: diffSummary.insertions,
-            deletions: diffSummary.deletions,
-          });
-          let successMsg = outcomeLine;
-          if (mergeResult.stashPopConflict) {
-            successMsg += `\n⚠️ Pre-merge stash pop conflicted — run \`git stash show ${mergeResult.stashRef ?? "stash@{0}"}\` in ${repoDir} to review stashed changes.`;
-          } else if (mergeResult.stashed) {
-            successMsg += `\n(Pre-existing changes on ${baseBranch} were auto-stashed and restored.)`;
-          }
-
-          this.deps.dispatchSessionNotification(session, {
-            label: "worktree-merge-success",
-            userMessage: successMsg,
-          });
+          this.handleAutoMergeSuccess(session, repoDir, branchName, baseBranch, diffSummary, mergeResult);
           return;
         }
 
         if (mergeResult.rebaseConflict) {
-          const attemptsUsed = session.autoMergeConflictResolutionAttemptCount ?? 0;
-          if (attemptsUsed >= 1) {
-            this.updatePersistedSessionFor(session, {
-              autoMergeResolverSessionId: undefined,
-              pendingWorktreeDecisionSince: new Date().toISOString(),
-              lifecycle: "awaiting_worktree_decision",
-              worktreeState: "pending_decision",
-              worktreeLifecycle: {
-                state: "pending_decision",
-                updatedAt: new Date().toISOString(),
-                baseBranch,
-                targetRepo: session.worktreePrTargetRepo,
-                pushRemote: session.worktreePushRemote,
-                notes: ["auto_merge_conflict_retry_exhausted"],
-              },
-            });
-            this.notifyAutoMergeConflictEscalation(
-              session,
-              branchName,
-              `The rebased branch still conflicts with \`${baseBranch}\`. Open a PR or resolve manually in ${worktreePath}.`,
-            );
-            return;
-          }
-
-          const conflictPrompt = this.buildConflictResolverPrompt({
+          await this.handleInitialAutoMergeConflict(
             session,
             repoDir,
             worktreePath,
             branchName,
             baseBranch,
-            mergeError: mergeResult.error,
-          });
-
-          try {
-            const resolverSession = await this.deps.spawnConflictResolver({
-              session,
-              repoDir,
-              worktreePath,
-              branchName,
-              baseBranch,
-              prompt: conflictPrompt,
-            });
-            this.updatePersistedSessionFor(session, {
-              autoMergeConflictResolutionAttemptCount: attemptsUsed + 1,
-              autoMergeResolverSessionId: resolverSession.id,
-              pendingWorktreeDecisionSince: undefined,
-              lastWorktreeReminderAt: undefined,
-              lifecycle: "terminal",
-              worktreeState: "merge_conflict_resolving",
-              worktreeLifecycle: {
-                state: "merge_conflict_resolving",
-                updatedAt: new Date().toISOString(),
-                baseBranch,
-                targetRepo: session.worktreePrTargetRepo,
-                pushRemote: session.worktreePushRemote,
-                notes: [`resolver_session:${resolverSession.id}`],
-              },
-            });
-            this.deps.dispatchSessionNotification(session, {
-              label: "worktree-merge-conflict-resolving",
-              userMessage: `⚠️ [${session.name}] Auto-merge hit a rebase conflict. Started resolver session ${resolverSession.name} and will retry automatically if it succeeds.`,
-            });
-          } catch (err) {
-            this.updatePersistedSessionFor(session, {
-              pendingWorktreeDecisionSince: new Date().toISOString(),
-              lifecycle: "awaiting_worktree_decision",
-              worktreeState: "pending_decision",
-              worktreeLifecycle: {
-                state: "pending_decision",
-                updatedAt: new Date().toISOString(),
-                baseBranch,
-                targetRepo: session.worktreePrTargetRepo,
-                pushRemote: session.worktreePushRemote,
-                notes: ["auto_merge_conflict_resolver_spawn_failed"],
-              },
-            });
-            this.deps.dispatchSessionNotification(session, {
-              label: "worktree-merge-conflict-spawn-failed",
-              userMessage: `❌ [${session.name}] Auto-merge hit a rebase conflict and failed to start the resolver: ${err instanceof Error ? err.message : String(err)}`,
-              buttons: [[this.deps.makeOpenPrButton(session.id)]],
-            });
-          }
+            mergeResult.error,
+          );
           return;
         }
 
@@ -438,30 +444,7 @@ export class SessionWorktreeStrategyService {
           session.worktreeState === "merge_conflict_resolving"
           || session.worktreeLifecycle?.state === "merge_conflict_resolving";
         if (retryFailedAfterConflictResolution) {
-          this.updatePersistedSessionFor(session, {
-            autoMergeResolverSessionId: undefined,
-            pendingWorktreeDecisionSince: new Date().toISOString(),
-            lifecycle: "awaiting_worktree_decision",
-            worktreeState: "pending_decision",
-            worktreeLifecycle: {
-              state: "pending_decision",
-              updatedAt: new Date().toISOString(),
-              baseBranch,
-              targetRepo: session.worktreePrTargetRepo,
-              pushRemote: session.worktreePushRemote,
-              notes: ["auto_merge_conflict_retry_failed"],
-            },
-          });
-          this.deps.dispatchSessionNotification(session, {
-            label: "worktree-merge-error",
-            userMessage: [
-              errorMsg,
-              "",
-              `Auto-merge retry did not complete after conflict resolution.`,
-              `Branch \`${branchName}\` was preserved for manual follow-up in ${worktreePath}.`,
-            ].join("\n"),
-            buttons: [[this.deps.makeOpenPrButton(session.id)]],
-          });
+          this.handleAutoMergeRetryFailure(session, branchName, worktreePath, errorMsg);
           return;
         }
         this.deps.dispatchSessionNotification(session, {
@@ -488,18 +471,7 @@ export class SessionWorktreeStrategyService {
     });
     const result = await this.deps.runAutoPr(session, baseBranch);
     if (!result.success) {
-      this.updatePersistedSessionFor(session, {
-        pendingWorktreeDecisionSince: new Date().toISOString(),
-        lifecycle: "awaiting_worktree_decision",
-        worktreeState: "pending_decision",
-        worktreeLifecycle: {
-          state: "pending_decision",
-          updatedAt: new Date().toISOString(),
-          baseBranch,
-          targetRepo: session.worktreePrTargetRepo,
-          pushRemote: session.worktreePushRemote,
-        },
-      });
+      this.markPendingDecision(session);
     }
     return { notificationSent: true, worktreeRemoved: false };
   }

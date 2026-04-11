@@ -155,15 +155,15 @@ For multi-workspace or multi-bot setups, configure `agentChannels`. The full rou
 
 Prefer fully routable channel strings such as `telegram|123456789` or `telegram|my-bot|123456789`. A bare provider like `telegram` is only a weak fallback; the plugin now repairs topic routing from `originSessionKey` when possible, but explicit channels are still the safer default.
 
-### Upgrade Note For 3.1.0
+### Upgrade Note For 3.2.0
 
-`3.1.0` is a maintenance release focused on reliability, explicit session state, and release-tooling hardening.
+`3.2.0` is a hardening release focused on worktree reliability, conflict-resolution flow cleanup, and release-process consistency.
 
-- Upgrading archives old or invalid persisted session stores to a timestamped `.legacy-*.json` backup and starts with a fresh index.
-- Legacy Codex SDK session entries are archived and not loaded by the App Server backend.
-- App Server-backed Codex sessions are now the only supported Codex runtime path.
-- The package now advertises OpenClaw external-plugin compatibility metadata for the `v2026.4.9` plugin API baseline.
-- Contributors and release automation should use `pnpm verify` as the canonical validation gate.
+- `auto-merge` now supports one autonomous conflict-resolution attempt and retries the merge automatically if that resolver succeeds.
+- Worktree free-space checks now probe the correct filesystem even before `<repo>/.worktrees` exists or when a custom worktree base directory has not been created yet.
+- Cross-repo PR auto-targeting now works for upstream-only repos.
+- Internal worktree lifecycle transitions now use shared patch builders, reducing drift between persisted and live session state.
+- Contributors and release automation use `pnpm verify` as the canonical validation gate, and the repo now standardizes on `pnpm` lockfiles only.
 
 ### Backend Capabilities
 

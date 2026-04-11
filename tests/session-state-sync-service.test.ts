@@ -117,4 +117,59 @@ describe("SessionStateSyncService", () => {
     assert.equal(liveSession.autoMergeConflictResolutionAttemptCount, undefined);
     assert.equal(liveSession.autoMergeResolverSessionId, undefined);
   });
+
+  it("applies grouped control, session, and worktree metadata patches consistently", () => {
+    const controlPatches: Array<Record<string, unknown>> = [];
+    const liveSession = {
+      id: "session-2",
+      harnessSessionId: "h-session-2",
+      name: "session-2",
+      lifecycle: "active",
+      approvalRationale: undefined,
+      pendingWorktreeDecisionSince: undefined,
+      worktreePrTargetRepo: undefined,
+      worktreePushRemote: undefined,
+      worktreeLifecycle: undefined,
+      applyControlPatch(patch: Record<string, unknown>) {
+        controlPatches.push(patch);
+        Object.assign(this, patch);
+      },
+    } as any;
+
+    const service = new SessionStateSyncService({
+      store: {
+        getPersistedSession: () => undefined,
+        assertPersistedEntry: () => {},
+        saveIndex: () => {},
+      } as any,
+      sessions: new Map(),
+      resolveSession: () => liveSession,
+    });
+
+    const updated = service.applySessionPatch("session-2", {
+      lifecycle: "awaiting_worktree_decision",
+      pendingWorktreeDecisionSince: "2026-04-10T12:00:00.000Z",
+      approvalRationale: "needs release review",
+      worktreePrTargetRepo: "openai/codex",
+      worktreePushRemote: "origin",
+      worktreeLifecycle: {
+        state: "pending_decision",
+        updatedAt: "2026-04-10T12:00:00.000Z",
+        baseBranch: "main",
+      },
+    });
+
+    assert.equal(updated, true);
+    assert.equal(controlPatches.length, 1);
+    assert.equal(controlPatches[0].lifecycle, "awaiting_worktree_decision");
+    assert.equal(controlPatches[0].pendingWorktreeDecisionSince, "2026-04-10T12:00:00.000Z");
+    assert.equal(liveSession.approvalRationale, "needs release review");
+    assert.equal(liveSession.worktreePrTargetRepo, "openai/codex");
+    assert.equal(liveSession.worktreePushRemote, "origin");
+    assert.deepEqual(liveSession.worktreeLifecycle, {
+      state: "pending_decision",
+      updatedAt: "2026-04-10T12:00:00.000Z",
+      baseBranch: "main",
+    });
+  });
 });

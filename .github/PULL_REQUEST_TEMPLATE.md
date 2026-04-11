@@ -8,9 +8,8 @@
 
 ## Testing
 
-- [ ] `pnpm run typecheck` passes
-- [ ] `pnpm run build` passes
-- [ ] `pnpm run test` passes (all tests)
+- [ ] `pnpm verify` passes
+- [ ] `npm pack --dry-run` passes when packaging or release metadata changed
 - [ ] No regressions in existing functionality
 
 ## Notes
