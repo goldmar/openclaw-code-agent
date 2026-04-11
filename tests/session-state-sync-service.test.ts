@@ -47,6 +47,9 @@ describe("SessionStateSyncService", () => {
       worktreeDisposition: undefined,
       worktreePrTargetRepo: undefined,
       worktreePushRemote: undefined,
+      autoMergeParentSessionId: "parent-session",
+      autoMergeConflictResolutionAttemptCount: 1,
+      autoMergeResolverSessionId: "resolver-session",
     } as any;
 
     const sessions = new Map<string, any>([[liveSession.id, liveSession]]);
@@ -81,5 +84,37 @@ describe("SessionStateSyncService", () => {
     assert.equal(liveSession.worktreePrUrl, "https://github.com/openclaw/openclaw/pull/1");
     assert.equal(liveSession.worktreePath, "/tmp/.worktrees/session-1");
     assert.equal(liveSession.worktreeBranch, "agent/session-1");
+  });
+
+  it("applies explicit undefined clears for auto-merge sync fields onto the live session", () => {
+    const liveSession = {
+      id: "session-1",
+      harnessSessionId: "h-session",
+      name: "session-1",
+      autoMergeParentSessionId: "parent-session",
+      autoMergeConflictResolutionAttemptCount: 1,
+      autoMergeResolverSessionId: "resolver-session",
+    } as any;
+
+    const service = new SessionStateSyncService({
+      store: {
+        getPersistedSession: () => undefined,
+        assertPersistedEntry: () => {},
+        saveIndex: () => {},
+      } as any,
+      sessions: new Map(),
+      resolveSession: () => liveSession,
+    });
+
+    const updated = service.applySessionPatch("session-1", {
+      autoMergeParentSessionId: undefined,
+      autoMergeConflictResolutionAttemptCount: undefined,
+      autoMergeResolverSessionId: undefined,
+    });
+
+    assert.equal(updated, true);
+    assert.equal(liveSession.autoMergeParentSessionId, undefined);
+    assert.equal(liveSession.autoMergeConflictResolutionAttemptCount, undefined);
+    assert.equal(liveSession.autoMergeResolverSessionId, undefined);
   });
 });

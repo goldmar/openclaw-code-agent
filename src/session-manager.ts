@@ -913,12 +913,10 @@ export class SessionManager {
       return;
     }
 
-    const clearResolverPatch: Partial<PersistedSessionInfo> = {
-      autoMergeResolverSessionId: undefined,
-    };
-    this.updatePersistedSession(parentRef, clearResolverPatch);
-
     if (session.status === "completed" && parentSession) {
+      this.updatePersistedSession(parentRef, {
+        autoMergeResolverSessionId: undefined,
+      });
       await this.handleWorktreeStrategy(parentSession);
       return;
     }

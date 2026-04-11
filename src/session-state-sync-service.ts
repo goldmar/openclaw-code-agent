@@ -115,11 +115,11 @@ export class SessionStateSyncService {
     if (patch.worktreeMergedAt !== undefined) session.worktreeMergedAt = patch.worktreeMergedAt;
     if (patch.worktreeDisposition !== undefined) session.worktreeDisposition = patch.worktreeDisposition;
     if (patch.worktreePrTargetRepo !== undefined) session.worktreePrTargetRepo = patch.worktreePrTargetRepo;
-    if (patch.autoMergeParentSessionId !== undefined) session.autoMergeParentSessionId = patch.autoMergeParentSessionId;
-    if (patch.autoMergeConflictResolutionAttemptCount !== undefined) {
+    if ("autoMergeParentSessionId" in patch) session.autoMergeParentSessionId = patch.autoMergeParentSessionId;
+    if ("autoMergeConflictResolutionAttemptCount" in patch) {
       session.autoMergeConflictResolutionAttemptCount = patch.autoMergeConflictResolutionAttemptCount;
     }
-    if (patch.autoMergeResolverSessionId !== undefined) session.autoMergeResolverSessionId = patch.autoMergeResolverSessionId;
+    if ("autoMergeResolverSessionId" in patch) session.autoMergeResolverSessionId = patch.autoMergeResolverSessionId;
     if (patch.worktreePushRemote !== undefined) session.worktreePushRemote = patch.worktreePushRemote;
     if (patch.worktreeLifecycle !== undefined) session.worktreeLifecycle = patch.worktreeLifecycle;
   }

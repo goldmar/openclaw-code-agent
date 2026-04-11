@@ -32,11 +32,11 @@ describe("SessionManager auto-merge conflict resolver terminal handling", () => 
     const { sm, cleanup } = createSessionManager();
     try {
       let retriedSession: unknown;
-      const persistedPatches: Array<Record<string, unknown>> = [];
       (sm as any).persistSession = () => {};
       (sm as any).wakeDispatcher = { clearRetryTimersForSession: () => {}, dispose: () => {} };
       (sm as any).worktreeStrategy.handleWorktreeStrategy = async (session: unknown) => {
         retriedSession = session;
+        assert.equal((session as any).autoMergeResolverSessionId, undefined);
         return { notificationSent: true, worktreeRemoved: false };
       };
 
@@ -48,14 +48,9 @@ describe("SessionManager auto-merge conflict resolver terminal handling", () => 
         worktreePath: "/tmp/worktree",
         worktreeBaseBranch: "main",
         route: ROUTE,
+        autoMergeResolverSessionId: "resolver-session",
       };
       (sm as any).sessions.set(parent.id, parent);
-
-      (sm as any).updatePersistedSession = (_ref: string, patch: Record<string, unknown>) => {
-        persistedPatches.push(patch);
-        Object.assign(parent, patch);
-        return true;
-      };
 
       await (sm as any).onSessionTerminal({
         id: "resolver-session",
@@ -65,7 +60,7 @@ describe("SessionManager auto-merge conflict resolver terminal handling", () => 
       });
 
       assert.equal(retriedSession, parent);
-      assert.deepEqual(persistedPatches[0], { autoMergeResolverSessionId: undefined });
+      assert.equal(parent.autoMergeResolverSessionId, undefined);
     } finally {
       cleanup();
     }
@@ -119,8 +114,9 @@ describe("SessionManager auto-merge conflict resolver terminal handling", () => 
         notifications[0].buttons[0][0].label,
         "Open PR",
       );
+      assert.equal(persistedPatches.length, 1);
       assert.equal(persistedPatches[0].autoMergeResolverSessionId, undefined);
-      assert.equal(persistedPatches[1].worktreeState, "pending_decision");
+      assert.equal(persistedPatches[0].worktreeState, "pending_decision");
     } finally {
       cleanup();
     }
