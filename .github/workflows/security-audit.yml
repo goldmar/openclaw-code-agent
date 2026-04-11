@@ -35,7 +35,6 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: 22
-          cache: pnpm
 
       - name: Audit published/runtime dependencies
         run: pnpm run audit:prod
