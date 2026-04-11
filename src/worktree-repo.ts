@@ -86,9 +86,9 @@ export function isGitRepo(dir: string): boolean {
   }
 }
 
-export function hasEnoughWorktreeSpace(): boolean {
+export function hasEnoughWorktreeSpace(repoDir?: string): boolean {
   try {
-    const baseDir = getWorktreeBaseDir();
+    const baseDir = getWorktreeBaseDir(repoDir);
     const stats = statfsSync(baseDir);
     const freeBytes = stats.bavail * stats.bsize;
     const minBytes = 100 * 1024 * 1024;
@@ -251,9 +251,22 @@ export function deleteBranch(repoDir: string, branch: string): boolean {
 
 export function resolveTargetRepo(repoDir: string, explicitRepo?: string): string | undefined {
   if (explicitRepo) return explicitRepo;
+  let origin: string | undefined;
   try {
-    const origin = execFileSync("git", ["-C", repoDir, "remote", "get-url", "origin"], { timeout: 5_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }).trim();
-    const upstream = execFileSync("git", ["-C", repoDir, "remote", "get-url", "upstream"], { timeout: 5_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }).trim();
+    origin = execFileSync("git", ["-C", repoDir, "remote", "get-url", "origin"], {
+      timeout: 5_000,
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "pipe"],
+    }).trim() || undefined;
+  } catch {
+    // no origin remote
+  }
+  try {
+    const upstream = execFileSync("git", ["-C", repoDir, "remote", "get-url", "upstream"], {
+      timeout: 5_000,
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "pipe"],
+    }).trim();
     if (upstream && upstream !== origin) {
       const match = upstream.match(/[:/]([^/]+\/[^/]+?)(?:\.git)?$/);
       if (match) return match[1];

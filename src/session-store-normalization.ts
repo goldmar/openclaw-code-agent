@@ -114,6 +114,7 @@ function toOptionalWorktreeState(value: unknown): SessionWorktreeState | undefin
   return value === "none"
     || value === "provisioned"
     || value === "pending_decision"
+    || value === "merge_conflict_resolving"
     || value === "merge_in_progress"
     || value === "pr_in_progress"
     || value === "merged"
@@ -129,6 +130,7 @@ function toOptionalManagedWorktreeLifecycleState(value: unknown): ManagedWorktre
   return value === "none"
     || value === "provisioned"
     || value === "pending_decision"
+    || value === "merge_conflict_resolving"
     || value === "pr_open"
     || value === "merged"
     || value === "released"
@@ -326,6 +328,15 @@ function synthesizeLegacyWorktreeLifecycle(raw: Record<string, unknown>): Persis
       pushRemote: toOptionalString(raw.worktreePushRemote),
     };
   }
+  if (raw.worktreeState === "merge_conflict_resolving") {
+    return {
+      state: "merge_conflict_resolving",
+      updatedAt,
+      baseBranch: toOptionalString(raw.worktreeBaseBranch),
+      targetRepo: toOptionalString(raw.worktreePrTargetRepo),
+      pushRemote: toOptionalString(raw.worktreePushRemote),
+    };
+  }
   if (toOptionalString(raw.worktreePath) || toOptionalString(raw.worktreeBranch)) {
     return {
       state: "provisioned",
@@ -436,6 +447,9 @@ export function normalizePersistedEntry(raw: unknown): PersistedSessionInfo | un
     lastWorktreeReminderAt: toOptionalString(raw.lastWorktreeReminderAt),
     worktreeBaseBranch: toOptionalString(raw.worktreeBaseBranch),
     worktreePrTargetRepo: toOptionalString(raw.worktreePrTargetRepo),
+    autoMergeParentSessionId: toOptionalString(raw.autoMergeParentSessionId),
+    autoMergeConflictResolutionAttemptCount: toOptionalNumber(raw.autoMergeConflictResolutionAttemptCount),
+    autoMergeResolverSessionId: toOptionalString(raw.autoMergeResolverSessionId),
     worktreePushRemote: toOptionalString(raw.worktreePushRemote),
     worktreeDecisionSnoozedUntil: toOptionalString(raw.worktreeDecisionSnoozedUntil),
     worktreeDisposition: (raw.worktreeDisposition === "active" || raw.worktreeDisposition === "pr-opened" || raw.worktreeDisposition === "merged" || raw.worktreeDisposition === "dismissed" || raw.worktreeDisposition === "no-change-cleaned") ? raw.worktreeDisposition : undefined,

@@ -147,20 +147,24 @@ export class SessionManager {
       makeOpenPrButton: (sessionId) => this.makeActionButton(sessionId, "worktree-create-pr", "Open PR"),
       worktreeMessages: this.worktreeMessages,
       enqueueMerge: (repoDir, fn, onQueued) => this.enqueueMerge(repoDir, fn, onQueued),
-      spawnConflictResolver: async (session, repoDir, prompt) => {
-        this.spawn({
+      spawnConflictResolver: async ({ session, worktreePath, prompt }) => {
+        return this.spawn({
           prompt,
-          workdir: repoDir,
+          workdir: worktreePath,
           name: `${session.name}-conflict-resolver`,
-          harness: getDefaultHarnessName(),
+          harness: session.harnessName || getDefaultHarnessName(),
+          model: session.model,
+          reasoningEffort: session.reasoningEffort,
           permissionMode: "bypassPermissions",
           multiTurn: true,
+          worktreeStrategy: "off",
+          autoMergeParentSessionId: session.id,
           route: session.route,
           originChannel: session.originChannel,
           originThreadId: session.originThreadId,
           originAgentId: session.originAgentId,
           originSessionKey: session.originSessionKey,
-        });
+        }, { notifyLaunch: false });
       },
       runAutoPr: async (session, baseBranch) => {
         const { makeAgentPrTool } = await import("./tools/agent-pr");
@@ -874,7 +878,88 @@ export class SessionManager {
   }
 
   private async onSessionTerminal(session: Session): Promise<void> {
+    if (session.autoMergeParentSessionId) {
+      await this.handleAutoMergeResolverTerminal(session);
+      return;
+    }
     return this.lifecycle.handleSessionTerminal(session);
+  }
+
+  private async handleAutoMergeResolverTerminal(session: Session): Promise<void> {
+    this.persistSession(session);
+    this.lastWaitingEventTimestamps.delete(session.id);
+    this.wakeDispatcher.clearRetryTimersForSession(session.id);
+
+    const parentRef = session.autoMergeParentSessionId;
+    if (!parentRef) return;
+
+    const parentSession = this.resolve(parentRef);
+    const parentPersisted = this.getPersistedSession(parentRef);
+    const parentRoutingTarget = parentSession ?? (parentPersisted
+      ? this.buildRoutingProxy({
+          id: parentPersisted.sessionId,
+          name: parentPersisted.name,
+          sessionId: parentPersisted.sessionId,
+          harnessSessionId: parentPersisted.harnessSessionId,
+          backendRef: parentPersisted.backendRef,
+          route: parentPersisted.route,
+        })
+      : undefined);
+
+    if (!parentRoutingTarget) {
+      console.warn(
+        `[SessionManager] Auto-merge resolver ${session.id} completed, but original session ${parentRef} could not be found.`,
+      );
+      return;
+    }
+
+    const clearResolverPatch: Partial<PersistedSessionInfo> = {
+      autoMergeResolverSessionId: undefined,
+    };
+    this.updatePersistedSession(parentRef, clearResolverPatch);
+
+    if (session.status === "completed" && parentSession) {
+      await this.handleWorktreeStrategy(parentSession);
+      return;
+    }
+
+    const worktreeBranch = parentSession?.worktreeBranch ?? parentPersisted?.worktreeBranch ?? "unknown";
+    const worktreePath = parentSession?.worktreePath ?? parentPersisted?.worktreePath ?? "(unknown worktree)";
+    const worktreeBaseBranch = parentSession?.worktreeBaseBranch ?? parentPersisted?.worktreeBaseBranch;
+    const worktreePrTargetRepo = parentSession?.worktreePrTargetRepo ?? parentPersisted?.worktreePrTargetRepo;
+    const worktreePushRemote = parentSession?.worktreePushRemote ?? parentPersisted?.worktreePushRemote;
+
+    this.updatePersistedSession(parentRef, {
+      autoMergeResolverSessionId: undefined,
+      pendingWorktreeDecisionSince: new Date().toISOString(),
+      lastWorktreeReminderAt: undefined,
+      lifecycle: "awaiting_worktree_decision",
+      worktreeState: "pending_decision",
+      worktreeLifecycle: {
+        state: "pending_decision",
+        updatedAt: new Date().toISOString(),
+        baseBranch: worktreeBaseBranch,
+        targetRepo: worktreePrTargetRepo,
+        pushRemote: worktreePushRemote,
+        notes: [
+          session.status === "completed"
+            ? "auto_merge_conflict_resolver_completed_without_retry_target"
+            : "auto_merge_conflict_resolver_failed",
+        ],
+      },
+    });
+
+    this.dispatchSessionNotification(parentRoutingTarget, {
+      label: "worktree-merge-conflict-resolver-failed",
+      userMessage: [
+        `⚠️ [${parentRoutingTarget.name}] Auto-merge conflict resolution did not complete successfully.`,
+        `Branch \`${worktreeBranch}\` was preserved for manual follow-up in ${worktreePath}.`,
+        session.status === "completed"
+          ? `The resolver finished, but the original session could not be resumed for the merge retry.`
+          : `Resolver session ${session.name} ended with status=${session.status}.`,
+      ].join("\n"),
+      buttons: [[this.makeActionButton(parentRef, "worktree-create-pr", "Open PR")]],
+    });
   }
 
   private getStoppedStatusLabel(killReason?: KillReason): string {

@@ -98,6 +98,9 @@ export class Session extends EventEmitter {
   readonly worktreeStrategy?: WorktreeStrategy;
   readonly worktreeBaseBranch?: string;
   worktreePrTargetRepo?: string;
+  autoMergeParentSessionId?: string;
+  autoMergeConflictResolutionAttemptCount?: number;
+  autoMergeResolverSessionId?: string;
   worktreePushRemote?: string;
   worktreeDisposition?: string;
   worktreePrUrl?: string;
@@ -218,6 +221,15 @@ export class Session extends EventEmitter {
     this.worktreeBaseBranch = config.worktreeBaseBranch;
     if (config.worktreePrTargetRepo) {
       this.worktreePrTargetRepo = config.worktreePrTargetRepo;
+    }
+    if (config.autoMergeParentSessionId) {
+      this.autoMergeParentSessionId = config.autoMergeParentSessionId;
+    }
+    if (config.autoMergeConflictResolutionAttemptCount !== undefined) {
+      this.autoMergeConflictResolutionAttemptCount = config.autoMergeConflictResolutionAttemptCount;
+    }
+    if (config.autoMergeResolverSessionId) {
+      this.autoMergeResolverSessionId = config.autoMergeResolverSessionId;
     }
     this.canUseTool = config.canUseTool;
     this.startedAt = Date.now();

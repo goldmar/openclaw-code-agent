@@ -209,7 +209,7 @@ export function prepareSessionBootstrap(
   }
 
   if (shouldWorktree && isGitRepo(originalWorkdir)) {
-    if (!hasEnoughWorktreeSpace()) {
+    if (!hasEnoughWorktreeSpace(originalWorkdir)) {
       throw new Error(`Cannot launch session "${name}": insufficient space for worktree creation.`);
     }
     try {

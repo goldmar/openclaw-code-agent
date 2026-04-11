@@ -93,6 +93,52 @@ describe("agent_worktree_status", () => {
       rmSync(repoDir, { recursive: true, force: true });
     }
   });
+
+  it("renders merge-conflict-resolving worktrees as preserved conflict resolution state", async () => {
+    const repoDir = initRepo("status-conflict-resolving-");
+    try {
+      const conflicted = createCommittedWorktree(repoDir, "conflict-resolving-status", "feature.txt", "resolver\n");
+
+      const persisted = {
+        sessionId: "s-conflict-resolving",
+        harnessSessionId: "h-conflict-resolving",
+        name: "conflict-resolving-status",
+        prompt: "resolve the merge conflict",
+        workdir: repoDir,
+        status: "completed",
+        costUsd: 0,
+        worktreePath: conflicted.worktreePath,
+        worktreeBranch: conflicted.branchName,
+        worktreeBaseBranch: "main",
+        worktreeLifecycle: {
+          state: "merge_conflict_resolving",
+          updatedAt: new Date().toISOString(),
+          baseBranch: "main",
+        },
+      };
+
+      setSessionManager({
+        list: () => [],
+        resolve: () => undefined,
+        listPersistedSessions: () => [persisted] as any,
+        getPersistedSession(ref: string) {
+          return [persisted].find((session) =>
+            session.sessionId === ref || session.harnessSessionId === ref || session.name === ref
+          ) as any;
+        },
+      } as any);
+
+      const tool = makeAgentWorktreeStatusTool();
+      const result = await tool.execute("tool-id", { session: "conflict-resolving-status" });
+      const text = (result.content[0] as { text: string }).text;
+
+      assert.match(text, /Lifecycle:\s*conflict resolving/);
+      assert.match(text, /Cleanup:\s*preserve/);
+      assert.match(text, /Reasons:\s*conflict resolving, still has unique content/);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("agent_worktree_cleanup", () => {

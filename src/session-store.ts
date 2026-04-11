@@ -197,6 +197,9 @@ export class SessionStore {
       worktreeStrategy: session.worktreeStrategy,
       worktreeBaseBranch: session.worktreeBaseBranch,
       worktreePrTargetRepo: session.worktreePrTargetRepo,
+      autoMergeParentSessionId: session.autoMergeParentSessionId,
+      autoMergeConflictResolutionAttemptCount: session.autoMergeConflictResolutionAttemptCount,
+      autoMergeResolverSessionId: session.autoMergeResolverSessionId,
       worktreeLifecycle: session.worktreeLifecycle,
       resumable: session.isExplicitlyResumable,
     };
@@ -298,6 +301,9 @@ export class SessionStore {
       worktreeStrategy: session.worktreeStrategy,
       worktreeBaseBranch: session.worktreeBaseBranch,
       worktreePrTargetRepo: session.worktreePrTargetRepo,
+      autoMergeParentSessionId: session.autoMergeParentSessionId,
+      autoMergeConflictResolutionAttemptCount: session.autoMergeConflictResolutionAttemptCount,
+      autoMergeResolverSessionId: session.autoMergeResolverSessionId,
       worktreeLifecycle: session.worktreeLifecycle,
       resumable: session.isExplicitlyResumable,
     };

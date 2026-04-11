@@ -20,6 +20,7 @@ export type WorktreeStrategyResult = {
 };
 
 type DiffSummary = NonNullable<ReturnType<typeof getDiffSummary>>;
+type SpawnedResolverSession = Pick<Session, "id" | "name">;
 
 /**
  * Worktree decision/messaging orchestration layer.
@@ -49,7 +50,14 @@ export class SessionWorktreeStrategyService {
         fn: () => Promise<void>,
         onQueued?: () => void,
       ) => Promise<void>;
-      spawnConflictResolver: (session: Session, repoDir: string, prompt: string) => Promise<void>;
+      spawnConflictResolver: (args: {
+        session: Session;
+        repoDir: string;
+        worktreePath: string;
+        branchName: string;
+        baseBranch: string;
+        prompt: string;
+      }) => Promise<SpawnedResolverSession>;
       runAutoPr: (session: Session, baseBranch: string) => Promise<{ success: boolean }>;
     },
   ) {
@@ -62,6 +70,54 @@ export class SessionWorktreeStrategyService {
   }
 
   private readonly actions: SessionWorktreeActionService;
+
+  private buildConflictResolverPrompt(args: {
+    session: Session;
+    repoDir: string;
+    worktreePath: string;
+    branchName: string;
+    baseBranch: string;
+    mergeError?: string;
+  }): string {
+    return [
+      `Resolve the git rebase conflict for the auto-merge worktree and finish the rebase cleanly.`,
+      ``,
+      `Original session: ${args.session.name} [${args.session.id}]`,
+      `Repository root: ${args.repoDir}`,
+      `Conflicted worktree: ${args.worktreePath}`,
+      `Branch: ${args.branchName}`,
+      `Base branch: ${args.baseBranch}`,
+      ``,
+      `Requirements:`,
+      `- Work only inside the conflicted worktree.`,
+      `- Inspect the current rebase state and resolve only the necessary conflict hunks.`,
+      `- Make only minimal follow-up edits needed to keep the rebased branch correct.`,
+      `- Continue the rebase until it completes successfully.`,
+      `- Run relevant local verification before you finish.`,
+      `- Do not broaden scope or start unrelated refactors.`,
+      `- Stop only when the branch is cleanly rebased onto ${args.baseBranch}.`,
+      args.mergeError ? "" : undefined,
+      args.mergeError ? `Rebase failure details:` : undefined,
+      args.mergeError,
+    ].filter((line): line is string => typeof line === "string").join("\n");
+  }
+
+  private notifyAutoMergeConflictEscalation(
+    session: Session,
+    branchName: string,
+    reason: string,
+  ): void {
+    this.deps.dispatchSessionNotification(session, {
+      label: "worktree-merge-conflict-escalated",
+      userMessage: [
+        `⚠️ [${session.name}] Auto-merge could not finish after one conflict-resolution attempt.`,
+        `Branch \`${branchName}\` was preserved for manual follow-up.`,
+        ``,
+        reason,
+      ].join("\n"),
+      buttons: [[this.deps.makeOpenPrButton(session.id)]],
+    });
+  }
 
   private updatePersistedSessionFor(
     session: Pick<Session, "id" | "harnessSessionId" | "backendRef">,
@@ -233,6 +289,7 @@ export class SessionWorktreeStrategyService {
     sessionRef = getPrimarySessionLookupRef(session) ?? session.harnessSessionId,
   ): Promise<void> {
     if (this.deps.isAlreadyMerged(sessionRef)) return;
+    if (session.autoMergeResolverSessionId) return;
 
     await this.deps.enqueueMerge(
       repoDir,
@@ -242,6 +299,9 @@ export class SessionWorktreeStrategyService {
         const mergeResult = mergeBranch(repoDir, branchName, baseBranch, "merge", worktreePath);
 
         if (mergeResult.success) {
+          this.updatePersistedSessionFor(session, {
+            autoMergeResolverSessionId: undefined,
+          });
           deleteBranch(repoDir, branchName);
 
           this.updatePersistedSessionFor(session, {
@@ -284,26 +344,87 @@ export class SessionWorktreeStrategyService {
           return;
         }
 
-        if (mergeResult.conflictFiles && mergeResult.conflictFiles.length > 0) {
-          const conflictPrompt = [
-            `Resolve merge conflicts in the following files and commit the resolution:`,
-            ``,
-            ...mergeResult.conflictFiles.map((f) => `- ${f}`),
-            ``,
-            `After resolving, commit with message: "Resolve merge conflicts from ${branchName}"`,
-          ].join("\n");
+        if (mergeResult.rebaseConflict) {
+          const attemptsUsed = session.autoMergeConflictResolutionAttemptCount ?? 0;
+          if (attemptsUsed >= 1) {
+            this.updatePersistedSessionFor(session, {
+              autoMergeResolverSessionId: undefined,
+              pendingWorktreeDecisionSince: new Date().toISOString(),
+              lifecycle: "awaiting_worktree_decision",
+              worktreeState: "pending_decision",
+              worktreeLifecycle: {
+                state: "pending_decision",
+                updatedAt: new Date().toISOString(),
+                baseBranch,
+                targetRepo: session.worktreePrTargetRepo,
+                pushRemote: session.worktreePushRemote,
+                notes: ["auto_merge_conflict_retry_exhausted"],
+              },
+            });
+            this.notifyAutoMergeConflictEscalation(
+              session,
+              branchName,
+              `The rebased branch still conflicts with \`${baseBranch}\`. Open a PR or resolve manually in ${worktreePath}.`,
+            );
+            return;
+          }
+
+          const conflictPrompt = this.buildConflictResolverPrompt({
+            session,
+            repoDir,
+            worktreePath,
+            branchName,
+            baseBranch,
+            mergeError: mergeResult.error,
+          });
 
           try {
-            await this.deps.spawnConflictResolver(session, repoDir, conflictPrompt);
+            const resolverSession = await this.deps.spawnConflictResolver({
+              session,
+              repoDir,
+              worktreePath,
+              branchName,
+              baseBranch,
+              prompt: conflictPrompt,
+            });
+            this.updatePersistedSessionFor(session, {
+              autoMergeConflictResolutionAttemptCount: attemptsUsed + 1,
+              autoMergeResolverSessionId: resolverSession.id,
+              pendingWorktreeDecisionSince: undefined,
+              lastWorktreeReminderAt: undefined,
+              lifecycle: "terminal",
+              worktreeState: "merge_conflict_resolving",
+              worktreeLifecycle: {
+                state: "merge_conflict_resolving",
+                updatedAt: new Date().toISOString(),
+                baseBranch,
+                targetRepo: session.worktreePrTargetRepo,
+                pushRemote: session.worktreePushRemote,
+                notes: [`resolver_session:${resolverSession.id}`],
+              },
+            });
             this.deps.dispatchSessionNotification(session, {
-              label: "worktree-merge-conflict",
-              userMessage: `⚠️ [${session.name}] Merge conflicts in ${mergeResult.conflictFiles.length} file(s) — spawned conflict resolver session`,
-              buttons: [[this.deps.makeOpenPrButton(session.id)]],
+              label: "worktree-merge-conflict-resolving",
+              userMessage: `⚠️ [${session.name}] Auto-merge hit a rebase conflict. Started resolver session ${resolverSession.name} and will retry automatically if it succeeds.`,
             });
           } catch (err) {
+            this.updatePersistedSessionFor(session, {
+              pendingWorktreeDecisionSince: new Date().toISOString(),
+              lifecycle: "awaiting_worktree_decision",
+              worktreeState: "pending_decision",
+              worktreeLifecycle: {
+                state: "pending_decision",
+                updatedAt: new Date().toISOString(),
+                baseBranch,
+                targetRepo: session.worktreePrTargetRepo,
+                pushRemote: session.worktreePushRemote,
+                notes: ["auto_merge_conflict_resolver_spawn_failed"],
+              },
+            });
             this.deps.dispatchSessionNotification(session, {
               label: "worktree-merge-conflict-spawn-failed",
-              userMessage: `❌ [${session.name}] Merge conflicts detected, but failed to spawn resolver: ${err instanceof Error ? err.message : String(err)}`,
+              userMessage: `❌ [${session.name}] Auto-merge hit a rebase conflict and failed to start the resolver: ${err instanceof Error ? err.message : String(err)}`,
+              buttons: [[this.deps.makeOpenPrButton(session.id)]],
             });
           }
           return;

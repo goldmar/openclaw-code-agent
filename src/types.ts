@@ -38,6 +38,7 @@ export type SessionWorktreeState =
   | "none"
   | "provisioned"
   | "pending_decision"
+  | "merge_conflict_resolving"
   | "merge_in_progress"
   | "pr_in_progress"
   | "merged"
@@ -49,6 +50,7 @@ export type ManagedWorktreeLifecycleState =
   | "none"
   | "provisioned"
   | "pending_decision"
+  | "merge_conflict_resolving"
   | "pr_open"
   | "merged"
   | "released"
@@ -307,6 +309,12 @@ export interface SessionConfig {
   worktreeBaseBranch?: string;
   /** Target repository for cross-repo PRs (e.g. 'openai/codex' for fork-to-upstream workflow). */
   worktreePrTargetRepo?: string;
+  /** Internal link back to the original auto-merge session for conflict resolver sessions. */
+  autoMergeParentSessionId?: string;
+  /** Number of automatic conflict-resolution attempts already used for this session. */
+  autoMergeConflictResolutionAttemptCount?: number;
+  /** Active conflict-resolver child session for this auto-merge worktree, if any. */
+  autoMergeResolverSessionId?: string;
   /** Optional tool-intercept callback (CC sessions only). Used for AskUserQuestion intercept. */
   canUseTool?: CanUseToolCallback;
   /** Explicit backend ref when reconstructing a persisted session against a native backend conversation. */
@@ -438,6 +446,12 @@ export interface PersistedSessionInfo {
   worktreeBaseBranch?: string;
   /** Target repository for cross-repo PRs (e.g. 'openai/codex'). */
   worktreePrTargetRepo?: string;
+  /** Internal link back to the original auto-merge session for conflict resolver sessions. */
+  autoMergeParentSessionId?: string;
+  /** Number of automatic conflict-resolution attempts already used for this session. */
+  autoMergeConflictResolutionAttemptCount?: number;
+  /** Active conflict-resolver child session for this auto-merge worktree, if any. */
+  autoMergeResolverSessionId?: string;
   /** Remote to push worktree branch to. */
   worktreePushRemote?: string;
   /** ISO timestamp until which stale-decision reminder is snoozed. */

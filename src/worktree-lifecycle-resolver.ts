@@ -92,6 +92,9 @@ export function resolveWorktreeLifecycle(
   if (lifecycle.state === "pending_decision") {
     reasons.add("pending_decision");
   }
+  if (lifecycle.state === "merge_conflict_resolving") {
+    reasons.add("merge_conflict_resolving");
+  }
 
   if (repoExists && branchName) {
     branchPresent = branchExists(session.workdir, branchName);
@@ -145,6 +148,7 @@ export function resolveWorktreeLifecycle(
   const preserve = options.activeSession
     || dirtyTracked
     || lifecycle.state === "pending_decision"
+    || lifecycle.state === "merge_conflict_resolving"
     || lifecycle.state === "pr_open"
     || prState === "open"
     || reasons.has("pr_merged_not_reflected_locally");

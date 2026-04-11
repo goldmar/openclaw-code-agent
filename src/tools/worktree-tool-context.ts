@@ -189,6 +189,8 @@ export function formatWorktreeLifecycleState(state: string): string {
       return "active";
     case "pending_decision":
       return "needs decision";
+    case "merge_conflict_resolving":
+      return "conflict resolving";
     case "pr_open":
       return "pr open";
     case "merged":
@@ -212,6 +214,8 @@ export function formatWorktreePreserveReason(reason: string): string {
       return "active session";
     case "pending_decision":
       return "pending decision";
+    case "merge_conflict_resolving":
+      return "conflict resolving";
     case "dirty_tracked_changes":
       return "dirty worktree";
     case "unique_content":

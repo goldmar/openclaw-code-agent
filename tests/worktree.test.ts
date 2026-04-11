@@ -97,6 +97,78 @@ describe("formatWorktreeOutcomeLine", () => {
   });
 });
 
+describe("worktree base dir and PR target resolution", () => {
+  it("defaults the worktree base dir to <repo>/.worktrees", async () => {
+    const { getWorktreeBaseDir } = await import("../src/worktree.js");
+    const repoDir = mkdtempSync(join(tmpdir(), "openclaw-worktree-basedir-"));
+
+    try {
+      execFileSync("git", ["init", "-b", "main"], { cwd: repoDir, stdio: "ignore" });
+      const canonicalRoot = execFileSync("git", ["-C", repoDir, "rev-parse", "--show-toplevel"], {
+        encoding: "utf-8",
+        stdio: ["pipe", "pipe", "pipe"],
+      }).trim();
+      assert.equal(getWorktreeBaseDir(repoDir), join(canonicalRoot, ".worktrees"));
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it("prefers an explicit PR target repo override", async () => {
+    const { resolveTargetRepo } = await import("../src/worktree.js");
+    const repoDir = mkdtempSync(join(tmpdir(), "openclaw-worktree-target-explicit-"));
+
+    try {
+      execFileSync("git", ["init", "-b", "main"], { cwd: repoDir, stdio: "ignore" });
+      execFileSync("git", ["remote", "add", "origin", "git@github.com:me/fork.git"], { cwd: repoDir, stdio: "ignore" });
+      execFileSync("git", ["remote", "add", "upstream", "git@github.com:openai/codex.git"], { cwd: repoDir, stdio: "ignore" });
+      assert.equal(resolveTargetRepo(repoDir, "custom/target"), "custom/target");
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses upstream as the PR target when origin and upstream differ", async () => {
+    const { resolveTargetRepo } = await import("../src/worktree.js");
+    const repoDir = mkdtempSync(join(tmpdir(), "openclaw-worktree-target-upstream-"));
+
+    try {
+      execFileSync("git", ["init", "-b", "main"], { cwd: repoDir, stdio: "ignore" });
+      execFileSync("git", ["remote", "add", "origin", "git@github.com:me/fork.git"], { cwd: repoDir, stdio: "ignore" });
+      execFileSync("git", ["remote", "add", "upstream", "git@github.com:openai/codex.git"], { cwd: repoDir, stdio: "ignore" });
+      assert.equal(resolveTargetRepo(repoDir), "openai/codex");
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses upstream as the PR target even when origin is missing", async () => {
+    const { resolveTargetRepo } = await import("../src/worktree.js");
+    const repoDir = mkdtempSync(join(tmpdir(), "openclaw-worktree-target-upstream-only-"));
+
+    try {
+      execFileSync("git", ["init", "-b", "main"], { cwd: repoDir, stdio: "ignore" });
+      execFileSync("git", ["remote", "add", "upstream", "git@github.com:openai/codex.git"], { cwd: repoDir, stdio: "ignore" });
+      assert.equal(resolveTargetRepo(repoDir), "openai/codex");
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it("returns undefined when no usable upstream target exists", async () => {
+    const { resolveTargetRepo } = await import("../src/worktree.js");
+    const repoDir = mkdtempSync(join(tmpdir(), "openclaw-worktree-target-none-"));
+
+    try {
+      execFileSync("git", ["init", "-b", "main"], { cwd: repoDir, stdio: "ignore" });
+      execFileSync("git", ["remote", "add", "origin", "git@github.com:me/fork.git"], { cwd: repoDir, stdio: "ignore" });
+      assert.equal(resolveTargetRepo(repoDir), undefined);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("removeWorktree", () => {
   it("refuses implicit cleanup for dirty worktrees but allows explicit destructive cleanup", async () => {
     const { createWorktree, removeWorktree } = await import("../src/worktree.js");
