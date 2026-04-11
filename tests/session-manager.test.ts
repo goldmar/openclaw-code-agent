@@ -1,5 +1,8 @@
 import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { SessionManager } from "../src/session-manager";
 import { setPluginConfig } from "../src/config";
 
@@ -1361,6 +1364,53 @@ describe("SessionManager turn-end wake", () => {
     assert.match(request.userMessages.at(-1).text, /Choose Approve, Revise, or Reject below\./);
   });
 
+  it("uses the plan file for the original ask-mode approval prompt when no structured artifact is cached", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "openclaw-plan-file-prompt-"));
+    const planPath = join(tempDir, "plan.md");
+    const longPlanItems = Array.from({ length: 40 }, (_, index) =>
+      `${index + 1}. Step ${index + 1}: use the on-disk plan body so the canonical approval prompt paginates the real plan instead of summarizing transcript chatter.`,
+    );
+    writeFileSync(planPath, ["## Proposed plan", ...longPlanItems].join("\n"), "utf-8");
+
+    try {
+      const s = fakeSession({
+        id: "s-plan-file-prompt",
+        name: "plan-file-prompt",
+        status: "running",
+        pendingPlanApproval: true,
+        planDecisionVersion: 11,
+        actionablePlanDecisionVersion: 11,
+        planApproval: "ask",
+        planFilePath: planPath,
+        latestPlanArtifactVersion: undefined,
+        latestPlanArtifact: undefined,
+        getOutput: () => [
+          "I’m grounding in the current workspace state first.",
+          "This is transcript chatter and should not become the approval summary when a plan file exists.",
+        ],
+      });
+
+      await (sm as any).triggerWaitingForInputEvent(s);
+
+      const calls = (sm as any).__dispatchCalls;
+      assert.equal(calls.length, 1);
+      const [_sessionArg, request] = calls[0];
+      assert.equal(request.label, "plan-approval");
+      assert.equal(request.userMessage, undefined);
+      assert.ok(Array.isArray(request.userMessages));
+      assert.ok(request.userMessages.length > 1);
+      assert.match(request.userMessages[0].text, /Full plan:/);
+      assert.match(request.userMessages[0].text, /ready for approval \(1\//);
+      assert.doesNotMatch(request.userMessages[0].text, /grounding in the current workspace state/);
+      assert.deepEqual(
+        request.userMessages.at(-1).buttons.map((row: Array<{ label: string }>) => row.map((button) => button.label)),
+        [["Approve", "Revise", "Reject"]],
+      );
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("ignores stale structured artifacts and falls back to preview-derived summaries", async () => {
     const s = fakeSession({
       id: "s-plan-stale",
@@ -1457,62 +1507,6 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(request.label, "plan-approval");
     assert.ok((request.userMessage ?? "").length < 2000);
     assert.match(request.userMessage, /Additional plan details omitted for brevity/);
-  });
-
-  it("re-sends the full ask-mode plan using paginated approval messages", () => {
-    const longPlanItems = Array.from({ length: 40 }, (_, index) =>
-      `${index + 1}. Step ${index + 1}: restate a distinct approval detail so the plan exceeds a single message and must be paginated for chat delivery.`,
-    );
-    const s = fakeSession({
-      id: "s-plan-resend",
-      name: "plan-resend",
-      status: "running",
-      pendingPlanApproval: true,
-      planDecisionVersion: 13,
-      actionablePlanDecisionVersion: 13,
-      planApproval: "ask",
-      latestPlanArtifactVersion: 13,
-      latestPlanArtifact: {
-        markdown: ["## Proposed plan", ...longPlanItems].join("\n"),
-        steps: [],
-      },
-    });
-    (sm as any).sessions.set(s.id, s);
-    stubDispatch(sm);
-
-    const result = sm.sendFullPlanToUser(s.id);
-
-    assert.match(result, /Full plan sent to the user/);
-    const calls = (sm as any).__dispatchCalls;
-    assert.equal(calls.length, 1);
-    const [_sessionArg, request] = calls[0];
-    assert.equal(request.label, "plan-approval-resend");
-    assert.equal(request.userMessage, undefined);
-    assert.ok(Array.isArray(request.userMessages));
-    assert.ok(request.userMessages.length > 1);
-    assert.match(request.userMessages[0].text, /ready for approval \(1\//);
-    assert.equal(request.userMessages[0].buttons, undefined);
-    assert.deepEqual(
-      request.userMessages.at(-1).buttons.map((row: Array<{ label: string }>) => row.map((button) => button.label)),
-      [["Approve", "Revise", "Reject"]],
-    );
-  });
-
-  it("rejects full-plan resends for delegated review sessions", () => {
-    const s = fakeSession({
-      id: "s-plan-resend-delegate",
-      name: "plan-resend-delegate",
-      status: "running",
-      pendingPlanApproval: true,
-      planDecisionVersion: 14,
-      actionablePlanDecisionVersion: 14,
-      planApproval: "delegate",
-    });
-    (sm as any).sessions.set(s.id, s);
-
-    const result = sm.sendFullPlanToUser(s.id);
-
-    assert.match(result, /does not use direct user plan approval/);
   });
 
   it("suppresses duplicate delegated escalations for the same plan decision version", () => {
