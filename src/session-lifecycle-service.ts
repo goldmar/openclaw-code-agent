@@ -10,9 +10,10 @@ import {
   getStoppedStatusLabel,
 } from "./session-notification-builder";
 import type { Session } from "./session";
-import type { PersistedSessionInfo, PlanApprovalMode } from "./types";
+import type { PersistedSessionInfo, PlanApprovalMode, PlanArtifact } from "./types";
 import type { NotificationButton } from "./session-interactions";
 import type { SessionNotificationRequest } from "./wake-dispatcher";
+import { existsSync, readFileSync } from "fs";
 
 type WorktreeStrategyResult = {
   notificationSent: boolean;
@@ -25,6 +26,26 @@ function hasProvablePlanReviewPrompt(session: Pick<Session, "approvalPromptRequi
   return planDecisionVersion != null
     && session.approvalPromptRequiredVersion === planDecisionVersion
     && (session.approvalPromptStatus === "delivered" || session.approvalPromptStatus === "fallback_delivered");
+}
+
+function resolvePlanArtifactForPrompt(
+  session: Pick<Session, "latestPlanArtifactVersion" | "latestPlanArtifact" | "planFilePath">,
+  planDecisionVersion?: number,
+): PlanArtifact | undefined {
+  if (session.latestPlanArtifactVersion === planDecisionVersion && session.latestPlanArtifact) {
+    return session.latestPlanArtifact;
+  }
+
+  const planPath = session.planFilePath?.trim();
+  if (!planPath || !existsSync(planPath)) return undefined;
+
+  try {
+    const markdown = readFileSync(planPath, "utf-8").trim();
+    if (!markdown) return undefined;
+    return { markdown, steps: [] };
+  } catch {
+    return undefined;
+  }
 }
 
 export class SessionLifecycleService {
@@ -380,9 +401,7 @@ export class SessionLifecycleService {
               session.pendingInputState.options.map((label) => ({ label })),
             )
         : undefined;
-    const matchingPlanArtifact = session.latestPlanArtifactVersion === planDecisionVersion
-      ? session.latestPlanArtifact
-      : undefined;
+    const matchingPlanArtifact = resolvePlanArtifactForPrompt(session, planDecisionVersion);
     const payload = buildWaitingForInputPayload({
       session,
       preview,
