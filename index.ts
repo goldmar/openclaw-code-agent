@@ -6,6 +6,7 @@ import { makeAgentLaunchTool } from "./src/tools/agent-launch";
 import { makeAgentSessionsTool } from "./src/tools/agent-sessions";
 import { makeAgentKillTool } from "./src/tools/agent-kill";
 import { makeAgentOutputTool } from "./src/tools/agent-output";
+import { makeAgentShowFullPlanTool } from "./src/tools/agent-show-full-plan";
 import { makeAgentRespondTool } from "./src/tools/agent-respond";
 import { makeAgentRequestPlanApprovalTool } from "./src/tools/agent-request-plan-approval";
 import { makeAgentSendMonitorReportTool } from "./src/tools/agent-send-monitor-report";
@@ -125,6 +126,7 @@ export function register(api: OpenClawPluginApi): void {
   registerTool((ctx: OpenClawPluginToolContext) => makeAgentSessionsTool(ctx), { optional: false });
   registerTool((ctx: OpenClawPluginToolContext) => makeAgentKillTool(ctx), { optional: false });
   registerTool((ctx: OpenClawPluginToolContext) => makeAgentOutputTool(ctx), { optional: false });
+  registerTool((ctx: OpenClawPluginToolContext) => makeAgentShowFullPlanTool(ctx), { optional: false });
   registerTool((ctx: OpenClawPluginToolContext) => makeAgentRespondTool(ctx), { optional: false });
   registerTool((ctx: OpenClawPluginToolContext) => makeAgentRequestPlanApprovalTool(ctx), { optional: false });
   registerTool((ctx: OpenClawPluginToolContext) => makeAgentSendMonitorReportTool(ctx), { optional: false });

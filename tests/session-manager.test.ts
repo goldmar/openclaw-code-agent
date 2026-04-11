@@ -1459,6 +1459,62 @@ describe("SessionManager turn-end wake", () => {
     assert.match(request.userMessage, /Additional plan details omitted for brevity/);
   });
 
+  it("re-sends the full ask-mode plan using paginated approval messages", () => {
+    const longPlanItems = Array.from({ length: 40 }, (_, index) =>
+      `${index + 1}. Step ${index + 1}: restate a distinct approval detail so the plan exceeds a single message and must be paginated for chat delivery.`,
+    );
+    const s = fakeSession({
+      id: "s-plan-resend",
+      name: "plan-resend",
+      status: "running",
+      pendingPlanApproval: true,
+      planDecisionVersion: 13,
+      actionablePlanDecisionVersion: 13,
+      planApproval: "ask",
+      latestPlanArtifactVersion: 13,
+      latestPlanArtifact: {
+        markdown: ["## Proposed plan", ...longPlanItems].join("\n"),
+        steps: [],
+      },
+    });
+    (sm as any).sessions.set(s.id, s);
+    stubDispatch(sm);
+
+    const result = sm.sendFullPlanToUser(s.id);
+
+    assert.match(result, /Full plan sent to the user/);
+    const calls = (sm as any).__dispatchCalls;
+    assert.equal(calls.length, 1);
+    const [_sessionArg, request] = calls[0];
+    assert.equal(request.label, "plan-approval-resend");
+    assert.equal(request.userMessage, undefined);
+    assert.ok(Array.isArray(request.userMessages));
+    assert.ok(request.userMessages.length > 1);
+    assert.match(request.userMessages[0].text, /ready for approval \(1\//);
+    assert.equal(request.userMessages[0].buttons, undefined);
+    assert.deepEqual(
+      request.userMessages.at(-1).buttons.map((row: Array<{ label: string }>) => row.map((button) => button.label)),
+      [["Approve", "Revise", "Reject"]],
+    );
+  });
+
+  it("rejects full-plan resends for delegated review sessions", () => {
+    const s = fakeSession({
+      id: "s-plan-resend-delegate",
+      name: "plan-resend-delegate",
+      status: "running",
+      pendingPlanApproval: true,
+      planDecisionVersion: 14,
+      actionablePlanDecisionVersion: 14,
+      planApproval: "delegate",
+    });
+    (sm as any).sessions.set(s.id, s);
+
+    const result = sm.sendFullPlanToUser(s.id);
+
+    assert.match(result, /does not use direct user plan approval/);
+  });
+
   it("suppresses duplicate delegated escalations for the same plan decision version", () => {
     const s = fakeSession({
       id: "s-plan-escalate-once",

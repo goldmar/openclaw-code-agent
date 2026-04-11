@@ -3,6 +3,7 @@ import { pluginConfig, getDefaultHarnessName } from "./config";
 import { generateSessionName, firstCompleteLines, lastCompleteLines } from "./format";
 import { formatLaunchSummaryFromSession } from "./launch-summary";
 import { pathsReferToSameLocation } from "./path-utils";
+import { buildPlanApprovalPromptContent } from "./plan-review-summary";
 import {
   getBackendConversationId,
   getPersistedMutationRefs,
@@ -50,7 +51,7 @@ import {
   removeWorktree,
 } from "./worktree";
 import { KeyedDeadlineScheduler } from "./keyed-deadline-scheduler";
-import { unlinkSync } from "fs";
+import { existsSync, readFileSync, unlinkSync } from "fs";
 
 
 const TERMINAL_STATUSES = new Set<SessionStatus>(["completed", "failed", "killed"]);
@@ -824,6 +825,71 @@ export class SessionManager {
       `Canonical plan approval prompt sent for session ${session.name} [${sessionId}].`,
       `Wait for the user's Approve, Revise, or Reject response.`,
       `Do not send a separate plain-text approval message.`,
+    ].join(" ");
+  }
+
+  sendFullPlanToUser(ref: string): string {
+    const activeSession = this.resolve(ref);
+    const persistedSession = activeSession ? undefined : this.getPersistedSession(ref);
+    const session = activeSession ?? persistedSession;
+    if (!session) return `Error: Session "${ref}" not found.`;
+    if (!session.pendingPlanApproval) {
+      return `Error: Session "${ref}" is not awaiting plan approval.`;
+    }
+    if (this.resolvePlanApprovalMode(session) !== "ask") {
+      return `Error: Session "${ref}" does not use direct user plan approval. Use agent_output(session='${ref}', full=true) for private review instead.`;
+    }
+
+    const sessionId = getPrimarySessionLookupRef(activeSession ?? persistedSession ?? { id: ref }) ?? ref;
+    const actionableVersion = session.actionablePlanDecisionVersion ?? session.planDecisionVersion;
+    const buttons = this.interactions.getPlanApprovalButtons(sessionId, {
+      ...session,
+      planDecisionVersion: actionableVersion,
+    });
+
+    const artifact = activeSession && activeSession.latestPlanArtifactVersion === actionableVersion
+      ? activeSession.latestPlanArtifact
+      : undefined;
+    const planFromFile = activeSession?.planFilePath && existsSync(activeSession.planFilePath)
+      ? readFileSync(activeSession.planFilePath, "utf-8").trim()
+      : undefined;
+    const preview = activeSession
+      ? this.getOutputPreview(activeSession, Number.POSITIVE_INFINITY)
+      : "";
+    const prompt = buildPlanApprovalPromptContent({
+      sessionName: session.name,
+      actionableVersion,
+      preview,
+      artifact: artifact ?? (planFromFile ? { markdown: planFromFile, steps: [] } : undefined),
+      hasButtons: true,
+    });
+
+    this.notifications.dispatch(
+      this.buildRoutingProxy({
+        id: sessionId,
+        name: session.name,
+        sessionId: persistedSession?.sessionId,
+        harnessSessionId: activeSession?.harnessSessionId ?? persistedSession?.harnessSessionId,
+        backendRef: activeSession?.backendRef ?? persistedSession?.backendRef,
+        route: activeSession?.route ?? persistedSession?.route,
+      }),
+      {
+        label: "plan-approval-resend",
+        userMessage: prompt.userMessages.length === 1 ? prompt.userMessages[0] : undefined,
+        userMessages: prompt.userMessages.length > 1
+          ? prompt.userMessages.map((text, index, all) => ({
+            text,
+            buttons: index === all.length - 1 ? buttons : undefined,
+          }))
+          : undefined,
+        notifyUser: "always",
+        buttons: prompt.userMessages.length === 1 ? buttons : undefined,
+      },
+    );
+
+    return [
+      `Full plan sent to the user for session ${session.name} [${sessionId}].`,
+      `The plugin reused the paginated plan renderer and approval buttons for this plan version.`,
     ].join(" ");
   }
 
