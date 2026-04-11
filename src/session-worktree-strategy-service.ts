@@ -50,6 +50,7 @@ export class SessionWorktreeStrategyService {
         fn: () => Promise<void>,
         onQueued?: () => void,
       ) => Promise<void>;
+      mergeBranchFn?: typeof mergeBranch;
       spawnConflictResolver: (args: {
         session: Session;
         repoDir: string;
@@ -296,7 +297,7 @@ export class SessionWorktreeStrategyService {
       async () => {
         if (this.deps.isAlreadyMerged(sessionRef)) return;
 
-        const mergeResult = mergeBranch(repoDir, branchName, baseBranch, "merge", worktreePath);
+        const mergeResult = (this.deps.mergeBranchFn ?? mergeBranch)(repoDir, branchName, baseBranch, "merge", worktreePath);
 
         if (mergeResult.success) {
           this.updatePersistedSessionFor(session, {
@@ -433,6 +434,36 @@ export class SessionWorktreeStrategyService {
         const errorMsg = mergeResult.dirtyError
           ? `❌ [${session.name}] Merge blocked: ${mergeResult.error}`
           : `❌ [${session.name}] Merge failed: ${mergeResult.error ?? "unknown error"}`;
+        const retryFailedAfterConflictResolution =
+          session.worktreeState === "merge_conflict_resolving"
+          || session.worktreeLifecycle?.state === "merge_conflict_resolving";
+        if (retryFailedAfterConflictResolution) {
+          this.updatePersistedSessionFor(session, {
+            autoMergeResolverSessionId: undefined,
+            pendingWorktreeDecisionSince: new Date().toISOString(),
+            lifecycle: "awaiting_worktree_decision",
+            worktreeState: "pending_decision",
+            worktreeLifecycle: {
+              state: "pending_decision",
+              updatedAt: new Date().toISOString(),
+              baseBranch,
+              targetRepo: session.worktreePrTargetRepo,
+              pushRemote: session.worktreePushRemote,
+              notes: ["auto_merge_conflict_retry_failed"],
+            },
+          });
+          this.deps.dispatchSessionNotification(session, {
+            label: "worktree-merge-error",
+            userMessage: [
+              errorMsg,
+              "",
+              `Auto-merge retry did not complete after conflict resolution.`,
+              `Branch \`${branchName}\` was preserved for manual follow-up in ${worktreePath}.`,
+            ].join("\n"),
+            buttons: [[this.deps.makeOpenPrButton(session.id)]],
+          });
+          return;
+        }
         this.deps.dispatchSessionNotification(session, {
           label: "worktree-merge-error",
           userMessage: errorMsg,

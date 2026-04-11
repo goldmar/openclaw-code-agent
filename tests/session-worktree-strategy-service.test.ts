@@ -169,4 +169,68 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       rmSync(repoDir, { recursive: true, force: true });
     }
   });
+
+  it("resets conflict-resolving sessions to pending decision when the retry fails with a non-rebase error", async () => {
+    const notifications: Array<Record<string, unknown>> = [];
+    const service = new SessionWorktreeStrategyService({
+      shouldRunWorktreeStrategy: () => true,
+      isAlreadyMerged: () => false,
+      resolveWorktreeRepoDir: (dir) => dir,
+      getWorktreeCompletionState: () => "has-commits",
+      updatePersistedSession: (_ref, patch) => {
+        Object.assign(session, patch);
+        return true;
+      },
+      dispatchSessionNotification: (_session, request) => {
+        notifications.push(request as Record<string, unknown>);
+      },
+      getOutputPreview: () => "",
+      originThreadLine: () => "thread",
+      getWorktreeDecisionButtons: () => undefined,
+      makeOpenPrButton: () => ({ label: "Open PR", callbackData: "open-pr" }),
+      worktreeMessages: new SessionWorktreeMessageService(),
+      enqueueMerge: async (_repoDir, fn) => { await fn(); },
+      mergeBranchFn: () => ({ success: false, error: "ff-only merge failed" }),
+      spawnConflictResolver: async () => ({ id: "resolver-3", name: "unused" }),
+      runAutoPr: async () => ({ success: true }),
+    });
+
+    const session: any = {
+      id: "s-resolver-retry-failure",
+      name: "resolver-retry-failure",
+      harnessSessionId: "h-resolver-retry-failure",
+      worktreeState: "merge_conflict_resolving",
+      worktreeLifecycle: {
+        state: "merge_conflict_resolving",
+        updatedAt: new Date().toISOString(),
+        baseBranch: "main",
+      },
+      worktreePrTargetRepo: undefined,
+      worktreePushRemote: undefined,
+    };
+
+    await (service as any).handleAutoMergeStrategy(
+      session,
+      "/tmp/repo",
+      "/tmp/worktree",
+      "agent/retry-failure",
+      "main",
+      {
+        commits: 1,
+        filesChanged: 1,
+        insertions: 1,
+        deletions: 0,
+        changedFiles: ["README.md"],
+        commitMessages: [],
+      },
+      session.id,
+    );
+
+    assert.equal(session.worktreeState, "pending_decision");
+    assert.equal(session.worktreeLifecycle?.state, "pending_decision");
+    assert.equal(notifications.length, 1);
+    assert.equal(notifications[0].label, "worktree-merge-error");
+    assert.match(String(notifications[0].userMessage), /auto-merge retry did not complete/i);
+    assert.ok(Array.isArray(notifications[0].buttons));
+  });
 });
