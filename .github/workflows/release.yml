@@ -95,7 +95,13 @@ jobs:
           node --version
           NPM_VERSION="$(npm --version)"
           echo "npm ${NPM_VERSION}"
-          node -e 'const version = process.argv[1]; const [major, minor, patch] = version.split(".").map(Number); if (major < 11 || (major === 11 && (minor < 5 || (minor === 5 && patch < 1)))) { throw new Error(`npm 11.5.1+ is required for Trusted Publishing, found ${version}`); }' "${NPM_VERSION}"
+          IFS=. read -r NPM_MAJOR NPM_MINOR NPM_PATCH <<EOF
+          ${NPM_VERSION}
+          EOF
+          if [ "${NPM_MAJOR}" -lt 11 ] || { [ "${NPM_MAJOR}" -eq 11 ] && { [ "${NPM_MINOR}" -lt 5 ] || { [ "${NPM_MINOR}" -eq 5 ] && [ "${NPM_PATCH}" -lt 1 ]; }; }; }; then
+            echo "npm 11.5.1+ is required for Trusted Publishing, found ${NPM_VERSION}" >&2
+            exit 1
+          fi
 
       - name: Publish to npm
         # Trusted Publishing generates provenance automatically for public packages
