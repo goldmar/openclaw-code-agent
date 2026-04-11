@@ -10,8 +10,8 @@ name: Release
 #      - Workflow filename: release.yml
 #   No secrets or tokens needed — OIDC handles authentication automatically.
 #   Trusted Publishing requires npm CLI 11.5.1+.
-#   GitHub-hosted runners can still surface npm 10.x with Node 22, so this workflow
-#   upgrades npm explicitly before publishing instead of relying on the bundled CLI.
+#   This workflow verifies on Node 22, then switches to Node 24 for publish so npm
+#   already satisfies the Trusted Publishing minimum without a brittle in-place upgrade.
 
 on:
   push:
@@ -84,10 +84,18 @@ jobs:
 
       # ── Publish to npm ────────────────────────────────────────────────────────
 
-      - name: Upgrade npm for Trusted Publishing
+      - name: Setup Node.js for publish
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - name: Verify npm for Trusted Publishing
         run: |
-          npm install --global npm@^11.5.1
-          npm --version
+          node --version
+          NPM_VERSION="$(npm --version)"
+          echo "npm ${NPM_VERSION}"
+          node -e 'const version = process.argv[1]; const [major, minor, patch] = version.split(".").map(Number); if (major < 11 || (major === 11 && (minor < 5 || (minor === 5 && patch < 1)))) { throw new Error(`npm 11.5.1+ is required for Trusted Publishing, found ${version}`); }' "${NPM_VERSION}"
 
       - name: Publish to npm
         # Trusted Publishing generates provenance automatically for public packages
