@@ -2,10 +2,16 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { validateReleaseMetadata } from "../scripts/validate-release-metadata.mjs";
 
 const rootDir = join(import.meta.dirname, "..");
 
 describe("plugin entry source", () => {
+  it("keeps package and plugin manifest versions in sync", () => {
+    const { packageVersion, pluginVersion } = validateReleaseMetadata();
+    assert.equal(packageVersion, pluginVersion);
+  });
+
   it("declares the v2026.4.9 external plugin compatibility baseline in package metadata", () => {
     const packageJson = JSON.parse(readFileSync(join(rootDir, "package.json"), "utf8")) as {
       openclaw?: {

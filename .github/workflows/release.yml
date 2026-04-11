@@ -80,12 +80,7 @@ jobs:
 
       - name: Validate release version
         run: |
-          PACKAGE_VERSION=$(node -p "require('./package.json').version")
-          RELEASE_VERSION="${{ steps.version.outputs.version }}"
-          if [ "$PACKAGE_VERSION" != "$RELEASE_VERSION" ]; then
-            echo "package.json version ($PACKAGE_VERSION) does not match release version ($RELEASE_VERSION)" >&2
-            exit 1
-          fi
+          pnpm run validate:release-metadata -- "${{ steps.version.outputs.version }}"
 
       # ── Publish to npm ────────────────────────────────────────────────────────
 
