@@ -65,9 +65,11 @@ Once launched, use `goal_status` / `/goal_status` to inspect progress and `goal_
 
 The differentiator is the plan-review loop. Claude Code and Codex both feed the same review UX now: the plugin receives a structured plan artifact, keeps execution blocked until approval, and resumes the same session with `agent_respond(..., approve=true)`. If the user asks for revisions, the revised submission becomes the new actionable review version for that same session, and `approve=true` resolves against that latest version instead of any stale earlier change-request state.
 
+> Demo note: the GIFs below were recorded on an older build. They still show the overall flow correctly, but they do not include the newer explicit action buttons and some other current thread controls.
+
 <img src="assets/ask-readme.gif" alt="Plan review in ask mode with inline approval controls">
 
-*`ask` mode keeps the human in the loop: the plan lands back in the originating thread, and execution only starts after approval.*
+*`ask` mode keeps the human in the loop: the plan lands back in the originating thread, and execution only starts after approval. The current UI now uses explicit buttons for approval and follow-through, even though the GIF predates that update.*
 
 ### Finish Cleanly
 
@@ -75,7 +77,7 @@ When the task is done, the plugin can leave the branch for review, merge it auto
 
 <img src="assets/delegate-readme.gif" alt="Delegated worktree flow with autonomous follow-through">
 
-*The main checkout stays clean. The branch lifecycle happens in the worktree, and the chat thread stays current on what was shipped.*
+*The main checkout stays clean. The branch lifecycle happens in the worktree, and the chat thread stays current on what was shipped. The current UI includes newer buttons and lifecycle affordances that are not visible in this older recording.*
 
 ### Worktree Lifecycle
 
