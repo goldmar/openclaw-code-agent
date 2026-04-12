@@ -3,6 +3,25 @@
   "name": "OpenClaw Code Agent",
   "description": "Multi-session coding-agent orchestration from OpenClaw chat",
   "version": "3.2.0",
+  "activation": {
+    "onCommands": [
+      "agent",
+      "agent_kill",
+      "agent_output",
+      "agent_respond",
+      "agent_sessions",
+      "agent_stats",
+      "goal",
+      "goal_status",
+      "goal_stop"
+    ],
+    "onCapabilities": [
+      "tool"
+    ]
+  },
+  "setup": {
+    "requiresRuntime": false
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

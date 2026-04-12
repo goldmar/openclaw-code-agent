@@ -89,7 +89,7 @@ For release preparation, also validate metadata parity explicitly:
 pnpm run validate:release-metadata -- <version>
 ```
 
-Release metadata for external plugin installs lives in `package.json` under `openclaw.compat` and `openclaw.build`, while the plugin manifest version lives in `openclaw.plugin.json`. When cutting a release, keep all three aligned: `package.json.version`, `openclaw.plugin.json.version`, and the release tag/version.
+Release metadata for external plugin installs lives in `package.json` under `openclaw.compat` and `openclaw.build`, while the plugin manifest version and manifest-owned activation/setup descriptors live in `openclaw.plugin.json`. When cutting a release, keep the package/plugin versions aligned and update the manifest descriptors whenever the plugin-owned command or setup surface changes.
 
 Additional smoke entry points:
 

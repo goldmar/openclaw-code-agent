@@ -31,8 +31,8 @@ importers:
         specifier: ^5.1.7
         version: 5.1.7
       openclaw:
-        specifier: 2026.4.10
-        version: 2026.4.10(@emnapi/core@1.9.2)(@emnapi/runtime@1.9.2)(@napi-rs/canvas@0.1.97)(@types/express@5.0.6)(apache-arrow@18.1.0)(typescript@6.0.2)
+        specifier: 2026.4.11
+        version: 2026.4.11(@emnapi/core@1.9.2)(@emnapi/runtime@1.9.2)(@napi-rs/canvas@0.1.97)(@types/express@5.0.6)(apache-arrow@18.1.0)(typescript@6.0.2)
       tsx:
         specifier: ^4.21.0
         version: 4.21.0
@@ -2766,8 +2766,8 @@ packages:
       zod:
         optional: true
 
-  openclaw@2026.4.10:
-    resolution: {integrity: sha512-fpPIZbG19xRIQJgxL2S6PZ+pvHZFR2uYJ+8KaVwrQbOioSWZ5BYbDcrOtTiqXrsJG5mDrVxMVBDeZ5gNHAmm1g==}
+  openclaw@2026.4.11:
+    resolution: {integrity: sha512-kio+6C05OZhkNrYkkluELpF22A2X5fvudXcKj1J74Dp3n/iSLIDYz3WQ4TyTVGElERK8bTswF4atfbf+KvVpfQ==}
     engines: {node: '>=22.14.0'}
     hasBin: true
     peerDependencies:
@@ -5005,14 +5005,14 @@ snapshots:
 
   '@slack/logger@4.0.1':
     dependencies:
-      '@types/node': 25.5.2
+      '@types/node': 25.6.0
 
   '@slack/oauth@3.0.5':
     dependencies:
       '@slack/logger': 4.0.1
       '@slack/web-api': 7.15.0
       '@types/jsonwebtoken': 9.0.10
-      '@types/node': 25.5.2
+      '@types/node': 25.6.0
       jsonwebtoken: 9.0.3
     transitivePeerDependencies:
       - debug
@@ -5021,7 +5021,7 @@ snapshots:
     dependencies:
       '@slack/logger': 4.0.1
       '@slack/web-api': 7.15.0
-      '@types/node': 25.5.2
+      '@types/node': 25.6.0
       '@types/ws': 8.18.1
       eventemitter3: 5.0.4
       ws: 8.20.0
@@ -5036,7 +5036,7 @@ snapshots:
     dependencies:
       '@slack/logger': 4.0.1
       '@slack/types': 2.20.1
-      '@types/node': 25.5.2
+      '@types/node': 25.6.0
       '@types/retry': 0.12.0
       axios: 1.15.0
       eventemitter3: 5.0.4
@@ -5478,7 +5478,7 @@ snapshots:
   '@types/jsonwebtoken@9.0.10':
     dependencies:
       '@types/ms': 2.1.0
-      '@types/node': 25.5.2
+      '@types/node': 25.6.0
 
   '@types/mime-types@2.1.4': {}
 
@@ -5523,7 +5523,7 @@ snapshots:
 
   '@types/yauzl@2.10.3':
     dependencies:
-      '@types/node': 25.5.2
+      '@types/node': 25.6.0
     optional: true
 
   '@wasm-audio-decoders/common@9.0.7':
@@ -6783,7 +6783,7 @@ snapshots:
       ws: 8.20.0
       zod: 4.3.6
 
-  openclaw@2026.4.10(@emnapi/core@1.9.2)(@emnapi/runtime@1.9.2)(@napi-rs/canvas@0.1.97)(@types/express@5.0.6)(apache-arrow@18.1.0)(typescript@6.0.2):
+  openclaw@2026.4.11(@emnapi/core@1.9.2)(@emnapi/runtime@1.9.2)(@napi-rs/canvas@0.1.97)(@types/express@5.0.6)(apache-arrow@18.1.0)(typescript@6.0.2):
     dependencies:
       '@agentclientprotocol/sdk': 0.18.2(zod@4.3.6)
       '@anthropic-ai/vertex-sdk': 0.15.0(zod@4.3.6)
@@ -7032,7 +7032,7 @@ snapshots:
       '@protobufjs/path': 1.1.2
       '@protobufjs/pool': 1.1.0
       '@protobufjs/utf8': 1.1.0
-      '@types/node': 25.5.2
+      '@types/node': 25.6.0
       long: 5.3.2
 
   proxy-addr@2.0.7:

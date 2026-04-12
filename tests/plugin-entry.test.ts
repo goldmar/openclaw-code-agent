@@ -18,6 +18,7 @@ describe("plugin entry source", () => {
         compat?: Record<string, string>;
         build?: Record<string, string>;
       };
+      devDependencies?: Record<string, string>;
       peerDependencies?: Record<string, string>;
     };
 
@@ -26,6 +27,40 @@ describe("plugin entry source", () => {
     assert.equal(packageJson.openclaw?.build?.openclawVersion, "2026.4.9");
     assert.equal(packageJson.openclaw?.build?.pluginSdkVersion, "2026.4.9");
     assert.equal(packageJson.peerDependencies?.openclaw, ">=2026.4.9");
+    assert.equal(packageJson.devDependencies?.openclaw, "2026.4.11");
+  });
+
+  it("declares manifest activation and setup descriptors for command/tool discovery", () => {
+    const pluginManifest = JSON.parse(readFileSync(join(rootDir, "openclaw.plugin.json"), "utf8")) as {
+      activation?: {
+        onCommands?: string[];
+        onCapabilities?: string[];
+      };
+      setup?: {
+        requiresRuntime?: boolean;
+        providers?: unknown[];
+        cliBackends?: unknown[];
+        configMigrations?: unknown[];
+      };
+    };
+
+    assert.deepEqual(pluginManifest.activation, {
+      onCommands: [
+        "agent",
+        "agent_kill",
+        "agent_output",
+        "agent_respond",
+        "agent_sessions",
+        "agent_stats",
+        "goal",
+        "goal_status",
+        "goal_stop",
+      ],
+      onCapabilities: ["tool"],
+    });
+    assert.deepEqual(pluginManifest.setup, {
+      requiresRuntime: false,
+    });
   });
 
   it("uses the canonical SDK entry helper", () => {
