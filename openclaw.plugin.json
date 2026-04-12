@@ -3,6 +3,22 @@
   "name": "OpenClaw Code Agent",
   "description": "Multi-session coding-agent orchestration from OpenClaw chat",
   "version": "3.2.0",
+  "activation": {
+    "onCommands": [
+      "agent",
+      "agent_kill",
+      "agent_output",
+      "agent_respond",
+      "agent_sessions",
+      "agent_stats",
+      "goal",
+      "goal_status",
+      "goal_stop"
+    ]
+  },
+  "setup": {
+    "requiresRuntime": false
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
@@ -131,6 +147,7 @@
       },
       "defaultHarness": {
         "type": "string",
+        "enum": ["claude-code", "codex"],
         "default": "claude-code",
         "description": "Default agent harness when agent_launch omits the harness parameter."
       },
@@ -156,14 +173,14 @@
   "uiHints": {
     "fallbackChannel": {
       "label": "Fallback notification channel",
-      "help": "Default channel used when no workspace-specific agentChannels entry matches the session workdir. Prefer a fully routable channel string; bare providers are only weak fallbacks.",
-      "placeholder": "telegram|my-bot|123456789",
-      "sensitive": true
+      "help": "Optional but recommended. Default channel used when no workspace-specific agentChannels entry matches the session workdir. Prefer a fully routable channel string; bare providers are only weak fallbacks.",
+      "placeholder": "telegram|my-bot|123456789"
     },
     "agentChannels": {
       "label": "Workspace notification channels",
       "help": "Map absolute working-directory paths to notification channels so each workspace routes session updates to the right chat.",
-      "sensitive": true
+      "sensitive": true,
+      "advanced": true
     },
     "defaultWorkdir": {
       "label": "Default working directory",
@@ -172,37 +189,38 @@
     },
     "harnesses": {
       "label": "Harness configuration",
-      "help": "Per-harness defaults and model restrictions. Default: {\"codex\":{\"defaultModel\":\"gpt-5.4\",\"allowedModels\":[\"gpt-5.4\"],\"reasoningEffort\":\"medium\"},\"claude-code\":{\"defaultModel\":\"sonnet\",\"allowedModels\":[\"sonnet\",\"opus\"]}}."
-    },
-    "defaultModel": {
-      "label": "Legacy default model",
-      "help": "Deprecated. Mapped to harnesses[defaultHarness].defaultModel during migration.",
-      "placeholder": "sonnet"
-    },
-    "model": {
-      "label": "Legacy Codex model",
-      "help": "Deprecated. Use harnesses.codex.defaultModel instead.",
-      "placeholder": "gpt-5.3-codex"
+      "help": "Per-harness defaults and model restrictions. Default: {\"codex\":{\"defaultModel\":\"gpt-5.4\",\"allowedModels\":[\"gpt-5.4\"],\"reasoningEffort\":\"medium\"},\"claude-code\":{\"defaultModel\":\"sonnet\",\"allowedModels\":[\"sonnet\",\"opus\"]}}.",
+      "advanced": true
     },
     "maxSessions": {
       "label": "Maximum concurrent sessions",
-      "help": "Upper limit on concurrently running coding-agent sessions."
+      "help": "Upper limit on concurrently running coding-agent sessions.",
+      "advanced": true
     },
     "idleTimeoutMinutes": {
       "label": "Idle timeout (minutes)",
-      "help": "Minutes a paused multi-turn session can remain idle before the plugin auto-kills it."
+      "help": "Minutes a paused multi-turn session can remain idle before the plugin auto-kills it.",
+      "advanced": true
+    },
+    "defaultHarness": {
+      "label": "Default harness",
+      "help": "Choose the harness you expect to use most often. Pick Codex only when the Codex command and local auth are ready on this machine.",
+      "placeholder": "claude-code"
     },
     "permissionMode": {
       "label": "Default permission mode",
-      "help": "Default plugin orchestration mode used when new coding-agent sessions are launched. Use this for plan/default/bypass behavior; Codex execution stays fixed to 'never'."
+      "help": "Default plugin orchestration mode used when new coding-agent sessions are launched. Use this for plan/default/bypass behavior; Codex execution stays fixed to 'never'.",
+      "advanced": true
     },
     "planApproval": {
       "label": "Plan approval policy",
-      "help": "Choose whether plans are always sent to the user with Approve/Revise/Reject buttons (`ask`, default), delegated to the orchestrator for full-plan review first, or auto-approved."
+      "help": "Choose whether plans are always sent to the user with Approve/Revise/Reject buttons (`ask`, default), delegated to the orchestrator for full-plan review first, or auto-approved.",
+      "advanced": true
     },
     "defaultWorktreeStrategy": {
       "label": "Default worktree strategy",
-      "help": "Applies to all sessions that don't specify worktree_strategy explicitly. 'off' (default) disables worktrees globally. 'ask' creates a worktree and sends inline Merge locally / Create PR buttons on completion. 'delegate' wakes the orchestrator to decide autonomously. 'auto-merge' and 'auto-pr' are fully automated."
+      "help": "Applies to all sessions that don't specify worktree_strategy explicitly. 'off' (default) disables worktrees globally. 'ask' creates a worktree and sends inline Merge locally / Create PR buttons on completion. 'delegate' wakes the orchestrator to decide autonomously. 'auto-merge' and 'auto-pr' are fully automated.",
+      "advanced": true
     }
   },
   "skills": [

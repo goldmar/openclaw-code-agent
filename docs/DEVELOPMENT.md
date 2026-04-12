@@ -89,7 +89,7 @@ For release preparation, also validate metadata parity explicitly:
 pnpm run validate:release-metadata -- <version>
 ```
 
-Release metadata for external plugin installs lives in `package.json` under `openclaw.compat` and `openclaw.build`, while the plugin manifest version lives in `openclaw.plugin.json`. When cutting a release, keep all three aligned: `package.json.version`, `openclaw.plugin.json.version`, and the release tag/version.
+Release metadata for external plugin installs lives in `package.json` under `openclaw.compat` and `openclaw.build`, while the plugin manifest version and manifest-owned activation/setup descriptors live in `openclaw.plugin.json`. When cutting a release, keep the package/plugin versions aligned and update the manifest descriptors whenever the plugin-owned command or onboarding surface changes.
 
 Additional smoke entry points:
 
@@ -140,6 +140,9 @@ Before running it:
 - Prefer source-of-truth facts from `src/config.ts`, `src/types.ts`, and the tool factories.
 - When editing docs for lifecycle behavior, verify the notification and resume flow in `src/session-manager.ts` and `src/actions/respond.ts`.
 - When editing worktree behavior, verify the orchestration path in `src/session-manager.ts`, the lifecycle resolver in `src/worktree-lifecycle-resolver.ts`, and the git helper path in `src/worktree.ts`.
+- Keep first-run onboarding narrow. `uiHints` without `advanced: true` are what OpenClaw's plugin-config wizard prompts by default, so only genuinely first-run fields should remain non-advanced.
+- Treat `fallbackChannel` as routing metadata, not a secret. Multi-workspace maps like `agentChannels` should stay advanced/manual because the generic wizard cannot collect them well.
+- Do not re-surface deprecated legacy model keys in onboarding. New setup should point operators at `defaultHarness` and `harnesses.*` instead.
 
 ## Service Lifecycle
 
