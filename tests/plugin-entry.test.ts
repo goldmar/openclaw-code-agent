@@ -30,11 +30,10 @@ describe("plugin entry source", () => {
     assert.equal(packageJson.devDependencies?.openclaw, "2026.4.11");
   });
 
-  it("declares manifest activation and setup descriptors for command/tool discovery", () => {
+  it("declares narrow manifest activation and minimal setup descriptors", () => {
     const pluginManifest = JSON.parse(readFileSync(join(rootDir, "openclaw.plugin.json"), "utf8")) as {
       activation?: {
         onCommands?: string[];
-        onCapabilities?: string[];
       };
       setup?: {
         requiresRuntime?: boolean;
@@ -42,6 +41,15 @@ describe("plugin entry source", () => {
         cliBackends?: unknown[];
         configMigrations?: unknown[];
       };
+      configSchema?: {
+        properties?: Record<string, {
+          enum?: string[];
+        }>;
+      };
+      uiHints?: Record<string, {
+        advanced?: boolean;
+        sensitive?: boolean;
+      }>;
     };
 
     assert.deepEqual(pluginManifest.activation, {
@@ -56,11 +64,39 @@ describe("plugin entry source", () => {
         "goal_status",
         "goal_stop",
       ],
-      onCapabilities: ["tool"],
     });
     assert.deepEqual(pluginManifest.setup, {
       requiresRuntime: false,
     });
+    assert.deepEqual(pluginManifest.configSchema?.properties?.defaultHarness?.enum, [
+      "claude-code",
+      "codex",
+    ]);
+  });
+
+  it("keeps first-run onboarding focused on workdir, harness, and fallback routing", () => {
+    const pluginManifest = JSON.parse(readFileSync(join(rootDir, "openclaw.plugin.json"), "utf8")) as {
+      uiHints?: Record<string, {
+        advanced?: boolean;
+        sensitive?: boolean;
+      }>;
+    };
+
+    assert.equal(pluginManifest.uiHints?.defaultWorkdir?.advanced, undefined);
+    assert.equal(pluginManifest.uiHints?.defaultHarness?.advanced, undefined);
+    assert.equal(pluginManifest.uiHints?.fallbackChannel?.advanced, undefined);
+    assert.equal(pluginManifest.uiHints?.fallbackChannel?.sensitive, undefined);
+
+    assert.equal(pluginManifest.uiHints?.agentChannels?.advanced, true);
+    assert.equal(pluginManifest.uiHints?.agentChannels?.sensitive, true);
+    assert.equal(pluginManifest.uiHints?.harnesses?.advanced, true);
+    assert.equal(pluginManifest.uiHints?.permissionMode?.advanced, true);
+    assert.equal(pluginManifest.uiHints?.planApproval?.advanced, true);
+    assert.equal(pluginManifest.uiHints?.defaultWorktreeStrategy?.advanced, true);
+    assert.equal(pluginManifest.uiHints?.maxSessions?.advanced, true);
+    assert.equal(pluginManifest.uiHints?.idleTimeoutMinutes?.advanced, true);
+    assert.equal(pluginManifest.uiHints?.defaultModel, undefined);
+    assert.equal(pluginManifest.uiHints?.model, undefined);
   });
 
   it("uses the canonical SDK entry helper", () => {

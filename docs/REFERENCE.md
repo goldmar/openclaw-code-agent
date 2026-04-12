@@ -42,6 +42,34 @@ openclaw plugins enable openclaw-code-agent
 openclaw gateway restart
 ```
 
+## First-Run Onboarding
+
+OpenClaw's generic plugin onboarding should stay narrow for this plugin. The first-run questions should be:
+
+- `defaultWorkdir`
+- `defaultHarness`
+- `fallbackChannel`
+
+Those three choices are enough to get to a predictable first launch without forcing the operator through multi-workspace routing or policy decisions too early.
+
+### Harness Readiness Guidance
+
+The host wizard does not currently provide a plugin-specific readiness panel, so harness availability still needs operator judgment:
+
+- `codex`
+  - Expect this to work only when the `codex` command, or your `OPENCLAW_CODEX_APP_SERVER_COMMAND` override, is resolvable.
+  - Local auth under `~/.codex` also needs to be present.
+  - `forced_login_method = "chatgpt"` in `~/.codex/config.toml` is recommended when Codex auth behaves inconsistently, but it is not a hard prerequisite.
+- `claude-code`
+  - The bundled Claude SDK/CLI is part of the plugin dependency set, so installation is usually the easy part.
+  - Authenticated usability may still require Claude-side login/account setup when you launch the first session.
+
+When choosing `defaultHarness`:
+
+- prefer `codex` if the command and auth are already working on this machine
+- prefer `claude-code` if Claude Code is the expected path and Codex is not locally ready
+- if neither harness is ready, finish onboarding with `defaultWorkdir` and optional `fallbackChannel`, then fix harness setup before launching sessions
+
 ## Minimal Config
 
 Add this under `plugins.entries["openclaw-code-agent"]` in `~/.openclaw/openclaw.json`:
@@ -50,9 +78,9 @@ Add this under `plugins.entries["openclaw-code-agent"]` in `~/.openclaw/openclaw
 {
   "enabled": true,
   "config": {
+    "defaultWorkdir": "/home/user/project",
+    "defaultHarness": "claude-code",
     "fallbackChannel": "telegram|my-bot|123456789",
-    "planApproval": "ask",
-    "defaultWorktreeStrategy": "off",
     "harnesses": {
       "claude-code": {
         "defaultModel": "sonnet",
@@ -68,6 +96,12 @@ Add this under `plugins.entries["openclaw-code-agent"]` in `~/.openclaw/openclaw
 }
 ```
 
+The rest can stay at defaults for the first run:
+
+- `permissionMode: "plan"`
+- `planApproval: "ask"`
+- `defaultWorktreeStrategy: "off"`
+
 If you use Codex, recommend this in `~/.codex/config.toml`:
 
 ```toml
@@ -82,6 +116,37 @@ forced_login_method = "chatgpt"
 | `codex` | Controlled by `harnesses.codex.allowedModels` | Native Codex App Server harness with structured pending input, structured plans, and native backend worktree refs |
 
 Allowed-model matching is case-insensitive substring matching. If the resolved model is not allowed, `agent_launch` fails immediately.
+
+## Config Tiers
+
+### Onboarding Fields
+
+These belong in the first-run setup flow:
+
+- `defaultWorkdir`
+- `defaultHarness`
+- `fallbackChannel`
+
+### Advanced / Manual Fields
+
+These should remain manual or follow-up configuration:
+
+- `agentChannels`
+- `harnesses.*`
+- `permissionMode`
+- `planApproval`
+- `defaultWorktreeStrategy`
+- `worktreeDir`
+- session/concurrency/retention limits such as `maxSessions`, `idleTimeoutMinutes`, `sessionGcAgeMinutes`, `maxPersistedSessions`, and `maxAutoResponds`
+
+### Deprecated Compatibility Fields
+
+Do not use these for new setup:
+
+- `defaultModel`
+- `model`
+- `reasoningEffort`
+- `allowedModels`
 
 ## Permission And Approval Modes
 

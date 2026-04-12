@@ -112,9 +112,19 @@ openclaw plugins enable openclaw-code-agent
 openclaw gateway restart
 ```
 
-This release targets the OpenClaw `v2026.4.9` external plugin contract. `package.json` now carries the plugin API compatibility and build metadata used by modern OpenClaw / ClawHub installs, and `openclaw.plugin.json` now advertises manifest activation/setup descriptors for the plugin-owned command/tool surface. Keep those metadata surfaces in sync when bumping the plugin release baseline.
+This release targets the OpenClaw `v2026.4.9` external plugin contract. `package.json` now carries the plugin API compatibility and build metadata used by modern OpenClaw / ClawHub installs, and `openclaw.plugin.json` now advertises the plugin-owned command activation surface plus the onboarding metadata OpenClaw uses during plugin-config setup. Keep those metadata surfaces in sync when bumping the plugin release baseline.
 
-The current manifest descriptors are intentionally narrow: activation advertises the chat commands this plugin owns plus its tool capability, while setup stays minimal with `requiresRuntime: false` because the plugin does not expose provider/backend onboarding metadata yet.
+The current manifest descriptors stay intentionally narrow: activation advertises only the chat commands this plugin owns, and setup stays minimal with `requiresRuntime: false`. First-run onboarding is driven by the manifest config schema and `uiHints`, not by provider/backend setup descriptors.
+
+### First-Run Onboarding
+
+In OpenClaw's Manual setup flow, the plugin should only ask for three first-run decisions:
+
+- `defaultWorkdir`: the repo or workspace path you expect to launch from most often
+- `defaultHarness`: whether your default harness is `claude-code` or `codex`
+- `fallbackChannel`: an optional but recommended fully routable notification target for async updates
+
+Everything else stays advanced/manual. In particular, `agentChannels`, per-harness model policy, permission defaults, and worktree policy are intentionally deferred until after the first successful launch.
 
 Add a minimal config block under `plugins.entries["openclaw-code-agent"]` in `~/.openclaw/openclaw.json`:
 
@@ -125,9 +135,9 @@ Add a minimal config block under `plugins.entries["openclaw-code-agent"]` in `~/
       "openclaw-code-agent": {
         "enabled": true,
         "config": {
+          "defaultWorkdir": "/home/user/project",
+          "defaultHarness": "claude-code",
           "fallbackChannel": "telegram|my-bot|123456789",
-          "planApproval": "ask",
-          "defaultWorktreeStrategy": "off",
           "harnesses": {
             "claude-code": {
               "defaultModel": "sonnet",
@@ -146,6 +156,12 @@ Add a minimal config block under `plugins.entries["openclaw-code-agent"]` in `~/
 }
 ```
 
+You can leave the advanced settings at their defaults for the first run. The plugin defaults to:
+
+- `permissionMode: "plan"`
+- `planApproval: "ask"`
+- `defaultWorktreeStrategy: "off"`
+
 If you run Codex sessions, keep Codex on the ChatGPT auth path:
 
 ```toml
@@ -155,6 +171,15 @@ forced_login_method = "chatgpt"
 Put that in `~/.codex/config.toml`.
 
 Codex approval behavior is fixed to the supported execution path, and OpenClaw handles review gates through `permissionMode` plus `planApproval`.
+
+### Harness Availability Guidance
+
+OpenClaw's generic plugin onboarding can prompt for `defaultHarness`, but it does not yet have a plugin-specific readiness panel. Use these checks when choosing the default:
+
+- `codex`: choose this only when the `codex` command (or your `OPENCLAW_CODEX_APP_SERVER_COMMAND` override) is available and local Codex auth under `~/.codex` is already working
+- `claude-code`: choose this when the bundled Claude SDK/CLI is installed and you expect Claude Code to be the main path on this machine
+
+Codex readiness is the easier one to verify locally because the plugin depends on a resolvable command plus local auth files. Claude Code installation is verifiable, but authenticated usability may still require Claude-side login/account setup the first time you launch a session.
 
 Launch a first session:
 
