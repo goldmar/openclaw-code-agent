@@ -238,6 +238,7 @@ The chat command surface mirrors the common workflows: `/agent`, `/agent_session
 | [docs/REFERENCE.md](docs/REFERENCE.md) | Install, config, tools, commands, notifications, routing, worktrees, troubleshooting |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Session manager, harness model, notification pipeline, persistence, worktree internals |
 | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | Local setup, repo layout, build/test flow, extension points |
+| [docs/SECURITY.md](docs/SECURITY.md) | Accepted subprocess surfaces, verifier-shell boundary, and current scanner findings |
 | [docs/ACP-COMPARISON.md](docs/ACP-COMPARISON.md) | Current comparison with OpenClaw core ACP |
 | [skills/code-agent-orchestration/SKILL.md](skills/code-agent-orchestration/SKILL.md) | Operational skill for orchestrating sessions from an agent |
 | [CHANGELOG.md](CHANGELOG.md) | Release history |

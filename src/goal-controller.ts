@@ -26,6 +26,7 @@ const DEFAULT_VERIFIER_TIMEOUT_MS = 10 * 60 * 1000;
 const MAX_COMMAND_OUTPUT_CHARS = 4000;
 const MAX_REASON_CHARS = 1200;
 const DEFAULT_RALPH_COMPLETION_PROMISE = "DONE";
+const VERIFIER_ENV_BLOCKLIST = ["BASH_ENV", "ENV"] as const;
 
 function normalizeName(value: string): string {
   return value
@@ -301,6 +302,14 @@ function sessionFailureReason(session: Pick<Session, "error">): string {
   return truncate(session.error?.trim() || "Underlying session failed.", MAX_REASON_CHARS);
 }
 
+function buildVerifierEnv(baseEnv: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...baseEnv };
+  // Verifier commands are intentionally operator-provided shell commands, but they
+  // should not inherit shell bootstrap hooks that can rewrite execution implicitly.
+  for (const key of VERIFIER_ENV_BLOCKLIST) delete env[key];
+  return env;
+}
+
 function runCommand(workdir: string, spec: GoalVerifierSpec): Promise<GoalVerifierStepResult> {
   return new Promise((resolve) => {
     const startedAt = Date.now();
@@ -311,6 +320,7 @@ function runCommand(workdir: string, spec: GoalVerifierSpec): Promise<GoalVerifi
         cwd: workdir,
         timeout: spec.timeoutMs ?? DEFAULT_VERIFIER_TIMEOUT_MS,
         maxBuffer: 1024 * 1024,
+        env: buildVerifierEnv(),
       },
       (err, stdout, stderr) => {
         const durationMs = Date.now() - startedAt;

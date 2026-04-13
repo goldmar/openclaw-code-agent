@@ -115,6 +115,8 @@ export class StdioJsonRpcClient implements JsonRpcClient {
 
   async connect(): Promise<void> {
     if (this.process) return;
+    // Codex is a native local backend for this plugin, so the accepted transport
+    // surface here is a stdio child process rather than an in-process SDK client.
     const child = spawn(this.command, ["app-server", ...this.args], {
       stdio: ["pipe", "pipe", "pipe"],
       env: process.env,

@@ -104,6 +104,11 @@ Important mapping detail:
 
 `SessionNotificationService` decides the delivery-state transitions. `WakeDispatcher` decides how to deliver each transport request.
 
+Security boundary note:
+
+- the plugin intentionally shells out to the local `openclaw` CLI for delivery instead of implementing a separate ad hoc network client
+- Discord interactive delivery is still gateway/plugin-SDK-owned; test injection is explicit and no longer uses a production env-var override
+
 ### `CallbackHandler`
 
 `src/callback-handler.ts` handles interactive callbacks under the `code-agent` namespace for both Telegram and Discord.
@@ -258,6 +263,7 @@ Backend capabilities intentionally differ:
 1. The plugin treats coding sessions as managed background jobs, not as inline chat completions.
 2. Notification transport is gateway-owned. The plugin shells out to OpenClaw instead of inventing its own delivery channel.
 3. `Session` is an event emitter, not a callback bucket. This keeps the lifecycle model explicit.
+4. Subprocess use is an accepted part of the architecture, but it should stay limited to backend launch, worktree/PR operations, gateway-owned delivery, and explicit verifier commands.
 4. Runtime GC and persisted resume are separate concerns. Eviction from memory does not mean losing the session.
 5. Worktree decisions are first-class orchestration states, not afterthoughts bolted on after completion.
 6. Codex and Claude Code share the same session-centric control plane even though their backend transports differ.

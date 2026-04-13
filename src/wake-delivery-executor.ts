@@ -106,6 +106,8 @@ export class WakeDeliveryExecutor {
       maxAttempts: WAKE_MAX_ATTEMPTS,
     });
 
+    // Delivery stays gateway-owned: the plugin shells out to the local OpenClaw CLI
+    // instead of implementing a separate ad hoc notification transport.
     execFile("openclaw", args, { timeout: WAKE_CLI_TIMEOUT_MS }, (err, _stdout, stderr) => {
       if (this.disposed) {
         onSettled?.();

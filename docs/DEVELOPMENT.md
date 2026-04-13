@@ -81,6 +81,14 @@ Security automation should work like this:
 - Version maintenance: Dependabot updates the JavaScript dependency set through the npm ecosystem support that covers pnpm projects.
 - Full snapshot audit: run `pnpm audit` when you need the current advisory set for the full resolved pnpm graph, including dev dependencies.
 
+Plugin-behavior review should also include:
+
+```bash
+pnpm check-plugin-security
+```
+
+That scanner currently reports the accepted `child_process` surface and a bundled-file env-plus-network heuristic. Treat it as a review aid, not as an auto-fix target. The current rationale and accepted subprocess inventory live in [SECURITY.md](SECURITY.md).
+
 This repo currently has dev-only transitive advisories coming from upstream dependencies, so a blanket failing `pnpm audit` step is not the right merge gate until those findings are either remediated upstream or intentionally allowlisted with pnpm audit configuration.
 
 For release preparation, also validate metadata parity explicitly:

@@ -117,6 +117,24 @@ forced_login_method = "chatgpt"
 
 Allowed-model matching is case-insensitive substring matching. If the resolved model is not allowed, `agent_launch` fails immediately.
 
+## Security Model
+
+This plugin is expected to use local subprocesses. That is part of the product design, not an accidental implementation detail.
+
+Accepted subprocess surfaces:
+
+- local `openclaw` CLI calls for wakes and notifications
+- Codex App Server launch over stdio
+- local `git` / `gh` commands for worktree and PR flows
+- operator-provided verifier shell commands in explicit goal tasks
+
+Operator guidance:
+
+- treat goal-task verifier commands as trusted shell input
+- do not expose verifier mode to untrusted users
+- expect plugin-security scanners to flag `child_process` usage for this plugin
+- use [SECURITY.md](SECURITY.md) when reviewing whether a finding is expected or a real regression
+
 ## Config Tiers
 
 ### Onboarding Fields

@@ -1,7 +1,7 @@
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -11,10 +11,22 @@ import type { GoalTaskState } from "../src/types";
 import { createStubSession, tick } from "./helpers";
 
 const tempDirs: string[] = [];
+const originalBashEnv = process.env.BASH_ENV;
+const originalEnv = process.env.ENV;
 
 afterEach(() => {
   while (tempDirs.length > 0) {
     rmSync(tempDirs.pop()!, { recursive: true, force: true });
+  }
+  if (originalBashEnv == null) {
+    delete process.env.BASH_ENV;
+  } else {
+    process.env.BASH_ENV = originalBashEnv;
+  }
+  if (originalEnv == null) {
+    delete process.env.ENV;
+  } else {
+    process.env.ENV = originalEnv;
   }
 });
 
@@ -572,6 +584,27 @@ describe("GoalController", () => {
 
     assert.equal(task.status, "failed");
     assert.equal(task.failureReason, "Verifier-mode goal tasks require at least one verifier command.");
+  });
+
+  it("runs verifier commands without inheriting shell bootstrap hooks from BASH_ENV or ENV", async () => {
+    const controller = new GoalController({} as any);
+    const dir = mkdtempSync(join(tmpdir(), "goal-controller-env-test-"));
+    tempDirs.push(dir);
+    const shellHookPath = join(dir, "shell-hook.sh");
+    writeFileSync(shellHookPath, "export OPENCLAW_TEST_VERIFIER_HOOK=1\n", "utf8");
+    process.env.BASH_ENV = shellHookPath;
+    process.env.ENV = shellHookPath;
+
+    const result = await (controller as any).runVerifiers(buildTask({
+      workdir: dir,
+      verifierCommands: [{
+        label: "check-clean-shell-env",
+        command: "printf '%s' \"${OPENCLAW_TEST_VERIFIER_HOOK:-}\"",
+      }],
+    }));
+
+    assert.equal(result.status, "pass");
+    assert.equal(result.steps[0]?.output, "(no output)");
   });
 
   it("passes persisted backend refs into resume-session selection for goal recovery", async () => {
