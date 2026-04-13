@@ -31,8 +31,8 @@ importers:
         specifier: ^5.1.7
         version: 5.1.7
       openclaw:
-        specifier: 2026.4.11
-        version: 2026.4.11(@emnapi/core@1.9.2)(@emnapi/runtime@1.9.2)(@napi-rs/canvas@0.1.97)(@types/express@5.0.6)(apache-arrow@18.1.0)(typescript@6.0.2)
+        specifier: 2026.4.12
+        version: 2026.4.12(@emnapi/core@1.9.2)(@emnapi/runtime@1.9.2)(@napi-rs/canvas@0.1.97)(@types/express@5.0.6)(apache-arrow@18.1.0)(typescript@6.0.2)
       tsx:
         specifier: ^4.21.0
         version: 4.21.0
@@ -2125,6 +2125,10 @@ packages:
     engines: {node: '>= 10.17.0'}
     hasBin: true
 
+  fake-indexeddb@6.2.5:
+    resolution: {integrity: sha512-CGnyrvbhPlWYMngksqrSSUT1BAVP49dZocrHuK0SvtR0D5TMs5wP0o3j7jexDJW01KSadjBp1M/71o/KR3nD1w==}
+    engines: {node: '>=18'}
+
   fast-deep-equal@3.1.3:
     resolution: {integrity: sha512-f3qQ9oQy9j2AhBe/H9VC91wLmKBCCU/gDOnKNAYG5hswO7BLKj09Hc5HYNz9cGI++xlpDCIgDaitVs03ATR84Q==}
 
@@ -2647,6 +2651,10 @@ packages:
   ms@2.1.3:
     resolution: {integrity: sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA==}
 
+  music-metadata@11.12.3:
+    resolution: {integrity: sha512-n6hSTZkuD59qWgHh6IP5dtDlDZQXoxk/bcA85Jywg8Z1iFrlNgl2+GTFgjZyn52W5UgQpV42V4XqrQZZAMbZTQ==}
+    engines: {node: '>=18'}
+
   mz@2.7.0:
     resolution: {integrity: sha512-z81GNO7nnYMEhrGh9LeymoE4+Yr0Wn5McHIZMK5cfQCl+NDX08sCZgUc9/6MHni9IWuFLm1Z3HTCXu2z9fN62Q==}
 
@@ -2766,8 +2774,8 @@ packages:
       zod:
         optional: true
 
-  openclaw@2026.4.11:
-    resolution: {integrity: sha512-kio+6C05OZhkNrYkkluELpF22A2X5fvudXcKj1J74Dp3n/iSLIDYz3WQ4TyTVGElERK8bTswF4atfbf+KvVpfQ==}
+  openclaw@2026.4.12:
+    resolution: {integrity: sha512-0siWIzT0OI8R+QWRJzTbDOcxAQnNXvQxFVXbF6CJMstsTyiG7hyW9HLRbTkv6SrxJEhuEMK91Ak2TLQjFjYZ5A==}
     engines: {node: '>=22.14.0'}
     hasBin: true
     peerDependencies:
@@ -3349,6 +3357,9 @@ packages:
 
   wide-align@1.1.5:
     resolution: {integrity: sha512-eDMORYaPNZ4sQIuuYPDHdQvf4gyCF9rEEV/yPxGfwPkRodwEgiMUUXTx/dex+Me0wxx53S+NgUHaP7y3MGlDmg==}
+
+  win-guid@0.2.1:
+    resolution: {integrity: sha512-gEIQU4mkgl2OPeoNrWflcJFJ3Ae2BPd4eCsHHA/XikslkIVms/nHhvnvzIZV7VLmBvtFlDOzLt9rrZT+n6D67A==}
 
   wordwrapjs@5.1.1:
     resolution: {integrity: sha512-0yweIbkINJodk27gX9LBGMzyQdBDan3s/dEAiwBOj+Mf0PPyWL6/rikalkv8EeD0E8jm4o5RXEOrFTP3NXbhJg==}
@@ -6059,6 +6070,9 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
+  fake-indexeddb@6.2.5:
+    optional: true
+
   fast-deep-equal@3.1.3: {}
 
   fast-string-truncated-width@1.2.1: {}
@@ -6681,6 +6695,22 @@ snapshots:
 
   ms@2.1.3: {}
 
+  music-metadata@11.12.3:
+    dependencies:
+      '@borewit/text-codec': 0.2.2
+      '@tokenizer/token': 0.3.0
+      content-type: 1.0.5
+      debug: 4.4.3
+      file-type: 21.3.4
+      media-typer: 1.1.0
+      strtok3: 10.3.5
+      token-types: 6.1.2
+      uint8array-extras: 1.5.0
+      win-guid: 0.2.1
+    transitivePeerDependencies:
+      - supports-color
+    optional: true
+
   mz@2.7.0:
     dependencies:
       any-promise: 1.3.0
@@ -6783,7 +6813,7 @@ snapshots:
       ws: 8.20.0
       zod: 4.3.6
 
-  openclaw@2026.4.11(@emnapi/core@1.9.2)(@emnapi/runtime@1.9.2)(@napi-rs/canvas@0.1.97)(@types/express@5.0.6)(apache-arrow@18.1.0)(typescript@6.0.2):
+  openclaw@2026.4.12(@emnapi/core@1.9.2)(@emnapi/runtime@1.9.2)(@napi-rs/canvas@0.1.97)(@types/express@5.0.6)(apache-arrow@18.1.0)(typescript@6.0.2):
     dependencies:
       '@agentclientprotocol/sdk': 0.18.2(zod@4.3.6)
       '@anthropic-ai/vertex-sdk': 0.15.0(zod@4.3.6)
@@ -6859,6 +6889,8 @@ snapshots:
     optionalDependencies:
       '@discordjs/opus': 0.10.0
       '@matrix-org/matrix-sdk-crypto-nodejs': 0.4.0
+      fake-indexeddb: 6.2.5
+      music-metadata: 11.12.3
       openshell: 0.1.0
     transitivePeerDependencies:
       - '@cfworker/json-schema'
@@ -7495,6 +7527,9 @@ snapshots:
   wide-align@1.1.5:
     dependencies:
       string-width: 4.2.3
+    optional: true
+
+  win-guid@0.2.1:
     optional: true
 
   wordwrapjs@5.1.1: {}

@@ -27,7 +27,7 @@ describe("plugin entry source", () => {
     assert.equal(packageJson.openclaw?.build?.openclawVersion, "2026.4.9");
     assert.equal(packageJson.openclaw?.build?.pluginSdkVersion, "2026.4.9");
     assert.equal(packageJson.peerDependencies?.openclaw, ">=2026.4.9");
-    assert.equal(packageJson.devDependencies?.openclaw, "2026.4.11");
+    assert.equal(packageJson.devDependencies?.openclaw, "2026.4.12");
   });
 
   it("declares narrow manifest activation and minimal setup descriptors", () => {
