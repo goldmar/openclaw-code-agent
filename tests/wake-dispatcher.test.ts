@@ -90,12 +90,12 @@ function parseMessageSendArgs(call: string[]) {
 describe("WakeDispatcher", () => {
   const originalPath = process.env.PATH ?? "";
   const originalLogPath = process.env.OPENCLAW_TEST_LOG;
-  const originalDiscordSdkModuleUrl = process.env.OPENCLAW_CODE_AGENT_DISCORD_SDK_MODULE_URL;
   const originalConsoleInfo = console.info;
   let tempDir: string;
   let logPath: string;
   let discordLogPath: string;
   let failStatePath: string;
+  let fakeDiscordSdkPath: string;
 
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), "wake-dispatcher-test-"));
@@ -134,7 +134,7 @@ if (failConfigRaw) {
 `);
     chmodSync(fakeOpenClawPath, 0o755);
 
-    const fakeDiscordSdkPath = join(tempDir, "fake-discord-sdk.mjs");
+    fakeDiscordSdkPath = join(tempDir, "fake-discord-sdk.mjs");
     writeFileSync(fakeDiscordSdkPath, `#!/usr/bin/env node
 import { appendFileSync } from "node:fs";
 
@@ -150,7 +150,6 @@ export async function sendDiscordComponentMessage(target, spec, opts = {}) {
     process.env.OPENCLAW_TEST_LOG = logPath;
     process.env.OPENCLAW_TEST_DISCORD_LOG = discordLogPath;
     process.env.OPENCLAW_TEST_FAIL_ONCE_STATE = failStatePath;
-    process.env.OPENCLAW_CODE_AGENT_DISCORD_SDK_MODULE_URL = `file://${fakeDiscordSdkPath}`;
     process.env.PATH = `${tempDir}:${originalPath}`;
   });
 
@@ -162,16 +161,19 @@ export async function sendDiscordComponentMessage(target, spec, opts = {}) {
     } else {
       process.env.OPENCLAW_TEST_LOG = originalLogPath;
     }
-    if (originalDiscordSdkModuleUrl == null) {
-      delete process.env.OPENCLAW_CODE_AGENT_DISCORD_SDK_MODULE_URL;
-    } else {
-      process.env.OPENCLAW_CODE_AGENT_DISCORD_SDK_MODULE_URL = originalDiscordSdkModuleUrl;
-    }
     delete process.env.OPENCLAW_TEST_DISCORD_LOG;
     delete process.env.OPENCLAW_TEST_FAIL_ONCE_FOR;
     delete process.env.OPENCLAW_TEST_FAIL_ONCE_STATE;
     rmSync(tempDir, { recursive: true, force: true });
   });
+
+  function createDispatcher() {
+    return new WakeDispatcher({
+      transportOptions: {
+        resolveDiscordSdkModuleUrl: () => `file://${fakeDiscordSdkPath}`,
+      },
+    });
+  }
 
   function readDiscordCalls(path: string): Array<{
     target: string;
@@ -199,7 +201,7 @@ export async function sendDiscordComponentMessage(target, spec, opts = {}) {
   }
 
   it("uses message.send for direct user notifications and logs completion", async () => {
-    const dispatcher = new WakeDispatcher();
+    const dispatcher = createDispatcher();
     const session: FakeSession = {
       id: "session-1",
       route: buildRoute(),
@@ -240,7 +242,7 @@ export async function sendDiscordComponentMessage(target, spec, opts = {}) {
       stderr: "launch delivery failed once",
       exitCode: 1,
     });
-    const dispatcher = new WakeDispatcher();
+    const dispatcher = createDispatcher();
     const session: FakeSession = {
       id: "session-ordering",
       route: buildRoute(),
@@ -266,7 +268,7 @@ export async function sendDiscordComponentMessage(target, spec, opts = {}) {
   });
 
   it("treats explicit system routes as non-routable and falls back to system.event", async () => {
-    const dispatcher = new WakeDispatcher();
+    const dispatcher = createDispatcher();
     const session: FakeSession = {
       id: "session-system-route",
       route: {
@@ -287,7 +289,7 @@ export async function sendDiscordComponentMessage(target, spec, opts = {}) {
   });
 
   it("recovers a direct Telegram notification route from degraded persisted metadata", async () => {
-    const dispatcher = new WakeDispatcher();
+    const dispatcher = createDispatcher();
     const session: FakeSession = {
       id: "session-degraded-route",
       route: {
@@ -318,16 +320,16 @@ export async function sendDiscordComponentMessage(target, spec, opts = {}) {
     const sigintBefore = process.listenerCount("SIGINT");
     const sigtermBefore = process.listenerCount("SIGTERM");
 
-    new WakeDispatcher();
-    new WakeDispatcher();
-    new WakeDispatcher();
+    createDispatcher();
+    createDispatcher();
+    createDispatcher();
 
     assert.equal(process.listenerCount("SIGINT"), sigintBefore);
     assert.equal(process.listenerCount("SIGTERM"), sigtermBefore);
   });
 
   it("sends the direct notification and wake through separate transports when wake metadata is present", async () => {
-    const dispatcher = new WakeDispatcher();
+    const dispatcher = createDispatcher();
     const session: FakeSession = {
       id: "session-2",
       route: buildRoute(),
@@ -362,7 +364,7 @@ export async function sendDiscordComponentMessage(target, spec, opts = {}) {
   });
 
   it("preserves Telegram inline buttons when a notification also sends a wake", async () => {
-    const dispatcher = new WakeDispatcher();
+    const dispatcher = createDispatcher();
     const session: FakeSession = {
       id: "session-buttons",
       route: buildRoute(),
@@ -400,7 +402,7 @@ export async function sendDiscordComponentMessage(target, spec, opts = {}) {
   });
 
   it("falls back to a direct user notification plus system event when the wake target is unavailable", async () => {
-    const dispatcher = new WakeDispatcher();
+    const dispatcher = createDispatcher();
     const session: FakeSession = {
       id: "session-3",
       route: buildRoute({ sessionKey: undefined }),
@@ -431,7 +433,7 @@ export async function sendDiscordComponentMessage(target, spec, opts = {}) {
   });
 
   it("does not silently downgrade interactive notifications to system text when direct routing is unavailable", async () => {
-    const dispatcher = new WakeDispatcher();
+    const dispatcher = createDispatcher();
     const session: FakeSession = {
       id: "session-interactive-no-route",
     };
@@ -460,7 +462,7 @@ export async function sendDiscordComponentMessage(target, spec, opts = {}) {
   });
 
   it("prefers the structured route over legacy originChannel fields for new-schema sessions", async () => {
-    const dispatcher = new WakeDispatcher();
+    const dispatcher = createDispatcher();
     const session: FakeSession = {
       id: "session-route-wins",
       route: {
@@ -485,7 +487,7 @@ export async function sendDiscordComponentMessage(target, spec, opts = {}) {
   });
 
   it("uses the wake/system fallback only once when originSessionKey is missing", async () => {
-    const dispatcher = new WakeDispatcher();
+    const dispatcher = createDispatcher();
     const session: FakeSession = { id: "session-4", route: buildRoute({ sessionKey: undefined }) };
 
     dispatcher.dispatchSessionNotification(session as any, {
@@ -513,7 +515,7 @@ export async function sendDiscordComponentMessage(target, spec, opts = {}) {
   });
 
   it("does not send a direct notify fallback when wake routing is recoverable from originSessionKey", async () => {
-    const dispatcher = new WakeDispatcher();
+    const dispatcher = createDispatcher();
     const session: FakeSession = {
       id: "session-origin-session-key-wake",
       route: buildRoute({ sessionKey: undefined }),
@@ -537,7 +539,7 @@ export async function sendDiscordComponentMessage(target, spec, opts = {}) {
   });
 
   it("uses system event for notify-only sessions when originSessionKey is missing", async () => {
-    const dispatcher = new WakeDispatcher();
+    const dispatcher = createDispatcher();
     const session: FakeSession = { id: "session-5" };
 
     dispatcher.dispatchSessionNotification(session as any, {
@@ -558,7 +560,7 @@ export async function sendDiscordComponentMessage(target, spec, opts = {}) {
   });
 
   it("routes explicit Discord channel targets through message.send", async () => {
-    const dispatcher = new WakeDispatcher();
+    const dispatcher = createDispatcher();
     const session: FakeSession = {
       id: "session-6",
       route: buildRoute({
@@ -585,7 +587,7 @@ export async function sendDiscordComponentMessage(target, spec, opts = {}) {
   });
 
   it("routes explicit Discord DM targets through message.send", async () => {
-    const dispatcher = new WakeDispatcher();
+    const dispatcher = createDispatcher();
     const session: FakeSession = {
       id: "session-7",
       route: buildRoute({
@@ -612,7 +614,7 @@ export async function sendDiscordComponentMessage(target, spec, opts = {}) {
   });
 
   it("sends Discord buttons as a separate native component notification", async () => {
-    const dispatcher = new WakeDispatcher();
+    const dispatcher = createDispatcher();
     const session: FakeSession = {
       id: "session-10",
       route: buildRoute({
@@ -658,7 +660,7 @@ export async function sendDiscordComponentMessage(target, spec, opts = {}) {
   });
 
   it("delivers paginated user notifications in order and keeps buttons only on the final chunk", async () => {
-    const dispatcher = new WakeDispatcher();
+    const dispatcher = createDispatcher();
     const session: FakeSession = {
       id: "session-paginated",
       route: buildRoute(),
@@ -703,7 +705,7 @@ export async function sendDiscordComponentMessage(target, spec, opts = {}) {
   });
 
   it("treats mid-sequence notification failures as partial success instead of triggering the all-failed fallback", () => {
-    const dispatcher = new WakeDispatcher();
+    const dispatcher = createDispatcher();
     const session: FakeSession = {
       id: "session-partial-sequence-failure",
       route: buildRoute(),
@@ -767,7 +769,7 @@ export async function sendDiscordComponentMessage(target, spec, opts = {}) {
   });
 
   it("falls back to system notify when no explicit route is present", async () => {
-    const dispatcher = new WakeDispatcher();
+    const dispatcher = createDispatcher();
     const session: FakeSession = {
       id: "session-8",
     };
@@ -790,7 +792,7 @@ export async function sendDiscordComponentMessage(target, spec, opts = {}) {
   });
 
   it("preserves existing Telegram routing when Discord sessions are added", async () => {
-    const dispatcher = new WakeDispatcher();
+    const dispatcher = createDispatcher();
     const session: FakeSession = {
       id: "session-9",
       route: buildRoute(),
@@ -813,7 +815,7 @@ export async function sendDiscordComponentMessage(target, spec, opts = {}) {
   });
 
   it("preserves Telegram topic routing for follow-up notifications", async () => {
-    const dispatcher = new WakeDispatcher();
+    const dispatcher = createDispatcher();
     const session: FakeSession = {
       id: "session-10",
       route: {
@@ -845,7 +847,7 @@ export async function sendDiscordComponentMessage(target, spec, opts = {}) {
   });
 
   it("repairs Telegram topic follow-ups before notifying or waking", async () => {
-    const dispatcher = new WakeDispatcher();
+    const dispatcher = createDispatcher();
     const session: FakeSession = {
       id: "session-telegram-topic-repair",
       route: {

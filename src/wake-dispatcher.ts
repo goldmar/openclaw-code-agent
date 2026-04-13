@@ -1,7 +1,7 @@
 import type { Session } from "./session";
 import { WakeDeliveryExecutor, type DispatchPhase } from "./wake-delivery-executor";
 import { WakeRouteResolver } from "./wake-route-resolver";
-import { WakeTransport } from "./wake-transport";
+import { WakeTransport, type WakeTransportOptions } from "./wake-transport";
 
 export type SessionNotificationPolicy = "always" | "on-wake-fallback" | "never";
 
@@ -32,10 +32,19 @@ export interface SessionNotificationHooks {
   onWakeFailed?: () => void;
 }
 
+export interface WakeDispatcherOptions {
+  transport?: WakeTransport;
+  transportOptions?: WakeTransportOptions;
+}
+
 export class WakeDispatcher {
   private readonly routes = new WakeRouteResolver();
-  private readonly transport = new WakeTransport();
+  private readonly transport: WakeTransport;
   private readonly executor = new WakeDeliveryExecutor();
+
+  constructor(options: WakeDispatcherOptions = {}) {
+    this.transport = options.transport ?? new WakeTransport(options.transportOptions);
+  }
 
   clearPendingRetries(): void {
     this.executor.clearPendingRetries();

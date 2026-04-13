@@ -7,17 +7,11 @@ import { join } from "node:path";
 import { WakeTransport } from "../src/wake-transport";
 
 const tempDirs: string[] = [];
-const originalDiscordSdkModuleUrl = process.env.OPENCLAW_CODE_AGENT_DISCORD_SDK_MODULE_URL;
 const originalDiscordLog = process.env.OPENCLAW_TEST_DISCORD_LOG;
 
 afterEach(() => {
   while (tempDirs.length > 0) {
     rmSync(tempDirs.pop()!, { recursive: true, force: true });
-  }
-  if (originalDiscordSdkModuleUrl == null) {
-    delete process.env.OPENCLAW_CODE_AGENT_DISCORD_SDK_MODULE_URL;
-  } else {
-    process.env.OPENCLAW_CODE_AGENT_DISCORD_SDK_MODULE_URL = originalDiscordSdkModuleUrl;
   }
   if (originalDiscordLog == null) {
     delete process.env.OPENCLAW_TEST_DISCORD_LOG;
@@ -81,7 +75,10 @@ describe("WakeTransport", () => {
     );
     writeFileSync(discordLogPath, "", "utf8");
 
-    const transport = new WakeTransport();
+    let moduleUrl = `file://${brokenModulePath}`;
+    const transport = new WakeTransport({
+      resolveDiscordSdkModuleUrl: () => moduleUrl,
+    });
     const route = {
       provider: "discord",
       accountId: "bot",
@@ -91,14 +88,13 @@ describe("WakeTransport", () => {
     const buttons = [[{ label: "Approve", callbackData: "token-approve" }]];
 
     process.env.OPENCLAW_TEST_DISCORD_LOG = discordLogPath;
-    process.env.OPENCLAW_CODE_AGENT_DISCORD_SDK_MODULE_URL = `file://${brokenModulePath}`;
 
     await assert.rejects(
       transport.sendDiscordComponents(route as any, buttons),
       /component sender export is unavailable/i,
     );
 
-    process.env.OPENCLAW_CODE_AGENT_DISCORD_SDK_MODULE_URL = `file://${workingModulePath}`;
+    moduleUrl = `file://${workingModulePath}`;
     await transport.sendDiscordComponents(route as any, buttons);
 
     const calls = readFileSync(discordLogPath, "utf8")
@@ -135,9 +131,9 @@ describe("WakeTransport", () => {
     writeFileSync(discordLogPath, "", "utf8");
 
     process.env.OPENCLAW_TEST_DISCORD_LOG = discordLogPath;
-    process.env.OPENCLAW_CODE_AGENT_DISCORD_SDK_MODULE_URL = `file://${modulePath}`;
-
-    const transport = new WakeTransport();
+    const transport = new WakeTransport({
+      resolveDiscordSdkModuleUrl: () => `file://${modulePath}`,
+    });
     await transport.sendDiscordComponents({
       provider: "discord",
       target: "channel:12345",

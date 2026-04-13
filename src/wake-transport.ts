@@ -20,12 +20,18 @@ type DiscordComponentSender = (
   opts?: { accountId?: string },
 ) => Promise<unknown>;
 
-function getDiscordSdkModuleUrl(): string {
-  return process.env.OPENCLAW_CODE_AGENT_DISCORD_SDK_MODULE_URL ?? "openclaw/plugin-sdk/discord";
+const DEFAULT_DISCORD_SDK_MODULE_URL = "openclaw/plugin-sdk/discord";
+
+export interface WakeTransportOptions {
+  resolveDiscordSdkModuleUrl?: () => string;
 }
 
 export class WakeTransport {
   private discordComponentSenderPromise: Promise<DiscordComponentSender> | null = null;
+
+  constructor(
+    private readonly options: WakeTransportOptions = {},
+  ) {}
 
   buildChatSendArgs(
     sessionKey: string,
@@ -123,7 +129,8 @@ export class WakeTransport {
 
   private async loadDiscordComponentSender(): Promise<DiscordComponentSender> {
     if (!this.discordComponentSenderPromise) {
-      this.discordComponentSenderPromise = import(getDiscordSdkModuleUrl())
+      const moduleUrl = this.options.resolveDiscordSdkModuleUrl?.() ?? DEFAULT_DISCORD_SDK_MODULE_URL;
+      this.discordComponentSenderPromise = import(moduleUrl)
         .then((mod) => {
           if (typeof mod.sendDiscordComponentMessage !== "function") {
             throw new Error("OpenClaw Discord component sender export is unavailable");
