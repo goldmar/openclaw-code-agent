@@ -9,6 +9,7 @@ import {
   buildWaitingForInputPayload,
   getStoppedStatusLabel,
 } from "./session-notification-builder";
+import { resolveNotificationRoute } from "./session-route";
 import type { Session } from "./session";
 import type { PersistedSessionInfo, PlanApprovalMode, PlanArtifact } from "./types";
 import type { NotificationButton } from "./session-interactions";
@@ -166,6 +167,17 @@ export class SessionLifecycleService {
       requestedShortFactualSummary: args.followupSummaryRequired,
       completionKind: "terminal",
     }));
+  }
+
+  private shouldRequestCompletionFollowup(
+    session: Pick<Session, "originChannel" | "originThreadId" | "originSessionKey" | "route">,
+  ): boolean {
+    const originSessionKey = session.originSessionKey?.trim();
+    if (originSessionKey?.startsWith("agent:main:cron:")) {
+      return false;
+    }
+
+    return Boolean(resolveNotificationRoute(session));
   }
 
   handleTurnEnd(session: Session, hadQuestion: boolean): void {
@@ -520,6 +532,7 @@ export class SessionLifecycleService {
 
   emitCompleted(session: Session): void {
     const preview = this.deps.getOutputPreview(session);
+    const followupSummaryRequired = this.shouldRequestCompletionFollowup(session);
     const payload = buildCompletedPayload({
       session,
       originThreadLine: this.deps.originThreadLine(session),
@@ -530,8 +543,9 @@ export class SessionLifecycleService {
       label: "completed",
       userMessage: payload.userMessage,
       notifyUser: "always",
-      wakeMessageOnNotifySuccess: payload.wakeMessageOnNotifySuccess,
-      wakeMessageOnNotifyFailed: payload.wakeMessageOnNotifyFailed,
+      completionWakeSummaryRequired: followupSummaryRequired,
+      wakeMessageOnNotifySuccess: followupSummaryRequired ? payload.wakeMessageOnNotifySuccess : undefined,
+      wakeMessageOnNotifyFailed: followupSummaryRequired ? payload.wakeMessageOnNotifyFailed : undefined,
       hooks: {
         onNotifySucceeded: () => {
           canonicalStatusDelivered = true;
@@ -539,7 +553,7 @@ export class SessionLifecycleService {
             session,
             event: "completion_notify_succeeded",
             canonicalStatusDelivered,
-            followupSummaryRequired: payload.followupContract.requiresShortFactualSummary,
+            followupSummaryRequired,
           });
         },
         onNotifyFailed: () => {
@@ -548,7 +562,7 @@ export class SessionLifecycleService {
             session,
             event: "completion_notify_failed",
             canonicalStatusDelivered,
-            followupSummaryRequired: payload.followupContract.requiresShortFactualSummary,
+            followupSummaryRequired,
           });
         },
         onWakeSucceeded: () => {
@@ -556,7 +570,7 @@ export class SessionLifecycleService {
             session,
             event: "completion_wake_succeeded",
             canonicalStatusDelivered,
-            followupSummaryRequired: payload.followupContract.requiresShortFactualSummary,
+            followupSummaryRequired,
           });
         },
       },

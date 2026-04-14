@@ -97,6 +97,7 @@ Completion ownership:
 - Skip the summary only in narrow cases:
   - no user-facing follow-up will be sent at all because the orchestrator is silently continuing an internal multi-phase pipeline
   - the completion produced no meaningful outcome to report, or the reliable result data is still too incomplete to support even a short factual summary
+  - the session is a silent cron/system pipeline that already returned `NO_REPLY` or otherwise explicitly opted out of a user-facing follow-up summary
 
 ## Respond Rules
 

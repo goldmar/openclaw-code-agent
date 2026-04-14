@@ -107,7 +107,7 @@ describe("SessionNotificationService", () => {
 
     service.dispatch(
       { id: "session-4", harnessSessionId: "h-4" } as any,
-      { label: "completed", wakeMessage: "done" },
+      { label: "completed", wakeMessage: "done", completionWakeSummaryRequired: true },
     );
 
     assert.deepEqual(
@@ -160,6 +160,7 @@ describe("SessionNotificationService", () => {
         label: "completed",
         userMessage: "done",
         wakeMessageOnNotifySuccess: "wake",
+        completionWakeSummaryRequired: true,
         notifyUser: "always",
       },
     );
@@ -206,6 +207,44 @@ describe("SessionNotificationService", () => {
           hasSucceededAt: true,
           hasFailedAt: false,
         },
+      ],
+    );
+  });
+
+  it("does not persist completion follow-up state when the terminal session opts out", () => {
+    const patches: Array<{ ref: string; patch: Record<string, unknown> }> = [];
+    const fakeDispatcher = {
+      dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, () => void> }) => {
+        request.hooks?.onNotifyStarted?.();
+        request.hooks?.onNotifySucceeded?.();
+      },
+      dispose: () => {},
+    };
+
+    const service = new SessionNotificationService(
+      fakeDispatcher as any,
+      (ref, patch) => patches.push({ ref, patch: patch as Record<string, unknown> }),
+    );
+
+    service.dispatch(
+      { id: "session-6", harnessSessionId: "h-6" } as any,
+      {
+        label: "completed",
+        userMessage: "done",
+        notifyUser: "always",
+        completionWakeSummaryRequired: false,
+      },
+    );
+
+    assert.deepEqual(
+      patches.map(({ ref, patch }) => ({
+        ref,
+        deliveryState: patch.deliveryState,
+        completionWakeSummaryRequired: patch.completionWakeSummaryRequired,
+      })),
+      [
+        { ref: "session-6", deliveryState: "notifying", completionWakeSummaryRequired: undefined },
+        { ref: "session-6", deliveryState: "idle", completionWakeSummaryRequired: undefined },
       ],
     );
   });
