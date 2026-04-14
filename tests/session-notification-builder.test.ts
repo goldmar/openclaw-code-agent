@@ -181,6 +181,62 @@ describe("session-notification-builder", () => {
     assert.doesNotMatch(summary, /Should I proceed\?/);
   });
 
+  it("includes concise recent context for forwarded user questions without echoing the question twice", () => {
+    const payload = buildWaitingForInputPayload({
+      session: {
+        id: "session-question-context",
+        name: "question-context",
+        multiTurn: true,
+        pendingPlanApproval: false,
+      } as any,
+      preview: "What host-version policy should the plan target?",
+      questionText: "What host-version policy should the plan target?",
+      questionContextPreview: [
+        "I traced the existing host-version handling and found two competing conventions.",
+        "The repo currently pins Docker hosts to a yearly baseline, but the deployment plan draft switched to exact image tags.",
+        "What host-version policy should the plan target?",
+      ].join("\n"),
+      originThreadLine: "Origin thread: telegram topic 42",
+    });
+
+    assert.equal(payload.label, "waiting");
+    assert.match(payload.userMessage ?? "", /Question:/);
+    assert.match(payload.userMessage ?? "", /What host-version policy should the plan target\?/);
+    assert.match(payload.userMessage ?? "", /Recent context:/);
+    assert.match(payload.userMessage ?? "", /two competing conventions/);
+    assert.match(payload.userMessage ?? "", /deployment plan draft switched to exact image tags/);
+    assert.equal((payload.userMessage ?? "").match(/What host-version policy should the plan target\?/g)?.length, 1);
+  });
+
+  it("keeps the newest complete lines when question context must be truncated", () => {
+    const oldLine = "Older context line ".repeat(28).trimEnd();
+    const middleLine = "Middle context line ".repeat(24).trimEnd();
+    const recentLine = "The user-visible policy conflict is between annual baselines and exact tags.";
+    const latestLine = "The question is asking which policy should govern the plan.";
+    const payload = buildWaitingForInputPayload({
+      session: {
+        id: "session-question-context-truncated",
+        name: "question-context-truncated",
+        multiTurn: true,
+        pendingPlanApproval: false,
+      } as any,
+      preview: "Which policy should we use?",
+      questionText: "Which policy should we use?",
+      questionContextPreview: [
+        oldLine,
+        middleLine,
+        recentLine,
+        latestLine,
+        "Which policy should we use?",
+      ].join("\n"),
+      originThreadLine: "Origin thread: telegram topic 42",
+    });
+
+    assert.match(payload.userMessage ?? "", new RegExp(recentLine.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    assert.match(payload.userMessage ?? "", new RegExp(latestLine.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    assert.doesNotMatch(payload.userMessage ?? "", new RegExp(oldLine.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  });
+
   it("keeps paginating the full finalized plan instead of switching to a semantic summary for very large plans", () => {
     const hugePlanItems = Array.from({ length: 90 }, (_, index) =>
       `${index + 1}. Step ${index + 1}: update a distinct approval-review surface with explicit wording and detailed validation notes so the finalized plan is intentionally larger than the full-plan pagination budget for a single approval prompt flow.`,

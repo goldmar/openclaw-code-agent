@@ -392,9 +392,14 @@ export class SessionLifecycleService {
       session.pendingPlanApproval
       && planApprovalMode === "ask"
       && hasProvablePlanReviewPrompt(session, planDecisionVersion);
+    const questionContextPreview = !session.pendingPlanApproval
+      ? this.deps.getOutputPreview(session)
+      : undefined;
     const preview =
       (!session.pendingPlanApproval && session.pendingInputState?.promptText)
         ? session.pendingInputState.promptText
+        : (!session.pendingPlanApproval && questionContextPreview !== undefined)
+          ? questionContextPreview
         : this.deps.getOutputPreview(
             session,
             session.pendingPlanApproval && planApprovalMode !== "delegate"
@@ -417,6 +422,8 @@ export class SessionLifecycleService {
     const payload = buildWaitingForInputPayload({
       session,
       preview,
+      questionText: !session.pendingPlanApproval ? session.pendingInputState?.promptText : undefined,
+      questionContextPreview,
       planArtifact: matchingPlanArtifact,
       originThreadLine: this.deps.originThreadLine(session),
       planApprovalMode,

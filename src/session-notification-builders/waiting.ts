@@ -1,6 +1,7 @@
 import type { Session } from "../session";
 import type { NotificationButton } from "../session-interactions";
 import type { PlanApprovalMode, PlanArtifact } from "../types";
+import { lastCompleteLines } from "../format";
 import { buildPlanApprovalPromptContent, buildPlanReviewSummary } from "../plan-review-summary";
 import type { SessionNotificationMessage } from "../wake-dispatcher";
 
@@ -13,6 +14,64 @@ type WaitingForInputPayload = {
   buttons?: NotificationButton[][];
   planReviewSummary?: string;
 };
+
+const QUESTION_CONTEXT_MAX_CHARS = 700;
+
+function normalizeQuestionText(text: string | undefined): string | undefined {
+  const trimmed = text?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function stripQuestionEchoFromContext(question: string | undefined, context: string | undefined): string | undefined {
+  const normalizedContext = context?.trim();
+  if (!normalizedContext) return undefined;
+  if (!question) return normalizedContext;
+
+  const questionTrimmed = question.trim();
+  const lines = normalizedContext
+    .split("\n")
+    .map((line) => line.trimEnd());
+
+  while (lines.length > 0 && !lines[lines.length - 1]?.trim()) lines.pop();
+  while (lines.length > 0 && lines[lines.length - 1]?.trim() === questionTrimmed) lines.pop();
+
+  const filtered = lines.filter((line, index, all) => {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed !== questionTrimmed) return true;
+    const hasOtherContent = all.some((candidate, candidateIndex) =>
+      candidateIndex !== index && candidate.trim().length > 0 && candidate.trim() !== questionTrimmed,
+    );
+    return !hasOtherContent;
+  });
+
+  const joined = filtered.join("\n").trim();
+  if (!joined || joined === questionTrimmed) return undefined;
+  return joined.length > QUESTION_CONTEXT_MAX_CHARS
+    ? lastCompleteLines(joined, QUESTION_CONTEXT_MAX_CHARS)
+    : joined;
+}
+
+function buildQuestionUserMessage(args: {
+  sessionName: string;
+  questionText?: string;
+  contextPreview?: string;
+}): string {
+  const questionText = normalizeQuestionText(args.questionText) ?? "The session is waiting for your reply.";
+  const contextPreview = stripQuestionEchoFromContext(questionText, args.contextPreview);
+  if (!contextPreview) {
+    return `❓ [${args.sessionName}] Question waiting for reply:\n\n${questionText}`;
+  }
+
+  return [
+    `❓ [${args.sessionName}] Question waiting for reply:`,
+    ``,
+    `Question:`,
+    questionText,
+    ``,
+    `Recent context:`,
+    contextPreview,
+  ].join("\n");
+}
 
 function hasProvableUserVisiblePrompt(session: Pick<Session, "approvalPromptRequiredVersion" | "approvalPromptStatus">, actionableVersion?: number): boolean {
   return actionableVersion != null
@@ -43,13 +102,25 @@ export function buildPlanApprovalFallbackText(args: {
 export function buildWaitingForInputPayload(args: {
   session: Pick<Session, "id" | "name" | "multiTurn" | "pendingPlanApproval" | "planDecisionVersion" | "actionablePlanDecisionVersion" | "approvalPromptRequiredVersion" | "approvalPromptStatus">;
   preview: string;
+  questionText?: string;
+  questionContextPreview?: string;
   planArtifact?: PlanArtifact;
   originThreadLine: OriginThreadLine;
   planApprovalMode?: PlanApprovalMode;
   planApprovalButtons?: NotificationButton[][];
   questionButtons?: NotificationButton[][];
 }): WaitingForInputPayload {
-  const { session, preview, planArtifact, originThreadLine, planApprovalMode, planApprovalButtons, questionButtons } = args;
+  const {
+    session,
+    preview,
+    questionText,
+    questionContextPreview,
+    planArtifact,
+    originThreadLine,
+    planApprovalMode,
+    planApprovalButtons,
+    questionButtons,
+  } = args;
   const isPlanApproval = session.pendingPlanApproval;
   const actionableVersion = session.actionablePlanDecisionVersion ?? session.planDecisionVersion;
   const promptAlreadyProven = hasProvableUserVisiblePrompt(session, actionableVersion);
@@ -76,7 +147,11 @@ export function buildWaitingForInputPayload(args: {
           ? planPrompt.userMessages[0]
           : undefined
       )
-    : `❓ [${session.name}] Question waiting for reply:\n\n${preview}`;
+    : buildQuestionUserMessage({
+        sessionName: session.name,
+        questionText: questionText ?? preview,
+        contextPreview: questionContextPreview,
+      });
   const userMessages = isPlanApproval
     ? (
         planPrompt && planPrompt.userMessages.length > 1

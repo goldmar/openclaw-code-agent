@@ -248,4 +248,56 @@ describe("SessionLifecycleService", () => {
     assert.equal(request.hooks, undefined);
     assert.deepEqual(persistedUpdates, []);
   });
+
+  it("reuses the question context preview when promptText is unavailable", () => {
+    const requests: Array<Record<string, unknown>> = [];
+    let previewCalls = 0;
+
+    const service = new SessionLifecycleService({
+      persistSession: () => {},
+      clearWaitingTimestamp: () => {},
+      handleWorktreeStrategy: async () => ({
+        notificationSent: false,
+        worktreeRemoved: false,
+      }),
+      resolveWorktreeRepoDir: () => undefined,
+      updatePersistedSession: () => false,
+      dispatchSessionNotification: (_session, request) => {
+        requests.push(request as unknown as Record<string, unknown>);
+      },
+      notifySession: () => {},
+      clearRetryTimersForSession: () => {},
+      hasTurnCompleteWakeMarker: () => false,
+      shouldEmitTurnCompleteWake: () => true,
+      shouldEmitTerminalWake: () => true,
+      resolvePlanApprovalMode: () => "ask",
+      getPlanApprovalButtons: () => [],
+      getResumeButtons: () => [],
+      getQuestionButtons: () => undefined,
+      extractLastOutputLine: () => undefined,
+      getOutputPreview: () => {
+        previewCalls += 1;
+        return "Fallback preview";
+      },
+      originThreadLine: () => "Origin thread: telegram topic 42",
+      debounceWaitingEvent: () => true,
+      isAlreadyMerged: () => false,
+    });
+
+    service.emitWaitingForInput(createStubSession({
+      id: "session-fallback-preview",
+      name: "fallback-preview",
+      pendingPlanApproval: false,
+      pendingInputState: {
+        requestId: "req-fallback-preview",
+        kind: "question",
+        promptText: "",
+        options: [],
+      },
+    }));
+
+    assert.equal(previewCalls, 1);
+    assert.equal(requests.length, 1);
+    assert.match(String(requests[0]?.userMessage ?? ""), /Fallback preview/);
+  });
 });
