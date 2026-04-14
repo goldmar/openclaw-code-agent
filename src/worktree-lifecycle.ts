@@ -6,10 +6,19 @@ export interface RemoveWorktreeOptions {
   destructive?: boolean;
 }
 
-export function createWorktree(repoDir: string, sessionName: string): string {
+export interface CreateWorktreeOptions {
+  allowExistingBranch?: boolean;
+}
+
+export function createWorktree(
+  repoDir: string,
+  sessionName: string,
+  options: CreateWorktreeOptions = {},
+): string {
   const sanitized = sanitizeBranchName(sessionName);
   const baseDir = getWorktreeBaseDir(repoDir);
   mkdirSync(baseDir, { recursive: true });
+  const allowExistingBranch = options.allowExistingBranch === true;
 
   let worktreePath: string | undefined;
   let branchName: string | undefined;
@@ -19,6 +28,9 @@ export function createWorktree(repoDir: string, sessionName: string): string {
     const suffix = attempt === 0 ? "" : `-${Math.random().toString(16).slice(2, 6)}`;
     const candidatePath = `${baseDir}/openclaw-worktree-${sanitized}${suffix}`;
     const candidateBranch = `agent/${sanitized}${suffix}`;
+    if (!allowExistingBranch && branchExists(repoDir, candidateBranch)) {
+      continue;
+    }
 
     try {
       mkdirSync(candidatePath, { recursive: false });
@@ -34,7 +46,7 @@ export function createWorktree(repoDir: string, sessionName: string): string {
   }
 
   if (!worktreePath || !branchName) {
-    throw new Error(`Failed to create unique worktree directory after ${maxRetries} attempts`);
+    throw new Error(`Failed to create unique worktree directory and branch after ${maxRetries} attempts`);
   }
 
   const branchAlreadyExists = branchExists(repoDir, branchName);

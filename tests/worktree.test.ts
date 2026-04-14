@@ -240,3 +240,63 @@ describe("removeWorktree", () => {
     }
   });
 });
+
+describe("createWorktree branch selection", () => {
+  it("creates a fresh suffixed branch when the default agent branch name already exists", async () => {
+    const { createWorktree, getBranchName } = await import("../src/worktree.js");
+    const repoDir = mkdtempSync(join(tmpdir(), "openclaw-worktree-branch-collision-"));
+
+    try {
+      execFileSync("git", ["init", "-b", "main"], { cwd: repoDir, stdio: "ignore" });
+      execFileSync("git", ["config", "user.name", "OpenClaw Tests"], { cwd: repoDir, stdio: "ignore" });
+      execFileSync("git", ["config", "user.email", "tests@example.com"], { cwd: repoDir, stdio: "ignore" });
+      writeFileSync(join(repoDir, "README.md"), "base\n");
+      execFileSync("git", ["add", "README.md"], { cwd: repoDir, stdio: "ignore" });
+      execFileSync("git", ["commit", "-m", "init"], { cwd: repoDir, stdio: "ignore" });
+
+      execFileSync("git", ["checkout", "-b", "agent/branch-collision"], { cwd: repoDir, stdio: "ignore" });
+      writeFileSync(join(repoDir, "stale.txt"), "old branch state\n");
+      execFileSync("git", ["add", "stale.txt"], { cwd: repoDir, stdio: "ignore" });
+      execFileSync("git", ["commit", "-m", "stale branch commit"], { cwd: repoDir, stdio: "ignore" });
+      execFileSync("git", ["checkout", "main"], { cwd: repoDir, stdio: "ignore" });
+
+      const worktreePath = createWorktree(repoDir, "branch-collision");
+      const branchName = getBranchName(worktreePath);
+
+      assert.ok(branchName);
+      assert.notEqual(branchName, "agent/branch-collision");
+      assert.match(branchName, /^agent\/branch-collision-/);
+      assert.equal(existsSync(join(worktreePath, "stale.txt")), false);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it("can explicitly reuse an existing agent branch when recreating a missing worktree", async () => {
+    const { createWorktree, getBranchName } = await import("../src/worktree.js");
+    const repoDir = mkdtempSync(join(tmpdir(), "openclaw-worktree-branch-reuse-"));
+
+    try {
+      execFileSync("git", ["init", "-b", "main"], { cwd: repoDir, stdio: "ignore" });
+      execFileSync("git", ["config", "user.name", "OpenClaw Tests"], { cwd: repoDir, stdio: "ignore" });
+      execFileSync("git", ["config", "user.email", "tests@example.com"], { cwd: repoDir, stdio: "ignore" });
+      writeFileSync(join(repoDir, "README.md"), "base\n");
+      execFileSync("git", ["add", "README.md"], { cwd: repoDir, stdio: "ignore" });
+      execFileSync("git", ["commit", "-m", "init"], { cwd: repoDir, stdio: "ignore" });
+
+      execFileSync("git", ["checkout", "-b", "agent/resume-target"], { cwd: repoDir, stdio: "ignore" });
+      writeFileSync(join(repoDir, "resume.txt"), "resume branch state\n");
+      execFileSync("git", ["add", "resume.txt"], { cwd: repoDir, stdio: "ignore" });
+      execFileSync("git", ["commit", "-m", "resume branch commit"], { cwd: repoDir, stdio: "ignore" });
+      execFileSync("git", ["checkout", "main"], { cwd: repoDir, stdio: "ignore" });
+
+      const worktreePath = createWorktree(repoDir, "resume-target", { allowExistingBranch: true });
+      const branchName = getBranchName(worktreePath);
+
+      assert.equal(branchName, "agent/resume-target");
+      assert.equal(existsSync(join(worktreePath, "resume.txt")), true);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+});
