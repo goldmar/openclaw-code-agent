@@ -34,7 +34,8 @@
           "codex": {
             "defaultModel": "gpt-5.4",
             "allowedModels": [
-              "gpt-5.4"
+              "gpt-5.4",
+              "gpt-5.4-pro"
             ],
             "reasoningEffort": "medium"
           },
@@ -189,7 +190,7 @@
     },
     "harnesses": {
       "label": "Harness configuration",
-      "help": "Per-harness defaults and model restrictions. Default: {\"codex\":{\"defaultModel\":\"gpt-5.4\",\"allowedModels\":[\"gpt-5.4\"],\"reasoningEffort\":\"medium\"},\"claude-code\":{\"defaultModel\":\"sonnet\",\"allowedModels\":[\"sonnet\",\"opus\"]}}.",
+      "help": "Per-harness defaults and model restrictions. Default: {\"codex\":{\"defaultModel\":\"gpt-5.4\",\"allowedModels\":[\"gpt-5.4\",\"gpt-5.4-pro\"],\"reasoningEffort\":\"medium\"},\"claude-code\":{\"defaultModel\":\"sonnet\",\"allowedModels\":[\"sonnet\",\"opus\"]}}.",
       "advanced": true
     },
     "maxSessions": {

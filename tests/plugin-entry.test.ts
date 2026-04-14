@@ -12,7 +12,7 @@ describe("plugin entry source", () => {
     assert.equal(packageVersion, pluginVersion);
   });
 
-  it("declares the v2026.4.9 external plugin compatibility baseline in package metadata", () => {
+  it("declares the v2026.4.14 external plugin compatibility baseline in package metadata", () => {
     const packageJson = JSON.parse(readFileSync(join(rootDir, "package.json"), "utf8")) as {
       openclaw?: {
         compat?: Record<string, string>;
@@ -22,12 +22,12 @@ describe("plugin entry source", () => {
       peerDependencies?: Record<string, string>;
     };
 
-    assert.equal(packageJson.openclaw?.compat?.pluginApi, ">=2026.4.9");
-    assert.equal(packageJson.openclaw?.compat?.minGatewayVersion, "2026.4.9");
-    assert.equal(packageJson.openclaw?.build?.openclawVersion, "2026.4.9");
-    assert.equal(packageJson.openclaw?.build?.pluginSdkVersion, "2026.4.9");
-    assert.equal(packageJson.peerDependencies?.openclaw, ">=2026.4.9");
-    assert.equal(packageJson.devDependencies?.openclaw, "2026.4.12");
+    assert.equal(packageJson.openclaw?.compat?.pluginApi, ">=2026.4.14");
+    assert.equal(packageJson.openclaw?.compat?.minGatewayVersion, "2026.4.14");
+    assert.equal(packageJson.openclaw?.build?.openclawVersion, "2026.4.14");
+    assert.equal(packageJson.openclaw?.build?.pluginSdkVersion, "2026.4.14");
+    assert.equal(packageJson.peerDependencies?.openclaw, ">=2026.4.14");
+    assert.equal(packageJson.devDependencies?.openclaw, "2026.4.14");
   });
 
   it("declares narrow manifest activation and minimal setup descriptors", () => {

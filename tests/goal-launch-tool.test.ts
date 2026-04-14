@@ -71,4 +71,56 @@ describe("goal_launch tool", () => {
     assert.match((result.content[0] as { text: string }).text, /Harness: codex/);
     assert.match((result.content[0] as { text: string }).text, /Max iterations: 5/);
   });
+
+  it("uses deliveryContext routing on the current SDK surface", async () => {
+    let launchConfig: Record<string, unknown> | undefined;
+
+    setPluginConfig({
+      defaultHarness: "codex",
+      harnesses: {
+        codex: {
+          defaultModel: "gpt-5.4",
+          allowedModels: ["gpt-5.4", "gpt-5.4-pro"],
+          reasoningEffort: "high",
+        },
+      },
+    });
+
+    setGoalController({
+      async launchTask(config: Record<string, unknown>) {
+        launchConfig = config;
+        return {
+          id: "goal-2",
+          name: "goal-routing",
+          workdir: config.workdir,
+          sessionId: "sess-2",
+          sessionName: "goal-routing",
+          maxIterations: config.maxIterations ?? 8,
+          loopMode: config.loopMode ?? "ralph",
+          completionPromise: config.completionPromise,
+        };
+      },
+    } as any);
+
+    const tool = makeGoalLaunchTool({
+      workspaceDir: "/tmp",
+      sessionKey: "agent:main:discord:channel:123456789",
+      deliveryContext: {
+        channel: "discord",
+        to: "123456789",
+        accountId: "acct-1",
+        threadId: "thread-7",
+      },
+    } as any);
+
+    await tool.execute("tool-id", {
+      goal: "Keep routing stable",
+      completion_promise: "DONE",
+    });
+
+    assert.ok(launchConfig, "launchTask should be called");
+    assert.equal(launchConfig?.originChannel, "discord|acct-1|123456789");
+    assert.equal(launchConfig?.originThreadId, "thread-7");
+    assert.equal((launchConfig?.route as { accountId?: string } | undefined)?.accountId, "acct-1");
+  });
 });

@@ -117,6 +117,20 @@ describe("resolveOriginChannel", () => {
     assert.equal(resolveOriginChannel({ messageChannel: "telegram", chatId: "-1003863755361" }), "telegram|-1003863755361");
   });
 
+  it("prefers deliveryContext routing from the current SDK surface", () => {
+    assert.equal(
+      resolveOriginChannel({
+        deliveryContext: {
+          channel: "telegram",
+          to: "-1003863755361",
+          accountId: "bot1",
+        },
+        messageChannel: "telegram",
+      }),
+      "telegram|bot1|-1003863755361",
+    );
+  });
+
   it("keeps Telegram topic sessions weak when only senderId is available", () => {
     assert.equal(
       resolveOriginChannel({
@@ -156,6 +170,26 @@ describe("resolveSessionRoute", () => {
       {
         provider: "telegram",
         accountId: undefined,
+        target: "-1003863755361",
+        threadId: "28",
+        sessionKey: undefined,
+      },
+    );
+  });
+
+  it("builds a direct Telegram route from deliveryContext", () => {
+    assert.deepEqual(
+      resolveSessionRoute({
+        deliveryContext: {
+          channel: "telegram",
+          to: "-1003863755361",
+          accountId: "bot1",
+          threadId: 28,
+        },
+      }),
+      {
+        provider: "telegram",
+        accountId: "bot1",
         target: "-1003863755361",
         threadId: "28",
         sessionKey: undefined,
@@ -228,6 +262,19 @@ describe("resolveToolChannel", () => {
   it("builds from provider-only messageChannel + chatId", () => {
     const ctx = { messageChannel: "telegram", chatId: "-1003863755361" };
     assert.equal(resolveToolChannel(ctx), "telegram|-1003863755361");
+  });
+
+  it("prefers deliveryContext when present", () => {
+    const ctx = {
+      deliveryContext: {
+        channel: "telegram",
+        to: "-1003863755361",
+        accountId: "bot1",
+      },
+      messageChannel: "telegram",
+      agentAccountId: "bot2",
+    };
+    assert.equal(resolveToolChannel(ctx), "telegram|bot1|-1003863755361");
   });
 
   it("does not derive Telegram topic routes from senderId", () => {
@@ -337,7 +384,7 @@ describe("setPluginConfig", () => {
     assert.equal(pluginConfig.harnesses["claude-code"]?.defaultModel, "sonnet");
     assert.deepEqual(pluginConfig.harnesses["claude-code"]?.allowedModels, ["sonnet", "opus"]);
     assert.equal(pluginConfig.harnesses.codex?.defaultModel, "gpt-5.4");
-    assert.deepEqual(pluginConfig.harnesses.codex?.allowedModels, ["gpt-5.4"]);
+    assert.deepEqual(pluginConfig.harnesses.codex?.allowedModels, ["gpt-5.4", "gpt-5.4-pro"]);
     assert.equal(pluginConfig.harnesses.codex?.reasoningEffort, "medium");
   });
 
@@ -369,7 +416,7 @@ describe("setPluginConfig", () => {
     assert.equal(pluginConfig.harnesses["claude-code"]?.defaultModel, "sonnet");
     assert.deepEqual(pluginConfig.harnesses["claude-code"]?.allowedModels, ["sonnet", "opus"]);
     assert.equal(pluginConfig.harnesses.codex?.defaultModel, "gpt-5.4");
-    assert.deepEqual(pluginConfig.harnesses.codex?.allowedModels, ["gpt-5.4"]);
+    assert.deepEqual(pluginConfig.harnesses.codex?.allowedModels, ["gpt-5.4", "gpt-5.4-pro"]);
     assert.equal(pluginConfig.defaultWorkdir, undefined);
     assert.equal(pluginConfig.fallbackChannel, undefined);
     assert.equal(pluginConfig.agentChannels, undefined);
@@ -391,6 +438,10 @@ describe("setPluginConfig", () => {
 describe("resolveOriginThreadId", () => {
   it("returns messageThreadId from context", () => {
     assert.equal(resolveOriginThreadId({ messageThreadId: 42 }), 42);
+  });
+
+  it("prefers deliveryContext.threadId from the current SDK surface", () => {
+    assert.equal(resolveOriginThreadId({ deliveryContext: { threadId: 77 }, messageThreadId: 42 }), "77");
   });
 
   it("returns string messageThreadId from context", () => {
@@ -427,7 +478,7 @@ describe("pluginConfig singleton", () => {
     assert.equal(pluginConfig.harnesses["claude-code"]?.defaultModel, "sonnet");
     assert.deepEqual(pluginConfig.harnesses["claude-code"]?.allowedModels, ["sonnet", "opus"]);
     assert.equal(pluginConfig.harnesses.codex?.defaultModel, "gpt-5.4");
-    assert.deepEqual(pluginConfig.harnesses.codex?.allowedModels, ["gpt-5.4"]);
+    assert.deepEqual(pluginConfig.harnesses.codex?.allowedModels, ["gpt-5.4", "gpt-5.4-pro"]);
     assert.equal(pluginConfig.harnesses.codex?.reasoningEffort, "medium");
   });
 

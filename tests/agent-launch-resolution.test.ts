@@ -56,6 +56,52 @@ describe("resolveAgentLaunchRequest", () => {
     }
   });
 
+  it("uses deliveryContext when resolving linked-session routing", () => {
+    const result = resolveAgentLaunchRequest(
+      { prompt: "Continue work" },
+      {
+        workspaceDir: "/tmp",
+        sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+        deliveryContext: {
+          channel: "telegram",
+          to: "-1003863755361",
+          accountId: "bot1",
+          threadId: 13832,
+        },
+      } as any,
+      {
+        list: () => [{
+          id: "sess-1",
+          name: "linked",
+          status: "running",
+          workdir: "/tmp",
+          originChannel: "telegram|bot1|-1003863755361",
+          originThreadId: "13832",
+        }],
+        listPersistedSessions: () => [],
+      },
+    );
+
+    assert.equal(result.kind, "blocked");
+  });
+
+  it("accepts gpt-5.4-pro under the built-in Codex allowlist", () => {
+    const result = resolveAgentLaunchRequest(
+      {
+        prompt: "Use the pro model",
+        harness: "codex",
+        model: "gpt-5.4-pro",
+      },
+      { workspaceDir: "/tmp" } as any,
+      {},
+    );
+
+    assert.equal(result.kind, "resolved");
+    if (result.kind === "resolved") {
+      assert.equal(result.resolvedModel, "gpt-5.4-pro");
+    }
+  });
+
   it("prefers canonical backend conversation ids for resume resolution", () => {
     const result = resolveAgentLaunchRequest(
       {

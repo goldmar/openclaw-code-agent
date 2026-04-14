@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Raised the external OpenClaw compatibility baseline to `v2026.4.14`.
+- Prefer the `deliveryContext` / `requesterSenderId` tool-context surface introduced in newer OpenClaw releases while keeping legacy routing fallbacks for older fixtures and persisted state.
+- Allowed `gpt-5.4-pro` in the built-in Codex model allowlist.
+
 ## [3.2.0] - 2026-04-10
 
 ### Added
