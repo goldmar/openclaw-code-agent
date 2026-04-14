@@ -401,6 +401,9 @@ export class SessionLifecycleService {
               ? Number.POSITIVE_INFINITY
               : undefined,
           );
+    const questionContextPreview = !session.pendingPlanApproval
+      ? this.deps.getOutputPreview(session)
+      : undefined;
     const waitingButtons =
       session.pendingPlanApproval && planApprovalMode === "ask" && !promptAlreadyProven
         ? this.deps.getPlanApprovalButtons(session.id, {
@@ -417,6 +420,8 @@ export class SessionLifecycleService {
     const payload = buildWaitingForInputPayload({
       session,
       preview,
+      questionText: !session.pendingPlanApproval ? session.pendingInputState?.promptText : undefined,
+      questionContextPreview,
       planArtifact: matchingPlanArtifact,
       originThreadLine: this.deps.originThreadLine(session),
       planApprovalMode,

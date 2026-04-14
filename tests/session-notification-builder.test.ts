@@ -181,6 +181,33 @@ describe("session-notification-builder", () => {
     assert.doesNotMatch(summary, /Should I proceed\?/);
   });
 
+  it("includes concise recent context for forwarded user questions without echoing the question twice", () => {
+    const payload = buildWaitingForInputPayload({
+      session: {
+        id: "session-question-context",
+        name: "question-context",
+        multiTurn: true,
+        pendingPlanApproval: false,
+      } as any,
+      preview: "What host-version policy should the plan target?",
+      questionText: "What host-version policy should the plan target?",
+      questionContextPreview: [
+        "I traced the existing host-version handling and found two competing conventions.",
+        "The repo currently pins Docker hosts to a yearly baseline, but the deployment plan draft switched to exact image tags.",
+        "What host-version policy should the plan target?",
+      ].join("\n"),
+      originThreadLine: "Origin thread: telegram topic 42",
+    });
+
+    assert.equal(payload.label, "waiting");
+    assert.match(payload.userMessage ?? "", /Question:/);
+    assert.match(payload.userMessage ?? "", /What host-version policy should the plan target\?/);
+    assert.match(payload.userMessage ?? "", /Recent context:/);
+    assert.match(payload.userMessage ?? "", /two competing conventions/);
+    assert.match(payload.userMessage ?? "", /deployment plan draft switched to exact image tags/);
+    assert.equal((payload.userMessage ?? "").match(/What host-version policy should the plan target\?/g)?.length, 1);
+  });
+
   it("keeps paginating the full finalized plan instead of switching to a semantic summary for very large plans", () => {
     const hugePlanItems = Array.from({ length: 90 }, (_, index) =>
       `${index + 1}. Step ${index + 1}: update a distinct approval-review surface with explicit wording and detailed validation notes so the finalized plan is intentionally larger than the full-plan pagination budget for a single approval prompt flow.`,

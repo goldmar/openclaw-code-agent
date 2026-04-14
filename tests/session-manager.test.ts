@@ -1668,6 +1668,43 @@ describe("SessionManager turn-end wake", () => {
     assert.match(request.wakeMessageOnNotifyFailed, /allow read-only workspace inspection/);
   });
 
+  it("includes recent output context alongside forwarded pending-input questions", async () => {
+    const s = fakeSession({
+      id: "s-pending-input-context",
+      name: "pending-input-context-session",
+      status: "running",
+      pendingPlanApproval: false,
+      pendingInputState: {
+        requestId: "req-context-1",
+        kind: "question",
+        promptText: "What host-version policy should the plan target?",
+        options: ["Annual baseline", "Exact tag", "Custom"],
+      },
+      getOutput: () => [
+        "I traced the existing host-version handling and found two competing conventions.",
+        "The repo currently pins Docker hosts to a yearly baseline, but the deployment plan draft switched to exact image tags.",
+        "What host-version policy should the plan target?",
+      ],
+    });
+
+    await (sm as any).triggerWaitingForInputEvent(s);
+
+    const calls = (sm as any).__dispatchCalls;
+    assert.equal(calls.length, 1);
+    const [_sessionArg, request] = calls[0];
+    assert.equal(request.label, "waiting");
+    assert.match(request.userMessage, /Question:/);
+    assert.match(request.userMessage, /What host-version policy should the plan target\?/);
+    assert.match(request.userMessage, /Recent context:/);
+    assert.match(request.userMessage, /two competing conventions/);
+    assert.match(request.userMessage, /exact image tags/);
+    assert.equal((request.userMessage.match(/What host-version policy should the plan target\?/g) ?? []).length, 1);
+    assert.deepEqual(
+      request.buttons.map((row: Array<{ label: string }>) => row.map((button) => button.label)),
+      [["Annual baseline", "Exact tag", "Custom"]],
+    );
+  });
+
   it("emits two separate waiting notifications for back-to-back native pending-input requests in one Codex session", async () => {
     const s = fakeSession({
       id: "s-codex-pending-input",
