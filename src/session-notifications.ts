@@ -125,7 +125,7 @@ export class SessionNotificationService {
   private buildCompletionWakePatch(
     request: SessionNotificationRequest,
   ): Pick<PersistedSessionInfo, "completionWakeSummaryRequired"> | undefined {
-    if (request.label !== "completed") return undefined;
+    if (request.label !== "completed" || request.completionWakeSummaryRequired !== true) return undefined;
     return { completionWakeSummaryRequired: true };
   }
 }

@@ -17,6 +17,7 @@ export interface SessionNotificationRequest {
   wakeMessage?: string;
   wakeMessageOnNotifySuccess?: string;
   wakeMessageOnNotifyFailed?: string;
+  completionWakeSummaryRequired?: boolean;
   notifyUser?: SessionNotificationPolicy;
   buttons?: Array<Array<{ label: string; callbackData: string }>>;
   onUserNotifyFailed?: () => void;

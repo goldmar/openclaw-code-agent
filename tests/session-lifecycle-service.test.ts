@@ -123,6 +123,62 @@ describe("SessionLifecycleService", () => {
     assert.ok(infoLogs.some((line) => line.includes("\"event\":\"completion_wake_succeeded\"") && line.includes("\"canonicalStatusDelivered\":true")));
   });
 
+  it("keeps completion follow-up summaries for degraded routes that still recover to a direct user route", () => {
+    const requests: Array<Record<string, unknown>> = [];
+
+    const service = new SessionLifecycleService({
+      persistSession: () => {},
+      clearWaitingTimestamp: () => {},
+      handleWorktreeStrategy: async () => ({
+        notificationSent: false,
+        worktreeRemoved: false,
+      }),
+      resolveWorktreeRepoDir: () => undefined,
+      updatePersistedSession: () => false,
+      dispatchSessionNotification: (_session, request) => {
+        requests.push(request as unknown as Record<string, unknown>);
+      },
+      notifySession: () => {},
+      clearRetryTimersForSession: () => {},
+      hasTurnCompleteWakeMarker: () => false,
+      shouldEmitTurnCompleteWake: () => true,
+      shouldEmitTerminalWake: () => true,
+      resolvePlanApprovalMode: () => "ask",
+      getPlanApprovalButtons: () => [],
+      getResumeButtons: () => [],
+      getQuestionButtons: () => undefined,
+      extractLastOutputLine: () => undefined,
+      getOutputPreview: () => "Final output",
+      originThreadLine: () => "Origin thread: telegram topic 42",
+      debounceWaitingEvent: () => true,
+      isAlreadyMerged: () => false,
+    });
+
+    service.emitCompleted(createStubSession({
+      id: "session-recoverable-route",
+      name: "recoverable-route",
+      status: "completed",
+      duration: 8_000,
+      route: {
+        provider: "system",
+        target: "system",
+        sessionKey: "agent:main:telegram:group:-1003863755361:topic:11239",
+      },
+      originChannel: "telegram",
+      originSessionKey: "agent:main:telegram:group:-1003863755361:topic:11239",
+    }));
+
+    assert.equal(requests.length, 1);
+    const request = requests[0] as {
+      completionWakeSummaryRequired?: boolean;
+      wakeMessageOnNotifySuccess?: string;
+      wakeMessageOnNotifyFailed?: string;
+    };
+    assert.equal(request.completionWakeSummaryRequired, true);
+    assert.match(request.wakeMessageOnNotifySuccess ?? "", /must send the user a short factual completion summary/i);
+    assert.match(request.wakeMessageOnNotifyFailed ?? "", /Canonical completion status delivered to user: no/i);
+  });
+
   it("does not re-enter ask-mode prompt delivery once the current plan prompt is already proven", () => {
     const requests: Array<Record<string, unknown>> = [];
     const persistedUpdates: Array<Record<string, unknown>> = [];

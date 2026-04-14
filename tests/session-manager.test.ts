@@ -1842,6 +1842,38 @@ describe("SessionManager turn-end wake", () => {
     assert.match(request.wakeMessageOnNotifyFailed, /did not confirm delivery of the canonical completion status/i);
   });
 
+  it("suppresses completion follow-up summaries for silent cron/system completions", async () => {
+    const s = fakeSession({
+      id: "s-silent-cron",
+      name: "analytics-refresh",
+      status: "completed",
+      originSessionKey: "agent:main:cron:x-engagement-analytics-refresh",
+      route: {
+        provider: "system",
+        target: "system",
+        sessionKey: "agent:main:cron:x-engagement-analytics-refresh",
+      },
+      prompt: "Run the cron job exactly as specified and do not post anything publicly.",
+      duration: 11_000,
+      completedAt: Date.now(),
+      getOutput: (n?: number) => {
+        const lines = ["Success. No user-facing message was sent to Telegram topic 6898."];
+        return n === undefined ? lines : lines.slice(-n);
+      },
+    });
+
+    await (sm as any).onSessionTerminal(s);
+
+    const calls = (sm as any).__dispatchCalls;
+    assert.equal(calls.length, 1);
+    const [_sessionArg, request] = calls[0];
+    assert.equal(request.label, "completed");
+    assert.equal(request.userMessage, "✅ [analytics-refresh] Completed | $0.00 | 11s");
+    assert.equal(request.completionWakeSummaryRequired, false);
+    assert.equal(request.wakeMessageOnNotifySuccess, undefined);
+    assert.equal(request.wakeMessageOnNotifyFailed, undefined);
+  });
+
   it("does not derive completion summaries from terminal transcript lines", async () => {
     const lines = [
       "Setting up the repository context.",
