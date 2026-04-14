@@ -39,6 +39,14 @@ export function createWorktree(
       break;
     } catch (err: unknown) {
       if (err && typeof err === "object" && "code" in err && err.code === "EEXIST") {
+        if (allowExistingBranch && attempt === 0) {
+          try {
+            rmSync(candidatePath, { recursive: true, force: true });
+            attempt--;
+          } catch {
+            // best effort; fall through to a suffixed retry if cleanup fails
+          }
+        }
         continue;
       }
       throw err;

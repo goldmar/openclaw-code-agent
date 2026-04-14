@@ -299,4 +299,41 @@ describe("createWorktree branch selection", () => {
       rmSync(repoDir, { recursive: true, force: true });
     }
   });
+
+  it("retries the original resume branch after removing a stale leftover worktree directory", async () => {
+    const { createWorktree, getBranchName, getWorktreeBaseDir } = await import("../src/worktree.js");
+    const repoDir = mkdtempSync(join(tmpdir(), "openclaw-worktree-branch-resume-dir-collision-"));
+
+    try {
+      execFileSync("git", ["init", "-b", "main"], { cwd: repoDir, stdio: "ignore" });
+      execFileSync("git", ["config", "user.name", "OpenClaw Tests"], { cwd: repoDir, stdio: "ignore" });
+      execFileSync("git", ["config", "user.email", "tests@example.com"], { cwd: repoDir, stdio: "ignore" });
+      writeFileSync(join(repoDir, "README.md"), "base\n");
+      execFileSync("git", ["add", "README.md"], { cwd: repoDir, stdio: "ignore" });
+      execFileSync("git", ["commit", "-m", "init"], { cwd: repoDir, stdio: "ignore" });
+
+      execFileSync("git", ["checkout", "-b", "agent/resume-dir-collision"], { cwd: repoDir, stdio: "ignore" });
+      writeFileSync(join(repoDir, "resume.txt"), "resume branch state\n");
+      execFileSync("git", ["add", "resume.txt"], { cwd: repoDir, stdio: "ignore" });
+      execFileSync("git", ["commit", "-m", "resume branch commit"], { cwd: repoDir, stdio: "ignore" });
+      execFileSync("git", ["checkout", "main"], { cwd: repoDir, stdio: "ignore" });
+
+      const stalePath = join(
+        getWorktreeBaseDir(repoDir),
+        "openclaw-worktree-resume-dir-collision",
+      );
+      mkdirSync(stalePath, { recursive: true });
+      writeFileSync(join(stalePath, "leftover.txt"), "stale directory\n");
+
+      const worktreePath = createWorktree(repoDir, "resume-dir-collision", { allowExistingBranch: true });
+      const branchName = getBranchName(worktreePath);
+
+      assert.equal(worktreePath, stalePath);
+      assert.equal(branchName, "agent/resume-dir-collision");
+      assert.equal(existsSync(join(worktreePath, "resume.txt")), true);
+      assert.equal(existsSync(join(worktreePath, "leftover.txt")), false);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
 });
