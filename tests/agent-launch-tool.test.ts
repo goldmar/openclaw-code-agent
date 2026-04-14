@@ -143,6 +143,39 @@ describe("agent_launch tool defaults", () => {
     assert.equal(spawnConfig?.originThreadId, 28);
   });
 
+  it("captures routing from deliveryContext on the current SDK surface", async () => {
+    let spawnConfig: Record<string, unknown> | undefined;
+
+    setSessionManager({
+      resolveHarnessSessionId: (id: string) => id,
+      spawn(config: Record<string, unknown>) {
+        spawnConfig = config;
+        return {
+          id: "sess-delivery-context",
+          name: "telegram-topic",
+          model: config.model,
+        };
+      },
+    } as any);
+
+    const tool = makeAgentLaunchTool({
+      workspaceDir: "/tmp",
+      sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+      deliveryContext: {
+        channel: "telegram",
+        to: "-1003863755361",
+        accountId: "bot1",
+        threadId: 13832,
+      },
+    } as any);
+    await tool.execute("tool-id", { prompt: "Ping the topic" });
+
+    assert.ok(spawnConfig, "spawn should be called");
+    assert.equal(spawnConfig?.originChannel, "telegram|bot1|-1003863755361");
+    assert.equal(spawnConfig?.originThreadId, 13832);
+    assert.equal((spawnConfig?.route as { accountId?: string } | undefined)?.accountId, "bot1");
+  });
+
   it("falls back to an explicit system route when the tool context has no chat metadata", async () => {
     let spawnConfig: Record<string, unknown> | undefined;
 

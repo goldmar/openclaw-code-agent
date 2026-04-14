@@ -1,22 +1,6 @@
-// Plugin types
+export type { OpenClawPluginToolContext } from "../api";
 
-/** Context provided by OpenClaw's tool factory pattern. */
-export interface OpenClawPluginToolContext {
-  config?: Record<string, unknown>;
-  workspaceDir?: string;
-  agentDir?: string;
-  agentId?: string;
-  id?: string | number;
-  channel?: string;
-  chatId?: string | number;
-  senderId?: string | number;
-  channelId?: string;
-  messageThreadId?: string | number;
-  sessionKey?: string;
-  messageChannel?: string;
-  agentAccountId?: string;
-  sandboxed?: boolean;
-}
+// Plugin types
 
 /** Runtime lifecycle state for a session. */
 export type SessionStatus = "starting" | "running" | "completed" | "failed" | "killed";

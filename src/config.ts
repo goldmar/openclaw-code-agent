@@ -28,7 +28,7 @@ const BUILTIN_HARNESS_CONFIGS: Record<string, HarnessConfig> = {
   },
   codex: {
     defaultModel: "gpt-5.4",
-    allowedModels: ["gpt-5.4"],
+    allowedModels: ["gpt-5.4", "gpt-5.4-pro"],
     reasoningEffort: "medium",
   },
 };
@@ -182,6 +182,13 @@ export function resolveReasoningEffortForHarness(name: string): ReasoningEffort 
 // -- Channel resolution utilities --
 
 interface OriginContextLike {
+  deliveryContext?: {
+    channel?: string;
+    to?: string;
+    accountId?: string;
+    threadId?: string | number;
+  };
+  requesterSenderId?: string;
   id?: string | number;
   channel?: string;
   chatId?: string | number;
@@ -193,10 +200,44 @@ interface OriginContextLike {
   sessionKey?: string;
 }
 
+function toOptionalText(value: unknown): string | undefined {
+  if (value == null) return undefined;
+  const normalized = String(value).trim();
+  return normalized || undefined;
+}
+
+function getTrustedDeliveryRoute(ctx: OriginContextLike | undefined): {
+  channel?: string;
+  to?: string;
+  accountId?: string;
+  threadId?: string;
+} {
+  return {
+    channel: toOptionalText(ctx?.deliveryContext?.channel),
+    to: toOptionalText(ctx?.deliveryContext?.to),
+    accountId: toOptionalText(ctx?.deliveryContext?.accountId),
+    threadId: toOptionalText(ctx?.deliveryContext?.threadId),
+  };
+}
+
+function buildChannelString(channel?: string, to?: string, accountId?: string): string | undefined {
+  const normalizedChannel = toOptionalText(channel);
+  const normalizedTo = toOptionalText(to);
+  const normalizedAccountId = toOptionalText(accountId);
+  if (!normalizedChannel || !normalizedTo) return undefined;
+  return normalizedAccountId
+    ? `${normalizedChannel}|${normalizedAccountId}|${normalizedTo}`
+    : `${normalizedChannel}|${normalizedTo}`;
+}
+
+function getFallbackSenderId(ctx: OriginContextLike | undefined): string | undefined {
+  return toOptionalText(ctx?.requesterSenderId ?? ctx?.senderId);
+}
+
 function shouldAvoidTelegramSenderFallback(
-  ctx: Pick<OriginContextLike, "messageChannel" | "channel" | "sessionKey">,
+  ctx: Pick<OriginContextLike, "deliveryContext" | "messageChannel" | "channel" | "sessionKey">,
 ): boolean {
-  const provider = ctx.messageChannel ?? ctx.channel;
+  const provider = toOptionalText(ctx.deliveryContext?.channel) ?? ctx.messageChannel ?? ctx.channel;
   if (provider?.toLowerCase() !== "telegram") return false;
   return Boolean(parseThreadIdFromRouteSessionKey(ctx.sessionKey));
 }
@@ -208,6 +249,11 @@ function shouldAvoidTelegramSenderFallback(
  * Priority: ctx.messageChannel + accountId → agentChannels(workspaceDir) → ctx.messageChannel as-is
  */
 export function resolveToolChannel(ctx: OpenClawPluginToolContext): string | undefined {
+  const trustedRoute = getTrustedDeliveryRoute(ctx);
+  const trustedChannel = buildChannelString(trustedRoute.channel, trustedRoute.to, trustedRoute.accountId);
+  if (trustedChannel) {
+    return trustedChannel;
+  }
   if (ctx.messageChannel) {
     const parts = ctx.messageChannel.split("|");
     if (parts.length >= 3) {
@@ -216,11 +262,13 @@ export function resolveToolChannel(ctx: OpenClawPluginToolContext): string | und
     if (ctx.agentAccountId && parts.length >= 2) {
       return `${parts[0]}|${ctx.agentAccountId}|${parts.slice(1).join("|")}`;
     }
-    if (parts.length === 1 && ctx.chatId) {
-      return `${parts[0]}|${ctx.chatId}`;
+    const legacyChatId = toOptionalText((ctx as OriginContextLike).chatId);
+    if (parts.length === 1 && legacyChatId) {
+      return `${parts[0]}|${legacyChatId}`;
     }
-    if (parts.length === 1 && ctx.senderId && !shouldAvoidTelegramSenderFallback(ctx)) {
-      return `${parts[0]}|${ctx.senderId}`;
+    const fallbackSenderId = getFallbackSenderId(ctx);
+    if (parts.length === 1 && fallbackSenderId && !shouldAvoidTelegramSenderFallback(ctx)) {
+      return `${parts[0]}|${fallbackSenderId}`;
     }
   }
   if (ctx.workspaceDir) {
@@ -240,6 +288,11 @@ export function resolveOriginChannel(ctx: OriginContextLike | undefined, explici
   if (explicitChannel && String(explicitChannel).includes("|")) {
     return String(explicitChannel);
   }
+  const trustedRoute = getTrustedDeliveryRoute(ctx);
+  const trustedChannel = buildChannelString(trustedRoute.channel, trustedRoute.to, trustedRoute.accountId);
+  if (trustedChannel) {
+    return trustedChannel;
+  }
   if (ctx?.channelId && String(ctx.channelId).includes("|")) {
     return String(ctx.channelId);
   }
@@ -248,18 +301,23 @@ export function resolveOriginChannel(ctx: OriginContextLike | undefined, explici
     if (messageChannel.includes("|")) {
       return messageChannel;
     }
-    if (ctx.chatId) {
-      return `${messageChannel}|${ctx.chatId}`;
+    const legacyChatId = toOptionalText(ctx.chatId);
+    if (legacyChatId) {
+      return `${messageChannel}|${legacyChatId}`;
     }
-    if (ctx.senderId && !shouldAvoidTelegramSenderFallback(ctx)) {
-      return `${messageChannel}|${ctx.senderId}`;
+    const fallbackSenderId = getFallbackSenderId(ctx);
+    if (fallbackSenderId && !shouldAvoidTelegramSenderFallback(ctx)) {
+      return `${messageChannel}|${fallbackSenderId}`;
     }
   }
-  if (ctx?.channel && ctx?.chatId) {
-    return `${ctx.channel}|${ctx.chatId}`;
+  const legacyChannel = toOptionalText(ctx?.channel);
+  const legacyChatId = toOptionalText(ctx?.chatId);
+  if (legacyChannel && legacyChatId) {
+    return `${legacyChannel}|${legacyChatId}`;
   }
-  if (ctx?.channel && ctx?.senderId && !shouldAvoidTelegramSenderFallback(ctx)) {
-    return `${ctx.channel}|${ctx.senderId}`;
+  const fallbackSenderId = getFallbackSenderId(ctx);
+  if (legacyChannel && fallbackSenderId && !shouldAvoidTelegramSenderFallback(ctx)) {
+    return `${legacyChannel}|${fallbackSenderId}`;
   }
   if (ctx?.id && /^-?\d+$/.test(String(ctx.id))) {
     return `telegram|${ctx.id}`;
@@ -269,7 +327,7 @@ export function resolveOriginChannel(ctx: OriginContextLike | undefined, explici
 
 /** Resolve Telegram thread/forum topic ID from command context. */
 export function resolveOriginThreadId(ctx: OriginContextLike | undefined): string | number | undefined {
-  return ctx?.messageThreadId ?? undefined;
+  return getTrustedDeliveryRoute(ctx).threadId ?? ctx?.messageThreadId ?? undefined;
 }
 
 /** Build the explicit session route used for notifications and wakes. */

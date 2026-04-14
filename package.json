@@ -25,12 +25,12 @@
       "./dist/index.js"
     ],
     "compat": {
-      "pluginApi": ">=2026.4.9",
-      "minGatewayVersion": "2026.4.9"
+      "pluginApi": ">=2026.4.14",
+      "minGatewayVersion": "2026.4.14"
     },
     "build": {
-      "openclawVersion": "2026.4.9",
-      "pluginSdkVersion": "2026.4.9"
+      "openclawVersion": "2026.4.14",
+      "pluginSdkVersion": "2026.4.14"
     }
   },
   "files": [
@@ -49,7 +49,7 @@
     "@types/node": "^25.5.2",
     "esbuild": "^0.28.0",
     "nanoid": "^5.1.7",
-    "openclaw": "2026.4.12",
+    "openclaw": "2026.4.14",
     "tsx": "^4.21.0",
     "typescript": "^6.0.2"
   },
@@ -84,7 +84,7 @@
   },
   "description": "An OpenClaw plugin that orchestrates coding agent sessions as managed background processes. Launch, monitor, and control coding agents (Claude Code, Codex, and more) directly from your AI gateway.",
   "peerDependencies": {
-    "openclaw": ">=2026.4.9"
+    "openclaw": ">=2026.4.14"
   },
   "overrides": {
     "basic-ftp": "5.2.2"
