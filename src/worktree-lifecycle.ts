@@ -33,25 +33,33 @@ export function createWorktree(
       continue;
     }
 
-    try {
-      mkdirSync(candidatePath, { recursive: false });
-      worktreePath = candidatePath;
-      branchName = candidateBranch;
-      break;
-    } catch (err: unknown) {
-      if (err && typeof err === "object" && "code" in err && err.code === "EEXIST") {
-        if (allowExistingBranch && attempt === 0 && !cleanedStaleResumeDir) {
-          try {
-            rmSync(candidatePath, { recursive: true, force: true });
-            cleanedStaleResumeDir = true;
-            attempt--;
-          } catch {
-            // best effort; fall through to a suffixed retry if cleanup fails
+    let retryCurrentCandidate = false;
+    do {
+      retryCurrentCandidate = false;
+      try {
+        mkdirSync(candidatePath, { recursive: false });
+        worktreePath = candidatePath;
+        branchName = candidateBranch;
+        break;
+      } catch (err: unknown) {
+        if (err && typeof err === "object" && "code" in err && err.code === "EEXIST") {
+          if (allowExistingBranch && attempt === 0 && !cleanedStaleResumeDir) {
+            try {
+              rmSync(candidatePath, { recursive: true, force: true });
+              cleanedStaleResumeDir = true;
+              retryCurrentCandidate = true;
+            } catch {
+              // best effort; fall through to a suffixed retry if cleanup fails
+            }
           }
+          continue;
         }
-        continue;
+        throw err;
       }
-      throw err;
+    } while (retryCurrentCandidate);
+
+    if (worktreePath && branchName) {
+      break;
     }
   }
 
