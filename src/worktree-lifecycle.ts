@@ -23,6 +23,7 @@ export function createWorktree(
   let worktreePath: string | undefined;
   let branchName: string | undefined;
   const maxRetries = 10;
+  let cleanedStaleResumeDir = false;
 
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     const suffix = attempt === 0 ? "" : `-${Math.random().toString(16).slice(2, 6)}`;
@@ -39,9 +40,10 @@ export function createWorktree(
       break;
     } catch (err: unknown) {
       if (err && typeof err === "object" && "code" in err && err.code === "EEXIST") {
-        if (allowExistingBranch && attempt === 0) {
+        if (allowExistingBranch && attempt === 0 && !cleanedStaleResumeDir) {
           try {
             rmSync(candidatePath, { recursive: true, force: true });
+            cleanedStaleResumeDir = true;
             attempt--;
           } catch {
             // best effort; fall through to a suffixed retry if cleanup fails
