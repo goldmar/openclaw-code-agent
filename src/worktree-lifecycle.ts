@@ -10,6 +10,10 @@ export interface CreateWorktreeOptions {
   allowExistingBranch?: boolean;
 }
 
+function isNodeErrorWithCode(err: unknown, code: string): boolean {
+  return Boolean(err && typeof err === "object" && "code" in err && err.code === code);
+}
+
 export function createWorktree(
   repoDir: string,
   sessionName: string,
@@ -42,15 +46,21 @@ export function createWorktree(
         branchName = candidateBranch;
         break;
       } catch (err: unknown) {
-        if (err && typeof err === "object" && "code" in err && err.code === "EEXIST") {
+        if (isNodeErrorWithCode(err, "EEXIST")) {
           if (allowExistingBranch && attempt === 0 && !cleanedStaleResumeDir) {
             try {
               rmSync(candidatePath, { recursive: true, force: true });
               cleanedStaleResumeDir = true;
               retryCurrentCandidate = true;
-            } catch {
-              // best effort; fall through to a suffixed retry if cleanup fails
+            } catch (cleanupErr) {
+              throw new Error(
+                `Failed to recreate existing worktree branch ${candidateBranch}: could not clear blocked path ${candidatePath}: ${cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr)}`,
+              );
             }
+          } else if (allowExistingBranch && attempt === 0) {
+            throw new Error(
+              `Failed to recreate existing worktree branch ${candidateBranch}: path ${candidatePath} remains blocked after one cleanup attempt`,
+            );
           }
           continue;
         }
