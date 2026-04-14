@@ -156,6 +156,7 @@ function restoreResumeWorktreeContext(
     const recreatedPath = createWorktree(
       originalWorkdir,
       persistedSession.worktreeBranch.replace(/^agent\//, ""),
+      { allowExistingBranch: true },
     );
     console.info(`[SessionManager] Recreated worktree from branch ${persistedSession.worktreeBranch}: ${recreatedPath}`);
     return {

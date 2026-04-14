@@ -6,35 +6,75 @@ export interface RemoveWorktreeOptions {
   destructive?: boolean;
 }
 
-export function createWorktree(repoDir: string, sessionName: string): string {
+export interface CreateWorktreeOptions {
+  allowExistingBranch?: boolean;
+}
+
+function isNodeErrorWithCode(err: unknown, code: string): boolean {
+  return Boolean(err && typeof err === "object" && "code" in err && err.code === code);
+}
+
+export function createWorktree(
+  repoDir: string,
+  sessionName: string,
+  options: CreateWorktreeOptions = {},
+): string {
   const sanitized = sanitizeBranchName(sessionName);
   const baseDir = getWorktreeBaseDir(repoDir);
   mkdirSync(baseDir, { recursive: true });
+  const allowExistingBranch = options.allowExistingBranch === true;
 
   let worktreePath: string | undefined;
   let branchName: string | undefined;
   const maxRetries = 10;
+  let cleanedStaleResumeDir = false;
 
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     const suffix = attempt === 0 ? "" : `-${Math.random().toString(16).slice(2, 6)}`;
     const candidatePath = `${baseDir}/openclaw-worktree-${sanitized}${suffix}`;
     const candidateBranch = `agent/${sanitized}${suffix}`;
+    if (!allowExistingBranch && branchExists(repoDir, candidateBranch)) {
+      continue;
+    }
 
-    try {
-      mkdirSync(candidatePath, { recursive: false });
-      worktreePath = candidatePath;
-      branchName = candidateBranch;
-      break;
-    } catch (err: unknown) {
-      if (err && typeof err === "object" && "code" in err && err.code === "EEXIST") {
-        continue;
+    let retryCurrentCandidate = false;
+    do {
+      retryCurrentCandidate = false;
+      try {
+        mkdirSync(candidatePath, { recursive: false });
+        worktreePath = candidatePath;
+        branchName = candidateBranch;
+        break;
+      } catch (err: unknown) {
+        if (isNodeErrorWithCode(err, "EEXIST")) {
+          if (allowExistingBranch && attempt === 0 && !cleanedStaleResumeDir) {
+            try {
+              rmSync(candidatePath, { recursive: true, force: true });
+              cleanedStaleResumeDir = true;
+              retryCurrentCandidate = true;
+            } catch (cleanupErr) {
+              throw new Error(
+                `Failed to recreate existing worktree branch ${candidateBranch}: could not clear blocked path ${candidatePath}: ${cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr)}`,
+              );
+            }
+          } else if (allowExistingBranch && attempt === 0) {
+            throw new Error(
+              `Failed to recreate existing worktree branch ${candidateBranch}: path ${candidatePath} remains blocked after one cleanup attempt`,
+            );
+          }
+          continue;
+        }
+        throw err;
       }
-      throw err;
+    } while (retryCurrentCandidate);
+
+    if (worktreePath && branchName) {
+      break;
     }
   }
 
   if (!worktreePath || !branchName) {
-    throw new Error(`Failed to create unique worktree directory after ${maxRetries} attempts`);
+    throw new Error(`Failed to create unique worktree directory and branch after ${maxRetries} attempts`);
   }
 
   const branchAlreadyExists = branchExists(repoDir, branchName);
