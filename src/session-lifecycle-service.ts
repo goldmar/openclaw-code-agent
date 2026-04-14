@@ -392,18 +392,20 @@ export class SessionLifecycleService {
       session.pendingPlanApproval
       && planApprovalMode === "ask"
       && hasProvablePlanReviewPrompt(session, planDecisionVersion);
+    const questionContextPreview = !session.pendingPlanApproval
+      ? this.deps.getOutputPreview(session)
+      : undefined;
     const preview =
       (!session.pendingPlanApproval && session.pendingInputState?.promptText)
         ? session.pendingInputState.promptText
+        : (!session.pendingPlanApproval && questionContextPreview !== undefined)
+          ? questionContextPreview
         : this.deps.getOutputPreview(
             session,
             session.pendingPlanApproval && planApprovalMode !== "delegate"
               ? Number.POSITIVE_INFINITY
               : undefined,
           );
-    const questionContextPreview = !session.pendingPlanApproval
-      ? this.deps.getOutputPreview(session)
-      : undefined;
     const waitingButtons =
       session.pendingPlanApproval && planApprovalMode === "ask" && !promptAlreadyProven
         ? this.deps.getPlanApprovalButtons(session.id, {
