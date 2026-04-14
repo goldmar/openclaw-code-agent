@@ -221,13 +221,10 @@ function getTrustedDeliveryRoute(ctx: OriginContextLike | undefined): {
 }
 
 function buildChannelString(channel?: string, to?: string, accountId?: string): string | undefined {
-  const normalizedChannel = toOptionalText(channel);
-  const normalizedTo = toOptionalText(to);
-  const normalizedAccountId = toOptionalText(accountId);
-  if (!normalizedChannel || !normalizedTo) return undefined;
-  return normalizedAccountId
-    ? `${normalizedChannel}|${normalizedAccountId}|${normalizedTo}`
-    : `${normalizedChannel}|${normalizedTo}`;
+  if (!channel || !to) return undefined;
+  return accountId
+    ? `${channel}|${accountId}|${to}`
+    : `${channel}|${to}`;
 }
 
 function getFallbackSenderId(ctx: OriginContextLike | undefined): string | undefined {
