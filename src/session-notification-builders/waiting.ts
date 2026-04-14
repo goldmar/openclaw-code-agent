@@ -1,7 +1,7 @@
 import type { Session } from "../session";
 import type { NotificationButton } from "../session-interactions";
 import type { PlanApprovalMode, PlanArtifact } from "../types";
-import { firstCompleteLines } from "../format";
+import { lastCompleteLines } from "../format";
 import { buildPlanApprovalPromptContent, buildPlanReviewSummary } from "../plan-review-summary";
 import type { SessionNotificationMessage } from "../wake-dispatcher";
 
@@ -47,7 +47,7 @@ function stripQuestionEchoFromContext(question: string | undefined, context: str
   const joined = filtered.join("\n").trim();
   if (!joined || joined === questionTrimmed) return undefined;
   return joined.length > QUESTION_CONTEXT_MAX_CHARS
-    ? firstCompleteLines(joined, QUESTION_CONTEXT_MAX_CHARS)
+    ? lastCompleteLines(joined, QUESTION_CONTEXT_MAX_CHARS)
     : joined;
 }
 
