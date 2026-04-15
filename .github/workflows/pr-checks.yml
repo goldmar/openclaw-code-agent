@@ -48,7 +48,7 @@ jobs:
 
       - name: Check bundle size
         id: bundle-size
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const fs = require('fs');
@@ -85,7 +85,7 @@ jobs:
 
       - name: Comment bundle size on PR
         if: github.event.pull_request.head.repo.fork == false
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         env:
           COMMENT_BODY: ${{ steps.bundle-size.outputs.body }}
         with:
@@ -159,7 +159,7 @@ jobs:
 
       - name: Comment on PR if lockfile is out of sync
         if: steps.lockfile.outcome == 'failure' && github.event.pull_request.head.repo.fork == false
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const body = [
