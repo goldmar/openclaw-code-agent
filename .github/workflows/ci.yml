@@ -31,7 +31,12 @@ jobs:
           submodules: false
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v5
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.30.0
+
+      - name: Prefer configured pnpm binary
+        run: echo "$PNPM_HOME/bin" >> "$GITHUB_PATH"
 
       - name: Setup Node.js 22
         uses: actions/setup-node@v6
