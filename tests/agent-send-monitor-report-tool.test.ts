@@ -47,7 +47,7 @@ describe("agent_send_monitor_report tool", () => {
     assert.match((result as any).content?.[0]?.text ?? "", /Interactive monitor report queued/);
   });
 
-  it("prefers deliveryContext routing for the topic 13832 monitor-report path", async () => {
+  it("prefers deliveryContext routing for Telegram topic monitor-report delivery", async () => {
     const calls: Array<Record<string, unknown>> = [];
     setSessionManager({
       sendMonitorReport(args: Record<string, unknown>) {
