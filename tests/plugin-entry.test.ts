@@ -12,7 +12,28 @@ describe("plugin entry source", () => {
     assert.equal(packageVersion, pluginVersion);
   });
 
-  it("declares the v2026.4.14 external plugin compatibility baseline in package metadata", () => {
+  it("keeps security audit automation on the pnpm-only path", () => {
+    const packageJson = JSON.parse(readFileSync(join(rootDir, "package.json"), "utf8")) as {
+      scripts?: Record<string, string>;
+    };
+    const securityAuditWorkflow = readFileSync(
+      join(rootDir, ".github", "workflows", "security-audit.yml"),
+      "utf8",
+    );
+    const activeWorkflowSources = [
+      readFileSync(join(rootDir, ".github", "workflows", "security-audit.yml"), "utf8"),
+      readFileSync(join(rootDir, ".github", "workflows", "ci.yml"), "utf8"),
+      readFileSync(join(rootDir, ".github", "workflows", "pr-checks.yml"), "utf8"),
+      readFileSync(join(rootDir, ".github", "workflows", "dependency-review.yml"), "utf8"),
+    ].join("\n");
+
+    assert.equal(packageJson.scripts?.["audit:prod"], "pnpm audit --prod");
+    assert.match(securityAuditWorkflow, /name:\s+pnpm audit --prod/);
+    assert.match(securityAuditWorkflow, /run:\s+pnpm run audit:prod/);
+    assert.doesNotMatch(activeWorkflowSources, /\bnpm audit\b/);
+  });
+
+  it("declares the v2026.4.14 compatibility floor and v2026.4.15 build target in package metadata", () => {
     const packageJson = JSON.parse(readFileSync(join(rootDir, "package.json"), "utf8")) as {
       openclaw?: {
         compat?: Record<string, string>;
@@ -24,10 +45,10 @@ describe("plugin entry source", () => {
 
     assert.equal(packageJson.openclaw?.compat?.pluginApi, ">=2026.4.14");
     assert.equal(packageJson.openclaw?.compat?.minGatewayVersion, "2026.4.14");
-    assert.equal(packageJson.openclaw?.build?.openclawVersion, "2026.4.14");
-    assert.equal(packageJson.openclaw?.build?.pluginSdkVersion, "2026.4.14");
+    assert.equal(packageJson.openclaw?.build?.openclawVersion, "2026.4.15");
+    assert.equal(packageJson.openclaw?.build?.pluginSdkVersion, "2026.4.15");
     assert.equal(packageJson.peerDependencies?.openclaw, ">=2026.4.14");
-    assert.equal(packageJson.devDependencies?.openclaw, "2026.4.14");
+    assert.equal(packageJson.devDependencies?.openclaw, "2026.4.15");
   });
 
   it("declares narrow manifest activation and minimal setup descriptors", () => {

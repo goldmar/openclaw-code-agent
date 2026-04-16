@@ -112,7 +112,7 @@ openclaw plugins enable openclaw-code-agent
 openclaw gateway restart
 ```
 
-This release targets the OpenClaw `v2026.4.14` external plugin contract. `package.json` now carries the plugin API compatibility and build metadata used by modern OpenClaw / ClawHub installs, and `openclaw.plugin.json` now advertises the plugin-owned command activation surface plus the onboarding metadata OpenClaw uses during plugin-config setup. Keep those metadata surfaces in sync when bumping the plugin release baseline.
+This release targets the OpenClaw `v2026.4.14` external plugin contract and is verified against the `v2026.4.15` build/test target. `package.json` now carries the plugin API compatibility and build metadata used by modern OpenClaw / ClawHub installs, and `openclaw.plugin.json` now advertises the plugin-owned command activation surface plus the onboarding metadata OpenClaw uses during plugin-config setup. Keep those metadata surfaces in sync when bumping the plugin release baseline.
 
 The current manifest descriptors stay intentionally narrow: activation advertises only the chat commands this plugin owns, and setup stays minimal with `requiresRuntime: false`. First-run onboarding is driven by the manifest config schema and `uiHints`, not by provider/backend setup descriptors.
 

@@ -77,7 +77,7 @@ Do not use `npm audit` here. npm audit expects an npm lockfile and fails with `E
 Security automation should work like this:
 
 - PR gating: GitHub Dependency Review checks dependency diffs in pull requests and works with `pnpm-lock.yaml`.
-- Runtime/package gate: `pnpm run audit:prod` audits the published dependency set in CI without introducing a second lockfile.
+- Runtime/package gate: `pnpm run audit:prod` audits the published dependency set in CI without introducing a second lockfile. Keep `.github/workflows/security-audit.yml` on that script; do not switch the workflow back to `npm audit`.
 - Version maintenance: Dependabot updates the JavaScript dependency set through the npm ecosystem support that covers pnpm projects.
 - Full snapshot audit: run `pnpm audit` when you need the current advisory set for the full resolved pnpm graph, including dev dependencies.
 

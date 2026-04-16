@@ -66,11 +66,11 @@ describe("agent_send_monitor_report tool", () => {
       },
     } as any);
     await tool.execute("tool-id", {
-      report_id: "openclaw-release-v2026.4.14",
+      report_id: "openclaw-release-v2026.4.15",
       report_text: "Release report body",
       plan_prompt: "Plan the compatibility follow-up.",
       plan_workdir: "/home/openclaw/workspace/openclaw-code-agent",
-      plan_name: "oc-release-v2026.4.14",
+      plan_name: "oc-release-v2026.4.15",
     });
 
     assert.equal(calls.length, 1);
