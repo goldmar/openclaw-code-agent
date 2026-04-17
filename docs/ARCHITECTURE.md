@@ -26,6 +26,25 @@ Interactive callbacks (Telegram / Discord)
   -> agent_merge / agent_pr / agent_respond
 ```
 
+## Adjacent OpenClaw Surfaces
+
+This plugin sits beside, not inside, two OpenClaw core subsystems that are easy to conflate with it:
+
+- **ACPX**: OpenClaw's bundled ACP runtime backend. It exists to back ACP sessions and ACP control-plane behavior.
+- **OpenClaw bundled `codex` plugin**: OpenClaw's core Codex provider and native embedded harness for `codex/*` model refs.
+
+`openclaw-code-agent` is neither of those:
+
+- it is not an ACP runtime backend
+- it is not OpenClaw's provider registry
+- it does not register a core provider into OpenClaw
+
+The overlap is substrate, not responsibility. Both the core bundled `codex` plugin and this plugin can talk to Codex App Server, but they do so for different products:
+
+- ACPX owns ACP runtime/session interoperability
+- the bundled core `codex` plugin owns embedded provider/harness execution for OpenClaw core
+- `openclaw-code-agent` owns chat UX, approval state, wake routing, session persistence, and worktree/merge/PR policy
+
 ## Core Components
 
 ### Plugin Entry
@@ -90,6 +109,12 @@ Important mapping detail:
 - Claude Code maps plugin `permissionMode` directly to the SDK modes.
 - Codex runs through the Codex App Server transport. Plugin `plan` mode remains a plugin-owned approval workflow even when the backend exposes structured plan artifacts, and plugin worktree strategy stays policy-only above Codex-native worktree execution.
 - `agent_respond` is the only continuation primitive across both backends; fork flows still go through `agent_launch(..., resume_session_id=..., fork_session=true)`.
+
+Boundary note:
+
+- this plugin's internal `codex` harness is local to this plugin
+- it is separate from OpenClaw core's bundled `codex` provider/harness plugin
+- it is also separate from ACPX, which is an ACP backend rather than this plugin's execution runtime
 
 ### `WakeDispatcher`
 

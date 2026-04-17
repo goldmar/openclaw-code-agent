@@ -71,6 +71,8 @@ When choosing `defaultHarness`:
 - prefer `claude-code` if Claude Code is the expected path and Codex is not locally ready
 - if neither harness is ready, finish onboarding with `defaultWorkdir` and optional `fallbackChannel`, then fix harness setup before launching sessions
 
+This setting picks between this plugin's own harnesses. It does not select OpenClaw ACPX, and it does not enable or disable OpenClaw core's bundled `codex` provider/harness plugin. Those are adjacent OpenClaw surfaces with different responsibilities. See [ACP-COMPARISON.md](ACP-COMPARISON.md).
+
 ## Minimal Config
 
 Add this under `plugins.entries["openclaw-code-agent"]` in `~/.openclaw/openclaw.json`:
@@ -117,6 +119,12 @@ forced_login_method = "chatgpt"
 | `codex` | Controlled by `harnesses.codex.allowedModels` | Native Codex App Server harness with structured pending input, structured plans, and native backend worktree refs |
 
 Allowed-model matching is case-insensitive substring matching. If the resolved model is not allowed, `agent_launch` fails immediately.
+
+Important boundary:
+
+- this plugin's `codex` harness is part of `openclaw-code-agent`
+- it is not the same thing as OpenClaw ACPX
+- it is not the same thing as OpenClaw core's bundled `codex` plugin, even though both can use the same local Codex App Server substrate
 
 ## Security Model
 

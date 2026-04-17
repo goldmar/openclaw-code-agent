@@ -16,7 +16,17 @@
 - **Two harnesses, one control plane**. Claude Code and Codex share the same tools, routing, notification pipeline, and worktree strategy model while each backend uses its own native execution substrate.
 - **One continuation primitive**. `agent_respond` is the only way to continue, approve, revise, or redirect an existing session. Forks still go through `agent_launch(..., resume_session_id=..., fork_session=true)`.
 
-Need the version-pinned ACP breakdown? See [docs/ACP-COMPARISON.md](docs/ACP-COMPARISON.md).
+Need the ACPX vs Codex vs code-agent breakdown? See [docs/ACP-COMPARISON.md](docs/ACP-COMPARISON.md).
+
+## Boundaries
+
+`openclaw-code-agent` is separate from both OpenClaw's bundled `acpx` runtime plugin and OpenClaw's bundled `codex` plugin.
+
+- **ACPX** is OpenClaw's ACP runtime backend for ACP session interoperability.
+- **OpenClaw's bundled `codex` plugin** is the core native Codex provider/harness pair for embedded agent turns.
+- **`openclaw-code-agent`** is the chat orchestration layer that adds plan approval, wake routing, session lifecycle, and worktree/merge/PR policy above its own native Claude Code and Codex harnesses.
+
+The shared substrate is often the local `codex` command and Codex App Server, but the responsibilities are different. This plugin is not an ACP server and it does not depend on OpenClaw's bundled Codex provider to expose its own `codex` harness.
 
 ## New In 3.2.0
 
@@ -180,6 +190,8 @@ OpenClaw's generic plugin onboarding can prompt for `defaultHarness`, but it doe
 - `claude-code`: choose this when the bundled Claude SDK/CLI is installed and you expect Claude Code to be the main path on this machine
 
 Codex readiness is the easier one to verify locally because the plugin depends on a resolvable command plus local auth files. Claude Code installation is verifiable, but authenticated usability may still require Claude-side login/account setup the first time you launch a session.
+
+This is this plugin's own harness selection, not OpenClaw ACPX runtime selection and not the bundled core `codex` provider toggle. The real prerequisites are the local backend commands and local auth state.
 
 Launch a first session:
 
