@@ -4,6 +4,7 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WakeDispatcher } from "../src/wake-dispatcher";
+import { wakeDeliveryExecutorInternals } from "../src/wake-delivery-executor";
 
 type FakeSession = {
   id: string;
@@ -91,6 +92,7 @@ describe("WakeDispatcher", () => {
   const originalPath = process.env.PATH ?? "";
   const originalLogPath = process.env.OPENCLAW_TEST_LOG;
   const originalConsoleInfo = console.info;
+  const originalConsoleError = console.error;
   let tempDir: string;
   let logPath: string;
   let discordLogPath: string;
@@ -155,6 +157,7 @@ export async function sendDiscordComponentMessage(target, spec, opts = {}) {
 
   afterEach(() => {
     console.info = originalConsoleInfo;
+    console.error = originalConsoleError;
     process.env.PATH = originalPath;
     if (originalLogPath == null) {
       delete process.env.OPENCLAW_TEST_LOG;
@@ -265,6 +268,48 @@ export async function sendDiscordComponentMessage(target, spec, opts = {}) {
     const calls = await waitForCalls(logPath, 3);
     const messages = calls.map((call) => parseMessageSendArgs(call).message);
     assert.deepEqual(messages, ["🚀 launched", "🚀 launched", "✅ completed"]);
+  });
+
+  it("does not retry a direct launch notification after an ambiguous timeout", async (t) => {
+    const dispatcher = createDispatcher();
+    const session: FakeSession = {
+      id: "session-launch-timeout",
+      route: buildRoute(),
+      originChannel: "telegram|bot|12345",
+      originThreadId: 11239,
+      originSessionKey: "agent:main:telegram:group:-1003863755361:topic:11239",
+    };
+    const errorLogs: string[] = [];
+    console.error = (message?: unknown, ...rest: unknown[]) => {
+      errorLogs.push([message, ...rest].map((value) => String(value)).join(" "));
+    };
+    t.mock.method(wakeDeliveryExecutorInternals, "execFile", ((_file, args, _options, callback) => {
+      writeFileSync(logPath, `${JSON.stringify(args)}\n`, { flag: "a" });
+      const error = new Error("Command timed out after 30000ms") as Error & {
+        killed: boolean;
+        signal: NodeJS.Signals;
+      };
+      error.killed = true;
+      error.signal = "SIGTERM";
+      callback?.(error, "", "");
+      return {} as any;
+    }) as typeof wakeDeliveryExecutorInternals.execFile);
+
+    dispatcher.dispatchSessionNotification(session as any, {
+      label: "launch",
+      userMessage: "🚀 launched",
+      notifyUser: "always",
+    });
+
+    await waitFor(
+      () => errorLogs.some((line) => line.includes("\"ambiguousResult\":true")),
+      "ambiguous timeout log",
+    );
+
+    const calls = readCalls(logPath);
+    assert.equal(calls.length, 1);
+    assert.equal(parseMessageSendArgs(calls[0] ?? []).message, "🚀 launched");
+    assert.ok(!errorLogs.some((line) => line.includes("\"event\":\"dispatch_retry_scheduled\"")));
   });
 
   it("treats explicit system routes as non-routable and falls back to system.event", async () => {
