@@ -39,10 +39,7 @@ type ExecFileError = Error & {
 function isExecFileTimeoutError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
   const execError = err as ExecFileError;
-  if (execError.code === "ETIMEDOUT") return true;
-  return execError.killed === true
-    && execError.signal === "SIGTERM"
-    && /\btime(?:d)? out\b/i.test(execError.message);
+  return execError.killed === true && execError.signal === "SIGTERM";
 }
 
 export const wakeDeliveryExecutorInternals = {
