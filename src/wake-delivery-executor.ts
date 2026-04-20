@@ -1,4 +1,4 @@
-import { execFile } from "child_process";
+import * as childProcess from "child_process";
 
 const WAKE_CLI_TIMEOUT_MS = 30_000;
 const WAKE_RETRY_BASE_DELAY_MS = 2_000;
@@ -18,6 +18,7 @@ type ExecuteOptions = {
   orderingKey?: string;
   onStarted?: () => void;
   onSuccess?: () => void;
+  onAmbiguousResult?: () => void;
   onFinalFailure?: () => void;
 };
 
@@ -28,6 +29,21 @@ function errorMessage(err: unknown): string {
 function createDispatchTimeoutError(): Error {
   return new Error(`Dispatch timed out after ${WAKE_CLI_TIMEOUT_MS}ms`);
 }
+
+type ExecFileError = Error & {
+  killed?: boolean;
+  signal?: NodeJS.Signals | null;
+};
+
+function isExecFileTimeoutError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const execError = err as ExecFileError;
+  return execError.killed === true && execError.signal === "SIGTERM";
+}
+
+export const wakeDeliveryExecutorInternals = {
+  execFile: childProcess.execFile,
+};
 
 type RetryTimerEntry = {
   timer: ReturnType<typeof setTimeout>;
@@ -108,7 +124,7 @@ export class WakeDeliveryExecutor {
 
     // Delivery stays gateway-owned: the plugin shells out to the local OpenClaw CLI
     // instead of implementing a separate ad hoc notification transport.
-    execFile("openclaw", args, { timeout: WAKE_CLI_TIMEOUT_MS }, (err, _stdout, stderr) => {
+    wakeDeliveryExecutorInternals.execFile("openclaw", args, { timeout: WAKE_CLI_TIMEOUT_MS }, (err, _stdout, stderr) => {
       if (this.disposed) {
         onSettled?.();
         return;
@@ -132,6 +148,26 @@ export class WakeDeliveryExecutor {
       }
 
       const stderrSuffix = stderr?.trim() ? ` | stderr: ${stderr.trim()}` : "";
+      const ambiguousResult = opts.target === "message.send" && isExecFileTimeoutError(err);
+      if (ambiguousResult) {
+        this.log("error", "dispatch_failed", {
+          label: opts.label,
+          sessionId: opts.sessionId,
+          target: opts.target,
+          phase: opts.phase,
+          messageKind: opts.messageKind,
+          route: opts.routeSummary,
+          attempt,
+          maxAttempts: WAKE_MAX_ATTEMPTS,
+          elapsedMs,
+          error: `${errorMessage(err)}${stderrSuffix}`,
+          terminal: true,
+          ambiguousResult: true,
+        });
+        opts.onAmbiguousResult?.();
+        onSettled?.();
+        return;
+      }
       if (attempt >= WAKE_MAX_ATTEMPTS) {
         this.log("error", "dispatch_failed", {
           label: opts.label,
