@@ -31,7 +31,6 @@ function createDispatchTimeoutError(): Error {
 }
 
 type ExecFileError = Error & {
-  code?: string | number | null;
   killed?: boolean;
   signal?: NodeJS.Signals | null;
 };
