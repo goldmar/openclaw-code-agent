@@ -1,6 +1,6 @@
 # ACPX, Codex, and Code Agent
 
-This note compares three adjacent OpenClaw surfaces as of the `openclaw-code-agent` `3.2.0` / OpenClaw `2026.4.15` baseline:
+This note compares three adjacent OpenClaw surfaces as of the `openclaw-code-agent` `3.2.0` / OpenClaw `2026.4.20-beta.2` baseline:
 
 - OpenClaw ACP and the bundled `acpx` runtime backend
 - OpenClaw's bundled `codex` plugin

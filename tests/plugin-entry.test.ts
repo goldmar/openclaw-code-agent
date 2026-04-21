@@ -33,7 +33,7 @@ describe("plugin entry source", () => {
     assert.doesNotMatch(activeWorkflowSources, /\bnpm audit\b/);
   });
 
-  it("declares the v2026.4.14 compatibility floor and v2026.4.15 build target in package metadata", () => {
+  it("declares the v2026.4.14 compatibility floor and v2026.4.20-beta.2 build target in package metadata", () => {
     const packageJson = JSON.parse(readFileSync(join(rootDir, "package.json"), "utf8")) as {
       openclaw?: {
         compat?: Record<string, string>;
@@ -45,10 +45,10 @@ describe("plugin entry source", () => {
 
     assert.equal(packageJson.openclaw?.compat?.pluginApi, ">=2026.4.14");
     assert.equal(packageJson.openclaw?.compat?.minGatewayVersion, "2026.4.14");
-    assert.equal(packageJson.openclaw?.build?.openclawVersion, "2026.4.15");
-    assert.equal(packageJson.openclaw?.build?.pluginSdkVersion, "2026.4.15");
+    assert.equal(packageJson.openclaw?.build?.openclawVersion, "2026.4.20-beta.2");
+    assert.equal(packageJson.openclaw?.build?.pluginSdkVersion, "2026.4.20-beta.2");
     assert.equal(packageJson.peerDependencies?.openclaw, ">=2026.4.14");
-    assert.equal(packageJson.devDependencies?.openclaw, "2026.4.15");
+    assert.equal(packageJson.devDependencies?.openclaw, "2026.4.20-beta.2");
   });
 
   it("declares narrow manifest activation and minimal setup descriptors", () => {
