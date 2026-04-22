@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.2.1] - 2026-04-22
+
 ### Changed
 
 - Raised the external OpenClaw compatibility baseline to `v2026.4.14`.
@@ -14,6 +16,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Allowed `gpt-5.4-pro` in the built-in Codex model allowlist.
 - Verified stable `v2026.4.21` compatibility and updated the local OpenClaw build/test target to `2026.4.21` without raising the minimum required gateway baseline.
 - Added explicit compatibility coverage for auth-required chat commands and the Telegram topic `13832` monitor-report route used in release smoke checks.
+
+### Fixed
+
+- Cleared `BASH_ENV` / `ENV` from goal-task verifier subprocesses so shell startup hooks cannot silently rewrite verifier execution.
+- Improved waiting-for-input notifications so forwarded question prompts carry cleaner recent context without echoing the same question text back at the user.
+- Allowed worktree recreation to clean one stale blocked path when resuming against an existing branch before escalating to a hard failure.
+
+### Security
+
+- Added explicit plugin security checks plus dependency-review and security-audit workflow coverage.
+- Refreshed vulnerable transitive dependency overrides and documented the current scanner findings and verifier-shell boundary.
 
 ## [3.2.0] - 2026-04-10
 
@@ -189,7 +202,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Default Codex approval policy to `on-request`.
 - Raised the default session limit.
 
-[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v3.2.0...HEAD
+[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v3.2.1...HEAD
+[3.2.1]: https://github.com/goldmar/openclaw-code-agent/compare/v3.2.0...v3.2.1
 [3.2.0]: https://github.com/goldmar/openclaw-code-agent/compare/v3.1.0...v3.2.0
 [3.1.0]: https://github.com/goldmar/openclaw-code-agent/compare/v3.0.0...v3.1.0
 [3.0.0]: https://github.com/goldmar/openclaw-code-agent/compare/v2.4.0...v3.0.0
