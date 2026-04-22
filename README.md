@@ -28,15 +28,15 @@ Need the ACPX vs Codex vs code-agent breakdown? See [docs/ACP-COMPARISON.md](doc
 
 The shared substrate is often the local `codex` command and Codex App Server, but the responsibilities are different. This plugin is not an ACP server and it does not depend on OpenClaw's bundled Codex provider to expose its own `codex` harness.
 
-## New In 3.2.0
+## New In 3.2.1
 
-`3.2.0` is the release that makes the newer worktree and plan-review model feel reliable enough for daily use.
+`3.2.1` is a maintenance release focused on routing correctness, compatibility metadata, and release/security hygiene around the newer plan-review and worktree model.
 
-- **Deterministic completion and approval state**. Terminal notifications and wakes no longer depend on transcript-style summary heuristics, and plan-gated sessions now surface explicit approval/execution state for operators and orchestration logic.
-- **Real auto-merge conflict recovery**. `auto-merge` now gets one autonomous conflict-resolution attempt, then retries the merge automatically before escalating back to a preserved branch or PR path.
-- **Lifecycle-first worktree cleanup**. Worktree status and cleanup now treat `released` as a first-class resolved state, so rebased, squashed, and cherry-picked work can still be identified and cleaned safely.
-- **Safer repository follow-through**. Worktree disk-space validation now checks the correct filesystem on first run and for custom worktree directories, and cross-repo PR auto-targeting now works for upstream-only repos.
-- **Stronger release hygiene**. The repo now standardizes on `pnpm` validation, and release automation validates `package.json`, `openclaw.plugin.json`, and the release version together before publish.
+- **Trusted route resolution for newer OpenClaw contexts**. The plugin now prefers `deliveryContext` and `requesterSenderId` when available, while keeping legacy routing fallbacks for persisted sessions and older fixtures.
+- **Safer verifier execution**. Goal-task verifier commands now drop shell bootstrap hooks like `BASH_ENV` and `ENV` so operator-provided verifier commands run with fewer implicit side effects.
+- **Compatibility and onboarding metadata refresh**. The release raises the external OpenClaw baseline to `v2026.4.14`, verifies against the stable `v2026.4.21` build target, and ships the manifest activation/setup descriptors plus narrower onboarding guidance for first-run setup.
+- **Codex harness policy refresh**. The built-in Codex allowlist now includes `gpt-5.4-pro`.
+- **Stronger security and release hygiene**. Dependency overrides, CI checks, plugin security validation, and release metadata parity checks are all updated to match the shipped package.
 
 ## From Prompt To Merged Branch
 
