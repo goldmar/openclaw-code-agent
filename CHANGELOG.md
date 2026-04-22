@@ -12,7 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Raised the external OpenClaw compatibility baseline to `v2026.4.14`.
 - Prefer the `deliveryContext` / `requesterSenderId` tool-context surface introduced in newer OpenClaw releases while keeping legacy routing fallbacks for older fixtures and persisted state.
 - Allowed `gpt-5.4-pro` in the built-in Codex model allowlist.
-- Verified `v2026.4.20-beta.2` compatibility and updated the local OpenClaw build/test target to `2026.4.20-beta.2` without raising the minimum required gateway baseline.
+- Verified stable `v2026.4.21` compatibility and updated the local OpenClaw build/test target to `2026.4.21` without raising the minimum required gateway baseline.
+- Added explicit compatibility coverage for auth-required chat commands and the Telegram topic `13832` monitor-report route used in release smoke checks.
 
 ## [3.2.0] - 2026-04-10
 
