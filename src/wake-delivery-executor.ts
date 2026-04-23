@@ -15,6 +15,7 @@ type ExecuteOptions = {
   phase: DispatchPhase;
   routeSummary: string;
   messageKind: "notify" | "wake";
+  dispatchContext?: Record<string, unknown>;
   orderingKey?: string;
   onStarted?: () => void;
   onSuccess?: () => void;
@@ -118,6 +119,7 @@ export class WakeDeliveryExecutor {
       phase: opts.phase,
       messageKind: opts.messageKind,
       route: opts.routeSummary,
+      ...opts.dispatchContext,
       attempt,
       maxAttempts: WAKE_MAX_ATTEMPTS,
     });
@@ -138,6 +140,7 @@ export class WakeDeliveryExecutor {
           phase: opts.phase,
           messageKind: opts.messageKind,
           route: opts.routeSummary,
+          ...opts.dispatchContext,
           attempt,
           maxAttempts: WAKE_MAX_ATTEMPTS,
           elapsedMs,
@@ -157,6 +160,7 @@ export class WakeDeliveryExecutor {
           phase: opts.phase,
           messageKind: opts.messageKind,
           route: opts.routeSummary,
+          ...opts.dispatchContext,
           attempt,
           maxAttempts: WAKE_MAX_ATTEMPTS,
           elapsedMs,
@@ -176,6 +180,7 @@ export class WakeDeliveryExecutor {
           phase: opts.phase,
           messageKind: opts.messageKind,
           route: opts.routeSummary,
+          ...opts.dispatchContext,
           attempt,
           maxAttempts: WAKE_MAX_ATTEMPTS,
           elapsedMs,
@@ -195,6 +200,7 @@ export class WakeDeliveryExecutor {
         phase: opts.phase,
         messageKind: opts.messageKind,
         route: opts.routeSummary,
+        ...opts.dispatchContext,
         attempt,
         maxAttempts: WAKE_MAX_ATTEMPTS,
         elapsedMs,
@@ -239,6 +245,7 @@ export class WakeDeliveryExecutor {
       phase: opts.phase,
       messageKind: opts.messageKind,
       route: opts.routeSummary,
+      ...opts.dispatchContext,
       attempt,
       maxAttempts: WAKE_MAX_ATTEMPTS,
     });
@@ -257,6 +264,7 @@ export class WakeDeliveryExecutor {
           phase: opts.phase,
           messageKind: opts.messageKind,
           route: opts.routeSummary,
+          ...opts.dispatchContext,
           attempt,
           maxAttempts: WAKE_MAX_ATTEMPTS,
           elapsedMs,
@@ -278,6 +286,7 @@ export class WakeDeliveryExecutor {
             phase: opts.phase,
             messageKind: opts.messageKind,
             route: opts.routeSummary,
+            ...opts.dispatchContext,
             attempt,
             maxAttempts: WAKE_MAX_ATTEMPTS,
             elapsedMs,
@@ -297,6 +306,7 @@ export class WakeDeliveryExecutor {
           phase: opts.phase,
           messageKind: opts.messageKind,
           route: opts.routeSummary,
+          ...opts.dispatchContext,
           attempt,
           maxAttempts: WAKE_MAX_ATTEMPTS,
           elapsedMs,

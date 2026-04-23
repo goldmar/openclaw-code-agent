@@ -59,6 +59,38 @@ export class WakeDispatcher {
     this.executor.dispose();
   }
 
+  private buildDispatchContext(args: {
+    routeSummary: string;
+    route?: {
+      channel: string;
+      target: string;
+      accountId?: string;
+      threadId?: string;
+      sessionKey?: string;
+    };
+    text: string;
+    buttons?: Array<Array<{ label: string; callbackData: string }>>;
+  }): Record<string, unknown> {
+    const buttons = args.buttons ?? [];
+    const flattenedButtons = buttons.flat();
+    return {
+      transportRoute: args.routeSummary,
+      transportChannel: args.route?.channel ?? "system",
+      transportTarget: args.route?.target ?? "system",
+      transportAccountId: args.route?.accountId,
+      transportThreadId: args.route?.threadId,
+      transportSessionKey: args.route?.sessionKey,
+      messageTextLength: args.text.length,
+      buttonsPresent: flattenedButtons.length > 0,
+      buttonRows: buttons.length || undefined,
+      buttonCount: flattenedButtons.length || undefined,
+      buttonLabels: flattenedButtons.length > 0 ? flattenedButtons.map((button) => button.label) : undefined,
+      maxCallbackDataLength: flattenedButtons.length > 0
+        ? Math.max(...flattenedButtons.map((button) => button.callbackData.length))
+        : undefined,
+    };
+  }
+
   private sendWake(
     session: Session,
     text: string,
@@ -79,6 +111,10 @@ export class WakeDispatcher {
           phase,
           routeSummary: "system",
           messageKind: "wake",
+          dispatchContext: this.buildDispatchContext({
+            routeSummary: "system",
+            text,
+          }),
           onSuccess,
           onFinalFailure,
         },
@@ -95,6 +131,11 @@ export class WakeDispatcher {
         phase,
         routeSummary: `session:${sessionKey}`,
         messageKind: "wake",
+        dispatchContext: this.buildDispatchContext({
+          routeSummary: `session:${sessionKey}`,
+          route,
+          text,
+        }),
         onSuccess,
         onFinalFailure: () => {
           this.executor.execute(
@@ -106,6 +147,10 @@ export class WakeDispatcher {
               phase,
               routeSummary: "system",
               messageKind: "wake",
+              dispatchContext: this.buildDispatchContext({
+                routeSummary: "system",
+                text,
+              }),
               onSuccess,
               onFinalFailure,
             },
@@ -146,6 +191,11 @@ export class WakeDispatcher {
           phase: "notify",
           routeSummary: "system",
           messageKind: "notify",
+          dispatchContext: this.buildDispatchContext({
+            routeSummary: "system",
+            text,
+            buttons,
+          }),
           orderingKey,
           onSuccess,
           onFinalFailure: onAllFailed,
@@ -165,6 +215,12 @@ export class WakeDispatcher {
             phase: "notify",
             routeSummary: this.routes.summary(route),
             messageKind: "notify",
+            dispatchContext: this.buildDispatchContext({
+              routeSummary: this.routes.summary(route),
+              route,
+              text,
+              buttons,
+            }),
             onSuccess,
             onFinalFailure: () => {
               console.warn(
@@ -187,6 +243,12 @@ export class WakeDispatcher {
             phase: "notify",
             routeSummary: this.routes.summary(route),
             messageKind: "notify",
+            dispatchContext: this.buildDispatchContext({
+              routeSummary: this.routes.summary(route),
+              route,
+              text,
+              buttons,
+            }),
             orderingKey,
             onSuccess: sendComponents,
             onFinalFailure: onAllFailed,
@@ -208,6 +270,12 @@ export class WakeDispatcher {
         phase: "notify",
         routeSummary: this.routes.summary(route),
         messageKind: "notify",
+        dispatchContext: this.buildDispatchContext({
+          routeSummary: this.routes.summary(route),
+          route,
+          text,
+          buttons,
+        }),
         orderingKey,
         onSuccess,
         onFinalFailure: () => {
@@ -228,6 +296,10 @@ export class WakeDispatcher {
               phase: "notify",
               routeSummary: "system",
               messageKind: "notify",
+              dispatchContext: this.buildDispatchContext({
+                routeSummary: "system",
+                text,
+              }),
               orderingKey,
               onSuccess,
               onFinalFailure: onAllFailed,

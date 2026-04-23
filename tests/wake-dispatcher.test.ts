@@ -446,6 +446,51 @@ export async function sendDiscordComponentMessage(target, spec, opts = {}) {
     assert.equal(wakeParams.message, "Delegated worktree decision wake");
   });
 
+  it("logs Telegram interactive delivery context when direct button sends fail", async () => {
+    process.env.OPENCLAW_TEST_FAIL_ONCE_FOR = JSON.stringify({
+      match: "--buttons",
+      stderr: "telegram button delivery failed",
+      exitCode: 1,
+    });
+
+    const dispatcher = createDispatcher();
+    const session: FakeSession = {
+      id: "session-button-failure",
+      route: buildRoute(),
+      originChannel: "telegram|bot|-1003863755361",
+      originThreadId: 11239,
+      originSessionKey: "agent:main:telegram:group:-1003863755361:topic:11239",
+    };
+    const errorLogs: string[] = [];
+    console.error = (message?: unknown, ...rest: unknown[]) => {
+      errorLogs.push([message, ...rest].map((value) => String(value)).join(" "));
+    };
+
+    dispatcher.dispatchSessionNotification(session as any, {
+      label: "plan-approval",
+      userMessage: "📋 Plan ready",
+      notifyUser: "always",
+      buttons: [[
+        { label: "Approve", callbackData: "token-approve" },
+        { label: "Revise", callbackData: "token-revise" },
+        { label: "Reject", callbackData: "token-reject" },
+      ]],
+    });
+
+    await waitFor(
+      () => errorLogs.some((line) => line.includes("\"event\":\"dispatch_retry_scheduled\"")),
+      "interactive failure log",
+    );
+
+    const failureLog = errorLogs.find((line) => line.includes("\"event\":\"dispatch_retry_scheduled\"")) ?? "";
+    assert.match(failureLog, /"buttonsPresent":true/);
+    assert.match(failureLog, /"buttonCount":3/);
+    assert.match(failureLog, /"buttonLabels":\["Approve","Revise","Reject"\]/);
+    assert.match(failureLog, /"transportChannel":"telegram"/);
+    assert.match(failureLog, /"transportThreadId":"11239"/);
+    assert.match(failureLog, /telegram button delivery failed/);
+  });
+
   it("falls back to a direct user notification plus system event when the wake target is unavailable", async () => {
     const dispatcher = createDispatcher();
     const session: FakeSession = {
