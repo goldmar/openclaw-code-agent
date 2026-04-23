@@ -156,8 +156,8 @@ describe("WakeTransport", () => {
     assert.equal(calls[0]?.opts, undefined);
   });
 
-  it("encodes Telegram buttons through the presentation payload by default", () => {
-    const transport = new WakeTransport();
+  it("encodes Telegram buttons through the presentation payload when presentation mode is selected", () => {
+    const transport = new WakeTransport({ telegramButtonCliMode: "presentation" });
     const args = transport.buildDirectNotificationArgs({
       channel: "telegram",
       target: "-1003863755361",
@@ -225,5 +225,34 @@ describe("WakeTransport", () => {
     } as any, "Plan ready", [[{ label: "Approve", callbackData: "token-approve" }]]);
 
     assert.equal(args[8], "--buttons");
+  });
+
+  it("auto-detects presentation support from the local OpenClaw CLI help", () => {
+    const dir = mkdtempSync(join(tmpdir(), "wake-transport-test-"));
+    tempDirs.push(dir);
+
+    const fakeOpenClawPath = join(dir, "openclaw");
+    writeFileSync(
+      fakeOpenClawPath,
+      [
+        "#!/usr/bin/env node",
+        "if (process.argv.slice(2).join(' ') === 'message send --help') {",
+        "  process.stdout.write('Usage: openclaw message send\\n\\nOptions:\\n  --presentation <json>\\n');",
+        "  process.exit(0);",
+        "}",
+        "process.exit(1);",
+      ].join("\n"),
+      "utf8",
+    );
+    chmodSync(fakeOpenClawPath, 0o755);
+    process.env.PATH = `${dir}:${originalPath ?? ""}`;
+
+    const transport = new WakeTransport();
+    const args = transport.buildDirectNotificationArgs({
+      channel: "telegram",
+      target: "-1003863755361",
+    } as any, "Plan ready", [[{ label: "Approve", callbackData: "token-approve" }]]);
+
+    assert.equal(args[8], "--presentation");
   });
 });
