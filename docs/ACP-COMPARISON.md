@@ -1,6 +1,6 @@
 # ACPX, Codex, and Code Agent
 
-This note compares three adjacent OpenClaw surfaces as of the `openclaw-code-agent` `3.2.1` / OpenClaw `2026.4.21` baseline:
+This note compares three adjacent OpenClaw surfaces as of the `openclaw-code-agent` `4.0.0` / OpenClaw `2026.4.23` verified build/test baseline:
 
 - OpenClaw ACP and the bundled `acpx` runtime backend
 - OpenClaw's bundled `codex` plugin
@@ -61,7 +61,7 @@ The same Codex App Server substrate can appear in more than one place. That does
 | Per-session USD cost tracking | Approximate usage only | Core session/provider accounting | Yes, plugin-facing cost reporting |
 | Git worktree lifecycle | No | No | Yes |
 | Merge / PR finish-line control | No | No | Yes |
-| Inline chat actions | No dedicated coding-session UX | No dedicated coding-session UX | Yes, Telegram and Discord callbacks |
+| Inline chat actions | No dedicated coding-session UX | No dedicated coding-session UX | Yes, Telegram and Discord callbacks over the shared `message.send --presentation` contract |
 
 ## What Each Supports Today
 

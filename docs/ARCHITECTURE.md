@@ -18,6 +18,7 @@ SessionManager
   -> SessionInteractionService
   -> SessionWorktreeController
   -> WakeDispatcher
+  -> openclaw message send
   -> openclaw gateway call chat.send
   -> openclaw system event --mode now
 
@@ -120,7 +121,8 @@ Boundary note:
 
 `src/wake-dispatcher.ts` owns outbound lifecycle delivery:
 
-- primary path: `openclaw gateway call chat.send`
+- direct user-notification path: `openclaw message send`
+- wake path: `openclaw gateway call chat.send`
 - fallback path: `openclaw system event --mode now`
 - bounded retries
 - per-session retry timers
@@ -245,8 +247,9 @@ The notification pipeline is intentionally centralized:
 
 1. `SessionManager` builds one notification request per event.
 2. `WakeDispatcher` decides whether it is notify-only, wake-only, or both.
-3. `chat.send` is preferred because it targets the originating runtime session precisely.
-4. `system event` is the recovery path when the richer routing metadata is missing or delivery fails repeatedly.
+3. Direct user notifications use `message.send`; Telegram and Discord interactive notifications attach buttons through `--presentation`.
+4. Wakes use `chat.send` because it targets the originating runtime session precisely.
+5. `system event` is the recovery path when richer routing metadata is missing or delivery fails repeatedly.
 
 The design goal is deterministic wakes with the fewest possible duplicate pings.
 

@@ -87,7 +87,7 @@ Plugin-behavior review should also include:
 pnpm check-plugin-security
 ```
 
-That scanner currently reports the accepted `child_process` surface and a bundled-file env-plus-network heuristic. Treat it as a review aid, not as an auto-fix target. The current rationale and accepted subprocess inventory live in [SECURITY.md](SECURITY.md).
+That checker currently allowlists the accepted `child_process` surface while still failing on any additional OpenClaw dangerous-code finding. Treat the known warning as a review item, not as an auto-fix target. The current rationale and accepted subprocess inventory live in [SECURITY.md](SECURITY.md).
 
 This repo currently has dev-only transitive advisories coming from upstream dependencies, so a blanket failing `pnpm audit` step is not the right merge gate until those findings are either remediated upstream or intentionally allowlisted with pnpm audit configuration.
 

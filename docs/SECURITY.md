@@ -42,18 +42,17 @@ Verifier commands remain powerful by design. They should be treated as trusted o
 
 ## Current Scanner Findings
 
-`pnpm check-plugin-security` currently reports:
+`pnpm check-plugin-security` currently reports and explicitly allowlists one expected finding:
 
 1. `Shell command execution detected (child_process)`
-2. `Environment variable access combined with network send`
 
 ### `child_process`
 
 This finding is legitimate but expected. The plugin cannot provide its core orchestration features without spawning local processes.
 
-### `Environment variable access combined with network send`
+The release checker installs the packed plugin with OpenClaw's unsafe-install override so this known finding can be reviewed without blocking the whole release gate. It still fails if the OpenClaw installer reports any additional dangerous-code finding.
 
-This finding is only partially informative.
+### Environment And Network Review
 
 The source tree does read environment variables for normal local configuration, for example:
 
@@ -63,7 +62,7 @@ The source tree does read environment variables for normal local configuration, 
 
 The source tree also sends lifecycle notifications and wakes.
 
-In the shipped bundle, those otherwise unrelated behaviors live in the same `dist/index.js`, so the scanner reports them together as a possible credential-harvesting pattern. In the reviewed source paths, the notification and wake code does not read sensitive env values and forward them into outbound payloads. Treat this finding as a bundled-file heuristic unless a source-level review shows a concrete exfiltration path.
+In the reviewed source paths, the notification and wake code does not read sensitive env values and forward them into outbound payloads. Treat any future env-to-network scanner finding as suspicious until source review confirms whether it is only a bundled-file heuristic or a concrete exfiltration path.
 
 ## Review Guidance
 

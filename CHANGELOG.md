@@ -11,20 +11,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking Changes
 
-- Raised the minimum supported OpenClaw plugin/gateway contract to `v2026.4.21`.
-- Removed the legacy Telegram `--buttons` compatibility path; interactive direct notifications now require the shared `message.send --presentation` contract.
-- Removed the plugin-owned Discord native component sender path; Discord interactive notifications now use the same shared direct presentation contract as Telegram.
+- Raised the minimum supported OpenClaw plugin/gateway contract from `>=2026.4.14` to `>=2026.4.21`.
+- Removed the legacy Telegram `--buttons` fallback; interactive direct notifications now require the shared `message.send --presentation` contract.
+- Removed the custom Discord component sender path; Discord interactive notifications now use the same shared direct presentation contract as Telegram.
+- Migrated persisted approval-prompt transport metadata from `direct-telegram` to `direct-message`; older persisted sessions are normalized on restore.
+- Refreshed the built-in model defaults to `anthropic/claude-sonnet-4-7` for Claude Code and `gpt-5.5` / `gpt-5.5-pro` for Codex.
 
 ### Changed
 
 - Unified outbound interactive delivery across Telegram and Discord on one shared `message.send --presentation` path.
 - Moved interactive button style selection into the shared session-interaction layer instead of transport-specific label inference.
-- Renamed persisted approval prompt transport state from `direct-telegram` to `direct-message`, while keeping restore-time normalization for older persisted sessions.
-- Updated the built-in recommended harness defaults to `anthropic/claude-sonnet-4-7` for Claude Code and `gpt-5.5` / `gpt-5.5-pro` for Codex.
+- Added structured dispatch diagnostics for direct interactive delivery, including route, thread, button labels, and callback payload length metadata.
+- Updated the local OpenClaw build/test target to stable `2026.4.23` while keeping the minimum compatibility floor at `>=2026.4.21`.
+
+### Fixed
+
+- Fixed Telegram approval delivery compatibility for routes that need the shared direct-message presentation contract.
+- Preserved Discord callback cleanup behavior after moving outbound buttons away from the plugin-owned component sender path.
 
 ### Docs
 
-- Updated the README, architecture notes, and package metadata to describe the new shared presentation transport and the new `v2026.4.21` compatibility floor.
+- Updated README, reference, architecture, ACP comparison, and package/plugin metadata for the `4.0.0` breaking transport contract and `v2026.4.21` compatibility floor.
 
 ## [3.2.1] - 2026-04-22
 
