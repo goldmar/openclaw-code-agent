@@ -2,7 +2,7 @@
   "id": "openclaw-code-agent",
   "name": "OpenClaw Code Agent",
   "description": "Multi-session coding-agent orchestration from OpenClaw chat",
-  "version": "3.2.1",
+  "version": "4.0.0",
   "activation": {
     "onCommands": [
       "agent",
@@ -32,15 +32,15 @@
         "description": "Per-harness launch defaults and model restrictions.",
         "default": {
           "codex": {
-            "defaultModel": "gpt-5.4",
+            "defaultModel": "gpt-5.5",
             "allowedModels": [
-              "gpt-5.4",
-              "gpt-5.4-pro"
+              "gpt-5.5",
+              "gpt-5.5-pro"
             ],
             "reasoningEffort": "medium"
           },
           "claude-code": {
-            "defaultModel": "sonnet",
+            "defaultModel": "anthropic/claude-sonnet-4-7",
             "allowedModels": [
               "sonnet",
               "opus"
@@ -190,7 +190,7 @@
     },
     "harnesses": {
       "label": "Harness configuration",
-      "help": "Per-harness defaults and model restrictions. Default: {\"codex\":{\"defaultModel\":\"gpt-5.4\",\"allowedModels\":[\"gpt-5.4\",\"gpt-5.4-pro\"],\"reasoningEffort\":\"medium\"},\"claude-code\":{\"defaultModel\":\"sonnet\",\"allowedModels\":[\"sonnet\",\"opus\"]}}.",
+      "help": "Per-harness defaults and model restrictions. Default: {\"codex\":{\"defaultModel\":\"gpt-5.5\",\"allowedModels\":[\"gpt-5.5\",\"gpt-5.5-pro\"],\"reasoningEffort\":\"medium\"},\"claude-code\":{\"defaultModel\":\"anthropic/claude-sonnet-4-7\",\"allowedModels\":[\"sonnet\",\"opus\"]}}.",
       "advanced": true
     },
     "maxSessions": {

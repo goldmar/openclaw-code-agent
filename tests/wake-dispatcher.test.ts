@@ -95,17 +95,13 @@ describe("WakeDispatcher", () => {
   const originalConsoleError = console.error;
   let tempDir: string;
   let logPath: string;
-  let discordLogPath: string;
   let failStatePath: string;
-  let fakeDiscordSdkPath: string;
 
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), "wake-dispatcher-test-"));
     logPath = join(tempDir, "openclaw-calls.log");
-    discordLogPath = join(tempDir, "discord-components.log");
     failStatePath = join(tempDir, "openclaw-fail-state.json");
     writeFileSync(logPath, "");
-    writeFileSync(discordLogPath, "");
 
     const fakeOpenClawPath = join(tempDir, "openclaw");
     writeFileSync(fakeOpenClawPath, `#!/usr/bin/env node
@@ -136,21 +132,7 @@ if (failConfigRaw) {
 `);
     chmodSync(fakeOpenClawPath, 0o755);
 
-    fakeDiscordSdkPath = join(tempDir, "fake-discord-sdk.mjs");
-    writeFileSync(fakeDiscordSdkPath, `#!/usr/bin/env node
-import { appendFileSync } from "node:fs";
-
-export async function sendDiscordComponentMessage(target, spec, opts = {}) {
-  appendFileSync(
-    process.env.OPENCLAW_TEST_DISCORD_LOG,
-    JSON.stringify({ target, spec, opts }) + "\\n",
-  );
-  return { channel: "discord", target, spec, opts };
-}
-`);
-
     process.env.OPENCLAW_TEST_LOG = logPath;
-    process.env.OPENCLAW_TEST_DISCORD_LOG = discordLogPath;
     process.env.OPENCLAW_TEST_FAIL_ONCE_STATE = failStatePath;
     process.env.PATH = `${tempDir}:${originalPath}`;
   });
@@ -164,44 +146,13 @@ export async function sendDiscordComponentMessage(target, spec, opts = {}) {
     } else {
       process.env.OPENCLAW_TEST_LOG = originalLogPath;
     }
-    delete process.env.OPENCLAW_TEST_DISCORD_LOG;
     delete process.env.OPENCLAW_TEST_FAIL_ONCE_FOR;
     delete process.env.OPENCLAW_TEST_FAIL_ONCE_STATE;
     rmSync(tempDir, { recursive: true, force: true });
   });
 
   function createDispatcher() {
-    return new WakeDispatcher({
-      transportOptions: {
-        resolveDiscordSdkModuleUrl: () => `file://${fakeDiscordSdkPath}`,
-        telegramButtonCliMode: "presentation",
-      },
-    });
-  }
-
-  function readDiscordCalls(path: string): Array<{
-    target: string;
-    spec: {
-      blocks: Array<{
-        type: string;
-        buttons: Array<{ label: string; callbackData: string; style: string }>;
-      }>;
-    };
-    opts: { accountId?: string };
-  }> {
-    const raw = readFileSync(path, "utf8").trim();
-    if (!raw) return [];
-    return raw.split("\n").map((line) => JSON.parse(line));
-  }
-
-  async function waitForDiscordCalls(path: string, count: number) {
-    const deadline = Date.now() + WAIT_TIMEOUT_MS;
-    while (Date.now() < deadline) {
-      const calls = readDiscordCalls(path);
-      if (calls.length >= count) return calls;
-      await new Promise((resolve) => setTimeout(resolve, WAIT_STEP_MS));
-    }
-    throw new Error(`Timed out waiting for ${count} Discord component call(s) in ${path}`);
+    return new WakeDispatcher();
   }
 
   it("uses message.send for direct user notifications and logs completion", async () => {
@@ -443,8 +394,8 @@ export async function sendDiscordComponentMessage(target, spec, opts = {}) {
       blocks: [{
         type: "buttons",
         buttons: [
-          { text: "✅ Merge", callback_data: "code-agent:token-merge" },
-          { text: "📬 Open PR", callback_data: "code-agent:token-pr" },
+          { label: "✅ Merge", value: "code-agent:token-merge" },
+          { label: "📬 Open PR", value: "code-agent:token-pr" },
         ],
       }],
     });
@@ -709,7 +660,7 @@ export async function sendDiscordComponentMessage(target, spec, opts = {}) {
     assert.equal(params.message, "🚀 launched");
   });
 
-  it("sends Discord buttons as a separate native component notification", async () => {
+  it("sends Discord buttons through the shared direct presentation path", async () => {
     const dispatcher = createDispatcher();
     const session: FakeSession = {
       id: "session-10",
@@ -730,29 +681,115 @@ export async function sendDiscordComponentMessage(target, spec, opts = {}) {
       userMessage: "📋 Plan ready",
       notifyUser: "always",
       buttons: [[
-        { label: "Approve", callbackData: "token-approve" },
-        { label: "Reject", callbackData: "token-reject" },
+        { label: "Approve", callbackData: "token-approve", style: "primary" },
+        { label: "Reject", callbackData: "token-reject", style: "danger" },
       ]],
     });
 
-    const textCalls = await waitForCalls(logPath, 1);
-    const componentCalls = await waitForDiscordCalls(discordLogPath, 1);
+    const calls = await waitForCalls(logPath, 1);
+    const args = parseMessageSendArgs(calls[0] ?? []);
+    assert.equal(args.channel, "discord");
+    assert.equal(args.target, "channel:1481874223294054540");
+    assert.equal(args.message, "📋 Plan ready");
+    assert.equal(args["thread-id"], "1481999999999999999");
+    assert.deepEqual(JSON.parse(args.presentation ?? "{}"), {
+      blocks: [{
+        type: "buttons",
+        buttons: [
+          { label: "Approve", value: "code-agent:token-approve", style: "primary" },
+          { label: "Reject", value: "code-agent:token-reject", style: "danger" },
+        ],
+      }],
+    });
+  });
 
-    const textArgs = parseMessageSendArgs(textCalls[0] ?? []);
-    assert.equal(textArgs.channel, "discord");
-    assert.equal(textArgs.target, "channel:1481874223294054540");
-    assert.equal(textArgs.message, "📋 Plan ready");
-    assert.equal(textArgs["thread-id"], "1481999999999999999");
+  it("preserves Discord account and thread targeting on the shared presentation path", async () => {
+    const dispatcher = createDispatcher();
+    const session: FakeSession = {
+      id: "session-discord-account-thread",
+      route: buildRoute({
+        provider: "discord",
+        accountId: "bot-account",
+        target: "channel:1481874223294054540",
+        threadId: "1481999999999999999",
+        sessionKey: undefined,
+      }),
+    };
 
-    const component = componentCalls[0];
-    assert.equal(component?.target, "channel:1481999999999999999");
-    assert.deepEqual(component?.spec.blocks, [{
-      type: "actions",
-      buttons: [
-        { label: "Approve", callbackData: "code-agent:token-approve", style: "primary" },
-        { label: "Reject", callbackData: "code-agent:token-reject", style: "danger" },
-      ],
-    }]);
+    dispatcher.dispatchSessionNotification(session as any, {
+      label: "worktree-delegate",
+      userMessage: "🔀 Worktree decision required",
+      notifyUser: "always",
+      buttons: [[
+        { label: "Merge", callbackData: "token-merge", style: "success" },
+        { label: "Open PR", callbackData: "token-pr", style: "primary" },
+      ]],
+    });
+
+    const calls = await waitForCalls(logPath, 1);
+    const args = parseMessageSendArgs(calls[0] ?? []);
+    assert.equal(args.channel, "discord");
+    assert.equal(args.account, "bot-account");
+    assert.equal(args.target, "channel:1481874223294054540");
+    assert.equal(args["thread-id"], "1481999999999999999");
+    assert.deepEqual(JSON.parse(args.presentation ?? "{}"), {
+      blocks: [{
+        type: "buttons",
+        buttons: [
+          { label: "Merge", value: "code-agent:token-merge", style: "success" },
+          { label: "Open PR", value: "code-agent:token-pr", style: "primary" },
+        ],
+      }],
+    });
+  });
+
+  it("logs Discord interactive delivery context when shared presentation delivery fails", async () => {
+    process.env.OPENCLAW_TEST_FAIL_ONCE_FOR = JSON.stringify({
+      match: "--presentation",
+      stderr: "discord presentation delivery failed",
+      exitCode: 1,
+    });
+
+    const dispatcher = createDispatcher();
+    const session: FakeSession = {
+      id: "session-discord-button-failure",
+      route: buildRoute({
+        provider: "discord",
+        accountId: "bot-account",
+        target: "channel:1481874223294054540",
+        threadId: "1481999999999999999",
+        sessionKey: undefined,
+      }),
+    };
+    const errorLogs: string[] = [];
+    console.error = (message?: unknown, ...rest: unknown[]) => {
+      errorLogs.push([message, ...rest].map((value) => String(value)).join(" "));
+    };
+
+    dispatcher.dispatchSessionNotification(session as any, {
+      label: "plan-approval",
+      userMessage: "📋 Plan ready",
+      notifyUser: "always",
+      buttons: [[
+        { label: "Approve", callbackData: "token-approve", style: "primary" },
+        { label: "Reject", callbackData: "token-reject", style: "danger" },
+      ]],
+    });
+
+    await waitFor(
+      () => errorLogs.some((line) => line.includes("\"event\":\"dispatch_retry_scheduled\"")),
+      "discord interactive failure log",
+    );
+
+    const failureLog = errorLogs.find((line) => line.includes("\"event\":\"dispatch_retry_scheduled\"")) ?? "";
+    assert.match(failureLog, /"target":"message\.send"/);
+    assert.match(failureLog, /"transportChannel":"discord"/);
+    assert.match(failureLog, /"transportAccountId":"bot-account"/);
+    assert.match(failureLog, /"transportTarget":"channel:1481874223294054540"/);
+    assert.match(failureLog, /"transportThreadId":"1481999999999999999"/);
+    assert.match(failureLog, /"buttonsPresent":true/);
+    assert.match(failureLog, /"buttonCount":2/);
+    assert.match(failureLog, /discord presentation delivery failed/);
   });
 
   it("delivers paginated user notifications in order and keeps buttons only on the final chunk", async () => {
@@ -982,5 +1019,29 @@ export async function sendDiscordComponentMessage(target, spec, opts = {}) {
     assert.equal(wakeParams.accountId, undefined);
     assert.equal(wakeParams.target, undefined);
     assert.equal(wakeParams.threadId, undefined);
+  });
+
+  it("treats empty button rows as a plain direct notification instead of an interactive failure", async () => {
+    const dispatcher = createDispatcher();
+    const session: FakeSession = {
+      id: "session-empty-button-rows",
+    };
+
+    dispatcher.dispatchSessionNotification(session as any, {
+      label: "launch",
+      userMessage: "🚀 launched",
+      notifyUser: "always",
+      buttons: [[], []],
+    });
+    const calls = await waitForCalls(logPath, 1);
+
+    assert.deepEqual(calls, [[
+      "system",
+      "event",
+      "--text",
+      "🚀 launched",
+      "--mode",
+      "now",
+    ]]);
   });
 });

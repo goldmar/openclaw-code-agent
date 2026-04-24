@@ -85,12 +85,12 @@ describe("resolveAgentLaunchRequest", () => {
     assert.equal(result.kind, "blocked");
   });
 
-  it("accepts gpt-5.4-pro under the built-in Codex allowlist", () => {
+  it("accepts gpt-5.5-pro under the built-in Codex allowlist", () => {
     const result = resolveAgentLaunchRequest(
       {
         prompt: "Use the pro model",
         harness: "codex",
-        model: "gpt-5.4-pro",
+        model: "gpt-5.5-pro",
       },
       { workspaceDir: "/tmp" } as any,
       {},
@@ -98,7 +98,7 @@ describe("resolveAgentLaunchRequest", () => {
 
     assert.equal(result.kind, "resolved");
     if (result.kind === "resolved") {
-      assert.equal(result.resolvedModel, "gpt-5.4-pro");
+      assert.equal(result.resolvedModel, "gpt-5.5-pro");
     }
   });
 

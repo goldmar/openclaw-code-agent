@@ -31,9 +31,9 @@ describe("WakeDeliveryExecutor", () => {
     executor.executePromise(
       () => new Promise<void>(() => {}),
       {
-        label: "discord-components",
+        label: "interactive-notify",
         sessionId: "session-timeout",
-        target: "discord.components",
+        target: "message.send",
         phase: "notify",
         routeSummary: "discord|channel:123",
         messageKind: "notify",
@@ -239,7 +239,7 @@ describe("WakeDeliveryExecutor", () => {
       {
         label: "first",
         sessionId: "session-ordered-dispose",
-        target: "discord.components",
+        target: "message.send",
         phase: "notify",
         routeSummary: "discord|channel:123",
         messageKind: "notify",
@@ -255,7 +255,7 @@ describe("WakeDeliveryExecutor", () => {
       {
         label: "second",
         sessionId: "session-ordered-dispose",
-        target: "discord.components",
+        target: "message.send",
         phase: "notify",
         routeSummary: "discord|channel:123",
         messageKind: "notify",

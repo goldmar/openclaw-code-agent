@@ -51,7 +51,7 @@ export type WorktreeLifecycleResolutionSource =
 export type SessionRuntimeState = "live" | "stopped";
 export type SessionDeliveryState = "idle" | "notifying" | "wake_pending" | "failed";
 export type SessionApprovalPromptStatus = "not_sent" | "sending" | "delivered" | "fallback_delivered" | "failed";
-export type SessionApprovalPromptTransport = "none" | "direct-telegram" | "wake-only";
+export type SessionApprovalPromptTransport = "none" | "direct-message" | "wake-only";
 export type SessionApprovalPromptMessageKind = "none" | "canonical_buttons" | "explicit_fallback_text";
 export type ApprovalExecutionState =
   | "awaiting_plan_output"

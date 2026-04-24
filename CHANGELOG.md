@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.0.0] - 2026-04-24
+
+### Breaking Changes
+
+- Raised the minimum supported OpenClaw plugin/gateway contract to `v2026.4.21`.
+- Removed the legacy Telegram `--buttons` compatibility path; interactive direct notifications now require the shared `message.send --presentation` contract.
+- Removed the plugin-owned Discord native component sender path; Discord interactive notifications now use the same shared direct presentation contract as Telegram.
+
+### Changed
+
+- Unified outbound interactive delivery across Telegram and Discord on one shared `message.send --presentation` path.
+- Moved interactive button style selection into the shared session-interaction layer instead of transport-specific label inference.
+- Renamed persisted approval prompt transport state from `direct-telegram` to `direct-message`, while keeping restore-time normalization for older persisted sessions.
+- Updated the built-in recommended harness defaults to `anthropic/claude-sonnet-4-7` for Claude Code and `gpt-5.5` / `gpt-5.5-pro` for Codex.
+
+### Docs
+
+- Updated the README, architecture notes, and package metadata to describe the new shared presentation transport and the new `v2026.4.21` compatibility floor.
+
 ## [3.2.1] - 2026-04-22
 
 ### Changed
@@ -202,7 +221,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Default Codex approval policy to `on-request`.
 - Raised the default session limit.
 
-[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v3.2.1...HEAD
+[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.0.0...HEAD
+[4.0.0]: https://github.com/goldmar/openclaw-code-agent/compare/v3.2.1...v4.0.0
 [3.2.1]: https://github.com/goldmar/openclaw-code-agent/compare/v3.2.0...v3.2.1
 [3.2.0]: https://github.com/goldmar/openclaw-code-agent/compare/v3.1.0...v3.2.0
 [3.1.0]: https://github.com/goldmar/openclaw-code-agent/compare/v3.0.0...v3.1.0

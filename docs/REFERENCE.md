@@ -7,9 +7,9 @@ Canonical operator reference for `openclaw-code-agent`: install, configuration, 
 | Setting | Default |
 | --- | --- |
 | `defaultHarness` | `claude-code` |
-| `harnesses.claude-code.defaultModel` | `sonnet` |
-| `harnesses.codex.defaultModel` | `gpt-5.4` |
-| `harnesses.codex.allowedModels` | `["gpt-5.4", "gpt-5.4-pro"]` |
+| `harnesses.claude-code.defaultModel` | `anthropic/claude-sonnet-4-7` |
+| `harnesses.codex.defaultModel` | `gpt-5.5` |
+| `harnesses.codex.allowedModels` | `["gpt-5.5", "gpt-5.5-pro"]` |
 | `harnesses.codex.reasoningEffort` | `medium` |
 | `permissionMode` | `plan` |
 | `planApproval` | `ask` |
@@ -86,12 +86,12 @@ Add this under `plugins.entries["openclaw-code-agent"]` in `~/.openclaw/openclaw
     "fallbackChannel": "telegram|my-bot|123456789",
     "harnesses": {
       "claude-code": {
-        "defaultModel": "sonnet",
+        "defaultModel": "anthropic/claude-sonnet-4-7",
         "allowedModels": ["sonnet", "opus"]
       },
       "codex": {
-        "defaultModel": "gpt-5.4",
-        "allowedModels": ["gpt-5.4", "gpt-5.4-pro"],
+        "defaultModel": "gpt-5.5",
+        "allowedModels": ["gpt-5.5", "gpt-5.5-pro"],
         "reasoningEffort": "medium"
       }
     }
@@ -198,6 +198,8 @@ For Codex, approval behavior is fixed to the supported execution path and is not
 | `approve` | Auto-approve after verification |
 
 In `ask`, the plugin sends action buttons for `Approve`, `Revise`, and `Reject` when interactive callbacks are available, and the user-facing message includes the full plan text rather than the normal preview budget. Each session keeps one canonical actionable approval prompt per plan review version; later reminders for that same version are non-canonical reminders, not a fresh approval cycle. The same flow still works through plain replies. In `delegate`, the orchestrator must read the full plan with `agent_output(..., full=true)` before approving anything.
+
+Direct interactive notifications for Telegram and Discord now share the same OpenClaw `message.send --presentation` contract. Callback handling and route repair still remain provider-specific.
 
 Revision and approval rules are version-scoped:
 

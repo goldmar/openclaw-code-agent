@@ -1,29 +1,10 @@
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 
 import { WakeTransport } from "../src/wake-transport";
 
-const tempDirs: string[] = [];
-const originalDiscordLog = process.env.OPENCLAW_TEST_DISCORD_LOG;
-const originalPath = process.env.PATH;
-
 afterEach(() => {
-  while (tempDirs.length > 0) {
-    rmSync(tempDirs.pop()!, { recursive: true, force: true });
-  }
-  if (originalDiscordLog == null) {
-    delete process.env.OPENCLAW_TEST_DISCORD_LOG;
-  } else {
-    process.env.OPENCLAW_TEST_DISCORD_LOG = originalDiscordLog;
-  }
-  if (originalPath == null) {
-    delete process.env.PATH;
-  } else {
-    process.env.PATH = originalPath;
-  }
+  delete process.env.OPENCLAW_TEST_DISCORD_LOG;
 });
 
 describe("WakeTransport", () => {
@@ -53,116 +34,16 @@ describe("WakeTransport", () => {
     assert.equal(payload.threadId, undefined);
   });
 
-  it("retries loading the Discord component sender after a transient module failure", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "wake-transport-test-"));
-    tempDirs.push(dir);
-
-    const brokenModulePath = join(dir, "broken-discord-sdk.mjs");
-    const workingModulePath = join(dir, "working-discord-sdk.mjs");
-    const discordLogPath = join(dir, "discord-components.log");
-
-    writeFileSync(
-      brokenModulePath,
-      "export const sendDiscordComponentMessage = undefined;\n",
-      "utf8",
-    );
-    writeFileSync(
-      workingModulePath,
-      [
-        "import { appendFileSync } from \"node:fs\";",
-        "",
-        "export async function sendDiscordComponentMessage(target, spec, opts = {}) {",
-        "  appendFileSync(process.env.OPENCLAW_TEST_DISCORD_LOG, JSON.stringify({ target, spec, opts }) + \"\\n\");",
-        "  return { target, spec, opts };",
-        "}",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-    writeFileSync(discordLogPath, "", "utf8");
-
-    let moduleUrl = `file://${brokenModulePath}`;
-    const transport = new WakeTransport({
-      resolveDiscordSdkModuleUrl: () => moduleUrl,
-    });
-    const route = {
-      provider: "discord",
-      accountId: "bot",
-      target: "channel:12345",
-      threadId: "67890",
-    };
-    const buttons = [[{ label: "Approve", callbackData: "token-approve" }]];
-
-    process.env.OPENCLAW_TEST_DISCORD_LOG = discordLogPath;
-
-    await assert.rejects(
-      transport.sendDiscordComponents(route as any, buttons),
-      /component sender export is unavailable/i,
-    );
-
-    moduleUrl = `file://${workingModulePath}`;
-    await transport.sendDiscordComponents(route as any, buttons);
-
-    const calls = readFileSync(discordLogPath, "utf8")
-      .trim()
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => JSON.parse(line) as { target: string; opts: { accountId?: string } });
-
-    assert.equal(calls.length, 1);
-    assert.equal(calls[0]?.target, "channel:67890");
-    assert.equal(calls[0]?.opts.accountId, "bot");
-  });
-
-  it("omits accountId from the Discord SDK call when the route has no account", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "wake-transport-test-"));
-    tempDirs.push(dir);
-
-    const modulePath = join(dir, "discord-sdk.mjs");
-    const discordLogPath = join(dir, "discord-components.log");
-
-    writeFileSync(
-      modulePath,
-      [
-        "import { appendFileSync } from \"node:fs\";",
-        "",
-        "export async function sendDiscordComponentMessage(target, spec, opts) {",
-        "  appendFileSync(process.env.OPENCLAW_TEST_DISCORD_LOG, JSON.stringify({ target, spec, opts }) + \"\\n\");",
-        "  return { target, spec, opts };",
-        "}",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-    writeFileSync(discordLogPath, "", "utf8");
-
-    process.env.OPENCLAW_TEST_DISCORD_LOG = discordLogPath;
-    const transport = new WakeTransport({
-      resolveDiscordSdkModuleUrl: () => `file://${modulePath}`,
-    });
-    await transport.sendDiscordComponents({
-      provider: "discord",
-      target: "channel:12345",
-      threadId: "67890",
-    } as any, [[{ label: "Approve", callbackData: "token-approve" }]]);
-
-    const calls = readFileSync(discordLogPath, "utf8")
-      .trim()
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => JSON.parse(line) as { opts?: unknown });
-
-    assert.equal(calls.length, 1);
-    assert.equal(calls[0]?.opts, undefined);
-  });
-
-  it("encodes Telegram buttons through the presentation payload when presentation mode is selected", () => {
-    const transport = new WakeTransport({ telegramButtonCliMode: "presentation" });
+  it("encodes interactive notifications through shared presentation blocks", () => {
+    const transport = new WakeTransport();
     const args = transport.buildDirectNotificationArgs({
       channel: "telegram",
       target: "-1003863755361",
       threadId: "28",
-    } as any, "Plan ready", [[{ label: "Approve", callbackData: "token-approve" }]]);
+    } as any, "Plan ready", [[
+      { label: "Approve", callbackData: "token-approve", style: "primary" },
+      { label: "Reject", callbackData: "token-reject", style: "danger" },
+    ]]);
 
     assert.deepEqual(args.slice(0, 8), [
       "message",
@@ -180,79 +61,122 @@ describe("WakeTransport", () => {
     assert.deepEqual(JSON.parse(args[11] ?? "{}"), {
       blocks: [{
         type: "buttons",
-        buttons: [{ text: "Approve", callback_data: "code-agent:token-approve" }],
+        buttons: [
+          { label: "Approve", value: "code-agent:token-approve", style: "primary" },
+          { label: "Reject", value: "code-agent:token-reject", style: "danger" },
+        ],
       }],
     });
   });
 
-  it("can still emit legacy Telegram --buttons payloads for older OpenClaw CLIs", () => {
-    const transport = new WakeTransport({ telegramButtonCliMode: "legacy-buttons" });
+  it("uses the same presentation payload shape for Discord interactive notifications", () => {
+    const transport = new WakeTransport();
     const args = transport.buildDirectNotificationArgs({
-      channel: "telegram",
-      target: "-1003863755361",
-    } as any, "Plan ready", [[{ label: "Approve", callbackData: "token-approve" }]]);
-
-    assert.equal(args[8], "--buttons");
-    assert.deepEqual(JSON.parse(args[9] ?? "[]"), [[
-      { text: "Approve", callback_data: "code-agent:token-approve" },
+      channel: "discord",
+      target: "channel:123",
+      accountId: "bot-account",
+      threadId: "456",
+    } as any, "Decision needed", [[
+      { label: "Resume", callbackData: "token-resume", style: "success" },
+      { label: "Later", callbackData: "token-later", style: "secondary" },
     ]]);
+
+    assert.equal(args[8], "--account");
+    assert.equal(args[9], "bot-account");
+    assert.equal(args[10], "--thread-id");
+    assert.equal(args[11], "456");
+    assert.equal(args[12], "--presentation");
+    assert.deepEqual(JSON.parse(args[13] ?? "{}"), {
+      blocks: [{
+        type: "buttons",
+        buttons: [
+          { label: "Resume", value: "code-agent:token-resume", style: "success" },
+          { label: "Later", value: "code-agent:token-later", style: "secondary" },
+        ],
+      }],
+    });
   });
 
-  it("auto-detects legacy Telegram button support from the local OpenClaw CLI help", () => {
-    const dir = mkdtempSync(join(tmpdir(), "wake-transport-test-"));
-    tempDirs.push(dir);
+  it("omits presentation for non-interactive direct notifications", () => {
+    const transport = new WakeTransport();
+    const args = transport.buildDirectNotificationArgs({
+      channel: "discord",
+      target: "channel:123",
+    } as any, "Plain notification");
 
-    const fakeOpenClawPath = join(dir, "openclaw");
-    writeFileSync(
-      fakeOpenClawPath,
-      [
-        "#!/usr/bin/env node",
-        "if (process.argv.slice(2).join(' ') === 'message send --help') {",
-        "  process.stdout.write('Usage: openclaw message send\\n\\nOptions:\\n  --buttons <json>\\n');",
-        "  process.exit(0);",
-        "}",
-        "process.exit(1);",
-      ].join("\n"),
-      "utf8",
-    );
-    chmodSync(fakeOpenClawPath, 0o755);
-    process.env.PATH = `${dir}:${originalPath ?? ""}`;
+    assert.deepEqual(args, [
+      "message",
+      "send",
+      "--channel",
+      "discord",
+      "--target",
+      "channel:123",
+      "--message",
+      "Plain notification",
+    ]);
+  });
 
+  it("prefixes callback values once even when the token is already namespaced", () => {
     const transport = new WakeTransport();
     const args = transport.buildDirectNotificationArgs({
       channel: "telegram",
       target: "-1003863755361",
-    } as any, "Plan ready", [[{ label: "Approve", callbackData: "token-approve" }]]);
+    } as any, "Plan ready", [[
+      { label: "Approve", callbackData: "code-agent:token-approve", style: "primary" },
+    ]]);
 
-    assert.equal(args[8], "--buttons");
+    assert.deepEqual(JSON.parse(args[9] ?? "{}"), {
+      blocks: [{
+        type: "buttons",
+        buttons: [
+          { label: "Approve", value: "code-agent:token-approve", style: "primary" },
+        ],
+      }],
+    });
   });
 
-  it("auto-detects presentation support from the local OpenClaw CLI help", () => {
-    const dir = mkdtempSync(join(tmpdir(), "wake-transport-test-"));
-    tempDirs.push(dir);
+  it("drops empty button rows instead of sending empty presentation blocks", () => {
+    const transport = new WakeTransport();
+    const args = transport.buildDirectNotificationArgs({
+      channel: "discord",
+      target: "channel:123",
+      threadId: "456",
+    } as any, "Decision needed", [
+      [],
+      [{ label: "Resume", callbackData: "token-resume", style: "success" }],
+      [],
+    ]);
 
-    const fakeOpenClawPath = join(dir, "openclaw");
-    writeFileSync(
-      fakeOpenClawPath,
-      [
-        "#!/usr/bin/env node",
-        "if (process.argv.slice(2).join(' ') === 'message send --help') {",
-        "  process.stdout.write('Usage: openclaw message send\\n\\nOptions:\\n  --presentation <json>\\n');",
-        "  process.exit(0);",
-        "}",
-        "process.exit(1);",
-      ].join("\n"),
-      "utf8",
-    );
-    chmodSync(fakeOpenClawPath, 0o755);
-    process.env.PATH = `${dir}:${originalPath ?? ""}`;
+    assert.equal(args[10], "--presentation");
+    assert.deepEqual(JSON.parse(args[11] ?? "{}"), {
+      blocks: [{
+        type: "buttons",
+        buttons: [
+          { label: "Resume", value: "code-agent:token-resume", style: "success" },
+        ],
+      }],
+    });
+  });
 
+  it("omits presentation entirely when button rows are structurally empty", () => {
     const transport = new WakeTransport();
     const args = transport.buildDirectNotificationArgs({
       channel: "telegram",
       target: "-1003863755361",
-    } as any, "Plan ready", [[{ label: "Approve", callbackData: "token-approve" }]]);
+      threadId: "28",
+    } as any, "Plan ready", [[], []]);
 
-    assert.equal(args[8], "--presentation");
+    assert.deepEqual(args, [
+      "message",
+      "send",
+      "--channel",
+      "telegram",
+      "--target",
+      "-1003863755361",
+      "--message",
+      "Plan ready",
+      "--thread-id",
+      "28",
+    ]);
   });
 });

@@ -6,7 +6,11 @@ import type {
 } from "./types";
 import type { SessionActionTokenStore } from "./session-action-token-store";
 
-export type NotificationButton = { label: string; callbackData: string };
+export type NotificationButton = {
+  label: string;
+  callbackData: string;
+  style?: "primary" | "secondary" | "success" | "danger";
+};
 
 type ButtonSource = {
   worktreePrUrl?: string;
@@ -50,7 +54,30 @@ export class SessionInteractionService {
     options: Partial<Omit<SessionActionToken, "id" | "sessionId" | "kind" | "createdAt">> = {},
   ): NotificationButton {
     const token = this.createActionToken(sessionId, kind, { label, ...options });
-    return { label, callbackData: token.id };
+    return {
+      label,
+      callbackData: token.id,
+      style: this.resolveButtonStyle(kind),
+    };
+  }
+
+  private resolveButtonStyle(kind: SessionActionKind): NotificationButton["style"] {
+    switch (kind) {
+      case "plan-approve":
+      case "worktree-create-pr":
+      case "worktree-update-pr":
+      case "monitor-start-plan":
+        return "primary";
+      case "worktree-merge":
+      case "session-resume":
+      case "session-restart":
+        return "success";
+      case "plan-reject":
+      case "worktree-dismiss":
+        return "danger";
+      default:
+        return "secondary";
+    }
   }
 
   getWorktreeDecisionButtons(

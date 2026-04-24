@@ -55,7 +55,7 @@ function hasFormatLaunchResult(value: unknown): value is {
  * Checks if a model identifier is allowed based on case-insensitive substring matching.
  * Returns true if allowedModels is empty/undefined, or if any allowed pattern matches the model.
  *
- * @param model - The model identifier to check (e.g., "anthropic/claude-sonnet-4-6")
+ * @param model - The model identifier to check (e.g., "anthropic/claude-sonnet-4-7")
  * @param allowedModels - Array of allowed patterns (e.g., ["sonnet", "opus"])
  * @returns true if model is allowed, false otherwise
  */

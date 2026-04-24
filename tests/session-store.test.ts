@@ -102,6 +102,36 @@ describe("SessionStore getLatestPersistedByName", () => {
   });
 });
 
+describe("SessionStore persisted compatibility", () => {
+  it("normalizes legacy direct-telegram approval prompt transport metadata on restore", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-store-compat-"));
+    const indexPath = join(dir, "sessions.json");
+    writeStore(indexPath, [{
+      id: "sess-compat",
+      harnessSessionId: "h-compat",
+      backendRef: { kind: "claude-code", conversationId: "thread-compat" },
+      name: "compat",
+      prompt: "p",
+      workdir: "/tmp",
+      status: "completed",
+      costUsd: 0,
+      createdAt: 1,
+      completedAt: 2,
+      approvalPromptStatus: "delivered",
+      approvalPromptTransport: "direct-telegram",
+    }]);
+
+    const store = new SessionStore({
+      env: {
+        OPENCLAW_CODE_AGENT_SESSIONS_PATH: indexPath,
+      },
+    });
+    const persisted = store.listPersistedSessions()[0];
+
+    assert.equal(persisted?.approvalPromptTransport, "direct-message");
+  });
+});
+
 describe("SessionStore path resolution", () => {
   function markRunningAt(store: SessionStore, sessionId: string): void {
     store.markRunning({

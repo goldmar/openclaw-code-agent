@@ -28,15 +28,14 @@ Need the ACPX vs Codex vs code-agent breakdown? See [docs/ACP-COMPARISON.md](doc
 
 The shared substrate is often the local `codex` command and Codex App Server, but the responsibilities are different. This plugin is not an ACP server and it does not depend on OpenClaw's bundled Codex provider to expose its own `codex` harness.
 
-## New In 3.2.1
+## New In 4.0.0
 
-`3.2.1` is a maintenance release focused on routing correctness, compatibility metadata, and release/security hygiene around the newer plan-review and worktree model.
+`4.0.0` is the messaging-contract cleanup release. Interactive direct notifications for Telegram and Discord now go through the same shared OpenClaw presentation contract, and the plugin drops the old Telegram legacy fallback plus the Discord-native component sender split.
 
-- **Trusted route resolution for newer OpenClaw contexts**. The plugin now prefers `deliveryContext` and `requesterSenderId` when available, while keeping legacy routing fallbacks for persisted sessions and older fixtures.
-- **Safer verifier execution**. Goal-task verifier commands now drop shell bootstrap hooks like `BASH_ENV` and `ENV` so operator-provided verifier commands run with fewer implicit side effects.
-- **Compatibility and onboarding metadata refresh**. The release raises the external OpenClaw baseline to `v2026.4.14`, verifies against the stable `v2026.4.21` build target, and ships the manifest activation/setup descriptors plus narrower onboarding guidance for first-run setup.
-- **Codex harness policy refresh**. The built-in Codex allowlist now includes `gpt-5.4-pro`.
-- **Stronger security and release hygiene**. Dependency overrides, CI checks, plugin security validation, and release metadata parity checks are all updated to match the shipped package.
+- **Shared outbound interactive delivery**. Telegram and Discord direct notifications now use one `message.send --presentation` path.
+- **Breaking compatibility floor update**. The plugin now requires OpenClaw `v2026.4.21` or newer.
+- **State migration cleanup**. Persisted approval-prompt delivery state is now recorded as `direct-message`, while older `direct-telegram` entries still restore cleanly.
+- **Model refresh**. Built-in defaults now recommend `anthropic/claude-sonnet-4-7` for Claude Code and `gpt-5.5` for Codex, with `gpt-5.5-pro` also included in the built-in Codex allowlist.
 
 ## From Prompt To Merged Branch
 
@@ -122,7 +121,7 @@ openclaw plugins enable openclaw-code-agent
 openclaw gateway restart
 ```
 
-This release targets the OpenClaw `v2026.4.14` external plugin contract and is verified against the stable `v2026.4.21` build/test target. `package.json` now carries the plugin API compatibility and build metadata used by modern OpenClaw / ClawHub installs, and `openclaw.plugin.json` now advertises the plugin-owned command activation surface plus the onboarding metadata OpenClaw uses during plugin-config setup. Keep those metadata surfaces in sync when bumping the plugin release baseline.
+This release targets the OpenClaw `v2026.4.21` external plugin contract and is verified against the stable `v2026.4.21` build/test target. `package.json` now carries the plugin API compatibility and build metadata used by modern OpenClaw / ClawHub installs, and `openclaw.plugin.json` now advertises the plugin-owned command activation surface plus the onboarding metadata OpenClaw uses during plugin-config setup. Keep those metadata surfaces in sync when bumping the plugin release baseline.
 
 The current manifest descriptors stay intentionally narrow: activation advertises only the chat commands this plugin owns, and setup stays minimal with `requiresRuntime: false`. First-run onboarding is driven by the manifest config schema and `uiHints`, not by provider/backend setup descriptors.
 
@@ -150,12 +149,12 @@ Add a minimal config block under `plugins.entries["openclaw-code-agent"]` in `~/
           "fallbackChannel": "telegram|my-bot|123456789",
           "harnesses": {
             "claude-code": {
-              "defaultModel": "sonnet",
+              "defaultModel": "anthropic/claude-sonnet-4-7",
               "allowedModels": ["sonnet", "opus"]
             },
             "codex": {
-              "defaultModel": "gpt-5.4",
-              "allowedModels": ["gpt-5.4", "gpt-5.4-pro"],
+              "defaultModel": "gpt-5.5",
+              "allowedModels": ["gpt-5.5", "gpt-5.5-pro"],
               "reasoningEffort": "medium"
             }
           }

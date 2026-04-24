@@ -5,7 +5,7 @@ const WAKE_RETRY_BASE_DELAY_MS = 2_000;
 const WAKE_RETRY_MAX_DELAY_MS = 20_000;
 const WAKE_MAX_ATTEMPTS = 4;
 
-export type DispatchTarget = "chat.send" | "message.send" | "discord.components" | "system.event";
+export type DispatchTarget = "chat.send" | "message.send" | "system.event";
 export type DispatchPhase = "notify" | "wake";
 
 type ExecuteOptions = {

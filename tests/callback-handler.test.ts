@@ -409,6 +409,39 @@ describe("createCallbackHandler()", () => {
     assert.equal(state.replies[0], "⏭️ Snoozed 24h");
   });
 
+  it("resolves Discord worktree prompts via clearComponents text updates and replies ephemerally", async () => {
+    setSessionManager({
+      getActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
+      consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
+      resolve: () => undefined,
+      getPersistedSession: () => ({ name: "ux-fix" }),
+      snoozeWorktreeDecision: () => "⏭️ Reminder snoozed 24h for `agent/ux-fix` (session: ux-fix)",
+    } as any);
+
+    const clearedMessages: Array<{ text?: string }> = [];
+    const replies: Array<{ text: string; ephemeral?: boolean }> = [];
+    const ctx = {
+      channel: "discord" as const,
+      auth: { isAuthorizedSender: true },
+      interaction: { payload: "token-snooze" },
+      respond: {
+        clearComponents: async ({ text }: { text?: string } = {}) => {
+          clearedMessages.push({ text });
+        },
+        reply: async ({ text, ephemeral }: { text: string; ephemeral?: boolean }) => {
+          replies.push({ text, ephemeral });
+        },
+      },
+    };
+
+    const handler = createCallbackHandler("discord");
+    const result = await handler.handler(ctx as any);
+
+    assert.deepEqual(result, { handled: true });
+    assert.deepEqual(clearedMessages, [{ text: "⏭️ Deferred for [ux-fix]" }]);
+    assert.deepEqual(replies, [{ text: "⏭️ Snoozed 24h", ephemeral: true }]);
+  });
+
   it("falls back to clearing Telegram buttons when worktree prompt edit fails", async () => {
     const warnings: string[] = [];
     const originalWarn = console.warn;

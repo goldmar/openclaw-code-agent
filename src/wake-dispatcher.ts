@@ -168,7 +168,7 @@ export class WakeDispatcher {
     onAllFailed?: () => void,
     onSuccess?: () => void,
   ): void {
-    const hasInteractiveButtons = Boolean(buttons && buttons.length > 0);
+    const hasInteractiveButtons = Boolean(buttons?.some((row) => Array.isArray(row) && row.length > 0));
     const route = this.routes.resolve(session);
     const orderingKey = route
       ? `notify:${route.channel}|${route.accountId ?? ""}|${route.target}|${route.threadId ?? ""}`
@@ -201,63 +201,6 @@ export class WakeDispatcher {
           onFinalFailure: onAllFailed,
         },
       );
-      return;
-    }
-
-    if (hasInteractiveButtons && route.channel === "discord") {
-      const sendComponents = (): void => {
-        this.executor.executePromise(
-          () => this.transport.sendDiscordComponents(route, buttons!),
-          {
-            label: `${label}-notify-components`,
-            sessionId: session.id,
-            target: "discord.components",
-            phase: "notify",
-            routeSummary: this.routes.summary(route),
-            messageKind: "notify",
-            dispatchContext: this.buildDispatchContext({
-              routeSummary: this.routes.summary(route),
-              route,
-              text,
-              buttons,
-            }),
-            onSuccess,
-            onFinalFailure: () => {
-              console.warn(
-                `[WakeDispatcher] Interactive notification "${label}" for session ${session.id} ` +
-                `failed Discord component delivery.`,
-              );
-              onAllFailed?.();
-            },
-          },
-        );
-      };
-
-      if (text) {
-        this.executor.execute(
-          this.transport.buildDirectNotificationArgs(route, text),
-          {
-            label: `${label}-notify-text`,
-            sessionId: session.id,
-            target: "message.send",
-            phase: "notify",
-            routeSummary: this.routes.summary(route),
-            messageKind: "notify",
-            dispatchContext: this.buildDispatchContext({
-              routeSummary: this.routes.summary(route),
-              route,
-              text,
-              buttons,
-            }),
-            orderingKey,
-            onSuccess: sendComponents,
-            onFinalFailure: onAllFailed,
-          },
-        );
-        return;
-      }
-
-      sendComponents();
       return;
     }
 

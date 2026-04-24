@@ -132,7 +132,7 @@ Boundary note:
 Security boundary note:
 
 - the plugin intentionally shells out to the local `openclaw` CLI for delivery instead of implementing a separate ad hoc network client
-- Discord interactive delivery is still gateway/plugin-SDK-owned; test injection is explicit and no longer uses a production env-var override
+- Telegram and Discord interactive direct notifications now share the same gateway-owned `message.send --presentation` contract; only callback/routing seams remain provider-specific
 
 ### `CallbackHandler`
 

@@ -11,7 +11,7 @@ describe("codex protocol turn payloads", () => {
     const payloads = buildTurnStartPayloads({
       threadId: "thread-1",
       prompt: "Plan the work",
-      model: "gpt-5.4",
+      model: "gpt-5.5",
       reasoningEffort: "medium",
       permissionMode: "plan",
       approvalPolicy: "never",
@@ -21,13 +21,13 @@ describe("codex protocol turn payloads", () => {
     assert.deepEqual(payloads[0], {
       threadId: "thread-1",
       input: [{ type: "text", text: "Plan the work" }],
-      model: "gpt-5.4",
+      model: "gpt-5.5",
       approvalPolicy: "never",
       sandbox: "danger-full-access",
       collaborationMode: {
         mode: "plan",
         settings: {
-          model: "gpt-5.4",
+          model: "gpt-5.5",
           reasoningEffort: "medium",
           developerInstructions: null,
         },
@@ -39,7 +39,7 @@ describe("codex protocol turn payloads", () => {
     const payloads = buildTurnStartPayloads({
       threadId: "thread-2",
       prompt: "Implement it",
-      model: "gpt-5.4",
+      model: "gpt-5.5",
       permissionMode: "bypassPermissions",
       approvalPolicy: "never",
       sandbox: "danger-full-access",
@@ -48,13 +48,13 @@ describe("codex protocol turn payloads", () => {
     assert.deepEqual(payloads[0], {
       threadId: "thread-2",
       input: [{ type: "text", text: "Implement it" }],
-      model: "gpt-5.4",
+      model: "gpt-5.5",
       approvalPolicy: "never",
       sandbox: "danger-full-access",
       collaborationMode: {
         mode: "default",
         settings: {
-          model: "gpt-5.4",
+          model: "gpt-5.5",
           developerInstructions: null,
         },
       },
@@ -65,7 +65,7 @@ describe("codex protocol turn payloads", () => {
     const payloads = buildTurnStartPayloads({
       threadId: "thread-3",
       prompt: "Implement it",
-      model: "gpt-5.4",
+      model: "gpt-5.5",
       systemPrompt: "Follow OpenClaw orchestration rules.",
       permissionMode: "default",
       approvalPolicy: "never",
@@ -75,13 +75,13 @@ describe("codex protocol turn payloads", () => {
     assert.deepEqual(payloads[0], {
       threadId: "thread-3",
       input: [{ type: "text", text: "Implement it" }],
-      model: "gpt-5.4",
+      model: "gpt-5.5",
       approvalPolicy: "never",
       sandbox: "danger-full-access",
       collaborationMode: {
         mode: "default",
         settings: {
-          model: "gpt-5.4",
+          model: "gpt-5.5",
           developerInstructions: "Follow OpenClaw orchestration rules.",
         },
       },
@@ -90,13 +90,13 @@ describe("codex protocol turn payloads", () => {
     assert.deepEqual(payloads[1], {
       threadId: "thread-3",
       input: [{ type: "text", text: "Implement it" }],
-      model: "gpt-5.4",
+      model: "gpt-5.5",
       approvalPolicy: "never",
       sandbox: "danger-full-access",
       collaboration_mode: {
         mode: "default",
         settings: {
-          model: "gpt-5.4",
+          model: "gpt-5.5",
           developer_instructions: "Follow OpenClaw orchestration rules.",
         },
       },

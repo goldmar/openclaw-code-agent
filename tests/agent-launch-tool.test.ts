@@ -20,7 +20,7 @@ describe("agent_launch tool defaults", () => {
       harnesses: {
         codex: {
           defaultModel: "gpt-5.3-codex",
-          allowedModels: ["gpt-5.3-codex", "gpt-5.4"],
+          allowedModels: ["gpt-5.3-codex", "gpt-5.5"],
           reasoningEffort: "high",
         },
       },
@@ -62,7 +62,7 @@ describe("agent_launch tool defaults", () => {
       harnesses: {
         codex: {
           defaultModel: "gpt-5.3-codex",
-          allowedModels: ["gpt-5.3-codex", "gpt-5.4"],
+          allowedModels: ["gpt-5.3-codex", "gpt-5.5"],
           reasoningEffort: "high",
         },
       },
@@ -82,10 +82,10 @@ describe("agent_launch tool defaults", () => {
     } as any);
 
     const tool = makeAgentLaunchTool({ workspaceDir: "/tmp" });
-    await tool.execute("tool-id", { prompt: "Ship it", model: "gpt-5.4" });
+    await tool.execute("tool-id", { prompt: "Ship it", model: "gpt-5.5" });
 
     assert.ok(spawnConfig, "spawn should be called");
-    assert.equal(spawnConfig?.model, "gpt-5.4");
+    assert.equal(spawnConfig?.model, "gpt-5.5");
     assert.equal(spawnConfig?.reasoningEffort, "high");
     assert.equal(spawnConfig?.codexApprovalPolicy, "never");
   });
@@ -657,7 +657,7 @@ describe("agent_launch allowedModels validation", () => {
     setPluginConfig({
       harnesses: {
         "claude-code": {
-          defaultModel: "anthropic/claude-sonnet-4-6",
+          defaultModel: "anthropic/claude-sonnet-4-7",
           allowedModels: ["sonnet", "haiku"],
         },
       },
@@ -676,7 +676,7 @@ describe("agent_launch allowedModels validation", () => {
     const text = (result.content[0] as { text: string }).text;
     assert.match(text, /Session launched successfully/);
     assert.ok(spawnConfig, "spawn should be called");
-    assert.equal(spawnConfig.model, "anthropic/claude-sonnet-4-6");
+    assert.equal(spawnConfig.model, "anthropic/claude-sonnet-4-7");
   });
 
   it("handles codex harness model resolution with allowedModels", async () => {
@@ -779,11 +779,11 @@ describe("agent_launch allowedModels validation", () => {
     } as any);
 
     const tool = makeAgentLaunchTool({ workspaceDir: "/tmp" });
-    const result = await tool.execute("tool-id", { prompt: "test", model: "anthropic/claude-sonnet-4-6" });
+    const result = await tool.execute("tool-id", { prompt: "test", model: "anthropic/claude-sonnet-4-7" });
 
     const text = (result.content[0] as { text: string }).text;
     assert.match(text, /Session launched successfully/);
     assert.ok(spawnConfig, "spawn should be called");
-    assert.equal(spawnConfig.model, "anthropic/claude-sonnet-4-6");
+    assert.equal(spawnConfig.model, "anthropic/claude-sonnet-4-7");
   });
 });

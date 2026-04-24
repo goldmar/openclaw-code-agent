@@ -19,8 +19,8 @@ describe("goal_launch tool", () => {
       defaultHarness: "codex",
       harnesses: {
         codex: {
-          defaultModel: "gpt-5.4",
-          allowedModels: ["gpt-5.4"],
+          defaultModel: "gpt-5.5",
+          allowedModels: ["gpt-5.5"],
           reasoningEffort: "high",
         },
       },
@@ -57,7 +57,7 @@ describe("goal_launch tool", () => {
 
     assert.ok(launchConfig, "launchTask should be called");
     assert.equal(launchConfig?.harness, "codex");
-    assert.equal(launchConfig?.model, "gpt-5.4");
+    assert.equal(launchConfig?.model, "gpt-5.5");
     assert.equal(launchConfig?.reasoningEffort, "high");
     assert.equal(launchConfig?.permissionMode, "bypassPermissions");
     assert.equal(launchConfig?.originChannel, "discord|123456789");
@@ -79,8 +79,8 @@ describe("goal_launch tool", () => {
       defaultHarness: "codex",
       harnesses: {
         codex: {
-          defaultModel: "gpt-5.4",
-          allowedModels: ["gpt-5.4", "gpt-5.4-pro"],
+          defaultModel: "gpt-5.5",
+          allowedModels: ["gpt-5.5", "gpt-5.5-pro"],
           reasoningEffort: "high",
         },
       },

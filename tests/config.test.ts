@@ -381,10 +381,10 @@ describe("setPluginConfig", () => {
     assert.equal(pluginConfig.sessionGcAgeMinutes, 1440);
     assert.equal(pluginConfig.maxPersistedSessions, 10000);
     assert.equal(pluginConfig.maxAutoResponds, 10);
-    assert.equal(pluginConfig.harnesses["claude-code"]?.defaultModel, "sonnet");
+    assert.equal(pluginConfig.harnesses["claude-code"]?.defaultModel, "anthropic/claude-sonnet-4-7");
     assert.deepEqual(pluginConfig.harnesses["claude-code"]?.allowedModels, ["sonnet", "opus"]);
-    assert.equal(pluginConfig.harnesses.codex?.defaultModel, "gpt-5.4");
-    assert.deepEqual(pluginConfig.harnesses.codex?.allowedModels, ["gpt-5.4", "gpt-5.4-pro"]);
+    assert.equal(pluginConfig.harnesses.codex?.defaultModel, "gpt-5.5");
+    assert.deepEqual(pluginConfig.harnesses.codex?.allowedModels, ["gpt-5.5", "gpt-5.5-pro"]);
     assert.equal(pluginConfig.harnesses.codex?.reasoningEffort, "medium");
   });
 
@@ -413,10 +413,10 @@ describe("setPluginConfig", () => {
 
   it("preserves optional fields as undefined when not provided", () => {
     setPluginConfig({});
-    assert.equal(pluginConfig.harnesses["claude-code"]?.defaultModel, "sonnet");
+    assert.equal(pluginConfig.harnesses["claude-code"]?.defaultModel, "anthropic/claude-sonnet-4-7");
     assert.deepEqual(pluginConfig.harnesses["claude-code"]?.allowedModels, ["sonnet", "opus"]);
-    assert.equal(pluginConfig.harnesses.codex?.defaultModel, "gpt-5.4");
-    assert.deepEqual(pluginConfig.harnesses.codex?.allowedModels, ["gpt-5.4", "gpt-5.4-pro"]);
+    assert.equal(pluginConfig.harnesses.codex?.defaultModel, "gpt-5.5");
+    assert.deepEqual(pluginConfig.harnesses.codex?.allowedModels, ["gpt-5.5", "gpt-5.5-pro"]);
     assert.equal(pluginConfig.defaultWorkdir, undefined);
     assert.equal(pluginConfig.fallbackChannel, undefined);
     assert.equal(pluginConfig.agentChannels, undefined);
@@ -475,10 +475,10 @@ describe("pluginConfig singleton", () => {
     assert.equal(pluginConfig.maxAutoResponds, 10);
     assert.equal(pluginConfig.permissionMode, "plan");
     assert.equal(pluginConfig.planApproval, "ask");
-    assert.equal(pluginConfig.harnesses["claude-code"]?.defaultModel, "sonnet");
+    assert.equal(pluginConfig.harnesses["claude-code"]?.defaultModel, "anthropic/claude-sonnet-4-7");
     assert.deepEqual(pluginConfig.harnesses["claude-code"]?.allowedModels, ["sonnet", "opus"]);
-    assert.equal(pluginConfig.harnesses.codex?.defaultModel, "gpt-5.4");
-    assert.deepEqual(pluginConfig.harnesses.codex?.allowedModels, ["gpt-5.4", "gpt-5.4-pro"]);
+    assert.equal(pluginConfig.harnesses.codex?.defaultModel, "gpt-5.5");
+    assert.deepEqual(pluginConfig.harnesses.codex?.allowedModels, ["gpt-5.5", "gpt-5.5-pro"]);
     assert.equal(pluginConfig.harnesses.codex?.reasoningEffort, "medium");
   });
 

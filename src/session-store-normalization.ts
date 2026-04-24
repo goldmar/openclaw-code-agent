@@ -156,7 +156,8 @@ function toOptionalApprovalPromptStatus(value: unknown): SessionApprovalPromptSt
 }
 
 function toOptionalApprovalPromptTransport(value: unknown): SessionApprovalPromptTransport | undefined {
-  return value === "none" || value === "direct-telegram" || value === "wake-only"
+  if (value === "direct-telegram") return "direct-message";
+  return value === "none" || value === "direct-message" || value === "wake-only"
     ? value
     : undefined;
 }
