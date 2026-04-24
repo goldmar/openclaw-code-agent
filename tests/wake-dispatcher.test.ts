@@ -174,6 +174,7 @@ export async function sendDiscordComponentMessage(target, spec, opts = {}) {
     return new WakeDispatcher({
       transportOptions: {
         resolveDiscordSdkModuleUrl: () => `file://${fakeDiscordSdkPath}`,
+        telegramButtonCliMode: "presentation",
       },
     });
   }
@@ -438,12 +439,62 @@ export async function sendDiscordComponentMessage(target, spec, opts = {}) {
     assert.ok(wakeCall, "expected a chat.send wake call");
     const notifyArgs = parseMessageSendArgs(notifyCall);
     assert.equal(notifyArgs.message, "🔀 Worktree decision required");
-    assert.equal(notifyArgs.buttons, JSON.stringify([[
-      { text: "✅ Merge", callback_data: "code-agent:token-merge" },
-      { text: "📬 Open PR", callback_data: "code-agent:token-pr" },
-    ]]));
+    assert.deepEqual(JSON.parse(notifyArgs.presentation ?? "{}"), {
+      blocks: [{
+        type: "buttons",
+        buttons: [
+          { text: "✅ Merge", callback_data: "code-agent:token-merge" },
+          { text: "📬 Open PR", callback_data: "code-agent:token-pr" },
+        ],
+      }],
+    });
     const wakeParams = parseChatSendParams(wakeCall);
     assert.equal(wakeParams.message, "Delegated worktree decision wake");
+  });
+
+  it("logs Telegram interactive delivery context when direct button sends fail", async () => {
+    process.env.OPENCLAW_TEST_FAIL_ONCE_FOR = JSON.stringify({
+      match: "--presentation",
+      stderr: "telegram button delivery failed",
+      exitCode: 1,
+    });
+
+    const dispatcher = createDispatcher();
+    const session: FakeSession = {
+      id: "session-button-failure",
+      route: buildRoute(),
+      originChannel: "telegram|bot|-1003863755361",
+      originThreadId: 11239,
+      originSessionKey: "agent:main:telegram:group:-1003863755361:topic:11239",
+    };
+    const errorLogs: string[] = [];
+    console.error = (message?: unknown, ...rest: unknown[]) => {
+      errorLogs.push([message, ...rest].map((value) => String(value)).join(" "));
+    };
+
+    dispatcher.dispatchSessionNotification(session as any, {
+      label: "plan-approval",
+      userMessage: "📋 Plan ready",
+      notifyUser: "always",
+      buttons: [[
+        { label: "Approve", callbackData: "token-approve" },
+        { label: "Revise", callbackData: "token-revise" },
+        { label: "Reject", callbackData: "token-reject" },
+      ]],
+    });
+
+    await waitFor(
+      () => errorLogs.some((line) => line.includes("\"event\":\"dispatch_retry_scheduled\"")),
+      "interactive failure log",
+    );
+
+    const failureLog = errorLogs.find((line) => line.includes("\"event\":\"dispatch_retry_scheduled\"")) ?? "";
+    assert.match(failureLog, /"buttonsPresent":true/);
+    assert.match(failureLog, /"buttonCount":3/);
+    assert.match(failureLog, /"buttonLabels":\["Approve","Revise","Reject"\]/);
+    assert.match(failureLog, /"transportChannel":"telegram"/);
+    assert.match(failureLog, /"transportThreadId":"11239"/);
+    assert.match(failureLog, /telegram button delivery failed/);
   });
 
   it("falls back to a direct user notification plus system event when the wake target is unavailable", async () => {
@@ -739,14 +790,14 @@ export async function sendDiscordComponentMessage(target, spec, opts = {}) {
     const third = parseMessageSendArgs(calls[2] ?? []);
 
     assert.equal(first.message, "📋 Plan part 1\n\nFull plan:\nchunk one");
-    assert.equal(first.buttons, undefined);
+    assert.equal(first.presentation, undefined);
     assert.equal(second.message, "📋 Plan part 2\n\nchunk two");
-    assert.equal(second.buttons, undefined);
+    assert.equal(second.presentation, undefined);
     assert.equal(third.message, "📋 Plan part 3\n\nchunk three\n\nChoose Approve, Revise, or Reject below.");
-    assert.ok(third.buttons);
-    assert.match(third.buttons, /Approve/);
-    assert.match(third.buttons, /Revise/);
-    assert.match(third.buttons, /Reject/);
+    assert.ok(third.presentation);
+    assert.match(third.presentation, /Approve/);
+    assert.match(third.presentation, /Revise/);
+    assert.match(third.presentation, /Reject/);
   });
 
   it("treats mid-sequence notification failures as partial success instead of triggering the all-failed fallback", () => {

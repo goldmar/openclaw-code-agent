@@ -82,6 +82,14 @@ describe("WakeDeliveryExecutor", () => {
         phase: "notify",
         routeSummary: "telegram|bot|123",
         messageKind: "notify",
+        dispatchContext: {
+          transportChannel: "telegram",
+          transportTarget: "123",
+          transportThreadId: "28",
+          buttonsPresent: true,
+          buttonCount: 3,
+          maxCallbackDataLength: 48,
+        },
         onAmbiguousResult: () => {
           ambiguousResultCount += 1;
         },
@@ -97,6 +105,8 @@ describe("WakeDeliveryExecutor", () => {
     assert.equal(ambiguousResultCount, 1);
     assert.equal(finalFailureCount, 0);
     assert.ok(errors.some((line) => line.includes("\"ambiguousResult\":true")));
+    assert.ok(errors.some((line) => line.includes("\"buttonsPresent\":true")));
+    assert.ok(errors.some((line) => line.includes("\"transportThreadId\":\"28\"")));
     assert.ok(!errors.some((line) => line.includes("\"event\":\"dispatch_retry_scheduled\"")));
   });
 

@@ -1,3 +1,4 @@
+import { execFileSync } from "child_process";
 import { randomUUID } from "crypto";
 import type { NotificationRoute } from "./wake-route-resolver";
 import { CALLBACK_NAMESPACE } from "./interactive-constants";
@@ -24,14 +25,44 @@ const DEFAULT_DISCORD_SDK_MODULE_URL = "openclaw/plugin-sdk/discord";
 
 export interface WakeTransportOptions {
   resolveDiscordSdkModuleUrl?: () => string;
+  telegramButtonCliMode?: "legacy-buttons" | "presentation";
 }
 
 export class WakeTransport {
   private discordComponentSenderPromise: Promise<DiscordComponentSender> | null = null;
+  private telegramButtonCliMode: "legacy-buttons" | "presentation" | null = null;
 
   constructor(
     private readonly options: WakeTransportOptions = {},
   ) {}
+
+  private resolveTelegramButtonCliMode(): "legacy-buttons" | "presentation" {
+    if (this.options.telegramButtonCliMode) return this.options.telegramButtonCliMode;
+    if (this.telegramButtonCliMode) return this.telegramButtonCliMode;
+    try {
+      const help = execFileSync("openclaw", ["message", "send", "--help"], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      this.telegramButtonCliMode = help.includes("--presentation")
+        ? "presentation"
+        : help.includes("--buttons")
+          ? "legacy-buttons"
+          : "presentation";
+    } catch {
+      this.telegramButtonCliMode = "presentation";
+    }
+    return this.telegramButtonCliMode;
+  }
+
+  private buildTelegramButtonPayload(buttons: Array<Array<NotificationButton>>) {
+    return buttons.map((row) => row.map((button) => ({
+      text: button.label,
+      callback_data: button.callbackData.startsWith(`${CALLBACK_NAMESPACE}:`)
+        ? button.callbackData
+        : `${CALLBACK_NAMESPACE}:${button.callbackData}`,
+    })));
+  }
 
   buildChatSendArgs(
     sessionKey: string,
@@ -77,14 +108,14 @@ export class WakeTransport {
       args.push("--thread-id", route.threadId);
     }
     if (buttons && route.channel === "telegram") {
-      args.push("--buttons", JSON.stringify(
-        buttons.map((row) => row.map((button) => ({
-          text: button.label,
-          callback_data: button.callbackData.startsWith(`${CALLBACK_NAMESPACE}:`)
-            ? button.callbackData
-            : `${CALLBACK_NAMESPACE}:${button.callbackData}`,
-        }))),
-      ));
+      const telegramButtons = this.buildTelegramButtonPayload(buttons);
+      if (this.resolveTelegramButtonCliMode() === "legacy-buttons") {
+        args.push("--buttons", JSON.stringify(telegramButtons));
+      } else {
+        args.push("--presentation", JSON.stringify({
+          blocks: telegramButtons.map((row) => ({ type: "buttons", buttons: row })),
+        }));
+      }
     }
     return args;
   }

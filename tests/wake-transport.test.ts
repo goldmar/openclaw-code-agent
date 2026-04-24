@@ -1,6 +1,6 @@
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -8,6 +8,7 @@ import { WakeTransport } from "../src/wake-transport";
 
 const tempDirs: string[] = [];
 const originalDiscordLog = process.env.OPENCLAW_TEST_DISCORD_LOG;
+const originalPath = process.env.PATH;
 
 afterEach(() => {
   while (tempDirs.length > 0) {
@@ -17,6 +18,11 @@ afterEach(() => {
     delete process.env.OPENCLAW_TEST_DISCORD_LOG;
   } else {
     process.env.OPENCLAW_TEST_DISCORD_LOG = originalDiscordLog;
+  }
+  if (originalPath == null) {
+    delete process.env.PATH;
+  } else {
+    process.env.PATH = originalPath;
   }
 });
 
@@ -148,5 +154,105 @@ describe("WakeTransport", () => {
 
     assert.equal(calls.length, 1);
     assert.equal(calls[0]?.opts, undefined);
+  });
+
+  it("encodes Telegram buttons through the presentation payload when presentation mode is selected", () => {
+    const transport = new WakeTransport({ telegramButtonCliMode: "presentation" });
+    const args = transport.buildDirectNotificationArgs({
+      channel: "telegram",
+      target: "-1003863755361",
+      threadId: "28",
+    } as any, "Plan ready", [[{ label: "Approve", callbackData: "token-approve" }]]);
+
+    assert.deepEqual(args.slice(0, 8), [
+      "message",
+      "send",
+      "--channel",
+      "telegram",
+      "--target",
+      "-1003863755361",
+      "--message",
+      "Plan ready",
+    ]);
+    assert.equal(args[8], "--thread-id");
+    assert.equal(args[9], "28");
+    assert.equal(args[10], "--presentation");
+    assert.deepEqual(JSON.parse(args[11] ?? "{}"), {
+      blocks: [{
+        type: "buttons",
+        buttons: [{ text: "Approve", callback_data: "code-agent:token-approve" }],
+      }],
+    });
+  });
+
+  it("can still emit legacy Telegram --buttons payloads for older OpenClaw CLIs", () => {
+    const transport = new WakeTransport({ telegramButtonCliMode: "legacy-buttons" });
+    const args = transport.buildDirectNotificationArgs({
+      channel: "telegram",
+      target: "-1003863755361",
+    } as any, "Plan ready", [[{ label: "Approve", callbackData: "token-approve" }]]);
+
+    assert.equal(args[8], "--buttons");
+    assert.deepEqual(JSON.parse(args[9] ?? "[]"), [[
+      { text: "Approve", callback_data: "code-agent:token-approve" },
+    ]]);
+  });
+
+  it("auto-detects legacy Telegram button support from the local OpenClaw CLI help", () => {
+    const dir = mkdtempSync(join(tmpdir(), "wake-transport-test-"));
+    tempDirs.push(dir);
+
+    const fakeOpenClawPath = join(dir, "openclaw");
+    writeFileSync(
+      fakeOpenClawPath,
+      [
+        "#!/usr/bin/env node",
+        "if (process.argv.slice(2).join(' ') === 'message send --help') {",
+        "  process.stdout.write('Usage: openclaw message send\\n\\nOptions:\\n  --buttons <json>\\n');",
+        "  process.exit(0);",
+        "}",
+        "process.exit(1);",
+      ].join("\n"),
+      "utf8",
+    );
+    chmodSync(fakeOpenClawPath, 0o755);
+    process.env.PATH = `${dir}:${originalPath ?? ""}`;
+
+    const transport = new WakeTransport();
+    const args = transport.buildDirectNotificationArgs({
+      channel: "telegram",
+      target: "-1003863755361",
+    } as any, "Plan ready", [[{ label: "Approve", callbackData: "token-approve" }]]);
+
+    assert.equal(args[8], "--buttons");
+  });
+
+  it("auto-detects presentation support from the local OpenClaw CLI help", () => {
+    const dir = mkdtempSync(join(tmpdir(), "wake-transport-test-"));
+    tempDirs.push(dir);
+
+    const fakeOpenClawPath = join(dir, "openclaw");
+    writeFileSync(
+      fakeOpenClawPath,
+      [
+        "#!/usr/bin/env node",
+        "if (process.argv.slice(2).join(' ') === 'message send --help') {",
+        "  process.stdout.write('Usage: openclaw message send\\n\\nOptions:\\n  --presentation <json>\\n');",
+        "  process.exit(0);",
+        "}",
+        "process.exit(1);",
+      ].join("\n"),
+      "utf8",
+    );
+    chmodSync(fakeOpenClawPath, 0o755);
+    process.env.PATH = `${dir}:${originalPath ?? ""}`;
+
+    const transport = new WakeTransport();
+    const args = transport.buildDirectNotificationArgs({
+      channel: "telegram",
+      target: "-1003863755361",
+    } as any, "Plan ready", [[{ label: "Approve", callbackData: "token-approve" }]]);
+
+    assert.equal(args[8], "--presentation");
   });
 });
