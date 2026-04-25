@@ -2,6 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { execFileSync } from "node:child_process";
 import { validateReleaseMetadata } from "../scripts/validate-release-metadata.mjs";
 
 const rootDir = join(import.meta.dirname, "..");
@@ -33,7 +34,7 @@ describe("plugin entry source", () => {
     assert.doesNotMatch(activeWorkflowSources, /\bnpm audit\b/);
   });
 
-  it("declares the v2026.4.21 compatibility floor and v2026.4.23 build target in package metadata", () => {
+  it("declares the v2026.4.21 compatibility floor and v2026.4.24 build target in package metadata", () => {
     const packageJson = JSON.parse(readFileSync(join(rootDir, "package.json"), "utf8")) as {
       openclaw?: {
         compat?: Record<string, string>;
@@ -45,10 +46,28 @@ describe("plugin entry source", () => {
 
     assert.equal(packageJson.openclaw?.compat?.pluginApi, ">=2026.4.21");
     assert.equal(packageJson.openclaw?.compat?.minGatewayVersion, "2026.4.21");
-    assert.equal(packageJson.openclaw?.build?.openclawVersion, "2026.4.23");
-    assert.equal(packageJson.openclaw?.build?.pluginSdkVersion, "2026.4.23");
+    assert.equal(packageJson.openclaw?.build?.openclawVersion, "2026.4.24");
+    assert.equal(packageJson.openclaw?.build?.pluginSdkVersion, "2026.4.24");
     assert.equal(packageJson.peerDependencies?.openclaw, ">=2026.4.21");
-    assert.equal(packageJson.devDependencies?.openclaw, "2026.4.23");
+    assert.equal(packageJson.devDependencies?.openclaw, "2026.4.24");
+  });
+
+  it("does not use the removed OpenClaw embedded-extension factory API", () => {
+    const removedApi = ["register", "Embedded", "Extension", "Factory"].join("");
+    const trackedFiles = execFileSync("git", ["ls-files"], {
+      cwd: rootDir,
+      encoding: "utf8",
+    })
+      .split(/\r?\n/)
+      .filter((file) =>
+        /^(api\.ts|index\.ts|src\/|openclaw\.plugin\.json$|package\.json$)/.test(file),
+      );
+
+    const offenders = trackedFiles.filter((file) =>
+      readFileSync(join(rootDir, file), "utf8").includes(removedApi),
+    );
+
+    assert.deepEqual(offenders, []);
   });
 
   it("declares narrow manifest activation and minimal setup descriptors", () => {
