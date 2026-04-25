@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Updated the local OpenClaw build/test target to stable `2026.4.24` while keeping the minimum compatibility floor at `>=2026.4.21`.
+- Added compatibility guard coverage for OpenClaw `v2026.4.24`'s removed embedded-extension factory path; future tool-result rewriting must use OpenClaw's runtime-neutral middleware contract when available for this plugin.
+
 ## [4.0.0] - 2026-04-24
 
 ### Breaking Changes
