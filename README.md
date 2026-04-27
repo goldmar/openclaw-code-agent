@@ -28,15 +28,13 @@ Need the ACPX vs Codex vs code-agent breakdown? See [docs/ACP-COMPARISON.md](doc
 
 The shared substrate is often the local `codex` command and Codex App Server, but the responsibilities are different. This plugin is not an ACP server and it does not depend on OpenClaw's bundled Codex provider to expose its own `codex` harness.
 
-## New In 4.0.0
+## New In 4.0.1
 
-`4.0.0` is the messaging-contract cleanup release. Interactive direct notifications for Telegram and Discord now go through the same shared OpenClaw presentation contract, and the plugin drops the old Telegram legacy fallback plus the Discord-native component sender split.
+`4.0.1` is the OpenClaw `v2026.4.25` compatibility patch release. It keeps the `4.0.0` messaging-contract cleanup intact while refreshing the verified local build/test target and adding guard coverage for newer OpenClaw plugin-install and embedded-extension behavior.
 
-- **Shared outbound interactive delivery**. Telegram and Discord direct notifications now use one `message.send --presentation` path.
-- **Breaking compatibility floor update**. The plugin now requires OpenClaw `v2026.4.21` or newer.
-- **Removed legacy sender paths**. The Telegram `--buttons` fallback and the custom Discord component sender path are gone; both providers now depend on the shared presentation contract.
-- **State migration cleanup**. Persisted approval-prompt delivery state is now recorded as `direct-message`, while older `direct-telegram` entries still restore cleanly.
-- **Model refresh**. Built-in defaults now recommend `anthropic/claude-sonnet-4-7` for Claude Code and `gpt-5.5` for Codex, with `gpt-5.5-pro` also included in the built-in Codex allowlist.
+- **Verified OpenClaw target**. Local build/test metadata now targets stable OpenClaw `2026.4.25` while keeping the minimum compatibility floor at `>=2026.4.21`.
+- **Install-registry compatibility**. Guard coverage now confirms plugin code does not read or write OpenClaw's legacy authored install metadata.
+- **Embedded-extension compatibility**. Guard coverage now documents the removed embedded-extension factory path and keeps future tool-result rewriting aligned with OpenClaw's runtime-neutral middleware contract.
 
 ## From Prompt To Merged Branch
 
