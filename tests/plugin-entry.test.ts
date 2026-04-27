@@ -34,7 +34,7 @@ describe("plugin entry source", () => {
     assert.doesNotMatch(activeWorkflowSources, /\bnpm audit\b/);
   });
 
-  it("declares the v2026.4.21 compatibility floor and v2026.4.24 build target in package metadata", () => {
+  it("declares the v2026.4.21 compatibility floor and v2026.4.25 build target in package metadata", () => {
     const packageJson = JSON.parse(readFileSync(join(rootDir, "package.json"), "utf8")) as {
       dependencies?: Record<string, string>;
       openclaw?: {
@@ -51,10 +51,10 @@ describe("plugin entry source", () => {
     assert.equal(packageJson.dependencies?.["@anthropic-ai/claude-agent-sdk"], "^0.2.119");
     assert.equal(packageJson.openclaw?.compat?.pluginApi, ">=2026.4.21");
     assert.equal(packageJson.openclaw?.compat?.minGatewayVersion, "2026.4.21");
-    assert.equal(packageJson.openclaw?.build?.openclawVersion, "2026.4.24");
-    assert.equal(packageJson.openclaw?.build?.pluginSdkVersion, "2026.4.24");
+    assert.equal(packageJson.openclaw?.build?.openclawVersion, "2026.4.25");
+    assert.equal(packageJson.openclaw?.build?.pluginSdkVersion, "2026.4.25");
     assert.equal(packageJson.peerDependencies?.openclaw, ">=2026.4.21");
-    assert.equal(packageJson.devDependencies?.openclaw, "2026.4.24");
+    assert.equal(packageJson.devDependencies?.openclaw, "2026.4.25");
     assert.equal(packageJson.pnpm?.overrides?.["fast-xml-parser@>=5.0.0 <5.7.0"], ">=5.7.0");
   });
 
@@ -72,6 +72,26 @@ describe("plugin entry source", () => {
     const offenders = trackedFiles.filter((file) =>
       readFileSync(join(rootDir, file), "utf8").includes(removedApi),
     );
+
+    assert.deepEqual(offenders, []);
+  });
+
+  it("does not depend on legacy authored plugin install metadata", () => {
+    const legacyAuthoredInstalls = ["plugins", "installs"].join(".");
+    const persistedInstallRegistry = ["installs", "json"].join(".");
+    const trackedFiles = execFileSync("git", ["ls-files"], {
+      cwd: rootDir,
+      encoding: "utf8",
+    })
+      .split(/\r?\n/)
+      .filter((file) =>
+        /^(api\.ts|index\.ts|src\/|scripts\/|openclaw\.plugin\.json$|package\.json$)/.test(file),
+      );
+
+    const offenders = trackedFiles.filter((file) => {
+      const source = readFileSync(join(rootDir, file), "utf8");
+      return source.includes(legacyAuthoredInstalls) || source.includes(persistedInstallRegistry);
+    });
 
     assert.deepEqual(offenders, []);
   });
