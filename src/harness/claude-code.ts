@@ -4,9 +4,6 @@
  */
 
 import * as claudeAgentSdk from "@anthropic-ai/claude-agent-sdk";
-import { dirname, join } from "path";
-import { fileURLToPath } from "url";
-import { createRequire } from "module";
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type {
   PendingInputState,
@@ -145,16 +142,6 @@ export class ClaudeCodeHarness implements AgentHarness {
       model: options.model,
       permissionMode: options.permissionMode,
       allowDangerouslySkipPermissions: true,
-      pathToClaudeCodeExecutable: (() => {
-        try {
-          const req = createRequire(import.meta.url);
-          const sdkMain = req.resolve("@anthropic-ai/claude-agent-sdk");
-          return join(dirname(sdkMain), "cli.js");
-        } catch {
-          const thisDir = dirname(fileURLToPath(import.meta.url));
-          return join(thisDir, "..", "node_modules", "@anthropic-ai", "claude-agent-sdk", "cli.js");
-        }
-      })(),
       allowedTools: options.allowedTools,
       systemPrompt: options.systemPrompt,
       includePartialMessages: true,
