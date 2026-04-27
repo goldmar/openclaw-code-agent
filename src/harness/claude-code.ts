@@ -4,9 +4,6 @@
  */
 
 import * as claudeAgentSdk from "@anthropic-ai/claude-agent-sdk";
-import { dirname, join } from "path";
-import { fileURLToPath } from "url";
-import { createRequire } from "module";
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type {
   PendingInputState,
