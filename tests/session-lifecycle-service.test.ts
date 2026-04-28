@@ -114,8 +114,10 @@ describe("SessionLifecycleService", () => {
       wakeMessage?: string;
       wakeMessageOnNotifySuccess?: string;
       wakeMessageOnNotifyFailed?: string;
+      requireDirectUserNotification?: boolean;
     };
     assert.equal(request.wakeMessage, undefined);
+    assert.equal(request.requireDirectUserNotification, true);
     assert.match(request.wakeMessageOnNotifySuccess ?? "", /Plugin requested short factual follow-up summary: yes/);
     assert.match(request.wakeMessageOnNotifySuccess ?? "", /must send the user a short factual completion summary/i);
     assert.match(request.wakeMessageOnNotifyFailed ?? "", /Canonical completion status delivered to user: no/);

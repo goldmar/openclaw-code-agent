@@ -93,6 +93,8 @@ describe("WakeDispatcher", () => {
   const originalLogPath = process.env.OPENCLAW_TEST_LOG;
   const originalConsoleInfo = console.info;
   const originalConsoleError = console.error;
+  const originalSetTimeout = global.setTimeout;
+  const originalClearTimeout = global.clearTimeout;
   let tempDir: string;
   let logPath: string;
   let failStatePath: string;
@@ -140,6 +142,8 @@ if (failConfigRaw) {
   afterEach(() => {
     console.info = originalConsoleInfo;
     console.error = originalConsoleError;
+    global.setTimeout = originalSetTimeout;
+    global.clearTimeout = originalClearTimeout;
     process.env.PATH = originalPath;
     if (originalLogPath == null) {
       delete process.env.OPENCLAW_TEST_LOG;
@@ -262,6 +266,145 @@ if (failConfigRaw) {
     assert.equal(calls.length, 1);
     assert.equal(parseMessageSendArgs(calls[0] ?? []).message, "🚀 launched");
     assert.ok(!errorLogs.some((line) => line.includes("\"event\":\"dispatch_retry_scheduled\"")));
+  });
+
+  it("reports strict completion notification ambiguity as delivery failure before waking", async (t) => {
+    const dispatcher = createDispatcher();
+    const session: FakeSession = {
+      id: "session-completion-strict",
+      route: buildRoute({ threadId: "26", sessionKey: "agent:main:telegram:group:-1003863755361:topic:26" }),
+      originChannel: "telegram|bot|-1003863755361",
+      originThreadId: 26,
+      originSessionKey: "agent:main:telegram:group:-1003863755361:topic:26",
+    };
+    const errorLogs: string[] = [];
+    console.error = (message?: unknown, ...rest: unknown[]) => {
+      errorLogs.push([message, ...rest].map((value) => String(value)).join(" "));
+    };
+    t.mock.method(wakeDeliveryExecutorInternals, "execFile", ((_file, args, _options, callback) => {
+      writeFileSync(logPath, `${JSON.stringify(args)}\n`, { flag: "a" });
+      if ((args as string[])[0] === "message") {
+        const error = new Error("Command timed out after 30000ms") as Error & {
+          killed: boolean;
+          signal: NodeJS.Signals;
+        };
+        error.killed = true;
+        error.signal = "SIGTERM";
+        callback?.(error, "", "");
+        return {} as any;
+      }
+      callback?.(null, "", "");
+      return {} as any;
+    }) as typeof wakeDeliveryExecutorInternals.execFile);
+
+    dispatcher.dispatchSessionNotification(session as any, {
+      label: "completed",
+      userMessage: "✅ completed",
+      requireDirectUserNotification: true,
+      wakeMessageOnNotifySuccess: "Canonical completion status delivered to user: yes",
+      wakeMessageOnNotifyFailed: "Canonical completion status delivered to user: no",
+      notifyUser: "always",
+    });
+
+    const calls = await waitForCalls(logPath, 2);
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0]?.[0], "message");
+    assert.equal(calls[1]?.[0], "gateway");
+    assert.equal(parseMessageSendArgs(calls[0] ?? []).message, "✅ completed");
+    assert.equal(parseMessageSendArgs(calls[0] ?? [])["thread-id"], "26");
+    const wakeParams = parseChatSendParams(calls[1] ?? []);
+    assert.equal(wakeParams.message, "Canonical completion status delivered to user: no");
+    assert.equal(wakeParams.sessionKey, "agent:main:telegram:group:-1003863755361:topic:26");
+    assert.ok(errorLogs.some((line) => line.includes("\"ambiguousResult\":true")));
+  });
+
+  it("does not count system fallback as strict completion notification success", async (t) => {
+    const dispatcher = createDispatcher();
+    const session: FakeSession = {
+      id: "session-completion-strict-failure",
+      route: buildRoute({ threadId: "26", sessionKey: "agent:main:telegram:group:-1003863755361:topic:26" }),
+      originChannel: "telegram|bot|-1003863755361",
+      originThreadId: 26,
+      originSessionKey: "agent:main:telegram:group:-1003863755361:topic:26",
+    };
+
+    global.setTimeout = (((fn: (...args: any[]) => void, _delay?: number) => {
+      queueMicrotask(() => fn());
+      return { fake: true, unref() { return this; } } as any;
+    }) as typeof setTimeout);
+    global.clearTimeout = ((() => {}) as typeof clearTimeout);
+    t.mock.method(wakeDeliveryExecutorInternals, "execFile", ((_file, args, _options, callback) => {
+      writeFileSync(logPath, `${JSON.stringify(args)}\n`, { flag: "a" });
+      if ((args as string[])[0] === "message") {
+        callback?.(new Error("telegram send failed"), "", "telegram send failed");
+        return {} as any;
+      }
+      callback?.(null, "", "");
+      return {} as any;
+    }) as typeof wakeDeliveryExecutorInternals.execFile);
+
+    dispatcher.dispatchSessionNotification(session as any, {
+      label: "completed",
+      userMessage: "✅ completed",
+      requireDirectUserNotification: true,
+      wakeMessageOnNotifySuccess: "Canonical completion status delivered to user: yes",
+      wakeMessageOnNotifyFailed: "Canonical completion status delivered to user: no",
+      notifyUser: "always",
+    });
+
+    const calls = await waitForCalls(logPath, 5);
+    assert.equal(calls.filter((call) => call[0] === "message").length, 4);
+    assert.equal(calls.some((call) => call[0] === "system"), false);
+    const wakeCall = calls.find((call) => call[0] === "gateway");
+    assert.ok(wakeCall, "expected failed-delivery wake");
+    const wakeParams = parseChatSendParams(wakeCall);
+    assert.equal(wakeParams.message, "Canonical completion status delivered to user: no");
+  });
+
+  it("does not count system fallback as strict notify-only completion success", async (t) => {
+    const dispatcher = createDispatcher();
+    const session: FakeSession = {
+      id: "session-completion-strict-no-wake",
+      route: buildRoute({ threadId: "26", sessionKey: "agent:main:telegram:group:-1003863755361:topic:26" }),
+      originChannel: "telegram|bot|-1003863755361",
+      originThreadId: 26,
+      originSessionKey: "agent:main:telegram:group:-1003863755361:topic:26",
+    };
+    let notifySucceeded = 0;
+    let notifyFailed = 0;
+
+    global.setTimeout = (((fn: (...args: any[]) => void, _delay?: number) => {
+      queueMicrotask(() => fn());
+      return { fake: true, unref() { return this; } } as any;
+    }) as typeof setTimeout);
+    global.clearTimeout = ((() => {}) as typeof clearTimeout);
+    t.mock.method(wakeDeliveryExecutorInternals, "execFile", ((_file, args, _options, callback) => {
+      writeFileSync(logPath, `${JSON.stringify(args)}\n`, { flag: "a" });
+      if ((args as string[])[0] === "message") {
+        callback?.(new Error("telegram send failed"), "", "telegram send failed");
+        return {} as any;
+      }
+      callback?.(null, "", "");
+      return {} as any;
+    }) as typeof wakeDeliveryExecutorInternals.execFile);
+
+    dispatcher.dispatchSessionNotification(session as any, {
+      label: "completed",
+      userMessage: "✅ completed",
+      requireDirectUserNotification: true,
+      notifyUser: "always",
+      hooks: {
+        onNotifySucceeded: () => { notifySucceeded += 1; },
+        onNotifyFailed: () => { notifyFailed += 1; },
+      },
+    });
+
+    await waitFor(() => notifyFailed === 1, "strict notify-only failure");
+    const calls = readCalls(logPath);
+    assert.equal(calls.filter((call) => call[0] === "message").length, 4);
+    assert.equal(calls.some((call) => call[0] === "system"), false);
+    assert.equal(calls.some((call) => call[0] === "gateway"), false);
+    assert.equal(notifySucceeded, 0);
   });
 
   it("treats explicit system routes as non-routable and falls back to system.event", async () => {

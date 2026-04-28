@@ -18,6 +18,7 @@ export interface SessionNotificationRequest {
   wakeMessageOnNotifySuccess?: string;
   wakeMessageOnNotifyFailed?: string;
   completionWakeSummaryRequired?: boolean;
+  requireDirectUserNotification?: boolean;
   notifyUser?: SessionNotificationPolicy;
   buttons?: Array<Array<{ label: string; callbackData: string }>>;
   onUserNotifyFailed?: () => void;
@@ -167,6 +168,7 @@ export class WakeDispatcher {
     buttons?: Array<Array<{ label: string; callbackData: string }>>,
     onAllFailed?: () => void,
     onSuccess?: () => void,
+    requireDirectDelivery: boolean = false,
   ): void {
     const hasInteractiveButtons = Boolean(buttons?.some((row) => Array.isArray(row) && row.length > 0));
     const route = this.routes.resolve(session);
@@ -174,6 +176,14 @@ export class WakeDispatcher {
       ? `notify:${route.channel}|${route.accountId ?? ""}|${route.target}|${route.threadId ?? ""}`
       : `notify:system:${session.id}`;
     if (!route) {
+      if (requireDirectDelivery) {
+        console.warn(
+          `[WakeDispatcher] Direct notification "${label}" for session ${session.id} ` +
+          `has no direct route; reporting delivery failure instead of using system fallback.`,
+        );
+        onAllFailed?.();
+        return;
+      }
       if (hasInteractiveButtons) {
         console.warn(
           `[WakeDispatcher] Interactive notification "${label}" for session ${session.id} ` +
@@ -221,7 +231,16 @@ export class WakeDispatcher {
         }),
         orderingKey,
         onSuccess,
+        onAmbiguousResult: requireDirectDelivery ? onAllFailed : undefined,
         onFinalFailure: () => {
+          if (requireDirectDelivery) {
+            console.warn(
+              `[WakeDispatcher] Direct notification "${label}" for session ${session.id} ` +
+              `failed direct delivery; reporting delivery failure instead of using system fallback.`,
+            );
+            onAllFailed?.();
+            return;
+          }
           if (hasInteractiveButtons) {
             console.warn(
               `[WakeDispatcher] Interactive notification "${label}" for session ${session.id} ` +
@@ -259,6 +278,7 @@ export class WakeDispatcher {
     label: string,
     onAllFailed?: () => void,
     onSuccess?: () => void,
+    requireDirectDelivery: boolean = false,
   ): void {
     const normalizedMessages = messages
       .map((message) => ({
@@ -287,6 +307,7 @@ export class WakeDispatcher {
         message.buttons,
         onFailure,
         () => sendAt(index + 1),
+        requireDirectDelivery,
       );
     };
 
@@ -344,7 +365,14 @@ export class WakeDispatcher {
 
       if (userMessages.length > 0) {
         hooks?.onNotifyStarted?.();
-        this.sendUserNotificationSequence(session, userMessages, request.label, onFailed, onSuccess);
+        this.sendUserNotificationSequence(
+          session,
+          userMessages,
+          request.label,
+          onFailed,
+          onSuccess,
+          request.requireDirectUserNotification === true,
+        );
       } else {
         onFailed();
       }
@@ -362,6 +390,7 @@ export class WakeDispatcher {
           request.onUserNotifyFailed?.();
         },
         () => hooks?.onNotifySucceeded?.(),
+        request.requireDirectUserNotification === true,
       );
     }
 
