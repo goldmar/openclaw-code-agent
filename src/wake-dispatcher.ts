@@ -390,6 +390,7 @@ export class WakeDispatcher {
           request.onUserNotifyFailed?.();
         },
         () => hooks?.onNotifySucceeded?.(),
+        request.requireDirectUserNotification === true,
       );
     }
 

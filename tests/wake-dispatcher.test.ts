@@ -361,6 +361,52 @@ if (failConfigRaw) {
     assert.equal(wakeParams.message, "Canonical completion status delivered to user: no");
   });
 
+  it("does not count system fallback as strict notify-only completion success", async (t) => {
+    const dispatcher = createDispatcher();
+    const session: FakeSession = {
+      id: "session-completion-strict-no-wake",
+      route: buildRoute({ threadId: "26", sessionKey: "agent:main:telegram:group:-1003863755361:topic:26" }),
+      originChannel: "telegram|bot|-1003863755361",
+      originThreadId: 26,
+      originSessionKey: "agent:main:telegram:group:-1003863755361:topic:26",
+    };
+    let notifySucceeded = 0;
+    let notifyFailed = 0;
+
+    global.setTimeout = (((fn: (...args: any[]) => void, _delay?: number) => {
+      queueMicrotask(() => fn());
+      return { fake: true, unref() { return this; } } as any;
+    }) as typeof setTimeout);
+    global.clearTimeout = ((() => {}) as typeof clearTimeout);
+    t.mock.method(wakeDeliveryExecutorInternals, "execFile", ((_file, args, _options, callback) => {
+      writeFileSync(logPath, `${JSON.stringify(args)}\n`, { flag: "a" });
+      if ((args as string[])[0] === "message") {
+        callback?.(new Error("telegram send failed"), "", "telegram send failed");
+        return {} as any;
+      }
+      callback?.(null, "", "");
+      return {} as any;
+    }) as typeof wakeDeliveryExecutorInternals.execFile);
+
+    dispatcher.dispatchSessionNotification(session as any, {
+      label: "completed",
+      userMessage: "✅ completed",
+      requireDirectUserNotification: true,
+      notifyUser: "always",
+      hooks: {
+        onNotifySucceeded: () => { notifySucceeded += 1; },
+        onNotifyFailed: () => { notifyFailed += 1; },
+      },
+    });
+
+    await waitFor(() => notifyFailed === 1, "strict notify-only failure");
+    const calls = readCalls(logPath);
+    assert.equal(calls.filter((call) => call[0] === "message").length, 4);
+    assert.equal(calls.some((call) => call[0] === "system"), false);
+    assert.equal(calls.some((call) => call[0] === "gateway"), false);
+    assert.equal(notifySucceeded, 0);
+  });
+
   it("treats explicit system routes as non-routable and falls back to system.event", async () => {
     const dispatcher = createDispatcher();
     const session: FakeSession = {
