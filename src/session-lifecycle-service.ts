@@ -551,6 +551,7 @@ export class SessionLifecycleService {
       userMessage: payload.userMessage,
       notifyUser: "always",
       completionWakeSummaryRequired: followupSummaryRequired,
+      requireDirectUserNotification: true,
       wakeMessageOnNotifySuccess: followupSummaryRequired ? payload.wakeMessageOnNotifySuccess : undefined,
       wakeMessageOnNotifyFailed: followupSummaryRequired ? payload.wakeMessageOnNotifyFailed : undefined,
       hooks: {
