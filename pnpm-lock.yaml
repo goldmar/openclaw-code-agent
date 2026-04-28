@@ -34,8 +34,8 @@ importers:
         specifier: ^5.1.7
         version: 5.1.9
       openclaw:
-        specifier: 2026.4.25
-        version: 2026.4.25
+        specifier: 2026.4.26
+        version: 2026.4.26
       tsx:
         specifier: ^4.21.0
         version: 4.21.0
@@ -1702,8 +1702,8 @@ packages:
       zod:
         optional: true
 
-  openclaw@2026.4.25:
-    resolution: {integrity: sha512-VBekZHT+m5/scRBHTZg6bE93K2PpElGrsOvK/WxJ8sXKwhzYEYHWbMCmXssDoiKaHVy8+0RwayLTMyAmC/5BbA==}
+  openclaw@2026.4.26:
+    resolution: {integrity: sha512-KBKI7gu9d/6NxBfqnojTFcHNJvrOyyYGJ6oczaBKF7zUHVKdm78zZNQOBmwiaHQMrvhjNRo0ry9xXtaAJwhV3A==}
     engines: {node: '>=22.14.0'}
     hasBin: true
 
@@ -4134,7 +4134,7 @@ snapshots:
       ws: 8.20.0
       zod: 4.3.6
 
-  openclaw@2026.4.25:
+  openclaw@2026.4.26:
     dependencies:
       '@agentclientprotocol/sdk': 0.20.0(zod@4.3.6)
       '@clack/prompts': 1.2.0
