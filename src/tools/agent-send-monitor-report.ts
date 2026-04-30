@@ -1,12 +1,11 @@
 import { Type } from "@sinclair/typebox";
 import { sessionManager } from "../singletons";
 import { resolveSessionRoute } from "../config";
+import { WORKTREE_STRATEGY_SET } from "../types";
 import type { OpenClawPluginToolContext, SessionRoute, WorktreeStrategy } from "../types";
 
-const WORKTREE_STRATEGIES = new Set<WorktreeStrategy>(["off", "manual", "ask", "delegate", "auto-merge", "auto-pr"]);
-
 function isWorktreeStrategy(value: unknown): value is WorktreeStrategy {
-  return typeof value === "string" && WORKTREE_STRATEGIES.has(value as WorktreeStrategy);
+  return typeof value === "string" && WORKTREE_STRATEGY_SET.has(value as WorktreeStrategy);
 }
 
 interface AgentSendMonitorReportParams {

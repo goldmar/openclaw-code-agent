@@ -71,7 +71,9 @@ export type PermissionMode = "default" | "plan" | "bypassPermissions";
  * to `plan-mode` on read so new writes only use one explicit value.
  */
 export type PlanApprovalContext = "plan-mode";
-export type WorktreeStrategy = "off" | "manual" | "ask" | "delegate" | "auto-merge" | "auto-pr";
+export const WORKTREE_STRATEGIES = ["off", "manual", "ask", "delegate", "auto-merge", "auto-pr"] as const;
+export type WorktreeStrategy = typeof WORKTREE_STRATEGIES[number];
+export const WORKTREE_STRATEGY_SET: ReadonlySet<WorktreeStrategy> = new Set(WORKTREE_STRATEGIES);
 /**
  * Codex App Server execution policy is fixed to `never`.
  * OpenClaw owns the plan-review and approval UX through `permissionMode`
