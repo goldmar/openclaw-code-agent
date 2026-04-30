@@ -30,11 +30,12 @@ The shared substrate is often the local `codex` command and Codex App Server, bu
 
 ## New In 4.0.1
 
-`4.0.1` is the OpenClaw `v2026.4.25` compatibility patch release. It keeps the `4.0.0` messaging-contract cleanup intact while refreshing the verified local build/test target and adding guard coverage for newer OpenClaw plugin-install and embedded-extension behavior.
+`4.0.1` is the OpenClaw compatibility patch release. It keeps the `4.0.0` messaging-contract cleanup intact while refreshing the verified local build/test target and adding guard coverage for newer OpenClaw plugin-install, embedded-extension, config-helper, and startup-activation behavior.
 
-- **Verified OpenClaw target**. Local build/test metadata now targets stable OpenClaw `2026.4.25` while keeping the minimum compatibility floor at `>=2026.4.21`.
+- **Verified OpenClaw target**. Local build/test metadata now targets stable OpenClaw `2026.4.29` while keeping the minimum compatibility floor at `>=2026.4.21`.
 - **Install-registry compatibility**. Guard coverage now confirms plugin code does not read or write OpenClaw's legacy authored install metadata.
 - **Embedded-extension compatibility**. Guard coverage now documents the removed embedded-extension factory path and keeps future tool-result rewriting aligned with OpenClaw's runtime-neutral middleware contract.
+- **Startup activation compatibility**. The manifest explicitly opts into startup loading for controller startup, background services, and interactive handlers.
 
 ## From Prompt To Merged Branch
 
@@ -120,9 +121,9 @@ openclaw plugins enable openclaw-code-agent
 openclaw gateway restart
 ```
 
-This release targets the OpenClaw `v2026.4.21` external plugin contract and is verified against the stable `v2026.4.25` build/test target. `package.json` now carries the plugin API compatibility and build metadata used by modern OpenClaw / ClawHub installs, and `openclaw.plugin.json` now advertises the plugin-owned command activation surface plus the onboarding metadata OpenClaw uses during plugin-config setup. Keep those metadata surfaces in sync when bumping the plugin release baseline.
+This release targets the OpenClaw `v2026.4.21` external plugin contract and is verified against the stable `v2026.4.29` build/test target. `package.json` now carries the plugin API compatibility and build metadata used by modern OpenClaw / ClawHub installs, and `openclaw.plugin.json` now advertises the plugin-owned startup and command activation surface plus the onboarding metadata OpenClaw uses during plugin-config setup. Keep those metadata surfaces in sync when bumping the plugin release baseline.
 
-The current manifest descriptors stay intentionally narrow: activation advertises only the chat commands this plugin owns, and setup stays minimal with `requiresRuntime: false`. First-run onboarding is driven by the manifest config schema and `uiHints`, not by provider/backend setup descriptors.
+The current manifest descriptors stay intentionally narrow: activation advertises startup loading plus only the chat commands this plugin owns, and setup stays minimal with `requiresRuntime: false`. First-run onboarding is driven by the manifest config schema and `uiHints`, not by provider/backend setup descriptors.
 
 ### First-Run Onboarding
 

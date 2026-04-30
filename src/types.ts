@@ -222,6 +222,7 @@ export interface SessionActionToken {
   launchName?: string;
   launchPrompt?: string;
   launchWorkdir?: string;
+  launchWorktreeStrategy?: WorktreeStrategy;
 }
 
 /** Harness-scoped launch defaults and model restrictions. */

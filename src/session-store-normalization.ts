@@ -483,6 +483,7 @@ export function normalizeActionToken(raw: unknown): SessionActionToken | undefin
     launchName: toOptionalString(raw.launchName),
     launchPrompt: toOptionalString(raw.launchPrompt),
     launchWorkdir: toOptionalString(raw.launchWorkdir),
+    launchWorktreeStrategy: (raw.launchWorktreeStrategy === "off" || raw.launchWorktreeStrategy === "manual" || raw.launchWorktreeStrategy === "ask" || raw.launchWorktreeStrategy === "delegate" || raw.launchWorktreeStrategy === "auto-merge" || raw.launchWorktreeStrategy === "auto-pr") ? raw.launchWorktreeStrategy : undefined,
   };
 }
 

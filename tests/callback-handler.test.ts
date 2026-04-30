@@ -734,6 +734,7 @@ describe("createCallbackHandler()", () => {
         launchName: "oc-release-v2026.3.31",
         launchPrompt: "Plan the required follow-up.",
         launchWorkdir: "/home/openclaw/workspace/openclaw-code-agent",
+        launchWorktreeStrategy: "auto-pr",
       }),
       consumeActionToken: () => ({
         sessionId: "openclaw-release-v2026.3.31",
@@ -747,6 +748,7 @@ describe("createCallbackHandler()", () => {
         launchName: "oc-release-v2026.3.31",
         launchPrompt: "Plan the required follow-up.",
         launchWorkdir: "/home/openclaw/workspace/openclaw-code-agent",
+        launchWorktreeStrategy: "auto-pr",
       }),
       launchMonitorPlan: (args: Record<string, unknown>) => {
         launches.push(args);
@@ -761,6 +763,7 @@ describe("createCallbackHandler()", () => {
     assert.deepEqual(result, { handled: true });
     assert.equal(state.buttonsCleared, 1);
     assert.equal(launches[0]?.workdir, "/home/openclaw/workspace/openclaw-code-agent");
+    assert.equal(launches[0]?.worktreeStrategy, "auto-pr");
     assert.match(state.replies[0], /Planning session started: oc-release-v2026\.3\.31 \[sess-plan\]/);
   });
 });

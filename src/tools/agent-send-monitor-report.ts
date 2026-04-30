@@ -1,13 +1,20 @@
 import { Type } from "@sinclair/typebox";
 import { sessionManager } from "../singletons";
 import { resolveSessionRoute } from "../config";
-import type { OpenClawPluginToolContext, SessionRoute } from "../types";
+import type { OpenClawPluginToolContext, SessionRoute, WorktreeStrategy } from "../types";
+
+const WORKTREE_STRATEGIES = new Set<WorktreeStrategy>(["off", "manual", "ask", "delegate", "auto-merge", "auto-pr"]);
+
+function isWorktreeStrategy(value: unknown): value is WorktreeStrategy {
+  return typeof value === "string" && WORKTREE_STRATEGIES.has(value as WorktreeStrategy);
+}
 
 interface AgentSendMonitorReportParams {
   report_id: string;
   report_text: string;
   plan_prompt: string;
   plan_workdir: string;
+  plan_worktree_strategy?: WorktreeStrategy;
   plan_name?: string;
   target_channel?: string;
   target_thread_id?: string | number;
@@ -21,6 +28,7 @@ function isAgentSendMonitorReportParams(value: unknown): value is AgentSendMonit
     && typeof params.report_text === "string"
     && typeof params.plan_prompt === "string"
     && typeof params.plan_workdir === "string"
+    && (params.plan_worktree_strategy == null || isWorktreeStrategy(params.plan_worktree_strategy))
     && (params.plan_name == null || typeof params.plan_name === "string")
     && (params.target_channel == null || typeof params.target_channel === "string")
     && (params.target_thread_id == null || typeof params.target_thread_id === "string" || typeof params.target_thread_id === "number")
@@ -46,6 +54,14 @@ export function makeAgentSendMonitorReportTool(ctx: OpenClawPluginToolContext) {
       report_text: Type.String({ description: "Final user-facing report text to deliver." }),
       plan_prompt: Type.String({ description: "Prompt to seed into the plan-only session when the user clicks Start Plan." }),
       plan_workdir: Type.String({ description: "Working directory for the planning session." }),
+      plan_worktree_strategy: Type.Optional(Type.Union([
+        Type.Literal("off"),
+        Type.Literal("manual"),
+        Type.Literal("ask"),
+        Type.Literal("delegate"),
+        Type.Literal("auto-merge"),
+        Type.Literal("auto-pr"),
+      ], { description: "Optional worktree strategy for the planning session. Use auto-pr for monitor follow-up that should branch and open/update a PR after approved implementation." })),
       plan_name: Type.Optional(Type.String({ description: "Optional explicit session name for the planning session." })),
       target_channel: Type.Optional(Type.String({ description: "Optional explicit route like 'telegram|-1003863755361'." })),
       target_thread_id: Type.Optional(Type.Union([Type.String(), Type.Number()], { description: "Optional explicit topic/thread id." })),
@@ -70,6 +86,7 @@ export function makeAgentSendMonitorReportTool(ctx: OpenClawPluginToolContext) {
         planName: params.plan_name ?? params.report_id,
         planPrompt: params.plan_prompt,
         planWorkdir: params.plan_workdir,
+        planWorktreeStrategy: params.plan_worktree_strategy,
       });
 
       return {

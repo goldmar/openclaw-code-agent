@@ -34,7 +34,7 @@ describe("plugin entry source", () => {
     assert.doesNotMatch(activeWorkflowSources, /\bnpm audit\b/);
   });
 
-  it("declares the v2026.4.21 compatibility floor and v2026.4.26 build target in package metadata", () => {
+  it("declares the v2026.4.21 compatibility floor and v2026.4.29 build target in package metadata", () => {
     const packageJson = JSON.parse(readFileSync(join(rootDir, "package.json"), "utf8")) as {
       dependencies?: Record<string, string>;
       openclaw?: {
@@ -51,10 +51,10 @@ describe("plugin entry source", () => {
     assert.equal(packageJson.dependencies?.["@anthropic-ai/claude-agent-sdk"], "^0.2.119");
     assert.equal(packageJson.openclaw?.compat?.pluginApi, ">=2026.4.21");
     assert.equal(packageJson.openclaw?.compat?.minGatewayVersion, "2026.4.21");
-    assert.equal(packageJson.openclaw?.build?.openclawVersion, "2026.4.26");
-    assert.equal(packageJson.openclaw?.build?.pluginSdkVersion, "2026.4.26");
+    assert.equal(packageJson.openclaw?.build?.openclawVersion, "2026.4.29");
+    assert.equal(packageJson.openclaw?.build?.pluginSdkVersion, "2026.4.29");
     assert.equal(packageJson.peerDependencies?.openclaw, ">=2026.4.21");
-    assert.equal(packageJson.devDependencies?.openclaw, "2026.4.26");
+    assert.equal(packageJson.devDependencies?.openclaw, "2026.4.29");
     assert.equal(packageJson.pnpm?.overrides?.["fast-xml-parser@>=5.0.0 <5.7.0"], ">=5.7.0");
   });
 
@@ -150,6 +150,7 @@ describe("plugin entry source", () => {
     };
 
     assert.deepEqual(pluginManifest.activation, {
+      onStartup: true,
       onCommands: [
         "agent",
         "agent_kill",

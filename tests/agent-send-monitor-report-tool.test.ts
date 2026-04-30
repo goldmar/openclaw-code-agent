@@ -36,11 +36,13 @@ describe("agent_send_monitor_report tool", () => {
       report_text: "Release report body",
       plan_prompt: "Plan the follow-up.",
       plan_workdir: "/home/openclaw/workspace/openclaw-code-agent",
+      plan_worktree_strategy: "auto-pr",
       plan_name: "oc-release-v2026.3.31",
     });
 
     assert.equal(calls.length, 1);
     assert.equal(calls[0]?.reportId, "openclaw-release-v2026.3.31");
+    assert.equal(calls[0]?.planWorktreeStrategy, "auto-pr");
     assert.equal((calls[0]?.route as { provider?: string })?.provider, "telegram");
     assert.equal((calls[0]?.route as { target?: string })?.target, "-1003863755361");
     assert.equal((calls[0]?.route as { threadId?: string })?.threadId, "13832");
