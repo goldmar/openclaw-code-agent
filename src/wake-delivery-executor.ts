@@ -39,7 +39,7 @@ type ExecFileError = Error & {
 function isExecFileTimeoutError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
   const execError = err as ExecFileError;
-  return execError.killed === true && (execError.signal === "SIGTERM" || execError.signal === "SIGKILL");
+  return execError.killed === true && execError.signal === "SIGKILL";
 }
 
 export const wakeDeliveryExecutorInternals = {
