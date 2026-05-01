@@ -156,7 +156,7 @@ if (failConfigRaw) {
   });
 
   function createDispatcher() {
-    return new WakeDispatcher();
+    return new WakeDispatcher({ directNotifications: null });
   }
 
   it("uses message.send for direct user notifications and logs completion", async () => {
@@ -226,7 +226,7 @@ if (failConfigRaw) {
     assert.deepEqual(messages, ["🚀 launched", "🚀 launched", "✅ completed"]);
   });
 
-  it("does not retry a direct launch notification after an ambiguous timeout", async (t) => {
+  it("falls back and does not retry a direct launch notification after an ambiguous timeout", async (t) => {
     const dispatcher = createDispatcher();
     const session: FakeSession = {
       id: "session-launch-timeout",
@@ -241,13 +241,17 @@ if (failConfigRaw) {
     };
     t.mock.method(wakeDeliveryExecutorInternals, "execFile", ((_file, args, _options, callback) => {
       writeFileSync(logPath, `${JSON.stringify(args)}\n`, { flag: "a" });
-      const error = new Error("Command timed out after 30000ms") as Error & {
-        killed: boolean;
-        signal: NodeJS.Signals;
-      };
-      error.killed = true;
-      error.signal = "SIGKILL";
-      callback?.(error, "", "");
+      if ((args as string[])[0] === "message") {
+        const error = new Error("Command timed out after 30000ms") as Error & {
+          killed: boolean;
+          signal: NodeJS.Signals;
+        };
+        error.killed = true;
+        error.signal = "SIGKILL";
+        callback?.(error, "", "");
+        return {} as any;
+      }
+      callback?.(null, "", "");
       return {} as any;
     }) as typeof wakeDeliveryExecutorInternals.execFile);
 
@@ -262,10 +266,90 @@ if (failConfigRaw) {
       "ambiguous timeout log",
     );
 
-    const calls = readCalls(logPath);
-    assert.equal(calls.length, 1);
+    const calls = await waitForCalls(logPath, 2);
+    assert.equal(calls.length, 2);
     assert.equal(parseMessageSendArgs(calls[0] ?? []).message, "🚀 launched");
+    assert.deepEqual(calls[1], ["system", "event", "--text", "🚀 launched", "--mode", "now"]);
     assert.ok(!errorLogs.some((line) => line.includes("\"event\":\"dispatch_retry_scheduled\"")));
+  });
+
+  it("uses in-process runtime delivery for Telegram topic direct notifications", async () => {
+    const sends: Array<Record<string, unknown>> = [];
+    const dispatcher = new WakeDispatcher({
+      directNotifications: {
+        send: async (route, text) => {
+          sends.push({ route, text });
+        },
+      },
+    });
+    const session: FakeSession = {
+      id: "session-runtime-direct",
+      route: buildRoute({ threadId: "28", sessionKey: "agent:main:telegram:group:-1003863755361:topic:28" }),
+      originChannel: "telegram|bot|-1003863755361",
+      originThreadId: 28,
+      originSessionKey: "agent:main:telegram:group:-1003863755361:topic:28",
+    };
+    const infoLogs: string[] = [];
+    console.info = (message?: unknown, ...rest: unknown[]) => {
+      infoLogs.push([message, ...rest].map((value) => String(value)).join(" "));
+    };
+
+    dispatcher.dispatchSessionNotification(session as any, {
+      label: "launch",
+      userMessage: "🚀 launched",
+      notifyUser: "always",
+    });
+
+    await waitFor(() => sends.length === 1, "runtime direct send");
+    assert.deepEqual(sends, [
+      {
+        route: {
+          channel: "telegram",
+          target: "-1003863755361",
+          accountId: "bot",
+          threadId: "28",
+          sessionKey: "agent:main:telegram:group:-1003863755361:topic:28",
+        },
+        text: "🚀 launched",
+      },
+    ]);
+    assert.deepEqual(readCalls(logPath), []);
+    assert.ok(infoLogs.some((line) => line.includes("\"event\":\"dispatch_succeeded\"") && line.includes("\"target\":\"message.send\"")));
+  });
+
+  it("falls back on unavailable in-process direct notify without blocking the route lane", async () => {
+    const sends: string[] = [];
+    const dispatcher = new WakeDispatcher({
+      directNotifications: {
+        send: async (_route, text) => {
+          sends.push(text);
+          if (text === "🚀 launched") throw new Error("runtime direct sender unavailable");
+        },
+      },
+    });
+    const session: FakeSession = {
+      id: "session-runtime-direct-unavailable",
+      route: buildRoute({ threadId: "28", sessionKey: "agent:main:telegram:group:-1003863755361:topic:28" }),
+      originChannel: "telegram|bot|-1003863755361",
+      originThreadId: 28,
+      originSessionKey: "agent:main:telegram:group:-1003863755361:topic:28",
+    };
+
+    dispatcher.dispatchSessionNotification(session as any, {
+      label: "launch",
+      userMessage: "🚀 launched",
+      notifyUser: "always",
+    });
+    dispatcher.dispatchSessionNotification(session as any, {
+      label: "completed",
+      userMessage: "✅ completed",
+      notifyUser: "always",
+    });
+
+    await waitFor(() => sends.includes("✅ completed"), "second notification after first direct failure");
+    const calls = await waitForCalls(logPath, 1);
+    assert.deepEqual(sends, ["🚀 launched", "✅ completed"]);
+    assert.deepEqual(calls, [["system", "event", "--text", "🚀 launched", "--mode", "now"]]);
   });
 
   it("reports strict completion notification ambiguity as delivery failure before waking", async (t) => {

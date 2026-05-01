@@ -1,4 +1,5 @@
 import type { Session } from "./session";
+import { RuntimeDirectNotificationTransport, type DirectNotificationTransport } from "./direct-notification-transport";
 import { WakeDeliveryExecutor, type DispatchPhase } from "./wake-delivery-executor";
 import { WakeRouteResolver } from "./wake-route-resolver";
 import { WakeTransport, type WakeTransportOptions } from "./wake-transport";
@@ -37,15 +38,20 @@ export interface SessionNotificationHooks {
 export interface WakeDispatcherOptions {
   transport?: WakeTransport;
   transportOptions?: WakeTransportOptions;
+  directNotifications?: DirectNotificationTransport | null;
 }
 
 export class WakeDispatcher {
   private readonly routes = new WakeRouteResolver();
   private readonly transport: WakeTransport;
+  private readonly directNotifications: DirectNotificationTransport | null;
   private readonly executor = new WakeDeliveryExecutor();
 
   constructor(options: WakeDispatcherOptions = {}) {
     this.transport = options.transport ?? new WakeTransport(options.transportOptions);
+    this.directNotifications = options.directNotifications === undefined
+      ? new RuntimeDirectNotificationTransport()
+      : options.directNotifications;
   }
 
   clearPendingRetries(): void {
@@ -214,61 +220,74 @@ export class WakeDispatcher {
       return;
     }
 
+    const directFailureHandler = () => {
+      if (requireDirectDelivery) {
+        console.warn(
+          `[WakeDispatcher] Direct notification "${label}" for session ${session.id} ` +
+          `failed direct delivery; reporting delivery failure instead of using system fallback.`,
+        );
+        onAllFailed?.();
+        return;
+      }
+      if (hasInteractiveButtons) {
+        console.warn(
+          `[WakeDispatcher] Interactive notification "${label}" for session ${session.id} ` +
+          `failed direct delivery; refusing text-only fallback because buttons would be lost.`,
+        );
+        onAllFailed?.();
+        return;
+      }
+      this.executor.execute(
+        this.transport.buildSystemEventArgs(text),
+        {
+          label: `${label}-notify-fallback`,
+          sessionId: session.id,
+          target: "system.event",
+          phase: "notify",
+          routeSummary: "system",
+          messageKind: "notify",
+          dispatchContext: this.buildDispatchContext({
+            routeSummary: "system",
+            text,
+          }),
+          orderingKey,
+          onSuccess,
+          onFinalFailure: onAllFailed,
+        },
+      );
+    };
+
+    const options = {
+      label: `${label}-notify`,
+      sessionId: session.id,
+      target: "message.send",
+      phase: "notify",
+      routeSummary: this.routes.summary(route),
+      messageKind: "notify",
+      dispatchContext: this.buildDispatchContext({
+        routeSummary: this.routes.summary(route),
+        route,
+        text,
+        buttons,
+      }),
+      orderingKey,
+      onSuccess,
+      onAmbiguousResult: directFailureHandler,
+      onFinalFailure: directFailureHandler,
+      terminalOnFailure: this.directNotifications ? true : undefined,
+    } as const;
+
+    if (this.directNotifications) {
+      this.executor.executePromise(
+        () => this.directNotifications!.send(route, text, buttons),
+        options,
+      );
+      return;
+    }
+
     this.executor.execute(
       this.transport.buildDirectNotificationArgs(route, text, buttons),
-      {
-        label: `${label}-notify`,
-        sessionId: session.id,
-        target: "message.send",
-        phase: "notify",
-        routeSummary: this.routes.summary(route),
-        messageKind: "notify",
-        dispatchContext: this.buildDispatchContext({
-          routeSummary: this.routes.summary(route),
-          route,
-          text,
-          buttons,
-        }),
-        orderingKey,
-        onSuccess,
-        onAmbiguousResult: requireDirectDelivery ? onAllFailed : undefined,
-        onFinalFailure: () => {
-          if (requireDirectDelivery) {
-            console.warn(
-              `[WakeDispatcher] Direct notification "${label}" for session ${session.id} ` +
-              `failed direct delivery; reporting delivery failure instead of using system fallback.`,
-            );
-            onAllFailed?.();
-            return;
-          }
-          if (hasInteractiveButtons) {
-            console.warn(
-              `[WakeDispatcher] Interactive notification "${label}" for session ${session.id} ` +
-              `failed direct delivery; refusing text-only fallback because buttons would be lost.`,
-            );
-            onAllFailed?.();
-            return;
-          }
-          this.executor.execute(
-            this.transport.buildSystemEventArgs(text),
-            {
-              label: `${label}-notify-fallback`,
-              sessionId: session.id,
-              target: "system.event",
-              phase: "notify",
-              routeSummary: "system",
-              messageKind: "notify",
-              dispatchContext: this.buildDispatchContext({
-                routeSummary: "system",
-                text,
-              }),
-              orderingKey,
-              onSuccess,
-              onFinalFailure: onAllFailed,
-            },
-          );
-        },
-      },
+      options,
     );
   }
 

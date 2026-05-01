@@ -158,7 +158,7 @@ export function register(api: OpenClawPluginApi): void {
     start: (ctx) => {
       const config = api.pluginConfig ?? {};
       setPluginConfig(config);
-      setPluginRuntime(api.runtime);
+      setPluginRuntime(api.runtime, ctx.config);
 
       sm = new SessionManager(pluginConfig.maxSessions, pluginConfig.maxPersistedSessions);
       gc = new GoalController(sm);
