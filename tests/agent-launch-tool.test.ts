@@ -178,24 +178,22 @@ describe("agent_launch tool defaults", () => {
     assert.equal((spawnConfig?.route as { accountId?: string } | undefined)?.accountId, "bot1");
   });
 
-  it("attaches a host task lifecycle sink when runtime tasks lifecycle is available", async () => {
+  it("attaches a managed TaskFlow lifecycle sink when the current runtime is available", async () => {
     let spawnConfig: Record<string, unknown> | undefined;
-    const createCalls: Record<string, unknown>[] = [];
+    const createManagedCalls: Record<string, unknown>[] = [];
     setPluginRuntime({
-      tasks: {
-        runs: {
-          fromToolContext() {
-            return {
-              lifecycle: {
-                create(params: Record<string, unknown>) {
-                  createCalls.push(params);
-                  return { id: "task-1" };
-                },
-                progress() { return { id: "task-1" }; },
-                finalize() { return { id: "task-1" }; },
-              },
-            };
-          },
+      taskFlow: {
+        fromToolContext() {
+          return {
+            createManaged(params: Record<string, unknown>) {
+              createManagedCalls.push(params);
+              return { flowId: "flow-1", revision: 1 };
+            },
+            resume() { return { applied: true, flow: { flowId: "flow-1", revision: 2 } }; },
+            setWaiting() { return { applied: true, flow: { flowId: "flow-1", revision: 2 } }; },
+            finish() { return { applied: true, flow: { flowId: "flow-1", revision: 2 } }; },
+            fail() { return { applied: true, flow: { flowId: "flow-1", revision: 2 } }; },
+          };
         },
       },
     });
@@ -209,6 +207,8 @@ describe("agent_launch tool defaults", () => {
           name: "task-lifecycle",
           prompt: config.prompt,
           startedAt: 100,
+          status: "starting",
+          lifecycle: "starting",
           model: config.model,
         };
         (config.taskLifecycle as { create: (session: unknown) => void }).create(session);
@@ -223,12 +223,12 @@ describe("agent_launch tool defaults", () => {
     await tool.execute("tool-id", { prompt: "Represent this session in native tasks" });
 
     assert.ok(spawnConfig?.taskLifecycle);
-    assert.equal(createCalls.length, 1);
-    assert.equal(createCalls[0].taskKind, "openclaw-code-agent.session");
-    assert.equal(createCalls[0].sourceId, "openclaw-code-agent");
-    assert.equal(createCalls[0].runId, "sess-task-lifecycle");
-    assert.equal(createCalls[0].label, "task-lifecycle");
-    assert.equal(createCalls[0].notifyPolicy, "silent");
+    assert.equal(createManagedCalls.length, 1);
+    assert.equal(createManagedCalls[0].controllerId, "openclaw-code-agent");
+    assert.equal(createManagedCalls[0].goal, "Represent this session in native tasks");
+    assert.equal(createManagedCalls[0].status, "running");
+    assert.equal(createManagedCalls[0].notifyPolicy, "silent");
+    assert.equal((createManagedCalls[0].stateJson as Record<string, unknown>).integration, "phase-1-managed-task-flow");
   });
 
   it("falls back to an explicit system route when the tool context has no chat metadata", async () => {

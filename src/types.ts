@@ -307,7 +307,7 @@ export interface SessionConfig {
   canUseTool?: CanUseToolCallback;
   /** Explicit backend ref when reconstructing a persisted session against a native backend conversation. */
   backendRef?: SessionBackendRef;
-  /** Optional host task lifecycle bridge for plugin-owned session task records. */
+  /** Optional phase-1 bridge to current host TaskFlow task surfaces. */
   taskLifecycle?: SessionTaskLifecycleSink;
 }
 

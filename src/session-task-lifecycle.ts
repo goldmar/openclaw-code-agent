@@ -3,55 +3,80 @@ import { getPluginRuntime } from "./runtime-store";
 import type { Session } from "./session";
 import type { KillReason, SessionStatus } from "./types";
 
-const TASK_KIND = "openclaw-code-agent.session";
-const SOURCE_ID = "openclaw-code-agent";
+const CONTROLLER_ID = "openclaw-code-agent";
 const TITLE_MAX_LENGTH = 160;
 
+// Phase 1 intentionally uses only the released managed TaskFlow runtime.
+// Current OpenClaw SDKs can create/update/finalize the flow record, but they
+// do not expose plugin-owned child task run create/progress/finalize methods.
+// When that surface is absent, this adapter degrades to the no-op sink below.
+
 type TaskNotifyPolicy = "done_only" | "state_changes" | "silent";
-type TaskLifecycleCreateStatus = "queued" | "running";
+type ManagedTaskFlowStatus = "queued" | "running" | "waiting" | "blocked" | "succeeded" | "failed" | "cancelled" | "lost";
 type TaskLifecycleTerminalStatus = "succeeded" | "failed" | "timed_out" | "cancelled";
 
-type TaskLifecycleCreateParams = {
-  taskKind: string;
-  runId: string;
-  title: string;
-  sourceId?: string;
-  label?: string;
-  status?: TaskLifecycleCreateStatus;
-  startedAt?: number;
-  lastEventAt?: number;
-  progressSummary?: string | null;
-  notifyPolicy?: TaskNotifyPolicy;
+type ManagedTaskFlowRecord = {
+  flowId: string;
+  revision: number;
+  status?: ManagedTaskFlowStatus;
+  [key: string]: unknown;
 };
 
-type TaskLifecycleProgressParams = {
-  taskKind: string;
-  runId: string;
-  lastEventAt?: number;
-  progressSummary?: string | null;
-  eventSummary?: string | null;
+type ManagedTaskFlowMutationResult = {
+  applied: true;
+  flow: ManagedTaskFlowRecord;
+  current?: never;
+} | {
+  applied: false;
+  code?: string;
+  current?: ManagedTaskFlowRecord;
 };
 
-type TaskLifecycleFinalizeParams = {
-  taskKind: string;
-  runId: string;
-  status: TaskLifecycleTerminalStatus;
-  endedAt: number;
-  startedAt?: number;
-  lastEventAt?: number;
-  error?: string;
-  progressSummary?: string | null;
-  terminalSummary?: string | null;
-};
-
-type TaskLifecycleRuntime = {
-  create?: (params: TaskLifecycleCreateParams) => unknown;
-  progress?: (params: TaskLifecycleProgressParams) => unknown;
-  finalize?: (params: TaskLifecycleFinalizeParams) => unknown;
-};
-
-type TaskRunsRuntime = {
-  lifecycle?: TaskLifecycleRuntime;
+type BoundTaskFlowRuntime = {
+  createManaged?: (params: {
+    controllerId: string;
+    goal: string;
+    status?: ManagedTaskFlowStatus;
+    notifyPolicy?: TaskNotifyPolicy;
+    currentStep?: string | null;
+    stateJson?: Record<string, unknown> | null;
+    waitJson?: Record<string, unknown> | null;
+    createdAt?: number;
+    updatedAt?: number;
+    endedAt?: number | null;
+  }) => ManagedTaskFlowRecord;
+  setWaiting?: (params: {
+    flowId: string;
+    expectedRevision: number;
+    currentStep?: string | null;
+    stateJson?: Record<string, unknown> | null;
+    waitJson?: Record<string, unknown> | null;
+    blockedSummary?: string | null;
+    updatedAt?: number;
+  }) => ManagedTaskFlowMutationResult;
+  resume?: (params: {
+    flowId: string;
+    expectedRevision: number;
+    status?: Extract<ManagedTaskFlowStatus, "queued" | "running">;
+    currentStep?: string | null;
+    stateJson?: Record<string, unknown> | null;
+    updatedAt?: number;
+  }) => ManagedTaskFlowMutationResult;
+  finish?: (params: {
+    flowId: string;
+    expectedRevision: number;
+    stateJson?: Record<string, unknown> | null;
+    updatedAt?: number;
+    endedAt?: number;
+  }) => ManagedTaskFlowMutationResult;
+  fail?: (params: {
+    flowId: string;
+    expectedRevision: number;
+    stateJson?: Record<string, unknown> | null;
+    blockedSummary?: string | null;
+    updatedAt?: number;
+    endedAt?: number;
+  }) => ManagedTaskFlowMutationResult;
 };
 
 type ToolContextLike = {
@@ -114,49 +139,101 @@ function terminalSummary(status: SessionStatus, killReason: KillReason): string 
   return "Cancelled";
 }
 
-class RuntimeSessionTaskLifecycleSink implements SessionTaskLifecycleSink {
-  private created = false;
+function isWaitingLifecycle(session: Pick<Session, "lifecycle">): boolean {
+  return session.lifecycle === "awaiting_plan_decision"
+    || session.lifecycle === "awaiting_user_input"
+    || session.lifecycle === "awaiting_worktree_decision"
+    || session.lifecycle === "suspended";
+}
+
+function buildStateJson(session: Session, phase: "created" | "progress" | "terminal", summary: string): Record<string, unknown> {
+  return {
+    phase,
+    integration: "phase-1-managed-task-flow",
+    sessionId: session.id,
+    sessionName: session.name,
+    sessionStatus: session.status,
+    sessionLifecycle: session.lifecycle,
+    summary,
+  };
+}
+
+function isManagedTaskFlowRuntime(value: unknown): value is Required<Pick<BoundTaskFlowRuntime, "createManaged" | "resume" | "setWaiting" | "finish" | "fail">> {
+  if (!value || typeof value !== "object") return false;
+  const runtime = value as BoundTaskFlowRuntime;
+  return typeof runtime.createManaged === "function"
+    && typeof runtime.resume === "function"
+    && typeof runtime.setWaiting === "function"
+    && typeof runtime.finish === "function"
+    && typeof runtime.fail === "function";
+}
+
+function applyMutation(
+  current: ManagedTaskFlowRecord | undefined,
+  mutation: ManagedTaskFlowMutationResult,
+): ManagedTaskFlowRecord | undefined {
+  if (mutation.applied) return mutation.flow;
+  const currentFlow = mutation.current;
+  if (currentFlow?.flowId && typeof currentFlow.revision === "number") return currentFlow;
+  return current;
+}
+
+class ManagedTaskFlowSessionTaskLifecycleSink implements SessionTaskLifecycleSink {
+  private flow?: ManagedTaskFlowRecord;
   private finalized = false;
   private lastProgressKey?: string;
 
-  constructor(private readonly lifecycle: Required<TaskLifecycleRuntime>) {}
+  constructor(private readonly taskFlow: Required<Pick<BoundTaskFlowRuntime, "createManaged" | "resume" | "setWaiting" | "finish" | "fail">>) {}
 
   create(session: Session): void {
-    if (this.created || this.finalized) return;
+    if (this.flow || this.finalized) return;
+    const summary = "Starting";
+    const now = Date.now();
     try {
-      this.lifecycle.create({
-        taskKind: TASK_KIND,
-        sourceId: SOURCE_ID,
-        runId: session.id,
-        title: buildSessionTaskTitle(session),
-        label: session.name,
+      this.flow = this.taskFlow.createManaged({
+        controllerId: CONTROLLER_ID,
+        goal: buildSessionTaskTitle(session),
         status: "running",
-        startedAt: session.startedAt,
-        lastEventAt: Date.now(),
-        progressSummary: "Starting",
         notifyPolicy: "silent",
+        currentStep: summary,
+        stateJson: buildStateJson(session, "created", summary),
+        createdAt: session.startedAt,
+        updatedAt: now,
       });
-      this.created = true;
-      this.lastProgressKey = this.progressKey(session, "Starting");
+      this.lastProgressKey = this.progressKey(session, summary);
     } catch (err) {
       warnLifecycleError("create", err);
     }
   }
 
   progress(session: Session): void {
-    if (!this.created || this.finalized) return;
-    const progressSummary = mapSessionLifecycleProgress(session);
-    if (!progressSummary) return;
-    const key = this.progressKey(session, progressSummary);
+    if (!this.flow || this.finalized) return;
+    const summary = mapSessionLifecycleProgress(session);
+    if (!summary) return;
+    const key = this.progressKey(session, summary);
     if (key === this.lastProgressKey) return;
     try {
-      this.lifecycle.progress({
-        taskKind: TASK_KIND,
-        runId: session.id,
-        lastEventAt: Date.now(),
-        progressSummary,
-        eventSummary: progressSummary,
-      });
+      const stateJson = buildStateJson(session, "progress", summary);
+      const updatedAt = Date.now();
+      const mutation = isWaitingLifecycle(session)
+        ? this.taskFlow.setWaiting({
+            flowId: this.flow.flowId,
+            expectedRevision: this.flow.revision,
+            currentStep: summary,
+            stateJson,
+            waitJson: { reason: summary, sessionId: session.id },
+            blockedSummary: summary,
+            updatedAt,
+          })
+        : this.taskFlow.resume({
+            flowId: this.flow.flowId,
+            expectedRevision: this.flow.revision,
+            status: "running",
+            currentStep: summary,
+            stateJson,
+            updatedAt,
+          });
+      this.flow = applyMutation(this.flow, mutation);
       this.lastProgressKey = key;
     } catch (err) {
       warnLifecycleError("progress", err);
@@ -164,26 +241,39 @@ class RuntimeSessionTaskLifecycleSink implements SessionTaskLifecycleSink {
   }
 
   finalize(session: Session): void {
-    if (!this.created || this.finalized) return;
+    if (!this.flow || this.finalized) return;
     const status = mapSessionTaskTerminalStatus(session);
     if (!status) return;
+    const summary = status === "succeeded"
+      ? "Completed"
+      : status === "failed"
+        ? "Failed"
+        : terminalSummary(session.status, session.killReason);
     try {
-      const progressSummary = status === "succeeded"
-        ? "Completed"
-        : status === "failed"
-          ? "Failed"
-          : terminalSummary(session.status, session.killReason);
-      this.lifecycle.finalize({
-        taskKind: TASK_KIND,
-        runId: session.id,
-        status,
-        startedAt: session.startedAt,
-        endedAt: session.completedAt ?? Date.now(),
-        lastEventAt: session.completedAt ?? Date.now(),
-        progressSummary,
+      const endedAt = session.completedAt ?? Date.now();
+      const stateJson = {
+        ...buildStateJson(session, "terminal", summary),
+        terminalStatus: status,
         terminalSummary: terminalSummary(session.status, session.killReason),
         ...(session.status === "failed" && session.error ? { error: session.error } : {}),
-      });
+      };
+      const mutation = status === "succeeded"
+        ? this.taskFlow.finish({
+            flowId: this.flow.flowId,
+            expectedRevision: this.flow.revision,
+            stateJson,
+            updatedAt: endedAt,
+            endedAt,
+          })
+        : this.taskFlow.fail({
+            flowId: this.flow.flowId,
+            expectedRevision: this.flow.revision,
+            stateJson,
+            blockedSummary: terminalSummary(session.status, session.killReason),
+            updatedAt: endedAt,
+            endedAt,
+          });
+      this.flow = applyMutation(this.flow, mutation);
       this.finalized = true;
     } catch (err) {
       warnLifecycleError("finalize", err);
@@ -195,20 +285,14 @@ class RuntimeSessionTaskLifecycleSink implements SessionTaskLifecycleSink {
   }
 }
 
-function isTaskLifecycleRuntime(value: TaskLifecycleRuntime | undefined): value is Required<TaskLifecycleRuntime> {
-  return typeof value?.create === "function"
-    && typeof value.progress === "function"
-    && typeof value.finalize === "function";
-}
-
 export function resolveSessionTaskLifecycle(ctx: ToolContextLike): SessionTaskLifecycleSink {
   if (!ctx.sessionKey?.trim()) return NOOP_SESSION_TASK_LIFECYCLE;
   try {
-    const fromToolContext = getPluginRuntime()?.tasks?.runs?.fromToolContext;
+    const fromToolContext = getPluginRuntime()?.taskFlow?.fromToolContext;
     if (typeof fromToolContext !== "function") return NOOP_SESSION_TASK_LIFECYCLE;
-    const runs = fromToolContext(ctx) as TaskRunsRuntime | undefined;
-    if (!isTaskLifecycleRuntime(runs?.lifecycle)) return NOOP_SESSION_TASK_LIFECYCLE;
-    return new RuntimeSessionTaskLifecycleSink(runs.lifecycle);
+    const taskFlow = fromToolContext(ctx);
+    if (!isManagedTaskFlowRuntime(taskFlow)) return NOOP_SESSION_TASK_LIFECYCLE;
+    return new ManagedTaskFlowSessionTaskLifecycleSink(taskFlow);
   } catch (err) {
     warnLifecycleError("resolve", err);
     return NOOP_SESSION_TASK_LIFECYCLE;

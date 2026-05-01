@@ -23,35 +23,51 @@ function createSession(overrides: Partial<SessionConfig> = {}): Session {
   return new Session({ ...BASE_CONFIG, ...overrides }, "task-lifecycle");
 }
 
-describe("session task lifecycle adapter", () => {
-  it("creates, progresses, and finalizes through the host lifecycle API", () => {
-    const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
-    const lifecycle = {
-      create(params: Record<string, unknown>) {
-        calls.push({ method: "create", params });
-        return { id: "task-1" };
-      },
-      progress(params: Record<string, unknown>) {
-        calls.push({ method: "progress", params });
-        return { id: "task-1" };
-      },
-      finalize(params: Record<string, unknown>) {
-        calls.push({ method: "finalize", params });
-        return { id: "task-1" };
-      },
-    };
+function createTaskFlowRecorder() {
+  const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
+  let revision = 1;
+  const taskFlow = {
+    createManaged(params: Record<string, unknown>) {
+      calls.push({ method: "createManaged", params });
+      return { flowId: "flow-1", revision };
+    },
+    resume(params: Record<string, unknown>) {
+      calls.push({ method: "resume", params });
+      revision += 1;
+      return { applied: true, flow: { flowId: "flow-1", revision } };
+    },
+    setWaiting(params: Record<string, unknown>) {
+      calls.push({ method: "setWaiting", params });
+      revision += 1;
+      return { applied: true, flow: { flowId: "flow-1", revision } };
+    },
+    finish(params: Record<string, unknown>) {
+      calls.push({ method: "finish", params });
+      revision += 1;
+      return { applied: true, flow: { flowId: "flow-1", revision } };
+    },
+    fail(params: Record<string, unknown>) {
+      calls.push({ method: "fail", params });
+      revision += 1;
+      return { applied: true, flow: { flowId: "flow-1", revision } };
+    },
+  };
+  return { calls, taskFlow };
+}
+
+describe("session task lifecycle phase-1 adapter", () => {
+  it("creates, updates, and finalizes a managed TaskFlow through the current SDK runtime", () => {
+    const { calls, taskFlow } = createTaskFlowRecorder();
     const ctx = {
       sessionKey: "agent:main:telegram:group:123",
       deliveryContext: { channel: "telegram", to: "123" },
     };
     let receivedCtx: unknown;
     setPluginRuntime({
-      tasks: {
-        runs: {
-          fromToolContext(input: unknown) {
-            receivedCtx = input;
-            return { lifecycle };
-          },
+      taskFlow: {
+        fromToolContext(input: unknown) {
+          receivedCtx = input;
+          return taskFlow;
         },
       },
     });
@@ -62,43 +78,73 @@ describe("session task lifecycle adapter", () => {
     sink.create(session);
     session.transition("running");
     sink.progress(session);
+    session.markAwaitingUserInput();
+    sink.progress(session);
     session.complete("done");
     sink.finalize(session);
 
     assert.equal(receivedCtx, ctx);
-    assert.deepEqual(calls.map((call) => call.method), ["create", "progress", "finalize"]);
+    assert.deepEqual(calls.map((call) => call.method), [
+      "createManaged",
+      "resume",
+      "setWaiting",
+      "finish",
+    ]);
     assert.deepEqual(calls[0].params, {
-      taskKind: "openclaw-code-agent.session",
-      sourceId: "openclaw-code-agent",
-      runId: session.id,
-      title: "Implement task lifecycle integration",
-      label: "task-lifecycle",
+      controllerId: "openclaw-code-agent",
+      goal: "Implement task lifecycle integration",
       status: "running",
-      startedAt: 100,
-      lastEventAt: calls[0].params.lastEventAt,
-      progressSummary: "Starting",
       notifyPolicy: "silent",
+      currentStep: "Starting",
+      stateJson: {
+        phase: "created",
+        integration: "phase-1-managed-task-flow",
+        sessionId: session.id,
+        sessionName: "task-lifecycle",
+        sessionStatus: "starting",
+        sessionLifecycle: "starting",
+        summary: "Starting",
+      },
+      createdAt: 100,
+      updatedAt: calls[0].params.updatedAt,
     });
-    assert.deepEqual(calls[1].params, {
-      taskKind: "openclaw-code-agent.session",
-      runId: session.id,
-      lastEventAt: calls[1].params.lastEventAt,
-      progressSummary: "Running",
-      eventSummary: "Running",
+    assert.equal(calls[1].params.flowId, "flow-1");
+    assert.equal(calls[1].params.expectedRevision, 1);
+    assert.equal(calls[1].params.currentStep, "Running");
+    assert.equal(calls[2].params.expectedRevision, 2);
+    assert.equal(calls[2].params.currentStep, "Waiting for input");
+    assert.deepEqual(calls[2].params.waitJson, {
+      reason: "Waiting for input",
+      sessionId: session.id,
     });
-    assert.deepEqual(calls[2].params, {
-      taskKind: "openclaw-code-agent.session",
-      runId: session.id,
-      status: "succeeded",
-      startedAt: 100,
-      endedAt: session.completedAt,
-      lastEventAt: session.completedAt,
-      progressSummary: "Completed",
-      terminalSummary: "Completed",
-    });
+    assert.equal(calls[3].params.expectedRevision, 3);
+    assert.equal((calls[3].params.stateJson as Record<string, unknown>).terminalStatus, "succeeded");
   });
 
-  it("no-ops safely when the host lifecycle API is absent", () => {
+  it("fails the managed TaskFlow for failed or cancelled terminal sessions", () => {
+    const { calls, taskFlow } = createTaskFlowRecorder();
+    setPluginRuntime({
+      taskFlow: {
+        fromToolContext() {
+          return taskFlow;
+        },
+      },
+    });
+
+    const sink = resolveSessionTaskLifecycle({
+      sessionKey: "agent:main:telegram:group:123",
+    });
+    const session = createSession();
+    sink.create(session);
+    session.kill("user");
+    sink.finalize(session);
+
+    assert.deepEqual(calls.map((call) => call.method), ["createManaged", "fail"]);
+    assert.equal((calls[1].params.stateJson as Record<string, unknown>).terminalStatus, "cancelled");
+    assert.equal(calls[1].params.blockedSummary, "Cancelled by user");
+  });
+
+  it("no-ops safely when the current TaskFlow runtime is absent", () => {
     setPluginRuntime({});
     const sink = resolveSessionTaskLifecycle({
       sessionKey: "agent:main:telegram:group:123",
@@ -114,7 +160,7 @@ describe("session task lifecycle adapter", () => {
     });
   });
 
-  it("does not call the host API without a bound session key", () => {
+  it("ignores unreleased task run lifecycle shapes instead of depending on them", () => {
     let fromToolContextCalled = false;
     setPluginRuntime({
       tasks: {
@@ -133,6 +179,25 @@ describe("session task lifecycle adapter", () => {
       },
     });
 
+    const sink = resolveSessionTaskLifecycle({
+      sessionKey: "agent:main:telegram:group:123",
+    });
+    sink.create(createSession());
+
+    assert.equal(fromToolContextCalled, false);
+  });
+
+  it("does not call the host API without a bound session key", () => {
+    let fromToolContextCalled = false;
+    setPluginRuntime({
+      taskFlow: {
+        fromToolContext() {
+          fromToolContextCalled = true;
+          return createTaskFlowRecorder().taskFlow;
+        },
+      },
+    });
+
     const sink = resolveSessionTaskLifecycle({});
     sink.create(createSession());
 
@@ -140,22 +205,11 @@ describe("session task lifecycle adapter", () => {
   });
 
   it("de-dupes repeated progress for the same status and lifecycle state", () => {
-    const progressCalls: Record<string, unknown>[] = [];
+    const { calls, taskFlow } = createTaskFlowRecorder();
     setPluginRuntime({
-      tasks: {
-        runs: {
-          fromToolContext() {
-            return {
-              lifecycle: {
-                create() { return { id: "task-1" }; },
-                progress(params: Record<string, unknown>) {
-                  progressCalls.push(params);
-                  return { id: "task-1" };
-                },
-                finalize() { return { id: "task-1" }; },
-              },
-            };
-          },
+      taskFlow: {
+        fromToolContext() {
+          return taskFlow;
         },
       },
     });
@@ -171,8 +225,7 @@ describe("session task lifecycle adapter", () => {
     sink.progress(session);
     sink.progress(session);
 
-    assert.equal(progressCalls.length, 1);
-    assert.equal(progressCalls[0].progressSummary, "Running");
+    assert.deepEqual(calls.map((call) => call.method), ["createManaged", "resume"]);
   });
 
   it("maps terminal statuses precisely", () => {
