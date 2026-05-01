@@ -176,7 +176,27 @@ describe("RuntimeDirectNotificationTransport", () => {
         },
         "🚀 launched",
       ),
-      /channel outbound surface is unavailable.*runtimeVersion=2026\.4\.21.*bounded openclaw message send fallback failed after 5000ms/s,
+      /channel outbound surface is unavailable.*runtimeVersion=2026\.4\.21.*bounded openclaw message send fallback failed within 5000ms timeout/s,
+    );
+  });
+
+  it("reports absent plugin runtime before missing runtime config", async (t) => {
+    setPluginRuntime(undefined);
+    t.mock.method(directNotificationTransportInternals, "execFile", ((_file, _args, _options, callback) => {
+      callback?.(new Error("spawn openclaw ENOENT"), "", "");
+      return {} as any;
+    }) as typeof directNotificationTransportInternals.execFile);
+
+    await assert.rejects(
+      () => new RuntimeDirectNotificationTransport().send(
+        {
+          channel: "telegram",
+          target: "-1003863755361",
+          threadId: "28",
+        },
+        "🚀 launched",
+      ),
+      /OpenClaw plugin runtime is unavailable for direct notification delivery.*fallback failed within 5000ms timeout/s,
     );
   });
 

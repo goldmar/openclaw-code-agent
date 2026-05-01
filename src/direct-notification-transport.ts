@@ -73,14 +73,14 @@ export class RuntimeDirectNotificationTransport implements DirectNotificationTra
     const runtime = getPluginRuntime();
     const cfg = getRuntimeConfig();
     const loadAdapter = runtime?.channel?.outbound?.loadAdapter;
-    if (cfg == null) {
-      throw new MissingRuntimeDirectNotificationCapabilityError(
-        "OpenClaw runtime config snapshot is unavailable for direct notification delivery",
-      );
-    }
     if (!runtime) {
       throw new MissingRuntimeDirectNotificationCapabilityError(
         "OpenClaw plugin runtime is unavailable for direct notification delivery",
+      );
+    }
+    if (cfg == null) {
+      throw new MissingRuntimeDirectNotificationCapabilityError(
+        "OpenClaw runtime config snapshot is unavailable for direct notification delivery",
       );
     }
     if (!runtime.channel) {
@@ -178,7 +178,7 @@ export class RuntimeDirectNotificationTransport implements DirectNotificationTra
           const stderrSuffix = stderr?.trim() ? ` | stderr: ${stderr.trim()}` : "";
           reject(
             new Error(
-              `${reason}; bounded openclaw message send fallback failed after ${FALLBACK_CLI_TIMEOUT_MS}ms: ${errorMessage(err)}${stderrSuffix}`,
+              `${reason}; bounded openclaw message send fallback failed within ${FALLBACK_CLI_TIMEOUT_MS}ms timeout: ${errorMessage(err)}${stderrSuffix}`,
             ),
           );
         },
