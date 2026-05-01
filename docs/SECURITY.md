@@ -8,7 +8,7 @@ This plugin is intentionally an orchestration layer around local developer tooli
 
 - spawn local agent backends
 - run local `git` / `gh` commands for worktree and PR flows
-- shell out to the local `openclaw` CLI for wake and notification delivery
+- use OpenClaw-owned runtime/gateway surfaces for wake and notification delivery
 - optionally run operator-provided verifier shell commands in explicit goal-task flows
 
 Because of that design, static scanners that flag any `child_process` usage will report this plugin. That finding is expected and should be reviewed as an accepted design surface, not treated as accidental malicious behavior.
@@ -17,9 +17,12 @@ Because of that design, static scanners that flag any `child_process` usage will
 
 The reviewed subprocess surfaces are:
 
-- Notification and wake delivery via the local `openclaw` CLI.
+- Wake and fallback delivery via the local `openclaw` CLI.
   Source: `src/wake-delivery-executor.ts`
-  Rationale: delivery stays gateway-owned; the plugin does not create its own network client for lifecycle wakes.
+  Rationale: wake delivery stays gateway-owned; the plugin does not create its own network client for lifecycle wakes.
+- Direct user notifications via OpenClaw runtime channel adapters.
+  Sources: `src/direct-notification-transport.ts`, `src/wake-dispatcher.ts`
+  Rationale: direct delivery stays inside the gateway runtime so channel account, topic/thread routing, and interactive presentation handling remain provider-owned.
 - Codex App Server launch over stdio.
   Source: `src/harness/codex-rpc.ts`
   Rationale: this is the native Codex backend transport.
