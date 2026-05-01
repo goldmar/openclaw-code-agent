@@ -1,13 +1,18 @@
+import * as childProcess from "child_process";
 import { CALLBACK_NAMESPACE } from "./interactive-constants";
 import { getPluginRuntime, getRuntimeConfig } from "./runtime-store";
 import type { NotificationButton } from "./session-interactions";
 import type { NotificationRoute } from "./wake-route-resolver";
+
+const FALLBACK_CLI_TIMEOUT_MS = 5_000;
 
 type RuntimeOutboundAdapter = NonNullable<
   NonNullable<ReturnType<typeof getPluginRuntime>>["channel"]
 >["outbound"] extends { loadAdapter?: (...args: any[]) => Promise<infer T> }
   ? NonNullable<T>
   : never;
+
+type ExecFile = typeof childProcess.execFile;
 
 type MessagePresentation = {
   blocks: Array<{
@@ -28,8 +33,39 @@ export interface DirectNotificationTransport {
   ): Promise<void>;
 }
 
+export const directNotificationTransportInternals = {
+  execFile: childProcess.execFile,
+};
+
+class MissingRuntimeDirectNotificationCapabilityError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "MissingRuntimeDirectNotificationCapabilityError";
+  }
+}
+
 export class RuntimeDirectNotificationTransport implements DirectNotificationTransport {
+  constructor(
+    private readonly execFile: ExecFile = directNotificationTransportInternals.execFile,
+  ) {}
+
   async send(
+    route: NotificationRoute,
+    text: string,
+    buttons?: Array<Array<NotificationButton>>,
+  ): Promise<void> {
+    try {
+      await this.sendViaRuntime(route, text, buttons);
+      return;
+    } catch (err) {
+      if (!(err instanceof MissingRuntimeDirectNotificationCapabilityError)) {
+        throw err;
+      }
+      await this.sendViaBoundedCliFallback(route, text, buttons, err.message);
+    }
+  }
+
+  private async sendViaRuntime(
     route: NotificationRoute,
     text: string,
     buttons?: Array<Array<NotificationButton>>,
@@ -37,8 +73,30 @@ export class RuntimeDirectNotificationTransport implements DirectNotificationTra
     const runtime = getPluginRuntime();
     const cfg = getRuntimeConfig();
     const loadAdapter = runtime?.channel?.outbound?.loadAdapter;
-    if (cfg == null || !loadAdapter) {
-      throw new Error("OpenClaw runtime channel outbound adapter is unavailable");
+    if (cfg == null) {
+      throw new MissingRuntimeDirectNotificationCapabilityError(
+        "OpenClaw runtime config snapshot is unavailable for direct notification delivery",
+      );
+    }
+    if (!runtime) {
+      throw new MissingRuntimeDirectNotificationCapabilityError(
+        "OpenClaw plugin runtime is unavailable for direct notification delivery",
+      );
+    }
+    if (!runtime.channel) {
+      throw new MissingRuntimeDirectNotificationCapabilityError(
+        `OpenClaw plugin runtime channel surface is unavailable for direct notification delivery (runtimeVersion=${formatRuntimeVersion(runtime)})`,
+      );
+    }
+    if (!runtime.channel.outbound) {
+      throw new MissingRuntimeDirectNotificationCapabilityError(
+        `OpenClaw plugin runtime channel outbound surface is unavailable for direct notification delivery (runtimeVersion=${formatRuntimeVersion(runtime)})`,
+      );
+    }
+    if (!loadAdapter) {
+      throw new MissingRuntimeDirectNotificationCapabilityError(
+        `OpenClaw plugin runtime channel outbound loadAdapter is unavailable for direct notification delivery (runtimeVersion=${formatRuntimeVersion(runtime)})`,
+      );
     }
 
     const adapter = await loadAdapter(route.channel);
@@ -99,6 +157,72 @@ export class RuntimeDirectNotificationTransport implements DirectNotificationTra
       payload: renderedPayload,
     });
   }
+
+  private sendViaBoundedCliFallback(
+    route: NotificationRoute,
+    text: string,
+    buttons: Array<Array<NotificationButton>> | undefined,
+    reason: string,
+  ): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const args = buildDirectNotificationCliArgs(route, text, buttons);
+      this.execFile(
+        "openclaw",
+        args,
+        { timeout: FALLBACK_CLI_TIMEOUT_MS, killSignal: "SIGKILL" },
+        (err, _stdout, stderr) => {
+          if (!err) {
+            resolve();
+            return;
+          }
+          const stderrSuffix = stderr?.trim() ? ` | stderr: ${stderr.trim()}` : "";
+          reject(
+            new Error(
+              `${reason}; bounded openclaw message send fallback failed after ${FALLBACK_CLI_TIMEOUT_MS}ms: ${errorMessage(err)}${stderrSuffix}`,
+            ),
+          );
+        },
+      );
+    });
+  }
+}
+
+function buildDirectNotificationCliArgs(
+  route: NotificationRoute,
+  text: string,
+  buttons?: Array<Array<NotificationButton>>,
+): string[] {
+  const presentation = buildPresentation(buttons);
+  const args = [
+    "message",
+    "send",
+    "--channel",
+    route.channel,
+    "--target",
+    route.target,
+    "--message",
+    text,
+  ];
+  if (route.accountId) {
+    args.push("--account", route.accountId);
+  }
+  if (route.threadId) {
+    args.push("--thread-id", route.threadId);
+  }
+  if (presentation) {
+    args.push("--presentation", JSON.stringify(presentation));
+  }
+  return args;
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+function formatRuntimeVersion(runtime: unknown): string {
+  if (!runtime || typeof runtime !== "object") return "unknown";
+  const version = (runtime as { version?: unknown }).version;
+  return typeof version === "string" && version.trim() ? version : "unknown";
 }
 
 export function buildPresentation(
