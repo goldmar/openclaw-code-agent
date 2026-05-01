@@ -797,6 +797,7 @@ export class Session extends EventEmitter {
   }
 
   private applyControlState(next: SessionControlState): void {
+    const previousLifecycle = this.lifecycle;
     this.lifecycle = next.lifecycle;
     this.approvalState = next.approvalState;
     this.approvalExecutionState = next.approvalExecutionState;
@@ -817,5 +818,8 @@ export class Session extends EventEmitter {
     this.approvalPromptDeliveredAt = next.approvalPromptDeliveredAt;
     this.approvalPromptFailedAt = next.approvalPromptFailedAt;
     this.planModeApproved = next.planModeApproved;
+    if (previousLifecycle !== this.lifecycle) {
+      this.emit("lifecycleChange", this, this.lifecycle, previousLifecycle);
+    }
   }
 }

@@ -5,11 +5,13 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { makeAgentLaunchTool } from "../src/tools/agent-launch";
 import { setPluginConfig } from "../src/config";
+import { setPluginRuntime } from "../src/runtime-store";
 import { setSessionManager } from "../src/singletons";
 
 describe("agent_launch tool defaults", () => {
   beforeEach(() => {
     setPluginConfig({});
+    setPluginRuntime(undefined);
     setSessionManager(null);
   });
 
@@ -174,6 +176,59 @@ describe("agent_launch tool defaults", () => {
     assert.equal(spawnConfig?.originChannel, "telegram|bot1|-1003863755361");
     assert.equal(spawnConfig?.originThreadId, 13832);
     assert.equal((spawnConfig?.route as { accountId?: string } | undefined)?.accountId, "bot1");
+  });
+
+  it("attaches a managed TaskFlow lifecycle sink when the current runtime is available", async () => {
+    let spawnConfig: Record<string, unknown> | undefined;
+    const createManagedCalls: Record<string, unknown>[] = [];
+    setPluginRuntime({
+      taskFlow: {
+        fromToolContext() {
+          return {
+            createManaged(params: Record<string, unknown>) {
+              createManagedCalls.push(params);
+              return { flowId: "flow-1", revision: 1 };
+            },
+            resume() { return { applied: true, flow: { flowId: "flow-1", revision: 2 } }; },
+            setWaiting() { return { applied: true, flow: { flowId: "flow-1", revision: 2 } }; },
+            finish() { return { applied: true, flow: { flowId: "flow-1", revision: 2 } }; },
+            fail() { return { applied: true, flow: { flowId: "flow-1", revision: 2 } }; },
+          };
+        },
+      },
+    });
+
+    setSessionManager({
+      resolveHarnessSessionId: (id: string) => id,
+      spawn(config: Record<string, unknown>) {
+        spawnConfig = config;
+        const session = {
+          id: "sess-task-lifecycle",
+          name: "task-lifecycle",
+          prompt: config.prompt,
+          startedAt: 100,
+          status: "starting",
+          lifecycle: "starting",
+          model: config.model,
+        };
+        (config.taskLifecycle as { create: (session: unknown) => void }).create(session);
+        return session;
+      },
+    } as any);
+
+    const tool = makeAgentLaunchTool({
+      workspaceDir: "/tmp",
+      sessionKey: "agent:main:telegram:group:123",
+    } as any);
+    await tool.execute("tool-id", { prompt: "Represent this session in native tasks" });
+
+    assert.ok(spawnConfig?.taskLifecycle);
+    assert.equal(createManagedCalls.length, 1);
+    assert.equal(createManagedCalls[0].controllerId, "openclaw-code-agent");
+    assert.equal(createManagedCalls[0].goal, "Represent this session in native tasks");
+    assert.equal(createManagedCalls[0].status, "running");
+    assert.equal(createManagedCalls[0].notifyPolicy, "silent");
+    assert.equal((createManagedCalls[0].stateJson as Record<string, unknown>).integration, "phase-1-managed-task-flow");
   });
 
   it("falls back to an explicit system route when the tool context has no chat metadata", async () => {

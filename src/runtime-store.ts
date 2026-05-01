@@ -1,10 +1,13 @@
 type TaskFlowHandle = {
   id?: string;
   lookupKey?: string;
+  flowId?: string;
+  revision?: number;
   [key: string]: unknown;
 };
 
 type TaskFlowRuntime = {
+  fromToolContext?: (ctx: { sessionKey?: string; deliveryContext?: unknown }) => unknown;
   get?: (lookup: string) => Promise<TaskFlowHandle | undefined>;
   lookup?: (lookup: string) => Promise<TaskFlowHandle | undefined>;
   show?: (lookup: string) => Promise<TaskFlowHandle | undefined>;
@@ -55,6 +58,7 @@ export interface PluginRuntimeStore {
   taskFlow?: TaskFlowRuntime;
   channel?: RuntimeChannel;
   config?: RuntimeConfigStore;
+  tasks?: Record<string, unknown>;
 }
 
 let pluginRuntime: PluginRuntimeStore | undefined;

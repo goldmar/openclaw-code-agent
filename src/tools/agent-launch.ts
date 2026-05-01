@@ -16,6 +16,7 @@ import {
   resolveAgentLaunchRequest,
   type AgentLaunchParams,
 } from "./agent-launch-resolution";
+import { resolveSessionTaskLifecycle } from "../session-task-lifecycle";
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -213,6 +214,7 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
           originSessionKey,
           route,
           harness,
+          taskLifecycle: resolveSessionTaskLifecycle(ctx),
           worktreeStrategy: params.worktree_strategy,
           worktreeBaseBranch: params.worktree_base_branch,
           worktreePrTargetRepo: params.worktree_pr_target_repo,
