@@ -39,7 +39,7 @@ type ExecFileError = Error & {
 function isExecFileTimeoutError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
   const execError = err as ExecFileError;
-  return execError.killed === true && execError.signal === "SIGTERM";
+  return execError.killed === true && execError.signal === "SIGKILL";
 }
 
 export const wakeDeliveryExecutorInternals = {
@@ -126,104 +126,109 @@ export class WakeDeliveryExecutor {
 
     // Delivery stays gateway-owned: the plugin shells out to the local OpenClaw CLI
     // instead of implementing a separate ad hoc notification transport.
-    wakeDeliveryExecutorInternals.execFile("openclaw", args, { timeout: WAKE_CLI_TIMEOUT_MS }, (err, _stdout, stderr) => {
-      if (this.disposed) {
-        onSettled?.();
-        return;
-      }
-      const elapsedMs = Date.now() - startedAt;
-      if (!err) {
-        this.log("info", "dispatch_succeeded", {
-          label: opts.label,
-          sessionId: opts.sessionId,
-          target: opts.target,
-          phase: opts.phase,
-          messageKind: opts.messageKind,
-          route: opts.routeSummary,
-          ...opts.dispatchContext,
-          attempt,
-          maxAttempts: WAKE_MAX_ATTEMPTS,
-          elapsedMs,
-        });
-        opts.onSuccess?.();
-        onSettled?.();
-        return;
-      }
+    wakeDeliveryExecutorInternals.execFile(
+      "openclaw",
+      args,
+      { timeout: WAKE_CLI_TIMEOUT_MS, killSignal: "SIGKILL" },
+      (err, _stdout, stderr) => {
+        if (this.disposed) {
+          onSettled?.();
+          return;
+        }
+        const elapsedMs = Date.now() - startedAt;
+        if (!err) {
+          this.log("info", "dispatch_succeeded", {
+            label: opts.label,
+            sessionId: opts.sessionId,
+            target: opts.target,
+            phase: opts.phase,
+            messageKind: opts.messageKind,
+            route: opts.routeSummary,
+            ...opts.dispatchContext,
+            attempt,
+            maxAttempts: WAKE_MAX_ATTEMPTS,
+            elapsedMs,
+          });
+          opts.onSuccess?.();
+          onSettled?.();
+          return;
+        }
 
-      const stderrSuffix = stderr?.trim() ? ` | stderr: ${stderr.trim()}` : "";
-      const ambiguousResult = opts.target === "message.send" && isExecFileTimeoutError(err);
-      if (ambiguousResult) {
-        this.log("error", "dispatch_failed", {
-          label: opts.label,
-          sessionId: opts.sessionId,
-          target: opts.target,
-          phase: opts.phase,
-          messageKind: opts.messageKind,
-          route: opts.routeSummary,
-          ...opts.dispatchContext,
-          attempt,
-          maxAttempts: WAKE_MAX_ATTEMPTS,
-          elapsedMs,
-          error: `${errorMessage(err)}${stderrSuffix}`,
-          terminal: true,
-          ambiguousResult: true,
-        });
-        opts.onAmbiguousResult?.();
-        onSettled?.();
-        return;
-      }
-      if (attempt >= WAKE_MAX_ATTEMPTS) {
-        this.log("error", "dispatch_failed", {
-          label: opts.label,
-          sessionId: opts.sessionId,
-          target: opts.target,
-          phase: opts.phase,
-          messageKind: opts.messageKind,
-          route: opts.routeSummary,
-          ...opts.dispatchContext,
-          attempt,
-          maxAttempts: WAKE_MAX_ATTEMPTS,
-          elapsedMs,
-          error: `${errorMessage(err)}${stderrSuffix}`,
-          terminal: true,
-        });
-        opts.onFinalFailure?.();
-        onSettled?.();
-        return;
-      }
+        const stderrSuffix = stderr?.trim() ? ` | stderr: ${stderr.trim()}` : "";
+        const ambiguousResult = opts.target === "message.send" && isExecFileTimeoutError(err);
+        if (ambiguousResult) {
+          this.log("error", "dispatch_failed", {
+            label: opts.label,
+            sessionId: opts.sessionId,
+            target: opts.target,
+            phase: opts.phase,
+            messageKind: opts.messageKind,
+            route: opts.routeSummary,
+            ...opts.dispatchContext,
+            attempt,
+            maxAttempts: WAKE_MAX_ATTEMPTS,
+            elapsedMs,
+            error: `${errorMessage(err)}${stderrSuffix}`,
+            terminal: true,
+            ambiguousResult: true,
+          });
+          opts.onAmbiguousResult?.();
+          onSettled?.();
+          return;
+        }
+        if (attempt >= WAKE_MAX_ATTEMPTS) {
+          this.log("error", "dispatch_failed", {
+            label: opts.label,
+            sessionId: opts.sessionId,
+            target: opts.target,
+            phase: opts.phase,
+            messageKind: opts.messageKind,
+            route: opts.routeSummary,
+            ...opts.dispatchContext,
+            attempt,
+            maxAttempts: WAKE_MAX_ATTEMPTS,
+            elapsedMs,
+            error: `${errorMessage(err)}${stderrSuffix}`,
+            terminal: true,
+          });
+          opts.onFinalFailure?.();
+          onSettled?.();
+          return;
+        }
 
-      const delay = this.retryDelayMs(attempt);
-      this.log("error", "dispatch_retry_scheduled", {
-        label: opts.label,
-        sessionId: opts.sessionId,
-        target: opts.target,
-        phase: opts.phase,
-        messageKind: opts.messageKind,
-        route: opts.routeSummary,
-        ...opts.dispatchContext,
-        attempt,
-        maxAttempts: WAKE_MAX_ATTEMPTS,
-        elapsedMs,
-        retryDelayMs: delay,
-        error: `${errorMessage(err)}${stderrSuffix}`,
-      });
-      const entry: RetryTimerEntry = {
-        timer: setTimeout(() => {
-          const entries = this.pendingRetryTimers.get(opts.sessionId);
-          if (entries) {
-            entries.delete(entry);
-            if (entries.size === 0) this.pendingRetryTimers.delete(opts.sessionId);
-          }
-          this.executeNow(args, opts, onSettled, attempt + 1);
-        }, delay),
-        onCleared: onSettled,
-      };
-      entry.timer.unref?.();
-      if (!this.pendingRetryTimers.has(opts.sessionId)) {
-        this.pendingRetryTimers.set(opts.sessionId, new Set());
-      }
-      this.pendingRetryTimers.get(opts.sessionId)!.add(entry);
-    });
+        const delay = this.retryDelayMs(attempt);
+        this.log("error", "dispatch_retry_scheduled", {
+          label: opts.label,
+          sessionId: opts.sessionId,
+          target: opts.target,
+          phase: opts.phase,
+          messageKind: opts.messageKind,
+          route: opts.routeSummary,
+          ...opts.dispatchContext,
+          attempt,
+          maxAttempts: WAKE_MAX_ATTEMPTS,
+          elapsedMs,
+          retryDelayMs: delay,
+          error: `${errorMessage(err)}${stderrSuffix}`,
+        });
+        const entry: RetryTimerEntry = {
+          timer: setTimeout(() => {
+            const entries = this.pendingRetryTimers.get(opts.sessionId);
+            if (entries) {
+              entries.delete(entry);
+              if (entries.size === 0) this.pendingRetryTimers.delete(opts.sessionId);
+            }
+            this.executeNow(args, opts, onSettled, attempt + 1);
+          }, delay),
+          onCleared: onSettled,
+        };
+        entry.timer.unref?.();
+        if (!this.pendingRetryTimers.has(opts.sessionId)) {
+          this.pendingRetryTimers.set(opts.sessionId, new Set());
+        }
+        this.pendingRetryTimers.get(opts.sessionId)!.add(entry);
+      },
+    );
   }
 
   private executePromiseNow(

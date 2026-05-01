@@ -54,6 +54,7 @@ describe("WakeDeliveryExecutor", () => {
     const executor = new WakeDeliveryExecutor();
     const errors: string[] = [];
     let attempts = 0;
+    let killSignal: unknown;
     let ambiguousResultCount = 0;
     let finalFailureCount = 0;
 
@@ -61,14 +62,15 @@ describe("WakeDeliveryExecutor", () => {
       errors.push([message, ...rest].map((value) => String(value)).join(" "));
     };
 
-    t.mock.method(wakeDeliveryExecutorInternals, "execFile", ((_file, _args, _options, callback) => {
+    t.mock.method(wakeDeliveryExecutorInternals, "execFile", ((_file, _args, options, callback) => {
       attempts += 1;
+      killSignal = options?.killSignal;
       const error = new Error("Command failed: openclaw message send --channel telegram --target 123") as Error & {
         killed: boolean;
         signal: NodeJS.Signals;
       };
       error.killed = true;
-      error.signal = "SIGTERM";
+      error.signal = "SIGKILL";
       callback?.(error, "", "");
       return {} as any;
     }) as typeof wakeDeliveryExecutorInternals.execFile);
@@ -102,6 +104,7 @@ describe("WakeDeliveryExecutor", () => {
     await new Promise((resolve) => setImmediate(resolve));
 
     assert.equal(attempts, 1);
+    assert.equal(killSignal, "SIGKILL");
     assert.equal(ambiguousResultCount, 1);
     assert.equal(finalFailureCount, 0);
     assert.ok(errors.some((line) => line.includes("\"ambiguousResult\":true")));
@@ -110,7 +113,7 @@ describe("WakeDeliveryExecutor", () => {
     assert.ok(!errors.some((line) => line.includes("\"event\":\"dispatch_retry_scheduled\"")));
   });
 
-  it("does not classify non-SIGTERM process failures as ambiguous direct-send timeouts", async (t) => {
+  it("does not classify ordinary process failures as ambiguous direct-send timeouts", async (t) => {
     const executor = new WakeDeliveryExecutor();
     const errors: string[] = [];
     let attempts = 0;
@@ -128,13 +131,7 @@ describe("WakeDeliveryExecutor", () => {
 
     t.mock.method(wakeDeliveryExecutorInternals, "execFile", ((_file, _args, _options, callback) => {
       attempts += 1;
-      const error = new Error("Command failed: openclaw message send --channel telegram --target 123") as Error & {
-        killed: boolean;
-        signal: NodeJS.Signals;
-      };
-      error.killed = true;
-      error.signal = "SIGKILL";
-      callback?.(error, "", "forced failure");
+      callback?.(new Error("Command failed: openclaw message send --channel telegram --target 123"), "", "forced failure");
       return {} as any;
     }) as typeof wakeDeliveryExecutorInternals.execFile);
 
