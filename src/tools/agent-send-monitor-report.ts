@@ -1,12 +1,20 @@
-import { Type } from "@sinclair/typebox";
+import { Type, type TLiteral } from "@sinclair/typebox";
 import { sessionManager } from "../singletons";
 import { resolveSessionRoute } from "../config";
-import { WORKTREE_STRATEGY_SET } from "../types";
+import { WORKTREE_STRATEGIES, WORKTREE_STRATEGY_SET } from "../types";
 import type { OpenClawPluginToolContext, SessionRoute, WorktreeStrategy } from "../types";
 
 function isWorktreeStrategy(value: unknown): value is WorktreeStrategy {
   return typeof value === "string" && WORKTREE_STRATEGY_SET.has(value as WorktreeStrategy);
 }
+
+const WORKTREE_STRATEGY_SCHEMA = Type.Union(
+  WORKTREE_STRATEGIES.map((strategy) => Type.Literal(strategy)) as [
+    TLiteral<WorktreeStrategy>,
+    ...TLiteral<WorktreeStrategy>[],
+  ],
+  { description: "Optional worktree strategy for the planning session. Use auto-pr for monitor follow-up that should branch and open/update a PR after approved implementation." },
+);
 
 interface AgentSendMonitorReportParams {
   report_id: string;
@@ -53,14 +61,7 @@ export function makeAgentSendMonitorReportTool(ctx: OpenClawPluginToolContext) {
       report_text: Type.String({ description: "Final user-facing report text to deliver." }),
       plan_prompt: Type.String({ description: "Prompt to seed into the plan-only session when the user clicks Start Plan." }),
       plan_workdir: Type.String({ description: "Working directory for the planning session." }),
-      plan_worktree_strategy: Type.Optional(Type.Union([
-        Type.Literal("off"),
-        Type.Literal("manual"),
-        Type.Literal("ask"),
-        Type.Literal("delegate"),
-        Type.Literal("auto-merge"),
-        Type.Literal("auto-pr"),
-      ], { description: "Optional worktree strategy for the planning session. Use auto-pr for monitor follow-up that should branch and open/update a PR after approved implementation." })),
+      plan_worktree_strategy: Type.Optional(WORKTREE_STRATEGY_SCHEMA),
       plan_name: Type.Optional(Type.String({ description: "Optional explicit session name for the planning session." })),
       target_channel: Type.Optional(Type.String({ description: "Optional explicit route like 'telegram|-1003863755361'." })),
       target_thread_id: Type.Optional(Type.Union([Type.String(), Type.Number()], { description: "Optional explicit topic/thread id." })),
