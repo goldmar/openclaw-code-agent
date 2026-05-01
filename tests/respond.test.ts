@@ -396,6 +396,88 @@ describe("executeRespond", () => {
     assert.equal(notifications[0].text, "👍 [test-session] Plan approved");
   });
 
+  it("persists active plan approval state before notifying", async () => {
+    const persistedPatches: Array<{ ref: string; patch: Record<string, unknown> }> = [];
+    const notifications: Array<{ text: string; label?: string }> = [];
+    const session = createStubSession({
+      status: "running",
+      lifecycle: "awaiting_plan_decision",
+      pendingPlanApproval: true,
+      approvalState: "pending",
+      requestedPermissionMode: "plan",
+      currentPermissionMode: "plan",
+      planDecisionVersion: 2,
+      actionablePlanDecisionVersion: 2,
+      planModeApproved: false,
+      approvalExecutionState: "awaiting_approval",
+      planApproval: "delegate",
+      sendMessage: async () => {
+        session.lifecycle = "active";
+        session.pendingPlanApproval = false;
+        session.approvalState = "approved";
+        session.currentPermissionMode = "bypassPermissions";
+        session.actionablePlanDecisionVersion = undefined;
+        session.planModeApproved = true;
+        session.approvalExecutionState = "approved_then_implemented";
+      },
+      switchPermissionMode: () => {},
+      controlStateSnapshot: () => ({
+        status: session.status,
+        lifecycle: session.lifecycle,
+        approvalState: session.approvalState,
+        approvalExecutionState: session.approvalExecutionState,
+        worktreeState: session.worktreeState,
+        runtimeState: session.runtimeState,
+        deliveryState: session.deliveryState,
+        requestedPermissionMode: session.requestedPermissionMode,
+        currentPermissionMode: session.currentPermissionMode,
+        pendingPlanApproval: session.pendingPlanApproval,
+        planApprovalContext: session.planApprovalContext,
+        planDecisionVersion: session.planDecisionVersion,
+        actionablePlanDecisionVersion: session.actionablePlanDecisionVersion,
+        canonicalPlanPromptVersion: session.canonicalPlanPromptVersion,
+        approvalPromptRequiredVersion: session.approvalPromptRequiredVersion,
+        approvalPromptVersion: session.approvalPromptVersion,
+        approvalPromptStatus: session.approvalPromptStatus,
+        approvalPromptTransport: session.approvalPromptTransport,
+        approvalPromptMessageKind: session.approvalPromptMessageKind,
+        approvalPromptLastAttemptAt: session.approvalPromptLastAttemptAt,
+        approvalPromptDeliveredAt: session.approvalPromptDeliveredAt,
+        approvalPromptFailedAt: session.approvalPromptFailedAt,
+        planModeApproved: session.planModeApproved,
+      }),
+    });
+    const sm = createStubSessionManager({ "test-id": session });
+    (sm as any).updatePersistedSession = (ref: string, patch: Record<string, unknown>) => {
+      persistedPatches.push({ ref, patch });
+      return true;
+    };
+    (sm as any).notifySession = (_session: any, text: string, label?: string) => {
+      notifications.push({ text, label });
+    };
+
+    const result = await executeRespond(sm, {
+      session: "test-id",
+      message: "Approved. Go ahead.",
+      approve: true,
+      approvalRationale: "The plan matches topic 28 scope.",
+    });
+
+    assert.equal(result.isError, undefined);
+    assert.equal(persistedPatches.length, 1);
+    assert.equal(persistedPatches[0].ref, "test-id");
+    assert.equal(persistedPatches[0].patch.approvalState, "approved");
+    assert.equal(persistedPatches[0].patch.approvalExecutionState, "approved_then_implemented");
+    assert.equal(persistedPatches[0].patch.requestedPermissionMode, "plan");
+    assert.equal(persistedPatches[0].patch.currentPermissionMode, "bypassPermissions");
+    assert.equal(persistedPatches[0].patch.pendingPlanApproval, false);
+    assert.equal(persistedPatches[0].patch.actionablePlanDecisionVersion, undefined);
+    assert.equal(persistedPatches[0].patch.planModeApproved, true);
+    assert.equal(persistedPatches[0].patch.approvalRationale, "The plan matches topic 28 scope.");
+    assert.equal(notifications.length, 1);
+    assert.equal(notifications[0].label, "plan-approved");
+  });
+
   it("does not infer delegated approval rationale from arbitrary message text", async () => {
     const notifications: Array<{ text: string; label?: string }> = [];
     const session = createStubSession({

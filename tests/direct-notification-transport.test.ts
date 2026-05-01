@@ -46,6 +46,87 @@ describe("RuntimeDirectNotificationTransport", () => {
     assert.equal(calls[0]?.threadId, "28");
   });
 
+  it("uses runtime.config.current when no service config snapshot is stored", async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    const cfg = { channels: { telegram: { enabled: true } }, source: "runtime-current" };
+    setPluginRuntime({
+      config: {
+        current: () => cfg,
+      },
+      channel: {
+        outbound: {
+          loadAdapter: async (channelId: string) => {
+            assert.equal(channelId, "telegram");
+            return {
+              sendText: async (ctx: Record<string, unknown>) => {
+                calls.push(ctx);
+              },
+            };
+          },
+        },
+      },
+    });
+
+    await new RuntimeDirectNotificationTransport().send(
+      {
+        channel: "telegram",
+        accountId: "default",
+        target: "-1003863755361",
+        threadId: "28",
+        sessionKey: "agent:main:telegram:group:-1003863755361:topic:28",
+      },
+      "🚀 launched",
+    );
+
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]?.cfg, cfg);
+    assert.equal(calls[0]?.to, "-1003863755361");
+    assert.equal(calls[0]?.accountId, "default");
+    assert.equal(calls[0]?.threadId, "28");
+  });
+
+  it("preserves the service config when a later runtime-only registration occurs", async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    const serviceCfg = { channels: { telegram: { enabled: true } }, source: "service-start" };
+    const runtimeCfg = { channels: { telegram: { enabled: true } }, source: "register" };
+    let runtimeConfigReads = 0;
+    const runtime = {
+      config: {
+        current: () => {
+          runtimeConfigReads += 1;
+          return runtimeCfg;
+        },
+      },
+      channel: {
+        outbound: {
+          loadAdapter: async () => ({
+            sendText: async (ctx: Record<string, unknown>) => {
+              calls.push(ctx);
+            },
+          }),
+        },
+      },
+    };
+
+    setPluginRuntime(runtime, serviceCfg);
+    setPluginRuntime(runtime);
+
+    await new RuntimeDirectNotificationTransport().send(
+      {
+        channel: "telegram",
+        accountId: "default",
+        target: "-1003863755361",
+        threadId: "28",
+        sessionKey: "agent:main:telegram:group:-1003863755361:topic:28",
+      },
+      "✅ completed",
+    );
+
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]?.cfg, serviceCfg);
+    assert.equal(runtimeConfigReads, 0);
+  });
+
   it("preserves interactive buttons through presentation payload delivery", async () => {
     const payloads: unknown[] = [];
     setPluginRuntime({

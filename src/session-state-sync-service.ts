@@ -73,9 +73,12 @@ export class SessionStateSyncService {
     const controlPatch = {
       lifecycle: patch.lifecycle,
       approvalState: patch.approvalState,
+      approvalExecutionState: patch.approvalExecutionState,
       worktreeState: patch.worktreeState,
       runtimeState: patch.runtimeState,
       deliveryState: patch.deliveryState,
+      requestedPermissionMode: patch.requestedPermissionMode,
+      currentPermissionMode: patch.currentPermissionMode,
       pendingPlanApproval: patch.pendingPlanApproval,
       planApprovalContext: patch.planApprovalContext,
       planDecisionVersion: patch.planDecisionVersion,
@@ -89,6 +92,7 @@ export class SessionStateSyncService {
       approvalPromptLastAttemptAt: patch.approvalPromptLastAttemptAt,
       approvalPromptDeliveredAt: patch.approvalPromptDeliveredAt,
       approvalPromptFailedAt: patch.approvalPromptFailedAt,
+      planModeApproved: patch.planModeApproved,
       pendingWorktreeDecisionSince: patch.pendingWorktreeDecisionSince,
     };
 
@@ -99,9 +103,12 @@ export class SessionStateSyncService {
 
     this.assignIfDefined(session, "lifecycle", patch.lifecycle);
     this.assignIfDefined(session, "approvalState", patch.approvalState);
+    this.assignIfDefined(session, "approvalExecutionState", patch.approvalExecutionState);
     this.assignIfDefined(session, "worktreeState", patch.worktreeState);
     this.assignIfDefined(session, "runtimeState", patch.runtimeState);
     this.assignIfDefined(session, "deliveryState", patch.deliveryState);
+    this.assignIfDefined(session, "requestedPermissionMode", patch.requestedPermissionMode);
+    this.assignIfDefined(session, "currentPermissionMode", patch.currentPermissionMode);
     this.assignIfDefined(session, "pendingPlanApproval", patch.pendingPlanApproval);
     this.assignIfDefined(session, "planApprovalContext", patch.planApprovalContext);
     this.assignIfDefined(session, "planDecisionVersion", patch.planDecisionVersion);
@@ -115,6 +122,7 @@ export class SessionStateSyncService {
     this.assignIfDefined(session, "approvalPromptLastAttemptAt", patch.approvalPromptLastAttemptAt);
     this.assignIfDefined(session, "approvalPromptDeliveredAt", patch.approvalPromptDeliveredAt);
     this.assignIfDefined(session, "approvalPromptFailedAt", patch.approvalPromptFailedAt);
+    this.assignIfDefined(session, "planModeApproved" as keyof Session, patch.planModeApproved as never);
   }
 
   private applySessionMetadataPatch(session: Session, patch: Partial<PersistedSessionInfo>): void {

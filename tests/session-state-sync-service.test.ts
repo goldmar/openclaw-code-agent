@@ -148,6 +148,12 @@ describe("SessionStateSyncService", () => {
 
     const updated = service.applySessionPatch("session-2", {
       lifecycle: "awaiting_worktree_decision",
+      approvalState: "approved",
+      approvalExecutionState: "approved_then_implemented",
+      requestedPermissionMode: "plan",
+      currentPermissionMode: "bypassPermissions",
+      pendingPlanApproval: false,
+      planModeApproved: true,
       pendingWorktreeDecisionSince: "2026-04-10T12:00:00.000Z",
       approvalRationale: "needs release review",
       worktreePrTargetRepo: "openai/codex",
@@ -162,6 +168,12 @@ describe("SessionStateSyncService", () => {
     assert.equal(updated, true);
     assert.equal(controlPatches.length, 1);
     assert.equal(controlPatches[0].lifecycle, "awaiting_worktree_decision");
+    assert.equal(controlPatches[0].approvalState, "approved");
+    assert.equal(controlPatches[0].approvalExecutionState, "approved_then_implemented");
+    assert.equal(controlPatches[0].requestedPermissionMode, "plan");
+    assert.equal(controlPatches[0].currentPermissionMode, "bypassPermissions");
+    assert.equal(controlPatches[0].pendingPlanApproval, false);
+    assert.equal(controlPatches[0].planModeApproved, true);
     assert.equal(controlPatches[0].pendingWorktreeDecisionSince, "2026-04-10T12:00:00.000Z");
     assert.equal(liveSession.approvalRationale, "needs release review");
     assert.equal(liveSession.worktreePrTargetRepo, "openai/codex");

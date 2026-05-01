@@ -10,7 +10,7 @@ import {
   type ResumeUnavailableReason,
   type ResumableSessionLike,
 } from "../session-resume";
-import type { PersistedSessionInfo, SessionConfig } from "../types";
+import type { SessionConfig } from "../types";
 
 interface RespondParams {
   session: string;
@@ -148,6 +148,29 @@ function hasLatestActionablePlan(session: Pick<PlanApprovalTarget, "approvalStat
 function canAutoResumePlanApproval(session: PlanApprovalTarget): boolean {
   if (approvalBlockedReason(session)) return false;
   return hasLatestActionablePlan(session) || session.currentPermissionMode === "plan";
+}
+
+function persistPlanApprovalState(sm: SessionManager, session: Session): void {
+  const updatePersistedSession = (sm as SessionManager & {
+    updatePersistedSession?: SessionManager["updatePersistedSession"];
+  }).updatePersistedSession;
+  if (typeof updatePersistedSession !== "function") return;
+
+  const control = session.controlStateSnapshot();
+  updatePersistedSession.call(sm, session.id, {
+    lifecycle: control.lifecycle,
+    approvalState: control.approvalState,
+    approvalExecutionState: control.approvalExecutionState,
+    runtimeState: control.runtimeState,
+    requestedPermissionMode: control.requestedPermissionMode,
+    currentPermissionMode: control.currentPermissionMode,
+    pendingPlanApproval: control.pendingPlanApproval,
+    planApprovalContext: control.planApprovalContext,
+    planDecisionVersion: control.planDecisionVersion,
+    actionablePlanDecisionVersion: control.actionablePlanDecisionVersion,
+    planModeApproved: control.planModeApproved,
+    approvalRationale: session.approvalRationale,
+  });
 }
 
 async function tryAutoResume(
@@ -366,6 +389,9 @@ export async function executeRespond(
     }
 
     await session.sendMessage(params.message);
+    if (isPlanApproval) {
+      persistPlanApprovalState(sm, session);
+    }
 
     // Single notification: plan approval gets a dedicated icon; everything else
     // (including interrupt/redirect) collapses into one ↪️ message with preview.
