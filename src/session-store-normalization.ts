@@ -1,4 +1,5 @@
 import { canonicalizeSessionRoute } from "./session-route";
+import { WORKTREE_STRATEGY_SET } from "./types";
 import type {
   ManagedWorktreeLifecycleState,
   PersistedSessionInfo,
@@ -23,6 +24,7 @@ import type {
   SessionActionKind,
   SessionRoute,
   SessionBackendRef,
+  WorktreeStrategy,
 } from "./types";
 
 export const STORE_SCHEMA_VERSION = 6;
@@ -80,6 +82,12 @@ function toOptionalPlanApprovalContext(value: unknown): PlanApprovalContext | un
     return "plan-mode";
   }
   return undefined;
+}
+
+function toOptionalWorktreeStrategy(value: unknown): WorktreeStrategy | undefined {
+  return typeof value === "string" && WORKTREE_STRATEGY_SET.has(value as WorktreeStrategy)
+    ? value as WorktreeStrategy
+    : undefined;
 }
 
 function toOptionalKillReason(value: unknown): KillReason | undefined {
@@ -439,7 +447,7 @@ export function normalizePersistedEntry(raw: unknown): PersistedSessionInfo | un
     codexApprovalPolicy: toOptionalCodexApprovalPolicy(raw.codexApprovalPolicy),
     worktreePath,
     worktreeBranch: persistedWorktreeBranch,
-    worktreeStrategy: (raw.worktreeStrategy === "off" || raw.worktreeStrategy === "manual" || raw.worktreeStrategy === "ask" || raw.worktreeStrategy === "delegate" || raw.worktreeStrategy === "auto-merge" || raw.worktreeStrategy === "auto-pr") ? raw.worktreeStrategy : undefined,
+    worktreeStrategy: toOptionalWorktreeStrategy(raw.worktreeStrategy),
     worktreeMerged: typeof raw.worktreeMerged === "boolean" ? raw.worktreeMerged : undefined,
     worktreeMergedAt: toOptionalString(raw.worktreeMergedAt),
     worktreePrUrl: toOptionalString(raw.worktreePrUrl),
@@ -483,6 +491,7 @@ export function normalizeActionToken(raw: unknown): SessionActionToken | undefin
     launchName: toOptionalString(raw.launchName),
     launchPrompt: toOptionalString(raw.launchPrompt),
     launchWorkdir: toOptionalString(raw.launchWorkdir),
+    launchWorktreeStrategy: toOptionalWorktreeStrategy(raw.launchWorktreeStrategy),
   };
 }
 

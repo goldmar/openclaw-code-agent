@@ -372,6 +372,7 @@ export function createCallbackHandler(channel: InteractiveChannel = "telegram") 
             prompt: consumedToken.launchPrompt,
             workdir: consumedToken.launchWorkdir,
             name: consumedToken.launchName,
+            worktreeStrategy: consumedToken.launchWorktreeStrategy,
           });
           await replyText(ctx, `▶️ Planning session started: ${session.name} [${session.id}]`);
           break;

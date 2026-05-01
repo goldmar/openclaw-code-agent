@@ -9,7 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Updated the local OpenClaw build/test target to stable `2026.4.26` while keeping the minimum compatibility floor at `>=2026.4.21`.
+- Updated the local OpenClaw build/test target to stable `2026.4.29` while keeping the minimum compatibility floor at `>=2026.4.21`.
+- Declared explicit startup activation so OpenClaw continues loading the plugin's background services and interactive handlers as startup activation becomes stricter.
+- Let monitor-report Start Plan actions carry an explicit worktree strategy so release-follow-up jobs can run in managed branches and auto-open PRs instead of editing local `main`.
 - Added compatibility guard coverage for OpenClaw `v2026.4.26`'s deprecated direct config load/write helper surface; plugin code should continue using injected runtime config and plugin-owned state instead of OpenClaw config mutation helpers.
 
 ## [4.0.1] - 2026-04-27

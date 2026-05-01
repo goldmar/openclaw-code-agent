@@ -24,6 +24,7 @@ import type {
   SessionActionToken,
   SessionRoute,
   GoalTaskState,
+  WorktreeStrategy,
 } from "./types";
 import { SessionStore } from "./session-store";
 import type { SessionStoreOptions } from "./session-store";
@@ -998,6 +999,7 @@ export class SessionManager {
     planName: string;
     planPrompt: string;
     planWorkdir: string;
+    planWorktreeStrategy?: WorktreeStrategy;
   }): void {
     const buttons = this.interactions.getMonitorReportButtons({
       reportId: args.reportId,
@@ -1005,6 +1007,7 @@ export class SessionManager {
       planName: args.planName,
       planPrompt: args.planPrompt,
       planWorkdir: args.planWorkdir,
+      planWorktreeStrategy: args.planWorktreeStrategy,
     });
     this.dispatchSessionNotification(this.buildRoutingProxy({
       id: args.reportId,
@@ -1045,6 +1048,7 @@ export class SessionManager {
     prompt: string;
     workdir: string;
     name?: string;
+    worktreeStrategy?: WorktreeStrategy;
   }): Session {
     const route = args.route ?? { provider: "system", target: "system" };
     return this.spawn({
@@ -1054,7 +1058,7 @@ export class SessionManager {
       harness: getDefaultHarnessName(),
       permissionMode: "plan",
       planApproval: "ask",
-      worktreeStrategy: "off",
+      worktreeStrategy: args.worktreeStrategy ?? "off",
       multiTurn: true,
       route,
       originChannel: this.originChannelFromRoute(route),

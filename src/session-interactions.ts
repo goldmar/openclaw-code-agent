@@ -3,6 +3,7 @@ import type {
   SessionRoute,
   SessionActionKind,
   SessionActionToken,
+  WorktreeStrategy,
 } from "./types";
 import type { SessionActionTokenStore } from "./session-action-token-store";
 
@@ -164,14 +165,16 @@ export class SessionInteractionService {
     planName: string;
     planPrompt: string;
     planWorkdir: string;
+    planWorktreeStrategy?: WorktreeStrategy;
   }): NotificationButton[][] {
-    const { reportId, route, planName, planPrompt, planWorkdir } = args;
+    const { reportId, route, planName, planPrompt, planWorkdir, planWorktreeStrategy } = args;
     return [[
       this.makeActionButton(reportId, "monitor-start-plan", "Start Plan", {
         route,
         launchName: planName,
         launchPrompt: planPrompt,
         launchWorkdir: planWorkdir,
+        launchWorktreeStrategy: planWorktreeStrategy,
       }),
       this.makeActionButton(reportId, "monitor-dismiss", "Dismiss", { route }),
     ]];

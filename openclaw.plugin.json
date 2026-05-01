@@ -4,6 +4,7 @@
   "description": "Multi-session coding-agent orchestration from OpenClaw chat",
   "version": "4.0.1",
   "activation": {
+    "onStartup": true,
     "onCommands": [
       "agent",
       "agent_kill",
