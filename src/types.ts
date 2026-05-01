@@ -1,4 +1,5 @@
 export type { OpenClawPluginToolContext } from "../api";
+import type { SessionTaskLifecycleSink } from "./session-task-lifecycle";
 
 // Plugin types
 
@@ -306,6 +307,8 @@ export interface SessionConfig {
   canUseTool?: CanUseToolCallback;
   /** Explicit backend ref when reconstructing a persisted session against a native backend conversation. */
   backendRef?: SessionBackendRef;
+  /** Optional host task lifecycle bridge for plugin-owned session task records. */
+  taskLifecycle?: SessionTaskLifecycleSink;
 }
 
 /** Plan-approval policy for orchestrator wake flows. */

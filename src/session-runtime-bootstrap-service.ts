@@ -1,5 +1,5 @@
 import type { Session } from "./session";
-import type { SessionConfig, SessionStatus } from "./types";
+import type { SessionConfig, SessionLifecycle, SessionStatus } from "./types";
 
 type SpawnOptions = {
   notifyLaunch?: boolean;
@@ -29,15 +29,24 @@ export class SessionRuntimeBootstrapService {
     options: SpawnOptions = {},
   ): Session {
     this.deps.hydrateSpawnedSession(session, preparedLaunch, config);
+    config.taskLifecycle?.create(session);
 
     session.on("statusChange", (_session: Session, newStatus: SessionStatus) => {
-      if (newStatus === "running" && session.harnessSessionId) {
-        this.deps.markRunning(session);
+      if (newStatus === "running") {
+        if (session.harnessSessionId) {
+          this.deps.markRunning(session);
+        }
+        config.taskLifecycle?.progress(session);
       } else if (newStatus === "completed" || newStatus === "failed" || newStatus === "killed") {
+        config.taskLifecycle?.finalize(session);
         void this.deps.handleTerminal(session).catch((err) => {
           console.error(`[SessionRuntimeBootstrap] handleTerminal threw for session ${session.id}:`, err);
         });
       }
+    });
+
+    session.on("lifecycleChange", (_session: Session, _next: SessionLifecycle) => {
+      config.taskLifecycle?.progress(session);
     });
 
     session.on("turnEnd", (_session: Session, hadQuestion: boolean) => {

@@ -51,10 +51,25 @@ type RuntimeConfigStore = {
   current?: () => unknown;
 };
 
+type RuntimeTaskLifecycle = {
+  create?: (params: Record<string, unknown>) => unknown;
+  progress?: (params: Record<string, unknown>) => unknown;
+  finalize?: (params: Record<string, unknown>) => unknown;
+};
+
+type RuntimeTaskRuns = {
+  fromToolContext?: (ctx: { sessionKey?: string; deliveryContext?: unknown }) => {
+    lifecycle?: RuntimeTaskLifecycle;
+  } | undefined;
+};
+
 export interface PluginRuntimeStore {
   taskFlow?: TaskFlowRuntime;
   channel?: RuntimeChannel;
   config?: RuntimeConfigStore;
+  tasks?: {
+    runs?: RuntimeTaskRuns;
+  };
 }
 
 let pluginRuntime: PluginRuntimeStore | undefined;

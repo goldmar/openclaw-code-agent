@@ -168,6 +168,23 @@ describe("Session event emission", () => {
     assert.equal(snapshot?.reason, "done");
     assert.ok(snapshot?.completedAt);
   });
+
+  it("emits lifecycleChange only when lifecycle changes", () => {
+    const session = new Session(BASE_CONFIG, "test");
+    const events: Array<{ next: string; previous: string }> = [];
+    session.on("lifecycleChange", (_s, next, previous) => {
+      events.push({ next, previous });
+    });
+
+    session.transition("running");
+    session.applyControlPatch({ lifecycle: "active" });
+    session.markAwaitingUserInput();
+
+    assert.deepEqual(events, [
+      { next: "active", previous: "starting" },
+      { next: "awaiting_user_input", previous: "active" },
+    ]);
+  });
 });
 
 describe("Session.duration", () => {

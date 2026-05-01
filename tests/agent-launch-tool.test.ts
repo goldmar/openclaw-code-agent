@@ -5,11 +5,13 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { makeAgentLaunchTool } from "../src/tools/agent-launch";
 import { setPluginConfig } from "../src/config";
+import { setPluginRuntime } from "../src/runtime-store";
 import { setSessionManager } from "../src/singletons";
 
 describe("agent_launch tool defaults", () => {
   beforeEach(() => {
     setPluginConfig({});
+    setPluginRuntime(undefined);
     setSessionManager(null);
   });
 
@@ -174,6 +176,59 @@ describe("agent_launch tool defaults", () => {
     assert.equal(spawnConfig?.originChannel, "telegram|bot1|-1003863755361");
     assert.equal(spawnConfig?.originThreadId, 13832);
     assert.equal((spawnConfig?.route as { accountId?: string } | undefined)?.accountId, "bot1");
+  });
+
+  it("attaches a host task lifecycle sink when runtime tasks lifecycle is available", async () => {
+    let spawnConfig: Record<string, unknown> | undefined;
+    const createCalls: Record<string, unknown>[] = [];
+    setPluginRuntime({
+      tasks: {
+        runs: {
+          fromToolContext() {
+            return {
+              lifecycle: {
+                create(params: Record<string, unknown>) {
+                  createCalls.push(params);
+                  return { id: "task-1" };
+                },
+                progress() { return { id: "task-1" }; },
+                finalize() { return { id: "task-1" }; },
+              },
+            };
+          },
+        },
+      },
+    });
+
+    setSessionManager({
+      resolveHarnessSessionId: (id: string) => id,
+      spawn(config: Record<string, unknown>) {
+        spawnConfig = config;
+        const session = {
+          id: "sess-task-lifecycle",
+          name: "task-lifecycle",
+          prompt: config.prompt,
+          startedAt: 100,
+          model: config.model,
+        };
+        (config.taskLifecycle as { create: (session: unknown) => void }).create(session);
+        return session;
+      },
+    } as any);
+
+    const tool = makeAgentLaunchTool({
+      workspaceDir: "/tmp",
+      sessionKey: "agent:main:telegram:group:123",
+    } as any);
+    await tool.execute("tool-id", { prompt: "Represent this session in native tasks" });
+
+    assert.ok(spawnConfig?.taskLifecycle);
+    assert.equal(createCalls.length, 1);
+    assert.equal(createCalls[0].taskKind, "openclaw-code-agent.session");
+    assert.equal(createCalls[0].sourceId, "openclaw-code-agent");
+    assert.equal(createCalls[0].runId, "sess-task-lifecycle");
+    assert.equal(createCalls[0].label, "task-lifecycle");
+    assert.equal(createCalls[0].notifyPolicy, "silent");
   });
 
   it("falls back to an explicit system route when the tool context has no chat metadata", async () => {
