@@ -118,6 +118,37 @@ describe("SessionStateSyncService", () => {
     assert.equal(liveSession.autoMergeResolverSessionId, undefined);
   });
 
+  it("uses a public control-field setter in the legacy control sync fallback", () => {
+    const controlFields: Array<{ key: string; value: unknown }> = [];
+    const liveSession = {
+      id: "session-1",
+      harnessSessionId: "h-session",
+      name: "session-1",
+      setControlField(key: string, value: unknown) {
+        controlFields.push({ key, value });
+        Object.assign(this, { [key]: value });
+      },
+    } as any;
+
+    const service = new SessionStateSyncService({
+      store: {
+        getPersistedSession: () => undefined,
+        assertPersistedEntry: () => {},
+        saveIndex: () => {},
+      } as any,
+      sessions: new Map(),
+      resolveSession: () => liveSession,
+    });
+
+    const updated = service.applySessionPatch("session-1", {
+      planModeApproved: true,
+    });
+
+    assert.equal(updated, true);
+    assert.deepEqual(controlFields, [{ key: "planModeApproved", value: true }]);
+    assert.equal(liveSession.planModeApproved, true);
+  });
+
   it("applies grouped control, session, and worktree metadata patches consistently", () => {
     const controlPatches: Array<Record<string, unknown>> = [];
     const liveSession = {
@@ -148,6 +179,12 @@ describe("SessionStateSyncService", () => {
 
     const updated = service.applySessionPatch("session-2", {
       lifecycle: "awaiting_worktree_decision",
+      approvalState: "approved",
+      approvalExecutionState: "approved_then_implemented",
+      requestedPermissionMode: "plan",
+      currentPermissionMode: "bypassPermissions",
+      pendingPlanApproval: false,
+      planModeApproved: true,
       pendingWorktreeDecisionSince: "2026-04-10T12:00:00.000Z",
       approvalRationale: "needs release review",
       worktreePrTargetRepo: "openai/codex",
@@ -162,6 +199,12 @@ describe("SessionStateSyncService", () => {
     assert.equal(updated, true);
     assert.equal(controlPatches.length, 1);
     assert.equal(controlPatches[0].lifecycle, "awaiting_worktree_decision");
+    assert.equal(controlPatches[0].approvalState, "approved");
+    assert.equal(controlPatches[0].approvalExecutionState, "approved_then_implemented");
+    assert.equal(controlPatches[0].requestedPermissionMode, "plan");
+    assert.equal(controlPatches[0].currentPermissionMode, "bypassPermissions");
+    assert.equal(controlPatches[0].pendingPlanApproval, false);
+    assert.equal(controlPatches[0].planModeApproved, true);
     assert.equal(controlPatches[0].pendingWorktreeDecisionSince, "2026-04-10T12:00:00.000Z");
     assert.equal(liveSession.approvalRationale, "needs release review");
     assert.equal(liveSession.worktreePrTargetRepo, "openai/codex");

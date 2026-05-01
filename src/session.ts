@@ -792,6 +792,10 @@ export class Session extends EventEmitter {
     this.applyControlState(next);
   }
 
+  setControlField<K extends keyof SessionControlPatch>(key: K, value: SessionControlPatch[K]): void {
+    this.applyControlPatch({ [key]: value } as Pick<SessionControlPatch, K>);
+  }
+
   private applyControlState(next: SessionControlState): void {
     this.lifecycle = next.lifecycle;
     this.approvalState = next.approvalState;
