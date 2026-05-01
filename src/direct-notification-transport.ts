@@ -37,7 +37,7 @@ export class RuntimeDirectNotificationTransport implements DirectNotificationTra
     const runtime = getPluginRuntime();
     const cfg = getRuntimeConfig();
     const loadAdapter = runtime?.channel?.outbound?.loadAdapter;
-    if (!cfg || !loadAdapter) {
+    if (cfg == null || !loadAdapter) {
       throw new Error("OpenClaw runtime channel outbound adapter is unavailable");
     }
 

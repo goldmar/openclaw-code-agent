@@ -258,24 +258,24 @@ export class WakeDispatcher {
     };
 
     const options = {
-        label: `${label}-notify`,
-        sessionId: session.id,
-        target: "message.send",
-        phase: "notify",
+      label: `${label}-notify`,
+      sessionId: session.id,
+      target: "message.send",
+      phase: "notify",
+      routeSummary: this.routes.summary(route),
+      messageKind: "notify",
+      dispatchContext: this.buildDispatchContext({
         routeSummary: this.routes.summary(route),
-        messageKind: "notify",
-        dispatchContext: this.buildDispatchContext({
-          routeSummary: this.routes.summary(route),
-          route,
-          text,
-          buttons,
-        }),
-        orderingKey,
-        onSuccess,
-        onAmbiguousResult: directFailureHandler,
-        onFinalFailure: directFailureHandler,
-        terminalOnFailure: this.directNotifications ? true : undefined,
-      } as const;
+        route,
+        text,
+        buttons,
+      }),
+      orderingKey,
+      onSuccess,
+      onAmbiguousResult: directFailureHandler,
+      onFinalFailure: directFailureHandler,
+      terminalOnFailure: this.directNotifications ? true : undefined,
+    } as const;
 
     if (this.directNotifications) {
       this.executor.executePromise(
