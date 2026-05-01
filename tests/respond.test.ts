@@ -421,31 +421,6 @@ describe("executeRespond", () => {
         session.approvalExecutionState = "approved_then_implemented";
       },
       switchPermissionMode: () => {},
-      controlStateSnapshot: () => ({
-        status: session.status,
-        lifecycle: session.lifecycle,
-        approvalState: session.approvalState,
-        approvalExecutionState: session.approvalExecutionState,
-        worktreeState: session.worktreeState,
-        runtimeState: session.runtimeState,
-        deliveryState: session.deliveryState,
-        requestedPermissionMode: session.requestedPermissionMode,
-        currentPermissionMode: session.currentPermissionMode,
-        pendingPlanApproval: session.pendingPlanApproval,
-        planApprovalContext: session.planApprovalContext,
-        planDecisionVersion: session.planDecisionVersion,
-        actionablePlanDecisionVersion: session.actionablePlanDecisionVersion,
-        canonicalPlanPromptVersion: session.canonicalPlanPromptVersion,
-        approvalPromptRequiredVersion: session.approvalPromptRequiredVersion,
-        approvalPromptVersion: session.approvalPromptVersion,
-        approvalPromptStatus: session.approvalPromptStatus,
-        approvalPromptTransport: session.approvalPromptTransport,
-        approvalPromptMessageKind: session.approvalPromptMessageKind,
-        approvalPromptLastAttemptAt: session.approvalPromptLastAttemptAt,
-        approvalPromptDeliveredAt: session.approvalPromptDeliveredAt,
-        approvalPromptFailedAt: session.approvalPromptFailedAt,
-        planModeApproved: session.planModeApproved,
-      }),
     });
     const sm = createStubSessionManager({ "test-id": session });
     (sm as any).updatePersistedSession = (ref: string, patch: Record<string, unknown>) => {

@@ -59,6 +59,7 @@ export interface PluginRuntimeStore {
 
 let pluginRuntime: PluginRuntimeStore | undefined;
 let runtimeConfig: unknown;
+let runtimeConfigLoaded = false;
 
 function loadCurrentRuntimeConfig(runtime: PluginRuntimeStore | undefined): unknown {
   try {
@@ -73,13 +74,16 @@ export function setPluginRuntime(runtime: unknown, config?: unknown): void {
     pluginRuntime = runtime as PluginRuntimeStore;
     if (arguments.length >= 2) {
       runtimeConfig = config;
-    } else if (runtimeConfig == null) {
+      runtimeConfigLoaded = true;
+    } else if (!runtimeConfigLoaded) {
       runtimeConfig = loadCurrentRuntimeConfig(pluginRuntime);
+      runtimeConfigLoaded = true;
     }
     return;
   }
   pluginRuntime = undefined;
   runtimeConfig = undefined;
+  runtimeConfigLoaded = false;
 }
 
 export function getPluginRuntime(): PluginRuntimeStore | undefined {
@@ -87,8 +91,9 @@ export function getPluginRuntime(): PluginRuntimeStore | undefined {
 }
 
 export function getRuntimeConfig(): unknown {
-  if (runtimeConfig == null) {
+  if (!runtimeConfigLoaded) {
     runtimeConfig = loadCurrentRuntimeConfig(pluginRuntime);
+    runtimeConfigLoaded = true;
   }
   return runtimeConfig;
 }

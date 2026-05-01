@@ -4,7 +4,7 @@ import {
   RuntimeDirectNotificationTransport,
   directNotificationTransportInternals,
 } from "../src/direct-notification-transport";
-import { setPluginRuntime } from "../src/runtime-store";
+import { getRuntimeConfig, setPluginRuntime } from "../src/runtime-store";
 
 describe("RuntimeDirectNotificationTransport", () => {
   afterEach(() => {
@@ -83,6 +83,22 @@ describe("RuntimeDirectNotificationTransport", () => {
     assert.equal(calls[0]?.to, "-1003863755361");
     assert.equal(calls[0]?.accountId, "default");
     assert.equal(calls[0]?.threadId, "28");
+  });
+
+  it("caches a null runtime.config.current result", async () => {
+    let runtimeConfigReads = 0;
+    setPluginRuntime({
+      config: {
+        current: () => {
+          runtimeConfigReads += 1;
+          return null;
+        },
+      },
+    });
+
+    assert.equal(getRuntimeConfig(), null);
+    assert.equal(getRuntimeConfig(), null);
+    assert.equal(runtimeConfigReads, 1);
   });
 
   it("preserves the service config when a later runtime-only registration occurs", async () => {

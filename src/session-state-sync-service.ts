@@ -1,4 +1,5 @@
 import type { Session } from "./session";
+import type { SessionControlPatch } from "./session-state";
 import { getBackendConversationId, getPrimarySessionLookupRef } from "./session-backend-ref";
 import type { PersistedSessionInfo } from "./types";
 
@@ -6,6 +7,10 @@ type PersistedStore = Pick<
   import("./session-store").SessionStore,
   "getPersistedSession" | "assertPersistedEntry" | "saveIndex"
 >;
+
+type ControlFieldSetter = {
+  setControlField?: <K extends keyof SessionControlPatch>(key: K, value: SessionControlPatch[K]) => void;
+};
 
 /**
  * Bridges persisted session patches and live in-memory Session instances.
@@ -122,7 +127,7 @@ export class SessionStateSyncService {
     this.assignIfDefined(session, "approvalPromptLastAttemptAt", patch.approvalPromptLastAttemptAt);
     this.assignIfDefined(session, "approvalPromptDeliveredAt", patch.approvalPromptDeliveredAt);
     this.assignIfDefined(session, "approvalPromptFailedAt", patch.approvalPromptFailedAt);
-    this.assignIfDefined(session, "planModeApproved" as keyof Session, patch.planModeApproved as never);
+    this.setControlFieldIfDefined(session, "planModeApproved", patch.planModeApproved);
   }
 
   private applySessionMetadataPatch(session: Session, patch: Partial<PersistedSessionInfo>): void {
@@ -154,6 +159,16 @@ export class SessionStateSyncService {
   private assignIfDefined<K extends keyof Session>(session: Session, key: K, value: Session[K] | undefined): void {
     if (value !== undefined) {
       session[key] = value;
+    }
+  }
+
+  private setControlFieldIfDefined<K extends keyof SessionControlPatch>(
+    session: Session,
+    key: K,
+    value: SessionControlPatch[K] | undefined,
+  ): void {
+    if (value !== undefined) {
+      (session as Session & ControlFieldSetter).setControlField?.(key, value);
     }
   }
 }
