@@ -101,6 +101,13 @@ function warnLifecycleError(action: string, err: unknown): void {
   console.warn(`[SessionTaskLifecycle] ${action} failed: ${message}`);
 }
 
+function warnLifecycleMutationSkipped(action: string, mutation: ManagedTaskFlowMutationResult): void {
+  if (mutation.applied === false) {
+    const suffix = mutation.code ? ` (${mutation.code})` : "";
+    console.warn(`[SessionTaskLifecycle] ${action} mutation was not applied${suffix}`);
+  }
+}
+
 export function buildSessionTaskTitle(session: Pick<Session, "prompt" | "name">): string {
   const collapsed = session.prompt.trim().replace(/\s+/g, " ");
   return truncateText(collapsed || session.name, TITLE_MAX_LENGTH);
@@ -225,6 +232,8 @@ class ManagedTaskFlowSessionTaskLifecycleSink implements SessionTaskLifecycleSin
             blockedSummary: summary,
             updatedAt,
           })
+        // Current released SDKs use resume as the non-waiting update path too,
+        // so this intentionally carries running-state step/state changes.
         : this.taskFlow.resume({
             flowId: this.flow.flowId,
             expectedRevision: this.flow.revision,
@@ -273,6 +282,7 @@ class ManagedTaskFlowSessionTaskLifecycleSink implements SessionTaskLifecycleSin
             updatedAt: endedAt,
             endedAt,
           });
+      warnLifecycleMutationSkipped("finalize", mutation);
       this.flow = applyMutation(this.flow, mutation);
       this.finalized = true;
     } catch (err) {

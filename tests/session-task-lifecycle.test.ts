@@ -144,6 +144,67 @@ describe("session task lifecycle phase-1 adapter", () => {
     assert.equal(calls[1].params.blockedSummary, "Cancelled by user");
   });
 
+  it("warns once when terminal TaskFlow mutation is not applied and does not retry", () => {
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (message?: unknown) => {
+      warnings.push(String(message));
+    };
+    try {
+      const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
+      const taskFlow = {
+        createManaged(params: Record<string, unknown>) {
+          calls.push({ method: "createManaged", params });
+          return { flowId: "flow-1", revision: 1 };
+        },
+        resume(params: Record<string, unknown>) {
+          calls.push({ method: "resume", params });
+          return { applied: true, flow: { flowId: "flow-1", revision: 2 } };
+        },
+        setWaiting(params: Record<string, unknown>) {
+          calls.push({ method: "setWaiting", params });
+          return { applied: true, flow: { flowId: "flow-1", revision: 2 } };
+        },
+        finish(params: Record<string, unknown>) {
+          calls.push({ method: "finish", params });
+          return {
+            applied: false,
+            code: "revision_conflict",
+            current: { flowId: "flow-1", revision: 2, status: "running" },
+          };
+        },
+        fail(params: Record<string, unknown>) {
+          calls.push({ method: "fail", params });
+          return { applied: true, flow: { flowId: "flow-1", revision: 2 } };
+        },
+      };
+      setPluginRuntime({
+        taskFlow: {
+          fromToolContext() {
+            return taskFlow;
+          },
+        },
+      });
+
+      const sink = resolveSessionTaskLifecycle({
+        sessionKey: "agent:main:telegram:group:123",
+      });
+      const session = createSession();
+      sink.create(session);
+      session.transition("running");
+      session.complete("done");
+      sink.finalize(session);
+      sink.finalize(session);
+
+      assert.deepEqual(calls.map((call) => call.method), ["createManaged", "finish"]);
+      assert.deepEqual(warnings, [
+        "[SessionTaskLifecycle] finalize mutation was not applied (revision_conflict)",
+      ]);
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+
   it("no-ops safely when the current TaskFlow runtime is absent", () => {
     setPluginRuntime({});
     const sink = resolveSessionTaskLifecycle({
