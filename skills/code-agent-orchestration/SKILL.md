@@ -77,6 +77,8 @@ Treat these wake fields as authoritative state when present:
 
 Use those deterministic fields instead of inferring behavior from transcript fragments.
 
+When OpenClaw exposes managed TaskFlow state for a session, treat it as a high-level progress mirror of the plugin session. The plugin session state, `agent_sessions`, `agent_output`, and `agent_worktree_status` remain the authoritative operational surfaces for follow-up decisions.
+
 Approval/execution meanings:
 
 - `approved_then_implemented`: normal approved execution

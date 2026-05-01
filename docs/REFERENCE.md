@@ -43,6 +43,8 @@ openclaw plugins enable openclaw-code-agent
 openclaw gateway restart
 ```
 
+Restart or reload the gateway only as part of normal installation or upgrade. Documentation-only release prep does not require a local gateway restart.
+
 ## First-Run Onboarding
 
 OpenClaw's generic plugin onboarding should stay narrow for this plugin. The first-run questions should be:
@@ -538,9 +540,10 @@ Prefer fully routable channel strings in `fallbackChannel` and `agentChannels`. 
 
 ## Troubleshooting
 
-- No notifications: verify `fallbackChannel` or `agentChannels` use fully routable channel strings, then restart the gateway.
+- No notifications: verify `fallbackChannel` or `agentChannels` use fully routable channel strings. If you changed plugin config on disk, reload or restart the gateway through your normal operator process.
 - Wrong chat receives the update: check `agentChannels` longest-prefix matches and remove ambiguous path entries.
 - Worktree was not created: confirm the workdir is a git repo and there is enough free space for the worktree.
 - Push or PR failed: `agent_pr` always needs a configured remote plus `gh` installed and authenticated. `agent_merge(push=true)` also needs a configured remote. `ask` and `delegate` keep branches local until one of those explicit push paths is chosen; `auto-pr` falls back into the same explicit pending-decision state when automatic PR creation fails.
 - Model launch rejected: update `harnesses.<name>.allowedModels` or the harness default model so they agree.
 - Codex auth weirdness: prefer `forced_login_method = "chatgpt"` and relaunch.
+- Notification delivery failed or timed out: inspect direct-delivery diagnostics and routing metadata first. Do not treat missing interactive buttons as proof that the underlying plan, worktree decision, or runtime state changed.

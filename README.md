@@ -28,14 +28,14 @@ Need the ACPX vs Codex vs code-agent breakdown? See [docs/ACP-COMPARISON.md](doc
 
 The shared substrate is often the local `codex` command and Codex App Server, but the responsibilities are different. This plugin is not an ACP server and it does not depend on OpenClaw's bundled Codex provider to expose its own `codex` harness.
 
-## New In 4.0.1
+## New In 4.1.0
 
-`4.0.1` is the OpenClaw compatibility patch release. It keeps the `4.0.0` messaging-contract cleanup intact while refreshing the verified local build/test target and adding guard coverage for newer OpenClaw plugin-install, embedded-extension, config-helper, and startup-activation behavior.
+`4.1.0` is the managed-lifecycle and notification reliability release. It keeps the `4.0.0` messaging-contract cleanup intact, preserves the `>=2026.4.21` compatibility floor, and adds the release-line fixes that make completion state and direct notification delivery deterministic.
 
-- **Verified OpenClaw target**. Local build/test metadata now targets stable OpenClaw `2026.4.29` while keeping the minimum compatibility floor at `>=2026.4.21`.
-- **Install-registry compatibility**. Guard coverage now confirms plugin code does not read or write OpenClaw's legacy authored install metadata.
-- **Embedded-extension compatibility**. Guard coverage now documents the removed embedded-extension factory path and keeps future tool-result rewriting aligned with OpenClaw's runtime-neutral middleware contract.
-- **Startup activation compatibility**. The manifest explicitly opts into startup loading for controller startup, background services, and interactive handlers.
+- **Managed TaskFlow lifecycle**. When the current OpenClaw runtime exposes managed TaskFlow APIs, code-agent sessions now create, update, wait, and finalize a gateway-owned flow record; older runtimes fall back cleanly without changing session behavior.
+- **Deterministic runtime state**. Completion and no-change paths now surface canonical approval/runtime state instead of asking operators to infer it from transcript text.
+- **Notification delivery reliability**. Direct notification timeouts, fallback failures, and completion-delivery diagnostics are handled explicitly so failed delivery is visible instead of silently hanging.
+- **Verified OpenClaw target**. Local build/test metadata targets stable OpenClaw `2026.4.29` while keeping the minimum compatibility floor at `>=2026.4.21`.
 
 ## From Prompt To Merged Branch
 
@@ -121,7 +121,9 @@ openclaw plugins enable openclaw-code-agent
 openclaw gateway restart
 ```
 
-This release targets the OpenClaw `v2026.4.21` external plugin contract and is verified against the stable `v2026.4.29` build/test target. `package.json` now carries the plugin API compatibility and build metadata used by modern OpenClaw / ClawHub installs, and `openclaw.plugin.json` now advertises the plugin-owned startup and command activation surface plus the onboarding metadata OpenClaw uses during plugin-config setup. Keep those metadata surfaces in sync when bumping the plugin release baseline.
+Restart or reload the gateway only as part of your normal install/upgrade flow; it is not needed for editing docs or preparing a release branch.
+
+This release targets the OpenClaw `v2026.4.21` external plugin contract and is verified against the stable `v2026.4.29` build/test target. `package.json` carries the plugin API compatibility and build metadata used by modern OpenClaw / ClawHub installs, and `openclaw.plugin.json` advertises the plugin-owned startup and command activation surface plus the onboarding metadata OpenClaw uses during plugin-config setup. Keep those metadata surfaces in sync when bumping the plugin release baseline.
 
 The current manifest descriptors stay intentionally narrow: activation advertises startup loading plus only the chat commands this plugin owns, and setup stays minimal with `requiresRuntime: false`. First-run onboarding is driven by the manifest config schema and `uiHints`, not by provider/backend setup descriptors.
 
@@ -205,7 +207,15 @@ For multi-workspace or multi-bot setups, configure `agentChannels`. The full rou
 
 Prefer fully routable channel strings such as `telegram|123456789` or `telegram|my-bot|123456789`. A bare provider like `telegram` is only a weak fallback; the plugin now repairs topic routing from `originSessionKey` when possible, but explicit channels are still the safer default.
 
-### Upgrade Note For 3.2.0
+### Upgrade Notes
+
+For `4.1.0`:
+
+- Managed TaskFlow integration is opportunistic. It uses OpenClaw's current managed-flow runtime when available and degrades to the existing session-only behavior when that surface is absent.
+- Direct notification failures are now surfaced more explicitly. Treat a missing button delivery as a delivery/routing problem, not as evidence that the underlying plan or worktree state changed.
+- Runtime and approval state fields in wakes are authoritative. Prefer them over transcript fragments when deciding whether execution was approved, bypassed, completed, or still waiting.
+
+For `3.2.0`:
 
 If you are upgrading from `3.1.0`, the important behavioral changes are:
 

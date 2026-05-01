@@ -7,12 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.0] - 2026-05-01
+
+### Added
+
+- Wired code-agent sessions into OpenClaw's managed TaskFlow lifecycle when the current SDK runtime exposes the required managed-flow surface, with a no-op fallback for older runtimes.
+- Added session TaskFlow lifecycle coverage for creation, progress, waiting states, terminal success/failure, revision-conflict handling, and runtimes without the managed-flow API.
+
 ### Changed
 
 - Updated the local OpenClaw build/test target to stable `2026.4.29` while keeping the minimum compatibility floor at `>=2026.4.21`.
 - Declared explicit startup activation so OpenClaw continues loading the plugin's background services and interactive handlers as startup activation becomes stricter.
 - Let monitor-report Start Plan actions carry an explicit worktree strategy so release-follow-up jobs can run in managed branches and auto-open PRs instead of editing local `main`.
 - Added compatibility guard coverage for OpenClaw `v2026.4.26`'s deprecated direct config load/write helper surface; plugin code should continue using injected runtime config and plugin-owned state instead of OpenClaw config mutation helpers.
+- Refreshed the Claude Code SDK dependency through the current pnpm lockfile resolution.
+
+### Fixed
+
+- Fixed direct notification delivery and fallback handling so runtime-channel notification failures and timeouts are reported deterministically instead of hanging.
+- Fixed canonical notification runtime-state handling so completion and no-change paths expose deterministic state rather than relying on transcript inference.
+- Improved completion notification delivery diagnostics for direct user-notification paths.
 
 ## [4.0.1] - 2026-04-27
 
@@ -243,7 +257,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Default Codex approval policy to `on-request`.
 - Raised the default session limit.
 
-[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.0.1...HEAD
+[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.1.0...HEAD
+[4.1.0]: https://github.com/goldmar/openclaw-code-agent/compare/v4.0.1...v4.1.0
 [4.0.1]: https://github.com/goldmar/openclaw-code-agent/compare/v4.0.0...v4.0.1
 [4.0.0]: https://github.com/goldmar/openclaw-code-agent/compare/v3.2.1...v4.0.0
 [3.2.1]: https://github.com/goldmar/openclaw-code-agent/compare/v3.2.0...v3.2.1

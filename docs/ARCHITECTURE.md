@@ -98,6 +98,8 @@ Plan-gated sessions also persist deterministic approval/execution context:
 - the current effective permission mode
 - an explicit approval/execution state such as `awaiting_approval`, `approved_then_implemented`, `implemented_without_required_approval`, or `not_plan_gated`
 
+When the OpenClaw runtime exposes the managed TaskFlow API, sessions also mirror high-level lifecycle progress into a gateway-owned flow record. The adapter is intentionally opportunistic: it creates, updates, waits, and finalizes managed flows when the API is present, and otherwise degrades to a no-op so session execution, notifications, and persistence do not depend on unreleased runtime surfaces.
+
 ### Harness Abstraction
 
 `src/harness/types.ts` defines the `AgentHarness` interface. The built-in harnesses are:
@@ -289,13 +291,13 @@ Backend capabilities intentionally differ:
 ## Design Decisions
 
 1. The plugin treats coding sessions as managed background jobs, not as inline chat completions.
-2. Notification transport is gateway-owned. The plugin shells out to OpenClaw instead of inventing its own delivery channel.
+2. Notification transport is gateway-owned. Direct notifications use runtime channel adapters, and wake/fallback paths use OpenClaw gateway/system event surfaces instead of a plugin-owned transport.
 3. `Session` is an event emitter, not a callback bucket. This keeps the lifecycle model explicit.
 4. Subprocess use is an accepted part of the architecture, but it should stay limited to backend launch, worktree/PR operations, gateway-owned delivery, and explicit verifier commands.
-4. Runtime GC and persisted resume are separate concerns. Eviction from memory does not mean losing the session.
-5. Worktree decisions are first-class orchestration states, not afterthoughts bolted on after completion.
-6. Codex and Claude Code share the same session-centric control plane even though their backend transports differ.
-7. Worktree cleanup is lifecycle-first and evidence-based. Tooling and maintenance only remove worktrees when local repository evidence proves a safe resolved state such as `merged`, `released`, `dismissed`, or `no_change`.
+5. Runtime GC and persisted resume are separate concerns. Eviction from memory does not mean losing the session.
+6. Worktree decisions are first-class orchestration states, not afterthoughts bolted on after completion.
+7. Codex and Claude Code share the same session-centric control plane even though their backend transports differ.
+8. Worktree cleanup is lifecycle-first and evidence-based. Tooling and maintenance only remove worktrees when local repository evidence proves a safe resolved state such as `merged`, `released`, `dismissed`, or `no_change`.
 
 ## Config Touchpoints
 
