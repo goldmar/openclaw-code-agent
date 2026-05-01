@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 import type { NotificationRoute } from "./wake-route-resolver";
-import { CALLBACK_NAMESPACE } from "./interactive-constants";
 import type { NotificationButton } from "./session-interactions";
+import { buildPresentation } from "./direct-notification-transport";
 
 export interface WakeTransportOptions {}
 
@@ -37,16 +37,7 @@ export class WakeTransport {
     text: string,
     buttons?: Array<Array<NotificationButton>>,
   ): string[] {
-    const presentationBlocks = (buttons ?? [])
-      .filter((row) => Array.isArray(row) && row.length > 0)
-      .map((row) => ({
-        type: "buttons",
-        buttons: row.map((button) => ({
-          label: button.label,
-          value: this.prefixCallbackData(button.callbackData),
-          ...(button.style ? { style: button.style } : {}),
-        })),
-      }));
+    const presentation = buildPresentation(buttons);
     const args = [
       "message",
       "send",
@@ -63,18 +54,10 @@ export class WakeTransport {
     if (route.threadId) {
       args.push("--thread-id", route.threadId);
     }
-    if (presentationBlocks.length > 0) {
-      args.push("--presentation", JSON.stringify({
-        blocks: presentationBlocks,
-      }));
+    if (presentation) {
+      args.push("--presentation", JSON.stringify(presentation));
     }
     return args;
-  }
-
-  private prefixCallbackData(callbackData: string): string {
-    return callbackData.startsWith(`${CALLBACK_NAMESPACE}:`)
-      ? callbackData
-      : `${CALLBACK_NAMESPACE}:${callbackData}`;
   }
 
   buildSystemEventArgs(text: string): string[] {

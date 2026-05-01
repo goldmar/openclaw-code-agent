@@ -18,7 +18,7 @@ SessionManager
   -> SessionInteractionService
   -> SessionWorktreeController
   -> WakeDispatcher
-  -> openclaw message send
+  -> OpenClaw runtime channel outbound adapter
   -> openclaw gateway call chat.send
   -> openclaw system event --mode now
 
@@ -121,7 +121,7 @@ Boundary note:
 
 `src/wake-dispatcher.ts` owns outbound lifecycle delivery:
 
-- direct user-notification path: `openclaw message send`
+- direct user-notification path: OpenClaw runtime channel outbound adapters
 - wake path: `openclaw gateway call chat.send`
 - fallback path: `openclaw system event --mode now`
 - bounded retries
@@ -133,8 +133,8 @@ Boundary note:
 
 Security boundary note:
 
-- the plugin intentionally shells out to the local `openclaw` CLI for delivery instead of implementing a separate ad hoc network client
-- Telegram and Discord interactive direct notifications now share the same gateway-owned `message.send --presentation` contract; only callback/routing seams remain provider-specific
+- direct notifications use the gateway-owned in-process outbound adapter instead of shelling back into `openclaw message send`, avoiding service re-entry while preserving account and topic/thread routing
+- Telegram and Discord interactive direct notifications share the same gateway-owned presentation contract; only callback/routing details remain provider-specific
 
 ### `CallbackHandler`
 

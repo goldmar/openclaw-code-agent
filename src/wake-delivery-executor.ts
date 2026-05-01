@@ -21,6 +21,7 @@ type ExecuteOptions = {
   onSuccess?: () => void;
   onAmbiguousResult?: () => void;
   onFinalFailure?: () => void;
+  terminalOnFailure?: boolean;
 };
 
 function errorMessage(err: unknown): string {
@@ -176,7 +177,7 @@ export class WakeDeliveryExecutor {
           onSettled?.();
           return;
         }
-        if (attempt >= WAKE_MAX_ATTEMPTS) {
+        if (attempt >= WAKE_MAX_ATTEMPTS || opts.terminalOnFailure === true) {
           this.log("error", "dispatch_failed", {
             label: opts.label,
             sessionId: opts.sessionId,
@@ -283,7 +284,7 @@ export class WakeDeliveryExecutor {
           return;
         }
         const elapsedMs = Date.now() - startedAt;
-        if (attempt >= WAKE_MAX_ATTEMPTS) {
+        if (attempt >= WAKE_MAX_ATTEMPTS || opts.terminalOnFailure === true) {
           this.log("error", "dispatch_failed", {
             label: opts.label,
             sessionId: opts.sessionId,
@@ -297,6 +298,7 @@ export class WakeDeliveryExecutor {
             elapsedMs,
             error: errorMessage(err),
             terminal: true,
+            ...(opts.terminalOnFailure === true && attempt < WAKE_MAX_ATTEMPTS ? { terminalReason: "non_retryable" } : {}),
           });
           opts.onFinalFailure?.();
           onSettled?.();
