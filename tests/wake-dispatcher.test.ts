@@ -246,7 +246,7 @@ if (failConfigRaw) {
         signal: NodeJS.Signals;
       };
       error.killed = true;
-      error.signal = "SIGTERM";
+      error.signal = "SIGKILL";
       callback?.(error, "", "");
       return {} as any;
     }) as typeof wakeDeliveryExecutorInternals.execFile);
@@ -289,7 +289,7 @@ if (failConfigRaw) {
           signal: NodeJS.Signals;
         };
         error.killed = true;
-        error.signal = "SIGTERM";
+        error.signal = "SIGKILL";
         callback?.(error, "", "");
         return {} as any;
       }
@@ -589,6 +589,7 @@ if (failConfigRaw) {
     assert.match(failureLog, /"transportChannel":"telegram"/);
     assert.match(failureLog, /"transportThreadId":"11239"/);
     assert.match(failureLog, /telegram button delivery failed/);
+    dispatcher.dispose();
   });
 
   it("falls back to a direct user notification plus system event when the wake target is unavailable", async () => {
@@ -933,6 +934,7 @@ if (failConfigRaw) {
     assert.match(failureLog, /"buttonsPresent":true/);
     assert.match(failureLog, /"buttonCount":2/);
     assert.match(failureLog, /discord presentation delivery failed/);
+    dispatcher.dispose();
   });
 
   it("delivers paginated user notifications in order and keeps buttons only on the final chunk", async () => {
