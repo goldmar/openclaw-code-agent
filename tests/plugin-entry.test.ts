@@ -263,7 +263,7 @@ describe("plugin entry source", () => {
 
     assert.doesNotMatch(buildScript, /--external:openclaw(?:\s|$)/);
     assert.doesNotMatch(buildScript, /--external:openclaw\/plugin-sdk(?:\s|$)/);
-    assert.doesNotMatch(buildScript, /--external:openclaw\/plugin-sdk\/\*/);
+    assert.doesNotMatch(buildScript, /--external:openclaw\/plugin-sdk\/\*(?:\s|$)/);
     assert.match(buildScript, /--external:@anthropic-ai\/claude-agent-sdk/);
   });
 
