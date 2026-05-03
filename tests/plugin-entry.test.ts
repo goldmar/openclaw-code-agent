@@ -142,6 +142,8 @@ describe("plugin entry source", () => {
       };
       configSchema?: {
         properties?: Record<string, {
+          default?: unknown;
+          description?: string;
           enum?: string[];
         }>;
       };
@@ -172,6 +174,9 @@ describe("plugin entry source", () => {
       "claude-code",
       "codex",
     ]);
+    assert.equal(pluginManifest.configSchema?.properties?.planApproval?.default, "delegate");
+    assert.equal(pluginManifest.configSchema?.properties?.defaultWorktreeStrategy?.default, "delegate");
+    assert.match(pluginManifest.configSchema?.properties?.defaultWorkdir?.description ?? "", /git repository root/);
   });
 
   it("keeps declared tool contracts synced with runtime registrations", () => {
@@ -224,6 +229,7 @@ describe("plugin entry source", () => {
     assert.equal(pluginManifest.uiHints?.defaultHarness?.advanced, undefined);
     assert.equal(pluginManifest.uiHints?.fallbackChannel?.advanced, undefined);
     assert.equal(pluginManifest.uiHints?.fallbackChannel?.sensitive, undefined);
+    assert.match(pluginManifest.uiHints?.defaultWorkdir?.help ?? "", /git repository root/);
 
     assert.equal(pluginManifest.uiHints?.agentChannels?.advanced, true);
     assert.equal(pluginManifest.uiHints?.agentChannels?.sensitive, true);

@@ -1,10 +1,11 @@
-import { describe, it } from "node:test";
+import { beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { pathsReferToSameLocation } from "../src/path-utils";
+import { setPluginConfig } from "../src/config";
 import { prepareSessionBootstrap } from "../src/session-bootstrap";
 import type { PersistedSessionInfo, SessionConfig } from "../src/types";
 import { createWorktree, getBranchName } from "../src/worktree";
@@ -14,6 +15,10 @@ function git(cwd: string, ...args: string[]): string {
 }
 
 describe("prepareSessionBootstrap()", () => {
+  beforeEach(() => {
+    setPluginConfig({});
+  });
+
   it("recovers the original repo dir for resumed worktree sessions with legacy self-referential metadata", () => {
     const repoDir = mkdtempSync(join(tmpdir(), "session-bootstrap-"));
     try {
@@ -102,6 +107,41 @@ describe("prepareSessionBootstrap()", () => {
       assert.equal(bootstrap.worktreePath, undefined);
       assert.equal(bootstrap.worktreeBranchName, undefined);
       assert.equal(bootstrap.effectiveSystemPrompt, config.systemPrompt);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses the delegated plugin worktree default when no strategy is provided", () => {
+    const repoDir = mkdtempSync(join(tmpdir(), "session-bootstrap-default-delegate-"));
+    try {
+      git(repoDir, "init", "-b", "main");
+      git(repoDir, "config", "user.name", "Test User");
+      git(repoDir, "config", "user.email", "test@example.com");
+      writeFileSync(join(repoDir, "README.md"), "hello\n", "utf-8");
+      git(repoDir, "add", "README.md");
+      git(repoDir, "commit", "-m", "init");
+
+      const config: SessionConfig = {
+        prompt: "Implement the fix",
+        workdir: repoDir,
+        harness: "claude-code",
+        multiTurn: true,
+        route: {
+          provider: "telegram",
+          target: "12345",
+          sessionKey: "agent:main:telegram:group:12345",
+        },
+      };
+
+      const bootstrap = prepareSessionBootstrap(config, "default-delegate", () => undefined);
+
+      assert.equal(config.worktreeStrategy, "delegate");
+      assert.equal(bootstrap.originalWorkdir, repoDir);
+      assert.ok(bootstrap.worktreePath, "default delegate strategy should create a worktree");
+      assert.equal(bootstrap.actualWorkdir, bootstrap.worktreePath);
+      assert.ok(bootstrap.worktreeBranchName, "default delegate worktree should have a branch");
+      assert.match(bootstrap.effectiveSystemPrompt ?? "", /You are working in a git worktree/);
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }
