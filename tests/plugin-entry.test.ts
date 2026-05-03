@@ -248,11 +248,23 @@ describe("plugin entry source", () => {
     const apiSource = readFileSync(join(rootDir, "api.ts"), "utf8");
 
     assert.match(apiSource, /definePluginEntry/);
-    assert.match(apiSource, /from "openclaw\/plugin-sdk\/core"/);
+    assert.match(apiSource, /from "openclaw\/plugin-sdk\/plugin-entry"/);
     assert.match(indexSource, /export default definePluginEntry\(\{/);
     assert.match(indexSource, /id: "openclaw-code-agent"/);
     assert.match(indexSource, /name: "OpenClaw Code Agent"/);
     assert.match(indexSource, /register,\s*\n\}\);/);
+  });
+
+  it("bundles the OpenClaw plugin SDK entry helper into the release artifact", () => {
+    const packageJson = JSON.parse(readFileSync(join(rootDir, "package.json"), "utf8")) as {
+      scripts?: Record<string, string>;
+    };
+    const buildScript = packageJson.scripts?.build ?? "";
+
+    assert.doesNotMatch(buildScript, /--external:openclaw(?:\s|$)/);
+    assert.doesNotMatch(buildScript, /--external:openclaw\/plugin-sdk(?:\s|$)/);
+    assert.doesNotMatch(buildScript, /--external:openclaw\/plugin-sdk\/\*/);
+    assert.match(buildScript, /--external:@anthropic-ai\/claude-agent-sdk/);
   });
 
   it("registers interactive handlers and does not register plugin HTTP routes", () => {

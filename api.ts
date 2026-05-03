@@ -5,7 +5,7 @@ export {
   type OpenClawPluginService,
   type OpenClawPluginServiceContext,
   type PluginLogger,
-} from "openclaw/plugin-sdk/core";
+} from "openclaw/plugin-sdk/plugin-entry";
 
 // OpenClaw v2026.4.8 widened `registerInteractiveHandler(...)` to a generic
 // registration type, so `Parameters<...>[0]` no longer preserves the concrete
