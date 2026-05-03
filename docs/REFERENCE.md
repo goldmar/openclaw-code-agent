@@ -41,9 +41,12 @@ Old Codex SDK persisted sessions are archived separately and are not resumed. Ap
 openclaw plugins install openclaw-code-agent
 openclaw plugins enable openclaw-code-agent
 openclaw gateway restart
+openclaw plugins inspect openclaw-code-agent --runtime --json
 ```
 
 Restart or reload the gateway only as part of normal installation or upgrade. Documentation-only release prep does not require a local gateway restart.
+
+Runtime inspection after the restart should report this plugin's commands, service, and tool contracts without diagnostics. If `tools.effective` or `tools.invoke` cannot see `agent_launch` or `agent_sessions`, update/reinstall the plugin and restart the gateway so the installed manifest and bundle match the release.
 
 ## First-Run Onboarding
 
