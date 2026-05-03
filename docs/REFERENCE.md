@@ -56,7 +56,7 @@ OpenClaw's generic plugin onboarding should stay narrow for this plugin. The fir
 - `defaultHarness`
 - `fallbackChannel`
 
-Those three choices are enough to get to a predictable first launch without forcing the operator through multi-workspace routing or policy decisions too early.
+Those three choices are enough to get to a predictable first launch without forcing the operator through multi-workspace routing or policy decisions too early. Because `defaultWorktreeStrategy` now defaults to `delegate`, choose a git repository root for `defaultWorkdir` unless you plan to disable worktrees through Advanced setup or config.
 
 ### Harness Readiness Guidance
 
@@ -110,6 +110,8 @@ The rest can stay at defaults for the first run:
 - `planApproval: "delegate"`
 - `defaultWorktreeStrategy: "delegate"`
 
+With those defaults, new sessions expect a git repository so they can create an isolated worktree. For non-git directories, set `defaultWorktreeStrategy: "off"` globally or pass `worktree_strategy: "off"` for that launch.
+
 If you use Codex, recommend this in `~/.codex/config.toml`:
 
 ```toml
@@ -158,6 +160,8 @@ These belong in the first-run setup flow:
 - `defaultWorkdir`
 - `defaultHarness`
 - `fallbackChannel`
+
+`defaultWorkdir` should normally be a git repository root because delegated worktree isolation is the default first-run behavior.
 
 ### Advanced / Manual Fields
 

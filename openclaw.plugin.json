@@ -113,7 +113,7 @@
       },
       "defaultWorkdir": {
         "type": "string",
-        "description": "Default working directory for new sessions"
+        "description": "Default working directory for new sessions. Because the default worktree strategy is 'delegate', this should normally be a git repository root unless defaultWorktreeStrategy is changed to 'off'."
       },
       "idleTimeoutMinutes": {
         "type": "number",
@@ -205,7 +205,7 @@
     },
     "defaultWorkdir": {
       "label": "Default working directory",
-      "help": "Base directory used for new sessions when agent_launch does not provide a workdir.",
+      "help": "Base directory used for new sessions when agent_launch does not provide a workdir. With the default delegated worktree strategy, choose a git repository root; use the advanced worktree strategy setting to disable worktrees for non-git directories.",
       "placeholder": "/home/user/project"
     },
     "harnesses": {

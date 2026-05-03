@@ -134,11 +134,11 @@ The current manifest descriptors stay intentionally narrow: activation advertise
 
 In OpenClaw's Manual setup flow, the plugin should only ask for three first-run decisions:
 
-- `defaultWorkdir`: the repo or workspace path you expect to launch from most often
+- `defaultWorkdir`: the git repo path you expect to launch from most often
 - `defaultHarness`: whether your default harness is `claude-code` or `codex`
 - `fallbackChannel`: an optional but recommended fully routable notification target for async updates
 
-Everything else stays advanced/manual. In particular, `agentChannels`, per-harness model policy, permission defaults, and worktree policy are intentionally deferred until after the first successful launch, even though plan approval and worktree follow-through now default to delegated behavior.
+Everything else stays advanced/manual. In particular, `agentChannels`, per-harness model policy, permission defaults, and worktree policy are intentionally deferred until after the first successful launch, even though plan approval and worktree follow-through now default to delegated behavior. If your first launch must run outside a git repo, expand Advanced during setup or edit config afterwards and set `defaultWorktreeStrategy` to `off`.
 
 Add a minimal config block under `plugins.entries["openclaw-code-agent"]` in `~/.openclaw/openclaw.json`:
 
@@ -175,6 +175,8 @@ You can leave the advanced settings at their defaults for the first run. The plu
 - `permissionMode: "plan"`
 - `planApproval: "delegate"`
 - `defaultWorktreeStrategy: "delegate"`
+
+Because delegated worktree follow-through is now the default, the first-run `defaultWorkdir` should normally point at a git repository. Non-git workdirs are still supported by setting `defaultWorktreeStrategy: "off"` globally or by launching with `worktree_strategy: "off"`.
 
 If you run Codex sessions, keep Codex on the ChatGPT auth path:
 
