@@ -228,6 +228,39 @@ describe("SessionStore path resolution", () => {
     assert.equal(persisted?.harnessSessionId, "h-GccpSIqJ");
     assert.equal(persisted?.sessionId, "GccpSIqJ");
     assert.equal(persisted?.status, "killed");
+    assert.equal(persisted?.lifecycle, "suspended");
+    assert.equal(persisted?.runtimeState, "stopped");
+  });
+
+  it("normalizes recovered running rows with active lifecycle to suspended", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-store-running-lifecycle-"));
+    const indexPath = join(dir, "sessions.json");
+    writeStore(indexPath, [{
+      sessionId: "recovered-active",
+      harnessSessionId: "h-recovered-active",
+      backendRef: {
+        kind: "codex-app-server",
+        conversationId: "backend-recovered-active",
+      },
+      name: "recovered-active",
+      prompt: "p",
+      workdir: "/tmp",
+      status: "running",
+      lifecycle: "active",
+      runtimeState: "live",
+      costUsd: 0,
+    }]);
+
+    const store = new SessionStore({
+      indexPath,
+      env: {},
+    });
+
+    const persisted = store.getPersistedSession("recovered-active");
+    assert.equal(persisted?.status, "killed");
+    assert.equal(persisted?.lifecycle, "suspended");
+    assert.equal(persisted?.runtimeState, "stopped");
+    assert.equal(persisted?.resumable, true);
   });
 
   it("resolves persisted sessions by backend conversation id before legacy harness id", () => {
