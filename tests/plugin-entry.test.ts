@@ -199,8 +199,12 @@ describe("plugin entry source", () => {
     };
     const indexSource = readFileSync(join(rootDir, "index.ts"), "utf8");
     const registeredToolNames = Array.from(
-      indexSource.matchAll(/registerTool\([\s\S]*?\{\s*optional:\s*false,\s*name:\s*"([^"]+)"/g),
-      (match) => match[1],
+      indexSource.matchAll(/registerTool\([\s\S]*?,\s*\{([^}]*)\}\s*\)/g),
+      (match) => {
+        const name = match[1]?.match(/\bname:\s*"([^"]+)"/)?.[1];
+        assert.ok(name, `missing explicit tool name in registerTool options: ${match[1] ?? ""}`);
+        return name;
+      },
     );
 
     assert.deepEqual(pluginManifest.contracts?.tools, expectedToolNames);

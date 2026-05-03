@@ -116,7 +116,7 @@ export function register(api: OpenClawPluginApi): void {
   let gc: GoalController | null = null;
   const registerTool = api.registerTool as (
     tool: (ctx: OpenClawPluginToolContext) => unknown,
-    options?: { optional?: boolean; name?: string; names?: string[] },
+    options?: { optional?: boolean; name?: string },
   ) => void;
   setPluginRuntime(api.runtime);
 
