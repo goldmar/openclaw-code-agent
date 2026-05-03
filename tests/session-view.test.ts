@@ -277,6 +277,47 @@ describe("session-view app layer", () => {
     assert.match(text, /evicted from runtime cache — showing persisted output/);
   });
 
+  it("reports recovered persisted sessions even when no output path is stored", () => {
+    const sm: any = {
+      resolve: () => undefined,
+      getPersistedSession: () => ({
+        sessionId: "Pb1J9UBH",
+        harnessSessionId: "backend-019deedc",
+        name: "recovered-codex",
+        status: "killed",
+        lifecycle: "suspended",
+        costUsd: 0,
+      }),
+    };
+
+    const text = getSessionOutputText(sm, "Pb1J9UBH");
+    assert.match(text, /Session: recovered-codex \| Status: KILLED \| Phase: suspended/);
+    assert.match(text, /persisted session metadata recovered; no output file was recorded/);
+    assert.match(text, /no outputPath is stored/);
+    assert.doesNotMatch(text, /not found/);
+  });
+
+  it("reports recovered persisted sessions when the stored output file is missing", () => {
+    const missingOutputPath = "/tmp/openclaw-code-agent-missing-output.log";
+    const sm: any = {
+      resolve: () => undefined,
+      getPersistedSession: () => ({
+        sessionId: "missing-output",
+        harnessSessionId: "h-missing-output",
+        name: "missing-output",
+        status: "killed",
+        lifecycle: "suspended",
+        costUsd: 0,
+        outputPath: missingOutputPath,
+      }),
+    };
+
+    const text = getSessionOutputText(sm, "missing-output");
+    assert.match(text, /Status: KILLED \| Phase: suspended/);
+    assert.match(text, /output file is missing at/);
+    assert.doesNotMatch(text, /not found/);
+  });
+
   it("clamps invalid line counts to the default window", () => {
     const sm: any = {
       resolve: () => ({

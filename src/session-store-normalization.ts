@@ -407,7 +407,7 @@ export function normalizePersistedEntry(raw: unknown): PersistedSessionInfo | un
     createdAt: toOptionalNumber(raw.createdAt),
     completedAt: toOptionalNumber(raw.completedAt),
     status,
-    lifecycle: recoveredFromRunning ? (toOptionalLifecycle(raw.lifecycle) ?? "suspended") : toOptionalLifecycle(raw.lifecycle),
+    lifecycle: recoveredFromRunning ? "suspended" : toOptionalLifecycle(raw.lifecycle),
     approvalState: toOptionalApprovalState(raw.approvalState),
     worktreeState: toOptionalWorktreeState(raw.worktreeState),
     runtimeState: recoveredFromRunning ? "stopped" : toOptionalRuntimeState(raw.runtimeState),

@@ -126,11 +126,22 @@ function outputHeaderForActiveSession(session: ActiveSessionView): string {
 /** Build a header line for persisted sessions loaded from disk/tmp output. */
 function outputHeaderForPersistedSession(persisted: PersistedSessionInfo): string {
   const displayName = persisted.name || persisted.sessionId || persistedBackendConversationId(persisted) || "unknown";
+  const phaseStr = persisted.lifecycle ? ` | Phase: ${persisted.lifecycle}` : "";
+  const source = persisted.outputPath
+    ? `(retrieved from ${persisted.outputPath} — evicted from runtime cache — showing persisted output)`
+    : "(persisted session metadata recovered; no output file was recorded)";
   return [
-    `Session: ${displayName} | Status: ${persisted.status.toUpperCase()} | Cost: $${persisted.costUsd.toFixed(4)}`,
-    `(retrieved from ${persisted.outputPath} — evicted from runtime cache — showing persisted output)`,
+    `Session: ${displayName} | Status: ${persisted.status.toUpperCase()}${phaseStr} | Cost: $${persisted.costUsd.toFixed(4)}`,
+    source,
     `${"─".repeat(60)}`,
   ].join("\n");
+}
+
+function unavailablePersistedOutputText(persisted: PersistedSessionInfo, reason: string): string {
+  const header = outputHeaderForPersistedSession(persisted);
+  const backendConversationId = persistedBackendConversationId(persisted);
+  const backendHint = backendConversationId ? `\nBackend session: ${backendConversationId}` : "";
+  return `${header}\n(no persisted output available: ${reason})${backendHint}`;
 }
 
 /** Render diagnostics when a session has no output buffer yet. */
@@ -166,6 +177,12 @@ export function getSessionOutputText(
         const message = err instanceof Error ? err.message : String(err);
         return `Error: Session "${ref}" was cleaned up (expired) and output file could not be read: ${message}`;
       }
+    }
+    if (persisted?.outputPath) {
+      return unavailablePersistedOutputText(persisted, `output file is missing at ${persisted.outputPath}`);
+    }
+    if (persisted) {
+      return unavailablePersistedOutputText(persisted, "no outputPath is stored for this recovered session");
     }
     return `Error: Session "${ref}" not found.`;
   }
