@@ -56,6 +56,7 @@ export let pluginConfig: PluginConfig = {
   maxAutoResponds: 10,
   permissionMode: "plan",
   planApproval: "delegate",
+  defaultWorktreeStrategy: "delegate",
   harnesses: {
     "claude-code": { ...BUILTIN_HARNESS_CONFIGS["claude-code"] },
     codex: { ...BUILTIN_HARNESS_CONFIGS.codex },
