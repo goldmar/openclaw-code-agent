@@ -56,6 +56,8 @@ describe("plugin entry source", () => {
     assert.equal(packageJson.peerDependencies?.openclaw, ">=2026.4.21");
     assert.equal(packageJson.devDependencies?.openclaw, "2026.5.2");
     assert.equal(packageJson.pnpm?.overrides?.["fast-xml-parser@>=5.0.0 <5.7.0"], ">=5.7.0");
+    assert.equal(packageJson.pnpm?.overrides?.["@anthropic-ai/vertex-sdk>google-auth-library"], "10.6.2");
+    assert.doesNotMatch(readFileSync(join(rootDir, "pnpm-lock.yaml"), "utf8"), /uuid@9\.0\.1/);
   });
 
   it("does not use the removed OpenClaw embedded-extension factory API", () => {
