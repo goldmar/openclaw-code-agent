@@ -12,8 +12,8 @@ Canonical operator reference for `openclaw-code-agent`: install, configuration, 
 | `harnesses.codex.allowedModels` | `["gpt-5.5", "gpt-5.5-pro"]` |
 | `harnesses.codex.reasoningEffort` | `medium` |
 | `permissionMode` | `plan` |
-| `planApproval` | `ask` |
-| `defaultWorktreeStrategy` | `off` |
+| `planApproval` | `delegate` |
+| `defaultWorktreeStrategy` | `delegate` |
 | `maxSessions` | `20` |
 | `maxAutoResponds` | `10` |
 | `idleTimeoutMinutes` | `15` |
@@ -28,7 +28,7 @@ Current releases treat persisted session storage as new-schema-only. If startup 
 
 If you are upgrading from `3.1.0`, note these behavior changes:
 
-- `defaultWorktreeStrategy` is back to `off` unless you opt in at launch time or via config.
+- `defaultWorktreeStrategy` now defaults to `delegate`, so fresh launches use isolated worktrees and orchestrator-led follow-through unless you opt out at launch time or via config.
 - `auto-merge` now gets one autonomous conflict-resolution attempt and retries the merge automatically before escalating.
 - Completion wakes and no-change outcomes are deterministic and expose explicit approval/execution state for plan-gated sessions.
 - Worktree cleanup/status are lifecycle-first and can now resolve branches as `released` when the content already landed on base after rebase, squash, or cherry-pick.
@@ -107,8 +107,8 @@ Add this under `plugins.entries["openclaw-code-agent"]` in `~/.openclaw/openclaw
 The rest can stay at defaults for the first run:
 
 - `permissionMode: "plan"`
-- `planApproval: "ask"`
-- `defaultWorktreeStrategy: "off"`
+- `planApproval: "delegate"`
+- `defaultWorktreeStrategy: "delegate"`
 
 If you use Codex, recommend this in `~/.codex/config.toml`:
 
@@ -198,8 +198,8 @@ For Codex, approval behavior is fixed to the supported execution path and is not
 
 | Mode | Meaning |
 | --- | --- |
-| `ask` | Default. Notify the user directly with the full plan and wait for explicit approval or revision |
-| `delegate` | Wake the orchestrator, require a full-plan review, then let it either approve directly or escalate back to the user with the same approval buttons |
+| `ask` | Notify the user directly with the full plan and wait for explicit approval or revision |
+| `delegate` | Default. Wake the orchestrator, require a full-plan review, then let it either approve directly or escalate back to the user with the same approval buttons |
 | `approve` | Auto-approve after verification |
 
 In `ask`, the plugin sends action buttons for `Approve`, `Revise`, and `Reject` when interactive callbacks are available, and the user-facing message includes the full plan text rather than the normal preview budget. Each session keeps one canonical actionable approval prompt per plan review version; later reminders for that same version are non-canonical reminders, not a fresh approval cycle. The same flow still works through plain replies. In `delegate`, the orchestrator must read the full plan with `agent_output(..., full=true)` before approving anything.

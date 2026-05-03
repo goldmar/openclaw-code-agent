@@ -6,8 +6,8 @@
 
 `openclaw-code-agent` is the OpenClaw plugin for running Claude Code and Codex as managed background coding sessions from chat. Launch work from Telegram, Discord, or any OpenClaw-supported channel, review the plan before execution, keep the job isolated in its own git worktree, and merge or open a PR without leaving the thread.
 
-- **Plan -> Review -> Execute**. `plan` is the default launch mode, with `ask`, `delegate`, and `approve` deciding how much plan approval autonomy the orchestrator gets.
-- **Optional worktree isolation**. New sessions default to `off`; opt into `ask`, `delegate`, `auto-merge`, or `auto-pr` when you want worktree-backed branch isolation and post-run branch handling.
+- **Plan -> Review -> Execute**. `plan` is the default launch mode, and plan approval defaults to `delegate` so the orchestrator reviews the full plan before approving or escalating to the user.
+- **Delegated worktree isolation**. New sessions default to `delegate`; opt into `ask`, `off`, `manual`, `auto-merge`, or `auto-pr` when you want a different branch follow-through policy.
 - **State-driven decision UX**. `ask` sends explicit action buttons for **Merge locally**, **Create PR**, **Decide later**, and **Dismiss**. The same action-token model now backs both Telegram and Discord interactive callbacks.
 - **Lifecycle-first cleanup**. Worktrees are treated as temporary task sandboxes. The plugin distinguishes `merged` from `released` so different-SHA branches whose content already landed on the base branch can still be cleaned safely.
 - **Full session lifecycle**. Suspend, resume, fork, interrupt, and recover sessions across restarts with persisted metadata and output.
@@ -138,7 +138,7 @@ In OpenClaw's Manual setup flow, the plugin should only ask for three first-run 
 - `defaultHarness`: whether your default harness is `claude-code` or `codex`
 - `fallbackChannel`: an optional but recommended fully routable notification target for async updates
 
-Everything else stays advanced/manual. In particular, `agentChannels`, per-harness model policy, permission defaults, and worktree policy are intentionally deferred until after the first successful launch.
+Everything else stays advanced/manual. In particular, `agentChannels`, per-harness model policy, permission defaults, and worktree policy are intentionally deferred until after the first successful launch, even though plan approval and worktree follow-through now default to delegated behavior.
 
 Add a minimal config block under `plugins.entries["openclaw-code-agent"]` in `~/.openclaw/openclaw.json`:
 
@@ -173,8 +173,8 @@ Add a minimal config block under `plugins.entries["openclaw-code-agent"]` in `~/
 You can leave the advanced settings at their defaults for the first run. The plugin defaults to:
 
 - `permissionMode: "plan"`
-- `planApproval: "ask"`
-- `defaultWorktreeStrategy: "off"`
+- `planApproval: "delegate"`
+- `defaultWorktreeStrategy: "delegate"`
 
 If you run Codex sessions, keep Codex on the ChatGPT auth path:
 
@@ -222,7 +222,7 @@ For `3.2.0`:
 
 If you are upgrading from `3.1.0`, the important behavioral changes are:
 
-- `defaultWorktreeStrategy` is back to `off`, so worktree isolation remains opt-in unless you configure it explicitly.
+- `defaultWorktreeStrategy` now defaults to `delegate`, so new sessions use worktree isolation and orchestrator-led follow-through unless you configure or launch with a different strategy.
 - `auto-merge` now attempts one autonomous conflict resolution before escalating.
 - Completion wakes and no-change outcomes are deterministic and carry explicit approval/execution state instead of relying on transcript inference.
 - Worktree cleanup is lifecycle-first and can now classify already-landed branches as `released`, which makes `preview_safe` and `clean_safe` more trustworthy after rebase, squash, or cherry-pick flows.

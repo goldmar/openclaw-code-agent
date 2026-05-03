@@ -158,13 +158,13 @@
       },
       "planApproval": {
         "type": "string",
-        "default": "ask",
+        "default": "delegate",
         "enum": [
           "approve",
           "ask",
           "delegate"
         ],
-        "description": "Plan approval behavior. 'ask' (default): orchestrator always forwards plans to the user for approval. 'delegate': orchestrator autonomously decides whether to approve low-risk plans or escalate to the user. 'approve': orchestrator can auto-approve after verification."
+        "description": "Plan approval behavior. 'delegate' (default): orchestrator must review the full plan, then approve low-risk plans or escalate to the user. 'ask': always forwards plans to the user for approval. 'approve': orchestrator can auto-approve after verification."
       },
       "defaultHarness": {
         "type": "string",
@@ -174,9 +174,9 @@
       },
       "defaultWorktreeStrategy": {
         "type": "string",
-        "default": "off",
+        "default": "delegate",
         "enum": ["off", "manual", "ask", "delegate", "auto-merge", "auto-pr"],
-        "description": "Default worktree strategy for all new sessions when agent_launch omits worktree_strategy. 'off' (default) = no worktree. 'manual' = create worktree, no automatic action. 'ask' = push branch and notify the user with inline buttons (Merge locally / Create PR). 'delegate' = push branch and wake the orchestrator to decide autonomously. 'auto-merge' = auto-merge to base branch on completion. 'auto-pr' = auto-create or update a GitHub PR on completion."
+        "description": "Default worktree strategy for all new sessions when agent_launch omits worktree_strategy. 'delegate' (default) creates an isolated worktree and wakes the orchestrator to decide follow-through autonomously. 'off' = no worktree. 'manual' = create worktree, no automatic action. 'ask' = push branch and notify the user with inline buttons (Merge locally / Create PR). 'auto-merge' = auto-merge to base branch on completion. 'auto-pr' = auto-create or update a GitHub PR on completion."
       },
       "worktreeDir": {
         "type": "string",
@@ -235,12 +235,12 @@
     },
     "planApproval": {
       "label": "Plan approval policy",
-      "help": "Choose whether plans are always sent to the user with Approve/Revise/Reject buttons (`ask`, default), delegated to the orchestrator for full-plan review first, or auto-approved.",
+      "help": "Choose whether plans are delegated to the orchestrator for full-plan review first (`delegate`, default), always sent to the user with Approve/Revise/Reject buttons, or auto-approved.",
       "advanced": true
     },
     "defaultWorktreeStrategy": {
       "label": "Default worktree strategy",
-      "help": "Applies to all sessions that don't specify worktree_strategy explicitly. 'off' (default) disables worktrees globally. 'ask' creates a worktree and sends inline Merge locally / Create PR buttons on completion. 'delegate' wakes the orchestrator to decide autonomously. 'auto-merge' and 'auto-pr' are fully automated.",
+      "help": "Applies to all sessions that don't specify worktree_strategy explicitly. 'delegate' (default) creates a worktree and wakes the orchestrator to decide follow-through. 'off' disables worktrees globally. 'ask' sends inline Merge locally / Create PR buttons on completion. 'auto-merge' and 'auto-pr' are fully automated.",
       "advanced": true
     }
   },
