@@ -35,7 +35,7 @@ The shared substrate is often the local `codex` command and Codex App Server, bu
 - **Managed TaskFlow lifecycle**. When the current OpenClaw runtime exposes managed TaskFlow APIs, code-agent sessions now create, update, wait, and finalize a gateway-owned flow record; older runtimes fall back cleanly without changing session behavior.
 - **Deterministic runtime state**. Completion and no-change paths now surface canonical approval/runtime state instead of asking operators to infer it from transcript text.
 - **Notification delivery reliability**. Direct notification timeouts, fallback failures, and completion-delivery diagnostics are handled explicitly so failed delivery is visible instead of silently hanging.
-- **Verified OpenClaw target**. Local build/test metadata targets stable OpenClaw `2026.4.29` while keeping the minimum compatibility floor at `>=2026.4.21`.
+- **Verified OpenClaw target**. Local build/test metadata targets stable OpenClaw `2026.5.2` while keeping the minimum compatibility floor at `>=2026.4.21`.
 
 ## From Prompt To Merged Branch
 
@@ -119,11 +119,14 @@ Install and enable the plugin:
 openclaw plugins install openclaw-code-agent
 openclaw plugins enable openclaw-code-agent
 openclaw gateway restart
+openclaw plugins inspect openclaw-code-agent --runtime --json
 ```
 
 Restart or reload the gateway only as part of your normal install/upgrade flow; it is not needed for editing docs or preparing a release branch.
 
-This release targets the OpenClaw `v2026.4.21` external plugin contract and is verified against the stable `v2026.4.29` build/test target. `package.json` carries the plugin API compatibility and build metadata used by modern OpenClaw / ClawHub installs, and `openclaw.plugin.json` advertises the plugin-owned startup and command activation surface plus the onboarding metadata OpenClaw uses during plugin-config setup. Keep those metadata surfaces in sync when bumping the plugin release baseline.
+This release targets the OpenClaw `v2026.4.21` external plugin contract and is verified against the stable `v2026.5.2` build/test target. `package.json` carries the plugin API compatibility and build metadata used by modern OpenClaw / ClawHub installs, and `openclaw.plugin.json` advertises the plugin-owned startup, command activation surface, tool contracts, and onboarding metadata OpenClaw uses during plugin-config setup. Keep those metadata surfaces in sync when bumping the plugin release baseline.
+
+After install or update, inspect the runtime plugin view after the gateway restart. The runtime inspection should show the chat commands, service, and `agent_*` / `goal_*` tools without diagnostics. If `tools.effective` or `tools.invoke` cannot see `agent_launch` or `agent_sessions`, the installed plugin is stale or the gateway has not restarted onto the updated manifest and bundle.
 
 The current manifest descriptors stay intentionally narrow: activation advertises startup loading plus only the chat commands this plugin owns, and setup stays minimal with `requiresRuntime: false`. First-run onboarding is driven by the manifest config schema and `uiHints`, not by provider/backend setup descriptors.
 

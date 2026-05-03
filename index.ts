@@ -116,26 +116,26 @@ export function register(api: OpenClawPluginApi): void {
   let gc: GoalController | null = null;
   const registerTool = api.registerTool as (
     tool: (ctx: OpenClawPluginToolContext) => unknown,
-    options?: { optional?: boolean },
+    options?: { optional?: boolean; name?: string },
   ) => void;
   setPluginRuntime(api.runtime);
 
   // Tools
-  registerTool((ctx: OpenClawPluginToolContext) => makeAgentLaunchTool(ctx), { optional: false });
-  registerTool((ctx: OpenClawPluginToolContext) => makeAgentSessionsTool(ctx), { optional: false });
-  registerTool((ctx: OpenClawPluginToolContext) => makeAgentKillTool(ctx), { optional: false });
-  registerTool((ctx: OpenClawPluginToolContext) => makeAgentOutputTool(ctx), { optional: false });
-  registerTool((ctx: OpenClawPluginToolContext) => makeAgentRespondTool(ctx), { optional: false });
-  registerTool((ctx: OpenClawPluginToolContext) => makeAgentRequestPlanApprovalTool(ctx), { optional: false });
-  registerTool((ctx: OpenClawPluginToolContext) => makeAgentSendMonitorReportTool(ctx), { optional: false });
-  registerTool((ctx: OpenClawPluginToolContext) => makeAgentStatsTool(ctx), { optional: false });
-  registerTool((ctx: OpenClawPluginToolContext) => makeAgentMergeTool(ctx), { optional: false });
-  registerTool((ctx: OpenClawPluginToolContext) => makeAgentPrTool(ctx), { optional: false });
-  registerTool((ctx: OpenClawPluginToolContext) => makeAgentWorktreeCleanupTool(ctx), { optional: false });
-  registerTool((ctx: OpenClawPluginToolContext) => makeAgentWorktreeStatusTool(ctx), { optional: false });
-  registerTool((ctx: OpenClawPluginToolContext) => makeGoalLaunchTool(ctx), { optional: false });
-  registerTool((ctx: OpenClawPluginToolContext) => makeGoalStatusTool(ctx), { optional: false });
-  registerTool((ctx: OpenClawPluginToolContext) => makeGoalStopTool(ctx), { optional: false });
+  registerTool((ctx: OpenClawPluginToolContext) => makeAgentLaunchTool(ctx), { optional: false, name: "agent_launch" });
+  registerTool((ctx: OpenClawPluginToolContext) => makeAgentSessionsTool(ctx), { optional: false, name: "agent_sessions" });
+  registerTool((ctx: OpenClawPluginToolContext) => makeAgentKillTool(ctx), { optional: false, name: "agent_kill" });
+  registerTool((ctx: OpenClawPluginToolContext) => makeAgentOutputTool(ctx), { optional: false, name: "agent_output" });
+  registerTool((ctx: OpenClawPluginToolContext) => makeAgentRespondTool(ctx), { optional: false, name: "agent_respond" });
+  registerTool((ctx: OpenClawPluginToolContext) => makeAgentRequestPlanApprovalTool(ctx), { optional: false, name: "agent_request_plan_approval" });
+  registerTool((ctx: OpenClawPluginToolContext) => makeAgentSendMonitorReportTool(ctx), { optional: false, name: "agent_send_monitor_report" });
+  registerTool((ctx: OpenClawPluginToolContext) => makeAgentStatsTool(ctx), { optional: false, name: "agent_stats" });
+  registerTool((ctx: OpenClawPluginToolContext) => makeAgentMergeTool(ctx), { optional: false, name: "agent_merge" });
+  registerTool((ctx: OpenClawPluginToolContext) => makeAgentPrTool(ctx), { optional: false, name: "agent_pr" });
+  registerTool((ctx: OpenClawPluginToolContext) => makeAgentWorktreeCleanupTool(ctx), { optional: false, name: "agent_worktree_cleanup" });
+  registerTool((ctx: OpenClawPluginToolContext) => makeAgentWorktreeStatusTool(ctx), { optional: false, name: "agent_worktree_status" });
+  registerTool((ctx: OpenClawPluginToolContext) => makeGoalLaunchTool(ctx), { optional: false, name: "goal_launch" });
+  registerTool((ctx: OpenClawPluginToolContext) => makeGoalStatusTool(ctx), { optional: false, name: "goal_status" });
+  registerTool((ctx: OpenClawPluginToolContext) => makeGoalStopTool(ctx), { optional: false, name: "goal_stop" });
 
   // Interactive handlers (shared action-token callbacks across chat transports)
   api.registerInteractiveHandler(createCallbackHandler("telegram"));

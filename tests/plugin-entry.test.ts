@@ -34,7 +34,7 @@ describe("plugin entry source", () => {
     assert.doesNotMatch(activeWorkflowSources, /\bnpm audit\b/);
   });
 
-  it("declares the v2026.4.21 compatibility floor and v2026.4.29 build target in package metadata", () => {
+  it("declares the v2026.4.21 compatibility floor and v2026.5.2 build target in package metadata", () => {
     const packageJson = JSON.parse(readFileSync(join(rootDir, "package.json"), "utf8")) as {
       dependencies?: Record<string, string>;
       openclaw?: {
@@ -51,11 +51,13 @@ describe("plugin entry source", () => {
     assert.equal(packageJson.dependencies?.["@anthropic-ai/claude-agent-sdk"], "^0.2.119");
     assert.equal(packageJson.openclaw?.compat?.pluginApi, ">=2026.4.21");
     assert.equal(packageJson.openclaw?.compat?.minGatewayVersion, "2026.4.21");
-    assert.equal(packageJson.openclaw?.build?.openclawVersion, "2026.4.29");
-    assert.equal(packageJson.openclaw?.build?.pluginSdkVersion, "2026.4.29");
+    assert.equal(packageJson.openclaw?.build?.openclawVersion, "2026.5.2");
+    assert.equal(packageJson.openclaw?.build?.pluginSdkVersion, "2026.5.2");
     assert.equal(packageJson.peerDependencies?.openclaw, ">=2026.4.21");
-    assert.equal(packageJson.devDependencies?.openclaw, "2026.4.29");
+    assert.equal(packageJson.devDependencies?.openclaw, "2026.5.2");
     assert.equal(packageJson.pnpm?.overrides?.["fast-xml-parser@>=5.0.0 <5.7.0"], ">=5.7.0");
+    assert.equal(packageJson.pnpm?.overrides?.["@anthropic-ai/vertex-sdk>google-auth-library"], "10.6.2");
+    assert.doesNotMatch(readFileSync(join(rootDir, "pnpm-lock.yaml"), "utf8"), /uuid@9\.0\.1/);
   });
 
   it("does not use the removed OpenClaw embedded-extension factory API", () => {
@@ -170,6 +172,44 @@ describe("plugin entry source", () => {
       "claude-code",
       "codex",
     ]);
+  });
+
+  it("keeps declared tool contracts synced with runtime registrations", () => {
+    const expectedToolNames = [
+      "agent_launch",
+      "agent_sessions",
+      "agent_kill",
+      "agent_output",
+      "agent_respond",
+      "agent_request_plan_approval",
+      "agent_send_monitor_report",
+      "agent_stats",
+      "agent_merge",
+      "agent_pr",
+      "agent_worktree_cleanup",
+      "agent_worktree_status",
+      "goal_launch",
+      "goal_status",
+      "goal_stop",
+    ];
+    const pluginManifest = JSON.parse(readFileSync(join(rootDir, "openclaw.plugin.json"), "utf8")) as {
+      contracts?: {
+        tools?: string[];
+      };
+    };
+    const indexSource = readFileSync(join(rootDir, "index.ts"), "utf8");
+    const registeredToolNames = Array.from(
+      indexSource.matchAll(/registerTool\([\s\S]*?,\s*\{([^}]*)\}\s*\)/g),
+      (match) => {
+        const name = match[1]?.match(/\bname:\s*"([^"]+)"/)?.[1];
+        assert.ok(name, `missing explicit tool name in registerTool options: ${match[1] ?? ""}`);
+        return name;
+      },
+    );
+
+    assert.deepEqual(pluginManifest.contracts?.tools, expectedToolNames);
+    assert.deepEqual(registeredToolNames, expectedToolNames);
+    assert.equal(new Set(registeredToolNames).size, registeredToolNames.length);
   });
 
   it("keeps first-run onboarding focused on workdir, harness, and fallback routing", () => {
