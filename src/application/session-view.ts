@@ -124,12 +124,9 @@ function outputHeaderForActiveSession(session: ActiveSessionView): string {
 }
 
 /** Build a header line for persisted sessions loaded from disk/tmp output. */
-function outputHeaderForPersistedSession(persisted: PersistedSessionInfo): string {
+function outputHeaderForPersistedSession(persisted: PersistedSessionInfo, source: string): string {
   const displayName = persisted.name || persisted.sessionId || persistedBackendConversationId(persisted) || "unknown";
   const phaseStr = persisted.lifecycle ? ` | Phase: ${persisted.lifecycle}` : "";
-  const source = persisted.outputPath
-    ? `(retrieved from ${persisted.outputPath} — evicted from runtime cache — showing persisted output)`
-    : "(persisted session metadata recovered; no output file was recorded)";
   return [
     `Session: ${displayName} | Status: ${persisted.status.toUpperCase()}${phaseStr} | Cost: $${persisted.costUsd.toFixed(4)}`,
     source,
@@ -137,8 +134,18 @@ function outputHeaderForPersistedSession(persisted: PersistedSessionInfo): strin
   ].join("\n");
 }
 
+function persistedOutputSource(persisted: PersistedSessionInfo): string {
+  return `(retrieved from ${persisted.outputPath} — evicted from runtime cache — showing persisted output)`;
+}
+
+function unavailablePersistedOutputSource(persisted: PersistedSessionInfo): string {
+  return persisted.outputPath
+    ? `(persisted session metadata recovered; output file is unavailable at ${persisted.outputPath})`
+    : "(persisted session metadata recovered; no output file was recorded)";
+}
+
 function unavailablePersistedOutputText(persisted: PersistedSessionInfo, reason: string): string {
-  const header = outputHeaderForPersistedSession(persisted);
+  const header = outputHeaderForPersistedSession(persisted, unavailablePersistedOutputSource(persisted));
   const backendConversationId = persistedBackendConversationId(persisted);
   const backendHint = backendConversationId ? `\nBackend session: ${backendConversationId}` : "";
   return `${header}\n(no persisted output available: ${reason})${backendHint}`;
@@ -171,7 +178,7 @@ export function getSessionOutputText(
     if (persisted?.outputPath && existsSync(persisted.outputPath)) {
       try {
         const output = readOutputLinesFromFile(persisted.outputPath, options, linesToShow).join("\n");
-        const header = outputHeaderForPersistedSession(persisted);
+        const header = outputHeaderForPersistedSession(persisted, persistedOutputSource(persisted));
         return output ? `${header}\n${output}` : `${header}\n(output file was empty)`;
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);

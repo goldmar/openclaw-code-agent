@@ -294,6 +294,7 @@ describe("session-view app layer", () => {
     assert.match(text, /Session: recovered-codex \| Status: KILLED \| Phase: suspended/);
     assert.match(text, /persisted session metadata recovered; no output file was recorded/);
     assert.match(text, /no outputPath is stored/);
+    assert.doesNotMatch(text, /showing persisted output/);
     assert.doesNotMatch(text, /not found/);
   });
 
@@ -314,7 +315,9 @@ describe("session-view app layer", () => {
 
     const text = getSessionOutputText(sm, "missing-output");
     assert.match(text, /Status: KILLED \| Phase: suspended/);
+    assert.match(text, /output file is unavailable at/);
     assert.match(text, /output file is missing at/);
+    assert.doesNotMatch(text, /showing persisted output/);
     assert.doesNotMatch(text, /not found/);
   });
 
