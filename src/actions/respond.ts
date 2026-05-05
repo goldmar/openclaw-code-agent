@@ -377,7 +377,10 @@ export async function executeRespond(
   const resumeAssessment = target.status === "running" ? { kind: "direct" as const } : assessResumeCandidate(target);
 
   const textPlanDecision =
-    !params.approve && target.pendingPlanApproval && params.userInitiated
+    !params.approve
+    && target.lifecycle === "awaiting_plan_decision"
+    && target.pendingPlanApproval
+    && params.userInitiated
       ? normalizePlanReplyDecision(params.message)
       : undefined;
   if (textPlanDecision === "approve") {

@@ -1244,7 +1244,7 @@ export class SessionManager {
         runtimeState: "stopped",
         pendingPlanApproval: false,
         planApprovalContext: undefined,
-        approvalState: (reason ?? "user") === "user" ? "rejected" : session.approvalState,
+        approvalState: session.approvalState === "pending" ? "rejected" : session.approvalState,
         planDecisionVersion: (session.planDecisionVersion ?? 0) + 1,
         actionablePlanDecisionVersion: undefined,
         canonicalPlanPromptVersion: undefined,

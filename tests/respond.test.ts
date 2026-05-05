@@ -391,6 +391,33 @@ describe("executeRespond", () => {
     assert.equal(sentMessage, "Approved. Go ahead.");
   });
 
+  it("does not route plain-text Approve when lifecycle is not awaiting a plan decision", async () => {
+    let switchedTo: string | undefined;
+    let sentMessage: string | undefined;
+    const session = createStubSession({
+      status: "running",
+      lifecycle: "active",
+      pendingPlanApproval: true,
+      actionablePlanDecisionVersion: 2,
+      sendMessage: async (message: string) => {
+        sentMessage = message;
+      },
+      switchPermissionMode: (mode: string) => { switchedTo = mode; },
+    });
+    const sm = createStubSessionManager({ "test-id": session });
+
+    const result = await executeRespond(sm, {
+      session: "test-id",
+      message: "Approve",
+      userInitiated: true,
+    });
+
+    assert.equal(result.isError, undefined);
+    assert.match(result.text, /Message sent to session/);
+    assert.equal(switchedTo, undefined);
+    assert.equal(sentMessage, "Approve");
+  });
+
   it("routes plain-text Revise during pending plan approval to request-changes state", async () => {
     let sentMessage: string | undefined;
     const patches: Array<{ ref: string; patch: Record<string, unknown> }> = [];
