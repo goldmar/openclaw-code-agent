@@ -1,4 +1,5 @@
 import type { Session } from "./session";
+import { logButtonDiagnostic, summarizeButtons } from "./button-diagnostics";
 import { RuntimeDirectNotificationTransport, type DirectNotificationTransport } from "./direct-notification-transport";
 import { WakeDeliveryExecutor, type DispatchPhase } from "./wake-delivery-executor";
 import { WakeRouteResolver } from "./wake-route-resolver";
@@ -178,10 +179,33 @@ export class WakeDispatcher {
   ): void {
     const hasInteractiveButtons = Boolean(buttons?.some((row) => Array.isArray(row) && row.length > 0));
     const route = this.routes.resolve(session);
+    logButtonDiagnostic("wake_notify_selected", {
+      sessionId: session.id,
+      sessionName: session.name,
+      label,
+      messageTextLength: text.length,
+      requireDirectDelivery,
+      hasDirectNotificationTransport: Boolean(this.directNotifications),
+      routeSummary: route ? this.routes.summary(route) : "system",
+      channel: route?.channel,
+      target: route?.target,
+      accountId: route?.accountId,
+      threadId: route?.threadId,
+      sessionKey: route?.sessionKey,
+      ...summarizeButtons(buttons),
+    });
     const orderingKey = route
       ? `notify:${route.channel}|${route.accountId ?? ""}|${route.target}|${route.threadId ?? ""}`
       : `notify:system:${session.id}`;
     if (!route) {
+      logButtonDiagnostic("wake_notify_no_direct_route", {
+        sessionId: session.id,
+        sessionName: session.name,
+        label,
+        requireDirectDelivery,
+        hasInteractiveButtons,
+        ...summarizeButtons(buttons),
+      });
       if (requireDirectDelivery) {
         console.warn(
           `[WakeDispatcher] Direct notification "${label}" for session ${session.id} ` +
@@ -221,6 +245,19 @@ export class WakeDispatcher {
     }
 
     const directFailureHandler = () => {
+      logButtonDiagnostic("wake_notify_direct_failed", {
+        sessionId: session.id,
+        sessionName: session.name,
+        label,
+        requireDirectDelivery,
+        hasInteractiveButtons,
+        channel: route.channel,
+        target: route.target,
+        accountId: route.accountId,
+        threadId: route.threadId,
+        sessionKey: route.sessionKey,
+        ...summarizeButtons(buttons),
+      });
       if (requireDirectDelivery) {
         console.warn(
           `[WakeDispatcher] Direct notification "${label}" for session ${session.id} ` +
@@ -278,6 +315,17 @@ export class WakeDispatcher {
     } as const;
 
     if (this.directNotifications) {
+      logButtonDiagnostic("wake_notify_dispatching_direct_runtime", {
+        sessionId: session.id,
+        sessionName: session.name,
+        label,
+        channel: route.channel,
+        target: route.target,
+        accountId: route.accountId,
+        threadId: route.threadId,
+        sessionKey: route.sessionKey,
+        ...summarizeButtons(buttons),
+      });
       this.executor.executePromise(
         () => this.directNotifications!.send(route, text, buttons),
         options,
@@ -285,6 +333,17 @@ export class WakeDispatcher {
       return;
     }
 
+    logButtonDiagnostic("wake_notify_dispatching_cli_message_send", {
+      sessionId: session.id,
+      sessionName: session.name,
+      label,
+      channel: route.channel,
+      target: route.target,
+      accountId: route.accountId,
+      threadId: route.threadId,
+      sessionKey: route.sessionKey,
+      ...summarizeButtons(buttons),
+    });
     this.executor.execute(
       this.transport.buildDirectNotificationArgs(route, text, buttons),
       options,
@@ -311,13 +370,42 @@ export class WakeDispatcher {
       return;
     }
 
+    logButtonDiagnostic("wake_notify_sequence_started", {
+      sessionId: session.id,
+      sessionName: session.name,
+      label,
+      chunkCount: normalizedMessages.length,
+      buttonChunkIndexes: normalizedMessages
+        .map((message, index) => (
+          message.buttons?.some((row) => Array.isArray(row) && row.length > 0) ? index + 1 : undefined
+        ))
+        .filter((index): index is number => typeof index === "number"),
+      requireDirectDelivery,
+    });
+
     const sendAt = (index: number): void => {
       const message = normalizedMessages[index];
       if (!message) {
+        logButtonDiagnostic("wake_notify_sequence_succeeded", {
+          sessionId: session.id,
+          sessionName: session.name,
+          label,
+          chunkCount: normalizedMessages.length,
+        });
         onSuccess?.();
         return;
       }
       const onFailure = index === 0 ? onAllFailed : onSuccess;
+      logButtonDiagnostic("wake_notify_sequence_chunk_selected", {
+        sessionId: session.id,
+        sessionName: session.name,
+        label,
+        chunkIndex: index + 1,
+        chunkCount: normalizedMessages.length,
+        messageTextLength: message.text.length,
+        failureHandler: index === 0 ? "all-failed" : "sequence-success",
+        ...summarizeButtons(message.buttons),
+      });
 
       this.sendUserNotification(
         session,

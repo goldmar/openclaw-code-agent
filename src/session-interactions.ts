@@ -6,6 +6,7 @@ import type {
   WorktreeStrategy,
 } from "./types";
 import type { SessionActionTokenStore } from "./session-action-token-store";
+import { logButtonDiagnostic, summarizeButtons } from "./button-diagnostics";
 
 export type NotificationButton = {
   label: string;
@@ -127,7 +128,7 @@ export class SessionInteractionService {
   }
 
   getPlanApprovalButtons(sessionId: string, session?: ButtonSource): NotificationButton[][] {
-    return [[
+    const buttons = [[
       this.makeActionButton(sessionId, "plan-approve", "Approve", {
         planDecisionVersion: session?.planDecisionVersion,
       }),
@@ -138,6 +139,12 @@ export class SessionInteractionService {
         planDecisionVersion: session?.planDecisionVersion,
       }),
     ]];
+    logButtonDiagnostic("plan_approval_buttons_created", {
+      sessionId,
+      planDecisionVersion: session?.planDecisionVersion,
+      ...summarizeButtons(buttons),
+    });
+    return buttons;
   }
 
   getResumeButtons(sessionId: string, session: ButtonSource): NotificationButton[][] {
@@ -168,7 +175,7 @@ export class SessionInteractionService {
     planWorktreeStrategy?: WorktreeStrategy;
   }): NotificationButton[][] {
     const { reportId, route, planName, planPrompt, planWorkdir, planWorktreeStrategy } = args;
-    return [[
+    const buttons = [[
       this.makeActionButton(reportId, "monitor-start-plan", "Start Plan", {
         route,
         launchName: planName,
@@ -178,5 +185,19 @@ export class SessionInteractionService {
       }),
       this.makeActionButton(reportId, "monitor-dismiss", "Dismiss", { route }),
     ]];
+    logButtonDiagnostic("monitor_report_buttons_created", {
+      reportId,
+      planName,
+      channel: route.provider,
+      target: route.target,
+      accountId: route.accountId,
+      threadId: route.threadId,
+      sessionKey: route.sessionKey,
+      planPromptLength: planPrompt.length,
+      planWorkdirLength: planWorkdir.length,
+      planWorktreeStrategy,
+      ...summarizeButtons(buttons),
+    });
+    return buttons;
   }
 }

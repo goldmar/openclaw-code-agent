@@ -3,6 +3,7 @@ import { executeRespond } from "./actions/respond";
 import { makeAgentMergeTool } from "./tools/agent-merge";
 import { makeAgentPrTool } from "./tools/agent-pr";
 import { makeAgentOutputTool } from "./tools/agent-output";
+import { hashDiagnosticToken, logButtonDiagnostic } from "./button-diagnostics";
 import { CALLBACK_NAMESPACE } from "./interactive-constants";
 import type {
   PluginInteractiveDiscordHandlerContext,
@@ -196,6 +197,10 @@ async function replyText(ctx: InteractiveCallbackContext, text: string): Promise
  * Alice never sees raw callback_data strings.
  */
 export function createCallbackHandler(channel: InteractiveChannel = "telegram") {
+  logButtonDiagnostic("callback_handler_registered", {
+    channel,
+    namespace: CALLBACK_NAMESPACE,
+  });
   return {
     channel,
     namespace: CALLBACK_NAMESPACE,
@@ -208,6 +213,13 @@ export function createCallbackHandler(channel: InteractiveChannel = "telegram") 
 
       const payload = getPayload(ctx);
       const tokenId = parsePayload(payload);
+      logButtonDiagnostic("callback_received", {
+        channel: ctx.channel,
+        namespace: CALLBACK_NAMESPACE,
+        payloadByteLength: Buffer.byteLength(payload, "utf8"),
+        tokenHash: hashDiagnosticToken(tokenId),
+        isAuthorizedSender: ctx.auth.isAuthorizedSender,
+      });
       if (!tokenId) {
         await replyText(ctx, `⚠️ Unrecognized callback payload: "${payload}".`);
         return { handled: true };
@@ -220,6 +232,15 @@ export function createCallbackHandler(channel: InteractiveChannel = "telegram") 
       }
 
       const token = sessionManager.getActionToken(tokenId);
+      logButtonDiagnostic("callback_token_lookup_completed", {
+        channel: ctx.channel,
+        namespace: CALLBACK_NAMESPACE,
+        tokenHash: hashDiagnosticToken(tokenId),
+        tokenFound: Boolean(token),
+        actionKind: token?.kind,
+        sessionId: token?.sessionId,
+        planDecisionVersion: token?.planDecisionVersion,
+      });
       if (!token) {
         await replyText(ctx, "⚠️ This action is stale or has already been used.");
         return { handled: true };
@@ -229,6 +250,16 @@ export function createCallbackHandler(channel: InteractiveChannel = "telegram") 
       const actionSession = sessionManager.resolve?.(sessionId) ?? sessionManager.getPersistedSession?.(sessionId);
       const actionSessionName = actionSession?.name ?? sessionId;
       const invalidPlanDecision = validatePlanDecisionToken(token, actionSession);
+      logButtonDiagnostic("callback_plan_validation_completed", {
+        channel: ctx.channel,
+        namespace: CALLBACK_NAMESPACE,
+        tokenHash: hashDiagnosticToken(tokenId),
+        actionKind: token.kind,
+        sessionId,
+        sessionName: actionSessionName,
+        planDecisionVersion: token.planDecisionVersion,
+        valid: !invalidPlanDecision,
+      });
 
       if (invalidPlanDecision) {
         await clearInteractiveState(ctx);
@@ -237,6 +268,15 @@ export function createCallbackHandler(channel: InteractiveChannel = "telegram") 
       }
 
       const consumedToken = sessionManager.consumeActionToken(tokenId);
+      logButtonDiagnostic("callback_token_consume_completed", {
+        channel: ctx.channel,
+        namespace: CALLBACK_NAMESPACE,
+        tokenHash: hashDiagnosticToken(tokenId),
+        consumed: Boolean(consumedToken),
+        actionKind: consumedToken?.kind,
+        sessionId: consumedToken?.sessionId,
+        planDecisionVersion: consumedToken?.planDecisionVersion,
+      });
       if (!consumedToken) {
         await replyText(ctx, "⚠️ This action is stale or has already been used.");
         return { handled: true };
