@@ -1,4 +1,4 @@
-import { beforeEach, describe, it } from "node:test";
+import { afterEach, beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { createCallbackHandler } from "../src/callback-handler";
 import { setSessionManager } from "../src/singletons";
@@ -55,6 +55,10 @@ describe("createCallbackHandler()", () => {
     setSessionManager(null);
   });
 
+  afterEach(() => {
+    delete process.env.OPENCLAW_CODE_AGENT_BUTTON_DIAGNOSTICS;
+  });
+
   it("surfaces PR URLs through explicit view-pr actions", async () => {
     setSessionManager({
       getActionToken: () => ({
@@ -77,6 +81,48 @@ describe("createCallbackHandler()", () => {
     assert.deepEqual(result, { handled: true });
     assert.equal(state.buttonsCleared, 1);
     assert.equal(state.replies[0], "PR: https://github.com/example/repo/pull/123");
+  });
+
+  it("emits callback diagnostics without logging full token payloads", async (t) => {
+    process.env.OPENCLAW_CODE_AGENT_BUTTON_DIAGNOSTICS = "1";
+    const logs: string[] = [];
+    t.mock.method(console, "info", ((message?: unknown) => {
+      logs.push(String(message));
+    }) as typeof console.info);
+    setSessionManager({
+      getActionToken: () => ({
+        sessionId: "sess-1",
+        kind: "plan-reject",
+        planDecisionVersion: 7,
+      }),
+      consumeActionToken: () => ({
+        sessionId: "sess-1",
+        kind: "plan-reject",
+        planDecisionVersion: 7,
+      }),
+      resolve: () => ({
+        id: "sess-1",
+        name: "diagnostic-session",
+        pendingPlanApproval: true,
+        planDecisionVersion: 7,
+        actionablePlanDecisionVersion: 7,
+      }),
+      clearPlanDecisionTokens: () => {},
+      kill: () => true,
+    } as any);
+
+    const handler = createCallbackHandler();
+    const state = createCtx("code-agent:secret-callback-token");
+    const result = await handler.handler(state.ctx as any);
+
+    assert.deepEqual(result, { handled: true });
+    const joined = logs.join("\n");
+    assert.match(joined, /"event":"callback_handler_registered"/);
+    assert.match(joined, /"event":"callback_received"/);
+    assert.match(joined, /"event":"callback_token_lookup_completed"/);
+    assert.match(joined, /"event":"callback_token_consume_completed"/);
+    assert.match(joined, /"tokenHash":"[a-f0-9]{12}"/);
+    assert.doesNotMatch(joined, /secret-callback-token/);
   });
 
   it("approves pending plans through executeRespond", async () => {

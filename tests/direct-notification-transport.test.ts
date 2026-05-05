@@ -9,6 +9,7 @@ import { getRuntimeConfig, setPluginRuntime } from "../src/runtime-store";
 describe("RuntimeDirectNotificationTransport", () => {
   afterEach(() => {
     setPluginRuntime(undefined);
+    delete process.env.OPENCLAW_CODE_AGENT_BUTTON_DIAGNOSTICS;
   });
 
   it("sends Telegram topic text through the in-process outbound adapter", async () => {
@@ -192,6 +193,54 @@ describe("RuntimeDirectNotificationTransport", () => {
         channelData: { rendered: true },
       },
     ]);
+  });
+
+  it("emits privacy-safe diagnostics for the runtime presentation path", async (t) => {
+    process.env.OPENCLAW_CODE_AGENT_BUTTON_DIAGNOSTICS = "1";
+    const logs: string[] = [];
+    t.mock.method(console, "info", ((message?: unknown) => {
+      logs.push(String(message));
+    }) as typeof console.info);
+    setPluginRuntime({
+      channel: {
+        outbound: {
+          loadAdapter: async () => ({
+            renderPresentation: ({ payload, presentation }: { payload: unknown; presentation: unknown }) => ({
+              ...(payload as Record<string, unknown>),
+              interactive: presentation,
+            }),
+            sendPayload: async () => ({
+              channel: "telegram",
+              messageId: "123",
+              chatId: "-1003863755361",
+              messageThreadId: "13832",
+            }),
+          }),
+        },
+      },
+    }, { channels: { telegram: { enabled: true } } });
+
+    await new RuntimeDirectNotificationTransport().send(
+      {
+        channel: "telegram",
+        accountId: "default",
+        target: "-1003863755361",
+        threadId: "13832",
+        sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+      },
+      "Plan needs approval",
+      [[{ label: "Approve", callbackData: "secret-token-approve", style: "primary" }]],
+    );
+
+    assert.ok(logs.some((line) => line.includes('"event":"presentation_render_completed"')));
+    assert.ok(logs.some((line) => line.includes('"event":"presentation_send_payload_completed"')));
+    const joined = logs.join("\n");
+    assert.match(joined, /"threadId":"13832"/);
+    assert.match(joined, /"buttonLabels":\["Approve"\]/);
+    assert.match(joined, /"callbackHashes":\["[a-f0-9]{12}"\]/);
+    assert.match(joined, /"messageId":"123"/);
+    assert.doesNotMatch(joined, /secret-token-approve/);
+    assert.doesNotMatch(joined, /Plan needs approval/);
   });
 
   it("fails clearly when runtime delivery cannot preserve buttons", async () => {

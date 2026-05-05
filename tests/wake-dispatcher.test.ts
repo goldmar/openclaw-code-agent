@@ -152,6 +152,7 @@ if (failConfigRaw) {
     }
     delete process.env.OPENCLAW_TEST_FAIL_ONCE_FOR;
     delete process.env.OPENCLAW_TEST_FAIL_ONCE_STATE;
+    delete process.env.OPENCLAW_CODE_AGENT_BUTTON_DIAGNOSTICS;
     rmSync(tempDir, { recursive: true, force: true });
   });
 
@@ -1064,6 +1065,53 @@ if (failConfigRaw) {
     assert.match(third.presentation, /Approve/);
     assert.match(third.presentation, /Revise/);
     assert.match(third.presentation, /Reject/);
+  });
+
+  it("emits privacy-safe diagnostics for paginated button-bearing chunks", async () => {
+    process.env.OPENCLAW_CODE_AGENT_BUTTON_DIAGNOSTICS = "1";
+    const infoLogs: string[] = [];
+    console.info = (message?: unknown, ...rest: unknown[]) => {
+      infoLogs.push([message, ...rest].map((value) => String(value)).join(" "));
+    };
+    const dispatcher = new WakeDispatcher({
+      directNotifications: {
+        send: async () => {},
+      },
+    });
+    const session: FakeSession = {
+      id: "session-paginated-diagnostics",
+      route: buildRoute({ threadId: "13832", sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832" }),
+      originChannel: "telegram|bot|-1003863755361",
+      originThreadId: 13832,
+      originSessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+    };
+
+    dispatcher.dispatchSessionNotification(session as any, {
+      label: "plan-approval",
+      notifyUser: "always",
+      userMessages: [
+        { text: "secret plan body chunk one" },
+        {
+          text: "secret plan body chunk two",
+          buttons: [[
+            { label: "Approve", callbackData: "secret-approve-token" },
+            { label: "Reject", callbackData: "secret-reject-token" },
+          ]],
+        },
+      ],
+    });
+
+    await waitFor(
+      () => infoLogs.some((line) => line.includes('"event":"wake_notify_sequence_succeeded"')),
+      "button diagnostics sequence success",
+    );
+    const joined = infoLogs.join("\n");
+    assert.match(joined, /"event":"wake_notify_sequence_started"/);
+    assert.match(joined, /"buttonChunkIndexes":\[2\]/);
+    assert.match(joined, /"threadId":"13832"/);
+    assert.match(joined, /"buttonLabels":\["Approve","Reject"\]/);
+    assert.doesNotMatch(joined, /secret-approve-token/);
+    assert.doesNotMatch(joined, /secret plan body/);
   });
 
   it("treats mid-sequence notification failures as partial success instead of triggering the all-failed fallback", () => {
