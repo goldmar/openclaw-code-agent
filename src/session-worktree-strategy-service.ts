@@ -472,6 +472,11 @@ export class SessionWorktreeStrategyService {
     const result = await this.deps.runAutoPr(session, baseBranch);
     if (!result.success) {
       this.markPendingDecision(session);
+      this.deps.dispatchSessionNotification(session, {
+        label: "worktree-auto-pr-failed",
+        userMessage: `⚠️ [${session.name}] Auto-PR did not complete. The worktree is preserved for an explicit merge or PR decision.`,
+        buttons: this.deps.getWorktreeDecisionButtons(session.id),
+      });
     }
     return { notificationSent: true, worktreeRemoved: false };
   }

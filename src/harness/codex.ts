@@ -319,6 +319,7 @@ export class CodexHarness implements AgentHarness {
         payloads: buildThreadStartPayloads({
           cwd: options.originalWorkdir?.trim() || options.cwd,
           model: options.model,
+          reasoningEffort: options.reasoningEffort,
           approvalPolicy: executionPolicy.approvalPolicy,
           sandbox: executionPolicy.sandbox,
         }),

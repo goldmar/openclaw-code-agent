@@ -140,6 +140,7 @@ export class ClaudeCodeHarness implements AgentHarness {
     const sdkOptions: Record<string, unknown> = {
       cwd: options.cwd,
       model: options.model,
+      ...(options.reasoningEffort ? { effort: options.reasoningEffort } : {}),
       permissionMode: options.permissionMode,
       allowDangerouslySkipPermissions: true,
       allowedTools: options.allowedTools,

@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.1] - 2026-05-05
+
+### Changed
+- Updated the local OpenClaw build/test target to stable `2026.5.4` while keeping the minimum compatibility floor at `>=2026.4.21`.
+- Aligned harness reasoning-effort handling with OpenClaw `v2026.5.4`: Claude Code now receives configured non-default effort, and Codex fresh thread starts include effort alongside resume and turn-start payloads.
+- Added compatibility coverage for v2026.5.4 manifest contracts, model allowlists, disabled bundled-provider assumptions, callback delivery, and bounded monitor launch routing.
+
 ## [4.1.0] - 2026-05-01
 
 ### Added
@@ -257,7 +264,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Default Codex approval policy to `on-request`.
 - Raised the default session limit.
 
-[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.1.0...HEAD
+[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.1.1...HEAD
+[4.1.1]: https://github.com/goldmar/openclaw-code-agent/compare/v4.1.0...v4.1.1
 [4.1.0]: https://github.com/goldmar/openclaw-code-agent/compare/v4.0.1...v4.1.0
 [4.0.1]: https://github.com/goldmar/openclaw-code-agent/compare/v4.0.0...v4.0.1
 [4.0.0]: https://github.com/goldmar/openclaw-code-agent/compare/v3.2.1...v4.0.0

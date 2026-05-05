@@ -91,6 +91,44 @@ describe("ClaudeCodeHarness", () => {
     assert.equal(messages.at(-1)?.type, "run_completed");
   });
 
+  it("passes configured reasoning effort to Claude Code without inventing a default", async () => {
+    const seenOptions: Record<string, unknown>[] = [];
+    const { handle } = createQueryHandle([
+      { type: "result", subtype: "success", session_id: "claude-effort", duration_ms: 0, total_cost_usd: 0, num_turns: 1, result: "done" },
+    ]);
+    const harness = new ClaudeCodeHarness({
+      startup: async ({ options } = {}) => {
+        seenOptions.push(options ?? {});
+        return { query: () => handle as any };
+      },
+    });
+
+    await collectMessages(harness.launch({
+      prompt: "think harder",
+      cwd: "/tmp/project",
+      reasoningEffort: "xhigh",
+    }));
+
+    assert.equal(seenOptions[0]?.effort, "xhigh");
+
+    const { handle: defaultHandle } = createQueryHandle([
+      { type: "result", subtype: "success", session_id: "claude-default", duration_ms: 0, total_cost_usd: 0, num_turns: 1, result: "done" },
+    ]);
+    const defaultHarness = new ClaudeCodeHarness({
+      startup: async ({ options } = {}) => {
+        seenOptions.push(options ?? {});
+        return { query: () => defaultHandle as any };
+      },
+    });
+
+    await collectMessages(defaultHarness.launch({
+      prompt: "use default effort",
+      cwd: "/tmp/project",
+    }));
+
+    assert.equal(Object.hasOwn(seenOptions[1] ?? {}, "effort"), false);
+  });
+
   it("waits for startup() before forwarding control calls to the query handle", async () => {
     let resolveStartup: ((value: { query: () => AsyncIterable<unknown> }) => void) | undefined;
     const { handle, permissionModes, streamedInputs, wasInterrupted } = createQueryHandle([
