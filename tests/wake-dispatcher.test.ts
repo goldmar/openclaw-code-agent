@@ -1067,12 +1067,12 @@ if (failConfigRaw) {
     assert.match(third.presentation, /Reject/);
   });
 
-  it("emits privacy-safe diagnostics for paginated button-bearing chunks", async () => {
+  it("emits privacy-safe diagnostics for paginated button-bearing chunks", async (t) => {
     process.env.OPENCLAW_CODE_AGENT_BUTTON_DIAGNOSTICS = "1";
     const infoLogs: string[] = [];
-    console.info = (message?: unknown, ...rest: unknown[]) => {
+    t.mock.method(console, "info", (message?: unknown, ...rest: unknown[]) => {
       infoLogs.push([message, ...rest].map((value) => String(value)).join(" "));
-    };
+    });
     const dispatcher = new WakeDispatcher({
       directNotifications: {
         send: async () => {},
