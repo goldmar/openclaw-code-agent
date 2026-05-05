@@ -21,6 +21,7 @@ type ExecuteOptions = {
   onSuccess?: () => void;
   onAmbiguousResult?: () => void;
   onFinalFailure?: () => void;
+  shouldContinue?: () => boolean;
   terminalOnFailure?: boolean;
 };
 
@@ -107,7 +108,7 @@ export class WakeDeliveryExecutor {
     onSettled?: () => void,
     attempt: number = 1,
   ): void {
-    if (this.disposed) {
+    if (this.disposed || opts.shouldContinue?.() === false) {
       onSettled?.();
       return;
     }
@@ -150,7 +151,9 @@ export class WakeDeliveryExecutor {
             maxAttempts: WAKE_MAX_ATTEMPTS,
             elapsedMs,
           });
-          opts.onSuccess?.();
+          if (opts.shouldContinue?.() !== false) {
+            opts.onSuccess?.();
+          }
           onSettled?.();
           return;
         }
@@ -219,6 +222,10 @@ export class WakeDeliveryExecutor {
               entries.delete(entry);
               if (entries.size === 0) this.pendingRetryTimers.delete(opts.sessionId);
             }
+            if (opts.shouldContinue?.() === false) {
+              onSettled?.();
+              return;
+            }
             this.executeNow(args, opts, onSettled, attempt + 1);
           }, delay),
           onCleared: onSettled,
@@ -238,7 +245,7 @@ export class WakeDeliveryExecutor {
     onSettled?: () => void,
     attempt: number = 1,
   ): void {
-    if (this.disposed) {
+    if (this.disposed || opts.shouldContinue?.() === false) {
       onSettled?.();
       return;
     }
@@ -275,7 +282,9 @@ export class WakeDeliveryExecutor {
           maxAttempts: WAKE_MAX_ATTEMPTS,
           elapsedMs,
         });
-        opts.onSuccess?.();
+        if (opts.shouldContinue?.() !== false) {
+          opts.onSuccess?.();
+        }
         onSettled?.();
       })
       .catch((err) => {
@@ -326,6 +335,10 @@ export class WakeDeliveryExecutor {
             if (entries) {
               entries.delete(entry);
               if (entries.size === 0) this.pendingRetryTimers.delete(opts.sessionId);
+            }
+            if (opts.shouldContinue?.() === false) {
+              onSettled?.();
+              return;
             }
             this.executePromiseNow(task, opts, onSettled, attempt + 1);
           }, delay),

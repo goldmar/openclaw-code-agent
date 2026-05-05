@@ -1,5 +1,5 @@
 import { sessionManager } from "./singletons";
-import { executeRespond } from "./actions/respond";
+import { executeRespond, rejectPlanDecision, requestPlanDecisionChanges } from "./actions/respond";
 import { makeAgentMergeTool } from "./tools/agent-merge";
 import { makeAgentPrTool } from "./tools/agent-pr";
 import { makeAgentOutputTool } from "./tools/agent-output";
@@ -350,54 +350,15 @@ export function createCallbackHandler(channel: InteractiveChannel = "telegram") 
 
         case "plan-reject": {
           await clearInteractiveState(ctx);
-          sessionManager.clearPlanDecisionTokens(sessionId);
-          const active = sessionManager.resolve(sessionId);
-          if (active) {
-            active.approvalState = "rejected";
-            sessionManager.kill(active.id, "user");
-            await replyText(ctx, `❌ Plan rejected for [${active.name}]. Session stopped.`);
-          } else {
-            const persisted = sessionManager.getPersistedSession?.(sessionId);
-            if (persisted) {
-              sessionManager.updatePersistedSession?.(sessionId, {
-                approvalState: "rejected",
-                lifecycle: "terminal",
-                pendingPlanApproval: false,
-                planApprovalContext: undefined,
-                planDecisionVersion: (persisted.planDecisionVersion ?? 0) + 1,
-              });
-              await replyText(ctx, `❌ Plan rejected for [${persisted.name ?? actionSessionName}]. Session remains stopped.`);
-            } else {
-              await replyText(ctx, `❌ Plan rejected.`);
-            }
-          }
+          const result = rejectPlanDecision(sessionManager, sessionId);
+          await replyText(ctx, `❌ ${result.text}`);
           break;
         }
 
         case "plan-request-changes": {
           await clearInteractiveState(ctx);
-          const reviseSession = sessionManager.resolve?.(sessionId);
-          const revisePersisted = sessionManager.getPersistedSession?.(sessionId);
-          const reviseName = reviseSession?.name ?? revisePersisted?.name ?? sessionId;
-          const planDecisionVersion = (reviseSession?.planDecisionVersion ?? revisePersisted?.planDecisionVersion ?? 0) + 1;
-          sessionManager.clearPlanDecisionTokens(sessionId);
-          sessionManager.updatePersistedSession(sessionId, {
-            approvalState: "changes_requested",
-            lifecycle: "awaiting_user_input",
-            pendingPlanApproval: false,
-            planDecisionVersion,
-            actionablePlanDecisionVersion: undefined,
-            canonicalPlanPromptVersion: undefined,
-            approvalPromptRequiredVersion: undefined,
-            approvalPromptVersion: undefined,
-            approvalPromptStatus: "not_sent",
-            approvalPromptTransport: "none",
-            approvalPromptMessageKind: "none",
-            approvalPromptLastAttemptAt: undefined,
-            approvalPromptDeliveredAt: undefined,
-            approvalPromptFailedAt: undefined,
-          });
-          await replyText(ctx, `✏️ Type your revision feedback for [${reviseName}] and I'll forward it to the agent.`);
+          const result = requestPlanDecisionChanges(sessionManager, sessionId);
+          await replyText(ctx, `✏️ ${result.text}`);
           break;
         }
 

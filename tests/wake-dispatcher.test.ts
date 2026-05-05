@@ -227,6 +227,45 @@ if (failConfigRaw) {
     assert.deepEqual(messages, ["🚀 launched", "🚀 launched", "✅ completed"]);
   });
 
+  it("suppresses queued revised plan prompts when the plan decision is rejected before delivery starts", async (t) => {
+    const dispatcher = createDispatcher();
+    const session: FakeSession = {
+      id: "session-plan-rejected",
+      route: buildRoute(),
+      originChannel: "telegram|bot|12345",
+      originThreadId: 11239,
+      originSessionKey: "agent:main:telegram:group:-1003863755361:topic:11239",
+    };
+    let shouldDeliverPlanV2 = true;
+
+    t.mock.method(wakeDeliveryExecutorInternals, "execFile", ((_file, args, _options, callback) => {
+      writeFileSync(logPath, `${JSON.stringify(args)}\n`, { flag: "a" });
+      setTimeout(() => callback?.(null, "", ""), 50);
+      return {} as any;
+    }) as typeof wakeDeliveryExecutorInternals.execFile);
+
+    dispatcher.dispatchSessionNotification(session as any, {
+      label: "plan-v1",
+      userMessage: "Plan v1 needs your decision",
+      notifyUser: "always",
+    });
+    dispatcher.dispatchSessionNotification(session as any, {
+      label: "plan-v2",
+      userMessage: "Plan v2 needs your decision",
+      notifyUser: "always",
+      buttons: [[{ label: "Reject", callbackData: "stale-reject-token" }]],
+      shouldDispatch: () => shouldDeliverPlanV2,
+    });
+
+    await waitForCalls(logPath, 1);
+    shouldDeliverPlanV2 = false;
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
+    const calls = readCalls(logPath);
+    assert.equal(calls.length, 1);
+    assert.equal(parseMessageSendArgs(calls[0] ?? []).message, "Plan v1 needs your decision");
+  });
+
   it("falls back and does not retry a direct launch notification after an ambiguous timeout", async (t) => {
     const dispatcher = createDispatcher();
     const session: FakeSession = {

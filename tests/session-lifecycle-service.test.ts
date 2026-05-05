@@ -251,6 +251,65 @@ describe("SessionLifecycleService", () => {
     assert.deepEqual(persistedUpdates, []);
   });
 
+  it("adds a plan-decision delivery guard that closes when the pending plan is rejected", () => {
+    const requests: Array<Record<string, unknown>> = [];
+    const service = new SessionLifecycleService({
+      persistSession: () => {},
+      clearWaitingTimestamp: () => {},
+      handleWorktreeStrategy: async () => ({
+        notificationSent: false,
+        worktreeRemoved: false,
+      }),
+      resolveWorktreeRepoDir: () => undefined,
+      updatePersistedSession: () => false,
+      dispatchSessionNotification: (_session, request) => {
+        requests.push(request as unknown as Record<string, unknown>);
+      },
+      notifySession: () => {},
+      clearRetryTimersForSession: () => {},
+      hasTurnCompleteWakeMarker: () => false,
+      shouldEmitTurnCompleteWake: () => true,
+      shouldEmitTerminalWake: () => true,
+      resolvePlanApprovalMode: () => "ask",
+      getPlanApprovalButtons: () => [[{ label: "Reject", callbackData: "reject-token" }]],
+      getResumeButtons: () => [],
+      getQuestionButtons: () => undefined,
+      extractLastOutputLine: () => undefined,
+      getOutputPreview: () => "Plan v2 preview",
+      originThreadLine: () => "Origin thread: telegram topic 42",
+      debounceWaitingEvent: () => true,
+      isAlreadyMerged: () => false,
+    });
+    const session = createStubSession({
+      id: "session-plan-v2",
+      name: "plan-v2",
+      lifecycle: "awaiting_plan_decision",
+      pendingPlanApproval: true,
+      approvalState: "pending",
+      planDecisionVersion: 2,
+      actionablePlanDecisionVersion: 2,
+      latestPlanArtifactVersion: 2,
+      latestPlanArtifact: {
+        markdown: "1. Revised Plan v2 step",
+        steps: [],
+      },
+    });
+
+    service.emitWaitingForInput(session);
+
+    assert.equal(requests.length, 1);
+    const request = requests[0] as { shouldDispatch?: () => boolean };
+    assert.equal(request.shouldDispatch?.(), true);
+
+    session.pendingPlanApproval = false;
+    session.approvalState = "rejected";
+    session.lifecycle = "terminal";
+    session.planDecisionVersion = 3;
+    session.actionablePlanDecisionVersion = undefined;
+
+    assert.equal(request.shouldDispatch?.(), false);
+  });
+
   it("reuses the question context preview when promptText is unavailable", () => {
     const requests: Array<Record<string, unknown>> = [];
     let previewCalls = 0;

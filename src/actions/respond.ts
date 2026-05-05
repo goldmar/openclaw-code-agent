@@ -10,7 +10,8 @@ import {
   type ResumeUnavailableReason,
   type ResumableSessionLike,
 } from "../session-resume";
-import type { SessionConfig } from "../types";
+import type { SessionControlPatch } from "../session-state";
+import type { PersistedSessionInfo, SessionConfig } from "../types";
 
 interface RespondParams {
   session: string;
@@ -25,6 +26,8 @@ interface RespondResult {
   text: string;
   isError?: boolean;
 }
+
+type PlanReplyDecision = "approve" | "revise" | "reject";
 
 const DEFAULT_MAX_AUTO_RESPONDS = 10;
 
@@ -53,6 +56,14 @@ function canAutoResumeStoppedPlanDecision(session: ResumableSession): boolean {
   return session.status !== "running"
     && !!session.pendingPlanApproval
     && !!getBackendConversationId(session);
+}
+
+function normalizePlanReplyDecision(message: string): PlanReplyDecision | undefined {
+  const normalized = message.trim().toLowerCase().replace(/[.!?]+$/g, "").trim();
+  if (normalized === "approve" || normalized === "approved") return "approve";
+  if (normalized === "revise" || normalized === "request changes" || normalized === "changes requested") return "revise";
+  if (normalized === "reject" || normalized === "rejected") return "reject";
+  return undefined;
 }
 
 /**
@@ -173,6 +184,91 @@ function persistPlanApprovalState(sm: SessionManager, session: Session): void {
   });
 }
 
+function nextPlanDecisionVersion(session: Partial<PlanApprovalTarget>): number {
+  return (session.planDecisionVersion ?? 0) + 1;
+}
+
+function buildPlanDecisionClosedPatch(
+  session: Partial<PlanApprovalTarget>,
+  approvalState: "changes_requested" | "rejected",
+): Partial<PersistedSessionInfo> {
+  const patch: Partial<PersistedSessionInfo> = {
+    approvalState,
+    lifecycle: approvalState === "rejected" ? "terminal" : "awaiting_user_input",
+    pendingPlanApproval: false,
+    planApprovalContext: undefined,
+    planDecisionVersion: nextPlanDecisionVersion(session),
+    actionablePlanDecisionVersion: undefined,
+    canonicalPlanPromptVersion: undefined,
+    approvalPromptRequiredVersion: undefined,
+    approvalPromptVersion: undefined,
+    approvalPromptStatus: "not_sent",
+    approvalPromptTransport: "none",
+    approvalPromptMessageKind: "none",
+    approvalPromptLastAttemptAt: undefined,
+    approvalPromptDeliveredAt: undefined,
+    approvalPromptFailedAt: undefined,
+  };
+  if (approvalState === "rejected") {
+    patch.runtimeState = "stopped";
+  }
+  return patch;
+}
+
+function applyPlanDecisionPatchToSession(session: Session, patch: Partial<PersistedSessionInfo>): void {
+  const maybePatchable = session as Session & {
+    applyControlPatch?: (patch: SessionControlPatch) => void;
+  };
+  if (typeof maybePatchable.applyControlPatch === "function") {
+    maybePatchable.applyControlPatch(patch as SessionControlPatch);
+  }
+
+  Object.assign(session, patch);
+}
+
+export function rejectPlanDecision(sm: SessionManager, sessionId: string): RespondResult {
+  const active = sm.resolve(sessionId);
+  const persisted = active ? undefined : sm.getPersistedSession(sessionId);
+  const target = active ?? persisted;
+  const name = target?.name ?? sessionId;
+
+  sm.clearPlanDecisionTokens?.(sessionId);
+
+  if (!target) {
+    return { text: `Plan rejected for [${name}].`, isError: false };
+  }
+
+  const patch = buildPlanDecisionClosedPatch(target, "rejected");
+  if (active) {
+    applyPlanDecisionPatchToSession(active, patch);
+    sm.updatePersistedSession?.(sessionId, patch);
+    sm.kill(active.id, "user");
+    return { text: `Plan rejected for [${active.name}]. Session stopped.` };
+  }
+
+  sm.updatePersistedSession?.(sessionId, patch);
+  return { text: `Plan rejected for [${name}]. Session remains stopped.` };
+}
+
+export function requestPlanDecisionChanges(sm: SessionManager, sessionId: string): RespondResult {
+  const active = sm.resolve(sessionId);
+  const persisted = active ? undefined : sm.getPersistedSession(sessionId);
+  const target = active ?? persisted;
+  const name = target?.name ?? sessionId;
+
+  sm.clearPlanDecisionTokens?.(sessionId);
+
+  if (target) {
+    const patch = buildPlanDecisionClosedPatch(target, "changes_requested");
+    if (active) {
+      applyPlanDecisionPatchToSession(active, patch);
+    }
+    sm.updatePersistedSession?.(sessionId, patch);
+  }
+
+  return { text: `Type your revision feedback for [${name}] and I'll forward it to the agent.` };
+}
+
 async function tryAutoResume(
   sm: SessionManager,
   session: ResumableSession,
@@ -279,6 +375,24 @@ export async function executeRespond(
 
   const target = session ?? persisted!;
   const resumeAssessment = target.status === "running" ? { kind: "direct" as const } : assessResumeCandidate(target);
+
+  const textPlanDecision =
+    !params.approve && target.pendingPlanApproval && params.userInitiated
+      ? normalizePlanReplyDecision(params.message)
+      : undefined;
+  if (textPlanDecision === "approve") {
+    return executeRespond(sm, {
+      ...params,
+      message: "Approved. Go ahead.",
+      approve: true,
+    });
+  }
+  if (textPlanDecision === "revise") {
+    return requestPlanDecisionChanges(sm, session?.id ?? persisted?.sessionId ?? params.session);
+  }
+  if (textPlanDecision === "reject") {
+    return rejectPlanDecision(sm, session?.id ?? persisted?.sessionId ?? params.session);
+  }
 
   if (params.approve) {
     const blockedReason = approvalBlockedReason(target);

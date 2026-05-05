@@ -364,6 +364,129 @@ describe("executeRespond", () => {
     assert.equal(session.approvalRationale, "The scope matches the request and the change is low risk.");
   });
 
+  it("routes plain-text Approve during pending plan approval through approval handling", async () => {
+    let switchedTo: string | undefined;
+    let sentMessage: string | undefined;
+    const session = createStubSession({
+      status: "running",
+      lifecycle: "awaiting_plan_decision",
+      pendingPlanApproval: true,
+      actionablePlanDecisionVersion: 2,
+      sendMessage: async (message: string) => {
+        sentMessage = message;
+      },
+      switchPermissionMode: (mode: string) => { switchedTo = mode; },
+    });
+    const sm = createStubSessionManager({ "test-id": session });
+
+    const result = await executeRespond(sm, {
+      session: "test-id",
+      message: "Approve",
+      userInitiated: true,
+    });
+
+    assert.equal(result.isError, undefined);
+    assert.match(result.text, /Plan approved for session/);
+    assert.equal(switchedTo, "bypassPermissions");
+    assert.equal(sentMessage, "Approved. Go ahead.");
+  });
+
+  it("routes plain-text Revise during pending plan approval to request-changes state", async () => {
+    let sentMessage: string | undefined;
+    const patches: Array<{ ref: string; patch: Record<string, unknown> }> = [];
+    const session = createStubSession({
+      status: "running",
+      lifecycle: "awaiting_plan_decision",
+      pendingPlanApproval: true,
+      approvalState: "pending",
+      planDecisionVersion: 4,
+      actionablePlanDecisionVersion: 4,
+      sendMessage: async (message: string) => {
+        sentMessage = message;
+      },
+    });
+    const sm = createStubSessionManager({ "test-id": session });
+    const reviseToken = (sm as any).interactions.createActionToken("test-id", "plan-request-changes", {
+      planDecisionVersion: 4,
+    });
+    (sm as any).updatePersistedSession = (ref: string, patch: Record<string, unknown>) => {
+      patches.push({ ref, patch });
+      return true;
+    };
+
+    const result = await executeRespond(sm, {
+      session: "test-id",
+      message: "Revise",
+      userInitiated: true,
+    });
+
+    assert.equal(result.isError, undefined);
+    assert.match(result.text, /Type your revision feedback/);
+    assert.equal(sentMessage, undefined);
+    assert.equal(session.approvalState, "changes_requested");
+    assert.equal(session.pendingPlanApproval, false);
+    assert.equal(session.lifecycle, "awaiting_user_input");
+    assert.equal(session.actionablePlanDecisionVersion, undefined);
+    assert.equal(sm.getActionToken(reviseToken.id), undefined);
+    assert.equal(patches[0].patch.approvalState, "changes_requested");
+  });
+
+  it("routes plain-text Reject during pending plan approval to terminal rejection", async () => {
+    let sentMessage: string | undefined;
+    let killed: { id: string; reason: string } | undefined;
+    const patches: Array<{ ref: string; patch: Record<string, unknown> }> = [];
+    const session = createStubSession({
+      status: "running",
+      lifecycle: "awaiting_plan_decision",
+      pendingPlanApproval: true,
+      approvalState: "pending",
+      planDecisionVersion: 8,
+      actionablePlanDecisionVersion: 8,
+      approvalPromptRequiredVersion: 8,
+      approvalPromptVersion: 8,
+      approvalPromptStatus: "delivered",
+      approvalPromptTransport: "direct-message",
+      approvalPromptMessageKind: "canonical_buttons",
+      sendMessage: async (message: string) => {
+        sentMessage = message;
+      },
+    });
+    const sm = createStubSessionManager({ "test-id": session });
+    const rejectToken = (sm as any).interactions.createActionToken("test-id", "plan-reject", {
+      planDecisionVersion: 8,
+    });
+    (sm as any).updatePersistedSession = (ref: string, patch: Record<string, unknown>) => {
+      patches.push({ ref, patch });
+      return true;
+    };
+    sm.kill = (id: string, reason?: any) => {
+      killed = { id, reason };
+      session.status = "killed";
+      return true;
+    };
+
+    const result = await executeRespond(sm, {
+      session: "test-id",
+      message: "Reject",
+      userInitiated: true,
+    });
+
+    assert.equal(result.isError, undefined);
+    assert.match(result.text, /Plan rejected for \[test-session\]\. Session stopped\./);
+    assert.equal(sentMessage, undefined, "Reject must not be forwarded as revision feedback");
+    assert.deepEqual(killed, { id: "test-id", reason: "user" });
+    assert.equal(session.approvalState, "rejected");
+    assert.equal(session.pendingPlanApproval, false);
+    assert.equal(session.lifecycle, "terminal");
+    assert.equal(session.actionablePlanDecisionVersion, undefined);
+    assert.equal(session.approvalPromptStatus, "not_sent");
+    assert.equal(sm.getActionToken(rejectToken.id), undefined);
+    assert.equal(patches.length, 1);
+    assert.equal(patches[0].patch.pendingPlanApproval, false);
+    assert.equal(patches[0].patch.approvalState, "rejected");
+    assert.equal(patches[0].patch.planDecisionVersion, 9);
+  });
+
   it("keeps only the delegated approval thumbs-up fallback for active sessions", async () => {
     const notifications: Array<{ text: string; label?: string }> = [];
     let switchedTo: string | undefined;
