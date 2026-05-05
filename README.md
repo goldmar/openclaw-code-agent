@@ -214,6 +214,14 @@ Prefer fully routable channel strings such as `telegram|123456789` or `telegram|
 
 ### Upgrade Notes
 
+For OpenClaw `2026.5.3` readiness:
+
+- Build and SDK metadata now target OpenClaw `2026.5.3`; the peer floor remains `>=2026.4.21` for existing compatible installs.
+- If your OpenClaw config uses an exclusive `plugins.allow` list, include `openclaw-code-agent` or the plugin's `agent_*` / `goal_*` tools will not load even if `tools.allow` names them.
+- Harness model policy should live under `harnesses.codex.*` and `harnesses["claude-code"].*`. Legacy `defaultModel`, `model`, `reasoningEffort`, and global `allowedModels` are compatibility-only.
+- Codex and Claude Code restrictions are harness-scoped. Codex defaults to `gpt-5.5` with `gpt-5.5` / `gpt-5.5-pro` allowed; Claude Code defaults to `anthropic/claude-sonnet-4-7` with `sonnet` / `opus` matching.
+- `tools.deny` does not disable OpenClaw's `apply_patch` tool by itself. Use OpenClaw's `tools.exec.applyPatch.*` settings when you need patch-tool policy.
+
 For `4.1.0`:
 
 - Managed TaskFlow integration is opportunistic. It uses OpenClaw's current managed-flow runtime when available and degrades to the existing session-only behavior when that surface is absent.

@@ -102,6 +102,75 @@ describe("resolveAgentLaunchRequest", () => {
     }
   });
 
+  it("rejects a Codex default model outside the configured harness allowlist", () => {
+    setPluginConfig({
+      harnesses: {
+        codex: {
+          defaultModel: "gpt-5.4",
+          allowedModels: ["gpt-5.5"],
+        },
+      },
+    });
+
+    const result = resolveAgentLaunchRequest(
+      {
+        prompt: "Use the configured Codex default",
+        harness: "codex",
+      },
+      { workspaceDir: "/tmp" } as any,
+      {},
+    );
+
+    assert.equal(result.kind, "error");
+    if (result.kind === "error") {
+      assert.match(result.text, /Default model "gpt-5\.4" is not in allowedModels/);
+      assert.match(result.text, /compatible defaultModel/);
+    }
+  });
+
+  it("accepts canonical Claude Code models through substring harness restrictions", () => {
+    const result = resolveAgentLaunchRequest(
+      {
+        prompt: "Use Claude Code",
+        harness: "claude-code",
+        model: "anthropic/claude-opus-4-7",
+      },
+      { workspaceDir: "/tmp" } as any,
+      {},
+    );
+
+    assert.equal(result.kind, "resolved");
+    if (result.kind === "resolved") {
+      assert.equal(result.resolvedModel, "anthropic/claude-opus-4-7");
+      assert.equal(result.permissionMode, "plan");
+      assert.equal(result.planApproval, "delegate");
+    }
+  });
+
+  it("applies per-launch plan approval overrides without changing worktree policy", () => {
+    setPluginConfig({
+      permissionMode: "plan",
+      planApproval: "delegate",
+      defaultWorktreeStrategy: "delegate",
+    });
+
+    const result = resolveAgentLaunchRequest(
+      {
+        prompt: "Plan this work",
+        plan_approval: "ask",
+        permission_mode: "default",
+      },
+      { workspaceDir: "/tmp" } as any,
+      {},
+    );
+
+    assert.equal(result.kind, "resolved");
+    if (result.kind === "resolved") {
+      assert.equal(result.permissionMode, "default");
+      assert.equal(result.planApproval, "ask");
+    }
+  });
+
   it("prefers canonical backend conversation ids for resume resolution", () => {
     const result = resolveAgentLaunchRequest(
       {

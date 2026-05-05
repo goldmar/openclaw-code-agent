@@ -34,7 +34,7 @@ describe("plugin entry source", () => {
     assert.doesNotMatch(activeWorkflowSources, /\bnpm audit\b/);
   });
 
-  it("declares the v2026.4.21 compatibility floor and v2026.5.2 build target in package metadata", () => {
+  it("declares the v2026.4.21 compatibility floor and v2026.5.3 build target in package metadata", () => {
     const packageJson = JSON.parse(readFileSync(join(rootDir, "package.json"), "utf8")) as {
       dependencies?: Record<string, string>;
       openclaw?: {
@@ -51,10 +51,10 @@ describe("plugin entry source", () => {
     assert.equal(packageJson.dependencies?.["@anthropic-ai/claude-agent-sdk"], "^0.2.119");
     assert.equal(packageJson.openclaw?.compat?.pluginApi, ">=2026.4.21");
     assert.equal(packageJson.openclaw?.compat?.minGatewayVersion, "2026.4.21");
-    assert.equal(packageJson.openclaw?.build?.openclawVersion, "2026.5.2");
-    assert.equal(packageJson.openclaw?.build?.pluginSdkVersion, "2026.5.2");
+    assert.equal(packageJson.openclaw?.build?.openclawVersion, "2026.5.3");
+    assert.equal(packageJson.openclaw?.build?.pluginSdkVersion, "2026.5.3");
     assert.equal(packageJson.peerDependencies?.openclaw, ">=2026.4.21");
-    assert.equal(packageJson.devDependencies?.openclaw, "2026.5.2");
+    assert.equal(packageJson.devDependencies?.openclaw, "2026.5.3");
     assert.equal(packageJson.pnpm?.overrides?.["fast-xml-parser@>=5.0.0 <5.7.0"], ">=5.7.0");
     assert.equal(packageJson.pnpm?.overrides?.["@anthropic-ai/vertex-sdk>google-auth-library"], "10.6.2");
     assert.doesNotMatch(readFileSync(join(rootDir, "pnpm-lock.yaml"), "utf8"), /uuid@9\.0\.1/);
@@ -253,6 +253,26 @@ describe("plugin entry source", () => {
     assert.match(indexSource, /id: "openclaw-code-agent"/);
     assert.match(indexSource, /name: "OpenClaw Code Agent"/);
     assert.match(indexSource, /register,\s*\n\}\);/);
+  });
+
+  it("keeps the 2026.5.3 plugin API compatibility shim narrow", () => {
+    const apiSource = readFileSync(join(rootDir, "api.ts"), "utf8");
+
+    assert.match(apiSource, /from "openclaw\/plugin-sdk\/plugin-entry"/);
+    assert.match(apiSource, /PluginInteractiveTelegramHandlerContext/);
+    assert.match(apiSource, /PluginInteractiveDiscordHandlerContext/);
+    assert.doesNotMatch(apiSource, /openclaw\/plugin-sdk\/telegram-account/);
+    assert.doesNotMatch(apiSource, /openclaw\/plugin-sdk\/discord/);
+  });
+
+  it("documents 2026.5.3 plugin allowlist and apply_patch policy boundaries", () => {
+    const reference = readFileSync(join(rootDir, "docs", "REFERENCE.md"), "utf8");
+
+    assert.match(reference, /OpenClaw 2026\.5\.3 Readiness/);
+    assert.match(reference, /plugins\.allow/);
+    assert.match(reference, /openclaw-code-agent/);
+    assert.match(reference, /tools\.exec\.applyPatch/);
+    assert.match(reference, /tools\.deny/);
   });
 
   it("bundles the OpenClaw plugin SDK entry helper into the release artifact", () => {
