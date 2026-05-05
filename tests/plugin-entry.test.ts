@@ -140,7 +140,18 @@ describe("plugin entry source", () => {
         cliBackends?: unknown[];
         configMigrations?: unknown[];
       };
-      configSchema?: any;
+      configSchema?: {
+        properties?: Record<string, {
+          default?: unknown;
+          description?: string;
+          enum?: string[];
+          additionalProperties?: {
+            properties?: Record<string, {
+              enum?: string[];
+            }>;
+          };
+        }>;
+      };
       uiHints?: Record<string, {
         advanced?: boolean;
         sensitive?: boolean;
