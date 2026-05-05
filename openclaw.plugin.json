@@ -2,7 +2,7 @@
   "id": "openclaw-code-agent",
   "name": "OpenClaw Code Agent",
   "description": "Multi-session coding-agent orchestration from OpenClaw chat",
-  "version": "4.1.0",
+  "version": "4.1.1",
   "contracts": {
     "tools": [
       "agent_launch",
@@ -87,9 +87,11 @@
               "enum": [
                 "low",
                 "medium",
-                "high"
+                "high",
+                "xhigh",
+                "max"
               ],
-              "description": "Harness-specific reasoning effort. Currently used by Codex."
+              "description": "Harness-specific reasoning effort. Used by Codex and passed to Claude Code when configured."
             }
           }
         }
@@ -107,7 +109,9 @@
         "enum": [
           "low",
           "medium",
-          "high"
+          "high",
+          "xhigh",
+          "max"
         ],
         "description": "Deprecated legacy Codex reasoning effort. Use harnesses.codex.reasoningEffort instead."
       },

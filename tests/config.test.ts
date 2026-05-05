@@ -374,6 +374,22 @@ describe("setPluginConfig", () => {
     assert.deepEqual(pluginConfig.allowedModels, ["sonnet", "opus"]);
   });
 
+  it("accepts v2026.5.4 extended reasoning efforts", () => {
+    setPluginConfig({
+      harnesses: {
+        codex: {
+          reasoningEffort: "xhigh",
+        },
+        "claude-code": {
+          reasoningEffort: "max",
+        },
+      },
+    });
+
+    assert.equal(pluginConfig.harnesses.codex?.reasoningEffort, "xhigh");
+    assert.equal(pluginConfig.harnesses["claude-code"]?.reasoningEffort, "max");
+  });
+
   it("uses defaults for missing numeric fields", () => {
     setPluginConfig({});
     assert.equal(pluginConfig.maxSessions, 20);

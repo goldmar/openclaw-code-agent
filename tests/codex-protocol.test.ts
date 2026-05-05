@@ -1,12 +1,37 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+  buildThreadStartPayloads,
   buildTurnStartPayloads,
   classifyTerminalOutcome,
   codexExecutionPolicyForMode,
 } from "../src/harness/codex-protocol";
 
 describe("codex protocol turn payloads", () => {
+  it("includes reasoning effort on fresh thread-start payload fallbacks", () => {
+    const payloads = buildThreadStartPayloads({
+      cwd: "/tmp/project",
+      model: "gpt-5.5",
+      reasoningEffort: "xhigh",
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+    });
+
+    assert.deepEqual(payloads[0], {
+      cwd: "/tmp/project",
+      model: "gpt-5.5",
+      reasoningEffort: "xhigh",
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+    });
+    assert.deepEqual(payloads[1], {
+      cwd: "/tmp/project",
+      reasoning_effort: "xhigh",
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+    });
+  });
+
   it("includes execution policy alongside plan collaboration mode", () => {
     const payloads = buildTurnStartPayloads({
       threadId: "thread-1",

@@ -297,14 +297,17 @@ export async function requestWithFallbacks(params: {
 export function buildThreadStartPayloads(params: {
   cwd: string;
   model?: string;
+  reasoningEffort?: string;
   approvalPolicy?: string;
   sandbox?: string;
 }): unknown[] {
   const base: Record<string, unknown> = { cwd: params.cwd };
   if (params.model?.trim()) base.model = params.model.trim();
+  if (params.reasoningEffort?.trim()) base.reasoningEffort = params.reasoningEffort.trim();
   if (params.approvalPolicy?.trim()) base.approvalPolicy = params.approvalPolicy.trim();
   if (params.sandbox?.trim()) base.sandbox = params.sandbox.trim();
   const fallback: Record<string, unknown> = { cwd: params.cwd };
+  if (params.reasoningEffort?.trim()) fallback.reasoning_effort = params.reasoningEffort.trim();
   if (params.approvalPolicy?.trim()) fallback.approvalPolicy = params.approvalPolicy.trim();
   if (params.sandbox?.trim()) fallback.sandbox = params.sandbox.trim();
   return [
@@ -345,24 +348,25 @@ export function buildCollaborationMode(
   developerInstructions?: string,
 ): Record<string, unknown> | undefined {
   const normalizedModel = model?.trim();
+  const normalizedReasoningEffort = reasoningEffort?.trim();
   const normalizedDeveloperInstructions = developerInstructions?.trim();
   if (mode !== "plan") {
-    return normalizedModel || normalizedDeveloperInstructions ? {
+    return normalizedModel || normalizedReasoningEffort || normalizedDeveloperInstructions ? {
       mode: "default",
       settings: {
         ...(normalizedModel ? { model: normalizedModel } : {}),
-        ...(reasoningEffort?.trim() ? { reasoningEffort: reasoningEffort.trim() } : {}),
+        ...(normalizedReasoningEffort ? { reasoningEffort: normalizedReasoningEffort } : {}),
         developerInstructions: normalizedDeveloperInstructions ?? null,
       },
     } : undefined;
   }
 
-  if (!normalizedModel && !normalizedDeveloperInstructions) return undefined;
+  if (!normalizedModel && !normalizedReasoningEffort && !normalizedDeveloperInstructions) return undefined;
   return {
     mode: "plan",
     settings: {
       ...(normalizedModel ? { model: normalizedModel } : {}),
-      ...(reasoningEffort?.trim() ? { reasoningEffort: reasoningEffort.trim() } : {}),
+      ...(normalizedReasoningEffort ? { reasoningEffort: normalizedReasoningEffort } : {}),
       developerInstructions: normalizedDeveloperInstructions ?? null,
     },
   };

@@ -1,5 +1,5 @@
 import { canonicalizeSessionRoute } from "./session-route";
-import { WORKTREE_STRATEGY_SET } from "./types";
+import { REASONING_EFFORT_SET, WORKTREE_STRATEGY_SET } from "./types";
 import type {
   ManagedWorktreeLifecycleState,
   PersistedSessionInfo,
@@ -54,7 +54,9 @@ function toOptionalNumber(value: unknown): number | undefined {
 }
 
 function toOptionalReasoningEffort(value: unknown): ReasoningEffort | undefined {
-  return value === "low" || value === "medium" || value === "high" ? value : undefined;
+  return typeof value === "string" && REASONING_EFFORT_SET.has(value as ReasoningEffort)
+    ? value as ReasoningEffort
+    : undefined;
 }
 
 function toOptionalPermissionMode(value: unknown): PermissionMode | undefined {

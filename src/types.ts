@@ -81,7 +81,9 @@ export const WORKTREE_STRATEGY_SET: ReadonlySet<WorktreeStrategy> = new Set(WORK
  * and `planApproval` instead of Codex-side approval prompts.
  */
 export type CodexApprovalPolicy = "never";
-export type ReasoningEffort = "low" | "medium" | "high";
+export const REASONING_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
+export type ReasoningEffort = typeof REASONING_EFFORTS[number];
+export const REASONING_EFFORT_SET: ReadonlySet<ReasoningEffort> = new Set(REASONING_EFFORTS);
 export type SessionBackendKind = "claude-code" | "codex-app-server";
 export type BackendWorktreeCapability = "plugin-managed" | "native-execution" | "native-restore";
 

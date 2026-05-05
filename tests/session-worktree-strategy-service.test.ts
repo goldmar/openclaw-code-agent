@@ -172,6 +172,54 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
     }
   });
 
+  it("falls back to an explicit pending decision notification when auto-pr fails", async () => {
+    const notifications: Array<Record<string, unknown>> = [];
+    const patches: Array<Record<string, unknown>> = [];
+    const buttons = [{ text: "Create PR", callback_data: "pr" }];
+    const service = new SessionWorktreeStrategyService({
+      shouldRunWorktreeStrategy: () => true,
+      isAlreadyMerged: () => false,
+      resolveWorktreeRepoDir: (dir) => dir,
+      getWorktreeCompletionState: () => "has-commits",
+      updatePersistedSession: (_ref, patch) => {
+        patches.push(patch as Record<string, unknown>);
+        Object.assign(session, patch);
+        return true;
+      },
+      dispatchSessionNotification: (_session, request) => {
+        notifications.push(request as Record<string, unknown>);
+      },
+      getOutputPreview: () => "",
+      originThreadLine: () => "thread",
+      getWorktreeDecisionButtons: () => buttons as any,
+      makeOpenPrButton: () => ({ label: "Open PR", callbackData: "open-pr" }),
+      worktreeMessages: new SessionWorktreeMessageService(),
+      enqueueMerge: async (_repoDir, fn) => { await fn(); },
+      mergeBranch,
+      spawnConflictResolver: async () => ({ id: "resolver-auto-pr", name: "unused" }),
+      runAutoPr: async () => ({ success: false }),
+    });
+
+    const session: any = {
+      id: "s-auto-pr-failure",
+      name: "auto-pr-failure",
+      harnessSessionId: "h-auto-pr-failure",
+      worktreePrTargetRepo: undefined,
+      worktreePushRemote: undefined,
+    };
+
+    const result = await (service as any).handleAutoPrStrategy(session, "main");
+
+    assert.deepEqual(result, { notificationSent: true, worktreeRemoved: false });
+    assert.equal(session.worktreeState, "pending_decision");
+    assert.equal(session.worktreeLifecycle?.state, "pending_decision");
+    assert.equal(patches.some((patch) => patch.worktreeState === "pr_in_progress"), true);
+    assert.equal(notifications.length, 1);
+    assert.equal(notifications[0].label, "worktree-auto-pr-failed");
+    assert.match(String(notifications[0].userMessage), /Auto-PR did not complete/i);
+    assert.equal(notifications[0].buttons, buttons);
+  });
+
   it("resets conflict-resolving sessions to pending decision when the retry fails with a non-rebase error", async () => {
     const notifications: Array<Record<string, unknown>> = [];
     const service = new SessionWorktreeStrategyService({

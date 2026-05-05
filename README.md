@@ -28,14 +28,14 @@ Need the ACPX vs Codex vs code-agent breakdown? See [docs/ACP-COMPARISON.md](doc
 
 The shared substrate is often the local `codex` command and Codex App Server, but the responsibilities are different. This plugin is not an ACP server and it does not depend on OpenClaw's bundled Codex provider to expose its own `codex` harness.
 
-## New In 4.1.0
+## New In 4.1.1
 
-`4.1.0` is the managed-lifecycle and notification reliability release. It keeps the `4.0.0` messaging-contract cleanup intact, preserves the `>=2026.4.21` compatibility floor, and adds the release-line fixes that make completion state and direct notification delivery deterministic.
+`4.1.1` is the OpenClaw `2026.5.4` compatibility patch. It keeps the `4.1.0` managed-lifecycle and notification reliability work intact, preserves the `>=2026.4.21` compatibility floor, and aligns harness model/thinking behavior with the newer OpenClaw release line.
 
 - **Managed TaskFlow lifecycle**. When the current OpenClaw runtime exposes managed TaskFlow APIs, code-agent sessions now create, update, wait, and finalize a gateway-owned flow record; older runtimes fall back cleanly without changing session behavior.
 - **Deterministic runtime state**. Completion and no-change paths now surface canonical approval/runtime state instead of asking operators to infer it from transcript text.
 - **Notification delivery reliability**. Direct notification timeouts, fallback failures, and completion-delivery diagnostics are handled explicitly so failed delivery is visible instead of silently hanging.
-- **Verified OpenClaw target**. Local build/test metadata targets stable OpenClaw `2026.5.2` while keeping the minimum compatibility floor at `>=2026.4.21`.
+- **Verified OpenClaw target**. Local build/test metadata targets stable OpenClaw `2026.5.4` while keeping the minimum compatibility floor at `>=2026.4.21`.
 
 ## From Prompt To Merged Branch
 
@@ -124,7 +124,7 @@ openclaw plugins inspect openclaw-code-agent --runtime --json
 
 Restart or reload the gateway only as part of your normal install/upgrade flow; it is not needed for editing docs or preparing a release branch.
 
-This release targets the OpenClaw `v2026.4.21` external plugin contract and is verified against the stable `v2026.5.2` build/test target. `package.json` carries the plugin API compatibility and build metadata used by modern OpenClaw / ClawHub installs, and `openclaw.plugin.json` advertises the plugin-owned startup, command activation surface, tool contracts, and onboarding metadata OpenClaw uses during plugin-config setup. Keep those metadata surfaces in sync when bumping the plugin release baseline.
+This release targets the OpenClaw `v2026.4.21` external plugin contract and is verified against the stable `v2026.5.4` build/test target. `package.json` carries the plugin API compatibility and build metadata used by modern OpenClaw / ClawHub installs, and `openclaw.plugin.json` advertises the plugin-owned startup, command activation surface, tool contracts, and onboarding metadata OpenClaw uses during plugin-config setup. Keep those metadata surfaces in sync when bumping the plugin release baseline.
 
 After install or update, inspect the runtime plugin view after the gateway restart. The runtime inspection should show the chat commands, service, and `agent_*` / `goal_*` tools without diagnostics. If `tools.effective` or `tools.invoke` cannot see `agent_launch` or `agent_sessions`, the installed plugin is stale or the gateway has not restarted onto the updated manifest and bundle.
 
@@ -214,11 +214,11 @@ Prefer fully routable channel strings such as `telegram|123456789` or `telegram|
 
 ### Upgrade Notes
 
-For OpenClaw `2026.5.3` readiness:
+For OpenClaw `2026.5.4` readiness:
 
-- Build and SDK metadata now target OpenClaw `2026.5.3`; the peer floor remains `>=2026.4.21` for existing compatible installs.
+- Build and SDK metadata now target OpenClaw `2026.5.4`; the peer floor remains `>=2026.4.21` for existing compatible installs.
 - If your OpenClaw config uses an exclusive `plugins.allow` list, include `openclaw-code-agent` or the plugin's `agent_*` / `goal_*` tools will not load even if `tools.allow` names them.
-- Harness model policy should live under `harnesses.codex.*` and `harnesses["claude-code"].*`. Legacy `defaultModel`, `model`, `reasoningEffort`, and global `allowedModels` are compatibility-only.
+- Harness model policy should live under `harnesses.codex.*` and `harnesses["claude-code"].*`. Legacy `defaultModel`, `model`, `reasoningEffort`, and global `allowedModels` are compatibility-only. Configured `reasoningEffort` supports `low`, `medium`, `high`, `xhigh`, and `max`.
 - Codex and Claude Code restrictions are harness-scoped. Codex defaults to `gpt-5.5` with `gpt-5.5` / `gpt-5.5-pro` allowed; Claude Code defaults to `anthropic/claude-sonnet-4-7` with `sonnet` / `opus` matching.
 - `tools.deny` does not disable OpenClaw's `apply_patch` tool by itself. Use OpenClaw's `tools.exec.applyPatch.*` settings when you need patch-tool policy.
 
