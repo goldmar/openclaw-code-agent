@@ -36,8 +36,8 @@ importers:
         specifier: ^5.1.7
         version: 5.1.9
       openclaw:
-        specifier: 2026.5.2
-        version: 2026.5.2(@types/express@5.0.6)
+        specifier: 2026.5.3
+        version: 2026.5.3(@types/express@5.0.6)
       tsx:
         specifier: ^4.21.0
         version: 4.21.0
@@ -2035,6 +2035,10 @@ packages:
     resolution: {integrity: sha512-eonl3sLUha+S1GzTPxychyhnUzKyeQkZ7jLjKrBagJgPla13F+uQ71HgpFefyHgqrjEbCPkDArxYsjY8/+gLKA==}
     engines: {node: '>= 0.4.0'}
 
+  node-addon-api@8.7.0:
+    resolution: {integrity: sha512-9MdFxmkKaOYVTV+XVRG8ArDwwQ77XIgIPyKASB1k3JPq3M8fGQQQE3YpMOrKm6g//Ktx8ivZr8xo1Qmtqub+GA==}
+    engines: {node: ^18 || ^20 || >= 21}
+
   node-domexception@1.0.0:
     resolution: {integrity: sha512-/jKZoMpw0F8GRwl4/eLROPA3cfcXtLApP0QzLmUT/HuPCZWyB7IY9ZrMeKw2O/nFIqPQB3PVM9aYm0F312AXDQ==}
     engines: {node: '>=10.5.0'}
@@ -2056,6 +2060,10 @@ packages:
   node-fetch@3.3.2:
     resolution: {integrity: sha512-dRB78srN/l6gqWulah9SrxeYnxeddIG30+GOqK/9OlLVyLg3HPnr6SqOWTWOXKRwC2eGYCkZ59NNuSgvSrpgOA==}
     engines: {node: ^12.20.0 || ^14.13.1 || >=16.0.0}
+
+  node-gyp-build@4.8.4:
+    resolution: {integrity: sha512-LA4ZjwlnUblHVgq0oBF3Jl/6h/Nvs5fzBLwdEF4nuxnFdsfajde4WfxtJr3CaiH+F6ewcIB/q4jQ4UzPyid+CQ==}
+    hasBin: true
 
   nth-check@2.1.1:
     resolution: {integrity: sha512-lqjrjmaOoAnWfMmBPL+XNnynZh2+swxiX3WUE0s4yEHI6m+AwrK2UZOimIRl3X/4QctVqS8AiZjFqyOGrMXb/w==}
@@ -2103,8 +2111,8 @@ packages:
       zod:
         optional: true
 
-  openclaw@2026.5.2:
-    resolution: {integrity: sha512-Jz00jdV/yE0/RfAln0tVlEq1hX9DIZdc7NRZVQRpt98XINduqoua9uOc1Ty4GeYlg5c746Lhl5ZCe6A4rsOmng==}
+  openclaw@2026.5.3:
+    resolution: {integrity: sha512-DMhhMDREWd/KM0RjrQT2aAv/xrf/zGiRzuDf91osADv84r84G9ZQROHalFwJIxzkw2dLg+StAUz0fkQKFPKQPQ==}
     engines: {node: '>=22.14.0'}
     hasBin: true
 
@@ -2498,6 +2506,14 @@ packages:
   tr46@0.0.3:
     resolution: {integrity: sha512-N3WMsuqV66lT30CrXNbEjx4GEwlow3v6rr4mCcv6prnfwhS01rkgyFdjPNBYd9br7LpXV1+Emh01fHnq2Gdgrw==}
 
+  tree-sitter-bash@0.25.1:
+    resolution: {integrity: sha512-7hMytuYIMoXOq24yRulgIxthE9YmggZIOHCyPTTuJcu6EU54tYD+4G39cUb28kxC6jMf/AbPfWGLQtgPTdh3xw==}
+    peerDependencies:
+      tree-sitter: ^0.25.0
+    peerDependenciesMeta:
+      tree-sitter:
+        optional: true
+
   ts-algebra@2.0.0:
     resolution: {integrity: sha512-FPAhNPFMrkwz76P7cdjdmiShwMynZYN6SgOujD1urY4oNm80Ou9oMdmbR45LotcKOXoy7wSmHkRFE6Mxbrhefw==}
 
@@ -2577,6 +2593,9 @@ packages:
   web-streams-polyfill@3.3.3:
     resolution: {integrity: sha512-d2JWLCivmZYTSIoge9MsgFCZrt571BikcWGYkjC1khllbTeDlGqZ2D8vD8E/lJa8WGWbb7Plm8/XJYV7IJHZZw==}
     engines: {node: '>= 8'}
+
+  web-tree-sitter@0.26.8:
+    resolution: {integrity: sha512-4sUwi7ZyOrIk5KLgYLkc2A/F0LFMQnBhfb+2Cdl7ik4ePJ6JD+fk4ofI2sA5eGawBKBaK4Vntt7Ww5KcEsay4A==}
 
   webidl-conversions@3.0.1:
     resolution: {integrity: sha512-2JAn3z8AR6rjK8Sm8orRC0h/bcl/DqL7tRPdGZ4I1CjdF+EaMLmYxBHyXuKL849eucPFhvBoxMsflfOb8kxaeQ==}
@@ -5117,6 +5136,8 @@ snapshots:
 
   netmask@2.1.1: {}
 
+  node-addon-api@8.7.0: {}
+
   node-domexception@1.0.0: {}
 
   node-edge-tts@1.2.10:
@@ -5138,6 +5159,8 @@ snapshots:
       data-uri-to-buffer: 4.0.1
       fetch-blob: 3.2.0
       formdata-polyfill: 4.0.10
+
+  node-gyp-build@4.8.4: {}
 
   nth-check@2.1.1:
     dependencies:
@@ -5167,7 +5190,7 @@ snapshots:
       ws: 8.20.0
       zod: 4.4.2
 
-  openclaw@2026.5.2(@types/express@5.0.6):
+  openclaw@2026.5.3(@types/express@5.0.6):
     dependencies:
       '@agentclientprotocol/sdk': 0.21.0(zod@4.4.2)
       '@anthropic-ai/sdk': 0.92.0(zod@4.4.2)
@@ -5216,16 +5239,19 @@ snapshots:
       playwright-core: 1.59.1
       proxy-agent: 8.0.1
       qrcode: 1.5.4
-      sqlite-vec: 0.1.9
       tar: 7.5.13
       tokenjuice: 0.7.0
+      tree-sitter-bash: 0.25.1
       tslog: 4.10.2
       typebox: 1.1.37
       undici: 8.1.0
       web-push: 3.6.7
+      web-tree-sitter: 0.26.8
       ws: 8.20.0
       yaml: 2.8.3
       zod: 4.4.2
+    optionalDependencies:
+      sqlite-vec: 0.1.9
     transitivePeerDependencies:
       - '@cfworker/json-schema'
       - '@types/express'
@@ -5235,6 +5261,7 @@ snapshots:
       - debug
       - encoding
       - supports-color
+      - tree-sitter
       - utf-8-validate
 
   openshell@0.1.0:
@@ -5608,6 +5635,7 @@ snapshots:
       sqlite-vec-linux-arm64: 0.1.9
       sqlite-vec-linux-x64: 0.1.9
       sqlite-vec-windows-x64: 0.1.9
+    optional: true
 
   statuses@2.0.2: {}
 
@@ -5683,6 +5711,11 @@ snapshots:
 
   tr46@0.0.3: {}
 
+  tree-sitter-bash@0.25.1:
+    dependencies:
+      node-addon-api: 8.7.0
+      node-gyp-build: 4.8.4
+
   ts-algebra@2.0.0: {}
 
   tslib@2.8.1: {}
@@ -5741,6 +5774,8 @@ snapshots:
       - supports-color
 
   web-streams-polyfill@3.3.3: {}
+
+  web-tree-sitter@0.26.8: {}
 
   webidl-conversions@3.0.1: {}
 
