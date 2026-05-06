@@ -153,14 +153,18 @@ Ask OpenClaw for worktree status before cleaning resolved sandboxes.
 
 ### Goal Tasks
 
-Goal tasks are explicit autonomous loops. They do not replace ordinary coding sessions.
+Goal tasks are explicit autonomous loops for work that should keep iterating toward a defined finish line. They do not replace ordinary coding sessions.
 
-```bash
-/goal --workdir /repo --verify "pnpm test" Fix the failing auth flow
-/goal --workdir /repo --mode ralph --completion-promise DONE Ship the draft workflow
+Ask in normal chat:
+
+```text
+Start a verifier goal in /repo: fix the failing auth flow and keep running pnpm test until it passes.
+Start a Ralph-style goal for /repo: ship the draft workflow, and consider it complete when the output says DONE.
+Show goal status.
+Stop the auth goal.
 ```
 
-Use `goal_status` to inspect progress and `goal_stop` to stop a loop.
+OpenClaw agents can use the goal tools directly when they need explicit loop control; humans can usually describe the goal in plain language.
 
 ## Tools And Commands
 
@@ -182,7 +186,7 @@ Most users interact in chat. The tool surface is for OpenClaw agents and advance
 | `goal_status` | Show one goal task or list all goal tasks |
 | `goal_stop` | Stop a running goal task |
 
-Chat commands mirror the common workflows when you want explicit commands instead of natural-language chat: `/agent`, `/agent_sessions`, `/agent_output`, `/agent_respond`, `/agent_kill`, `/agent_stats`, `/goal`, `/goal_status`, and `/goal_stop`.
+Chat commands mirror the common workflows when you want explicit commands instead of natural-language chat, but most human use should start with plain requests like the examples above. Available commands are `/agent`, `/agent_sessions`, `/agent_output`, `/agent_respond`, `/agent_kill`, `/agent_stats`, `/goal`, `/goal_status`, and `/goal_stop`.
 
 ## Docs
 

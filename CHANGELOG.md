@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- Extracted keyed async operation queueing from `SessionManager` and reused it for per-repository merge serialization.
+- Reused the keyed operation queue for ordered wake dispatch and moved session maintenance scheduling into an internal service.
+- Centralized chat command argument tokenization so `/agent`, `/agent_respond`, `/agent_output`, and `/goal` share quoted-argument handling.
+- Reworked README goal-task examples to use human conversation prompts instead of command invocations.
+- Updated the release workflow to publish the same packed artifact to npm and ClawHub.
 - Reworked the README into a shorter operator-first guide and moved release-detail emphasis back to the changelog/reference docs.
 - Aligned worktree decision button documentation with the current state-aware `Merge`, `Open PR`, `View PR`, `Sync PR`, `Later`, and `Discard` labels.
 - Removed the stale `workflows/` package file entry because no workflows are shipped in the npm tarball.

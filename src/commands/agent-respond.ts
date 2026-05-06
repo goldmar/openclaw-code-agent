@@ -1,5 +1,6 @@
 import { sessionManager } from "../singletons";
 import { executeRespond } from "../actions/respond";
+import { consumeFirstCommandArg } from "./args";
 
 interface AgentRespondCommandContext {
   args?: string;
@@ -35,19 +36,20 @@ export function registerAgentRespondCommand(api: CommandApi): void {
 
       let interrupt = false;
       let remaining = args;
-      if (remaining.startsWith("--interrupt ")) {
+      const first = consumeFirstCommandArg(remaining);
+      if (first?.value === "--interrupt") {
         interrupt = true;
-        remaining = remaining.slice("--interrupt ".length).trim();
+        remaining = first.rest;
       }
 
-      const spaceIdx = remaining.indexOf(" ");
-      if (spaceIdx === -1) {
+      const refArg = consumeFirstCommandArg(remaining);
+      if (!refArg) {
         return { text: "Error: Missing message. Usage: /agent_respond <id-or-name> <message>" };
       }
 
-      const ref = remaining.slice(0, spaceIdx);
-      const message = remaining.slice(spaceIdx + 1).trim();
-      if (!message) {
+      const ref = refArg.value;
+      const message = refArg.rest;
+      if (!message.trim()) {
         return { text: "Error: Empty message. Usage: /agent_respond <id-or-name> <message>" };
       }
 

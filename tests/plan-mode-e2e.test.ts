@@ -396,7 +396,7 @@ describe("Plan mode E2E: approve=true on idle-killed plan session (double-approv
 });
 
 // ---------------------------------------------------------------------------
-// Test: Fix B — Codex plan mode sets pendingPlanApproval after first turn
+// Regression: Codex plan mode sets pendingPlanApproval after first turn
 // ---------------------------------------------------------------------------
 
 describe("Plan mode E2E: Codex plan turn sets pendingPlanApproval", () => {
@@ -404,7 +404,7 @@ describe("Plan mode E2E: Codex plan turn sets pendingPlanApproval", () => {
     // Use the fake harness but start a session with permissionMode="plan".
     // The key assertion is that when the first turn's result arrives, the
     // currentPermissionMode=="plan" path sets pendingPlanApproval=true — this
-    // is the same path that fires for Codex sessions after Fix B.
+    // is the same path that fires for Codex plan sessions.
     const session = await startSession({ permissionMode: "plan", multiTurn: true });
 
     assert.equal(session.currentPermissionMode, "plan",

@@ -33,7 +33,7 @@ describe("agent command", () => {
         spawnConfig = config;
         return {
           id: "sess-agent-command",
-          name: "agent-command",
+          name: config.name,
           model: config.model,
           reasoningEffort: config.reasoningEffort,
           worktreeStrategy: "delegate",
@@ -46,7 +46,7 @@ describe("agent command", () => {
 
     const handler = captureAgentCommand();
     const result = handler({
-      args: "--name agent-command Fix the auth bug",
+      args: '--name "agent command" Fix the auth bug',
       workspaceDir: "/tmp",
       sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
       deliveryContext: {
@@ -57,7 +57,7 @@ describe("agent command", () => {
       },
     });
 
-    assert.equal(result.text, "launched agent-command with plan/delegate");
+    assert.equal(result.text, "launched agent command with plan/delegate");
     assert.ok(spawnConfig, "spawn should be called");
     assert.equal(spawnConfig?.permissionMode, "plan");
     assert.equal(spawnConfig?.planApproval, "delegate");
