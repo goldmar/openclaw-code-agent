@@ -32,7 +32,7 @@ import { SessionManager } from "./src/session-manager";
 import { setGoalController, setSessionManager } from "./src/singletons";
 import { setPluginRuntime } from "./src/runtime-store";
 import { setPluginConfig, pluginConfig } from "./src/config";
-import { definePluginEntry, type OpenClawPluginApi, type OpenClawPluginToolContext } from "./api";
+import { definePluginEntry, type OpenClawPluginApi, type OpenClawPluginServiceContext, type OpenClawPluginToolContext } from "./api";
 
 /**
  * Startup orphan cleanup: scan worktree base dir(s) for old worktrees and clean them up.
@@ -114,71 +114,128 @@ function cleanupOrphanedWorktrees(sm: SessionManager): void {
 export function register(api: OpenClawPluginApi): void {
   let sm: SessionManager | null = null;
   let gc: GoalController | null = null;
+  let started = false;
+  let startedWithServiceContext = false;
   const registerTool = api.registerTool as (
     tool: (ctx: OpenClawPluginToolContext) => unknown,
     options?: { optional?: boolean; name?: string },
   ) => void;
   setPluginRuntime(api.runtime);
 
+  const startCodeAgentService = (ctx?: OpenClawPluginServiceContext): void => {
+    if (started) {
+      if (ctx && !startedWithServiceContext) {
+        setPluginRuntime(api.runtime, ctx.config);
+        startedWithServiceContext = true;
+      }
+      return;
+    }
+
+    const config = api.pluginConfig ?? {};
+    setPluginConfig(config);
+    if (ctx) {
+      setPluginRuntime(api.runtime, ctx.config);
+      startedWithServiceContext = true;
+    } else {
+      setPluginRuntime(api.runtime);
+      startedWithServiceContext = false;
+    }
+
+    sm = new SessionManager(pluginConfig.maxSessions, pluginConfig.maxPersistedSessions);
+    gc = new GoalController(sm);
+    setSessionManager(sm);
+    setGoalController(gc);
+    gc.start();
+
+    cleanupOrphanedWorktrees(sm);
+    sm.bootstrapMaintenanceSchedules();
+    started = true;
+  };
+
+  const stopCodeAgentService = (): void => {
+    if (gc) gc.stop();
+    if (sm) sm.killAll("shutdown");
+    if (sm) sm.dispose();
+    gc = null;
+    sm = null;
+    started = false;
+    startedWithServiceContext = false;
+    setPluginRuntime(undefined);
+    setGoalController(null);
+    setSessionManager(null);
+  };
+
+  const registerCodeAgentTool = (
+    tool: (ctx: OpenClawPluginToolContext) => unknown,
+    options: { optional?: boolean; name?: string },
+  ): void => {
+    registerTool((ctx: OpenClawPluginToolContext) => {
+      startCodeAgentService();
+      return tool(ctx);
+    }, options);
+  };
+
+  const commandApi = {
+    ...api,
+    registerCommand(command: Parameters<OpenClawPluginApi["registerCommand"]>[0]) {
+      api.registerCommand({
+        ...command,
+        handler: (ctx: Parameters<typeof command.handler>[0]) => {
+          startCodeAgentService();
+          return command.handler(ctx);
+        },
+      });
+    },
+  } as OpenClawPluginApi;
+
+  const registerCodeAgentInteractiveHandler = (channel: "telegram" | "discord"): void => {
+    const registration = createCallbackHandler(channel);
+    api.registerInteractiveHandler({
+      ...registration,
+      handler: async (ctx: Parameters<typeof registration.handler>[0]) => {
+        startCodeAgentService();
+        return registration.handler(ctx);
+      },
+    });
+  };
+
   // Tools
-  registerTool((ctx: OpenClawPluginToolContext) => makeAgentLaunchTool(ctx), { optional: false, name: "agent_launch" });
-  registerTool((ctx: OpenClawPluginToolContext) => makeAgentSessionsTool(ctx), { optional: false, name: "agent_sessions" });
-  registerTool((ctx: OpenClawPluginToolContext) => makeAgentKillTool(ctx), { optional: false, name: "agent_kill" });
-  registerTool((ctx: OpenClawPluginToolContext) => makeAgentOutputTool(ctx), { optional: false, name: "agent_output" });
-  registerTool((ctx: OpenClawPluginToolContext) => makeAgentRespondTool(ctx), { optional: false, name: "agent_respond" });
-  registerTool((ctx: OpenClawPluginToolContext) => makeAgentRequestPlanApprovalTool(ctx), { optional: false, name: "agent_request_plan_approval" });
-  registerTool((ctx: OpenClawPluginToolContext) => makeAgentSendPlanOfferTool(ctx), { optional: false, name: "agent_send_plan_offer" });
-  registerTool((ctx: OpenClawPluginToolContext) => makeAgentStatsTool(ctx), { optional: false, name: "agent_stats" });
-  registerTool((ctx: OpenClawPluginToolContext) => makeAgentMergeTool(ctx), { optional: false, name: "agent_merge" });
-  registerTool((ctx: OpenClawPluginToolContext) => makeAgentPrTool(ctx), { optional: false, name: "agent_pr" });
-  registerTool((ctx: OpenClawPluginToolContext) => makeAgentWorktreeCleanupTool(ctx), { optional: false, name: "agent_worktree_cleanup" });
-  registerTool((ctx: OpenClawPluginToolContext) => makeAgentWorktreeStatusTool(ctx), { optional: false, name: "agent_worktree_status" });
-  registerTool((ctx: OpenClawPluginToolContext) => makeGoalLaunchTool(ctx), { optional: false, name: "goal_launch" });
-  registerTool((ctx: OpenClawPluginToolContext) => makeGoalStatusTool(ctx), { optional: false, name: "goal_status" });
-  registerTool((ctx: OpenClawPluginToolContext) => makeGoalStopTool(ctx), { optional: false, name: "goal_stop" });
+  registerCodeAgentTool((ctx: OpenClawPluginToolContext) => makeAgentLaunchTool(ctx), { optional: false, name: "agent_launch" });
+  registerCodeAgentTool((ctx: OpenClawPluginToolContext) => makeAgentSessionsTool(ctx), { optional: false, name: "agent_sessions" });
+  registerCodeAgentTool((ctx: OpenClawPluginToolContext) => makeAgentKillTool(ctx), { optional: false, name: "agent_kill" });
+  registerCodeAgentTool((ctx: OpenClawPluginToolContext) => makeAgentOutputTool(ctx), { optional: false, name: "agent_output" });
+  registerCodeAgentTool((ctx: OpenClawPluginToolContext) => makeAgentRespondTool(ctx), { optional: false, name: "agent_respond" });
+  registerCodeAgentTool((ctx: OpenClawPluginToolContext) => makeAgentRequestPlanApprovalTool(ctx), { optional: false, name: "agent_request_plan_approval" });
+  registerCodeAgentTool((ctx: OpenClawPluginToolContext) => makeAgentSendPlanOfferTool(ctx), { optional: false, name: "agent_send_plan_offer" });
+  registerCodeAgentTool((ctx: OpenClawPluginToolContext) => makeAgentStatsTool(ctx), { optional: false, name: "agent_stats" });
+  registerCodeAgentTool((ctx: OpenClawPluginToolContext) => makeAgentMergeTool(ctx), { optional: false, name: "agent_merge" });
+  registerCodeAgentTool((ctx: OpenClawPluginToolContext) => makeAgentPrTool(ctx), { optional: false, name: "agent_pr" });
+  registerCodeAgentTool((ctx: OpenClawPluginToolContext) => makeAgentWorktreeCleanupTool(ctx), { optional: false, name: "agent_worktree_cleanup" });
+  registerCodeAgentTool((ctx: OpenClawPluginToolContext) => makeAgentWorktreeStatusTool(ctx), { optional: false, name: "agent_worktree_status" });
+  registerCodeAgentTool((ctx: OpenClawPluginToolContext) => makeGoalLaunchTool(ctx), { optional: false, name: "goal_launch" });
+  registerCodeAgentTool((ctx: OpenClawPluginToolContext) => makeGoalStatusTool(ctx), { optional: false, name: "goal_status" });
+  registerCodeAgentTool((ctx: OpenClawPluginToolContext) => makeGoalStopTool(ctx), { optional: false, name: "goal_stop" });
 
   // Interactive handlers (shared action-token callbacks across chat transports)
-  api.registerInteractiveHandler(createCallbackHandler("telegram"));
-  api.registerInteractiveHandler(createCallbackHandler("discord"));
+  registerCodeAgentInteractiveHandler("telegram");
+  registerCodeAgentInteractiveHandler("discord");
 
   // Commands
-  registerAgentCommand(api);
-  registerAgentSessionsCommand(api);
-  registerAgentKillCommand(api);
-  registerAgentRespondCommand(api);
-  registerAgentStatsCommand(api);
-  registerAgentOutputCommand(api);
-  registerGoalCommand(api);
-  registerGoalStatusCommand(api);
-  registerGoalStopCommand(api);
+  registerAgentCommand(commandApi);
+  registerAgentSessionsCommand(commandApi);
+  registerAgentKillCommand(commandApi);
+  registerAgentRespondCommand(commandApi);
+  registerAgentStatsCommand(commandApi);
+  registerAgentOutputCommand(commandApi);
+  registerGoalCommand(commandApi);
+  registerGoalStatusCommand(commandApi);
+  registerGoalStopCommand(commandApi);
 
   // Service
   api.registerService({
     id: "openclaw-code-agent",
-    start: (ctx) => {
-      const config = api.pluginConfig ?? {};
-      setPluginConfig(config);
-      setPluginRuntime(api.runtime, ctx.config);
-
-      sm = new SessionManager(pluginConfig.maxSessions, pluginConfig.maxPersistedSessions);
-      gc = new GoalController(sm);
-      setSessionManager(sm);
-      setGoalController(gc);
-      gc.start();
-
-      cleanupOrphanedWorktrees(sm);
-      sm.bootstrapMaintenanceSchedules();
-    },
-    stop: () => {
-      if (gc) gc.stop();
-      if (sm) sm.killAll("shutdown");
-      if (sm) sm.dispose();
-      gc = null;
-      sm = null;
-      setPluginRuntime(undefined);
-      setGoalController(null);
-      setSessionManager(null);
-    },
+    start: startCodeAgentService,
+    stop: stopCodeAgentService,
   });
 }
 
