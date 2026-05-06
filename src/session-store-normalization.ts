@@ -198,6 +198,8 @@ function toOptionalActionKind(value: unknown): SessionActionKind | undefined {
   return value === "plan-approve"
     || value === "plan-request-changes"
     || value === "plan-reject"
+    || value === "plan-offer-start"
+    || value === "plan-offer-dismiss"
     || value === "monitor-start-plan"
     || value === "monitor-dismiss"
     || value === "worktree-merge"

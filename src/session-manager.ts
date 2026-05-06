@@ -815,6 +815,34 @@ export class SessionManager {
     });
   }
 
+  sendPlanOffer(args: {
+    offerId: string;
+    route: SessionRoute;
+    text: string;
+    planName: string;
+    planPrompt: string;
+    planWorkdir: string;
+    planWorktreeStrategy?: WorktreeStrategy;
+  }): void {
+    const buttons = this.interactions.getPlanOfferButtons({
+      offerId: args.offerId,
+      route: args.route,
+      planName: args.planName,
+      planPrompt: args.planPrompt,
+      planWorkdir: args.planWorkdir,
+      planWorktreeStrategy: args.planWorktreeStrategy,
+    });
+    this.dispatchSessionNotification(this.buildRoutingProxy({
+      id: args.offerId,
+      route: args.route,
+    }), {
+      label: "plan-offer",
+      userMessage: args.text,
+      notifyUser: "always",
+      buttons,
+    });
+  }
+
   sendMonitorReport(args: {
     reportId: string;
     route: SessionRoute;
@@ -824,22 +852,15 @@ export class SessionManager {
     planWorkdir: string;
     planWorktreeStrategy?: WorktreeStrategy;
   }): void {
-    const buttons = this.interactions.getMonitorReportButtons({
-      reportId: args.reportId,
+    // Compatibility for the original monitor-specific tool surface.
+    this.sendPlanOffer({
+      offerId: args.reportId,
       route: args.route,
+      text: args.text,
       planName: args.planName,
       planPrompt: args.planPrompt,
       planWorkdir: args.planWorkdir,
       planWorktreeStrategy: args.planWorktreeStrategy,
-    });
-    this.dispatchSessionNotification(this.buildRoutingProxy({
-      id: args.reportId,
-      route: args.route,
-    }), {
-      label: "monitor-report",
-      userMessage: args.text,
-      notifyUser: "always",
-      buttons,
     });
   }
 
@@ -866,7 +887,7 @@ export class SessionManager {
     });
   }
 
-  launchMonitorPlan(args: {
+  launchPlanOffer(args: {
     route?: SessionRoute;
     prompt: string;
     workdir: string;
@@ -888,6 +909,17 @@ export class SessionManager {
       originThreadId: route.threadId,
       originSessionKey: route.sessionKey,
     });
+  }
+
+  launchMonitorPlan(args: {
+    route?: SessionRoute;
+    prompt: string;
+    workdir: string;
+    name?: string;
+    worktreeStrategy?: WorktreeStrategy;
+  }): Session {
+    // Compatibility for legacy monitor-start-plan action tokens.
+    return this.launchPlanOffer(args);
   }
 
   private dispatchSessionNotification(session: Session, request: SessionNotificationRequest): void {

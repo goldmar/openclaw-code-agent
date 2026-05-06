@@ -68,6 +68,7 @@ export class SessionInteractionService {
       case "plan-approve":
       case "worktree-create-pr":
       case "worktree-update-pr":
+      case "plan-offer-start":
       case "monitor-start-plan":
         return "primary";
       case "worktree-merge":
@@ -166,27 +167,27 @@ export class SessionInteractionService {
     ))];
   }
 
-  getMonitorReportButtons(args: {
-    reportId: string;
+  getPlanOfferButtons(args: {
+    offerId: string;
     route: SessionRoute;
     planName: string;
     planPrompt: string;
     planWorkdir: string;
     planWorktreeStrategy?: WorktreeStrategy;
   }): NotificationButton[][] {
-    const { reportId, route, planName, planPrompt, planWorkdir, planWorktreeStrategy } = args;
+    const { offerId, route, planName, planPrompt, planWorkdir, planWorktreeStrategy } = args;
     const buttons = [[
-      this.makeActionButton(reportId, "monitor-start-plan", "Start Plan", {
+      this.makeActionButton(offerId, "plan-offer-start", "Start Plan", {
         route,
         launchName: planName,
         launchPrompt: planPrompt,
         launchWorkdir: planWorkdir,
         launchWorktreeStrategy: planWorktreeStrategy,
       }),
-      this.makeActionButton(reportId, "monitor-dismiss", "Dismiss", { route }),
+      this.makeActionButton(offerId, "plan-offer-dismiss", "Dismiss", { route }),
     ]];
-    logButtonDiagnostic("monitor_report_buttons_created", {
-      reportId,
+    logButtonDiagnostic("plan_offer_buttons_created", {
+      offerId,
       planName,
       channel: route.provider,
       target: route.target,
@@ -199,5 +200,24 @@ export class SessionInteractionService {
       ...summarizeButtons(buttons),
     });
     return buttons;
+  }
+
+  getMonitorReportButtons(args: {
+    reportId: string;
+    route: SessionRoute;
+    planName: string;
+    planPrompt: string;
+    planWorkdir: string;
+    planWorktreeStrategy?: WorktreeStrategy;
+  }): NotificationButton[][] {
+    // Compatibility for persisted/older callers. New callers should use plan offers.
+    return this.getPlanOfferButtons({
+      offerId: args.reportId,
+      route: args.route,
+      planName: args.planName,
+      planPrompt: args.planPrompt,
+      planWorkdir: args.planWorkdir,
+      planWorktreeStrategy: args.planWorktreeStrategy,
+    });
   }
 }

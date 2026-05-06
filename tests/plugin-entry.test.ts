@@ -202,6 +202,7 @@ describe("plugin entry source", () => {
       "agent_output",
       "agent_respond",
       "agent_request_plan_approval",
+      "agent_send_plan_offer",
       "agent_send_monitor_report",
       "agent_stats",
       "agent_merge",

@@ -191,6 +191,8 @@ export type SessionActionKind =
   | "plan-approve"
   | "plan-request-changes"
   | "plan-reject"
+  | "plan-offer-start"
+  | "plan-offer-dismiss"
   | "monitor-start-plan"
   | "monitor-dismiss"
   | "worktree-merge"

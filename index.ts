@@ -8,6 +8,7 @@ import { makeAgentKillTool } from "./src/tools/agent-kill";
 import { makeAgentOutputTool } from "./src/tools/agent-output";
 import { makeAgentRespondTool } from "./src/tools/agent-respond";
 import { makeAgentRequestPlanApprovalTool } from "./src/tools/agent-request-plan-approval";
+import { makeAgentSendPlanOfferTool } from "./src/tools/agent-send-plan-offer";
 import { makeAgentSendMonitorReportTool } from "./src/tools/agent-send-monitor-report";
 import { makeAgentStatsTool } from "./src/tools/agent-stats";
 import { makeAgentMergeTool } from "./src/tools/agent-merge";
@@ -127,6 +128,7 @@ export function register(api: OpenClawPluginApi): void {
   registerTool((ctx: OpenClawPluginToolContext) => makeAgentOutputTool(ctx), { optional: false, name: "agent_output" });
   registerTool((ctx: OpenClawPluginToolContext) => makeAgentRespondTool(ctx), { optional: false, name: "agent_respond" });
   registerTool((ctx: OpenClawPluginToolContext) => makeAgentRequestPlanApprovalTool(ctx), { optional: false, name: "agent_request_plan_approval" });
+  registerTool((ctx: OpenClawPluginToolContext) => makeAgentSendPlanOfferTool(ctx), { optional: false, name: "agent_send_plan_offer" });
   registerTool((ctx: OpenClawPluginToolContext) => makeAgentSendMonitorReportTool(ctx), { optional: false, name: "agent_send_monitor_report" });
   registerTool((ctx: OpenClawPluginToolContext) => makeAgentStatsTool(ctx), { optional: false, name: "agent_stats" });
   registerTool((ctx: OpenClawPluginToolContext) => makeAgentMergeTool(ctx), { optional: false, name: "agent_merge" });
