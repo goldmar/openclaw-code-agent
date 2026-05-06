@@ -36,6 +36,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  CLAWHUB_CLI_VERSION: "0.12.3"
 
 permissions:
   contents: write  # required to create GitHub releases
@@ -128,7 +129,7 @@ jobs:
       # ── Publish to ClawHub ───────────────────────────────────────────────────
 
       - name: Install ClawHub CLI
-        run: npm install -g clawhub
+        run: npm install -g "clawhub@${CLAWHUB_CLI_VERSION}"
 
       - name: Authenticate ClawHub
         env:

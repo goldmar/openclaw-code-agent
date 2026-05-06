@@ -319,7 +319,7 @@ export class SessionManager {
       this.lastWaitingEventTimestamps.delete(config.sessionIdOverride);
       this.lastTurnCompleteMarkers.delete(config.sessionIdOverride);
       this.lastTerminalWakeMarkers.delete(config.sessionIdOverride);
-      this.maintenance.cancel(`runtime-gc:${config.sessionIdOverride}`);
+      this.maintenance.cancelRuntimeGc(config.sessionIdOverride);
     }
 
     const baseName = config.name || generateSessionName(config.prompt);

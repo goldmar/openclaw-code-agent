@@ -37,4 +37,8 @@ describe("command arg tokenization", () => {
       { value: "agent command", rest: "continue  with   spacing" },
     );
   });
+
+  it("keeps lone quote tokens literal", () => {
+    assert.deepEqual(tokenizeCommandArgs("\" '"), ["\"", "'"]);
+  });
 });

@@ -33,8 +33,11 @@ export function consumeFirstCommandArg(raw: string): { value: string; rest: stri
 
 function stripWrappingQuotes(token: string): string {
   if (
-    (token.startsWith("\"") && token.endsWith("\""))
-    || (token.startsWith("'") && token.endsWith("'"))
+    token.length > 1
+    && (
+      (token.startsWith("\"") && token.endsWith("\""))
+      || (token.startsWith("'") && token.endsWith("'"))
+    )
   ) {
     return token.slice(1, -1);
   }

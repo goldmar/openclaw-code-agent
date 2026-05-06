@@ -75,6 +75,10 @@ export class SessionMaintenanceService {
     });
   }
 
+  cancelRuntimeGc(sessionId: string): void {
+    this.cancel(this.runtimeGcKey(sessionId));
+  }
+
   cancelPersistedMaintenance(
     session: Pick<PersistedSessionInfo, "sessionId" | "harnessSessionId" | "backendRef">,
   ): void {
@@ -176,7 +180,7 @@ export class SessionMaintenanceService {
     for (const session of evicted) {
       this.cancelPersistedMaintenance(session);
       if (session.sessionId) {
-        this.cancel(this.runtimeGcKey(session.sessionId));
+        this.cancelRuntimeGc(session.sessionId);
       }
       this.cleanupOutputPathIfUnreferenced(session.outputPath);
     }
