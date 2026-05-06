@@ -1105,10 +1105,10 @@ describe("SessionManager.notifySession()", () => {
 });
 
 // =========================================================================
-// monitor report plan launch
+// plan offer launch
 // =========================================================================
 
-describe("SessionManager.launchMonitorPlan()", () => {
+describe("SessionManager.launchPlanOffer()", () => {
   let sm: SessionManager;
 
   beforeEach(() => {
@@ -1132,11 +1132,11 @@ describe("SessionManager.launchMonitorPlan()", () => {
       sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
     } as const;
 
-    const session = sm.launchMonitorPlan({
+    const session = sm.launchPlanOffer({
       route,
       prompt: "Plan the OpenClaw v2026.5.6 plugin-readiness follow-up.",
       workdir: "/home/openclaw/workspace/openclaw-code-agent",
-      name: "oc-release-v2026.5.6",
+      name: "plugin-readiness-v2026.5.6",
       worktreeStrategy: "auto-pr",
     });
 

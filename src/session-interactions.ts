@@ -69,7 +69,6 @@ export class SessionInteractionService {
       case "worktree-create-pr":
       case "worktree-update-pr":
       case "plan-offer-start":
-      case "monitor-start-plan":
         return "primary";
       case "worktree-merge":
       case "session-resume":
@@ -202,22 +201,4 @@ export class SessionInteractionService {
     return buttons;
   }
 
-  getMonitorReportButtons(args: {
-    reportId: string;
-    route: SessionRoute;
-    planName: string;
-    planPrompt: string;
-    planWorkdir: string;
-    planWorktreeStrategy?: WorktreeStrategy;
-  }): NotificationButton[][] {
-    // Compatibility for persisted/older callers. New callers should use plan offers.
-    return this.getPlanOfferButtons({
-      offerId: args.reportId,
-      route: args.route,
-      planName: args.planName,
-      planPrompt: args.planPrompt,
-      planWorkdir: args.planWorkdir,
-      planWorktreeStrategy: args.planWorktreeStrategy,
-    });
-  }
 }

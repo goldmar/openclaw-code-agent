@@ -843,27 +843,6 @@ export class SessionManager {
     });
   }
 
-  sendMonitorReport(args: {
-    reportId: string;
-    route: SessionRoute;
-    text: string;
-    planName: string;
-    planPrompt: string;
-    planWorkdir: string;
-    planWorktreeStrategy?: WorktreeStrategy;
-  }): void {
-    // Compatibility for the original monitor-specific tool surface.
-    this.sendPlanOffer({
-      offerId: args.reportId,
-      route: args.route,
-      text: args.text,
-      planName: args.planName,
-      planPrompt: args.planPrompt,
-      planWorkdir: args.planWorkdir,
-      planWorktreeStrategy: args.planWorktreeStrategy,
-    });
-  }
-
   emitGoalTaskUpdate(
     task: Pick<GoalTaskState, "id" | "sessionId" | "route" | "originChannel" | "originThreadId" | "originSessionKey">,
     text: string,
@@ -909,17 +888,6 @@ export class SessionManager {
       originThreadId: route.threadId,
       originSessionKey: route.sessionKey,
     });
-  }
-
-  launchMonitorPlan(args: {
-    route?: SessionRoute;
-    prompt: string;
-    workdir: string;
-    name?: string;
-    worktreeStrategy?: WorktreeStrategy;
-  }): Session {
-    // Compatibility for legacy monitor-start-plan action tokens.
-    return this.launchPlanOffer(args);
   }
 
   private dispatchSessionNotification(session: Session, request: SessionNotificationRequest): void {

@@ -56,7 +56,7 @@ The overlap is substrate, not responsibility. Both the core bundled `codex` plug
 
 `index.ts` registers:
 
-- 16 tools
+- 15 tools
 - 9 chat commands
 - the shared interactive callback handlers for Telegram and Discord
 - the background session service

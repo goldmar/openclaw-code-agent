@@ -200,8 +200,6 @@ function toOptionalActionKind(value: unknown): SessionActionKind | undefined {
     || value === "plan-reject"
     || value === "plan-offer-start"
     || value === "plan-offer-dismiss"
-    || value === "monitor-start-plan"
-    || value === "monitor-dismiss"
     || value === "worktree-merge"
     || value === "worktree-create-pr"
     || value === "worktree-update-pr"

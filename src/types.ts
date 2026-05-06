@@ -193,8 +193,6 @@ export type SessionActionKind =
   | "plan-reject"
   | "plan-offer-start"
   | "plan-offer-dismiss"
-  | "monitor-start-plan"
-  | "monitor-dismiss"
   | "worktree-merge"
   | "worktree-create-pr"
   | "worktree-update-pr"

@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { validateReleaseMetadata } from "../scripts/validate-release-metadata.mjs";
@@ -70,6 +70,7 @@ describe("plugin entry source", () => {
       encoding: "utf8",
     })
       .split(/\r?\n/)
+      .filter((file) => file && existsSync(join(rootDir, file)))
       .filter((file) =>
         /^(api\.ts|index\.ts|src\/|openclaw\.plugin\.json$|package\.json$)/.test(file),
       );
@@ -89,6 +90,7 @@ describe("plugin entry source", () => {
       encoding: "utf8",
     })
       .split(/\r?\n/)
+      .filter((file) => file && existsSync(join(rootDir, file)))
       .filter((file) =>
         /^(api\.ts|index\.ts|src\/|scripts\/|openclaw\.plugin\.json$|package\.json$)/.test(file),
       );
@@ -119,6 +121,7 @@ describe("plugin entry source", () => {
       encoding: "utf8",
     })
       .split(/\r?\n/)
+      .filter((file) => file && existsSync(join(rootDir, file)))
       .filter((file) =>
         /^(api\.ts|index\.ts|src\/|scripts\/|openclaw\.plugin\.json$|package\.json$)/.test(file),
       );
@@ -203,7 +206,6 @@ describe("plugin entry source", () => {
       "agent_respond",
       "agent_request_plan_approval",
       "agent_send_plan_offer",
-      "agent_send_monitor_report",
       "agent_stats",
       "agent_merge",
       "agent_pr",
@@ -294,16 +296,15 @@ describe("plugin entry source", () => {
     assert.match(reference, /tools\.deny/);
   });
 
-  it("documents the generic plan-offer tool and legacy monitor alias", () => {
+  it("documents the generic plan-offer tool", () => {
     const readme = readFileSync(join(rootDir, "README.md"), "utf8");
     const reference = readFileSync(join(rootDir, "docs", "REFERENCE.md"), "utf8");
 
     assert.match(readme, /agent_send_plan_offer/);
-    assert.match(readme, /Legacy alias for `agent_send_plan_offer`/);
     assert.match(reference, /### `agent_send_plan_offer`/);
     assert.match(reference, /preserving the chosen route, Telegram\/Discord thread, and optional worktree strategy/);
-    assert.match(reference, /agent_send_monitor_report` is a backward-compatible legacy alias/);
-    assert.match(reference, /Legacy `monitor-start-plan` and `monitor-dismiss` callback tokens are still accepted/);
+    assert.doesNotMatch(readme, /agent_send_monitor_report|monitor-start-plan|monitor-dismiss/);
+    assert.doesNotMatch(reference, /agent_send_monitor_report|monitor-start-plan|monitor-dismiss/);
   });
 
   it("does not assume bundled Codex or ACPX plugin availability", () => {

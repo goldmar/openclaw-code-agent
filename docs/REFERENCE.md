@@ -375,8 +375,6 @@ Use this as the primary generic primitive for external/local automation that wan
 | `target_thread_id` | `string \| number` | No | Optional topic/thread id |
 | `target_session_key` | `string` | No | Optional explicit wake-routing key |
 
-`agent_send_monitor_report` is a backward-compatible legacy alias for this tool. Legacy `monitor-start-plan` and `monitor-dismiss` callback tokens are still accepted, but new local monitor code should use `agent_send_plan_offer` and the generic plan-offer path.
-
 ### `agent_output`
 
 Read buffered output without changing session state.
