@@ -308,9 +308,9 @@ describe("Session.phase", () => {
     assert.equal(session.phase, "awaiting_plan_decision");
   });
 
-  // Fix B: Codex sessions must preserve plan mode so pendingPlanApproval is set
-  // after the first Codex first-turn plan and the Approve/Revise/Reject buttons fire.
-  it("Codex session in plan mode keeps currentPermissionMode=plan (Fix B)", () => {
+  // Codex sessions must preserve plan mode so pendingPlanApproval is set after
+  // the first-turn plan and the Approve/Revise/Reject buttons fire.
+  it("Codex session in plan mode keeps currentPermissionMode=plan until approval", () => {
     const codexSession = new Session({ ...BASE_CONFIG, harness: "codex" }, "codex-test");
     codexSession.transition("running");
 

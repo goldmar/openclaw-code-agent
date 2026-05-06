@@ -1,6 +1,7 @@
 import { goalController } from "../singletons";
 import { formatGoalLaunchResult, resolveGoalLaunchRequest } from "../goal-launch-resolution";
 import type { OpenClawPluginToolContext, PermissionMode, GoalLoopMode } from "../types";
+import { tokenizeCommandArgs } from "./args";
 
 const GOAL_USAGE = "Usage: /goal [--name <name>] [--workdir <dir>] [--model <model>] [--harness <name>] [--mode <ralph|verifier>] [--completion-promise <text>] [--max-iterations N] [--verify <cmd> ...] <goal>";
 
@@ -16,20 +17,6 @@ interface CommandApi {
     requireAuth: boolean;
     handler: (ctx: GoalCommandContext) => Promise<{ text: string }>;
   }): void;
-}
-
-function tokenizeArgs(raw: string): string[] {
-  const matches = raw.match(/"[^"]*"|'[^']*'|\S+/g);
-  if (!matches) return [];
-  return matches.map((token) => {
-    if (
-      (token.startsWith("\"") && token.endsWith("\""))
-      || (token.startsWith("'") && token.endsWith("'"))
-    ) {
-      return token.slice(1, -1);
-    }
-    return token;
-  });
 }
 
 export function registerGoalCommand(api: CommandApi): void {
@@ -48,7 +35,7 @@ export function registerGoalCommand(api: CommandApi): void {
         return { text: GOAL_USAGE };
       }
 
-      const tokens = tokenizeArgs(raw);
+      const tokens = tokenizeCommandArgs(raw);
       let name: string | undefined;
       let workdir: string | undefined;
       let model: string | undefined;

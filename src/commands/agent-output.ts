@@ -1,5 +1,6 @@
 import { sessionManager } from "../singletons";
 import { getSessionOutputText } from "../application/session-view";
+import { tokenizeCommandArgs } from "./args";
 
 const DEFAULT_OUTPUT_LINES = 50;
 
@@ -31,8 +32,7 @@ export function registerAgentOutputCommand(api: CommandApi): void {
         return { text: "Usage: /agent_output <id-or-name> [--full] [--lines N]" };
       }
 
-      // Parse flags from args
-      const tokens = raw.split(/\s+/);
+      const tokens = tokenizeCommandArgs(raw);
       let ref = "";
       let full = false;
       let lines = DEFAULT_OUTPUT_LINES;
@@ -43,7 +43,7 @@ export function registerAgentOutputCommand(api: CommandApi): void {
         } else if (tokens[i] === "--lines" && i + 1 < tokens.length) {
           const n = parseInt(tokens[i + 1], 10);
           if (!isNaN(n) && n > 0) lines = n;
-          i++; // skip the number token
+          i++;
         } else if (!ref) {
           ref = tokens[i];
         }

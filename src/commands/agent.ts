@@ -5,6 +5,7 @@ import {
 import { resolveSessionTaskLifecycle } from "../session-task-lifecycle";
 import type { OpenClawPluginToolContext } from "../types";
 import { resolveAgentLaunchRequest } from "../tools/agent-launch-resolution";
+import { tokenizeCommandArgs } from "./args";
 
 interface AgentCommandContext {
   args?: string;
@@ -42,6 +43,20 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+function parseAgentCommandArgs(raw: string): { name?: string; prompt: string } {
+  const tokens = tokenizeCommandArgs(raw);
+  let name: string | undefined;
+  let promptTokens = tokens;
+  if (tokens[0] === "--name" && tokens[1]) {
+    name = tokens[1];
+    promptTokens = tokens.slice(2);
+  }
+  return {
+    name,
+    prompt: promptTokens.join(" ").trim(),
+  };
+}
+
 /** Register `/agent` chat command. */
 export function registerAgentCommand(api: CommandApi): void {
   api.registerCommand({
@@ -54,17 +69,10 @@ export function registerAgentCommand(api: CommandApi): void {
         return { text: "Error: SessionManager not initialized. The code-agent service must be running." };
       }
 
-      let args = (ctx.args ?? "").trim();
-      if (!args) return { text: "Usage: /agent [--name <name>] <prompt>" };
+      const raw = (ctx.args ?? "").trim();
+      if (!raw) return { text: "Usage: /agent [--name <name>] <prompt>" };
 
-      let name: string | undefined;
-      const nameMatch = args.match(/^--name\s+(\S+)\s+/);
-      if (nameMatch) {
-        name = nameMatch[1];
-        args = args.slice(nameMatch[0].length).trim();
-      }
-
-      const prompt = args;
+      const { name, prompt } = parseAgentCommandArgs(raw);
       if (!prompt) return { text: "Usage: /agent [--name <name>] <prompt>" };
 
       try {

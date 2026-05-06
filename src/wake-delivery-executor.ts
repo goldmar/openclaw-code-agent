@@ -1,4 +1,5 @@
 import * as childProcess from "child_process";
+import { KeyedOperationQueue } from "./keyed-operation-queue";
 
 const WAKE_CLI_TIMEOUT_MS = 30_000;
 const WAKE_RETRY_BASE_DELAY_MS = 2_000;
@@ -55,7 +56,7 @@ type RetryTimerEntry = {
 
 export class WakeDeliveryExecutor {
   private pendingRetryTimers: Map<string, Set<RetryTimerEntry>> = new Map();
-  private orderedDispatchTails: Map<string, Promise<void>> = new Map();
+  private orderedDispatches = new KeyedOperationQueue();
   private disposed = false;
 
   clearPendingRetries(): void {
@@ -81,7 +82,7 @@ export class WakeDeliveryExecutor {
   dispose(): void {
     this.disposed = true;
     this.clearPendingRetries();
-    this.orderedDispatchTails.clear();
+    this.orderedDispatches.clear();
   }
 
   execute(args: string[], opts: ExecuteOptions, attempt: number = 1): void {
@@ -386,26 +387,17 @@ export class WakeDeliveryExecutor {
   }
 
   private enqueueOrderedDispatch(orderingKey: string, task: (onSettled: () => void) => void): void {
-    const previous = this.orderedDispatchTails.get(orderingKey) ?? Promise.resolve();
-    const next = previous
-      .catch(() => {})
-      .then(() => {
-        if (this.disposed) return;
-        return new Promise<void>((resolve) => {
-          let settled = false;
-          const onSettled = () => {
-            if (settled) return;
-            settled = true;
-            resolve();
-          };
-          task(onSettled);
-        });
+    void this.orderedDispatches.enqueue(orderingKey, async () => {
+      if (this.disposed) return;
+      await new Promise<void>((resolve) => {
+        let settled = false;
+        const onSettled = () => {
+          if (settled) return;
+          settled = true;
+          resolve();
+        };
+        task(onSettled);
       });
-    this.orderedDispatchTails.set(orderingKey, next);
-    void next.finally(() => {
-      if (this.orderedDispatchTails.get(orderingKey) === next) {
-        this.orderedDispatchTails.delete(orderingKey);
-      }
     });
   }
 

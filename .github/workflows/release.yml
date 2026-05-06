@@ -12,6 +12,12 @@ name: Release
 #   Trusted Publishing requires npm CLI 11.5.1+.
 #   This workflow verifies on Node 22, then switches to Node 24 for publish so npm
 #   already satisfies the Trusted Publishing minimum without a brittle in-place upgrade.
+#
+# SETUP REQUIRED (one-time, on clawhub.ai):
+#   1. Create a ClawHub API token for the package owner.
+#   2. Add it as the repository secret CLAWHUB_TOKEN.
+#   ClawHub tag-push publishing needs a token; keep the secret available even if
+#   workflow_dispatch trusted publishing is configured later.
 
 on:
   push:
@@ -30,6 +36,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  CLAWHUB_CLI_VERSION: "0.12.3"
 
 permissions:
   contents: write  # required to create GitHub releases
@@ -106,10 +113,45 @@ jobs:
             exit 1
           fi
 
+      - name: Pack release artifact
+        id: pack
+        run: |
+          npm pack --json > /tmp/npm-pack.json
+          cat /tmp/npm-pack.json
+          TARBALL="$(node -e "const fs = require('fs'); const data = JSON.parse(fs.readFileSync('/tmp/npm-pack.json', 'utf8')); console.log(data[0].filename);")"
+          echo "tarball=${TARBALL}" >> "$GITHUB_OUTPUT"
+
       - name: Publish to npm
         # Trusted Publishing generates provenance automatically for public packages
         # from public repositories once npm can authenticate via OIDC.
-        run: npm publish --access public
+        run: npm publish "${{ steps.pack.outputs.tarball }}" --access public
+
+      # ── Publish to ClawHub ───────────────────────────────────────────────────
+
+      - name: Install ClawHub CLI
+        run: npm install -g "clawhub@${CLAWHUB_CLI_VERSION}"
+
+      - name: Authenticate ClawHub
+        env:
+          CLAWHUB_TOKEN: ${{ secrets.CLAWHUB_TOKEN }}
+        run: |
+          if [ -z "${CLAWHUB_TOKEN}" ]; then
+            echo "CLAWHUB_TOKEN repository secret is required to publish to ClawHub." >&2
+            exit 1
+          fi
+          clawhub login --token "${CLAWHUB_TOKEN}" --no-browser
+          clawhub whoami
+
+      - name: Publish to ClawHub
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          clawhub package publish "${{ steps.pack.outputs.tarball }}" \
+            --family code-plugin \
+            --source-repo "${GITHUB_REPOSITORY}" \
+            --source-ref "${GITHUB_REF_NAME}" \
+            --source-commit "${GITHUB_SHA}" \
+            --json
 
       # ── Create GitHub release ─────────────────────────────────────────────────
 
