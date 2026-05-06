@@ -63,8 +63,8 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
         return { content: [{ type: "text", text: `Error: Cannot determine branch name for worktree at ${worktreePath}. The worktree may have been removed and no persisted branch name is available.` }] };
       }
 
-      // Fix 2-D: If worktreePath no longer exists (removed after session ended), that is fine —
-      // mergeBranch operates on originalWorkdir and does not require the worktree directory.
+      // A removed worktree path is fine here; mergeBranch operates on
+      // originalWorkdir and the persisted branch name.
       if (!existsSync(worktreePath)) {
         console.info(`[agent_merge] Worktree directory ${worktreePath} no longer exists; proceeding with merge via originalWorkdir (${originalWorkdir})`);
       }

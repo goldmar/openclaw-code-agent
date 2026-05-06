@@ -286,7 +286,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext) {
           }
         }
 
-        // Create PR
+        // Open the PR after title/body generation is complete.
         const prResult = createPR(originalWorkdir, branchName, baseBranch, prTitle, prBody, targetRepo);
 
         if (prResult.success && prResult.prUrl) {

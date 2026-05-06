@@ -261,11 +261,11 @@ When a session completes with changes under `ask` or `delegate`, users receive e
 
 | Button | Action |
 | --- | --- |
-| **Merge locally** | Merge branch into base locally |
-| **Create PR** | Create a GitHub PR when none exists |
-| **View PR / Update PR** | Shown instead of `Create PR` once a PR already exists |
-| **Decide later** | Snooze reminders for 24h |
-| **Dismiss** | Permanently delete branch and worktree (irreversible) |
+| **Merge** | Merge branch into base locally |
+| **Open PR** | Create a GitHub PR when none exists |
+| **View PR / Sync PR** | Shown instead of `Open PR` once a PR already exists |
+| **Later** | Snooze reminders for 24h |
+| **Discard** | Permanently delete branch and worktree (irreversible) |
 
 ### Worktree Lifecycle
 
@@ -544,7 +544,7 @@ Prefer fully routable channel strings in `fallbackChannel` and `agentChannels`. 
 | Failed | `❌` failed, with recovery guidance |
 | Idle timeout | `💤` idle kill |
 | Stopped | `⛔` stopped by user or shutdown |
-| Worktree decision in `ask` | Inline `Merge locally` / `Create PR` buttons |
+| Worktree decision in `ask` | Inline `Merge` / `Open PR` buttons |
 | Worktree decision in `delegate` | Orchestrator wake only |
 
 `ask` and `delegate` suppress the normal turn-complete wake at the end of the session because the worktree decision message becomes the completion signal.

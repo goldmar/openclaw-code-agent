@@ -12,6 +12,7 @@ import {
   resolveSessionRoute,
   resolveToolChannel,
 } from "../config";
+import { isModelAllowed } from "../model-allowlist";
 import { decideResumeSessionId } from "../resume-policy";
 import { getBackendConversationId, getPrimarySessionLookupRef } from "../session-backend-ref";
 import type { OpenClawPluginToolContext, PersistedSessionInfo } from "../types";
@@ -200,13 +201,6 @@ function findLinkedSessionMatches(
   }
 
   return { resumable, active };
-}
-
-function isModelAllowed(model: string | undefined, allowedModels: string[] | undefined): boolean {
-  if (!allowedModels || allowedModels.length === 0) return true;
-  if (!model) return false;
-  const modelLower = model.toLowerCase();
-  return allowedModels.some((pattern) => modelLower.includes(pattern.toLowerCase()));
 }
 
 export function resolveAgentLaunchRequest(

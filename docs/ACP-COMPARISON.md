@@ -138,7 +138,7 @@ The plugin treats the git lifecycle as part of the product:
 - isolated worktrees and `agent/*` branches when the selected backend needs plugin-managed worktrees
 - `ask`, `delegate`, `manual`, `auto-merge`, and `auto-pr` strategies
 - `agent_merge`, `agent_pr`, `agent_worktree_status`, and `agent_worktree_cleanup`
-- inline `Merge locally` / `Create PR` actions in Telegram and Discord
+- inline `Merge` / `Open PR` actions in Telegram and Discord
 
 ACPX and the bundled core Codex plugin do not solve this layer.
 

@@ -94,7 +94,7 @@ export class Session extends EventEmitter {
   // Worktree
   worktreePath?: string;
   originalWorkdir?: string;
-  worktreeBranch?: string; // Fix 2-B: cached at creation to avoid live lookups after worktree removal
+  worktreeBranch?: string; // Cached at creation to avoid live lookups after worktree removal.
   readonly worktreeStrategy?: WorktreeStrategy;
   readonly worktreeBaseBranch?: string;
   worktreePrTargetRepo?: string;
