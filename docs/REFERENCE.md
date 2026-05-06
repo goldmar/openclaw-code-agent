@@ -28,9 +28,7 @@ Current releases treat persisted session storage as new-schema-only. If startup 
 
 ### OpenClaw 2026.5.5 SDK Readiness
 
-`openclaw-code-agent` `4.1.2` is validated against the latest installable OpenClaw SDK package, `openclaw@2026.5.5`. The plugin keeps the peer floor at `>=2026.4.21` for compatible existing installs, while package build metadata targets OpenClaw `2026.5.5` for both host and SDK readiness.
-
-As of May 6, 2026, an OpenClaw `2026.5.6` GitHub release has been observed, but npm returns `E404 No match found for version 2026.5.6` for `openclaw@2026.5.6`. There is no installable SDK/package bump available yet, so local typecheck/build verification and plugin build metadata stay on `openclaw@2026.5.5`.
+`openclaw-code-agent` `4.2.0` is validated against the latest installable OpenClaw SDK package, `openclaw@2026.5.5`. The plugin keeps the peer floor at `>=2026.4.21` for compatible existing installs, while package build metadata targets OpenClaw `2026.5.5` for both host and SDK readiness.
 
 Configuration guidance for `2026.5.5`:
 

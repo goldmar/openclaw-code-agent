@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.2.0] - 2026-05-06
+
 ### Changed
 - Extracted keyed async operation queueing from `SessionManager` and reused it for per-repository merge serialization.
 - Reused the keyed operation queue for ordered wake dispatch and moved session maintenance scheduling into an internal service.
@@ -20,6 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Routed `/agent` through the shared launch resolver used by `agent_launch`, so chat commands and tool launches share workdir, model, routing, and resume-first behavior.
 - Deduplicated goal launch validation and output formatting across `/goal` and `goal_launch`.
 - Extracted shared plan-approval delivery guards/text builders and session output-preview selection from `SessionManager`.
+- Updated the local OpenClaw package target to `openclaw@2026.5.5` while keeping the peer floor at `>=2026.4.21`.
+- Added the generic `agent_send_plan_offer` helper for external workflows that need Start Plan / Dismiss buttons without a monitor-specific API.
+- Removed the legacy monitor plan-offer tool aliases and compatibility callback path in favor of the generic plan-offer action tokens.
+- Refreshed `@anthropic-ai/claude-agent-sdk` and `nanoid` dependency resolutions.
 
 ### Fixed
 - Reused the shared model allowlist helper in agent launch resolution and cleaned up patch-era comments in launch, merge, session, and startup cleanup code.
@@ -294,7 +300,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Default Codex approval policy to `on-request`.
 - Raised the default session limit.
 
-[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.1.2...HEAD
+[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.2.0...HEAD
+[4.2.0]: https://github.com/goldmar/openclaw-code-agent/compare/v4.1.2...v4.2.0
 [4.1.2]: https://github.com/goldmar/openclaw-code-agent/compare/v4.1.1...v4.1.2
 [4.1.1]: https://github.com/goldmar/openclaw-code-agent/compare/v4.1.0...v4.1.1
 [4.1.0]: https://github.com/goldmar/openclaw-code-agent/compare/v4.0.1...v4.1.0
