@@ -781,7 +781,7 @@ describe("createCallbackHandler()", () => {
     const launches: Array<Record<string, unknown>> = [];
     setSessionManager({
       getActionToken: () => ({
-        sessionId: "openclaw-release-v2026.3.31",
+        sessionId: "openclaw-release-v2026.5.6",
         kind: "monitor-start-plan",
         route: {
           provider: "telegram",
@@ -789,13 +789,13 @@ describe("createCallbackHandler()", () => {
           threadId: "13832",
           sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
         },
-        launchName: "oc-release-v2026.3.31",
+        launchName: "oc-release-v2026.5.6",
         launchPrompt: "Plan the required follow-up.",
         launchWorkdir: "/home/openclaw/workspace/openclaw-code-agent",
         launchWorktreeStrategy: "auto-pr",
       }),
       consumeActionToken: () => ({
-        sessionId: "openclaw-release-v2026.3.31",
+        sessionId: "openclaw-release-v2026.5.6",
         kind: "monitor-start-plan",
         route: {
           provider: "telegram",
@@ -803,14 +803,14 @@ describe("createCallbackHandler()", () => {
           threadId: "13832",
           sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
         },
-        launchName: "oc-release-v2026.3.31",
+        launchName: "oc-release-v2026.5.6",
         launchPrompt: "Plan the required follow-up.",
         launchWorkdir: "/home/openclaw/workspace/openclaw-code-agent",
         launchWorktreeStrategy: "auto-pr",
       }),
       launchMonitorPlan: (args: Record<string, unknown>) => {
         launches.push(args);
-        return { id: "sess-plan", name: "oc-release-v2026.3.31" };
+        return { id: "sess-plan", name: "oc-release-v2026.5.6" };
       },
     } as any);
 
@@ -820,8 +820,12 @@ describe("createCallbackHandler()", () => {
 
     assert.deepEqual(result, { handled: true });
     assert.equal(state.buttonsCleared, 1);
+    assert.equal((launches[0]?.route as { threadId?: string })?.threadId, "13832");
+    assert.equal((launches[0]?.route as { sessionKey?: string })?.sessionKey, "agent:main:telegram:group:-1003863755361:topic:13832");
+    assert.equal(launches[0]?.name, "oc-release-v2026.5.6");
+    assert.equal(launches[0]?.prompt, "Plan the required follow-up.");
     assert.equal(launches[0]?.workdir, "/home/openclaw/workspace/openclaw-code-agent");
     assert.equal(launches[0]?.worktreeStrategy, "auto-pr");
-    assert.match(state.replies[0], /Planning session started: oc-release-v2026\.3\.31 \[sess-plan\]/);
+    assert.match(state.replies[0], /Planning session started: oc-release-v2026\.5\.6 \[sess-plan\]/);
   });
 });

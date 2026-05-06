@@ -1069,6 +1069,54 @@ describe("SessionManager.notifySession()", () => {
 });
 
 // =========================================================================
+// monitor report plan launch
+// =========================================================================
+
+describe("SessionManager.launchMonitorPlan()", () => {
+  let sm: SessionManager;
+
+  beforeEach(() => {
+    setPluginConfig({});
+    sm = new SessionManager(5);
+    stubDispatch(sm);
+  });
+
+  it("starts a plan-gated auto-pr session with preserved topic routing", () => {
+    const spawnCalls: Array<Record<string, unknown>> = [];
+    (sm as any).spawn = (config: Record<string, unknown>) => {
+      spawnCalls.push(config);
+      return { id: "sess-plan", name: config.name };
+    };
+
+    const route = {
+      provider: "telegram",
+      accountId: "bot1",
+      target: "-1003863755361",
+      threadId: "13832",
+      sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+    } as const;
+
+    const session = sm.launchMonitorPlan({
+      route,
+      prompt: "Plan the OpenClaw v2026.5.6 plugin-readiness follow-up.",
+      workdir: "/home/openclaw/workspace/openclaw-code-agent",
+      name: "oc-release-v2026.5.6",
+      worktreeStrategy: "auto-pr",
+    });
+
+    assert.equal(session.id, "sess-plan");
+    assert.equal(spawnCalls.length, 1);
+    assert.equal(spawnCalls[0]?.permissionMode, "plan");
+    assert.equal(spawnCalls[0]?.planApproval, "ask");
+    assert.equal(spawnCalls[0]?.worktreeStrategy, "auto-pr");
+    assert.equal(spawnCalls[0]?.route, route);
+    assert.equal(spawnCalls[0]?.originChannel, "telegram|bot1|-1003863755361");
+    assert.equal(spawnCalls[0]?.originThreadId, "13832");
+    assert.equal(spawnCalls[0]?.originSessionKey, "agent:main:telegram:group:-1003863755361:topic:13832");
+  });
+});
+
+// =========================================================================
 // turn-end wake behavior
 // =========================================================================
 
