@@ -838,6 +838,12 @@ export class SessionManager {
     }), {
       label: "monitor-report",
       userMessage: args.text,
+      wakeMessageOnNotifyFailed: [
+        args.text,
+        "",
+        "Interactive Start Plan / Dismiss buttons could not be delivered.",
+        "Reply \"start plan\" if you want me to open a plan-only code-agent session for this release.",
+      ].join("\n"),
       notifyUser: "always",
       buttons,
     });
