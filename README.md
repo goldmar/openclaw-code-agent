@@ -70,6 +70,19 @@ openclaw gateway restart
 openclaw plugins inspect openclaw-code-agent --runtime --json
 ```
 
+If OpenClaw blocks installation with a dangerous-code scanner finding for
+`child_process`, that is expected for this trusted plugin because it launches
+local coding harnesses and git tooling. Review the rationale in
+[docs/SECURITY.md](docs/SECURITY.md), then rerun the trusted package/source with
+the unsafe-install override:
+
+```bash
+openclaw plugins install openclaw-code-agent --force --pin --dangerously-force-unsafe-install
+```
+
+Use that override only for a package/source you already trust. When validating a
+specific reviewed release, add its version after the package name.
+
 Add the smallest useful config under `plugins.entries["openclaw-code-agent"]` in `~/.openclaw/openclaw.json`:
 
 ```json

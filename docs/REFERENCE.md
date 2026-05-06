@@ -56,6 +56,18 @@ openclaw gateway restart
 openclaw plugins inspect openclaw-code-agent --runtime --json
 ```
 
+If OpenClaw's dangerous-code scanner blocks installation for `child_process`,
+that finding is expected for this trusted plugin because it launches local
+coding harnesses and git tooling. Review [SECURITY.md](SECURITY.md), then
+rerun the trusted package/source with the unsafe-install override:
+
+```bash
+openclaw plugins install openclaw-code-agent --force --pin --dangerously-force-unsafe-install
+```
+
+Use that override only for a package/source you already trust. When validating a
+specific reviewed release, add its version after the package name.
+
 Restart or reload the gateway only as part of normal installation or upgrade. Documentation-only release prep does not require a local gateway restart.
 
 Runtime inspection after the restart should report this plugin's commands, service, and tool contracts without diagnostics. If `tools.effective` or `tools.invoke` cannot see `agent_launch` or `agent_sessions`, update/reinstall the plugin and restart the gateway so the installed manifest and bundle match the release.
