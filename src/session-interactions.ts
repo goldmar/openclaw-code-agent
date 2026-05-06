@@ -68,7 +68,7 @@ export class SessionInteractionService {
       case "plan-approve":
       case "worktree-create-pr":
       case "worktree-update-pr":
-      case "monitor-start-plan":
+      case "plan-offer-start":
         return "primary";
       case "worktree-merge":
       case "session-resume":
@@ -166,27 +166,27 @@ export class SessionInteractionService {
     ))];
   }
 
-  getMonitorReportButtons(args: {
-    reportId: string;
+  getPlanOfferButtons(args: {
+    offerId: string;
     route: SessionRoute;
     planName: string;
     planPrompt: string;
     planWorkdir: string;
     planWorktreeStrategy?: WorktreeStrategy;
   }): NotificationButton[][] {
-    const { reportId, route, planName, planPrompt, planWorkdir, planWorktreeStrategy } = args;
+    const { offerId, route, planName, planPrompt, planWorkdir, planWorktreeStrategy } = args;
     const buttons = [[
-      this.makeActionButton(reportId, "monitor-start-plan", "Start Plan", {
+      this.makeActionButton(offerId, "plan-offer-start", "Start Plan", {
         route,
         launchName: planName,
         launchPrompt: planPrompt,
         launchWorkdir: planWorkdir,
         launchWorktreeStrategy: planWorktreeStrategy,
       }),
-      this.makeActionButton(reportId, "monitor-dismiss", "Dismiss", { route }),
+      this.makeActionButton(offerId, "plan-offer-dismiss", "Dismiss", { route }),
     ]];
-    logButtonDiagnostic("monitor_report_buttons_created", {
-      reportId,
+    logButtonDiagnostic("plan_offer_buttons_created", {
+      offerId,
       planName,
       channel: route.provider,
       target: route.target,
@@ -200,4 +200,5 @@ export class SessionInteractionService {
     });
     return buttons;
   }
+
 }

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { SessionManager } from "../src/session-manager";
 import { setPluginConfig } from "../src/config";
+import { buildPresentation } from "../src/direct-notification-transport";
 
 // ---------------------------------------------------------------------------
 // Helper to create a fake session-like object for injection
@@ -1066,13 +1067,48 @@ describe("SessionManager.notifySession()", () => {
       notifyUser: "always",
     }]]);
   });
+
+  it("builds plan offers with generic interactive buttons and Telegram topic routing", () => {
+    sm.sendPlanOffer({
+      offerId: "plugin-readiness-v2026.5.6",
+      route: {
+        provider: "telegram",
+        target: "-1003863755361",
+        threadId: "13832",
+        sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+      },
+      text: "Readiness report body",
+      planName: "plugin-readiness-v2026.5.6",
+      planPrompt: "Create a plugin readiness plan.",
+      planWorkdir: "/home/openclaw/workspace/openclaw-code-agent",
+      planWorktreeStrategy: "auto-pr",
+    });
+
+    const [[session, request]] = (sm as any).__dispatchCalls;
+    assert.equal(session.id, "plugin-readiness-v2026.5.6");
+    assert.equal(session.route.provider, "telegram");
+    assert.equal(session.route.threadId, "13832");
+    assert.equal(request.label, "plan-offer");
+    assert.equal(request.notifyUser, "always");
+    assert.deepEqual(
+      request.buttons.map((row: Array<{ label: string }>) => row.map((button) => button.label)),
+      [["Start Plan", "Dismiss"]],
+    );
+
+    const presentation = buildPresentation(request.buttons);
+    assert.deepEqual(
+      presentation?.blocks.map((block) => block.buttons.map((button) => button.label)),
+      [["Start Plan", "Dismiss"]],
+    );
+    assert.match(presentation?.blocks[0]?.buttons[0]?.value ?? "", /^code-agent:/);
+  });
 });
 
 // =========================================================================
-// monitor report plan launch
+// plan offer launch
 // =========================================================================
 
-describe("SessionManager.launchMonitorPlan()", () => {
+describe("SessionManager.launchPlanOffer()", () => {
   let sm: SessionManager;
 
   beforeEach(() => {
@@ -1096,11 +1132,11 @@ describe("SessionManager.launchMonitorPlan()", () => {
       sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
     } as const;
 
-    const session = sm.launchMonitorPlan({
+    const session = sm.launchPlanOffer({
       route,
       prompt: "Plan the OpenClaw v2026.5.6 plugin-readiness follow-up.",
       workdir: "/home/openclaw/workspace/openclaw-code-agent",
-      name: "oc-release-v2026.5.6",
+      name: "plugin-readiness-v2026.5.6",
       worktreeStrategy: "auto-pr",
     });
 

@@ -11,7 +11,7 @@
       "agent_output",
       "agent_respond",
       "agent_request_plan_approval",
-      "agent_send_monitor_report",
+      "agent_send_plan_offer",
       "agent_stats",
       "agent_merge",
       "agent_pr",

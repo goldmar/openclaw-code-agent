@@ -348,6 +348,33 @@ agent_respond(
 )
 ```
 
+### `agent_request_plan_approval`
+
+Escalate a delegated plan review to the user with the normal Approve / Revise / Reject buttons.
+
+| Parameter | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `session` | `string` | Yes | Session waiting on a delegated plan review |
+| `summary` | `string` | Yes | Concise scope/risk summary shown with the approval prompt |
+
+### `agent_send_plan_offer`
+
+Send a user-facing message with `Start Plan` / `Dismiss` inline buttons. `Start Plan` launches a plan-gated code-agent session from the supplied prompt while preserving the chosen route, Telegram/Discord thread, and optional worktree strategy.
+
+Use this as the primary generic primitive for external/local automation that wants to offer a human-gated follow-up plan from a notification.
+
+| Parameter | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `offer_id` | `string` | Yes | Stable identifier for the button action tokens |
+| `offer_text` | `string` | Yes | User-facing message body |
+| `plan_prompt` | `string` | Yes | Prompt for the plan-only follow-up session |
+| `plan_workdir` | `string` | Yes | Working directory for the follow-up session |
+| `plan_worktree_strategy` | `off \| manual \| ask \| delegate \| auto-merge \| auto-pr` | No | Preserved on the launched plan session |
+| `plan_name` | `string` | No | Optional session name; defaults to `offer_id` |
+| `target_channel` | `string` | No | Explicit route, for example `telegram|-1003863755361` |
+| `target_thread_id` | `string \| number` | No | Optional topic/thread id |
+| `target_session_key` | `string` | No | Optional explicit wake-routing key |
+
 ### `agent_output`
 
 Read buffered output without changing session state.

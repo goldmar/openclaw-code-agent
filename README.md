@@ -174,6 +174,8 @@ Most users interact in chat. The tool surface is for OpenClaw agents and advance
 | --- | --- |
 | `agent_launch` | Start a background coding session |
 | `agent_respond` | Reply, redirect, approve a plan, or escalate permissions |
+| `agent_request_plan_approval` | Escalate a delegated plan review to the user |
+| `agent_send_plan_offer` | Send a message with Start Plan / Dismiss buttons for a plan-gated follow-up |
 | `agent_output` | Read buffered session output |
 | `agent_sessions` | List active and recent sessions |
 | `agent_kill` | Stop or mark a session completed |

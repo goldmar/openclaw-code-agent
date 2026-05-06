@@ -815,8 +815,8 @@ export class SessionManager {
     });
   }
 
-  sendMonitorReport(args: {
-    reportId: string;
+  sendPlanOffer(args: {
+    offerId: string;
     route: SessionRoute;
     text: string;
     planName: string;
@@ -824,8 +824,8 @@ export class SessionManager {
     planWorkdir: string;
     planWorktreeStrategy?: WorktreeStrategy;
   }): void {
-    const buttons = this.interactions.getMonitorReportButtons({
-      reportId: args.reportId,
+    const buttons = this.interactions.getPlanOfferButtons({
+      offerId: args.offerId,
       route: args.route,
       planName: args.planName,
       planPrompt: args.planPrompt,
@@ -833,10 +833,10 @@ export class SessionManager {
       planWorktreeStrategy: args.planWorktreeStrategy,
     });
     this.dispatchSessionNotification(this.buildRoutingProxy({
-      id: args.reportId,
+      id: args.offerId,
       route: args.route,
     }), {
-      label: "monitor-report",
+      label: "plan-offer",
       userMessage: args.text,
       notifyUser: "always",
       buttons,
@@ -866,7 +866,7 @@ export class SessionManager {
     });
   }
 
-  launchMonitorPlan(args: {
+  launchPlanOffer(args: {
     route?: SessionRoute;
     prompt: string;
     workdir: string;
