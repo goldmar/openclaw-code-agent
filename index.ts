@@ -35,7 +35,7 @@ import { setPluginConfig, pluginConfig } from "./src/config";
 import { definePluginEntry, type OpenClawPluginApi, type OpenClawPluginToolContext } from "./api";
 
 /**
- * A1 — Startup orphan cleanup: scan worktree base dir(s) for old worktrees and clean them up.
+ * Startup orphan cleanup: scan worktree base dir(s) for old worktrees and clean them up.
  * For each dir matching openclaw-worktree-* older than the cleanup age:
  * - Use rmSync directly (orphaned worktrees are already detached, no git cleanup needed)
  *
@@ -166,7 +166,6 @@ export function register(api: OpenClawPluginApi): void {
       setGoalController(gc);
       gc.start();
 
-      // A1: Cleanup orphaned worktrees at startup (needs sm for per-repo workdir scan)
       cleanupOrphanedWorktrees(sm);
       sm.bootstrapMaintenanceSchedules();
     },

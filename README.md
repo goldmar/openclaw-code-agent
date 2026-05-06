@@ -4,114 +4,60 @@
 [![npm downloads](https://img.shields.io/npm/dm/openclaw-code-agent.svg)](https://www.npmjs.com/package/openclaw-code-agent)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-`openclaw-code-agent` is the OpenClaw plugin for running Claude Code and Codex as managed background coding sessions from chat. Launch work from Telegram, Discord, or any OpenClaw-supported channel, review the plan before execution, keep the job isolated in its own git worktree, and merge or open a PR without leaving the thread.
+`openclaw-code-agent` runs Claude Code and Codex as managed background coding sessions from OpenClaw chat. It adds plan approval, session lifecycle, wake routing, worktree isolation, merge/PR follow-through, and explicit goal loops on top of the agent backends.
+
+Use it when you want to start coding work from Telegram, Discord, or another OpenClaw-supported channel and keep the job observable after the first message.
+
+## Highlights
 
 - **Plan -> Review -> Execute**. `plan` is the default launch mode, and plan approval defaults to `delegate` so the orchestrator reviews the full plan before approving or escalating to the user.
 - **Delegated worktree isolation**. New sessions default to `delegate`; opt into `ask`, `off`, `manual`, `auto-merge`, or `auto-pr` when you want a different branch follow-through policy.
-- **State-driven decision UX**. `ask` sends explicit action buttons for **Merge locally**, **Create PR**, **Decide later**, and **Dismiss**. The same action-token model now backs both Telegram and Discord interactive callbacks.
-- **Lifecycle-first cleanup**. Worktrees are treated as temporary task sandboxes. The plugin distinguishes `merged` from `released` so different-SHA branches whose content already landed on the base branch can still be cleaned safely.
+- **State-driven decision UX**. `ask` sends explicit action buttons for **Merge**, **Open PR**, **Later**, and **Discard**. The same action-token model backs Telegram and Discord interactive callbacks.
+- **Lifecycle-first cleanup**. Worktrees are temporary task sandboxes. The plugin distinguishes `merged` from `released` so different-SHA branches whose content already landed on the base branch can still be cleaned safely.
 - **Full session lifecycle**. Suspend, resume, fork, interrupt, and recover sessions across restarts with persisted metadata and output.
 - **Explicit goal-task loops**. Opt into verifier-driven repair loops or Ralph-style completion loops when you need iterative autonomous execution toward a specific goal.
 - **Real operator visibility**. `agent_sessions`, `agent_output`, and `agent_stats` show status, buffered output, duration, and USD cost.
 - **Two harnesses, one control plane**. Claude Code and Codex share the same tools, routing, notification pipeline, and worktree strategy model while each backend uses its own native execution substrate.
 - **One continuation primitive**. `agent_respond` is the only way to continue, approve, revise, or redirect an existing session. Forks still go through `agent_launch(..., resume_session_id=..., fork_session=true)`.
 
-Need the ACPX vs Codex vs code-agent breakdown? See [docs/ACP-COMPARISON.md](docs/ACP-COMPARISON.md).
+This plugin is separate from OpenClaw's bundled `acpx` runtime plugin and bundled core `codex` plugin. Those own adjacent OpenClaw runtime/provider surfaces; `openclaw-code-agent` owns chat orchestration and repository follow-through for its own Claude Code and Codex harnesses. See [docs/ACP-COMPARISON.md](docs/ACP-COMPARISON.md) for the boundary details.
 
-## Boundaries
+## From Prompt To Shipped Branch
 
-`openclaw-code-agent` is separate from both OpenClaw's bundled `acpx` runtime plugin and OpenClaw's bundled `codex` plugin.
-
-- **ACPX** is OpenClaw's ACP runtime backend for ACP session interoperability.
-- **OpenClaw's bundled `codex` plugin** is the core native Codex provider/harness pair for embedded agent turns.
-- **`openclaw-code-agent`** is the chat orchestration layer that adds plan approval, wake routing, session lifecycle, and worktree/merge/PR policy above its own native Claude Code and Codex harnesses.
-
-The shared substrate is often the local `codex` command and Codex App Server, but the responsibilities are different. This plugin is not an ACP server and it does not depend on OpenClaw's bundled Codex provider to expose its own `codex` harness.
-
-## New In 4.1.2
-
-`4.1.2` is a plan-approval reliability patch for the OpenClaw `2026.5.4` release line. It keeps the `>=2026.4.21` compatibility floor and the `4.1.1` build/test target, while tightening the user-facing approval path that gates implementation.
-
-- **Telegram plan approval buttons restored**. Plan prompts in Telegram use the shared direct-message presentation path and carry the canonical **Approve**, **Revise**, and **Reject** actions.
-- **Plain-text fallback is explicit**. While a plan is awaiting review, replying `Approve`, `Revise`, or `Reject` triggers the same approval, revision, or rejection path as the buttons.
-- **Stale prompts are suppressed**. Rejected or killed plan sessions no longer resurface an obsolete Plan v2 prompt as if it were still actionable.
-- **Verified release evidence**. A plan-gated `rust-hello-world` run, `rust-hello-world-minor-change-2` (`FzPCkqjh`), completed as `approved_then_implemented` after explicit approval; a later run (`VmUBWOH2`) delivered a clean plan prompt without the old stale Plan v2-after-reject behavior.
-
-The `4.1.1` OpenClaw `2026.5.4` compatibility work remains current: managed TaskFlow mirroring is opportunistic, deterministic runtime state is exposed in wakes, direct notification failures are surfaced, and local build/test metadata still targets stable OpenClaw `2026.5.4`.
-
-## From Prompt To Merged Branch
-
-1. Launch a coding session from chat with `/agent ...` or `agent_launch(...)`.
-2. Review the plan in the same thread before anything touches the repo.
-3. Let the agent finish in an isolated worktree, then merge or publish the result from chat.
-
-### Explicit Goal Tasks
-
-Goal tasks are an explicit opt-in path for iterative autonomous work. They do not replace the default `agent_launch` flow.
-
-Use the dedicated goal entrypoints:
-
-- `/goal ...`
-- `goal_launch(...)`
-
-The plugin does not automatically switch into goal mode just because a freeform prompt contains the words `goal task`.
-
-Use them when you want the plugin to keep looping toward one concrete outcome:
-
-- **Verifier mode** reruns one or more shell checks after each coding turn and keeps iterating until they pass or the iteration budget is exhausted.
-- **Ralph mode** keeps resuming the same task until the agent emits an exact completion promise, with optional verifiers run after completion is claimed.
-
-Examples:
-
-```bash
-/goal --workdir /repo --verify "npm test" --verify "npm run lint" Fix the failing auth flow
-/goal --workdir /repo --mode ralph --completion-promise DONE Ship the draft blog post workflow end to end
-goal_launch(goal="Fix the failing auth flow", verifier_commands=["npm test", "npm run lint"], workdir="/repo")
-goal_launch(goal="Ship the draft blog post workflow end to end", goal_mode="ralph", completion_promise="DONE", workdir="/repo")
-```
-
-Once launched, use `goal_status` / `/goal_status` to inspect progress and `goal_stop` / `/goal_stop` to terminate the loop. Goal-task state is persisted so recoverable loops can resume after a gateway restart.
+1. Launch a coding session from chat with `/agent ...` or from tools with `agent_launch(...)`.
+2. Review the plan in the same thread before implementation starts.
+3. Let the agent finish in an isolated worktree.
+4. Merge into the base branch, open a PR, defer the decision, or discard the sandbox from the same control plane.
 
 ### Plan First
 
-The differentiator is the plan-review loop. Claude Code and Codex both feed the same review UX now: the plugin receives a structured plan artifact, keeps execution blocked until approval, and resumes the same session with `agent_respond(..., approve=true)`. If the user asks for revisions, the revised submission becomes the new actionable review version for that same session, and `approve=true` resolves against that latest version instead of any stale earlier change-request state.
-
-> Demo note: the GIFs below were recorded on an older build. They still show the overall flow correctly, but they do not include the newer explicit action buttons and some other current thread controls.
-
-<img src="assets/ask-readme.gif" alt="Plan review in ask mode with inline approval controls">
-
-*`ask` mode keeps the human in the loop: the plan lands back in the originating thread, and execution only starts after approval. The current UI now uses explicit buttons for approval and follow-through, even though the GIF predates that update.*
+The core loop is plan review. Claude Code and Codex feed the same approval UX: the plugin receives a structured plan artifact, keeps execution blocked until approval, and resumes the same session with `agent_respond(..., approve=true)`. If the user asks for revisions, the revised plan becomes the latest actionable version for that same session.
 
 ### Finish Cleanly
 
-When the task is done, the plugin can leave the branch for review, merge it automatically, or help create a PR. In `ask`, the user gets the same explicit decision buttons in the originating thread. In `delegate`, the orchestrator receives the diff context, may merge if safe, and always escalates PR decisions to the user. Planning artifacts belong in `/tmp/` — the agent will not commit analysis notes to the branch.
+When a task completes, the plugin can leave the branch for review, merge it automatically, open or update a PR, or wake the orchestrator with diff context. In `ask`, the user gets explicit decision buttons in the originating thread. In `delegate`, the orchestrator reviews the worktree result and escalates user-facing decisions such as PR creation.
 
-<img src="assets/delegate-readme.gif" alt="Delegated worktree flow with autonomous follow-through">
+![Delegated worktree flow](https://raw.githubusercontent.com/goldmar/openclaw-code-agent/main/assets/delegate-readme.gif)
 
-*The main checkout stays clean. The branch lifecycle happens in the worktree, and the chat thread stays current on what was shipped. The current UI includes newer buttons and lifecycle affordances that are not visible in this older recording.*
+*`delegate` keeps the main checkout clean while the branch lifecycle happens in the worktree. The chat thread stays current on what was attempted, what changed, and what follow-through is needed.*
+
+![Ask-mode worktree decisions](https://raw.githubusercontent.com/goldmar/openclaw-code-agent/main/assets/ask-readme.gif)
+
+*`ask` keeps the human in the loop for branch follow-through. The current button labels are **Merge**, **Open PR**, **Later**, and **Discard**; older recordings may show prior wording.*
 
 ### Worktree Lifecycle
 
 Worktree-backed sessions move through product-facing lifecycle states:
 
 - `active`: sandbox still in use
-- `pending decision`: waiting for merge / PR / dismiss follow-through
+- `pending decision`: waiting for merge, PR, later, or discard follow-through
 - `pr_open`: PR exists and the sandbox is being preserved
 - `merged`: branch landed by normal git ancestry
-- `released`: content is already on the base branch even though branch SHAs differ after rebase, squash, or cherry-pick
+- `released`: content is already on the base branch after rebase, squash, or cherry-pick
 - `dismissed`: user intentionally discarded the sandbox
 - `no_change`: session finished without a committed delta
 
-For cleanup, use `agent_worktree_cleanup(mode="preview_safe")` to preview what **Clean all safe** would remove, `mode="clean_safe"` to perform that cleanup, and `mode="preview_all"` to review both safe sandboxes and the reasons other worktrees were retained.
-
-## Supported Harnesses
-
-| Harness | Status | Notes |
-| --- | --- | --- |
-| [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | Supported | Native harness via `@anthropic-ai/claude-agent-sdk` |
-| [Codex](https://github.com/openai/codex) | Supported | Native harness via Codex App Server over stdio |
-
-Launches and notifications work from Telegram, Discord, or any OpenClaw-supported channel. Telegram and Discord now share the same action-token callback flow for plan approvals, question options, resume/restart, and worktree decisions.
+Use `agent_worktree_status` for current state and `agent_worktree_cleanup(mode="preview_safe")` before removing resolved sandboxes.
 
 ## Quick Start
 
@@ -124,25 +70,7 @@ openclaw gateway restart
 openclaw plugins inspect openclaw-code-agent --runtime --json
 ```
 
-Restart or reload the gateway only as part of your normal install/upgrade flow; it is not needed for editing docs or preparing a release branch.
-
-This release targets the OpenClaw `v2026.4.21` external plugin contract and is verified against the stable `v2026.5.4` build/test target. `package.json` carries the plugin API compatibility and build metadata used by modern OpenClaw / ClawHub installs, and `openclaw.plugin.json` advertises the plugin-owned startup, command activation surface, tool contracts, and onboarding metadata OpenClaw uses during plugin-config setup. Keep those metadata surfaces in sync when bumping the plugin release baseline.
-
-After install or update, inspect the runtime plugin view after the gateway restart. The runtime inspection should show the chat commands, service, and `agent_*` / `goal_*` tools without diagnostics. If `tools.effective` or `tools.invoke` cannot see `agent_launch` or `agent_sessions`, the installed plugin is stale or the gateway has not restarted onto the updated manifest and bundle.
-
-The current manifest descriptors stay intentionally narrow: activation advertises startup loading plus only the chat commands this plugin owns, and setup stays minimal with `requiresRuntime: false`. First-run onboarding is driven by the manifest config schema and `uiHints`, not by provider/backend setup descriptors.
-
-### First-Run Onboarding
-
-In OpenClaw's Manual setup flow, the plugin should only ask for three first-run decisions:
-
-- `defaultWorkdir`: the git repo path you expect to launch from most often
-- `defaultHarness`: whether your default harness is `claude-code` or `codex`
-- `fallbackChannel`: an optional but recommended fully routable notification target for async updates
-
-Everything else stays advanced/manual. In particular, `agentChannels`, per-harness model policy, permission defaults, and worktree policy are intentionally deferred until after the first successful launch, even though plan approval and worktree follow-through now default to delegated behavior. If your first launch must run outside a git repo, expand Advanced during setup or edit config afterwards and set `defaultWorktreeStrategy` to `off`.
-
-Add a minimal config block under `plugins.entries["openclaw-code-agent"]` in `~/.openclaw/openclaw.json`:
+Add the smallest useful config under `plugins.entries["openclaw-code-agent"]` in `~/.openclaw/openclaw.json`:
 
 ```json
 {
@@ -152,19 +80,7 @@ Add a minimal config block under `plugins.entries["openclaw-code-agent"]` in `~/
         "enabled": true,
         "config": {
           "defaultWorkdir": "/home/user/project",
-          "defaultHarness": "claude-code",
-          "fallbackChannel": "telegram|my-bot|123456789",
-          "harnesses": {
-            "claude-code": {
-              "defaultModel": "anthropic/claude-sonnet-4-7",
-              "allowedModels": ["sonnet", "opus"]
-            },
-            "codex": {
-              "defaultModel": "gpt-5.5",
-              "allowedModels": ["gpt-5.5", "gpt-5.5-pro"],
-              "reasoningEffort": "medium"
-            }
-          }
+          "defaultHarness": "claude-code"
         }
       }
     }
@@ -172,82 +88,88 @@ Add a minimal config block under `plugins.entries["openclaw-code-agent"]` in `~/
 }
 ```
 
-You can leave the advanced settings at their defaults for the first run. The plugin defaults to:
+For the first run, choose:
+
+- `defaultWorkdir`: a git repository root you expect to use often.
+- `defaultHarness`: `claude-code` or `codex`.
+
+The default policy is intentionally review-first:
 
 - `permissionMode: "plan"`
 - `planApproval: "delegate"`
 - `defaultWorktreeStrategy: "delegate"`
 
-Because delegated worktree follow-through is now the default, the first-run `defaultWorkdir` should normally point at a git repository. Non-git workdirs are still supported by setting `defaultWorktreeStrategy: "off"` globally or by launching with `worktree_strategy: "off"`.
+Because worktree isolation defaults to `delegate`, `defaultWorkdir` should normally be a git repo. For non-git directories, set `defaultWorktreeStrategy` to `off` or launch with `worktree_strategy: "off"`.
 
-If you run Codex sessions, keep Codex on the ChatGPT auth path:
+Chat-launched sessions route updates back to their originating chat thread. For tool-launched sessions without an origin route, configure `fallbackChannel` or `agentChannels` in the reference guide.
+
+If you use Codex, make sure the local `codex` command or `OPENCLAW_CODEX_APP_SERVER_COMMAND` override is available and authenticated. When Codex auth is inconsistent, this is the recommended `~/.codex/config.toml` setting:
 
 ```toml
 forced_login_method = "chatgpt"
 ```
 
-Put that in `~/.codex/config.toml`.
+## First Session
 
-Codex approval behavior is fixed to the supported execution path, and OpenClaw handles review gates through `permissionMode` plus `planApproval`.
-
-### Harness Availability Guidance
-
-OpenClaw's generic plugin onboarding can prompt for `defaultHarness`, but it does not yet have a plugin-specific readiness panel. Use these checks when choosing the default:
-
-- `codex`: choose this only when the `codex` command (or your `OPENCLAW_CODEX_APP_SERVER_COMMAND` override) is available and local Codex auth under `~/.codex` is already working
-- `claude-code`: choose this when the bundled Claude SDK/CLI is installed and you expect Claude Code to be the main path on this machine
-
-Codex readiness is the easier one to verify locally because the plugin depends on a resolvable command plus local auth files. Claude Code installation is verifiable, but authenticated usability may still require Claude-side login/account setup the first time you launch a session.
-
-This is this plugin's own harness selection, not OpenClaw ACPX runtime selection and not the bundled core `codex` provider toggle. The real prerequisites are the local backend commands and local auth state.
-
-Launch a first session:
+From chat:
 
 ```bash
 /agent --name fix-auth Fix the auth middleware bug
 /agent_sessions
 /agent_respond fix-auth Add unit tests too
-agent_launch(prompt="<new task>", resume_session_id="fix-auth", fork_session=true)
 ```
 
-For multi-workspace or multi-bot setups, configure `agentChannels`. The full routing rules, config matrix, and notification behavior live in [docs/REFERENCE.md](docs/REFERENCE.md).
+From a tool call:
 
-Prefer fully routable channel strings such as `telegram|123456789` or `telegram|my-bot|123456789`. A bare provider like `telegram` is only a weak fallback; the plugin now repairs topic routing from `originSessionKey` when possible, but explicit channels are still the safer default.
+```text
+agent_launch(
+  prompt: "Fix the auth middleware bug and add tests",
+  name: "fix-auth",
+  workdir: "/home/user/project"
+)
+```
 
-### Upgrade Notes
+Continue existing work with `agent_respond`. Fork from prior context only when you want a separate session:
 
-For OpenClaw `2026.5.4` readiness:
+```text
+agent_launch(
+  prompt: "Try a different implementation",
+  resume_session_id: "fix-auth",
+  fork_session: true
+)
+```
 
-- Build and SDK metadata now target OpenClaw `2026.5.4`; the peer floor remains `>=2026.4.21` for existing compatible installs.
-- If your OpenClaw config uses an exclusive `plugins.allow` list, include `openclaw-code-agent` or the plugin's `agent_*` / `goal_*` tools will not load even if `tools.allow` names them.
-- Harness model policy should live under `harnesses.codex.*` and `harnesses["claude-code"].*`. Legacy `defaultModel`, `model`, `reasoningEffort`, and global `allowedModels` are compatibility-only. Configured `reasoningEffort` supports `low`, `medium`, `high`, `xhigh`, and `max`.
-- Codex and Claude Code restrictions are harness-scoped. Codex defaults to `gpt-5.5` with `gpt-5.5` / `gpt-5.5-pro` allowed; Claude Code defaults to `anthropic/claude-sonnet-4-7` with `sonnet` / `opus` matching.
-- `tools.deny` does not disable OpenClaw's `apply_patch` tool by itself. Use OpenClaw's `tools.exec.applyPatch.*` settings when you need patch-tool policy.
+## Core Workflows
 
-For `4.1.0`:
+### Plan Review
 
-- Managed TaskFlow integration is opportunistic. It uses OpenClaw's current managed-flow runtime when available and degrades to the existing session-only behavior when that surface is absent.
-- Direct notification failures are now surfaced more explicitly. Treat a missing button delivery as a delivery/routing problem, not as evidence that the underlying plan or worktree state changed.
-- Runtime and approval state fields in wakes are authoritative. Prefer them over transcript fragments when deciding whether execution was approved, bypassed, completed, or still waiting.
+With the default `permissionMode: "plan"`, Claude Code and Codex produce a plan before implementation. The plan can be approved, revised, or rejected through buttons when available, or with plain-text `Approve`, `Revise`, or `Reject` in the same thread.
 
-For `3.2.0`:
+`agent_respond(..., approve=true)` approves the latest actionable plan version for that session.
 
-If you are upgrading from `3.1.0`, the important behavioral changes are:
+### Worktree Follow-Through
 
-- `defaultWorktreeStrategy` now defaults to `delegate`, so new sessions use worktree isolation and orchestrator-led follow-through unless you configure or launch with a different strategy.
-- `auto-merge` now attempts one autonomous conflict resolution before escalating.
-- Completion wakes and no-change outcomes are deterministic and carry explicit approval/execution state instead of relying on transcript inference.
-- Worktree cleanup is lifecycle-first and can now classify already-landed branches as `released`, which makes `preview_safe` and `clean_safe` more trustworthy after rebase, squash, or cherry-pick flows.
-- Release validation now checks package/plugin version parity in addition to the normal `pnpm verify` gate.
+New sessions default to `defaultWorktreeStrategy: "delegate"`, which keeps changes in an isolated branch and wakes the orchestrator with diff context. In `ask` mode, the user gets action buttons:
 
-### Backend Capabilities
+- `Merge`
+- `Open PR`
+- `Later`
+- `Discard`
 
-- Claude Code stays on plugin-managed worktrees.
-- Codex now runs through App Server structured events and may execute inside a native backend-managed worktree.
-- Merge, PR, reminder, and decision policy remain plugin-owned above both backends.
-- Operators should continue sessions by plugin session ID or name. Backend conversation IDs are accepted only for recovery and diagnostics.
+Use `agent_worktree_status` to inspect worktree state and `agent_worktree_cleanup(mode="preview_safe")` before cleaning resolved sandboxes.
 
-## Tool Surface
+### Goal Tasks
+
+Goal tasks are explicit autonomous loops. They do not replace ordinary `agent_launch`.
+
+```bash
+/goal --workdir /repo --verify "pnpm test" Fix the failing auth flow
+/goal --workdir /repo --mode ralph --completion-promise DONE Ship the draft workflow
+```
+
+Use `goal_status` to inspect progress and `goal_stop` to stop a loop.
+
+## Tools And Commands
 
 | Tool | Purpose |
 | --- | --- |
@@ -259,23 +181,23 @@ If you are upgrading from `3.1.0`, the important behavioral changes are:
 | `agent_stats` | Show aggregate usage and cost |
 | `agent_merge` | Merge a worktree branch back to base |
 | `agent_pr` | Create or update a GitHub PR |
-| `agent_worktree_status` | Show authoritative lifecycle state, derived repo evidence, cleanup safety, and retained reasons |
-| `agent_worktree_cleanup` | Clean all lifecycle-safe worktrees or dismiss one pending decision without touching live/unsafe worktrees |
+| `agent_worktree_status` | Show worktree lifecycle state and cleanup safety |
+| `agent_worktree_cleanup` | Clean safe worktrees or dismiss one pending decision |
 | `goal_launch` | Start an explicit verifier or Ralph-style goal loop |
 | `goal_status` | Show one goal task or list all goal tasks |
 | `goal_stop` | Stop a running goal task |
 
-The chat command surface mirrors the common workflows: `/agent`, `/agent_sessions`, `/agent_output`, `/agent_respond`, `/agent_kill`, `/agent_stats`, `/goal`, `/goal_status`, and `/goal_stop`.
+Chat commands mirror the common workflows: `/agent`, `/agent_sessions`, `/agent_output`, `/agent_respond`, `/agent_kill`, `/agent_stats`, `/goal`, `/goal_status`, and `/goal_stop`.
 
 ## Docs
 
 | Doc | What It Covers |
 | --- | --- |
-| [docs/REFERENCE.md](docs/REFERENCE.md) | Install, config, tools, commands, notifications, routing, worktrees, troubleshooting |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Session manager, harness model, notification pipeline, persistence, worktree internals |
-| [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | Local setup, repo layout, build/test flow, extension points |
-| [docs/SECURITY.md](docs/SECURITY.md) | Accepted subprocess surfaces, verifier-shell boundary, and current scanner findings |
-| [docs/ACP-COMPARISON.md](docs/ACP-COMPARISON.md) | Current comparison with OpenClaw core ACP |
+| [docs/REFERENCE.md](docs/REFERENCE.md) | Full operator reference: install, config, tools, commands, routing, worktrees, troubleshooting |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Internal architecture and lifecycle design |
+| [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | Local setup, validation, release prep, extension points |
+| [docs/SECURITY.md](docs/SECURITY.md) | Accepted subprocess surfaces, verifier shell boundary, scanner findings |
+| [docs/ACP-COMPARISON.md](docs/ACP-COMPARISON.md) | Boundary with OpenClaw ACPX and bundled Codex surfaces |
 | [skills/code-agent-orchestration/SKILL.md](skills/code-agent-orchestration/SKILL.md) | Operational skill for orchestrating sessions from an agent |
 | [CHANGELOG.md](CHANGELOG.md) | Release history |
 

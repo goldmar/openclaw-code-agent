@@ -56,8 +56,8 @@ The overlap is substrate, not responsibility. Both the core bundled `codex` plug
 
 `index.ts` registers:
 
-- 10 tools
-- 7 chat commands
+- 15 tools
+- 9 chat commands
 - the shared interactive callback handlers for Telegram and Discord
 - the background session service
 
@@ -204,7 +204,7 @@ For `ask`, Telegram and Discord plan buttons share OpenClaw's direct-message pre
 
 When a session completes with worktree metadata:
 
-- `ask`: keep the branch local, notify the user, and attach `Merge locally` / `Create PR` buttons
+- `ask`: keep the branch local, notify the user, and attach `Merge` / `Open PR` buttons
 - `delegate`: keep the branch local and wake the orchestrator with diff context
 - `auto-merge`: attempt merge automatically and spawn a conflict resolver on failure
 - `auto-pr`: attempt PR creation/update automatically; fall back to explicit pending decision state on failure

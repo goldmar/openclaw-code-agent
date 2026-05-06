@@ -36,7 +36,6 @@
   "files": [
     "dist/",
     "skills/",
-    "workflows/",
     "openclaw.plugin.json",
     "README.md",
     "LICENSE"

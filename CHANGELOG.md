@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Reworked the README into a shorter operator-first guide and moved release-detail emphasis back to the changelog/reference docs.
+- Aligned worktree decision button documentation with the current `Merge`, `Open PR`, `Later`, and `Discard` labels.
+- Removed the stale `workflows/` package file entry because no workflows are shipped in the npm tarball.
+
+### Fixed
+- Reused the shared model allowlist helper in agent launch resolution and cleaned up patch-era comments in launch, merge, session, and startup cleanup code.
+- Corrected architecture docs for the current plugin entry surface: 15 tools and 9 chat commands.
+
 ## [4.1.2] - 2026-05-06
 
 ### Fixed

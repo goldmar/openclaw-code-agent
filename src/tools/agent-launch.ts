@@ -1,18 +1,13 @@
-import { existsSync } from "fs";
 import { Type } from "@sinclair/typebox";
 import { sessionManager } from "../singletons";
 import { formatLaunchSummaryFromSession, type LaunchSummarySessionLike } from "../launch-summary";
 import {
-  getDefaultHarnessName,
   pluginConfig,
-  resolveAllowedModelsForHarness,
-  resolveDefaultModelForHarness,
   resolveReasoningEffortForHarness,
 } from "../config";
-import { assessResumeCandidate, getStableSessionId } from "../session-resume";
+import { assessResumeCandidate } from "../session-resume";
 import type { OpenClawPluginToolContext, PersistedSessionInfo } from "../types";
 import {
-  extractPromptDeclaredWorkdir,
   resolveAgentLaunchRequest,
   type AgentLaunchParams,
 } from "./agent-launch-resolution";
@@ -50,29 +45,6 @@ function hasFormatLaunchResult(value: unknown): value is {
   return !!value
     && typeof value === "object"
     && typeof (value as { formatLaunchResult?: unknown }).formatLaunchResult === "function";
-}
-
-/**
- * Checks if a model identifier is allowed based on case-insensitive substring matching.
- * Returns true if allowedModels is empty/undefined, or if any allowed pattern matches the model.
- *
- * @param model - The model identifier to check (e.g., "anthropic/claude-sonnet-4-7")
- * @param allowedModels - Array of allowed patterns (e.g., ["sonnet", "opus"])
- * @returns true if model is allowed, false otherwise
- */
-function isModelAllowed(model: string | undefined, allowedModels: string[] | undefined): boolean {
-  // No restrictions if allowedModels is not configured or empty
-  if (!allowedModels || allowedModels.length === 0) {
-    return true;
-  }
-
-  // Reject if model is undefined/null when there are restrictions
-  if (!model) {
-    return false;
-  }
-
-  const modelLower = model.toLowerCase();
-  return allowedModels.some(pattern => modelLower.includes(pattern.toLowerCase()));
 }
 
 /** Register the `agent_launch` tool factory. */
@@ -117,7 +89,7 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
       worktree_strategy: Type.Optional(
         Type.Union(
           [Type.Literal("off"), Type.Literal("manual"), Type.Literal("ask"), Type.Literal("delegate"), Type.Literal("auto-merge"), Type.Literal("auto-pr")],
-          { description: "Worktree strategy: 'off' (no worktree), 'manual' (create worktree but no auto merge-back), 'ask' (prompt user with Merge/PR/Decide later/Dismiss buttons), 'delegate' (orchestrator decides), 'auto-merge' (merge automatically), 'auto-pr' (open/update a PR automatically). Defaults to the plugin config when unset." },
+          { description: "Worktree strategy: 'off' (no worktree), 'manual' (create worktree but no auto merge-back), 'ask' (prompt user with Merge/Open PR/Later/Discard buttons), 'delegate' (orchestrator decides), 'auto-merge' (merge automatically), 'auto-pr' (open/update a PR automatically). Defaults to the plugin config when unset." },
         ),
       ),
       worktree_base_branch: Type.Optional(
@@ -137,7 +109,6 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
 
       // Guard: agentId is NOT a valid parameter for agent_launch. It belongs to sessions_spawn (OpenClaw sub-agents).
       // If present in params, it was passed by mistake — log a warning and ignore it.
-      // See docs/internal/COMMON-MISTAKES.md for the full explanation.
       if (params.agentId) {
         console.warn(`[agent_launch] ⚠️ agentId="${params.agentId}" was passed as a parameter — this is WRONG. agentId is only for sessions_spawn (OpenClaw sub-agents), not agent_launch (CC sessions). The field is being ignored. ctx.agentId="${ctx.agentId}" will be used for origin routing instead.`);
       }
@@ -200,8 +171,8 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
           systemPrompt: params.system_prompt,
           allowedTools: params.allowed_tools,
           resumeSessionId: resumeAssessment?.kind === "resume" ? resumeAssessment.resumeSessionId : resumeSessionId,
-          // Bug 3 fix: always pass the original resolved session ID for worktree inheritance,
-          // even when resumeSessionId was cleared by decideResumeSessionId (e.g. Codex harness).
+          // Worktree inheritance needs the original resolved session ref even when
+          // backend resume state is intentionally cleared for a fresh launch.
           resumeWorktreeFrom: resolvedResumeId,
           forkSession: resumeSessionId ? params.fork_session : false,
           multiTurn: true,
