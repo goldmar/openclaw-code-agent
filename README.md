@@ -28,14 +28,16 @@ Need the ACPX vs Codex vs code-agent breakdown? See [docs/ACP-COMPARISON.md](doc
 
 The shared substrate is often the local `codex` command and Codex App Server, but the responsibilities are different. This plugin is not an ACP server and it does not depend on OpenClaw's bundled Codex provider to expose its own `codex` harness.
 
-## New In 4.1.1
+## New In 4.1.2
 
-`4.1.1` is the OpenClaw `2026.5.4` compatibility patch. It keeps the `4.1.0` managed-lifecycle and notification reliability work intact, preserves the `>=2026.4.21` compatibility floor, and aligns harness model/thinking behavior with the newer OpenClaw release line.
+`4.1.2` is a plan-approval reliability patch for the OpenClaw `2026.5.4` release line. It keeps the `>=2026.4.21` compatibility floor and the `4.1.1` build/test target, while tightening the user-facing approval path that gates implementation.
 
-- **Managed TaskFlow lifecycle**. When the current OpenClaw runtime exposes managed TaskFlow APIs, code-agent sessions now create, update, wait, and finalize a gateway-owned flow record; older runtimes fall back cleanly without changing session behavior.
-- **Deterministic runtime state**. Completion and no-change paths now surface canonical approval/runtime state instead of asking operators to infer it from transcript text.
-- **Notification delivery reliability**. Direct notification timeouts, fallback failures, and completion-delivery diagnostics are handled explicitly so failed delivery is visible instead of silently hanging.
-- **Verified OpenClaw target**. Local build/test metadata targets stable OpenClaw `2026.5.4` while keeping the minimum compatibility floor at `>=2026.4.21`.
+- **Telegram plan approval buttons restored**. Plan prompts in Telegram use the shared direct-message presentation path and carry the canonical **Approve**, **Revise**, and **Reject** actions.
+- **Plain-text fallback is explicit**. While a plan is awaiting review, replying `Approve`, `Revise`, or `Reject` triggers the same approval, revision, or rejection path as the buttons.
+- **Stale prompts are suppressed**. Rejected or killed plan sessions no longer resurface an obsolete Plan v2 prompt as if it were still actionable.
+- **Verified release evidence**. A plan-gated `rust-hello-world` run, `rust-hello-world-minor-change-2` (`FzPCkqjh`), completed as `approved_then_implemented` after explicit approval; a later run (`VmUBWOH2`) delivered a clean plan prompt without the old stale Plan v2-after-reject behavior.
+
+The `4.1.1` OpenClaw `2026.5.4` compatibility work remains current: managed TaskFlow mirroring is opportunistic, deterministic runtime state is exposed in wakes, direct notification failures are surfaced, and local build/test metadata still targets stable OpenClaw `2026.5.4`.
 
 ## From Prompt To Merged Branch
 

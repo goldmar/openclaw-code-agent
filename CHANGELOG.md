@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.2] - 2026-05-06
+
+### Fixed
+- Fixed Telegram plan approval prompts so the canonical Approve / Revise / Reject buttons are delivered through the shared direct-message presentation path.
+- Added explicit plain-text Approve / Revise / Reject handling while a plan is awaiting review, so sessions remain controllable when interactive buttons cannot be delivered.
+- Stopped stale Plan v2 approval prompts from resurfacing after a plan is rejected or the session is killed.
+
+### Docs
+- Refreshed README, operator reference, architecture, ACP comparison, development, contributor, and orchestration-skill docs around plan approval, Telegram buttons, text fallback behavior, diagnostics, and release-prep validation. The worktree-default note is a documentation correction: prior skill docs incorrectly described `defaultWorktreeStrategy` as defaulting to `off`; no runtime behavior changed, and the actual default remains `delegate`.
+- Documented the release smoke evidence from the Builds & Tools topic: `rust-hello-world-minor-change-2` (`FzPCkqjh`) completed as `approved_then_implemented` after explicit approval, and a later run (`VmUBWOH2`) delivered a clean plan prompt without the old stale Plan v2-after-reject behavior.
+
 ## [4.1.1] - 2026-05-05
 
 ### Changed
@@ -264,7 +275,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Default Codex approval policy to `on-request`.
 - Raised the default session limit.
 
-[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.1.1...HEAD
+[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.1.2...HEAD
+[4.1.2]: https://github.com/goldmar/openclaw-code-agent/compare/v4.1.1...v4.1.2
 [4.1.1]: https://github.com/goldmar/openclaw-code-agent/compare/v4.1.0...v4.1.1
 [4.1.0]: https://github.com/goldmar/openclaw-code-agent/compare/v4.0.1...v4.1.0
 [4.0.1]: https://github.com/goldmar/openclaw-code-agent/compare/v4.0.0...v4.0.1

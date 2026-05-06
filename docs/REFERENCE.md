@@ -28,7 +28,7 @@ Current releases treat persisted session storage as new-schema-only. If startup 
 
 ### OpenClaw 2026.5.4 Readiness
 
-`openclaw-code-agent` `4.1.1` is validated against OpenClaw `2026.5.4` SDK and plugin-loading behavior. The plugin keeps the peer floor at `>=2026.4.21` for compatible existing installs, while package build metadata should target `2026.5.4` for this readiness pass.
+`openclaw-code-agent` `4.1.2` is validated against OpenClaw `2026.5.4` SDK and plugin-loading behavior. The plugin keeps the peer floor at `>=2026.4.21` for compatible existing installs, while package build metadata should target `2026.5.4` for this readiness pass.
 
 Configuration guidance for `2026.5.4`:
 
@@ -218,7 +218,7 @@ For Codex, approval behavior is fixed to the supported execution path and is not
 | `delegate` | Default. Wake the orchestrator, require a full-plan review, then let it either approve directly or escalate back to the user with the same approval buttons |
 | `approve` | Auto-approve after verification |
 
-In `ask`, the plugin sends action buttons for `Approve`, `Revise`, and `Reject` when interactive callbacks are available, and the user-facing message includes the full plan text rather than the normal preview budget. Each session keeps one canonical actionable approval prompt per plan review version; later reminders for that same version are non-canonical reminders, not a fresh approval cycle. The same flow still works through plain replies. In `delegate`, the orchestrator must read the full plan with `agent_output(..., full=true)` before approving anything.
+In `ask`, the plugin sends action buttons for `Approve`, `Revise`, and `Reject` when interactive callbacks are available, and the user-facing message includes the full plan text rather than the normal preview budget. Telegram and Discord both use OpenClaw's shared direct-message presentation contract for the outbound button UI. Each session keeps one canonical actionable approval prompt per plan review version; later reminders for that same version are non-canonical reminders, not a fresh approval cycle. If buttons are unavailable, hidden by the client, or fail to deliver, the same flow still works through plain replies: `Approve` approves and resumes implementation, `Revise` records changes requested for the current review version, and `Reject` kills the pending plan session instead of forwarding the word as normal task input. In `delegate`, the orchestrator must read the full plan with `agent_output(..., full=true)` before approving anything.
 
 Direct interactive notifications for Telegram and Discord now share the same OpenClaw `message.send --presentation` contract. Callback handling and route repair still remain provider-specific.
 
@@ -227,6 +227,7 @@ Revision and approval rules are version-scoped:
 - `Revise` supersedes only the prior review version for that same session
 - the revised plan becomes the latest actionable review version
 - `agent_respond(..., approve=true)` resolves against that latest actionable version, even if older versions previously had `changes_requested`
+- `Reject` closes the current plan decision and prevents old Plan v2 prompts for that killed/rejected session from being treated as actionable
 - approval-prompt delivery state is tracked separately from backend approval state, so a missing button delivery should be treated as a delivery problem, not as proof that the plan is no longer awaiting approval
 
 Terminal completion wakes and no-change worktree completion wakes now include deterministic approval context for plan-gated sessions:
@@ -566,3 +567,5 @@ Prefer fully routable channel strings in `fallbackChannel` and `agentChannels`. 
 - Model launch rejected: update `harnesses.<name>.allowedModels` or the harness default model so they agree.
 - Codex auth weirdness: prefer `forced_login_method = "chatgpt"` and relaunch.
 - Notification delivery failed or timed out: inspect direct-delivery diagnostics and routing metadata first. Do not treat missing interactive buttons as proof that the underlying plan, worktree decision, or runtime state changed.
+- Plan approval buttons are missing: reply with plain text `Approve`, `Revise`, or `Reject` in the same thread while the plan is awaiting review, then inspect delivery diagnostics separately.
+- A stale plan prompt appears after rejection or kill: treat it as stale UI unless `agent_sessions` shows the session is still awaiting approval for a current review version.
