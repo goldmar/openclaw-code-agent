@@ -26,11 +26,13 @@ Sessions are multi-turn. Active sessions accept follow-up messages via `agent_re
 
 Current releases treat persisted session storage as new-schema-only. If startup finds an older or invalid session store, the plugin archives it to a timestamped `.legacy-*.json` backup and starts with a fresh index instead of migrating rows in place.
 
-### OpenClaw 2026.5.4 Readiness
+### OpenClaw 2026.5.6 Readiness
 
-`openclaw-code-agent` `4.1.2` is validated against OpenClaw `2026.5.4` SDK and plugin-loading behavior. The plugin keeps the peer floor at `>=2026.4.21` for compatible existing installs, while package build metadata should target `2026.5.4` for this readiness pass.
+`openclaw-code-agent` `4.1.2` is validated for OpenClaw `2026.5.6` plugin-loading behavior. The plugin keeps the peer floor at `>=2026.4.21` for compatible existing installs, while package build metadata targets OpenClaw `2026.5.6`.
 
-Configuration guidance for `2026.5.4`:
+The latest published OpenClaw SDK package for this pass is `2026.5.5`, so local typecheck/build verification uses `openclaw@2026.5.5` until a `2026.5.6` SDK package is available. This is a plugin-readiness baseline, not a host upgrade requirement.
+
+Configuration guidance for `2026.5.6`:
 
 - If `plugins.allow` is present, add `openclaw-code-agent`. OpenClaw treats that allowlist as exclusive, so `tools.allow` cannot make this plugin's tools available when the owning plugin is blocked.
 - Disabled bundled plugins remain disabled unless explicitly enabled or auto-enabled by their own OpenClaw contracts. Do not assume adjacent bundled plugins are available to code-agent sessions.
