@@ -1,16 +1,22 @@
-import { existsSync } from "fs";
-
 import { goalController } from "../singletons";
-import {
-  getDefaultHarnessName,
-  pluginConfig,
-  resolveAllowedModelsForHarness,
-  resolveDefaultModelForHarness,
-  resolveOriginChannel,
-  resolveReasoningEffortForHarness,
-  resolveSessionRoute,
-} from "../config";
-import { isModelAllowed } from "../model-allowlist";
+import { formatGoalLaunchResult, resolveGoalLaunchRequest } from "../goal-launch-resolution";
+import type { OpenClawPluginToolContext, PermissionMode, GoalLoopMode } from "../types";
+
+const GOAL_USAGE = "Usage: /goal [--name <name>] [--workdir <dir>] [--model <model>] [--harness <name>] [--mode <ralph|verifier>] [--completion-promise <text>] [--max-iterations N] [--verify <cmd> ...] <goal>";
+
+interface GoalCommandContext extends Partial<OpenClawPluginToolContext> {
+  args?: string;
+}
+
+interface CommandApi {
+  registerCommand(config: {
+    name: string;
+    description: string;
+    acceptsArgs: boolean;
+    requireAuth: boolean;
+    handler: (ctx: GoalCommandContext) => Promise<{ text: string }>;
+  }): void;
+}
 
 function tokenizeArgs(raw: string): string[] {
   const matches = raw.match(/"[^"]*"|'[^']*'|\S+/g);
@@ -26,30 +32,30 @@ function tokenizeArgs(raw: string): string[] {
   });
 }
 
-export function registerGoalCommand(api: any): void {
+export function registerGoalCommand(api: CommandApi): void {
   api.registerCommand({
     name: "goal",
     description: "Launch an explicit goal task (Ralph-style completion loop or verifier-driven loop)",
     acceptsArgs: true,
     requireAuth: true,
-    handler: async (ctx: any) => {
+    handler: async (ctx: GoalCommandContext) => {
       if (!goalController) {
         return { text: "Error: GoalController not initialized. The code-agent service must be running." };
       }
 
       const raw = (ctx.args ?? "").trim();
       if (!raw) {
-        return { text: "Usage: /goal [--name <name>] [--workdir <dir>] [--model <model>] [--harness <name>] [--mode <ralph|verifier>] [--completion-promise <text>] [--max-iterations N] [--verify <cmd> ...] <goal>" };
+        return { text: GOAL_USAGE };
       }
 
       const tokens = tokenizeArgs(raw);
       let name: string | undefined;
-      let workdir = pluginConfig.defaultWorkdir || process.cwd();
+      let workdir: string | undefined;
       let model: string | undefined;
       let maxIterations: number | undefined;
-      let permissionMode: "default" | "plan" | "bypassPermissions" = "bypassPermissions";
+      let permissionMode: PermissionMode = "bypassPermissions";
       let harness: string | undefined;
-      let loopMode: "ralph" | "verifier" | undefined;
+      let loopMode: GoalLoopMode | undefined;
       let completionPromise: string | undefined;
       const verifierCommands: string[] = [];
       const goalParts: string[] = [];
@@ -96,68 +102,49 @@ export function registerGoalCommand(api: any): void {
 
       const goal = goalParts.join(" ").trim();
       if (!goal) {
-        return { text: "Usage: /goal [--name <name>] [--workdir <dir>] [--model <model>] [--harness <name>] [--mode <ralph|verifier>] [--completion-promise <text>] [--max-iterations N] [--verify <cmd> ...] <goal>" };
-      }
-      if (!existsSync(workdir)) {
-        return { text: `Error: Working directory does not exist: ${workdir}` };
+        return { text: GOAL_USAGE };
       }
 
-      const resolvedLoopMode = loopMode ?? (verifierCommands.length > 0 ? "verifier" : "ralph");
-      if (resolvedLoopMode === "verifier" && verifierCommands.length === 0) {
-        return { text: "Error: verifier mode requires at least one --verify command." };
-      }
-
-      const resolvedHarness = harness ?? getDefaultHarnessName();
-      const resolvedModel = model ?? resolveDefaultModelForHarness(resolvedHarness);
-      if (!resolvedModel) {
-        return {
-          text: `Error: No default model configured for harness "${resolvedHarness}". Set plugins.entries["openclaw-code-agent"].config.harnesses.${resolvedHarness}.defaultModel or pass model explicitly.`,
-        };
-      }
-
-      const allowedModels = resolveAllowedModelsForHarness(resolvedHarness);
-      if (!isModelAllowed(resolvedModel, allowedModels)) {
-        return { text: `Error: Model "${resolvedModel}" is not allowed. Permitted models: ${allowedModels?.join(", ")}` };
+      const resolution = resolveGoalLaunchRequest({
+        goal,
+        verifierCommands,
+        name,
+        workdir,
+        model,
+        maxIterations,
+        permissionMode,
+        harness,
+        goalMode: loopMode,
+        completionPromise,
+      }, ctx as OpenClawPluginToolContext);
+      if (resolution.kind !== "resolved") {
+        return { text: resolution.text };
       }
 
       try {
-        const route = resolveSessionRoute(ctx);
         const task = await goalController.launchTask({
-          goal,
-          name,
-          workdir,
-          model: resolvedModel,
-          reasoningEffort: resolveReasoningEffortForHarness(resolvedHarness),
-          maxIterations,
-          permissionMode,
-          harness: resolvedHarness,
-          loopMode: resolvedLoopMode,
-          completionPromise,
-          originChannel: resolveOriginChannel(ctx),
-          originThreadId: route?.threadId,
-          originSessionKey: ctx.sessionKey,
-          route,
-          verifierCommands: verifierCommands.map((command, index) => ({
-            label: `check-${index + 1}`,
-            command,
-          })),
+          goal: resolution.goal,
+          name: resolution.name,
+          workdir: resolution.workdir,
+          model: resolution.model,
+          reasoningEffort: resolution.reasoningEffort,
+          maxIterations: resolution.maxIterations,
+          permissionMode: resolution.permissionMode,
+          harness: resolution.harness,
+          loopMode: resolution.loopMode,
+          completionPromise: resolution.completionPromise,
+          originChannel: resolution.originChannel,
+          originThreadId: resolution.originThreadId,
+          originAgentId: resolution.originAgentId,
+          originSessionKey: resolution.originSessionKey,
+          route: resolution.route,
+          verifierCommands: resolution.verifierCommands,
         });
 
-        return {
-          text: [
-            `Goal task launched.`,
-            `  Name: ${task.name}`,
-            `  ID: ${task.id}`,
-            `  Session: ${task.sessionName} [${task.sessionId}]`,
-            `  Harness: ${resolvedHarness}`,
-            `  Loop mode: ${task.loopMode}`,
-            ...(task.loopMode === "ralph" ? [`  Completion promise: ${task.completionPromise}`] : []),
-            `  Max iterations: ${task.maxIterations}`,
-            `  Goal: "${goal.length > 100 ? `${goal.slice(0, 100)}...` : goal}"`,
-          ].join("\n"),
-        };
-      } catch (err: any) {
-        return { text: `Error launching goal task: ${err.message}` };
+        return { text: formatGoalLaunchResult(task, resolution) };
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        return { text: `Error launching goal task: ${message}` };
       }
     },
   });
