@@ -32,6 +32,17 @@ type MessagePresentation = {
   }>;
 };
 
+type InteractiveReply = {
+  blocks: Array<{
+    type: "buttons";
+    buttons: Array<{
+      label: string;
+      value: string;
+      style?: string;
+    }>;
+  }>;
+};
+
 export interface DirectNotificationTransport {
   send(
     route: NotificationRoute,
@@ -171,7 +182,8 @@ export class RuntimeDirectNotificationTransport implements DirectNotificationTra
     text: string,
     presentation: MessagePresentation,
   ): Promise<void> {
-    const basePayload = { text, presentation };
+    const interactive = presentationToInteractiveReply(presentation);
+    const basePayload = { text, presentation, interactive };
     logButtonDiagnostic("presentation_render_started", {
       ...summarizeRoute(route),
       messageTextLength: text.length,
@@ -194,15 +206,16 @@ export class RuntimeDirectNotificationTransport implements DirectNotificationTra
           ctx,
       })
       : basePayload;
+    const payload = ensureInteractivePayload(renderedPayload, interactive);
 
     logButtonDiagnostic("presentation_render_completed", {
       ...summarizeRoute(route),
       adapterHasRenderPresentation: typeof adapter.renderPresentation === "function",
       adapterHasSendPayload: typeof adapter.sendPayload === "function",
-      ...summarizeRenderedPayload(renderedPayload),
+      ...summarizeRenderedPayload(payload),
     });
 
-    if (!renderedPayload || typeof renderedPayload !== "object" || !adapter.sendPayload) {
+    if (!payload || typeof payload !== "object" || !adapter.sendPayload) {
       throw new Error(
         `OpenClaw outbound adapter for channel "${route.channel}" cannot preserve interactive presentation`,
       );
@@ -210,11 +223,11 @@ export class RuntimeDirectNotificationTransport implements DirectNotificationTra
 
     const result = await adapter.sendPayload({
       ...ctx,
-      payload: renderedPayload,
+      payload,
     });
     logButtonDiagnostic("presentation_send_payload_completed", {
       ...summarizeRoute(route),
-      ...summarizeRenderedPayload(renderedPayload),
+      ...summarizeRenderedPayload(payload),
       ...summarizeSendResult(result),
     });
   }
@@ -329,6 +342,41 @@ export function buildPresentation(
       })),
     }));
   return blocks.length > 0 ? { blocks } : undefined;
+}
+
+function presentationToInteractiveReply(presentation: MessagePresentation): InteractiveReply | undefined {
+  const blocks = presentation.blocks
+    .filter((block) => block.type === "buttons" && block.buttons.length > 0)
+    .map((block) => ({
+      type: "buttons" as const,
+      buttons: block.buttons.map((button) => ({
+        label: button.label,
+        value: button.value,
+        ...(button.style ? { style: button.style } : {}),
+      })),
+    }));
+  return blocks.length > 0 ? { blocks } : undefined;
+}
+
+function hasInteractiveButtons(payload: unknown): boolean {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+  const interactive = (payload as { interactive?: unknown }).interactive;
+  if (!interactive || typeof interactive !== "object" || Array.isArray(interactive)) return false;
+  const blocks = (interactive as { blocks?: unknown }).blocks;
+  return Array.isArray(blocks) && blocks.some((block) => {
+    if (!block || typeof block !== "object" || Array.isArray(block)) return false;
+    const record = block as { type?: unknown; buttons?: unknown };
+    return record.type === "buttons" && Array.isArray(record.buttons) && record.buttons.length > 0;
+  });
+}
+
+function ensureInteractivePayload(payload: unknown, interactive: InteractiveReply | undefined): unknown {
+  if (!interactive || hasInteractiveButtons(payload)) return payload;
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return payload;
+  return {
+    ...(payload as Record<string, unknown>),
+    interactive,
+  };
 }
 
 function prefixCallbackData(callbackData: string): string {

@@ -23,6 +23,7 @@ export interface SessionNotificationRequest {
   requireDirectUserNotification?: boolean;
   notifyUser?: SessionNotificationPolicy;
   buttons?: Array<Array<{ label: string; callbackData: string }>>;
+  shouldDispatch?: () => boolean;
   onUserNotifyFailed?: () => void;
   hooks?: SessionNotificationHooks;
 }
@@ -106,8 +107,11 @@ export class WakeDispatcher {
     phase: DispatchPhase,
     onFinalFailure?: () => void,
     onSuccess?: () => void,
+    shouldDispatch?: () => boolean,
   ): void {
     const route = this.routes.resolve(session);
+    const shouldContinue = shouldDispatch;
+    if (shouldContinue?.() === false) return;
     const sessionKey = route?.sessionKey?.trim();
     if (!sessionKey) {
       this.executor.execute(
@@ -125,6 +129,7 @@ export class WakeDispatcher {
           }),
           onSuccess,
           onFinalFailure,
+          shouldContinue,
         },
       );
       return;
@@ -145,7 +150,9 @@ export class WakeDispatcher {
           text,
         }),
         onSuccess,
+        shouldContinue,
         onFinalFailure: () => {
+          if (shouldContinue?.() === false) return;
           this.executor.execute(
             this.transport.buildSystemEventArgs(text),
             {
@@ -161,6 +168,7 @@ export class WakeDispatcher {
               }),
               onSuccess,
               onFinalFailure,
+              shouldContinue,
             },
           );
         },
@@ -176,7 +184,9 @@ export class WakeDispatcher {
     onAllFailed?: () => void,
     onSuccess?: () => void,
     requireDirectDelivery: boolean = false,
+    shouldDispatch?: () => boolean,
   ): void {
+    if (shouldDispatch?.() === false) return;
     const hasInteractiveButtons = Boolean(buttons?.some((row) => Array.isArray(row) && row.length > 0));
     const route = this.routes.resolve(session);
     logButtonDiagnostic("wake_notify_selected", {
@@ -239,6 +249,7 @@ export class WakeDispatcher {
           orderingKey,
           onSuccess,
           onFinalFailure: onAllFailed,
+          shouldContinue: shouldDispatch,
         },
       );
       return;
@@ -290,6 +301,7 @@ export class WakeDispatcher {
           orderingKey,
           onSuccess,
           onFinalFailure: onAllFailed,
+          shouldContinue: shouldDispatch,
         },
       );
     };
@@ -312,6 +324,7 @@ export class WakeDispatcher {
       onAmbiguousResult: directFailureHandler,
       onFinalFailure: directFailureHandler,
       terminalOnFailure: this.directNotifications ? true : undefined,
+      shouldContinue: shouldDispatch,
     } as const;
 
     if (this.directNotifications) {
@@ -357,6 +370,7 @@ export class WakeDispatcher {
     onAllFailed?: () => void,
     onSuccess?: () => void,
     requireDirectDelivery: boolean = false,
+    shouldDispatch?: () => boolean,
   ): void {
     const normalizedMessages = messages
       .map((message) => ({
@@ -384,6 +398,9 @@ export class WakeDispatcher {
     });
 
     const sendAt = (index: number): void => {
+      if (shouldDispatch?.() === false) {
+        return;
+      }
       const message = normalizedMessages[index];
       if (!message) {
         logButtonDiagnostic("wake_notify_sequence_succeeded", {
@@ -415,6 +432,7 @@ export class WakeDispatcher {
         onFailure,
         () => sendAt(index + 1),
         requireDirectDelivery,
+        shouldDispatch,
       );
     };
 
@@ -437,6 +455,7 @@ export class WakeDispatcher {
     })).filter((message) => message.text.length > 0);
     const userMessage = userMessages[0]?.text;
     const wakeMessage = request.wakeMessage?.trim();
+    const shouldDispatch = request.shouldDispatch;
 
     if (hasConditionalWake) {
       const wakeOnSuccess = request.wakeMessageOnNotifySuccess?.trim();
@@ -444,6 +463,7 @@ export class WakeDispatcher {
 
       const dispatchWake = (wakeText: string): void => {
         if (!wakeText) return;
+        if (shouldDispatch?.() === false) return;
         hooks?.onWakeStarted?.();
         this.sendWake(
           session,
@@ -452,25 +472,30 @@ export class WakeDispatcher {
           "wake",
           hooks?.onWakeFailed,
           hooks?.onWakeSucceeded,
+          shouldDispatch,
         );
       };
 
       const onSuccess = () => {
+        if (shouldDispatch?.() === false) return;
         hooks?.onNotifySucceeded?.();
         if (wakeOnSuccess) dispatchWake(wakeOnSuccess);
       };
       const onFailed = wakeOnFailed
         ? () => {
+            if (shouldDispatch?.() === false) return;
             hooks?.onNotifyFailed?.();
             request.onUserNotifyFailed?.();
             dispatchWake(wakeOnFailed);
           }
         : () => {
+            if (shouldDispatch?.() === false) return;
             hooks?.onNotifyFailed?.();
             request.onUserNotifyFailed?.();
           };
 
       if (userMessages.length > 0) {
+        if (shouldDispatch?.() === false) return;
         hooks?.onNotifyStarted?.();
         this.sendUserNotificationSequence(
           session,
@@ -479,6 +504,7 @@ export class WakeDispatcher {
           onFailed,
           onSuccess,
           request.requireDirectUserNotification === true,
+          shouldDispatch,
         );
       } else {
         onFailed();
@@ -487,34 +513,48 @@ export class WakeDispatcher {
     }
 
     if (notifyUser === "always" && userMessages.length > 0) {
+      if (shouldDispatch?.() === false) return;
       hooks?.onNotifyStarted?.();
       this.sendUserNotificationSequence(
         session,
         userMessages,
         request.label,
         () => {
+          if (shouldDispatch?.() === false) return;
           hooks?.onNotifyFailed?.();
           request.onUserNotifyFailed?.();
         },
-        () => hooks?.onNotifySucceeded?.(),
+        () => {
+          if (shouldDispatch?.() === false) return;
+          hooks?.onNotifySucceeded?.();
+        },
         request.requireDirectUserNotification === true,
+        shouldDispatch,
       );
     }
 
     if (!wakeMessage) return;
+    if (shouldDispatch?.() === false) return;
     hooks?.onWakeStarted?.();
 
     if (notifyUser === "on-wake-fallback" && userMessages.length > 0 && !this.routes.resolve(session)?.sessionKey) {
+      if (shouldDispatch?.() === false) return;
       hooks?.onNotifyStarted?.();
       this.sendUserNotificationSequence(
         session,
         userMessages,
         request.label,
         () => {
+          if (shouldDispatch?.() === false) return;
           hooks?.onNotifyFailed?.();
           request.onUserNotifyFailed?.();
         },
-        () => hooks?.onNotifySucceeded?.(),
+        () => {
+          if (shouldDispatch?.() === false) return;
+          hooks?.onNotifySucceeded?.();
+        },
+        false,
+        shouldDispatch,
       );
     }
 
@@ -525,6 +565,7 @@ export class WakeDispatcher {
       "wake",
       hooks?.onWakeFailed,
       hooks?.onWakeSucceeded,
+      shouldDispatch,
     );
   }
 }

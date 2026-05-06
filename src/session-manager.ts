@@ -643,6 +643,17 @@ export class SessionManager {
     ].filter(Boolean).join("\n");
   }
 
+  private isCurrentPendingPlanDecision(ref: string, planDecisionVersion: number | undefined): boolean {
+    if (planDecisionVersion == null) return false;
+    const session = this.resolve(ref) ?? this.getPersistedSession(ref);
+    return Boolean(
+      session?.pendingPlanApproval
+      && session.approvalState === "pending"
+      && session.lifecycle === "awaiting_plan_decision"
+      && ((session.actionablePlanDecisionVersion ?? session.planDecisionVersion) === planDecisionVersion),
+    );
+  }
+
   private dispatchPlanApprovalFallback(
     session: Session,
     planDecisionVersion: number | undefined,
@@ -653,6 +664,7 @@ export class SessionManager {
       label: "plan-approval-fallback",
       userMessage: buildPlanApprovalFallbackText({ session, summary }),
       notifyUser: "always",
+      shouldDispatch: () => this.isCurrentPendingPlanDecision(session.id, planDecisionVersion),
       hooks: {
         onNotifyStarted: () => {
           this.updatePersistedSession(session.id, {
@@ -812,6 +824,7 @@ export class SessionManager {
             });
           },
         },
+        shouldDispatch: () => this.isCurrentPendingPlanDecision(sessionId, actionableVersion),
         onUserNotifyFailed: () => this.dispatchPlanApprovalFallback(
           this.buildRoutingProxy({
             id: sessionId,
@@ -1224,6 +1237,30 @@ export class SessionManager {
   kill(id: string, reason?: KillReason): boolean {
     const session = this.registry.get(id);
     if (!session) return false;
+    if (session.pendingPlanApproval) {
+      this.clearPlanDecisionTokens(session.id);
+      const patch: Partial<PersistedSessionInfo> = {
+        lifecycle: "terminal",
+        runtimeState: "stopped",
+        pendingPlanApproval: false,
+        planApprovalContext: undefined,
+        approvalState: session.approvalState === "pending" ? "rejected" : session.approvalState,
+        planDecisionVersion: (session.planDecisionVersion ?? 0) + 1,
+        actionablePlanDecisionVersion: undefined,
+        canonicalPlanPromptVersion: undefined,
+        approvalPromptRequiredVersion: undefined,
+        approvalPromptVersion: undefined,
+        approvalPromptStatus: "not_sent",
+        approvalPromptTransport: "none",
+        approvalPromptMessageKind: "none",
+        approvalPromptLastAttemptAt: undefined,
+        approvalPromptDeliveredAt: undefined,
+        approvalPromptFailedAt: undefined,
+      };
+      session.applyControlPatch(patch);
+      Object.assign(session, patch);
+      this.updatePersistedSession(session.id, patch);
+    }
     session.kill(reason ?? "user");
     return true;
   }

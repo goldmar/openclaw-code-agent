@@ -326,6 +326,7 @@ describe("createCallbackHandler()", () => {
       approvalState: "changes_requested",
       lifecycle: "awaiting_user_input",
       pendingPlanApproval: false,
+      planApprovalContext: undefined,
       planDecisionVersion: 5,
       actionablePlanDecisionVersion: undefined,
       canonicalPlanPromptVersion: undefined,
@@ -378,9 +379,20 @@ describe("createCallbackHandler()", () => {
     assert.deepEqual(patches[0], {
       approvalState: "rejected",
       lifecycle: "terminal",
+      runtimeState: "stopped",
       pendingPlanApproval: false,
       planApprovalContext: undefined,
       planDecisionVersion: 5,
+      actionablePlanDecisionVersion: undefined,
+      canonicalPlanPromptVersion: undefined,
+      approvalPromptRequiredVersion: undefined,
+      approvalPromptVersion: undefined,
+      approvalPromptStatus: "not_sent",
+      approvalPromptTransport: "none",
+      approvalPromptMessageKind: "none",
+      approvalPromptLastAttemptAt: undefined,
+      approvalPromptDeliveredAt: undefined,
+      approvalPromptFailedAt: undefined,
     });
   });
 

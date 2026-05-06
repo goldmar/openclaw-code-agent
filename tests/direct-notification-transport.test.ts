@@ -190,9 +190,122 @@ describe("RuntimeDirectNotificationTransport", () => {
             },
           ],
         },
+        interactive: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                {
+                  label: "Approve",
+                  value: "code-agent:token-approve",
+                  style: "success",
+                },
+              ],
+            },
+          ],
+        },
         channelData: { rendered: true },
       },
     ]);
+  });
+
+  it("adds interactive buttons when the runtime adapter sends payloads without rendering presentation", async () => {
+    const payloads: unknown[] = [];
+    setPluginRuntime({
+      channel: {
+        outbound: {
+          loadAdapter: async () => ({
+            sendPayload: async (ctx: { payload: unknown }) => {
+              payloads.push(ctx.payload);
+            },
+          }),
+        },
+      },
+    }, { channels: { telegram: { enabled: true } } });
+
+    await new RuntimeDirectNotificationTransport().send(
+      {
+        channel: "telegram",
+        accountId: "default",
+        target: "-1003863755361",
+        threadId: "28",
+      },
+      "Plan needs approval",
+      [[
+        { label: "Approve", callbackData: "approve-token", style: "primary" },
+        { label: "Revise", callbackData: "revise-token", style: "secondary" },
+        { label: "Reject", callbackData: "reject-token", style: "danger" },
+      ]],
+    );
+
+    assert.deepEqual(payloads[0], {
+      text: "Plan needs approval",
+      presentation: {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              { label: "Approve", value: "code-agent:approve-token", style: "primary" },
+              { label: "Revise", value: "code-agent:revise-token", style: "secondary" },
+              { label: "Reject", value: "code-agent:reject-token", style: "danger" },
+            ],
+          },
+        ],
+      },
+      interactive: {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              { label: "Approve", value: "code-agent:approve-token", style: "primary" },
+              { label: "Revise", value: "code-agent:revise-token", style: "secondary" },
+              { label: "Reject", value: "code-agent:reject-token", style: "danger" },
+            ],
+          },
+        ],
+      },
+    });
+  });
+
+  it("repairs rendered payloads that accidentally drop interactive button data", async () => {
+    const payloads: unknown[] = [];
+    setPluginRuntime({
+      channel: {
+        outbound: {
+          loadAdapter: async () => ({
+            renderPresentation: ({ payload }: { payload: unknown }) => {
+              const { interactive: _interactive, ...rest } = payload as Record<string, unknown>;
+              return { ...rest, channelData: { telegram: {} } };
+            },
+            sendPayload: async (ctx: { payload: unknown }) => {
+              payloads.push(ctx.payload);
+            },
+          }),
+        },
+      },
+    }, { channels: { telegram: { enabled: true } } });
+
+    await new RuntimeDirectNotificationTransport().send(
+      {
+        channel: "telegram",
+        accountId: "default",
+        target: "-1003863755361",
+        threadId: "28",
+      },
+      "Plan needs approval",
+      [[{ label: "Reject", callbackData: "reject-token", style: "danger" }]],
+    );
+
+    assert.deepEqual((payloads[0] as any).interactive, {
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            { label: "Reject", value: "code-agent:reject-token", style: "danger" },
+          ],
+        },
+      ],
+    });
   });
 
   it("emits privacy-safe diagnostics for the runtime presentation path", async (t) => {

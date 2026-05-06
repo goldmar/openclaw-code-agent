@@ -266,6 +266,77 @@ describe("SessionManager.kill()", () => {
     sm.kill("s1");
     assert.equal(killCalled, "user");
   });
+
+  it("clears pending plan approval state and decision tokens before killing", () => {
+    let killCalled: string | undefined;
+    const patches: Record<string, unknown>[] = [];
+    const s = fakeSession({
+      id: "s1",
+      name: "pending-plan",
+      status: "running",
+      pendingPlanApproval: true,
+      approvalState: "pending",
+      planDecisionVersion: 3,
+      actionablePlanDecisionVersion: 3,
+      approvalPromptRequiredVersion: 3,
+      approvalPromptVersion: 3,
+      approvalPromptStatus: "delivered",
+      approvalPromptTransport: "direct-message",
+      approvalPromptMessageKind: "canonical_buttons",
+      applyControlPatch(patch: Record<string, unknown>) {
+        patches.push(patch);
+        Object.assign(this, patch);
+      },
+      kill(reason: string) { killCalled = reason; },
+    });
+    (sm as any).sessions.set("s1", s);
+    const token = (sm as any).interactions.createActionToken("s1", "plan-reject", {
+      planDecisionVersion: 3,
+    });
+
+    const result = sm.kill("s1", "user");
+
+    assert.equal(result, true);
+    assert.equal(killCalled, "user");
+    assert.equal(s.pendingPlanApproval, false);
+    assert.equal(s.approvalState, "rejected");
+    assert.equal(s.lifecycle, "terminal");
+    assert.equal(s.actionablePlanDecisionVersion, undefined);
+    assert.equal(s.approvalPromptStatus, "not_sent");
+    assert.equal(s.planDecisionVersion, 4);
+    assert.equal(sm.getActionToken(token.id), undefined);
+    assert.ok(patches.length >= 1);
+  });
+
+  it("rejects pending plan approval state before non-user kills", () => {
+    let killCalled: string | undefined;
+    const patches: Record<string, unknown>[] = [];
+    const s = fakeSession({
+      id: "s1",
+      name: "pending-plan",
+      status: "running",
+      pendingPlanApproval: true,
+      approvalState: "pending",
+      planDecisionVersion: 1,
+      applyControlPatch(patch: Record<string, unknown>) {
+        patches.push(patch);
+        Object.assign(this, patch);
+      },
+      kill(reason: string) { killCalled = reason; },
+    });
+    (sm as any).sessions.set("s1", s);
+
+    const result = sm.kill("s1", "shutdown");
+
+    assert.equal(result, true);
+    assert.equal(killCalled, "shutdown");
+    assert.equal(s.pendingPlanApproval, false);
+    assert.equal(s.approvalState, "rejected");
+    assert.equal(s.lifecycle, "terminal");
+    assert.equal(s.runtimeState, "stopped");
+    assert.equal(s.planDecisionVersion, 2);
+    assert.equal(patches[0].approvalState, "rejected");
+  });
 });
 
 describe("SessionManager.killAll()", () => {

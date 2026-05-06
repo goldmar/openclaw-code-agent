@@ -29,6 +29,17 @@ function hasProvablePlanReviewPrompt(session: Pick<Session, "approvalPromptRequi
     && (session.approvalPromptStatus === "delivered" || session.approvalPromptStatus === "fallback_delivered");
 }
 
+function isCurrentPendingPlanDecision(
+  session: Pick<Session, "pendingPlanApproval" | "approvalState" | "lifecycle" | "planDecisionVersion" | "actionablePlanDecisionVersion">,
+  planDecisionVersion?: number,
+): boolean {
+  if (planDecisionVersion == null) return false;
+  return session.pendingPlanApproval
+    && session.approvalState === "pending"
+    && session.lifecycle === "awaiting_plan_decision"
+    && (session.actionablePlanDecisionVersion ?? session.planDecisionVersion) === planDecisionVersion;
+}
+
 function resolvePlanArtifactForPrompt(
   session: Pick<Session, "latestPlanArtifactVersion" | "latestPlanArtifact" | "planFilePath">,
   planDecisionVersion?: number,
@@ -113,6 +124,7 @@ export class SessionLifecycleService {
       label: "plan-approval-fallback",
       userMessage: buildPlanApprovalFallbackText({ session, summary }),
       notifyUser: "always",
+      shouldDispatch: () => isCurrentPendingPlanDecision(session, planDecisionVersion),
       hooks: {
         onNotifyStarted: () => {
           this.deps.updatePersistedSession(session.id, {
@@ -485,6 +497,7 @@ export class SessionLifecycleService {
             });
           },
         },
+        shouldDispatch: () => isCurrentPendingPlanDecision(session, planDecisionVersion),
         onUserNotifyFailed: () => this.dispatchPlanApprovalFallback(session, planDecisionVersion, planReviewSummary),
         wakeMessageOnNotifySuccess: this.buildPlanApprovalWakeText(session, planDecisionVersion),
       });
