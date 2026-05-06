@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 
 const scriptPath = fileURLToPath(import.meta.url);
 const rootDir = dirname(dirname(scriptPath));
+const defaultOpenClawTargetVersion = "2026.5.5";
 
 export function loadReleaseMetadata(baseDir = rootDir) {
   const packageJson = JSON.parse(readFileSync(join(baseDir, "package.json"), "utf8"));
@@ -19,7 +20,11 @@ export function loadReleaseMetadata(baseDir = rootDir) {
 }
 
 export function validateReleaseMetadata(options = {}) {
-  const { releaseVersion, openclawTargetVersion, baseDir = rootDir } = options;
+  const {
+    releaseVersion,
+    openclawTargetVersion = defaultOpenClawTargetVersion,
+    baseDir = rootDir,
+  } = options;
   const { packageVersion, pluginVersion, openclawVersion, pluginSdkVersion } =
     loadReleaseMetadata(baseDir);
 
@@ -61,7 +66,7 @@ export function validateReleaseMetadata(options = {}) {
 
 function runCli() {
   const args = process.argv.slice(2).filter((arg) => arg !== "--");
-  const releaseVersion = args.find((arg) => !arg.startsWith("--openclaw-target="));
+  const releaseVersion = args.find((arg) => !arg.startsWith("--"));
   const openclawTargetVersion = args
     .find((arg) => arg.startsWith("--openclaw-target="))
     ?.slice("--openclaw-target=".length);

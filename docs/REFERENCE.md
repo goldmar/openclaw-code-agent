@@ -26,13 +26,13 @@ Sessions are multi-turn. Active sessions accept follow-up messages via `agent_re
 
 Current releases treat persisted session storage as new-schema-only. If startup finds an older or invalid session store, the plugin archives it to a timestamped `.legacy-*.json` backup and starts with a fresh index instead of migrating rows in place.
 
-### OpenClaw 2026.5.6 Readiness
+### OpenClaw 2026.5.5 SDK Readiness
 
-`openclaw-code-agent` `4.1.2` is validated for OpenClaw `2026.5.6` plugin-loading behavior. The plugin keeps the peer floor at `>=2026.4.21` for compatible existing installs, while package build metadata targets OpenClaw `2026.5.6` for both host and SDK readiness.
+`openclaw-code-agent` `4.1.2` is validated against the latest installable OpenClaw SDK package, `openclaw@2026.5.5`. The plugin keeps the peer floor at `>=2026.4.21` for compatible existing installs, while package build metadata targets OpenClaw `2026.5.5` for both host and SDK readiness.
 
-As of May 6, 2026, the latest published OpenClaw SDK package is `2026.5.5`; npm returns `E404 No match found for version 2026.5.6` for `openclaw@2026.5.6`. Local typecheck/build verification therefore uses `openclaw@2026.5.5` until a `2026.5.6` SDK package is available. This is a package availability blocker, not a host upgrade requirement.
+As of May 6, 2026, an OpenClaw `2026.5.6` GitHub release has been observed, but npm returns `E404 No match found for version 2026.5.6` for `openclaw@2026.5.6`. There is no installable SDK/package bump available yet, so local typecheck/build verification and plugin build metadata stay on `openclaw@2026.5.5`.
 
-Configuration guidance for `2026.5.6`:
+Configuration guidance for `2026.5.5`:
 
 - If `plugins.allow` is present, add `openclaw-code-agent`. OpenClaw treats that allowlist as exclusive, so `tools.allow` cannot make this plugin's tools available when the owning plugin is blocked.
 - Disabled bundled plugins remain disabled unless explicitly enabled or auto-enabled by their own OpenClaw contracts. Do not assume adjacent bundled plugins are available to code-agent sessions.
