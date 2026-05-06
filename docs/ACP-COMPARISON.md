@@ -1,6 +1,6 @@
 # ACPX, Codex, and Code Agent
 
-This note compares three adjacent OpenClaw surfaces as of the `openclaw-code-agent` `4.1.1` / OpenClaw `2026.5.4` verified build/test baseline:
+This note compares three adjacent OpenClaw surfaces as of the `openclaw-code-agent` `4.1.2` / OpenClaw `2026.5.4` verified build/test baseline:
 
 - OpenClaw ACP and the bundled `acpx` runtime backend
 - OpenClaw's bundled `codex` plugin
@@ -127,6 +127,7 @@ The plugin has a first-class approval workflow:
 - `planApproval: "delegate"` is the default
 - plans can be revised before implementation
 - approval happens with `agent_respond(..., approve=true)` or the shared Approve / Revise / Reject callback flow
+- plain-text `Approve`, `Revise`, and `Reject` replies provide the same control path when interactive buttons are unavailable
 
 Neither ACPX nor the bundled core Codex plugin owns this chat-native review loop.
 

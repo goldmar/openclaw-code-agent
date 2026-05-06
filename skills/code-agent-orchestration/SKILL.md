@@ -25,7 +25,7 @@ Use `openclaw-code-agent` to run Claude Code or Codex sessions as background cod
 - Set `workdir` to the target repo.
 - Use `permission_mode: "plan"` when the user wants a real review gate before implementation.
 - Use `permission_mode: "bypassPermissions"` only for autonomous execution.
-- `defaultWorktreeStrategy` now defaults to `off`. Opt into a worktree strategy explicitly when you want branch isolation.
+- `defaultWorktreeStrategy` defaults to `delegate`, so new sessions normally use branch isolation and orchestrator-led follow-through. Use `worktree_strategy: "off"` only when the task must run in the main checkout or outside a git repo.
 - In `plan` mode, the plan belongs in normal session output. Do not ask the coding agent to write plan docs or transcript artifacts unless the user explicitly asked for a file.
 
 Example:
@@ -126,7 +126,9 @@ Use `permission_mode: "plan"` whenever the user wants a real planning checkpoint
 
 - Approval belongs to the user.
 - The plugin sends the canonical Approve / Revise / Reject prompt directly to the user.
+- Telegram and Discord buttons use the shared direct-message presentation path; if buttons are missing, plain-text `Approve`, `Revise`, or `Reject` in the same thread drives the same decision path.
 - If the user requests changes, wait for the revised plan from that same session; the revised submission becomes the latest actionable review version automatically.
+- If the user rejects the plan or the session is killed, treat older plan prompts as stale and verify state with `agent_sessions` before acting.
 - Wait for the user's answer, then forward it with `agent_respond(...)`.
 - Do not send a duplicate approval recap or second approval prompt.
 

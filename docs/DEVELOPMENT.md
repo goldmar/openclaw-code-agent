@@ -99,6 +99,8 @@ pnpm run validate:release-metadata -- <version>
 
 Release metadata for external plugin installs lives in `package.json` under `openclaw.compat` and `openclaw.build`, while the plugin manifest version and manifest-owned activation/setup descriptors live in `openclaw.plugin.json`. When cutting a release, keep the package/plugin versions aligned and update the manifest descriptors whenever the plugin-owned command or onboarding surface changes.
 
+Release-prep branches should stop after PR-ready changes and validation unless the maintainer explicitly asks to publish. Do not push a `v*` tag, dispatch `.github/workflows/release.yml`, or run `npm publish` during preparation-only work. Use `npm pack --dry-run` to check package contents without publishing.
+
 Additional smoke entry points:
 
 - `pnpm smoke:backend-parity` for the shared backend-contract surface
@@ -167,3 +169,4 @@ Before merging a behavior change, confirm:
 4. Historical implementation plans stay out of the main docs surface.
 5. `package.json` compatibility/build metadata matches the intended OpenClaw release floor.
 6. `package.json.version` and `openclaw.plugin.json.version` match the intended release version.
+7. Approval docs mention both interactive Approve / Revise / Reject buttons and plain-text fallback behavior.

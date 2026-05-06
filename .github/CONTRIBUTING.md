@@ -33,6 +33,8 @@ For release prep, validate manifest/package version parity too:
 pnpm run validate:release-metadata -- <version>
 ```
 
+For preparation-only release work, stop at a PR-ready branch. Do not push a `v*` tag, manually dispatch the release workflow, or run `npm publish` unless a maintainer explicitly asks for publishing. Use `npm pack --dry-run` when package or release metadata changed.
+
 ### Individual commands
 
 ```bash
