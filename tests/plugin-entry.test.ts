@@ -288,8 +288,8 @@ describe("plugin entry source", () => {
 
     assert.match(reference, /OpenClaw 2026\.5\.5 SDK Readiness/);
     assert.match(reference, /package build metadata targets OpenClaw `2026\.5\.5` for both host and SDK readiness/);
-    assert.match(reference, /OpenClaw `2026\.5\.6` GitHub release has been observed/);
-    assert.match(reference, /npm returns `E404 No match found for version 2026\.5\.6` for `openclaw@2026\.5\.6`/);
+    assert.doesNotMatch(reference, /2026\.5\.6/);
+    assert.doesNotMatch(reference, /E404/);
     assert.match(reference, /plugins\.allow/);
     assert.match(reference, /openclaw-code-agent/);
     assert.match(reference, /tools\.exec\.applyPatch/);

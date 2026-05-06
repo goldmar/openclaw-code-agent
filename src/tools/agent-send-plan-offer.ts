@@ -87,7 +87,7 @@ export function makeAgentSendPlanOfferTool(ctx: OpenClawPluginToolContext) {
     description:
       "Post a user-facing message to the current or explicit chat route with human-gated Start Plan and Dismiss inline buttons. Use this when an external workflow wants the user to open a plan-only code-agent session from the message.",
     parameters: Type.Object({
-      offer_id: Type.String({ description: "Stable offer identifier, for example 'plugin-readiness-v2026.5.6'." }),
+      offer_id: Type.String({ description: "Stable offer identifier, for example 'plugin-readiness-v2026.5.5'." }),
       offer_text: Type.String({ description: "Final user-facing text to deliver." }),
       plan_prompt: Type.String({ description: "Prompt to seed into the plan-only session when the user clicks Start Plan." }),
       plan_workdir: Type.String({ description: "Working directory for the planning session." }),

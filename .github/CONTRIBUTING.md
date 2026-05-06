@@ -119,11 +119,13 @@ Releases are handled via the `release.yml` GitHub Actions workflow:
 - **Tag push**: push a `v*` tag (e.g. `v2.3.2`) to trigger an automated release
 - **Manual dispatch**: use the "Release" workflow in the Actions tab and supply the version
 
-The workflow runs the full CI gate (`pnpm verify`), validates package/plugin version parity against the requested release version, publishes to npm using
-Trusted Publishing (OIDC — no secrets or tokens required), and creates a GitHub release
-with notes extracted from `CHANGELOG.md`.
+The workflow runs the full CI gate (`pnpm verify`), validates package/plugin version parity against the requested release version, packs one release artifact, publishes that artifact to npm using Trusted Publishing, publishes it to ClawHub with `CLAWHUB_TOKEN`, and creates a GitHub release with notes extracted from `CHANGELOG.md`.
 
 **One-time npm setup (repo maintainers only):** On npmjs.com, go to the `openclaw-code-agent`
 package → Settings → Trusted Publishers, and add a GitHub Actions publisher for this
-repository (`goldmar/openclaw-code-agent`, workflow `release.yml`). After that, releases
-are fully automated with no stored credentials.
+repository (`goldmar/openclaw-code-agent`, workflow `release.yml`). npm then uses OIDC and
+does not need a stored npm token.
+
+**One-time ClawHub setup (repo maintainers only):** Create a ClawHub API token for the package
+owner and store it as the repository secret `CLAWHUB_TOKEN`. Tag-push releases require this
+secret even if workflow-dispatch trusted publishing is configured later.
