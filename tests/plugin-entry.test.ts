@@ -52,7 +52,7 @@ describe("plugin entry source", () => {
     assert.equal(packageJson.openclaw?.compat?.pluginApi, ">=2026.4.21");
     assert.equal(packageJson.openclaw?.compat?.minGatewayVersion, "2026.4.21");
     assert.equal(packageJson.openclaw?.build?.openclawVersion, "2026.5.6");
-    assert.equal(packageJson.openclaw?.build?.pluginSdkVersion, "2026.5.5");
+    assert.equal(packageJson.openclaw?.build?.pluginSdkVersion, "2026.5.6");
     assert.equal(packageJson.peerDependencies?.openclaw, ">=2026.4.21");
     assert.equal(packageJson.devDependencies?.openclaw, "2026.5.5");
     assert.equal(packageJson.pnpm?.overrides?.["fast-xml-parser@>=5.0.0 <5.7.0"], ">=5.7.0");
@@ -281,7 +281,8 @@ describe("plugin entry source", () => {
     const reference = readFileSync(join(rootDir, "docs", "REFERENCE.md"), "utf8");
 
     assert.match(reference, /OpenClaw 2026\.5\.6 Readiness/);
-    assert.match(reference, /latest published OpenClaw SDK package for this pass is `2026\.5\.5`/);
+    assert.match(reference, /package build metadata targets OpenClaw `2026\.5\.6` for both host and SDK readiness/);
+    assert.match(reference, /npm returns `E404 No match found for version 2026\.5\.6` for `openclaw@2026\.5\.6`/);
     assert.match(reference, /plugins\.allow/);
     assert.match(reference, /openclaw-code-agent/);
     assert.match(reference, /tools\.exec\.applyPatch/);

@@ -13,12 +13,15 @@ export function loadReleaseMetadata(baseDir = rootDir) {
   return {
     packageVersion: packageJson.version,
     pluginVersion: pluginManifest.version,
+    openclawVersion: packageJson.openclaw?.build?.openclawVersion,
+    pluginSdkVersion: packageJson.openclaw?.build?.pluginSdkVersion,
   };
 }
 
 export function validateReleaseMetadata(options = {}) {
-  const { releaseVersion, baseDir = rootDir } = options;
-  const { packageVersion, pluginVersion } = loadReleaseMetadata(baseDir);
+  const { releaseVersion, openclawTargetVersion, baseDir = rootDir } = options;
+  const { packageVersion, pluginVersion, openclawVersion, pluginSdkVersion } =
+    loadReleaseMetadata(baseDir);
 
   if (packageVersion !== pluginVersion) {
     throw new Error(
@@ -32,18 +35,41 @@ export function validateReleaseMetadata(options = {}) {
     );
   }
 
+  if (!openclawVersion || !pluginSdkVersion) {
+    throw new Error("Missing OpenClaw build metadata in package.json");
+  }
+
+  if (openclawVersion !== pluginSdkVersion) {
+    throw new Error(
+      `OpenClaw build metadata mismatch: openclawVersion=${openclawVersion}, pluginSdkVersion=${pluginSdkVersion}`,
+    );
+  }
+
+  if (openclawTargetVersion && openclawVersion !== openclawTargetVersion) {
+    throw new Error(
+      `OpenClaw target mismatch: expected ${openclawTargetVersion}, openclawVersion=${openclawVersion}, pluginSdkVersion=${pluginSdkVersion}`,
+    );
+  }
+
   return {
     packageVersion,
     pluginVersion,
+    openclawVersion,
+    pluginSdkVersion,
   };
 }
 
 function runCli() {
-  const releaseVersion = process.argv.slice(2).find((arg) => arg !== "--");
-  const { packageVersion, pluginVersion } = validateReleaseMetadata({ releaseVersion });
+  const args = process.argv.slice(2).filter((arg) => arg !== "--");
+  const releaseVersion = args.find((arg) => !arg.startsWith("--openclaw-target="));
+  const openclawTargetVersion = args
+    .find((arg) => arg.startsWith("--openclaw-target="))
+    ?.slice("--openclaw-target=".length);
+  const { packageVersion, pluginVersion, openclawVersion, pluginSdkVersion } =
+    validateReleaseMetadata({ releaseVersion, openclawTargetVersion });
   const releaseLabel = releaseVersion ? ` against release ${releaseVersion}` : "";
   console.log(
-    `Release metadata validated${releaseLabel}: package.json=${packageVersion}, openclaw.plugin.json=${pluginVersion}`,
+    `Release metadata validated${releaseLabel}: package.json=${packageVersion}, openclaw.plugin.json=${pluginVersion}, openclawVersion=${openclawVersion}, pluginSdkVersion=${pluginSdkVersion}`,
   );
 }
 
