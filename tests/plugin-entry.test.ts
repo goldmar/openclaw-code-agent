@@ -1,13 +1,69 @@
-import { describe, it } from "node:test";
+import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { validateReleaseMetadata } from "../scripts/validate-release-metadata.mjs";
+import { register } from "../index";
+import { goalController, sessionManager, setGoalController, setSessionManager } from "../src/singletons";
 
 const rootDir = join(import.meta.dirname, "..");
 
+type CapturedTool = {
+  factory: (ctx: Record<string, unknown>) => {
+    execute: (id: string, params: unknown) => Promise<{ content?: Array<{ text?: string }> }> | { content?: Array<{ text?: string }> };
+  };
+  options?: { name?: string };
+};
+
+function createPluginApi(pluginConfig: Record<string, unknown> = {}) {
+  const tools: CapturedTool[] = [];
+  const commands: Array<{ name: string; handler: (ctx: Record<string, unknown>) => { text: string } }> = [];
+  const services: Array<{ start: (ctx: Record<string, unknown>) => void; stop?: (ctx: Record<string, unknown>) => void }> = [];
+  const interactiveHandlers: Array<{ handler: (ctx: Record<string, unknown>) => Promise<unknown> }> = [];
+  const runtimeConfig = { runtime: true };
+  const api = {
+    pluginConfig,
+    runtime: {
+      config: {
+        current: () => runtimeConfig,
+      },
+    },
+    registerTool(factory: CapturedTool["factory"], options?: { name?: string }) {
+      tools.push({ factory, options });
+    },
+    registerCommand(command: { name: string; handler: (ctx: Record<string, unknown>) => { text: string } }) {
+      commands.push(command);
+    },
+    registerService(service: { start: (ctx: Record<string, unknown>) => void; stop?: (ctx: Record<string, unknown>) => void }) {
+      services.push(service);
+    },
+    registerInteractiveHandler(handler: { handler: (ctx: Record<string, unknown>) => Promise<unknown> }) {
+      interactiveHandlers.push(handler);
+    },
+  };
+  return { api, commands, services, tools, interactiveHandlers };
+}
+
+function stopCapturedServices(services: Array<{ stop?: (ctx: Record<string, unknown>) => void }>): void {
+  for (const service of services) {
+    service.stop?.({});
+  }
+}
+
 describe("plugin entry source", () => {
+  afterEach(() => {
+    if (goalController) {
+      goalController.stop();
+    }
+    if (sessionManager) {
+      sessionManager.killAll("shutdown");
+      sessionManager.dispose();
+    }
+    setGoalController(null);
+    setSessionManager(null);
+  });
+
   it("keeps package and plugin manifest versions in sync", () => {
     const { packageVersion, pluginVersion, openclawVersion, pluginSdkVersion } =
       validateReleaseMetadata();
@@ -222,10 +278,10 @@ describe("plugin entry source", () => {
     };
     const indexSource = readFileSync(join(rootDir, "index.ts"), "utf8");
     const registeredToolNames = Array.from(
-      indexSource.matchAll(/registerTool\([\s\S]*?,\s*\{([^}]*)\}\s*\)/g),
+      indexSource.matchAll(/registerCodeAgentTool\([\s\S]*?,\s*\{([^}]*)\}\s*\)/g),
       (match) => {
         const name = match[1]?.match(/\bname:\s*"([^"]+)"/)?.[1];
-        assert.ok(name, `missing explicit tool name in registerTool options: ${match[1] ?? ""}`);
+        assert.ok(name, `missing explicit tool name in registerCodeAgentTool options: ${match[1] ?? ""}`);
         return name;
       },
     );
@@ -335,8 +391,9 @@ describe("plugin entry source", () => {
   it("registers interactive handlers and does not register plugin HTTP routes", () => {
     const indexSource = readFileSync(join(rootDir, "index.ts"), "utf8");
 
-    assert.match(indexSource, /registerInteractiveHandler\(createCallbackHandler\("telegram"\)\)/);
-    assert.match(indexSource, /registerInteractiveHandler\(createCallbackHandler\("discord"\)\)/);
+    assert.match(indexSource, /registerCodeAgentInteractiveHandler\("telegram"\)/);
+    assert.match(indexSource, /registerCodeAgentInteractiveHandler\("discord"\)/);
+    assert.match(indexSource, /createCallbackHandler\(channel\)/);
     assert.doesNotMatch(indexSource, /registerHttpRoute\(/);
   });
 
@@ -346,10 +403,56 @@ describe("plugin entry source", () => {
     assert.match(indexSource, /makeGoalLaunchTool/);
     assert.match(indexSource, /makeGoalStatusTool/);
     assert.match(indexSource, /makeGoalStopTool/);
-    assert.match(indexSource, /registerGoalCommand\(api\)/);
-    assert.match(indexSource, /registerGoalStatusCommand\(api\)/);
-    assert.match(indexSource, /registerGoalStopCommand\(api\)/);
+    assert.match(indexSource, /registerGoalCommand\(commandApi\)/);
+    assert.match(indexSource, /registerGoalStatusCommand\(commandApi\)/);
+    assert.match(indexSource, /registerGoalStopCommand\(commandApi\)/);
     assert.match(indexSource, /gc = new GoalController\(sm\)/);
     assert.match(indexSource, /gc\.start\(\)/);
+  });
+
+  it("lazily starts the code-agent service before a tool can observe an uninitialized SessionManager", async () => {
+    const { api, services, tools } = createPluginApi();
+    register(api as any);
+    assert.equal(sessionManager, null);
+
+    const factory = tools.find((tool) => tool.options?.name === "agent_sessions")?.factory;
+    assert.ok(factory, "expected agent_sessions factory");
+    const tool = factory({ workspaceDir: rootDir });
+    assert.ok(sessionManager, "tool construction should initialize SessionManager");
+
+    const result = await tool.execute("tool-id", {});
+    assert.doesNotMatch(result.content?.[0]?.text ?? "", /SessionManager not initialized/);
+    stopCapturedServices(services);
+  });
+
+  it("lazily starts the code-agent service before command handlers can observe uninitialized state", () => {
+    const { api, commands, services } = createPluginApi();
+    register(api as any);
+    assert.equal(sessionManager, null);
+
+    const command = commands.find((entry) => entry.name === "agent_sessions");
+    assert.ok(command, "expected agent_sessions command");
+    const result = command.handler({ args: "--full" });
+
+    assert.ok(sessionManager, "command handler should initialize SessionManager");
+    assert.doesNotMatch(result.text, /SessionManager not initialized/);
+    stopCapturedServices(services);
+  });
+
+  it("keeps service startup idempotent when service start runs after lazy tool initialization", () => {
+    const { api, services, tools } = createPluginApi();
+    register(api as any);
+
+    const factory = tools.find((tool) => tool.options?.name === "agent_sessions")?.factory;
+    assert.ok(factory, "expected agent_sessions factory");
+    factory({ workspaceDir: rootDir });
+    const lazySessionManager = sessionManager;
+    assert.ok(lazySessionManager, "expected lazy SessionManager");
+
+    services[0]?.start({ config: { gateway: true } });
+    assert.equal(sessionManager, lazySessionManager);
+
+    stopCapturedServices(services);
+    assert.equal(sessionManager, null);
   });
 });
