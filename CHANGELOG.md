@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Stopped stale Plan v2 approval prompts from resurfacing after a plan is rejected or the session is killed.
 
 ### Docs
-- Refreshed README, operator reference, architecture, ACP comparison, development, contributor, and orchestration-skill docs around plan approval, Telegram buttons, text fallback behavior, worktree defaults, diagnostics, and release-prep validation.
+- Refreshed README, operator reference, architecture, ACP comparison, development, contributor, and orchestration-skill docs around plan approval, Telegram buttons, text fallback behavior, diagnostics, and release-prep validation. The worktree-default note is a documentation correction: prior skill docs incorrectly described `defaultWorktreeStrategy` as defaulting to `off`; no runtime behavior changed, and the actual default remains `delegate`.
 - Documented the release smoke evidence from the Builds & Tools topic: `rust-hello-world-minor-change-2` (`FzPCkqjh`) completed as `approved_then_implemented` after explicit approval, and a later run (`VmUBWOH2`) delivered a clean plan prompt without the old stale Plan v2-after-reject behavior.
 
 ## [4.1.1] - 2026-05-05
