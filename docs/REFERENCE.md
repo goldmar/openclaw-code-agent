@@ -26,15 +26,16 @@ Sessions are multi-turn. Active sessions accept follow-up messages via `agent_re
 
 Current releases treat persisted session storage as new-schema-only. If startup finds an older or invalid session store, the plugin archives it to a timestamped `.legacy-*.json` backup and starts with a fresh index instead of migrating rows in place.
 
-### OpenClaw 2026.5.5 SDK Readiness
+### OpenClaw 2026.5.6 SDK Readiness
 
-`openclaw-code-agent` `4.2.0` is validated against the latest installable OpenClaw SDK package, `openclaw@2026.5.5`. The plugin keeps the peer floor at `>=2026.4.21` for compatible existing installs, while package build metadata targets OpenClaw `2026.5.5` for both host and SDK readiness.
+`openclaw-code-agent` `4.2.1` is validated against the latest installable OpenClaw SDK package, `openclaw@2026.5.6`. The plugin keeps the peer floor at `>=2026.4.21` for compatible existing installs, while package build metadata targets OpenClaw `2026.5.6` for both host and SDK readiness.
 
-Configuration guidance for `2026.5.5`:
+Configuration guidance for `2026.5.6`:
 
 - If `plugins.allow` is present, add `openclaw-code-agent`. OpenClaw treats that allowlist as exclusive, so `tools.allow` cannot make this plugin's tools available when the owning plugin is blocked.
 - Disabled bundled plugins remain disabled unless explicitly enabled or auto-enabled by their own OpenClaw contracts. Do not assume adjacent bundled plugins are available to code-agent sessions.
 - Use `harnesses.codex.defaultModel`, `harnesses.codex.allowedModels`, and `harnesses.codex.reasoningEffort` for Codex. Use `harnesses["claude-code"].defaultModel`, `harnesses["claude-code"].allowedModels`, and optional `harnesses["claude-code"].reasoningEffort` for Claude Code.
+- OpenClaw `doctor` may warn about `openai-codex/*` when the bundled `codex` plugin is enabled, but `2026.5.6` intentionally does not rewrite those routes. This plugin's own Codex harness is configured through `harnesses.codex.*`, not through OpenClaw's bundled `codex` provider route.
 - Legacy `defaultModel`, `model`, `reasoningEffort`, and global `allowedModels` are compatibility fields only. New configs should not use them.
 - `tools.deny` does not disable OpenClaw's `apply_patch` tool by itself in current OpenClaw. To restrict patch edits, configure OpenClaw `tools.exec.applyPatch.enabled`, `tools.exec.applyPatch.workspaceOnly`, or `tools.exec.applyPatch.allowModels`.
 
