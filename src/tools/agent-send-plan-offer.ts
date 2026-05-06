@@ -28,37 +28,11 @@ interface AgentSendPlanOfferParams {
   target_session_key?: string;
 }
 
-export interface AgentSendMonitorReportParams {
-  report_id: string;
-  report_text: string;
-  plan_prompt: string;
-  plan_workdir: string;
-  plan_worktree_strategy?: WorktreeStrategy;
-  plan_name?: string;
-  target_channel?: string;
-  target_thread_id?: string | number;
-  target_session_key?: string;
-}
-
 function isAgentSendPlanOfferParams(value: unknown): value is AgentSendPlanOfferParams {
   if (!value || typeof value !== "object") return false;
   const params = value as Record<string, unknown>;
   return typeof params.offer_id === "string"
     && typeof params.offer_text === "string"
-    && typeof params.plan_prompt === "string"
-    && typeof params.plan_workdir === "string"
-    && (params.plan_worktree_strategy == null || isWorktreeStrategy(params.plan_worktree_strategy))
-    && (params.plan_name == null || typeof params.plan_name === "string")
-    && (params.target_channel == null || typeof params.target_channel === "string")
-    && (params.target_thread_id == null || typeof params.target_thread_id === "string" || typeof params.target_thread_id === "number")
-    && (params.target_session_key == null || typeof params.target_session_key === "string");
-}
-
-export function isAgentSendMonitorReportParams(value: unknown): value is AgentSendMonitorReportParams {
-  if (!value || typeof value !== "object") return false;
-  const params = value as Record<string, unknown>;
-  return typeof params.report_id === "string"
-    && typeof params.report_text === "string"
     && typeof params.plan_prompt === "string"
     && typeof params.plan_workdir === "string"
     && (params.plan_worktree_strategy == null || isWorktreeStrategy(params.plan_worktree_strategy))
@@ -104,20 +78,6 @@ export async function executePlanOffer(
       type: "text",
       text: `Interactive plan offer queued for ${route.provider}|${route.target}${route.threadId ? `#${route.threadId}` : ""}.`,
     }],
-  };
-}
-
-export function monitorReportToPlanOfferParams(params: AgentSendMonitorReportParams): AgentSendPlanOfferParams {
-  return {
-    offer_id: params.report_id,
-    offer_text: params.report_text,
-    plan_prompt: params.plan_prompt,
-    plan_workdir: params.plan_workdir,
-    plan_worktree_strategy: params.plan_worktree_strategy,
-    plan_name: params.plan_name,
-    target_channel: params.target_channel,
-    target_thread_id: params.target_thread_id,
-    target_session_key: params.target_session_key,
   };
 }
 
