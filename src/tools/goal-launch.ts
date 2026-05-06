@@ -1,18 +1,7 @@
-import { existsSync } from "fs";
 import { Type } from "@sinclair/typebox";
 
 import { goalController } from "../singletons";
-import {
-  getDefaultHarnessName,
-  pluginConfig,
-  resolveAllowedModelsForHarness,
-  resolveDefaultModelForHarness,
-  resolveOriginChannel,
-  resolveReasoningEffortForHarness,
-  resolveSessionRoute,
-  resolveToolChannel,
-} from "../config";
-import { isModelAllowed } from "../model-allowlist";
+import { formatGoalLaunchResult, resolveGoalLaunchRequest } from "../goal-launch-resolution";
 import type { OpenClawPluginToolContext } from "../types";
 
 interface GoalLaunchParams {
@@ -78,96 +67,50 @@ export function makeGoalLaunchTool(ctx: OpenClawPluginToolContext) {
         return { content: [{ type: "text", text: "Error: Invalid parameters. Expected at least { goal }." }] };
       }
 
-      const workdir = params.workdir || ctx.workspaceDir || pluginConfig.defaultWorkdir || process.cwd();
-      if (!existsSync(workdir)) {
-        return { content: [{ type: "text", text: `Error: Working directory does not exist: ${workdir}` }] };
+      const resolution = resolveGoalLaunchRequest({
+        goal: params.goal,
+        verifierCommands: params.verifier_commands,
+        name: params.name,
+        workdir: params.workdir,
+        model: params.model,
+        systemPrompt: params.system_prompt,
+        allowedTools: params.allowed_tools,
+        maxIterations: params.max_iterations,
+        permissionMode: params.permission_mode,
+        harness: params.harness,
+        goalMode: params.goal_mode,
+        completionPromise: params.completion_promise,
+      }, ctx);
+      if (resolution.kind !== "resolved") {
+        return { content: [{ type: "text", text: resolution.text }] };
       }
-
-      const verifierCommands = (params.verifier_commands ?? [])
-        .map((command, index) => ({
-          label: `check-${index + 1}`,
-          command: command.trim(),
-        }))
-        .filter((command) => command.command.length > 0);
-
-      const goalMode = params.goal_mode ?? (verifierCommands.length > 0 ? "verifier" : "ralph");
-      if (goalMode === "verifier" && verifierCommands.length === 0) {
-        return { content: [{ type: "text", text: "Error: verifier_commands must contain at least one non-empty command for verifier goal mode." }] };
-      }
-
-      const harness = params.harness ?? getDefaultHarnessName();
-      const resolvedModel = params.model ?? resolveDefaultModelForHarness(harness);
-      if (!resolvedModel) {
-        return {
-          content: [{
-            type: "text",
-            text: `Error: No default model configured for harness "${harness}". Set plugins.entries[\"openclaw-code-agent\"].config.harnesses.${harness}.defaultModel or pass model explicitly.`,
-          }],
-        };
-      }
-
-      const allowedModels = resolveAllowedModelsForHarness(harness);
-      if (!isModelAllowed(resolvedModel, allowedModels)) {
-        return {
-          content: [{
-            type: "text",
-            text: `Error: Model "${resolvedModel}" is not allowed. Permitted models: ${allowedModels?.join(", ")}`,
-          }],
-        };
-      }
-
-      const originSessionKey = ctx.sessionKey || undefined;
-      const ctxChannel = resolveToolChannel(ctx);
-      const originChannel = resolveOriginChannel(ctx, ctxChannel);
-      const route = resolveSessionRoute(ctx, originChannel, originSessionKey);
 
       try {
         const task = await goalController.launchTask({
-          goal: params.goal,
-          name: params.name,
-          workdir,
-          model: resolvedModel,
-          reasoningEffort: resolveReasoningEffortForHarness(harness),
-          systemPrompt: params.system_prompt,
-          allowedTools: params.allowed_tools,
-          maxIterations: params.max_iterations,
-          permissionMode: params.permission_mode ?? "bypassPermissions",
-          loopMode: goalMode,
-          completionPromise: params.completion_promise,
-          originChannel,
-          originThreadId: route?.threadId,
-          originAgentId: ctx.agentId || undefined,
-          originSessionKey,
-          route,
-          harness,
-          verifierCommands,
+          goal: resolution.goal,
+          name: resolution.name,
+          workdir: resolution.workdir,
+          model: resolution.model,
+          reasoningEffort: resolution.reasoningEffort,
+          systemPrompt: resolution.systemPrompt,
+          allowedTools: resolution.allowedTools,
+          maxIterations: resolution.maxIterations,
+          permissionMode: resolution.permissionMode,
+          loopMode: resolution.loopMode,
+          completionPromise: resolution.completionPromise,
+          originChannel: resolution.originChannel,
+          originThreadId: resolution.originThreadId,
+          originAgentId: resolution.originAgentId,
+          originSessionKey: resolution.originSessionKey,
+          route: resolution.route,
+          harness: resolution.harness,
+          verifierCommands: resolution.verifierCommands,
         });
-
-        const lines = [
-          `Goal task launched successfully.`,
-          `  Name: ${task.name}`,
-          `  ID: ${task.id}`,
-          `  Dir: ${task.workdir}`,
-          `  Session: ${task.sessionName} [${task.sessionId}]`,
-          `  Harness: ${harness}`,
-          `  Model: ${resolvedModel}`,
-          `  Loop mode: ${task.loopMode}`,
-          `  Max iterations: ${task.maxIterations}`,
-          `  Goal: "${params.goal.length > 100 ? `${params.goal.slice(0, 100)}...` : params.goal}"`,
-          ...(task.loopMode === "ralph"
-            ? [`  Completion promise: ${task.completionPromise}`]
-            : [
-                `  Verifiers:`,
-                ...verifierCommands.map((command) => `  - ${command.command}`),
-              ]),
-          ``,
-          `Use goal_status to follow progress or goal_stop to terminate the task.`,
-        ];
 
         return {
           content: [{
             type: "text",
-            text: lines.join("\n"),
+            text: formatGoalLaunchResult(task, resolution),
           }],
         };
       } catch (err: unknown) {

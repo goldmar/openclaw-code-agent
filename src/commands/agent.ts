@@ -1,16 +1,25 @@
 import { sessionManager } from "../singletons";
 import {
-  getDefaultHarnessName,
   pluginConfig,
-  resolveDefaultModelForHarness,
-  resolveOriginChannel,
-  resolveSessionRoute,
-  resolveOriginThreadId,
-  resolveReasoningEffortForHarness,
 } from "../config";
+import { resolveSessionTaskLifecycle } from "../session-task-lifecycle";
+import type { OpenClawPluginToolContext } from "../types";
+import { resolveAgentLaunchRequest } from "../tools/agent-launch-resolution";
 
 interface AgentCommandContext {
   args?: string;
+  workspaceDir?: string;
+  messageChannel?: string;
+  agentAccountId?: string;
+  requesterSenderId?: string;
+  sessionKey?: string;
+  deliveryContext?: {
+    channel?: string;
+    to?: string;
+    accountId?: string;
+    threadId?: string | number;
+  };
+  agentId?: string;
   id?: string | number;
   channel?: string;
   chatId?: string | number;
@@ -59,37 +68,40 @@ export function registerAgentCommand(api: CommandApi): void {
       if (!prompt) return { text: "Usage: /agent [--name <name>] <prompt>" };
 
       try {
-        const harness = getDefaultHarnessName();
-        const defaultModel = resolveDefaultModelForHarness(harness);
-        if (!defaultModel) {
-          return {
-            text: `Error: No default model configured for harness "${harness}". Set plugins.entries["openclaw-code-agent"].config.harnesses.${harness}.defaultModel or pass model explicitly via agent_launch.`,
-          };
+        const resolution = resolveAgentLaunchRequest(
+          { prompt, name },
+          ctx as OpenClawPluginToolContext,
+          sessionManager,
+        );
+        if (resolution.kind !== "resolved") {
+          return { text: resolution.text };
         }
 
         const session = sessionManager.spawn({
           prompt,
           name,
-          workdir: pluginConfig.defaultWorkdir || process.cwd(),
-          model: defaultModel,
-          reasoningEffort: resolveReasoningEffortForHarness(harness),
-          codexApprovalPolicy: harness === "codex" ? "never" : undefined,
-          originChannel: resolveOriginChannel(ctx),
-          originThreadId: resolveOriginThreadId(ctx),
-          route: resolveSessionRoute(ctx),
-          harness,
+          workdir: resolution.workdir,
+          model: resolution.resolvedModel,
+          reasoningEffort: resolution.reasoningEffort,
+          codexApprovalPolicy: resolution.harness === "codex" ? "never" : undefined,
+          originChannel: resolution.originChannel,
+          originThreadId: resolution.originThreadId,
+          originAgentId: ctx.agentId || undefined,
+          originSessionKey: resolution.originSessionKey,
+          route: resolution.route,
+          harness: resolution.harness,
+          permissionMode: resolution.permissionMode,
+          planApproval: resolution.planApproval,
+          taskLifecycle: resolveSessionTaskLifecycle(ctx as OpenClawPluginToolContext),
         });
 
-        const promptSummary = prompt.length > 80 ? prompt.slice(0, 80) + "..." : prompt;
-        return {
-          text: [
-            `Session launched.`,
-            `  Name: ${session.name}`,
-            `  ID: ${session.id}`,
-            `  Prompt: "${promptSummary}"`,
-            `  Status: ${session.status}`,
-          ].join("\n"),
-        };
+        return { text: sessionManager.formatLaunchResult({
+          prompt,
+          workdir: resolution.workdir,
+          harness: resolution.harness,
+          permissionMode: resolution.permissionMode ?? pluginConfig.permissionMode,
+          planApproval: resolution.planApproval,
+        }, session) };
       } catch (err: unknown) {
         const message = errorMessage(err);
         const hint = message.includes("Max sessions") ? "" : "\n\nUse /agent_sessions to see active sessions.";

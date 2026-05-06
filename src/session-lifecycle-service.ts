@@ -10,6 +10,12 @@ import {
   getStoppedStatusLabel,
 } from "./session-notification-builder";
 import { resolveNotificationRoute } from "./session-route";
+import {
+  buildPlanApprovalDeliveryFailureWake,
+  buildPlanApprovalWakeText,
+  hasProvablePlanReviewPrompt,
+  isCurrentPendingPlanDecision,
+} from "./session-plan-approval-delivery";
 import type { Session } from "./session";
 import type { PersistedSessionInfo, PlanApprovalMode, PlanArtifact } from "./types";
 import type { NotificationButton } from "./session-interactions";
@@ -22,23 +28,6 @@ type WorktreeStrategyResult = {
 };
 
 type DispatchNotification = (session: Session, request: SessionNotificationRequest) => void;
-
-function hasProvablePlanReviewPrompt(session: Pick<Session, "approvalPromptRequiredVersion" | "approvalPromptStatus">, planDecisionVersion?: number): boolean {
-  return planDecisionVersion != null
-    && session.approvalPromptRequiredVersion === planDecisionVersion
-    && (session.approvalPromptStatus === "delivered" || session.approvalPromptStatus === "fallback_delivered");
-}
-
-function isCurrentPendingPlanDecision(
-  session: Pick<Session, "pendingPlanApproval" | "approvalState" | "lifecycle" | "planDecisionVersion" | "actionablePlanDecisionVersion">,
-  planDecisionVersion?: number,
-): boolean {
-  if (planDecisionVersion == null) return false;
-  return session.pendingPlanApproval
-    && session.approvalState === "pending"
-    && session.lifecycle === "awaiting_plan_decision"
-    && (session.actionablePlanDecisionVersion ?? session.planDecisionVersion) === planDecisionVersion;
-}
 
 function resolvePlanArtifactForPrompt(
   session: Pick<Session, "latestPlanArtifactVersion" | "latestPlanArtifact" | "planFilePath">,
@@ -97,27 +86,6 @@ export class SessionLifecycleService {
     },
   ) {}
 
-  private buildPlanApprovalWakeText(session: Session, planDecisionVersion?: number, explicitFallback: boolean = false): string {
-    return [
-      explicitFallback
-        ? `Plan review fallback text delivered to the user because interactive buttons could not be delivered.`
-        : `Plan approval buttons delivered to the user.`,
-      `Session: ${session.name} | ID: ${session.id} | Plan v${planDecisionVersion ?? "?"}`,
-      `Wait for their ${explicitFallback ? "explicit reply" : "button callback"} — do NOT approve or reject this plan yourself.`,
-    ].join("\n");
-  }
-
-  private buildPlanApprovalDeliveryFailureWake(session: Session, planDecisionVersion?: number): string {
-    return [
-      `[PLAN APPROVAL DELIVERY FAILED] The plugin could not deliver the canonical plan review buttons or the explicit fallback text to the user.`,
-      `Name: ${session.name} | ID: ${session.id} | Plan v${planDecisionVersion ?? "?"}`,
-      this.deps.originThreadLine(session),
-      ``,
-      `No user-visible actionable review prompt is confirmed for this plan version.`,
-      `Intervene manually before assuming the user saw the plan review request.`,
-    ].join("\n");
-  }
-
   private dispatchPlanApprovalFallback(session: Session, planDecisionVersion: number | undefined, summary: string): void {
     const now = new Date().toISOString();
     this.deps.dispatchSessionNotification(session, {
@@ -160,8 +128,12 @@ export class SessionLifecycleService {
           });
         },
       },
-      wakeMessageOnNotifySuccess: this.buildPlanApprovalWakeText(session, planDecisionVersion, true),
-      wakeMessageOnNotifyFailed: this.buildPlanApprovalDeliveryFailureWake(session, planDecisionVersion),
+      wakeMessageOnNotifySuccess: buildPlanApprovalWakeText(session, planDecisionVersion, true),
+      wakeMessageOnNotifyFailed: buildPlanApprovalDeliveryFailureWake({
+        session,
+        planDecisionVersion,
+        originThreadLine: this.deps.originThreadLine(session),
+      }),
     });
   }
 
@@ -499,7 +471,7 @@ export class SessionLifecycleService {
         },
         shouldDispatch: () => isCurrentPendingPlanDecision(session, planDecisionVersion),
         onUserNotifyFailed: () => this.dispatchPlanApprovalFallback(session, planDecisionVersion, planReviewSummary),
-        wakeMessageOnNotifySuccess: this.buildPlanApprovalWakeText(session, planDecisionVersion),
+        wakeMessageOnNotifySuccess: buildPlanApprovalWakeText(session, planDecisionVersion),
       });
       return;
     }

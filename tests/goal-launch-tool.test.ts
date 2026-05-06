@@ -67,7 +67,7 @@ describe("goal_launch tool", () => {
       { label: "check-2", command: "npm run lint" },
     ]);
 
-    assert.match((result.content[0] as { text: string }).text, /Goal task launched successfully/);
+    assert.match((result.content[0] as { text: string }).text, /Goal task launched\./);
     assert.match((result.content[0] as { text: string }).text, /Harness: codex/);
     assert.match((result.content[0] as { text: string }).text, /Max iterations: 5/);
   });

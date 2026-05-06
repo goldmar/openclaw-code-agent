@@ -1,6 +1,6 @@
 import { Session } from "./session";
 import { pluginConfig, getDefaultHarnessName } from "./config";
-import { generateSessionName, firstCompleteLines, lastCompleteLines } from "./format";
+import { generateSessionName } from "./format";
 import { formatLaunchSummaryFromSession } from "./launch-summary";
 import { pathsReferToSameLocation } from "./path-utils";
 import {
@@ -41,6 +41,13 @@ import { SessionWorktreeDecisionService } from "./session-worktree-decision-serv
 import { SessionRuntimeRegistry } from "./session-runtime-registry";
 import { SessionRuntimeBootstrapService } from "./session-runtime-bootstrap-service";
 import { SessionWorktreeMessageService } from "./session-worktree-message-service";
+import { getSessionOutputPreview } from "./session-output-preview";
+import {
+  buildPlanApprovalDeliveryFailureWake,
+  buildPlanApprovalWakeText,
+  hasProvablePlanReviewPrompt,
+  isCurrentPendingPlanDecision as isCurrentPendingPlanDecisionState,
+} from "./session-plan-approval-delivery";
 import { resolveWorktreeLifecycle } from "./worktree-lifecycle-resolver";
 import {
   getStoppedStatusLabel as formatStoppedStatusLabel,
@@ -606,52 +613,9 @@ export class SessionManager {
     this.interactions.clearPlanDecisionTokens(sessionId, keepVersion);
   }
 
-  private hasProvablePlanReviewPrompt(
-    session: Pick<PersistedSessionInfo, "approvalPromptRequiredVersion" | "approvalPromptStatus"> | Pick<Session, "approvalPromptRequiredVersion" | "approvalPromptStatus">,
-    planDecisionVersion?: number,
-  ): boolean {
-    return planDecisionVersion != null
-      && session.approvalPromptRequiredVersion === planDecisionVersion
-      && (session.approvalPromptStatus === "delivered" || session.approvalPromptStatus === "fallback_delivered");
-  }
-
-  private buildPlanApprovalWakeText(
-    session: Pick<Session, "id" | "name">,
-    planDecisionVersion: number | undefined,
-    explicitFallback: boolean = false,
-  ): string {
-    return [
-      explicitFallback
-        ? `Plan review fallback text delivered to the user because interactive buttons could not be delivered.`
-        : `Plan approval buttons delivered to the user.`,
-      `Session: ${session.name} | ID: ${session.id} | Plan v${planDecisionVersion ?? "?"}`,
-      `Wait for their ${explicitFallback ? "explicit reply" : "button callback"} — do NOT approve or reject this plan yourself.`,
-    ].join("\n");
-  }
-
-  private buildPlanApprovalDeliveryFailureWake(
-    session: Pick<Session, "id" | "name" | "originThreadId">,
-    planDecisionVersion: number | undefined,
-  ): string {
-    return [
-      `[PLAN APPROVAL DELIVERY FAILED] The plugin could not deliver the canonical plan review buttons or the explicit fallback text to the user.`,
-      `Name: ${session.name} | ID: ${session.id} | Plan v${planDecisionVersion ?? "?"}`,
-      session.originThreadId != null ? `Origin thread: ${session.originThreadId}` : "",
-      ``,
-      `No user-visible actionable review prompt is confirmed for this plan version.`,
-      `Intervene manually before assuming the user saw the plan review request.`,
-    ].filter(Boolean).join("\n");
-  }
-
   private isCurrentPendingPlanDecision(ref: string, planDecisionVersion: number | undefined): boolean {
-    if (planDecisionVersion == null) return false;
     const session = this.resolve(ref) ?? this.getPersistedSession(ref);
-    return Boolean(
-      session?.pendingPlanApproval
-      && session.approvalState === "pending"
-      && session.lifecycle === "awaiting_plan_decision"
-      && ((session.actionablePlanDecisionVersion ?? session.planDecisionVersion) === planDecisionVersion),
-    );
+    return isCurrentPendingPlanDecisionState(session, planDecisionVersion);
   }
 
   private dispatchPlanApprovalFallback(
@@ -700,8 +664,8 @@ export class SessionManager {
           });
         },
       },
-      wakeMessageOnNotifySuccess: this.buildPlanApprovalWakeText(session, planDecisionVersion, true),
-      wakeMessageOnNotifyFailed: this.buildPlanApprovalDeliveryFailureWake(session, planDecisionVersion),
+      wakeMessageOnNotifySuccess: buildPlanApprovalWakeText(session, planDecisionVersion, true),
+      wakeMessageOnNotifyFailed: buildPlanApprovalDeliveryFailureWake({ session, planDecisionVersion }),
     });
   }
 
@@ -748,7 +712,7 @@ export class SessionManager {
       return `Error: Session "${ref}" already uses direct user plan approval. Do not send a duplicate approval prompt.`;
     }
     const actionableVersion = session.actionablePlanDecisionVersion ?? session.planDecisionVersion;
-    if (this.hasProvablePlanReviewPrompt(session, actionableVersion)) {
+    if (hasProvablePlanReviewPrompt(session, actionableVersion)) {
       return [
         `An actionable plan review prompt already exists for session ${session.name} [${sessionId}].`,
         `Wait for the user's Approve, Revise, or Reject response.`,
@@ -837,7 +801,7 @@ export class SessionManager {
           actionableVersion,
           formattedSummary,
         ),
-        wakeMessageOnNotifySuccess: this.buildPlanApprovalWakeText({ id: sessionId, name: session.name } as Session, actionableVersion),
+        wakeMessageOnNotifySuccess: buildPlanApprovalWakeText({ id: sessionId, name: session.name }, actionableVersion),
       },
     );
 
@@ -1112,58 +1076,7 @@ export class SessionManager {
   }
 
   private getOutputPreview(session: Session, maxChars: number = 1000): string {
-    const useFullOutput = !Number.isFinite(maxChars);
-    const outputLines = typeof (session as Partial<Session>).getOutput === "function"
-      ? session.getOutput()
-      : [];
-    const raw = useFullOutput
-      ? outputLines.join("\n")
-      : this.selectCompletionPreviewSource(session);
-    if (useFullOutput) return raw;
-    return raw.length > maxChars
-      ? this.shouldPreferTailPreview(session)
-        ? lastCompleteLines(raw, maxChars)
-        : firstCompleteLines(raw, maxChars)
-      : raw;
-  }
-
-  private selectCompletionPreviewSource(session: Session): string {
-    const outputLines = typeof (session as Partial<Session>).getOutput === "function"
-      ? session.getOutput()
-      : [];
-    const fullOutput = outputLines.join("\n").trim();
-    if (!fullOutput) return "";
-    if (!this.shouldPreferTailPreview(session)) {
-      return outputLines.slice(-20).join("\n");
-    }
-
-    const lastBlock = this.extractLastSubstantiveBlock(fullOutput);
-    return lastBlock ?? fullOutput;
-  }
-
-  private shouldPreferTailPreview(session: Session): boolean {
-    if (session.status === "completed" || session.killReason === "done") return true;
-    const control = session as unknown as {
-      approvalState?: string;
-      planDecisionVersion?: number;
-      planModeApproved?: boolean;
-      pendingPlanApproval?: boolean;
-    };
-    return control.approvalState === "approved"
-      || control.planModeApproved === true
-      || (control.planDecisionVersion ?? 0) > 0;
-  }
-
-  private extractLastSubstantiveBlock(text: string): string | undefined {
-    const blocks = text
-      .split(/\n\s*\n+/)
-      .map((block) => block.trim())
-      .filter((block) => /[A-Za-z0-9]/.test(block));
-    const lastBlock = blocks.at(-1);
-    if (!lastBlock) return undefined;
-    return lastBlock.length >= 120 || lastBlock.includes("\n")
-      ? lastBlock
-      : undefined;
+    return getSessionOutputPreview(session, maxChars);
   }
 
   private triggerAgentEvent(session: Session): void {
