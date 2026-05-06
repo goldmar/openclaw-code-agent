@@ -294,6 +294,18 @@ describe("plugin entry source", () => {
     assert.match(reference, /tools\.deny/);
   });
 
+  it("documents the generic plan-offer tool and legacy monitor alias", () => {
+    const readme = readFileSync(join(rootDir, "README.md"), "utf8");
+    const reference = readFileSync(join(rootDir, "docs", "REFERENCE.md"), "utf8");
+
+    assert.match(readme, /agent_send_plan_offer/);
+    assert.match(readme, /Legacy alias for `agent_send_plan_offer`/);
+    assert.match(reference, /### `agent_send_plan_offer`/);
+    assert.match(reference, /preserving the chosen route, Telegram\/Discord thread, and optional worktree strategy/);
+    assert.match(reference, /agent_send_monitor_report` is a backward-compatible legacy alias/);
+    assert.match(reference, /Legacy `monitor-start-plan` and `monitor-dismiss` callback tokens are still accepted/);
+  });
+
   it("does not assume bundled Codex or ACPX plugin availability", () => {
     const harnessSources = [
       "src/harness/index.ts",
