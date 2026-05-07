@@ -285,6 +285,7 @@ export class SessionWorktreeStrategyService {
       branchName,
       baseBranch,
       diffSummary,
+      originThreadLine: this.deps.originThreadLine(session),
     }));
     this.markPendingDecision(session);
     return { notificationSent: true, worktreeRemoved: false };

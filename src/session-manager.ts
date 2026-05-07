@@ -40,6 +40,7 @@ import { SessionRuntimeRegistry } from "./session-runtime-registry";
 import { SessionRuntimeBootstrapService } from "./session-runtime-bootstrap-service";
 import { SessionWorktreeMessageService } from "./session-worktree-message-service";
 import { getSessionOutputPreview } from "./session-output-preview";
+import { formatOriginRouteWakeBlock } from "./session-route";
 import {
   buildPlanApprovalDeliveryFailureWake,
   buildPlanApprovalWakeText,
@@ -910,9 +911,7 @@ export class SessionManager {
   }
 
   private originThreadLine(session: Session): string {
-    return session.originThreadId != null
-      ? `Session origin thread: ${session.originThreadId}`
-      : "";
+    return formatOriginRouteWakeBlock(session);
   }
 
   private extractLastOutputLine(session: Session): string | undefined {

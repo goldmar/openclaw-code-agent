@@ -2027,6 +2027,11 @@ describe("SessionManager turn-end wake", () => {
     const [_sessionArg, request] = calls[0];
     assert.equal(request.label, "completed");
     assert.equal(request.userMessage, "✅ [normal-session] Completed | $0.00 | 8s");
+    assert.match(request.wakeMessageOnNotifySuccess, /Session origin route \(authoritative for human follow-ups\):/);
+    assert.match(request.wakeMessageOnNotifySuccess, /"provider":"telegram"/);
+    assert.match(request.wakeMessageOnNotifySuccess, /"target":"12345"/);
+    assert.match(request.wakeMessageOnNotifySuccess, /"threadId":"42"/);
+    assert.match(request.wakeMessageOnNotifySuccess, /do NOT use a plain final assistant reply/i);
     assert.match(request.wakeMessageOnNotifySuccess, /plugin already sent the canonical completion status/i);
     assert.match(request.wakeMessageOnNotifySuccess, /must send the user a short factual completion summary/i);
     assert.match(request.wakeMessageOnNotifySuccess, /ordinary terminal\/manual completions too/i);

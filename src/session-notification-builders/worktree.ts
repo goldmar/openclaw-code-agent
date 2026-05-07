@@ -9,6 +9,7 @@ export function buildDelegateWorktreeWakeMessage(args: {
   promptSnippet: string;
   commitLines: string[];
   moreNote?: string;
+  originThreadLine?: string;
   diffSummary: {
     commits: number;
     filesChanged: number;
@@ -24,6 +25,7 @@ export function buildDelegateWorktreeWakeMessage(args: {
     promptSnippet,
     commitLines,
     moreNote,
+    originThreadLine,
     diffSummary,
   } = args;
 
@@ -33,6 +35,7 @@ export function buildDelegateWorktreeWakeMessage(args: {
     `Session ID: ${sessionId}`,
     `Branch: ${branchName} → ${baseBranch}`,
     `Commits: ${diffSummary.commits} | Files: ${diffSummary.filesChanged} | +${diffSummary.insertions} / -${diffSummary.deletions}`,
+    ...(originThreadLine ? [originThreadLine] : []),
     ``,
     ...commitLines,
     ...(moreNote ? [moreNote] : []),
@@ -46,6 +49,7 @@ export function buildDelegateWorktreeWakeMessage(args: {
     `- If scope or risk is unclear, message the user and ask for guidance.`,
     `- Never call agent_pr() autonomously in delegate mode.`,
     `- After deciding, notify the user briefly with what you did and why.`,
+    `- Send any human follow-up to the Session origin route above; if it differs from the current chat, do not use a plain final assistant reply.`,
   ].join("\n");
 }
 

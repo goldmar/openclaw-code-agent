@@ -99,10 +99,11 @@ export function buildCompletionFollowupInstructionLines(args: {
       : "The plugin did not confirm delivery of the canonical completion status to the user.")}`,
     `4. Unless you are silently continuing an internal multi-phase pipeline or there is still no meaningful confirmed outcome to report, you must send the user a short factual completion summary for this completed session.`,
     `5. This requirement applies to ordinary terminal/manual completions too, not just delegated worktree decisions.`,
-    `6. That follow-up belongs to you alone; keep it brief, concrete, and grounded in reliable result data.`,
+    `6. Before sending that follow-up, honor the Session origin route block above. If originRoute differs from the current chat, do NOT use a plain final assistant reply; use a routed send path that preserves provider/target/threadId.`,
+    `7. That follow-up belongs to you alone; keep it brief, concrete, and grounded in reliable result data.`,
     ...(canonicalStatusDelivered
-      ? [`7. Do NOT repeat the plugin's status line, and do NOT rely on the plugin to summarize the completed work for you.`]
-      : [`7. Because canonical status delivery was not confirmed, account for that gap yourself when you follow up; do NOT assume the plugin already reached the user.`]),
+      ? [`8. Do NOT repeat the plugin's status line, and do NOT rely on the plugin to summarize the completed work for you.`]
+      : [`8. Because canonical status delivery was not confirmed, account for that gap yourself when you follow up; do NOT assume the plugin already reached the user.`]),
   ];
 }
 

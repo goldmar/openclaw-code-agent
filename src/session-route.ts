@@ -291,3 +291,28 @@ export function resolveNotificationRoute(source: SessionRouteSource): SessionRou
   const route = canonicalizeSessionRoute(source);
   return isDirectSessionRoute(route) ? route : undefined;
 }
+
+function compactRouteObject(route: Record<string, string | undefined>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(route).filter((entry): entry is [string, string] => Boolean(entry[1])),
+  );
+}
+
+export function formatOriginRouteWakeBlock(source: SessionRouteSource): string {
+  const route = canonicalizeSessionRoute(source);
+  const originRoute = compactRouteObject({
+    provider: route?.provider,
+    accountId: route?.accountId,
+    target: route?.target,
+    threadId: route?.threadId ?? (source.originThreadId != null ? String(source.originThreadId) : undefined),
+    sessionKey: route?.sessionKey ?? source.originSessionKey,
+  });
+
+  if (Object.keys(originRoute).length === 0) return "";
+
+  return [
+    `Session origin route (authoritative for human follow-ups):`,
+    `originRoute: ${JSON.stringify(originRoute)}`,
+    `Routing rule: Send any human follow-up for this wake to originRoute. If originRoute differs from the current chat, do not use a plain final assistant reply; use a routed send path that preserves provider/target/threadId.`,
+  ].join("\n");
+}
