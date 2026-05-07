@@ -8,9 +8,10 @@ metadata:
       bins:
         - openclaw
     install:
-      - kind: node
+      - id: npm
+        kind: node
         package: openclaw-code-agent
-        bins: []
+        label: Install OpenClaw Code Agent (npm)
 ---
 
 # Code Agent Orchestration
@@ -67,17 +68,17 @@ agent_worktree_status()
 agent_worktree_status(session: "fix-auth")
 ```
 
-Treat that tool's lifecycle, derived state, cleanup disposition, and retained reasons as authoritative. Do not infer cleanup safety from a transcript summary or from branch names alone.
+For worktree cleanup and follow-through, use that tool's lifecycle, derived state, cleanup disposition, and retained reasons as the plugin state source. Avoid deciding cleanup safety from transcript summaries or branch names alone.
 
-Treat these wake fields as authoritative state when present:
+When wake payloads include these fields, use them as the plugin's recorded approval state:
 
 - `requestedPermissionMode`
 - `effectivePermissionMode` / `currentPermissionMode`
 - `approvalExecutionState`
 
-Use those deterministic fields instead of inferring behavior from transcript fragments.
+Use those deterministic fields for approval follow-through before consulting transcript fragments.
 
-When OpenClaw exposes managed TaskFlow state for a session, treat it as a high-level progress mirror of the plugin session. The plugin session state, `agent_sessions`, `agent_output`, and `agent_worktree_status` remain the authoritative operational surfaces for follow-up decisions.
+When OpenClaw exposes managed TaskFlow state for a session, use it as a high-level progress mirror of the plugin session. For operational follow-up, check `agent_sessions`, `agent_output`, and `agent_worktree_status`.
 
 Approval/execution meanings:
 
@@ -92,7 +93,7 @@ Completion ownership:
 - The plugin owns the canonical completion status line; the orchestrator owns any additional plain-text follow-up.
 - After a coding-agent session completes, the orchestrator should usually add at least a short human-useful summary of what changed, what was done, or the concrete outcome.
 - That expectation applies to ordinary terminal/manual completions, manual no-change completions, and delegated worktree completions alike.
-- Treat the plugin's canonical `✅` as the status signal and your follow-up as the factual outcome summary that should usually come right after it.
+- Use the plugin's canonical `✅` line as the status signal and your follow-up as the factual outcome summary that should usually come right after it.
 - That summary can be brief; one sentence is often enough.
 - Extra synthesis, risk framing, and next-step guidance are optional. Add them when useful; do not force them every time.
 - Do not generate your own heuristic completion summary from transcript tail lines. Base any summary on reliable result data such as `agent_output(..., full=true)`, diff context, or deterministic tool state.
@@ -151,7 +152,7 @@ Use `permission_mode: "plan"` whenever the user wants a real planning checkpoint
 
 ## Worktree Decisions
 
-Treat worktrees as temporary task sandboxes, not as generic branch inventory.
+Use worktrees as temporary task sandboxes, not as generic branch inventory.
 
 Lifecycle meanings:
 
@@ -162,7 +163,7 @@ Lifecycle meanings:
 - `dismissed`: sandbox intentionally discarded
 - `no_change`: no committed delta
 
-If `agent_worktree_status` reports `released`, treat that sandbox as already landed. Do not narrate it as “still unmerged” just because the branch appears ahead.
+If `agent_worktree_status` reports `released`, the sandbox content is already landed. Do not narrate it as "still unmerged" just because the branch appears ahead.
 
 ### `off`
 
@@ -191,7 +192,7 @@ If `agent_worktree_status` reports `released`, treat that sandbox as already lan
 - Use `agent_worktree_cleanup(mode: "preview_safe")` to review what **Clean all safe** would remove.
 - Use `agent_worktree_cleanup(mode: "clean_safe")` only when the user asked to clean up safe sandboxes.
 - Use `agent_worktree_cleanup(mode: "preview_all")` when you need both safe candidates and retained reasons.
-- Respect retained reasons from `agent_worktree_status` / `agent_worktree_cleanup`; they are the lifecycle model, not advisory prose.
+- Use retained reasons from `agent_worktree_status` / `agent_worktree_cleanup` as lifecycle data, not advisory prose.
 
 ### Never
 
