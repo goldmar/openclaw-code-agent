@@ -28,7 +28,7 @@ Current releases treat persisted session storage as new-schema-only. If startup 
 
 ### OpenClaw 2026.5.6 SDK Readiness
 
-`openclaw-code-agent` `4.2.1` is validated against the latest installable OpenClaw SDK package, `openclaw@2026.5.6`. The plugin keeps the peer floor at `>=2026.4.21` for compatible existing installs, while package build metadata targets OpenClaw `2026.5.6` for both host and SDK readiness.
+`openclaw-code-agent` `4.2.2` is validated against the latest installable OpenClaw SDK package, `openclaw@2026.5.6`. The plugin keeps the peer floor at `>=2026.4.21` for compatible existing installs, while package build metadata targets OpenClaw `2026.5.6` for both host and SDK readiness.
 
 Configuration guidance for `2026.5.6`:
 
@@ -301,7 +301,7 @@ Notes:
 - Resumed sessions keep the worktree strategy they already had.
 - Worktrees are kept alive until explicitly resolved (merge/PR/dismiss) when using non-trivial strategies.
 - Stale-decision reminders fire every 3h; users can snooze per-session for 24h.
-- Claude Code uses plugin-managed worktrees; Codex may execute inside a native backend-managed worktree while the plugin still owns merge/PR/reminder policy.
+- Claude Code and fresh Codex `ask` / `delegate` launches use plugin-managed worktrees for isolated edits. Persisted Codex App Server backend refs can still restore native backend worktree context when resuming an existing thread.
 - `released` covers different-SHA cases where the base branch already contains the branch content after rebase, cherry-pick, or squash.
 - `agent_worktree_cleanup(mode="preview_safe")` previews what Clean all safe would remove, `mode="clean_safe"` performs it, and `mode="preview_all"` shows both safe sandboxes and retained reasons.
 

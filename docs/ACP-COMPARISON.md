@@ -1,6 +1,6 @@
 # ACPX, Codex, and Code Agent
 
-This note compares three adjacent OpenClaw surfaces as of the `openclaw-code-agent` `4.2.1` / OpenClaw `2026.5.6` installable SDK readiness baseline:
+This note compares three adjacent OpenClaw surfaces as of the `openclaw-code-agent` `4.2.2` / OpenClaw `2026.5.6` installable SDK readiness baseline:
 
 - OpenClaw ACP and the bundled `acpx` runtime backend
 - OpenClaw's bundled `codex` plugin

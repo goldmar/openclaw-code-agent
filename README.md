@@ -17,33 +17,41 @@ Use it when you want to start coding work from Telegram, Discord, or another Ope
 - **Full session lifecycle**. Suspend, resume, fork, interrupt, and recover sessions across restarts with persisted metadata and output.
 - **Explicit goal-task loops**. Opt into verifier-driven repair loops or Ralph-style completion loops when you need iterative autonomous execution toward a specific goal.
 - **Real operator visibility**. `agent_sessions`, `agent_output`, and `agent_stats` show status, buffered output, duration, and USD cost.
-- **Two harnesses, one control plane**. Claude Code and Codex share the same tools, routing, notification pipeline, and worktree strategy model while each backend uses its own native execution substrate.
+- **Two harnesses, one control plane**. Claude Code and Codex share the same tools, routing, notification pipeline, and worktree strategy model while each backend uses its own adapter and resume substrate.
 - **One continuation path**. Follow-ups, approvals, revisions, interrupts, and redirects all continue the existing session instead of launching a duplicate.
 
 This plugin is separate from OpenClaw's bundled `acpx` runtime plugin and bundled core `codex` plugin. Those own adjacent OpenClaw runtime/provider surfaces; `openclaw-code-agent` owns chat orchestration and repository follow-through for its own Claude Code and Codex harnesses. See [docs/ACP-COMPARISON.md](docs/ACP-COMPARISON.md) for the boundary details.
 
-## From Prompt To Shipped Branch
+## From Chat To Resolved Work
 
 1. Ask OpenClaw to launch a coding session from chat.
-2. Review the plan in the same thread before implementation starts.
-3. Let the agent finish in an isolated worktree.
-4. Merge into the base branch, open a PR, defer the decision, or discard the sandbox from the same control plane.
+2. Choose the review style you want: direct execution, user plan approval, delegated review, or explicit worktree decisions.
+3. Let the agent finish in an isolated worktree when branch follow-through is enabled.
+4. Merge into the base branch, open a PR, defer the decision, or discard the sandbox from the same thread.
 
-### Plan First
+### Direct Completion
 
-The core loop is plan review. Claude Code and Codex feed the same approval UX: the plugin receives a structured plan artifact, keeps execution blocked until approval, and continues the same session after the plan is approved. If the user asks for revisions, the revised plan becomes the latest actionable version for that same session.
+For small trusted changes, an orchestrator can launch a session, let Codex or Claude Code finish, and report the verified outcome back to chat. The session stays observable through launch, completion, cost, duration, and commit summary.
 
-### Finish Cleanly
+![Direct completion](https://raw.githubusercontent.com/goldmar/openclaw-code-agent/main/assets/no-plan.png)
 
-When a task completes, the plugin can leave the branch for review, merge it automatically, open or update a PR, or wake the orchestrator with diff context. In `ask`, the user gets explicit decision buttons in the originating thread. In `delegate`, the orchestrator reviews the worktree result and escalates user-facing decisions such as PR creation.
+### Plan Review
 
-![Delegated worktree flow](https://raw.githubusercontent.com/goldmar/openclaw-code-agent/main/assets/delegate-readme.gif)
+The default review loop is plan-first. Claude Code and Codex feed the same approval UX: the plugin receives a structured plan artifact, blocks implementation until approval, and continues the same session after the plan is approved. The user can approve, request a revision, or reject the plan from the originating thread.
 
-*`delegate` keeps the main checkout clean while the branch lifecycle happens in the worktree. The chat thread stays current on what was attempted, what changed, and what follow-through is needed.*
+![Plan review](https://raw.githubusercontent.com/goldmar/openclaw-code-agent/main/assets/plan-review.png)
 
-![Ask-mode worktree decisions](https://raw.githubusercontent.com/goldmar/openclaw-code-agent/main/assets/ask-readme.gif)
+### Worktree Decisions
 
-*`ask` keeps the human in the loop for branch follow-through. Current buttons adapt to state: new branches can show **Merge**, **Open PR**, **Later**, and **Discard**; branches with an existing PR can show **View PR** and **Sync PR** instead of **Open PR**. Older recordings may show prior wording.*
+In `ask`, the user controls branch follow-through after the agent finishes. Current buttons adapt to state: new branches can show **Merge**, **Open PR**, **Later**, and **Discard**; branches with an existing PR can show **View PR** and **Sync PR** instead of **Open PR**.
+
+![Ask-mode worktree decisions](https://raw.githubusercontent.com/goldmar/openclaw-code-agent/main/assets/worktree-ask.png)
+
+### Delegated Worktrees
+
+In `delegate`, the orchestrator reviews the completed worktree and attempts the merge follow-through when the change is clean. The agent edits files in the managed worktree so the main checkout is not touched during implementation; after review, delegated follow-through merges the finished branch back to the base branch unless a conflict, error, or explicit policy requires escalation.
+
+![Delegated worktree flow](https://raw.githubusercontent.com/goldmar/openclaw-code-agent/main/assets/worktree-delegate.png)
 
 ### Worktree Lifecycle
 
