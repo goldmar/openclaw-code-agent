@@ -269,6 +269,23 @@ describe("CodexHarness App Server mapping", () => {
     });
   });
 
+  it("starts fresh Codex threads in the prepared cwd, not the original repo cwd", async () => {
+    const client = new MockJsonRpcClient({ assistantText: "Inspecting." });
+    const harness = new CodexHarness({
+      createClient: () => client as any,
+    });
+
+    await collectMessages(harness.launch({
+      prompt: "ship it",
+      cwd: "/repo/openclaw/.worktrees/openclaw-worktree-ship-it",
+      originalWorkdir: "/repo/openclaw",
+      worktreeStrategy: "ask",
+    }));
+
+    const startRequest = client.requests.find((request) => request.method === "thread/start" || request.method === "thread/new");
+    assert.equal((startRequest?.params as { cwd?: string } | undefined)?.cwd, "/repo/openclaw/.worktrees/openclaw-worktree-ship-it");
+  });
+
   it("captures native Codex worktree refs from thread state", async () => {
     const client = new MockJsonRpcClient({
       threadId: "thread-worktree",
