@@ -114,7 +114,7 @@ When the OpenClaw runtime exposes the managed TaskFlow API, sessions also mirror
 Important mapping detail:
 
 - Claude Code maps plugin `permissionMode` directly to the SDK modes.
-- Codex runs through the Codex App Server transport. Plugin `plan` mode remains a plugin-owned approval workflow even when the backend exposes structured plan artifacts, and plugin worktree strategy stays policy-only above Codex-native worktree execution.
+- Codex runs through the Codex App Server transport. Plugin `plan` mode remains a plugin-owned approval workflow even when the backend exposes structured plan artifacts. Fresh Codex worktree launches use the plugin-managed worktree cwd, while persisted backend refs can restore Codex backend worktree context during resume.
 - `agent_respond` is the only continuation primitive across both backends; fork flows still go through `agent_launch(..., resume_session_id=..., fork_session=true)`.
 
 Boundary note:
@@ -284,7 +284,7 @@ The design goal is deterministic wakes with the fewest possible duplicate pings.
 Important constraints:
 
 - worktree creation only happens for git repos
-- Codex can execute inside a native backend-managed worktree while the plugin still owns ask/delegate/auto-merge/auto-pr policy above it
+- fresh Codex worktree launches use plugin-managed worktrees, while persisted Codex backend refs can restore native backend worktree context during resume
 - push and PR flows need a configured remote
 - the main checkout is not modified during isolated worktree execution
 - cleanup is lifecycle-driven: safe cleanup applies only to `merged`, `released`, `dismissed`, and `no_change`
@@ -292,7 +292,7 @@ Important constraints:
 Backend capabilities intentionally differ:
 
 - Claude Code: plugin-managed worktree substrate
-- Codex App Server: native backend worktree substrate with persisted backend refs
+- Codex App Server: plugin-managed fresh worktrees plus native backend worktree restore refs
 - User-facing worktree strategy and decision UX remain identical above both
 
 ## Design Decisions

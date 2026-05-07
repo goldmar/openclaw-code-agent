@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.2.2] - 2026-05-06
+
+### Fixed
+- Fixed Codex `ask` and `delegate` worktree launches so fresh sessions start in the prepared plugin-managed worktree instead of the original checkout.
+- Preserved worktree strategy, base branch, and PR target when auto-resuming sessions.
+- Resumed missing Codex backend worktree refs conservatively without treating native restore metadata as fresh backend-managed execution.
+- Added the default managed `.worktrees/` directory to the repo-local git exclude file when creating worktrees.
+
+### Docs
+- Replaced the README GIFs with static screenshots for direct completion, plan review, `ask` worktree decisions, and delegated worktree follow-through.
+- Refreshed Codex worktree docs to distinguish plugin-managed fresh worktrees from native backend restore refs.
+
 ## [4.2.1] - 2026-05-06
 
 ### Changed
@@ -306,7 +318,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Default Codex approval policy to `on-request`.
 - Raised the default session limit.
 
-[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.2.1...HEAD
+[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.2.2...HEAD
+[4.2.2]: https://github.com/goldmar/openclaw-code-agent/compare/v4.2.1...v4.2.2
 [4.2.1]: https://github.com/goldmar/openclaw-code-agent/compare/v4.2.0...v4.2.1
 [4.2.0]: https://github.com/goldmar/openclaw-code-agent/compare/v4.1.2...v4.2.0
 [4.1.2]: https://github.com/goldmar/openclaw-code-agent/compare/v4.1.1...v4.1.2
