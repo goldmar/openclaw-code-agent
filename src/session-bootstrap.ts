@@ -25,6 +25,7 @@ type Preparation = {
   clearedResumeSessionId?: boolean;
   clearedResumeWorktreeFrom?: boolean;
   restoredMissingNativeBackendWorktree?: boolean;
+  canCreateManagedWorktreeForResumeWithoutPersistedPath?: boolean;
 };
 
 function errorMessage(err: unknown): string {
@@ -80,6 +81,7 @@ function restoreResumeWorktreeContext(
   clearedResumeSessionId?: boolean;
   clearedResumeWorktreeFrom?: boolean;
   restoredMissingNativeBackendWorktree?: boolean;
+  canCreateManagedWorktreeForResumeWithoutPersistedPath?: boolean;
 } {
   const resumeWorktreeId = config.resumeSessionId ?? config.resumeWorktreeFrom;
   if (!resumeWorktreeId) return {};
@@ -111,7 +113,17 @@ function restoreResumeWorktreeContext(
     config.planApproval = persistedSession.planApproval;
   }
 
-  if (!persistedSession.worktreePath) return {};
+  if (!persistedSession.worktreePath) {
+    const canCreateManagedWorktreeForResumeWithoutPersistedPath =
+      supportsNativeBackendWorktreeRestore(getBackendWorktreeCapability({
+        persistedHarness: persistedSession.harness,
+        backendRef: persistedSession.backendRef,
+      }));
+    return {
+      originalWorkdir,
+      canCreateManagedWorktreeForResumeWithoutPersistedPath,
+    };
+  }
   if (!persistedSession.worktreeBranch) {
     throw new Error(`Cannot resume session "${resumeWorktreeId}": persisted worktree metadata is missing worktreeBranch.`);
   }
@@ -192,6 +204,7 @@ export function prepareSessionBootstrap(
     clearedResumeSessionId,
     clearedResumeWorktreeFrom,
     restoredMissingNativeBackendWorktree,
+    canCreateManagedWorktreeForResumeWithoutPersistedPath,
   } = restoreResumeWorktreeContext(config, getPersistedSession);
 
   if (clearedResumeSessionId) {
@@ -207,7 +220,9 @@ export function prepareSessionBootstrap(
   const strategy = config.worktreeStrategy ?? pluginConfig.defaultWorktreeStrategy;
   if (strategy) config.worktreeStrategy = strategy;
   const useNativeCodexWorktree = prefersNativeCodexWorktrees(config);
-  const shouldWorktree = !restoredMissingNativeBackendWorktree
+  const canCreateWorktreeForThisLaunch = !isResumedSession || !!canCreateManagedWorktreeForResumeWithoutPersistedPath;
+  const shouldWorktree = canCreateWorktreeForThisLaunch
+    && !restoredMissingNativeBackendWorktree
     && !worktreePath
     && strategy
     && strategy !== "off"

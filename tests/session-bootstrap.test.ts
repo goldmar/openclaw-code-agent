@@ -277,6 +277,65 @@ describe("prepareSessionBootstrap()", () => {
     }
   });
 
+  it("does not create a new managed worktree for non-Codex resumes without persisted worktree metadata", () => {
+    const repoDir = mkdtempSync(join(tmpdir(), "session-bootstrap-claude-resume-no-worktree-"));
+    try {
+      git(repoDir, "init", "-b", "main");
+      git(repoDir, "config", "user.name", "Test User");
+      git(repoDir, "config", "user.email", "test@example.com");
+      writeFileSync(join(repoDir, "README.md"), "hello\n", "utf-8");
+      git(repoDir, "add", "README.md");
+      git(repoDir, "commit", "-m", "init");
+
+      const config: SessionConfig = {
+        prompt: "Resume the Claude session",
+        workdir: repoDir,
+        harness: "claude-code",
+        resumeSessionId: "claude-thread-no-worktree",
+        worktreeStrategy: "ask",
+        multiTurn: true,
+        route: {
+          provider: "telegram",
+          target: "12345",
+          sessionKey: "agent:main:telegram:group:12345",
+        },
+      };
+
+      const bootstrap = prepareSessionBootstrap(
+        config,
+        "claude-resume-no-managed-worktree",
+        (_ref): PersistedSessionInfo | undefined => ({
+          sessionId: "claude-session-no-worktree",
+          harnessSessionId: "claude-thread-no-worktree",
+          backendRef: {
+            kind: "claude-code",
+            conversationId: "claude-thread-no-worktree",
+          },
+          name: "claude-resume-no-managed-worktree",
+          prompt: "Resume the Claude session",
+          workdir: repoDir,
+          status: "killed",
+          lifecycle: "suspended",
+          runtimeState: "stopped",
+          costUsd: 0,
+          route: {
+            provider: "telegram",
+            target: "12345",
+            sessionKey: "agent:main:telegram:group:12345",
+          },
+          worktreeStrategy: "ask",
+        }),
+      );
+
+      assert.equal(bootstrap.actualWorkdir, repoDir);
+      assert.equal(bootstrap.originalWorkdir, repoDir);
+      assert.equal(bootstrap.worktreePath, undefined);
+      assert.doesNotMatch(bootstrap.effectiveSystemPrompt ?? "", /You are working in a git worktree/);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
   it("clears stale resume state when a missing plugin-managed worktree cannot be recreated", () => {
     const missingRepoDir = join(tmpdir(), `session-bootstrap-missing-${Date.now()}`);
     const missingWorktreePath = join(missingRepoDir, ".worktrees", "missing", "openclaw");
