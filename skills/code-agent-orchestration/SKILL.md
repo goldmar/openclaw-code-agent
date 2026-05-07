@@ -91,7 +91,7 @@ Completion ownership:
 
 - The plugin sends the canonical completion notification.
 - The plugin owns the canonical completion status line; the orchestrator owns any additional plain-text follow-up.
-- Completion wakes may arrive in a different chat than the session's original user route. Treat the wake's `originRoute` block as authoritative for human follow-ups.
+- Completion wakes may arrive in a different chat than the session's original user route. Treat the wake's `originRoute` block as the source of truth for human follow-ups.
 - If `originRoute` differs from the current chat, do not use a normal final assistant reply for the user-facing follow-up. Use a routed send path that preserves `provider`, `target`, and `threadId` instead.
 - After a coding-agent session completes, the orchestrator should usually add at least a short human-useful summary of what changed, what was done, or the concrete outcome.
 - That expectation applies to ordinary terminal/manual completions, manual no-change completions, and delegated worktree completions alike.
