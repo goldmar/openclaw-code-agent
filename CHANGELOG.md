@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.2.3] - 2026-05-07
+
+### Changed
+- Updated the local OpenClaw package target to `openclaw@2026.5.7` while keeping the peer floor at `>=2026.4.21`.
+- Refreshed OpenClaw `2026.5.7` compatibility guidance around plugin allowlists, bundled discovery, managed npm override inheritance, and Codex provider/runtime routing.
+
 ## [4.2.2] - 2026-05-06
 
 ### Fixed
@@ -318,7 +324,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Default Codex approval policy to `on-request`.
 - Raised the default session limit.
 
-[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.2.2...HEAD
+[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.2.3...HEAD
+[4.2.3]: https://github.com/goldmar/openclaw-code-agent/compare/v4.2.2...v4.2.3
 [4.2.2]: https://github.com/goldmar/openclaw-code-agent/compare/v4.2.1...v4.2.2
 [4.2.1]: https://github.com/goldmar/openclaw-code-agent/compare/v4.2.0...v4.2.1
 [4.2.0]: https://github.com/goldmar/openclaw-code-agent/compare/v4.1.2...v4.2.0

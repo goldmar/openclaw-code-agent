@@ -1,6 +1,6 @@
 {
   "name": "openclaw-code-agent",
-  "version": "4.2.2",
+  "version": "4.2.3",
   "type": "module",
   "packageManager": "pnpm@10.30.0",
   "main": "dist/index.js",
@@ -34,8 +34,8 @@
       "minGatewayVersion": "2026.4.21"
     },
     "build": {
-      "openclawVersion": "2026.5.6",
-      "pluginSdkVersion": "2026.5.6"
+      "openclawVersion": "2026.5.7",
+      "pluginSdkVersion": "2026.5.7"
     }
   },
   "files": [
@@ -53,7 +53,7 @@
     "@types/node": "^25.5.2",
     "esbuild": "^0.28.0",
     "nanoid": "^5.1.7",
-    "openclaw": "2026.5.6",
+    "openclaw": "2026.5.7",
     "tsx": "^4.21.0",
     "typescript": "^6.0.2"
   },
