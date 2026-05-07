@@ -25,7 +25,6 @@ type Preparation = {
   clearedResumeSessionId?: boolean;
   clearedResumeWorktreeFrom?: boolean;
   restoredMissingNativeBackendWorktree?: boolean;
-  canCreateManagedWorktreeForResumeWithoutPersistedPath?: boolean;
 };
 
 function errorMessage(err: unknown): string {

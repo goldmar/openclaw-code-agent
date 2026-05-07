@@ -307,6 +307,7 @@ describe("prepareSessionBootstrap()", () => {
         (_ref): PersistedSessionInfo | undefined => ({
           sessionId: "claude-session-no-worktree",
           harnessSessionId: "claude-thread-no-worktree",
+          harness: "claude-code",
           backendRef: {
             kind: "claude-code",
             conversationId: "claude-thread-no-worktree",
