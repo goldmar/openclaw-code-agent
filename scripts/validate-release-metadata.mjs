@@ -16,6 +16,7 @@ export function loadReleaseMetadata(baseDir = rootDir) {
     pluginVersion: pluginManifest.version,
     openclawVersion: packageJson.openclaw?.build?.openclawVersion,
     pluginSdkVersion: packageJson.openclaw?.build?.pluginSdkVersion,
+    openclawInstall: packageJson.openclaw?.install,
   };
 }
 
@@ -25,7 +26,7 @@ export function validateReleaseMetadata(options = {}) {
     openclawTargetVersion = defaultOpenClawTargetVersion,
     baseDir = rootDir,
   } = options;
-  const { packageVersion, pluginVersion, openclawVersion, pluginSdkVersion } =
+  const { packageVersion, pluginVersion, openclawVersion, pluginSdkVersion, openclawInstall } =
     loadReleaseMetadata(baseDir);
 
   if (packageVersion !== pluginVersion) {
@@ -56,11 +57,34 @@ export function validateReleaseMetadata(options = {}) {
     );
   }
 
+  if (!openclawInstall || typeof openclawInstall !== "object") {
+    throw new Error("Missing OpenClaw install metadata in package.json");
+  }
+
+  if (openclawInstall.npmSpec !== "openclaw-code-agent") {
+    throw new Error(
+      `OpenClaw install npmSpec mismatch: expected openclaw-code-agent, got ${openclawInstall.npmSpec}`,
+    );
+  }
+
+  if (openclawInstall.defaultChoice !== "npm") {
+    throw new Error(
+      `OpenClaw install defaultChoice mismatch: expected npm, got ${openclawInstall.defaultChoice}`,
+    );
+  }
+
+  if (openclawInstall.minHostVersion !== ">=2026.4.21") {
+    throw new Error(
+      `OpenClaw install minHostVersion mismatch: expected >=2026.4.21, got ${openclawInstall.minHostVersion}`,
+    );
+  }
+
   return {
     packageVersion,
     pluginVersion,
     openclawVersion,
     pluginSdkVersion,
+    openclawInstall,
   };
 }
 
@@ -70,11 +94,11 @@ function runCli() {
   const openclawTargetVersion = args
     .find((arg) => arg.startsWith("--openclaw-target="))
     ?.slice("--openclaw-target=".length);
-  const { packageVersion, pluginVersion, openclawVersion, pluginSdkVersion } =
+  const { packageVersion, pluginVersion, openclawVersion, pluginSdkVersion, openclawInstall } =
     validateReleaseMetadata({ releaseVersion, openclawTargetVersion });
   const releaseLabel = releaseVersion ? ` against release ${releaseVersion}` : "";
   console.log(
-    `Release metadata validated${releaseLabel}: package.json=${packageVersion}, openclaw.plugin.json=${pluginVersion}, openclawVersion=${openclawVersion}, pluginSdkVersion=${pluginSdkVersion}`,
+    `Release metadata validated${releaseLabel}: package.json=${packageVersion}, openclaw.plugin.json=${pluginVersion}, openclawVersion=${openclawVersion}, pluginSdkVersion=${pluginSdkVersion}, openclaw.install.npmSpec=${openclawInstall.npmSpec}, openclaw.install.defaultChoice=${openclawInstall.defaultChoice}, openclaw.install.minHostVersion=${openclawInstall.minHostVersion}`,
   );
 }
 

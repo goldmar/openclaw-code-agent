@@ -24,6 +24,11 @@
     "extensions": [
       "./dist/index.js"
     ],
+    "install": {
+      "npmSpec": "openclaw-code-agent",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.4.21"
+    },
     "compat": {
       "pluginApi": ">=2026.4.21",
       "minGatewayVersion": "2026.4.21"

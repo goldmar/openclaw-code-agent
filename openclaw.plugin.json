@@ -22,6 +22,26 @@
       "goal_stop"
     ]
   },
+  "configContracts": {
+    "dangerousFlags": [
+      {
+        "path": "permissionMode",
+        "equals": "bypassPermissions"
+      },
+      {
+        "path": "planApproval",
+        "equals": "approve"
+      },
+      {
+        "path": "defaultWorktreeStrategy",
+        "equals": "auto-merge"
+      },
+      {
+        "path": "defaultWorktreeStrategy",
+        "equals": "auto-pr"
+      }
+    ]
+  },
   "activation": {
     "onStartup": true,
     "onCommands": [

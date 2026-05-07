@@ -65,11 +65,22 @@ describe("plugin entry source", () => {
   });
 
   it("keeps package and plugin manifest versions in sync", () => {
-    const { packageVersion, pluginVersion, openclawVersion, pluginSdkVersion } =
+    const { packageVersion, pluginVersion, openclawVersion, pluginSdkVersion, openclawInstall } =
       validateReleaseMetadata();
     assert.equal(packageVersion, pluginVersion);
     assert.equal(openclawVersion, "2026.5.6");
     assert.equal(pluginSdkVersion, "2026.5.6");
+    assert.equal(openclawInstall.npmSpec, "openclaw-code-agent");
+    assert.equal(openclawInstall.defaultChoice, "npm");
+    assert.equal(openclawInstall.minHostVersion, ">=2026.4.21");
+
+    const cliOutput = execFileSync("node", ["scripts/validate-release-metadata.mjs"], {
+      cwd: rootDir,
+      encoding: "utf8",
+    });
+    assert.match(cliOutput, /openclaw\.install\.npmSpec=openclaw-code-agent/);
+    assert.match(cliOutput, /openclaw\.install\.defaultChoice=npm/);
+    assert.match(cliOutput, /openclaw\.install\.minHostVersion=>=2026\.4\.21/);
   });
 
   it("keeps security audit automation on the pnpm-only path", () => {
@@ -97,6 +108,7 @@ describe("plugin entry source", () => {
     const packageJson = JSON.parse(readFileSync(join(rootDir, "package.json"), "utf8")) as {
       dependencies?: Record<string, string>;
       openclaw?: {
+        install?: Record<string, string>;
         compat?: Record<string, string>;
         build?: Record<string, string>;
       };
@@ -108,6 +120,9 @@ describe("plugin entry source", () => {
     };
 
     assert.equal(packageJson.dependencies?.["@anthropic-ai/claude-agent-sdk"], "^0.2.119");
+    assert.equal(packageJson.openclaw?.install?.npmSpec, "openclaw-code-agent");
+    assert.equal(packageJson.openclaw?.install?.defaultChoice, "npm");
+    assert.equal(packageJson.openclaw?.install?.minHostVersion, ">=2026.4.21");
     assert.equal(packageJson.openclaw?.compat?.pluginApi, ">=2026.4.21");
     assert.equal(packageJson.openclaw?.compat?.minGatewayVersion, "2026.4.21");
     assert.equal(packageJson.openclaw?.build?.openclawVersion, "2026.5.6");
@@ -117,6 +132,47 @@ describe("plugin entry source", () => {
     assert.equal(packageJson.pnpm?.overrides?.["fast-xml-parser@>=5.0.0 <5.7.0"], ">=5.7.0");
     assert.equal(packageJson.pnpm?.overrides?.["@anthropic-ai/vertex-sdk>google-auth-library"], "10.6.2");
     assert.doesNotMatch(readFileSync(join(rootDir, "pnpm-lock.yaml"), "utf8"), /uuid@9\.0\.1/);
+  });
+
+  it("declares high-trust automation config flags for OpenClaw security review", () => {
+    const pluginManifest = JSON.parse(readFileSync(join(rootDir, "openclaw.plugin.json"), "utf8")) as {
+      configContracts?: {
+        dangerousFlags?: Array<{ path: string; equals: string }>;
+      };
+    };
+    const flags = pluginManifest.configContracts?.dangerousFlags ?? [];
+
+    assert.deepEqual(
+      flags.map((flag) => `${flag.path}=${flag.equals}`).sort(),
+      [
+        "defaultWorktreeStrategy=auto-merge",
+        "defaultWorktreeStrategy=auto-pr",
+        "permissionMode=bypassPermissions",
+        "planApproval=approve",
+      ],
+    );
+  });
+
+  it("keeps orchestration skill guidance out of prompt-override phrasing", () => {
+    const skill = readFileSync(
+      join(rootDir, "skills", "code-agent-orchestration", "SKILL.md"),
+      "utf8",
+    );
+
+    assert.doesNotMatch(skill, /\bauthoritative\b/i);
+    assert.doesNotMatch(skill, /system prompt|developer instruction|higher-priority/i);
+  });
+
+  it("keeps orchestration skill install metadata in plain YAML frontmatter", () => {
+    const skill = readFileSync(
+      join(rootDir, "skills", "code-agent-orchestration", "SKILL.md"),
+      "utf8",
+    );
+    const frontmatter = skill.match(/^---\n([\s\S]*?)\n---\n/)?.[1] ?? "";
+
+    assert.match(frontmatter, /metadata:\n  openclaw:\n/);
+    assert.match(frontmatter, /\n    install:\n      - id: npm\n        kind: node\n        package: openclaw-code-agent\n/);
+    assert.doesNotMatch(frontmatter, /,\s*[\]}]/);
   });
 
   it("does not use the removed OpenClaw embedded-extension factory API", () => {

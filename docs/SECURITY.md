@@ -13,6 +13,8 @@ This plugin is intentionally an orchestration layer around local developer tooli
 
 Because of that design, static scanners that flag any `child_process` usage will report this plugin. That finding is expected and should be reviewed as an accepted design surface, not treated as accidental malicious behavior.
 
+The package also declares OpenClaw install metadata in `package.json` and dangerous configuration flags in `openclaw.plugin.json` so review tools can identify it as an executable high-trust developer automation plugin rather than an instruction-only helper.
+
 ## Accepted Subprocess Surfaces
 
 The reviewed subprocess surfaces are:
@@ -42,6 +44,16 @@ The plugin keeps subprocess use narrow where practical:
 - Goal-task verifier execution still uses `bash -lc` by design, but now strips `BASH_ENV` and `ENV` so ambient shell bootstrap hooks cannot silently rewrite verifier execution.
 
 Verifier commands remain powerful by design. They should be treated as trusted operator input and not exposed to untrusted users.
+
+## Security Metadata
+
+The release package includes:
+
+- `openclaw.install.npmSpec`, `defaultChoice`, and `minHostVersion` in `package.json`.
+- `configContracts.dangerousFlags` for `permissionMode: "bypassPermissions"`, `planApproval: "approve"`, `defaultWorktreeStrategy: "auto-merge"`, and `defaultWorktreeStrategy: "auto-pr"` in `openclaw.plugin.json`.
+- Skill install metadata for the `openclaw-code-agent` npm package.
+
+The orchestration skill should describe plugin tool state without wording that resembles prompt hierarchy changes. Local tests reject `authoritative`, `system prompt`, `developer instruction`, and `higher-priority` phrasing in `skills/code-agent-orchestration/SKILL.md`.
 
 ## Current Scanner Findings
 
