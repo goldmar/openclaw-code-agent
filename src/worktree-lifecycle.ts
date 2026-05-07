@@ -1,5 +1,6 @@
 import { execFileSync } from "child_process";
-import { existsSync, mkdirSync, rmSync } from "fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync } from "fs";
+import { relative, sep } from "path";
 import { branchExists, getWorktreeBaseDir, sanitizeBranchName } from "./worktree-repo";
 
 export interface RemoveWorktreeOptions {
@@ -14,6 +15,42 @@ function isNodeErrorWithCode(err: unknown, code: string): boolean {
   return Boolean(err && typeof err === "object" && "code" in err && err.code === code);
 }
 
+function getRepoRoot(repoDir: string): string | undefined {
+  try {
+    const result = execFileSync(
+      "git",
+      ["-C", repoDir, "rev-parse", "--show-toplevel"],
+      { timeout: 5_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
+    );
+    return result.trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function ensureWorktreeBaseIgnored(repoDir: string, baseDir: string): void {
+  const repoRoot = getRepoRoot(repoDir);
+  if (!repoRoot) return;
+
+  const relativeBaseDir = relative(repoRoot, baseDir);
+  if (!relativeBaseDir || relativeBaseDir.startsWith("..") || relativeBaseDir.includes(`..${sep}`)) return;
+
+  const excludePath = `${repoRoot}/.git/info/exclude`;
+  const normalizedPattern = `${relativeBaseDir.split(sep).join("/").replace(/\/$/, "")}/`;
+  try {
+    const existing = existsSync(excludePath) ? readFileSync(excludePath, "utf-8") : "";
+    const alreadyIgnored = existing
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .some((line) => line === normalizedPattern || line === `/${normalizedPattern}`);
+    if (!alreadyIgnored) {
+      appendFileSync(excludePath, `${existing.endsWith("\n") || existing.length === 0 ? "" : "\n"}${normalizedPattern}\n`, "utf-8");
+    }
+  } catch (err) {
+    console.warn(`[worktree] Failed to add ${normalizedPattern} to ${excludePath}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 export function createWorktree(
   repoDir: string,
   sessionName: string,
@@ -21,6 +58,7 @@ export function createWorktree(
 ): string {
   const sanitized = sanitizeBranchName(sessionName);
   const baseDir = getWorktreeBaseDir(repoDir);
+  ensureWorktreeBaseIgnored(repoDir, baseDir);
   mkdirSync(baseDir, { recursive: true });
   const allowExistingBranch = options.allowExistingBranch === true;
 

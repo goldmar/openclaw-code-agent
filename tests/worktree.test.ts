@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert";
 import { execFileSync } from "child_process";
-import { mkdtempSync, rmSync, writeFileSync, existsSync, mkdirSync } from "fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 
@@ -109,6 +109,33 @@ describe("worktree base dir and PR target resolution", () => {
         stdio: ["pipe", "pipe", "pipe"],
       }).trim();
       assert.equal(getWorktreeBaseDir(repoDir), join(canonicalRoot, ".worktrees"));
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it("adds the default managed worktree directory to the repo-local exclude file", async () => {
+    const { createWorktree } = await import("../src/worktree.js");
+    const repoDir = mkdtempSync(join(tmpdir(), "openclaw-worktree-exclude-default-"));
+
+    try {
+      execFileSync("git", ["init", "-b", "main"], { cwd: repoDir, stdio: "ignore" });
+      execFileSync("git", ["config", "user.name", "OpenClaw Tests"], { cwd: repoDir, stdio: "ignore" });
+      execFileSync("git", ["config", "user.email", "tests@example.com"], { cwd: repoDir, stdio: "ignore" });
+      writeFileSync(join(repoDir, "README.md"), "base\n");
+      execFileSync("git", ["add", "README.md"], { cwd: repoDir, stdio: "ignore" });
+      execFileSync("git", ["commit", "-m", "init"], { cwd: repoDir, stdio: "ignore" });
+
+      createWorktree(repoDir, "exclude-default");
+
+      const status = execFileSync("git", ["status", "--porcelain", "--untracked-files=all"], {
+        cwd: repoDir,
+        encoding: "utf-8",
+        stdio: ["pipe", "pipe", "pipe"],
+      }).trim();
+      const exclude = readFileSync(join(repoDir, ".git", "info", "exclude"), "utf-8");
+      assert.match(exclude, /^\.worktrees\/$/m);
+      assert.equal(status, "");
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }
