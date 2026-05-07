@@ -87,6 +87,7 @@ function restoreResumeWorktreeContext(
 
   const persistedSession = getPersistedSession(resumeWorktreeId);
   if (!persistedSession) return {};
+  const hasPersistedBackendIdentity = !!persistedSession.harness || !!persistedSession.backendRef;
   const originalWorkdir = (() => {
     if (persistedSession.workdir && persistedSession.workdir !== persistedSession.worktreePath) {
       return persistedSession.workdir;
@@ -114,7 +115,8 @@ function restoreResumeWorktreeContext(
 
   if (!persistedSession.worktreePath) {
     const canCreateManagedWorktreeForResumeWithoutPersistedPath =
-      supportsNativeBackendWorktreeRestore(getBackendWorktreeCapability({
+      hasPersistedBackendIdentity
+      && supportsNativeBackendWorktreeRestore(getBackendWorktreeCapability({
         persistedHarness: persistedSession.harness,
         backendRef: persistedSession.backendRef,
       }));
