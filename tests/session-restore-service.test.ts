@@ -75,7 +75,7 @@ describe("SessionRestoreService", () => {
     assert.equal(liveSession.worktreePrTargetRepo, "openclaw/openclaw");
   });
 
-  it("preserves originalWorkdir for native Codex worktree strategies before the backend reports the worktree path", () => {
+  it("hydrates plugin-managed worktree metadata for fresh Codex worktree strategies", () => {
     const repoDir = mkdtempSync(join(tmpdir(), "session-restore-native-codex-"));
     git(repoDir, "init", "-b", "main");
     git(repoDir, "config", "user.name", "Test User");
@@ -103,11 +103,13 @@ describe("SessionRestoreService", () => {
 
     service.hydrateSpawnedSession(liveSession, prepared, config);
 
-    assert.equal(prepared.actualWorkdir, repoDir);
-    assert.equal(prepared.worktreePath, undefined);
+    assert.ok(prepared.worktreePath, "fresh Codex ask launch should create a managed worktree");
+    assert.equal(prepared.actualWorkdir, prepared.worktreePath);
+    assert.ok(prepared.worktreeBranchName, "fresh Codex ask worktree should have a branch");
     assert.equal(liveSession.originalWorkdir, repoDir);
-    assert.equal(liveSession.worktreePath, undefined);
-    assert.equal(liveSession.worktreeState, "none");
+    assert.equal(liveSession.worktreePath, prepared.worktreePath);
+    assert.equal(liveSession.worktreeBranch, prepared.worktreeBranchName);
+    assert.equal(liveSession.worktreeState, "provisioned");
     assert.equal(liveSession.worktreePrTargetRepo, "openclaw/openclaw");
   });
 });

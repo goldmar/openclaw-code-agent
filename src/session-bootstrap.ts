@@ -24,6 +24,7 @@ type Preparation = {
   worktreeBranchName?: string;
   clearedResumeSessionId?: boolean;
   clearedResumeWorktreeFrom?: boolean;
+  restoredMissingNativeBackendWorktree?: boolean;
 };
 
 function errorMessage(err: unknown): string {
@@ -78,6 +79,7 @@ function restoreResumeWorktreeContext(
   worktreeBranchName?: string;
   clearedResumeSessionId?: boolean;
   clearedResumeWorktreeFrom?: boolean;
+  restoredMissingNativeBackendWorktree?: boolean;
 } {
   const resumeWorktreeId = config.resumeSessionId ?? config.resumeWorktreeFrom;
   if (!resumeWorktreeId) return {};
@@ -148,6 +150,7 @@ function restoreResumeWorktreeContext(
       originalWorkdir,
       worktreeBranchName: persistedSession.worktreeBranch,
       clearedResumeWorktreeFrom: !!config.resumeWorktreeFrom,
+      restoredMissingNativeBackendWorktree: true,
     };
   }
 
@@ -188,6 +191,7 @@ export function prepareSessionBootstrap(
     worktreeBranchName,
     clearedResumeSessionId,
     clearedResumeWorktreeFrom,
+    restoredMissingNativeBackendWorktree,
   } = restoreResumeWorktreeContext(config, getPersistedSession);
 
   if (clearedResumeSessionId) {
@@ -203,7 +207,11 @@ export function prepareSessionBootstrap(
   const strategy = config.worktreeStrategy ?? pluginConfig.defaultWorktreeStrategy;
   if (strategy) config.worktreeStrategy = strategy;
   const useNativeCodexWorktree = prefersNativeCodexWorktrees(config);
-  const shouldWorktree = !config.resumeSessionId && !worktreePath && strategy && strategy !== "off" && !useNativeCodexWorktree;
+  const shouldWorktree = !restoredMissingNativeBackendWorktree
+    && !worktreePath
+    && strategy
+    && strategy !== "off"
+    && !useNativeCodexWorktree;
 
   if (useNativeCodexWorktree && !isGitRepo(originalWorkdir)) {
     throw new Error(`Cannot launch session "${name}": worktree strategy "${strategy}" requires a git worktree, but "${originalWorkdir}" is not a git repository.`);
@@ -242,5 +250,6 @@ export function prepareSessionBootstrap(
     worktreeBranchName,
     clearedResumeSessionId,
     clearedResumeWorktreeFrom,
+    restoredMissingNativeBackendWorktree,
   };
 }
