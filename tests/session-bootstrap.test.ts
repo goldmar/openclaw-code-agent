@@ -77,7 +77,7 @@ describe("prepareSessionBootstrap()", () => {
     }
   });
 
-  it("keeps fresh Codex worktree launches on the original repo and lets the backend allocate the native worktree", () => {
+  it("creates a plugin-managed worktree for fresh Codex worktree launches", () => {
     const repoDir = mkdtempSync(join(tmpdir(), "session-bootstrap-codex-native-"));
     try {
       git(repoDir, "init", "-b", "main");
@@ -102,11 +102,12 @@ describe("prepareSessionBootstrap()", () => {
 
       const bootstrap = prepareSessionBootstrap(config, "codex-native", () => undefined);
 
-      assert.equal(bootstrap.actualWorkdir, repoDir);
       assert.equal(bootstrap.originalWorkdir, repoDir);
-      assert.equal(bootstrap.worktreePath, undefined);
-      assert.equal(bootstrap.worktreeBranchName, undefined);
-      assert.equal(bootstrap.effectiveSystemPrompt, config.systemPrompt);
+      assert.ok(bootstrap.worktreePath, "fresh Codex ask launch should create a plugin-managed worktree");
+      assert.equal(bootstrap.actualWorkdir, bootstrap.worktreePath);
+      assert.ok(bootstrap.worktreeBranchName, "fresh Codex ask worktree should have a branch");
+      assert.match(bootstrap.effectiveSystemPrompt ?? "", /You are working in a git worktree/);
+      assert.match(bootstrap.effectiveSystemPrompt ?? "", /IMPORTANT: ALL file edits must be made within this worktree/);
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }
@@ -206,8 +207,71 @@ describe("prepareSessionBootstrap()", () => {
       assert.equal(bootstrap.originalWorkdir, repoDir);
       assert.equal(bootstrap.worktreePath, undefined);
       assert.equal(bootstrap.worktreeBranchName, "agent/codex-native-resume");
+      assert.equal(bootstrap.restoredMissingNativeBackendWorktree, true);
       assert.equal(config.resumeSessionId, "thread-1");
       assert.equal(config.resumeWorktreeFrom, undefined);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it("creates a new plugin-managed worktree for Codex resume launches without a persisted worktree path", () => {
+    const repoDir = mkdtempSync(join(tmpdir(), "session-bootstrap-codex-resume-no-worktree-"));
+    try {
+      git(repoDir, "init", "-b", "main");
+      git(repoDir, "config", "user.name", "Test User");
+      git(repoDir, "config", "user.email", "test@example.com");
+      writeFileSync(join(repoDir, "README.md"), "hello\n", "utf-8");
+      git(repoDir, "add", "README.md");
+      git(repoDir, "commit", "-m", "init");
+
+      const config: SessionConfig = {
+        prompt: "Fork and continue the Codex session",
+        workdir: repoDir,
+        harness: "codex",
+        resumeSessionId: "thread-no-worktree",
+        forkSession: true,
+        worktreeStrategy: "ask",
+        multiTurn: true,
+        route: {
+          provider: "telegram",
+          target: "12345",
+          sessionKey: "agent:main:telegram:group:12345",
+        },
+      };
+
+      const bootstrap = prepareSessionBootstrap(
+        config,
+        "codex-resume-managed-worktree",
+        (_ref): PersistedSessionInfo | undefined => ({
+          sessionId: "session-no-worktree",
+          harnessSessionId: "thread-no-worktree",
+          backendRef: {
+            kind: "codex-app-server",
+            conversationId: "thread-no-worktree",
+          },
+          name: "codex-resume-managed-worktree",
+          prompt: "Fork and continue the Codex session",
+          workdir: repoDir,
+          status: "completed",
+          lifecycle: "terminal",
+          runtimeState: "stopped",
+          costUsd: 0,
+          route: {
+            provider: "telegram",
+            target: "12345",
+            sessionKey: "agent:main:telegram:group:12345",
+          },
+          worktreeStrategy: "ask",
+        }),
+      );
+
+      assert.equal(bootstrap.originalWorkdir, repoDir);
+      assert.ok(bootstrap.worktreePath, "Codex resume without persisted worktree should create a managed worktree");
+      assert.equal(bootstrap.actualWorkdir, bootstrap.worktreePath);
+      assert.ok(bootstrap.worktreeBranchName, "managed resume worktree should have a branch");
+      assert.match(bootstrap.effectiveSystemPrompt ?? "", /You are working in a git worktree/);
+      assert.equal(config.resumeSessionId, "thread-no-worktree");
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }

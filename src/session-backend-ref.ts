@@ -52,7 +52,7 @@ export function getBackendWorktreeCapability(
 }
 
 export function supportsNativeBackendWorktreeExecution(capability: BackendWorktreeCapability): boolean {
-  return capability === "native-execution" || capability === "native-restore";
+  return capability === "native-execution";
 }
 
 export function supportsNativeBackendWorktreeRestore(capability: BackendWorktreeCapability): boolean {
@@ -68,6 +68,7 @@ export function hasNativeBackendWorktreeRef(
 export function usesNativeBackendWorktree(
   session: { harnessName?: string; persistedHarness?: string; backendRef?: SessionBackendRef },
 ): boolean {
-  return supportsNativeBackendWorktreeExecution(getBackendWorktreeCapability(session))
+  const capability = getBackendWorktreeCapability(session);
+  return (supportsNativeBackendWorktreeExecution(capability) || supportsNativeBackendWorktreeRestore(capability))
     && hasNativeBackendWorktreeRef(session);
 }

@@ -727,6 +727,7 @@ describe("executeRespond", () => {
       harnessName: "respond-resume-harness",
       name: "resume-only",
       workdir: "/tmp/repo",
+      worktreeStrategy: "off",
       model: "test-model",
     });
     const sm = new SessionManager(5);
