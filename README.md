@@ -124,7 +124,7 @@ Because worktree isolation defaults to `delegate`, `defaultWorkdir` should norma
 
 Chat-launched sessions route updates back to their originating chat thread. For agent-launched tool sessions without an origin route, configure `fallbackChannel` or `agentChannels` in the reference guide.
 
-This release targets the OpenClaw SDK package `openclaw@2026.5.6`, while keeping the plugin peer floor at `>=2026.4.21`.
+This release targets the OpenClaw SDK package `openclaw@2026.5.7`, while keeping the plugin peer floor at `>=2026.4.21`.
 
 If you use Codex, make sure the local `codex` command or `OPENCLAW_CODEX_APP_SERVER_COMMAND` override is available and authenticated. When Codex auth is inconsistent, this is the recommended `~/.codex/config.toml` setting:
 
