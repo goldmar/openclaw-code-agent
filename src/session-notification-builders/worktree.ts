@@ -28,6 +28,7 @@ export function buildDelegateWorktreeWakeMessage(args: {
     originThreadLine,
     diffSummary,
   } = args;
+  const hasOriginRouteBlock = Boolean(originThreadLine?.trim());
 
   return [
     `[DELEGATED WORKTREE DECISION] Session "${sessionName}" completed with changes.`,
@@ -35,7 +36,7 @@ export function buildDelegateWorktreeWakeMessage(args: {
     `Session ID: ${sessionId}`,
     `Branch: ${branchName} → ${baseBranch}`,
     `Commits: ${diffSummary.commits} | Files: ${diffSummary.filesChanged} | +${diffSummary.insertions} / -${diffSummary.deletions}`,
-    ...(originThreadLine ? [originThreadLine] : []),
+    ...(hasOriginRouteBlock ? [originThreadLine] : []),
     ``,
     ...commitLines,
     ...(moreNote ? [moreNote] : []),
@@ -49,7 +50,9 @@ export function buildDelegateWorktreeWakeMessage(args: {
     `- If scope or risk is unclear, message the user and ask for guidance.`,
     `- Never call agent_pr() autonomously in delegate mode.`,
     `- After deciding, notify the user briefly with what you did and why.`,
-    `- Send any human follow-up to the Session origin route above; if it differs from the current chat, do not use a plain final assistant reply.`,
+    ...(hasOriginRouteBlock
+      ? [`- Send any human follow-up to the Session origin route above; if it differs from the current chat, do not use a plain final assistant reply.`]
+      : []),
   ].join("\n");
 }
 
@@ -105,12 +108,13 @@ export function buildNoChangeWakeMessage(args: {
   const previewSection = preview.trim()
     ? ["", "Output preview:", preview]
     : [];
+  const hasOriginRouteBlock = Boolean(originThreadLine?.trim());
 
   return [
     `Coding agent session completed with no repository changes.`,
     `Name: ${sessionName} | ID: ${sessionId}`,
     `Worktree outcome: ${cleanupSummary}`,
-    ...(originThreadLine ? [originThreadLine] : []),
+    ...(hasOriginRouteBlock ? [originThreadLine] : []),
     ...formatApprovalExecutionContextLines({
       requestedPermissionMode,
       currentPermissionMode,
@@ -126,6 +130,7 @@ export function buildNoChangeWakeMessage(args: {
     ...buildCompletionFollowupInstructionLines({
       sessionId,
       canonicalStatusDetail: "The plugin already sent the canonical completion status to the user, including that no repo changes were kept.",
+      hasOriginRouteBlock,
     }),
   ].join("\n");
 }

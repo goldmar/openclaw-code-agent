@@ -165,6 +165,18 @@ describe("session-route", () => {
     assert.match(block, /do not use a plain final assistant reply/i);
   });
 
+  it("does not format a wake originRoute block for system routes", () => {
+    const block = formatOriginRouteWakeBlock({
+      originChannel: "unknown",
+      route: {
+        provider: "system",
+        target: "system",
+      },
+    });
+
+    assert.equal(block, "");
+  });
+
   it("parses direct Telegram topic conversation ids", () => {
     assert.deepEqual(
       safeParseTelegramTopicConversation("-100123:topic:77"),

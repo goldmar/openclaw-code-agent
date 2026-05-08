@@ -300,6 +300,8 @@ function compactRouteObject(route: Record<string, string | undefined>): Record<s
 
 export function formatOriginRouteWakeBlock(source: SessionRouteSource): string {
   const route = canonicalizeSessionRoute(source);
+  if (!isDirectSessionRoute(route)) return "";
+
   const originRoute = compactRouteObject({
     provider: route?.provider,
     accountId: route?.accountId,
