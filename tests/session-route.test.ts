@@ -2,6 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   canonicalizeSessionRoute,
+  formatOriginRouteWakeBlock,
   routeFromOriginMetadata,
   safeParseTelegramTopicConversation,
   sessionRouteInternals,
@@ -141,6 +142,39 @@ describe("session-route", () => {
       threadId: "77",
       sessionKey: "agent:main:telegram:group:-100123:topic:77",
     });
+  });
+
+  it("formats an authoritative wake originRoute block for Telegram topic follow-ups", () => {
+    const block = formatOriginRouteWakeBlock({
+      originChannel: "telegram|-1003863755361",
+      originThreadId: 13832,
+      originSessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+      route: {
+        provider: "telegram",
+        target: "5551234",
+        threadId: "13832",
+        sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+      },
+    });
+
+    assert.match(block, /Session origin route \(authoritative for human follow-ups\):/);
+    assert.match(block, /"provider":"telegram"/);
+    assert.match(block, /"target":"-1003863755361"/);
+    assert.match(block, /"threadId":"13832"/);
+    assert.match(block, /"sessionKey":"agent:main:telegram:group:-1003863755361:topic:13832"/);
+    assert.match(block, /do not use a plain final assistant reply/i);
+  });
+
+  it("does not format a wake originRoute block for system routes", () => {
+    const block = formatOriginRouteWakeBlock({
+      originChannel: "unknown",
+      route: {
+        provider: "system",
+        target: "system",
+      },
+    });
+
+    assert.equal(block, "");
   });
 
   it("parses direct Telegram topic conversation ids", () => {

@@ -384,6 +384,15 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
         worktreeBranch: branchName,
         worktreeStrategy: "delegate",
         worktreeBaseBranch: "main",
+        route: {
+          provider: "telegram",
+          target: "-1003863755361",
+          threadId: "13832",
+          sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+        },
+        originChannel: "telegram|-1003863755361",
+        originThreadId: 13832,
+        originSessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
         pendingPlanApproval: false,
       };
       (sm as any).sessions.set(session.id, session);
@@ -399,6 +408,10 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       assert.equal(request.userMessage, undefined);
       assert.equal(request.buttons, undefined);
       assert.match(request.wakeMessage, /DELEGATED WORKTREE DECISION/);
+      assert.match(request.wakeMessage, /Session origin route \(authoritative for human follow-ups\):/);
+      assert.match(request.wakeMessage, /"target":"-1003863755361"/);
+      assert.match(request.wakeMessage, /"threadId":"13832"/);
+      assert.match(request.wakeMessage, /do not use a plain final assistant reply/i);
       assert.match(request.wakeMessage, /agent_merge\(session="delegate-session"/);
       assert.match(request.wakeMessage, /Never call agent_pr\(\) autonomously/);
       const persisted = (sm as any).store.persisted.get("h-delegate");

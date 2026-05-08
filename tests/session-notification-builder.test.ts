@@ -424,10 +424,29 @@ describe("session-notification-builder", () => {
     assert.match(payload.wakeMessageOnNotifySuccess, /Plugin requested short factual follow-up summary: yes/);
     assert.match(payload.wakeMessageOnNotifySuccess, /must send the user a short factual completion summary/i);
     assert.match(payload.wakeMessageOnNotifySuccess, /ordinary terminal\/manual completions too/i);
+    assert.match(payload.wakeMessageOnNotifySuccess, /honor the Session origin route block above/i);
     assert.match(payload.wakeMessageOnNotifySuccess, /do NOT repeat the plugin's status line/i);
     assert.match(payload.wakeMessageOnNotifyFailed, /Canonical completion status delivered to user: no/);
     assert.match(payload.wakeMessageOnNotifyFailed, /did not confirm delivery of the canonical completion status/i);
     assert.match(payload.wakeMessageOnNotifyFailed, /do NOT assume the plugin already reached the user/i);
+  });
+
+  it("omits route-block follow-up guidance when terminal completion has no origin route block", () => {
+    const payload = buildCompletedPayload({
+      session: {
+        id: "session-no-route",
+        name: "done-session",
+        status: "completed",
+        costUsd: 0,
+        duration: 1_000,
+      } as any,
+      originThreadLine: "",
+      preview: "Final output",
+    });
+
+    assert.match(payload.wakeMessageOnNotifySuccess, /must send the user a short factual completion summary/i);
+    assert.doesNotMatch(payload.wakeMessageOnNotifySuccess, /Session origin route block above/i);
+    assert.doesNotMatch(payload.wakeMessageOnNotifySuccess, /originRoute differs from the current chat/i);
   });
 
   it("uses agent_respond as the primary continuation path in failure wakes", () => {
@@ -473,6 +492,28 @@ describe("session-notification-builder", () => {
 
     assert.match(message, /Branch: agent\/feature-session → main/);
     assert.match(message, /Never call agent_pr\(\) autonomously in delegate mode/);
+    assert.doesNotMatch(message, /Session origin route above/);
+  });
+
+  it("includes routed follow-up guidance in delegate worktree wakes with an origin route block", () => {
+    const message = buildDelegateWorktreeWakeMessage({
+      sessionName: "feature-session",
+      sessionId: "session-3",
+      branchName: "agent/feature-session",
+      baseBranch: "main",
+      promptSnippet: "Fix the bug",
+      commitLines: ["- feat: implement fix"],
+      originThreadLine: "Session origin route (authoritative for human follow-ups):\noriginRoute: {\"provider\":\"telegram\",\"target\":\"-1003863755361\",\"threadId\":\"13832\"}",
+      diffSummary: {
+        commits: 1,
+        filesChanged: 2,
+        insertions: 10,
+        deletions: 3,
+      },
+    });
+
+    assert.match(message, /Session origin route above/);
+    assert.match(message, /do not use a plain final assistant reply/);
   });
 
   it("builds deterministic no-change worktree wakes with preview context", () => {
@@ -496,6 +537,21 @@ describe("session-notification-builder", () => {
     assert.match(message, /plugin already sent the canonical completion status/i);
     assert.match(message, /must send the user a short factual completion summary/i);
     assert.match(message, /ordinary terminal\/manual completions too/i);
+    assert.match(message, /honor the Session origin route block above/i);
     assert.match(message, /do NOT repeat the plugin's status line/i);
+  });
+
+  it("omits route-block follow-up guidance when no-change wakes have no origin route block", () => {
+    const message = buildNoChangeWakeMessage({
+      sessionName: "rust-hello-world",
+      sessionId: "session-4",
+      cleanupSummary: "worktree cleaned up",
+      preview: "Built the project and verified the binary prints hello world.",
+    });
+
+    assert.match(message, /completed with no repository changes/);
+    assert.match(message, /must send the user a short factual completion summary/i);
+    assert.doesNotMatch(message, /Session origin route block above/i);
+    assert.doesNotMatch(message, /originRoute differs from the current chat/i);
   });
 });

@@ -137,8 +137,9 @@ export class SessionWorktreeMessageService {
     branchName: string;
     baseBranch: string;
     diffSummary: DiffSummary;
+    originThreadLine?: string;
   }): SessionNotificationRequest {
-    const { session, branchName, baseBranch, diffSummary } = args;
+    const { session, branchName, baseBranch, diffSummary, originThreadLine } = args;
     const commitLines = diffSummary.commitMessages
       .slice(0, 5)
       .map((commit) => `• ${commit.hash} ${commit.message} (${commit.author})`);
@@ -155,6 +156,7 @@ export class SessionWorktreeMessageService {
         promptSnippet,
         commitLines,
         moreNote,
+        originThreadLine,
         diffSummary,
       }),
       notifyUser: "never",
