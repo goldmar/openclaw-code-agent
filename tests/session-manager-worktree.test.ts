@@ -250,6 +250,80 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
     }
   });
 
+  it("marks dirty uncommitted worktree completion as a pending decision instead of no-change", async () => {
+    const repoDir = mkdtempSync(join(tmpdir(), "sm-worktree-dirty-completion-"));
+    let cleanup = () => {};
+    try {
+      git(repoDir, "init", "-b", "main");
+      git(repoDir, "config", "user.name", "Test User");
+      git(repoDir, "config", "user.email", "test@example.com");
+      writeFileSync(join(repoDir, "README.md"), "hello\n", "utf-8");
+      git(repoDir, "add", "README.md");
+      git(repoDir, "commit", "-m", "init");
+
+      const worktreePath = createWorktree(repoDir, "dirty-completion");
+      const branchName = getBranchName(worktreePath);
+      assert.ok(branchName, "worktree branch should exist");
+      writeFileSync(join(worktreePath, "new-file.txt"), "untracked\n", "utf-8");
+
+      const created = createTestSessionManager(5);
+      const sm = created.sm;
+      cleanup = created.cleanup;
+      stubDispatch(sm);
+      (sm as any).store.persisted.set("h-dirty-completion", {
+        harnessSessionId: "h-dirty-completion",
+        backendRef: { kind: "claude-code", conversationId: "h-dirty-completion" },
+        name: "dirty-completion",
+        prompt: "create a file",
+        workdir: repoDir,
+        route: {
+          provider: "telegram",
+          target: "12345",
+          sessionKey: "agent:main:telegram:group:12345",
+        },
+        status: "completed",
+        costUsd: 0,
+        worktreePath,
+        worktreeBranch: branchName,
+        worktreeStrategy: "delegate",
+      });
+
+      const session = {
+        id: "s-dirty-completion",
+        name: "dirty-completion",
+        status: "completed",
+        phase: "implementing",
+        harnessSessionId: "h-dirty-completion",
+        prompt: "create a file",
+        originalWorkdir: repoDir,
+        worktreePath,
+        worktreeBranch: branchName,
+        worktreeStrategy: "delegate",
+        worktreeBaseBranch: "main",
+        pendingPlanApproval: false,
+      };
+
+      const result = await (sm as any).handleWorktreeStrategy(session);
+
+      assert.deepEqual(result, { notificationSent: true, worktreeRemoved: false });
+      assert.equal(existsSync(worktreePath), true);
+      const calls = (sm as any).__dispatchCalls;
+      assert.equal(calls.length, 1);
+      const [_sessionArg, request] = calls[0];
+      assert.equal(request.label, "worktree-dirty-uncommitted");
+      assert.match(request.userMessage, /uncommitted worktree changes/i);
+      assert.match(request.userMessage, /new-file\.txt/);
+      const persisted = (sm as any).store.persisted.get("h-dirty-completion");
+      assert.equal(persisted.lifecycle, "awaiting_worktree_decision");
+      assert.equal(persisted.worktreeState, "pending_decision");
+      assert.equal(persisted.worktreeLifecycle?.state, "pending_decision");
+      assert.deepEqual(persisted.worktreeLifecycle?.notes, ["dirty_uncommitted_completion"]);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+      cleanup();
+    }
+  });
+
   it("releases native Codex worktrees to backend cleanup instead of deleting them directly", async () => {
     const repoDir = mkdtempSync(join(tmpdir(), "sm-worktree-native-codex-"));
     const nativeWorktreePath = join(tmpdir(), "codex-native-worktree-release");

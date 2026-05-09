@@ -14,6 +14,7 @@ import {
 import {
   removeWorktree,
   getDiffSummary,
+  listDirtyWorktreeEntries,
   mergeBranch,
   deleteBranch,
   formatWorktreeOutcomeLine,
@@ -178,6 +179,15 @@ export class SessionWorktreeStrategyService {
       return { notificationSent: true, worktreeRemoved: false };
     }
 
+    if (action.kind === "dirty-uncommitted") {
+      return this.handleDirtyUncommittedCompletion(
+        session,
+        action.worktreePath,
+        action.branchName,
+        action.baseBranch,
+      );
+    }
+
     if (action.kind === "no-change") {
       return this.handleNoChange(
         session,
@@ -288,6 +298,35 @@ export class SessionWorktreeStrategyService {
       originThreadLine: this.deps.originThreadLine(session),
     }));
     this.markPendingDecision(session);
+    return { notificationSent: true, worktreeRemoved: false };
+  }
+
+  private handleDirtyUncommittedCompletion(
+    session: Session,
+    worktreePath: string,
+    branchName: string,
+    baseBranch: string,
+  ): WorktreeStrategyResult {
+    this.markPendingDecision(session, {
+      notes: ["dirty_uncommitted_completion"],
+    });
+    const dirtyEntries = listDirtyWorktreeEntries(worktreePath);
+    const dirtyPreview = dirtyEntries.slice(0, 20).map((entry) => `- ${entry}`);
+    const moreLine = dirtyEntries.length > 20 ? [`- ...and ${dirtyEntries.length - 20} more`] : [];
+    this.deps.dispatchSessionNotification(session, {
+      label: "worktree-dirty-uncommitted",
+      userMessage: [
+        `⚠️ [${session.name}] Session completed with uncommitted worktree changes.`,
+        ``,
+        `Branch \`${branchName}\` has no commits ahead of \`${baseBranch}\`, so merge/PR follow-through is blocked until the worktree is fixed.`,
+        `Worktree: ${worktreePath}`,
+        ``,
+        ...(dirtyPreview.length > 0
+          ? [`Dirty entries:`, ...dirtyPreview, ...moreLine, ``]
+          : []),
+        `Resume the session or inspect the worktree, then commit real task changes or clean temporary files. Discard only if these local changes should be permanently removed.`,
+      ].join("\n"),
+    });
     return { notificationSent: true, worktreeRemoved: false };
   }
 

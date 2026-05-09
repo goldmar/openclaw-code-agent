@@ -9,6 +9,12 @@ export type PlannedWorktreeAction =
   | { kind: "skip"; result: { notificationSent: boolean; worktreeRemoved: boolean } }
   | { kind: "notify"; label: string; message: string }
   | {
+      kind: "dirty-uncommitted";
+      worktreePath: string;
+      branchName: string;
+      baseBranch: string;
+    }
+  | {
       kind: "no-change";
       repoDir: string;
       worktreePath: string;
@@ -101,9 +107,10 @@ export class SessionWorktreeActionService {
     }
     if (completionState === "dirty-uncommitted") {
       return {
-        kind: "notify",
-        label: "worktree-dirty-uncommitted",
-        message: `⚠️ [${session.name}] Session completed with uncommitted changes. The branch has no commits ahead of '${baseBranch}' but there are modified tracked files in the worktree. Check: ${worktreePath}`,
+        kind: "dirty-uncommitted",
+        worktreePath,
+        branchName,
+        baseBranch,
       };
     }
 

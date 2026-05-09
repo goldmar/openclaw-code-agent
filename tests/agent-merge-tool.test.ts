@@ -46,7 +46,7 @@ function remoteHead(repoDir: string, branch: string): string {
   return output.split(/\s+/)[0] ?? "";
 }
 
-function installPersistedSessionStub(sessionName: string, repoDir: string, worktreePath: string, branchName: string) {
+function installPersistedSessionStub(sessionName: string, repoDir: string, worktreePath: string, branchName: string): Record<string, unknown> {
   const persistedSession: Record<string, unknown> = {
     harnessSessionId: `h-${sessionName}`,
     name: sessionName,
@@ -73,6 +73,7 @@ function installPersistedSessionStub(sessionName: string, repoDir: string, workt
       throw new Error("conflict resolver should not be spawned in this test");
     },
   } as any);
+  return persistedSession;
 }
 
 afterEach(() => {
@@ -80,6 +81,50 @@ afterEach(() => {
 });
 
 describe("agent_merge push behavior", () => {
+  it("blocks dirty uncommitted worktrees that have no commits to merge", async () => {
+    const { repoDir, remoteDir } = createRepoWithRemote("agent-merge-dirty");
+    try {
+      const sessionName = "merge-dirty";
+      const worktreePath = createWorktree(repoDir, sessionName);
+      const branchName = getBranchName(worktreePath);
+      assert.ok(branchName, "worktree branch should exist");
+      writeFileSync(join(worktreePath, "feature.txt"), "not committed\n", "utf-8");
+      installPersistedSessionStub(sessionName, repoDir, worktreePath, branchName);
+
+      const tool = makeAgentMergeTool();
+      const result = await tool.execute("tool-id", { session: sessionName });
+
+      assert.match((result.content[0] as { text: string }).text, /Merge blocked/i);
+      assert.match((result.content[0] as { text: string }).text, /uncommitted worktree changes/i);
+      assert.equal(git(repoDir, "rev-parse", "main"), remoteHead(repoDir, "main"));
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+      rmSync(remoteDir, { recursive: true, force: true });
+    }
+  });
+
+  it("returns already merged before dirty/no-commit merge blocking", async () => {
+    const { repoDir, remoteDir } = createRepoWithRemote("agent-merge-already-dirty");
+    try {
+      const sessionName = "merge-already-dirty";
+      const worktreePath = createWorktree(repoDir, sessionName);
+      const branchName = getBranchName(worktreePath);
+      assert.ok(branchName, "worktree branch should exist");
+      writeFileSync(join(worktreePath, "feature.txt"), "not committed\n", "utf-8");
+      const persistedSession = installPersistedSessionStub(sessionName, repoDir, worktreePath, branchName);
+      persistedSession.worktreeMerged = true;
+
+      const tool = makeAgentMergeTool();
+      const result = await tool.execute("tool-id", { session: sessionName });
+
+      assert.match((result.content[0] as { text: string }).text, /already merged/i);
+      assert.doesNotMatch((result.content[0] as { text: string }).text, /Merge blocked/i);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+      rmSync(remoteDir, { recursive: true, force: true });
+    }
+  });
+
   it("keeps the merged base branch local by default", async () => {
     const { repoDir, remoteDir } = createRepoWithRemote("agent-merge-default");
     try {

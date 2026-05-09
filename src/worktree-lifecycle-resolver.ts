@@ -14,7 +14,7 @@ import {
   wouldMergeBeNoop,
 } from "./worktree-repo";
 import { syncWorktreePR } from "./worktree-pr";
-import { checkDirtyTracked } from "./worktree-merge";
+import { hasDirtyWorktreeEntries } from "./worktree-lifecycle";
 
 function isoNow(): string {
   return new Date().toISOString();
@@ -68,7 +68,7 @@ export function resolveWorktreeLifecycle(
   const baseBranch = getEffectiveBaseBranch(session);
 
   let branchPresent = false;
-  let dirtyTracked = false;
+  let dirtyWorktreeEntries = false;
   let topologyMerged = false;
   let releaseNoopMerge = false;
   let branchAheadCount: number | undefined;
@@ -104,8 +104,8 @@ export function resolveWorktreeLifecycle(
   }
 
   if (worktreeExists && session.worktreePath) {
-    dirtyTracked = checkDirtyTracked(session.worktreePath);
-    if (dirtyTracked) reasons.add("dirty_tracked_changes");
+    dirtyWorktreeEntries = hasDirtyWorktreeEntries(session.worktreePath);
+    if (dirtyWorktreeEntries) reasons.add("dirty_worktree_entries");
   }
 
   if (repoExists && branchPresent && baseBranch) {
@@ -146,7 +146,7 @@ export function resolveWorktreeLifecycle(
   }
 
   const preserve = options.activeSession
-    || dirtyTracked
+    || dirtyWorktreeEntries
     || lifecycle.state === "pending_decision"
     || lifecycle.state === "merge_conflict_resolving"
     || lifecycle.state === "pr_open"
@@ -165,7 +165,7 @@ export function resolveWorktreeLifecycle(
     branchExists: branchPresent,
     worktreeExists,
     activeSession: options.activeSession === true,
-    dirtyTracked,
+    dirtyTracked: dirtyWorktreeEntries,
     topologyMerged,
     releaseNoopMerge,
     branchAheadCount,
