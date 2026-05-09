@@ -143,6 +143,7 @@ describe("worktree-tool-context", () => {
     assert.equal(formatWorktreeLifecycleState("provisioned"), "active");
     assert.equal(formatWorktreeLifecycleState("custom"), "custom");
     assert.equal(formatWorktreePreserveReason("dirty_tracked_changes"), "dirty worktree");
+    assert.equal(formatWorktreePreserveReason("dirty_worktree_entries"), "dirty worktree");
     assert.equal(formatWorktreePreserveReason("custom_reason"), "custom reason");
   });
 });

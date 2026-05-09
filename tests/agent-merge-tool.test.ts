@@ -46,7 +46,7 @@ function remoteHead(repoDir: string, branch: string): string {
   return output.split(/\s+/)[0] ?? "";
 }
 
-function installPersistedSessionStub(sessionName: string, repoDir: string, worktreePath: string, branchName: string) {
+function installPersistedSessionStub(sessionName: string, repoDir: string, worktreePath: string, branchName: string): Record<string, unknown> {
   const persistedSession: Record<string, unknown> = {
     harnessSessionId: `h-${sessionName}`,
     name: sessionName,
@@ -73,6 +73,7 @@ function installPersistedSessionStub(sessionName: string, repoDir: string, workt
       throw new Error("conflict resolver should not be spawned in this test");
     },
   } as any);
+  return persistedSession;
 }
 
 afterEach(() => {
@@ -96,6 +97,28 @@ describe("agent_merge push behavior", () => {
       assert.match((result.content[0] as { text: string }).text, /Merge blocked/i);
       assert.match((result.content[0] as { text: string }).text, /uncommitted worktree changes/i);
       assert.equal(git(repoDir, "rev-parse", "main"), remoteHead(repoDir, "main"));
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+      rmSync(remoteDir, { recursive: true, force: true });
+    }
+  });
+
+  it("returns already merged before dirty/no-commit merge blocking", async () => {
+    const { repoDir, remoteDir } = createRepoWithRemote("agent-merge-already-dirty");
+    try {
+      const sessionName = "merge-already-dirty";
+      const worktreePath = createWorktree(repoDir, sessionName);
+      const branchName = getBranchName(worktreePath);
+      assert.ok(branchName, "worktree branch should exist");
+      writeFileSync(join(worktreePath, "feature.txt"), "not committed\n", "utf-8");
+      const persistedSession = installPersistedSessionStub(sessionName, repoDir, worktreePath, branchName);
+      persistedSession.worktreeMerged = true;
+
+      const tool = makeAgentMergeTool();
+      const result = await tool.execute("tool-id", { session: sessionName });
+
+      assert.match((result.content[0] as { text: string }).text, /already merged/i);
+      assert.doesNotMatch((result.content[0] as { text: string }).text, /Merge blocked/i);
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
       rmSync(remoteDir, { recursive: true, force: true });

@@ -91,6 +91,11 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
       const shouldPush = params.push === true; // Default false
       const shouldCleanup = params.delete_branch !== false; // Default true
 
+      // Idempotency guard: if already merged, return early before touching the queue
+      if (persistedSession?.worktreeLifecycle?.state === "merged" || persistedSession?.worktreeMerged) {
+        return { content: [{ type: "text", text: `ℹ️ Session "${params.session}" is already merged.` }] };
+      }
+
       if (
         existsSync(worktreePath)
         && !hasCommitsAhead(effectiveWorkdir, branchName, baseBranch)
@@ -106,11 +111,6 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
             ].join("\n"),
           }],
         };
-      }
-
-      // Idempotency guard: if already merged, return early before touching the queue
-      if (persistedSession?.worktreeLifecycle?.state === "merged" || persistedSession?.worktreeMerged) {
-        return { content: [{ type: "text", text: `ℹ️ Session "${params.session}" is already merged.` }] };
       }
 
       // Serialise against concurrent merges on the same repo directory

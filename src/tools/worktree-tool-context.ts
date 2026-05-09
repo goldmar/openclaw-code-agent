@@ -217,6 +217,7 @@ export function formatWorktreePreserveReason(reason: string): string {
     case "merge_conflict_resolving":
       return "conflict resolving";
     case "dirty_tracked_changes":
+    case "dirty_worktree_entries":
       return "dirty worktree";
     case "unique_content":
       return "still has unique content";
