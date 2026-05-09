@@ -142,7 +142,7 @@ export function createWorktree(
   return worktreePath;
 }
 
-function listDirtyWorktreeEntries(worktreePath: string): string[] {
+export function listDirtyWorktreeEntries(worktreePath: string): string[] {
   if (!existsSync(worktreePath)) return [];
   try {
     const result = execFileSync(
@@ -158,6 +158,10 @@ function listDirtyWorktreeEntries(worktreePath: string): string[] {
   } catch {
     return [];
   }
+}
+
+export function hasDirtyWorktreeEntries(worktreePath: string): boolean {
+  return listDirtyWorktreeEntries(worktreePath).length > 0;
 }
 
 export function removeWorktree(

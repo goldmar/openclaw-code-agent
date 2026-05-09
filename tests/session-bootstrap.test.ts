@@ -108,6 +108,8 @@ describe("prepareSessionBootstrap()", () => {
       assert.ok(bootstrap.worktreeBranchName, "fresh Codex ask worktree should have a branch");
       assert.match(bootstrap.effectiveSystemPrompt ?? "", /You are working in a git worktree/);
       assert.match(bootstrap.effectiveSystemPrompt ?? "", /IMPORTANT: ALL file edits must be made within this worktree/);
+      assert.match(bootstrap.effectiveSystemPrompt ?? "", /Before finishing, run `git status --short`/);
+      assert.match(bootstrap.effectiveSystemPrompt ?? "", /commit all of them to this branch before finishing/);
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }

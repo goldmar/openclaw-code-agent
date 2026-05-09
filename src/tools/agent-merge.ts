@@ -3,7 +3,18 @@ import { existsSync } from "fs";
 import { getDefaultHarnessName } from "../config";
 import { sessionManager } from "../singletons";
 import type { OpenClawPluginToolContext } from "../types";
-import { mergeBranch, pushBranch, deleteBranch, detectDefaultBranch, removeWorktree, pruneWorktrees, getDiffSummary, formatWorktreeOutcomeLine } from "../worktree";
+import {
+  mergeBranch,
+  pushBranch,
+  deleteBranch,
+  detectDefaultBranch,
+  removeWorktree,
+  pruneWorktrees,
+  getDiffSummary,
+  formatWorktreeOutcomeLine,
+  hasCommitsAhead,
+  hasDirtyWorktreeEntries,
+} from "../worktree";
 import { getPersistedTargetMutationRefs, resolveWorktreeToolTarget } from "./worktree-tool-context";
 
 interface AgentMergeParams {
@@ -79,6 +90,23 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
       const strategy = params.strategy ?? "merge";
       const shouldPush = params.push === true; // Default false
       const shouldCleanup = params.delete_branch !== false; // Default true
+
+      if (
+        existsSync(worktreePath)
+        && !hasCommitsAhead(effectiveWorkdir, branchName, baseBranch)
+        && hasDirtyWorktreeEntries(worktreePath)
+      ) {
+        return {
+          content: [{
+            type: "text",
+            text: [
+              `❌ Merge blocked: session "${params.session}" has uncommitted worktree changes but branch ${branchName} has no commits ahead of ${baseBranch}.`,
+              `Worktree: ${worktreePath}`,
+              `Resume or inspect the session, then commit real task changes or clean temporary files before retrying agent_merge.`,
+            ].join("\n"),
+          }],
+        };
+      }
 
       // Idempotency guard: if already merged, return early before touching the queue
       if (persistedSession?.worktreeLifecycle?.state === "merged" || persistedSession?.worktreeMerged) {

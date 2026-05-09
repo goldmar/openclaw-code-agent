@@ -14,6 +14,7 @@ type TurnRuntimeDeps = {
   markAwaitingUserInput: () => void;
   applyInputRequested: () => void;
   completeTurn: () => void;
+  queueWorktreeFinalizationPrompt?: () => boolean;
   setPlanFilePath: (path: string) => void;
   setLatestPlanArtifact: (artifact: PlanArtifact) => void;
 };
@@ -150,6 +151,10 @@ export class SessionTurnRuntime {
       }
       this.deps.emitTurnEnd(true);
     } else if (!hasPendingMessages && !needsInput) {
+      if (this.deps.queueWorktreeFinalizationPrompt?.()) {
+        this.turnInProgress = true;
+        return;
+      }
       this.deps.completeTurn();
       this.deps.emitTurnEnd(false);
     }

@@ -14,7 +14,7 @@ import {
   wouldMergeBeNoop,
 } from "./worktree-repo";
 import { syncWorktreePR } from "./worktree-pr";
-import { checkDirtyTracked } from "./worktree-merge";
+import { hasDirtyWorktreeEntries } from "./worktree-lifecycle";
 
 function isoNow(): string {
   return new Date().toISOString();
@@ -104,7 +104,7 @@ export function resolveWorktreeLifecycle(
   }
 
   if (worktreeExists && session.worktreePath) {
-    dirtyTracked = checkDirtyTracked(session.worktreePath);
+    dirtyTracked = hasDirtyWorktreeEntries(session.worktreePath);
     if (dirtyTracked) reasons.add("dirty_tracked_changes");
   }
 

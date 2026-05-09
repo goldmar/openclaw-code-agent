@@ -80,6 +80,28 @@ afterEach(() => {
 });
 
 describe("agent_merge push behavior", () => {
+  it("blocks dirty uncommitted worktrees that have no commits to merge", async () => {
+    const { repoDir, remoteDir } = createRepoWithRemote("agent-merge-dirty");
+    try {
+      const sessionName = "merge-dirty";
+      const worktreePath = createWorktree(repoDir, sessionName);
+      const branchName = getBranchName(worktreePath);
+      assert.ok(branchName, "worktree branch should exist");
+      writeFileSync(join(worktreePath, "feature.txt"), "not committed\n", "utf-8");
+      installPersistedSessionStub(sessionName, repoDir, worktreePath, branchName);
+
+      const tool = makeAgentMergeTool();
+      const result = await tool.execute("tool-id", { session: sessionName });
+
+      assert.match((result.content[0] as { text: string }).text, /Merge blocked/i);
+      assert.match((result.content[0] as { text: string }).text, /uncommitted worktree changes/i);
+      assert.equal(git(repoDir, "rev-parse", "main"), remoteHead(repoDir, "main"));
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+      rmSync(remoteDir, { recursive: true, force: true });
+    }
+  });
+
   it("keeps the merged base branch local by default", async () => {
     const { repoDir, remoteDir } = createRepoWithRemote("agent-merge-default");
     try {

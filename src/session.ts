@@ -48,7 +48,7 @@ import { appendSessionOutput } from "./session-output";
 import { SessionTimerRegistry } from "./session-timer-registry";
 import { SessionTurnRuntime } from "./session-turn-runtime";
 import { SessionHarnessEventApplier } from "./session-harness-event-applier";
-import { getBranchName } from "./worktree";
+import { getBranchName, listDirtyWorktreeEntries } from "./worktree";
 
 const STARTUP_TIMEOUT_MS = 2 * 60 * 1000; // 2 minutes
 export { getSessionOutputFilePath } from "./session-output";
@@ -168,6 +168,7 @@ export class Session extends EventEmitter {
   private planModeApproved: boolean = false;
   private readonly turnRuntime: SessionTurnRuntime;
   private readonly harnessEvents: SessionHarnessEventApplier;
+  private worktreeFinalizationPromptIssued = false;
   lifecycle: SessionLifecycle = "starting";
   approvalState: SessionApprovalState = "not_required";
   approvalExecutionState: ApprovalExecutionState = "not_plan_gated";
@@ -246,6 +247,7 @@ export class Session extends EventEmitter {
         this.applyControlEvent({ type: "terminal.entered" });
         this.complete("done");
       },
+      queueWorktreeFinalizationPrompt: () => this.queueWorktreeFinalizationPrompt(),
       setPlanFilePath: (path) => { this.planFilePath = path; },
       setLatestPlanArtifact: (artifact) => {
         this.latestPlanArtifact = artifact;
@@ -488,6 +490,39 @@ export class Session extends EventEmitter {
 
   markAwaitingUserInput(): void {
     this.applyControlEvent({ type: "input.requested" });
+  }
+
+  private queueWorktreeFinalizationPrompt(): boolean {
+    if (!this.multiTurn || !this.messageStream) return false;
+    if (!this.worktreePath || !this.worktreeStrategy || this.worktreeStrategy === "off") return false;
+    if (this.worktreeFinalizationPromptIssued) return false;
+
+    const dirtyEntries = listDirtyWorktreeEntries(this.worktreePath);
+    if (dirtyEntries.length === 0) return false;
+
+    this.worktreeFinalizationPromptIssued = true;
+    const dirtyPreview = dirtyEntries.slice(0, 20).map((entry) => `- ${entry}`).join("\n");
+    const moreLine = dirtyEntries.length > 20 ? `\n- ...and ${dirtyEntries.length - 20} more` : "";
+    const prompt = [
+      `Your worktree still has uncommitted changes, so this session cannot finish yet.`,
+      ``,
+      `Worktree: ${this.worktreePath}`,
+      `Branch: ${this.worktreeBranch ?? "(unknown)"}`,
+      ``,
+      `Dirty entries:`,
+      `${dirtyPreview}${moreLine}`,
+      ``,
+      `Before finishing, run \`git status --short\` in the worktree and do exactly one of these:`,
+      `1. If these are real task changes, commit them on the worktree branch with \`git add\` and \`git commit\`.`,
+      `2. If these are temporary or unrelated artifacts, remove or restore them so the worktree is clean.`,
+      `3. If no repository changes were intended, leave the worktree clean and say that no changes were needed.`,
+      ``,
+      `Do not finish again until \`git status --short\` is clean or all real task changes are committed.`,
+    ].join("\n");
+    this.messageStream.push(
+      this.harness.buildUserMessage(prompt, this.backendConversationId ?? ""),
+    );
+    return true;
   }
 
   // -- Lifecycle --

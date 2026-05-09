@@ -1,11 +1,16 @@
 import { describe, it, before } from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { Session } from "../src/session";
 import { registerHarness } from "../src/harness/index";
 import { createFakeHarness, makeSessionConfig, tick } from "./helpers";
 import type { FakeHarness } from "./helpers";
 import type { AgentHarness, HarnessLaunchOptions, HarnessSession } from "../src/harness/types";
 import { setPluginConfig } from "../src/config";
+import { createWorktree, getBranchName } from "../src/worktree";
 
 // ---------------------------------------------------------------------------
 // Register fake harness once (before any tests)
@@ -17,6 +22,24 @@ before(() => {
   fakeHarness = createFakeHarness("test-harness", { initialPromptConsumptionPaused: true });
   registerHarness(fakeHarness);
 });
+
+function git(cwd: string, ...args: string[]): string {
+  return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }).trim();
+}
+
+function createRepoWithWorktree(name: string): { repoDir: string; worktreePath: string; branchName: string } {
+  const repoDir = mkdtempSync(join(tmpdir(), `openclaw-session-${name}-`));
+  git(repoDir, "init", "-b", "main");
+  git(repoDir, "config", "user.name", "Test User");
+  git(repoDir, "config", "user.email", "test@example.com");
+  writeFileSync(join(repoDir, "README.md"), "base\n", "utf-8");
+  git(repoDir, "add", "README.md");
+  git(repoDir, "commit", "-m", "init");
+  const worktreePath = createWorktree(repoDir, name);
+  const branchName = getBranchName(worktreePath);
+  assert.ok(branchName, "worktree branch should exist");
+  return { repoDir, worktreePath, branchName };
+}
 
 /**
  * Helper: start a session, send init, wait for running, and return it.
@@ -179,6 +202,38 @@ describe("Session consumeMessages — result message (multi-turn)", () => {
     assert.ok(turnEndEvents.includes(false), "turnEnd should fire with hadQuestion=false");
     assert.equal(session.status, "completed", "session should complete with done reason after turn completes without needing input");
     assert.equal(session.killReason, "done");
+  });
+
+  it("keeps a dirty worktree session running and queues a finalization prompt before completing", async () => {
+    const { repoDir, worktreePath, branchName } = createRepoWithWorktree("dirty-finalization");
+    try {
+      const session = await startSession({
+        multiTurn: true,
+        permissionMode: "bypassPermissions",
+        workdir: worktreePath,
+        worktreeStrategy: "delegate",
+      });
+      session.originalWorkdir = repoDir;
+      session.worktreePath = worktreePath;
+      session.worktreeBranch = branchName;
+
+      fakeHarness.setPromptConsumptionPaused(false);
+      await tick(50);
+
+      writeFileSync(join(worktreePath, "README.md"), "base\nchanged\n", "utf-8");
+      fakeHarness.pushMessage({
+        type: "result",
+        data: { success: true, duration_ms: 100, total_cost_usd: 0.01, num_turns: 1, session_id: session.harnessSessionId! },
+      });
+      await tick(50);
+
+      assert.equal(session.status, "running");
+      assert.equal(session.killReason, "unknown");
+
+      session.kill("user");
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
   });
 
   it("stays running when a follow-up sendMessage() is queued during an active turn", async () => {

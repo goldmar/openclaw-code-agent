@@ -78,4 +78,35 @@ describe("SessionTurnRuntime", () => {
 
     assert.deepEqual(events, ["complete", "done"]);
   });
+
+  it("queues worktree finalization instead of completing a dirty worktree turn", () => {
+    const events: string[] = [];
+    const runtime = new SessionTurnRuntime({
+      appendOutput: () => {},
+      emitOutput: () => {},
+      emitToolUse: () => {},
+      emitTurnEnd: (hadQuestion) => { events.push(hadQuestion ? "question" : "done"); },
+      markPendingPlanApproval: () => {},
+      markAwaitingUserInput: () => {},
+      applyInputRequested: () => {},
+      completeTurn: () => { events.push("complete"); },
+      queueWorktreeFinalizationPrompt: () => {
+        events.push("queue-worktree-finalization");
+        return true;
+      },
+      setPlanFilePath: () => {},
+      setLatestPlanArtifact: () => {},
+    });
+
+    runtime.finishSuccessfulTurn({
+      currentPermissionMode: "default",
+      permissionMode: "default",
+      pendingPlanApproval: false,
+      planModeApproved: false,
+      pendingInputState: undefined,
+      hasPendingMessages: false,
+    });
+
+    assert.deepEqual(events, ["queue-worktree-finalization"]);
+  });
 });
