@@ -91,8 +91,7 @@
     "openclaw": ">=2026.4.21"
   },
   "overrides": {
-    "basic-ftp": "5.3.1",
-    "fast-xml-builder": "1.1.7",
+    "basic-ftp": "5.3.0",
     "ip-address@<10.1.1": "10.1.1"
   },
   "pnpm": {
@@ -105,9 +104,8 @@
       "@img/sharp-linux-arm64"
     ],
     "overrides": {
-      "basic-ftp": "5.3.1",
+      "basic-ftp": "5.3.0",
       "axios@<1.15.0": ">=1.15.0",
-      "fast-xml-builder": "1.1.7",
       "follow-redirects@<1.16.0": "1.16.0",
       "protobufjs@>=7 <7.5.5": "7.5.5",
       "brace-expansion@>=4.0.0 <5.0.5": ">=5.0.5",
