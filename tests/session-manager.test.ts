@@ -1031,8 +1031,8 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
       }) as any;
       (sm as any).reminders.sendReminderIfDue = (() => false) as any;
 
-      (sm as any).syncPersistedSessionMaintenance(pending);
-      assert.equal(scheduled.length, 1);
+      (sm as any).maintenance.schedulePersistedWorktreeReminder(pending.sessionId, now);
+      assert.equal(scheduled.filter((entry) => entry.key.endsWith(":worktree-reminder")).length, 1);
 
       scheduled[0].cb();
 
@@ -1055,6 +1055,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
       { label: "dismissed lifecycle", lifecycle: "awaiting_worktree_decision", worktreeState: "pending_decision", worktreeLifecycle: { state: "dismissed", updatedAt: new Date(now).toISOString() } },
       { label: "terminal session lifecycle", lifecycle: "terminal", worktreeState: "pending_decision", worktreeLifecycle: { state: "pending_decision", updatedAt: new Date(now).toISOString() } },
       { label: "cleaned lifecycle", lifecycle: "terminal", worktreeState: "none", worktreeLifecycle: { state: "none", updatedAt: new Date(now).toISOString() } },
+      { label: "missing branch cleanup failure", lifecycle: "awaiting_worktree_decision", worktreeState: "pending_decision", worktreeBranch: "agent/missing", worktreePath: "/tmp/openclaw-missing-worktree", worktreeLifecycle: { state: "pending_decision", updatedAt: new Date(now).toISOString() } },
     ];
 
     for (const entry of cases) {
@@ -1078,6 +1079,60 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     }
   });
 
+  it("clears stale persisted reminder fields when maintenance finds a resolved decision", () => {
+    const sm = new SessionManager(5, 5);
+    const now = Date.now();
+    const scheduled: Array<{ key: string; at: number; cb: () => void }> = [];
+    const stale = {
+      sessionId: "stale-cleaned-session",
+      harnessSessionId: "stale-cleaned-thread",
+      backendRef: { kind: "claude-code", conversationId: "stale-cleaned-thread" },
+      name: "stale-cleaned-session",
+      prompt: "test",
+      workdir: "/tmp",
+      route: {
+        provider: "telegram",
+        accountId: "bot",
+        target: "12345",
+        threadId: "42",
+        sessionKey: "agent:main:telegram:group:12345:topic:42",
+      },
+      createdAt: now,
+      completedAt: now,
+      status: "completed",
+      lifecycle: "awaiting_worktree_decision",
+      approvalState: "not_required",
+      worktreeState: "pending_decision",
+      runtimeState: "stopped",
+      deliveryState: "idle",
+      costUsd: 0,
+      pendingWorktreeDecisionSince: new Date(now - 4 * 60 * 60 * 1000).toISOString(),
+      lastWorktreeReminderAt: new Date(now - 60_000).toISOString(),
+      worktreeDecisionSnoozedUntil: new Date(now - 30_000).toISOString(),
+      worktreeLifecycle: {
+        state: "merged",
+        updatedAt: new Date(now).toISOString(),
+        resolvedAt: new Date(now).toISOString(),
+        resolutionSource: "agent_merge",
+      },
+    };
+
+    (sm as any).persisted.set(stale.harnessSessionId, stale);
+    (sm as any).idIndex.set(stale.sessionId, stale.harnessSessionId);
+    (sm as any).maintenance.cancel = (() => {}) as any;
+    (sm as any).maintenance.schedule = ((key: string, at: number, cb: () => void) => {
+      scheduled.push({ key, at, cb });
+    }) as any;
+
+    (sm as any).syncPersistedSessionMaintenance(stale);
+
+    const persisted = (sm as any).store.getPersistedSession(stale.sessionId);
+    assert.equal(persisted.pendingWorktreeDecisionSince, undefined);
+    assert.equal(persisted.lastWorktreeReminderAt, undefined);
+    assert.equal(persisted.worktreeDecisionSnoozedUntil, undefined);
+    assert.equal(scheduled.some((entry) => entry.key.endsWith(":worktree-reminder")), false);
+  });
+
   it("drops a queued stale worktree reminder after rechecking resolved persisted state", () => {
     const sm = new SessionManager(5, 5);
     stubDispatch(sm);
@@ -1094,6 +1149,13 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
         name: "stale-pending-session",
         prompt: "test",
         workdir: "/tmp",
+        route: {
+          provider: "telegram",
+          accountId: "bot",
+          target: "12345",
+          threadId: "42",
+          sessionKey: "agent:main:telegram:group:12345:topic:42",
+        },
         createdAt: now,
         completedAt: now,
         status: "completed",
@@ -1117,7 +1179,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
         scheduled.push({ key, at, cb });
       }) as any;
 
-      (sm as any).syncPersistedSessionMaintenance(pending);
+      (sm as any).maintenance.schedulePersistedWorktreeReminder(pending.sessionId, now);
       assert.equal(scheduled.length, 1);
 
       Object.assign(pending, {
@@ -1132,8 +1194,10 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
 
       scheduled[0].cb();
 
-      assert.equal(scheduled.length, 1);
+      assert.equal(scheduled.filter((entry) => entry.key.endsWith(":worktree-reminder")).length, 1);
       assert.equal(((sm as any).__dispatchCalls ?? []).length, 0);
+      assert.equal(pending.pendingWorktreeDecisionSince, undefined);
+      assert.equal(pending.lastWorktreeReminderAt, undefined);
     } finally {
       Date.now = originalDateNow;
     }

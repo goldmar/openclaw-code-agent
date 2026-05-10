@@ -95,6 +95,8 @@ export class SessionMaintenanceService {
     const nextReminderAt = this.deps.reminders.getNextReminderAt(session);
     if (nextReminderAt != null) {
       this.schedulePersistedWorktreeReminder(ref, nextReminderAt);
+    } else {
+      this.deps.reminders.clearResolvedReminderState(session);
     }
 
     this.cancel(this.persistedMaintenanceKey(ref, "worktree-retention"));
