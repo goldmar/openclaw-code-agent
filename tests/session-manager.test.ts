@@ -1043,6 +1043,101 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
       Date.now = originalDateNow;
     }
   });
+
+  it("does not schedule reminders when stale pending fields conflict with resolved lifecycle state", () => {
+    const sm = new SessionManager(5, 5);
+    const now = Date.now();
+    const pendingSince = new Date(now - 4 * 60 * 60 * 1000).toISOString();
+
+    const cases = [
+      { label: "merged worktree state", lifecycle: "awaiting_worktree_decision", worktreeState: "merged" },
+      { label: "released worktree state", lifecycle: "awaiting_worktree_decision", worktreeState: "released" },
+      { label: "dismissed lifecycle", lifecycle: "awaiting_worktree_decision", worktreeState: "pending_decision", worktreeLifecycle: { state: "dismissed", updatedAt: new Date(now).toISOString() } },
+      { label: "terminal session lifecycle", lifecycle: "terminal", worktreeState: "pending_decision", worktreeLifecycle: { state: "pending_decision", updatedAt: new Date(now).toISOString() } },
+      { label: "cleaned lifecycle", lifecycle: "terminal", worktreeState: "none", worktreeLifecycle: { state: "none", updatedAt: new Date(now).toISOString() } },
+    ];
+
+    for (const entry of cases) {
+      const nextReminderAt = (sm as any).reminders.getNextReminderAt({
+        sessionId: `stale-${entry.label}`,
+        harnessSessionId: `thread-${entry.label}`,
+        name: `stale-${entry.label}`,
+        prompt: "test",
+        workdir: "/tmp",
+        createdAt: now,
+        completedAt: now,
+        status: "completed",
+        approvalState: "not_required",
+        runtimeState: "stopped",
+        deliveryState: "idle",
+        costUsd: 0,
+        pendingWorktreeDecisionSince: pendingSince,
+        ...entry,
+      });
+      assert.equal(nextReminderAt, undefined, entry.label);
+    }
+  });
+
+  it("drops a queued stale worktree reminder after rechecking resolved persisted state", () => {
+    const sm = new SessionManager(5, 5);
+    stubDispatch(sm);
+    const originalDateNow = Date.now;
+    const now = 1_700_000_000_000;
+    Date.now = () => now;
+
+    try {
+      const scheduled: Array<{ key: string; at: number; cb: () => void }> = [];
+      const pending = {
+        sessionId: "stale-pending-session",
+        harnessSessionId: "stale-pending-thread",
+        backendRef: { kind: "claude-code", conversationId: "stale-pending-thread" },
+        name: "stale-pending-session",
+        prompt: "test",
+        workdir: "/tmp",
+        createdAt: now,
+        completedAt: now,
+        status: "completed",
+        lifecycle: "awaiting_worktree_decision",
+        approvalState: "not_required",
+        worktreeState: "pending_decision",
+        runtimeState: "stopped",
+        deliveryState: "idle",
+        costUsd: 0,
+        pendingWorktreeDecisionSince: new Date(now - 4 * 60 * 60 * 1000).toISOString(),
+        worktreeLifecycle: {
+          state: "pending_decision",
+          updatedAt: new Date(now - 4 * 60 * 60 * 1000).toISOString(),
+        },
+      };
+
+      (sm as any).persisted.set(pending.harnessSessionId, pending);
+      (sm as any).idIndex.set(pending.sessionId, pending.harnessSessionId);
+      (sm as any).maintenance.cancel = (() => {}) as any;
+      (sm as any).maintenance.schedule = ((key: string, at: number, cb: () => void) => {
+        scheduled.push({ key, at, cb });
+      }) as any;
+
+      (sm as any).syncPersistedSessionMaintenance(pending);
+      assert.equal(scheduled.length, 1);
+
+      Object.assign(pending, {
+        lifecycle: "terminal",
+        worktreeLifecycle: {
+          state: "merged",
+          updatedAt: new Date(now).toISOString(),
+          resolvedAt: new Date(now).toISOString(),
+          resolutionSource: "agent_merge",
+        },
+      });
+
+      scheduled[0].cb();
+
+      assert.equal(scheduled.length, 1);
+      assert.equal(((sm as any).__dispatchCalls ?? []).length, 0);
+    } finally {
+      Date.now = originalDateNow;
+    }
+  });
 });
 
 // =========================================================================

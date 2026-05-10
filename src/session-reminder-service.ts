@@ -4,6 +4,7 @@ import type { SessionNotificationRequest } from "./wake-dispatcher";
 import type { PersistedSessionInfo } from "./types";
 import type { Session } from "./session";
 import { getBackendConversationId, getPersistedMutationRefs, getPrimarySessionLookupRef } from "./session-backend-ref";
+import { resolveWorktreeLifecycle } from "./worktree-lifecycle-resolver";
 
 type RoutingProxyBuilder = (session: {
   id?: string;
@@ -31,15 +32,8 @@ export class SessionReminderService {
   static readonly REMINDER_INTERVAL_MS = 3 * 60 * 60 * 1000;
 
   getNextReminderAt(session: PersistedSessionInfo): number | undefined {
-    if (!session.pendingWorktreeDecisionSince) return undefined;
-    const explicitlyPending =
-      session.worktreeState === "pending_decision" || session.lifecycle === "awaiting_worktree_decision";
-    const unresolvedWithoutExplicitState =
-      session.worktreeState == null && session.lifecycle == null && !session.worktreeMerged && !session.worktreePrUrl;
-    if (!explicitlyPending && !unresolvedWithoutExplicitState) return undefined;
-
     const pendingSince = new Date(session.pendingWorktreeDecisionSince).getTime();
-    if (!Number.isFinite(pendingSince)) return undefined;
+    if (!this.hasUnresolvedWorktreeDecision(session, pendingSince)) return undefined;
 
     const candidates = [pendingSince + SessionReminderService.REMINDER_THRESHOLD_MS];
     if (session.worktreeDecisionSnoozedUntil) {
@@ -112,5 +106,56 @@ export class SessionReminderService {
       notifyUser: "always",
       buttons: this.getWorktreeDecisionButtons(getPrimarySessionLookupRef(session) ?? session.harnessSessionId),
     });
+  }
+
+  private hasUnresolvedWorktreeDecision(session: PersistedSessionInfo, pendingSince?: number): boolean {
+    if (!session.pendingWorktreeDecisionSince) return false;
+    const parsedPendingSince = pendingSince ?? new Date(session.pendingWorktreeDecisionSince).getTime();
+    if (!Number.isFinite(parsedPendingSince)) return false;
+
+    if (session.worktreeMerged || session.worktreePrUrl) return false;
+    if (session.lifecycle === "terminal") return false;
+
+    const resolvedWorktreeStates = new Set([
+      "merged",
+      "released",
+      "dismissed",
+      "none",
+    ]);
+    if (session.worktreeState && resolvedWorktreeStates.has(session.worktreeState)) return false;
+
+    const resolvedLifecycleStates = new Set([
+      "merged",
+      "released",
+      "dismissed",
+      "no_change",
+      "none",
+    ]);
+    if (session.worktreeLifecycle?.state && resolvedLifecycleStates.has(session.worktreeLifecycle.state)) return false;
+    if (
+      !session.worktreePath
+      && !session.worktreeBranch
+      && (session.worktreeState === "none" || session.worktreeLifecycle?.state === "none")
+    ) {
+      return false;
+    }
+
+    const explicitlyPending =
+      session.worktreeState === "pending_decision"
+      || session.lifecycle === "awaiting_worktree_decision"
+      || session.worktreeLifecycle?.state === "pending_decision";
+    const unresolvedWithoutExplicitState =
+      session.worktreeState == null
+      && session.lifecycle == null
+      && session.worktreeLifecycle?.state == null
+      && !session.worktreeMerged
+      && !session.worktreePrUrl;
+    if (!explicitlyPending && !unresolvedWithoutExplicitState) return false;
+
+    const resolved = resolveWorktreeLifecycle(session, {
+      activeSession: false,
+      includePrSync: false,
+    });
+    return resolved.derivedState !== "merged" && resolved.derivedState !== "released";
   }
 }

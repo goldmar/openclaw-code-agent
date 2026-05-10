@@ -145,9 +145,10 @@ export function resolveWorktreeLifecycle(
     derivedState = "cleanup_failed";
   }
 
+  const resolvedByRepositoryEvidence = derivedState === "merged" || derivedState === "released";
   const preserve = options.activeSession
     || dirtyWorktreeEntries
-    || lifecycle.state === "pending_decision"
+    || (!resolvedByRepositoryEvidence && lifecycle.state === "pending_decision")
     || lifecycle.state === "merge_conflict_resolving"
     || lifecycle.state === "pr_open"
     || prState === "open"

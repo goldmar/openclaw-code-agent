@@ -120,7 +120,10 @@ export function makeAgentWorktreeCleanupTool(_ctx?: OpenClawPluginToolContext) {
             sessionManager.updatePersistedSession(target.id, {
               worktreePath: undefined,
               worktreeBranch: undefined,
+              lifecycle: "terminal",
               worktreeState: "none",
+              pendingWorktreeDecisionSince: undefined,
+              lastWorktreeReminderAt: undefined,
               worktreeMerged: nextLifecycleState === "merged" ? true : persisted.worktreeMerged,
               worktreeMergedAt: nextLifecycleState === "merged" ? (persisted.worktreeMergedAt ?? new Date().toISOString()) : persisted.worktreeMergedAt,
               worktreeLifecycle: {
