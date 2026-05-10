@@ -157,13 +157,6 @@ export class SessionReminderService {
       "cleanup_failed",
     ]);
     if (session.worktreeLifecycle?.state && resolvedLifecycleStates.has(session.worktreeLifecycle.state)) return "resolved";
-    if (
-      !session.worktreePath
-      && !session.worktreeBranch
-      && (session.worktreeState === "none" || session.worktreeLifecycle?.state === "none")
-    ) {
-      return "resolved";
-    }
 
     const explicitlyPending =
       session.worktreeState === "pending_decision"
