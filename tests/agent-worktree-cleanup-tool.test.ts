@@ -86,7 +86,7 @@ describe("agent_worktree_status", () => {
       assert.match(text, /Session: released-status \[s-released-status\]/);
       assert.match(text, /Lifecycle:\s*needs decision/);
       assert.match(text, /Derived:\s*released/);
-      assert.match(text, /Cleanup:\s*preserve/);
+      assert.match(text, /Cleanup:\s*safe now/);
       assert.match(text, /Ahead:\s*\d+ ahead \/ \d+ behind/);
       assert.match(text, /Reasons:\s*pending decision, content already on base/);
     } finally {

@@ -45,6 +45,33 @@ describe("resolveWorktreeLifecycle", () => {
     }
   });
 
+  it("treats stale pending decisions as cleanup-safe after repository merge evidence", () => {
+    const repoDir = initRepo("resolver-pending-merged-");
+    try {
+      git(repoDir, "checkout", "-b", "agent/pending-merged");
+      writeFileSync(join(repoDir, "feature.txt"), "merged\n", "utf-8");
+      git(repoDir, "add", "feature.txt");
+      git(repoDir, "commit", "-m", "feat: pending merged");
+      git(repoDir, "checkout", "main");
+      git(repoDir, "merge", "--ff-only", "agent/pending-merged");
+
+      const resolved = resolveWorktreeLifecycle({
+        workdir: repoDir,
+        worktreeBranch: "agent/pending-merged",
+        worktreeLifecycle: {
+          state: "pending_decision",
+          updatedAt: new Date().toISOString(),
+        },
+      });
+
+      assert.equal(resolved.derivedState, "merged");
+      assert.equal(resolved.cleanupSafe, true);
+      assert.equal(resolved.preserve, false);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
   it("detects cherry-picked branch content as released", () => {
     const repoDir = initRepo("resolver-released-cherry-");
     try {

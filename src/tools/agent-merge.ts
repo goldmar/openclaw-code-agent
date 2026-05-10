@@ -163,6 +163,8 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
                 worktreeMergedAt: new Date().toISOString(),
                 pendingWorktreeDecisionSince: undefined,
                 lastWorktreeReminderAt: undefined,
+                lifecycle: "terminal",
+                worktreeState: "merged",
                 worktreeDisposition: "merged",
                 worktreeLifecycle: {
                   state: "merged",
