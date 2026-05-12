@@ -64,10 +64,12 @@ describe("session task lifecycle phase-1 adapter", () => {
     };
     let receivedCtx: unknown;
     setPluginRuntime({
-      taskFlow: {
-        fromToolContext(input: unknown) {
-          receivedCtx = input;
-          return taskFlow;
+      tasks: {
+        managedFlows: {
+          fromToolContext(input: unknown) {
+            receivedCtx = input;
+            return taskFlow;
+          },
         },
       },
     });
@@ -119,6 +121,51 @@ describe("session task lifecycle phase-1 adapter", () => {
     });
     assert.equal(calls[3].params.expectedRevision, 3);
     assert.equal((calls[3].params.stateJson as Record<string, unknown>).terminalStatus, "succeeded");
+  });
+
+  it("falls back to the legacy TaskFlow runtime alias for older OpenClaw hosts", () => {
+    const { calls, taskFlow } = createTaskFlowRecorder();
+    setPluginRuntime({
+      taskFlow: {
+        fromToolContext() {
+          return taskFlow;
+        },
+      },
+    });
+
+    const sink = resolveSessionTaskLifecycle({
+      sessionKey: "agent:main:telegram:group:123",
+    });
+    sink.create(createSession());
+
+    assert.deepEqual(calls.map((call) => call.method), ["createManaged"]);
+  });
+
+  it("prefers tasks.managedFlows when both current and legacy TaskFlow runtimes exist", () => {
+    const current = createTaskFlowRecorder();
+    const legacy = createTaskFlowRecorder();
+    setPluginRuntime({
+      tasks: {
+        managedFlows: {
+          fromToolContext() {
+            return current.taskFlow;
+          },
+        },
+      },
+      taskFlow: {
+        fromToolContext() {
+          return legacy.taskFlow;
+        },
+      },
+    });
+
+    const sink = resolveSessionTaskLifecycle({
+      sessionKey: "agent:main:telegram:group:123",
+    });
+    sink.create(createSession());
+
+    assert.deepEqual(current.calls.map((call) => call.method), ["createManaged"]);
+    assert.deepEqual(legacy.calls, []);
   });
 
   it("fails the managed TaskFlow for failed or cancelled terminal sessions", () => {
@@ -225,6 +272,7 @@ describe("session task lifecycle phase-1 adapter", () => {
     let fromToolContextCalled = false;
     setPluginRuntime({
       tasks: {
+        managedFlows: undefined,
         runs: {
           fromToolContext() {
             fromToolContextCalled = true;

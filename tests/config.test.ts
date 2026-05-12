@@ -374,7 +374,7 @@ describe("setPluginConfig", () => {
     assert.deepEqual(pluginConfig.allowedModels, ["sonnet", "opus"]);
   });
 
-  it("accepts v2026.5.7 readiness extended reasoning efforts", () => {
+  it("accepts v2026.5.12-beta.1 readiness extended reasoning efforts", () => {
     setPluginConfig({
       harnesses: {
         codex: {

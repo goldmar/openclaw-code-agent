@@ -14,6 +14,12 @@ type TaskFlowRuntime = {
   [key: string]: unknown;
 };
 
+type RuntimeTasks = {
+  managedFlows?: TaskFlowRuntime;
+  flow?: TaskFlowRuntime;
+  [key: string]: unknown;
+};
+
 type RuntimeChannelOutboundAdapter = {
   sendText?: (ctx: {
     cfg: unknown;
@@ -55,10 +61,11 @@ type RuntimeConfigStore = {
 };
 
 export interface PluginRuntimeStore {
+  /** @deprecated OpenClaw now exposes managed TaskFlow runtime at tasks.managedFlows. */
   taskFlow?: TaskFlowRuntime;
   channel?: RuntimeChannel;
   config?: RuntimeConfigStore;
-  tasks?: Record<string, unknown>;
+  tasks?: RuntimeTasks;
 }
 
 let pluginRuntime: PluginRuntimeStore | undefined;
@@ -92,6 +99,10 @@ export function setPluginRuntime(runtime: unknown, config?: unknown): void {
 
 export function getPluginRuntime(): PluginRuntimeStore | undefined {
   return pluginRuntime;
+}
+
+export function getManagedTaskFlowRuntime(): TaskFlowRuntime | undefined {
+  return pluginRuntime?.tasks?.managedFlows ?? pluginRuntime?.taskFlow;
 }
 
 export function getRuntimeConfig(): unknown {
