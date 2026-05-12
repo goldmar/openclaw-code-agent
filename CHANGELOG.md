@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Updated the local OpenClaw package target to `openclaw@2026.5.12-beta.1` while keeping the peer floor at `>=2026.4.21`.
+- Refreshed OpenClaw `2026.5.12-beta.1` compatibility guidance around the current TaskFlow runtime surface, beta/main Codex app-server churn, and plugin install/runtime scanning.
+
 ## [4.2.3] - 2026-05-07
 
 ### Changed

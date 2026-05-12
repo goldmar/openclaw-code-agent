@@ -1,4 +1,4 @@
-import { getPluginRuntime } from "./runtime-store";
+import { getManagedTaskFlowRuntime } from "./runtime-store";
 
 export interface PluginTaskFlowRuntime {
   get?: (lookup: string) => Promise<unknown>;
@@ -20,7 +20,7 @@ function isTaskFlowRuntime(value: unknown): value is PluginTaskFlowRuntime {
 }
 
 export function resolveTaskFlowRuntime(): PluginTaskFlowRuntime | undefined {
-  const runtime = getPluginRuntime()?.taskFlow;
+  const runtime = getManagedTaskFlowRuntime();
   return isTaskFlowRuntime(runtime) ? runtime : undefined;
 }
 

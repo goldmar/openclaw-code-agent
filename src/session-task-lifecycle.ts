@@ -1,5 +1,5 @@
 import { truncateText } from "./format";
-import { getPluginRuntime } from "./runtime-store";
+import { getManagedTaskFlowRuntime } from "./runtime-store";
 import type { Session } from "./session";
 import type { KillReason, SessionStatus } from "./types";
 
@@ -298,7 +298,7 @@ class ManagedTaskFlowSessionTaskLifecycleSink implements SessionTaskLifecycleSin
 export function resolveSessionTaskLifecycle(ctx: ToolContextLike): SessionTaskLifecycleSink {
   if (!ctx.sessionKey?.trim()) return NOOP_SESSION_TASK_LIFECYCLE;
   try {
-    const fromToolContext = getPluginRuntime()?.taskFlow?.fromToolContext;
+    const fromToolContext = getManagedTaskFlowRuntime()?.fromToolContext;
     if (typeof fromToolContext !== "function") return NOOP_SESSION_TASK_LIFECYCLE;
     const taskFlow = fromToolContext(ctx);
     if (!isManagedTaskFlowRuntime(taskFlow)) return NOOP_SESSION_TASK_LIFECYCLE;

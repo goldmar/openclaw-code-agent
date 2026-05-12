@@ -26,18 +26,20 @@ Sessions are multi-turn. Active sessions accept follow-up messages via `agent_re
 
 Current releases treat persisted session storage as new-schema-only. If startup finds an older or invalid session store, the plugin archives it to a timestamped `.legacy-*.json` backup and starts with a fresh index instead of migrating rows in place.
 
-### OpenClaw 2026.5.7 SDK Readiness
+### OpenClaw 2026.5.12-beta.1 SDK Readiness
 
-`openclaw-code-agent` `4.2.3` is validated against the latest installable OpenClaw SDK package, `openclaw@2026.5.7`. The plugin keeps the peer floor at `>=2026.4.21` for compatible existing installs, while package build metadata targets OpenClaw `2026.5.7` for both host and SDK readiness.
+`openclaw-code-agent` `4.2.3` is validated against the latest installable OpenClaw SDK package, `openclaw@2026.5.12-beta.1`. The plugin keeps the peer floor at `>=2026.4.21` for compatible existing installs, while package build metadata targets OpenClaw `2026.5.12-beta.1` for both host and SDK readiness.
 
-Configuration guidance for `2026.5.7`:
+Configuration guidance for `2026.5.12-beta.1`:
 
 - If `plugins.allow` is present, add `openclaw-code-agent`. OpenClaw treats that allowlist as exclusive, so `tools.allow` cannot make this plugin's tools available when the owning plugin is blocked.
 - New OpenClaw configs default `plugins.bundledDiscovery` to `allowlist`, so a restrictive `plugins.allow` list can also block omitted bundled provider or runtime plugins. Disabled bundled plugins remain disabled unless explicitly enabled or auto-enabled by their own OpenClaw contracts. Do not assume adjacent bundled plugins are available to code-agent sessions.
 - Use `harnesses.codex.defaultModel`, `harnesses.codex.allowedModels`, and `harnesses.codex.reasoningEffort` for Codex. Use `harnesses["claude-code"].defaultModel`, `harnesses["claude-code"].allowedModels`, and optional `harnesses["claude-code"].reasoningEffort` for Claude Code.
 - OpenClaw core now documents Codex routing as an explicit provider/runtime split: `openai/gpt-5.5` plus `agentRuntime.id: "codex"` uses the bundled native Codex app-server runtime, while `openai-codex/gpt-5.5` remains the PI Codex OAuth route. This plugin's own Codex harness is configured through `harnesses.codex.*`, not through OpenClaw's bundled `codex` provider route.
+- Session lifecycle mirroring now prefers the current `api.runtime.tasks.managedFlows` surface and keeps a compatibility fallback for older hosts that still expose `api.runtime.taskFlow`.
+- OpenClaw beta/main Codex app-server changes include quieter completed turns, native subagent task mirroring, tool transcript repair, and media event handling; this plugin keeps its Codex harness isolated from bundled Codex provider/runtime config.
 - Legacy `defaultModel`, `model`, `reasoningEffort`, and global `allowedModels` are compatibility fields only. New configs should not use them.
-- Managed external-plugin npm roots inherit OpenClaw's package-level npm overrides, so the host's security pins also apply to hoisted dependencies under installed plugin roots.
+- Managed external-plugin npm roots inherit OpenClaw's package-level npm overrides, and newer install scans inspect runtime entries; keep `openclaw.extensions` pointing at the built `dist/index.js` artifact.
 - `tools.deny` does not disable OpenClaw's `apply_patch` tool by itself in current OpenClaw. To restrict patch edits, configure OpenClaw `tools.exec.applyPatch.enabled`, `tools.exec.applyPatch.workspaceOnly`, or `tools.exec.applyPatch.allowModels`.
 
 If you are upgrading from `3.1.0`, note these behavior changes:
