@@ -119,7 +119,7 @@ describe("plugin entry source", () => {
       };
     };
 
-    assert.equal(packageJson.dependencies?.["@anthropic-ai/claude-agent-sdk"], "^0.2.119");
+    assert.equal(packageJson.dependencies?.["@anthropic-ai/claude-agent-sdk"], "^0.3.142");
     assert.equal(packageJson.openclaw?.install?.npmSpec, "openclaw-code-agent");
     assert.equal(packageJson.openclaw?.install?.defaultChoice, "npm");
     assert.equal(packageJson.openclaw?.install?.minHostVersion, ">=2026.4.21");
