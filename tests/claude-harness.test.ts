@@ -129,6 +129,32 @@ describe("ClaudeCodeHarness", () => {
     assert.equal(Object.hasOwn(seenOptions[1] ?? {}, "effort"), false);
   });
 
+  it("passes resume options through Claude Code startup and preserves the backend ref", async () => {
+    const seenOptions: Record<string, unknown>[] = [];
+    const { handle } = createQueryHandle([
+      { type: "system", subtype: "init", session_id: "claude-resume-session" },
+      { type: "result", subtype: "success", session_id: "claude-resume-session", duration_ms: 0, total_cost_usd: 0, num_turns: 1, result: "resumed" },
+    ]);
+    const harness = new ClaudeCodeHarness({
+      startup: async ({ options } = {}) => {
+        seenOptions.push(options ?? {});
+        return { query: () => handle as any };
+      },
+    });
+
+    const messages = await collectMessages(harness.launch({
+      prompt: "continue",
+      cwd: "/tmp/project",
+      resumeSessionId: "claude-resume-session",
+    }));
+
+    assert.equal(seenOptions[0]?.resume, "claude-resume-session");
+    assert.equal(seenOptions[0]?.forkSession, false);
+    const ref = messages.find((message) => message.type === "backend_ref");
+    assert.equal(ref?.type, "backend_ref");
+    assert.equal(ref?.ref.conversationId, "claude-resume-session");
+  });
+
   it("waits for startup() before forwarding control calls to the query handle", async () => {
     let resolveStartup: ((value: { query: () => AsyncIterable<unknown> }) => void) | undefined;
     const { handle, permissionModes, streamedInputs, wasInterrupted } = createQueryHandle([
