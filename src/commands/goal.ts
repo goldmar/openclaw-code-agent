@@ -115,6 +115,7 @@ export function registerGoalCommand(api: CommandApi): void {
           workdir: resolution.workdir,
           model: resolution.model,
           reasoningEffort: resolution.reasoningEffort,
+          fastMode: resolution.fastMode,
           maxIterations: resolution.maxIterations,
           permissionMode: resolution.permissionMode,
           harness: resolution.harness,

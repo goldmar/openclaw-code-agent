@@ -6,6 +6,7 @@ import {
   resolveAgentChannel,
   resolveAllowedModelsForHarness,
   resolveDefaultModelForHarness,
+  resolveFastModeForHarness,
   resolveOriginChannel,
   resolveOriginThreadId,
   resolveReasoningEffortForHarness,
@@ -84,6 +85,7 @@ export type AgentLaunchResolution =
       resolvedResumeId?: string;
       clearedPersistedCodexResume: boolean;
       reasoningEffort?: ReturnType<typeof resolveReasoningEffortForHarness>;
+      fastMode?: boolean;
     };
 
 function normalizeThreadId(value: unknown): string | undefined {
@@ -335,5 +337,6 @@ export function resolveAgentLaunchRequest(
     resolvedResumeId,
     clearedPersistedCodexResume,
     reasoningEffort: resolveReasoningEffortForHarness(harness),
+    fastMode: resolveFastModeForHarness(harness),
   };
 }

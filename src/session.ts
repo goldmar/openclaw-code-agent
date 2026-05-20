@@ -32,6 +32,7 @@ import {
   getGlobalMcpServers,
   pluginConfig,
   resolveDefaultModelForHarness,
+  resolveFastModeForHarness,
   resolveReasoningEffortForHarness,
 } from "./config";
 import { getBackendConversationId } from "./session-backend-ref";
@@ -78,6 +79,7 @@ export class Session extends EventEmitter {
   readonly workdir: string;
   readonly model?: string;
   readonly reasoningEffort?: ReasoningEffort;
+  readonly fastMode?: boolean;
   private readonly systemPrompt?: string;
   private readonly allowedTools?: string[];
   private readonly permissionMode: PermissionMode;
@@ -196,6 +198,9 @@ export class Session extends EventEmitter {
     this.workdir = config.workdir;
     this.model = config.model ?? resolveDefaultModelForHarness(this.harness.name);
     this.reasoningEffort = config.reasoningEffort ?? resolveReasoningEffortForHarness(this.harness.name);
+    this.fastMode = this.harness.name === "codex"
+      ? (config.fastMode ?? resolveFastModeForHarness(this.harness.name))
+      : undefined;
     this.systemPrompt = config.systemPrompt;
     this.allowedTools = config.allowedTools;
     this.permissionMode = config.permissionMode ?? pluginConfig.permissionMode;
@@ -546,6 +551,7 @@ export class Session extends EventEmitter {
         cwd: this.workdir,
         model: this.model,
         reasoningEffort: this.reasoningEffort,
+        fastMode: this.fastMode,
         permissionMode: this.permissionMode,
         codexApprovalPolicy: this.codexApprovalPolicy,
         systemPrompt: this.systemPrompt,

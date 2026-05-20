@@ -158,6 +158,7 @@ export class SessionStore {
       workdir: session.originalWorkdir ?? session.workdir, // E1: Always write originalWorkdir
       model: session.model,
       reasoningEffort: session.reasoningEffort,
+      fastMode: session.fastMode,
       createdAt: session.startedAt,
       status: "running",
       lifecycle: session.lifecycle,
@@ -259,6 +260,7 @@ export class SessionStore {
       workdir: session.originalWorkdir ?? session.workdir, // E1: Always write originalWorkdir
       model: session.model,
       reasoningEffort: session.reasoningEffort,
+      fastMode: session.fastMode,
       createdAt: session.startedAt,
       completedAt: session.completedAt,
       status: session.status,

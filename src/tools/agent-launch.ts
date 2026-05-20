@@ -132,6 +132,7 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
           resolvedResumeId,
           clearedPersistedCodexResume,
           reasoningEffort,
+          fastMode,
         } = resolution;
         const resumeTarget = params.resume_session_id
           ? sessionManager.resolve(params.resume_session_id) ?? sessionManager.getPersistedSession(params.resume_session_id)
@@ -168,6 +169,7 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
           workdir,
           model: resolvedModel,
           reasoningEffort,
+          fastMode,
           systemPrompt: params.system_prompt,
           allowedTools: params.allowed_tools,
           resumeSessionId: resumeAssessment?.kind === "resume" ? resumeAssessment.resumeSessionId : resumeSessionId,
@@ -218,6 +220,7 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
               name: session.name,
               model: session.model,
               reasoningEffort: session.reasoningEffort ?? resolveReasoningEffortForHarness(harness),
+              fastMode: session.fastMode ?? fastMode,
               worktreeStrategy: session.worktreeStrategy ?? params.worktree_strategy ?? pluginConfig.defaultWorktreeStrategy ?? "off",
               worktreePath: session.worktreePath,
               originalWorkdir: session.originalWorkdir,

@@ -57,6 +57,7 @@ export interface HarnessLaunchOptions {
   cwd: string;
   model?: string;
   reasoningEffort?: ReasoningEffort;
+  fastMode?: boolean;
   permissionMode?: string;
   codexApprovalPolicy?: CodexApprovalPolicy;
   systemPrompt?: string;

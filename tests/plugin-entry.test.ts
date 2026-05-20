@@ -306,6 +306,9 @@ describe("plugin entry source", () => {
       "xhigh",
       "max",
     ]);
+    assert.equal(pluginManifest.configSchema?.properties?.harnesses?.additionalProperties?.properties?.fastMode?.type, "boolean");
+    assert.equal(pluginManifest.configSchema?.properties?.harnesses?.default?.codex?.fastMode, false);
+    assert.match(pluginManifest.uiHints?.harnesses?.help ?? "", /harnesses\.codex\.fastMode=true/);
   });
 
   it("keeps declared tool contracts synced with runtime registrations", () => {

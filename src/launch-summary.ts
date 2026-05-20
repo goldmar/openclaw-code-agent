@@ -13,6 +13,7 @@ export interface LaunchSummaryInput {
   harness: string;
   model?: string;
   reasoningEffort?: ReasoningEffort;
+  fastMode?: boolean;
   permissionMode: PermissionMode;
   planApproval: PlanApprovalMode;
   worktreeStrategy?: WorktreeStrategy;
@@ -29,6 +30,7 @@ export interface LaunchSummarySessionLike {
   name: string;
   model?: string;
   reasoningEffort?: ReasoningEffort;
+  fastMode?: boolean;
   worktreeStrategy?: WorktreeStrategy;
   worktreePath?: string;
   originalWorkdir?: string;
@@ -63,6 +65,9 @@ export function formatLaunchSummary(input: LaunchSummaryInput): string {
   if (input.reasoningEffort) {
     details.push(`  Reasoning effort: ${input.reasoningEffort}`);
   }
+  if (input.fastMode) {
+    details.push("  Fast mode: enabled");
+  }
   if (input.resumeSessionId) {
     details.push(`  Resume: ${input.resumeSessionId}${input.forkSession ? " (forked)" : ""}`);
   } else if (input.forceNewSession) {
@@ -77,7 +82,7 @@ export function formatLaunchSummary(input: LaunchSummaryInput): string {
 }
 
 export function formatLaunchSummaryFromSession(
-  input: Omit<LaunchSummaryInput, "sessionId" | "sessionName" | "model" | "reasoningEffort" | "worktreeStrategy" | "worktreePath" | "originalWorkdir">,
+  input: Omit<LaunchSummaryInput, "sessionId" | "sessionName" | "model" | "reasoningEffort" | "fastMode" | "worktreeStrategy" | "worktreePath" | "originalWorkdir">,
   session: LaunchSummarySessionLike,
 ): string {
   return formatLaunchSummary({
@@ -86,6 +91,7 @@ export function formatLaunchSummaryFromSession(
     sessionName: session.name,
     model: session.model,
     reasoningEffort: session.reasoningEffort,
+    fastMode: session.fastMode,
     worktreeStrategy: session.worktreeStrategy ?? "off",
     worktreePath: session.worktreePath,
     originalWorkdir: session.originalWorkdir,

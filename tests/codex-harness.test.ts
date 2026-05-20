@@ -224,12 +224,14 @@ describe("CodexHarness App Server mapping", () => {
       permissionMode: "plan",
       codexApprovalPolicy: "never",
       reasoningEffort: "xhigh",
+      fastMode: true,
     }));
 
     const startRequest = client.requests.find((request) => request.method === "thread/start" || request.method === "thread/new");
     assert.deepEqual(startRequest?.params, {
       cwd: "/tmp",
       reasoningEffort: "xhigh",
+      service_tier: "fast",
       approvalPolicy: "never",
       sandbox: "danger-full-access",
     });
@@ -237,6 +239,7 @@ describe("CodexHarness App Server mapping", () => {
     assert.deepEqual(turnStartRequest?.params, {
       threadId: "thread-123",
       input: [{ type: "text", text: "investigate" }],
+      service_tier: "fast",
       approvalPolicy: "never",
       sandbox: "danger-full-access",
       collaborationMode: {

@@ -5,6 +5,7 @@ import {
   pluginConfig,
   resolveAllowedModelsForHarness,
   resolveDefaultModelForHarness,
+  resolveFastModeForHarness,
   resolveOriginChannel,
   resolveReasoningEffortForHarness,
   resolveSessionRoute,
@@ -45,6 +46,7 @@ export type GoalLaunchResolution =
       workdir: string;
       model: string;
       reasoningEffort?: ReasoningEffort;
+      fastMode?: boolean;
       systemPrompt?: string;
       allowedTools?: string[];
       maxIterations?: number;
@@ -118,6 +120,7 @@ export function resolveGoalLaunchRequest(
     workdir,
     model,
     reasoningEffort: resolveReasoningEffortForHarness(harness),
+    fastMode: resolveFastModeForHarness(harness),
     systemPrompt: request.systemPrompt,
     allowedTools: request.allowedTools,
     maxIterations: request.maxIterations,
@@ -136,7 +139,7 @@ export function resolveGoalLaunchRequest(
 
 export function formatGoalLaunchResult(task: GoalTaskState, resolution: Pick<
   Extract<GoalLaunchResolution, { kind: "resolved" }>,
-  "goal" | "harness" | "model" | "verifierCommands"
+  "goal" | "harness" | "model" | "fastMode" | "verifierCommands"
 >): string {
   const lines = [
     `Goal task launched.`,
@@ -146,6 +149,7 @@ export function formatGoalLaunchResult(task: GoalTaskState, resolution: Pick<
     `  Session: ${task.sessionName} [${task.sessionId}]`,
     `  Harness: ${resolution.harness}`,
     `  Model: ${resolution.model}`,
+    ...(resolution.fastMode ? [`  Fast mode: enabled`] : []),
     `  Loop mode: ${task.loopMode}`,
     `  Max iterations: ${task.maxIterations}`,
     `  Goal: "${resolution.goal.length > 100 ? `${resolution.goal.slice(0, 100)}...` : resolution.goal}"`,

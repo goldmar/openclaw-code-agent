@@ -91,6 +91,7 @@ export function registerAgentCommand(api: CommandApi): void {
           workdir: resolution.workdir,
           model: resolution.resolvedModel,
           reasoningEffort: resolution.reasoningEffort,
+          fastMode: resolution.fastMode,
           codexApprovalPolicy: resolution.harness === "codex" ? "never" : undefined,
           originChannel: resolution.originChannel,
           originThreadId: resolution.originThreadId,

@@ -298,29 +298,26 @@ export function buildThreadStartPayloads(params: {
   cwd: string;
   model?: string;
   reasoningEffort?: string;
+  fastMode?: boolean;
   approvalPolicy?: string;
   sandbox?: string;
 }): unknown[] {
   const base: Record<string, unknown> = { cwd: params.cwd };
   if (params.model?.trim()) base.model = params.model.trim();
   if (params.reasoningEffort?.trim()) base.reasoningEffort = params.reasoningEffort.trim();
+  if (params.fastMode === true) {
+    base.service_tier = "fast";
+  }
   if (params.approvalPolicy?.trim()) base.approvalPolicy = params.approvalPolicy.trim();
   if (params.sandbox?.trim()) base.sandbox = params.sandbox.trim();
-  const fallback: Record<string, unknown> = { cwd: params.cwd };
-  if (params.reasoningEffort?.trim()) fallback.reasoning_effort = params.reasoningEffort.trim();
-  if (params.approvalPolicy?.trim()) fallback.approvalPolicy = params.approvalPolicy.trim();
-  if (params.sandbox?.trim()) fallback.sandbox = params.sandbox.trim();
-  return [
-    base,
-    fallback,
-    {},
-  ];
+  return [base];
 }
 
 export function buildThreadResumePayloads(params: {
   threadId: string;
   model?: string;
   reasoningEffort?: string;
+  fastMode?: boolean;
   cwd?: string;
   approvalPolicy?: string;
   sandbox?: string;
@@ -331,6 +328,9 @@ export function buildThreadResumePayloads(params: {
   };
   if (params.model?.trim()) base.model = params.model.trim();
   if (params.reasoningEffort?.trim()) base.reasoningEffort = params.reasoningEffort.trim();
+  if (params.fastMode === true) {
+    base.service_tier = "fast";
+  }
   if (params.cwd?.trim()) base.cwd = params.cwd.trim();
   if (params.approvalPolicy?.trim()) base.approvalPolicy = params.approvalPolicy.trim();
   if (params.sandbox?.trim()) base.sandbox = params.sandbox.trim();
@@ -377,6 +377,7 @@ export function buildTurnStartPayloads(params: {
   prompt: string;
   model?: string;
   reasoningEffort?: string;
+  fastMode?: boolean;
   systemPrompt?: string;
   permissionMode?: string;
   approvalPolicy?: string;
@@ -387,6 +388,9 @@ export function buildTurnStartPayloads(params: {
     input: buildTurnInput(params.prompt),
   };
   if (params.model?.trim()) base.model = params.model.trim();
+  if (params.fastMode === true) {
+    base.service_tier = "fast";
+  }
   if (params.approvalPolicy?.trim()) base.approvalPolicy = params.approvalPolicy.trim();
   if (params.sandbox?.trim()) base.sandbox = params.sandbox.trim();
   const collaborationMode = buildCollaborationMode(
@@ -396,26 +400,7 @@ export function buildTurnStartPayloads(params: {
     params.systemPrompt,
   );
   if (!collaborationMode) return [base];
-  return [
-    { ...base, collaborationMode },
-    {
-      ...base,
-      collaboration_mode: {
-        mode: collaborationMode.mode,
-        settings: {
-          ...((typeof (collaborationMode.settings as { model?: string }).model === "string")
-            ? { model: (collaborationMode.settings as { model: string }).model }
-            : {}),
-          ...(typeof (collaborationMode.settings as { reasoningEffort?: string }).reasoningEffort === "string"
-            ? { reasoning_effort: (collaborationMode.settings as { reasoningEffort: string }).reasoningEffort }
-            : {}),
-          developer_instructions:
-            (collaborationMode.settings as { developerInstructions?: string | null }).developerInstructions ?? null,
-        },
-      },
-    },
-    base,
-  ];
+  return [{ ...base, collaborationMode }];
 }
 
 export function buildTurnInterruptPayloads(params: { threadId: string; turnId: string }): unknown[] {

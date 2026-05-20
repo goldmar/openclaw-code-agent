@@ -406,6 +406,7 @@ export function normalizePersistedEntry(raw: unknown): PersistedSessionInfo | un
     workdir: toNonEmptyString(raw.workdir, "(unknown)"),
     model: toOptionalString(raw.model),
     reasoningEffort: toOptionalReasoningEffort(raw.reasoningEffort),
+    fastMode: raw.fastMode === true ? true : undefined,
     createdAt: toOptionalNumber(raw.createdAt),
     completedAt: toOptionalNumber(raw.completedAt),
     status,

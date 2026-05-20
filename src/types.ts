@@ -235,6 +235,7 @@ export interface HarnessConfig {
   defaultModel?: string;
   allowedModels?: string[];
   reasoningEffort?: ReasoningEffort;
+  fastMode?: boolean;
 }
 
 /** Tool-intercept callback type for harnesses that support it. */
@@ -252,6 +253,7 @@ export interface SessionConfig {
   name?: string;
   model?: string;
   reasoningEffort?: ReasoningEffort;
+  fastMode?: boolean;
   systemPrompt?: string;
   allowedTools?: string[];
   originChannel?: string;
@@ -375,6 +377,7 @@ export interface PersistedSessionInfo {
   workdir: string;
   model?: string;
   reasoningEffort?: ReasoningEffort;
+  fastMode?: boolean;
   createdAt?: number;
   completedAt?: number;
   status: SessionStatus;
@@ -489,6 +492,7 @@ export interface GoalTaskConfig {
   name?: string;
   model?: string;
   reasoningEffort?: ReasoningEffort;
+  fastMode?: boolean;
   systemPrompt?: string;
   allowedTools?: string[];
   originChannel?: string;
@@ -535,6 +539,7 @@ export interface GoalTaskState {
   harnessSessionId?: string;
   model?: string;
   reasoningEffort?: ReasoningEffort;
+  fastMode?: boolean;
   systemPrompt?: string;
   allowedTools?: string[];
   originChannel?: string;
