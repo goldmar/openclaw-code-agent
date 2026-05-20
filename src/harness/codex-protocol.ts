@@ -298,16 +298,19 @@ export function buildThreadStartPayloads(params: {
   cwd: string;
   model?: string;
   reasoningEffort?: string;
+  fastMode?: boolean;
   approvalPolicy?: string;
   sandbox?: string;
 }): unknown[] {
   const base: Record<string, unknown> = { cwd: params.cwd };
   if (params.model?.trim()) base.model = params.model.trim();
   if (params.reasoningEffort?.trim()) base.reasoningEffort = params.reasoningEffort.trim();
+  if (params.fastMode === true) base.fastMode = true;
   if (params.approvalPolicy?.trim()) base.approvalPolicy = params.approvalPolicy.trim();
   if (params.sandbox?.trim()) base.sandbox = params.sandbox.trim();
   const fallback: Record<string, unknown> = { cwd: params.cwd };
   if (params.reasoningEffort?.trim()) fallback.reasoning_effort = params.reasoningEffort.trim();
+  if (params.fastMode === true) fallback.fastMode = true;
   if (params.approvalPolicy?.trim()) fallback.approvalPolicy = params.approvalPolicy.trim();
   if (params.sandbox?.trim()) fallback.sandbox = params.sandbox.trim();
   return [
@@ -321,6 +324,7 @@ export function buildThreadResumePayloads(params: {
   threadId: string;
   model?: string;
   reasoningEffort?: string;
+  fastMode?: boolean;
   cwd?: string;
   approvalPolicy?: string;
   sandbox?: string;
@@ -331,6 +335,7 @@ export function buildThreadResumePayloads(params: {
   };
   if (params.model?.trim()) base.model = params.model.trim();
   if (params.reasoningEffort?.trim()) base.reasoningEffort = params.reasoningEffort.trim();
+  if (params.fastMode === true) base.fastMode = true;
   if (params.cwd?.trim()) base.cwd = params.cwd.trim();
   if (params.approvalPolicy?.trim()) base.approvalPolicy = params.approvalPolicy.trim();
   if (params.sandbox?.trim()) base.sandbox = params.sandbox.trim();
@@ -345,28 +350,31 @@ export function buildCollaborationMode(
   mode: string,
   model?: string,
   reasoningEffort?: string,
+  fastMode?: boolean,
   developerInstructions?: string,
 ): Record<string, unknown> | undefined {
   const normalizedModel = model?.trim();
   const normalizedReasoningEffort = reasoningEffort?.trim();
   const normalizedDeveloperInstructions = developerInstructions?.trim();
   if (mode !== "plan") {
-    return normalizedModel || normalizedReasoningEffort || normalizedDeveloperInstructions ? {
+    return normalizedModel || normalizedReasoningEffort || fastMode === true || normalizedDeveloperInstructions ? {
       mode: "default",
       settings: {
         ...(normalizedModel ? { model: normalizedModel } : {}),
         ...(normalizedReasoningEffort ? { reasoningEffort: normalizedReasoningEffort } : {}),
+        ...(fastMode === true ? { fastMode: true } : {}),
         developerInstructions: normalizedDeveloperInstructions ?? null,
       },
     } : undefined;
   }
 
-  if (!normalizedModel && !normalizedReasoningEffort && !normalizedDeveloperInstructions) return undefined;
+  if (!normalizedModel && !normalizedReasoningEffort && fastMode !== true && !normalizedDeveloperInstructions) return undefined;
   return {
     mode: "plan",
     settings: {
       ...(normalizedModel ? { model: normalizedModel } : {}),
       ...(normalizedReasoningEffort ? { reasoningEffort: normalizedReasoningEffort } : {}),
+      ...(fastMode === true ? { fastMode: true } : {}),
       developerInstructions: normalizedDeveloperInstructions ?? null,
     },
   };
@@ -377,6 +385,7 @@ export function buildTurnStartPayloads(params: {
   prompt: string;
   model?: string;
   reasoningEffort?: string;
+  fastMode?: boolean;
   systemPrompt?: string;
   permissionMode?: string;
   approvalPolicy?: string;
@@ -387,12 +396,14 @@ export function buildTurnStartPayloads(params: {
     input: buildTurnInput(params.prompt),
   };
   if (params.model?.trim()) base.model = params.model.trim();
+  if (params.fastMode === true) base.fastMode = true;
   if (params.approvalPolicy?.trim()) base.approvalPolicy = params.approvalPolicy.trim();
   if (params.sandbox?.trim()) base.sandbox = params.sandbox.trim();
   const collaborationMode = buildCollaborationMode(
     params.permissionMode ?? "default",
     params.model,
     params.reasoningEffort,
+    params.fastMode,
     params.systemPrompt,
   );
   if (!collaborationMode) return [base];
@@ -408,6 +419,9 @@ export function buildTurnStartPayloads(params: {
             : {}),
           ...(typeof (collaborationMode.settings as { reasoningEffort?: string }).reasoningEffort === "string"
             ? { reasoning_effort: (collaborationMode.settings as { reasoningEffort: string }).reasoningEffort }
+            : {}),
+          ...(typeof (collaborationMode.settings as { fastMode?: boolean }).fastMode === "boolean"
+            ? { fast_mode: (collaborationMode.settings as { fastMode: boolean }).fastMode }
             : {}),
           developer_instructions:
             (collaborationMode.settings as { developerInstructions?: string | null }).developerInstructions ?? null,

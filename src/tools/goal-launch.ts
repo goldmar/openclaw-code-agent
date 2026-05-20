@@ -92,6 +92,7 @@ export function makeGoalLaunchTool(ctx: OpenClawPluginToolContext) {
           workdir: resolution.workdir,
           model: resolution.model,
           reasoningEffort: resolution.reasoningEffort,
+          fastMode: resolution.fastMode,
           systemPrompt: resolution.systemPrompt,
           allowedTools: resolution.allowedTools,
           maxIterations: resolution.maxIterations,

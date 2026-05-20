@@ -130,6 +130,33 @@ describe("SessionStore persisted compatibility", () => {
 
     assert.equal(persisted?.approvalPromptTransport, "direct-message");
   });
+
+  it("normalizes persisted Codex fastMode only when explicitly true", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-store-fast-mode-"));
+    const indexPath = join(dir, "sessions.json");
+    writeStore(indexPath, [{
+      sessionId: "fast-mode",
+      harnessSessionId: "h-fast-mode",
+      backendRef: { kind: "codex-app-server", conversationId: "thread-fast-mode" },
+      harness: "codex",
+      name: "fast-mode",
+      prompt: "p",
+      workdir: "/tmp",
+      model: "gpt-5.5",
+      reasoningEffort: "medium",
+      fastMode: true,
+      status: "completed",
+      costUsd: 0,
+    }]);
+
+    const store = new SessionStore({
+      env: {
+        OPENCLAW_CODE_AGENT_SESSIONS_PATH: indexPath,
+      },
+    });
+
+    assert.equal(store.getPersistedSession("fast-mode")?.fastMode, true);
+  });
 });
 
 describe("SessionStore path resolution", () => {

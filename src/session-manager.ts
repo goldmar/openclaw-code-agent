@@ -158,6 +158,7 @@ export class SessionManager {
           harness: session.harnessName || getDefaultHarnessName(),
           model: session.model,
           reasoningEffort: session.reasoningEffort,
+          fastMode: session.fastMode,
           permissionMode: "bypassPermissions",
           multiTurn: true,
           worktreeStrategy: "off",

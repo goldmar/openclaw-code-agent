@@ -320,6 +320,14 @@ describe("Session.phase", () => {
       "Codex plan-mode sessions should stay in an explicit active lifecycle while the first turn is in progress");
   });
 
+  it("Codex sessions retain explicit fastMode launch option", () => {
+    const codexSession = new Session({ ...BASE_CONFIG, harness: "codex", fastMode: true }, "codex-fast");
+    const claudeSession = new Session({ ...BASE_CONFIG, harness: "claude-code", fastMode: true }, "claude-fast");
+
+    assert.equal(codexSession.fastMode, true);
+    assert.equal(claudeSession.fastMode, undefined);
+  });
+
   it("Codex session in plan mode shows awaiting_plan_decision after pendingPlanApproval is set", () => {
     const codexSession = new Session({ ...BASE_CONFIG, harness: "codex" }, "codex-test");
     codexSession.transition("running");

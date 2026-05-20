@@ -77,7 +77,8 @@
               "gpt-5.5",
               "gpt-5.5-pro"
             ],
-            "reasoningEffort": "medium"
+            "reasoningEffort": "medium",
+            "fastMode": false
           },
           "claude-code": {
             "defaultModel": "anthropic/claude-sonnet-4-7",
@@ -112,6 +113,11 @@
                 "max"
               ],
               "description": "Harness-specific reasoning effort. Used by Codex and passed to Claude Code when configured."
+            },
+            "fastMode": {
+              "type": "boolean",
+              "default": false,
+              "description": "Codex-only fast service-tier mode. When true under harnesses.codex, new Codex sessions pass fastMode to the Codex App Server protocol."
             }
           }
         }
@@ -234,7 +240,7 @@
     },
     "harnesses": {
       "label": "Harness configuration",
-      "help": "Per-harness defaults and model restrictions. Default: {\"codex\":{\"defaultModel\":\"gpt-5.5\",\"allowedModels\":[\"gpt-5.5\",\"gpt-5.5-pro\"],\"reasoningEffort\":\"medium\"},\"claude-code\":{\"defaultModel\":\"anthropic/claude-sonnet-4-7\",\"allowedModels\":[\"sonnet\",\"opus\"]}}.",
+      "help": "Per-harness defaults and model restrictions. Set harnesses.codex.fastMode=true to opt into Codex fast service tier for new Codex sessions. Default: {\"codex\":{\"defaultModel\":\"gpt-5.5\",\"allowedModels\":[\"gpt-5.5\",\"gpt-5.5-pro\"],\"reasoningEffort\":\"medium\",\"fastMode\":false},\"claude-code\":{\"defaultModel\":\"anthropic/claude-sonnet-4-7\",\"allowedModels\":[\"sonnet\",\"opus\"]}}.",
       "advanced": true
     },
     "maxSessions": {

@@ -102,6 +102,35 @@ describe("resolveAgentLaunchRequest", () => {
     }
   });
 
+  it("resolves Codex fastMode from harness config only for Codex", () => {
+    setPluginConfig({
+      harnesses: {
+        codex: { fastMode: true },
+        "claude-code": { fastMode: true } as any,
+      },
+    });
+
+    const codex = resolveAgentLaunchRequest(
+      { prompt: "Use Codex fast mode", harness: "codex" },
+      { workspaceDir: "/tmp" } as any,
+      {},
+    );
+    const claude = resolveAgentLaunchRequest(
+      { prompt: "Use Claude", harness: "claude-code" },
+      { workspaceDir: "/tmp" } as any,
+      {},
+    );
+
+    assert.equal(codex.kind, "resolved");
+    if (codex.kind === "resolved") {
+      assert.equal(codex.fastMode, true);
+    }
+    assert.equal(claude.kind, "resolved");
+    if (claude.kind === "resolved") {
+      assert.equal(claude.fastMode, undefined);
+    }
+  });
+
   it("rejects a Codex default model outside the configured harness allowlist", () => {
     setPluginConfig({
       harnesses: {

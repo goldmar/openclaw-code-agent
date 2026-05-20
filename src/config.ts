@@ -81,6 +81,7 @@ export function setPluginConfig(config: Partial<RawPluginConfig>): void {
       ...existing,
       defaultModel: value.defaultModel ?? existing.defaultModel,
       reasoningEffort: value.reasoningEffort ?? existing.reasoningEffort,
+      fastMode: value.fastMode ?? existing.fastMode,
     };
     if (value.allowedModels !== undefined) {
       next.allowedModels = value.allowedModels ? [...value.allowedModels] : value.allowedModels;
@@ -178,6 +179,10 @@ export function resolveAllowedModelsForHarness(name: string): string[] | undefin
 
 export function resolveReasoningEffortForHarness(name: string): ReasoningEffort | undefined {
   return getHarnessConfig(name).reasoningEffort;
+}
+
+export function resolveFastModeForHarness(name: string): boolean | undefined {
+  return name === "codex" ? getHarnessConfig(name).fastMode : undefined;
 }
 
 // -- Channel resolution utilities --

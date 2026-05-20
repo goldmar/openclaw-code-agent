@@ -60,6 +60,7 @@ function normalizeTask(raw: unknown): GoalTaskState | undefined {
     harnessSessionId: typeof value.harnessSessionId === "string" ? value.harnessSessionId : undefined,
     model: typeof value.model === "string" ? value.model : undefined,
     reasoningEffort: typeof value.reasoningEffort === "string" ? value.reasoningEffort as GoalTaskState["reasoningEffort"] : undefined,
+    fastMode: value.fastMode === true ? true : undefined,
     systemPrompt: typeof value.systemPrompt === "string" ? value.systemPrompt : undefined,
     allowedTools: Array.isArray(value.allowedTools) ? value.allowedTools.filter((item): item is string => typeof item === "string") : undefined,
     originChannel: typeof value.originChannel === "string" ? value.originChannel : undefined,

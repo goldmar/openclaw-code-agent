@@ -314,6 +314,7 @@ describe("setPluginConfig", () => {
           defaultModel: "gpt-5.3-codex",
           allowedModels: ["gpt-5.3-codex", "gpt-5.4"],
           reasoningEffort: "high",
+          fastMode: true,
         },
       },
       defaultWorkdir: "/work",
@@ -332,6 +333,7 @@ describe("setPluginConfig", () => {
     assert.equal(pluginConfig.harnesses.codex?.defaultModel, "gpt-5.3-codex");
     assert.deepEqual(pluginConfig.harnesses.codex?.allowedModels, ["gpt-5.3-codex", "gpt-5.4"]);
     assert.equal(pluginConfig.harnesses.codex?.reasoningEffort, "high");
+    assert.equal(pluginConfig.harnesses.codex?.fastMode, true);
     assert.equal(pluginConfig.defaultWorkdir, "/work");
     assert.equal(pluginConfig.idleTimeoutMinutes, 60);
     assert.equal(pluginConfig.sessionGcAgeMinutes, 120);
@@ -402,6 +404,7 @@ describe("setPluginConfig", () => {
     assert.equal(pluginConfig.harnesses.codex?.defaultModel, "gpt-5.5");
     assert.deepEqual(pluginConfig.harnesses.codex?.allowedModels, ["gpt-5.5", "gpt-5.5-pro"]);
     assert.equal(pluginConfig.harnesses.codex?.reasoningEffort, "medium");
+    assert.equal(pluginConfig.harnesses.codex?.fastMode, undefined);
   });
 
   it("uses default for missing permissionMode", () => {
@@ -502,6 +505,7 @@ describe("pluginConfig singleton", () => {
     assert.equal(pluginConfig.harnesses.codex?.defaultModel, "gpt-5.5");
     assert.deepEqual(pluginConfig.harnesses.codex?.allowedModels, ["gpt-5.5", "gpt-5.5-pro"]);
     assert.equal(pluginConfig.harnesses.codex?.reasoningEffort, "medium");
+    assert.equal(pluginConfig.harnesses.codex?.fastMode, undefined);
   });
 
   it("setPluginConfig mutates the module-level singleton", () => {

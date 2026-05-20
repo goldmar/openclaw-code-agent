@@ -2,6 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   buildThreadStartPayloads,
+  buildThreadResumePayloads,
   buildTurnStartPayloads,
   classifyTerminalOutcome,
   codexExecutionPolicyForMode,
@@ -30,6 +31,47 @@ describe("codex protocol turn payloads", () => {
       approvalPolicy: "never",
       sandbox: "danger-full-access",
     });
+  });
+
+  it("includes Codex fastMode on thread and turn payloads when enabled", () => {
+    const threadStart = buildThreadStartPayloads({
+      cwd: "/tmp/project",
+      model: "gpt-5.5",
+      reasoningEffort: "xhigh",
+      fastMode: true,
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+    });
+    const threadResume = buildThreadResumePayloads({
+      threadId: "thread-1",
+      model: "gpt-5.5",
+      reasoningEffort: "xhigh",
+      fastMode: true,
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+    });
+    const turnStart = buildTurnStartPayloads({
+      threadId: "thread-1",
+      prompt: "Ship it",
+      model: "gpt-5.5",
+      reasoningEffort: "xhigh",
+      fastMode: true,
+      permissionMode: "plan",
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+    });
+
+    assert.equal((threadStart[0] as Record<string, unknown>).fastMode, true);
+    assert.equal((threadStart[1] as Record<string, unknown>).fastMode, true);
+    assert.equal(threadResume[0].fastMode, true);
+    assert.equal((turnStart[0] as Record<string, unknown>).fastMode, true);
+    assert.deepEqual((turnStart[0] as any).collaborationMode.settings, {
+      model: "gpt-5.5",
+      reasoningEffort: "xhigh",
+      fastMode: true,
+      developerInstructions: null,
+    });
+    assert.equal((turnStart[1] as any).collaboration_mode.settings.fast_mode, true);
   });
 
   it("includes execution policy alongside plan collaboration mode", () => {
