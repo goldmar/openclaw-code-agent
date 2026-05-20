@@ -356,6 +356,17 @@ export class SessionWorktreeStrategyService {
     } else if (mergeResult.stashed) {
       successMsg += `\n(Pre-existing changes on ${baseBranch} were auto-stashed and restored.)`;
     }
+    const outcomeDetailLines = [
+      mergeResult.fastForward ? "Merge type: fast-forward." : "Merge type: merge commit.",
+      `Auto-merge landed ${branchName} into ${baseBranch}.`,
+      "Local worktree branch cleanup was requested.",
+      ...(mergeResult.stashPopConflict
+        ? [`Pre-merge stash pop conflicted; run git stash show ${mergeResult.stashRef ?? "stash@{0}"} in ${repoDir} to review stashed changes.`]
+        : []),
+      ...(!mergeResult.stashPopConflict && mergeResult.stashed
+        ? [`Pre-existing changes on ${baseBranch} were auto-stashed and restored.`]
+        : []),
+    ];
 
     this.deps.dispatchSessionNotification(session, {
       label: "worktree-merge-success",
@@ -367,11 +378,7 @@ export class SessionWorktreeStrategyService {
         sessionName: session.name,
         outcomeLine,
         originThreadLine: this.deps.originThreadLine(session),
-        detailLines: [
-          mergeResult.fastForward ? "Merge type: fast-forward." : "Merge type: merge commit.",
-          `Auto-merge landed ${branchName} into ${baseBranch}.`,
-          "Local worktree branch cleanup was requested.",
-        ],
+        detailLines: outcomeDetailLines,
         canonicalStatusDelivered: true,
       }),
       wakeMessageOnNotifyFailed: buildWorktreeOutcomeFollowupWake({
@@ -379,11 +386,7 @@ export class SessionWorktreeStrategyService {
         sessionName: session.name,
         outcomeLine,
         originThreadLine: this.deps.originThreadLine(session),
-        detailLines: [
-          mergeResult.fastForward ? "Merge type: fast-forward." : "Merge type: merge commit.",
-          `Auto-merge landed ${branchName} into ${baseBranch}.`,
-          "Local worktree branch cleanup was requested.",
-        ],
+        detailLines: outcomeDetailLines,
         canonicalStatusDelivered: false,
       }),
     });

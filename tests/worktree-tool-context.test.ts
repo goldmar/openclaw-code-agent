@@ -7,6 +7,7 @@ import {
   matchesWorktreeToolRef,
   resolveWorktreeToolLifecycle,
   resolveWorktreeToolSessions,
+  resolveWorktreeToolTarget,
 } from "../src/tools/worktree-tool-context";
 
 describe("worktree-tool-context", () => {
@@ -93,6 +94,50 @@ describe("worktree-tool-context", () => {
         persistedSession: { sessionId: "persisted-1", name: "feature-work" },
       },
     );
+  });
+
+  it("preserves persisted-only notification target identity and origin metadata", () => {
+    const target = resolveWorktreeToolTarget({
+      resolve: () => undefined,
+      getPersistedSession(ref: string) {
+        return ref === "persisted-merge"
+          ? {
+              sessionId: "session-merged",
+              harnessSessionId: "h-merged",
+              backendRef: { kind: "codex-app-server", conversationId: "backend-merged" },
+              name: "persisted merge summary",
+              workdir: "/repo",
+              worktreePath: "/repo/.worktrees/openclaw-worktree-persisted-merge",
+              worktreeBranch: "agent/persisted-merge",
+              route: {
+                provider: "telegram",
+                target: "-100123",
+                threadId: "32947",
+                sessionKey: "agent:x:telegram:channel:-100123:topic:32947",
+              },
+              originChannel: "telegram|-100123",
+              originThreadId: "32947",
+              originSessionKey: "agent:x:telegram:channel:-100123:topic:32947",
+            }
+          : undefined;
+      },
+    } as any, "persisted-merge");
+
+    assert.deepEqual(target.notificationTarget, {
+      id: "session-merged",
+      name: "persisted merge summary",
+      harnessSessionId: "h-merged",
+      backendRef: { kind: "codex-app-server", conversationId: "backend-merged" },
+      route: {
+        provider: "telegram",
+        target: "-100123",
+        threadId: "32947",
+        sessionKey: "agent:x:telegram:channel:-100123:topic:32947",
+      },
+      originChannel: "telegram|-100123",
+      originThreadId: "32947",
+      originSessionKey: "agent:x:telegram:channel:-100123:topic:32947",
+    });
   });
 
   it("resolves worktree lifecycle from the shared tool helper", () => {
