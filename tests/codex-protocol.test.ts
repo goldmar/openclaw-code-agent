@@ -33,7 +33,7 @@ describe("codex protocol turn payloads", () => {
     });
   });
 
-  it("maps Codex fastMode to service_tier fast while retaining fastMode compatibility", () => {
+  it("maps Codex fastMode to service_tier fast without undocumented fast-mode payload fields", () => {
     const threadStart = buildThreadStartPayloads({
       cwd: "/tmp/project",
       model: "gpt-5.5",
@@ -61,25 +61,23 @@ describe("codex protocol turn payloads", () => {
       sandbox: "danger-full-access",
     });
 
-    assert.equal((threadStart[0] as Record<string, unknown>).fastMode, true);
     assert.equal((threadStart[0] as Record<string, unknown>).service_tier, "fast");
-    assert.equal((threadStart[1] as Record<string, unknown>).fastMode, true);
     assert.equal((threadStart[1] as Record<string, unknown>).service_tier, "fast");
-    assert.equal(threadResume[0].fastMode, true);
     assert.equal(threadResume[0].service_tier, "fast");
-    assert.equal((turnStart[0] as Record<string, unknown>).fastMode, true);
     assert.equal((turnStart[0] as Record<string, unknown>).service_tier, "fast");
-    assert.equal((turnStart[1] as Record<string, unknown>).fastMode, true);
     assert.equal((turnStart[1] as Record<string, unknown>).service_tier, "fast");
-    assert.equal((turnStart[2] as Record<string, unknown>).fastMode, true);
     assert.equal((turnStart[2] as Record<string, unknown>).service_tier, "fast");
+    for (const payload of [...threadStart.slice(0, 2), ...threadResume, ...turnStart] as Array<Record<string, unknown>>) {
+      assert.equal(Object.hasOwn(payload, "fastMode"), false);
+      assert.equal(Object.hasOwn(payload, "fast_mode"), false);
+    }
     assert.deepEqual((turnStart[0] as any).collaborationMode.settings, {
       model: "gpt-5.5",
       reasoningEffort: "xhigh",
-      fastMode: true,
       developerInstructions: null,
     });
-    assert.equal((turnStart[1] as any).collaboration_mode.settings.fast_mode, true);
+    assert.equal(Object.hasOwn((turnStart[0] as any).collaborationMode.settings, "fastMode"), false);
+    assert.equal(Object.hasOwn((turnStart[1] as any).collaboration_mode.settings, "fast_mode"), false);
   });
 
   it("includes execution policy alongside plan collaboration mode", () => {

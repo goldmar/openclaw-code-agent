@@ -231,7 +231,6 @@ describe("CodexHarness App Server mapping", () => {
     assert.deepEqual(startRequest?.params, {
       cwd: "/tmp",
       reasoningEffort: "xhigh",
-      fastMode: true,
       service_tier: "fast",
       approvalPolicy: "never",
       sandbox: "danger-full-access",
@@ -240,7 +239,6 @@ describe("CodexHarness App Server mapping", () => {
     assert.deepEqual(turnStartRequest?.params, {
       threadId: "thread-123",
       input: [{ type: "text", text: "investigate" }],
-      fastMode: true,
       service_tier: "fast",
       approvalPolicy: "never",
       sandbox: "danger-full-access",
@@ -248,7 +246,6 @@ describe("CodexHarness App Server mapping", () => {
         mode: "plan",
         settings: {
           reasoningEffort: "xhigh",
-          fastMode: true,
           developerInstructions: null,
         },
       },

@@ -306,7 +306,6 @@ export function buildThreadStartPayloads(params: {
   if (params.model?.trim()) base.model = params.model.trim();
   if (params.reasoningEffort?.trim()) base.reasoningEffort = params.reasoningEffort.trim();
   if (params.fastMode === true) {
-    base.fastMode = true;
     base.service_tier = "fast";
   }
   if (params.approvalPolicy?.trim()) base.approvalPolicy = params.approvalPolicy.trim();
@@ -314,7 +313,6 @@ export function buildThreadStartPayloads(params: {
   const fallback: Record<string, unknown> = { cwd: params.cwd };
   if (params.reasoningEffort?.trim()) fallback.reasoning_effort = params.reasoningEffort.trim();
   if (params.fastMode === true) {
-    fallback.fastMode = true;
     fallback.service_tier = "fast";
   }
   if (params.approvalPolicy?.trim()) fallback.approvalPolicy = params.approvalPolicy.trim();
@@ -342,7 +340,6 @@ export function buildThreadResumePayloads(params: {
   if (params.model?.trim()) base.model = params.model.trim();
   if (params.reasoningEffort?.trim()) base.reasoningEffort = params.reasoningEffort.trim();
   if (params.fastMode === true) {
-    base.fastMode = true;
     base.service_tier = "fast";
   }
   if (params.cwd?.trim()) base.cwd = params.cwd.trim();
@@ -359,31 +356,28 @@ export function buildCollaborationMode(
   mode: string,
   model?: string,
   reasoningEffort?: string,
-  fastMode?: boolean,
   developerInstructions?: string,
 ): Record<string, unknown> | undefined {
   const normalizedModel = model?.trim();
   const normalizedReasoningEffort = reasoningEffort?.trim();
   const normalizedDeveloperInstructions = developerInstructions?.trim();
   if (mode !== "plan") {
-    return normalizedModel || normalizedReasoningEffort || fastMode === true || normalizedDeveloperInstructions ? {
+    return normalizedModel || normalizedReasoningEffort || normalizedDeveloperInstructions ? {
       mode: "default",
       settings: {
         ...(normalizedModel ? { model: normalizedModel } : {}),
         ...(normalizedReasoningEffort ? { reasoningEffort: normalizedReasoningEffort } : {}),
-        ...(fastMode === true ? { fastMode: true } : {}),
         developerInstructions: normalizedDeveloperInstructions ?? null,
       },
     } : undefined;
   }
 
-  if (!normalizedModel && !normalizedReasoningEffort && fastMode !== true && !normalizedDeveloperInstructions) return undefined;
+  if (!normalizedModel && !normalizedReasoningEffort && !normalizedDeveloperInstructions) return undefined;
   return {
     mode: "plan",
     settings: {
       ...(normalizedModel ? { model: normalizedModel } : {}),
       ...(normalizedReasoningEffort ? { reasoningEffort: normalizedReasoningEffort } : {}),
-      ...(fastMode === true ? { fastMode: true } : {}),
       developerInstructions: normalizedDeveloperInstructions ?? null,
     },
   };
@@ -406,7 +400,6 @@ export function buildTurnStartPayloads(params: {
   };
   if (params.model?.trim()) base.model = params.model.trim();
   if (params.fastMode === true) {
-    base.fastMode = true;
     base.service_tier = "fast";
   }
   if (params.approvalPolicy?.trim()) base.approvalPolicy = params.approvalPolicy.trim();
@@ -415,7 +408,6 @@ export function buildTurnStartPayloads(params: {
     params.permissionMode ?? "default",
     params.model,
     params.reasoningEffort,
-    params.fastMode,
     params.systemPrompt,
   );
   if (!collaborationMode) return [base];
@@ -431,9 +423,6 @@ export function buildTurnStartPayloads(params: {
             : {}),
           ...(typeof (collaborationMode.settings as { reasoningEffort?: string }).reasoningEffort === "string"
             ? { reasoning_effort: (collaborationMode.settings as { reasoningEffort: string }).reasoningEffort }
-            : {}),
-          ...(typeof (collaborationMode.settings as { fastMode?: boolean }).fastMode === "boolean"
-            ? { fast_mode: (collaborationMode.settings as { fastMode: boolean }).fastMode }
             : {}),
           developer_instructions:
             (collaborationMode.settings as { developerInstructions?: string | null }).developerInstructions ?? null,
