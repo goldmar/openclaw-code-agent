@@ -41,6 +41,18 @@ function createCommittedWorktree(repoDir: string, name: string): { worktreePath:
   return { worktreePath, branchName };
 }
 
+function createReadmeChangingWorktree(repoDir: string, name: string): { worktreePath: string; branchName: string } {
+  const worktreePath = createWorktree(repoDir, name);
+  const branchName = getBranchName(worktreePath);
+  assert.ok(branchName, "worktree branch should exist");
+
+  writeFileSync(join(worktreePath, "README.md"), `${name}\n`, "utf-8");
+  git(worktreePath, "add", "README.md");
+  git(worktreePath, "commit", "-m", `feat: ${name}`);
+
+  return { worktreePath, branchName };
+}
+
 function remoteHead(repoDir: string, branch: string): string {
   const output = git(repoDir, "ls-remote", "--heads", "origin", branch);
   return output.split(/\s+/)[0] ?? "";
@@ -189,6 +201,28 @@ describe("agent_merge push behavior", () => {
       assert.match(notifications[0].outcomeLine, /Merged .* locally, but failed to push main/);
       assert.match(String(notifications[0].options?.detailLines?.join("\n")), /remote state may not include the merge/i);
       assert.equal(git(repoDir, "rev-parse", "main"), git(repoDir, "rev-parse", branchName));
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+      rmSync(remoteDir, { recursive: true, force: true });
+    }
+  });
+
+  it("includes stash-pop-conflict details in successful manual merge summary wake details", async () => {
+    const { repoDir, remoteDir } = createRepoWithRemote("agent-merge-stash-conflict");
+    try {
+      const sessionName = "merge-stash-conflict";
+      const { worktreePath, branchName } = createReadmeChangingWorktree(repoDir, sessionName);
+      const notifications: Array<{ session: unknown; outcomeLine: string; options?: any }> = [];
+      installPersistedSessionStub(sessionName, repoDir, worktreePath, branchName, notifications);
+      writeFileSync(join(repoDir, "README.md"), "local dirty base change\n", "utf-8");
+
+      const tool = makeAgentMergeTool();
+      const result = await tool.execute("tool-id", { session: sessionName, delete_branch: false });
+
+      assert.match((result.content[0] as { text: string }).text, /Pre-merge stash pop conflicted/);
+      assert.equal(notifications.length, 1);
+      assert.match(String(notifications[0].options?.detailLines?.join("\n")), /Pre-merge stash pop conflicted/);
+      assert.match(String(notifications[0].options?.detailLines?.join("\n")), /git stash show stash@\{0\}/);
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
       rmSync(remoteDir, { recursive: true, force: true });

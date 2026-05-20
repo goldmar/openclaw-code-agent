@@ -34,6 +34,30 @@ type AgentPrExecuteResult = {
   };
 };
 
+export function buildPrOutcomeDetailLines(args: {
+  branchName: string;
+  baseBranch: string;
+  prUrl?: string;
+  prNumber?: number;
+  targetRepo?: string;
+  commits?: number;
+  insertions?: number;
+  deletions?: number;
+  action: "opened" | "updated";
+}): string[] {
+  return [
+    args.action === "opened"
+      ? `Opened PR for branch ${args.branchName} into ${args.baseBranch}.`
+      : `Updated PR for branch ${args.branchName} into ${args.baseBranch}.`,
+    ...(args.prUrl ? [`PR URL: ${args.prUrl}.`] : []),
+    ...(args.prNumber ? [`PR number: #${args.prNumber}.`] : []),
+    ...(args.targetRepo ? [`Target repository: ${args.targetRepo}.`] : []),
+    ...(args.commits !== undefined
+      ? [`Pushed ${args.commits} new commits (+${args.insertions ?? 0}/-${args.deletions ?? 0}).`]
+      : []),
+  ];
+}
+
 /** Register the `agent_pr` tool factory. */
 export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext) {
   return {
@@ -162,7 +186,20 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext) {
             });
             sessionManager.notifyWorktreeOutcome(
               target.notificationTarget!,
-              updateOutcomeLine
+              updateOutcomeLine,
+              {
+                detailLines: buildPrOutcomeDetailLines({
+                  action: "updated",
+                  branchName,
+                  baseBranch,
+                  prUrl: prStatus.url,
+                  prNumber: prStatus.number,
+                  targetRepo,
+                  commits: diffSummary.commits,
+                  insertions: diffSummary.insertions,
+                  deletions: diffSummary.deletions,
+                }),
+              },
             );
             return {
               content: [{
@@ -322,7 +359,17 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext) {
           });
           sessionManager.notifyWorktreeOutcome(
             target.notificationTarget!,
-            outcomeLine
+            outcomeLine,
+            {
+              detailLines: buildPrOutcomeDetailLines({
+                action: "opened",
+                branchName,
+                baseBranch,
+                prUrl: prResult.prUrl,
+                prNumber: newPrStatus.number,
+                targetRepo,
+              }),
+            },
           );
 
           return { content: [{ type: "text", text: outcomeLine }], meta: { success: true, state: "created" } } satisfies AgentPrExecuteResult;
