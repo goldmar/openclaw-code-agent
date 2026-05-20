@@ -206,7 +206,7 @@
         "type": "string",
         "default": "delegate",
         "enum": ["off", "manual", "ask", "delegate", "auto-merge", "auto-pr"],
-        "description": "Default worktree strategy for all new sessions when agent_launch omits worktree_strategy. 'delegate' (default) creates an isolated worktree and wakes the orchestrator to decide follow-through autonomously. 'off' = no worktree. 'manual' = create worktree, no automatic action. 'ask' = push branch and notify the user with state-aware inline buttons such as Merge, Open PR, View PR, Sync PR, Later, and Discard. 'auto-merge' = auto-merge to base branch on completion. 'auto-pr' = auto-create or update a GitHub PR on completion."
+        "description": "Default worktree strategy for all new sessions when agent_launch omits worktree_strategy. 'delegate' (default) creates an isolated worktree and wakes the orchestrator to decide follow-through autonomously. 'off' = no worktree. 'manual' = create worktree, no automatic action. 'ask' = push branch and notify the user with state-aware inline buttons such as Merge, Open PR, View PR, Sync PR, Later, and Discard. 'auto-merge' = auto-merge to base branch on completion. 'auto-pr' = auto-create or update a GitHub PR on completion. Merge/PR outcomes deliver a canonical status, then request an orchestrator-owned routed summary."
       },
       "worktreeDir": {
         "type": "string",
@@ -270,7 +270,7 @@
     },
     "defaultWorktreeStrategy": {
       "label": "Default worktree strategy",
-      "help": "Applies to all sessions that don't specify worktree_strategy explicitly. 'delegate' (default) creates a worktree and wakes the orchestrator to decide follow-through. 'off' disables worktrees globally. 'ask' sends state-aware inline worktree buttons such as Merge, Open PR, View PR, Sync PR, Later, and Discard. 'auto-merge' and 'auto-pr' are fully automated.",
+      "help": "Applies to all sessions that don't specify worktree_strategy explicitly. 'delegate' (default) creates a worktree and wakes the orchestrator to decide follow-through. 'off' disables worktrees globally. 'ask' sends state-aware inline worktree buttons such as Merge, Open PR, View PR, Sync PR, Later, and Discard. Merge/PR outcomes send the canonical status first, then request an orchestrator-owned routed summary.",
       "advanced": true
     }
   },
