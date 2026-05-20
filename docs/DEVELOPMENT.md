@@ -99,6 +99,8 @@ pnpm run validate:release-metadata -- <version>
 
 Release metadata for external plugin installs lives in `package.json` under `openclaw.compat` and `openclaw.build`, while the plugin manifest version and manifest-owned activation/setup descriptors live in `openclaw.plugin.json`. When cutting a release, keep the package/plugin versions aligned and update the manifest descriptors whenever the plugin-owned command or onboarding surface changes.
 
+Release-prep docs should also cover behavior that changed since the previous tag. For `4.3.0`, that includes Codex `harnesses.codex.fastMode` mapping to the current App Server `service_tier: "fast"` contract, Codex `reasoningEffort` staying on the current `reasoningEffort` field, and the orchestrator-owned routed follow-up summary after merge/PR worktree outcomes.
+
 Release-prep branches should stop after PR-ready changes and validation unless the maintainer explicitly asks to publish. Do not push a `v*` tag, dispatch `.github/workflows/release.yml`, or run `npm publish` / `clawhub package publish` during preparation-only work. Use `npm pack --dry-run` to check package contents without publishing.
 
 The release workflow publishes one packed artifact to both npm and ClawHub. npm uses Trusted Publishing via GitHub OIDC; ClawHub publishing requires the repository secret `CLAWHUB_TOKEN`.

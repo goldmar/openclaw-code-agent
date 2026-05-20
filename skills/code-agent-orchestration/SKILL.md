@@ -183,7 +183,8 @@ If `agent_worktree_status` reports `released`, the sandbox content is already la
 - Read the diff context and decide whether a local merge is clearly safe.
 - `agent_merge` is acceptable for low-risk, clearly scoped changes that match the task.
 - Never call `agent_pr()` autonomously in delegate flows. Escalate PR decisions to the user.
-- If the wake already says the plugin sent the canonical completion notification, do not repeat that status line, but you should still usually add a short summary of the completed outcome.
+- If a merge/PR outcome wake has `completionWakeSummaryRequired=true`, read `agent_output(..., full=true)` when available and send one short factual summary. Honor the wake's origin route block; if it differs from the current chat, use a routed send path that preserves provider, target, and thread/topic.
+- If the wake already says the plugin sent the canonical completion notification, do not repeat that status line. The follow-up summary is orchestrator-owned and should add only the useful confirmed outcome.
 
 ### `manual`
 
