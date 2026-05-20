@@ -40,7 +40,165 @@ function createConflictedWorktree(name: string): {
   return { repoDir, worktreePath, branchName };
 }
 
+function createMergeableWorktree(name: string): {
+  repoDir: string;
+  worktreePath: string;
+  branchName: string;
+} {
+  const repoDir = mkdtempSync(join(tmpdir(), `openclaw-auto-merge-success-${name}-`));
+  git(repoDir, "init", "-b", "main");
+  git(repoDir, "config", "user.name", "Test User");
+  git(repoDir, "config", "user.email", "test@example.com");
+  writeFileSync(join(repoDir, "README.md"), "base\n", "utf-8");
+  git(repoDir, "add", "README.md");
+  git(repoDir, "commit", "-m", "init");
+
+  const worktreePath = createWorktree(repoDir, name);
+  const branchName = getBranchName(worktreePath);
+  assert.ok(branchName, "worktree branch should exist");
+
+  writeFileSync(join(worktreePath, "feature.txt"), "feature\n", "utf-8");
+  git(worktreePath, "add", "feature.txt");
+  git(worktreePath, "commit", "-m", "feature change");
+
+  return { repoDir, worktreePath, branchName };
+}
+
 describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
+  it("requests a routed follow-up summary after auto-merge succeeds", async () => {
+    const { repoDir, worktreePath, branchName } = createMergeableWorktree("summary-success");
+    try {
+      const notifications: Array<Record<string, unknown>> = [];
+      const service = new SessionWorktreeStrategyService({
+        shouldRunWorktreeStrategy: () => true,
+        isAlreadyMerged: () => false,
+        resolveWorktreeRepoDir: (dir) => dir,
+        getWorktreeCompletionState: () => "has-commits",
+        updatePersistedSession: (_ref, patch) => {
+          Object.assign(session, patch);
+          return true;
+        },
+        dispatchSessionNotification: (_session, request) => {
+          notifications.push(request as Record<string, unknown>);
+        },
+        getOutputPreview: () => "",
+        originThreadLine: () => "Session origin route (authoritative for human follow-ups):\noriginRoute: {\"provider\":\"telegram\",\"target\":\"-100123\",\"threadId\":\"32947\"}",
+        getWorktreeDecisionButtons: () => undefined,
+        makeOpenPrButton: () => ({ label: "Open PR", callbackData: "open-pr" }),
+        worktreeMessages: new SessionWorktreeMessageService(),
+        enqueueMerge: async (_repoDir, fn) => { await fn(); },
+        mergeBranch,
+        spawnConflictResolver: async () => ({ id: "resolver-success", name: "unused" }),
+        runAutoPr: async () => ({ success: true }),
+      });
+
+      const session: any = {
+        id: "s-summary-success",
+        name: "summary-success",
+        harnessSessionId: "h-summary-success",
+        worktreePrTargetRepo: undefined,
+        worktreePushRemote: undefined,
+      };
+
+      const diffSummary = getDiffSummary(repoDir, branchName, "main");
+      assert.ok(diffSummary, "diff summary should be available");
+
+      await (service as any).handleAutoMergeStrategy(
+        session,
+        repoDir,
+        worktreePath,
+        branchName,
+        "main",
+        diffSummary,
+        session.id,
+      );
+
+      assert.equal(notifications.length, 1);
+      assert.equal(notifications[0].label, "worktree-merge-success");
+      assert.equal(notifications[0].completionWakeSummaryRequired, true);
+      assert.match(String(notifications[0].wakeMessageOnNotifySuccess), /agent_output\(session='s-summary-success', full=true\)/);
+      assert.match(String(notifications[0].wakeMessageOnNotifySuccess), /originRoute: \{"provider":"telegram","target":"-100123","threadId":"32947"\}/);
+      assert.equal(session.worktreeState, "merged");
+      assert.equal(session.worktreeLifecycle?.state, "merged");
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it("includes stash-pop-conflict warnings in the auto-merge follow-up wake", async () => {
+    const repoDir = mkdtempSync(join(tmpdir(), "openclaw-auto-merge-stash-conflict-"));
+    git(repoDir, "init", "-b", "main");
+    git(repoDir, "config", "user.name", "Test User");
+    git(repoDir, "config", "user.email", "test@example.com");
+    writeFileSync(join(repoDir, "README.md"), "base\n", "utf-8");
+    git(repoDir, "add", "README.md");
+    git(repoDir, "commit", "-m", "init");
+    git(repoDir, "branch", "agent/stash-conflict");
+    const notifications: Array<Record<string, unknown>> = [];
+    const service = new SessionWorktreeStrategyService({
+      shouldRunWorktreeStrategy: () => true,
+      isAlreadyMerged: () => false,
+      resolveWorktreeRepoDir: (dir) => dir,
+      getWorktreeCompletionState: () => "has-commits",
+      updatePersistedSession: (_ref, patch) => {
+        Object.assign(session, patch);
+        return true;
+      },
+      dispatchSessionNotification: (_session, request) => {
+        notifications.push(request as Record<string, unknown>);
+      },
+      getOutputPreview: () => "",
+      originThreadLine: () => "",
+      getWorktreeDecisionButtons: () => undefined,
+      makeOpenPrButton: () => ({ label: "Open PR", callbackData: "open-pr" }),
+      worktreeMessages: new SessionWorktreeMessageService(),
+      enqueueMerge: async (_repoDir, fn) => { await fn(); },
+      mergeBranch: () => ({
+        success: true,
+        fastForward: true,
+        stashPopConflict: true,
+        stashRef: "stash@{2}",
+      }),
+      spawnConflictResolver: async () => ({ id: "resolver-stash", name: "unused" }),
+      runAutoPr: async () => ({ success: true }),
+    });
+
+    const session: any = {
+      id: "s-stash-conflict",
+      name: "stash-conflict",
+      harnessSessionId: "h-stash-conflict",
+      worktreePrTargetRepo: undefined,
+      worktreePushRemote: undefined,
+    };
+    const diffSummary = {
+      commits: 1,
+      filesChanged: 1,
+      insertions: 2,
+      deletions: 0,
+      changedFiles: ["feature.txt"],
+      commitMessages: [],
+    };
+
+    try {
+      await (service as any).handleAutoMergeStrategy(
+        session,
+        repoDir,
+        join(repoDir, ".worktrees/stash-conflict"),
+        "agent/stash-conflict",
+        "main",
+        diffSummary,
+        session.id,
+      );
+
+      assert.equal(notifications.length, 1);
+      assert.match(String(notifications[0].userMessage), /Pre-merge stash pop conflicted/);
+      assert.match(String(notifications[0].wakeMessageOnNotifySuccess), /Pre-merge stash pop conflicted/);
+      assert.match(String(notifications[0].wakeMessageOnNotifySuccess), /stash@\{2\}/);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
   it("spawns a resolver session and marks the worktree as conflict-resolving on first rebase conflict", async () => {
     const { repoDir, worktreePath, branchName } = createConflictedWorktree("resolver-first");
     try {

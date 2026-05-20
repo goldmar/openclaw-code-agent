@@ -248,4 +248,61 @@ describe("SessionNotificationService", () => {
       ],
     );
   });
+
+  it("requests a follow-up wake for worktree outcomes and records the summary contract", () => {
+    const patches: Array<{ ref: string; patch: Record<string, unknown> }> = [];
+    let capturedRequest: any;
+    const fakeDispatcher = {
+      dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, () => void> }) => {
+        capturedRequest = request;
+        request.hooks?.onNotifyStarted?.();
+        request.hooks?.onNotifySucceeded?.();
+        request.hooks?.onWakeStarted?.();
+        request.hooks?.onWakeSucceeded?.();
+      },
+      dispose: () => {},
+    };
+
+    const service = new SessionNotificationService(
+      fakeDispatcher as any,
+      (ref, patch) => patches.push({ ref, patch: patch as Record<string, unknown> }),
+    );
+
+    service.notifyWorktreeOutcome(
+      {
+        id: "session-7",
+        harnessSessionId: "h-7",
+        name: "merge-summary",
+        route: {
+          provider: "telegram",
+          target: "-100123",
+          threadId: "32947",
+          sessionKey: "agent:x:telegram:channel:-100123:topic:32947",
+        },
+      } as any,
+      "✅ Merged: agent/example → main",
+      { detailLines: ["Pushed main.", "Branch and worktree cleaned up."] },
+    );
+
+    assert.equal(capturedRequest.label, "worktree-outcome");
+    assert.equal(capturedRequest.completionWakeSummaryRequired, true);
+    assert.match(capturedRequest.wakeMessageOnNotifySuccess, /agent_output\(session='session-7', full=true\)/);
+    assert.match(capturedRequest.wakeMessageOnNotifySuccess, /originRoute: \{"provider":"telegram","target":"-100123","threadId":"32947","sessionKey":"agent:x:telegram:channel:-100123:topic:32947"\}/);
+    assert.match(capturedRequest.wakeMessageOnNotifySuccess, /Pushed main\./);
+    assert.deepEqual(
+      patches.map(({ ref, patch }) => ({
+        ref,
+        deliveryState: patch.deliveryState,
+        completionWakeSummaryRequired: patch.completionWakeSummaryRequired,
+        hasIssuedAt: typeof patch.completionWakeIssuedAt === "string",
+        hasSucceededAt: typeof patch.completionWakeSucceededAt === "string",
+      })),
+      [
+        { ref: "session-7", deliveryState: "notifying", completionWakeSummaryRequired: undefined, hasIssuedAt: false, hasSucceededAt: false },
+        { ref: "session-7", deliveryState: "wake_pending", completionWakeSummaryRequired: undefined, hasIssuedAt: false, hasSucceededAt: false },
+        { ref: "session-7", deliveryState: "wake_pending", completionWakeSummaryRequired: true, hasIssuedAt: true, hasSucceededAt: false },
+        { ref: "session-7", deliveryState: "idle", completionWakeSummaryRequired: true, hasIssuedAt: false, hasSucceededAt: true },
+      ],
+    );
+  });
 });

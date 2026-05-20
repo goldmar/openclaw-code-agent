@@ -31,6 +31,22 @@ function isAgentMergeParams(value: unknown): value is AgentMergeParams {
   return typeof params.session === "string";
 }
 
+function buildStashOutcomeDetailLines(args: {
+  mergeResult: ReturnType<typeof mergeBranch>;
+  repoDir: string;
+  baseBranch: string;
+}): string[] {
+  if (args.mergeResult.stashPopConflict) {
+    return [
+      `Pre-merge stash pop conflicted; run git stash show ${args.mergeResult.stashRef ?? "stash@{0}"} in ${args.repoDir} to review stashed changes.`,
+    ];
+  }
+  if (args.mergeResult.stashed) {
+    return [`Pre-existing changes on ${args.baseBranch} were auto-stashed and restored.`];
+  }
+  return [];
+}
+
 /** Register the `agent_merge` tool factory. */
 export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
   return {
@@ -135,10 +151,29 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
         const mergeResult = mergeBranch(effectiveWorkdir, branchName, baseBranch, strategy, worktreePath);
 
         if (mergeResult.success) {
+          const stashDetailLines = buildStashOutcomeDetailLines({
+            mergeResult,
+            repoDir: effectiveWorkdir,
+            baseBranch,
+          });
+
           // Push base branch if requested
           if (shouldPush) {
             if (!pushBranch(effectiveWorkdir, baseBranch)) {
-              toolResult = { content: [{ type: "text", text: `⚠️ Merged ${branchName} → ${baseBranch} locally, but failed to push ${baseBranch}` }] };
+              const pushFailedText = `⚠️ Merged ${branchName} → ${baseBranch} locally, but failed to push ${baseBranch}`;
+              sessionManager.notifyWorktreeOutcome(
+                target.notificationTarget!,
+                pushFailedText,
+                {
+                  detailLines: [
+                    `Branch ${branchName} was merged into ${baseBranch} in the local repository.`,
+                    `Pushing ${baseBranch} failed; remote state may not include the merge.`,
+                    `Cleanup was skipped so the branch/worktree remains available for follow-up.`,
+                    ...stashDetailLines,
+                  ],
+                },
+              );
+              toolResult = { content: [{ type: "text", text: pushFailedText }] };
               return;
             }
           }
@@ -190,7 +225,17 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
           });
           sessionManager.notifyWorktreeOutcome(
             target.notificationTarget!,
-            outcomeLine
+            outcomeLine,
+            {
+              detailLines: [
+                mergeResult.fastForward ? "Merge type: fast-forward." : "Merge type: merge commit.",
+                shouldPush ? `Pushed ${baseBranch}.` : `Did not push ${baseBranch}; push was not requested.`,
+                shouldCleanup
+                  ? (worktreeCleanedUp ? "Branch and worktree cleaned up." : "Branch deleted; worktree cleanup skipped.")
+                  : "Branch/worktree cleanup was not requested.",
+                ...stashDetailLines,
+              ],
+            },
           );
 
           const mergeTypeMsg = mergeResult.fastForward ? "⚡ Fast-forward" : "🔀 Merge commit";

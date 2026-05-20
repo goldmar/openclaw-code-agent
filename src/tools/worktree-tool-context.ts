@@ -15,9 +15,13 @@ export interface ResolvedWorktreeToolTarget {
   branchName?: string;
   notificationTarget?: {
     id: string;
+    name?: string;
     harnessSessionId?: string;
     backendRef?: Session["backendRef"] | PersistedSessionInfo["backendRef"];
     route?: PersistedSessionInfo["route"];
+    originChannel?: string;
+    originThreadId?: string | number;
+    originSessionKey?: string;
   };
 }
 
@@ -39,9 +43,13 @@ export function resolveWorktreeToolTarget(sessionManager: SessionManager, ref: s
     notificationTarget: activeSession ?? (persistedSession
       ? {
           id: persistedRef ?? ref,
+          name: persistedSession.name,
           harnessSessionId: persistedSession.harnessSessionId,
           backendRef: persistedSession.backendRef,
           route: persistedSession.route,
+          originChannel: persistedSession.originChannel,
+          originThreadId: persistedSession.originThreadId,
+          originSessionKey: persistedSession.originSessionKey,
         }
       : undefined),
   };

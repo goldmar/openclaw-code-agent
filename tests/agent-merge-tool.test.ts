@@ -41,12 +41,30 @@ function createCommittedWorktree(repoDir: string, name: string): { worktreePath:
   return { worktreePath, branchName };
 }
 
+function createReadmeChangingWorktree(repoDir: string, name: string): { worktreePath: string; branchName: string } {
+  const worktreePath = createWorktree(repoDir, name);
+  const branchName = getBranchName(worktreePath);
+  assert.ok(branchName, "worktree branch should exist");
+
+  writeFileSync(join(worktreePath, "README.md"), `${name}\n`, "utf-8");
+  git(worktreePath, "add", "README.md");
+  git(worktreePath, "commit", "-m", `feat: ${name}`);
+
+  return { worktreePath, branchName };
+}
+
 function remoteHead(repoDir: string, branch: string): string {
   const output = git(repoDir, "ls-remote", "--heads", "origin", branch);
   return output.split(/\s+/)[0] ?? "";
 }
 
-function installPersistedSessionStub(sessionName: string, repoDir: string, worktreePath: string, branchName: string): Record<string, unknown> {
+function installPersistedSessionStub(
+  sessionName: string,
+  repoDir: string,
+  worktreePath: string,
+  branchName: string,
+  notifications: Array<{ session: unknown; outcomeLine: string; options?: unknown }> = [],
+): Record<string, unknown> {
   const persistedSession: Record<string, unknown> = {
     harnessSessionId: `h-${sessionName}`,
     name: sessionName,
@@ -68,7 +86,9 @@ function installPersistedSessionStub(sessionName: string, repoDir: string, workt
     updatePersistedSession(_id: string, patch: Record<string, unknown>) {
       Object.assign(persistedSession, patch);
     },
-    notifyWorktreeOutcome() {},
+    notifyWorktreeOutcome(session: unknown, outcomeLine: string, options?: unknown) {
+      notifications.push({ session, outcomeLine, options });
+    },
     spawn() {
       throw new Error("conflict resolver should not be spawned in this test");
     },
@@ -158,6 +178,51 @@ describe("agent_merge push behavior", () => {
 
       assert.match((result.content[0] as { text: string }).text, /Pushed\./);
       assert.equal(remoteHead(repoDir, "main"), git(repoDir, "rev-parse", "main"));
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+      rmSync(remoteDir, { recursive: true, force: true });
+    }
+  });
+
+  it("notifies with a summary wake when local merge succeeds but push fails", async () => {
+    const { repoDir, remoteDir } = createRepoWithRemote("agent-merge-push-fail");
+    try {
+      const sessionName = "merge-push-fail";
+      const { worktreePath, branchName } = createCommittedWorktree(repoDir, sessionName);
+      const notifications: Array<{ session: unknown; outcomeLine: string; options?: any }> = [];
+      installPersistedSessionStub(sessionName, repoDir, worktreePath, branchName, notifications);
+      git(repoDir, "remote", "set-url", "origin", join(tmpdir(), "missing-openclaw-remote.git"));
+
+      const tool = makeAgentMergeTool();
+      const result = await tool.execute("tool-id", { session: sessionName, push: true, delete_branch: false });
+
+      assert.match((result.content[0] as { text: string }).text, /locally, but failed to push main/);
+      assert.equal(notifications.length, 1);
+      assert.match(notifications[0].outcomeLine, /Merged .* locally, but failed to push main/);
+      assert.match(String(notifications[0].options?.detailLines?.join("\n")), /remote state may not include the merge/i);
+      assert.equal(git(repoDir, "rev-parse", "main"), git(repoDir, "rev-parse", branchName));
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+      rmSync(remoteDir, { recursive: true, force: true });
+    }
+  });
+
+  it("includes stash-pop-conflict details in successful manual merge summary wake details", async () => {
+    const { repoDir, remoteDir } = createRepoWithRemote("agent-merge-stash-conflict");
+    try {
+      const sessionName = "merge-stash-conflict";
+      const { worktreePath, branchName } = createReadmeChangingWorktree(repoDir, sessionName);
+      const notifications: Array<{ session: unknown; outcomeLine: string; options?: any }> = [];
+      installPersistedSessionStub(sessionName, repoDir, worktreePath, branchName, notifications);
+      writeFileSync(join(repoDir, "README.md"), "local dirty base change\n", "utf-8");
+
+      const tool = makeAgentMergeTool();
+      const result = await tool.execute("tool-id", { session: sessionName, delete_branch: false });
+
+      assert.match((result.content[0] as { text: string }).text, /Pre-merge stash pop conflicted/);
+      assert.equal(notifications.length, 1);
+      assert.match(String(notifications[0].options?.detailLines?.join("\n")), /Pre-merge stash pop conflicted/);
+      assert.match(String(notifications[0].options?.detailLines?.join("\n")), /git stash show stash@\{0\}/);
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
       rmSync(remoteDir, { recursive: true, force: true });

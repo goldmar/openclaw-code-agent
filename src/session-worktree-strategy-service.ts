@@ -11,6 +11,7 @@ import {
   buildMergedPatch,
   buildPendingDecisionPatch,
 } from "./worktree-session-patches";
+import { buildWorktreeOutcomeFollowupWake } from "./session-notification-builder";
 import {
   removeWorktree,
   getDiffSummary,
@@ -355,10 +356,39 @@ export class SessionWorktreeStrategyService {
     } else if (mergeResult.stashed) {
       successMsg += `\n(Pre-existing changes on ${baseBranch} were auto-stashed and restored.)`;
     }
+    const outcomeDetailLines = [
+      mergeResult.fastForward ? "Merge type: fast-forward." : "Merge type: merge commit.",
+      `Auto-merge landed ${branchName} into ${baseBranch}.`,
+      "Local worktree branch cleanup was requested.",
+      ...(mergeResult.stashPopConflict
+        ? [`Pre-merge stash pop conflicted; run git stash show ${mergeResult.stashRef ?? "stash@{0}"} in ${repoDir} to review stashed changes.`]
+        : []),
+      ...(!mergeResult.stashPopConflict && mergeResult.stashed
+        ? [`Pre-existing changes on ${baseBranch} were auto-stashed and restored.`]
+        : []),
+    ];
 
     this.deps.dispatchSessionNotification(session, {
       label: "worktree-merge-success",
       userMessage: successMsg,
+      notifyUser: "always",
+      completionWakeSummaryRequired: true,
+      wakeMessageOnNotifySuccess: buildWorktreeOutcomeFollowupWake({
+        sessionId: session.id,
+        sessionName: session.name,
+        outcomeLine,
+        originThreadLine: this.deps.originThreadLine(session),
+        detailLines: outcomeDetailLines,
+        canonicalStatusDelivered: true,
+      }),
+      wakeMessageOnNotifyFailed: buildWorktreeOutcomeFollowupWake({
+        sessionId: session.id,
+        sessionName: session.name,
+        outcomeLine,
+        originThreadLine: this.deps.originThreadLine(session),
+        detailLines: outcomeDetailLines,
+        canonicalStatusDelivered: false,
+      }),
     });
   }
 
