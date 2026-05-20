@@ -1229,7 +1229,7 @@ describe("SessionManager.notifySession()", () => {
 
   it("builds plan offers with generic interactive buttons and Telegram topic routing", () => {
     sm.sendPlanOffer({
-      offerId: "plugin-readiness-v2026.5.12",
+      offerId: "plugin-readiness-v2026.5.18",
       route: {
         provider: "telegram",
         target: "-1003863755361",
@@ -1237,14 +1237,14 @@ describe("SessionManager.notifySession()", () => {
         sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
       },
       text: "Readiness report body",
-      planName: "plugin-readiness-v2026.5.12",
+      planName: "plugin-readiness-v2026.5.18",
       planPrompt: "Create a plugin readiness plan.",
       planWorkdir: "/home/openclaw/workspace/openclaw-code-agent",
       planWorktreeStrategy: "auto-pr",
     });
 
     const [[session, request]] = (sm as any).__dispatchCalls;
-    assert.equal(session.id, "plugin-readiness-v2026.5.12");
+    assert.equal(session.id, "plugin-readiness-v2026.5.18");
     assert.equal(session.route.provider, "telegram");
     assert.equal(session.route.threadId, "13832");
     assert.equal(request.label, "plan-offer");
@@ -1293,9 +1293,9 @@ describe("SessionManager.launchPlanOffer()", () => {
 
     const session = sm.launchPlanOffer({
       route,
-      prompt: "Plan the OpenClaw v2026.5.12 plugin-readiness follow-up.",
+      prompt: "Plan the OpenClaw v2026.5.18 plugin-readiness follow-up.",
       workdir: "/home/openclaw/workspace/openclaw-code-agent",
-      name: "plugin-readiness-v2026.5.12",
+      name: "plugin-readiness-v2026.5.18",
       worktreeStrategy: "auto-pr",
     });
 

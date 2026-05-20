@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Kept Codex reasoning effort on the current App Server `reasoningEffort` field across fresh thread, resume, and turn-start payloads, including plan-mode collaboration settings.
+- Updated the local OpenClaw package target to `openclaw@2026.5.18` while keeping the peer floor at `>=2026.4.21`.
 - Clarified that merge/PR tools first deliver the canonical plugin status line, then wake the orchestrator to read the full output and send one short factual routed summary.
 
 ## [4.2.4] - 2026-05-14

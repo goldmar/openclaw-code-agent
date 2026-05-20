@@ -781,7 +781,7 @@ describe("createCallbackHandler()", () => {
     const launches: Array<Record<string, unknown>> = [];
     setSessionManager({
       getActionToken: () => ({
-        sessionId: "plugin-readiness-v2026.5.12",
+        sessionId: "plugin-readiness-v2026.5.18",
         kind: "plan-offer-start",
         route: {
           provider: "telegram",
@@ -789,13 +789,13 @@ describe("createCallbackHandler()", () => {
           threadId: "13832",
           sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
         },
-        launchName: "plugin-readiness-v2026.5.12",
+        launchName: "plugin-readiness-v2026.5.18",
         launchPrompt: "Plan the required follow-up.",
         launchWorkdir: "/home/openclaw/workspace/openclaw-code-agent",
         launchWorktreeStrategy: "auto-pr",
       }),
       consumeActionToken: () => ({
-        sessionId: "plugin-readiness-v2026.5.12",
+        sessionId: "plugin-readiness-v2026.5.18",
         kind: "plan-offer-start",
         route: {
           provider: "telegram",
@@ -803,14 +803,14 @@ describe("createCallbackHandler()", () => {
           threadId: "13832",
           sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
         },
-        launchName: "plugin-readiness-v2026.5.12",
+        launchName: "plugin-readiness-v2026.5.18",
         launchPrompt: "Plan the required follow-up.",
         launchWorkdir: "/home/openclaw/workspace/openclaw-code-agent",
         launchWorktreeStrategy: "auto-pr",
       }),
       launchPlanOffer: (args: Record<string, unknown>) => {
         launches.push(args);
-        return { id: "sess-plan", name: "plugin-readiness-v2026.5.12" };
+        return { id: "sess-plan", name: "plugin-readiness-v2026.5.18" };
       },
     } as any);
 
@@ -822,10 +822,10 @@ describe("createCallbackHandler()", () => {
     assert.equal(state.buttonsCleared, 1);
     assert.equal((launches[0]?.route as { threadId?: string })?.threadId, "13832");
     assert.equal((launches[0]?.route as { sessionKey?: string })?.sessionKey, "agent:main:telegram:group:-1003863755361:topic:13832");
-    assert.equal(launches[0]?.name, "plugin-readiness-v2026.5.12");
+    assert.equal(launches[0]?.name, "plugin-readiness-v2026.5.18");
     assert.equal(launches[0]?.prompt, "Plan the required follow-up.");
     assert.equal(launches[0]?.workdir, "/home/openclaw/workspace/openclaw-code-agent");
     assert.equal(launches[0]?.worktreeStrategy, "auto-pr");
-    assert.match(state.replies[0], /Planning session started: plugin-readiness-v2026\.5\.12 \[sess-plan\]/);
+    assert.match(state.replies[0], /Planning session started: plugin-readiness-v2026\.5\.18 \[sess-plan\]/);
   });
 });
