@@ -11,6 +11,7 @@ Canonical operator reference for `openclaw-code-agent`: install, configuration, 
 | `harnesses.codex.defaultModel` | `gpt-5.5` |
 | `harnesses.codex.allowedModels` | `["gpt-5.5", "gpt-5.5-pro"]` |
 | `harnesses.codex.reasoningEffort` | `medium` |
+| `harnesses.codex.fastMode` | `false` |
 | `permissionMode` | `plan` |
 | `planApproval` | `delegate` |
 | `defaultWorktreeStrategy` | `delegate` |
@@ -26,15 +27,18 @@ Sessions are multi-turn. Active sessions accept follow-up messages via `agent_re
 
 Current releases treat persisted session storage as new-schema-only. If startup finds an older or invalid session store, the plugin archives it to a timestamped `.legacy-*.json` backup and starts with a fresh index instead of migrating rows in place.
 
-### OpenClaw 2026.5.12 SDK Readiness
+### OpenClaw 2026.5.18 SDK Readiness
 
-`openclaw-code-agent` `4.2.4` is validated against the latest installable OpenClaw SDK package, `openclaw@2026.5.12`. The plugin keeps the peer floor at `>=2026.4.21` for compatible existing installs, while package build metadata targets OpenClaw `2026.5.12` for both host and SDK readiness.
+`openclaw-code-agent` `4.3.0` is validated against the latest installable OpenClaw SDK package, `openclaw@2026.5.18`. The plugin keeps the peer floor at `>=2026.4.21` for compatible existing installs, while package build metadata targets OpenClaw `2026.5.18` for both host and SDK readiness.
 
-Configuration guidance for `2026.5.12`:
+No plugin compatibility code update was needed for `2026.5.18`: `openclaw@latest` resolves to `2026.5.18`, the plugin SDK `plugin-entry` type surface is unchanged from `2026.5.12`, `openclaw.plugin.json` already declares tools through `contracts.tools`, and runtime code only imports `openclaw/plugin-sdk/plugin-entry` from the OpenClaw SDK. The compatibility check passed with release metadata validation, typecheck, build, and `npx -y openclaw@2026.5.18 --version`.
+
+Configuration guidance for `2026.5.18`:
 
 - If `plugins.allow` is present, add `openclaw-code-agent`. OpenClaw treats that allowlist as exclusive, so `tools.allow` cannot make this plugin's tools available when the owning plugin is blocked.
 - New OpenClaw configs default `plugins.bundledDiscovery` to `allowlist`, so a restrictive `plugins.allow` list can also block omitted bundled provider or runtime plugins. Disabled bundled plugins remain disabled unless explicitly enabled or auto-enabled by their own OpenClaw contracts. Do not assume adjacent bundled plugins are available to code-agent sessions.
-- Use `harnesses.codex.defaultModel`, `harnesses.codex.allowedModels`, and `harnesses.codex.reasoningEffort` for Codex. Use `harnesses["claude-code"].defaultModel`, `harnesses["claude-code"].allowedModels`, and optional `harnesses["claude-code"].reasoningEffort` for Claude Code.
+- Use `harnesses.codex.defaultModel`, `harnesses.codex.allowedModels`, `harnesses.codex.reasoningEffort`, and `harnesses.codex.fastMode` for Codex. Use `harnesses["claude-code"].defaultModel`, `harnesses["claude-code"].allowedModels`, and optional `harnesses["claude-code"].reasoningEffort` for Claude Code.
+- Codex `reasoningEffort` is sent as `reasoningEffort` on current App Server thread, resume, and turn-start collaboration settings. Codex `fastMode: true` sends `service_tier: "fast"` on current App Server thread, resume, and turn payloads; the plugin does not emit a `fastMode` payload field.
 - OpenClaw core now documents Codex routing as an explicit provider/runtime split: `openai/gpt-5.5` plus `agentRuntime.id: "codex"` uses the bundled native Codex app-server runtime, while `openai-codex/gpt-5.5` remains the PI Codex OAuth route. This plugin's own Codex harness is configured through `harnesses.codex.*`, not through OpenClaw's bundled `codex` provider route.
 - Session lifecycle mirroring now prefers the current `api.runtime.tasks.managedFlows` surface and keeps a compatibility fallback for older hosts that still expose `api.runtime.taskFlow`.
 - OpenClaw final/main Codex app-server changes include quieter completed turns, native subagent task mirroring, tool transcript repair, and media event handling; this plugin keeps its Codex harness isolated from bundled Codex provider/runtime config.
@@ -125,7 +129,8 @@ Add this under `plugins.entries["openclaw-code-agent"]` in `~/.openclaw/openclaw
       "codex": {
         "defaultModel": "gpt-5.5",
         "allowedModels": ["gpt-5.5", "gpt-5.5-pro"],
-        "reasoningEffort": "medium"
+        "reasoningEffort": "medium",
+        "fastMode": false
       }
     }
   }
@@ -154,6 +159,13 @@ forced_login_method = "chatgpt"
 | `codex` | Controlled by `harnesses.codex.allowedModels` | Native Codex App Server harness with structured pending input, structured plans, and native backend worktree refs |
 
 Allowed-model matching is case-insensitive substring matching. If the resolved model is not allowed, `agent_launch` fails immediately.
+
+Codex harness details:
+
+- Fresh Codex App Server threads, resumed threads, and turn starts receive the configured model when present.
+- Configured Codex reasoning effort is sent as `reasoningEffort` on thread/resume payloads and inside turn-start collaboration settings.
+- `harnesses.codex.fastMode: true` sends `service_tier: "fast"` on Codex App Server thread/resume/turn payloads. It is Codex-only and is ignored for Claude Code.
+- Codex execution policy remains fixed to the supported App Server path; use plugin `permissionMode` and `planApproval` for review behavior.
 
 Important boundary:
 
@@ -439,7 +451,7 @@ Merge a worktree branch back to base.
 
 On conflicts, the plugin spawns a conflict-resolver session using the configured default harness.
 
-After a successful local merge, auto-merge, or local-merge-with-push-failure outcome, the plugin sends the canonical worktree status and wakes the orchestrator with `completionWakeSummaryRequired=true`. The orchestrator must read `agent_output(session, full=true)` when available and send one short factual routed summary. If `push=true` fails after the local merge, that follow-up must describe the push failure and must not claim the merge reached the remote.
+After a successful local merge, auto-merge, or local-merge-with-push-failure outcome, the plugin sends the canonical worktree status and wakes the orchestrator with `completionWakeSummaryRequired=true`. The wake carries the authoritative session origin route/thread block, including persisted route metadata when the active row no longer has it. The orchestrator must read `agent_output(session, full=true)` when available and send one short factual routed summary to that origin route. If `push=true` fails after the local merge, that follow-up must describe the push failure and must not claim the merge reached the remote.
 
 ### `agent_pr`
 
@@ -455,7 +467,7 @@ Create or update a GitHub PR for a worktree branch.
 
 The PR path pushes the worktree branch on demand, then handles open, merged, and closed PR states instead of blindly creating duplicates.
 
-PR opened and PR updated outcomes use the same post-outcome follow-up contract as merge outcomes: the canonical PR status is delivered first, then the orchestrator is woken to send one concise factual summary in the session origin route/topic.
+PR opened and PR updated outcomes use the same post-outcome follow-up contract as merge outcomes: the canonical PR status is delivered first, then the orchestrator is woken with the authoritative session origin route/thread block and must send one concise factual summary in that route/topic.
 
 ### `agent_worktree_status`
 

@@ -32,16 +32,16 @@ describe("agent_send_plan_offer tool", () => {
       sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
     } as any);
     const result = await tool.execute("tool-id", {
-      offer_id: "plugin-readiness-v2026.5.12",
+      offer_id: "plugin-readiness-v2026.5.18",
       offer_text: "Readiness report body",
       plan_prompt: "Plan the follow-up.",
       plan_workdir: "/home/openclaw/workspace/openclaw-code-agent",
       plan_worktree_strategy: "auto-pr",
-      plan_name: "plugin-readiness-v2026.5.12",
+      plan_name: "plugin-readiness-v2026.5.18",
     });
 
     assert.equal(calls.length, 1);
-    assert.equal(calls[0]?.offerId, "plugin-readiness-v2026.5.12");
+    assert.equal(calls[0]?.offerId, "plugin-readiness-v2026.5.18");
     assert.equal(calls[0]?.planWorktreeStrategy, "auto-pr");
     assert.equal((calls[0]?.route as { provider?: string })?.provider, "telegram");
     assert.equal((calls[0]?.route as { target?: string })?.target, "-1003863755361");
@@ -68,11 +68,11 @@ describe("agent_send_plan_offer tool", () => {
       },
     } as any);
     await tool.execute("tool-id", {
-      offer_id: "plugin-readiness-v2026.5.12",
+      offer_id: "plugin-readiness-v2026.5.18",
       offer_text: "Readiness report body",
       plan_prompt: "Plan the compatibility follow-up.",
       plan_workdir: "/home/openclaw/workspace/openclaw-code-agent",
-      plan_name: "plugin-readiness-v2026.5.12",
+      plan_name: "plugin-readiness-v2026.5.18",
     });
 
     assert.equal(calls.length, 1);

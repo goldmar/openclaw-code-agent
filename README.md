@@ -14,6 +14,7 @@ Use it when you want to start coding work from Telegram, Discord, or another Ope
 - **Delegated worktree isolation**. New sessions default to `delegate`; opt into `ask`, `off`, `manual`, `auto-merge`, or `auto-pr` when you want a different branch follow-through policy.
 - **State-driven decision UX**. `ask` sends explicit action buttons for **Merge**, **Open PR**, **Later**, and **Discard**. The same action-token model backs Telegram and Discord interactive callbacks.
 - **Lifecycle-first cleanup**. Worktrees are temporary task sandboxes. The plugin distinguishes `merged` from `released` so different-SHA branches whose content already landed on the base branch can still be cleaned safely.
+- **Routed outcome summaries**. Merge and PR actions deliver the canonical status first, then wake the orchestrator to send one concise factual follow-up in the originating chat/thread.
 - **Full session lifecycle**. Suspend, resume, fork, interrupt, and recover sessions across restarts with persisted metadata and output.
 - **Explicit goal-task loops**. Opt into verifier-driven repair loops or Ralph-style completion loops when you need iterative autonomous execution toward a specific goal.
 - **Real operator visibility**. `agent_sessions`, `agent_output`, and `agent_stats` show status, buffered output, duration, and USD cost.
@@ -50,6 +51,8 @@ In `ask`, the user controls branch follow-through after the agent finishes. Curr
 ### Delegated Worktrees
 
 In `delegate`, the orchestrator reviews the completed worktree and attempts the merge follow-through when the change is clean. The agent edits files in the managed worktree so the main checkout is not touched during implementation; after review, delegated follow-through merges the finished branch back to the base branch unless a conflict, error, or explicit policy requires escalation.
+
+After merge or PR follow-through, the plugin sends the canonical status line and wakes the orchestrator to read the full session output and send the routed factual summary. That summary is orchestrator-owned, so it preserves the original chat/thread instead of depending on whichever route handled the tool call.
 
 ![Delegated worktree flow](https://raw.githubusercontent.com/goldmar/openclaw-code-agent/main/assets/worktree-delegate.png)
 
@@ -124,9 +127,9 @@ Because worktree isolation defaults to `delegate`, `defaultWorkdir` should norma
 
 Chat-launched sessions route updates back to their originating chat thread. For agent-launched tool sessions without an origin route, configure `fallbackChannel` or `agentChannels` in the reference guide.
 
-This release targets the OpenClaw SDK package `openclaw@2026.5.12`, while keeping the plugin peer floor at `>=2026.4.21`.
+This release targets and validates against the OpenClaw SDK package `openclaw@2026.5.18`, while keeping the plugin peer floor at `>=2026.4.21`. No plugin compatibility code changes were needed for `2026.5.18`: the plugin SDK `plugin-entry` type surface is unchanged from `2026.5.12`, the manifest already uses `contracts.tools`, and this plugin only imports `openclaw/plugin-sdk/plugin-entry` from the OpenClaw SDK.
 
-If you use Codex, make sure the local `codex` command or `OPENCLAW_CODEX_APP_SERVER_COMMAND` override is available and authenticated. When Codex auth is inconsistent, this is the recommended `~/.codex/config.toml` setting:
+If you use Codex, make sure the local `codex` command or `OPENCLAW_CODEX_APP_SERVER_COMMAND` override is available and authenticated. Codex-specific defaults live under `harnesses.codex`: `reasoningEffort` is sent as `reasoningEffort`, and `fastMode: true` sends `service_tier: "fast"` on Codex App Server thread, resume, and turn payloads. When Codex auth is inconsistent, this is the recommended `~/.codex/config.toml` setting:
 
 ```toml
 forced_login_method = "chatgpt"
@@ -173,6 +176,8 @@ New sessions use delegated worktree follow-through unless configured otherwise. 
 | GitHub CLI unavailable | `Merge`, `Later`, `Discard` |
 
 Ask OpenClaw for worktree status before cleaning resolved sandboxes.
+
+Merge and PR outcomes use a two-step completion contract: the plugin delivers the canonical outcome status, then wakes the orchestrator with the original route/thread metadata and `completionWakeSummaryRequired=true`. The orchestrator should read the full output, avoid repeating the status line, and send one short factual summary to the session origin route.
 
 ### Goal Tasks
 

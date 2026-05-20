@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.3.0] - 2026-05-20
+
+### Added
+- Added Codex `harnesses.codex.fastMode` configuration so Codex App Server thread, resume, and turn payloads can opt into `service_tier: "fast"` for new and continued Codex sessions.
+- Added orchestrator-owned follow-up summary wakes after merge and PR worktree terminal outcomes, including route preservation back to the originating chat/thread.
+
+### Changed
+- Kept Codex reasoning effort on the current App Server `reasoningEffort` field across fresh thread, resume, and turn-start payloads, including plan-mode collaboration settings.
+- Updated the local OpenClaw package target to `openclaw@2026.5.18` while keeping the peer floor at `>=2026.4.21`.
+- Documented the `2026.5.18` compatibility verdict: no plugin compatibility code update was needed because the plugin SDK `plugin-entry` type surface was unchanged from `2026.5.12`, the manifest already uses `contracts.tools`, and this plugin only imports `openclaw/plugin-sdk/plugin-entry` from the OpenClaw SDK.
+- Clarified that merge/PR tools first deliver the canonical plugin status line, then wake the orchestrator to read the full output and send one short factual routed summary.
+
 ## [4.2.4] - 2026-05-14
 
 ### Changed
@@ -330,7 +342,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Default Codex approval policy to `on-request`.
 - Raised the default session limit.
 
-[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.2.4...HEAD
+[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.3.0...HEAD
+[4.3.0]: https://github.com/goldmar/openclaw-code-agent/compare/v4.2.4...v4.3.0
 [4.2.4]: https://github.com/goldmar/openclaw-code-agent/compare/v4.2.3...v4.2.4
 [4.2.3]: https://github.com/goldmar/openclaw-code-agent/compare/v4.2.2...v4.2.3
 [4.2.2]: https://github.com/goldmar/openclaw-code-agent/compare/v4.2.1...v4.2.2
