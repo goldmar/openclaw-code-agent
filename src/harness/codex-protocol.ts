@@ -310,18 +310,7 @@ export function buildThreadStartPayloads(params: {
   }
   if (params.approvalPolicy?.trim()) base.approvalPolicy = params.approvalPolicy.trim();
   if (params.sandbox?.trim()) base.sandbox = params.sandbox.trim();
-  const fallback: Record<string, unknown> = { cwd: params.cwd };
-  if (params.reasoningEffort?.trim()) fallback.reasoning_effort = params.reasoningEffort.trim();
-  if (params.fastMode === true) {
-    fallback.service_tier = "fast";
-  }
-  if (params.approvalPolicy?.trim()) fallback.approvalPolicy = params.approvalPolicy.trim();
-  if (params.sandbox?.trim()) fallback.sandbox = params.sandbox.trim();
-  return [
-    base,
-    fallback,
-    {},
-  ];
+  return [base];
 }
 
 export function buildThreadResumePayloads(params: {
@@ -411,26 +400,7 @@ export function buildTurnStartPayloads(params: {
     params.systemPrompt,
   );
   if (!collaborationMode) return [base];
-  return [
-    { ...base, collaborationMode },
-    {
-      ...base,
-      collaboration_mode: {
-        mode: collaborationMode.mode,
-        settings: {
-          ...((typeof (collaborationMode.settings as { model?: string }).model === "string")
-            ? { model: (collaborationMode.settings as { model: string }).model }
-            : {}),
-          ...(typeof (collaborationMode.settings as { reasoningEffort?: string }).reasoningEffort === "string"
-            ? { reasoning_effort: (collaborationMode.settings as { reasoningEffort: string }).reasoningEffort }
-            : {}),
-          developer_instructions:
-            (collaborationMode.settings as { developerInstructions?: string | null }).developerInstructions ?? null,
-        },
-      },
-    },
-    base,
-  ];
+  return [{ ...base, collaborationMode }];
 }
 
 export function buildTurnInterruptPayloads(params: { threadId: string; turnId: string }): unknown[] {

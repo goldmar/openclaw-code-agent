@@ -9,7 +9,7 @@ import {
 } from "../src/harness/codex-protocol";
 
 describe("codex protocol turn payloads", () => {
-  it("includes reasoning effort on fresh thread-start payload fallbacks", () => {
+  it("uses current reasoningEffort naming on fresh thread-start payloads", () => {
     const payloads = buildThreadStartPayloads({
       cwd: "/tmp/project",
       model: "gpt-5.5",
@@ -25,12 +25,8 @@ describe("codex protocol turn payloads", () => {
       approvalPolicy: "never",
       sandbox: "danger-full-access",
     });
-    assert.deepEqual(payloads[1], {
-      cwd: "/tmp/project",
-      reasoning_effort: "xhigh",
-      approvalPolicy: "never",
-      sandbox: "danger-full-access",
-    });
+    assert.equal(payloads.length, 1);
+    assert.equal(Object.hasOwn(payloads[0] as Record<string, unknown>, "reasoning_effort"), false);
   });
 
   it("maps Codex fastMode to service_tier fast without undocumented fast-mode payload fields", () => {
@@ -62,12 +58,9 @@ describe("codex protocol turn payloads", () => {
     });
 
     assert.equal((threadStart[0] as Record<string, unknown>).service_tier, "fast");
-    assert.equal((threadStart[1] as Record<string, unknown>).service_tier, "fast");
     assert.equal(threadResume[0].service_tier, "fast");
     assert.equal((turnStart[0] as Record<string, unknown>).service_tier, "fast");
-    assert.equal((turnStart[1] as Record<string, unknown>).service_tier, "fast");
-    assert.equal((turnStart[2] as Record<string, unknown>).service_tier, "fast");
-    for (const payload of [...threadStart.slice(0, 2), ...threadResume, ...turnStart] as Array<Record<string, unknown>>) {
+    for (const payload of [...threadStart, ...threadResume, ...turnStart] as Array<Record<string, unknown>>) {
       assert.equal(Object.hasOwn(payload, "fastMode"), false);
       assert.equal(Object.hasOwn(payload, "fast_mode"), false);
     }
@@ -77,7 +70,7 @@ describe("codex protocol turn payloads", () => {
       developerInstructions: null,
     });
     assert.equal(Object.hasOwn((turnStart[0] as any).collaborationMode.settings, "fastMode"), false);
-    assert.equal(Object.hasOwn((turnStart[1] as any).collaboration_mode.settings, "fast_mode"), false);
+    assert.equal(turnStart.length, 1);
   });
 
   it("includes execution policy alongside plan collaboration mode", () => {
@@ -159,21 +152,7 @@ describe("codex protocol turn payloads", () => {
         },
       },
     });
-
-    assert.deepEqual(payloads[1], {
-      threadId: "thread-3",
-      input: [{ type: "text", text: "Implement it" }],
-      model: "gpt-5.5",
-      approvalPolicy: "never",
-      sandbox: "danger-full-access",
-      collaboration_mode: {
-        mode: "default",
-        settings: {
-          model: "gpt-5.5",
-          developer_instructions: "Follow OpenClaw orchestration rules.",
-        },
-      },
-    });
+    assert.equal(payloads.length, 1);
   });
 
   it("defaults Codex execution policy to never so OpenClaw plan/default sessions do not fall back to on-request", () => {
