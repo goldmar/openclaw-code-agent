@@ -33,7 +33,7 @@ describe("codex protocol turn payloads", () => {
     });
   });
 
-  it("includes Codex fastMode on thread and turn payloads when enabled", () => {
+  it("maps Codex fastMode to service_tier fast while retaining fastMode compatibility", () => {
     const threadStart = buildThreadStartPayloads({
       cwd: "/tmp/project",
       model: "gpt-5.5",
@@ -62,9 +62,17 @@ describe("codex protocol turn payloads", () => {
     });
 
     assert.equal((threadStart[0] as Record<string, unknown>).fastMode, true);
+    assert.equal((threadStart[0] as Record<string, unknown>).service_tier, "fast");
     assert.equal((threadStart[1] as Record<string, unknown>).fastMode, true);
+    assert.equal((threadStart[1] as Record<string, unknown>).service_tier, "fast");
     assert.equal(threadResume[0].fastMode, true);
+    assert.equal(threadResume[0].service_tier, "fast");
     assert.equal((turnStart[0] as Record<string, unknown>).fastMode, true);
+    assert.equal((turnStart[0] as Record<string, unknown>).service_tier, "fast");
+    assert.equal((turnStart[1] as Record<string, unknown>).fastMode, true);
+    assert.equal((turnStart[1] as Record<string, unknown>).service_tier, "fast");
+    assert.equal((turnStart[2] as Record<string, unknown>).fastMode, true);
+    assert.equal((turnStart[2] as Record<string, unknown>).service_tier, "fast");
     assert.deepEqual((turnStart[0] as any).collaborationMode.settings, {
       model: "gpt-5.5",
       reasoningEffort: "xhigh",

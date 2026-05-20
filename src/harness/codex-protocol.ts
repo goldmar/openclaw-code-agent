@@ -305,12 +305,18 @@ export function buildThreadStartPayloads(params: {
   const base: Record<string, unknown> = { cwd: params.cwd };
   if (params.model?.trim()) base.model = params.model.trim();
   if (params.reasoningEffort?.trim()) base.reasoningEffort = params.reasoningEffort.trim();
-  if (params.fastMode === true) base.fastMode = true;
+  if (params.fastMode === true) {
+    base.fastMode = true;
+    base.service_tier = "fast";
+  }
   if (params.approvalPolicy?.trim()) base.approvalPolicy = params.approvalPolicy.trim();
   if (params.sandbox?.trim()) base.sandbox = params.sandbox.trim();
   const fallback: Record<string, unknown> = { cwd: params.cwd };
   if (params.reasoningEffort?.trim()) fallback.reasoning_effort = params.reasoningEffort.trim();
-  if (params.fastMode === true) fallback.fastMode = true;
+  if (params.fastMode === true) {
+    fallback.fastMode = true;
+    fallback.service_tier = "fast";
+  }
   if (params.approvalPolicy?.trim()) fallback.approvalPolicy = params.approvalPolicy.trim();
   if (params.sandbox?.trim()) fallback.sandbox = params.sandbox.trim();
   return [
@@ -335,7 +341,10 @@ export function buildThreadResumePayloads(params: {
   };
   if (params.model?.trim()) base.model = params.model.trim();
   if (params.reasoningEffort?.trim()) base.reasoningEffort = params.reasoningEffort.trim();
-  if (params.fastMode === true) base.fastMode = true;
+  if (params.fastMode === true) {
+    base.fastMode = true;
+    base.service_tier = "fast";
+  }
   if (params.cwd?.trim()) base.cwd = params.cwd.trim();
   if (params.approvalPolicy?.trim()) base.approvalPolicy = params.approvalPolicy.trim();
   if (params.sandbox?.trim()) base.sandbox = params.sandbox.trim();
@@ -396,7 +405,10 @@ export function buildTurnStartPayloads(params: {
     input: buildTurnInput(params.prompt),
   };
   if (params.model?.trim()) base.model = params.model.trim();
-  if (params.fastMode === true) base.fastMode = true;
+  if (params.fastMode === true) {
+    base.fastMode = true;
+    base.service_tier = "fast";
+  }
   if (params.approvalPolicy?.trim()) base.approvalPolicy = params.approvalPolicy.trim();
   if (params.sandbox?.trim()) base.sandbox = params.sandbox.trim();
   const collaborationMode = buildCollaborationMode(

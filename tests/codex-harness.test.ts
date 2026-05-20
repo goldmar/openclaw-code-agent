@@ -232,6 +232,7 @@ describe("CodexHarness App Server mapping", () => {
       cwd: "/tmp",
       reasoningEffort: "xhigh",
       fastMode: true,
+      service_tier: "fast",
       approvalPolicy: "never",
       sandbox: "danger-full-access",
     });
@@ -240,6 +241,7 @@ describe("CodexHarness App Server mapping", () => {
       threadId: "thread-123",
       input: [{ type: "text", text: "investigate" }],
       fastMode: true,
+      service_tier: "fast",
       approvalPolicy: "never",
       sandbox: "danger-full-access",
       collaborationMode: {
