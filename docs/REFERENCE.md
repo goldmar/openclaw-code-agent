@@ -31,6 +31,8 @@ Current releases treat persisted session storage as new-schema-only. If startup 
 
 `openclaw-code-agent` `4.3.0` is validated against the latest installable OpenClaw SDK package, `openclaw@2026.5.18`. The plugin keeps the peer floor at `>=2026.4.21` for compatible existing installs, while package build metadata targets OpenClaw `2026.5.18` for both host and SDK readiness.
 
+No plugin compatibility code update was needed for `2026.5.18`: `openclaw@latest` resolves to `2026.5.18`, the plugin SDK `plugin-entry` type surface is unchanged from `2026.5.12`, `openclaw.plugin.json` already declares tools through `contracts.tools`, and runtime code only imports `openclaw/plugin-sdk/plugin-entry` from the OpenClaw SDK. The compatibility check passed with release metadata validation, typecheck, build, and `npx -y openclaw@2026.5.18 --version`.
+
 Configuration guidance for `2026.5.18`:
 
 - If `plugins.allow` is present, add `openclaw-code-agent`. OpenClaw treats that allowlist as exclusive, so `tools.allow` cannot make this plugin's tools available when the owning plugin is blocked.
