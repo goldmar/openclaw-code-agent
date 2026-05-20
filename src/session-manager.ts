@@ -538,8 +538,12 @@ export class SessionManager {
       route?: PersistedSessionInfo["route"];
     },
     outcomeLine: string,
+    options?: {
+      summaryWakeRequired?: boolean;
+      detailLines?: string[];
+    },
   ): void {
-    this.notifications.notifyWorktreeOutcome(sessionOrPersisted as Session, outcomeLine);
+    this.notifications.notifyWorktreeOutcome(sessionOrPersisted as Session, outcomeLine, options);
   }
 
   requestPlanApprovalFromUser(ref: string, summary: string): string {

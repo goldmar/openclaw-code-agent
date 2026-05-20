@@ -138,7 +138,19 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
           // Push base branch if requested
           if (shouldPush) {
             if (!pushBranch(effectiveWorkdir, baseBranch)) {
-              toolResult = { content: [{ type: "text", text: `⚠️ Merged ${branchName} → ${baseBranch} locally, but failed to push ${baseBranch}` }] };
+              const pushFailedText = `⚠️ Merged ${branchName} → ${baseBranch} locally, but failed to push ${baseBranch}`;
+              sessionManager.notifyWorktreeOutcome(
+                target.notificationTarget!,
+                pushFailedText,
+                {
+                  detailLines: [
+                    `Branch ${branchName} was merged into ${baseBranch} in the local repository.`,
+                    `Pushing ${baseBranch} failed; remote state may not include the merge.`,
+                    `Cleanup was skipped so the branch/worktree remains available for follow-up.`,
+                  ],
+                },
+              );
+              toolResult = { content: [{ type: "text", text: pushFailedText }] };
               return;
             }
           }
@@ -190,7 +202,16 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
           });
           sessionManager.notifyWorktreeOutcome(
             target.notificationTarget!,
-            outcomeLine
+            outcomeLine,
+            {
+              detailLines: [
+                mergeResult.fastForward ? "Merge type: fast-forward." : "Merge type: merge commit.",
+                shouldPush ? `Pushed ${baseBranch}.` : `Did not push ${baseBranch}; push was not requested.`,
+                shouldCleanup
+                  ? (worktreeCleanedUp ? "Branch and worktree cleaned up." : "Branch deleted; worktree cleanup skipped.")
+                  : "Branch/worktree cleanup was not requested.",
+              ],
+            },
           );
 
           const mergeTypeMsg = mergeResult.fastForward ? "⚡ Fast-forward" : "🔀 Merge commit";

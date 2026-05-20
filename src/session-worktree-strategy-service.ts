@@ -11,6 +11,7 @@ import {
   buildMergedPatch,
   buildPendingDecisionPatch,
 } from "./worktree-session-patches";
+import { buildWorktreeOutcomeFollowupWake } from "./session-notification-builder";
 import {
   removeWorktree,
   getDiffSummary,
@@ -359,6 +360,32 @@ export class SessionWorktreeStrategyService {
     this.deps.dispatchSessionNotification(session, {
       label: "worktree-merge-success",
       userMessage: successMsg,
+      notifyUser: "always",
+      completionWakeSummaryRequired: true,
+      wakeMessageOnNotifySuccess: buildWorktreeOutcomeFollowupWake({
+        sessionId: session.id,
+        sessionName: session.name,
+        outcomeLine,
+        originThreadLine: this.deps.originThreadLine(session),
+        detailLines: [
+          mergeResult.fastForward ? "Merge type: fast-forward." : "Merge type: merge commit.",
+          `Auto-merge landed ${branchName} into ${baseBranch}.`,
+          "Local worktree branch cleanup was requested.",
+        ],
+        canonicalStatusDelivered: true,
+      }),
+      wakeMessageOnNotifyFailed: buildWorktreeOutcomeFollowupWake({
+        sessionId: session.id,
+        sessionName: session.name,
+        outcomeLine,
+        originThreadLine: this.deps.originThreadLine(session),
+        detailLines: [
+          mergeResult.fastForward ? "Merge type: fast-forward." : "Merge type: merge commit.",
+          `Auto-merge landed ${branchName} into ${baseBranch}.`,
+          "Local worktree branch cleanup was requested.",
+        ],
+        canonicalStatusDelivered: false,
+      }),
     });
   }
 

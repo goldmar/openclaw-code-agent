@@ -2,20 +2,27 @@ import type { PersistedSessionInfo } from "./types";
 import { WakeDispatcher, type SessionNotificationHooks, type SessionNotificationRequest } from "./wake-dispatcher";
 import type { Session } from "./session";
 import { getBackendConversationId, getPrimarySessionLookupRef } from "./session-backend-ref";
+import { formatOriginRouteWakeBlock } from "./session-route";
+import { buildWorktreeOutcomeFollowupWake } from "./session-notification-builder";
 
 type RoutableSession = Pick<
   Session,
-  "id" | "harnessSessionId" | "backendRef" | "route"
+  "id" | "harnessSessionId" | "backendRef" | "route" | "originChannel" | "originThreadId" | "originSessionKey"
 > & {
   name?: string;
 };
 
 type PersistedRoutingSession = Pick<
   PersistedSessionInfo,
-  "sessionId" | "harnessSessionId" | "backendRef" | "route" | "name"
+  "sessionId" | "harnessSessionId" | "backendRef" | "route" | "name" | "originChannel" | "originThreadId" | "originSessionKey"
 > & {
   id?: string;
 };
+
+export interface WorktreeOutcomeNotificationOptions {
+  summaryWakeRequired?: boolean;
+  detailLines?: string[];
+}
 
 export class SessionNotificationService {
   constructor(
@@ -77,11 +84,25 @@ export class SessionNotificationService {
   notifyWorktreeOutcome(
     session: RoutableSession | PersistedRoutingSession,
     outcomeLine: string,
+    options: WorktreeOutcomeNotificationOptions = {},
   ): void {
+    const sessionId = this.getDeliveryRef(session);
+    const buildWakeMessage = (canonicalStatusDelivered: boolean): string => buildWorktreeOutcomeFollowupWake({
+      sessionId,
+      sessionName: session.name,
+      outcomeLine,
+      originThreadLine: formatOriginRouteWakeBlock(session),
+      detailLines: options.detailLines,
+      canonicalStatusDelivered,
+    });
+    const summaryWakeRequired = options.summaryWakeRequired ?? true;
     this.dispatch(session, {
       label: "worktree-outcome",
       userMessage: outcomeLine,
       notifyUser: "always",
+      completionWakeSummaryRequired: summaryWakeRequired,
+      wakeMessageOnNotifySuccess: summaryWakeRequired ? buildWakeMessage(true) : undefined,
+      wakeMessageOnNotifyFailed: summaryWakeRequired ? buildWakeMessage(false) : undefined,
     });
   }
 
@@ -125,7 +146,7 @@ export class SessionNotificationService {
   private buildCompletionWakePatch(
     request: SessionNotificationRequest,
   ): Pick<PersistedSessionInfo, "completionWakeSummaryRequired"> | undefined {
-    if (request.label !== "completed" || request.completionWakeSummaryRequired !== true) return undefined;
+    if (request.completionWakeSummaryRequired !== true) return undefined;
     return { completionWakeSummaryRequired: true };
   }
 }

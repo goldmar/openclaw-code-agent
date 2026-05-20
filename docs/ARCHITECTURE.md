@@ -262,6 +262,8 @@ The notification pipeline is intentionally centralized:
 
 The design goal is deterministic wakes with the fewest possible duplicate pings.
 
+Worktree terminal outcomes use a two-step UX contract. The plugin first delivers the canonical merge or PR status line, then sends a wake with `completionWakeSummaryRequired=true` so the orchestrator reads `agent_output(..., full=true)` and sends one short factual follow-up summary. The wake includes the canonical outcome facts and the authoritative origin route block; if the active session row no longer has origin metadata, persisted `route` remains the routing source of truth.
+
 ## Worktree Internals
 
 `src/worktree.ts` handles the plugin-owned worktree policy layer:

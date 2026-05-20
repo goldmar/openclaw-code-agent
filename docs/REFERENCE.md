@@ -439,6 +439,8 @@ Merge a worktree branch back to base.
 
 On conflicts, the plugin spawns a conflict-resolver session using the configured default harness.
 
+After a successful local merge, auto-merge, or local-merge-with-push-failure outcome, the plugin sends the canonical worktree status and wakes the orchestrator with `completionWakeSummaryRequired=true`. The orchestrator must read `agent_output(session, full=true)` when available and send one short factual routed summary. If `push=true` fails after the local merge, that follow-up must describe the push failure and must not claim the merge reached the remote.
+
 ### `agent_pr`
 
 Create or update a GitHub PR for a worktree branch.
@@ -452,6 +454,8 @@ Create or update a GitHub PR for a worktree branch.
 | `force_new` | `boolean` | No | Reject instead of updating an existing PR |
 
 The PR path pushes the worktree branch on demand, then handles open, merged, and closed PR states instead of blindly creating duplicates.
+
+PR opened and PR updated outcomes use the same post-outcome follow-up contract as merge outcomes: the canonical PR status is delivered first, then the orchestrator is woken to send one concise factual summary in the session origin route/topic.
 
 ### `agent_worktree_status`
 

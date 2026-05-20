@@ -48,6 +48,12 @@ export interface CompletionFollowupContract {
   appliesToOrdinaryTerminalCompletions: true;
 }
 
+export interface WorktreeOutcomeFollowupContract {
+  requiresShortFactualSummary: true;
+  owner: "agent";
+  appliesToWorktreeTerminalOutcomes: true;
+}
+
 export function formatApprovalExecutionContextLines(
   context: ApprovalExecutionContext,
 ): string[] {
@@ -81,6 +87,14 @@ export function buildCompletionFollowupContract(): CompletionFollowupContract {
     requiresShortFactualSummary: true,
     owner: "agent",
     appliesToOrdinaryTerminalCompletions: true,
+  };
+}
+
+export function buildWorktreeOutcomeFollowupContract(): WorktreeOutcomeFollowupContract {
+  return {
+    requiresShortFactualSummary: true,
+    owner: "agent",
+    appliesToWorktreeTerminalOutcomes: true,
   };
 }
 
@@ -186,6 +200,46 @@ export function buildCompletedPayload(args: {
     wakeMessageOnNotifyFailed: buildWakeMessage(false),
     followupContract,
   };
+}
+
+export function buildWorktreeOutcomeFollowupWake(args: {
+  sessionId: string;
+  sessionName?: string;
+  outcomeLine: string;
+  originThreadLine: OriginThreadLine;
+  detailLines?: string[];
+  canonicalStatusDelivered: boolean;
+}): string {
+  const contract = buildWorktreeOutcomeFollowupContract();
+  const hasOriginRouteBlock = Boolean(args.originThreadLine.trim());
+  const details = (args.detailLines ?? [])
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+
+  return [
+    `Worktree follow-through outcome recorded.`,
+    `Name: ${args.sessionName ?? "unknown"} | ID: ${args.sessionId}`,
+    ...(hasOriginRouteBlock ? [args.originThreadLine] : []),
+    ``,
+    `Canonical outcome status:`,
+    args.outcomeLine,
+    ...(details.length > 0 ? [``, `Outcome details:`, ...details.map((line) => `- ${line}`)] : []),
+    ``,
+    `Completion diagnostics:`,
+    `- Canonical worktree status delivered to user: ${args.canonicalStatusDelivered ? "yes" : "no"}`,
+    `- Plugin requested short factual follow-up summary: ${contract.requiresShortFactualSummary ? "yes" : "no"}`,
+    `- Contract applies to worktree terminal outcomes: ${contract.appliesToWorktreeTerminalOutcomes ? "yes" : "no"}`,
+    ``,
+    `[ACTION REQUIRED] Follow your autonomy rules for worktree follow-through:`,
+    `1. Use agent_output(session='${args.sessionId}', full=true) to read the full result if output is available.`,
+    `2. Send the user one short factual outcome summary grounded in the full output plus the canonical outcome status above.`,
+    `3. If full output is unavailable or not meaningful, say only what is proven by the merge/PR facts above; do not invent task details.`,
+    `4. Mention blockers such as push failure when present; do not describe a local-only merge as pushed.`,
+    ...(hasOriginRouteBlock
+      ? [`5. Before sending that follow-up, honor the Session origin route block above. If originRoute differs from the current chat, do NOT use a plain final assistant reply; use a routed send path that preserves provider/target/threadId.`]
+      : []),
+    `${hasOriginRouteBlock ? 6 : 5}. Do NOT repeat only the plugin status line; keep the follow-up brief, concrete, and non-duplicative.`,
+  ].join("\n");
 }
 
 export function buildFailedPayload(args: {

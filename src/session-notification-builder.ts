@@ -13,5 +13,6 @@ export {
   buildCompletedPayload,
   buildFailedPayload,
   buildTurnCompletePayload,
+  buildWorktreeOutcomeFollowupWake,
   getStoppedStatusLabel,
 } from "./session-notification-builders/terminal";
