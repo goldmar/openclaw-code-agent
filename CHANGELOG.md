@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.3.1] - 2026-05-25
+
+### Fixed
+- Fixed Telegram callback button payload handling so OpenClaw cross-channel callback data is preserved before interactive plan, Start Plan, and worktree decision actions reach the plugin.
+
 ### Changed
 - Updated the local OpenClaw package target to `openclaw@2026.5.22` while keeping the peer floor at `>=2026.4.21`.
 - Documented the `2026.5.22` compatibility verdict: no plugin source migration was required for the new channel-message poll, row-level session workflow, generic harness task completion, embedding/source-provider, cron delivery, or Codex app-server SDK surfaces because `openclaw-code-agent` still imports only `openclaw/plugin-sdk/plugin-entry` and owns its own session store.
@@ -347,7 +352,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Default Codex approval policy to `on-request`.
 - Raised the default session limit.
 
-[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.3.0...HEAD
+[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.3.1...HEAD
+[4.3.1]: https://github.com/goldmar/openclaw-code-agent/compare/v4.3.0...v4.3.1
 [4.3.0]: https://github.com/goldmar/openclaw-code-agent/compare/v4.2.4...v4.3.0
 [4.2.4]: https://github.com/goldmar/openclaw-code-agent/compare/v4.2.3...v4.2.4
 [4.2.3]: https://github.com/goldmar/openclaw-code-agent/compare/v4.2.2...v4.2.3
