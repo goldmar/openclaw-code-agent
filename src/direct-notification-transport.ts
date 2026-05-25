@@ -12,6 +12,7 @@ import type { NotificationButton } from "./session-interactions";
 import type { NotificationRoute } from "./wake-route-resolver";
 
 const FALLBACK_CLI_TIMEOUT_MS = 5_000;
+const TELEGRAM_CALLBACK_DATA_MAX_BYTES = 64;
 
 type RuntimeOutboundAdapter = NonNullable<
   NonNullable<ReturnType<typeof getPluginRuntime>>["channel"]
@@ -402,7 +403,7 @@ function ensureTelegramInlineButtons(payload: unknown, interactive: InteractiveR
   const record = payload as Record<string, unknown>;
   const channelData = toRecord(record.channelData);
   const telegram = toRecord(channelData?.telegram);
-  if (Array.isArray(telegram?.buttons)) return payload;
+  if (hasTelegramInlineButtons(telegram?.buttons)) return payload;
 
   const buttons = buildTelegramInlineButtons(interactive);
   if (!buttons) return payload;
@@ -424,7 +425,11 @@ function buildTelegramInlineButtons(interactive: InteractiveReply): TelegramInli
     .filter((block) => block.type === "buttons" && block.buttons.length > 0)
     .map((block) =>
       block.buttons
-        .filter((button) => typeof button.value === "string" && button.value.trim().length > 0)
+        .filter((button) =>
+          typeof button.value === "string" &&
+          button.value.trim().length > 0 &&
+          Buffer.byteLength(button.value, "utf8") <= TELEGRAM_CALLBACK_DATA_MAX_BYTES
+        )
         .map((button) => ({
           text: button.label,
           callback_data: button.value,
@@ -433,6 +438,11 @@ function buildTelegramInlineButtons(interactive: InteractiveReply): TelegramInli
     )
     .filter((row) => row.length > 0);
   return rows.length > 0 ? rows : undefined;
+}
+
+function hasTelegramInlineButtons(buttons: unknown): boolean {
+  return Array.isArray(buttons) &&
+    buttons.some((row) => Array.isArray(row) && row.length > 0);
 }
 
 function toRecord(value: unknown): Record<string, unknown> | undefined {

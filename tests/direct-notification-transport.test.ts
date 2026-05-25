@@ -331,6 +331,73 @@ describe("RuntimeDirectNotificationTransport", () => {
     ]]);
   });
 
+  it("repairs rendered payloads that initialize Telegram buttons to an empty array", async () => {
+    const payloads: unknown[] = [];
+    setPluginRuntime({
+      channel: {
+        outbound: {
+          loadAdapter: async () => ({
+            renderPresentation: ({ payload }: { payload: unknown }) => ({
+              ...(payload as Record<string, unknown>),
+              channelData: { telegram: { buttons: [] } },
+            }),
+            sendPayload: async (ctx: { payload: unknown }) => {
+              payloads.push(ctx.payload);
+            },
+          }),
+        },
+      },
+    }, { channels: { telegram: { enabled: true } } });
+
+    await new RuntimeDirectNotificationTransport().send(
+      {
+        channel: "telegram",
+        accountId: "default",
+        target: "-1003863755361",
+        threadId: "28",
+      },
+      "Plan needs approval",
+      [[{ label: "Approve", callbackData: "approve-token", style: "primary" }]],
+    );
+
+    assert.deepEqual((payloads[0] as any).channelData.telegram.buttons, [[
+      { text: "Approve", callback_data: "code-agent:approve-token", style: "primary" },
+    ]]);
+  });
+
+  it("omits generated Telegram callback buttons that exceed the 64-byte callback_data limit", async () => {
+    const payloads: unknown[] = [];
+    setPluginRuntime({
+      channel: {
+        outbound: {
+          loadAdapter: async () => ({
+            sendPayload: async (ctx: { payload: unknown }) => {
+              payloads.push(ctx.payload);
+            },
+          }),
+        },
+      },
+    }, { channels: { telegram: { enabled: true } } });
+
+    await new RuntimeDirectNotificationTransport().send(
+      {
+        channel: "telegram",
+        accountId: "default",
+        target: "-1003863755361",
+        threadId: "28",
+      },
+      "Plan needs approval",
+      [[
+        { label: "Approve", callbackData: "a".repeat(53), style: "primary" },
+        { label: "Too long", callbackData: "b".repeat(54), style: "secondary" },
+      ]],
+    );
+
+    assert.deepEqual((payloads[0] as any).channelData.telegram.buttons, [[
+      { text: "Approve", callback_data: `code-agent:${"a".repeat(53)}`, style: "primary" },
+    ]]);
+  });
+
   it("sends Telegram plan-offer buttons as native callback_data, not text payload buttons", async () => {
     const payloads: unknown[] = [];
     setPluginRuntime({
