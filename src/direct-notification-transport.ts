@@ -12,6 +12,7 @@ import type { NotificationButton } from "./session-interactions";
 import type { NotificationRoute } from "./wake-route-resolver";
 
 const FALLBACK_CLI_TIMEOUT_MS = 5_000;
+const TELEGRAM_CALLBACK_DATA_MAX_BYTES = 64;
 
 type RuntimeOutboundAdapter = NonNullable<
   NonNullable<ReturnType<typeof getPluginRuntime>>["channel"]
@@ -42,6 +43,12 @@ type InteractiveReply = {
     }>;
   }>;
 };
+
+type TelegramInlineButtons = Array<Array<{
+  text: string;
+  callback_data: string;
+  style?: string;
+}>>;
 
 export interface DirectNotificationTransport {
   send(
@@ -206,7 +213,7 @@ export class RuntimeDirectNotificationTransport implements DirectNotificationTra
           ctx,
       })
       : basePayload;
-    const payload = ensureInteractivePayload(renderedPayload, interactive);
+    const payload = ensureInteractivePayload(renderedPayload, interactive, route.channel);
 
     logButtonDiagnostic("presentation_render_completed", {
       ...summarizeRoute(route),
@@ -370,13 +377,78 @@ function hasInteractiveButtons(payload: unknown): boolean {
   });
 }
 
-function ensureInteractivePayload(payload: unknown, interactive: InteractiveReply | undefined): unknown {
-  if (!interactive || hasInteractiveButtons(payload)) return payload;
+function ensureInteractivePayload(
+  payload: unknown,
+  interactive: InteractiveReply | undefined,
+  channel: string,
+): unknown {
+  if (!interactive) return payload;
+  const withInteractive = hasInteractiveButtons(payload)
+    ? payload
+    : addInteractivePayload(payload, interactive);
+  if (channel !== "telegram") return withInteractive;
+  return ensureTelegramInlineButtons(withInteractive, interactive);
+}
+
+function addInteractivePayload(payload: unknown, interactive: InteractiveReply): unknown {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return payload;
   return {
     ...(payload as Record<string, unknown>),
     interactive,
   };
+}
+
+function ensureTelegramInlineButtons(payload: unknown, interactive: InteractiveReply): unknown {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return payload;
+  const record = payload as Record<string, unknown>;
+  const channelData = toRecord(record.channelData);
+  const telegram = toRecord(channelData?.telegram);
+  if (hasTelegramInlineButtons(telegram?.buttons)) return payload;
+
+  const buttons = buildTelegramInlineButtons(interactive);
+  if (!buttons) return payload;
+
+  return {
+    ...record,
+    channelData: {
+      ...(channelData ?? {}),
+      telegram: {
+        ...(telegram ?? {}),
+        buttons,
+      },
+    },
+  };
+}
+
+function buildTelegramInlineButtons(interactive: InteractiveReply): TelegramInlineButtons | undefined {
+  const rows = interactive.blocks
+    .filter((block) => block.type === "buttons" && block.buttons.length > 0)
+    .map((block) =>
+      block.buttons
+        .filter((button) =>
+          typeof button.value === "string" &&
+          button.value.trim().length > 0 &&
+          Buffer.byteLength(button.value, "utf8") <= TELEGRAM_CALLBACK_DATA_MAX_BYTES
+        )
+        .map((button) => ({
+          text: button.label,
+          callback_data: button.value,
+          ...(button.style ? { style: button.style } : {}),
+        })),
+    )
+    .filter((row) => row.length > 0);
+  return rows.length > 0 ? rows : undefined;
+}
+
+function hasTelegramInlineButtons(buttons: unknown): boolean {
+  return Array.isArray(buttons) &&
+    buttons.some((row) => Array.isArray(row) && row.length > 0);
+}
+
+function toRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
 }
 
 function prefixCallbackData(callbackData: string): string {

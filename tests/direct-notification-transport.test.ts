@@ -204,7 +204,18 @@ describe("RuntimeDirectNotificationTransport", () => {
             },
           ],
         },
-        channelData: { rendered: true },
+        channelData: {
+          rendered: true,
+          telegram: {
+            buttons: [[
+              {
+                text: "Approve",
+                callback_data: "code-agent:token-approve",
+                style: "success",
+              },
+            ]],
+          },
+        },
       },
     ]);
   });
@@ -264,6 +275,15 @@ describe("RuntimeDirectNotificationTransport", () => {
           },
         ],
       },
+      channelData: {
+        telegram: {
+          buttons: [[
+            { text: "Approve", callback_data: "code-agent:approve-token", style: "primary" },
+            { text: "Revise", callback_data: "code-agent:revise-token", style: "secondary" },
+            { text: "Reject", callback_data: "code-agent:reject-token", style: "danger" },
+          ]],
+        },
+      },
     });
   });
 
@@ -306,6 +326,119 @@ describe("RuntimeDirectNotificationTransport", () => {
         },
       ],
     });
+    assert.deepEqual((payloads[0] as any).channelData.telegram.buttons, [[
+      { text: "Reject", callback_data: "code-agent:reject-token", style: "danger" },
+    ]]);
+  });
+
+  it("repairs rendered payloads that initialize Telegram buttons to an empty array", async () => {
+    const payloads: unknown[] = [];
+    setPluginRuntime({
+      channel: {
+        outbound: {
+          loadAdapter: async () => ({
+            renderPresentation: ({ payload }: { payload: unknown }) => ({
+              ...(payload as Record<string, unknown>),
+              channelData: { telegram: { buttons: [] } },
+            }),
+            sendPayload: async (ctx: { payload: unknown }) => {
+              payloads.push(ctx.payload);
+            },
+          }),
+        },
+      },
+    }, { channels: { telegram: { enabled: true } } });
+
+    await new RuntimeDirectNotificationTransport().send(
+      {
+        channel: "telegram",
+        accountId: "default",
+        target: "-1003863755361",
+        threadId: "28",
+      },
+      "Plan needs approval",
+      [[{ label: "Approve", callbackData: "approve-token", style: "primary" }]],
+    );
+
+    assert.deepEqual((payloads[0] as any).channelData.telegram.buttons, [[
+      { text: "Approve", callback_data: "code-agent:approve-token", style: "primary" },
+    ]]);
+  });
+
+  it("omits generated Telegram callback buttons that exceed the 64-byte callback_data limit", async () => {
+    const payloads: unknown[] = [];
+    setPluginRuntime({
+      channel: {
+        outbound: {
+          loadAdapter: async () => ({
+            sendPayload: async (ctx: { payload: unknown }) => {
+              payloads.push(ctx.payload);
+            },
+          }),
+        },
+      },
+    }, { channels: { telegram: { enabled: true } } });
+
+    await new RuntimeDirectNotificationTransport().send(
+      {
+        channel: "telegram",
+        accountId: "default",
+        target: "-1003863755361",
+        threadId: "28",
+      },
+      "Plan needs approval",
+      [[
+        { label: "Approve", callbackData: "a".repeat(53), style: "primary" },
+        { label: "Too long", callbackData: "b".repeat(54), style: "secondary" },
+      ]],
+    );
+
+    assert.deepEqual((payloads[0] as any).channelData.telegram.buttons, [[
+      { text: "Approve", callback_data: `code-agent:${"a".repeat(53)}`, style: "primary" },
+    ]]);
+  });
+
+  it("sends Telegram plan-offer buttons as native callback_data, not text payload buttons", async () => {
+    const payloads: unknown[] = [];
+    setPluginRuntime({
+      channel: {
+        outbound: {
+          loadAdapter: async () => ({
+            renderPresentation: ({ payload }: { payload: unknown }) => payload,
+            sendPayload: async (ctx: { payload: unknown }) => {
+              payloads.push(ctx.payload);
+            },
+          }),
+        },
+      },
+    }, { channels: { telegram: { enabled: true } } });
+
+    await new RuntimeDirectNotificationTransport().send(
+      {
+        channel: "telegram",
+        accountId: "default",
+        target: "-1003863755361",
+        threadId: "13832",
+      },
+      "Release monitor plan offer",
+      [[
+        { label: "Start Plan", callbackData: "26620ba6-719b-491e-bbe3-9b9f49ce293c", style: "primary" },
+        { label: "Dismiss", callbackData: "9c26cebd-caf4-4551-bc9e-f52146a328dc", style: "secondary" },
+      ]],
+    );
+
+    assert.deepEqual((payloads[0] as any).channelData.telegram.buttons, [[
+      {
+        text: "Start Plan",
+        callback_data: "code-agent:26620ba6-719b-491e-bbe3-9b9f49ce293c",
+        style: "primary",
+      },
+      {
+        text: "Dismiss",
+        callback_data: "code-agent:9c26cebd-caf4-4551-bc9e-f52146a328dc",
+        style: "secondary",
+      },
+    ]]);
   });
 
   it("emits privacy-safe diagnostics for the runtime presentation path", async (t) => {
