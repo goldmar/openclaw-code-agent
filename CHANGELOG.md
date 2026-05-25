@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Updated the local OpenClaw package target to `openclaw@2026.5.22` while keeping the peer floor at `>=2026.4.21`.
+- Documented the `2026.5.22` compatibility verdict: no plugin source migration was required for the new channel-message poll, row-level session workflow, generic harness task completion, embedding/source-provider, cron delivery, or Codex app-server SDK surfaces because `openclaw-code-agent` still imports only `openclaw/plugin-sdk/plugin-entry` and owns its own session store.
+- Refreshed operator guidance for Telegram topic routing, Start Plan and approval callbacks, completion wakes, worktree `delegate`/`ask`/`auto-pr` follow-through, runtime tool visibility, disabled bundled plugin boundaries, and Codex/Claude harness model restrictions under OpenClaw `2026.5.22`.
+
 ## [4.3.0] - 2026-05-20
 
 ### Added
