@@ -211,6 +211,33 @@ describe("formatSessionListing", () => {
     );
     assert.ok(!result.includes("Phase:"), "should not show Phase for completed");
   });
+
+  it("uses worktree lifecycle state when rendering merged worktrees", () => {
+    const result = formatSessionListing(makeSession({
+      status: "completed",
+      phase: "terminal",
+      worktreePath: "/tmp/repo/.worktrees/agent/fix",
+      worktreeBranch: "agent/fix",
+      worktreeMerged: false,
+      worktreeLifecycle: { state: "merged", updatedAt: "2026-05-26T10:00:00.000Z" },
+    }));
+
+    assert.match(result, /Worktree: agent\/fix \[merged ✓\]/);
+    assert.doesNotMatch(result, /\[not merged\]/);
+  });
+
+  it("does not call released worktrees unmerged", () => {
+    const result = formatSessionListing(makeSession({
+      status: "completed",
+      phase: "terminal",
+      worktreePath: "/tmp/repo/.worktrees/agent/released",
+      worktreeBranch: "agent/released",
+      worktreeState: "released",
+    }));
+
+    assert.match(result, /Worktree: agent\/released \[released\]/);
+    assert.doesNotMatch(result, /\[not merged\]/);
+  });
 });
 
 describe("formatStats", () => {
