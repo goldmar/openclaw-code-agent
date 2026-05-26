@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.3.2] - 2026-05-26
+
+### Fixed
+- Fixed Telegram worktree decision prompts by stripping generic button `style` fields from Telegram-native callback buttons before dispatch.
+
 ## [4.3.1] - 2026-05-25
 
 ### Fixed
@@ -352,7 +357,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Default Codex approval policy to `on-request`.
 - Raised the default session limit.
 
-[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.3.1...HEAD
+[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.3.2...HEAD
+[4.3.2]: https://github.com/goldmar/openclaw-code-agent/compare/v4.3.1...v4.3.2
 [4.3.1]: https://github.com/goldmar/openclaw-code-agent/compare/v4.3.0...v4.3.1
 [4.3.0]: https://github.com/goldmar/openclaw-code-agent/compare/v4.2.4...v4.3.0
 [4.2.4]: https://github.com/goldmar/openclaw-code-agent/compare/v4.2.3...v4.2.4
