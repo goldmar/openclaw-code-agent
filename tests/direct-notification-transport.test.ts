@@ -211,7 +211,6 @@ describe("RuntimeDirectNotificationTransport", () => {
               {
                 text: "Approve",
                 callback_data: "code-agent:token-approve",
-                style: "success",
               },
             ]],
           },
@@ -278,9 +277,9 @@ describe("RuntimeDirectNotificationTransport", () => {
       channelData: {
         telegram: {
           buttons: [[
-            { text: "Approve", callback_data: "code-agent:approve-token", style: "primary" },
-            { text: "Revise", callback_data: "code-agent:revise-token", style: "secondary" },
-            { text: "Reject", callback_data: "code-agent:reject-token", style: "danger" },
+            { text: "Approve", callback_data: "code-agent:approve-token" },
+            { text: "Revise", callback_data: "code-agent:revise-token" },
+            { text: "Reject", callback_data: "code-agent:reject-token" },
           ]],
         },
       },
@@ -327,7 +326,7 @@ describe("RuntimeDirectNotificationTransport", () => {
       ],
     });
     assert.deepEqual((payloads[0] as any).channelData.telegram.buttons, [[
-      { text: "Reject", callback_data: "code-agent:reject-token", style: "danger" },
+      { text: "Reject", callback_data: "code-agent:reject-token" },
     ]]);
   });
 
@@ -361,7 +360,7 @@ describe("RuntimeDirectNotificationTransport", () => {
     );
 
     assert.deepEqual((payloads[0] as any).channelData.telegram.buttons, [[
-      { text: "Approve", callback_data: "code-agent:approve-token", style: "primary" },
+      { text: "Approve", callback_data: "code-agent:approve-token" },
     ]]);
   });
 
@@ -394,7 +393,7 @@ describe("RuntimeDirectNotificationTransport", () => {
     );
 
     assert.deepEqual((payloads[0] as any).channelData.telegram.buttons, [[
-      { text: "Approve", callback_data: `code-agent:${"a".repeat(53)}`, style: "primary" },
+      { text: "Approve", callback_data: `code-agent:${"a".repeat(53)}` },
     ]]);
   });
 
@@ -431,12 +430,10 @@ describe("RuntimeDirectNotificationTransport", () => {
       {
         text: "Start Plan",
         callback_data: "code-agent:26620ba6-719b-491e-bbe3-9b9f49ce293c",
-        style: "primary",
       },
       {
         text: "Dismiss",
         callback_data: "code-agent:9c26cebd-caf4-4551-bc9e-f52146a328dc",
-        style: "secondary",
       },
     ]]);
   });

@@ -47,7 +47,6 @@ type InteractiveReply = {
 type TelegramInlineButtons = Array<Array<{
   text: string;
   callback_data: string;
-  style?: string;
 }>>;
 
 export interface DirectNotificationTransport {
@@ -433,7 +432,6 @@ function buildTelegramInlineButtons(interactive: InteractiveReply): TelegramInli
         .map((button) => ({
           text: button.label,
           callback_data: button.value,
-          ...(button.style ? { style: button.style } : {}),
         })),
     )
     .filter((row) => row.length > 0);
