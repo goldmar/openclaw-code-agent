@@ -223,10 +223,21 @@ function includesPromptLeak(value: string, prompt: string | undefined, evidence:
 
 function mentionsUnknownFile(value: string, evidence: PrMetadataEvidence): boolean {
   const knownFiles = new Set(evidence.changedFiles);
-  const pathMatches = value.match(/\b(?:[\w.-]+\/)+[\w.-]+\b/g) ?? [];
+  const pathMatches = [...value.matchAll(/(?:^|[^\w.-])((?:\.?[\w-][\w.-]*\/)+(?:\.?[\w-][\w.-]*))(?![\w.-])/g)].map((match) => match[1]);
   if (pathMatches.some((file) => /\.[A-Za-z0-9]+$/.test(file) && !knownFiles.has(file))) return true;
 
   const knownRootFiles = new Set(evidence.changedFiles.filter((file) => !file.includes("/")));
+  const hiddenRootFilePattern = String.raw`\.[a-z0-9][\w.-]*`;
+  const quotedHiddenRootFileMentions = value.matchAll(new RegExp(`[\\\`"'](${hiddenRootFilePattern})[\\\`"']`, "g"));
+  for (const match of quotedHiddenRootFileMentions) {
+    if (!knownRootFiles.has(match[1])) return true;
+  }
+
+  const contextualHiddenRootFileMentions = value.matchAll(new RegExp(String.raw`\b(?:file|files|path|paths|changed|changes|updated?|updates?|modified?|modifies|touched?|touches|added?|adds?|removed?|removes?|deleted?|deletes?)\s+(?:the\s+)?(${hiddenRootFilePattern})(?![\w.-])`, "gi"));
+  for (const match of contextualHiddenRootFileMentions) {
+    if (!knownRootFiles.has(match[1])) return true;
+  }
+
   if (knownRootFiles.size === 0) return false;
 
   const knownRootExtensions = new Set(

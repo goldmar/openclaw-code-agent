@@ -331,6 +331,80 @@ describe("agent_pr generated PR metadata", () => {
     assert.equal(result.ok && result.metadata.summary.includes("Keeps `Node.js` package metadata current."), true);
   });
 
+  it("rejects hallucinated dot-prefixed path mentions", async () => {
+    const diffSummary = {
+      commits: 1,
+      filesChanged: 1,
+      insertions: 8,
+      deletions: 1,
+      changedFiles: ["src/tools/agent-pr.ts"],
+      commitMessages: [{ hash: "abc1234", message: "Harden metadata path checks", author: "Codex" }],
+    };
+
+    const cases: unknown[] = [
+      {
+        title: "Update workflow metadata",
+        summary: ["Updates hidden workflow metadata."],
+        changes: ["`src/tools/agent-pr.ts`", "`.github/workflows/ci.yml`"],
+        validation: ["Review CI checks before merging."],
+        notes: ["No notes"],
+      },
+      {
+        title: "Update environment metadata",
+        summary: ["Updates hidden environment metadata."],
+        changes: ["Changed `.env` handling."],
+        validation: ["Review CI checks before merging."],
+        notes: ["No notes"],
+      },
+    ];
+
+    for (const generated of cases) {
+      const result = await buildPrMetadata({
+        sessionName: "dot-path-hallucination",
+        prompt: "Summarize metadata validation changes.",
+        diffSummary,
+        provider: { async generatePrMetadata() { return generated; } },
+      });
+
+      assert.equal(result.ok, false);
+      assert.match(result.ok ? "" : result.error, /failed schema or safety validation/);
+    }
+  });
+
+  it("allows changed dot-prefixed files and dotted technology names", async () => {
+    const result = await buildPrMetadata({
+      sessionName: "dot-paths-and-tech-names",
+      prompt: "Describe hidden path validation updates.",
+      diffSummary: {
+        commits: 1,
+        filesChanged: 3,
+        insertions: 20,
+        deletions: 4,
+        changedFiles: [
+          ".github/workflows/ci.yml",
+          ".env",
+          "src/tools/agent-pr.ts",
+        ],
+        commitMessages: [{ hash: "abc1234", message: "Handle hidden path metadata", author: "Codex" }],
+      },
+      provider: {
+        async generatePrMetadata() {
+          return {
+            title: "Handle hidden path metadata",
+            summary: ["Keeps `.NET` and Node.js wording safe while checking hidden path mentions."],
+            changes: ["`src/tools/agent-pr.ts`", "`.github/workflows/ci.yml`", "Changed `.env` validation."],
+            validation: ["Review CI checks before merging."],
+            notes: ["No pnpm command was run by metadata generation."],
+          };
+        },
+      },
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.ok && result.metadata.changes.includes("`.github/workflows/ci.yml`"), true);
+    assert.equal(result.ok && result.metadata.changes.includes("Changed `.env` validation."), true);
+  });
+
   it("allows model output to mention files beyond the first ten changed files", async () => {
     const changedFiles = Array.from({ length: 12 }, (_, index) => `src/file-${index + 1}.ts`);
     const result = await buildPrMetadata({
