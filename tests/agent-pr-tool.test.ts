@@ -302,6 +302,35 @@ describe("agent_pr generated PR metadata", () => {
     assert.equal(result.ok && result.metadata.summary.includes("Keeps Node.js package metadata current."), true);
   });
 
+  it("does not reject quoted root-like technology names", async () => {
+    const result = await buildPrMetadata({
+      sessionName: "quoted-root-like-names",
+      prompt: "Describe package metadata updates.",
+      diffSummary: {
+        commits: 1,
+        filesChanged: 1,
+        insertions: 8,
+        deletions: 1,
+        changedFiles: ["package.json"],
+        commitMessages: [{ hash: "abc1234", message: "Update package metadata", author: "Codex" }],
+      },
+      provider: {
+        async generatePrMetadata() {
+          return {
+            title: "Update package metadata",
+            summary: ["Keeps `Node.js` package metadata current."],
+            changes: ["`package.json`"],
+            validation: ["Review CI checks before merging."],
+            notes: ["No `pnpm` command was run by metadata generation."],
+          };
+        },
+      },
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.ok && result.metadata.summary.includes("Keeps `Node.js` package metadata current."), true);
+  });
+
   it("allows model output to mention files beyond the first ten changed files", async () => {
     const changedFiles = Array.from({ length: 12 }, (_, index) => `src/file-${index + 1}.ts`);
     const result = await buildPrMetadata({

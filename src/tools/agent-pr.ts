@@ -237,7 +237,9 @@ function mentionsUnknownFile(value: string, evidence: PrMetadataEvidence): boole
   const rootFilePattern = String.raw`[A-Za-z0-9][\w.-]*\.([A-Za-z0-9]+)`;
   const quotedRootFileMentions = value.matchAll(new RegExp(`[\\\`"'](${rootFilePattern})[\\\`"']`, "g"));
   for (const match of quotedRootFileMentions) {
-    if (!knownRootFiles.has(match[1])) return true;
+    const file = match[1];
+    const extension = match[2]?.toLowerCase();
+    if (extension !== undefined && knownRootExtensions.has(extension) && !knownRootFiles.has(file)) return true;
   }
 
   const contextualRootFileMentions = value.matchAll(new RegExp(String.raw`\b(?:file|files|path|paths|changed|changes|updated?|updates?|modified?|modifies|touched?|touches|added?|adds?|removed?|removes?|deleted?|deletes?)\s+(?:the\s+)?(${rootFilePattern})\b`, "gi"));
