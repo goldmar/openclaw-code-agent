@@ -16,7 +16,7 @@ import {
 import { isModelAllowed } from "../model-allowlist";
 import { decideResumeSessionId } from "../resume-policy";
 import { getBackendConversationId, getPrimarySessionLookupRef } from "../session-backend-ref";
-import type { OpenClawPluginToolContext, PersistedSessionInfo } from "../types";
+import type { OpenClawPluginToolContext, PersistedSessionInfo, WorktreeStrategy } from "../types";
 
 export interface AgentLaunchParams {
   prompt: string;
@@ -81,6 +81,7 @@ export type AgentLaunchResolution =
       originThreadId?: string | number;
       originSessionKey?: string;
       route: ReturnType<typeof resolveSessionRoute>;
+      worktreeStrategy: WorktreeStrategy;
       resumeSessionId?: string;
       resolvedResumeId?: string;
       clearedPersistedCodexResume: boolean;
@@ -96,6 +97,30 @@ function normalizeThreadId(value: unknown): string | undefined {
 
 function stripOptionalQuotes(value: string): string {
   return value.trim().replace(/^['"`](.*)['"`]$/s, "$1").trim();
+}
+
+function isNegatedPrInstruction(prefix: string): boolean {
+  return /\b(?:do\s+not|don't|dont|never|without|no)\s+(?:\w+\s+){0,4}$/.test(prefix);
+}
+
+export function promptRequestsPullRequest(prompt: string): boolean {
+  const normalized = prompt
+    .toLowerCase()
+    .replace(/\bpull\s+request\b/g, "pr")
+    .replace(/\s+/g, " ");
+  const prInstruction = /\b(?:create|open|raise|file|submit|make|prepare)(?:\s*\/\s*|\s+(?:or|and)\s+)?(?:create|open|raise|file|submit|make|prepare)?\s+(?:a\s+|an\s+|the\s+)?(?:draft\s+)?pr\b/g;
+
+  for (const match of normalized.matchAll(prInstruction)) {
+    const prefix = normalized.slice(Math.max(0, match.index - 40), match.index);
+    if (!isNegatedPrInstruction(prefix)) return true;
+  }
+  return false;
+}
+
+export function resolveRequestedWorktreeStrategy(params: AgentLaunchParams): WorktreeStrategy {
+  if (params.worktree_strategy) return params.worktree_strategy;
+  if (promptRequestsPullRequest(params.prompt)) return "auto-pr";
+  return pluginConfig.defaultWorktreeStrategy ?? "off";
 }
 
 export function extractPromptDeclaredWorkdir(prompt: string): string | undefined {
@@ -321,6 +346,7 @@ export function resolveAgentLaunchRequest(
 
   const permissionMode = params.permission_mode ?? pluginConfig.permissionMode;
   const planApproval = params.plan_approval ?? pluginConfig.planApproval;
+  const worktreeStrategy = resolveRequestedWorktreeStrategy(params);
 
   return {
     kind: "resolved",
@@ -329,6 +355,7 @@ export function resolveAgentLaunchRequest(
     resolvedModel,
     permissionMode,
     planApproval,
+    worktreeStrategy,
     originChannel,
     originThreadId,
     originSessionKey,

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { resolveAgentLaunchRequest } from "../src/tools/agent-launch-resolution";
+import { promptRequestsPullRequest, resolveAgentLaunchRequest } from "../src/tools/agent-launch-resolution";
 import { setPluginConfig } from "../src/config";
 
 describe("resolveAgentLaunchRequest", () => {
@@ -197,7 +197,53 @@ describe("resolveAgentLaunchRequest", () => {
     if (result.kind === "resolved") {
       assert.equal(result.permissionMode, "default");
       assert.equal(result.planApproval, "ask");
+      assert.equal(result.worktreeStrategy, "delegate");
     }
+  });
+
+  it("promotes explicit create/open PR prompt instructions to auto-pr", () => {
+    setPluginConfig({
+      defaultWorktreeStrategy: "delegate",
+    });
+
+    const result = resolveAgentLaunchRequest(
+      {
+        prompt: "Let oca investigate and fix and create a pr for generic OCA PR descriptions",
+      },
+      { workspaceDir: "/tmp" } as any,
+      {},
+    );
+
+    assert.equal(result.kind, "resolved");
+    if (result.kind === "resolved") {
+      assert.equal(result.worktreeStrategy, "auto-pr");
+    }
+  });
+
+  it("preserves explicit worktree_strategy over PR wording in the prompt", () => {
+    setPluginConfig({
+      defaultWorktreeStrategy: "delegate",
+    });
+
+    const result = resolveAgentLaunchRequest(
+      {
+        prompt: "Investigate the bug and create a PR when done",
+        worktree_strategy: "ask",
+      },
+      { workspaceDir: "/tmp" } as any,
+      {},
+    );
+
+    assert.equal(result.kind, "resolved");
+    if (result.kind === "resolved") {
+      assert.equal(result.worktreeStrategy, "ask");
+    }
+  });
+
+  it("does not treat generic PR-description wording as an instruction to open a PR", () => {
+    assert.equal(promptRequestsPullRequest("Fix generic OCA PR descriptions"), false);
+    assert.equal(promptRequestsPullRequest("Investigate the PR description renderer"), false);
+    assert.equal(promptRequestsPullRequest("Investigate and fix; do not create a PR"), false);
   });
 
   it("prefers canonical backend conversation ids for resume resolution", () => {

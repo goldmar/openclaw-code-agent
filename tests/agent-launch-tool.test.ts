@@ -60,6 +60,36 @@ describe("agent_launch tool defaults", () => {
     assert.match(text, /Fast mode: enabled/);
   });
 
+  it("honors explicit PR instructions by launching with auto-pr", async () => {
+    let spawnConfig: Record<string, unknown> | undefined;
+    setPluginConfig({
+      defaultWorktreeStrategy: "delegate",
+    });
+
+    setSessionManager({
+      resolveHarnessSessionId: (id: string) => id,
+      spawn(config: Record<string, unknown>) {
+        spawnConfig = config;
+        return {
+          id: "sess-pr-request",
+          name: "fix-pr-request",
+          model: config.model,
+          worktreeStrategy: config.worktreeStrategy,
+        };
+      },
+    } as any);
+
+    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp" });
+    const result = await tool.execute("tool-id", {
+      prompt: "Let oca investigate and fix and create a pr",
+    });
+
+    assert.ok(spawnConfig, "spawn should be called");
+    assert.equal(spawnConfig?.worktreeStrategy, "auto-pr");
+    const text = (result.content[0] as { text: string }).text;
+    assert.match(text, /Worktree strategy: auto-pr/);
+  });
+
   it("prefers an explicit model while keeping the plugin Codex approval policy", async () => {
     let spawnConfig: Record<string, unknown> | undefined;
     setPluginConfig({

@@ -124,6 +124,7 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
           resolvedModel,
           permissionMode,
           planApproval,
+          worktreeStrategy,
           originChannel,
           originThreadId,
           originSessionKey,
@@ -188,7 +189,7 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
           route,
           harness,
           taskLifecycle: resolveSessionTaskLifecycle(ctx),
-          worktreeStrategy: params.worktree_strategy,
+          worktreeStrategy,
           worktreeBaseBranch: params.worktree_base_branch,
           worktreePrTargetRepo: params.worktree_pr_target_repo,
         });
@@ -221,7 +222,7 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
               model: session.model,
               reasoningEffort: session.reasoningEffort ?? resolveReasoningEffortForHarness(harness),
               fastMode: session.fastMode ?? fastMode,
-              worktreeStrategy: session.worktreeStrategy ?? params.worktree_strategy ?? pluginConfig.defaultWorktreeStrategy ?? "off",
+              worktreeStrategy: session.worktreeStrategy ?? worktreeStrategy,
               worktreePath: session.worktreePath,
               originalWorkdir: session.originalWorkdir,
             });
