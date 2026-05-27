@@ -10,6 +10,7 @@ export interface ResolvedWorktreeToolTarget {
   persistedSession?: PersistedSessionInfo;
   persistedRef?: string;
   sessionName: string;
+  prompt?: string;
   worktreePath?: string;
   originalWorkdir?: string;
   branchName?: string;
@@ -37,6 +38,7 @@ export function resolveWorktreeToolTarget(sessionManager: SessionManager, ref: s
     persistedSession,
     persistedRef,
     sessionName: activeSession?.name ?? persistedSession?.name ?? ref,
+    prompt: activeSession?.prompt ?? persistedSession?.prompt,
     worktreePath: activeSession?.worktreePath ?? persistedSession?.worktreePath,
     originalWorkdir: activeSession?.originalWorkdir ?? persistedSession?.workdir,
     branchName: activeSession?.worktreeBranch ?? persistedSession?.worktreeBranch,
