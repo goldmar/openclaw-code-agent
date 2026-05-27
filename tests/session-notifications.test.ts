@@ -285,6 +285,7 @@ describe("SessionNotificationService", () => {
     );
 
     assert.equal(capturedRequest.label, "worktree-outcome");
+    assert.equal(capturedRequest.requireDirectUserNotification, true);
     assert.equal(capturedRequest.completionWakeSummaryRequired, true);
     assert.match(capturedRequest.wakeMessageOnNotifySuccess, /agent_output\(session='session-7', full=true\)/);
     assert.match(capturedRequest.wakeMessageOnNotifySuccess, /originRoute: \{"provider":"telegram","target":"-100123","threadId":"32947","sessionKey":"agent:x:telegram:channel:-100123:topic:32947"\}/);

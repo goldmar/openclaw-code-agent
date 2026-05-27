@@ -392,6 +392,40 @@ if (failConfigRaw) {
     assert.deepEqual(calls, [["system", "event", "--text", "🚀 launched", "--mode", "now"]]);
   });
 
+  it("does not system-fallback strict runtime direct notification failures", async () => {
+    const sends: string[] = [];
+    const dispatcher = new WakeDispatcher({
+      directNotifications: {
+        send: async (_route, text) => {
+          sends.push(text);
+          throw new Error("runtime direct sender unavailable after send ambiguity");
+        },
+      },
+    });
+    const session: FakeSession = {
+      id: "session-runtime-strict-direct-unavailable",
+      route: buildRoute({ threadId: "28", sessionKey: "agent:main:telegram:group:-1003863755361:topic:28" }),
+      originChannel: "telegram|bot|-1003863755361",
+      originThreadId: 28,
+      originSessionKey: "agent:main:telegram:group:-1003863755361:topic:28",
+    };
+
+    dispatcher.dispatchSessionNotification(session as any, {
+      label: "worktree-outcome",
+      userMessage: "✅ PR opened: https://github.com/goldmar/openclaw-workspace/pull/3",
+      requireDirectUserNotification: true,
+      wakeMessageOnNotifySuccess: "Canonical worktree status delivered to user: yes",
+      wakeMessageOnNotifyFailed: "Canonical worktree status delivered to user: no",
+      notifyUser: "always",
+    });
+
+    const calls = await waitForCalls(logPath, 1);
+    assert.deepEqual(sends, ["✅ PR opened: https://github.com/goldmar/openclaw-workspace/pull/3"]);
+    assert.equal(calls.some((call) => call[0] === "system"), false);
+    const wakeParams = parseChatSendParams(calls[0] ?? []);
+    assert.equal(wakeParams.message, "Canonical worktree status delivered to user: no");
+  });
+
   it("reports strict completion notification ambiguity as delivery failure before waking", async (t) => {
     const dispatcher = createDispatcher();
     const session: FakeSession = {
