@@ -225,6 +225,10 @@ function includesPromptLeak(value: string, prompt: string | undefined, evidence:
   return promptLeakFragments(prompt, evidence.objective).some((fragment) => lower.includes(fragment));
 }
 
+function isLikelyDottedTechnologyName(value: string): boolean {
+  return /^(?:node|next|nuxt|vue|express|nest|three|d3|chart|ember|backbone|require)\.js$/i.test(value);
+}
+
 function mentionsUnknownFile(value: string, evidence: PrMetadataEvidence): boolean {
   const knownFiles = new Set(evidence.changedFiles);
   const pathMatches = [...value.matchAll(/(?:^|[^\w.-])((?:\.?[\w-][\w.-]*\/)+(?:\.?[\w-][\w.-]*))(?![\w.-])/g)].map((match) => match[1]);
@@ -254,7 +258,7 @@ function mentionsUnknownFile(value: string, evidence: PrMetadataEvidence): boole
   for (const match of quotedRootFileMentions) {
     const file = match[1];
     const extension = match[2]?.toLowerCase();
-    if (extension !== undefined && knownRootExtensions.has(extension) && !knownRootFiles.has(file)) return true;
+    if (extension !== undefined && knownRootExtensions.has(extension) && !knownRootFiles.has(file) && !isLikelyDottedTechnologyName(file)) return true;
   }
 
   const contextualRootFileMentions = value.matchAll(new RegExp(String.raw`\b(?:file|files|path|paths|changed|changes|updated?|updates?|modified?|modifies|touched?|touches|added?|adds?|removed?|removes?|deleted?|deletes?)\s+(?:the\s+)?(${rootFilePattern})\b`, "gi"));
@@ -263,7 +267,8 @@ function mentionsUnknownFile(value: string, evidence: PrMetadataEvidence): boole
     const extension = match[2]?.toLowerCase();
     return extension !== undefined
       && knownRootExtensions.has(extension)
-      && !knownRootFiles.has(file);
+      && !knownRootFiles.has(file)
+      && !isLikelyDottedTechnologyName(file);
   });
 }
 

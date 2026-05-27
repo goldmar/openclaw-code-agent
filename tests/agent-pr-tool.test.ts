@@ -350,6 +350,46 @@ describe("agent_pr generated PR metadata", () => {
     assert.match(result.ok ? "" : result.error, /failed schema or safety validation/);
   });
 
+  it("rejects hallucinated root-level JS and TS file names", async () => {
+    const diffSummary = {
+      commits: 1,
+      filesChanged: 2,
+      insertions: 10,
+      deletions: 2,
+      changedFiles: ["index.js", "types.ts"],
+      commitMessages: [{ hash: "abc1234", message: "Update root metadata", author: "Codex" }],
+    };
+
+    const cases: unknown[] = [
+      {
+        title: "Update root metadata",
+        summary: ["Updates root package behavior."],
+        changes: ["`config.js`"],
+        validation: ["Review CI checks before merging."],
+        notes: ["No notes"],
+      },
+      {
+        title: "Update root metadata",
+        summary: ["Updates root package behavior."],
+        changes: ["Updated declarations.ts"],
+        validation: ["Review CI checks before merging."],
+        notes: ["No notes"],
+      },
+    ];
+
+    for (const generated of cases) {
+      const result = await buildPrMetadata({
+        sessionName: "root-js-ts-hallucination",
+        prompt: "Summarize root-level package changes.",
+        diffSummary,
+        provider: { async generatePrMetadata() { return generated; } },
+      });
+
+      assert.equal(result.ok, false);
+      assert.match(result.ok ? "" : result.error, /failed schema or safety validation/);
+    }
+  });
+
   it("does not reject ordinary root-like technology names", async () => {
     const result = await buildPrMetadata({
       sessionName: "ordinary-root-like-names",
@@ -406,6 +446,35 @@ describe("agent_pr generated PR metadata", () => {
 
     assert.equal(result.ok, true);
     assert.equal(result.ok && result.metadata.summary.includes("Keeps `Node.js` package metadata current."), true);
+  });
+
+  it("does not reject dotted technology names when root files share their extensions", async () => {
+    const result = await buildPrMetadata({
+      sessionName: "dotted-technology-names-with-root-files",
+      prompt: "Describe JavaScript package metadata updates.",
+      diffSummary: {
+        commits: 1,
+        filesChanged: 3,
+        insertions: 12,
+        deletions: 3,
+        changedFiles: ["index.js", "types.ts", "README.md"],
+        commitMessages: [{ hash: "abc1234", message: "Update JavaScript package metadata", author: "Codex" }],
+      },
+      provider: {
+        async generatePrMetadata() {
+          return {
+            title: "Update JavaScript package metadata",
+            summary: ["Updates Node.js package metadata and documents `Next.js` support."],
+            changes: ["`index.js`", "`types.ts`", "`README.md`"],
+            validation: ["Review CI checks before merging."],
+            notes: ["No `pnpm` command was run by metadata generation."],
+          };
+        },
+      },
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.ok && result.metadata.summary.includes("Updates Node.js package metadata and documents `Next.js` support."), true);
   });
 
   it("rejects hallucinated dot-prefixed path mentions", async () => {
