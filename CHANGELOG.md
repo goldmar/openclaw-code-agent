@@ -7,10 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.3.3] - 2026-05-27
+
+### Fixed
+- Fixed merged worktree session listings so completed worktree outcomes render the resolved lifecycle state and summary consistently.
+- Restored Telegram-native action button styling safely by omitting unsupported generic style fields while preserving callback payloads.
+- Avoided duplicate fallback notifications after worktree merge or PR outcomes when routed orchestrator wake delivery is already available.
+- Improved `agent_pr` pull request descriptions so generated PR bodies include clearer change summaries, validation metadata, and repository/worktree context without false-positive framework labels.
+
 ### Changed
 - Updated the local OpenClaw package target to `openclaw@2026.5.26` while keeping the peer floor at `>=2026.4.21`.
 - Documented the `2026.5.26` compatibility verdict: no plugin source migration was required because `openclaw-code-agent` still imports only `openclaw/plugin-sdk/plugin-entry`, declares its tool surface through `contracts.tools`, and owns its own session store, wake routing, callbacks, worktree flows, and harness model restrictions.
 - Refreshed operator guidance for Telegram topic routing, Start Plan and approval callbacks, cron-origin wake delivery, Codex/Claude harness policy boundaries, runtime tool allowlists, disabled bundled plugin behavior, and worktree `delegate`/`ask`/`auto-pr` follow-through under OpenClaw `2026.5.26`.
+- Refreshed dependency metadata by updating the transitive Anthropic SDK lockfile resolution and removing stale pnpm build allowlist entries no longer needed by the current OpenClaw target.
 
 ## [4.3.2] - 2026-05-26
 
@@ -362,7 +371,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Default Codex approval policy to `on-request`.
 - Raised the default session limit.
 
-[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.3.2...HEAD
+[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.3.3...HEAD
+[4.3.3]: https://github.com/goldmar/openclaw-code-agent/compare/v4.3.2...v4.3.3
 [4.3.2]: https://github.com/goldmar/openclaw-code-agent/compare/v4.3.1...v4.3.2
 [4.3.1]: https://github.com/goldmar/openclaw-code-agent/compare/v4.3.0...v4.3.1
 [4.3.0]: https://github.com/goldmar/openclaw-code-agent/compare/v4.2.4...v4.3.0
