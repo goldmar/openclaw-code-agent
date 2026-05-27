@@ -66,6 +66,8 @@ export type PrMetadataResult =
   | { ok: true; metadata: PrMetadata; evidence: PrMetadataEvidence }
   | { ok: false; error: string; evidence: PrMetadataEvidence };
 
+const OPAQUE_TOKEN_MIN_LENGTH = 32;
+
 export function buildPrOutcomeDetailLines(args: {
   branchName: string;
   baseBranch: string;
@@ -127,7 +129,7 @@ function redactSensitiveText(value: string): string {
     .replace(/\bhttps?:\/\/\S+/gi, "[redacted link]")
     .replace(/\b[A-Z]:\\(?:Users|Documents and Settings)\\[^\s`'")]+/gi, "[redacted path]")
     .replace(/(?:^|[\s(])\/(?:home|Users|var|etc|private|tmp)\/[^\s`'").]+/g, (match) => `${match.startsWith(" ") || match.startsWith("(") ? match[0] : ""}[redacted path]`)
-    .replace(/\b[A-Za-z0-9_-]{32,}\b/g, "[redacted token]");
+    .replace(new RegExp(`\\b[A-Za-z0-9_-]{${OPAQUE_TOKEN_MIN_LENGTH},}\\b`, "g"), "[redacted token]");
 }
 
 function containsSensitiveText(value: string): boolean {
@@ -141,7 +143,7 @@ function containsSensitiveText(value: string): boolean {
     || /\bhttps?:\/\/\S+/i.test(value)
     || /\b[A-Z]:\\(?:Users|Documents and Settings)\\[^\s`'")]+/i.test(value)
     || /(?:^|[\s(])\/(?:home|Users|var|etc|private|tmp)\/[^\s`'").]+/.test(value)
-    || /\b[A-Za-z0-9_-]{48,}\b/.test(value);
+    || new RegExp(`\\b[A-Za-z0-9_-]{${OPAQUE_TOKEN_MIN_LENGTH},}\\b`).test(value);
 }
 
 function buildSafeObjective(prompt: string | undefined): string | undefined {
@@ -222,7 +224,30 @@ function includesPromptLeak(value: string, prompt: string | undefined, evidence:
 function mentionsUnknownFile(value: string, evidence: PrMetadataEvidence): boolean {
   const knownFiles = new Set(evidence.changedFiles);
   const pathMatches = value.match(/\b(?:[\w.-]+\/)+[\w.-]+\b/g) ?? [];
-  return pathMatches.some((file) => /\.[A-Za-z0-9]+$/.test(file) && !knownFiles.has(file));
+  if (pathMatches.some((file) => /\.[A-Za-z0-9]+$/.test(file) && !knownFiles.has(file))) return true;
+
+  const knownRootFiles = new Set(evidence.changedFiles.filter((file) => !file.includes("/")));
+  if (knownRootFiles.size === 0) return false;
+
+  const knownRootExtensions = new Set(
+    [...knownRootFiles]
+      .map((file) => file.match(/\.([A-Za-z0-9]+)$/)?.[1]?.toLowerCase())
+      .filter((extension): extension is string => Boolean(extension)),
+  );
+  const rootFilePattern = String.raw`[A-Za-z0-9][\w.-]*\.([A-Za-z0-9]+)`;
+  const quotedRootFileMentions = value.matchAll(new RegExp(`[\\\`"'](${rootFilePattern})[\\\`"']`, "g"));
+  for (const match of quotedRootFileMentions) {
+    if (!knownRootFiles.has(match[1])) return true;
+  }
+
+  const contextualRootFileMentions = value.matchAll(new RegExp(String.raw`\b(?:file|files|path|paths|changed|changes|updated?|updates?|modified?|modifies|touched?|touches|added?|adds?|removed?|removes?|deleted?|deletes?)\s+(?:the\s+)?(${rootFilePattern})\b`, "gi"));
+  return [...contextualRootFileMentions].some((match) => {
+    const file = match[1];
+    const extension = match[2]?.toLowerCase();
+    return extension !== undefined
+      && knownRootExtensions.has(extension)
+      && !knownRootFiles.has(file);
+  });
 }
 
 function sanitizeMetadataText(value: string): string {

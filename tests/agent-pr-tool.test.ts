@@ -192,6 +192,13 @@ describe("agent_pr generated PR metadata", () => {
         validation: ["Not recorded by agent_pr. Review CI/checks and session output before merging."],
         notes: ["No notes"],
       },
+      {
+        title: "Opaque token",
+        summary: ["Token abcdefghijklmnopqrstuvwxyzABCDEF12345678 was emitted."],
+        changes: ["`src/tools/agent-pr.ts`"],
+        validation: ["Not recorded by agent_pr. Review CI/checks and session output before merging."],
+        notes: ["No notes"],
+      },
     ];
 
     for (const generated of cases) {
@@ -235,6 +242,64 @@ describe("agent_pr generated PR metadata", () => {
 
     assert.equal(result.ok, true);
     assert.equal(result.ok && result.metadata.title, "Update package metadata");
+  });
+
+  it("rejects hallucinated root-level changed file names", async () => {
+    const result = await buildPrMetadata({
+      sessionName: "root-file-hallucination",
+      prompt: "Summarize root-level documentation changes.",
+      diffSummary: {
+        commits: 1,
+        filesChanged: 1,
+        insertions: 6,
+        deletions: 2,
+        changedFiles: ["README.md"],
+        commitMessages: [{ hash: "abc1234", message: "Update README metadata", author: "Codex" }],
+      },
+      provider: {
+        async generatePrMetadata() {
+          return {
+            title: "Update documentation metadata",
+            summary: ["Updates the root-level documentation summary."],
+            changes: ["`CHANGELOG.md`"],
+            validation: ["Review CI checks before merging."],
+            notes: ["No notes"],
+          };
+        },
+      },
+    });
+
+    assert.equal(result.ok, false);
+    assert.match(result.ok ? "" : result.error, /failed schema or safety validation/);
+  });
+
+  it("does not reject ordinary root-like technology names", async () => {
+    const result = await buildPrMetadata({
+      sessionName: "ordinary-root-like-names",
+      prompt: "Describe package metadata updates.",
+      diffSummary: {
+        commits: 1,
+        filesChanged: 1,
+        insertions: 8,
+        deletions: 1,
+        changedFiles: ["package.json"],
+        commitMessages: [{ hash: "abc1234", message: "Update package metadata", author: "Codex" }],
+      },
+      provider: {
+        async generatePrMetadata() {
+          return {
+            title: "Update package metadata",
+            summary: ["Keeps Node.js package metadata current."],
+            changes: ["`package.json`"],
+            validation: ["Review CI checks before merging."],
+            notes: ["No pnpm command was run by metadata generation."],
+          };
+        },
+      },
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.ok && result.metadata.summary.includes("Keeps Node.js package metadata current."), true);
   });
 
   it("allows model output to mention files beyond the first ten changed files", async () => {
