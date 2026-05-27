@@ -7,7 +7,14 @@
  *
  * @module format
  */
-import type { ApprovalExecutionState, PermissionMode, SessionBackendRef, SessionMetrics } from "./types";
+import type {
+  ApprovalExecutionState,
+  PermissionMode,
+  PersistedWorktreeLifecycle,
+  SessionBackendRef,
+  SessionMetrics,
+  SessionWorktreeState,
+} from "./types";
 import { getBackendConversationId } from "./session-backend-ref";
 
 /** Session shape needed by list formatting utilities. */
@@ -34,6 +41,8 @@ export interface SessionListRenderable {
   worktreePath?: string;
   worktreeBranch?: string;
   worktreeStrategy?: string;
+  worktreeState?: SessionWorktreeState;
+  worktreeLifecycle?: PersistedWorktreeLifecycle;
   worktreeMerged?: boolean;
   worktreeMergedAt?: string;
   worktreePrUrl?: string;
@@ -84,6 +93,29 @@ const STATUS_ICONS: Record<string, string> = {
   terminal: "🏁",
 };
 
+function formatWorktreeResolutionStatus(session: SessionListRenderable): string {
+  const lifecycleState = session.worktreeLifecycle?.state ?? session.worktreeState;
+  if (session.worktreeMerged || lifecycleState === "merged") {
+    return "[merged ✓]";
+  }
+  if (lifecycleState === "released") {
+    return "[released]";
+  }
+  if (session.worktreePrUrl) {
+    return `[PR: ${session.worktreePrUrl}]`;
+  }
+  if (lifecycleState === "pr_open") {
+    return "[PR open]";
+  }
+  if (lifecycleState === "dismissed") {
+    return "[dismissed]";
+  }
+  if (lifecycleState === "no_change") {
+    return "[no change]";
+  }
+  return "[not merged]";
+}
+
 /** Render a human-readable session row for `agent_sessions`. */
 export function formatSessionListing(session: SessionListRenderable): string {
   const icon = STATUS_ICONS[session.phase] ?? STATUS_ICONS[session.status] ?? "❓";
@@ -101,17 +133,7 @@ export function formatSessionListing(session: SessionListRenderable): string {
 
   // F1 + F5: Show branch name, merge status, and PR info when worktree is used
   if (session.worktreePath && session.worktreeBranch) {
-    let worktreeInfo = `   🌿 Worktree: ${session.worktreeBranch}`;
-
-    if (session.worktreeMerged) {
-      worktreeInfo += ` [merged ✓]`;
-    } else if (session.worktreePrUrl) {
-      worktreeInfo += ` [PR: ${session.worktreePrUrl}]`;
-    } else {
-      worktreeInfo += ` [not merged]`;
-    }
-
-    lines.push(worktreeInfo);
+    lines.push(`   🌿 Worktree: ${session.worktreeBranch} ${formatWorktreeResolutionStatus(session)}`);
   }
 
   if (session.phase !== session.status) {

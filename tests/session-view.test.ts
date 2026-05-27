@@ -263,6 +263,61 @@ describe("session-view app layer", () => {
     assert.doesNotMatch(channelFiltered, /same-name \[persisted-other\]/);
   });
 
+  it("preserves persisted merged worktree state when an active row overrides the listing", () => {
+    const now = Date.now();
+    const sm: any = {
+      list: () => [
+        {
+          status: "completed",
+          name: "fix-fresh-broker-proof-observation-scope",
+          id: "a0nzxOmv",
+          duration: 5000,
+          prompt: "fix broker proof observation scope readiness",
+          multiTurn: true,
+          workdir: "/repo/.worktrees/agent/fix-fresh-broker-proof-observation-scope",
+          originalWorkdir: "/repo",
+          costUsd: 0,
+          phase: "terminal",
+          lifecycle: "terminal",
+          startedAt: now - 1000,
+          completedAt: now - 500,
+          worktreePath: "/repo/.worktrees/agent/fix-fresh-broker-proof-observation-scope",
+          worktreeBranch: "agent/fix-fresh-broker-proof-observation-scope",
+          worktreeState: "none",
+        },
+      ],
+      listPersistedSessions: () => [
+        {
+          sessionId: "a0nzxOmv",
+          harnessSessionId: "h-a0nzxOmv",
+          name: "fix-fresh-broker-proof-observation-scope",
+          status: "completed",
+          prompt: "fix broker proof observation scope readiness",
+          workdir: "/repo",
+          createdAt: now - 1000,
+          completedAt: now - 500,
+          costUsd: 0,
+          lifecycle: "terminal",
+          worktreePath: "/repo/.worktrees/agent/fix-fresh-broker-proof-observation-scope",
+          worktreeBranch: "agent/fix-fresh-broker-proof-observation-scope",
+          worktreeState: "merged",
+          worktreeMerged: true,
+          worktreeLifecycle: {
+            state: "merged",
+            updatedAt: "2026-05-26T10:00:00.000Z",
+            resolvedAt: "2026-05-26T10:00:00.000Z",
+          },
+        },
+      ],
+    };
+
+    const text = getSessionsListingText(sm, "all", undefined, { full: true });
+    assert.match(text, /fix-fresh-broker-proof-observation-scope \[a0nzxOmv\]/);
+    assert.match(text, /Worktree: agent\/fix-fresh-broker-proof-observation-scope \[merged ✓\]/);
+    assert.doesNotMatch(text, /\[not merged\]/);
+    assert.equal((text.match(/fix-fresh-broker-proof-observation-scope \[a0nzxOmv\]/g) ?? []).length, 1);
+  });
+
   it("uses updated persisted output label", () => {
     const sm: any = {
       resolve: () => undefined,

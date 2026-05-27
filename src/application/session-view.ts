@@ -3,7 +3,14 @@ import type { SessionManager } from "../session-manager";
 import type { Session } from "../session";
 import { getSessionOutputFilePath } from "../session";
 import { formatDuration, formatSessionListing } from "../format";
-import type { ApprovalExecutionState, PermissionMode, PersistedSessionInfo, SessionStatus } from "../types";
+import type {
+  ApprovalExecutionState,
+  PermissionMode,
+  PersistedSessionInfo,
+  PersistedWorktreeLifecycle,
+  SessionStatus,
+  SessionWorktreeState,
+} from "../types";
 
 const DEFAULT_OUTPUT_LINES = 50;
 const MIN_OUTPUT_LINES = 1;
@@ -57,6 +64,8 @@ interface SessionListingItem {
   worktreePath?: string;
   worktreeBranch?: string;
   worktreeStrategy?: string;
+  worktreeState?: SessionWorktreeState;
+  worktreeLifecycle?: PersistedWorktreeLifecycle;
   originalWorkdir?: string;
   worktreeMerged?: boolean;
   worktreeMergedAt?: string;
@@ -69,6 +78,7 @@ export interface SessionListingOptions {
 
 const DEFAULT_SESSION_LIST_LIMIT = 5;
 const FULL_SESSION_LIST_WINDOW_MS = 24 * 60 * 60 * 1000;
+const RESOLVED_WORKTREE_STATES = new Set<string>(["merged", "released", "dismissed", "no_change"]);
 
 function normalizeLines(lines?: number): number {
   const parsed = Number(lines);
@@ -90,6 +100,26 @@ function splitOutputLines(content: string): string[] {
 
 function persistedBackendConversationId(persisted: PersistedSessionInfo): string | undefined {
   return persisted.backendRef?.conversationId ?? persisted.harnessSessionId;
+}
+
+function preferResolvedWorktreeState(
+  primary: SessionWorktreeState | undefined,
+  fallback: SessionWorktreeState | undefined,
+): SessionWorktreeState | undefined {
+  if (fallback && RESOLVED_WORKTREE_STATES.has(fallback) && (!primary || !RESOLVED_WORKTREE_STATES.has(primary))) {
+    return fallback;
+  }
+  return primary ?? fallback;
+}
+
+function preferResolvedWorktreeLifecycle(
+  primary: PersistedWorktreeLifecycle | undefined,
+  fallback: PersistedWorktreeLifecycle | undefined,
+): PersistedWorktreeLifecycle | undefined {
+  if (fallback && RESOLVED_WORKTREE_STATES.has(fallback.state) && (!primary || !RESOLVED_WORKTREE_STATES.has(primary.state))) {
+    return fallback;
+  }
+  return primary ?? fallback;
 }
 
 function readOutputLinesFromFile(path: string, options: OutputOptions, linesToShow: number): string[] {
@@ -293,6 +323,8 @@ function mergeActiveAndPersistedSessions(active: Session[], persisted: Persisted
       worktreePath: p.worktreePath,
       worktreeBranch: p.worktreeBranch,
       worktreeStrategy: p.worktreeStrategy,
+      worktreeState: p.worktreeState,
+      worktreeLifecycle: p.worktreeLifecycle,
       worktreeMerged: p.worktreeMerged,
       worktreeMergedAt: p.worktreeMergedAt,
       worktreePrUrl: p.worktreePrUrl,
@@ -300,6 +332,7 @@ function mergeActiveAndPersistedSessions(active: Session[], persisted: Persisted
   }
 
   for (const session of active) {
+    const persistedMatch = merged.get(session.id);
     merged.set(session.id, {
       id: session.id,
       name: session.name,
@@ -325,9 +358,11 @@ function mergeActiveAndPersistedSessions(active: Session[], persisted: Persisted
       worktreePath: session.worktreePath,
       worktreeBranch: session.worktreeBranch,
       worktreeStrategy: session.worktreeStrategy,
-      worktreeMerged: undefined, // Active sessions don't have merge status yet
-      worktreeMergedAt: undefined,
-      worktreePrUrl: undefined,
+      worktreeState: preferResolvedWorktreeState(session.worktreeState, persistedMatch?.worktreeState),
+      worktreeLifecycle: preferResolvedWorktreeLifecycle(session.worktreeLifecycle, persistedMatch?.worktreeLifecycle),
+      worktreeMerged: session.worktreeMerged ?? persistedMatch?.worktreeMerged,
+      worktreeMergedAt: session.worktreeMergedAt ?? persistedMatch?.worktreeMergedAt,
+      worktreePrUrl: session.worktreePrUrl ?? persistedMatch?.worktreePrUrl,
     });
   }
 
