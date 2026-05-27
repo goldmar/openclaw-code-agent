@@ -1,4 +1,4 @@
-import { Type } from "@sinclair/typebox";
+import { Type } from "../tool-schema";
 
 import { buildGoalTaskRuntimeSnapshot, formatGoalTask } from "../goal-format";
 import { goalController, sessionManager } from "../singletons";

@@ -34,8 +34,8 @@
       "minGatewayVersion": "2026.4.21"
     },
     "build": {
-      "openclawVersion": "2026.5.22",
-      "pluginSdkVersion": "2026.5.22"
+      "openclawVersion": "2026.5.26",
+      "pluginSdkVersion": "2026.5.26"
     }
   },
   "files": [
@@ -49,11 +49,10 @@
     "@anthropic-ai/claude-agent-sdk": "^0.3.142"
   },
   "devDependencies": {
-    "@sinclair/typebox": "^0.34.49",
     "@types/node": "^25.5.2",
     "esbuild": "^0.28.0",
     "nanoid": "^5.1.7",
-    "openclaw": "2026.5.22",
+    "openclaw": "2026.5.26",
     "tsx": "^4.21.0",
     "typescript": "^6.0.2"
   },
@@ -98,11 +97,7 @@
   "pnpm": {
     "onlyBuiltDependencies": [
       "esbuild",
-      "koffi",
-      "protobufjs",
-      "sharp",
-      "@img/sharp-linux-x64",
-      "@img/sharp-linux-arm64"
+      "protobufjs"
     ],
     "overrides": {
       "basic-ftp": "5.3.1",

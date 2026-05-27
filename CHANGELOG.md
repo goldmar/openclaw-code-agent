@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Updated the local OpenClaw package target to `openclaw@2026.5.26` while keeping the peer floor at `>=2026.4.21`.
+- Documented the `2026.5.26` compatibility verdict: no plugin source migration was required because `openclaw-code-agent` still imports only `openclaw/plugin-sdk/plugin-entry`, declares its tool surface through `contracts.tools`, and owns its own session store, wake routing, callbacks, worktree flows, and harness model restrictions.
+- Refreshed operator guidance for Telegram topic routing, Start Plan and approval callbacks, cron-origin wake delivery, Codex/Claude harness policy boundaries, runtime tool allowlists, disabled bundled plugin behavior, and worktree `delegate`/`ask`/`auto-pr` follow-through under OpenClaw `2026.5.26`.
+
 ## [4.3.2] - 2026-05-26
 
 ### Fixed

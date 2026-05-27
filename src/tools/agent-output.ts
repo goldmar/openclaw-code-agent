@@ -1,4 +1,4 @@
-import { Type } from "@sinclair/typebox";
+import { Type } from "../tool-schema";
 import { sessionManager } from "../singletons";
 import type { OpenClawPluginToolContext } from "../types";
 import { getSessionOutputText } from "../application/session-view";

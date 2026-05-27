@@ -1,4 +1,4 @@
-import { Type, type TLiteral } from "@sinclair/typebox";
+import { Type, type TLiteral } from "../tool-schema";
 import { sessionManager } from "../singletons";
 import { resolveSessionRoute } from "../config";
 import { WORKTREE_STRATEGIES, WORKTREE_STRATEGY_SET } from "../types";
