@@ -13,6 +13,14 @@ import type { NotificationRoute } from "./wake-route-resolver";
 
 const FALLBACK_CLI_TIMEOUT_MS = 5_000;
 const TELEGRAM_CALLBACK_DATA_MAX_BYTES = 64;
+const TELEGRAM_BUTTON_STYLE_ALIASES: Record<string, string> = {
+  primary: "primary",
+  success: "success",
+  positive: "success",
+  danger: "danger",
+  destructive: "danger",
+  negative: "danger",
+};
 
 type RuntimeOutboundAdapter = NonNullable<
   NonNullable<ReturnType<typeof getPluginRuntime>>["channel"]
@@ -44,10 +52,15 @@ type InteractiveReply = {
   }>;
 };
 
-type TelegramInlineButtons = Array<Array<{
+type TelegramInlineButton = {
   text: string;
-  callback_data: string;
-}>>;
+  callback_data?: string;
+  url?: string;
+  style?: string;
+  [key: string]: unknown;
+};
+
+type TelegramInlineButtons = Array<Array<TelegramInlineButton>>;
 
 export interface DirectNotificationTransport {
   send(
@@ -402,7 +415,19 @@ function ensureTelegramInlineButtons(payload: unknown, interactive: InteractiveR
   const record = payload as Record<string, unknown>;
   const channelData = toRecord(record.channelData);
   const telegram = toRecord(channelData?.telegram);
-  if (hasTelegramInlineButtons(telegram?.buttons)) return payload;
+  const sanitizedExistingButtons = sanitizeTelegramInlineButtons(telegram?.buttons);
+  if (sanitizedExistingButtons) {
+    return {
+      ...record,
+      channelData: {
+        ...(channelData ?? {}),
+        telegram: {
+          ...(telegram ?? {}),
+          buttons: sanitizedExistingButtons,
+        },
+      },
+    };
+  }
 
   const buttons = buildTelegramInlineButtons(interactive);
   if (!buttons) return payload;
@@ -432,15 +457,39 @@ function buildTelegramInlineButtons(interactive: InteractiveReply): TelegramInli
         .map((button) => ({
           text: button.label,
           callback_data: button.value,
+          ...telegramButtonStyle(button.style),
         })),
     )
     .filter((row) => row.length > 0);
   return rows.length > 0 ? rows : undefined;
 }
 
-function hasTelegramInlineButtons(buttons: unknown): boolean {
-  return Array.isArray(buttons) &&
-    buttons.some((row) => Array.isArray(row) && row.length > 0);
+function sanitizeTelegramInlineButtons(buttons: unknown): TelegramInlineButtons | undefined {
+  if (!Array.isArray(buttons)) return undefined;
+  const rows = buttons
+    .map((row) => {
+      if (!Array.isArray(row)) return [];
+      return row
+        .map((button) => {
+          if (!button || typeof button !== "object" || Array.isArray(button)) return undefined;
+          const { style: rawStyle, ...rest } = button as Record<string, unknown>;
+          if (typeof rest.text !== "string" || rest.text.trim().length === 0) return undefined;
+          return {
+            ...rest,
+            ...telegramButtonStyle(rawStyle),
+          };
+        })
+        .filter((button): button is Record<string, unknown> => Boolean(button));
+    })
+    .filter((row) => row.length > 0);
+  return rows.length > 0 ? rows as TelegramInlineButtons : undefined;
+}
+
+function telegramButtonStyle(style: unknown): { style: string } | Record<string, never> {
+  if (typeof style !== "string") return {};
+  const normalized = style.trim().toLowerCase();
+  const telegramStyle = TELEGRAM_BUTTON_STYLE_ALIASES[normalized];
+  return telegramStyle ? { style: telegramStyle } : {};
 }
 
 function toRecord(value: unknown): Record<string, unknown> | undefined {
