@@ -1,4 +1,4 @@
-import { Type } from "@sinclair/typebox";
+import { Type } from "../tool-schema";
 import { existsSync } from "fs";
 import { sessionManager } from "../singletons";
 import type { OpenClawPluginToolContext } from "../types";

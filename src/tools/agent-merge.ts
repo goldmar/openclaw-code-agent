@@ -1,4 +1,4 @@
-import { Type } from "@sinclair/typebox";
+import { Type } from "../tool-schema";
 import { existsSync } from "fs";
 import { getDefaultHarnessName } from "../config";
 import { sessionManager } from "../singletons";
