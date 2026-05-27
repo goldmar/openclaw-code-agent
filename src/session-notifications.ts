@@ -100,6 +100,7 @@ export class SessionNotificationService {
       label: "worktree-outcome",
       userMessage: outcomeLine,
       notifyUser: "always",
+      requireDirectUserNotification: true,
       completionWakeSummaryRequired: summaryWakeRequired,
       wakeMessageOnNotifySuccess: summaryWakeRequired ? buildWakeMessage(true) : undefined,
       wakeMessageOnNotifyFailed: summaryWakeRequired ? buildWakeMessage(false) : undefined,
