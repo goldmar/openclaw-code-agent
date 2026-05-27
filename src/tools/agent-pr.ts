@@ -156,7 +156,7 @@ function buildSafeObjective(prompt: string | undefined): string | undefined {
 
 function formatCommitSubjects(diffSummary: DiffSummary | undefined, limit: number): string[] {
   return diffSummary?.commitMessages
-    .map((commit) => commit.message.trim())
+    .map((commit) => redactSensitiveText(commit.message.trim()).replace(/\s+/g, " ").trim())
     .filter(Boolean)
     .slice(0, limit) ?? [];
 }

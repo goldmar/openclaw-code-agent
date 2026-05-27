@@ -166,6 +166,50 @@ describe("agent_pr generated PR metadata", () => {
     assert.match(evidenceText, /\[redacted path\]/);
   });
 
+  it("redacts token-like commit subjects before sending metadata evidence to the provider", async () => {
+    let evidenceCommitSubjects: string[] = [];
+
+    const result = await buildPrMetadata({
+      sessionName: "private-commit-subjects",
+      prompt: "Summarize safe commit-subject evidence.",
+      diffSummary: {
+        commits: 3,
+        filesChanged: 1,
+        insertions: 7,
+        deletions: 1,
+        changedFiles: ["src/tools/agent-pr.ts"],
+        commitMessages: [
+          { hash: "abc1234", message: "Rotate deployment token SECRET_TOKEN=ghp_1234567890abcdefghijklmnopqrstuvwxyz", author: "Codex" },
+          { hash: "def5678", message: "Document generated metadata safety", author: "Codex" },
+          { hash: "fed4321", message: "Remove leaked key sk-abcdefghijklmnopqrstuvwxyz123456", author: "Codex" },
+        ],
+      },
+      provider: {
+        async generatePrMetadata(evidence) {
+          evidenceCommitSubjects = evidence.commitSubjects;
+          return {
+            title: "Redact commit metadata evidence",
+            summary: ["Redacts sensitive commit subject details before metadata generation."],
+            changes: ["`src/tools/agent-pr.ts`"],
+            validation: evidence.validation,
+            notes: evidence.notes,
+          };
+        },
+      },
+    });
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(evidenceCommitSubjects, [
+      "Rotate deployment [redacted credential]",
+      "Document generated metadata safety",
+      "Remove leaked key [redacted token]",
+    ]);
+    const evidenceText = JSON.stringify(evidenceCommitSubjects);
+    assert.doesNotMatch(evidenceText, /SECRET_TOKEN/);
+    assert.doesNotMatch(evidenceText, /ghp_1234567890abcdefghijklmnopqrstuvwxyz/);
+    assert.doesNotMatch(evidenceText, /sk-abcdefghijklmnopqrstuvwxyz123456/);
+  });
+
   it("fails explicitly when LLM metadata is invalid, unsafe, or references files outside the evidence", async () => {
     const diffSummary = {
       commits: 1,
