@@ -97,11 +97,7 @@
   "pnpm": {
     "onlyBuiltDependencies": [
       "esbuild",
-      "koffi",
-      "protobufjs",
-      "sharp",
-      "@img/sharp-linux-x64",
-      "@img/sharp-linux-arm64"
+      "protobufjs"
     ],
     "overrides": {
       "basic-ftp": "5.3.1",
