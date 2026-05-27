@@ -210,6 +210,39 @@ describe("agent_pr generated PR metadata", () => {
     assert.doesNotMatch(evidenceText, /sk-abcdefghijklmnopqrstuvwxyz123456/);
   });
 
+  it("redacts token-like commit subjects in the rendered PR body commits block", () => {
+    const body = formatPrBody({
+      sessionName: "private-commit-body",
+      metadata: {
+        title: "Redact commit metadata evidence",
+        summary: ["Redacts sensitive commit subject details before rendering."],
+        changes: ["`src/tools/agent-pr.ts`"],
+        validation: ["pnpm test:file tests/agent-pr-tool.test.ts"],
+        notes: ["Keeps commit context while removing sensitive values."],
+      },
+      diffSummary: {
+        commits: 3,
+        filesChanged: 1,
+        insertions: 7,
+        deletions: 1,
+        changedFiles: ["src/tools/agent-pr.ts"],
+        commitMessages: [
+          { hash: "abc1234", message: "Rotate deployment token SECRET_TOKEN=ghp_1234567890abcdefghijklmnopqrstuvwxyz", author: "Codex" },
+          { hash: "def5678", message: "Document generated metadata safety", author: "Codex" },
+          { hash: "fed4321", message: "Remove leaked key sk-abcdefghijklmnopqrstuvwxyz123456", author: "Codex" },
+        ],
+      },
+    });
+
+    assert.match(body, /## Commits/);
+    assert.match(body, /- abc1234 Rotate deployment \[redacted credential\] \(Codex\)/);
+    assert.match(body, /- def5678 Document generated metadata safety \(Codex\)/);
+    assert.match(body, /- fed4321 Remove leaked key \[redacted token\] \(Codex\)/);
+    assert.doesNotMatch(body, /SECRET_TOKEN/);
+    assert.doesNotMatch(body, /ghp_1234567890abcdefghijklmnopqrstuvwxyz/);
+    assert.doesNotMatch(body, /sk-abcdefghijklmnopqrstuvwxyz123456/);
+  });
+
   it("fails explicitly when LLM metadata is invalid, unsafe, or references files outside the evidence", async () => {
     const diffSummary = {
       commits: 1,

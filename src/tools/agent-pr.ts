@@ -154,9 +154,13 @@ function buildSafeObjective(prompt: string | undefined): string | undefined {
   return redacted ? truncateText(redacted, 180) : undefined;
 }
 
+function formatSafeCommitSubject(message: string): string {
+  return redactSensitiveText(message.trim()).replace(/\s+/g, " ").trim();
+}
+
 function formatCommitSubjects(diffSummary: DiffSummary | undefined, limit: number): string[] {
   return diffSummary?.commitMessages
-    .map((commit) => redactSensitiveText(commit.message.trim()).replace(/\s+/g, " ").trim())
+    .map((commit) => formatSafeCommitSubject(commit.message))
     .filter(Boolean)
     .slice(0, limit) ?? [];
 }
@@ -363,7 +367,7 @@ export function formatPrBody(args: {
   if (args.diffSummary) {
     const commitMessages = args.diffSummary.commitMessages
       .slice(0, 5)
-      .map((c) => `- ${c.hash} ${c.message} (${c.author})`);
+      .map((c) => `- ${c.hash} ${formatSafeCommitSubject(c.message)} (${c.author})`);
     const moreCommits = args.diffSummary.commits > 5 ? [`- ...and ${args.diffSummary.commits - 5} more`] : [];
     if (commitMessages.length > 0) {
       lines.push(`## Commits`, ...commitMessages, ...moreCommits, ``);
