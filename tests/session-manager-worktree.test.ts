@@ -521,6 +521,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       const sm = created.sm;
       cleanup = created.cleanup;
       stubDispatch(sm);
+      (sm as any).interactions.isGitHubCliAvailable = () => true;
       (sm as any).store.persisted.set("h-ask-summary", {
         harnessSessionId: "h-ask-summary",
         backendRef: { kind: "claude-code", conversationId: "h-ask-summary" },
