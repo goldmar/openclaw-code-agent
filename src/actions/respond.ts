@@ -52,6 +52,11 @@ function getSessionRef(session: ResumableSession): string {
   return getPrimarySessionLookupRef(session) ?? session.harnessSessionId ?? "unknown-session";
 }
 
+function getResumeWorktreeRef(session: ResumableSession): string | undefined {
+  if (!session.worktreeStrategy || session.worktreeStrategy === "off") return undefined;
+  return getStableSessionId(session) ?? getPrimarySessionLookupRef(session) ?? getBackendConversationId(session);
+}
+
 function canAutoResumeStoppedPlanDecision(session: ResumableSession): boolean {
   return session.status !== "running"
     && !!session.pendingPlanApproval
@@ -308,6 +313,7 @@ async function tryAutoResume(
       reasoningEffort: session.reasoningEffort,
       fastMode: session.fastMode,
       resumeSessionId: assessment.resumeSessionId,
+      resumeWorktreeFrom: getResumeWorktreeRef(session),
       worktreeStrategy: session.worktreeStrategy,
       worktreeBaseBranch: session.worktreeBaseBranch,
       worktreePrTargetRepo: session.worktreePrTargetRepo,

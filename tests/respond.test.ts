@@ -202,6 +202,102 @@ describe("executeRespond", () => {
     assert.equal(capturedConfig.sessionIdOverride, "dead-plan");
   });
 
+  it("passes a stable worktree resume ref when approving a stopped delegate worktree plan", async () => {
+    const sm = createStubSessionManager();
+    sm.persisted.set("019e6c36-1321-7130-a871-7b4303e8ff32", {
+      sessionId: "SPhNrL4Q",
+      harnessSessionId: "019e6c36-1321-7130-a871-7b4303e8ff32",
+      backendRef: {
+        kind: "codex-app-server",
+        conversationId: "019e6c36-1321-7130-a871-7b4303e8ff32",
+        runId: "019e6c43-3db5-7b30-8ccc-720c9979bcbe",
+      },
+      name: "repair-real-openclaw-dashboard",
+      prompt: "Repair dashboard after plan approval.",
+      workdir: "/home/openclaw/workspace/openclaw-dashboard",
+      worktreePath: "/home/openclaw/workspace/openclaw-dashboard/.worktrees/openclaw-worktree-repair-real-openclaw-dashboard",
+      worktreeBranch: "agent/repair-real-openclaw-dashboard",
+      worktreeStrategy: "delegate",
+      status: "completed",
+      lifecycle: "awaiting_plan_decision",
+      approvalState: "pending",
+      planApproval: "delegate",
+      currentPermissionMode: "plan",
+      requestedPermissionMode: "plan",
+      pendingPlanApproval: true,
+      planDecisionVersion: 1,
+      actionablePlanDecisionVersion: 1,
+      planModeApproved: false,
+      costUsd: 0.05,
+      harness: "codex",
+      route: {
+        provider: "telegram",
+        target: "12345",
+        sessionKey: "agent:main:telegram:group:12345",
+      },
+    } as any);
+    sm.idIndex.set("SPhNrL4Q", "019e6c36-1321-7130-a871-7b4303e8ff32");
+
+    let capturedConfig: any;
+    sm.spawn = (config: any) => {
+      capturedConfig = config;
+      return createStubSession({ name: "repair-real-openclaw-dashboard", id: "SPhNrL4Q" });
+    };
+
+    const result = await executeRespond(sm, {
+      session: "SPhNrL4Q",
+      message: "Approved. Go ahead.",
+      approve: true,
+      approvalRationale: "The plan is in scope.",
+    });
+
+    assert.match(result.text, /Plan approved for session/);
+    assert.equal(capturedConfig.workdir, "/home/openclaw/workspace/openclaw-dashboard");
+    assert.equal(capturedConfig.resumeSessionId, "019e6c36-1321-7130-a871-7b4303e8ff32");
+    assert.equal(capturedConfig.resumeWorktreeFrom, "SPhNrL4Q");
+    assert.equal(capturedConfig.worktreeStrategy, "delegate");
+    assert.equal(capturedConfig.permissionMode, "bypassPermissions");
+    assert.equal(capturedConfig.planModeApproved, true);
+  });
+
+  it("does not add a worktree resume ref for explicit off approvals", async () => {
+    const sm = createStubSessionManager();
+    sm.persisted.set("harness-plan-off", {
+      sessionId: "dead-plan-off",
+      harnessSessionId: "harness-plan-off",
+      name: "plan-session-off",
+      prompt: "Plan only and stop.",
+      workdir: "/tmp/repo",
+      status: "killed",
+      lifecycle: "suspended",
+      resumable: true,
+      killReason: "idle-timeout",
+      requestedPermissionMode: "plan",
+      currentPermissionMode: "plan",
+      pendingPlanApproval: true,
+      worktreeStrategy: "off",
+      costUsd: 0.05,
+      harness: "respond-resume-harness",
+    } as any);
+    sm.idIndex.set("dead-plan-off", "harness-plan-off");
+
+    let capturedConfig: any;
+    sm.spawn = (config: any) => {
+      capturedConfig = config;
+      return createStubSession({ name: "plan-session-off", id: "dead-plan-off" });
+    };
+
+    const result = await executeRespond(sm, {
+      session: "dead-plan-off",
+      message: "Approved. Go ahead.",
+      approve: true,
+    });
+
+    assert.match(result.text, /Plan approved for session/);
+    assert.equal(capturedConfig.worktreeStrategy, "off");
+    assert.equal(capturedConfig.resumeWorktreeFrom, undefined);
+  });
+
   it("routes free-text replies into a live native pending-input request", async () => {
     let submittedText: string | undefined;
     let sendMessageCalled = false;

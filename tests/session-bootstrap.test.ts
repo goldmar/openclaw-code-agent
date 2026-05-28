@@ -77,6 +77,63 @@ describe("prepareSessionBootstrap()", () => {
     }
   });
 
+  it("uses resumeWorktreeFrom instead of backend resume id when restoring worktree context", () => {
+    const repoDir = mkdtempSync(join(tmpdir(), "session-bootstrap-resume-worktree-from-"));
+    try {
+      git(repoDir, "init", "-b", "main");
+      git(repoDir, "config", "user.name", "Test User");
+      git(repoDir, "config", "user.email", "test@example.com");
+      writeFileSync(join(repoDir, "README.md"), "hello\n", "utf-8");
+      git(repoDir, "add", "README.md");
+      git(repoDir, "commit", "-m", "init");
+
+      const worktreePath = createWorktree(repoDir, "resume-worktree-from");
+      const branchName = getBranchName(worktreePath);
+      assert.ok(branchName, "worktree branch should exist");
+
+      const config: SessionConfig = {
+        prompt: "Approved. Continue in the existing worktree.",
+        workdir: repoDir,
+        resumeSessionId: "backend-thread-1",
+        resumeWorktreeFrom: "stable-session-1",
+        worktreeStrategy: "delegate",
+        multiTurn: true,
+        route: {
+          provider: "telegram",
+          target: "12345",
+          sessionKey: "agent:main:telegram:group:12345",
+        },
+      };
+
+      const bootstrap = prepareSessionBootstrap(
+        config,
+        "resume-worktree-from",
+        (ref): PersistedSessionInfo | undefined => {
+          if (ref !== "stable-session-1") return undefined;
+          return {
+            harnessSessionId: "backend-thread-1",
+            sessionId: "stable-session-1",
+            name: "resume-worktree-from",
+            prompt: "Original prompt",
+            workdir: repoDir,
+            status: "killed",
+            costUsd: 0,
+            worktreePath,
+            worktreeBranch: branchName,
+            worktreeStrategy: "delegate",
+          };
+        },
+      );
+
+      assert.equal(bootstrap.actualWorkdir, worktreePath);
+      assert.equal(bootstrap.originalWorkdir, repoDir);
+      assert.equal(bootstrap.worktreePath, worktreePath);
+      assert.equal(bootstrap.worktreeBranchName, branchName);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
   it("creates a plugin-managed worktree for fresh Codex worktree launches", () => {
     const repoDir = mkdtempSync(join(tmpdir(), "session-bootstrap-codex-native-"));
     try {
@@ -150,7 +207,7 @@ describe("prepareSessionBootstrap()", () => {
     }
   });
 
-  it("does not recreate missing native Codex worktrees during resume bootstrap", () => {
+  it("fails closed when a requested native Codex resume worktree is missing", () => {
     const repoDir = mkdtempSync(join(tmpdir(), "session-bootstrap-codex-resume-"));
     const missingWorktreePath = join(repoDir, ".codex", "worktrees", "abcd", "openclaw");
     try {
@@ -175,43 +232,38 @@ describe("prepareSessionBootstrap()", () => {
         },
       };
 
-      const bootstrap = prepareSessionBootstrap(
-        config,
-        "codex-native-resume",
-        (_ref): PersistedSessionInfo | undefined => ({
-          sessionId: "session-1",
-          harnessSessionId: "thread-1",
-          backendRef: {
-            kind: "codex-app-server",
-            conversationId: "thread-1",
-            worktreeId: "abcd",
+      assert.throws(
+        () => prepareSessionBootstrap(
+          config,
+          "codex-native-resume",
+          (_ref): PersistedSessionInfo | undefined => ({
+            sessionId: "session-1",
+            harnessSessionId: "thread-1",
+            backendRef: {
+              kind: "codex-app-server",
+              conversationId: "thread-1",
+              worktreeId: "abcd",
+              worktreePath: missingWorktreePath,
+            },
+            name: "codex-native-resume",
+            prompt: "Resume the Codex session",
+            workdir: repoDir,
+            status: "killed",
+            lifecycle: "suspended",
+            runtimeState: "stopped",
+            costUsd: 0,
+            route: {
+              provider: "telegram",
+              target: "12345",
+              sessionKey: "agent:main:telegram:group:12345",
+            },
             worktreePath: missingWorktreePath,
-          },
-          name: "codex-native-resume",
-          prompt: "Resume the Codex session",
-          workdir: repoDir,
-          status: "killed",
-          lifecycle: "suspended",
-          runtimeState: "stopped",
-          costUsd: 0,
-          route: {
-            provider: "telegram",
-            target: "12345",
-            sessionKey: "agent:main:telegram:group:12345",
-          },
-          worktreePath: missingWorktreePath,
-          worktreeBranch: "agent/codex-native-resume",
-          worktreeStrategy: "ask",
-        }),
+            worktreeBranch: "agent/codex-native-resume",
+            worktreeStrategy: "ask",
+          }),
+        ),
+        /worktree strategy "ask" was requested, but no isolated worktree was prepared/,
       );
-
-      assert.equal(bootstrap.actualWorkdir, repoDir);
-      assert.equal(bootstrap.originalWorkdir, repoDir);
-      assert.equal(bootstrap.worktreePath, undefined);
-      assert.equal(bootstrap.worktreeBranchName, "agent/codex-native-resume");
-      assert.equal(bootstrap.restoredMissingNativeBackendWorktree, true);
-      assert.equal(config.resumeSessionId, "thread-1");
-      assert.equal(config.resumeWorktreeFrom, undefined);
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }
@@ -279,7 +331,7 @@ describe("prepareSessionBootstrap()", () => {
     }
   });
 
-  it("does not create a new managed worktree for non-Codex resumes without persisted worktree metadata", () => {
+  it("fails closed for non-Codex resumes without persisted worktree metadata when a worktree strategy is requested", () => {
     const repoDir = mkdtempSync(join(tmpdir(), "session-bootstrap-claude-resume-no-worktree-"));
     try {
       git(repoDir, "init", "-b", "main");
@@ -303,43 +355,41 @@ describe("prepareSessionBootstrap()", () => {
         },
       };
 
-      const bootstrap = prepareSessionBootstrap(
-        config,
-        "claude-resume-no-managed-worktree",
-        (_ref): PersistedSessionInfo | undefined => ({
-          sessionId: "claude-session-no-worktree",
-          harnessSessionId: "claude-thread-no-worktree",
-          harness: "claude-code",
-          backendRef: {
-            kind: "claude-code",
-            conversationId: "claude-thread-no-worktree",
-          },
-          name: "claude-resume-no-managed-worktree",
-          prompt: "Resume the Claude session",
-          workdir: repoDir,
-          status: "killed",
-          lifecycle: "suspended",
-          runtimeState: "stopped",
-          costUsd: 0,
-          route: {
-            provider: "telegram",
-            target: "12345",
-            sessionKey: "agent:main:telegram:group:12345",
-          },
-          worktreeStrategy: "ask",
-        }),
+      assert.throws(
+        () => prepareSessionBootstrap(
+          config,
+          "claude-resume-no-managed-worktree",
+          (_ref): PersistedSessionInfo | undefined => ({
+            sessionId: "claude-session-no-worktree",
+            harnessSessionId: "claude-thread-no-worktree",
+            harness: "claude-code",
+            backendRef: {
+              kind: "claude-code",
+              conversationId: "claude-thread-no-worktree",
+            },
+            name: "claude-resume-no-managed-worktree",
+            prompt: "Resume the Claude session",
+            workdir: repoDir,
+            status: "killed",
+            lifecycle: "suspended",
+            runtimeState: "stopped",
+            costUsd: 0,
+            route: {
+              provider: "telegram",
+              target: "12345",
+              sessionKey: "agent:main:telegram:group:12345",
+            },
+            worktreeStrategy: "ask",
+          }),
+        ),
+        /worktree strategy "ask" was requested, but no isolated worktree was prepared/,
       );
-
-      assert.equal(bootstrap.actualWorkdir, repoDir);
-      assert.equal(bootstrap.originalWorkdir, repoDir);
-      assert.equal(bootstrap.worktreePath, undefined);
-      assert.doesNotMatch(bootstrap.effectiveSystemPrompt ?? "", /You are working in a git worktree/);
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }
   });
 
-  it("does not infer native resume fallback from the default harness for legacy Claude rows", () => {
+  it("fails closed for legacy Claude resumes without worktree metadata even when Codex is the default harness", () => {
     const repoDir = mkdtempSync(join(tmpdir(), "session-bootstrap-legacy-claude-resume-no-worktree-"));
     try {
       git(repoDir, "init", "-b", "main");
@@ -364,38 +414,156 @@ describe("prepareSessionBootstrap()", () => {
         },
       };
 
-      const bootstrap = prepareSessionBootstrap(
-        config,
-        "legacy-claude-resume-no-managed-worktree",
-        (_ref): PersistedSessionInfo | undefined => ({
-          sessionId: "legacy-claude-session-no-worktree",
-          harnessSessionId: "legacy-claude-thread-no-worktree",
-          name: "legacy-claude-resume-no-managed-worktree",
-          prompt: "Resume the legacy Claude session",
-          workdir: repoDir,
-          status: "killed",
-          lifecycle: "suspended",
-          runtimeState: "stopped",
-          costUsd: 0,
-          route: {
-            provider: "telegram",
-            target: "12345",
-            sessionKey: "agent:main:telegram:group:12345",
-          },
-          worktreeStrategy: "ask",
-        }),
+      assert.throws(
+        () => prepareSessionBootstrap(
+          config,
+          "legacy-claude-resume-no-managed-worktree",
+          (_ref): PersistedSessionInfo | undefined => ({
+            sessionId: "legacy-claude-session-no-worktree",
+            harnessSessionId: "legacy-claude-thread-no-worktree",
+            name: "legacy-claude-resume-no-managed-worktree",
+            prompt: "Resume the legacy Claude session",
+            workdir: repoDir,
+            status: "killed",
+            lifecycle: "suspended",
+            runtimeState: "stopped",
+            costUsd: 0,
+            route: {
+              provider: "telegram",
+              target: "12345",
+              sessionKey: "agent:main:telegram:group:12345",
+            },
+            worktreeStrategy: "ask",
+          }),
+        ),
+        /worktree strategy "ask" was requested, but no isolated worktree was prepared/,
       );
-
-      assert.equal(bootstrap.actualWorkdir, repoDir);
-      assert.equal(bootstrap.originalWorkdir, repoDir);
-      assert.equal(bootstrap.worktreePath, undefined);
-      assert.doesNotMatch(bootstrap.effectiveSystemPrompt ?? "", /You are working in a git worktree/);
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }
   });
 
-  it("clears stale resume state when a missing plugin-managed worktree cannot be recreated", () => {
+  it("fails closed when a requested plugin-managed resume worktree is missing and cannot be recreated", () => {
+    const missingRepoDir = join(tmpdir(), `session-bootstrap-missing-${Date.now()}`);
+    const missingWorktreePath = join(missingRepoDir, ".worktrees", "missing", "openclaw");
+    try {
+      const config: SessionConfig = {
+        prompt: "Resume the Claude session",
+        workdir: "/tmp",
+        harness: "claude-code",
+        resumeSessionId: "thread-missing",
+        resumeWorktreeFrom: "session-missing",
+        worktreeStrategy: "ask",
+        multiTurn: true,
+        route: {
+          provider: "telegram",
+          target: "12345",
+          sessionKey: "agent:main:telegram:group:12345",
+        },
+      };
+
+      assert.throws(
+        () => prepareSessionBootstrap(
+          config,
+          "missing-plugin-worktree",
+          (_ref): PersistedSessionInfo | undefined => ({
+            sessionId: "session-missing",
+            harnessSessionId: "thread-missing",
+            backendRef: {
+              kind: "claude-code",
+              conversationId: "thread-missing",
+            },
+            name: "missing-plugin-worktree",
+            prompt: "Resume the Claude session",
+            workdir: missingRepoDir,
+            status: "killed",
+            lifecycle: "suspended",
+            runtimeState: "stopped",
+            costUsd: 0,
+            route: {
+              provider: "telegram",
+              target: "12345",
+              sessionKey: "agent:main:telegram:group:12345",
+            },
+            worktreePath: missingWorktreePath,
+            worktreeBranch: "agent/missing-plugin-worktree",
+            worktreeStrategy: "ask",
+          }),
+        ),
+        /worktree strategy "ask" was requested, but no isolated worktree was prepared/,
+      );
+    } finally {
+      rmSync(missingRepoDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not replace a failed plugin-managed resume worktree restore with a fresh unrelated worktree", () => {
+    const repoDir = mkdtempSync(join(tmpdir(), "session-bootstrap-recreate-fails-"));
+    const occupiedWorktreeDir = mkdtempSync(join(tmpdir(), "session-bootstrap-occupied-worktree-"));
+    const occupiedWorktreePath = join(occupiedWorktreeDir, "checkout");
+    const missingWorktreePath = join(repoDir, ".worktrees", "openclaw-worktree-missing-plugin-worktree");
+    try {
+      git(repoDir, "init", "-b", "main");
+      git(repoDir, "config", "user.name", "Test User");
+      git(repoDir, "config", "user.email", "test@example.com");
+      writeFileSync(join(repoDir, "README.md"), "hello\n", "utf-8");
+      git(repoDir, "add", "README.md");
+      git(repoDir, "commit", "-m", "init");
+      git(repoDir, "worktree", "add", "-b", "agent/missing-plugin-worktree", occupiedWorktreePath);
+      rmSync(missingWorktreePath, { recursive: true, force: true });
+
+      const config: SessionConfig = {
+        prompt: "Resume the Claude session",
+        workdir: repoDir,
+        harness: "claude-code",
+        resumeSessionId: "thread-valid-repo-missing-worktree",
+        resumeWorktreeFrom: "session-valid-repo-missing-worktree",
+        worktreeStrategy: "ask",
+        multiTurn: true,
+        route: {
+          provider: "telegram",
+          target: "12345",
+          sessionKey: "agent:main:telegram:group:12345",
+        },
+      };
+
+      assert.throws(
+        () => prepareSessionBootstrap(
+          config,
+          "missing-plugin-worktree",
+          (_ref): PersistedSessionInfo | undefined => ({
+            sessionId: "session-valid-repo-missing-worktree",
+            harnessSessionId: "thread-valid-repo-missing-worktree",
+            backendRef: {
+              kind: "claude-code",
+              conversationId: "thread-valid-repo-missing-worktree",
+            },
+            name: "missing-plugin-worktree",
+            prompt: "Resume the Claude session",
+            workdir: repoDir,
+            status: "killed",
+            lifecycle: "suspended",
+            runtimeState: "stopped",
+            costUsd: 0,
+            route: {
+              provider: "telegram",
+              target: "12345",
+              sessionKey: "agent:main:telegram:group:12345",
+            },
+            worktreePath: missingWorktreePath,
+            worktreeBranch: "agent/missing-plugin-worktree",
+            worktreeStrategy: "ask",
+          }),
+        ),
+        /worktree strategy "ask" was requested, but no isolated worktree was prepared/,
+      );
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+      rmSync(occupiedWorktreeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("allows explicit off to clear stale resume state when a missing plugin-managed worktree cannot be recreated", () => {
     const missingRepoDir = join(tmpdir(), `session-bootstrap-missing-${Date.now()}`);
     const missingWorktreePath = join(missingRepoDir, ".worktrees", "missing", "openclaw");
     try {

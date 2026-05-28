@@ -25,6 +25,7 @@ type Preparation = {
   clearedResumeSessionId?: boolean;
   clearedResumeWorktreeFrom?: boolean;
   restoredMissingNativeBackendWorktree?: boolean;
+  failedResumeWorktreeRestore?: boolean;
 };
 
 function errorMessage(err: unknown): string {
@@ -83,8 +84,9 @@ function restoreResumeWorktreeContext(
   clearedResumeWorktreeFrom?: boolean;
   restoredMissingNativeBackendWorktree?: boolean;
   canCreateManagedWorktreeForResumeWithoutPersistedPath?: boolean;
+  failedResumeWorktreeRestore?: boolean;
 } {
-  const resumeWorktreeId = config.resumeSessionId ?? config.resumeWorktreeFrom;
+  const resumeWorktreeId = config.resumeWorktreeFrom ?? config.resumeSessionId;
   if (!resumeWorktreeId) return {};
 
   const persistedSession = getPersistedSession(resumeWorktreeId);
@@ -190,6 +192,7 @@ function restoreResumeWorktreeContext(
       originalWorkdir,
       clearedResumeSessionId: !!config.resumeSessionId,
       clearedResumeWorktreeFrom: !!config.resumeWorktreeFrom,
+      failedResumeWorktreeRestore: true,
     };
   }
 }
@@ -208,6 +211,7 @@ export function prepareSessionBootstrap(
     clearedResumeWorktreeFrom,
     restoredMissingNativeBackendWorktree,
     canCreateManagedWorktreeForResumeWithoutPersistedPath,
+    failedResumeWorktreeRestore,
   } = restoreResumeWorktreeContext(config, getPersistedSession);
 
   if (clearedResumeSessionId) {
@@ -230,6 +234,13 @@ export function prepareSessionBootstrap(
     && strategy
     && strategy !== "off"
     && !useNativeCodexWorktree;
+
+  if (failedResumeWorktreeRestore && strategy && strategy !== "off") {
+    throw new Error(
+      `Cannot launch session "${name}": worktree strategy "${strategy}" was requested, but no isolated worktree was prepared. ` +
+      `Launch with worktree_strategy "off" only when running in the base checkout is intentional.`,
+    );
+  }
 
   if (useNativeCodexWorktree && !isGitRepo(originalWorkdir)) {
     throw new Error(`Cannot launch session "${name}": worktree strategy "${strategy}" requires a git worktree, but "${originalWorkdir}" is not a git repository.`);
@@ -258,6 +269,13 @@ export function prepareSessionBootstrap(
     actualWorkdir = worktreePath;
   }
 
+  if (strategy && strategy !== "off" && !worktreePath) {
+    throw new Error(
+      `Cannot launch session "${name}": worktree strategy "${strategy}" was requested, but no isolated worktree was prepared. ` +
+      `Launch with worktree_strategy "off" only when running in the base checkout is intentional.`,
+    );
+  }
+
   return {
     actualWorkdir,
     originalWorkdir,
@@ -269,5 +287,6 @@ export function prepareSessionBootstrap(
     clearedResumeSessionId,
     clearedResumeWorktreeFrom,
     restoredMissingNativeBackendWorktree,
+    failedResumeWorktreeRestore,
   };
 }
