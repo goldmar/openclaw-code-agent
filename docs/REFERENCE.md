@@ -27,20 +27,20 @@ Sessions are multi-turn. Active sessions accept follow-up messages via `agent_re
 
 Current releases treat persisted session storage as new-schema-only. If startup finds an older or invalid session store, the plugin archives it to a timestamped `.legacy-*.json` backup and starts with a fresh index instead of migrating rows in place.
 
-### OpenClaw 2026.5.26 SDK Readiness
+### OpenClaw 2026.5.27 SDK Readiness
 
-`openclaw-code-agent` `4.3.3` is validated against the OpenClaw SDK package `openclaw@2026.5.26`. The plugin keeps the peer floor at `>=2026.4.21` for compatible existing installs, while package build metadata targets OpenClaw `2026.5.26` for both host and SDK readiness.
+`openclaw-code-agent` `4.3.4` is validated against the OpenClaw SDK package `openclaw@2026.5.27`. The plugin keeps the peer floor at `>=2026.4.21` for compatible existing installs, while package build metadata targets OpenClaw `2026.5.27` for both host and SDK readiness.
 
-No host upgrade, `openclaw doctor --fix`, Gateway restart, or host config change is required for this plugin compatibility update. No plugin compatibility source update was needed for `2026.5.26`: the release adds plugin SDK diagnostic exports, transcript-source provider contracts, safer model-pattern handling, broader approval reaction runtime exports, cron delivery changes, Telegram topic-routing fixes, stricter runtime allowlist behavior, and material bundled Codex App Server changes, but this plugin does not depend on those new imports. Runtime code still imports only `openclaw/plugin-sdk/plugin-entry` from the OpenClaw SDK, `openclaw.plugin.json` already declares tools through `contracts.tools`, and code-agent session storage remains plugin-owned.
+No host upgrade, `openclaw doctor --fix`, Gateway restart, or host config change is required for this plugin compatibility update. OpenClaw `2026.5.27` adds plugin approval action metadata and adjusts Telegram durable outbound delivery plus native callback routing. OCA keeps Start Plan, Dismiss, Approve, Revise, and Reject as plugin-owned `code-agent:<token>` callbacks, and now accepts the current Telegram callback context even when the namespace-stripped payload is absent and only full callback data is present.
 
-Configuration guidance for `2026.5.26`:
+Configuration guidance for `2026.5.27`:
 
 - If `plugins.allow` is present, add `openclaw-code-agent`. OpenClaw treats that allowlist as exclusive, so `tools.allow` cannot make this plugin's tools available when the owning plugin is blocked.
 - New OpenClaw configs default `plugins.bundledDiscovery` to `allowlist`, so a restrictive `plugins.allow` list can also block omitted bundled provider or runtime plugins. Disabled bundled plugins remain disabled unless explicitly enabled or auto-enabled by their own OpenClaw contracts. Do not assume adjacent bundled plugins are available to code-agent sessions.
 - Use `harnesses.codex.defaultModel`, `harnesses.codex.allowedModels`, `harnesses.codex.reasoningEffort`, and `harnesses.codex.fastMode` for Codex. Use `harnesses["claude-code"].defaultModel`, `harnesses["claude-code"].allowedModels`, and optional `harnesses["claude-code"].reasoningEffort` for Claude Code.
 - Codex `reasoningEffort` is sent as `reasoningEffort` on current App Server thread, resume, and turn-start collaboration settings. Codex `fastMode: true` sends `service_tier: "fast"` on current App Server thread, resume, and turn payloads; the plugin does not emit a `fastMode` payload field.
 - OpenClaw core documents Codex routing as an explicit provider/runtime split: `openai/gpt-5.5` plus `agentRuntime.id: "codex"` uses the bundled native Codex app-server runtime, while `openai-codex/gpt-5.5` remains the PI Codex OAuth route. This plugin's own Codex harness is configured through `harnesses.codex.*`, not through OpenClaw's bundled `codex` provider route.
-- Telegram topic routes remain plain code-agent route metadata. OpenClaw `2026.5.26` improves forum-topic propagation, targeted bot-command mentions, and native progress callback preservation; for cron or release-monitor wakeups, still use fully routable channel strings and preserve topic/thread ids such as `telegram|-1003863755361` with thread `13832`. The plugin's Start Plan, approval, completion, merge, and PR callbacks continue to route through stored delivery context and action tokens.
+- Telegram forum-topic routes remain plain code-agent route metadata. OpenClaw `2026.5.27` preserves native callback routing and topic delivery; for cron or release-monitor wakeups, still use fully routable channel strings and preserve the originating `threadId`/topic id from stored delivery context. The plugin's Start Plan, Dismiss, approval, completion, merge, and PR callbacks continue to route through stored delivery context and action tokens.
 - Session lifecycle mirroring now prefers the current `api.runtime.tasks.managedFlows` surface and keeps a compatibility fallback for older hosts that still expose `api.runtime.taskFlow`.
 - OpenClaw Codex App Server changes include CLI `0.134.0`, updated resume history projection, context-window and timeout recovery changes, dynamic tool allowlist tightening, and exact `approvalPolicy: "never"` plus `sandbox: "danger-full-access"` handling. This plugin keeps its Codex harness isolated from bundled Codex provider/runtime config and continues to send `reasoningEffort`, optional `service_tier: "fast"`, and the fixed Codex execution policy through its own payload builders.
 - OpenClaw Claude CLI handling now routes live Bash permission requests through OpenClaw exec policy and audits YOLO policy overrides. This plugin's Claude Code harness remains plugin-owned: use `harnesses["claude-code"].allowedModels` for model restrictions, and keep plan approval controlled through `permissionMode` plus `planApproval`.
@@ -401,7 +401,7 @@ Use this as the primary generic primitive for external/local automation that wan
 | `plan_workdir` | `string` | Yes | Working directory for the follow-up session |
 | `plan_worktree_strategy` | `off \| manual \| ask \| delegate \| auto-merge \| auto-pr` | No | Preserved on the launched plan session |
 | `plan_name` | `string` | No | Optional session name; defaults to `offer_id` |
-| `target_channel` | `string` | No | Explicit route, for example `telegram|-1003863755361` |
+| `target_channel` | `string` | No | Explicit route, for example `telegram|<chat-id>` |
 | `target_thread_id` | `string \| number` | No | Optional topic/thread id |
 | `target_session_key` | `string` | No | Optional explicit wake-routing key |
 

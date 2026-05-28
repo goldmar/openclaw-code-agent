@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.3.4] - 2026-05-28
+
+### Fixed
+- Hardened Telegram interactive callback handling for OpenClaw `2026.5.27` by accepting the current native callback shape when `callback.payload` is absent and only the full `callback.data` value is provided.
+- Added regressions for Telegram forum-topic Start Plan, Dismiss, plan-approval, and unauthorized callback flows so `code-agent:<token>` button payloads are consumed by OCA instead of surfacing as raw chat text.
+
+### Changed
+- Updated the local OpenClaw package target to `openclaw@2026.5.27` while keeping the peer floor at `>=2026.4.21`.
+- Documented the `2026.5.27` compatibility verdict: OCA keeps Start Plan, Dismiss, Approve, Revise, and Reject buttons as plugin-owned callbacks, while tolerating OpenClaw's newer plugin approval action metadata, Telegram durable outbound delivery, and native callback routing shape.
+
 ## [4.3.3] - 2026-05-27
 
 ### Fixed
@@ -184,7 +194,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Prefer the `deliveryContext` / `requesterSenderId` tool-context surface introduced in newer OpenClaw releases while keeping legacy routing fallbacks for older fixtures and persisted state.
 - Allowed `gpt-5.4-pro` in the built-in Codex model allowlist.
 - Verified stable `v2026.4.21` compatibility and updated the local OpenClaw build/test target to `2026.4.21` without raising the minimum required gateway baseline.
-- Added explicit compatibility coverage for auth-required chat commands and the Telegram topic `13832` monitor-report route used in release smoke checks.
+- Added explicit compatibility coverage for auth-required chat commands and Telegram forum-topic monitor-report routes used in release smoke checks.
 
 ### Fixed
 
@@ -371,7 +381,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Default Codex approval policy to `on-request`.
 - Raised the default session limit.
 
-[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.3.3...HEAD
+[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.3.4...HEAD
+[4.3.4]: https://github.com/goldmar/openclaw-code-agent/compare/v4.3.3...v4.3.4
 [4.3.3]: https://github.com/goldmar/openclaw-code-agent/compare/v4.3.2...v4.3.3
 [4.3.2]: https://github.com/goldmar/openclaw-code-agent/compare/v4.3.1...v4.3.2
 [4.3.1]: https://github.com/goldmar/openclaw-code-agent/compare/v4.3.0...v4.3.1

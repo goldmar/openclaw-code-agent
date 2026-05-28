@@ -93,7 +93,7 @@ export function makeAgentSendPlanOfferTool(ctx: OpenClawPluginToolContext) {
       plan_workdir: Type.String({ description: "Working directory for the planning session." }),
       plan_worktree_strategy: Type.Optional(WORKTREE_STRATEGY_SCHEMA),
       plan_name: Type.Optional(Type.String({ description: "Optional explicit session name for the planning session." })),
-      target_channel: Type.Optional(Type.String({ description: "Optional explicit route like 'telegram|-1003863755361'." })),
+      target_channel: Type.Optional(Type.String({ description: "Optional explicit route like 'telegram|<chat-id>'." })),
       target_thread_id: Type.Optional(Type.Union([Type.String(), Type.Number()], { description: "Optional explicit topic/thread id." })),
       target_session_key: Type.Optional(Type.String({ description: "Optional explicit session key for wake routing." })),
     }),
