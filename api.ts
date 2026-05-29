@@ -15,9 +15,25 @@ export type PluginInteractiveHandlerResult = { handled?: boolean } | void;
 
 export type PluginInteractiveTelegramHandlerContext = {
   channel: "telegram";
+  accountId?: string;
+  conversationId?: string;
+  parentConversationId?: string;
+  senderId?: string;
+  senderUsername?: string;
+  threadId?: number;
+  isGroup?: boolean;
+  isForum?: boolean;
   auth: { isAuthorizedSender: boolean };
-  callback?: { payload?: string };
+  callback?: {
+    data?: string;
+    namespace?: string;
+    payload?: string;
+    messageId?: number;
+    chatId?: string;
+    messageText?: string;
+  };
   respond: {
+    acknowledge?: () => Promise<void>;
     reply: (params: { text: string; buttons?: unknown[] }) => Promise<void>;
     editMessage?: (params: { text: string; buttons?: unknown[] }) => Promise<void>;
     clearButtons?: () => Promise<void>;
@@ -28,7 +44,7 @@ export type PluginInteractiveDiscordHandlerContext = {
   channel: "discord";
   auth: { isAuthorizedSender: boolean };
   interaction?: { payload?: string };
-  callback?: { payload?: string };
+  callback?: { data?: string; namespace?: string; payload?: string };
   respond: {
     acknowledge?: () => Promise<void>;
     reply: (params: { text: string; ephemeral?: boolean }) => Promise<void>;

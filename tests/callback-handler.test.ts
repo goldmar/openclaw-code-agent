@@ -4,36 +4,48 @@ import { createCallbackHandler } from "../src/callback-handler";
 import { setSessionManager } from "../src/singletons";
 import { createStubSession } from "./helpers";
 
-function createCtx(payload: string, channel: "telegram" | "discord" = "telegram") {
+function createCtx(
+  payload: string,
+  channel: "telegram" | "discord" = "telegram",
+  options: {
+    telegramCallback?: Record<string, unknown>;
+    authorized?: boolean;
+  } = {},
+) {
   const replies: string[] = [];
   const editedMessages: string[] = [];
+  const events: string[] = [];
+  let callbacksAcknowledged = 0;
   let buttonsCleared = 0;
   let componentsCleared = 0;
   const ctx = channel === "telegram"
     ? {
         channel,
-        auth: { isAuthorizedSender: true },
-        callback: { payload },
+        auth: { isAuthorizedSender: options.authorized ?? true },
+        callback: { payload, ...options.telegramCallback },
         respond: {
-          reply: async ({ text }: { text: string }) => { replies.push(text); },
-          clearButtons: async () => { buttonsCleared++; },
-          editMessage: async ({ text }: { text: string }) => { editedMessages.push(text); },
+          acknowledge: async () => { callbacksAcknowledged++; events.push("acknowledge"); },
+          reply: async ({ text }: { text: string }) => { replies.push(text); events.push("reply"); },
+          clearButtons: async () => { buttonsCleared++; events.push("clearButtons"); },
+          editMessage: async ({ text }: { text: string }) => { editedMessages.push(text); events.push("editMessage"); },
         },
       }
     : {
         channel,
-        auth: { isAuthorizedSender: true },
+        auth: { isAuthorizedSender: options.authorized ?? true },
         interaction: { payload },
         respond: {
-          acknowledge: async () => {},
-          reply: async ({ text }: { text: string }) => { replies.push(text); },
-          followUp: async ({ text }: { text: string }) => { replies.push(text); },
+          acknowledge: async () => { callbacksAcknowledged++; events.push("acknowledge"); },
+          reply: async ({ text }: { text: string }) => { replies.push(text); events.push("reply"); },
+          followUp: async ({ text }: { text: string }) => { replies.push(text); events.push("followUp"); },
           editMessage: async ({ text }: { text?: string }) => {
             if (typeof text === "string") editedMessages.push(text);
+            events.push("editMessage");
           },
           clearComponents: async ({ text }: { text?: string } = {}) => {
             componentsCleared++;
             if (typeof text === "string") editedMessages.push(text);
+            events.push("clearComponents");
           },
         },
       };
@@ -44,9 +56,13 @@ function createCtx(payload: string, channel: "telegram" | "discord" = "telegram"
     get buttonsCleared() {
       return buttonsCleared;
     },
+    get callbacksAcknowledged() {
+      return callbacksAcknowledged;
+    },
     get componentsCleared() {
       return componentsCleared;
     },
+    events,
   };
 }
 
@@ -148,8 +164,119 @@ describe("createCallbackHandler()", () => {
     const result = await handler.handler(state.ctx as any);
 
     assert.deepEqual(result, { handled: true });
+    assert.equal(state.callbacksAcknowledged, 1);
+    assert.deepEqual(state.events.slice(0, 2), ["acknowledge", "clearButtons"]);
     assert.equal(switchedTo, "bypassPermissions");
     assert.deepEqual(state.replies, []);
+  });
+
+  it("acknowledges Telegram callbacks before terminal cleanup and agent work", async () => {
+    const events: string[] = [];
+    const session = createStubSession({
+      pendingPlanApproval: true,
+      actionablePlanDecisionVersion: 1,
+      sendMessage: async () => { events.push("sendMessage"); },
+      switchPermissionMode: () => { events.push("switchPermissionMode"); },
+    });
+
+    setSessionManager({
+      getActionToken: () => {
+        events.push("getActionToken");
+        return { sessionId: "test-id", kind: "plan-approve" };
+      },
+      consumeActionToken: () => {
+        events.push("consumeActionToken");
+        return { sessionId: "test-id", kind: "plan-approve" };
+      },
+      resolve: () => session,
+      getPersistedSession: () => undefined,
+      notifySession: () => { events.push("notifySession"); },
+      clearPlanDecisionTokens: () => { events.push("clearPlanDecisionTokens"); },
+    } as any);
+
+    const replies: string[] = [];
+    const ctx = {
+      channel: "telegram" as const,
+      auth: { isAuthorizedSender: true },
+      callback: { payload: "token-approve" },
+      respond: {
+        acknowledge: async () => { events.push("acknowledge"); },
+        clearButtons: async () => { events.push("clearButtons"); },
+        reply: async ({ text }: { text: string }) => { replies.push(text); events.push("reply"); },
+      },
+    };
+
+    const handler = createCallbackHandler();
+    const result = await handler.handler(ctx as any);
+
+    assert.deepEqual(result, { handled: true });
+    assert.deepEqual(events.slice(0, 3), ["acknowledge", "getActionToken", "consumeActionToken"]);
+    assert.ok(events.indexOf("clearButtons") < events.indexOf("sendMessage"));
+    assert.ok(events.indexOf("acknowledge") < events.indexOf("clearButtons"));
+    assert.deepEqual(replies, []);
+  });
+
+  it("consumes Telegram callback data when payload is absent", async () => {
+    let switchedTo: string | undefined;
+    let consumed = 0;
+    const session = createStubSession({
+      pendingPlanApproval: true,
+      approvalState: "pending",
+      planDecisionVersion: 7,
+      actionablePlanDecisionVersion: 7,
+      sendMessage: async () => {},
+      switchPermissionMode: (mode: string) => { switchedTo = mode; },
+    });
+
+    setSessionManager({
+      getActionToken: (tokenId: string) => {
+        assert.equal(tokenId, "2d1bab1c-ce69-4bdb-ae5c-782504ec686e");
+        return {
+          sessionId: "test-id",
+          kind: "plan-approve",
+          planDecisionVersion: 7,
+        };
+      },
+      consumeActionToken: (tokenId: string) => {
+        consumed++;
+        assert.equal(tokenId, "2d1bab1c-ce69-4bdb-ae5c-782504ec686e");
+        return {
+          sessionId: "test-id",
+          kind: "plan-approve",
+          planDecisionVersion: 7,
+        };
+      },
+      resolve: () => session,
+      getPersistedSession: () => undefined,
+      notifySession: () => {},
+      clearPlanDecisionTokens: () => {},
+    } as any);
+
+    const handler = createCallbackHandler();
+    const replies: string[] = [];
+    let buttonsCleared = 0;
+    let acknowledged = 0;
+    const ctx = {
+      channel: "telegram" as const,
+      auth: { isAuthorizedSender: true },
+      callback: {
+        data: "code-agent:2d1bab1c-ce69-4bdb-ae5c-782504ec686e",
+        payload: undefined,
+      },
+      respond: {
+        acknowledge: async () => { acknowledged++; },
+        clearButtons: async () => { buttonsCleared++; },
+        reply: async ({ text }: { text: string }) => { replies.push(text); },
+      },
+    };
+    const result = await handler.handler(ctx as any);
+
+    assert.deepEqual(result, { handled: true });
+    assert.equal(consumed, 1);
+    assert.equal(switchedTo, "bypassPermissions");
+    assert.equal(acknowledged, 1);
+    assert.equal(buttonsCleared, 1);
+    assert.deepEqual(replies, []);
   });
 
   it("accepts Discord callbacks that provide payload via callback and only expose clearButtons", async () => {
@@ -426,6 +553,48 @@ describe("createCallbackHandler()", () => {
     assert.deepEqual(result, { handled: true });
     assert.equal(state.buttonsCleared, 1);
     assert.match(state.replies[0], /stale/i);
+  });
+
+  it("clears Telegram buttons and stays quiet for duplicate consumed callbacks", async () => {
+    let consumes = 0;
+    setSessionManager({
+      getActionToken: () => undefined,
+      consumeActionToken: () => {
+        consumes++;
+        return undefined;
+      },
+    } as any);
+
+    const handler = createCallbackHandler();
+    const state = createCtx("already-used-token");
+    const result = await handler.handler(state.ctx as any);
+
+    assert.deepEqual(result, { handled: true });
+    assert.equal(state.callbacksAcknowledged, 1);
+    assert.equal(state.buttonsCleared, 1);
+    assert.equal(consumes, 0);
+    assert.deepEqual(state.replies, []);
+    assert.deepEqual(state.events, ["acknowledge", "clearButtons"]);
+  });
+
+  it("does not echo raw malformed Telegram callback text", async () => {
+    setSessionManager({
+      getActionToken: () => undefined,
+    } as any);
+
+    const handler = createCallbackHandler();
+    const state = createCtx("ignored", "telegram", {
+      telegramCallback: {
+        data: "code-agent:",
+        payload: "",
+      },
+    });
+    const result = await handler.handler(state.ctx as any);
+
+    assert.deepEqual(result, { handled: true });
+    assert.equal(state.callbacksAcknowledged, 1);
+    assert.deepEqual(state.replies, ["⚠️ Unrecognized callback payload."]);
+    assert.doesNotMatch(state.replies.join("\n"), /code-agent:/);
   });
 
   it("resolves question-answer callbacks by session and option index", async () => {
