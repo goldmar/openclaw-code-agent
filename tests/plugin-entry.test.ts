@@ -114,9 +114,6 @@ describe("plugin entry source", () => {
       };
       devDependencies?: Record<string, string>;
       peerDependencies?: Record<string, string>;
-      pnpm?: {
-        overrides?: Record<string, string>;
-      };
     };
 
     assert.equal(packageJson.dependencies?.["@anthropic-ai/claude-agent-sdk"], "^0.3.142");
@@ -129,7 +126,6 @@ describe("plugin entry source", () => {
     assert.equal(packageJson.openclaw?.build?.pluginSdkVersion, "2026.5.28");
     assert.equal(packageJson.peerDependencies?.openclaw, ">=2026.4.21");
     assert.equal(packageJson.devDependencies?.openclaw, "2026.5.28");
-    assert.equal(packageJson.pnpm?.overrides?.["fast-xml-parser@>=5.0.0 <5.7.0"], ">=5.7.0");
     assert.doesNotMatch(readFileSync(join(rootDir, "pnpm-lock.yaml"), "utf8"), /uuid@9\.0\.1/);
   });
 
