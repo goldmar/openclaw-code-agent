@@ -1,6 +1,6 @@
 # ACPX, Codex, and Code Agent
 
-This note compares three adjacent OpenClaw surfaces as of the `openclaw-code-agent` `4.3.3` / OpenClaw `2026.5.26` installable SDK readiness baseline:
+This note compares three adjacent OpenClaw surfaces as of the `openclaw-code-agent` `4.3.4` / OpenClaw `2026.5.28` installable SDK readiness baseline:
 
 - OpenClaw ACP and the bundled `acpx` runtime backend
 - OpenClaw's bundled `codex` plugin
@@ -92,7 +92,7 @@ Today the bundled `codex` plugin provides:
 - synthetic auth/provider availability because the harness owns the native Codex login/session
 - Codex-specific App Server transport, fixed execution policy, sandbox, `reasoningEffort`, and `service_tier` fast-mode config
 
-OpenClaw `2026.5.26` documents Codex as an explicit provider/runtime split. `openai/gpt-5.5` plus `agentRuntime.id: "codex"` selects the bundled native Codex app-server runtime, while `openai-codex/gpt-5.5` remains the PI Codex OAuth route. That routing policy is separate from this plugin's `harnesses.codex.*` configuration.
+OpenClaw `2026.5.28` documents Codex as an explicit provider/runtime split. `openai/gpt-5.5` plus `agentRuntime.id: "codex"` selects the bundled native Codex app-server runtime, while `openai-codex/gpt-5.5` remains the PI Codex OAuth route. That routing policy is separate from this plugin's `harnesses.codex.*` configuration.
 
 What the bundled `codex` plugin is **not**:
 
