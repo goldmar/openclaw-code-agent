@@ -29,7 +29,7 @@ Current releases treat persisted session storage as new-schema-only. If startup 
 
 ### OpenClaw 2026.5.28 SDK Readiness
 
-`openclaw-code-agent` `4.3.4` is validated against the OpenClaw SDK package `openclaw@2026.5.28`. The plugin keeps the peer floor at `>=2026.4.21` for compatible existing installs, while package build metadata targets OpenClaw `2026.5.28` for both host and SDK readiness.
+`openclaw-code-agent` `4.3.5` is validated against the OpenClaw SDK package `openclaw@2026.5.28`. The plugin keeps the peer floor at `>=2026.4.21` for compatible existing installs, while package build metadata targets OpenClaw `2026.5.28` for both host and SDK readiness.
 
 No host upgrade, `openclaw doctor --fix`, Gateway restart, or host config change is required for this plugin compatibility update. No plugin compatibility source update was needed for `2026.5.28`: the release adds plugin SDK exports, package install compatibility checks through `openclaw.compat.pluginApi`, per-plugin npm project installs, reply payload sending hooks, Gateway protocol package split work, stricter cron and channel validation, Telegram callback hardening, and material bundled Codex App Server changes, but this plugin does not depend on those new imports. Runtime code still imports only `openclaw/plugin-sdk/plugin-entry` from the OpenClaw SDK, `openclaw.plugin.json` already declares tools through `contracts.tools`, and code-agent session storage remains plugin-owned.
 
