@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [4.3.4] - 2026-05-31
 
+### Fixed
+- Hardened Telegram interactive callback handling for OpenClaw `2026.5.28` by accepting the current native callback shape when `callback.payload` is absent and only the full `callback.data` value is provided.
+- Added regressions for Telegram forum-topic Start Plan, Dismiss, plan-approval, and unauthorized callback flows so `code-agent:<token>` button payloads are consumed by OCA instead of surfacing as raw chat text.
+
 ### Changed
 - Updated the local OpenClaw package target to `openclaw@2026.5.28` while keeping the peer and plugin API floors at `>=2026.4.21`.
 - Documented the `2026.5.28` compatibility verdict: no plugin source migration was required because `openclaw-code-agent` still imports only `openclaw/plugin-sdk/plugin-entry`, declares its tool surface through `contracts.tools`, and owns its own session store, wake routing, callbacks, worktree flows, and harness model restrictions.

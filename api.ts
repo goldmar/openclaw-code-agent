@@ -16,6 +16,7 @@ export type PluginInteractiveHandlerResult = { handled?: boolean } | void;
 export type PluginInteractiveTelegramHandlerContext = {
   channel: "telegram";
   accountId?: string;
+  callbackId?: string;
   conversationId?: string;
   parentConversationId?: string;
   senderId?: string;
@@ -36,7 +37,9 @@ export type PluginInteractiveTelegramHandlerContext = {
     acknowledge?: () => Promise<void>;
     reply: (params: { text: string; buttons?: unknown[] }) => Promise<void>;
     editMessage?: (params: { text: string; buttons?: unknown[] }) => Promise<void>;
+    editButtons?: (params: { buttons: unknown[] }) => Promise<void>;
     clearButtons?: () => Promise<void>;
+    deleteMessage?: () => Promise<void>;
   };
 };
 
