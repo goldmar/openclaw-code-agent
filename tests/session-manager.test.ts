@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { SessionManager } from "../src/session-manager";
 import { setPluginConfig } from "../src/config";
 import { buildPresentation } from "../src/direct-notification-transport";
+import { SessionNotificationService } from "../src/session-notifications";
 
 // ---------------------------------------------------------------------------
 // Helper to create a fake session-like object for injection
@@ -2414,6 +2415,78 @@ describe("SessionManager terminal wake behavior", () => {
     assert.equal(calls.length, 1);
     const [_sessionArg, request] = calls[0];
     assert.equal(request.label, "completed");
+  });
+
+  it("clears the persisted completion summary flag after an ordinary terminal completion wake succeeds", async () => {
+    const requests: Array<Record<string, any>> = [];
+    (sm as any).notifications = new SessionNotificationService(
+      {
+        dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, () => void> }) => {
+          requests.push(request as Record<string, any>);
+          request.hooks?.onNotifyStarted?.();
+          request.hooks?.onNotifySucceeded?.();
+          request.hooks?.onWakeStarted?.();
+          request.hooks?.onWakeSucceeded?.();
+        },
+        dispose: () => {},
+      } as any,
+      (ref, patch) => (sm as any).stateSync.applySessionPatch(ref, patch),
+    );
+
+    const s = fakeSession({
+      id: "s-completion-wake-success",
+      harnessSessionId: "h-completion-wake-success",
+      backendRef: { kind: "codex-app-server", conversationId: "thread-completion-wake-success" },
+      name: "completion-wake-success",
+      status: "completed",
+      completedAt: 1700000002000,
+      duration: 7_000,
+      getOutput: () => ["Implemented the terminal wake regression fix."],
+    });
+
+    await (sm as any).onSessionTerminal(s);
+
+    assert.equal(requests[0]?.label, "completed");
+    assert.equal(requests[0]?.completionWakeSummaryRequired, true);
+    const persisted = sm.getPersistedSession("s-completion-wake-success");
+    assert.equal(persisted?.completionWakeSummaryRequired, undefined);
+    assert.equal(typeof persisted?.completionWakeIssuedAt, "string");
+    assert.equal(typeof persisted?.completionWakeSucceededAt, "string");
+    assert.equal(persisted?.completionWakeFailedAt, undefined);
+  });
+
+  it("keeps the persisted completion summary flag after an ordinary terminal completion wake fails", async () => {
+    (sm as any).notifications = new SessionNotificationService(
+      {
+        dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, () => void> }) => {
+          request.hooks?.onNotifyStarted?.();
+          request.hooks?.onNotifySucceeded?.();
+          request.hooks?.onWakeStarted?.();
+          request.hooks?.onWakeFailed?.();
+        },
+        dispose: () => {},
+      } as any,
+      (ref, patch) => (sm as any).stateSync.applySessionPatch(ref, patch),
+    );
+
+    const s = fakeSession({
+      id: "s-completion-wake-failure",
+      harnessSessionId: "h-completion-wake-failure",
+      backendRef: { kind: "codex-app-server", conversationId: "thread-completion-wake-failure" },
+      name: "completion-wake-failure",
+      status: "completed",
+      completedAt: 1700000002100,
+      duration: 7_000,
+      getOutput: () => ["Implemented the terminal wake regression fix."],
+    });
+
+    await (sm as any).onSessionTerminal(s);
+
+    const persisted = sm.getPersistedSession("s-completion-wake-failure");
+    assert.equal(persisted?.completionWakeSummaryRequired, true);
+    assert.equal(typeof persisted?.completionWakeIssuedAt, "string");
+    assert.equal(persisted?.completionWakeSucceededAt, undefined);
+    assert.equal(typeof persisted?.completionWakeFailedAt, "string");
   });
 
   it("wakes the originating agent when a session fails", async () => {
