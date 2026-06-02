@@ -2417,7 +2417,7 @@ describe("SessionManager terminal wake behavior", () => {
     assert.equal(request.label, "completed");
   });
 
-  it("clears the persisted completion summary flag after an ordinary terminal completion wake succeeds", async () => {
+  it("clears the persisted completion summary flag after an ordinary terminal follow-up is confirmed delivered", async () => {
     const requests: Array<Record<string, any>> = [];
     (sm as any).notifications = new SessionNotificationService(
       {

@@ -8,6 +8,10 @@ const WAKE_MAX_ATTEMPTS = 4;
 
 export type DispatchTarget = "chat.send" | "message.send" | "system.event";
 export type DispatchPhase = "notify" | "wake";
+export type DispatchSuccessValidationResult =
+  | { outcome: "success" }
+  | { outcome: "skipped"; reason: string }
+  | { outcome: "failure"; reason: string };
 
 type ExecuteOptions = {
   label: string;
@@ -20,9 +24,10 @@ type ExecuteOptions = {
   orderingKey?: string;
   onStarted?: () => void;
   onSuccess?: () => void;
+  onSkipped?: (reason: string) => void;
   onAmbiguousResult?: () => void;
   onFinalFailure?: () => void;
-  successValidator?: (stdout: string) => string | undefined;
+  successValidator?: (stdout: string) => DispatchSuccessValidationResult;
   shouldContinue?: () => boolean;
   terminalOnFailure?: boolean;
 };
@@ -141,8 +146,8 @@ export class WakeDeliveryExecutor {
         }
         const elapsedMs = Date.now() - startedAt;
         if (!err) {
-          const validationFailure = opts.successValidator?.(stdout ?? "");
-          if (validationFailure) {
+          const validation = opts.successValidator?.(stdout ?? "");
+          if (validation?.outcome === "failure") {
             this.log("error", "dispatch_success_validation_failed", {
               label: opts.label,
               sessionId: opts.sessionId,
@@ -154,10 +159,30 @@ export class WakeDeliveryExecutor {
               attempt,
               maxAttempts: WAKE_MAX_ATTEMPTS,
               elapsedMs,
-              error: validationFailure,
+              error: validation.reason,
               terminal: true,
             });
             opts.onFinalFailure?.();
+            onSettled?.();
+            return;
+          }
+          if (validation?.outcome === "skipped") {
+            this.log("info", "dispatch_skipped", {
+              label: opts.label,
+              sessionId: opts.sessionId,
+              target: opts.target,
+              phase: opts.phase,
+              messageKind: opts.messageKind,
+              route: opts.routeSummary,
+              ...opts.dispatchContext,
+              attempt,
+              maxAttempts: WAKE_MAX_ATTEMPTS,
+              elapsedMs,
+              reason: validation.reason,
+            });
+            if (opts.shouldContinue?.() !== false) {
+              opts.onSkipped?.(validation.reason);
+            }
             onSettled?.();
             return;
           }

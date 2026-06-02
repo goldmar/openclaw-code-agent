@@ -65,6 +65,8 @@ export class SessionNotificationService {
           completionWakeIssuedAt: new Date().toISOString(),
           completionWakeSucceededAt: undefined,
           completionWakeFailedAt: undefined,
+          completionWakeSkippedAt: undefined,
+          completionWakeSkipReason: undefined,
         });
         request.hooks?.onWakeStarted?.();
       },
@@ -72,8 +74,19 @@ export class SessionNotificationService {
         this.applyPersistedPatchWithCompletionWake(deliveryRef, "idle", this.buildCompletionWakeSucceededPatch(completionWakePatch), {
           completionWakeSucceededAt: new Date().toISOString(),
           completionWakeFailedAt: undefined,
+          completionWakeSkippedAt: undefined,
+          completionWakeSkipReason: undefined,
         });
         request.hooks?.onWakeSucceeded?.();
+      },
+      onWakeSkipped: (reason) => {
+        this.applyPersistedPatchWithCompletionWake(deliveryRef, "idle", this.buildCompletionWakeSucceededPatch(completionWakePatch), {
+          completionWakeSucceededAt: undefined,
+          completionWakeFailedAt: undefined,
+          completionWakeSkippedAt: new Date().toISOString(),
+          completionWakeSkipReason: reason,
+        });
+        request.hooks?.onWakeSkipped?.(reason);
       },
       onWakeFailed: () => {
         this.applyPersistedPatchWithCompletionWake(deliveryRef, "failed", completionWakePatch, {
@@ -153,7 +166,11 @@ export class SessionNotificationService {
     extraPatch: Partial<
       Pick<
         PersistedSessionInfo,
-        "completionWakeIssuedAt" | "completionWakeSucceededAt" | "completionWakeFailedAt"
+        | "completionWakeIssuedAt"
+        | "completionWakeSucceededAt"
+        | "completionWakeFailedAt"
+        | "completionWakeSkippedAt"
+        | "completionWakeSkipReason"
       >
     >,
   ): void {

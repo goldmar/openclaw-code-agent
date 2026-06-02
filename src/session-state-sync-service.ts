@@ -47,7 +47,10 @@ export class SessionStateSyncService {
   private normalizeCompletionWakePatch(
     patch: Partial<PersistedSessionInfo>,
   ): Partial<PersistedSessionInfo> {
-    if (!("completionWakeSucceededAt" in patch) || !patch.completionWakeSucceededAt) {
+    const completed =
+      ("completionWakeSucceededAt" in patch && patch.completionWakeSucceededAt)
+      || ("completionWakeSkippedAt" in patch && patch.completionWakeSkippedAt);
+    if (!completed) {
       return patch;
     }
     return {

@@ -397,7 +397,8 @@ export function normalizePersistedEntry(raw: unknown): PersistedSessionInfo | un
   const backendRef = normalizeBackendRef(raw.backendRef, harness, harnessSessionId);
   const worktreeLifecycle = normalizeWorktreeLifecycle(raw.worktreeLifecycle) ?? synthesizeLegacyWorktreeLifecycle(raw);
   const completionWakeSucceededAt = toOptionalString(raw.completionWakeSucceededAt);
-  const completionWakeSummaryRequired = raw.completionWakeSummaryRequired === true && !completionWakeSucceededAt
+  const completionWakeSkippedAt = toOptionalString(raw.completionWakeSkippedAt);
+  const completionWakeSummaryRequired = raw.completionWakeSummaryRequired === true && !completionWakeSkippedAt
     ? true
     : undefined;
 
@@ -422,6 +423,8 @@ export function normalizePersistedEntry(raw: unknown): PersistedSessionInfo | un
     completionWakeIssuedAt: toOptionalString(raw.completionWakeIssuedAt),
     completionWakeSucceededAt,
     completionWakeFailedAt: toOptionalString(raw.completionWakeFailedAt),
+    completionWakeSkippedAt,
+    completionWakeSkipReason: toOptionalString(raw.completionWakeSkipReason),
     completionWakeSummaryRequired,
     killReason: toOptionalKillReason(raw.killReason),
     costUsd: typeof raw.costUsd === "number" && Number.isFinite(raw.costUsd) ? raw.costUsd : 0,

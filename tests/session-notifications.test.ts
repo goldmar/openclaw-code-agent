@@ -261,6 +261,43 @@ describe("SessionNotificationService", () => {
     );
   });
 
+  it("records explicit completion follow-up skips and clears retry state", () => {
+    const patches: Array<{ ref: string; patch: Record<string, unknown> }> = [];
+    const fakeDispatcher = {
+      dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, (reason?: string) => void> }) => {
+        request.hooks?.onNotifyStarted?.();
+        request.hooks?.onNotifySucceeded?.();
+        request.hooks?.onWakeStarted?.();
+        request.hooks?.onWakeSkipped?.("internal pipeline continuing");
+      },
+      dispose: () => {},
+    };
+
+    const service = new SessionNotificationService(
+      fakeDispatcher as any,
+      (ref, patch) => patches.push({ ref, patch: patch as Record<string, unknown> }),
+    );
+
+    service.dispatch(
+      { id: "session-skip", harnessSessionId: "h-skip" } as any,
+      {
+        label: "completed",
+        userMessage: "done",
+        wakeMessageOnNotifySuccess: "wake",
+        completionWakeSummaryRequired: true,
+        notifyUser: "always",
+      },
+    );
+
+    const lastPatch = patches.at(-1)?.patch;
+    assert.equal(lastPatch?.deliveryState, "idle");
+    assert.equal(lastPatch?.completionWakeSummaryRequired, undefined);
+    assert.equal(lastPatch?.completionWakeSucceededAt, undefined);
+    assert.equal(lastPatch?.completionWakeFailedAt, undefined);
+    assert.equal(typeof lastPatch?.completionWakeSkippedAt, "string");
+    assert.equal(lastPatch?.completionWakeSkipReason, "internal pipeline continuing");
+  });
+
   it("does not persist completion follow-up state when the terminal session opts out", () => {
     const patches: Array<{ ref: string; patch: Record<string, unknown> }> = [];
     const fakeDispatcher = {

@@ -173,7 +173,7 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
       finalResponse: "NO_REPLY",
     }));
 
-    assert.equal(failure, "completion follow-up wake ended with NO_REPLY");
+    assert.deepEqual(failure, { outcome: "failure", reason: "completion follow-up wake ended with NO_REPLY" });
   });
 
   it("uses message.send for direct user notifications and logs completion", async () => {
@@ -1432,6 +1432,37 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
 
     assert.equal(wakeSucceeded, 1);
     assert.equal(wakeFailed, 0);
+  });
+
+  it("records explicit completion follow-up skips with a reason", async () => {
+    process.env.OPENCLAW_TEST_STDOUT = "COMPLETION_FOLLOWUP_SKIPPED: internal pipeline continuing\n";
+    const dispatcher = createDispatcher();
+    const session: FakeSession = {
+      id: "session-skipped-followup",
+      route: buildRoute(),
+    };
+    let skippedReason = "";
+    let wakeSucceeded = 0;
+    let wakeFailed = 0;
+
+    dispatcher.dispatchSessionNotification(session as any, {
+      label: "completed",
+      wakeMessage: "Coding agent session completed. Send the user a short factual completion summary.",
+      notifyUser: "never",
+      completionWakeSummaryRequired: true,
+      hooks: {
+        onWakeSucceeded: () => { wakeSucceeded += 1; },
+        onWakeSkipped: (reason) => { skippedReason = reason; },
+        onWakeFailed: () => { wakeFailed += 1; },
+      },
+    });
+
+    await waitForCalls(logPath, 1);
+    await waitFor(() => skippedReason.length > 0, "completion follow-up wake skip");
+
+    assert.equal(wakeSucceeded, 0);
+    assert.equal(wakeFailed, 0);
+    assert.equal(skippedReason, "internal pipeline continuing");
   });
 
   it("repairs Telegram topic follow-ups before notifying or waking", async () => {
