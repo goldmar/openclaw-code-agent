@@ -22,6 +22,7 @@ type ExecuteOptions = {
   onSuccess?: () => void;
   onAmbiguousResult?: () => void;
   onFinalFailure?: () => void;
+  successValidator?: (stdout: string) => string | undefined;
   shouldContinue?: () => boolean;
   terminalOnFailure?: boolean;
 };
@@ -133,13 +134,33 @@ export class WakeDeliveryExecutor {
       "openclaw",
       args,
       { timeout: WAKE_CLI_TIMEOUT_MS, killSignal: "SIGKILL" },
-      (err, _stdout, stderr) => {
+      (err, stdout, stderr) => {
         if (this.disposed) {
           onSettled?.();
           return;
         }
         const elapsedMs = Date.now() - startedAt;
         if (!err) {
+          const validationFailure = opts.successValidator?.(stdout ?? "");
+          if (validationFailure) {
+            this.log("error", "dispatch_success_validation_failed", {
+              label: opts.label,
+              sessionId: opts.sessionId,
+              target: opts.target,
+              phase: opts.phase,
+              messageKind: opts.messageKind,
+              route: opts.routeSummary,
+              ...opts.dispatchContext,
+              attempt,
+              maxAttempts: WAKE_MAX_ATTEMPTS,
+              elapsedMs,
+              error: validationFailure,
+              terminal: true,
+            });
+            opts.onFinalFailure?.();
+            onSettled?.();
+            return;
+          }
           this.log("info", "dispatch_succeeded", {
             label: opts.label,
             sessionId: opts.sessionId,

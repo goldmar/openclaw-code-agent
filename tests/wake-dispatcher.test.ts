@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { WakeDispatcher } from "../src/wake-dispatcher";
+import { WakeDispatcher, validateCompletionFollowupWakeSuccess } from "../src/wake-dispatcher";
 import { wakeDeliveryExecutorInternals } from "../src/wake-delivery-executor";
 
 type FakeSession = {
@@ -131,12 +131,16 @@ if (failConfigRaw) {
     return;
   }
 }
+if (process.env.OPENCLAW_TEST_STDOUT) {
+  process.stdout.write(process.env.OPENCLAW_TEST_STDOUT);
+}
 `);
     chmodSync(fakeOpenClawPath, 0o755);
 
     process.env.OPENCLAW_TEST_LOG = logPath;
     process.env.OPENCLAW_TEST_FAIL_ONCE_STATE = failStatePath;
     process.env.PATH = `${tempDir}:${originalPath}`;
+    delete process.env.OPENCLAW_TEST_STDOUT;
   });
 
   afterEach(() => {
@@ -152,6 +156,7 @@ if (failConfigRaw) {
     }
     delete process.env.OPENCLAW_TEST_FAIL_ONCE_FOR;
     delete process.env.OPENCLAW_TEST_FAIL_ONCE_STATE;
+    delete process.env.OPENCLAW_TEST_STDOUT;
     delete process.env.OPENCLAW_CODE_AGENT_BUTTON_DIAGNOSTICS;
     rmSync(tempDir, { recursive: true, force: true });
   });
@@ -159,6 +164,17 @@ if (failConfigRaw) {
   function createDispatcher() {
     return new WakeDispatcher({ directNotifications: null });
   }
+
+  it("does not accept a completion marker echoed only inside the wake prompt", () => {
+    const failure = validateCompletionFollowupWakeSuccess(JSON.stringify({
+      request: {
+        message: "Prompt mentions COMPLETION_FOLLOWUP_DELIVERED as an instruction.",
+      },
+      finalResponse: "NO_REPLY",
+    }));
+
+    assert.equal(failure, "completion follow-up wake ended with NO_REPLY");
+  });
 
   it("uses message.send for direct user notifications and logs completion", async () => {
     const dispatcher = createDispatcher();
@@ -1360,6 +1376,62 @@ if (failConfigRaw) {
     assert.equal(params.target, "-1003863755361");
     assert.equal(params.message, "✅ completed");
     assert.equal(params["thread-id"], "13832");
+  });
+
+  it("does not mark completion follow-up wakes successful when the final response is NO_REPLY", async () => {
+    process.env.OPENCLAW_TEST_STDOUT = "NO_REPLY\n";
+    const dispatcher = createDispatcher();
+    const session: FakeSession = {
+      id: "session-no-visible-followup",
+      route: buildRoute(),
+    };
+    let wakeSucceeded = 0;
+    let wakeFailed = 0;
+
+    dispatcher.dispatchSessionNotification(session as any, {
+      label: "completed",
+      wakeMessage: "Coding agent session completed. Send the user a short factual completion summary.",
+      notifyUser: "never",
+      completionWakeSummaryRequired: true,
+      hooks: {
+        onWakeSucceeded: () => { wakeSucceeded += 1; },
+        onWakeFailed: () => { wakeFailed += 1; },
+      },
+    });
+
+    await waitForCalls(logPath, 1);
+    await waitFor(() => wakeFailed === 1, "completion follow-up wake validation failure");
+
+    assert.equal(wakeSucceeded, 0);
+    assert.equal(wakeFailed, 1);
+  });
+
+  it("marks completion follow-up wakes successful only after explicit visible-delivery confirmation", async () => {
+    process.env.OPENCLAW_TEST_STDOUT = "Sent the routed summary. COMPLETION_FOLLOWUP_DELIVERED\n";
+    const dispatcher = createDispatcher();
+    const session: FakeSession = {
+      id: "session-visible-followup",
+      route: buildRoute(),
+    };
+    let wakeSucceeded = 0;
+    let wakeFailed = 0;
+
+    dispatcher.dispatchSessionNotification(session as any, {
+      label: "completed",
+      wakeMessage: "Coding agent session completed. Send the user a short factual completion summary.",
+      notifyUser: "never",
+      completionWakeSummaryRequired: true,
+      hooks: {
+        onWakeSucceeded: () => { wakeSucceeded += 1; },
+        onWakeFailed: () => { wakeFailed += 1; },
+      },
+    });
+
+    await waitForCalls(logPath, 1);
+    await waitFor(() => wakeSucceeded === 1, "completion follow-up wake validation success");
+
+    assert.equal(wakeSucceeded, 1);
+    assert.equal(wakeFailed, 0);
   });
 
   it("repairs Telegram topic follow-ups before notifying or waking", async () => {

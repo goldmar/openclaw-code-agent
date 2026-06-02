@@ -38,6 +38,62 @@ export interface SessionNotificationHooks {
   onWakeFailed?: () => void;
 }
 
+export const COMPLETION_FOLLOWUP_DELIVERED_MARKER = "COMPLETION_FOLLOWUP_DELIVERED";
+
+export function validateCompletionFollowupWakeSuccess(stdout: string): string | undefined {
+  const finalText = extractWakeFinalText(stdout).trim();
+  if (!finalText) {
+    return "completion follow-up wake produced no final response";
+  }
+  if (/^NO_REPLY$/i.test(finalText)) {
+    return "completion follow-up wake ended with NO_REPLY";
+  }
+  if (!finalText.includes(COMPLETION_FOLLOWUP_DELIVERED_MARKER)) {
+    return `completion follow-up wake did not confirm ${COMPLETION_FOLLOWUP_DELIVERED_MARKER}`;
+  }
+  return undefined;
+}
+
+function extractWakeFinalText(stdout: string): string {
+  const trimmed = stdout.trim();
+  if (!trimmed) return "";
+  try {
+    return extractJsonFinalText(JSON.parse(trimmed)).trim();
+  } catch {
+    return trimmed;
+  }
+}
+
+function extractJsonFinalText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) {
+    return value.map((item) => extractJsonFinalText(item)).filter(Boolean).join("\n");
+  }
+  if (!value || typeof value !== "object") return "";
+
+  const record = value as Record<string, unknown>;
+  const directKeys = [
+    "final",
+    "finalResponse",
+    "final_response",
+    "assistantFinal",
+    "assistant_final",
+    "response",
+    "text",
+    "content",
+  ];
+  for (const key of directKeys) {
+    const direct = record[key];
+    if (typeof direct === "string" && direct.trim()) return direct;
+  }
+
+  for (const key of ["result", "message", "data"]) {
+    const nested = extractJsonFinalText(record[key]);
+    if (nested.trim()) return nested;
+  }
+  return "";
+}
+
 export interface WakeDispatcherOptions {
   transport?: WakeTransport;
   transportOptions?: WakeTransportOptions;
@@ -109,6 +165,7 @@ export class WakeDispatcher {
     onFinalFailure?: () => void,
     onSuccess?: () => void,
     shouldDispatch?: () => boolean,
+    successValidator?: (stdout: string) => string | undefined,
   ): void {
     const route = this.routes.resolve(session);
     const shouldContinue = shouldDispatch;
@@ -130,6 +187,7 @@ export class WakeDispatcher {
           }),
           onSuccess,
           onFinalFailure,
+          successValidator,
           shouldContinue,
         },
       );
@@ -151,6 +209,7 @@ export class WakeDispatcher {
           text,
         }),
         onSuccess,
+        successValidator,
         shouldContinue,
         onFinalFailure: () => {
           if (shouldContinue?.() === false) return;
@@ -169,6 +228,7 @@ export class WakeDispatcher {
               }),
               onSuccess,
               onFinalFailure,
+              successValidator,
               shouldContinue,
             },
           );
@@ -457,6 +517,9 @@ export class WakeDispatcher {
     const userMessage = userMessages[0]?.text;
     const wakeMessage = request.wakeMessage?.trim();
     const shouldDispatch = request.shouldDispatch;
+    const wakeSuccessValidator = request.completionWakeSummaryRequired === true
+      ? validateCompletionFollowupWakeSuccess
+      : undefined;
 
     if (hasConditionalWake) {
       const wakeOnSuccess = request.wakeMessageOnNotifySuccess?.trim();
@@ -474,6 +537,7 @@ export class WakeDispatcher {
           hooks?.onWakeFailed,
           hooks?.onWakeSucceeded,
           shouldDispatch,
+          wakeSuccessValidator,
         );
       };
       const dispatchWake = (wakeText: string): void => {
@@ -575,6 +639,7 @@ export class WakeDispatcher {
       hooks?.onWakeFailed,
       hooks?.onWakeSucceeded,
       shouldDispatch,
+      wakeSuccessValidator,
     );
   }
 }

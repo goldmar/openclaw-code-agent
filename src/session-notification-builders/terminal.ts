@@ -54,6 +54,8 @@ export interface WorktreeOutcomeFollowupContract {
   appliesToWorktreeTerminalOutcomes: true;
 }
 
+const COMPLETION_FOLLOWUP_DELIVERED_MARKER = "COMPLETION_FOLLOWUP_DELIVERED";
+
 export function formatApprovalExecutionContextLines(
   context: ApprovalExecutionContext,
 ): string[] {
@@ -129,6 +131,7 @@ export function buildCompletionFollowupInstructionLines(args: {
     ...(canonicalStatusDelivered
       ? [`${canonicalStatusInstructionIndex}. Do NOT repeat the plugin's status line, and do NOT rely on the plugin to summarize the completed work for you.`]
       : [`${canonicalStatusInstructionIndex}. Because canonical status delivery was not confirmed, account for that gap yourself when you follow up; do NOT assume the plugin already reached the user.`]),
+    `${canonicalStatusInstructionIndex + 1}. After the visible follow-up summary has actually been sent to the user or origin route, finish this wake turn with ${COMPLETION_FOLLOWUP_DELIVERED_MARKER}. If you cannot send the visible summary, do not use that marker and do not answer NO_REPLY.`,
   ];
 }
 
@@ -239,6 +242,7 @@ export function buildWorktreeOutcomeFollowupWake(args: {
       ? [`5. Before sending that follow-up, honor the Session origin route block above. If originRoute differs from the current chat, do NOT use a plain final assistant reply; use a routed send path that preserves provider/target/threadId.`]
       : []),
     `${hasOriginRouteBlock ? 6 : 5}. Do NOT repeat only the plugin status line; keep the follow-up brief, concrete, and non-duplicative.`,
+    `${hasOriginRouteBlock ? 7 : 6}. After the visible follow-up summary has actually been sent to the user or origin route, finish this wake turn with ${COMPLETION_FOLLOWUP_DELIVERED_MARKER}. If you cannot send the visible summary, do not use that marker and do not answer NO_REPLY.`,
   ].join("\n");
 }
 
