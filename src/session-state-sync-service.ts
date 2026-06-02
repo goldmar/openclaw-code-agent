@@ -27,20 +27,36 @@ export class SessionStateSyncService {
   ) {}
 
   applySessionPatch(ref: string, patch: Partial<PersistedSessionInfo>): boolean {
+    const normalizedPatch = this.normalizeCompletionWakePatch(patch);
     const existing = this.deps.store.getPersistedSession(ref);
     if (existing) {
-      Object.assign(existing, patch);
+      Object.assign(existing, normalizedPatch);
       this.deps.store.assertPersistedEntry(existing);
     }
 
     const active = this.findActiveSessionForRef(ref, existing);
     if (active) {
-      this.applyPatchToActiveSession(active, patch);
+      this.applyPatchToActiveSession(active, normalizedPatch);
     }
 
     if (!existing && !active) return false;
     if (existing) this.deps.store.saveIndex();
     return true;
+  }
+
+  private normalizeCompletionWakePatch(
+    patch: Partial<PersistedSessionInfo>,
+  ): Partial<PersistedSessionInfo> {
+    const completed =
+      ("completionWakeSucceededAt" in patch && patch.completionWakeSucceededAt)
+      || ("completionWakeSkippedAt" in patch && patch.completionWakeSkippedAt);
+    if (!completed) {
+      return patch;
+    }
+    return {
+      ...patch,
+      completionWakeSummaryRequired: undefined,
+    };
   }
 
   private matchesExistingSession(session: Session, existing?: PersistedSessionInfo): boolean {

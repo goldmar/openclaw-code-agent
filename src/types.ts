@@ -387,8 +387,11 @@ export interface PersistedSessionInfo {
   runtimeState?: SessionRuntimeState;
   deliveryState?: SessionDeliveryState;
   completionWakeIssuedAt?: string;
+  /** The required human-visible completion follow-up was confirmed delivered. */
   completionWakeSucceededAt?: string;
   completionWakeFailedAt?: string;
+  completionWakeSkippedAt?: string;
+  completionWakeSkipReason?: string;
   completionWakeSummaryRequired?: boolean;
   killReason?: KillReason;
   costUsd: number;

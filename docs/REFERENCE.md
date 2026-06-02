@@ -455,7 +455,7 @@ Merge a worktree branch back to base.
 
 On conflicts, the plugin spawns a conflict-resolver session using the configured default harness.
 
-After a successful local merge, auto-merge, or local-merge-with-push-failure outcome, the plugin sends the canonical worktree status and wakes the orchestrator with `completionWakeSummaryRequired=true`. The wake carries the authoritative session origin route/thread block, including persisted route metadata when the active row no longer has it. The orchestrator must read `agent_output(session, full=true)` when available and send one short factual routed summary to that origin route. If `push=true` fails after the local merge, that follow-up must describe the push failure and must not claim the merge reached the remote.
+After a successful local merge, auto-merge, or local-merge-with-push-failure outcome, the plugin sends the canonical worktree status and wakes the orchestrator with `completionWakeSummaryRequired=true`. The wake carries the authoritative session origin route/thread block, including persisted route metadata when the active row no longer has it. The orchestrator must read `agent_output(session, full=true)` when available and send one short factual routed summary to that origin route. If `push=true` fails after the local merge, that follow-up must describe the push failure and must not claim the merge reached the remote. The persisted `completionWakeSummaryRequired` bit is pending-only; it is cleared only after the wake confirms that visible summary was delivered, or records an explicit valid skip reason.
 
 ### `agent_pr`
 

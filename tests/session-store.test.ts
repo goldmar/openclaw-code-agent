@@ -157,6 +157,72 @@ describe("SessionStore persisted compatibility", () => {
 
     assert.equal(store.getPersistedSession("fast-mode")?.fastMode, true);
   });
+
+  it("keeps completion summary repair pending on restore when old success records conflict", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-store-completion-wake-"));
+    const indexPath = join(dir, "sessions.json");
+    writeStore(indexPath, [{
+      sessionId: "merged-followup",
+      harnessSessionId: "h-merged-followup",
+      backendRef: { kind: "codex-app-server", conversationId: "thread-merged-followup" },
+      harness: "codex",
+      name: "merged-followup",
+      prompt: "p",
+      workdir: "/tmp",
+      model: "gpt-5.5",
+      status: "completed",
+      lifecycle: "terminal",
+      worktreeState: "merged",
+      worktreeMerged: true,
+      completionWakeIssuedAt: "2026-06-01T23:26:03.000Z",
+      completionWakeSucceededAt: "2026-06-01T23:26:04.000Z",
+      completionWakeSummaryRequired: true,
+      costUsd: 0,
+    }]);
+
+    const store = new SessionStore({
+      env: {
+        OPENCLAW_CODE_AGENT_SESSIONS_PATH: indexPath,
+      },
+    });
+
+    assert.equal(store.getPersistedSession("merged-followup")?.completionWakeSummaryRequired, true);
+    assert.equal(
+      store.getPersistedSession("merged-followup")?.completionWakeSucceededAt,
+      "2026-06-01T23:26:04.000Z",
+    );
+  });
+
+  it("clears completion summary repair on restore when an explicit skip reason was recorded", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-store-completion-wake-skip-"));
+    const indexPath = join(dir, "sessions.json");
+    writeStore(indexPath, [{
+      sessionId: "skipped-followup",
+      harnessSessionId: "h-skipped-followup",
+      backendRef: { kind: "codex-app-server", conversationId: "thread-skipped-followup" },
+      harness: "codex",
+      name: "skipped-followup",
+      prompt: "p",
+      workdir: "/tmp",
+      model: "gpt-5.5",
+      status: "completed",
+      lifecycle: "terminal",
+      completionWakeIssuedAt: "2026-06-01T23:26:03.000Z",
+      completionWakeSkippedAt: "2026-06-01T23:26:04.000Z",
+      completionWakeSkipReason: "internal pipeline continuing",
+      completionWakeSummaryRequired: true,
+      costUsd: 0,
+    }]);
+
+    const store = new SessionStore({
+      env: {
+        OPENCLAW_CODE_AGENT_SESSIONS_PATH: indexPath,
+      },
+    });
+
+    assert.equal(store.getPersistedSession("skipped-followup")?.completionWakeSummaryRequired, undefined);
+    assert.equal(store.getPersistedSession("skipped-followup")?.completionWakeSkipReason, "internal pipeline continuing");
+  });
 });
 
 describe("SessionStore path resolution", () => {

@@ -1,7 +1,11 @@
 import type { Session } from "./session";
 import { logButtonDiagnostic, summarizeButtons } from "./button-diagnostics";
 import { RuntimeDirectNotificationTransport, type DirectNotificationTransport } from "./direct-notification-transport";
-import { WakeDeliveryExecutor, type DispatchPhase } from "./wake-delivery-executor";
+import {
+  WakeDeliveryExecutor,
+  type DispatchPhase,
+  type DispatchSuccessValidationResult,
+} from "./wake-delivery-executor";
 import { WakeRouteResolver } from "./wake-route-resolver";
 import { WakeTransport, type WakeTransportOptions } from "./wake-transport";
 
@@ -20,6 +24,7 @@ export interface SessionNotificationRequest {
   wakeMessageOnNotifySuccess?: string;
   wakeMessageOnNotifyFailed?: string;
   completionWakeSummaryRequired?: boolean;
+  deferConditionalWakeUntilNextTick?: boolean;
   requireDirectUserNotification?: boolean;
   notifyUser?: SessionNotificationPolicy;
   buttons?: Array<Array<{ label: string; callbackData: string }>>;
@@ -34,7 +39,80 @@ export interface SessionNotificationHooks {
   onNotifyFailed?: () => void;
   onWakeStarted?: () => void;
   onWakeSucceeded?: () => void;
+  onWakeSkipped?: (reason: string) => void;
   onWakeFailed?: () => void;
+}
+
+export const COMPLETION_FOLLOWUP_DELIVERED_MARKER = "COMPLETION_FOLLOWUP_DELIVERED";
+export const COMPLETION_FOLLOWUP_SKIPPED_MARKER = "COMPLETION_FOLLOWUP_SKIPPED";
+
+export function validateCompletionFollowupWakeSuccess(stdout: string): DispatchSuccessValidationResult {
+  const finalText = extractWakeFinalText(stdout).trim();
+  if (!finalText) {
+    return { outcome: "failure", reason: "completion follow-up wake produced no final response" };
+  }
+  if (/^NO_REPLY$/i.test(finalText)) {
+    return { outcome: "failure", reason: "completion follow-up wake ended with NO_REPLY" };
+  }
+  if (!finalText.includes(COMPLETION_FOLLOWUP_DELIVERED_MARKER)) {
+    const skipReason = extractCompletionFollowupSkipReason(finalText);
+    if (skipReason) {
+      return { outcome: "skipped", reason: skipReason };
+    }
+    return {
+      outcome: "failure",
+      reason: `completion follow-up wake did not confirm ${COMPLETION_FOLLOWUP_DELIVERED_MARKER}`,
+    };
+  }
+  return { outcome: "success" };
+}
+
+function extractWakeFinalText(stdout: string): string {
+  const trimmed = stdout.trim();
+  if (!trimmed) return "";
+  try {
+    return extractJsonFinalText(JSON.parse(trimmed)).trim();
+  } catch {
+    return trimmed;
+  }
+}
+
+function extractJsonFinalText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) {
+    return value.map((item) => extractJsonFinalText(item)).filter(Boolean).join("\n");
+  }
+  if (!value || typeof value !== "object") return "";
+
+  const record = value as Record<string, unknown>;
+  const directKeys = [
+    "final",
+    "finalResponse",
+    "final_response",
+    "assistantFinal",
+    "assistant_final",
+    "response",
+    "text",
+    "content",
+  ];
+  for (const key of directKeys) {
+    const direct = record[key];
+    if (typeof direct === "string" && direct.trim()) return direct;
+  }
+
+  for (const key of ["result", "message", "data"]) {
+    const nested = extractJsonFinalText(record[key]);
+    if (nested.trim()) return nested;
+  }
+  return "";
+}
+
+function extractCompletionFollowupSkipReason(finalText: string): string | undefined {
+  const markerIndex = finalText.indexOf(COMPLETION_FOLLOWUP_SKIPPED_MARKER);
+  if (markerIndex < 0) return undefined;
+  const suffix = finalText.slice(markerIndex + COMPLETION_FOLLOWUP_SKIPPED_MARKER.length);
+  const reason = suffix.replace(/^[:\s-]+/, "").split(/\r?\n/, 1)[0]?.trim();
+  return reason || "explicitly skipped by wake agent";
 }
 
 export interface WakeDispatcherOptions {
@@ -108,6 +186,8 @@ export class WakeDispatcher {
     onFinalFailure?: () => void,
     onSuccess?: () => void,
     shouldDispatch?: () => boolean,
+    successValidator?: (stdout: string) => DispatchSuccessValidationResult,
+    onSkipped?: (reason: string) => void,
   ): void {
     const route = this.routes.resolve(session);
     const shouldContinue = shouldDispatch;
@@ -128,7 +208,9 @@ export class WakeDispatcher {
             text,
           }),
           onSuccess,
+          onSkipped,
           onFinalFailure,
+          successValidator,
           shouldContinue,
         },
       );
@@ -150,6 +232,8 @@ export class WakeDispatcher {
           text,
         }),
         onSuccess,
+        onSkipped,
+        successValidator,
         shouldContinue,
         onFinalFailure: () => {
           if (shouldContinue?.() === false) return;
@@ -167,7 +251,9 @@ export class WakeDispatcher {
                 text,
               }),
               onSuccess,
+              onSkipped,
               onFinalFailure,
+              successValidator,
               shouldContinue,
             },
           );
@@ -456,12 +542,15 @@ export class WakeDispatcher {
     const userMessage = userMessages[0]?.text;
     const wakeMessage = request.wakeMessage?.trim();
     const shouldDispatch = request.shouldDispatch;
+    const wakeSuccessValidator = request.completionWakeSummaryRequired === true
+      ? validateCompletionFollowupWakeSuccess
+      : undefined;
 
     if (hasConditionalWake) {
       const wakeOnSuccess = request.wakeMessageOnNotifySuccess?.trim();
       const wakeOnFailed = request.wakeMessageOnNotifyFailed?.trim();
 
-      const dispatchWake = (wakeText: string): void => {
+      const sendDeferredWake = (wakeText: string): void => {
         if (!wakeText) return;
         if (shouldDispatch?.() === false) return;
         hooks?.onWakeStarted?.();
@@ -473,7 +562,17 @@ export class WakeDispatcher {
           hooks?.onWakeFailed,
           hooks?.onWakeSucceeded,
           shouldDispatch,
+          wakeSuccessValidator,
+          hooks?.onWakeSkipped,
         );
+      };
+      const dispatchWake = (wakeText: string): void => {
+        if (!wakeText) return;
+        if (request.deferConditionalWakeUntilNextTick === true) {
+          setTimeout(() => sendDeferredWake(wakeText), 0).unref?.();
+          return;
+        }
+        sendDeferredWake(wakeText);
       };
 
       const onSuccess = () => {
@@ -566,6 +665,8 @@ export class WakeDispatcher {
       hooks?.onWakeFailed,
       hooks?.onWakeSucceeded,
       shouldDispatch,
+      wakeSuccessValidator,
+      hooks?.onWakeSkipped,
     );
   }
 }

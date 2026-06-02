@@ -186,7 +186,7 @@ describe("SessionNotificationService", () => {
         {
           ref: "session-5",
           deliveryState: "wake_pending",
-          completionWakeSummaryRequired: undefined,
+          completionWakeSummaryRequired: true,
           hasIssuedAt: false,
           hasSucceededAt: false,
           hasFailedAt: false,
@@ -202,13 +202,100 @@ describe("SessionNotificationService", () => {
         {
           ref: "session-5",
           deliveryState: "idle",
-          completionWakeSummaryRequired: true,
+          completionWakeSummaryRequired: undefined,
           hasIssuedAt: false,
           hasSucceededAt: true,
           hasFailedAt: false,
         },
       ],
     );
+  });
+
+  it("persists completion repair state after notify success before a deferred wake starts", () => {
+    const patches: Array<{ ref: string; patch: Record<string, unknown> }> = [];
+    const fakeDispatcher = {
+      dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, () => void> }) => {
+        request.hooks?.onNotifyStarted?.();
+        request.hooks?.onNotifySucceeded?.();
+      },
+      dispose: () => {},
+    };
+
+    const service = new SessionNotificationService(
+      fakeDispatcher as any,
+      (ref, patch) => patches.push({ ref, patch: patch as Record<string, unknown> }),
+    );
+
+    service.notifyWorktreeOutcome(
+      { id: "session-deferred", harnessSessionId: "h-deferred", name: "deferred-worktree" } as any,
+      "✅ [deferred-worktree] Branch merged.",
+    );
+
+    assert.deepEqual(
+      patches.map(({ ref, patch }) => ({
+        ref,
+        deliveryState: patch.deliveryState,
+        completionWakeSummaryRequired: patch.completionWakeSummaryRequired,
+        hasIssuedAt: typeof patch.completionWakeIssuedAt === "string",
+        hasSucceededAt: typeof patch.completionWakeSucceededAt === "string",
+        hasFailedAt: typeof patch.completionWakeFailedAt === "string",
+      })),
+      [
+        {
+          ref: "session-deferred",
+          deliveryState: "notifying",
+          completionWakeSummaryRequired: undefined,
+          hasIssuedAt: false,
+          hasSucceededAt: false,
+          hasFailedAt: false,
+        },
+        {
+          ref: "session-deferred",
+          deliveryState: "wake_pending",
+          completionWakeSummaryRequired: true,
+          hasIssuedAt: false,
+          hasSucceededAt: false,
+          hasFailedAt: false,
+        },
+      ],
+    );
+  });
+
+  it("records explicit completion follow-up skips and clears retry state", () => {
+    const patches: Array<{ ref: string; patch: Record<string, unknown> }> = [];
+    const fakeDispatcher = {
+      dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, (reason?: string) => void> }) => {
+        request.hooks?.onNotifyStarted?.();
+        request.hooks?.onNotifySucceeded?.();
+        request.hooks?.onWakeStarted?.();
+        request.hooks?.onWakeSkipped?.("internal pipeline continuing");
+      },
+      dispose: () => {},
+    };
+
+    const service = new SessionNotificationService(
+      fakeDispatcher as any,
+      (ref, patch) => patches.push({ ref, patch: patch as Record<string, unknown> }),
+    );
+
+    service.dispatch(
+      { id: "session-skip", harnessSessionId: "h-skip" } as any,
+      {
+        label: "completed",
+        userMessage: "done",
+        wakeMessageOnNotifySuccess: "wake",
+        completionWakeSummaryRequired: true,
+        notifyUser: "always",
+      },
+    );
+
+    const lastPatch = patches.at(-1)?.patch;
+    assert.equal(lastPatch?.deliveryState, "idle");
+    assert.equal(lastPatch?.completionWakeSummaryRequired, undefined);
+    assert.equal(lastPatch?.completionWakeSucceededAt, undefined);
+    assert.equal(lastPatch?.completionWakeFailedAt, undefined);
+    assert.equal(typeof lastPatch?.completionWakeSkippedAt, "string");
+    assert.equal(lastPatch?.completionWakeSkipReason, "internal pipeline continuing");
   });
 
   it("does not persist completion follow-up state when the terminal session opts out", () => {
@@ -287,6 +374,7 @@ describe("SessionNotificationService", () => {
     assert.equal(capturedRequest.label, "worktree-outcome");
     assert.equal(capturedRequest.requireDirectUserNotification, true);
     assert.equal(capturedRequest.completionWakeSummaryRequired, true);
+    assert.equal(capturedRequest.deferConditionalWakeUntilNextTick, true);
     assert.match(capturedRequest.wakeMessageOnNotifySuccess, /agent_output\(session='session-7', full=true\)/);
     assert.match(capturedRequest.wakeMessageOnNotifySuccess, /originRoute: \{"provider":"telegram","target":"-100123","threadId":"32947","sessionKey":"agent:x:telegram:channel:-100123:topic:32947"\}/);
     assert.match(capturedRequest.wakeMessageOnNotifySuccess, /Pushed main\./);
@@ -300,9 +388,9 @@ describe("SessionNotificationService", () => {
       })),
       [
         { ref: "session-7", deliveryState: "notifying", completionWakeSummaryRequired: undefined, hasIssuedAt: false, hasSucceededAt: false },
-        { ref: "session-7", deliveryState: "wake_pending", completionWakeSummaryRequired: undefined, hasIssuedAt: false, hasSucceededAt: false },
+        { ref: "session-7", deliveryState: "wake_pending", completionWakeSummaryRequired: true, hasIssuedAt: false, hasSucceededAt: false },
         { ref: "session-7", deliveryState: "wake_pending", completionWakeSummaryRequired: true, hasIssuedAt: true, hasSucceededAt: false },
-        { ref: "session-7", deliveryState: "idle", completionWakeSummaryRequired: true, hasIssuedAt: false, hasSucceededAt: true },
+        { ref: "session-7", deliveryState: "idle", completionWakeSummaryRequired: undefined, hasIssuedAt: false, hasSucceededAt: true },
       ],
     );
   });

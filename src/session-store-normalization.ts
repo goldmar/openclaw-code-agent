@@ -396,6 +396,11 @@ export function normalizePersistedEntry(raw: unknown): PersistedSessionInfo | un
   const harness = toOptionalString(raw.harness);
   const backendRef = normalizeBackendRef(raw.backendRef, harness, harnessSessionId);
   const worktreeLifecycle = normalizeWorktreeLifecycle(raw.worktreeLifecycle) ?? synthesizeLegacyWorktreeLifecycle(raw);
+  const completionWakeSucceededAt = toOptionalString(raw.completionWakeSucceededAt);
+  const completionWakeSkippedAt = toOptionalString(raw.completionWakeSkippedAt);
+  const completionWakeSummaryRequired = raw.completionWakeSummaryRequired === true && !completionWakeSkippedAt
+    ? true
+    : undefined;
 
   return {
     sessionId: toOptionalString(raw.sessionId),
@@ -416,9 +421,11 @@ export function normalizePersistedEntry(raw: unknown): PersistedSessionInfo | un
     runtimeState: recoveredFromRunning ? "stopped" : toOptionalRuntimeState(raw.runtimeState),
     deliveryState: toOptionalDeliveryState(raw.deliveryState),
     completionWakeIssuedAt: toOptionalString(raw.completionWakeIssuedAt),
-    completionWakeSucceededAt: toOptionalString(raw.completionWakeSucceededAt),
+    completionWakeSucceededAt,
     completionWakeFailedAt: toOptionalString(raw.completionWakeFailedAt),
-    completionWakeSummaryRequired: raw.completionWakeSummaryRequired === true ? true : undefined,
+    completionWakeSkippedAt,
+    completionWakeSkipReason: toOptionalString(raw.completionWakeSkipReason),
+    completionWakeSummaryRequired,
     killReason: toOptionalKillReason(raw.killReason),
     costUsd: typeof raw.costUsd === "number" && Number.isFinite(raw.costUsd) ? raw.costUsd : 0,
     originAgentId: toOptionalString(raw.originAgentId),
