@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.3.5] - 2026-06-01
+
+### Fixed
+- Hardened Telegram interactive callback handling for OpenClaw `2026.5.28` by accepting the current native callback shape when `callback.payload` is absent and only the full `callback.data` value is provided.
+- Deferred OCA worktree outcome follow-up wakes until after merge or PR terminal status is visible, so the orchestrator reads the canonical outcome before sending the routed summary.
+- Made OCA completion follow-up wake retries crash-safe and semantic: persisted retry state survives restarts, and `completionWakeSucceededAt` is recorded only after visible follow-up delivery is proven.
+
+### Changed
+- Kept the local OpenClaw package target on `openclaw@2026.5.28` while retaining the peer and plugin API floors at `>=2026.4.21`.
+- Refreshed release compatibility guidance for OpenClaw `2026.5.28`, including callback/API hardening, runtime tool allowlists, and Codex/Claude harness policy boundaries.
+
 ## [4.3.4] - 2026-05-31
 
 ### Fixed
@@ -382,7 +393,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Default Codex approval policy to `on-request`.
 - Raised the default session limit.
 
-[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.3.4...HEAD
+[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.3.5...HEAD
+[4.3.5]: https://github.com/goldmar/openclaw-code-agent/compare/v4.3.4...v4.3.5
 [4.3.4]: https://github.com/goldmar/openclaw-code-agent/compare/v4.3.3...v4.3.4
 [4.3.3]: https://github.com/goldmar/openclaw-code-agent/compare/v4.3.2...v4.3.3
 [4.3.2]: https://github.com/goldmar/openclaw-code-agent/compare/v4.3.1...v4.3.2
