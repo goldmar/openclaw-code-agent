@@ -61,7 +61,7 @@ export class SessionNotificationService {
         request.hooks?.onWakeStarted?.();
       },
       onWakeSucceeded: () => {
-        this.applyPersistedPatchWithCompletionWake(deliveryRef, "idle", completionWakePatch, {
+        this.applyPersistedPatchWithCompletionWake(deliveryRef, "idle", this.buildCompletionWakeSucceededPatch(completionWakePatch), {
           completionWakeSucceededAt: new Date().toISOString(),
           completionWakeFailedAt: undefined,
         });
@@ -149,5 +149,12 @@ export class SessionNotificationService {
   ): Pick<PersistedSessionInfo, "completionWakeSummaryRequired"> | undefined {
     if (request.completionWakeSummaryRequired !== true) return undefined;
     return { completionWakeSummaryRequired: true };
+  }
+
+  private buildCompletionWakeSucceededPatch(
+    completionWakePatch: Pick<PersistedSessionInfo, "completionWakeSummaryRequired"> | undefined,
+  ): Pick<PersistedSessionInfo, "completionWakeSummaryRequired"> | undefined {
+    if (!completionWakePatch) return undefined;
+    return { completionWakeSummaryRequired: undefined };
   }
 }

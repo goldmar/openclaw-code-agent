@@ -157,6 +157,41 @@ describe("SessionStore persisted compatibility", () => {
 
     assert.equal(store.getPersistedSession("fast-mode")?.fastMode, true);
   });
+
+  it("clears stale completion summary requirements after a successful wake on restore", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-store-completion-wake-"));
+    const indexPath = join(dir, "sessions.json");
+    writeStore(indexPath, [{
+      sessionId: "merged-followup",
+      harnessSessionId: "h-merged-followup",
+      backendRef: { kind: "codex-app-server", conversationId: "thread-merged-followup" },
+      harness: "codex",
+      name: "merged-followup",
+      prompt: "p",
+      workdir: "/tmp",
+      model: "gpt-5.5",
+      status: "completed",
+      lifecycle: "terminal",
+      worktreeState: "merged",
+      worktreeMerged: true,
+      completionWakeIssuedAt: "2026-06-01T23:26:03.000Z",
+      completionWakeSucceededAt: "2026-06-01T23:26:04.000Z",
+      completionWakeSummaryRequired: true,
+      costUsd: 0,
+    }]);
+
+    const store = new SessionStore({
+      env: {
+        OPENCLAW_CODE_AGENT_SESSIONS_PATH: indexPath,
+      },
+    });
+
+    assert.equal(store.getPersistedSession("merged-followup")?.completionWakeSummaryRequired, undefined);
+    assert.equal(
+      store.getPersistedSession("merged-followup")?.completionWakeSucceededAt,
+      "2026-06-01T23:26:04.000Z",
+    );
+  });
 });
 
 describe("SessionStore path resolution", () => {

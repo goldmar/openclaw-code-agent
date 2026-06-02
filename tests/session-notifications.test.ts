@@ -202,7 +202,7 @@ describe("SessionNotificationService", () => {
         {
           ref: "session-5",
           deliveryState: "idle",
-          completionWakeSummaryRequired: true,
+          completionWakeSummaryRequired: undefined,
           hasIssuedAt: false,
           hasSucceededAt: true,
           hasFailedAt: false,
@@ -302,7 +302,7 @@ describe("SessionNotificationService", () => {
         { ref: "session-7", deliveryState: "notifying", completionWakeSummaryRequired: undefined, hasIssuedAt: false, hasSucceededAt: false },
         { ref: "session-7", deliveryState: "wake_pending", completionWakeSummaryRequired: undefined, hasIssuedAt: false, hasSucceededAt: false },
         { ref: "session-7", deliveryState: "wake_pending", completionWakeSummaryRequired: true, hasIssuedAt: true, hasSucceededAt: false },
-        { ref: "session-7", deliveryState: "idle", completionWakeSummaryRequired: true, hasIssuedAt: false, hasSucceededAt: true },
+        { ref: "session-7", deliveryState: "idle", completionWakeSummaryRequired: undefined, hasIssuedAt: false, hasSucceededAt: true },
       ],
     );
   });
