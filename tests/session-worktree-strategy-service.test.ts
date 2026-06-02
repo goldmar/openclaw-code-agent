@@ -116,6 +116,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       assert.equal(notifications.length, 1);
       assert.equal(notifications[0].label, "worktree-merge-success");
       assert.equal(notifications[0].completionWakeSummaryRequired, true);
+      assert.equal(notifications[0].deferConditionalWakeUntilNextTick, true);
       assert.match(String(notifications[0].wakeMessageOnNotifySuccess), /agent_output\(session='s-summary-success', full=true\)/);
       assert.match(String(notifications[0].wakeMessageOnNotifySuccess), /originRoute: \{"provider":"telegram","target":"-100123","threadId":"32947"\}/);
       assert.equal(session.worktreeState, "merged");

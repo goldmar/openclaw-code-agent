@@ -102,6 +102,7 @@ export class SessionNotificationService {
       notifyUser: "always",
       requireDirectUserNotification: true,
       completionWakeSummaryRequired: summaryWakeRequired,
+      deferConditionalWakeUntilNextTick: true,
       wakeMessageOnNotifySuccess: summaryWakeRequired ? buildWakeMessage(true) : undefined,
       wakeMessageOnNotifyFailed: summaryWakeRequired ? buildWakeMessage(false) : undefined,
     });

@@ -20,6 +20,7 @@ export interface SessionNotificationRequest {
   wakeMessageOnNotifySuccess?: string;
   wakeMessageOnNotifyFailed?: string;
   completionWakeSummaryRequired?: boolean;
+  deferConditionalWakeUntilNextTick?: boolean;
   requireDirectUserNotification?: boolean;
   notifyUser?: SessionNotificationPolicy;
   buttons?: Array<Array<{ label: string; callbackData: string }>>;
@@ -461,7 +462,7 @@ export class WakeDispatcher {
       const wakeOnSuccess = request.wakeMessageOnNotifySuccess?.trim();
       const wakeOnFailed = request.wakeMessageOnNotifyFailed?.trim();
 
-      const dispatchWake = (wakeText: string): void => {
+      const sendDeferredWake = (wakeText: string): void => {
         if (!wakeText) return;
         if (shouldDispatch?.() === false) return;
         hooks?.onWakeStarted?.();
@@ -474,6 +475,14 @@ export class WakeDispatcher {
           hooks?.onWakeSucceeded,
           shouldDispatch,
         );
+      };
+      const dispatchWake = (wakeText: string): void => {
+        if (!wakeText) return;
+        if (request.deferConditionalWakeUntilNextTick === true) {
+          setTimeout(() => sendDeferredWake(wakeText), 0).unref?.();
+          return;
+        }
+        sendDeferredWake(wakeText);
       };
 
       const onSuccess = () => {

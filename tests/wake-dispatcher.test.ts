@@ -227,6 +227,39 @@ if (failConfigRaw) {
     assert.deepEqual(messages, ["🚀 launched", "🚀 launched", "✅ completed"]);
   });
 
+  it("defers conditional worktree wakes until after the notification turn yields", async () => {
+    const dispatcher = new WakeDispatcher({
+      directNotifications: {
+        send: async () => {},
+      } as any,
+    });
+    const session: FakeSession = {
+      id: "session-worktree-deferred-wake",
+      route: buildRoute({ threadId: "13832", sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832" }),
+      originChannel: "telegram|bot|-1003863755361",
+      originThreadId: 13832,
+      originSessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+    };
+
+    dispatcher.dispatchSessionNotification(session as any, {
+      label: "worktree-outcome",
+      userMessage: "✅ Merged: agent/example → main",
+      wakeMessageOnNotifySuccess: "Worktree follow-through outcome recorded.",
+      notifyUser: "always",
+      requireDirectUserNotification: true,
+      deferConditionalWakeUntilNextTick: true,
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+    assert.equal(readCalls(logPath).length, 0);
+
+    const calls = await waitForCalls(logPath, 1);
+    const wakeParams = parseChatSendParams(calls[0] ?? []);
+    assert.equal(wakeParams.sessionKey, "agent:main:telegram:group:-1003863755361:topic:13832");
+    assert.equal(wakeParams.message, "Worktree follow-through outcome recorded.");
+  });
+
   it("suppresses queued revised plan prompts when the plan decision is rejected before delivery starts", async (t) => {
     const dispatcher = createDispatcher();
     const session: FakeSession = {

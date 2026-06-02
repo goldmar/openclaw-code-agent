@@ -5,6 +5,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { setSessionManager } from "../src/singletons";
+import { SessionNotificationService } from "../src/session-notifications";
 import { makeAgentMergeTool } from "../src/tools/agent-merge";
 import { createWorktree, getBranchName } from "../src/worktree";
 
@@ -56,6 +57,86 @@ function createReadmeChangingWorktree(repoDir: string, name: string): { worktree
 function remoteHead(repoDir: string, branch: string): string {
   const output = git(repoDir, "ls-remote", "--heads", "origin", branch);
   return output.split(/\s+/)[0] ?? "";
+}
+
+function installPersistedSessionWithNotificationService(args: {
+  sessionName: string;
+  repoDir: string;
+  worktreePath: string;
+  branchName: string;
+  wakeOutcome: "success" | "failure";
+  capturedRequests: any[];
+}): Record<string, any> {
+  const persistedSession: Record<string, any> = {
+    sessionId: `s-${args.sessionName}`,
+    harnessSessionId: `h-${args.sessionName}`,
+    backendRef: { kind: "codex-app-server", conversationId: `thread-${args.sessionName}` },
+    name: args.sessionName,
+    prompt: "test",
+    workdir: args.repoDir,
+    worktreePath: args.worktreePath,
+    worktreeBranch: args.branchName,
+    worktreeState: "pending_decision",
+    pendingWorktreeDecisionSince: "2026-06-01T22:51:00.000Z",
+    status: "completed",
+    costUsd: 0,
+    route: {
+      provider: "telegram",
+      target: "-1003863755361",
+      threadId: "13832",
+      sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+    },
+    originChannel: "telegram|-1003863755361",
+    originThreadId: 13832,
+    originSessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+  };
+
+  const matchesRef = (ref: string): boolean => [
+    persistedSession.sessionId,
+    persistedSession.name,
+    persistedSession.harnessSessionId,
+    persistedSession.backendRef.conversationId,
+  ].includes(ref);
+
+  const updatePersistedSession = (ref: string, patch: Record<string, unknown>) => {
+    assert.ok(matchesRef(ref), `unexpected persisted ref ${ref}`);
+    Object.assign(persistedSession, patch);
+  };
+
+  const notificationService = new SessionNotificationService(
+    {
+      dispatchSessionNotification: (session: unknown, request: { hooks?: Record<string, () => void> }) => {
+        args.capturedRequests.push({ session, request });
+        request.hooks?.onNotifyStarted?.();
+        request.hooks?.onNotifySucceeded?.();
+        request.hooks?.onWakeStarted?.();
+        if (args.wakeOutcome === "success") {
+          request.hooks?.onWakeSucceeded?.();
+        } else {
+          request.hooks?.onWakeFailed?.();
+        }
+      },
+      dispose: () => {},
+    } as any,
+    updatePersistedSession,
+  );
+
+  setSessionManager({
+    resolve: () => undefined,
+    getPersistedSession(ref: string) {
+      return matchesRef(ref) ? persistedSession as any : undefined;
+    },
+    enqueueMerge: async (_repoDir: string, fn: () => Promise<void>) => { await fn(); },
+    updatePersistedSession,
+    notifyWorktreeOutcome(session: unknown, outcomeLine: string, options?: unknown) {
+      notificationService.notifyWorktreeOutcome(session as any, outcomeLine, options as any);
+    },
+    spawn() {
+      throw new Error("conflict resolver should not be spawned in this test");
+    },
+  } as any);
+
+  return persistedSession;
 }
 
 function installPersistedSessionStub(
@@ -160,6 +241,80 @@ describe("agent_merge push behavior", () => {
       assert.doesNotMatch((result.content[0] as { text: string }).text, /Pushed\./);
       assert.equal(remoteHead(repoDir, "main"), initialRemoteMain);
       assert.notEqual(git(repoDir, "rev-parse", "main"), initialRemoteMain);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+      rmSync(remoteDir, { recursive: true, force: true });
+    }
+  });
+
+  it("records immediate merge outcome wake success against the persisted origin route", async () => {
+    const { repoDir, remoteDir } = createRepoWithRemote("agent-merge-wake-success");
+    try {
+      const sessionName = "merge-wake-success";
+      const { worktreePath, branchName } = createCommittedWorktree(repoDir, sessionName);
+      const capturedRequests: any[] = [];
+      const persistedSession = installPersistedSessionWithNotificationService({
+        sessionName,
+        repoDir,
+        worktreePath,
+        branchName,
+        wakeOutcome: "success",
+        capturedRequests,
+      });
+
+      const tool = makeAgentMergeTool();
+      const result = await tool.execute("tool-id", { session: sessionName, delete_branch: false });
+
+      assert.match((result.content[0] as { text: string }).text, /Fast-forward|Merge commit/);
+      assert.equal(capturedRequests.length, 1);
+      assert.equal(capturedRequests[0].request.deferConditionalWakeUntilNextTick, true);
+      assert.equal(capturedRequests[0].request.completionWakeSummaryRequired, true);
+      assert.match(capturedRequests[0].request.wakeMessageOnNotifySuccess, /Session origin route \(authoritative for human follow-ups\):/);
+      assert.match(capturedRequests[0].request.wakeMessageOnNotifySuccess, /"target":"-1003863755361"/);
+      assert.match(capturedRequests[0].request.wakeMessageOnNotifySuccess, /"threadId":"13832"/);
+      assert.match(capturedRequests[0].request.wakeMessageOnNotifySuccess, /"sessionKey":"agent:main:telegram:group:-1003863755361:topic:13832"/);
+      assert.equal(persistedSession.worktreeMerged, true);
+      assert.equal(persistedSession.worktreeState, "merged");
+      assert.equal(persistedSession.pendingWorktreeDecisionSince, undefined);
+      assert.equal(persistedSession.deliveryState, "idle");
+      assert.equal(persistedSession.completionWakeSummaryRequired, undefined);
+      assert.equal(typeof persistedSession.completionWakeIssuedAt, "string");
+      assert.equal(typeof persistedSession.completionWakeSucceededAt, "string");
+      assert.equal(persistedSession.completionWakeFailedAt, undefined);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+      rmSync(remoteDir, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves the merge outcome summary repair flag durable when the immediate wake fails", async () => {
+    const { repoDir, remoteDir } = createRepoWithRemote("agent-merge-wake-failure");
+    try {
+      const sessionName = "merge-wake-failure";
+      const { worktreePath, branchName } = createCommittedWorktree(repoDir, sessionName);
+      const capturedRequests: any[] = [];
+      const persistedSession = installPersistedSessionWithNotificationService({
+        sessionName,
+        repoDir,
+        worktreePath,
+        branchName,
+        wakeOutcome: "failure",
+        capturedRequests,
+      });
+
+      const tool = makeAgentMergeTool();
+      const result = await tool.execute("tool-id", { session: sessionName, delete_branch: false });
+
+      assert.match((result.content[0] as { text: string }).text, /Fast-forward|Merge commit/);
+      assert.equal(capturedRequests.length, 1);
+      assert.equal(capturedRequests[0].request.deferConditionalWakeUntilNextTick, true);
+      assert.equal(persistedSession.worktreeMerged, true);
+      assert.equal(persistedSession.worktreeState, "merged");
+      assert.equal(persistedSession.deliveryState, "failed");
+      assert.equal(persistedSession.completionWakeSummaryRequired, true);
+      assert.equal(typeof persistedSession.completionWakeIssuedAt, "string");
+      assert.equal(persistedSession.completionWakeSucceededAt, undefined);
+      assert.equal(typeof persistedSession.completionWakeFailedAt, "string");
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
       rmSync(remoteDir, { recursive: true, force: true });
