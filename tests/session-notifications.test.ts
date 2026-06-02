@@ -186,7 +186,7 @@ describe("SessionNotificationService", () => {
         {
           ref: "session-5",
           deliveryState: "wake_pending",
-          completionWakeSummaryRequired: undefined,
+          completionWakeSummaryRequired: true,
           hasIssuedAt: false,
           hasSucceededAt: false,
           hasFailedAt: false,
@@ -205,6 +205,56 @@ describe("SessionNotificationService", () => {
           completionWakeSummaryRequired: undefined,
           hasIssuedAt: false,
           hasSucceededAt: true,
+          hasFailedAt: false,
+        },
+      ],
+    );
+  });
+
+  it("persists completion repair state after notify success before a deferred wake starts", () => {
+    const patches: Array<{ ref: string; patch: Record<string, unknown> }> = [];
+    const fakeDispatcher = {
+      dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, () => void> }) => {
+        request.hooks?.onNotifyStarted?.();
+        request.hooks?.onNotifySucceeded?.();
+      },
+      dispose: () => {},
+    };
+
+    const service = new SessionNotificationService(
+      fakeDispatcher as any,
+      (ref, patch) => patches.push({ ref, patch: patch as Record<string, unknown> }),
+    );
+
+    service.notifyWorktreeOutcome(
+      { id: "session-deferred", harnessSessionId: "h-deferred", name: "deferred-worktree" } as any,
+      "✅ [deferred-worktree] Branch merged.",
+    );
+
+    assert.deepEqual(
+      patches.map(({ ref, patch }) => ({
+        ref,
+        deliveryState: patch.deliveryState,
+        completionWakeSummaryRequired: patch.completionWakeSummaryRequired,
+        hasIssuedAt: typeof patch.completionWakeIssuedAt === "string",
+        hasSucceededAt: typeof patch.completionWakeSucceededAt === "string",
+        hasFailedAt: typeof patch.completionWakeFailedAt === "string",
+      })),
+      [
+        {
+          ref: "session-deferred",
+          deliveryState: "notifying",
+          completionWakeSummaryRequired: undefined,
+          hasIssuedAt: false,
+          hasSucceededAt: false,
+          hasFailedAt: false,
+        },
+        {
+          ref: "session-deferred",
+          deliveryState: "wake_pending",
+          completionWakeSummaryRequired: true,
+          hasIssuedAt: false,
+          hasSucceededAt: false,
           hasFailedAt: false,
         },
       ],
@@ -301,7 +351,7 @@ describe("SessionNotificationService", () => {
       })),
       [
         { ref: "session-7", deliveryState: "notifying", completionWakeSummaryRequired: undefined, hasIssuedAt: false, hasSucceededAt: false },
-        { ref: "session-7", deliveryState: "wake_pending", completionWakeSummaryRequired: undefined, hasIssuedAt: false, hasSucceededAt: false },
+        { ref: "session-7", deliveryState: "wake_pending", completionWakeSummaryRequired: true, hasIssuedAt: false, hasSucceededAt: false },
         { ref: "session-7", deliveryState: "wake_pending", completionWakeSummaryRequired: true, hasIssuedAt: true, hasSucceededAt: false },
         { ref: "session-7", deliveryState: "idle", completionWakeSummaryRequired: undefined, hasIssuedAt: false, hasSucceededAt: true },
       ],

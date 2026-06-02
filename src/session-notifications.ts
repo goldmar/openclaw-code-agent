@@ -45,11 +45,19 @@ export class SessionNotificationService {
         request.hooks?.onNotifyStarted?.();
       },
       onNotifySucceeded: () => {
-        this.applyDeliveryState(deliveryRef, hasWakeAfterNotifySuccess ? "wake_pending" : "idle");
+        this.applyNotifyDeliveryState(
+          deliveryRef,
+          hasWakeAfterNotifySuccess ? "wake_pending" : "idle",
+          hasWakeAfterNotifySuccess ? completionWakePatch : undefined,
+        );
         request.hooks?.onNotifySucceeded?.();
       },
       onNotifyFailed: () => {
-        this.applyDeliveryState(deliveryRef, hasWakeAfterNotifyFailure ? "wake_pending" : "failed");
+        this.applyNotifyDeliveryState(
+          deliveryRef,
+          hasWakeAfterNotifyFailure ? "wake_pending" : "failed",
+          hasWakeAfterNotifyFailure ? completionWakePatch : undefined,
+        );
         request.hooks?.onNotifyFailed?.();
       },
       onWakeStarted: () => {
@@ -122,6 +130,20 @@ export class SessionNotificationService {
   ): void {
     if (!ref || !deliveryState) return;
     this.applyPersistedPatch(ref, { deliveryState });
+  }
+
+  private applyNotifyDeliveryState(
+    ref: string,
+    deliveryState: PersistedSessionInfo["deliveryState"],
+    completionWakePatch: Pick<PersistedSessionInfo, "completionWakeSummaryRequired"> | undefined,
+  ): void {
+    if (!ref || !deliveryState) return;
+    this.applyPersistedPatch(ref, completionWakePatch
+      ? {
+          deliveryState,
+          ...completionWakePatch,
+        }
+      : { deliveryState });
   }
 
   private applyPersistedPatchWithCompletionWake(
