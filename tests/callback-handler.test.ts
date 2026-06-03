@@ -1124,7 +1124,7 @@ describe("createCallbackHandler()", () => {
       getActionToken: (tokenId: string) => {
         assert.equal(tokenId, "2d1bab1c-ce69-4bdb-ae5c-782504ec686e");
         return {
-          sessionId: "plugin-readiness-v2026.5.28",
+          sessionId: "plugin-readiness-v2026.6.1",
           kind: "plan-offer-start",
           route: {
             provider: "telegram",
@@ -1133,7 +1133,7 @@ describe("createCallbackHandler()", () => {
             threadId: TELEGRAM_FORUM_THREAD_ID,
             sessionKey: TELEGRAM_FORUM_SESSION_KEY,
           },
-          launchName: "plugin-readiness-v2026.5.28",
+          launchName: "plugin-readiness-v2026.6.1",
           launchPrompt: "Plan the required follow-up.",
           launchWorkdir: "/home/openclaw/workspace/openclaw-code-agent",
           launchWorktreeStrategy: "auto-pr",
@@ -1142,7 +1142,7 @@ describe("createCallbackHandler()", () => {
       consumeActionToken: (tokenId: string) => {
         assert.equal(tokenId, "2d1bab1c-ce69-4bdb-ae5c-782504ec686e");
         return {
-          sessionId: "plugin-readiness-v2026.5.28",
+          sessionId: "plugin-readiness-v2026.6.1",
           kind: "plan-offer-start",
           route: {
             provider: "telegram",
@@ -1151,7 +1151,7 @@ describe("createCallbackHandler()", () => {
             threadId: TELEGRAM_FORUM_THREAD_ID,
             sessionKey: TELEGRAM_FORUM_SESSION_KEY,
           },
-          launchName: "plugin-readiness-v2026.5.28",
+          launchName: "plugin-readiness-v2026.6.1",
           launchPrompt: "Plan the required follow-up.",
           launchWorkdir: "/home/openclaw/workspace/openclaw-code-agent",
           launchWorktreeStrategy: "auto-pr",
@@ -1159,7 +1159,7 @@ describe("createCallbackHandler()", () => {
       },
       launchPlanOffer: (args: Record<string, unknown>) => {
         launches.push(args);
-        return { id: "sess-plan-528", name: "plugin-readiness-v2026.5.28" };
+        return { id: "sess-plan-661", name: "plugin-readiness-v2026.6.1" };
       },
     } as any);
 
@@ -1178,7 +1178,7 @@ describe("createCallbackHandler()", () => {
     assert.equal((launches[0]?.route as { threadId?: string })?.threadId, TELEGRAM_FORUM_THREAD_ID);
     assert.equal((launches[0]?.route as { sessionKey?: string })?.sessionKey, TELEGRAM_FORUM_SESSION_KEY);
     assert.equal(launches[0]?.worktreeStrategy, "auto-pr");
-    assert.match(state.replies[0], /Planning session started: plugin-readiness-v2026\.5\.28 \[sess-plan-528\]/);
+    assert.match(state.replies[0], /Planning session started: plugin-readiness-v2026\.6\.1 \[sess-plan-661\]/);
     assert.doesNotMatch(state.replies.join("\n"), /code-agent:2d1bab1c/);
   });
 
@@ -1187,7 +1187,7 @@ describe("createCallbackHandler()", () => {
     let launchCount = 0;
     setSessionManager({
       getActionToken: () => ({
-        sessionId: "plugin-readiness-v2026.5.28",
+        sessionId: "plugin-readiness-v2026.6.1",
         kind: "plan-offer-dismiss",
         route: {
           provider: "telegram",
@@ -1199,7 +1199,7 @@ describe("createCallbackHandler()", () => {
       consumeActionToken: () => {
         consumed++;
         return {
-          sessionId: "plugin-readiness-v2026.5.28",
+          sessionId: "plugin-readiness-v2026.6.1",
           kind: "plan-offer-dismiss",
           route: {
             provider: "telegram",

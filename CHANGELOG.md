@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.3.6] - 2026-06-03
+
+### Changed
+- Updated the local OpenClaw package target to `openclaw@2026.6.1` while keeping the peer and plugin API floors at `>=2026.4.21`.
+- Documented the `2026.6.1` compatibility verdict: no plugin source migration was required because `openclaw-code-agent` still imports only `openclaw/plugin-sdk/plugin-entry`, declares its tool surface through `contracts.tools`, and owns its own session store, wake routing, callbacks, worktree flows, and harness model restrictions.
+- Refreshed operator guidance for plugin install/index lookup, approval callback behavior, Telegram/topic routing, cron-origin wake delivery, Codex/Claude harness policy boundaries, runtime tool allowlists, disabled bundled plugin behavior, and worktree `delegate`/`ask`/`auto-pr` follow-through under OpenClaw `2026.6.1`.
+
 ## [4.3.5] - 2026-06-01
 
 ### Fixed
@@ -393,7 +400,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Default Codex approval policy to `on-request`.
 - Raised the default session limit.
 
-[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.3.5...HEAD
+[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.3.6...HEAD
+[4.3.6]: https://github.com/goldmar/openclaw-code-agent/compare/v4.3.5...v4.3.6
 [4.3.5]: https://github.com/goldmar/openclaw-code-agent/compare/v4.3.4...v4.3.5
 [4.3.4]: https://github.com/goldmar/openclaw-code-agent/compare/v4.3.3...v4.3.4
 [4.3.3]: https://github.com/goldmar/openclaw-code-agent/compare/v4.3.2...v4.3.3
