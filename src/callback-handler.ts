@@ -61,6 +61,18 @@ function toolResultText(result: unknown): string {
   return "(done)";
 }
 
+function toolResultSucceeded(result: unknown): boolean {
+  if (result && typeof result === "object" && "meta" in result) {
+    const meta = (result as { meta?: { success?: unknown } }).meta;
+    if (typeof meta?.success === "boolean") return meta.success;
+  }
+  return worktreeActionTextSucceeded(toolResultText(result));
+}
+
+function worktreeActionTextSucceeded(text: string): boolean {
+  return !/^\s*(?:Error\b:?|❌|⚠️)/.test(text);
+}
+
 function isPlanDecisionAction(kind: SessionActionKind): boolean {
   return kind === "plan-approve" || kind === "plan-request-changes" || kind === "plan-reject";
 }
@@ -124,9 +136,17 @@ async function clearInteractiveState(
     if (typeof text === "string" && typeof responder.editMessage === "function") {
       try {
         await responder.editMessage({ text, buttons: [] });
+        if (typeof responder.clearButtons === "function") {
+          await responder.clearButtons();
+        }
         return;
       } catch (err) {
-        if (isMessageNotModifiedError(err)) return;
+        if (isMessageNotModifiedError(err)) {
+          if (typeof responder.clearButtons === "function") {
+            await responder.clearButtons();
+          }
+          return;
+        }
         const errText = err instanceof Error ? err.message : String(err);
         console.warn(`[callback-handler] Failed to edit Telegram worktree prompt before clearing buttons: ${errText}`);
       }
@@ -313,35 +333,37 @@ export function createCallbackHandler(channel: InteractiveChannel = "telegram") 
       // Route action
       switch (consumedToken.kind) {
         case "worktree-merge": {
-          await resolveWorktreePrompt(ctx, `✅ Merge selected for [${actionSessionName}]`, callbackAcknowledged);
           const result = await makeAgentMergeTool().execute("callback", { session: sessionId });
-          await replyText(ctx, toolResultText(result));
+          const text = toolResultText(result);
+          if (toolResultSucceeded(result)) {
+            await resolveWorktreePrompt(ctx, `✅ Merge selected for [${actionSessionName}]`, callbackAcknowledged);
+          }
+          await replyText(ctx, text);
           break;
         }
 
         case "worktree-decide-later": {
-          await resolveWorktreePrompt(ctx, `⏭️ Deferred for [${actionSessionName}]`, callbackAcknowledged);
           const result = sessionManager.snoozeWorktreeDecision(sessionId);
-          await replyText(ctx, result.startsWith("Error") ? result : "⏭️ Snoozed 24h");
+          const succeeded = worktreeActionTextSucceeded(result);
+          if (succeeded) {
+            await resolveWorktreePrompt(ctx, `⏭️ Deferred for [${actionSessionName}]`, callbackAcknowledged);
+          }
+          await replyText(ctx, succeeded ? "⏭️ Snoozed 24h" : result);
           break;
         }
 
         case "worktree-dismiss": {
-          await resolveWorktreePrompt(ctx, `🗑️ Discarded for [${actionSessionName}]`, callbackAcknowledged);
           const result = await sessionManager.dismissWorktree(sessionId);
-          await replyText(ctx, result.startsWith("Error") ? result : result);
+          const succeeded = worktreeActionTextSucceeded(result);
+          if (succeeded) {
+            await resolveWorktreePrompt(ctx, `🗑️ Discarded for [${actionSessionName}]`, callbackAcknowledged);
+          }
+          await replyText(ctx, succeeded ? "✅ Discarded" : result);
           break;
         }
 
         case "worktree-create-pr":
         case "worktree-update-pr": {
-          await resolveWorktreePrompt(
-            ctx,
-            token.kind === "worktree-update-pr"
-              ? `📬 PR update selected for [${actionSessionName}]`
-              : `📬 PR selected for [${actionSessionName}]`,
-            callbackAcknowledged,
-          );
           // Do NOT pre-clear pendingWorktreeDecisionSince here.
           // For the PR path the worktree directory must stay alive indefinitely so the
           // user can push follow-up commits for PR review.  The worktree directory was
@@ -350,7 +372,17 @@ export function createCallbackHandler(channel: InteractiveChannel = "telegram") 
           // on success; if the PR creation fails the flag remains set so reminders
           // continue until the user tries again.
           const result = await makeAgentPrTool().execute("callback", { session: sessionId });
-          await replyText(ctx, toolResultText(result));
+          const text = toolResultText(result);
+          if (toolResultSucceeded(result)) {
+            await resolveWorktreePrompt(
+              ctx,
+              token.kind === "worktree-update-pr"
+                ? `📬 PR update selected for [${actionSessionName}]`
+                : `📬 PR selected for [${actionSessionName}]`,
+              callbackAcknowledged,
+            );
+          }
+          await replyText(ctx, text);
           break;
         }
 

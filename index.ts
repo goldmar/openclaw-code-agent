@@ -31,6 +31,7 @@ import { GoalController } from "./src/goal-controller";
 import { SessionManager } from "./src/session-manager";
 import { setGoalController, setSessionManager } from "./src/singletons";
 import { setPluginRuntime } from "./src/runtime-store";
+import { createRuntimeWorktreeDecisionSummaryProvider } from "./src/worktree-decision-summary";
 import { setPluginConfig, pluginConfig } from "./src/config";
 import { definePluginEntry, type OpenClawPluginApi, type OpenClawPluginServiceContext, type OpenClawPluginToolContext } from "./api";
 
@@ -141,7 +142,9 @@ export function register(api: OpenClawPluginApi): void {
       startedWithServiceContext = false;
     }
 
-    sm = new SessionManager(pluginConfig.maxSessions, pluginConfig.maxPersistedSessions);
+    sm = new SessionManager(pluginConfig.maxSessions, pluginConfig.maxPersistedSessions, {
+      worktreeSummaryProvider: createRuntimeWorktreeDecisionSummaryProvider(),
+    });
     gc = new GoalController(sm);
     setSessionManager(sm);
     setGoalController(gc);

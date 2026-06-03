@@ -5,19 +5,24 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { SessionManager } from "../src/session-manager";
+import type { WorktreeDecisionSummaryEvidence, WorktreeDecisionSummaryProvider } from "../src/worktree-decision-summary";
 import { createWorktree, getBranchName } from "../src/worktree";
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf-8" }).trim();
 }
 
-function createTestSessionManager(maxSessions = 5): { sm: SessionManager; cleanup: () => void } {
+function createTestSessionManager(
+  maxSessions = 5,
+  options: { worktreeSummaryProvider?: WorktreeDecisionSummaryProvider } = {},
+): { sm: SessionManager; cleanup: () => void } {
   const storeDir = mkdtempSync(join(tmpdir(), "sm-session-store-"));
   const sm = new SessionManager(maxSessions, 50, {
     store: {
       env: {},
       indexPath: join(storeDir, "sessions.json"),
     },
+    worktreeSummaryProvider: options.worktreeSummaryProvider,
   });
   return {
     sm,
@@ -517,7 +522,21 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       git(worktreePath, "add", "README.md", "src-note.txt");
       git(worktreePath, "commit", "-m", "tighten worktree decision UX");
 
-      const created = createTestSessionManager(5);
+      let capturedEvidence: WorktreeDecisionSummaryEvidence | undefined;
+      const created = createTestSessionManager(5, {
+        worktreeSummaryProvider: {
+          async generateWorktreeDecisionSummary(evidence) {
+            capturedEvidence = evidence;
+            return {
+              summary: [
+                "Fixed the worktree decision notification so it explains the completed UX changes.",
+                "Updated callback cleanup so successful decisions resolve the original Telegram buttons.",
+                "Covered the summary and callback behavior with focused regression tests.",
+              ],
+            };
+          },
+        },
+      });
       const sm = created.sm;
       cleanup = created.cleanup;
       stubDispatch(sm);
@@ -553,6 +572,11 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
         worktreeStrategy: "ask",
         worktreeBaseBranch: "main",
         pendingPlanApproval: false,
+        getOutput: () => [
+          "Implemented a richer worktree decision prompt using the agent's completion summary.",
+          "Changed src/session-worktree-message-service.ts and src/session-notification-builders/worktree.ts.",
+          "Verified with focused regression tests for summary quality and callback cleanup.",
+        ],
       };
       (sm as any).sessions.set(session.id, session);
 
@@ -564,8 +588,15 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       const [_sessionArg, request] = calls[0];
       assert.equal(request.label, "worktree-merge-ask");
       assert.match(request.userMessage, /Summary:/);
-      assert.match(request.userMessage, /Touches `README.md`, `src-note.txt`/);
-      assert.match(request.userMessage, /Recent work: tighten worktree decision UX/);
+      assert.match(request.userMessage, /Fixed the worktree decision notification so it explains the completed UX changes/);
+      assert.match(request.userMessage, /Updated callback cleanup so successful decisions resolve the original Telegram buttons/);
+      assert.match(request.userMessage, /Covered the summary and callback behavior with focused regression tests/);
+      assert.doesNotMatch(request.userMessage, /Implemented a richer worktree decision prompt using the agent's completion summary/);
+      assert.doesNotMatch(request.userMessage, /Touches `README\.md`, `src-note\.txt`/);
+      assert.equal(capturedEvidence?.sessionName, "ask-summary");
+      assert.match(capturedEvidence?.objective ?? "", /fix the worktree decision prompt/);
+      assert.ok(capturedEvidence?.changedFiles.includes("README.md"));
+      assert.match(capturedEvidence?.outputPreview ?? "", /Implemented a richer worktree decision prompt/);
       assert.match(request.wakeMessageOnNotifySuccess, /Session: ask-summary \| ID: s-ask-summary/);
       assert.match(request.wakeMessageOnNotifySuccess, /Branch: `agent\/ask-summary` → `main`/);
       assert.deepEqual(

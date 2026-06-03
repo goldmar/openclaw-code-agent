@@ -134,30 +134,3 @@ export function buildNoChangeWakeMessage(args: {
     }),
   ].join("\n");
 }
-
-export function buildWorktreeDecisionSummary(diffSummary: {
-  changedFiles: string[];
-  commitMessages: Array<{ message: string }>;
-}): string[] {
-  const summaryLines: string[] = [];
-  const topFiles = diffSummary.changedFiles.slice(0, 3).map((file) => `\`${file}\``);
-  if (topFiles.length > 0) {
-    const remainingFiles = diffSummary.changedFiles.length - topFiles.length;
-    summaryLines.push(
-      remainingFiles > 0
-        ? `Touches ${topFiles.join(", ")} and ${remainingFiles} more file${remainingFiles === 1 ? "" : "s"}`
-        : `Touches ${topFiles.join(", ")}`,
-    );
-  }
-
-  const recentSubjects = [...new Set(
-    diffSummary.commitMessages
-      .map((commit) => commit.message.trim())
-      .filter(Boolean),
-  )].slice(0, 2);
-  if (recentSubjects.length > 0) {
-    summaryLines.push(`Recent work: ${recentSubjects.join("; ")}`);
-  }
-
-  return summaryLines;
-}

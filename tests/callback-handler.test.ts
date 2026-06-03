@@ -643,8 +643,116 @@ describe("createCallbackHandler()", () => {
 
     assert.deepEqual(result, { handled: true });
     assert.deepEqual(state.editedMessages, ["⏭️ Deferred for [ux-fix]"]);
-    assert.equal(state.buttonsCleared, 0);
+    assert.equal(state.buttonsCleared, 1);
     assert.equal(state.replies[0], "⏭️ Snoozed 24h");
+    assert.deepEqual(state.events, ["acknowledge", "editMessage", "clearButtons", "reply"]);
+  });
+
+  it("keeps Telegram worktree decision buttons when the action fails", async () => {
+    setSessionManager({
+      getActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
+      consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
+      resolve: () => undefined,
+      getPersistedSession: () => ({ name: "ux-fix" }),
+      snoozeWorktreeDecision: () => "Error: session no longer has a pending worktree decision.",
+    } as any);
+
+    const handler = createCallbackHandler();
+    const state = createCtx("token-snooze");
+    const result = await handler.handler(state.ctx as any);
+
+    assert.deepEqual(result, { handled: true });
+    assert.deepEqual(state.editedMessages, []);
+    assert.equal(state.buttonsCleared, 0);
+    assert.equal(state.replies[0], "Error: session no longer has a pending worktree decision.");
+    assert.deepEqual(state.events, ["acknowledge", "reply"]);
+  });
+
+  it("uses the same text-result predicate for snooze prompt cleanup and replies", async () => {
+    const cases = [
+      { result: "Error: session no longer has a pending worktree decision.", success: false, reply: "Error: session no longer has a pending worktree decision." },
+      { result: "Error without colon still comes from an internal failure path.", success: false, reply: "Error without colon still comes from an internal failure path." },
+      { result: "❌ Snooze failed because persisted state is unavailable.", success: false, reply: "❌ Snooze failed because persisted state is unavailable." },
+      { result: "⚠️ Snooze skipped because reminders are disabled.", success: false, reply: "⚠️ Snooze skipped because reminders are disabled." },
+    ];
+
+    for (const testCase of cases) {
+      setSessionManager({
+        getActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
+        consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
+        resolve: () => undefined,
+        getPersistedSession: () => ({ name: "ux-fix" }),
+        snoozeWorktreeDecision: () => testCase.result,
+      } as any);
+
+      const handler = createCallbackHandler();
+      const state = createCtx("token-snooze");
+      const result = await handler.handler(state.ctx as any);
+
+      assert.deepEqual(result, { handled: true });
+      assert.equal(state.buttonsCleared, testCase.success ? 1 : 0, testCase.result);
+      assert.deepEqual(state.editedMessages, testCase.success ? ["⏭️ Deferred for [ux-fix]"] : [], testCase.result);
+      assert.equal(state.replies[0], testCase.reply);
+    }
+  });
+
+  it("uses a friendly success reply for discard while preserving raw dismiss errors", async () => {
+    let shouldFail = false;
+    setSessionManager({
+      getActionToken: () => ({ sessionId: "sess-42", kind: "worktree-dismiss" }),
+      consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-dismiss" }),
+      resolve: () => undefined,
+      getPersistedSession: () => ({ name: "ux-fix" }),
+      dismissWorktree: async () => shouldFail
+        ? "Error: branch deletion failed."
+        : "🗑️ [ux-fix] Branch `agent/ux-fix` dismissed and permanently deleted.",
+    } as any);
+
+    const handler = createCallbackHandler();
+    const success = createCtx("token-dismiss");
+    const successResult = await handler.handler(success.ctx as any);
+
+    assert.deepEqual(successResult, { handled: true });
+    assert.deepEqual(success.editedMessages, ["🗑️ Discarded for [ux-fix]"]);
+    assert.equal(success.buttonsCleared, 1);
+    assert.equal(success.replies[0], "✅ Discarded");
+
+    shouldFail = true;
+    const failure = createCtx("token-dismiss");
+    const failureResult = await handler.handler(failure.ctx as any);
+
+    assert.deepEqual(failureResult, { handled: true });
+    assert.deepEqual(failure.editedMessages, []);
+    assert.equal(failure.buttonsCleared, 0);
+    assert.equal(failure.replies[0], "Error: branch deletion failed.");
+  });
+
+  it("uses the same text-result predicate for discard prompt cleanup and replies", async () => {
+    const cases = [
+      { result: "Error: branch deletion failed.", success: false, reply: "Error: branch deletion failed." },
+      { result: "Error without colon still comes from an internal failure path.", success: false, reply: "Error without colon still comes from an internal failure path." },
+      { result: "❌ Branch deletion failed.", success: false, reply: "❌ Branch deletion failed." },
+      { result: "⚠️ Discard skipped because worktree state changed.", success: false, reply: "⚠️ Discard skipped because worktree state changed." },
+    ];
+
+    for (const testCase of cases) {
+      setSessionManager({
+        getActionToken: () => ({ sessionId: "sess-42", kind: "worktree-dismiss" }),
+        consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-dismiss" }),
+        resolve: () => undefined,
+        getPersistedSession: () => ({ name: "ux-fix" }),
+        dismissWorktree: async () => testCase.result,
+      } as any);
+
+      const handler = createCallbackHandler();
+      const state = createCtx("token-dismiss");
+      const result = await handler.handler(state.ctx as any);
+
+      assert.deepEqual(result, { handled: true });
+      assert.equal(state.buttonsCleared, testCase.success ? 1 : 0, testCase.result);
+      assert.deepEqual(state.editedMessages, testCase.success ? ["🗑️ Discarded for [ux-fix]"] : [], testCase.result);
+      assert.equal(state.replies[0], testCase.reply);
+    }
   });
 
   it("resolves Discord worktree prompts via clearComponents text updates and replies ephemerally", async () => {
