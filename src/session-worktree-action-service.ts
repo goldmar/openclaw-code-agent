@@ -5,6 +5,14 @@ import { detectDefaultBranch, getDiffSummary } from "./worktree";
 
 type DiffSummary = NonNullable<ReturnType<typeof getDiffSummary>>;
 
+const RESOLVED_WORKTREE_STATES = new Set([
+  "merged",
+  "released",
+  "pr_open",
+  "dismissed",
+  "cleanup_failed",
+]);
+
 export type PlannedWorktreeAction =
   | { kind: "skip"; result: { notificationSent: boolean; worktreeRemoved: boolean } }
   | { kind: "notify"; label: string; message: string }
@@ -54,6 +62,16 @@ export class SessionWorktreeActionService {
     const sessionRef = getPrimarySessionLookupRef(session) ?? session.harnessSessionId;
     if (this.deps.isAlreadyMerged(sessionRef)) {
       console.info(`[SessionManager] handleWorktreeStrategy: session "${session.name}" already merged — skipping strategy handling`);
+      return { kind: "skip", result: { notificationSent: true, worktreeRemoved: false } };
+    }
+    const resolvedWorktreeState =
+      RESOLVED_WORKTREE_STATES.has(session.worktreeState)
+        ? session.worktreeState
+        : (session.worktreeLifecycle?.state && RESOLVED_WORKTREE_STATES.has(session.worktreeLifecycle.state)
+          ? session.worktreeLifecycle.state
+          : undefined);
+    if (resolvedWorktreeState && !(resolvedWorktreeState === "pr_open" && session.worktreeStrategy === "auto-pr")) {
+      console.info(`[SessionManager] handleWorktreeStrategy: session "${session.name}" worktree is ${session.worktreeLifecycle?.state ?? session.worktreeState} — skipping strategy handling`);
       return { kind: "skip", result: { notificationSent: true, worktreeRemoved: false } };
     }
     if (session.status !== "completed") {

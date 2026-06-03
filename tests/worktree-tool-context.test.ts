@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   formatWorktreeLifecycleState,
   formatWorktreePreserveReason,
+  getPersistedTargetMutationRefs,
   listWorktreeToolTargets,
   matchesWorktreeToolRef,
   resolveWorktreeToolLifecycle,
@@ -94,6 +95,33 @@ describe("worktree-tool-context", () => {
         persistedSession: { sessionId: "persisted-1", name: "feature-work" },
       },
     );
+  });
+
+  it("uses explicit persisted-session overrides when building mutation refs", () => {
+    const refs = getPersistedTargetMutationRefs({
+      activeSession: {
+        id: "active-runtime",
+        name: "active-name",
+        harnessSessionId: "active-harness",
+        backendRef: { kind: "claude-code", conversationId: "active-backend" },
+      } as any,
+      persistedSession: {
+        sessionId: "fresh-persisted",
+        name: "fresh-name",
+        harnessSessionId: "fresh-harness",
+        backendRef: { kind: "claude-code", conversationId: "fresh-backend" },
+      } as any,
+      sessionName: "active-name",
+    });
+
+    assert.deepEqual(refs, [
+      "fresh-persisted",
+      "fresh-backend",
+      "fresh-harness",
+      "active-runtime",
+      "active-backend",
+      "active-harness",
+    ]);
   });
 
   it("preserves persisted-only notification target identity and origin metadata", () => {

@@ -1,10 +1,11 @@
 import { Type } from "../tool-schema";
 import { existsSync } from "fs";
 import { sessionManager } from "../singletons";
-import type { OpenClawPluginToolContext } from "../types";
+import type { OpenClawPluginToolContext, PersistedSessionInfo } from "../types";
 import type { DiffSummary } from "../worktree";
 import { getDiffSummary, createPR, pushBranch, isGitHubCLIAvailable, detectDefaultBranch, syncWorktreePR, commentOnPR, resolveTargetRepo, formatWorktreeOutcomeLine } from "../worktree";
-import { resolveWorktreeToolTarget } from "./worktree-tool-context";
+import { buildMergedPatch, buildPrOpenPatch } from "../worktree-session-patches";
+import { getPersistedTargetMutationRefs, resolveWorktreeToolTarget } from "./worktree-tool-context";
 
 interface AgentPrParams {
   session: string;
@@ -441,7 +442,30 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
       }
 
       const baseBranch = params.base_branch ?? detectDefaultBranch(originalWorkdir);
-      const persistedRef = target.persistedRef;
+      const persistPrOpen = (args: {
+        prUrl: string;
+        prNumber?: number;
+        targetRepo?: string;
+        disposition?: "pr-opened";
+      }) => {
+        const patch = buildPrOpenPatch(
+          {
+            worktreeBaseBranch: persistedSession?.worktreeBaseBranch ?? targetSession?.worktreeBaseBranch ?? baseBranch,
+            worktreePrTargetRepo: persistedSession?.worktreePrTargetRepo ?? targetSession?.worktreePrTargetRepo,
+            worktreePushRemote: persistedSession?.worktreePushRemote ?? targetSession?.worktreePushRemote,
+          },
+          {
+            prUrl: args.prUrl,
+            prNumber: args.prNumber,
+            baseBranch,
+            targetRepo: args.targetRepo,
+            disposition: args.disposition,
+          },
+        );
+        for (const mutationRef of getPersistedTargetMutationRefs(target)) {
+          sessionManager.updatePersistedSession(mutationRef, patch);
+        }
+      };
 
       // Resolve target repository for cross-repo PRs
       const targetRepo = resolveTargetRepo(originalWorkdir, params.target_repo ?? persistedSession?.worktreePrTargetRepo);
@@ -455,7 +479,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
       const prStatus = syncWorktreePR(originalWorkdir, branchName, targetRepo);
 
       // Handle force_new parameter
-        if (params.force_new && prStatus.exists) {
+      if (params.force_new && prStatus.exists) {
         return {
           content: [{
             type: "text",
@@ -496,23 +520,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
 
           if (commented) {
             // Update persisted metadata
-            if (persistedRef) {
-              sessionManager.updatePersistedSession(persistedRef, {
-                worktreePrUrl: prStatus.url,
-                worktreePrNumber: prStatus.number,
-                lifecycle: "terminal",
-                worktreeState: "pr_open",
-                pendingWorktreeDecisionSince: undefined,
-                lastWorktreeReminderAt: undefined,
-                worktreeLifecycle: {
-                  state: "pr_open",
-                  updatedAt: new Date().toISOString(),
-                  baseBranch,
-                  targetRepo,
-                  pushRemote: persistedSession?.worktreePushRemote,
-                },
-              });
-            }
+            persistPrOpen({ prUrl: prStatus.url, prNumber: prStatus.number, targetRepo });
             const updateOutcomeLine = formatWorktreeOutcomeLine({
               kind: "pr-updated",
               branch: branchName,
@@ -554,23 +562,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
           }
         } else {
           // No new commits
-          if (persistedRef) {
-            sessionManager.updatePersistedSession(persistedRef, {
-              worktreePrUrl: prStatus.url,
-              worktreePrNumber: prStatus.number,
-              lifecycle: "terminal",
-              worktreeState: "pr_open",
-              pendingWorktreeDecisionSince: undefined,
-              lastWorktreeReminderAt: undefined,
-              worktreeLifecycle: {
-                state: "pr_open",
-                updatedAt: new Date().toISOString(),
-                baseBranch,
-                targetRepo,
-                pushRemote: persistedSession?.worktreePushRemote,
-              },
-            });
-          }
+          persistPrOpen({ prUrl: prStatus.url, prNumber: prStatus.number, targetRepo });
           return {
             content: [{
               type: "text",
@@ -582,27 +574,22 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
         }
       } else if (prStatus.exists && prStatus.state === "merged") {
         // Case: PR was merged
-        if (persistedRef) {
-          sessionManager.updatePersistedSession(persistedRef, {
-            worktreePrUrl: prStatus.url,
-            worktreePrNumber: prStatus.number,
-            worktreeMerged: true,
-            worktreeMergedAt: new Date().toISOString(),
-            lifecycle: "terminal",
-            worktreeState: "merged",
-            pendingWorktreeDecisionSince: undefined,
-            lastWorktreeReminderAt: undefined,
-            worktreeDisposition: "merged",
-            worktreeLifecycle: {
-              state: "merged",
-              updatedAt: new Date().toISOString(),
-              resolvedAt: new Date().toISOString(),
-              resolutionSource: "agent_pr",
-              baseBranch,
-              targetRepo,
-              pushRemote: persistedSession?.worktreePushRemote,
-            },
-          });
+        const mergedPatch: Partial<PersistedSessionInfo> = {
+          ...buildMergedPatch({
+            worktreeBaseBranch: persistedSession?.worktreeBaseBranch ?? targetSession?.worktreeBaseBranch ?? baseBranch,
+            worktreePrTargetRepo: persistedSession?.worktreePrTargetRepo ?? targetSession?.worktreePrTargetRepo,
+            worktreePushRemote: persistedSession?.worktreePushRemote ?? targetSession?.worktreePushRemote,
+          }, {
+            resolutionSource: "agent_pr",
+            clearResolverSessionId: true,
+          }),
+          worktreePrUrl: prStatus.url,
+          worktreePrNumber: prStatus.number,
+          worktreeDisposition: "merged",
+          worktreeDecisionSnoozedUntil: undefined,
+        };
+        for (const mutationRef of getPersistedTargetMutationRefs(target)) {
+          sessionManager.updatePersistedSession(mutationRef, mergedPatch);
         }
         return {
           content: [{
@@ -667,24 +654,12 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
           const newPrStatus = syncWorktreePR(originalWorkdir, branchName, targetRepo);
 
           // Persist PR URL and number
-          if (persistedRef) {
-            sessionManager.updatePersistedSession(persistedRef, {
-              worktreePrUrl: prResult.prUrl,
-              worktreePrNumber: newPrStatus.number,
-              lifecycle: "terminal",
-              pendingWorktreeDecisionSince: undefined,
-              lastWorktreeReminderAt: undefined,
-              worktreeState: "pr_open",
-              worktreeDisposition: "pr-opened",
-              worktreeLifecycle: {
-                state: "pr_open",
-                updatedAt: new Date().toISOString(),
-                baseBranch,
-                targetRepo,
-                pushRemote: persistedSession?.worktreePushRemote,
-              },
-            });
-          }
+          persistPrOpen({
+            prUrl: prResult.prUrl,
+            prNumber: newPrStatus.number,
+            targetRepo,
+            disposition: "pr-opened",
+          });
 
           // Notify via unified outcome pipeline
           const outcomeLine = formatWorktreeOutcomeLine({

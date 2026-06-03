@@ -134,6 +134,65 @@ describe("prepareSessionBootstrap()", () => {
     }
   });
 
+  it("defaults resumed PR-open worktrees to auto-pr follow-through", () => {
+    const repoDir = mkdtempSync(join(tmpdir(), "session-bootstrap-pr-open-followup-"));
+    try {
+      git(repoDir, "init", "-b", "main");
+      git(repoDir, "config", "user.name", "Test User");
+      git(repoDir, "config", "user.email", "test@example.com");
+      writeFileSync(join(repoDir, "README.md"), "hello\n", "utf-8");
+      git(repoDir, "add", "README.md");
+      git(repoDir, "commit", "-m", "init");
+
+      const worktreePath = createWorktree(repoDir, "pr-open-followup");
+      const branchName = getBranchName(worktreePath);
+      assert.ok(branchName, "worktree branch should exist");
+
+      const config: SessionConfig = {
+        prompt: "Address review feedback on the existing PR.",
+        workdir: repoDir,
+        resumeWorktreeFrom: "pr-open-session",
+        multiTurn: true,
+        route: {
+          provider: "telegram",
+          target: "12345",
+          sessionKey: "agent:main:telegram:group:12345",
+        },
+      };
+
+      const bootstrap = prepareSessionBootstrap(
+        config,
+        "pr-open-followup",
+        (ref): PersistedSessionInfo | undefined => {
+          if (ref !== "pr-open-session") return undefined;
+          return {
+            harnessSessionId: "backend-pr-open",
+            sessionId: "pr-open-session",
+            name: "pr-open-followup",
+            prompt: "Original prompt",
+            workdir: repoDir,
+            status: "completed",
+            costUsd: 0,
+            worktreePath,
+            worktreeBranch: branchName,
+            worktreeStrategy: "ask",
+            worktreePrUrl: "https://github.com/goldmar/openclaw-code-agent/pull/155",
+            worktreeLifecycle: {
+              state: "pr_open",
+              updatedAt: "2026-06-03T12:00:00.000Z",
+              resolutionSource: "agent_pr",
+            },
+          };
+        },
+      );
+
+      assert.equal(bootstrap.actualWorkdir, worktreePath);
+      assert.equal(config.worktreeStrategy, "auto-pr");
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
   it("creates a plugin-managed worktree for fresh Codex worktree launches", () => {
     const repoDir = mkdtempSync(join(tmpdir(), "session-bootstrap-codex-native-"));
     try {

@@ -4,6 +4,7 @@ import {
   buildMergeConflictResolvingPatch,
   buildMergedPatch,
   buildPendingDecisionPatch,
+  buildPrOpenPatch,
 } from "../src/worktree-session-patches";
 
 const CONTEXT = {
@@ -79,6 +80,34 @@ describe("worktree session patch helpers", () => {
       resolutionSource: "agent_merge",
       baseBranch: "main",
       targetRepo: "openai/codex",
+      pushRemote: "origin",
+    });
+  });
+
+  it("builds a canonical PR-open transition that resolves pending decisions", () => {
+    const patch = buildPrOpenPatch(CONTEXT, {
+      prUrl: "https://github.com/openai/codex/pull/154",
+      prNumber: 154,
+      updatedAt: "2026-04-10T10:15:00.000Z",
+      targetRepo: "goldmar/openclaw-code-agent",
+      baseBranch: "main",
+      disposition: "pr-opened",
+    });
+
+    assert.equal(patch.lifecycle, "terminal");
+    assert.equal(patch.worktreeState, "pr_open");
+    assert.equal(patch.worktreePrUrl, "https://github.com/openai/codex/pull/154");
+    assert.equal(patch.worktreePrNumber, 154);
+    assert.equal(patch.worktreeDisposition, "pr-opened");
+    assert.equal(patch.pendingWorktreeDecisionSince, undefined);
+    assert.equal(patch.lastWorktreeReminderAt, undefined);
+    assert.equal(patch.worktreeDecisionSnoozedUntil, undefined);
+    assert.deepEqual(patch.worktreeLifecycle, {
+      state: "pr_open",
+      updatedAt: "2026-04-10T10:15:00.000Z",
+      resolutionSource: "agent_pr",
+      baseBranch: "main",
+      targetRepo: "goldmar/openclaw-code-agent",
       pushRemote: "origin",
     });
   });

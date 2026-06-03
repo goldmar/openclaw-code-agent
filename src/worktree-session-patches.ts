@@ -104,3 +104,39 @@ export function buildMergedPatch(
   }
   return patch;
 }
+
+export function buildPrOpenPatch(
+  context: WorktreeTransitionContext,
+  options: {
+    prUrl: string;
+    prNumber?: number;
+    updatedAt?: string;
+    targetRepo?: string;
+    baseBranch?: string;
+    disposition?: "pr-opened";
+  },
+): Partial<PersistedSessionInfo> {
+  const updatedAt = options.updatedAt ?? new Date().toISOString();
+  const patch: Partial<PersistedSessionInfo> = {
+    worktreePrUrl: options.prUrl,
+    lifecycle: "terminal",
+    worktreeState: "pr_open",
+    pendingWorktreeDecisionSince: undefined,
+    lastWorktreeReminderAt: undefined,
+    worktreeDecisionSnoozedUntil: undefined,
+    worktreeLifecycle: buildLifecycle(context, {
+      state: "pr_open",
+      updatedAt,
+      resolutionSource: "agent_pr",
+      baseBranch: options.baseBranch,
+      targetRepo: options.targetRepo,
+    }),
+  };
+  if (options.prNumber !== undefined) {
+    patch.worktreePrNumber = options.prNumber;
+  }
+  if (options.disposition !== undefined) {
+    patch.worktreeDisposition = options.disposition;
+  }
+  return patch;
+}
