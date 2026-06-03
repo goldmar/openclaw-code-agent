@@ -65,6 +65,58 @@ function createMergeableWorktree(name: string): {
 }
 
 describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
+  it("does not re-emit an ask-mode worktree prompt after the worktree is PR-open", async () => {
+    const notifications: Array<Record<string, unknown>> = [];
+    const service = new SessionWorktreeStrategyService({
+      shouldRunWorktreeStrategy: () => true,
+      isAlreadyMerged: () => false,
+      resolveWorktreeRepoDir: () => {
+        throw new Error("PR-open worktrees should be resolved before repo planning");
+      },
+      getWorktreeCompletionState: () => {
+        throw new Error("PR-open worktrees should not be inspected for a new decision");
+      },
+      updatePersistedSession: () => true,
+      dispatchSessionNotification: (_session, request) => {
+        notifications.push(request as Record<string, unknown>);
+      },
+      getOutputPreview: () => "",
+      originThreadLine: () => "thread",
+      getWorktreeDecisionButtons: () => [[{ label: "Update PR", callbackData: "update-pr" }]],
+      makeOpenPrButton: () => ({ label: "Open PR", callbackData: "open-pr" }),
+      worktreeMessages: new SessionWorktreeMessageService(),
+      enqueueMerge: async (_repoDir, fn) => { await fn(); },
+      mergeBranch,
+      spawnConflictResolver: async () => ({ id: "resolver-pr-open", name: "unused" }),
+      runAutoPr: async () => ({ success: true }),
+    });
+
+    const session: any = {
+      id: "s-pr-open",
+      name: "pr-open",
+      status: "completed",
+      phase: "implementing",
+      lifecycle: "awaiting_worktree_decision",
+      worktreeState: "pending_decision",
+      worktreeLifecycle: {
+        state: "pr_open",
+        updatedAt: "2026-06-03T12:00:00.000Z",
+        resolutionSource: "agent_pr",
+      },
+      pendingWorktreeDecisionSince: "2026-06-03T11:55:00.000Z",
+      originalWorkdir: "/tmp/repo",
+      worktreePath: "/tmp/repo/.worktrees/pr-open",
+      worktreeBranch: "agent/pr-open",
+      worktreeStrategy: "ask",
+      pendingPlanApproval: false,
+    };
+
+    const result = await service.handleWorktreeStrategy(session);
+
+    assert.deepEqual(result, { notificationSent: true, worktreeRemoved: false });
+    assert.equal(notifications.length, 0);
+  });
+
   it("requests a routed follow-up summary after auto-merge succeeds", async () => {
     const { repoDir, worktreePath, branchName } = createMergeableWorktree("summary-success");
     try {

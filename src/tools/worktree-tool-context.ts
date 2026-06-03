@@ -58,7 +58,9 @@ export function resolveWorktreeToolTarget(sessionManager: SessionManager, ref: s
 }
 
 export function getPersistedTargetMutationRefs(target: ResolvedWorktreeToolTarget): string[] {
-  return target.persistedSession ? getPersistedMutationRefs(target.persistedSession) : [];
+  return target.activeSession
+    ? getPersistedMutationRefs(target.activeSession)
+    : (target.persistedSession ? getPersistedMutationRefs(target.persistedSession) : []);
 }
 
 export interface WorktreeToolListingTarget {
