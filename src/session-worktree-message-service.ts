@@ -87,9 +87,10 @@ export class SessionWorktreeMessageService {
     baseBranch: string;
     diffSummary: DiffSummary;
     buttons?: NotificationButton[][];
+    outputPreview?: string;
   }): SessionNotificationRequest {
-    const { session, branchName, baseBranch, diffSummary, buttons } = args;
-    const summaryLines = buildWorktreeDecisionSummary(diffSummary);
+    const { session, branchName, baseBranch, diffSummary, buttons, outputPreview } = args;
+    const summaryLines = buildWorktreeDecisionSummary(diffSummary, outputPreview);
     const commitLines = diffSummary.commitMessages
       .slice(0, 5)
       .map((commit) => `• ${commit.hash} ${commit.message} (${commit.author})`);

@@ -138,7 +138,10 @@ export function buildNoChangeWakeMessage(args: {
 export function buildWorktreeDecisionSummary(diffSummary: {
   changedFiles: string[];
   commitMessages: Array<{ message: string }>;
-}): string[] {
+}, outputPreview?: string): string[] {
+  const previewLines = extractWorktreeDecisionPreviewLines(outputPreview);
+  if (previewLines.length > 0) return previewLines;
+
   const summaryLines: string[] = [];
   const topFiles = diffSummary.changedFiles.slice(0, 3).map((file) => `\`${file}\``);
   if (topFiles.length > 0) {
@@ -160,4 +163,40 @@ export function buildWorktreeDecisionSummary(diffSummary: {
   }
 
   return summaryLines;
+}
+
+function extractWorktreeDecisionPreviewLines(outputPreview: string | undefined): string[] {
+  const text = outputPreview?.trim();
+  if (!text) return [];
+
+  return text
+    .split("\n")
+    .map(normalizeDecisionPreviewLine)
+    .filter((line) => line.length >= 12)
+    .filter((line) => !isLowSignalDecisionPreviewLine(line))
+    .slice(-6)
+    .slice(0, 3)
+    .map((line) => truncateDecisionPreviewLine(line, 180));
+}
+
+function normalizeDecisionPreviewLine(line: string): string {
+  return line
+    .trim()
+    .replace(/^#{1,6}\s+/, "")
+    .replace(/^[-*•]\s+/, "")
+    .replace(/^\d+[.)]\s+/, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isLowSignalDecisionPreviewLine(line: string): boolean {
+  return /^(done|no_reply|summary|changed files?|tests?|verification|next steps?)[:.]?$/i.test(line)
+    || /^```/.test(line)
+    || /^\[?session\b/i.test(line)
+    || /^tokens used:/i.test(line);
+}
+
+function truncateDecisionPreviewLine(line: string, maxLength: number): string {
+  if (line.length <= maxLength) return line;
+  return `${line.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
 }

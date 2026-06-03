@@ -643,8 +643,29 @@ describe("createCallbackHandler()", () => {
 
     assert.deepEqual(result, { handled: true });
     assert.deepEqual(state.editedMessages, ["⏭️ Deferred for [ux-fix]"]);
-    assert.equal(state.buttonsCleared, 0);
+    assert.equal(state.buttonsCleared, 1);
     assert.equal(state.replies[0], "⏭️ Snoozed 24h");
+    assert.deepEqual(state.events, ["acknowledge", "editMessage", "clearButtons", "reply"]);
+  });
+
+  it("keeps Telegram worktree decision buttons when the action fails", async () => {
+    setSessionManager({
+      getActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
+      consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
+      resolve: () => undefined,
+      getPersistedSession: () => ({ name: "ux-fix" }),
+      snoozeWorktreeDecision: () => "Error: session no longer has a pending worktree decision.",
+    } as any);
+
+    const handler = createCallbackHandler();
+    const state = createCtx("token-snooze");
+    const result = await handler.handler(state.ctx as any);
+
+    assert.deepEqual(result, { handled: true });
+    assert.deepEqual(state.editedMessages, []);
+    assert.equal(state.buttonsCleared, 0);
+    assert.equal(state.replies[0], "Error: session no longer has a pending worktree decision.");
+    assert.deepEqual(state.events, ["acknowledge", "reply"]);
   });
 
   it("resolves Discord worktree prompts via clearComponents text updates and replies ephemerally", async () => {

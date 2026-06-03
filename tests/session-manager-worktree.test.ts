@@ -553,6 +553,11 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
         worktreeStrategy: "ask",
         worktreeBaseBranch: "main",
         pendingPlanApproval: false,
+        getOutput: () => [
+          "Implemented a richer worktree decision prompt using the agent's completion summary.",
+          "Changed src/session-worktree-message-service.ts and src/session-notification-builders/worktree.ts.",
+          "Verified with focused regression tests for summary quality and callback cleanup.",
+        ],
       };
       (sm as any).sessions.set(session.id, session);
 
@@ -564,8 +569,10 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       const [_sessionArg, request] = calls[0];
       assert.equal(request.label, "worktree-merge-ask");
       assert.match(request.userMessage, /Summary:/);
-      assert.match(request.userMessage, /Touches `README.md`, `src-note.txt`/);
-      assert.match(request.userMessage, /Recent work: tighten worktree decision UX/);
+      assert.match(request.userMessage, /Implemented a richer worktree decision prompt using the agent's completion summary/);
+      assert.match(request.userMessage, /Changed src\/session-worktree-message-service\.ts and src\/session-notification-builders\/worktree\.ts/);
+      assert.match(request.userMessage, /Verified with focused regression tests for summary quality and callback cleanup/);
+      assert.doesNotMatch(request.userMessage, /Touches `README\.md`, `src-note\.txt`/);
       assert.match(request.wakeMessageOnNotifySuccess, /Session: ask-summary \| ID: s-ask-summary/);
       assert.match(request.wakeMessageOnNotifySuccess, /Branch: `agent\/ask-summary` → `main`/);
       assert.deepEqual(

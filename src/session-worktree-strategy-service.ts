@@ -279,6 +279,7 @@ export class SessionWorktreeStrategyService {
       branchName,
       baseBranch,
       diffSummary,
+      outputPreview: this.deps.getOutputPreview(session),
       buttons: this.deps.getWorktreeDecisionButtons(session.id),
     }));
     this.markPendingDecision(session);
