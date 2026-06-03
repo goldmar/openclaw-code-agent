@@ -110,8 +110,12 @@ function restoreResumeWorktreeContext(
     return persistedSession.workdir;
   })();
 
-  if (!config.worktreeStrategy && persistedSession.worktreeStrategy) {
-    config.worktreeStrategy = persistedSession.worktreeStrategy;
+  if (!config.worktreeStrategy) {
+    if (persistedSession.worktreeLifecycle?.state === "pr_open" || persistedSession.worktreePrUrl) {
+      config.worktreeStrategy = "auto-pr";
+    } else if (persistedSession.worktreeStrategy) {
+      config.worktreeStrategy = persistedSession.worktreeStrategy;
+    }
   }
   if (!config.planApproval && persistedSession.planApproval) {
     config.planApproval = persistedSession.planApproval;

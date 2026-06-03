@@ -64,7 +64,13 @@ export class SessionWorktreeActionService {
       console.info(`[SessionManager] handleWorktreeStrategy: session "${session.name}" already merged — skipping strategy handling`);
       return { kind: "skip", result: { notificationSent: true, worktreeRemoved: false } };
     }
-    if (RESOLVED_WORKTREE_STATES.has(session.worktreeState) || (session.worktreeLifecycle?.state && RESOLVED_WORKTREE_STATES.has(session.worktreeLifecycle.state))) {
+    const resolvedWorktreeState =
+      RESOLVED_WORKTREE_STATES.has(session.worktreeState)
+        ? session.worktreeState
+        : (session.worktreeLifecycle?.state && RESOLVED_WORKTREE_STATES.has(session.worktreeLifecycle.state)
+          ? session.worktreeLifecycle.state
+          : undefined);
+    if (resolvedWorktreeState && !(resolvedWorktreeState === "pr_open" && session.worktreeStrategy === "auto-pr")) {
       console.info(`[SessionManager] handleWorktreeStrategy: session "${session.name}" worktree is ${session.worktreeLifecycle?.state ?? session.worktreeState} — skipping strategy handling`);
       return { kind: "skip", result: { notificationSent: true, worktreeRemoved: false } };
     }

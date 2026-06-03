@@ -1,10 +1,10 @@
 import { Type } from "../tool-schema";
 import { existsSync } from "fs";
 import { sessionManager } from "../singletons";
-import type { OpenClawPluginToolContext } from "../types";
+import type { OpenClawPluginToolContext, PersistedSessionInfo } from "../types";
 import type { DiffSummary } from "../worktree";
 import { getDiffSummary, createPR, pushBranch, isGitHubCLIAvailable, detectDefaultBranch, syncWorktreePR, commentOnPR, resolveTargetRepo, formatWorktreeOutcomeLine } from "../worktree";
-import { buildPrOpenPatch } from "../worktree-session-patches";
+import { buildMergedPatch, buildPrOpenPatch } from "../worktree-session-patches";
 import { getPersistedTargetMutationRefs, resolveWorktreeToolTarget } from "./worktree-tool-context";
 
 interface AgentPrParams {
@@ -442,7 +442,6 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
       }
 
       const baseBranch = params.base_branch ?? detectDefaultBranch(originalWorkdir);
-      const persistedRef = target.persistedRef;
       const persistPrOpen = (args: {
         prUrl: string;
         prNumber?: number;
@@ -480,7 +479,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
       const prStatus = syncWorktreePR(originalWorkdir, branchName, targetRepo);
 
       // Handle force_new parameter
-        if (params.force_new && prStatus.exists) {
+      if (params.force_new && prStatus.exists) {
         return {
           content: [{
             type: "text",
@@ -575,27 +574,22 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
         }
       } else if (prStatus.exists && prStatus.state === "merged") {
         // Case: PR was merged
-        if (persistedRef) {
-          sessionManager.updatePersistedSession(persistedRef, {
-            worktreePrUrl: prStatus.url,
-            worktreePrNumber: prStatus.number,
-            worktreeMerged: true,
-            worktreeMergedAt: new Date().toISOString(),
-            lifecycle: "terminal",
-            worktreeState: "merged",
-            pendingWorktreeDecisionSince: undefined,
-            lastWorktreeReminderAt: undefined,
-            worktreeDisposition: "merged",
-            worktreeLifecycle: {
-              state: "merged",
-              updatedAt: new Date().toISOString(),
-              resolvedAt: new Date().toISOString(),
-              resolutionSource: "agent_pr",
-              baseBranch,
-              targetRepo,
-              pushRemote: persistedSession?.worktreePushRemote,
-            },
-          });
+        const mergedPatch: Partial<PersistedSessionInfo> = {
+          ...buildMergedPatch({
+            worktreeBaseBranch: persistedSession?.worktreeBaseBranch ?? targetSession?.worktreeBaseBranch ?? baseBranch,
+            worktreePrTargetRepo: persistedSession?.worktreePrTargetRepo ?? targetSession?.worktreePrTargetRepo,
+            worktreePushRemote: persistedSession?.worktreePushRemote ?? targetSession?.worktreePushRemote,
+          }, {
+            resolutionSource: "agent_pr",
+            clearResolverSessionId: true,
+          }),
+          worktreePrUrl: prStatus.url,
+          worktreePrNumber: prStatus.number,
+          worktreeDisposition: "merged",
+          worktreeDecisionSnoozedUntil: undefined,
+        };
+        for (const mutationRef of getPersistedTargetMutationRefs(target)) {
+          sessionManager.updatePersistedSession(mutationRef, mergedPatch);
         }
         return {
           content: [{
