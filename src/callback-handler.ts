@@ -70,7 +70,7 @@ function toolResultSucceeded(result: unknown): boolean {
 }
 
 function worktreeActionTextSucceeded(text: string): boolean {
-  return !/^\s*(?:Error:|❌|⚠️)/.test(text);
+  return !/^\s*(?:Error\b:?|❌|⚠️)/.test(text);
 }
 
 function isPlanDecisionAction(kind: SessionActionKind): boolean {
@@ -344,19 +344,21 @@ export function createCallbackHandler(channel: InteractiveChannel = "telegram") 
 
         case "worktree-decide-later": {
           const result = sessionManager.snoozeWorktreeDecision(sessionId);
-          if (worktreeActionTextSucceeded(result)) {
+          const succeeded = worktreeActionTextSucceeded(result);
+          if (succeeded) {
             await resolveWorktreePrompt(ctx, `⏭️ Deferred for [${actionSessionName}]`, callbackAcknowledged);
           }
-          await replyText(ctx, result.startsWith("Error") ? result : "⏭️ Snoozed 24h");
+          await replyText(ctx, succeeded ? "⏭️ Snoozed 24h" : result);
           break;
         }
 
         case "worktree-dismiss": {
           const result = await sessionManager.dismissWorktree(sessionId);
-          if (worktreeActionTextSucceeded(result)) {
+          const succeeded = worktreeActionTextSucceeded(result);
+          if (succeeded) {
             await resolveWorktreePrompt(ctx, `🗑️ Discarded for [${actionSessionName}]`, callbackAcknowledged);
           }
-          await replyText(ctx, result.startsWith("Error") ? result : "✅ Discarded");
+          await replyText(ctx, succeeded ? "✅ Discarded" : result);
           break;
         }
 
