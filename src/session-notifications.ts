@@ -25,14 +25,27 @@ export interface WorktreeOutcomeNotificationOptions {
   detailLines?: string[];
 }
 
+export interface SessionNotificationServiceOptions {
+  maxCompletedCompletionWakeKeys?: number;
+}
+
+const DEFAULT_MAX_COMPLETED_COMPLETION_WAKE_KEYS = 1024;
+
 export class SessionNotificationService {
   private readonly inFlightCompletionWakes = new Set<string>();
-  private readonly completedCompletionWakes = new Set<string>();
+  private readonly completedCompletionWakes = new Map<string, true>();
+  private readonly maxCompletedCompletionWakeKeys: number;
 
   constructor(
     private readonly wakeDispatcher: WakeDispatcher,
     private readonly applyPersistedPatch: (ref: string, patch: Partial<PersistedSessionInfo>) => void,
-  ) {}
+    options: SessionNotificationServiceOptions = {},
+  ) {
+    this.maxCompletedCompletionWakeKeys = Math.max(
+      1,
+      Math.floor(options.maxCompletedCompletionWakeKeys ?? DEFAULT_MAX_COMPLETED_COMPLETION_WAKE_KEYS),
+    );
+  }
 
   dispatch(
     session: RoutableSession | PersistedRoutingSession,
@@ -231,7 +244,13 @@ export class SessionNotificationService {
     if (!key) return;
     this.inFlightCompletionWakes.delete(key);
     if (completed) {
-      this.completedCompletionWakes.add(key);
+      this.completedCompletionWakes.delete(key);
+      this.completedCompletionWakes.set(key, true);
+      while (this.completedCompletionWakes.size > this.maxCompletedCompletionWakeKeys) {
+        const oldestKey = this.completedCompletionWakes.keys().next().value;
+        if (oldestKey === undefined) break;
+        this.completedCompletionWakes.delete(oldestKey);
+      }
     }
   }
 }

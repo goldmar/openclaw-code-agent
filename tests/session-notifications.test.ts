@@ -345,6 +345,58 @@ describe("SessionNotificationService", () => {
     assert.equal(patches.filter(({ patch }) => patch.completionWakeSucceededAt).length, 1);
   });
 
+  it("bounds completed completion wake keys while retaining recent duplicate suppression", () => {
+    const requests: Array<Record<string, unknown>> = [];
+    const skippedReasons: string[] = [];
+    const fakeDispatcher = {
+      dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, (reason?: string) => void> }) => {
+        requests.push(request as Record<string, unknown>);
+        request.hooks?.onNotifyStarted?.();
+        request.hooks?.onNotifySucceeded?.();
+        request.hooks?.onWakeStarted?.();
+        request.hooks?.onWakeSucceeded?.();
+      },
+      dispose: () => {},
+    };
+
+    const service = new SessionNotificationService(
+      fakeDispatcher as any,
+      () => {},
+      { maxCompletedCompletionWakeKeys: 2 },
+    );
+    const session = { id: "session-bounded-completion-wakes", harnessSessionId: "h-bounded-completion-wakes" } as any;
+    const requestFor = (wakeMessageOnNotifySuccess: string) => ({
+      label: "completed",
+      userMessage: "done",
+      wakeMessageOnNotifySuccess,
+      completionWakeSummaryRequired: true,
+      notifyUser: "always" as const,
+      hooks: {
+        onWakeSkipped: (reason?: string) => {
+          skippedReasons.push(reason ?? "");
+        },
+      },
+    });
+
+    service.dispatch(session, requestFor("wake: summary A"));
+    service.dispatch(session, requestFor("wake: summary A"));
+    service.dispatch(session, requestFor("wake: summary B"));
+    service.dispatch(session, requestFor("wake: summary C"));
+    service.dispatch(session, requestFor("wake: summary B"));
+    service.dispatch(session, requestFor("wake: summary C"));
+    service.dispatch(session, requestFor("wake: summary A"));
+
+    assert.deepEqual(
+      requests.map((request) => request.wakeMessageOnNotifySuccess),
+      ["wake: summary A", "wake: summary B", "wake: summary C", "wake: summary A"],
+    );
+    assert.deepEqual(skippedReasons, [
+      "duplicate completion follow-up wake already handled",
+      "duplicate completion follow-up wake already handled",
+      "duplicate completion follow-up wake already handled",
+    ]);
+  });
+
   it("suppresses duplicate completion follow-up wakes while the first wake is still in flight", () => {
     const patches: Array<{ ref: string; patch: Record<string, unknown> }> = [];
     const requests: Array<Record<string, unknown>> = [];
