@@ -21,6 +21,7 @@ function createCtx(
   const events: string[] = [];
   let callbacksAcknowledged = 0;
   let buttonsCleared = 0;
+  let buttonMarkupEdits = 0;
   let componentsCleared = 0;
   const ctx = channel === "telegram"
     ? {
@@ -48,6 +49,7 @@ function createCtx(
           acknowledge: async () => { callbacksAcknowledged++; events.push("acknowledge"); },
           reply: async ({ text }: { text: string }) => { replies.push(text); events.push("reply"); },
           clearButtons: async () => { buttonsCleared++; events.push("clearButtons"); },
+          editButtons: async () => { buttonMarkupEdits++; events.push("editButtons"); },
           editMessage: async ({ text }: { text: string }) => { editedMessages.push(text); events.push("editMessage"); },
         },
       }
@@ -79,6 +81,9 @@ function createCtx(
     },
     get callbacksAcknowledged() {
       return callbacksAcknowledged;
+    },
+    get buttonMarkupEdits() {
+      return buttonMarkupEdits;
     },
     get componentsCleared() {
       return componentsCleared;
@@ -1108,6 +1113,7 @@ describe("createCallbackHandler()", () => {
 
     assert.deepEqual(result, { handled: true });
     assert.equal(state.buttonsCleared, 1);
+    assert.equal(state.buttonMarkupEdits, 1);
     assert.equal((launches[0]?.route as { threadId?: string })?.threadId, TELEGRAM_FORUM_THREAD_ID);
     assert.equal((launches[0]?.route as { sessionKey?: string })?.sessionKey, TELEGRAM_FORUM_SESSION_KEY);
     assert.equal(launches[0]?.name, "plugin-readiness-v2026.5.18");
@@ -1173,6 +1179,7 @@ describe("createCallbackHandler()", () => {
     const result = await handler.handler(state.ctx as any);
 
     assert.deepEqual(result, { handled: true });
+    assert.equal(state.buttonMarkupEdits, 1);
     assert.equal(state.buttonsCleared, 1);
     assert.equal((launches[0]?.route as { target?: string })?.target, TELEGRAM_FORUM_TARGET);
     assert.equal((launches[0]?.route as { threadId?: string })?.threadId, TELEGRAM_FORUM_THREAD_ID);
@@ -1227,8 +1234,213 @@ describe("createCallbackHandler()", () => {
     assert.deepEqual(result, { handled: true });
     assert.equal(consumed, 1);
     assert.equal(launchCount, 0);
+    assert.equal(state.buttonMarkupEdits, 1);
     assert.equal(state.buttonsCleared, 1);
     assert.equal(state.replies[0], "✅ Dismissed.");
+  });
+
+  it("edits Telegram message markup as a fallback when plan-offer editButtons is unavailable", async () => {
+    const launches: Array<Record<string, unknown>> = [];
+    setSessionManager({
+      getActionToken: () => ({
+        sessionId: "plugin-readiness-v2026.5.28",
+        kind: "plan-offer-start",
+        route: {
+          provider: "telegram",
+          target: TELEGRAM_FORUM_TARGET,
+          threadId: TELEGRAM_FORUM_THREAD_ID,
+          sessionKey: TELEGRAM_FORUM_SESSION_KEY,
+        },
+        launchName: "plugin-readiness-v2026.5.28",
+        launchPrompt: "Plan the required follow-up.",
+        launchWorkdir: "/home/openclaw/workspace/openclaw-code-agent",
+        launchWorktreeStrategy: "auto-pr",
+      }),
+      consumeActionToken: () => ({
+        sessionId: "plugin-readiness-v2026.5.28",
+        kind: "plan-offer-start",
+        route: {
+          provider: "telegram",
+          target: TELEGRAM_FORUM_TARGET,
+          threadId: TELEGRAM_FORUM_THREAD_ID,
+          sessionKey: TELEGRAM_FORUM_SESSION_KEY,
+        },
+        launchName: "plugin-readiness-v2026.5.28",
+        launchPrompt: "Plan the required follow-up.",
+        launchWorkdir: "/home/openclaw/workspace/openclaw-code-agent",
+        launchWorktreeStrategy: "auto-pr",
+      }),
+      launchPlanOffer: (args: Record<string, unknown>) => {
+        launches.push(args);
+        return { id: "sess-plan-528", name: "plugin-readiness-v2026.5.28" };
+      },
+    } as any);
+
+    const events: string[] = [];
+    const replies: string[] = [];
+    const editedMessages: string[] = [];
+    let buttonsCleared = 0;
+    const ctx = {
+      channel: "telegram" as const,
+      auth: { isAuthorizedSender: true },
+      callback: {
+        data: "code-agent:plan-token",
+        payload: "plan-token",
+        messageText: "OpenClaw release monitor: v2026.6.1",
+      },
+      respond: {
+        acknowledge: async () => { events.push("acknowledge"); },
+        editMessage: async ({ text }: { text: string }) => { editedMessages.push(text); events.push("editMessage"); },
+        clearButtons: async () => { buttonsCleared++; events.push("clearButtons"); },
+        reply: async ({ text }: { text: string }) => { replies.push(text); events.push("reply"); },
+      },
+    };
+
+    const handler = createCallbackHandler();
+    const result = await handler.handler(ctx as any);
+
+    assert.deepEqual(result, { handled: true });
+    assert.equal(launches.length, 1);
+    assert.deepEqual(editedMessages, ["OpenClaw release monitor: v2026.6.1"]);
+    assert.equal(buttonsCleared, 1);
+    assert.match(replies[0], /Planning session started: plugin-readiness-v2026\.5\.28 \[sess-plan-528\]/);
+    assert.deepEqual(events, ["acknowledge", "editMessage", "clearButtons", "reply"]);
+  });
+
+  it("does not clear Start Plan buttons when the plan-offer launch truly fails", async () => {
+    setSessionManager({
+      getActionToken: () => ({
+        sessionId: "plugin-readiness-v2026.5.28",
+        kind: "plan-offer-start",
+        route: {
+          provider: "telegram",
+          target: TELEGRAM_FORUM_TARGET,
+          threadId: TELEGRAM_FORUM_THREAD_ID,
+          sessionKey: TELEGRAM_FORUM_SESSION_KEY,
+        },
+        launchName: "plugin-readiness-v2026.5.28",
+        launchPrompt: "Plan the required follow-up.",
+        launchWorkdir: "/home/openclaw/workspace/openclaw-code-agent",
+        launchWorktreeStrategy: "auto-pr",
+      }),
+      consumeActionToken: () => ({
+        sessionId: "plugin-readiness-v2026.5.28",
+        kind: "plan-offer-start",
+        route: {
+          provider: "telegram",
+          target: TELEGRAM_FORUM_TARGET,
+          threadId: TELEGRAM_FORUM_THREAD_ID,
+          sessionKey: TELEGRAM_FORUM_SESSION_KEY,
+        },
+        launchName: "plugin-readiness-v2026.5.28",
+        launchPrompt: "Plan the required follow-up.",
+        launchWorkdir: "/home/openclaw/workspace/openclaw-code-agent",
+        launchWorktreeStrategy: "auto-pr",
+      }),
+      launchPlanOffer: () => {
+        throw new Error("workdir is unavailable");
+      },
+    } as any);
+
+    const handler = createCallbackHandler();
+    const state = createCtx("plan-token", "telegram", {
+      telegramCallback: {
+        data: "code-agent:plan-token",
+        payload: "plan-token",
+      },
+    });
+    const result = await handler.handler(state.ctx as any);
+
+    assert.deepEqual(result, { handled: true });
+    assert.equal(state.buttonMarkupEdits, 0);
+    assert.equal(state.buttonsCleared, 0);
+    assert.equal(state.replies[0], "⚠️ Failed to start planning session: workdir is unavailable");
+  });
+
+  it("clears Start Plan buttons when consumed plan-offer tokens are missing launch context", async () => {
+    let launchCount = 0;
+    setSessionManager({
+      getActionToken: () => ({
+        sessionId: "plugin-readiness-v2026.5.28",
+        kind: "plan-offer-start",
+        route: {
+          provider: "telegram",
+          target: TELEGRAM_FORUM_TARGET,
+          threadId: TELEGRAM_FORUM_THREAD_ID,
+          sessionKey: TELEGRAM_FORUM_SESSION_KEY,
+        },
+      }),
+      consumeActionToken: () => ({
+        sessionId: "plugin-readiness-v2026.5.28",
+        kind: "plan-offer-start",
+        route: {
+          provider: "telegram",
+          target: TELEGRAM_FORUM_TARGET,
+          threadId: TELEGRAM_FORUM_THREAD_ID,
+          sessionKey: TELEGRAM_FORUM_SESSION_KEY,
+        },
+      }),
+      launchPlanOffer: () => {
+        launchCount++;
+        return { id: "unexpected", name: "unexpected" };
+      },
+    } as any);
+
+    const handler = createCallbackHandler();
+    const state = createCtx("plan-token", "telegram", {
+      telegramCallback: {
+        data: "code-agent:plan-token",
+        payload: "plan-token",
+      },
+    });
+    const result = await handler.handler(state.ctx as any);
+
+    assert.deepEqual(result, { handled: true });
+    assert.equal(launchCount, 0);
+    assert.equal(state.buttonMarkupEdits, 1);
+    assert.equal(state.buttonsCleared, 1);
+    assert.equal(state.replies[0], "⚠️ This action is missing the plan launch context.");
+    assert.deepEqual(state.events, ["acknowledge", "editButtons", "clearButtons", "reply"]);
+  });
+
+  it("clears Start Plan buttons quietly when an already-started plan-offer callback is retried", async () => {
+    let consumes = 0;
+    setSessionManager({
+      getActionToken: () => ({
+        sessionId: "plugin-readiness-v2026.5.28",
+        kind: "plan-offer-start",
+        consumedAt: Date.now(),
+        route: {
+          provider: "telegram",
+          target: TELEGRAM_FORUM_TARGET,
+          threadId: TELEGRAM_FORUM_THREAD_ID,
+          sessionKey: TELEGRAM_FORUM_SESSION_KEY,
+        },
+      }),
+      consumeActionToken: () => {
+        consumes++;
+        return undefined;
+      },
+      launchPlanOffer: () => {
+        throw new Error("should not relaunch");
+      },
+    } as any);
+
+    const handler = createCallbackHandler();
+    const state = createCtx("plan-token", "telegram", {
+      telegramCallback: {
+        data: "code-agent:plan-token",
+        payload: "plan-token",
+      },
+    });
+    const result = await handler.handler(state.ctx as any);
+
+    assert.deepEqual(result, { handled: true });
+    assert.equal(consumes, 1);
+    assert.equal(state.buttonMarkupEdits, 1);
+    assert.equal(state.buttonsCleared, 1);
+    assert.deepEqual(state.replies, []);
+    assert.doesNotMatch(state.replies.join("\n"), /code-agent:plan-token/);
   });
 
   it("blocks unauthorized Telegram topic callbacks before consuming the token", async () => {
