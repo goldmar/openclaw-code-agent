@@ -298,6 +298,93 @@ describe("SessionNotificationService", () => {
     assert.equal(lastPatch?.completionWakeSkipReason, "internal pipeline continuing");
   });
 
+  it("suppresses duplicate completion follow-up wakes for the same terminal wake payload", () => {
+    const patches: Array<{ ref: string; patch: Record<string, unknown> }> = [];
+    const requests: Array<Record<string, unknown>> = [];
+    let wakeStarted = 0;
+    let wakeSucceeded = 0;
+    let duplicateSkippedReason = "";
+    const fakeDispatcher = {
+      dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, (reason?: string) => void> }) => {
+        requests.push(request as Record<string, unknown>);
+        request.hooks?.onNotifyStarted?.();
+        request.hooks?.onNotifySucceeded?.();
+        request.hooks?.onWakeStarted?.();
+        wakeStarted += 1;
+        request.hooks?.onWakeSucceeded?.();
+        wakeSucceeded += 1;
+      },
+      dispose: () => {},
+    };
+
+    const service = new SessionNotificationService(
+      fakeDispatcher as any,
+      (ref, patch) => patches.push({ ref, patch: patch as Record<string, unknown> }),
+    );
+    const session = { id: "session-duplicate-summary", harnessSessionId: "h-duplicate-summary" } as any;
+    const request = {
+      label: "completed",
+      userMessage: "done",
+      wakeMessageOnNotifySuccess: "wake: send summary",
+      completionWakeSummaryRequired: true,
+      notifyUser: "always" as const,
+      hooks: {
+        onWakeSkipped: (reason?: string) => {
+          duplicateSkippedReason = reason ?? "";
+        },
+      },
+    };
+
+    service.dispatch(session, request);
+    service.dispatch(session, request);
+
+    assert.equal(requests.length, 1);
+    assert.equal(wakeStarted, 1);
+    assert.equal(wakeSucceeded, 1);
+    assert.equal(duplicateSkippedReason, "duplicate completion follow-up wake already handled");
+    assert.equal(patches.filter(({ patch }) => patch.completionWakeSucceededAt).length, 1);
+  });
+
+  it("suppresses duplicate completion follow-up wakes while the first wake is still in flight", () => {
+    const patches: Array<{ ref: string; patch: Record<string, unknown> }> = [];
+    const requests: Array<Record<string, unknown>> = [];
+    let duplicateSkippedReason = "";
+    const fakeDispatcher = {
+      dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, (reason?: string) => void> }) => {
+        requests.push(request as Record<string, unknown>);
+        request.hooks?.onNotifyStarted?.();
+        request.hooks?.onNotifySucceeded?.();
+        request.hooks?.onWakeStarted?.();
+      },
+      dispose: () => {},
+    };
+
+    const service = new SessionNotificationService(
+      fakeDispatcher as any,
+      (ref, patch) => patches.push({ ref, patch: patch as Record<string, unknown> }),
+    );
+    const session = { id: "session-duplicate-inflight", harnessSessionId: "h-duplicate-inflight" } as any;
+    const request = {
+      label: "completed",
+      userMessage: "done",
+      wakeMessageOnNotifySuccess: "wake: send summary",
+      completionWakeSummaryRequired: true,
+      notifyUser: "always" as const,
+      hooks: {
+        onWakeSkipped: (reason?: string) => {
+          duplicateSkippedReason = reason ?? "";
+        },
+      },
+    };
+
+    service.dispatch(session, request);
+    service.dispatch(session, request);
+
+    assert.equal(requests.length, 1);
+    assert.equal(duplicateSkippedReason, "duplicate completion follow-up wake already handled");
+    assert.equal(patches.filter(({ patch }) => patch.completionWakeIssuedAt).length, 1);
+  });
+
   it("does not persist completion follow-up state when the terminal session opts out", () => {
     const patches: Array<{ ref: string; patch: Record<string, unknown> }> = [];
     const fakeDispatcher = {

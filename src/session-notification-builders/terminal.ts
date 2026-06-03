@@ -128,10 +128,10 @@ export function buildCompletionFollowupInstructionLines(args: {
     hasOriginRouteBlock = false,
   } = args;
   const routeInstruction = hasOriginRouteBlock
-    ? [`6. Before sending that follow-up, honor the Session origin route block above. If originRoute differs from the current chat, do NOT use a plain final assistant reply; use a routed send path that preserves provider/target/threadId.`]
+    ? [`7. Before sending that follow-up, honor the Session origin route block above. If originRoute differs from the current chat, do NOT use a plain final assistant reply; use a routed send path that preserves provider/target/threadId.`]
     : [];
-  const ownerInstructionIndex = hasOriginRouteBlock ? 7 : 6;
-  const canonicalStatusInstructionIndex = hasOriginRouteBlock ? 8 : 7;
+  const ownerInstructionIndex = hasOriginRouteBlock ? 8 : 7;
+  const canonicalStatusInstructionIndex = hasOriginRouteBlock ? 9 : 8;
   return [
     `[ACTION REQUIRED] Follow your autonomy rules for session completion:`,
     `1. Use agent_output(session='${sessionId}', full=true) to read the full result.`,
@@ -139,14 +139,15 @@ export function buildCompletionFollowupInstructionLines(args: {
     `3. ${canonicalStatusDetail ?? (canonicalStatusDelivered
       ? "The plugin already sent the canonical completion status to the user."
       : "The plugin did not confirm delivery of the canonical completion status to the user.")}`,
-    `4. Unless you are silently continuing an internal multi-phase pipeline or there is still no meaningful confirmed outcome to report, you must send the user a short factual completion summary for this completed session.`,
-    `5. This requirement applies to ordinary terminal/manual completions too, not just delegated worktree decisions.`,
+    `4. Inspect the full result for an existing meaningful user-facing final summary. If the completed agent already gave the user a concrete outcome/follow-up summary, do not send a second recap; finish with ${COMPLETION_FOLLOWUP_SKIPPED_MARKER}: already summarized by completed session.`,
+    `5. If the visible result is only the plugin's terse status line, or the full output supports useful non-duplicative facts that have not already been summarized, send the user one short factual completion summary for this completed session.`,
+    `6. This requirement applies to ordinary terminal/manual completions too, not just delegated worktree decisions.`,
     ...routeInstruction,
     `${ownerInstructionIndex}. That follow-up belongs to you alone; keep it brief, concrete, and grounded in reliable result data.`,
     ...(canonicalStatusDelivered
       ? [`${canonicalStatusInstructionIndex}. Do NOT repeat the plugin's status line, and do NOT rely on the plugin to summarize the completed work for you.`]
       : [`${canonicalStatusInstructionIndex}. Because canonical status delivery was not confirmed, account for that gap yourself when you follow up; do NOT assume the plugin already reached the user.`]),
-    `${canonicalStatusInstructionIndex + 1}. After the visible follow-up summary has actually been sent to the user or origin route, finish this wake turn with ${COMPLETION_FOLLOWUP_DELIVERED_MARKER}. If you are silently continuing an internal multi-phase pipeline or there is no meaningful confirmed outcome to report, finish with ${COMPLETION_FOLLOWUP_SKIPPED_MARKER}: <brief reason>. Otherwise do not use either marker and do not answer NO_REPLY.`,
+    `${canonicalStatusInstructionIndex + 1}. After the visible follow-up summary has actually been sent to the user or origin route, finish this wake turn with ${COMPLETION_FOLLOWUP_DELIVERED_MARKER}. If you are silently continuing an internal multi-phase pipeline, there is no meaningful confirmed outcome to report, or the completed session already summarized it, finish with ${COMPLETION_FOLLOWUP_SKIPPED_MARKER}: <brief reason>. Otherwise do not use either marker and do not answer NO_REPLY.`,
   ];
 }
 
@@ -250,14 +251,15 @@ export function buildWorktreeOutcomeFollowupWake(args: {
     ``,
     `[ACTION REQUIRED] Follow your autonomy rules for worktree follow-through:`,
     `1. Use agent_output(session='${args.sessionId}', full=true) to read the full result if output is available.`,
-    `2. Send the user one short factual outcome summary grounded in the full output plus the canonical outcome status above.`,
-    `3. If full output is unavailable or not meaningful, say only what is proven by the merge/PR facts above; do not invent task details.`,
-    `4. Mention blockers such as push failure when present; do not describe a local-only merge as pushed.`,
+    `2. Inspect the full result for an existing meaningful user-facing final summary. If the completed agent already gave the user a concrete outcome/follow-up summary, do not send a second recap; finish with ${COMPLETION_FOLLOWUP_SKIPPED_MARKER}: already summarized by completed session.`,
+    `3. If the visible result is only the plugin's terse status line, or the full output supports useful non-duplicative facts that have not already been summarized, send the user one short factual outcome summary grounded in the full output plus the canonical outcome status above.`,
+    `4. If full output is unavailable or not meaningful, say only what is proven by the merge/PR facts above; do not invent task details.`,
+    `5. Mention blockers such as push failure when present; do not describe a local-only merge as pushed.`,
     ...(hasOriginRouteBlock
-      ? [`5. Before sending that follow-up, honor the Session origin route block above. If originRoute differs from the current chat, do NOT use a plain final assistant reply; use a routed send path that preserves provider/target/threadId.`]
+      ? [`6. Before sending that follow-up, honor the Session origin route block above. If originRoute differs from the current chat, do NOT use a plain final assistant reply; use a routed send path that preserves provider/target/threadId.`]
       : []),
-    `${hasOriginRouteBlock ? 6 : 5}. Do NOT repeat only the plugin status line; keep the follow-up brief, concrete, and non-duplicative.`,
-    `${hasOriginRouteBlock ? 7 : 6}. After the visible follow-up summary has actually been sent to the user or origin route, finish this wake turn with ${COMPLETION_FOLLOWUP_DELIVERED_MARKER}. If there is no meaningful confirmed outcome to report, finish with ${COMPLETION_FOLLOWUP_SKIPPED_MARKER}: <brief reason>. Otherwise do not use either marker and do not answer NO_REPLY.`,
+    `${hasOriginRouteBlock ? 7 : 6}. Do NOT repeat only the plugin status line; keep the follow-up brief, concrete, and non-duplicative.`,
+    `${hasOriginRouteBlock ? 8 : 7}. After the visible follow-up summary has actually been sent to the user or origin route, finish this wake turn with ${COMPLETION_FOLLOWUP_DELIVERED_MARKER}. If there is no meaningful confirmed outcome to report or the completed session already summarized it, finish with ${COMPLETION_FOLLOWUP_SKIPPED_MARKER}: <brief reason>. Otherwise do not use either marker and do not answer NO_REPLY.`,
   ].join("\n");
 }
 
