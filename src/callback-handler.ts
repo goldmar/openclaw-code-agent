@@ -24,6 +24,7 @@ type PlanDecisionTarget = Pick<
 
 type InteractiveResponder = {
   editMessage?: (message: { text: string; buttons?: [] }) => Promise<void>;
+  editButtons?: (message: { buttons: [] }) => Promise<void>;
   clearButtons?: () => Promise<void>;
   clearComponents?: (message?: { text?: string }) => Promise<void>;
   acknowledge?: () => Promise<void>;
@@ -127,10 +128,10 @@ function isDiscordEmptyMessageError(err: unknown): boolean {
 
 async function clearInteractiveState(
   ctx: InteractiveCallbackContext,
-  options: { text?: string; alreadyAcknowledged?: boolean } = {},
+  options: { text?: string; alreadyAcknowledged?: boolean; forceTelegramMarkupEdit?: boolean } = {},
 ): Promise<void> {
   const responder = ctx.respond as InteractiveResponder;
-  const { alreadyAcknowledged = false, text } = options;
+  const { alreadyAcknowledged = false, forceTelegramMarkupEdit = false, text } = options;
 
   if (ctx.channel === "telegram") {
     if (typeof text === "string" && typeof responder.editMessage === "function") {
@@ -149,6 +150,49 @@ async function clearInteractiveState(
         }
         const errText = err instanceof Error ? err.message : String(err);
         console.warn(`[callback-handler] Failed to edit Telegram worktree prompt before clearing buttons: ${errText}`);
+      }
+    }
+    if (forceTelegramMarkupEdit && typeof responder.editButtons === "function") {
+      try {
+        await responder.editButtons({ buttons: [] });
+        if (typeof responder.clearButtons === "function") {
+          await responder.clearButtons();
+        }
+        return;
+      } catch (err) {
+        if (isMessageNotModifiedError(err)) {
+          if (typeof responder.clearButtons === "function") {
+            await responder.clearButtons();
+          }
+          return;
+        }
+        const errText = err instanceof Error ? err.message : String(err);
+        console.warn(`[callback-handler] Failed to edit Telegram button markup before clearing buttons: ${errText}`);
+      }
+    }
+    const callbackMessageText = "callback" in ctx && typeof ctx.callback?.messageText === "string"
+      ? ctx.callback.messageText
+      : undefined;
+    if (
+      forceTelegramMarkupEdit
+      && typeof callbackMessageText === "string"
+      && typeof responder.editMessage === "function"
+    ) {
+      try {
+        await responder.editMessage({ text: callbackMessageText, buttons: [] });
+        if (typeof responder.clearButtons === "function") {
+          await responder.clearButtons();
+        }
+        return;
+      } catch (err) {
+        if (isMessageNotModifiedError(err)) {
+          if (typeof responder.clearButtons === "function") {
+            await responder.clearButtons();
+          }
+          return;
+        }
+        const errText = err instanceof Error ? err.message : String(err);
+        console.warn(`[callback-handler] Failed to edit Telegram message markup before clearing buttons: ${errText}`);
       }
     }
     if (typeof responder.clearButtons === "function") {
@@ -323,7 +367,10 @@ export function createCallbackHandler(channel: InteractiveChannel = "telegram") 
         planDecisionVersion: consumedToken?.planDecisionVersion,
       });
       if (!consumedToken) {
-        await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
+        await clearInteractiveState(ctx, {
+          alreadyAcknowledged: callbackAcknowledged,
+          forceTelegramMarkupEdit: token.kind === "plan-offer-start" || token.kind === "plan-offer-dismiss",
+        });
         if (ctx.channel !== "telegram") {
           await replyText(ctx, "⚠️ This action is stale or has already been used.");
         }
@@ -424,24 +471,37 @@ export function createCallbackHandler(channel: InteractiveChannel = "telegram") 
         }
 
         case "plan-offer-start": {
-          await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
           if (!consumedToken.launchPrompt || !consumedToken.launchWorkdir) {
             await replyText(ctx, "⚠️ This action is missing the plan launch context.");
             break;
           }
-          const session = sessionManager.launchPlanOffer({
-            route: consumedToken.route,
-            prompt: consumedToken.launchPrompt,
-            workdir: consumedToken.launchWorkdir,
-            name: consumedToken.launchName,
-            worktreeStrategy: consumedToken.launchWorktreeStrategy,
+          let session: { id: string; name: string };
+          try {
+            session = sessionManager.launchPlanOffer({
+              route: consumedToken.route,
+              prompt: consumedToken.launchPrompt,
+              workdir: consumedToken.launchWorkdir,
+              name: consumedToken.launchName,
+              worktreeStrategy: consumedToken.launchWorktreeStrategy,
+            });
+          } catch (err) {
+            const errText = err instanceof Error ? err.message : String(err);
+            await replyText(ctx, `⚠️ Failed to start planning session: ${errText}`);
+            break;
+          }
+          await clearInteractiveState(ctx, {
+            alreadyAcknowledged: callbackAcknowledged,
+            forceTelegramMarkupEdit: true,
           });
           await replyText(ctx, `▶️ Planning session started: ${session.name} [${session.id}]`);
           break;
         }
 
         case "plan-offer-dismiss": {
-          await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
+          await clearInteractiveState(ctx, {
+            alreadyAcknowledged: callbackAcknowledged,
+            forceTelegramMarkupEdit: true,
+          });
           await replyText(ctx, `✅ Dismissed.`);
           break;
         }
