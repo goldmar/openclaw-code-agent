@@ -54,6 +54,12 @@ export interface WorktreeOutcomeFollowupContract {
   appliesToWorktreeTerminalOutcomes: true;
 }
 
+export interface GoalTaskFollowupContract {
+  requiresShortFactualSummary: true;
+  owner: "agent";
+  appliesToGoalTaskCompletions: true;
+}
+
 const COMPLETION_FOLLOWUP_DELIVERED_MARKER = "COMPLETION_FOLLOWUP_DELIVERED";
 const COMPLETION_FOLLOWUP_SKIPPED_MARKER = "COMPLETION_FOLLOWUP_SKIPPED";
 
@@ -98,6 +104,14 @@ export function buildWorktreeOutcomeFollowupContract(): WorktreeOutcomeFollowupC
     requiresShortFactualSummary: true,
     owner: "agent",
     appliesToWorktreeTerminalOutcomes: true,
+  };
+}
+
+export function buildGoalTaskFollowupContract(): GoalTaskFollowupContract {
+  return {
+    requiresShortFactualSummary: true,
+    owner: "agent",
+    appliesToGoalTaskCompletions: true,
   };
 }
 
@@ -244,6 +258,43 @@ export function buildWorktreeOutcomeFollowupWake(args: {
       : []),
     `${hasOriginRouteBlock ? 6 : 5}. Do NOT repeat only the plugin status line; keep the follow-up brief, concrete, and non-duplicative.`,
     `${hasOriginRouteBlock ? 7 : 6}. After the visible follow-up summary has actually been sent to the user or origin route, finish this wake turn with ${COMPLETION_FOLLOWUP_DELIVERED_MARKER}. If there is no meaningful confirmed outcome to report, finish with ${COMPLETION_FOLLOWUP_SKIPPED_MARKER}: <brief reason>. Otherwise do not use either marker and do not answer NO_REPLY.`,
+  ].join("\n");
+}
+
+export function buildGoalTaskSucceededFollowupWake(args: {
+  sessionId: string;
+  sessionName?: string;
+  taskName: string;
+  summary: string;
+  originThreadLine: OriginThreadLine;
+  canonicalStatusDelivered: boolean;
+}): string {
+  const contract = buildGoalTaskFollowupContract();
+  const hasOriginRouteBlock = Boolean(args.originThreadLine.trim());
+
+  return [
+    `Goal task succeeded.`,
+    `Task: ${args.taskName}`,
+    `Name: ${args.sessionName ?? args.taskName} | ID: ${args.sessionId}`,
+    ...(hasOriginRouteBlock ? [args.originThreadLine] : []),
+    ``,
+    `Canonical goal status:`,
+    args.summary,
+    ``,
+    `Completion diagnostics:`,
+    `- Canonical goal success status delivered to user: ${args.canonicalStatusDelivered ? "yes" : "no"}`,
+    `- Plugin requested short factual follow-up summary: ${contract.requiresShortFactualSummary ? "yes" : "no"}`,
+    `- Contract applies to goal task completions: ${contract.appliesToGoalTaskCompletions ? "yes" : "no"}`,
+    ``,
+    `[ACTION REQUIRED] Follow your autonomy rules for goal task completion:`,
+    `1. Use agent_output(session='${args.sessionId}', full=true) to read the full result if output is available.`,
+    `2. Send the user one short factual completion summary grounded in the full output plus the canonical goal status above.`,
+    `3. If full output is unavailable or not meaningful, say only what is proven by the goal status above; do not invent task details.`,
+    ...(hasOriginRouteBlock
+      ? [`4. Before sending that follow-up, honor the Session origin route block above. If originRoute differs from the current chat, do NOT use a plain final assistant reply; use a routed send path that preserves provider/target/threadId.`]
+      : []),
+    `${hasOriginRouteBlock ? 5 : 4}. Do NOT repeat only the plugin status line; keep the follow-up brief, concrete, and non-duplicative.`,
+    `${hasOriginRouteBlock ? 6 : 5}. After the visible follow-up summary has actually been sent to the user or origin route, finish this wake turn with ${COMPLETION_FOLLOWUP_DELIVERED_MARKER}. If there is no meaningful confirmed outcome to report, finish with ${COMPLETION_FOLLOWUP_SKIPPED_MARKER}: <brief reason>. Otherwise do not use either marker and do not answer NO_REPLY.`,
   ].join("\n");
 }
 

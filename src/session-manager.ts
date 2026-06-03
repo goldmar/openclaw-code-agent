@@ -34,7 +34,11 @@ import { SessionWorktreeController } from "./session-worktree-controller";
 import { SessionQuestionService, type PendingAskUserQuestion } from "./session-question-service";
 import { SessionReminderService } from "./session-reminder-service";
 import { SessionLifecycleService } from "./session-lifecycle-service";
-import { buildPlanApprovalFallbackText, formatPlanApprovalSummary } from "./session-notification-builder";
+import {
+  buildGoalTaskSucceededFollowupWake,
+  buildPlanApprovalFallbackText,
+  formatPlanApprovalSummary,
+} from "./session-notification-builder";
 import { SessionWorktreeDecisionService } from "./session-worktree-decision-service";
 import { SessionRuntimeRegistry } from "./session-runtime-registry";
 import { SessionRuntimeBootstrapService } from "./session-runtime-bootstrap-service";
@@ -850,12 +854,17 @@ export class SessionManager {
   }
 
   emitGoalTaskUpdate(
-    task: Pick<GoalTaskState, "id" | "sessionId" | "route" | "originChannel" | "originThreadId" | "originSessionKey">,
+    task: Pick<
+      GoalTaskState,
+      "id" | "name" | "sessionId" | "sessionName" | "route" | "originChannel" | "originThreadId" | "originSessionKey"
+    >,
     text: string,
     label: string = "goal-task",
   ): void {
+    const sessionId = task.sessionId ?? task.id;
     const routingProxy = this.buildRoutingProxy({
-      id: task.sessionId ?? task.id,
+      id: sessionId,
+      name: task.sessionName ?? task.name,
       route: task.route,
     }) as Session & {
       originChannel?: string;
@@ -865,10 +874,23 @@ export class SessionManager {
     routingProxy.originChannel = task.originChannel;
     routingProxy.originThreadId = task.originThreadId;
     routingProxy.originSessionKey = task.originSessionKey;
+    const requiresGoalSuccessFollowup = label === "goal-task-succeeded";
+    const buildWakeMessage = (canonicalStatusDelivered: boolean): string => buildGoalTaskSucceededFollowupWake({
+      sessionId,
+      sessionName: task.sessionName,
+      taskName: task.name,
+      summary: text,
+      originThreadLine: formatOriginRouteWakeBlock(routingProxy),
+      canonicalStatusDelivered,
+    });
     this.dispatchSessionNotification(routingProxy, {
       label,
       userMessage: text,
       notifyUser: "always",
+      completionWakeSummaryRequired: requiresGoalSuccessFollowup,
+      requireDirectUserNotification: requiresGoalSuccessFollowup,
+      wakeMessageOnNotifySuccess: requiresGoalSuccessFollowup ? buildWakeMessage(true) : undefined,
+      wakeMessageOnNotifyFailed: requiresGoalSuccessFollowup ? buildWakeMessage(false) : undefined,
     });
   }
 
