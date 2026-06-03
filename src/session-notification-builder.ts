@@ -12,6 +12,7 @@ export { buildPlanReviewSummary, formatPlanApprovalSummary } from "./plan-review
 export {
   buildCompletedPayload,
   buildFailedPayload,
+  buildGoalTaskSucceededFollowupWake,
   buildTurnCompletePayload,
   buildWorktreeOutcomeFollowupWake,
   getStoppedStatusLabel,
