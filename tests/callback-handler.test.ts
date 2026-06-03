@@ -1357,6 +1357,52 @@ describe("createCallbackHandler()", () => {
     assert.equal(state.replies[0], "⚠️ Failed to start planning session: workdir is unavailable");
   });
 
+  it("clears Start Plan buttons when consumed plan-offer tokens are missing launch context", async () => {
+    let launchCount = 0;
+    setSessionManager({
+      getActionToken: () => ({
+        sessionId: "plugin-readiness-v2026.5.28",
+        kind: "plan-offer-start",
+        route: {
+          provider: "telegram",
+          target: TELEGRAM_FORUM_TARGET,
+          threadId: TELEGRAM_FORUM_THREAD_ID,
+          sessionKey: TELEGRAM_FORUM_SESSION_KEY,
+        },
+      }),
+      consumeActionToken: () => ({
+        sessionId: "plugin-readiness-v2026.5.28",
+        kind: "plan-offer-start",
+        route: {
+          provider: "telegram",
+          target: TELEGRAM_FORUM_TARGET,
+          threadId: TELEGRAM_FORUM_THREAD_ID,
+          sessionKey: TELEGRAM_FORUM_SESSION_KEY,
+        },
+      }),
+      launchPlanOffer: () => {
+        launchCount++;
+        return { id: "unexpected", name: "unexpected" };
+      },
+    } as any);
+
+    const handler = createCallbackHandler();
+    const state = createCtx("plan-token", "telegram", {
+      telegramCallback: {
+        data: "code-agent:plan-token",
+        payload: "plan-token",
+      },
+    });
+    const result = await handler.handler(state.ctx as any);
+
+    assert.deepEqual(result, { handled: true });
+    assert.equal(launchCount, 0);
+    assert.equal(state.buttonMarkupEdits, 1);
+    assert.equal(state.buttonsCleared, 1);
+    assert.equal(state.replies[0], "⚠️ This action is missing the plan launch context.");
+    assert.deepEqual(state.events, ["acknowledge", "editButtons", "clearButtons", "reply"]);
+  });
+
   it("clears Start Plan buttons quietly when an already-started plan-offer callback is retried", async () => {
     let consumes = 0;
     setSessionManager({

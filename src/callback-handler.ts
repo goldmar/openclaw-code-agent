@@ -472,6 +472,10 @@ export function createCallbackHandler(channel: InteractiveChannel = "telegram") 
 
         case "plan-offer-start": {
           if (!consumedToken.launchPrompt || !consumedToken.launchWorkdir) {
+            await clearInteractiveState(ctx, {
+              alreadyAcknowledged: callbackAcknowledged,
+              forceTelegramMarkupEdit: true,
+            });
             await replyText(ctx, "⚠️ This action is missing the plan launch context.");
             break;
           }
