@@ -2,7 +2,6 @@ export {
   buildDelegateReminderWakeMessage,
   buildDelegateWorktreeWakeMessage,
   buildNoChangeWakeMessage,
-  buildWorktreeDecisionSummary,
 } from "./session-notification-builders/worktree";
 export {
   buildPlanApprovalFallbackText,

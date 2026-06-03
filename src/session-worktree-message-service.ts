@@ -4,7 +4,6 @@ import type { SessionNotificationRequest } from "./wake-dispatcher";
 import {
   buildDelegateWorktreeWakeMessage,
   buildNoChangeWakeMessage,
-  buildWorktreeDecisionSummary,
 } from "./session-notification-builder";
 
 type DiffSummary = {
@@ -87,10 +86,9 @@ export class SessionWorktreeMessageService {
     baseBranch: string;
     diffSummary: DiffSummary;
     buttons?: NotificationButton[][];
-    outputPreview?: string;
+    summaryLines?: string[];
   }): SessionNotificationRequest {
-    const { session, branchName, baseBranch, diffSummary, buttons, outputPreview } = args;
-    const summaryLines = buildWorktreeDecisionSummary(diffSummary, outputPreview);
+    const { session, branchName, baseBranch, diffSummary, buttons, summaryLines = [] } = args;
     const commitLines = diffSummary.commitMessages
       .slice(0, 5)
       .map((commit) => `• ${commit.hash} ${commit.message} (${commit.author})`);

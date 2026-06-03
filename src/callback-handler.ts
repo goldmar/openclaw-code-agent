@@ -356,7 +356,7 @@ export function createCallbackHandler(channel: InteractiveChannel = "telegram") 
           if (worktreeActionTextSucceeded(result)) {
             await resolveWorktreePrompt(ctx, `🗑️ Discarded for [${actionSessionName}]`, callbackAcknowledged);
           }
-          await replyText(ctx, result.startsWith("Error") ? result : result);
+          await replyText(ctx, result.startsWith("Error") ? result : "✅ Discarded");
           break;
         }
 

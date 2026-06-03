@@ -40,6 +40,7 @@ import {
   formatPlanApprovalSummary,
 } from "./session-notification-builder";
 import { SessionWorktreeDecisionService } from "./session-worktree-decision-service";
+import type { WorktreeDecisionSummaryProvider } from "./worktree-decision-summary";
 import { SessionRuntimeRegistry } from "./session-runtime-registry";
 import { SessionRuntimeBootstrapService } from "./session-runtime-bootstrap-service";
 import { SessionWorktreeMessageService } from "./session-worktree-message-service";
@@ -115,7 +116,7 @@ export class SessionManager {
   constructor(
     maxSessions: number = 20,
     maxPersistedSessions: number = 50,
-    options: { store?: SessionStoreOptions } = {},
+    options: { store?: SessionStoreOptions; worktreeSummaryProvider?: WorktreeDecisionSummaryProvider } = {},
   ) {
     this.maxSessions = maxSessions;
     this.maxPersistedSessions = maxPersistedSessions;
@@ -151,6 +152,7 @@ export class SessionManager {
       originThreadLine: (session) => this.originThreadLine(session),
       getWorktreeDecisionButtons: (sessionId) => this.getWorktreeDecisionButtons(sessionId),
       makeOpenPrButton: (sessionId) => this.makeActionButton(sessionId, "worktree-create-pr", "Open PR"),
+      worktreeSummaryProvider: options.worktreeSummaryProvider,
       worktreeMessages: this.worktreeMessages,
       enqueueMerge: (repoDir, fn, onQueued) => this.enqueueMerge(repoDir, fn, onQueued),
       mergeBranch,

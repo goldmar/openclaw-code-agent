@@ -668,6 +668,37 @@ describe("createCallbackHandler()", () => {
     assert.deepEqual(state.events, ["acknowledge", "reply"]);
   });
 
+  it("uses a friendly success reply for discard while preserving raw dismiss errors", async () => {
+    let shouldFail = false;
+    setSessionManager({
+      getActionToken: () => ({ sessionId: "sess-42", kind: "worktree-dismiss" }),
+      consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-dismiss" }),
+      resolve: () => undefined,
+      getPersistedSession: () => ({ name: "ux-fix" }),
+      dismissWorktree: async () => shouldFail
+        ? "Error: branch deletion failed."
+        : "🗑️ [ux-fix] Branch `agent/ux-fix` dismissed and permanently deleted.",
+    } as any);
+
+    const handler = createCallbackHandler();
+    const success = createCtx("token-dismiss");
+    const successResult = await handler.handler(success.ctx as any);
+
+    assert.deepEqual(successResult, { handled: true });
+    assert.deepEqual(success.editedMessages, ["🗑️ Discarded for [ux-fix]"]);
+    assert.equal(success.buttonsCleared, 1);
+    assert.equal(success.replies[0], "✅ Discarded");
+
+    shouldFail = true;
+    const failure = createCtx("token-dismiss");
+    const failureResult = await handler.handler(failure.ctx as any);
+
+    assert.deepEqual(failureResult, { handled: true });
+    assert.deepEqual(failure.editedMessages, []);
+    assert.equal(failure.buttonsCleared, 0);
+    assert.equal(failure.replies[0], "Error: branch deletion failed.");
+  });
+
   it("resolves Discord worktree prompts via clearComponents text updates and replies ephemerally", async () => {
     setSessionManager({
       getActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),

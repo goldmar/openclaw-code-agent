@@ -13,6 +13,10 @@ import {
 } from "./worktree-session-patches";
 import { buildWorktreeOutcomeFollowupWake } from "./session-notification-builder";
 import {
+  buildWorktreeDecisionWorkSummary,
+  type WorktreeDecisionSummaryProvider,
+} from "./worktree-decision-summary";
+import {
   removeWorktree,
   getDiffSummary,
   listDirtyWorktreeEntries,
@@ -51,6 +55,7 @@ export class SessionWorktreeStrategyService {
       originThreadLine: (session: Session) => string;
       getWorktreeDecisionButtons: (sessionId: string) => NotificationButton[][] | undefined;
       makeOpenPrButton: (sessionId: string) => NotificationButton;
+      worktreeSummaryProvider?: WorktreeDecisionSummaryProvider;
       worktreeMessages: SessionWorktreeMessageService;
       enqueueMerge: (
         repoDir: string,
@@ -199,7 +204,7 @@ export class SessionWorktreeStrategyService {
     }
 
     if (action.strategy === "ask") {
-      return this.handleAskStrategy(session, action.branchName, action.baseBranch, action.diffSummary);
+      return await this.handleAskStrategy(session, action.branchName, action.baseBranch, action.diffSummary);
     }
     if (action.strategy === "delegate") {
       return this.handleDelegateStrategy(session, action.branchName, action.baseBranch, action.diffSummary);
@@ -268,18 +273,25 @@ export class SessionWorktreeStrategyService {
     return { notificationSent: true, worktreeRemoved: removed };
   }
 
-  private handleAskStrategy(
+  private async handleAskStrategy(
     session: Session,
     branchName: string,
     baseBranch: string,
     diffSummary: DiffSummary,
-  ): WorktreeStrategyResult {
+  ): Promise<WorktreeStrategyResult> {
+    const summary = await buildWorktreeDecisionWorkSummary({
+      sessionName: session.name,
+      prompt: session.prompt,
+      diffSummary,
+      outputPreview: this.deps.getOutputPreview(session, 4_000),
+      provider: this.deps.worktreeSummaryProvider,
+    });
     this.deps.dispatchSessionNotification(session, this.deps.worktreeMessages.buildAskNotification({
       session,
       branchName,
       baseBranch,
       diffSummary,
-      outputPreview: this.deps.getOutputPreview(session),
+      summaryLines: summary.lines,
       buttons: this.deps.getWorktreeDecisionButtons(session.id),
     }));
     this.markPendingDecision(session);
