@@ -8,6 +8,7 @@ import {
   buildNoChangeWakeMessage,
   buildFailedPayload,
   buildWaitingForInputPayload,
+  buildWorktreeOutcomeFollowupWake,
 } from "../src/session-notification-builder";
 
 describe("session-notification-builder", () => {
@@ -162,6 +163,42 @@ describe("session-notification-builder", () => {
     assert.equal(payload.userMessage, undefined);
     assert.match(payload.planReviewSummary ?? "", /Review summary:/);
     assert.match(payload.planReviewSummary ?? "", /Skip the LLM for delegate mode wakeups/);
+  });
+
+  it("tells completion wakes to skip when the completed session already gave a meaningful summary", () => {
+    const payload = buildCompletedPayload({
+      session: {
+        id: "session-completed-summary",
+        name: "completed-summary",
+        status: "completed",
+        costUsd: 0.12,
+        duration: 12_000,
+      } as any,
+      originThreadLine: "Origin thread: telegram topic 42",
+      preview: [
+        "Validation finished. Status: blocked, but we got useful signal.",
+        "- Do not start tomorrow as-is.",
+        "- Follow up on broker credential checks.",
+      ].join("\n"),
+    });
+
+    assert.match(payload.wakeMessageOnNotifySuccess, /already gave the user a concrete outcome\/follow-up summary/);
+    assert.match(payload.wakeMessageOnNotifySuccess, /COMPLETION_FOLLOWUP_SKIPPED: already summarized by completed session/);
+    assert.match(payload.wakeMessageOnNotifySuccess, /only the plugin's terse status line/);
+  });
+
+  it("keeps worktree follow-up wakes useful when only canonical facts are available", () => {
+    const wake = buildWorktreeOutcomeFollowupWake({
+      sessionId: "session-worktree-status-only",
+      sessionName: "worktree-status-only",
+      outcomeLine: "✅ Merged: agent/example -> main",
+      originThreadLine: "",
+      canonicalStatusDelivered: true,
+    });
+
+    assert.match(wake, /If the visible result is only the plugin's terse status line/);
+    assert.match(wake, /send the user one short factual outcome summary/);
+    assert.match(wake, /the completed session already summarized it/);
   });
 
   it("falls back to a filtered deterministic summary when no finalized plan exists", () => {
@@ -422,7 +459,8 @@ describe("session-notification-builder", () => {
     assert.match(payload.wakeMessageOnNotifySuccess, /Output preview:/);
     assert.match(payload.wakeMessageOnNotifySuccess, /Canonical completion status delivered to user: yes/);
     assert.match(payload.wakeMessageOnNotifySuccess, /Plugin requested short factual follow-up summary: yes/);
-    assert.match(payload.wakeMessageOnNotifySuccess, /must send the user a short factual completion summary/i);
+    assert.match(payload.wakeMessageOnNotifySuccess, /already gave the user a concrete outcome\/follow-up summary/i);
+    assert.match(payload.wakeMessageOnNotifySuccess, /send the user one short factual completion summary/i);
     assert.match(payload.wakeMessageOnNotifySuccess, /ordinary terminal\/manual completions too/i);
     assert.match(payload.wakeMessageOnNotifySuccess, /honor the Session origin route block above/i);
     assert.match(payload.wakeMessageOnNotifySuccess, /do NOT repeat the plugin's status line/i);
@@ -444,7 +482,8 @@ describe("session-notification-builder", () => {
       preview: "Final output",
     });
 
-    assert.match(payload.wakeMessageOnNotifySuccess, /must send the user a short factual completion summary/i);
+    assert.match(payload.wakeMessageOnNotifySuccess, /send the user one short factual completion summary/i);
+    assert.match(payload.wakeMessageOnNotifySuccess, /COMPLETION_FOLLOWUP_SKIPPED: already summarized by completed session/);
     assert.doesNotMatch(payload.wakeMessageOnNotifySuccess, /Session origin route block above/i);
     assert.doesNotMatch(payload.wakeMessageOnNotifySuccess, /originRoute differs from the current chat/i);
   });
@@ -535,7 +574,8 @@ describe("session-notification-builder", () => {
     assert.match(message, /Output preview:/);
     assert.match(message, /agent_output\(session='session-4', full=true\)/);
     assert.match(message, /plugin already sent the canonical completion status/i);
-    assert.match(message, /must send the user a short factual completion summary/i);
+    assert.match(message, /already gave the user a concrete outcome\/follow-up summary/i);
+    assert.match(message, /send the user one short factual completion summary/i);
     assert.match(message, /ordinary terminal\/manual completions too/i);
     assert.match(message, /honor the Session origin route block above/i);
     assert.match(message, /do NOT repeat the plugin's status line/i);
@@ -550,7 +590,8 @@ describe("session-notification-builder", () => {
     });
 
     assert.match(message, /completed with no repository changes/);
-    assert.match(message, /must send the user a short factual completion summary/i);
+    assert.match(message, /send the user one short factual completion summary/i);
+    assert.match(message, /COMPLETION_FOLLOWUP_SKIPPED: already summarized by completed session/);
     assert.doesNotMatch(message, /Session origin route block above/i);
     assert.doesNotMatch(message, /originRoute differs from the current chat/i);
   });

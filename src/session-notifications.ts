@@ -4,6 +4,7 @@ import type { Session } from "./session";
 import { getBackendConversationId, getPrimarySessionLookupRef } from "./session-backend-ref";
 import { formatOriginRouteWakeBlock } from "./session-route";
 import { buildWorktreeOutcomeFollowupWake } from "./session-notification-builder";
+import { createHash } from "crypto";
 
 type RoutableSession = Pick<
   Session,
@@ -24,17 +25,41 @@ export interface WorktreeOutcomeNotificationOptions {
   detailLines?: string[];
 }
 
+export interface SessionNotificationServiceOptions {
+  maxCompletedCompletionWakeKeys?: number;
+}
+
+const DEFAULT_MAX_COMPLETED_COMPLETION_WAKE_KEYS = 1024;
+
 export class SessionNotificationService {
+  private readonly inFlightCompletionWakes = new Set<string>();
+  private readonly completedCompletionWakes = new Map<string, true>();
+  private readonly maxCompletedCompletionWakeKeys: number;
+
   constructor(
     private readonly wakeDispatcher: WakeDispatcher,
     private readonly applyPersistedPatch: (ref: string, patch: Partial<PersistedSessionInfo>) => void,
-  ) {}
+    options: SessionNotificationServiceOptions = {},
+  ) {
+    this.maxCompletedCompletionWakeKeys = Math.max(
+      1,
+      Math.floor(options.maxCompletedCompletionWakeKeys ?? DEFAULT_MAX_COMPLETED_COMPLETION_WAKE_KEYS),
+    );
+  }
 
   dispatch(
     session: RoutableSession | PersistedRoutingSession,
     request: SessionNotificationRequest,
   ): void {
     const deliveryRef = this.getDeliveryRef(session);
+    const completionWakeKey = this.buildCompletionWakeKey(deliveryRef, request);
+    if (completionWakeKey) {
+      if (this.inFlightCompletionWakes.has(completionWakeKey) || this.completedCompletionWakes.has(completionWakeKey)) {
+        request.hooks?.onWakeSkipped?.("duplicate completion follow-up wake already handled");
+        return;
+      }
+      this.inFlightCompletionWakes.add(completionWakeKey);
+    }
     const completionWakePatch = this.buildCompletionWakePatch(request);
     const hasWakeAfterNotifySuccess = Boolean(request.wakeMessage?.trim() || request.wakeMessageOnNotifySuccess?.trim());
     const hasWakeAfterNotifyFailure = Boolean(request.wakeMessage?.trim() || request.wakeMessageOnNotifyFailed?.trim());
@@ -50,6 +75,9 @@ export class SessionNotificationService {
           hasWakeAfterNotifySuccess ? "wake_pending" : "idle",
           hasWakeAfterNotifySuccess ? completionWakePatch : undefined,
         );
+        if (!hasWakeAfterNotifySuccess) {
+          this.markCompletionWakeFinished(completionWakeKey, false);
+        }
         request.hooks?.onNotifySucceeded?.();
       },
       onNotifyFailed: () => {
@@ -58,6 +86,9 @@ export class SessionNotificationService {
           hasWakeAfterNotifyFailure ? "wake_pending" : "failed",
           hasWakeAfterNotifyFailure ? completionWakePatch : undefined,
         );
+        if (!hasWakeAfterNotifyFailure) {
+          this.markCompletionWakeFinished(completionWakeKey, false);
+        }
         request.hooks?.onNotifyFailed?.();
       },
       onWakeStarted: () => {
@@ -77,6 +108,7 @@ export class SessionNotificationService {
           completionWakeSkippedAt: undefined,
           completionWakeSkipReason: undefined,
         });
+        this.markCompletionWakeFinished(completionWakeKey, true);
         request.hooks?.onWakeSucceeded?.();
       },
       onWakeSkipped: (reason) => {
@@ -86,12 +118,14 @@ export class SessionNotificationService {
           completionWakeSkippedAt: new Date().toISOString(),
           completionWakeSkipReason: reason,
         });
+        this.markCompletionWakeFinished(completionWakeKey, true);
         request.hooks?.onWakeSkipped?.(reason);
       },
       onWakeFailed: () => {
         this.applyPersistedPatchWithCompletionWake(deliveryRef, "failed", completionWakePatch, {
           completionWakeFailedAt: new Date().toISOString(),
         });
+        this.markCompletionWakeFinished(completionWakeKey, false);
         request.hooks?.onWakeFailed?.();
       },
     };
@@ -196,5 +230,33 @@ export class SessionNotificationService {
   ): Pick<PersistedSessionInfo, "completionWakeSummaryRequired"> | undefined {
     if (!completionWakePatch) return undefined;
     return { completionWakeSummaryRequired: undefined };
+  }
+
+  private buildCompletionWakeKey(deliveryRef: string, request: SessionNotificationRequest): string | undefined {
+    if (request.completionWakeSummaryRequired !== true || !deliveryRef) return undefined;
+    const wakeTexts = [
+      request.wakeMessage,
+      request.wakeMessageOnNotifySuccess,
+      request.wakeMessageOnNotifyFailed,
+    ]
+      .map((text) => text?.trim())
+      .filter((text): text is string => Boolean(text));
+    if (wakeTexts.length === 0) return undefined;
+    const digest = createHash("sha256").update(wakeTexts.join("\n---completion-wake---\n")).digest("hex").slice(0, 16);
+    return `${deliveryRef}:${request.label}:${digest}`;
+  }
+
+  private markCompletionWakeFinished(key: string | undefined, completed: boolean): void {
+    if (!key) return;
+    this.inFlightCompletionWakes.delete(key);
+    if (completed) {
+      this.completedCompletionWakes.delete(key);
+      this.completedCompletionWakes.set(key, true);
+      while (this.completedCompletionWakes.size > this.maxCompletedCompletionWakeKeys) {
+        const oldestKey = this.completedCompletionWakes.keys().next().value;
+        if (oldestKey === undefined) break;
+        this.completedCompletionWakes.delete(oldestKey);
+      }
+    }
   }
 }
