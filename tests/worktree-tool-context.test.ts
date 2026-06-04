@@ -146,6 +146,7 @@ describe("worktree-tool-context", () => {
               originChannel: "telegram|-100123",
               originThreadId: "32947",
               originSessionKey: "agent:x:telegram:channel:-100123:topic:32947",
+              goalTaskId: "goal-persisted-merge",
             }
           : undefined;
       },
@@ -165,6 +166,7 @@ describe("worktree-tool-context", () => {
       originChannel: "telegram|-100123",
       originThreadId: "32947",
       originSessionKey: "agent:x:telegram:channel:-100123:topic:32947",
+      goalTaskId: "goal-persisted-merge",
     });
   });
 
