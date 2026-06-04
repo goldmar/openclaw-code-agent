@@ -397,6 +397,80 @@ describe("SessionNotificationService", () => {
     ]);
   });
 
+  it("releases completion wake keys when notify succeeds without a success wake", () => {
+    const requests: Array<Record<string, unknown>> = [];
+    const skippedReasons: string[] = [];
+    const fakeDispatcher = {
+      dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, (reason?: string) => void> }) => {
+        requests.push(request as Record<string, unknown>);
+        request.hooks?.onNotifyStarted?.();
+        request.hooks?.onNotifySucceeded?.();
+      },
+      dispose: () => {},
+    };
+
+    const service = new SessionNotificationService(
+      fakeDispatcher as any,
+      () => {},
+    );
+    const session = { id: "session-success-no-wake", harnessSessionId: "h-success-no-wake" } as any;
+    const request = {
+      label: "completed",
+      userMessage: "done",
+      wakeMessageOnNotifyFailed: "wake only after notify failure",
+      completionWakeSummaryRequired: true,
+      notifyUser: "always" as const,
+      hooks: {
+        onWakeSkipped: (reason?: string) => {
+          skippedReasons.push(reason ?? "");
+        },
+      },
+    };
+
+    service.dispatch(session, request);
+    service.dispatch(session, request);
+
+    assert.equal(requests.length, 2);
+    assert.deepEqual(skippedReasons, []);
+  });
+
+  it("releases completion wake keys when notify fails without a failure wake", () => {
+    const requests: Array<Record<string, unknown>> = [];
+    const skippedReasons: string[] = [];
+    const fakeDispatcher = {
+      dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, (reason?: string) => void> }) => {
+        requests.push(request as Record<string, unknown>);
+        request.hooks?.onNotifyStarted?.();
+        request.hooks?.onNotifyFailed?.();
+      },
+      dispose: () => {},
+    };
+
+    const service = new SessionNotificationService(
+      fakeDispatcher as any,
+      () => {},
+    );
+    const session = { id: "session-failed-no-wake", harnessSessionId: "h-failed-no-wake" } as any;
+    const request = {
+      label: "completed",
+      userMessage: "done",
+      wakeMessageOnNotifySuccess: "wake only after notify success",
+      completionWakeSummaryRequired: true,
+      notifyUser: "always" as const,
+      hooks: {
+        onWakeSkipped: (reason?: string) => {
+          skippedReasons.push(reason ?? "");
+        },
+      },
+    };
+
+    service.dispatch(session, request);
+    service.dispatch(session, request);
+
+    assert.equal(requests.length, 2);
+    assert.deepEqual(skippedReasons, []);
+  });
+
   it("suppresses duplicate completion follow-up wakes while the first wake is still in flight", () => {
     const patches: Array<{ ref: string; patch: Record<string, unknown> }> = [];
     const requests: Array<Record<string, unknown>> = [];

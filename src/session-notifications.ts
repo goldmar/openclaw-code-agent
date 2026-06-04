@@ -75,6 +75,9 @@ export class SessionNotificationService {
           hasWakeAfterNotifySuccess ? "wake_pending" : "idle",
           hasWakeAfterNotifySuccess ? completionWakePatch : undefined,
         );
+        if (!hasWakeAfterNotifySuccess) {
+          this.markCompletionWakeFinished(completionWakeKey, false);
+        }
         request.hooks?.onNotifySucceeded?.();
       },
       onNotifyFailed: () => {
@@ -83,6 +86,9 @@ export class SessionNotificationService {
           hasWakeAfterNotifyFailure ? "wake_pending" : "failed",
           hasWakeAfterNotifyFailure ? completionWakePatch : undefined,
         );
+        if (!hasWakeAfterNotifyFailure) {
+          this.markCompletionWakeFinished(completionWakeKey, false);
+        }
         request.hooks?.onNotifyFailed?.();
       },
       onWakeStarted: () => {
