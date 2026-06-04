@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.3.7] - 2026-06-03
+
+### Fixed
+- Treated summaries inside `agent_output(session, full=true)` as source material rather than visible delivery, so completion follow-up wakes still post a short routed summary when the user only saw the canonical plugin status line.
+- Rejected the stale `COMPLETION_FOLLOWUP_SKIPPED: already summarized by completed session` marker so incomplete completion follow-ups remain retryable instead of being silently cleared.
+- Suppressed generic terminal completion notifications after worktree strategy handling already sent an authoritative merge or PR outcome notification, preserving the contract of canonical plugin status plus at most one orchestrator-owned human summary.
+
 ## [4.3.6] - 2026-06-03
 
 ### Fixed
@@ -405,7 +412,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Default Codex approval policy to `on-request`.
 - Raised the default session limit.
 
-[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.3.6...HEAD
+[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.3.7...HEAD
+[4.3.7]: https://github.com/goldmar/openclaw-code-agent/compare/v4.3.6...v4.3.7
 [4.3.6]: https://github.com/goldmar/openclaw-code-agent/compare/v4.3.5...v4.3.6
 [4.3.5]: https://github.com/goldmar/openclaw-code-agent/compare/v4.3.4...v4.3.5
 [4.3.4]: https://github.com/goldmar/openclaw-code-agent/compare/v4.3.3...v4.3.4
