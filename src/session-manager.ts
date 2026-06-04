@@ -890,6 +890,7 @@ export class SessionManager {
       userMessage: text,
       notifyUser: "always",
       completionWakeSummaryRequired: requiresGoalSuccessFollowup,
+      completionWakeOutcomeKey: requiresGoalSuccessFollowup ? `goal:${task.id}` : undefined,
       requireDirectUserNotification: requiresGoalSuccessFollowup,
       wakeMessageOnNotifySuccess: requiresGoalSuccessFollowup ? buildWakeMessage(true) : undefined,
       wakeMessageOnNotifyFailed: requiresGoalSuccessFollowup ? buildWakeMessage(false) : undefined,

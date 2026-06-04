@@ -543,6 +543,7 @@ export class SessionLifecycleService {
       userMessage: payload.userMessage,
       notifyUser: "always",
       completionWakeSummaryRequired: followupSummaryRequired,
+      completionWakeOutcomeKey: `terminal:${session.id}`,
       requireDirectUserNotification: true,
       wakeMessageOnNotifySuccess: followupSummaryRequired ? payload.wakeMessageOnNotifySuccess : undefined,
       wakeMessageOnNotifyFailed: followupSummaryRequired ? payload.wakeMessageOnNotifyFailed : undefined,

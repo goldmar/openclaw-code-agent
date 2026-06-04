@@ -53,21 +53,29 @@ export class SessionNotificationService {
   ): void {
     const deliveryRef = this.getDeliveryRef(session);
     const completionWakeKey = this.buildCompletionWakeKey(deliveryRef, request);
-    if (completionWakeKey) {
-      if (this.inFlightCompletionWakes.has(completionWakeKey) || this.completedCompletionWakes.has(completionWakeKey)) {
+    let dispatchRequest = request;
+    let claimedCompletionWakeKey: string | undefined;
+    if (completionWakeKey?.key) {
+      if (this.inFlightCompletionWakes.has(completionWakeKey.key) || this.completedCompletionWakes.has(completionWakeKey.key)) {
         request.hooks?.onWakeSkipped?.("duplicate completion follow-up wake already handled");
-        return;
+        if (completionWakeKey.explicit) {
+          dispatchRequest = this.withoutCompletionWake(request);
+        } else {
+          return;
+        }
+      } else {
+        this.inFlightCompletionWakes.add(completionWakeKey.key);
+        claimedCompletionWakeKey = completionWakeKey.key;
       }
-      this.inFlightCompletionWakes.add(completionWakeKey);
     }
-    const completionWakePatch = this.buildCompletionWakePatch(request);
-    const hasWakeAfterNotifySuccess = Boolean(request.wakeMessage?.trim() || request.wakeMessageOnNotifySuccess?.trim());
-    const hasWakeAfterNotifyFailure = Boolean(request.wakeMessage?.trim() || request.wakeMessageOnNotifyFailed?.trim());
+    const completionWakePatch = this.buildCompletionWakePatch(dispatchRequest);
+    const hasWakeAfterNotifySuccess = Boolean(dispatchRequest.wakeMessage?.trim() || dispatchRequest.wakeMessageOnNotifySuccess?.trim());
+    const hasWakeAfterNotifyFailure = Boolean(dispatchRequest.wakeMessage?.trim() || dispatchRequest.wakeMessageOnNotifyFailed?.trim());
 
     const mergedHooks: SessionNotificationHooks = {
       onNotifyStarted: () => {
         this.applyDeliveryState(deliveryRef, "notifying");
-        request.hooks?.onNotifyStarted?.();
+        dispatchRequest.hooks?.onNotifyStarted?.();
       },
       onNotifySucceeded: () => {
         this.applyNotifyDeliveryState(
@@ -76,9 +84,9 @@ export class SessionNotificationService {
           hasWakeAfterNotifySuccess ? completionWakePatch : undefined,
         );
         if (!hasWakeAfterNotifySuccess) {
-          this.markCompletionWakeFinished(completionWakeKey, false);
+          this.markCompletionWakeFinished(claimedCompletionWakeKey, false);
         }
-        request.hooks?.onNotifySucceeded?.();
+        dispatchRequest.hooks?.onNotifySucceeded?.();
       },
       onNotifyFailed: () => {
         this.applyNotifyDeliveryState(
@@ -87,9 +95,9 @@ export class SessionNotificationService {
           hasWakeAfterNotifyFailure ? completionWakePatch : undefined,
         );
         if (!hasWakeAfterNotifyFailure) {
-          this.markCompletionWakeFinished(completionWakeKey, false);
+          this.markCompletionWakeFinished(claimedCompletionWakeKey, false);
         }
-        request.hooks?.onNotifyFailed?.();
+        dispatchRequest.hooks?.onNotifyFailed?.();
       },
       onWakeStarted: () => {
         this.applyPersistedPatchWithCompletionWake(deliveryRef, "wake_pending", completionWakePatch, {
@@ -99,7 +107,7 @@ export class SessionNotificationService {
           completionWakeSkippedAt: undefined,
           completionWakeSkipReason: undefined,
         });
-        request.hooks?.onWakeStarted?.();
+        dispatchRequest.hooks?.onWakeStarted?.();
       },
       onWakeSucceeded: () => {
         this.applyPersistedPatchWithCompletionWake(deliveryRef, "idle", this.buildCompletionWakeSucceededPatch(completionWakePatch), {
@@ -108,8 +116,8 @@ export class SessionNotificationService {
           completionWakeSkippedAt: undefined,
           completionWakeSkipReason: undefined,
         });
-        this.markCompletionWakeFinished(completionWakeKey, true);
-        request.hooks?.onWakeSucceeded?.();
+        this.markCompletionWakeFinished(claimedCompletionWakeKey, true);
+        dispatchRequest.hooks?.onWakeSucceeded?.();
       },
       onWakeSkipped: (reason) => {
         this.applyPersistedPatchWithCompletionWake(deliveryRef, "idle", this.buildCompletionWakeSucceededPatch(completionWakePatch), {
@@ -118,20 +126,20 @@ export class SessionNotificationService {
           completionWakeSkippedAt: new Date().toISOString(),
           completionWakeSkipReason: reason,
         });
-        this.markCompletionWakeFinished(completionWakeKey, true);
-        request.hooks?.onWakeSkipped?.(reason);
+        this.markCompletionWakeFinished(claimedCompletionWakeKey, true);
+        dispatchRequest.hooks?.onWakeSkipped?.(reason);
       },
       onWakeFailed: () => {
         this.applyPersistedPatchWithCompletionWake(deliveryRef, "failed", completionWakePatch, {
           completionWakeFailedAt: new Date().toISOString(),
         });
-        this.markCompletionWakeFinished(completionWakeKey, false);
-        request.hooks?.onWakeFailed?.();
+        this.markCompletionWakeFinished(claimedCompletionWakeKey, false);
+        dispatchRequest.hooks?.onWakeFailed?.();
       },
     };
 
     this.wakeDispatcher.dispatchSessionNotification(session as Session, {
-      ...request,
+      ...dispatchRequest,
       hooks: mergedHooks,
     });
   }
@@ -157,6 +165,7 @@ export class SessionNotificationService {
       notifyUser: "always",
       requireDirectUserNotification: true,
       completionWakeSummaryRequired: summaryWakeRequired,
+      completionWakeOutcomeKey: `terminal:${sessionId}`,
       deferConditionalWakeUntilNextTick: true,
       wakeMessageOnNotifySuccess: summaryWakeRequired ? buildWakeMessage(true) : undefined,
       wakeMessageOnNotifyFailed: summaryWakeRequired ? buildWakeMessage(false) : undefined,
@@ -232,8 +241,23 @@ export class SessionNotificationService {
     return { completionWakeSummaryRequired: undefined };
   }
 
-  private buildCompletionWakeKey(deliveryRef: string, request: SessionNotificationRequest): string | undefined {
+  private withoutCompletionWake(request: SessionNotificationRequest): SessionNotificationRequest {
+    return {
+      ...request,
+      wakeMessage: undefined,
+      wakeMessageOnNotifySuccess: undefined,
+      wakeMessageOnNotifyFailed: undefined,
+      completionWakeSummaryRequired: false,
+    };
+  }
+
+  private buildCompletionWakeKey(deliveryRef: string, request: SessionNotificationRequest): { key: string; explicit: boolean } | undefined {
     if (request.completionWakeSummaryRequired !== true || !deliveryRef) return undefined;
+    const outcomeKey = request.completionWakeOutcomeKey?.trim();
+    if (outcomeKey) {
+      const digest = createHash("sha256").update(outcomeKey).digest("hex").slice(0, 16);
+      return { key: `${deliveryRef}:outcome:${digest}`, explicit: true };
+    }
     const wakeTexts = [
       request.wakeMessage,
       request.wakeMessageOnNotifySuccess,
@@ -243,7 +267,7 @@ export class SessionNotificationService {
       .filter((text): text is string => Boolean(text));
     if (wakeTexts.length === 0) return undefined;
     const digest = createHash("sha256").update(wakeTexts.join("\n---completion-wake---\n")).digest("hex").slice(0, 16);
-    return `${deliveryRef}:${request.label}:${digest}`;
+    return { key: `${deliveryRef}:${request.label}:${digest}`, explicit: false };
   }
 
   private markCompletionWakeFinished(key: string | undefined, completed: boolean): void {

@@ -386,6 +386,7 @@ export class SessionWorktreeStrategyService {
       userMessage: successMsg,
       notifyUser: "always",
       completionWakeSummaryRequired: true,
+      completionWakeOutcomeKey: `terminal:${session.id}`,
       deferConditionalWakeUntilNextTick: true,
       wakeMessageOnNotifySuccess: buildWorktreeOutcomeFollowupWake({
         sessionId: session.id,

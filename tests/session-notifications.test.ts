@@ -345,6 +345,125 @@ describe("SessionNotificationService", () => {
     assert.equal(patches.filter(({ patch }) => patch.completionWakeSucceededAt).length, 1);
   });
 
+  it("suppresses completion follow-up prompt variants for the same terminal outcome key", () => {
+    const requests: Array<Record<string, unknown>> = [];
+    const skippedReasons: string[] = [];
+    const fakeDispatcher = {
+      dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, (reason?: string) => void> }) => {
+        requests.push(request as Record<string, unknown>);
+        request.hooks?.onNotifyStarted?.();
+        request.hooks?.onNotifySucceeded?.();
+        request.hooks?.onWakeStarted?.();
+        request.hooks?.onWakeSucceeded?.();
+      },
+      dispose: () => {},
+    };
+
+    const service = new SessionNotificationService(
+      fakeDispatcher as any,
+      () => {},
+    );
+    const session = { id: "session-same-terminal-outcome", harnessSessionId: "h-same-terminal-outcome" } as any;
+    const hooks = {
+      onWakeSkipped: (reason?: string) => {
+        skippedReasons.push(reason ?? "");
+      },
+    };
+
+    service.dispatch(session, {
+      label: "completed",
+      userMessage: "✅ [editable-running-goals] Completed",
+      wakeMessageOnNotifySuccess: "generic terminal completion wake",
+      completionWakeSummaryRequired: true,
+      completionWakeOutcomeKey: "terminal:session-same-terminal-outcome",
+      notifyUser: "always",
+    });
+    service.dispatch(session, {
+      label: "worktree-outcome",
+      userMessage: "✅ PR updated: https://github.example.test/repo/pull/165",
+      wakeMessageOnNotifySuccess: "richer PR outcome wake with different text",
+      completionWakeSummaryRequired: true,
+      completionWakeOutcomeKey: "terminal:session-same-terminal-outcome",
+      notifyUser: "always",
+      hooks,
+    });
+
+    assert.equal(requests.length, 2);
+    assert.deepEqual(
+      requests.map((request) => ({
+        label: request.label,
+        userMessage: request.userMessage,
+        wakeMessageOnNotifySuccess: request.wakeMessageOnNotifySuccess,
+        completionWakeSummaryRequired: request.completionWakeSummaryRequired,
+      })),
+      [
+        {
+          label: "completed",
+          userMessage: "✅ [editable-running-goals] Completed",
+          wakeMessageOnNotifySuccess: "generic terminal completion wake",
+          completionWakeSummaryRequired: true,
+        },
+        {
+          label: "worktree-outcome",
+          userMessage: "✅ PR updated: https://github.example.test/repo/pull/165",
+          wakeMessageOnNotifySuccess: undefined,
+          completionWakeSummaryRequired: false,
+        },
+      ],
+    );
+    assert.deepEqual(skippedReasons, ["duplicate completion follow-up wake already handled"]);
+  });
+
+  it("uses the same completion outcome key for routed worktree follow-through prompts", () => {
+    const requests: Array<Record<string, unknown>> = [];
+    const fakeDispatcher = {
+      dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, (reason?: string) => void> }) => {
+        requests.push(request as Record<string, unknown>);
+        request.hooks?.onNotifyStarted?.();
+        request.hooks?.onNotifySucceeded?.();
+        request.hooks?.onWakeStarted?.();
+        request.hooks?.onWakeSucceeded?.();
+      },
+      dispose: () => {},
+    };
+
+    const service = new SessionNotificationService(
+      fakeDispatcher as any,
+      () => {},
+    );
+    const session = {
+      id: "session-routed-terminal-outcome",
+      harnessSessionId: "h-routed-terminal-outcome",
+      name: "routed-outcome",
+      route: {
+        provider: "telegram",
+        target: "-100123",
+        threadId: "32947",
+        sessionKey: "agent:x:telegram:channel:-100123:topic:32947",
+      },
+    } as any;
+
+    service.dispatch(session, {
+      label: "completed",
+      userMessage: "✅ [routed-outcome] Completed",
+      wakeMessageOnNotifySuccess: "generic terminal completion wake",
+      completionWakeSummaryRequired: true,
+      completionWakeOutcomeKey: "terminal:session-routed-terminal-outcome",
+      notifyUser: "always",
+    });
+    service.notifyWorktreeOutcome(
+      session,
+      "✅ PR updated: https://github.example.test/repo/pull/165",
+      { detailLines: ["PR number: #165."] },
+    );
+
+    assert.equal(requests.length, 2);
+    assert.equal(requests[1]?.label, "worktree-outcome");
+    assert.equal(requests[1]?.userMessage, "✅ PR updated: https://github.example.test/repo/pull/165");
+    assert.equal(requests[1]?.wakeMessageOnNotifySuccess, undefined);
+    assert.equal(requests[1]?.completionWakeSummaryRequired, false);
+  });
+
   it("bounds completed completion wake keys while retaining recent duplicate suppression", () => {
     const requests: Array<Record<string, unknown>> = [];
     const skippedReasons: string[] = [];
