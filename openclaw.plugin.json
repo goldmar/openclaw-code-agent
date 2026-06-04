@@ -19,7 +19,8 @@
       "agent_worktree_status",
       "goal_launch",
       "goal_status",
-      "goal_stop"
+      "goal_stop",
+      "goal_edit"
     ]
   },
   "configContracts": {
@@ -53,7 +54,8 @@
       "agent_stats",
       "goal",
       "goal_status",
-      "goal_stop"
+      "goal_stop",
+      "goal_edit"
     ]
   },
   "setup": {

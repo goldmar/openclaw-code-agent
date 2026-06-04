@@ -294,6 +294,108 @@ describe("GoalController", () => {
     assert.deepEqual(notifications, []);
   });
 
+  it("edits and persists an active goal without changing session lifecycle fields", () => {
+    const notifications: Array<{ label: string; text: string }> = [];
+    const controller = new GoalController({
+      emitGoalTaskUpdate: (_task: GoalTaskState, text: string, label: string) => {
+        notifications.push({ label, text });
+      },
+    } as any);
+    const store = createStore();
+    (controller as any).store = store;
+
+    const task = buildTask({
+      goal: "Ship the feature",
+      status: "running",
+      updatedAt: 10,
+      iteration: 3,
+      sessionId: "session-1",
+      sessionName: "goal-task",
+      harnessSessionId: "hs-1",
+      verifierCommands: [{ label: "test", command: "pnpm test" }],
+      loopMode: "verifier",
+    });
+    store.upsert(task);
+
+    const result = controller.editTask("goal-task", "  Ship the feature and update smoke tests  ");
+    const persisted = store.get("goal-1");
+
+    assert.equal(result.action, "updated");
+    assert.equal(result.action === "updated" ? result.previousGoal : undefined, "Ship the feature");
+    assert.equal(persisted?.goal, "Ship the feature and update smoke tests");
+    assert.equal(persisted?.status, "running");
+    assert.equal(persisted?.iteration, 3);
+    assert.equal(persisted?.sessionId, "session-1");
+    assert.equal(persisted?.sessionName, "goal-task");
+    assert.equal(persisted?.harnessSessionId, "hs-1");
+    assert.deepEqual(persisted?.verifierCommands, [{ label: "test", command: "pnpm test" }]);
+    assert.ok((persisted?.updatedAt ?? 0) >= 10);
+    assert.deepEqual(notifications.map((note) => note.label), ["goal-task-edited"]);
+    assert.match(notifications[0]?.text ?? "", /Goal task edited/);
+    assert.match(notifications[0]?.text ?? "", /Ship the feature and update smoke tests/);
+  });
+
+  it("allows editing a waiting_for_session goal because it is recoverable active state", () => {
+    const controller = new GoalController({ emitGoalTaskUpdate: () => {} } as any);
+    const store = createStore();
+    (controller as any).store = store;
+
+    const task = buildTask({ status: "waiting_for_session", goal: "Old goal" });
+    store.upsert(task);
+
+    const result = controller.editTask("goal-1", "New goal");
+
+    assert.equal(result.action, "updated");
+    assert.equal(store.get("goal-1")?.goal, "New goal");
+    assert.equal(store.get("goal-1")?.status, "waiting_for_session");
+  });
+
+  it("rejects an empty replacement goal without mutating state", () => {
+    const notifications: string[] = [];
+    const controller = new GoalController({
+      emitGoalTaskUpdate: (_task: GoalTaskState, _text: string, label: string) => {
+        notifications.push(label);
+      },
+    } as any);
+    const store = createStore();
+    (controller as any).store = store;
+
+    const task = buildTask({ goal: "Original goal", updatedAt: 10 });
+    store.upsert(task);
+
+    const result = controller.editTask("goal-1", "   ");
+
+    assert.equal(result.action, "invalid_goal");
+    assert.equal(store.get("goal-1")?.goal, "Original goal");
+    assert.equal(store.get("goal-1")?.updatedAt, 10);
+    assert.deepEqual(notifications, []);
+  });
+
+  it("rejects non-editable goal states without notifications", () => {
+    const statuses: Array<GoalTaskState["status"]> = ["succeeded", "failed", "stopped", "waiting_for_user"];
+
+    for (const status of statuses) {
+      const notifications: string[] = [];
+      const controller = new GoalController({
+        emitGoalTaskUpdate: (_task: GoalTaskState, _text: string, label: string) => {
+          notifications.push(label);
+        },
+      } as any);
+      const store = createStore();
+      (controller as any).store = store;
+
+      const task = buildTask({ status, goal: "Original goal", updatedAt: 10 });
+      store.upsert(task);
+
+      const result = controller.editTask("goal-1", "New goal");
+
+      assert.equal(result.action, "not_editable");
+      assert.equal(store.get("goal-1")?.goal, "Original goal");
+      assert.equal(store.get("goal-1")?.updatedAt, 10);
+      assert.deepEqual(notifications, []);
+    }
+  });
+
   it("fast-fails verifier-loop tasks when the underlying session fails", async () => {
     const controller = new GoalController({ emitGoalTaskUpdate: () => {} } as any);
     const store = createStore();

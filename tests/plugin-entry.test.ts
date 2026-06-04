@@ -283,6 +283,7 @@ describe("plugin entry source", () => {
         "goal",
         "goal_status",
         "goal_stop",
+        "goal_edit",
       ],
     });
     assert.deepEqual(pluginManifest.setup, {
@@ -324,6 +325,7 @@ describe("plugin entry source", () => {
       "goal_launch",
       "goal_status",
       "goal_stop",
+      "goal_edit",
     ];
     const pluginManifest = JSON.parse(readFileSync(join(rootDir, "openclaw.plugin.json"), "utf8")) as {
       contracts?: {
@@ -460,9 +462,11 @@ describe("plugin entry source", () => {
     assert.match(indexSource, /makeGoalLaunchTool/);
     assert.match(indexSource, /makeGoalStatusTool/);
     assert.match(indexSource, /makeGoalStopTool/);
+    assert.match(indexSource, /makeGoalEditTool/);
     assert.match(indexSource, /registerGoalCommand\(commandApi\)/);
     assert.match(indexSource, /registerGoalStatusCommand\(commandApi\)/);
     assert.match(indexSource, /registerGoalStopCommand\(commandApi\)/);
+    assert.match(indexSource, /registerGoalEditCommand\(commandApi\)/);
     assert.match(indexSource, /gc = new GoalController\(sm\)/);
     assert.match(indexSource, /gc\.start\(\)/);
   });
