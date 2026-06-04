@@ -177,7 +177,7 @@ New sessions use delegated worktree follow-through unless configured otherwise. 
 
 Ask OpenClaw for worktree status before cleaning resolved sandboxes.
 
-Merge and PR outcomes use a two-step completion contract: the plugin delivers the canonical outcome status, then wakes the orchestrator with the original route/thread metadata and `completionWakeSummaryRequired=true`. The orchestrator should read the full output, avoid repeating the status line, and send one short factual summary to the session origin route.
+Merge, PR, ordinary terminal, and no-change worktree outcomes use a two-step completion contract: the plugin delivers the canonical terse status, then wakes the orchestrator with the original route/thread metadata and `completionWakeSummaryRequired=true`. The orchestrator must read the full output, treat any final summary inside `agent_output` as source material rather than visible delivery, avoid repeating the status line, and send at most one short factual summary to the session origin route for the terminal/worktree outcome.
 
 ### Goal Tasks
 

@@ -274,7 +274,9 @@ Treat those fields as authoritative in orchestration logic:
 - `implemented_without_required_approval` is the explicit approval-bypass case
 - successful completion wakes already correspond to a canonical plugin-sent completion notification, and the orchestrator should usually follow that with a short factual outcome summary
 - that expectation applies to ordinary terminal/manual completions and no-change completion wakes too, not just delegated worktree flows
-- skip the summary only when the orchestrator is silently continuing an internal pipeline or there is no meaningful confirmed outcome to report yet
+- a final summary that exists only inside `agent_output(session, full=true)` is source material, not visible delivery; when the plugin has posted only its terse status line, the orchestrator must still send one short routed summary
+- send at most one orchestrator-owned human summary for a terminal/worktree outcome; if a duplicate wake can confirm that prior orchestrator follow-up was already visibly delivered, skip the duplicate
+- otherwise skip the summary only when the orchestrator is silently continuing an internal pipeline, there is no meaningful confirmed outcome to report yet, result data is incomplete or unreliable, or an explicit NO_REPLY/silent cron/system opt-out applies
 
 ## Worktree Strategies
 
@@ -455,7 +457,7 @@ Merge a worktree branch back to base.
 
 On conflicts, the plugin spawns a conflict-resolver session using the configured default harness.
 
-After a successful local merge, auto-merge, or local-merge-with-push-failure outcome, the plugin sends the canonical worktree status and wakes the orchestrator with `completionWakeSummaryRequired=true`. The wake carries the authoritative session origin route/thread block, including persisted route metadata when the active row no longer has it. The orchestrator must read `agent_output(session, full=true)` when available and send one short factual routed summary to that origin route. If `push=true` fails after the local merge, that follow-up must describe the push failure and must not claim the merge reached the remote. The persisted `completionWakeSummaryRequired` bit is pending-only; it is cleared only after the wake confirms that visible summary was delivered, or records an explicit valid skip reason.
+After a successful local merge, auto-merge, or local-merge-with-push-failure outcome, the plugin sends the canonical worktree status and wakes the orchestrator with `completionWakeSummaryRequired=true`. The wake carries the authoritative session origin route/thread block, including persisted route metadata when the active row no longer has it. The orchestrator must read `agent_output(session, full=true)` when available and send one short factual routed summary to that origin route; a good summary inside that output is not itself visible delivery. The generic terminal completion path must not emit a second completion follow-up for that same worktree outcome. If `push=true` fails after the local merge, that follow-up must describe the push failure and must not claim the merge reached the remote. The persisted `completionWakeSummaryRequired` bit is pending-only; it is cleared only after the wake confirms that visible summary was delivered, or records an explicit valid skip reason.
 
 ### `agent_pr`
 

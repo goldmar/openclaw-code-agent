@@ -139,15 +139,15 @@ export function buildCompletionFollowupInstructionLines(args: {
     `3. ${canonicalStatusDetail ?? (canonicalStatusDelivered
       ? "The plugin already sent the canonical completion status to the user."
       : "The plugin did not confirm delivery of the canonical completion status to the user.")}`,
-    `4. Inspect the full result for an existing meaningful user-facing final summary. If the completed agent already gave the user a concrete outcome/follow-up summary, do not send a second recap; finish with ${COMPLETION_FOLLOWUP_SKIPPED_MARKER}: already summarized by completed session.`,
-    `5. If the visible result is only the plugin's terse status line, or the full output supports useful non-duplicative facts that have not already been summarized, send the user one short factual completion summary for this completed session.`,
+    `4. Treat the completed session output as source material, not visible delivery. A meaningful final summary inside agent_output is not enough to skip, because the user may only have seen the plugin's terse status line.`,
+    `5. If the visible result is only the plugin's terse status line, use the full output to send the user one short factual completion summary for this completed session. Do this even when agent_output already contains a good final summary.`,
     `6. This requirement applies to ordinary terminal/manual completions too, not just delegated worktree decisions.`,
     ...routeInstruction,
-    `${ownerInstructionIndex}. That follow-up belongs to you alone; keep it brief, concrete, and grounded in reliable result data.`,
+    `${ownerInstructionIndex}. That follow-up belongs to you alone; keep it brief, concrete, and grounded in reliable result data. Send at most one orchestrator-owned human summary for this terminal/worktree outcome.`,
     ...(canonicalStatusDelivered
       ? [`${canonicalStatusInstructionIndex}. Do NOT repeat the plugin's status line, and do NOT rely on the plugin to summarize the completed work for you.`]
       : [`${canonicalStatusInstructionIndex}. Because canonical status delivery was not confirmed, account for that gap yourself when you follow up; do NOT assume the plugin already reached the user.`]),
-    `${canonicalStatusInstructionIndex + 1}. After the visible follow-up summary has actually been sent to the user or origin route, finish this wake turn with ${COMPLETION_FOLLOWUP_DELIVERED_MARKER}. If you are silently continuing an internal multi-phase pipeline, there is no meaningful confirmed outcome to report, or the completed session already summarized it, finish with ${COMPLETION_FOLLOWUP_SKIPPED_MARKER}: <brief reason>. Otherwise do not use either marker and do not answer NO_REPLY.`,
+    `${canonicalStatusInstructionIndex + 1}. After the visible follow-up summary has actually been sent to the user or origin route, finish this wake turn with ${COMPLETION_FOLLOWUP_DELIVERED_MARKER}. Use ${COMPLETION_FOLLOWUP_SKIPPED_MARKER}: <brief reason> only for valid skip cases: silently continuing an internal multi-phase pipeline, no meaningful confirmed outcome to report, incomplete or unreliable result data, an explicit NO_REPLY/silent cron/system opt-out, or a duplicate wake where you can confirm a prior orchestrator follow-up summary for this same outcome was already visibly delivered. Do not skip merely because agent_output contains a meaningful summary. Otherwise do not use either marker and do not answer NO_REPLY.`,
   ];
 }
 
@@ -251,15 +251,15 @@ export function buildWorktreeOutcomeFollowupWake(args: {
     ``,
     `[ACTION REQUIRED] Follow your autonomy rules for worktree follow-through:`,
     `1. Use agent_output(session='${args.sessionId}', full=true) to read the full result if output is available.`,
-    `2. Inspect the full result for an existing meaningful user-facing final summary. If the completed agent already gave the user a concrete outcome/follow-up summary, do not send a second recap; finish with ${COMPLETION_FOLLOWUP_SKIPPED_MARKER}: already summarized by completed session.`,
-    `3. If the visible result is only the plugin's terse status line, or the full output supports useful non-duplicative facts that have not already been summarized, send the user one short factual outcome summary grounded in the full output plus the canonical outcome status above.`,
+    `2. Treat the completed session output as source material, not visible delivery. A meaningful final summary inside agent_output is not enough to skip, because the user may only have seen the plugin's terse status line.`,
+    `3. If the visible result is only the plugin's terse status line, use the full output plus the canonical outcome status above to send the user one short factual outcome summary. Do this even when agent_output already contains a good final summary.`,
     `4. If full output is unavailable or not meaningful, say only what is proven by the merge/PR facts above; do not invent task details.`,
     `5. Mention blockers such as push failure when present; do not describe a local-only merge as pushed.`,
     ...(hasOriginRouteBlock
       ? [`6. Before sending that follow-up, honor the Session origin route block above. If originRoute differs from the current chat, do NOT use a plain final assistant reply; use a routed send path that preserves provider/target/threadId.`]
       : []),
-    `${hasOriginRouteBlock ? 7 : 6}. Do NOT repeat only the plugin status line; keep the follow-up brief, concrete, and non-duplicative.`,
-    `${hasOriginRouteBlock ? 8 : 7}. After the visible follow-up summary has actually been sent to the user or origin route, finish this wake turn with ${COMPLETION_FOLLOWUP_DELIVERED_MARKER}. If there is no meaningful confirmed outcome to report or the completed session already summarized it, finish with ${COMPLETION_FOLLOWUP_SKIPPED_MARKER}: <brief reason>. Otherwise do not use either marker and do not answer NO_REPLY.`,
+    `${hasOriginRouteBlock ? 7 : 6}. Do NOT repeat only the plugin status line; keep the follow-up brief, concrete, and non-duplicative. Send at most one orchestrator-owned human summary for this terminal/worktree outcome.`,
+    `${hasOriginRouteBlock ? 8 : 7}. After the visible follow-up summary has actually been sent to the user or origin route, finish this wake turn with ${COMPLETION_FOLLOWUP_DELIVERED_MARKER}. Use ${COMPLETION_FOLLOWUP_SKIPPED_MARKER}: <brief reason> only for valid skip cases: no meaningful confirmed outcome to report, incomplete or unreliable result data, an explicit NO_REPLY/silent cron/system opt-out, or a duplicate wake where you can confirm a prior orchestrator follow-up summary for this same outcome was already visibly delivered. Do not skip merely because agent_output contains a meaningful summary. Otherwise do not use either marker and do not answer NO_REPLY.`,
   ].join("\n");
 }
 

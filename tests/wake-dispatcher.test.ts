@@ -176,6 +176,17 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
     assert.deepEqual(failure, { outcome: "failure", reason: "completion follow-up wake ended with NO_REPLY" });
   });
 
+  it("rejects completion follow-up skips when the summary only existed in agent output", () => {
+    const failure = validateCompletionFollowupWakeSuccess(
+      "COMPLETION_FOLLOWUP_SKIPPED: already summarized by completed session\n",
+    );
+
+    assert.deepEqual(failure, {
+      outcome: "failure",
+      reason: "completion follow-up wake skipped because the summary was only in agent output, not visibly delivered",
+    });
+  });
+
   it("uses message.send for direct user notifications and logs completion", async () => {
     const dispatcher = createDispatcher();
     const session: FakeSession = {

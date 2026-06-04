@@ -120,10 +120,70 @@ describe("SessionLifecycleService", () => {
     assert.equal(request.requireDirectUserNotification, true);
     assert.match(request.wakeMessageOnNotifySuccess ?? "", /Plugin requested short factual follow-up summary: yes/);
     assert.match(request.wakeMessageOnNotifySuccess ?? "", /send the user one short factual completion summary/i);
-    assert.match(request.wakeMessageOnNotifySuccess ?? "", /COMPLETION_FOLLOWUP_SKIPPED: already summarized by completed session/);
+    assert.match(request.wakeMessageOnNotifySuccess ?? "", /Do this even when agent_output already contains a good final summary/);
+    assert.doesNotMatch(request.wakeMessageOnNotifySuccess ?? "", /already summarized by completed session/);
     assert.match(request.wakeMessageOnNotifyFailed ?? "", /Canonical completion status delivered to user: no/);
     assert.ok(infoLogs.some((line) => line.includes("\"event\":\"completion_notify_succeeded\"") && line.includes("\"requestedShortFactualSummary\":true")));
     assert.ok(infoLogs.some((line) => line.includes("\"event\":\"completion_wake_succeeded\"") && line.includes("\"canonicalStatusDelivered\":true")));
+  });
+
+  it("does not emit a second completion follow-up after a worktree outcome notification", async () => {
+    const requests: Array<Record<string, unknown>> = [];
+    let terminalWakeChecks = 0;
+
+    const service = new SessionLifecycleService({
+      persistSession: () => {},
+      clearWaitingTimestamp: () => {},
+      handleWorktreeStrategy: async () => {
+        requests.push({
+          label: "worktree-merge-success",
+          userMessage: "✅ Merged: agent/example → main (4 files, +531/-0)",
+          completionWakeSummaryRequired: true,
+          wakeMessageOnNotifySuccess: "Worktree follow-through outcome recorded.",
+        });
+        return {
+          notificationSent: true,
+          worktreeRemoved: true,
+        };
+      },
+      resolveWorktreeRepoDir: () => undefined,
+      updatePersistedSession: () => false,
+      dispatchSessionNotification: (_session, request) => {
+        requests.push(request as unknown as Record<string, unknown>);
+      },
+      notifySession: () => {},
+      clearRetryTimersForSession: () => {},
+      hasTurnCompleteWakeMarker: () => false,
+      shouldEmitTurnCompleteWake: () => true,
+      shouldEmitTerminalWake: () => {
+        terminalWakeChecks += 1;
+        return true;
+      },
+      resolvePlanApprovalMode: () => "ask",
+      getPlanApprovalButtons: () => [],
+      getResumeButtons: () => [],
+      getQuestionButtons: () => undefined,
+      extractLastOutputLine: () => undefined,
+      getOutputPreview: () => "Implementation summary already in agent output.",
+      originThreadLine: () => "Origin thread: telegram topic 42",
+      debounceWaitingEvent: () => true,
+      isAlreadyMerged: () => false,
+    });
+
+    await service.handleSessionTerminal(createStubSession({
+      id: "session-worktree-merge",
+      name: "portfolio-move-summary",
+      status: "completed",
+      duration: 12_000,
+      worktreePath: "/tmp/worktree",
+      originalWorkdir: "/tmp/repo",
+      worktreeStrategy: "auto-merge",
+    }));
+
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0]?.label, "worktree-merge-success");
+    assert.equal(requests[0]?.completionWakeSummaryRequired, true);
+    assert.equal(terminalWakeChecks, 0);
   });
 
   it("keeps completion follow-up summaries for degraded routes that still recover to a direct user route", () => {
@@ -179,7 +239,8 @@ describe("SessionLifecycleService", () => {
     };
     assert.equal(request.completionWakeSummaryRequired, true);
     assert.match(request.wakeMessageOnNotifySuccess ?? "", /send the user one short factual completion summary/i);
-    assert.match(request.wakeMessageOnNotifySuccess ?? "", /COMPLETION_FOLLOWUP_SKIPPED: already summarized by completed session/);
+    assert.match(request.wakeMessageOnNotifySuccess ?? "", /Do this even when agent_output already contains a good final summary/);
+    assert.doesNotMatch(request.wakeMessageOnNotifySuccess ?? "", /already summarized by completed session/);
     assert.match(request.wakeMessageOnNotifyFailed ?? "", /Canonical completion status delivered to user: no/i);
   });
 
