@@ -11,11 +11,20 @@ type RoutableSession = Pick<
   "id" | "harnessSessionId" | "backendRef" | "route" | "originChannel" | "originThreadId" | "originSessionKey"
 > & {
   name?: string;
+  goalTaskId?: string;
 };
 
 type PersistedRoutingSession = Pick<
   PersistedSessionInfo,
-  "sessionId" | "harnessSessionId" | "backendRef" | "route" | "name" | "originChannel" | "originThreadId" | "originSessionKey"
+  | "sessionId"
+  | "harnessSessionId"
+  | "backendRef"
+  | "route"
+  | "name"
+  | "originChannel"
+  | "originThreadId"
+  | "originSessionKey"
+  | "goalTaskId"
 > & {
   id?: string;
 };
@@ -52,7 +61,7 @@ export class SessionNotificationService {
     request: SessionNotificationRequest,
   ): void {
     const deliveryRef = this.getDeliveryRef(session);
-    const completionWakeKey = this.buildCompletionWakeKey(deliveryRef, request);
+    const completionWakeKey = this.buildCompletionWakeKey(deliveryRef, request, session);
     let dispatchRequest = request;
     let claimedCompletionWakeKey: string | undefined;
     if (completionWakeKey?.key) {
@@ -251,9 +260,13 @@ export class SessionNotificationService {
     };
   }
 
-  private buildCompletionWakeKey(deliveryRef: string, request: SessionNotificationRequest): { key: string; explicit: boolean } | undefined {
+  private buildCompletionWakeKey(
+    deliveryRef: string,
+    request: SessionNotificationRequest,
+    session: RoutableSession | PersistedRoutingSession,
+  ): { key: string; explicit: boolean } | undefined {
     if (request.completionWakeSummaryRequired !== true || !deliveryRef) return undefined;
-    const outcomeKey = request.completionWakeOutcomeKey?.trim();
+    const outcomeKey = this.normalizeCompletionWakeOutcomeKey(session, request.completionWakeOutcomeKey?.trim());
     if (outcomeKey) {
       const digest = createHash("sha256").update(outcomeKey).digest("hex").slice(0, 16);
       return { key: `${deliveryRef}:outcome:${digest}`, explicit: true };
@@ -268,6 +281,18 @@ export class SessionNotificationService {
     if (wakeTexts.length === 0) return undefined;
     const digest = createHash("sha256").update(wakeTexts.join("\n---completion-wake---\n")).digest("hex").slice(0, 16);
     return { key: `${deliveryRef}:${request.label}:${digest}`, explicit: false };
+  }
+
+  private normalizeCompletionWakeOutcomeKey(
+    session: RoutableSession | PersistedRoutingSession,
+    outcomeKey: string | undefined,
+  ): string | undefined {
+    if (!outcomeKey) return undefined;
+    const goalTaskId = session.goalTaskId?.trim();
+    if (goalTaskId && outcomeKey.startsWith("terminal:")) {
+      return `goal:${goalTaskId}`;
+    }
+    return outcomeKey;
   }
 
   private markCompletionWakeFinished(key: string | undefined, completed: boolean): void {

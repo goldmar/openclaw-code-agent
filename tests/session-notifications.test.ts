@@ -414,6 +414,188 @@ describe("SessionNotificationService", () => {
     assert.deepEqual(skippedReasons, ["duplicate completion follow-up wake already handled"]);
   });
 
+  it("suppresses a terminal completion follow-up after a goal success follow-up for the same goal-owned session", () => {
+    const requests: Array<Record<string, unknown>> = [];
+    const skippedReasons: string[] = [];
+    const fakeDispatcher = {
+      dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, (reason?: string) => void> }) => {
+        requests.push(request as Record<string, unknown>);
+        request.hooks?.onNotifyStarted?.();
+        request.hooks?.onNotifySucceeded?.();
+        request.hooks?.onWakeStarted?.();
+        request.hooks?.onWakeSucceeded?.();
+      },
+      dispose: () => {},
+    };
+
+    const service = new SessionNotificationService(
+      fakeDispatcher as any,
+      () => {},
+    );
+    const session = {
+      id: "goal-owned-session",
+      harnessSessionId: "h-goal-owned-session",
+      goalTaskId: "goal-123",
+    } as any;
+
+    service.dispatch(session, {
+      label: "goal-task-succeeded",
+      userMessage: "✅ [paper-watcher] Goal task succeeded",
+      wakeMessageOnNotifySuccess: "goal success follow-up wake",
+      completionWakeSummaryRequired: true,
+      completionWakeOutcomeKey: "goal:goal-123",
+      notifyUser: "always",
+    });
+    service.dispatch(session, {
+      label: "completed",
+      userMessage: "✅ [paper-watcher] Completed",
+      wakeMessageOnNotifySuccess: "ordinary terminal completion wake",
+      completionWakeSummaryRequired: true,
+      completionWakeOutcomeKey: "terminal:goal-owned-session",
+      notifyUser: "always",
+      hooks: {
+        onWakeSkipped: (reason?: string) => {
+          skippedReasons.push(reason ?? "");
+        },
+      },
+    });
+
+    assert.equal(requests.length, 2);
+    assert.deepEqual(
+      requests.map((request) => ({
+        label: request.label,
+        userMessage: request.userMessage,
+        wakeMessageOnNotifySuccess: request.wakeMessageOnNotifySuccess,
+        completionWakeSummaryRequired: request.completionWakeSummaryRequired,
+      })),
+      [
+        {
+          label: "goal-task-succeeded",
+          userMessage: "✅ [paper-watcher] Goal task succeeded",
+          wakeMessageOnNotifySuccess: "goal success follow-up wake",
+          completionWakeSummaryRequired: true,
+        },
+        {
+          label: "completed",
+          userMessage: "✅ [paper-watcher] Completed",
+          wakeMessageOnNotifySuccess: undefined,
+          completionWakeSummaryRequired: false,
+        },
+      ],
+    );
+    assert.deepEqual(skippedReasons, ["duplicate completion follow-up wake already handled"]);
+  });
+
+  it("suppresses a goal success follow-up after a terminal completion follow-up for the same goal-owned session", () => {
+    const requests: Array<Record<string, unknown>> = [];
+    const skippedReasons: string[] = [];
+    const fakeDispatcher = {
+      dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, (reason?: string) => void> }) => {
+        requests.push(request as Record<string, unknown>);
+        request.hooks?.onNotifyStarted?.();
+        request.hooks?.onNotifySucceeded?.();
+        request.hooks?.onWakeStarted?.();
+        request.hooks?.onWakeSucceeded?.();
+      },
+      dispose: () => {},
+    };
+
+    const service = new SessionNotificationService(
+      fakeDispatcher as any,
+      () => {},
+    );
+    const session = {
+      id: "goal-owned-session-terminal-first",
+      harnessSessionId: "h-goal-owned-session-terminal-first",
+      goalTaskId: "goal-terminal-first",
+    } as any;
+
+    service.dispatch(session, {
+      label: "completed",
+      userMessage: "✅ [paper-watcher] Completed",
+      wakeMessageOnNotifySuccess: "ordinary terminal completion wake",
+      completionWakeSummaryRequired: true,
+      completionWakeOutcomeKey: "terminal:goal-owned-session-terminal-first",
+      notifyUser: "always",
+    });
+    service.dispatch(session, {
+      label: "goal-task-succeeded",
+      userMessage: "✅ [paper-watcher] Goal task succeeded",
+      wakeMessageOnNotifySuccess: "goal success follow-up wake",
+      completionWakeSummaryRequired: true,
+      completionWakeOutcomeKey: "goal:goal-terminal-first",
+      notifyUser: "always",
+      hooks: {
+        onWakeSkipped: (reason?: string) => {
+          skippedReasons.push(reason ?? "");
+        },
+      },
+    });
+
+    assert.equal(requests.length, 2);
+    assert.equal(requests[0]?.wakeMessageOnNotifySuccess, "ordinary terminal completion wake");
+    assert.equal(requests[0]?.completionWakeSummaryRequired, true);
+    assert.equal(requests[1]?.label, "goal-task-succeeded");
+    assert.equal(requests[1]?.userMessage, "✅ [paper-watcher] Goal task succeeded");
+    assert.equal(requests[1]?.wakeMessageOnNotifySuccess, undefined);
+    assert.equal(requests[1]?.completionWakeSummaryRequired, false);
+    assert.deepEqual(skippedReasons, ["duplicate completion follow-up wake already handled"]);
+  });
+
+  it("allows a retry for the same goal terminal outcome after the follow-up wake fails", () => {
+    const requests: Array<Record<string, unknown>> = [];
+    let wakeAttempts = 0;
+    const fakeDispatcher = {
+      dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, (reason?: string) => void> }) => {
+        requests.push(request as Record<string, unknown>);
+        request.hooks?.onNotifyStarted?.();
+        request.hooks?.onNotifySucceeded?.();
+        request.hooks?.onWakeStarted?.();
+        wakeAttempts += 1;
+        if (wakeAttempts === 1) {
+          request.hooks?.onWakeFailed?.();
+        } else {
+          request.hooks?.onWakeSucceeded?.();
+        }
+      },
+      dispose: () => {},
+    };
+
+    const service = new SessionNotificationService(
+      fakeDispatcher as any,
+      () => {},
+    );
+    const session = {
+      id: "goal-owned-retry-session",
+      harnessSessionId: "h-goal-owned-retry-session",
+      goalTaskId: "goal-retry",
+    } as any;
+
+    service.dispatch(session, {
+      label: "goal-task-succeeded",
+      userMessage: "✅ [paper-watcher] Goal task succeeded",
+      wakeMessageOnNotifySuccess: "goal success follow-up wake",
+      completionWakeSummaryRequired: true,
+      completionWakeOutcomeKey: "goal:goal-retry",
+      notifyUser: "always",
+    });
+    service.dispatch(session, {
+      label: "completed",
+      userMessage: "✅ [paper-watcher] Completed",
+      wakeMessageOnNotifySuccess: "retry terminal completion wake",
+      completionWakeSummaryRequired: true,
+      completionWakeOutcomeKey: "terminal:goal-owned-retry-session",
+      notifyUser: "always",
+    });
+
+    assert.equal(requests.length, 2);
+    assert.deepEqual(
+      requests.map((request) => request.wakeMessageOnNotifySuccess),
+      ["goal success follow-up wake", "retry terminal completion wake"],
+    );
+    assert.equal(wakeAttempts, 2);
+  });
+
   it("uses the same completion outcome key for routed worktree follow-through prompts", () => {
     const requests: Array<Record<string, unknown>> = [];
     const fakeDispatcher = {
