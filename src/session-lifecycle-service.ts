@@ -264,8 +264,15 @@ export class SessionLifecycleService {
       }
     }
 
+    if (worktreeResult.notificationSent) {
+      console.info(
+        `[SessionManager] Suppressing generic terminal notification for session ${session.id} ` +
+        "because worktree strategy handling already sent the authoritative outcome notification.",
+      );
+      return;
+    }
+
     if (session.killReason === "done") {
-      if (worktreeResult.notificationSent) return;
       if (this.deps.hasTurnCompleteWakeMarker(session.id)) return;
       if (!this.deps.shouldEmitTerminalWake(session)) return;
       this.emitCompleted(session);

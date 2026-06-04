@@ -57,6 +57,12 @@ export function validateCompletionFollowupWakeSuccess(stdout: string): DispatchS
   if (!finalText.includes(COMPLETION_FOLLOWUP_DELIVERED_MARKER)) {
     const skipReason = extractCompletionFollowupSkipReason(finalText);
     if (skipReason) {
+      if (isInvalidCompletionFollowupSkipReason(skipReason)) {
+        return {
+          outcome: "failure",
+          reason: "completion follow-up wake skipped because the summary was only in agent output, not visibly delivered",
+        };
+      }
       return { outcome: "skipped", reason: skipReason };
     }
     return {
@@ -113,6 +119,10 @@ function extractCompletionFollowupSkipReason(finalText: string): string | undefi
   const suffix = finalText.slice(markerIndex + COMPLETION_FOLLOWUP_SKIPPED_MARKER.length);
   const reason = suffix.replace(/^[:\s-]+/, "").split(/\r?\n/, 1)[0]?.trim();
   return reason || "explicitly skipped by wake agent";
+}
+
+function isInvalidCompletionFollowupSkipReason(reason: string): boolean {
+  return /\balready summarized by completed session\b/i.test(reason);
 }
 
 export interface WakeDispatcherOptions {

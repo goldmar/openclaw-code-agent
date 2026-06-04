@@ -2262,7 +2262,8 @@ describe("SessionManager turn-end wake", () => {
     assert.match(request.wakeMessageOnNotifySuccess, /do NOT use a plain final assistant reply/i);
     assert.match(request.wakeMessageOnNotifySuccess, /plugin already sent the canonical completion status/i);
     assert.match(request.wakeMessageOnNotifySuccess, /send the user one short factual completion summary/i);
-    assert.match(request.wakeMessageOnNotifySuccess, /COMPLETION_FOLLOWUP_SKIPPED: already summarized by completed session/);
+    assert.match(request.wakeMessageOnNotifySuccess, /Do this even when agent_output already contains a good final summary/);
+    assert.doesNotMatch(request.wakeMessageOnNotifySuccess, /already summarized by completed session/);
     assert.match(request.wakeMessageOnNotifySuccess, /ordinary terminal\/manual completions too/i);
     assert.match(request.wakeMessageOnNotifySuccess, /do NOT repeat the plugin's status line/i);
     assert.match(request.wakeMessageOnNotifyFailed, /did not confirm delivery of the canonical completion status/i);

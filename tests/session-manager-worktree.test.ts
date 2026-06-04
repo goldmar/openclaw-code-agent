@@ -188,7 +188,8 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       assert.equal(request.userMessage, "ℹ️ [plan-report] Session completed with no changes — worktree cleaned up");
       assert.match(request.wakeMessage, /plugin already sent the canonical completion status/i);
       assert.match(request.wakeMessage, /send the user one short factual completion summary/i);
-      assert.match(request.wakeMessage, /COMPLETION_FOLLOWUP_SKIPPED: already summarized by completed session/);
+      assert.match(request.wakeMessage, /Do this even when agent_output already contains a good final summary/);
+      assert.doesNotMatch(request.wakeMessage, /already summarized by completed session/);
       assert.match(request.wakeMessage, /ordinary terminal\/manual completions too/i);
       assert.match(request.wakeMessage, /do NOT repeat the plugin's status line/i);
     } finally {
@@ -248,7 +249,8 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       assert.equal(request.userMessage, "ℹ️ [investigation-report] Session completed with no changes — worktree cleaned up");
       assert.match(request.wakeMessage, /plugin already sent the canonical completion status/i);
       assert.match(request.wakeMessage, /send the user one short factual completion summary/i);
-      assert.match(request.wakeMessage, /COMPLETION_FOLLOWUP_SKIPPED: already summarized by completed session/);
+      assert.match(request.wakeMessage, /Do this even when agent_output already contains a good final summary/);
+      assert.doesNotMatch(request.wakeMessage, /already summarized by completed session/);
       assert.match(request.wakeMessage, /ordinary terminal\/manual completions too/i);
       assert.match(request.wakeMessage, /do NOT repeat the plugin's status line/i);
     } finally {
