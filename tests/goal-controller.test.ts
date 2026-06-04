@@ -537,6 +537,58 @@ describe("GoalController", () => {
     assert.match(notifications[0]?.text ?? "", /Status: running/);
   });
 
+  it("includes completion-claimed detail when a Ralph completion fails verification", async () => {
+    const notifications: Array<{ label: string; text: string }> = [];
+    const controller = new GoalController({
+      resolve: () => undefined,
+      emitGoalTaskUpdate: (_task: GoalTaskState, text: string, label: string) => {
+        notifications.push({ label, text });
+      },
+    } as any);
+    const store = createStore();
+    (controller as any).store = store;
+    (controller as any).runVerifiers = async () => ({
+      status: "fail",
+      steps: [],
+      summary: "FAIL readiness (exit 1, 25ms)\nbroker gate stayed closed",
+      fingerprint: "fingerprint-1",
+    });
+    (controller as any).resumeTaskSession = async () => createStubSession({
+      id: "session-2",
+      name: "goal-task",
+      harnessSessionId: "hs-2",
+    });
+
+    const task = buildTask({
+      loopMode: "ralph",
+      completionPromise: "DONE",
+      verifierCommands: [{ label: "readiness", command: "pnpm readiness" }],
+      sessionId: "session-1",
+      sessionName: "goal-task",
+      harnessSessionId: "hs-1",
+    });
+    const session = createStubSession({
+      id: "session-1",
+      status: "completed",
+      getOutput: () => [
+        "Readiness check ran and submit proof was attempted.",
+        "DONE",
+      ],
+    });
+
+    await (controller as any).handleTerminalSession(task, session);
+
+    assert.equal(task.iteration, 1);
+    assert.deepEqual(notifications.map((note) => note.label), ["goal-task-progress"]);
+    assert.match(notifications[0]?.text ?? "", /Completion claimed but verifiers still failed/);
+    assert.match(notifications[0]?.text ?? "", /Iteration summary:/);
+    assert.match(notifications[0]?.text ?? "", /Completion was claimed, but the loop is continuing after verification/);
+    assert.match(notifications[0]?.text ?? "", /Verifier: FAIL readiness/);
+    assert.match(notifications[0]?.text ?? "", /Verifier: broker gate stayed closed/);
+    assert.match(notifications[0]?.text ?? "", /Last verifier:/);
+    assert.match(notifications[0]?.text ?? "", /Status: running/);
+  });
+
   it("includes verifier failure detail in repair iteration notifications", async () => {
     const notifications: Array<{ label: string; text: string }> = [];
     const controller = new GoalController({

@@ -82,8 +82,6 @@ export function buildGoalIterationSummary(input: GoalIterationSummaryInput): str
     }
   }
 
-  if (bullets.length === 0) return undefined;
-
   return [`Iteration summary:`, ...bullets.map((line) => `- ${line}`)].join("\n");
 }
 
