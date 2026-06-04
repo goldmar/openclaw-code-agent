@@ -24,6 +24,7 @@ export interface SessionNotificationRequest {
   wakeMessageOnNotifySuccess?: string;
   wakeMessageOnNotifyFailed?: string;
   completionWakeSummaryRequired?: boolean;
+  completionWakeOutcomeKey?: string;
   deferConditionalWakeUntilNextTick?: boolean;
   requireDirectUserNotification?: boolean;
   notifyUser?: SessionNotificationPolicy;
