@@ -61,9 +61,9 @@ describe("goal_edit", () => {
       },
     });
 
-    const result = handler?.({ args: 'goal-task "New quoted goal" with suffix' });
+    const result = handler?.({ args: 'goal-task New  goal   with spacing' });
 
-    assert.deepEqual(editCall, { ref: "goal-task", goal: "New quoted goal with suffix" });
+    assert.deepEqual(editCall, { ref: "goal-task", goal: "New  goal   with spacing" });
     assert.equal(result?.text, 'Task "goal-task" (goal-1) goal updated.');
   });
 

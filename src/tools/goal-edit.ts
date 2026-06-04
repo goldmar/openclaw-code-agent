@@ -24,7 +24,7 @@ export function formatGoalEditResult(result: GoalTaskEditResult, ref: string): s
     case "invalid_goal":
       return "Error: replacement goal must not be empty.";
     case "not_editable":
-      if (result.task.status === "succeeded" || result.task.status === "failed" || result.task.status === "stopped") {
+      if (result.task.status !== "waiting_for_user") {
         return `Task is already ${result.task.status}.`;
       }
       return `Error: Goal task "${result.task.name}" is ${result.task.status} and cannot be edited.`;

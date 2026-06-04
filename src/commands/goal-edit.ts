@@ -1,5 +1,5 @@
 import { goalController } from "../singletons";
-import { tokenizeCommandArgs } from "./args";
+import { consumeFirstCommandArg } from "./args";
 import { formatGoalEditResult } from "../tools/goal-edit";
 
 const GOAL_EDIT_USAGE = "Usage: /goal_edit <task-id-or-name> <replacement-goal>";
@@ -20,9 +20,9 @@ export function registerGoalEditCommand(api: any): void {
         return { text: GOAL_EDIT_USAGE };
       }
 
-      const tokens = tokenizeCommandArgs(raw);
-      const ref = tokens[0]?.trim();
-      const replacementGoal = tokens.slice(1).join(" ").trim();
+      const consumed = consumeFirstCommandArg(raw);
+      const ref = consumed?.value.trim();
+      const replacementGoal = consumed?.rest.trim();
       if (!ref || !replacementGoal) {
         return { text: GOAL_EDIT_USAGE };
       }
