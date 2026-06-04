@@ -23,6 +23,7 @@ export interface ResolvedWorktreeToolTarget {
     originChannel?: string;
     originThreadId?: string | number;
     originSessionKey?: string;
+    goalTaskId?: string;
   };
 }
 
@@ -52,6 +53,7 @@ export function resolveWorktreeToolTarget(sessionManager: SessionManager, ref: s
           originChannel: persistedSession.originChannel,
           originThreadId: persistedSession.originThreadId,
           originSessionKey: persistedSession.originSessionKey,
+          goalTaskId: persistedSession.goalTaskId,
         }
       : undefined),
   };

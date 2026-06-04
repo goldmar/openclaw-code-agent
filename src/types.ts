@@ -402,6 +402,8 @@ export interface PersistedSessionInfo {
   route?: SessionRoute;
   outputPath?: string;
   harness?: string;
+  /** Optional goal-task owner for explicit iterative loop orchestration. */
+  goalTaskId?: string;
   requestedPermissionMode?: PermissionMode;
   currentPermissionMode?: PermissionMode;
   approvalExecutionState?: ApprovalExecutionState;

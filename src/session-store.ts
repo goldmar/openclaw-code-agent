@@ -278,6 +278,7 @@ export class SessionStore {
       route,
       outputPath,
       harness: session.harnessName,
+      goalTaskId: session.goalTaskId,
       requestedPermissionMode: session.requestedPermissionMode,
       currentPermissionMode: session.currentPermissionMode,
       approvalExecutionState: session.approvalExecutionState,

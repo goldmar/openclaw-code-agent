@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { buildPrMetadata, buildPrOutcomeDetailLines, formatPrBody } from "../src/tools/agent-pr";
+import { buildPrCompletionWakeOutcomeKey, buildPrMetadata, buildPrOutcomeDetailLines, formatPrBody } from "../src/tools/agent-pr";
 
 describe("agent_pr outcome detail lines", () => {
   it("builds factual PR opened details for summary wakes", () => {
@@ -41,6 +41,53 @@ describe("agent_pr outcome detail lines", () => {
         "Pushed 2 new commits (+14/-3).",
       ],
     );
+  });
+
+  it("builds stable PR update follow-up outcome keys from material commit evidence", () => {
+    const baseArgs = {
+      action: "updated" as const,
+      branchName: "agent/summary-hook",
+      prUrl: "https://github.com/goldmar/openclaw-code-agent/pull/127",
+      prNumber: 127,
+      targetRepo: "goldmar/openclaw-code-agent",
+    };
+
+    const firstKey = buildPrCompletionWakeOutcomeKey({
+      ...baseArgs,
+      diffSummary: {
+        commits: 1,
+        filesChanged: 2,
+        insertions: 14,
+        deletions: 3,
+        changedFiles: ["src/a.ts"],
+        commitMessages: [{ hash: "abc1234", message: "Update summary", author: "Codex" }],
+      },
+    });
+    const duplicateKey = buildPrCompletionWakeOutcomeKey({
+      ...baseArgs,
+      diffSummary: {
+        commits: 1,
+        filesChanged: 2,
+        insertions: 14,
+        deletions: 3,
+        changedFiles: ["src/a.ts"],
+        commitMessages: [{ hash: "abc1234", message: "Reworded rendered text", author: "Codex" }],
+      },
+    });
+    const laterKey = buildPrCompletionWakeOutcomeKey({
+      ...baseArgs,
+      diffSummary: {
+        commits: 1,
+        filesChanged: 1,
+        insertions: 5,
+        deletions: 0,
+        changedFiles: ["src/b.ts"],
+        commitMessages: [{ hash: "def5678", message: "Follow-up update", author: "Codex" }],
+      },
+    });
+
+    assert.equal(firstKey, duplicateKey);
+    assert.notEqual(firstKey, laterKey);
   });
 });
 
