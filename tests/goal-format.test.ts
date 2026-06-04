@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-import { buildGoalTaskRuntimeSnapshot, formatGoalTask } from "../src/goal-format";
+import { buildGoalIterationSummary, buildGoalTaskRuntimeSnapshot, formatGoalTask } from "../src/goal-format";
 import type { GoalTaskState } from "../src/types";
 
 describe("goal-format", () => {
@@ -43,5 +43,48 @@ describe("goal-format", () => {
     assert.match(text, /Awaiting input: no/);
     assert.match(text, /FAIL check-1/);
     assert.match(text, /running tests/);
+  });
+
+  it("formats concise iteration summaries from prior output and verifier state", () => {
+    const ralphSummary = buildGoalIterationSummary({
+      completionPromise: "DONE",
+      completionDetected: false,
+      output: [
+        "Readiness check ran; broker gate is still closed.",
+        "No eligible paper intents appeared.",
+        "Next iteration will watch for market data readiness.",
+      ].join("\n"),
+    });
+
+    assert.equal(
+      ralphSummary,
+      [
+        "Iteration summary:",
+        "- Agent: Readiness check ran; broker gate is still closed.",
+        "- Agent: No eligible paper intents appeared.",
+        "- Agent: Next iteration will watch for market data readiness.",
+      ].join("\n"),
+    );
+
+    const verifierSummary = buildGoalIterationSummary({
+      output: "DONE",
+      verifierSummary: "FAIL readiness (exit 1, 25ms)\nbroker gate stayed closed",
+      completionPromise: "DONE",
+      completionDetected: true,
+    });
+
+    assert.equal(
+      verifierSummary,
+      [
+        "Iteration summary:",
+        "- Completion was claimed, but the loop is continuing after verification.",
+        "- Verifier: FAIL readiness (exit 1, 25ms)",
+        "- Verifier: broker gate stayed closed",
+      ].join("\n"),
+    );
+  });
+
+  it("omits iteration summaries when source material is unavailable", () => {
+    assert.equal(buildGoalIterationSummary({ completionPromise: "DONE", completionDetected: false }), undefined);
   });
 });
