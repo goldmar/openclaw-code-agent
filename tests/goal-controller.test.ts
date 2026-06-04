@@ -455,6 +455,133 @@ describe("GoalController", () => {
     assert.equal(resumed, false);
   });
 
+  it("includes a concise Ralph iteration summary when continuing without completion", async () => {
+    const notifications: Array<{ label: string; text: string }> = [];
+    const controller = new GoalController({
+      resolve: () => undefined,
+      emitGoalTaskUpdate: (_task: GoalTaskState, text: string, label: string) => {
+        notifications.push({ label, text });
+      },
+    } as any);
+    const store = createStore();
+    (controller as any).store = store;
+    (controller as any).resumeTaskSession = async () => createStubSession({
+      id: "session-2",
+      name: "goal-task",
+      harnessSessionId: "hs-2",
+      getOutput: () => [],
+    });
+
+    const task = buildTask({
+      loopMode: "ralph",
+      completionPromise: "DONE",
+      sessionId: "session-1",
+      sessionName: "goal-task",
+      harnessSessionId: "hs-1",
+    });
+    const session = createStubSession({
+      id: "session-1",
+      status: "completed",
+      getOutput: () => [
+        "Readiness check ran; broker gate is still closed.",
+        "No eligible paper intents appeared.",
+        "Next iteration will watch for market data readiness.",
+      ],
+    });
+
+    await (controller as any).handleTerminalSession(task, session);
+
+    assert.equal(task.iteration, 1);
+    assert.deepEqual(notifications.map((note) => note.label), ["goal-task-progress"]);
+    assert.match(notifications[0]?.text ?? "", /Ralph iteration continued/);
+    assert.match(notifications[0]?.text ?? "", /Iteration summary:/);
+    assert.match(notifications[0]?.text ?? "", /Readiness check ran; broker gate is still closed/);
+    assert.match(notifications[0]?.text ?? "", /No eligible paper intents appeared/);
+    assert.match(notifications[0]?.text ?? "", /Next iteration will watch for market data readiness/);
+    assert.match(notifications[0]?.text ?? "", /Status: running/);
+  });
+
+  it("falls back to metadata-only Ralph continuation notifications without source output", async () => {
+    const notifications: Array<{ label: string; text: string }> = [];
+    const controller = new GoalController({
+      resolve: () => undefined,
+      emitGoalTaskUpdate: (_task: GoalTaskState, text: string, label: string) => {
+        notifications.push({ label, text });
+      },
+    } as any);
+    const store = createStore();
+    (controller as any).store = store;
+    (controller as any).resumeTaskSession = async () => createStubSession({
+      id: "session-2",
+      name: "goal-task",
+      harnessSessionId: "hs-2",
+    });
+
+    const task = buildTask({
+      loopMode: "ralph",
+      completionPromise: "DONE",
+      sessionId: "session-1",
+      sessionName: "goal-task",
+      harnessSessionId: "hs-1",
+    });
+    const session = createStubSession({
+      id: "session-1",
+      status: "completed",
+      getOutput: () => [],
+    });
+
+    await (controller as any).handleTerminalSession(task, session);
+
+    assert.deepEqual(notifications.map((note) => note.label), ["goal-task-progress"]);
+    assert.doesNotMatch(notifications[0]?.text ?? "", /Iteration summary:/);
+    assert.match(notifications[0]?.text ?? "", /Status: running/);
+  });
+
+  it("includes verifier failure detail in repair iteration notifications", async () => {
+    const notifications: Array<{ label: string; text: string }> = [];
+    const controller = new GoalController({
+      resolve: () => undefined,
+      emitGoalTaskUpdate: (_task: GoalTaskState, text: string, label: string) => {
+        notifications.push({ label, text });
+      },
+    } as any);
+    const store = createStore();
+    (controller as any).store = store;
+    (controller as any).runVerifiers = async () => ({
+      status: "fail",
+      steps: [],
+      summary: "FAIL readiness (exit 1, 25ms)\nbroker gate stayed closed",
+      fingerprint: "fingerprint-1",
+    });
+    (controller as any).resumeTaskSession = async () => createStubSession({
+      id: "session-2",
+      name: "goal-task",
+      harnessSessionId: "hs-2",
+    });
+
+    const task = buildTask({
+      loopMode: "verifier",
+      verifierCommands: [{ label: "readiness", command: "pnpm readiness" }],
+      sessionId: "session-1",
+      sessionName: "goal-task",
+      harnessSessionId: "hs-1",
+    });
+    const session = createStubSession({
+      id: "session-1",
+      status: "completed",
+    });
+
+    await (controller as any).handleTerminalSession(task, session);
+
+    assert.equal(task.iteration, 1);
+    assert.deepEqual(notifications.map((note) => note.label), ["goal-task-progress"]);
+    assert.match(notifications[0]?.text ?? "", /Repair iteration started after verifier failure/);
+    assert.match(notifications[0]?.text ?? "", /Iteration summary:/);
+    assert.match(notifications[0]?.text ?? "", /Verifier: FAIL readiness/);
+    assert.match(notifications[0]?.text ?? "", /Verifier: broker gate stayed closed/);
+    assert.match(notifications[0]?.text ?? "", /Last verifier:/);
+  });
+
   it("auto-approves goal-loop plan review even when the session requested ask approval", async () => {
     const messages: string[] = [];
     const permissionModes: string[] = [];

@@ -3,7 +3,7 @@ import { createHash } from "crypto";
 import { nanoid } from "nanoid";
 
 import { executeRespond } from "./actions/respond";
-import { buildGoalTaskRuntimeSnapshot, formatGoalTask } from "./goal-format";
+import { buildGoalIterationSummary, buildGoalTaskRuntimeSnapshot, formatGoalTask } from "./goal-format";
 import { GoalTaskStore } from "./goal-store";
 import { decideResumeSessionId } from "./resume-policy";
 import type { Session } from "./session";
@@ -673,9 +673,9 @@ export class GoalController {
     this.sessionManager.emitGoalTaskUpdate(task, text, label);
   }
 
-  private notifyIterationStatus(task: GoalTaskState, heading: string, session?: Session): void {
+  private notifyIterationStatus(task: GoalTaskState, heading: string, session?: Session, iterationSummary?: string): void {
     const runtime = buildGoalTaskRuntimeSnapshot(session ?? (task.sessionId ? this.sessionManager.resolve(task.sessionId) : undefined));
-    const text = `${heading}\n\n${formatGoalTask(task, runtime)}`;
+    const text = `${heading}\n\n${formatGoalTask(task, runtime, iterationSummary)}`;
     this.notify(task, text, "goal-task-progress");
   }
 
@@ -962,10 +962,16 @@ export class GoalController {
 
         task.iteration += 1;
         const prompt = buildRalphVerifierFailurePrompt(task, verifier);
+        const iterationSummary = buildGoalIterationSummary({
+          output,
+          verifierSummary: verifier.summary,
+          completionPromise,
+          completionDetected: true,
+        });
         try {
           const resumed = await this.resumeTaskSession(task, prompt, session);
           this.setTaskRunningWithSession(task, resumed);
-          this.notifyIterationStatus(task, `🔁 [${task.name}] Completion claimed but verifiers still failed`);
+          this.notifyIterationStatus(task, `🔁 [${task.name}] Completion claimed but verifiers still failed`, undefined, iterationSummary);
           this.scheduleTaskEvaluation(task.id, "ralph-verifier-resume", resumed.id);
         } catch (err: unknown) {
           this.markTaskFailed(task, `Failed to resume the Ralph goal task after verifier failure: ${errorMessage(err)}`);
@@ -995,10 +1001,15 @@ export class GoalController {
 
       task.iteration += 1;
       const prompt = buildRalphContinuationPrompt(task, output);
+      const iterationSummary = buildGoalIterationSummary({
+        output,
+        completionPromise,
+        completionDetected: false,
+      });
       try {
         const resumed = await this.resumeTaskSession(task, prompt, session);
         this.setTaskRunningWithSession(task, resumed);
-        this.notifyIterationStatus(task, `🔁 [${task.name}] Ralph iteration continued`);
+        this.notifyIterationStatus(task, `🔁 [${task.name}] Ralph iteration continued`, undefined, iterationSummary);
         this.scheduleTaskEvaluation(task.id, "ralph-continue", resumed.id);
       } catch (err: unknown) {
         this.markTaskFailed(task, `Failed to continue the Ralph goal task: ${errorMessage(err)}`);
@@ -1035,10 +1046,13 @@ export class GoalController {
 
     task.iteration += 1;
     const prompt = buildRepairPrompt(task, verifier);
+    const iterationSummary = buildGoalIterationSummary({
+      verifierSummary: verifier.summary,
+    });
     try {
       const resumed = await this.resumeTaskSession(task, prompt, session);
       this.setTaskRunningWithSession(task, resumed);
-      this.notifyIterationStatus(task, `🔁 [${task.name}] Repair iteration started after verifier failure`);
+      this.notifyIterationStatus(task, `🔁 [${task.name}] Repair iteration started after verifier failure`, undefined, iterationSummary);
       this.scheduleTaskEvaluation(task.id, "repair-resume", resumed.id);
     } catch (err: unknown) {
       this.markTaskFailed(task, `Failed to resume the goal task: ${errorMessage(err)}`);
