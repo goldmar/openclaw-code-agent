@@ -548,6 +548,7 @@ export class SessionManager {
     options?: {
       summaryWakeRequired?: boolean;
       detailLines?: string[];
+      completionWakeOutcomeKey?: string;
     },
   ): void {
     this.notifications.notifyWorktreeOutcome(sessionOrPersisted as Session, outcomeLine, options);

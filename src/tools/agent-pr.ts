@@ -93,6 +93,38 @@ export function buildPrOutcomeDetailLines(args: {
   ];
 }
 
+export function buildPrCompletionWakeOutcomeKey(args: {
+  action: "opened" | "updated";
+  branchName: string;
+  prUrl?: string;
+  prNumber?: number;
+  targetRepo?: string;
+  diffSummary?: DiffSummary;
+}): string {
+  const prIdentity = args.prNumber !== undefined
+    ? `#${args.prNumber}`
+    : (args.prUrl ?? "unknown-pr");
+  const commits = args.diffSummary?.commitMessages
+    .map((commit) => commit.hash.trim())
+    .filter(Boolean)
+    .join(",");
+  const materialChange = args.action === "updated"
+    ? (commits || [
+        `commits:${args.diffSummary?.commits ?? "unknown"}`,
+        `insertions:${args.diffSummary?.insertions ?? "unknown"}`,
+        `deletions:${args.diffSummary?.deletions ?? "unknown"}`,
+      ].join(","))
+    : "created";
+  return [
+    "worktree-pr",
+    args.action,
+    args.targetRepo ?? "default-repo",
+    prIdentity,
+    args.branchName,
+    materialChange,
+  ].join(":");
+}
+
 function normalizePrText(value: string | undefined, options: { preserveBlankLines?: boolean } = { preserveBlankLines: true }): string | undefined {
   const text = value
     ?.replace(/\r\n/g, "\n")
@@ -530,6 +562,14 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
               target.notificationTarget!,
               updateOutcomeLine,
               {
+                completionWakeOutcomeKey: buildPrCompletionWakeOutcomeKey({
+                  action: "updated",
+                  branchName,
+                  prUrl: prStatus.url,
+                  prNumber: prStatus.number,
+                  targetRepo,
+                  diffSummary,
+                }),
                 detailLines: buildPrOutcomeDetailLines({
                   action: "updated",
                   branchName,
@@ -672,6 +712,13 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
             target.notificationTarget!,
             outcomeLine,
             {
+              completionWakeOutcomeKey: buildPrCompletionWakeOutcomeKey({
+                action: "opened",
+                branchName,
+                prUrl: prResult.prUrl,
+                prNumber: newPrStatus.number,
+                targetRepo,
+              }),
               detailLines: buildPrOutcomeDetailLines({
                 action: "opened",
                 branchName,

@@ -646,6 +646,123 @@ describe("SessionNotificationService", () => {
     assert.equal(requests[1]?.completionWakeSummaryRequired, false);
   });
 
+  it("suppresses duplicate PR follow-through wakes across session refs for the same routed outcome", () => {
+    const requests: Array<Record<string, unknown>> = [];
+    const skippedReasons: string[] = [];
+    const fakeDispatcher = {
+      dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, (reason?: string) => void> }) => {
+        requests.push(request as Record<string, unknown>);
+        request.hooks?.onNotifyStarted?.();
+        request.hooks?.onNotifySucceeded?.();
+        request.hooks?.onWakeStarted?.();
+        request.hooks?.onWakeSucceeded?.();
+      },
+      dispose: () => {},
+    };
+
+    const service = new SessionNotificationService(
+      fakeDispatcher as any,
+      () => {},
+    );
+    const route = {
+      provider: "telegram",
+      target: "-100123",
+      threadId: "13832",
+      sessionKey: "agent:x:telegram:channel:-100123:topic:13832",
+    };
+    const firstTarget = {
+      id: "active-session-ref",
+      harnessSessionId: "h-active-session-ref",
+      name: "pr-update",
+      route,
+    } as any;
+    const secondTarget = {
+      id: "persisted-session-ref",
+      harnessSessionId: "h-persisted-session-ref",
+      name: "pr-update",
+      route,
+    } as any;
+    const outcomeKey = "worktree-pr:updated:goldmar/openclaw-code-agent:#169:agent/example:abc1234";
+
+    service.notifyWorktreeOutcome(
+      firstTarget,
+      "✅ PR updated: https://github.example.test/repo/pull/169",
+      {
+        completionWakeOutcomeKey: outcomeKey,
+        detailLines: ["PR number: #169.", "Pushed 1 new commit (+2/-1)."],
+      },
+    );
+    service.notifyWorktreeOutcome(
+      secondTarget,
+      "✅ PR updated: https://github.example.test/repo/pull/169",
+      {
+        completionWakeOutcomeKey: outcomeKey,
+        detailLines: ["PR number: #169.", "Pushed 1 new commit (+2/-1)."],
+      },
+    );
+
+    assert.equal(requests.length, 2);
+    assert.equal(requests[0]?.wakeMessageOnNotifySuccess === undefined, false);
+    assert.equal(requests[0]?.completionWakeSummaryRequired, true);
+    assert.equal(requests[1]?.label, "worktree-outcome");
+    assert.equal(requests[1]?.userMessage, "✅ PR updated: https://github.example.test/repo/pull/169");
+    assert.equal(requests[1]?.wakeMessageOnNotifySuccess, undefined);
+    assert.equal(requests[1]?.completionWakeSummaryRequired, false);
+    assert.deepEqual(skippedReasons, []);
+  });
+
+  it("keeps materially new PR follow-through outcomes visible for the same route", () => {
+    const requests: Array<Record<string, unknown>> = [];
+    const fakeDispatcher = {
+      dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, (reason?: string) => void> }) => {
+        requests.push(request as Record<string, unknown>);
+        request.hooks?.onNotifyStarted?.();
+        request.hooks?.onNotifySucceeded?.();
+        request.hooks?.onWakeStarted?.();
+        request.hooks?.onWakeSucceeded?.();
+      },
+      dispose: () => {},
+    };
+
+    const service = new SessionNotificationService(
+      fakeDispatcher as any,
+      () => {},
+    );
+    const session = {
+      id: "pr-update-session",
+      harnessSessionId: "h-pr-update-session",
+      route: {
+        provider: "telegram",
+        target: "-100123",
+        threadId: "13832",
+      },
+    } as any;
+
+    service.notifyWorktreeOutcome(
+      session,
+      "✅ PR updated: https://github.example.test/repo/pull/169",
+      {
+        completionWakeOutcomeKey: "worktree-pr:updated:goldmar/openclaw-code-agent:#169:agent/example:abc1234",
+        detailLines: ["PR number: #169.", "Pushed 1 new commit (+2/-1)."],
+      },
+    );
+    service.notifyWorktreeOutcome(
+      session,
+      "✅ PR updated: https://github.example.test/repo/pull/169",
+      {
+        completionWakeOutcomeKey: "worktree-pr:updated:goldmar/openclaw-code-agent:#169:agent/example:def5678",
+        detailLines: ["PR number: #169.", "Pushed 1 new commit (+3/-0)."],
+      },
+    );
+
+    assert.equal(requests.length, 2);
+    assert.deepEqual(
+      requests.map((request) => request.completionWakeSummaryRequired),
+      [true, true],
+    );
+    assert.equal(requests.every((request) => typeof request.wakeMessageOnNotifySuccess === "string"), true);
+  });
+
   it("bounds completed completion wake keys while retaining recent duplicate suppression", () => {
     const requests: Array<Record<string, unknown>> = [];
     const skippedReasons: string[] = [];

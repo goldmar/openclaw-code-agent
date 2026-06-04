@@ -2,7 +2,7 @@ import type { PersistedSessionInfo } from "./types";
 import { WakeDispatcher, type SessionNotificationHooks, type SessionNotificationRequest } from "./wake-dispatcher";
 import type { Session } from "./session";
 import { getBackendConversationId, getPrimarySessionLookupRef } from "./session-backend-ref";
-import { formatOriginRouteWakeBlock } from "./session-route";
+import { formatOriginRouteWakeBlock, resolveNotificationRoute } from "./session-route";
 import { buildWorktreeOutcomeFollowupWake } from "./session-notification-builder";
 import { createHash } from "crypto";
 
@@ -32,6 +32,7 @@ type PersistedRoutingSession = Pick<
 export interface WorktreeOutcomeNotificationOptions {
   summaryWakeRequired?: boolean;
   detailLines?: string[];
+  completionWakeOutcomeKey?: string;
 }
 
 export interface SessionNotificationServiceOptions {
@@ -174,7 +175,7 @@ export class SessionNotificationService {
       notifyUser: "always",
       requireDirectUserNotification: true,
       completionWakeSummaryRequired: summaryWakeRequired,
-      completionWakeOutcomeKey: `terminal:${sessionId}`,
+      completionWakeOutcomeKey: options.completionWakeOutcomeKey ?? `terminal:${sessionId}`,
       deferConditionalWakeUntilNextTick: true,
       wakeMessageOnNotifySuccess: summaryWakeRequired ? buildWakeMessage(true) : undefined,
       wakeMessageOnNotifyFailed: summaryWakeRequired ? buildWakeMessage(false) : undefined,
@@ -269,7 +270,7 @@ export class SessionNotificationService {
     const outcomeKey = this.normalizeCompletionWakeOutcomeKey(session, request.completionWakeOutcomeKey?.trim());
     if (outcomeKey) {
       const digest = createHash("sha256").update(outcomeKey).digest("hex").slice(0, 16);
-      return { key: `${deliveryRef}:outcome:${digest}`, explicit: true };
+      return { key: `${this.buildExplicitCompletionWakeScope(deliveryRef, session)}:outcome:${digest}`, explicit: true };
     }
     const wakeTexts = [
       request.wakeMessage,
@@ -293,6 +294,22 @@ export class SessionNotificationService {
       return `goal:${goalTaskId}`;
     }
     return outcomeKey;
+  }
+
+  private buildExplicitCompletionWakeScope(
+    deliveryRef: string,
+    session: RoutableSession | PersistedRoutingSession,
+  ): string {
+    const route = resolveNotificationRoute(session);
+    if (!route) return deliveryRef;
+    const routeIdentity = JSON.stringify({
+      provider: route.provider,
+      accountId: route.accountId,
+      target: route.target,
+      threadId: route.threadId,
+    });
+    const digest = createHash("sha256").update(routeIdentity).digest("hex").slice(0, 16);
+    return `route:${digest}`;
   }
 
   private markCompletionWakeFinished(key: string | undefined, completed: boolean): void {
