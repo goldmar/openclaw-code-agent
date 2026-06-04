@@ -1,18 +1,34 @@
 # ACPX, Codex, and Code Agent
 
-This note compares three adjacent OpenClaw surfaces as of the `openclaw-code-agent` `4.3.6` / OpenClaw `2026.6.1` installable SDK readiness baseline:
+This note compares three adjacent OpenClaw surfaces as of the `openclaw-code-agent` `4.3.7` / OpenClaw `2026.6.1` installable SDK readiness baseline:
 
-- OpenClaw ACP and the bundled `acpx` runtime backend
-- OpenClaw's bundled `codex` plugin
+- OpenClaw ACP and the `acpx` runtime backend
+- OpenClaw's `codex` plugin
 - `openclaw-code-agent`
 
-The important answer up front: **ACPX and Codex are different things**. ACPX is OpenClaw's ACP runtime backend. The bundled `codex` plugin is OpenClaw's native Codex provider and harness. `openclaw-code-agent` is a separate external plugin that orchestrates coding sessions from chat.
+The important answer up front: **ACPX and Codex are different things**. ACPX is OpenClaw's ACP runtime backend with plugin-owned session and transport management. The `codex` plugin is OpenClaw's Codex app-server harness and model provider plugin. `openclaw-code-agent` is a separate external plugin that orchestrates coding sessions from chat.
 
 ## The Short Version
 
 - Use **OpenClaw ACP / ACPX** when you want ACP-native editor interoperability, ACP session/runtime controls, configured bindings, or a broad ACP backend surface.
-- Use **OpenClaw's bundled Codex plugin** when you want embedded OpenClaw agent turns to run through Codex App Server as a native harness/provider pair.
+- Use **OpenClaw's Codex plugin** when you want embedded OpenClaw agent turns to run through Codex App Server as a native harness/provider pair.
 - Use **`openclaw-code-agent`** when you want coding agents to behave like managed background jobs from chat: plan review before execution, resume/fork/interrupt flows, operator-visible session state, and worktree/merge/PR follow-through.
+
+## Current Routing Guidance
+
+The current OpenClaw routing split is:
+
+| Intent | Use | Owned by |
+| --- | --- | --- |
+| Normal embedded Codex agent turn from OpenClaw chat | `openai/gpt-*` model ref with the `codex` runtime available | OpenClaw `codex` plugin |
+| Fail closed if Codex is unavailable | Provider/model-scoped `agentRuntime.id: "codex"` | OpenClaw `codex` plugin |
+| Intentionally run an OpenAI agent model through the OpenClaw embedded runtime | Provider/model-scoped `agentRuntime.id: "openclaw"` | OpenClaw core runtime selection |
+| Bind, inspect, resume, steer, or stop native Codex app-server threads from chat | `/codex bind`, `/codex threads`, `/codex resume`, `/codex steer`, `/codex stop`, and related `/codex ...` commands | OpenClaw `codex` plugin |
+| Run Codex through the ACP adapter path | ACP runtime config with `runtime: "acp"` and `agentId: "codex"` | OpenClaw ACP / ACPX |
+| Run Claude Code, Gemini CLI, OpenCode, Cursor, Droid, or another external harness through OpenClaw core | ACP / ACPX, unless a dedicated native runtime exists and is explicitly selected | OpenClaw ACP / ACPX |
+| Launch managed coding work from chat with plan review, worktrees, wake notifications, and PR follow-through | `openclaw-code-agent` tools and `harnesses.codex.*` / `harnesses["claude-code"].*` config | `openclaw-code-agent` |
+
+In current OpenClaw docs, public runtime policy lives on provider/model entries as `agentRuntime.id`; whole-agent runtime pins are legacy and ignored. Legacy Codex GPT refs and `codex-cli/*` refs should be repaired with `openclaw doctor --fix` rather than copied into new config.
 
 ## Architecture Relationship
 
@@ -23,7 +39,7 @@ ACP client / editor
   -> ACP agent command / runtime session
 
 OpenClaw embedded agent turn
-  -> bundled `codex` provider + harness
+  -> `codex` provider + harness
   -> Codex App Server
 
 OpenClaw chat session using `openclaw-code-agent`
@@ -35,22 +51,24 @@ OpenClaw chat session using `openclaw-code-agent`
 The same Codex App Server substrate can appear in more than one place. That does **not** make the products the same:
 
 - ACPX is about ACP runtime/session interoperability.
-- The bundled core `codex` plugin is about OpenClaw embedded harness/provider execution.
+- The OpenClaw `codex` plugin is about OpenClaw embedded harness/provider execution.
 - `openclaw-code-agent` is about chat-native orchestration and finish-line control.
 
 ## Side-By-Side
 
-| Area | OpenClaw ACP / ACPX | OpenClaw bundled `codex` plugin | `openclaw-code-agent` |
+| Area | OpenClaw ACP / ACPX | OpenClaw `codex` plugin | `openclaw-code-agent` |
 | --- | --- | --- | --- |
 | Primary role | ACP bridge and runtime backend | Native Codex provider + harness for embedded OpenClaw turns | Chat orchestration plugin for coding sessions |
 | Are ACPX and Codex the same thing? | No | No | No |
 | IDE-native ACP server/bridge | Yes | No | No |
 | ACP session/runtime controls | Yes | No | No |
 | Configured ACP bindings and ACP session identities | Yes | No | No |
-| Can run Codex | Yes, if the ACP runtime targets a Codex-backed agent | Yes, natively through Codex App Server | Yes, through the plugin's native Codex harness |
-| Can run Claude Code | Yes, via ACP-backed agent commands | No | Yes |
-| Provider registration inside OpenClaw core | No | Yes | No |
+| Can run Codex | Yes, through the Codex ACP adapter (`runtime: "acp"`, `agentId: "codex"`) | Yes, natively through Codex App Server | Yes, through the plugin's native Codex harness |
+| Can run Claude Code | Yes, via ACP-backed agent commands | No | Yes, through the plugin's native Claude Code harness |
+| External harness fit | Best fit for Claude Code, Gemini CLI, OpenCode, Cursor, Droid, and similar ACP-backed harnesses in OpenClaw core | Not the external harness path | Owns only its configured native Claude Code and Codex harnesses |
+| Provider/model runtime selection inside OpenClaw core | No | Yes, via provider/model-scoped `agentRuntime.id` and `openai/*` model refs | No |
 | Native Codex model discovery/catalog in core | No | Yes | No |
+| Native `/codex` chat-control commands | No | Yes | No |
 | Multi-turn sessions | Yes | Yes, within OpenClaw embedded sessions | Yes |
 | Resume previous work | Yes | Yes | Yes |
 | Fork a previous session | Not the focus of the ACP surface | Not the focus of the harness surface | Yes |
@@ -69,32 +87,38 @@ The same Codex App Server substrate can appear in more than one place. That does
 
 Today OpenClaw ACP is more than a thin prompt bridge:
 
-- ACP bridge over stdio with `initialize`, `newSession`, `prompt`, `cancel`, `listSessions`, and partial `loadSession`
+- ACP bridge over stdio with lifecycle and prompt methods such as `initialize`, `session/new`, `session/prompt`, `session/cancel`, `session/list`, `session/load`, and `session/resume`
 - session updates such as `available_commands_update`, `usage_update`, and `tool_call_update`
 - runtime controls including `session/set_mode`, `session/set_config_option`, and `session/status`
 - configured ACP bindings and persisted ACP backend identity
-- embedded ACP runtime backend registration through the bundled `acpx` plugin
+- embedded ACP runtime backend registration through the `acpx` plugin
 - ACP runtime config for cwd, state dir, permission mode, MCP server injection, and per-agent command overrides
+- Codex adapter routing when the request explicitly needs ACP/acpx, using `runtime: "acp"` and `agentId: "codex"`
 
 What ACPX is **not**:
 
-- not the bundled Codex provider
+- not the OpenClaw Codex provider
 - not this plugin's session orchestrator
 - not a git worktree / merge / PR workflow
+- not the preferred chat-control surface for native Codex app-server threads
 
-### OpenClaw bundled `codex` plugin
+### OpenClaw `codex` plugin
 
-Today the bundled `codex` plugin provides:
+Today the `codex` plugin provides:
 
-- a `codex` provider for OpenClaw model selection
+- Codex-backed OpenAI agent turns using canonical `openai/gpt-*` model refs
 - Codex App Server model discovery with fallback model catalog
 - a native `codex` harness for embedded OpenClaw agent turns
 - synthetic auth/provider availability because the harness owns the native Codex login/session
-- Codex-specific App Server transport, fixed execution policy, sandbox, `reasoningEffort`, and `service_tier` fast-mode config
+- provider/model-scoped runtime routing through `agentRuntime.id: "codex"` or `agentRuntime.id: "openclaw"`
+- native `/codex ...` chat-control commands for app-server bind/status/models/threads/resume/steer/stop flows
+- Codex-specific App Server transport, native code-mode policy, sandbox integration, `reasoningEffort`, and service-tier config
 
-OpenClaw `2026.6.1` documents Codex as an explicit provider/runtime split. `openai/gpt-5.5` plus `agentRuntime.id: "codex"` selects the bundled native Codex app-server runtime, while `openai-codex/gpt-5.5` remains the PI Codex OAuth route. That routing policy is separate from this plugin's `harnesses.codex.*` configuration.
+OpenClaw `2026.6.1` documents Codex as an explicit provider/runtime split. `openai/gpt-5.5` selects an OpenAI model ref and, in the normal Codex setup, runs embedded agent turns through the native Codex app-server runtime. Provider/model-scoped `agentRuntime.id: "codex"` makes that selection fail closed if Codex is unavailable. Provider/model-scoped `agentRuntime.id: "openclaw"` intentionally opts an OpenAI agent model into the OpenClaw embedded runtime. Legacy Codex GPT refs and `codex-cli/*` refs are migration inputs for `openclaw doctor --fix`, not new config to copy.
 
-What the bundled `codex` plugin is **not**:
+That routing policy is separate from this plugin's `harnesses.codex.*` configuration. It is also separate from the ACP/acpx Codex adapter path, which is selected only when ACP/acpx is explicitly needed.
+
+What the `codex` plugin is **not**:
 
 - not ACPX
 - not an ACP runtime backend
@@ -118,6 +142,7 @@ What this plugin deliberately does **not** try to be:
 - not an ACP server
 - not an ACP runtime backend
 - not OpenClaw's general provider registry
+- not the owner of OpenClaw core's native `/codex` command surface or provider/model `agentRuntime.id` routing
 
 ## Where `openclaw-code-agent` Wins
 
@@ -131,7 +156,7 @@ The plugin has a first-class approval workflow:
 - approval happens with `agent_respond(..., approve=true)` or the shared Approve / Revise / Reject callback flow
 - plain-text `Approve`, `Revise`, and `Reject` replies provide the same control path when interactive buttons are unavailable
 
-Neither ACPX nor the bundled core Codex plugin owns this chat-native review loop.
+Neither ACPX nor the OpenClaw Codex plugin owns this chat-native review loop.
 
 ### 2. Worktree Isolation And Finish-Line Control
 
@@ -142,7 +167,7 @@ The plugin treats the git lifecycle as part of the product:
 - `agent_merge`, `agent_pr`, `agent_worktree_status`, and `agent_worktree_cleanup`
 - inline `Merge` / `Open PR` actions in Telegram and Discord
 
-ACPX and the bundled core Codex plugin do not solve this layer.
+ACPX and the OpenClaw Codex plugin do not solve this layer.
 
 ### 3. Background-Job Semantics In Chat
 
@@ -154,7 +179,7 @@ The plugin is built for long-running coding jobs in chat:
 - startup recovery
 - cost and duration tracking
 
-ACPX is best thought of as an ACP runtime/backend surface. The bundled core Codex plugin is a native harness/provider surface. This plugin is a session orchestrator.
+ACPX is best thought of as an ACP runtime/backend surface. The OpenClaw Codex plugin is a native harness/provider surface. This plugin is a session orchestrator.
 
 ## Where ACPX Or Core Codex Win
 
@@ -164,11 +189,24 @@ Use **ACPX / OpenClaw ACP** when you need:
 - ACP runtime controls and interoperability
 - configured ACP bindings and backend session identity
 - a broader ACP backend matrix
+- Codex through an explicit ACP adapter path
+- Claude Code, Gemini CLI, OpenCode, Cursor, Droid, or another external harness path in OpenClaw core
 
-Use the **bundled core Codex plugin** when you need:
+Use the **OpenClaw Codex plugin** when you need:
 
-- embedded OpenClaw turns on `codex/*` models
+- embedded OpenClaw turns on canonical `openai/gpt-*` model refs through Codex App Server
 - Codex-managed model discovery and model refs inside OpenClaw core
+- provider/model-scoped `agentRuntime.id` routing for Codex fail-closed or intentional OpenClaw fallback behavior
+- native `/codex ...` chat-control commands for Codex app-server threads
 - native Codex harness execution without adopting this plugin's chat orchestration model
 
 If the job is running coding agents from chat like managed engineering tasks, use `openclaw-code-agent`.
+
+## Review Sources
+
+This comparison was checked against:
+
+- OpenClaw docs for agent runtimes, Codex harness routing, and plugin inventory in the OpenClaw source tree.
+- ACP v1 protocol docs for the JSON-RPC session model and session lifecycle methods.
+- ACP updates through May 2026, including stabilized session list, session resume, session close, logout, and config options.
+- Zed's public ACP Codex registry entry, which describes Codex as an ACP adapter integration.
