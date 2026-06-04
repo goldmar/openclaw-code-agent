@@ -442,11 +442,6 @@ describe("SessionNotificationService", () => {
         sessionKey: "agent:x:telegram:channel:-100123:topic:32947",
       },
     } as any;
-    const hooks = {
-      onWakeSkipped: (reason?: string) => {
-        skippedReasons.push(reason ?? "");
-      },
-    };
 
     service.dispatch(session, {
       label: "completed",
@@ -455,7 +450,6 @@ describe("SessionNotificationService", () => {
       completionWakeSummaryRequired: true,
       completionWakeOutcomeKey: "terminal:session-routed-terminal-outcome",
       notifyUser: "always",
-      hooks,
     });
     service.notifyWorktreeOutcome(
       session,
