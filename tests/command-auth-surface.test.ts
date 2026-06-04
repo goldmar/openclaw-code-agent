@@ -10,6 +10,7 @@ import { registerAgentStatsCommand } from "../src/commands/agent-stats";
 import { registerGoalCommand } from "../src/commands/goal";
 import { registerGoalStatusCommand } from "../src/commands/goal-status";
 import { registerGoalStopCommand } from "../src/commands/goal-stop";
+import { registerGoalEditCommand } from "../src/commands/goal-edit";
 
 interface RegisteredCommand {
   name: string;
@@ -41,6 +42,7 @@ describe("chat command auth surface", () => {
       captureCommand(registerGoalCommand),
       captureCommand(registerGoalStatusCommand),
       captureCommand(registerGoalStopCommand),
+      captureCommand(registerGoalEditCommand),
     ];
 
     assert.deepEqual(
@@ -55,6 +57,7 @@ describe("chat command auth surface", () => {
         ["goal", true],
         ["goal_status", true],
         ["goal_stop", true],
+        ["goal_edit", true],
       ],
     );
   });

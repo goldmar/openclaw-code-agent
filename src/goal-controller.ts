@@ -117,6 +117,12 @@ export function classifyGoalAutoReply(text: string): string | undefined {
   return undefined;
 }
 
+export type GoalTaskEditResult =
+  | { action: "updated"; task: GoalTaskState; previousGoal: string }
+  | { action: "not_found" }
+  | { action: "invalid_goal" }
+  | { action: "not_editable"; task: GoalTaskState };
+
 function buildInitialPrompt(task: GoalTaskState): string {
   if (task.loopMode === "ralph") {
     return [
@@ -455,6 +461,24 @@ export class GoalController {
 
     this.markTaskStopped(task, "Stopped by user.");
     return { task, action: "stopped" };
+  }
+
+  editTask(ref: string, replacementGoal: string): GoalTaskEditResult {
+    const goal = replacementGoal.trim();
+    if (!goal) return { action: "invalid_goal" };
+
+    const task = this.store.get(ref);
+    if (!task) return { action: "not_found" };
+    if (isTerminalGoalTaskStatus(task.status) || task.status === "waiting_for_user") {
+      return { action: "not_editable", task };
+    }
+
+    const previousGoal = task.goal;
+    task.goal = goal;
+    task.updatedAt = Date.now();
+    this.store.upsert(task);
+    this.notify(task, `✏️ [${task.name}] Goal task edited\n\nGoal:\n${truncate(task.goal, 500)}`, "goal-task-edited");
+    return { action: "updated", task, previousGoal };
   }
 
   private async spawnTaskSession(task: GoalTaskState, prompt: string): Promise<Session> {

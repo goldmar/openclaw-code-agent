@@ -17,6 +17,7 @@ import { makeAgentWorktreeStatusTool } from "./src/tools/agent-worktree-status";
 import { makeGoalLaunchTool } from "./src/tools/goal-launch";
 import { makeGoalStatusTool } from "./src/tools/goal-status";
 import { makeGoalStopTool } from "./src/tools/goal-stop";
+import { makeGoalEditTool } from "./src/tools/goal-edit";
 import { createCallbackHandler } from "./src/callback-handler";
 import { registerAgentCommand } from "./src/commands/agent";
 import { registerAgentSessionsCommand } from "./src/commands/agent-sessions";
@@ -27,6 +28,7 @@ import { registerAgentOutputCommand } from "./src/commands/agent-output";
 import { registerGoalCommand } from "./src/commands/goal";
 import { registerGoalStatusCommand } from "./src/commands/goal-status";
 import { registerGoalStopCommand } from "./src/commands/goal-stop";
+import { registerGoalEditCommand } from "./src/commands/goal-edit";
 import { GoalController } from "./src/goal-controller";
 import { SessionManager } from "./src/session-manager";
 import { setGoalController, setSessionManager } from "./src/singletons";
@@ -218,6 +220,7 @@ export function register(api: OpenClawPluginApi): void {
   registerCodeAgentTool((ctx: OpenClawPluginToolContext) => makeGoalLaunchTool(ctx), { optional: false, name: "goal_launch" });
   registerCodeAgentTool((ctx: OpenClawPluginToolContext) => makeGoalStatusTool(ctx), { optional: false, name: "goal_status" });
   registerCodeAgentTool((ctx: OpenClawPluginToolContext) => makeGoalStopTool(ctx), { optional: false, name: "goal_stop" });
+  registerCodeAgentTool((ctx: OpenClawPluginToolContext) => makeGoalEditTool(ctx), { optional: false, name: "goal_edit" });
 
   // Interactive handlers (shared action-token callbacks across chat transports)
   registerCodeAgentInteractiveHandler("telegram");
@@ -233,6 +236,7 @@ export function register(api: OpenClawPluginApi): void {
   registerGoalCommand(commandApi);
   registerGoalStatusCommand(commandApi);
   registerGoalStopCommand(commandApi);
+  registerGoalEditCommand(commandApi);
 
   // Service
   api.registerService({
