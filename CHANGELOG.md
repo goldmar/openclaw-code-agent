@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.3.8] - 2026-06-04
+
+### Added
+- Added `goal_edit` support so active goal tasks can be refined without relaunching the surrounding workflow.
+- Added goal iteration summaries so goal progress updates preserve a concise account of what changed between iterations.
+
+### Fixed
+- Deduplicated goal-owned terminal completion follow-up wakes so goal success and terminal completion paths collapse to one routed human summary while preserving the canonical plugin status line.
+- Deduplicated PR/worktree follow-up summaries using the resolved notification route and material PR outcome key, while still allowing later PR updates with new commits to produce a fresh summary.
+- Persisted and restored `goalTaskId` for worktree notification targets so restored goal-owned flows keep the same terminal outcome key after restart or reroute.
+
+### Changed
+- Refreshed ACP comparison guidance for current Codex chat binding and explicit ACP routing behavior.
+
 ## [4.3.7] - 2026-06-03
 
 ### Fixed
