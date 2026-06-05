@@ -508,7 +508,11 @@ describe("session-notification-builder", () => {
         "",
         'Completion promise "READINESS_GATE_FIX_RESTART_DONE" detected in agent output.',
       ].join("\n"),
-      originThreadLine: "Origin thread: telegram topic 42",
+      originThreadLine: [
+        "Session origin route (authoritative for human follow-ups):",
+        'originRoute: {"provider":"telegram","target":"-1003863755361","threadId":"32947","sessionKey":"agent:x:telegram:channel:-1003863755361:topic:32947"}',
+        "Routing rule: Send any human follow-up for this wake to originRoute. If originRoute differs from the current chat, do not use a plain final assistant reply; use a routed send path that preserves provider/target/threadId.",
+      ].join("\n"),
       canonicalStatusDelivered: true,
     });
 
@@ -519,6 +523,8 @@ describe("session-notification-builder", () => {
     assert.match(message, /Treat the completed session output as source material, not visible delivery/i);
     assert.match(message, /Do this even when agent_output already contains a good final summary/);
     assert.match(message, /Send at most one human-visible summary for this goal success outcome/i);
+    assert.match(message, /"threadId":"32947"/);
+    assert.match(message, /originRoute differs from the current chat/i);
     assert.doesNotMatch(message, /already summarized by completed session/);
   });
 

@@ -734,6 +734,74 @@ describe("SessionNotificationService", () => {
     assert.equal(wakeAttempts, 2);
   });
 
+  it("deduplicates goal success summaries within the Trading Platform Telegram topic", () => {
+    const requests: Array<Record<string, unknown>> = [];
+    let wakeAttempts = 0;
+    const fakeDispatcher = {
+      dispatchSessionNotification: (_session: unknown, request: Record<string, unknown> & { hooks?: Record<string, (reason?: string) => void> }) => {
+        requests.push(request as Record<string, unknown>);
+        request.hooks?.onNotifyStarted?.();
+        request.hooks?.onNotifySucceeded?.();
+        if (request.wakeMessage || request.wakeMessageOnNotifySuccess || request.wakeMessageOnNotifyFailed) {
+          wakeAttempts += 1;
+          request.hooks?.onWakeStarted?.();
+          request.hooks?.onWakeSucceeded?.();
+        }
+      },
+      dispose: () => {},
+    };
+
+    const service = new SessionNotificationService(
+      fakeDispatcher as any,
+      () => {},
+    );
+    const route = {
+      provider: "telegram",
+      target: "-1003863755361",
+      threadId: "32947",
+      sessionKey: "agent:x:telegram:channel:-1003863755361:topic:32947",
+    };
+    const session = {
+      id: "trading-platform-readiness-gate-fix-restart",
+      harnessSessionId: "h-trading-platform-readiness-gate-fix-restart",
+      name: "trading-platform-readiness-gate-fix-restart",
+      route,
+      goalTaskId: "goal-readiness-gate-fix-restart",
+    } as any;
+    const goalStatus = [
+      "✅ [trading-platform-readiness-gate-fix-restart] Goal task succeeded",
+      "",
+      'Completion promise "READINESS_GATE_FIX_RESTART_DONE" detected in agent output.',
+    ].join("\n");
+
+    service.dispatch(session, {
+      label: "goal-task-succeeded",
+      userMessage: goalStatus,
+      wakeMessageOnNotifySuccess: [
+        "Goal task succeeded.",
+        'originRoute: {"provider":"telegram","target":"-1003863755361","threadId":"32947","sessionKey":"agent:x:telegram:channel:-1003863755361:topic:32947"}',
+      ].join("\n"),
+      completionWakeSummaryRequired: true,
+      completionWakeOutcomeKey: "goal:goal-readiness-gate-fix-restart",
+      notifyUser: "always",
+    });
+    service.dispatch(session, {
+      label: "goal-task-succeeded",
+      userMessage: goalStatus,
+      wakeMessageOnNotifySuccess: "duplicate goal success follow-up wake",
+      completionWakeSummaryRequired: true,
+      completionWakeOutcomeKey: "goal:goal-readiness-gate-fix-restart",
+      notifyUser: "always",
+    });
+
+    assert.equal(requests.length, 2);
+    assert.equal(wakeAttempts, 1);
+    assert.equal(requests[0]?.completionWakeSummaryRequired, true);
+    assert.match(requests[0]?.wakeMessageOnNotifySuccess as string, /"threadId":"32947"/);
+    assert.equal(requests[1]?.completionWakeSummaryRequired, false);
+    assert.equal(requests[1]?.wakeMessageOnNotifySuccess, undefined);
+  });
+
   it("uses the same completion outcome key for routed worktree follow-through prompts", () => {
     const requests: Array<Record<string, unknown>> = [];
     const fakeDispatcher = {
@@ -856,6 +924,81 @@ describe("SessionNotificationService", () => {
     assert.equal(requests[1]?.wakeMessageOnNotifySuccess, undefined);
     assert.equal(requests[1]?.completionWakeSummaryRequired, false);
     assert.equal(wakeAttempts, 1);
+  });
+
+  it("deduplicates PR follow-through summaries independently in the reported Telegram topics", () => {
+    const requests: Array<Record<string, unknown>> = [];
+    let wakeAttempts = 0;
+    const fakeDispatcher = {
+      dispatchSessionNotification: (_session: unknown, request: Record<string, unknown> & { hooks?: Record<string, (reason?: string) => void> }) => {
+        requests.push(request as Record<string, unknown>);
+        request.hooks?.onNotifyStarted?.();
+        request.hooks?.onNotifySucceeded?.();
+        if (request.wakeMessage || request.wakeMessageOnNotifySuccess || request.wakeMessageOnNotifyFailed) {
+          wakeAttempts += 1;
+          request.hooks?.onWakeStarted?.();
+          request.hooks?.onWakeSucceeded?.();
+        }
+      },
+      dispose: () => {},
+    };
+
+    const service = new SessionNotificationService(
+      fakeDispatcher as any,
+      () => {},
+    );
+    const openClawTopic = {
+      provider: "telegram",
+      target: "-1003863755361",
+      threadId: "13832",
+      sessionKey: "agent:x:telegram:channel:-1003863755361:topic:13832",
+    };
+    const tradingPlatformTopic = {
+      provider: "telegram",
+      target: "-1003863755361",
+      threadId: "32947",
+      sessionKey: "agent:x:telegram:channel:-1003863755361:topic:32947",
+    };
+    const outcomeKey = "worktree-pr:opened:goldmar/openclaw-code-agent:#171:agent/fix-duplicate-completion-notifications-0ce3:created";
+    const notify = (id: string, route: typeof openClawTopic) => service.notifyWorktreeOutcome(
+      {
+        id,
+        harnessSessionId: `h-${id}`,
+        name: "duplicate-completion-notifications",
+        route,
+      } as any,
+      "✅ PR opened: https://github.com/goldmar/openclaw-code-agent/pull/171",
+      {
+        completionWakeOutcomeKey: outcomeKey,
+        detailLines: [
+          "Opened PR for branch agent/fix-duplicate-completion-notifications-0ce3 into main.",
+          "PR number: #171.",
+        ],
+      },
+    );
+
+    notify("openclaw-topic-first", openClawTopic);
+    notify("openclaw-topic-duplicate", openClawTopic);
+    notify("trading-platform-topic-first", tradingPlatformTopic);
+    notify("trading-platform-topic-duplicate", tradingPlatformTopic);
+
+    assert.equal(requests.length, 4);
+    assert.equal(wakeAttempts, 2);
+    assert.deepEqual(
+      requests.map((request) => ({
+        label: request.label,
+        completionWakeSummaryRequired: request.completionWakeSummaryRequired,
+        hasWake: typeof request.wakeMessageOnNotifySuccess === "string",
+      })),
+      [
+        { label: "worktree-outcome", completionWakeSummaryRequired: true, hasWake: true },
+        { label: "worktree-outcome", completionWakeSummaryRequired: false, hasWake: false },
+        { label: "worktree-outcome", completionWakeSummaryRequired: true, hasWake: true },
+        { label: "worktree-outcome", completionWakeSummaryRequired: false, hasWake: false },
+      ],
+    );
+    assert.match(requests[0]?.wakeMessageOnNotifySuccess as string, /"threadId":"13832"/);
+    assert.match(requests[2]?.wakeMessageOnNotifySuccess as string, /"threadId":"32947"/);
   });
 
   it("keeps materially new PR follow-through outcomes visible for the same route", () => {
