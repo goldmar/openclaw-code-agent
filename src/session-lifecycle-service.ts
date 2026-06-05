@@ -542,6 +542,11 @@ export class SessionLifecycleService {
       label: "completed",
       userMessage: payload.userMessage,
       notifyUser: "always",
+      completionSummary: {
+        required: followupSummaryRequired,
+        producer: "terminal",
+        outcomeKey: `terminal:${session.id}`,
+      },
       completionWakeSummaryRequired: followupSummaryRequired,
       completionWakeOutcomeKey: `terminal:${session.id}`,
       requireDirectUserNotification: true,

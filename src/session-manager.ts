@@ -549,6 +549,7 @@ export class SessionManager {
       summaryWakeRequired?: boolean;
       detailLines?: string[];
       completionWakeOutcomeKey?: string;
+      completionSummaryOwner?: "wake" | "foreground";
     },
   ): void {
     this.notifications.notifyWorktreeOutcome(sessionOrPersisted as Session, outcomeLine, options);
@@ -890,6 +891,13 @@ export class SessionManager {
       label,
       userMessage: text,
       notifyUser: "always",
+      completionSummary: requiresGoalSuccessFollowup
+        ? {
+            required: true,
+            producer: "goal",
+            outcomeKey: `goal:${task.id}`,
+          }
+        : undefined,
       completionWakeSummaryRequired: requiresGoalSuccessFollowup,
       completionWakeOutcomeKey: requiresGoalSuccessFollowup ? `goal:${task.id}` : undefined,
       requireDirectUserNotification: requiresGoalSuccessFollowup,
