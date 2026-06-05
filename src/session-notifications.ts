@@ -290,7 +290,7 @@ export class SessionNotificationService {
   ): string | undefined {
     if (!outcomeKey) return undefined;
     const goalTaskId = session.goalTaskId?.trim();
-    if (goalTaskId && outcomeKey.startsWith("terminal:")) {
+    if (goalTaskId) {
       return `goal:${goalTaskId}`;
     }
     return outcomeKey;

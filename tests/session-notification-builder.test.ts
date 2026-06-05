@@ -8,6 +8,7 @@ import {
   buildNoChangeWakeMessage,
   buildFailedPayload,
   buildWaitingForInputPayload,
+  buildGoalTaskSucceededFollowupWake,
   buildWorktreeOutcomeFollowupWake,
 } from "../src/session-notification-builder";
 
@@ -201,7 +202,10 @@ describe("session-notification-builder", () => {
     assert.match(wake, /If the visible result is only the plugin's terse status line/);
     assert.match(wake, /send the user one short factual outcome summary/);
     assert.match(wake, /Do this even when agent_output already contains a good final summary/);
-    assert.match(wake, /Send at most one orchestrator-owned human summary/);
+    assert.match(wake, /prior human-visible assistant or routed message already gave a substantive summary/);
+    assert.match(wake, /prior human-visible summary already delivered/);
+    assert.match(wake, /Send at most one human-visible summary/);
+    assert.match(wake, /foreground assistant turn or routed message tools/);
     assert.doesNotMatch(wake, /already summarized by completed session/);
   });
 
@@ -492,6 +496,36 @@ describe("session-notification-builder", () => {
     assert.doesNotMatch(payload.wakeMessageOnNotifySuccess, /already summarized by completed session/);
     assert.doesNotMatch(payload.wakeMessageOnNotifySuccess, /Session origin route block above/i);
     assert.doesNotMatch(payload.wakeMessageOnNotifySuccess, /originRoute differs from the current chat/i);
+  });
+
+  it("allows goal success follow-up wakes to skip when a prior visible summary exists", () => {
+    const message = buildGoalTaskSucceededFollowupWake({
+      sessionId: "session-goal-summary",
+      sessionName: "trading-platform-readiness-gate-fix-restart",
+      taskName: "trading-platform-readiness-gate-fix-restart",
+      summary: [
+        "✅ [trading-platform-readiness-gate-fix-restart] Goal task succeeded",
+        "",
+        'Completion promise "READINESS_GATE_FIX_RESTART_DONE" detected in agent output.',
+      ].join("\n"),
+      originThreadLine: [
+        "Session origin route (authoritative for human follow-ups):",
+        'originRoute: {"provider":"telegram","target":"-1003863755361","threadId":"32947","sessionKey":"agent:x:telegram:channel:-1003863755361:topic:32947"}',
+        "Routing rule: Send any human follow-up for this wake to originRoute. If originRoute differs from the current chat, do not use a plain final assistant reply; use a routed send path that preserves provider/target/threadId.",
+      ].join("\n"),
+      canonicalStatusDelivered: true,
+    });
+
+    assert.match(message, /Goal task succeeded\./);
+    assert.match(message, /First inspect the visible conversation context for this same goal outcome/);
+    assert.match(message, /prior human-visible assistant or routed message already gave a substantive summary/i);
+    assert.match(message, /COMPLETION_FOLLOWUP_SKIPPED: prior human-visible summary already delivered/);
+    assert.match(message, /Treat the completed session output as source material, not visible delivery/i);
+    assert.match(message, /Do this even when agent_output already contains a good final summary/);
+    assert.match(message, /Send at most one human-visible summary for this goal success outcome/i);
+    assert.match(message, /"threadId":"32947"/);
+    assert.match(message, /originRoute differs from the current chat/i);
+    assert.doesNotMatch(message, /already summarized by completed session/);
   });
 
   it("uses agent_respond as the primary continuation path in failure wakes", () => {

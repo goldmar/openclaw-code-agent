@@ -187,6 +187,17 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
     });
   });
 
+  it("accepts completion follow-up skips for prior human-visible summaries", () => {
+    const skipped = validateCompletionFollowupWakeSuccess(
+      "COMPLETION_FOLLOWUP_SKIPPED: prior human-visible summary already delivered\n",
+    );
+
+    assert.deepEqual(skipped, {
+      outcome: "skipped",
+      reason: "prior human-visible summary already delivered",
+    });
+  });
+
   it("uses message.send for direct user notifications and logs completion", async () => {
     const dispatcher = createDispatcher();
     const session: FakeSession = {
