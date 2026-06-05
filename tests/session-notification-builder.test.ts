@@ -8,6 +8,7 @@ import {
   buildNoChangeWakeMessage,
   buildFailedPayload,
   buildWaitingForInputPayload,
+  buildGoalTaskSucceededFollowupWake,
   buildWorktreeOutcomeFollowupWake,
 } from "../src/session-notification-builder";
 
@@ -495,6 +496,30 @@ describe("session-notification-builder", () => {
     assert.doesNotMatch(payload.wakeMessageOnNotifySuccess, /already summarized by completed session/);
     assert.doesNotMatch(payload.wakeMessageOnNotifySuccess, /Session origin route block above/i);
     assert.doesNotMatch(payload.wakeMessageOnNotifySuccess, /originRoute differs from the current chat/i);
+  });
+
+  it("allows goal success follow-up wakes to skip when a prior visible summary exists", () => {
+    const message = buildGoalTaskSucceededFollowupWake({
+      sessionId: "session-goal-summary",
+      sessionName: "trading-platform-readiness-gate-fix-restart",
+      taskName: "trading-platform-readiness-gate-fix-restart",
+      summary: [
+        "✅ [trading-platform-readiness-gate-fix-restart] Goal task succeeded",
+        "",
+        'Completion promise "READINESS_GATE_FIX_RESTART_DONE" detected in agent output.',
+      ].join("\n"),
+      originThreadLine: "Origin thread: telegram topic 42",
+      canonicalStatusDelivered: true,
+    });
+
+    assert.match(message, /Goal task succeeded\./);
+    assert.match(message, /First inspect the visible conversation context for this same goal outcome/);
+    assert.match(message, /prior human-visible assistant or routed message already gave a substantive summary/i);
+    assert.match(message, /COMPLETION_FOLLOWUP_SKIPPED: prior human-visible summary already delivered/);
+    assert.match(message, /Treat the completed session output as source material, not visible delivery/i);
+    assert.match(message, /Do this even when agent_output already contains a good final summary/);
+    assert.match(message, /Send at most one human-visible summary for this goal success outcome/i);
+    assert.doesNotMatch(message, /already summarized by completed session/);
   });
 
   it("uses agent_respond as the primary continuation path in failure wakes", () => {
