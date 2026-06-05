@@ -542,6 +542,141 @@ describe("SessionNotificationService", () => {
     assert.deepEqual(skippedReasons, ["duplicate completion follow-up wake already handled"]);
   });
 
+  it("suppresses a goal success follow-up after a PR outcome follow-up for the same goal-owned session", () => {
+    const requests: Array<Record<string, unknown>> = [];
+    const skippedReasons: string[] = [];
+    const fakeDispatcher = {
+      dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, (reason?: string) => void> }) => {
+        requests.push(request as Record<string, unknown>);
+        request.hooks?.onNotifyStarted?.();
+        request.hooks?.onNotifySucceeded?.();
+        request.hooks?.onWakeStarted?.();
+        request.hooks?.onWakeSucceeded?.();
+      },
+      dispose: () => {},
+    };
+
+    const service = new SessionNotificationService(
+      fakeDispatcher as any,
+      () => {},
+    );
+    const route = {
+      provider: "telegram",
+      target: "example-chat",
+      threadId: "example-topic",
+      sessionKey: "agent:x:telegram:channel:example-chat:topic:example-topic",
+    };
+    const worktreeTarget = {
+      id: "goal-owned-pr-session",
+      harnessSessionId: "h-goal-owned-pr-session",
+      name: "paper-watcher",
+      route,
+      goalTaskId: "goal-pr-merged",
+    } as any;
+    const goalRoutingProxy = {
+      id: "goal-owned-pr-session",
+      harnessSessionId: "h-goal-owned-pr-session",
+      name: "paper-watcher",
+      route,
+    } as any;
+
+    service.notifyWorktreeOutcome(
+      worktreeTarget,
+      "✅ PR opened: https://github.example.test/repo/pull/1",
+      {
+        completionWakeOutcomeKey: "worktree-pr:opened:example/repo:#1:agent/example",
+        detailLines: ["PR number: #1."],
+      },
+    );
+    service.dispatch(goalRoutingProxy, {
+      label: "goal-task-succeeded",
+      userMessage: "✅ [paper-watcher] Goal task succeeded",
+      wakeMessageOnNotifySuccess: "goal success follow-up wake with same PR details",
+      completionWakeSummaryRequired: true,
+      completionWakeOutcomeKey: "goal:goal-pr-merged",
+      notifyUser: "always",
+      hooks: {
+        onWakeSkipped: (reason?: string) => {
+          skippedReasons.push(reason ?? "");
+        },
+      },
+    });
+
+    assert.equal(requests.length, 2);
+    assert.equal(requests[0]?.label, "worktree-outcome");
+    assert.equal(requests[0]?.completionWakeSummaryRequired, true);
+    assert.equal(typeof requests[0]?.wakeMessageOnNotifySuccess, "string");
+    assert.equal(requests[1]?.label, "goal-task-succeeded");
+    assert.equal(requests[1]?.wakeMessageOnNotifySuccess, undefined);
+    assert.equal(requests[1]?.completionWakeSummaryRequired, false);
+    assert.deepEqual(skippedReasons, ["duplicate completion follow-up wake already handled"]);
+  });
+
+  it("suppresses a PR outcome follow-up after a goal success follow-up for the same goal-owned session", () => {
+    const requests: Array<Record<string, unknown>> = [];
+    const skippedReasons: string[] = [];
+    const fakeDispatcher = {
+      dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, (reason?: string) => void> }) => {
+        requests.push(request as Record<string, unknown>);
+        request.hooks?.onNotifyStarted?.();
+        request.hooks?.onNotifySucceeded?.();
+        request.hooks?.onWakeStarted?.();
+        request.hooks?.onWakeSucceeded?.();
+      },
+      dispose: () => {},
+    };
+
+    const service = new SessionNotificationService(
+      fakeDispatcher as any,
+      () => {},
+    );
+    const route = {
+      provider: "telegram",
+      target: "example-chat",
+      threadId: "example-topic",
+      sessionKey: "agent:x:telegram:channel:example-chat:topic:example-topic",
+    };
+    const goalRoutingProxy = {
+      id: "goal-owned-pr-session-goal-first",
+      harnessSessionId: "h-goal-owned-pr-session-goal-first",
+      name: "paper-watcher",
+      route,
+    } as any;
+    const worktreeTarget = {
+      id: "goal-owned-pr-session-goal-first",
+      harnessSessionId: "h-goal-owned-pr-session-goal-first",
+      name: "paper-watcher",
+      route,
+      goalTaskId: "goal-pr-merged-goal-first",
+    } as any;
+
+    service.dispatch(goalRoutingProxy, {
+      label: "goal-task-succeeded",
+      userMessage: "✅ [paper-watcher] Goal task succeeded",
+      wakeMessageOnNotifySuccess: "goal success follow-up wake with PR details",
+      completionWakeSummaryRequired: true,
+      completionWakeOutcomeKey: "goal:goal-pr-merged-goal-first",
+      notifyUser: "always",
+    });
+    service.notifyWorktreeOutcome(
+      worktreeTarget,
+      "✅ PR opened: https://github.example.test/repo/pull/1",
+      {
+        completionWakeOutcomeKey: "worktree-pr:opened:example/repo:#1:agent/example",
+        detailLines: ["PR number: #1."],
+      },
+    );
+
+    assert.equal(requests.length, 2);
+    assert.equal(requests[0]?.label, "goal-task-succeeded");
+    assert.equal(requests[0]?.completionWakeSummaryRequired, true);
+    assert.equal(requests[0]?.wakeMessageOnNotifySuccess, "goal success follow-up wake with PR details");
+    assert.equal(requests[1]?.label, "worktree-outcome");
+    assert.equal(requests[1]?.wakeMessageOnNotifySuccess, undefined);
+    assert.equal(requests[1]?.completionWakeSummaryRequired, false);
+    assert.deepEqual(skippedReasons, []);
+  });
+
   it("allows a retry for the same goal terminal outcome after the follow-up wake fails", () => {
     const requests: Array<Record<string, unknown>> = [];
     let wakeAttempts = 0;
