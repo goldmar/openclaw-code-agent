@@ -614,14 +614,17 @@ describe("SessionNotificationService", () => {
 
   it("suppresses a PR outcome follow-up after a goal success follow-up for the same goal-owned session", () => {
     const requests: Array<Record<string, unknown>> = [];
-    const skippedReasons: string[] = [];
+    let wakeAttempts = 0;
     const fakeDispatcher = {
-      dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, (reason?: string) => void> }) => {
+      dispatchSessionNotification: (_session: unknown, request: Record<string, unknown> & { hooks?: Record<string, (reason?: string) => void> }) => {
         requests.push(request as Record<string, unknown>);
         request.hooks?.onNotifyStarted?.();
         request.hooks?.onNotifySucceeded?.();
-        request.hooks?.onWakeStarted?.();
-        request.hooks?.onWakeSucceeded?.();
+        if (request.wakeMessage || request.wakeMessageOnNotifySuccess || request.wakeMessageOnNotifyFailed) {
+          wakeAttempts += 1;
+          request.hooks?.onWakeStarted?.();
+          request.hooks?.onWakeSucceeded?.();
+        }
       },
       dispose: () => {},
     };
@@ -674,14 +677,14 @@ describe("SessionNotificationService", () => {
     assert.equal(requests[1]?.label, "worktree-outcome");
     assert.equal(requests[1]?.wakeMessageOnNotifySuccess, undefined);
     assert.equal(requests[1]?.completionWakeSummaryRequired, false);
-    assert.deepEqual(skippedReasons, []);
+    assert.equal(wakeAttempts, 1);
   });
 
   it("allows a retry for the same goal terminal outcome after the follow-up wake fails", () => {
     const requests: Array<Record<string, unknown>> = [];
     let wakeAttempts = 0;
     const fakeDispatcher = {
-      dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, (reason?: string) => void> }) => {
+      dispatchSessionNotification: (_session: unknown, request: Record<string, unknown> & { hooks?: Record<string, (reason?: string) => void> }) => {
         requests.push(request as Record<string, unknown>);
         request.hooks?.onNotifyStarted?.();
         request.hooks?.onNotifySucceeded?.();
@@ -781,16 +784,19 @@ describe("SessionNotificationService", () => {
     assert.equal(requests[1]?.completionWakeSummaryRequired, false);
   });
 
-  it("suppresses duplicate PR follow-through wakes across session refs for the same routed outcome", () => {
+  it("suppresses duplicate opened PR follow-through wakes across session refs for the same routed outcome", () => {
     const requests: Array<Record<string, unknown>> = [];
-    const skippedReasons: string[] = [];
+    let wakeAttempts = 0;
     const fakeDispatcher = {
-      dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, (reason?: string) => void> }) => {
+      dispatchSessionNotification: (_session: unknown, request: Record<string, unknown> & { hooks?: Record<string, (reason?: string) => void> }) => {
         requests.push(request as Record<string, unknown>);
         request.hooks?.onNotifyStarted?.();
         request.hooks?.onNotifySucceeded?.();
-        request.hooks?.onWakeStarted?.();
-        request.hooks?.onWakeSucceeded?.();
+        if (request.wakeMessage || request.wakeMessageOnNotifySuccess || request.wakeMessageOnNotifyFailed) {
+          wakeAttempts += 1;
+          request.hooks?.onWakeStarted?.();
+          request.hooks?.onWakeSucceeded?.();
+        }
       },
       dispose: () => {},
     };
@@ -817,22 +823,28 @@ describe("SessionNotificationService", () => {
       name: "pr-update",
       route,
     } as any;
-    const outcomeKey = "worktree-pr:updated:goldmar/openclaw-code-agent:#169:agent/example:abc1234";
+    const outcomeKey = "worktree-pr:opened:goldmar/openclaw-code-agent:#171:agent/fix-duplicate-completion-notifications-0ce3:created";
 
     service.notifyWorktreeOutcome(
       firstTarget,
-      "✅ PR updated: https://github.example.test/repo/pull/169",
+      "✅ PR opened: https://github.example.test/repo/pull/171",
       {
         completionWakeOutcomeKey: outcomeKey,
-        detailLines: ["PR number: #169.", "Pushed 1 new commit (+2/-1)."],
+        detailLines: [
+          "Opened PR for branch agent/fix-duplicate-completion-notifications-0ce3 into main.",
+          "PR number: #171.",
+        ],
       },
     );
     service.notifyWorktreeOutcome(
       secondTarget,
-      "✅ PR updated: https://github.example.test/repo/pull/169",
+      "✅ PR opened: https://github.example.test/repo/pull/171",
       {
         completionWakeOutcomeKey: outcomeKey,
-        detailLines: ["PR number: #169.", "Pushed 1 new commit (+2/-1)."],
+        detailLines: [
+          "Opened PR for branch agent/fix-duplicate-completion-notifications-0ce3 into main.",
+          "PR number: #171.",
+        ],
       },
     );
 
@@ -840,10 +852,10 @@ describe("SessionNotificationService", () => {
     assert.equal(requests[0]?.wakeMessageOnNotifySuccess === undefined, false);
     assert.equal(requests[0]?.completionWakeSummaryRequired, true);
     assert.equal(requests[1]?.label, "worktree-outcome");
-    assert.equal(requests[1]?.userMessage, "✅ PR updated: https://github.example.test/repo/pull/169");
+    assert.equal(requests[1]?.userMessage, "✅ PR opened: https://github.example.test/repo/pull/171");
     assert.equal(requests[1]?.wakeMessageOnNotifySuccess, undefined);
     assert.equal(requests[1]?.completionWakeSummaryRequired, false);
-    assert.deepEqual(skippedReasons, []);
+    assert.equal(wakeAttempts, 1);
   });
 
   it("keeps materially new PR follow-through outcomes visible for the same route", () => {
