@@ -36,6 +36,7 @@ export interface WorktreeOutcomeNotificationOptions {
   summaryWakeRequired?: boolean;
   detailLines?: string[];
   completionWakeOutcomeKey?: string;
+  completionSummaryOwner?: "wake" | "foreground";
 }
 
 export interface SessionNotificationServiceOptions {
@@ -162,21 +163,29 @@ export class SessionNotificationService {
       canonicalStatusDelivered,
     });
     const summaryWakeRequired = options.summaryWakeRequired ?? true;
+    const completionSummary: CompletionSummaryFact = {
+      required: summaryWakeRequired,
+      producer: "worktree-pr",
+      outcomeKey: options.completionWakeOutcomeKey ?? `terminal:${sessionId}`,
+    };
+    const wakeOwnsSummary = options.completionSummaryOwner !== "foreground";
+    if (summaryWakeRequired && !wakeOwnsSummary) {
+      this.completionSummaries.recordVisibleDelivery(session, completionSummary);
+    }
     this.dispatch(session, {
       label: "worktree-outcome",
       userMessage: outcomeLine,
       notifyUser: "always",
       requireDirectUserNotification: true,
       completionSummary: {
-        required: summaryWakeRequired,
-        producer: "worktree-pr",
-        outcomeKey: options.completionWakeOutcomeKey ?? `terminal:${sessionId}`,
+        ...completionSummary,
+        required: summaryWakeRequired && wakeOwnsSummary,
       },
-      completionWakeSummaryRequired: summaryWakeRequired,
+      completionWakeSummaryRequired: summaryWakeRequired && wakeOwnsSummary,
       completionWakeOutcomeKey: options.completionWakeOutcomeKey ?? `terminal:${sessionId}`,
       deferConditionalWakeUntilNextTick: true,
-      wakeMessageOnNotifySuccess: summaryWakeRequired ? buildWakeMessage(true) : undefined,
-      wakeMessageOnNotifyFailed: summaryWakeRequired ? buildWakeMessage(false) : undefined,
+      wakeMessageOnNotifySuccess: summaryWakeRequired && wakeOwnsSummary ? buildWakeMessage(true) : undefined,
+      wakeMessageOnNotifyFailed: summaryWakeRequired && wakeOwnsSummary ? buildWakeMessage(false) : undefined,
     });
   }
 

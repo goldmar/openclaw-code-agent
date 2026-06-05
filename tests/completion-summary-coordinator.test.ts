@@ -1,6 +1,9 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { CompletionSummaryCoordinator } from "../src/completion-summary-coordinator";
+import {
+  CompletionSummaryCoordinator,
+  PRIOR_VISIBLE_SUMMARY_SKIP_REASON,
+} from "../src/completion-summary-coordinator";
 
 describe("CompletionSummaryCoordinator", () => {
   it("allows one visible follow-up for goal-owned terminal, goal, and worktree facts", () => {
@@ -128,5 +131,32 @@ describe("CompletionSummaryCoordinator", () => {
     assert.equal(openClawDuplicate.allowed, false);
     assert.equal(tradingFirst.allowed, true);
     assert.equal(tradingDuplicate.allowed, false);
+  });
+
+  it("skips later routed follow-ups after a prior human-visible PR summary in topic 13832", () => {
+    const coordinator = new CompletionSummaryCoordinator();
+    const session = {
+      id: "pr-172-session",
+      route: {
+        provider: "telegram",
+        target: "topic-fixture",
+        threadId: "13832",
+      },
+    };
+    const fact = {
+      required: true,
+      producer: "worktree-pr" as const,
+      outcomeKey: "worktree-pr:updated:goldmar/openclaw-code-agent:#172:agent/centralize-completion-summary-owner:commit-fixture",
+    };
+
+    const foregroundClaim = coordinator.recordVisibleDelivery(session, fact);
+    const routedFollowup = coordinator.decide(
+      { ...session, id: "pr-172-routed-followup" },
+      fact,
+    );
+
+    assert.equal(foregroundClaim.allowed, true);
+    assert.equal(routedFollowup.allowed, false);
+    assert.equal(routedFollowup.skipReason, PRIOR_VISIBLE_SUMMARY_SKIP_REASON);
   });
 });

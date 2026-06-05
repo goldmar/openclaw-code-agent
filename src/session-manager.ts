@@ -549,6 +549,7 @@ export class SessionManager {
       summaryWakeRequired?: boolean;
       detailLines?: string[];
       completionWakeOutcomeKey?: string;
+      completionSummaryOwner?: "wake" | "foreground";
     },
   ): void {
     this.notifications.notifyWorktreeOutcome(sessionOrPersisted as Session, outcomeLine, options);

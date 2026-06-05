@@ -50,16 +50,22 @@ export interface CompletionSummaryDecision {
   skipReason?: string;
 }
 
+interface CompletedSummaryRecord {
+  skipReason: string;
+}
+
 export interface CompletionSummaryCoordinatorOptions {
   maxCompletedKeys?: number;
 }
 
 const DEFAULT_MAX_COMPLETED_KEYS = 1024;
 const DUPLICATE_REASON = "duplicate completion follow-up wake already handled";
+export const PRIOR_VISIBLE_SUMMARY_SKIP_REASON =
+  "COMPLETION_FOLLOWUP_SKIPPED: prior human-visible summary already delivered";
 
 export class CompletionSummaryCoordinator {
   private readonly inFlight = new Set<string>();
-  private readonly completed = new Map<string, true>();
+  private readonly completed = new Map<string, CompletedSummaryRecord>();
   private readonly maxCompletedKeys: number;
 
   constructor(options: CompletionSummaryCoordinatorOptions = {}) {
@@ -82,13 +88,14 @@ export class CompletionSummaryCoordinator {
       return { required: true, allowed: true, explicit: false };
     }
 
-    if (this.inFlight.has(key.key) || this.completed.has(key.key)) {
+    const completedRecord = this.completed.get(key.key);
+    if (this.inFlight.has(key.key) || completedRecord) {
       return {
         required: true,
         allowed: false,
         key: key.key,
         explicit: key.explicit,
-        skipReason: DUPLICATE_REASON,
+        skipReason: completedRecord?.skipReason ?? DUPLICATE_REASON,
       };
     }
 
@@ -101,13 +108,24 @@ export class CompletionSummaryCoordinator {
     };
   }
 
-  finish(key: string | undefined, completed: boolean): void {
+  recordVisibleDelivery(
+    session: CompletionSummarySession | PersistedCompletionSummarySession,
+    fact: CompletionSummaryFact,
+  ): CompletionSummaryDecision {
+    const decision = this.decide(session, fact);
+    if (decision.allowed) {
+      this.finish(decision.key, true, PRIOR_VISIBLE_SUMMARY_SKIP_REASON);
+    }
+    return decision;
+  }
+
+  finish(key: string | undefined, completed: boolean, skipReason = DUPLICATE_REASON): void {
     if (!key) return;
     this.inFlight.delete(key);
     if (!completed) return;
 
     this.completed.delete(key);
-    this.completed.set(key, true);
+    this.completed.set(key, { skipReason });
     while (this.completed.size > this.maxCompletedKeys) {
       const oldestKey = this.completed.keys().next().value;
       if (oldestKey === undefined) break;

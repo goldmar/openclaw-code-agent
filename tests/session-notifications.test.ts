@@ -1001,6 +1001,89 @@ describe("SessionNotificationService", () => {
     assert.match(requests[2]?.wakeMessageOnNotifySuccess as string, /"threadId":"32947"/);
   });
 
+  it("suppresses a routed PR follow-up after a foreground summary already owned topic 13832", () => {
+    const requests: Array<Record<string, unknown>> = [];
+    const skippedReasons: string[] = [];
+    let wakeAttempts = 0;
+    const fakeDispatcher = {
+      dispatchSessionNotification: (_session: unknown, request: Record<string, unknown> & { hooks?: Record<string, (reason?: string) => void> }) => {
+        requests.push(request as Record<string, unknown>);
+        request.hooks?.onNotifyStarted?.();
+        request.hooks?.onNotifySucceeded?.();
+        if (request.wakeMessage || request.wakeMessageOnNotifySuccess || request.wakeMessageOnNotifyFailed) {
+          wakeAttempts += 1;
+          request.hooks?.onWakeStarted?.();
+          request.hooks?.onWakeSucceeded?.();
+        }
+      },
+      dispose: () => {},
+    };
+
+    const service = new SessionNotificationService(
+      fakeDispatcher as any,
+      () => {},
+    );
+    const route = {
+      provider: "telegram",
+      target: "topic-fixture",
+      threadId: "13832",
+      sessionKey: "agent:x:telegram:channel:topic-fixture:topic:13832",
+    };
+    const outcomeKey = "worktree-pr:updated:goldmar/openclaw-code-agent:#172:agent/centralize-completion-summary-owner:commit-fixture";
+    const foregroundTarget = {
+      id: "pr-172-foreground",
+      harnessSessionId: "h-pr-172-foreground",
+      name: "centralize-completion-summary-owner",
+      route,
+    } as any;
+    const routedTarget = {
+      id: "pr-172-routed-followup",
+      harnessSessionId: "h-pr-172-routed-followup",
+      name: "centralize-completion-summary-owner",
+      route,
+    } as any;
+
+    service.notifyWorktreeOutcome(
+      foregroundTarget,
+      "✅ PR updated: https://github.com/goldmar/openclaw-code-agent/pull/172",
+      {
+        completionSummaryOwner: "foreground",
+        completionWakeOutcomeKey: outcomeKey,
+        detailLines: [
+          "Updated draft PR for branch agent/centralize-completion-summary-owner.",
+          "Validation completed with focused tests and build.",
+        ],
+      },
+    );
+    service.dispatch(routedTarget, {
+      label: "worktree-outcome",
+      userMessage: "✅ PR updated: https://github.com/goldmar/openclaw-code-agent/pull/172",
+      wakeMessageOnNotifySuccess: "routed duplicate PR #172 summary",
+      completionSummary: {
+        required: true,
+        producer: "worktree-pr",
+        outcomeKey,
+      },
+      completionWakeSummaryRequired: true,
+      completionWakeOutcomeKey: outcomeKey,
+      notifyUser: "always",
+      hooks: {
+        onWakeSkipped: (reason?: string) => {
+          skippedReasons.push(reason ?? "");
+        },
+      },
+    });
+
+    assert.equal(requests.length, 2);
+    assert.equal(requests[0]?.userMessage, "✅ PR updated: https://github.com/goldmar/openclaw-code-agent/pull/172");
+    assert.equal(requests[0]?.completionWakeSummaryRequired, false);
+    assert.equal(requests[0]?.wakeMessageOnNotifySuccess, undefined);
+    assert.equal(requests[1]?.completionWakeSummaryRequired, false);
+    assert.equal(requests[1]?.wakeMessageOnNotifySuccess, undefined);
+    assert.equal(wakeAttempts, 0);
+    assert.deepEqual(skippedReasons, ["COMPLETION_FOLLOWUP_SKIPPED: prior human-visible summary already delivered"]);
+  });
+
   it("keeps materially new PR follow-through outcomes visible for the same route", () => {
     const requests: Array<Record<string, unknown>> = [];
     const fakeDispatcher = {
