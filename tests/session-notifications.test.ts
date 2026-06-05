@@ -802,6 +802,104 @@ describe("SessionNotificationService", () => {
     assert.equal(requests[1]?.wakeMessageOnNotifySuccess, undefined);
   });
 
+  it("suppresses a later goal success summary after a foreground routed summary in the Trading Platform topic", () => {
+    const requests: Array<Record<string, unknown>> = [];
+    const skippedReasons: string[] = [];
+    let wakeAttempts = 0;
+    const fakeDispatcher = {
+      dispatchSessionNotification: (_session: unknown, request: Record<string, unknown> & { hooks?: Record<string, (reason?: string) => void> }) => {
+        requests.push(request as Record<string, unknown>);
+        request.hooks?.onNotifyStarted?.();
+        request.hooks?.onNotifySucceeded?.();
+        if (request.wakeMessage || request.wakeMessageOnNotifySuccess || request.wakeMessageOnNotifyFailed) {
+          wakeAttempts += 1;
+        }
+      },
+      dispose: () => {},
+    };
+
+    const service = new SessionNotificationService(
+      fakeDispatcher as any,
+      () => {},
+    );
+    const route = {
+      provider: "telegram",
+      target: "trading-topic-fixture",
+      threadId: "32947",
+      sessionKey: "agent:x:telegram:channel:trading-topic-fixture:topic:32947",
+    };
+    const session = {
+      id: "trading-platform-full-repo-review-20-iter",
+      harnessSessionId: "h-trading-platform-full-repo-review-20-iter",
+      name: "trading-platform-full-repo-review-20-iter",
+      route,
+      goalTaskId: "goal-trading-platform-full-repo-review-20-iter",
+    } as any;
+    const goalStatus = [
+      "✅ [trading-platform-full-repo-review-20-iter] Goal task succeeded",
+      "",
+      'Completion promise "TRADING_PLATFORM_FULL_REPO_REVIEW_20_ITER_DONE" detected in agent output.',
+    ].join("\n");
+
+    service.dispatch(session, {
+      label: "goal-task-succeeded",
+      userMessage: goalStatus,
+      wakeMessageOnNotifySuccess: "goal success follow-up wake",
+      completionSummary: {
+        required: true,
+        producer: "goal",
+        outcomeKey: "goal:goal-trading-platform-full-repo-review-20-iter",
+      },
+      completionWakeSummaryRequired: true,
+      completionWakeOutcomeKey: "goal:goal-trading-platform-full-repo-review-20-iter",
+      notifyUser: "always",
+    });
+    service.dispatch(session, {
+      label: "goal-foreground-summary",
+      userMessage: "Full-repo OCA review completed and pushed.",
+      completionSummaryOwner: "foreground",
+      completionSummary: {
+        required: true,
+        producer: "goal",
+        outcomeKey: "goal:goal-trading-platform-full-repo-review-20-iter",
+      },
+      completionWakeSummaryRequired: true,
+      completionWakeOutcomeKey: "goal:goal-trading-platform-full-repo-review-20-iter",
+      notifyUser: "always",
+    });
+    (requests[0]?.hooks as Record<string, () => void> | undefined)?.onWakeSucceeded?.();
+    service.dispatch(session, {
+      label: "goal-task-succeeded",
+      userMessage: goalStatus,
+      wakeMessageOnNotifySuccess: "duplicate full Trading Platform repo review summary wake",
+      completionSummary: {
+        required: true,
+        producer: "goal",
+        outcomeKey: "goal:goal-trading-platform-full-repo-review-20-iter",
+      },
+      completionWakeSummaryRequired: true,
+      completionWakeOutcomeKey: "goal:goal-trading-platform-full-repo-review-20-iter",
+      notifyUser: "always",
+      hooks: {
+        onWakeSkipped: (reason?: string) => {
+          skippedReasons.push(reason ?? "");
+        },
+      },
+    });
+
+    assert.equal(requests.length, 3);
+    assert.equal(requests[0]?.userMessage, goalStatus);
+    assert.equal(requests[0]?.wakeMessageOnNotifySuccess, "goal success follow-up wake");
+    assert.equal(requests[1]?.userMessage, "Full-repo OCA review completed and pushed.");
+    assert.equal(requests[1]?.wakeMessageOnNotifySuccess, undefined);
+    assert.equal(requests[1]?.completionWakeSummaryRequired, false);
+    assert.equal(requests[2]?.userMessage, goalStatus);
+    assert.equal(requests[2]?.wakeMessageOnNotifySuccess, undefined);
+    assert.equal(requests[2]?.completionWakeSummaryRequired, false);
+    assert.equal(wakeAttempts, 1);
+    assert.deepEqual(skippedReasons, ["COMPLETION_FOLLOWUP_SKIPPED: prior human-visible summary already delivered"]);
+  });
+
   it("uses the same completion outcome key for routed worktree follow-through prompts", () => {
     const requests: Array<Record<string, unknown>> = [];
     const fakeDispatcher = {

@@ -62,11 +62,17 @@ export class SessionNotificationService {
   ): void {
     const deliveryRef = this.getDeliveryRef(session);
     const completionSummaryFact = this.buildCompletionSummaryFact(request);
-    const completionSummaryDecision = this.completionSummaries.decide(session, completionSummaryFact);
-    let dispatchRequest = request;
+    const foregroundOwnsSummary =
+      request.completionSummaryOwner === "foreground" && completionSummaryFact?.required === true;
+    const completionSummaryDecision = foregroundOwnsSummary
+      ? this.completionSummaries.recordVisibleDelivery(session, completionSummaryFact)
+      : this.completionSummaries.decide(session, completionSummaryFact);
+    let dispatchRequest = foregroundOwnsSummary ? this.withoutCompletionWake(request) : request;
     if (completionSummaryDecision.required && !completionSummaryDecision.allowed) {
       request.hooks?.onWakeSkipped?.(completionSummaryDecision.skipReason ?? "completion follow-up wake suppressed");
-      if (completionSummaryDecision.explicit) {
+      if (foregroundOwnsSummary) {
+        return;
+      } else if (completionSummaryDecision.explicit) {
         dispatchRequest = this.withoutCompletionWake(request);
       } else {
         return;
