@@ -145,6 +145,14 @@ export class CompletionSummaryCoordinator {
     this.inFlight.delete(key);
     if (!completed) return;
 
+    const completedRecord = this.completed.get(key);
+    if (
+      completedRecord?.skipReason === PRIOR_VISIBLE_SUMMARY_SKIP_REASON
+      && skipReason !== PRIOR_VISIBLE_SUMMARY_SKIP_REASON
+    ) {
+      return;
+    }
+
     this.completed.delete(key);
     this.completed.set(key, { skipReason });
     while (this.completed.size > this.maxCompletedKeys) {

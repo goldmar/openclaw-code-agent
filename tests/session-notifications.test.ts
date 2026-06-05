@@ -867,6 +867,7 @@ describe("SessionNotificationService", () => {
       completionWakeOutcomeKey: "goal:goal-trading-platform-full-repo-review-20-iter",
       notifyUser: "always",
     });
+    (requests[0]?.hooks as Record<string, () => void> | undefined)?.onWakeSucceeded?.();
     service.dispatch(session, {
       label: "goal-task-succeeded",
       userMessage: goalStatus,

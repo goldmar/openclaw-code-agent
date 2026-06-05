@@ -207,6 +207,7 @@ describe("CompletionSummaryCoordinator", () => {
 
     const goalWakeClaim = coordinator.decide(session, fact);
     const foregroundClaim = coordinator.recordVisibleDelivery(session, fact);
+    coordinator.finish(goalWakeClaim.key, true);
     const laterGoalWake = coordinator.decide(
       { ...session, id: "trading-platform-later-goal-wake" },
       fact,
