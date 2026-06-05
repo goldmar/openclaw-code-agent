@@ -93,7 +93,6 @@ export class CompletionSummaryCoordinator {
       return {
         required: true,
         allowed: false,
-        key: key.key,
         explicit: key.explicit,
         skipReason: completedRecord?.skipReason ?? DUPLICATE_REASON,
       };

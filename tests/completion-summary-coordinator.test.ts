@@ -64,6 +64,34 @@ describe("CompletionSummaryCoordinator", () => {
     assert.equal(second.allowed, true);
   });
 
+  it("does not let denied claimers release another in-flight completion summary", () => {
+    const coordinator = new CompletionSummaryCoordinator();
+    const route = {
+      provider: "telegram",
+      target: "topic-fixture",
+      threadId: "13832",
+    };
+    const firstSession = { id: "first-session", route };
+    const duplicateSession = { id: "duplicate-session", route };
+    const thirdSession = { id: "third-session", route };
+    const fact = {
+      required: true,
+      producer: "worktree-pr" as const,
+      outcomeKey: "worktree-pr:opened:example/repo:#172:agent/example",
+    };
+
+    const first = coordinator.decide(firstSession, fact);
+    const duplicate = coordinator.decide(duplicateSession, fact);
+    coordinator.finish(duplicate.key, false);
+    const third = coordinator.decide(thirdSession, fact);
+
+    assert.equal(first.allowed, true);
+    assert.equal(typeof first.key, "string");
+    assert.equal(duplicate.allowed, false);
+    assert.equal(duplicate.key, undefined);
+    assert.equal(third.allowed, false);
+  });
+
   it("deduplicates ordinary terminal/manual completions by fallback fingerprint", () => {
     const coordinator = new CompletionSummaryCoordinator();
     const session = { id: "manual-terminal-session" };
