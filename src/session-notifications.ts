@@ -2,9 +2,12 @@ import type { PersistedSessionInfo } from "./types";
 import { WakeDispatcher, type SessionNotificationHooks, type SessionNotificationRequest } from "./wake-dispatcher";
 import type { Session } from "./session";
 import { getBackendConversationId, getPrimarySessionLookupRef } from "./session-backend-ref";
-import { formatOriginRouteWakeBlock, resolveNotificationRoute } from "./session-route";
+import { formatOriginRouteWakeBlock } from "./session-route";
 import { buildWorktreeOutcomeFollowupWake } from "./session-notification-builder";
-import { createHash } from "crypto";
+import {
+  CompletionSummaryCoordinator,
+  type CompletionSummaryFact,
+} from "./completion-summary-coordinator";
 
 type RoutableSession = Pick<
   Session,
@@ -39,22 +42,17 @@ export interface SessionNotificationServiceOptions {
   maxCompletedCompletionWakeKeys?: number;
 }
 
-const DEFAULT_MAX_COMPLETED_COMPLETION_WAKE_KEYS = 1024;
-
 export class SessionNotificationService {
-  private readonly inFlightCompletionWakes = new Set<string>();
-  private readonly completedCompletionWakes = new Map<string, true>();
-  private readonly maxCompletedCompletionWakeKeys: number;
+  private readonly completionSummaries: CompletionSummaryCoordinator;
 
   constructor(
     private readonly wakeDispatcher: WakeDispatcher,
     private readonly applyPersistedPatch: (ref: string, patch: Partial<PersistedSessionInfo>) => void,
     options: SessionNotificationServiceOptions = {},
   ) {
-    this.maxCompletedCompletionWakeKeys = Math.max(
-      1,
-      Math.floor(options.maxCompletedCompletionWakeKeys ?? DEFAULT_MAX_COMPLETED_COMPLETION_WAKE_KEYS),
-    );
+    this.completionSummaries = new CompletionSummaryCoordinator({
+      maxCompletedKeys: options.maxCompletedCompletionWakeKeys,
+    });
   }
 
   dispatch(
@@ -62,20 +60,15 @@ export class SessionNotificationService {
     request: SessionNotificationRequest,
   ): void {
     const deliveryRef = this.getDeliveryRef(session);
-    const completionWakeKey = this.buildCompletionWakeKey(deliveryRef, request, session);
+    const completionSummaryFact = this.buildCompletionSummaryFact(request);
+    const completionSummaryDecision = this.completionSummaries.decide(session, completionSummaryFact);
     let dispatchRequest = request;
-    let claimedCompletionWakeKey: string | undefined;
-    if (completionWakeKey?.key) {
-      if (this.inFlightCompletionWakes.has(completionWakeKey.key) || this.completedCompletionWakes.has(completionWakeKey.key)) {
-        request.hooks?.onWakeSkipped?.("duplicate completion follow-up wake already handled");
-        if (completionWakeKey.explicit) {
-          dispatchRequest = this.withoutCompletionWake(request);
-        } else {
-          return;
-        }
+    if (completionSummaryDecision.required && !completionSummaryDecision.allowed) {
+      request.hooks?.onWakeSkipped?.(completionSummaryDecision.skipReason ?? "completion follow-up wake suppressed");
+      if (completionSummaryDecision.explicit) {
+        dispatchRequest = this.withoutCompletionWake(request);
       } else {
-        this.inFlightCompletionWakes.add(completionWakeKey.key);
-        claimedCompletionWakeKey = completionWakeKey.key;
+        return;
       }
     }
     const completionWakePatch = this.buildCompletionWakePatch(dispatchRequest);
@@ -94,7 +87,7 @@ export class SessionNotificationService {
           hasWakeAfterNotifySuccess ? completionWakePatch : undefined,
         );
         if (!hasWakeAfterNotifySuccess) {
-          this.markCompletionWakeFinished(claimedCompletionWakeKey, false);
+          this.completionSummaries.finish(completionSummaryDecision.key, false);
         }
         dispatchRequest.hooks?.onNotifySucceeded?.();
       },
@@ -105,7 +98,7 @@ export class SessionNotificationService {
           hasWakeAfterNotifyFailure ? completionWakePatch : undefined,
         );
         if (!hasWakeAfterNotifyFailure) {
-          this.markCompletionWakeFinished(claimedCompletionWakeKey, false);
+          this.completionSummaries.finish(completionSummaryDecision.key, false);
         }
         dispatchRequest.hooks?.onNotifyFailed?.();
       },
@@ -126,7 +119,7 @@ export class SessionNotificationService {
           completionWakeSkippedAt: undefined,
           completionWakeSkipReason: undefined,
         });
-        this.markCompletionWakeFinished(claimedCompletionWakeKey, true);
+        this.completionSummaries.finish(completionSummaryDecision.key, true);
         dispatchRequest.hooks?.onWakeSucceeded?.();
       },
       onWakeSkipped: (reason) => {
@@ -136,14 +129,14 @@ export class SessionNotificationService {
           completionWakeSkippedAt: new Date().toISOString(),
           completionWakeSkipReason: reason,
         });
-        this.markCompletionWakeFinished(claimedCompletionWakeKey, true);
+        this.completionSummaries.finish(completionSummaryDecision.key, true);
         dispatchRequest.hooks?.onWakeSkipped?.(reason);
       },
       onWakeFailed: () => {
         this.applyPersistedPatchWithCompletionWake(deliveryRef, "failed", completionWakePatch, {
           completionWakeFailedAt: new Date().toISOString(),
         });
-        this.markCompletionWakeFinished(claimedCompletionWakeKey, false);
+        this.completionSummaries.finish(completionSummaryDecision.key, false);
         dispatchRequest.hooks?.onWakeFailed?.();
       },
     };
@@ -174,6 +167,11 @@ export class SessionNotificationService {
       userMessage: outcomeLine,
       notifyUser: "always",
       requireDirectUserNotification: true,
+      completionSummary: {
+        required: summaryWakeRequired,
+        producer: "worktree-pr",
+        outcomeKey: options.completionWakeOutcomeKey ?? `terminal:${sessionId}`,
+      },
       completionWakeSummaryRequired: summaryWakeRequired,
       completionWakeOutcomeKey: options.completionWakeOutcomeKey ?? `terminal:${sessionId}`,
       deferConditionalWakeUntilNextTick: true,
@@ -254,6 +252,9 @@ export class SessionNotificationService {
   private withoutCompletionWake(request: SessionNotificationRequest): SessionNotificationRequest {
     return {
       ...request,
+      completionSummary: request.completionSummary
+        ? { ...request.completionSummary, required: false }
+        : undefined,
       wakeMessage: undefined,
       wakeMessageOnNotifySuccess: undefined,
       wakeMessageOnNotifyFailed: undefined,
@@ -261,17 +262,11 @@ export class SessionNotificationService {
     };
   }
 
-  private buildCompletionWakeKey(
-    deliveryRef: string,
+  private buildCompletionSummaryFact(
     request: SessionNotificationRequest,
-    session: RoutableSession | PersistedRoutingSession,
-  ): { key: string; explicit: boolean } | undefined {
-    if (request.completionWakeSummaryRequired !== true || !deliveryRef) return undefined;
-    const outcomeKey = this.normalizeCompletionWakeOutcomeKey(session, request.completionWakeOutcomeKey?.trim());
-    if (outcomeKey) {
-      const digest = createHash("sha256").update(outcomeKey).digest("hex").slice(0, 16);
-      return { key: `${this.buildExplicitCompletionWakeScope(deliveryRef, session)}:outcome:${digest}`, explicit: true };
-    }
+  ): CompletionSummaryFact | undefined {
+    if (request.completionSummary) return request.completionSummary;
+    if (request.completionWakeSummaryRequired !== true) return undefined;
     const wakeTexts = [
       request.wakeMessage,
       request.wakeMessageOnNotifySuccess,
@@ -279,50 +274,13 @@ export class SessionNotificationService {
     ]
       .map((text) => text?.trim())
       .filter((text): text is string => Boolean(text));
-    if (wakeTexts.length === 0) return undefined;
-    const digest = createHash("sha256").update(wakeTexts.join("\n---completion-wake---\n")).digest("hex").slice(0, 16);
-    return { key: `${deliveryRef}:${request.label}:${digest}`, explicit: false };
-  }
-
-  private normalizeCompletionWakeOutcomeKey(
-    session: RoutableSession | PersistedRoutingSession,
-    outcomeKey: string | undefined,
-  ): string | undefined {
-    if (!outcomeKey) return undefined;
-    const goalTaskId = session.goalTaskId?.trim();
-    if (goalTaskId) {
-      return `goal:${goalTaskId}`;
-    }
-    return outcomeKey;
-  }
-
-  private buildExplicitCompletionWakeScope(
-    deliveryRef: string,
-    session: RoutableSession | PersistedRoutingSession,
-  ): string {
-    const route = resolveNotificationRoute(session);
-    if (!route) return deliveryRef;
-    const routeIdentity = JSON.stringify({
-      provider: route.provider,
-      accountId: route.accountId,
-      target: route.target,
-      threadId: route.threadId,
-    });
-    const digest = createHash("sha256").update(routeIdentity).digest("hex").slice(0, 16);
-    return `route:${digest}`;
-  }
-
-  private markCompletionWakeFinished(key: string | undefined, completed: boolean): void {
-    if (!key) return;
-    this.inFlightCompletionWakes.delete(key);
-    if (completed) {
-      this.completedCompletionWakes.delete(key);
-      this.completedCompletionWakes.set(key, true);
-      while (this.completedCompletionWakes.size > this.maxCompletedCompletionWakeKeys) {
-        const oldestKey = this.completedCompletionWakes.keys().next().value;
-        if (oldestKey === undefined) break;
-        this.completedCompletionWakes.delete(oldestKey);
-      }
-    }
+    return {
+      required: true,
+      producer: "legacy",
+      outcomeKey: request.completionWakeOutcomeKey,
+      fallbackFingerprint: wakeTexts.length > 0
+        ? `${request.label}\n${wakeTexts.join("\n---completion-wake---\n")}`
+        : undefined,
+    };
   }
 }

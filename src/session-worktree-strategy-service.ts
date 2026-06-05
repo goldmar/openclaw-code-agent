@@ -385,6 +385,11 @@ export class SessionWorktreeStrategyService {
       label: "worktree-merge-success",
       userMessage: successMsg,
       notifyUser: "always",
+      completionSummary: {
+        required: true,
+        producer: "worktree",
+        outcomeKey: `terminal:${session.id}`,
+      },
       completionWakeSummaryRequired: true,
       completionWakeOutcomeKey: `terminal:${session.id}`,
       deferConditionalWakeUntilNextTick: true,

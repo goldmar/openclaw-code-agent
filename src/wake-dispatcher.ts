@@ -1,4 +1,5 @@
 import type { Session } from "./session";
+import type { CompletionSummaryFact } from "./completion-summary-coordinator";
 import { logButtonDiagnostic, summarizeButtons } from "./button-diagnostics";
 import { RuntimeDirectNotificationTransport, type DirectNotificationTransport } from "./direct-notification-transport";
 import {
@@ -23,6 +24,7 @@ export interface SessionNotificationRequest {
   wakeMessage?: string;
   wakeMessageOnNotifySuccess?: string;
   wakeMessageOnNotifyFailed?: string;
+  completionSummary?: CompletionSummaryFact;
   completionWakeSummaryRequired?: boolean;
   completionWakeOutcomeKey?: string;
   deferConditionalWakeUntilNextTick?: boolean;
