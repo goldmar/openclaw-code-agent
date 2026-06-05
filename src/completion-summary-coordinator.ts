@@ -111,11 +111,33 @@ export class CompletionSummaryCoordinator {
     session: CompletionSummarySession | PersistedCompletionSummarySession,
     fact: CompletionSummaryFact,
   ): CompletionSummaryDecision {
-    const decision = this.decide(session, fact);
-    if (decision.allowed) {
-      this.finish(decision.key, true, PRIOR_VISIBLE_SUMMARY_SKIP_REASON);
+    if (fact.required !== true) {
+      return { required: false, allowed: false, explicit: false };
     }
-    return decision;
+
+    const key = this.buildKey(session, fact);
+    if (!key) {
+      return { required: true, allowed: true, explicit: false };
+    }
+
+    const completedRecord = this.completed.get(key.key);
+    if (completedRecord) {
+      return {
+        required: true,
+        allowed: false,
+        explicit: key.explicit,
+        skipReason: completedRecord.skipReason,
+      };
+    }
+
+    this.inFlight.delete(key.key);
+    this.finish(key.key, true, PRIOR_VISIBLE_SUMMARY_SKIP_REASON);
+    return {
+      required: true,
+      allowed: true,
+      key: key.key,
+      explicit: key.explicit,
+    };
   }
 
   finish(key: string | undefined, completed: boolean, skipReason = DUPLICATE_REASON): void {

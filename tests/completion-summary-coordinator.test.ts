@@ -187,4 +187,34 @@ describe("CompletionSummaryCoordinator", () => {
     assert.equal(routedFollowup.allowed, false);
     assert.equal(routedFollowup.skipReason, PRIOR_VISIBLE_SUMMARY_SKIP_REASON);
   });
+
+  it("lets a foreground goal summary supersede an in-flight goal wake claim", () => {
+    const coordinator = new CompletionSummaryCoordinator();
+    const session = {
+      id: "trading-platform-review-session",
+      goalTaskId: "goal-trading-platform-full-repo-review-20-iter",
+      route: {
+        provider: "telegram",
+        target: "trading-topic-fixture",
+        threadId: "32947",
+      },
+    };
+    const fact = {
+      required: true,
+      producer: "goal" as const,
+      outcomeKey: "goal:goal-trading-platform-full-repo-review-20-iter",
+    };
+
+    const goalWakeClaim = coordinator.decide(session, fact);
+    const foregroundClaim = coordinator.recordVisibleDelivery(session, fact);
+    const laterGoalWake = coordinator.decide(
+      { ...session, id: "trading-platform-later-goal-wake" },
+      fact,
+    );
+
+    assert.equal(goalWakeClaim.allowed, true);
+    assert.equal(foregroundClaim.allowed, true);
+    assert.equal(laterGoalWake.allowed, false);
+    assert.equal(laterGoalWake.skipReason, PRIOR_VISIBLE_SUMMARY_SKIP_REASON);
+  });
 });
