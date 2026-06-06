@@ -7,6 +7,7 @@ import { SessionManager } from "../src/session-manager";
 import { setPluginConfig } from "../src/config";
 import { buildPresentation } from "../src/direct-notification-transport";
 import { SessionNotificationService } from "../src/session-notifications";
+import { SessionWorktreeDecisionService } from "../src/session-worktree-decision-service";
 
 // ---------------------------------------------------------------------------
 // Helper to create a fake session-like object for injection
@@ -1208,6 +1209,71 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     assert.equal(persisted.lastWorktreeReminderAt, undefined);
     assert.equal(persisted.worktreeDecisionSnoozedUntil, undefined);
     assert.equal(scheduled.some((entry) => entry.key.endsWith(":worktree-reminder")), false);
+  });
+
+  it("snoozes worktree decisions without dispatching a user notification when requested", () => {
+    const originalDateNow = Date.now;
+    const now = 1_700_000_000_000;
+    Date.now = () => now;
+
+    try {
+      const pending: any = {
+        sessionId: "later-session",
+        harnessSessionId: "later-thread",
+        backendRef: { kind: "claude-code", conversationId: "later-thread" },
+        name: "address-pr176-review-comments",
+        prompt: "test",
+        workdir: "/tmp",
+        route: {
+          provider: "telegram",
+          accountId: "bot",
+          target: "-1003863755361",
+          threadId: "13832",
+          sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+        },
+        createdAt: now,
+        completedAt: now,
+        status: "completed",
+        lifecycle: "awaiting_worktree_decision",
+        approvalState: "not_required",
+        worktreeState: "pending_decision",
+        runtimeState: "stopped",
+        deliveryState: "idle",
+        costUsd: 0,
+        pendingWorktreeDecisionSince: new Date(now - 60_000).toISOString(),
+        worktreeBranch: "agent/address-pr176-review-comments",
+        worktreePath: "/tmp/repo/.worktrees/address-pr176-review-comments",
+      };
+      const updates: Array<{ ref: string; patch: Record<string, unknown> }> = [];
+      const dispatchCalls: unknown[] = [];
+      const service = new SessionWorktreeDecisionService({
+        getPersistedSession: (ref) => ref === pending.sessionId || ref === pending.harnessSessionId ? pending : undefined,
+        resolveActiveSession: () => undefined,
+        resolveWorktreeRepoDir: () => undefined,
+        updatePersistedSession: (ref, patch) => {
+          updates.push({ ref, patch });
+          Object.assign(pending, patch);
+          return true;
+        },
+        dispatchNotification: (...args) => { dispatchCalls.push(args); },
+        buildRoutingProxy: (session) => ({ id: session.id ?? "later-session", route: session.route }) as any,
+      });
+
+      const result = service.snoozeWorktreeDecision(pending.sessionId, { notifyUser: false });
+
+      assert.equal(result, "⏭️ Reminder snoozed 24h for `agent/address-pr176-review-comments` (session: address-pr176-review-comments)");
+      assert.deepEqual(
+        updates.map((entry) => entry.ref),
+        ["later-session", "later-thread"],
+      );
+      assert.equal(pending.worktreeDecisionSnoozedUntil, new Date(now + 24 * 60 * 60 * 1000).toISOString());
+      assert.equal(pending.lastWorktreeReminderAt, new Date(now).toISOString());
+      assert.deepEqual(dispatchCalls, []);
+      assert.equal(pending.route.threadId, "13832");
+      assert.equal(pending.route.sessionKey, "agent:main:telegram:group:-1003863755361:topic:13832");
+    } finally {
+      Date.now = originalDateNow;
+    }
   });
 
   it("drops a queued stale worktree reminder after rechecking resolved persisted state", () => {

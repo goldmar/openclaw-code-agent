@@ -39,12 +39,14 @@ async function resolveWorktreePrompt(
   ctx: InteractiveCallbackContext,
   text: string,
   alreadyAcknowledged = false,
-): Promise<void> {
+): Promise<boolean> {
   try {
-    await clearInteractiveState(ctx, { text, alreadyAcknowledged });
+    const result = await clearInteractiveState(ctx, { text, alreadyAcknowledged });
+    return result.textDelivered;
   } catch (err) {
     const errText = err instanceof Error ? err.message : String(err);
     console.warn(`[callback-handler] Failed to resolve worktree prompt: ${errText}`);
+    return false;
   }
 }
 
@@ -129,7 +131,7 @@ function isDiscordEmptyMessageError(err: unknown): boolean {
 async function clearInteractiveState(
   ctx: InteractiveCallbackContext,
   options: { text?: string; alreadyAcknowledged?: boolean; forceTelegramMarkupEdit?: boolean } = {},
-): Promise<void> {
+): Promise<{ textDelivered: boolean }> {
   const responder = ctx.respond as InteractiveResponder;
   const { alreadyAcknowledged = false, forceTelegramMarkupEdit = false, text } = options;
 
@@ -140,13 +142,13 @@ async function clearInteractiveState(
         if (typeof responder.clearButtons === "function") {
           await responder.clearButtons();
         }
-        return;
+        return { textDelivered: true };
       } catch (err) {
         if (isMessageNotModifiedError(err)) {
           if (typeof responder.clearButtons === "function") {
             await responder.clearButtons();
           }
-          return;
+          return { textDelivered: true };
         }
         const errText = err instanceof Error ? err.message : String(err);
         console.warn(`[callback-handler] Failed to edit Telegram worktree prompt before clearing buttons: ${errText}`);
@@ -158,13 +160,13 @@ async function clearInteractiveState(
         if (typeof responder.clearButtons === "function") {
           await responder.clearButtons();
         }
-        return;
+        return { textDelivered: false };
       } catch (err) {
         if (isMessageNotModifiedError(err)) {
           if (typeof responder.clearButtons === "function") {
             await responder.clearButtons();
           }
-          return;
+          return { textDelivered: false };
         }
         const errText = err instanceof Error ? err.message : String(err);
         console.warn(`[callback-handler] Failed to edit Telegram button markup before clearing buttons: ${errText}`);
@@ -183,13 +185,13 @@ async function clearInteractiveState(
         if (typeof responder.clearButtons === "function") {
           await responder.clearButtons();
         }
-        return;
+        return { textDelivered: false };
       } catch (err) {
         if (isMessageNotModifiedError(err)) {
           if (typeof responder.clearButtons === "function") {
             await responder.clearButtons();
           }
-          return;
+          return { textDelivered: false };
         }
         const errText = err instanceof Error ? err.message : String(err);
         console.warn(`[callback-handler] Failed to edit Telegram message markup before clearing buttons: ${errText}`);
@@ -198,23 +200,23 @@ async function clearInteractiveState(
     if (typeof responder.clearButtons === "function") {
       await responder.clearButtons();
     }
-    return;
+    return { textDelivered: false };
   }
 
   if (typeof responder.clearComponents === "function") {
     try {
       await responder.clearComponents(typeof text === "string" ? { text } : undefined);
-      return;
+      return { textDelivered: typeof text === "string" };
     } catch (err) {
-      if (isMessageNotModifiedError(err)) return;
+      if (isMessageNotModifiedError(err)) return { textDelivered: typeof text === "string" };
 
       if (isDiscordEmptyMessageError(err)) {
         if (typeof text !== "string" && alreadyAcknowledged) {
-          return;
+          return { textDelivered: false };
         }
         if (typeof text !== "string" && typeof responder.acknowledge === "function") {
           await responder.acknowledge();
-          return;
+          return { textDelivered: false };
         }
         if (typeof text !== "string" && typeof responder.acknowledge !== "function") {
           console.warn("[callback-handler] clearComponents failed with empty-message error and no acknowledge fallback available");
@@ -232,16 +234,30 @@ async function clearInteractiveState(
     try {
       await responder.editMessage({ text });
     } catch (err) {
-      if (!isMessageNotModifiedError(err)) {
-        const errText = err instanceof Error ? err.message : String(err);
-        console.warn(`[callback-handler] Failed to edit worktree prompt before clearing interactive state: ${errText}`);
+      if (isMessageNotModifiedError(err)) {
+        if (typeof responder.clearButtons === "function") {
+          await responder.clearButtons();
+        }
+        return { textDelivered: true };
       }
+      const errText = err instanceof Error ? err.message : String(err);
+      console.warn(`[callback-handler] Failed to edit worktree prompt before clearing interactive state: ${errText}`);
+      if (typeof responder.clearButtons === "function") {
+        await responder.clearButtons();
+      }
+      return { textDelivered: false };
     }
+
+    if (typeof responder.clearButtons === "function") {
+      await responder.clearButtons();
+    }
+    return { textDelivered: true };
   }
 
   if (typeof responder.clearButtons === "function") {
     await responder.clearButtons();
   }
+  return { textDelivered: false };
 }
 
 async function acknowledgeCallback(ctx: InteractiveCallbackContext): Promise<boolean> {
@@ -390,12 +406,17 @@ export function createCallbackHandler(channel: InteractiveChannel = "telegram") 
         }
 
         case "worktree-decide-later": {
-          const result = sessionManager.snoozeWorktreeDecision(sessionId);
+          const result = sessionManager.snoozeWorktreeDecision(sessionId, { notifyUser: false });
           const succeeded = worktreeActionTextSucceeded(result);
           if (succeeded) {
-            await resolveWorktreePrompt(ctx, `⏭️ Deferred for [${actionSessionName}]`, callbackAcknowledged);
+            const confirmation = `⏭️ Snoozed 24h for [${actionSessionName}]`;
+            const resolved = await resolveWorktreePrompt(ctx, confirmation, callbackAcknowledged);
+            if (!resolved) {
+              await replyText(ctx, confirmation);
+            }
+          } else {
+            await replyText(ctx, result);
           }
-          await replyText(ctx, succeeded ? "⏭️ Snoozed 24h" : result);
           break;
         }
 
