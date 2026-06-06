@@ -408,6 +408,7 @@ export class OpenCodeHarness implements AgentHarness {
     let streamStarted = false;
     let turnInProgress = false;
     let turnCompletionEmitted = false;
+    let sessionInterrupted = false;
 
     const emitRunCompleted = (data: Parameters<typeof createRunCompletedEvent>[0]): boolean => {
       if (turnCompletionEmitted) return false;
@@ -621,6 +622,7 @@ export class OpenCodeHarness implements AgentHarness {
     void (async () => {
       try {
         for await (const rawMessage of promptIterable) {
+          if (sessionInterrupted) break;
           const text = extractPromptText(rawMessage).trim();
           if (!text) continue;
           if (currentPendingInput?.kind === "question") {
@@ -630,9 +632,12 @@ export class OpenCodeHarness implements AgentHarness {
             continue;
           }
           await runTurn(text);
+          if (sessionInterrupted) break;
         }
       } catch (error) {
-        finishTurn(false, "failed", errorMessage(error));
+        if (!sessionInterrupted) {
+          finishTurn(false, "failed", errorMessage(error));
+        }
       } finally {
         streamController.abort();
         await server?.close().catch((): undefined => undefined);
@@ -684,6 +689,7 @@ export class OpenCodeHarness implements AgentHarness {
       },
 
       async interrupt(): Promise<void> {
+        sessionInterrupted = true;
         if (!client || !sessionId) return;
         const abortRequest = client.request("POST", `/session/${encodeURIComponent(sessionId)}/abort`).catch((): undefined => undefined);
         activeWaitController?.abort();

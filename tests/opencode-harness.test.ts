@@ -451,6 +451,34 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     assert.equal(mock.requests.some((request) => request.method === "POST" && request.path === "/session/ses_test/abort"), true);
   });
 
+  it("stops a multi-message prompt stream after interrupting an active turn", async () => {
+    const mock = new MockOpenCodeServer();
+    mock.waitMode = "defer";
+    const harness = new OpenCodeHarness({
+      createServer: async () => mock.handle(),
+      fetch: mock.fetch,
+    });
+
+    async function* prompts(): AsyncGenerator<unknown> {
+      yield { type: "user", text: "first" };
+      yield { type: "user", text: "second" };
+    }
+
+    const session = harness.launch({ prompt: prompts(), cwd: "/repo" });
+    await waitForRequest(mock, "/api/session/ses_test/wait");
+    await session.interrupt?.();
+
+    const messages = await collectAllMessages(session);
+    const completions = messages.filter((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }>[];
+    assert.equal(completions.length, 1);
+    assert.equal(completions[0]?.data.outcome, "interrupted");
+
+    const promptsSent = mock.requests.filter((request) => request.method === "POST" && request.path === "/api/session/ses_test/prompt");
+    assert.deepEqual(promptsSent.map((request) => request.body), [
+      { prompt: { text: "first" }, delivery: "queue" },
+    ]);
+  });
+
   it("still emits one completion per prompt in a multi-turn launch stream", async () => {
     const mock = new MockOpenCodeServer();
     const harness = new OpenCodeHarness({
