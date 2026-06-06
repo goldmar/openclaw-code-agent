@@ -13,10 +13,17 @@ class MockOpenCodeServer {
   requests: RequestRecord[] = [];
   closed = false;
   waitMode: "immediate" | "defer" = "immediate";
+  unsupportedV2Wait = false;
+  unsupportedV2Prompt = false;
+  unsupportedV2Context = false;
+  unsupportedV2PermissionReply = false;
+  unsupportedV2QuestionReply = false;
+  statusMode: "idle" | "busy-then-idle" = "idle";
   failQuestionReplies = false;
   failSessionPatch = false;
   private streamController?: ReadableStreamDefaultController<Uint8Array>;
   private readonly encoder = new TextEncoder();
+  private statusRequests = 0;
   private deferredWait?: {
     resolve: (response: Response) => void;
     reject: (error: unknown) => void;
@@ -44,11 +51,25 @@ class MockOpenCodeServer {
     if (path === "/api/health") return json({ healthy: true, version: "1.16.2" });
     if (method === "POST" && path === "/session") return json({ id: "ses_test" });
     if (method === "POST" && path === "/session/ses_existing/fork") return json({ id: "ses_forked" });
-    if (method === "GET" && path === "/api/session/ses_existing/context") return json([]);
+    if (method === "GET" && path === "/session/status") {
+      this.statusRequests += 1;
+      const type = this.statusMode === "busy-then-idle" && this.statusRequests === 1 ? "busy" : "idle";
+      return json({ ses_test: { type }, ses_existing: { type }, ses_forked: { type } });
+    }
+    if (method === "GET" && path === "/api/session/ses_existing/context") {
+      if (this.unsupportedV2Context) return serviceUnavailable("v2.session.context");
+      return json([]);
+    }
     if (method === "GET" && path === "/api/session/ses_test/context") {
+      if (this.unsupportedV2Context) return serviceUnavailable("v2.session.context");
       return json([{ type: "assistant", content: [{ type: "text", text: "Final." }] }]);
     }
+    if (method === "GET" && path === "/session/ses_existing/message") return json([]);
+    if (method === "GET" && path === "/session/ses_test/message") {
+      return json([{ info: { type: "assistant", content: [{ type: "text", text: "Final." }] }, parts: [] }]);
+    }
     if (method === "POST" && path.endsWith("/wait")) {
+      if (this.unsupportedV2Wait) return serviceUnavailable("v2.session.wait");
       if (this.waitMode === "defer") {
         return await new Promise<Response>((resolve, reject) => {
           this.deferredWait = { resolve, reject };
@@ -57,9 +78,24 @@ class MockOpenCodeServer {
       }
       return new Response(null, { status: 204 });
     }
-    if (method === "POST" && path.endsWith("/prompt")) return json({ type: "assistant", content: [] });
-    if (method === "POST" && path.includes("/permission/request/")) return json(true);
+    if (method === "POST" && path.endsWith("/prompt")) {
+      if (this.unsupportedV2Prompt) return serviceUnavailable("v2.session.prompt");
+      return json({ type: "assistant", content: [] });
+    }
+    if (method === "POST" && path.endsWith("/prompt_async")) return new Response(null, { status: 204 });
+    if (method === "POST" && path.includes("/permission/request/")) {
+      if (this.unsupportedV2PermissionReply) return serviceUnavailable("v2.permission.reply");
+      return json(true);
+    }
+    if (method === "POST" && path.startsWith("/permission/") && path.endsWith("/reply")) return json(true);
     if (method === "POST" && path.includes("/question/request/")) {
+      if (this.unsupportedV2QuestionReply) return serviceUnavailable("v2.question.reply");
+      if (this.failQuestionReplies) {
+        return new Response(JSON.stringify({ error: "question reply failed" }), { status: 500 });
+      }
+      return json(true);
+    }
+    if (method === "POST" && path.startsWith("/question/") && path.endsWith("/reply")) {
       if (this.failQuestionReplies) {
         return new Response(JSON.stringify({ error: "question reply failed" }), { status: 500 });
       }
@@ -102,6 +138,17 @@ class MockOpenCodeServer {
 function json(value: unknown): Response {
   return new Response(JSON.stringify(value), {
     status: 200,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+function serviceUnavailable(service: string): Response {
+  return new Response(JSON.stringify({
+    _tag: "ServiceUnavailableError",
+    message: `${service} is not available yet`,
+    service,
+  }), {
+    status: 503,
     headers: { "content-type": "application/json" },
   });
 }
@@ -230,6 +277,76 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     assert.equal(result?.data.success, true);
     assert.equal(result?.data.result, "Final.");
     assert.equal(mock.closed, true);
+  });
+
+  it("falls back to classic status polling when v2 session wait is unavailable", async () => {
+    const mock = new MockOpenCodeServer();
+    mock.unsupportedV2Wait = true;
+    mock.statusMode = "busy-then-idle";
+    const harness = new OpenCodeHarness({
+      createServer: async () => mock.handle(),
+      fetch: mock.fetch,
+    });
+
+    const messages = await collectMessages(harness.launch({
+      prompt: "ship it",
+      cwd: "/repo",
+    }));
+
+    const result = messages.find((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }> | undefined;
+    assert.equal(mock.requests.some((request) => request.method === "POST" && request.path === "/api/session/ses_test/wait"), true);
+    assert.equal(mock.requests.some((request) => request.method === "GET" && request.path === "/session/status"), true);
+    assert.equal(result?.data.success, true);
+    assert.equal(result?.data.result, "Final.");
+  });
+
+  it("remembers unsupported v2 wait and polls status on later turns", async () => {
+    const mock = new MockOpenCodeServer();
+    mock.unsupportedV2Wait = true;
+    const harness = new OpenCodeHarness({
+      createServer: async () => mock.handle(),
+      fetch: mock.fetch,
+    });
+
+    async function* prompts(): AsyncGenerator<unknown> {
+      yield { type: "user", text: "first" };
+      yield { type: "user", text: "second" };
+    }
+
+    const messages = await collectAllMessages(harness.launch({ prompt: prompts(), cwd: "/repo" }));
+    const completions = messages.filter((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }>[];
+    assert.equal(completions.length, 2);
+    assert.equal(completions.every((completion) => completion.data.success), true);
+    assert.equal(mock.requests.filter((request) => request.path === "/api/session/ses_test/wait").length, 1);
+    assert.equal(mock.requests.filter((request) => request.path === "/session/status").length, 4);
+  });
+
+  it("falls back to classic prompt_async and message routes when v2 prompt/context are unavailable", async () => {
+    const mock = new MockOpenCodeServer();
+    mock.unsupportedV2Prompt = true;
+    mock.unsupportedV2Context = true;
+    const harness = new OpenCodeHarness({
+      createServer: async () => mock.handle(),
+      fetch: mock.fetch,
+    });
+
+    const messages = await collectMessages(harness.launch({
+      prompt: "implement",
+      cwd: "/repo",
+      model: "anthropic/claude-sonnet-4-5",
+      systemPrompt: "Use project conventions.",
+    }));
+
+    const classicPrompt = mock.requests.find((request) => request.method === "POST" && request.path === "/session/ses_test/prompt_async");
+    const result = messages.find((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }> | undefined;
+    assert.deepEqual(classicPrompt?.body, {
+      model: { providerID: "anthropic", modelID: "claude-sonnet-4-5" },
+      system: "Use project conventions.",
+      parts: [{ type: "text", text: "implement" }],
+    });
+    assert.equal(mock.requests.some((request) => request.method === "GET" && request.path === "/session/ses_test/message"), true);
+    assert.equal(result?.data.success, true);
+    assert.equal(result?.data.result, "Final.");
   });
 
   it("streams text deltas and tool calls from v2 events", async () => {
@@ -374,6 +491,48 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     assert.deepEqual(reply?.body, { response: "once" });
   });
 
+  it("falls back to classic permission reply when v2 permission reply is unavailable", async () => {
+    const mock = new MockOpenCodeServer();
+    mock.unsupportedV2PermissionReply = true;
+    const waitForEventStream = new Promise<void>((resolve) => {
+      const originalFetch = mock.fetch;
+      mock.fetch = async (input, init) => {
+        const response = await originalFetch(input, init);
+        const url = new URL(typeof input === "string" ? input : input.url);
+        if (url.pathname === "/api/event") resolve();
+        return response;
+      };
+    });
+    const harness = new OpenCodeHarness({
+      createServer: async () => mock.handle(),
+      fetch: mock.fetch,
+    });
+
+    const session = harness.launch({ prompt: "needs permission", cwd: "/repo" });
+    await waitForEventStream;
+    mock.emit({
+      type: "permission.asked",
+      properties: {
+        id: "per_classic",
+        sessionID: "ses_test",
+        permission: "bash",
+        patterns: ["npm test"],
+      },
+    });
+
+    for await (const message of session.messages) {
+      if (message.type === "pending_input") {
+        assert.equal(await session.submitPendingInputOption?.(0), true);
+      }
+      if (message.type === "pending_input_resolved") break;
+    }
+
+    const v2Reply = mock.requests.find((request) => request.path === "/api/session/ses_test/permission/request/per_classic/reply");
+    const classicReply = mock.requests.find((request) => request.path === "/permission/per_classic/reply");
+    assert.deepEqual(v2Reply?.body, { response: "once" });
+    assert.deepEqual(classicReply?.body, { reply: "once" });
+  });
+
   it("deduplicates permission resolved events when the server echoes the reply", async () => {
     const mock = new MockOpenCodeServer();
     const waitForEventStream = new Promise<void>((resolve) => {
@@ -480,6 +639,48 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     assert.deepEqual(reply?.body, { answers: [["main"]] });
     assert.equal(resolved.length, 1);
     assert.equal(resolved[0]?.requestId, "q_echo");
+  });
+
+  it("falls back to classic question reply when v2 question reply is unavailable", async () => {
+    const mock = new MockOpenCodeServer();
+    mock.unsupportedV2QuestionReply = true;
+    const waitForEventStream = new Promise<void>((resolve) => {
+      const originalFetch = mock.fetch;
+      mock.fetch = async (input, init) => {
+        const response = await originalFetch(input, init);
+        const url = new URL(typeof input === "string" ? input : input.url);
+        if (url.pathname === "/api/event") resolve();
+        return response;
+      };
+    });
+    const harness = new OpenCodeHarness({
+      createServer: async () => mock.handle(),
+      fetch: mock.fetch,
+    });
+
+    const session = harness.launch({ prompt: "needs answer", cwd: "/repo" });
+    await waitForEventStream;
+    mock.emit({
+      type: "question.asked",
+      properties: {
+        id: "q_classic",
+        sessionID: "ses_test",
+        question: "Which branch?",
+        options: ["main"],
+      },
+    });
+
+    for await (const message of session.messages) {
+      if (message.type === "pending_input") {
+        assert.equal(await session.submitPendingInputText?.("main"), true);
+      }
+      if (message.type === "pending_input_resolved") break;
+    }
+
+    const v2Reply = mock.requests.find((request) => request.path === "/api/session/ses_test/question/request/q_classic/reply");
+    const classicReply = mock.requests.find((request) => request.path === "/question/q_classic/reply");
+    assert.deepEqual(v2Reply?.body, { answers: [["main"]] });
+    assert.deepEqual(classicReply?.body, { answers: [["main"]] });
   });
 
   it("emits failed completion when inline question reply fails after a completed turn", async () => {

@@ -41,6 +41,14 @@ interface OpenCodeSession {
   title?: string;
 }
 
+type OpenCodeCapabilities = {
+  v2Prompt: "unknown" | "supported" | "unsupported";
+  v2Wait: "unknown" | "supported" | "unsupported";
+  v2Context: "unknown" | "supported" | "unsupported";
+  v2PermissionReply: "unknown" | "supported" | "unsupported";
+  v2QuestionReply: "unknown" | "supported" | "unsupported";
+};
+
 type OpenCodePendingInput = {
   requestId: string;
   kind: "approval" | "question";
@@ -131,6 +139,61 @@ async function getFreePort(): Promise<number> {
 
 async function delay(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+class OpenCodeHttpError extends Error {
+  constructor(
+    readonly method: string,
+    readonly path: string,
+    readonly status: number,
+    readonly body: string,
+  ) {
+    super(`OpenCode ${method} ${path} failed with ${status}${body ? `: ${body}` : ""}`);
+  }
+}
+
+function isOpenCodeHttpError(error: unknown): error is OpenCodeHttpError {
+  return error instanceof OpenCodeHttpError;
+}
+
+function isUnsupportedOpenCodeRoute(error: unknown): boolean {
+  if (!isOpenCodeHttpError(error)) return false;
+  if (error.status === 404 || error.status === 405 || error.status === 501) return true;
+  if (error.status !== 503) return false;
+  if (/not available yet|ServiceUnavailableError/i.test(error.body)) return true;
+  try {
+    const parsed = JSON.parse(error.body) as unknown;
+    return isRecord(parsed)
+      && parsed._tag === "ServiceUnavailableError"
+      && typeof parsed.service === "string";
+  } catch {
+    return false;
+  }
+}
+
+function createOpenCodeCapabilities(): OpenCodeCapabilities {
+  return {
+    v2Prompt: "unknown",
+    v2Wait: "unknown",
+    v2Context: "unknown",
+    v2PermissionReply: "unknown",
+    v2QuestionReply: "unknown",
+  };
+}
+
+function classicPromptBody(text: string, model: string | undefined, systemPrompt: string | undefined): Record<string, unknown> {
+  const parsed = parseModel(model);
+  return {
+    ...(parsed ? { model: { providerID: parsed.providerID, modelID: parsed.modelID } } : {}),
+    ...(systemPrompt?.trim() ? { system: systemPrompt.trim() } : {}),
+    parts: [{ type: "text", text }],
+  };
+}
+
+function isIdleSessionStatus(statuses: unknown, sessionId: string): boolean {
+  if (!isRecord(statuses)) return false;
+  const status = statuses[sessionId];
+  return isRecord(status) && status.type === "idle";
 }
 
 async function startOpenCodeServerOnce(options: { cwd: string }): Promise<OpenCodeServerHandle> {
@@ -233,7 +296,7 @@ class OpenCodeClient {
       });
       if (!response.ok) {
         const text = await response.text().catch(() => "");
-        throw new Error(`OpenCode ${method} ${path} failed with ${response.status}${text ? `: ${text}` : ""}`);
+        throw new OpenCodeHttpError(method, path, response.status, text);
       }
       if (response.status === 204) return undefined as T;
       const text = await response.text();
@@ -414,6 +477,7 @@ export class OpenCodeHarness implements AgentHarness {
     let sessionValidated = !options.resumeSessionId;
     let sessionForked = false;
     let systemPromptInjected = false;
+    const capabilities = createOpenCodeCapabilities();
     const streamController = new AbortController();
     let activeWaitController: AbortController | undefined;
     let streamStarted = false;
@@ -479,14 +543,38 @@ export class OpenCodeHarness implements AgentHarness {
 
     const replyPermission = async (requestId: string, response: string): Promise<void> => {
       if (!client || !sessionId) return;
-      await client.request("POST", `/api/session/${encodeURIComponent(sessionId)}/permission/request/${encodeURIComponent(requestId)}/reply`, {
-        response,
+      if (capabilities.v2PermissionReply !== "unsupported") {
+        try {
+          await client.request("POST", `/api/session/${encodeURIComponent(sessionId)}/permission/request/${encodeURIComponent(requestId)}/reply`, {
+            response,
+          });
+          capabilities.v2PermissionReply = "supported";
+          return;
+        } catch (error) {
+          if (!isUnsupportedOpenCodeRoute(error)) throw error;
+          capabilities.v2PermissionReply = "unsupported";
+        }
+      }
+      await client.request("POST", `/permission/${encodeURIComponent(requestId)}/reply`, {
+        reply: response,
       });
     };
 
     const replyQuestion = async (requestId: string, answer: string): Promise<void> => {
       if (!client || !sessionId) return;
-      await client.request("POST", `/api/session/${encodeURIComponent(sessionId)}/question/request/${encodeURIComponent(requestId)}/reply`, {
+      if (capabilities.v2QuestionReply !== "unsupported") {
+        try {
+          await client.request("POST", `/api/session/${encodeURIComponent(sessionId)}/question/request/${encodeURIComponent(requestId)}/reply`, {
+            answers: [[answer]],
+          });
+          capabilities.v2QuestionReply = "supported";
+          return;
+        } catch (error) {
+          if (!isUnsupportedOpenCodeRoute(error)) throw error;
+          capabilities.v2QuestionReply = "unsupported";
+        }
+      }
+      await client.request("POST", `/question/${encodeURIComponent(requestId)}/reply`, {
         answers: [[answer]],
       });
     };
@@ -576,6 +664,76 @@ export class OpenCodeHarness implements AgentHarness {
         });
     };
 
+    const fetchSessionMessages = async (http: OpenCodeClient, id: string): Promise<unknown> => {
+      if (capabilities.v2Context !== "unsupported") {
+        try {
+          const messages = await http.request<unknown>("GET", `/api/session/${encodeURIComponent(id)}/context`);
+          capabilities.v2Context = "supported";
+          return messages;
+        } catch (error) {
+          if (!isUnsupportedOpenCodeRoute(error)) throw error;
+          capabilities.v2Context = "unsupported";
+        }
+      }
+      return await http.request<unknown>("GET", `/session/${encodeURIComponent(id)}/message`);
+    };
+
+    const sendPrompt = async (http: OpenCodeClient, id: string, text: string, promptSystemPrompt: string | undefined): Promise<void> => {
+      if (capabilities.v2Prompt !== "unsupported") {
+        try {
+          await http.request("POST", `/api/session/${encodeURIComponent(id)}/prompt`, {
+            prompt: { text: buildPromptText(text, promptSystemPrompt) },
+            delivery: "queue",
+            ...(firstResumedPrompt ? { resume: true } : {}),
+          });
+          capabilities.v2Prompt = "supported";
+          return;
+        } catch (error) {
+          if (!isUnsupportedOpenCodeRoute(error)) throw error;
+          capabilities.v2Prompt = "unsupported";
+        }
+      }
+      await http.request("POST", `/session/${encodeURIComponent(id)}/prompt_async`, classicPromptBody(text, options.model, promptSystemPrompt));
+    };
+
+    const waitForIdleStatus = async (http: OpenCodeClient, id: string, signal: AbortSignal): Promise<void> => {
+      const startedAt = Date.now();
+      let consecutiveIdle = 0;
+      let observedBusy = false;
+      while (true) {
+        if (signal.aborted) throw new Error("wait aborted");
+        const statuses = await http.request<unknown>("GET", "/session/status", undefined, {
+          signal,
+          timeoutMs: Math.min(this.deps.requestTimeoutMs ?? REQUEST_TIMEOUT_MS, 10_000),
+        });
+        if (isIdleSessionStatus(statuses, id)) {
+          consecutiveIdle += 1;
+          if (observedBusy || consecutiveIdle >= 2) return;
+        } else {
+          observedBusy = true;
+          consecutiveIdle = 0;
+        }
+        if (Date.now() - startedAt > (this.deps.requestTimeoutMs ?? REQUEST_TIMEOUT_MS)) {
+          throw new Error(`Timed out waiting for OpenCode session ${id} to become idle.`);
+        }
+        await delay(250);
+      }
+    };
+
+    const waitForTurn = async (http: OpenCodeClient, id: string, signal: AbortSignal): Promise<void> => {
+      if (capabilities.v2Wait !== "unsupported") {
+        try {
+          await http.request("POST", `/api/session/${encodeURIComponent(id)}/wait`, undefined, { signal });
+          capabilities.v2Wait = "supported";
+          return;
+        } catch (error) {
+          if (!isUnsupportedOpenCodeRoute(error)) throw error;
+          capabilities.v2Wait = "unsupported";
+        }
+      }
+      await waitForIdleStatus(http, id, signal);
+    };
+
     const ensureSession = async (): Promise<string> => {
       const http = await ensureClient();
       if (sessionId) {
@@ -587,7 +745,7 @@ export class OpenCodeHarness implements AgentHarness {
           sessionValidated = true;
           firstResumedPrompt = false;
         } else if (!sessionValidated) {
-          await http.request("GET", `/api/session/${encodeURIComponent(sessionId)}/context`);
+          await fetchSessionMessages(http, sessionId);
           sessionValidated = true;
         }
         emitBackendRef();
@@ -612,7 +770,7 @@ export class OpenCodeHarness implements AgentHarness {
     const completeTurn = async (success: boolean, result?: string, outcome: "completed" | "failed" | "interrupted" = success ? "completed" : "failed"): Promise<void> => {
       let finalResult = result;
       if (success && client && sessionId) {
-        const messages = await client.request<unknown>("GET", `/api/session/${encodeURIComponent(sessionId)}/context`)
+        const messages = await fetchSessionMessages(client, sessionId)
           .catch((): undefined => undefined);
         finalResult = finalResult ?? extractAssistantResult(messages);
       }
@@ -631,18 +789,12 @@ export class OpenCodeHarness implements AgentHarness {
         queue.enqueue(createRunStartedEvent());
         runCounter += 1;
         const promptSystemPrompt = systemPromptInjected ? undefined : options.systemPrompt;
-        await http.request("POST", `/api/session/${encodeURIComponent(id)}/prompt`, {
-          prompt: { text: buildPromptText(text, promptSystemPrompt) },
-          delivery: "queue",
-          ...(firstResumedPrompt ? { resume: true } : {}),
-        });
+        await sendPrompt(http, id, text, promptSystemPrompt);
         systemPromptInjected = true;
         firstResumedPrompt = false;
         const waitController = new AbortController();
         activeWaitController = waitController;
-        await http.request("POST", `/api/session/${encodeURIComponent(id)}/wait`, undefined, {
-          signal: waitController.signal,
-        });
+        await waitForTurn(http, id, waitController.signal);
         activeWaitController = undefined;
         turnWaitCompleted = true;
         await completeTurn(true);

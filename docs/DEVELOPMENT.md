@@ -125,7 +125,7 @@ Before running it:
 
 ### Live OpenCode Smoke Check
 
-Use `pnpm smoke:opencode-live` only when a real OpenCode environment is available. It starts `opencode serve`, creates a trivial session, sends a current `/api/*` queued prompt, waits for completion, and verifies that an assistant response was produced. It intentionally stays out of `pnpm verify` because it depends on local OpenCode installation and provider auth.
+Use `pnpm smoke:opencode-live` only when a real OpenCode environment is available. It starts `opencode serve`, creates a trivial session, sends a prompt through the harness's OpenCode compatibility path, waits for completion, and verifies that an assistant response was produced. It intentionally stays out of `pnpm verify` because it depends on local OpenCode installation and provider auth.
 
 ## Extending The Plugin
 
