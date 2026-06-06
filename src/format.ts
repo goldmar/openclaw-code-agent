@@ -155,12 +155,12 @@ export function formatSessionListing(session: SessionListRenderable): string {
   }
 
   if (session.harness) {
-    lines.push(`   🧰 Harness / model: ${formatHarnessModelLabel({
+    lines.push(`   🧰 Harness | model: ${formatHarnessModelLabel({
       harness: session.harness,
       model: session.model,
     })}`);
   } else if (session.model) {
-    lines.push(`   🧰 Harness / model: ${session.model}`);
+    lines.push(`   🧰 Harness | model: ${session.model}`);
   }
 
   const backendConversationId = getBackendConversationId(session);

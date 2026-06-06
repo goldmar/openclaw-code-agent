@@ -1902,7 +1902,7 @@ describe("SessionNotificationService", () => {
         label: "worktree-foreground-summary",
         userMessage: [
           "Merged `include-harness-in-oca-notifications` into `main` by fast-forward.",
-          "Scope was tight: notifications now show `harness / model` instead of model-only ambiguity.",
+          "Scope was tight: notifications now show `harness | model` instead of model-only ambiguity.",
         ].join("\n"),
         completionSummaryOwner: "foreground",
         completionSummary: {
@@ -1942,7 +1942,7 @@ describe("SessionNotificationService", () => {
       "✅ Merged: agent/include-harness-in-oca-notifications → main (10 files, +128/-11)",
       [
         "Merged `include-harness-in-oca-notifications` into `main` by fast-forward.",
-        "Scope was tight: notifications now show `harness / model` instead of model-only ambiguity.",
+        "Scope was tight: notifications now show `harness | model` instead of model-only ambiguity.",
       ].join("\n"),
       "✅ [include-harness-in-oca-notifications] Completed",
     ]);

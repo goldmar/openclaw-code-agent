@@ -26,7 +26,7 @@ describe("SessionRuntimeBootstrapService", () => {
     service.initializeSession(session as any, {} as any, {} as any);
 
     assert.deepEqual(notifications, [
-      "🚀 [launch-session] Launched | /repo/worktree (worktree of /repo) | codex / gpt-5.5",
+      "🚀 [launch-session] Launched | /repo/worktree (worktree of /repo) | codex | gpt-5.5",
     ]);
   });
 });

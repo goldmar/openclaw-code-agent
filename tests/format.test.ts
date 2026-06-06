@@ -177,7 +177,7 @@ describe("formatSessionListing", () => {
 
   it("shows harness and model when present", () => {
     const result = formatSessionListing(makeSession({ harness: "codex", model: "gpt-5.5" }));
-    assert.ok(result.includes("Harness / model: codex / gpt-5.5"));
+    assert.ok(result.includes("Harness | model: codex | gpt-5.5"));
   });
 
   it("shows deterministic approval context when present", () => {
