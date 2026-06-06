@@ -504,7 +504,7 @@ export class SessionLifecycleService {
 
     this.deps.dispatchSessionNotification(session, {
       label: payload.label,
-      idempotencyKey: `waiting:${session.id}:${session.pendingInputState?.requestId ?? payload.label}:${payload.userMessage}`,
+      idempotencyKey: `waiting:${session.id}:${session.pendingInputState?.requestId ?? `${payload.label}:${payload.userMessage}`}`,
       userMessage: payload.userMessage,
       notifyUser: "always",
       buttons: payload.buttons,

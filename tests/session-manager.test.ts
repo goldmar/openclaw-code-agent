@@ -2121,6 +2121,7 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(calls.length, 1);
     const [_sessionArg, request] = calls[0];
     assert.equal(request.label, "waiting");
+    assert.equal(request.idempotencyKey, "waiting:s-pending-input:req-1");
     assert.equal(request.wakeMessage, undefined);
     assert.match(request.userMessage, /allow read-only workspace inspection/);
     assert.match(request.wakeMessageOnNotifyFailed, /allow read-only workspace inspection/);
@@ -2151,6 +2152,7 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(calls.length, 1);
     const [_sessionArg, request] = calls[0];
     assert.equal(request.label, "waiting");
+    assert.equal(request.idempotencyKey, "waiting:s-pending-input-context:req-context-1");
     assert.match(request.userMessage, /Question:/);
     assert.match(request.userMessage, /What host-version policy should the plan target\?/);
     assert.match(request.userMessage, /Recent context:/);
@@ -2184,6 +2186,7 @@ describe("SessionManager turn-end wake", () => {
     await (sm as any).triggerWaitingForInputEvent(s);
     const firstRequest = (sm as any).__dispatchCalls[0][1];
     assert.equal(firstRequest.label, "waiting");
+    assert.equal(firstRequest.idempotencyKey, "waiting:s-codex-pending-input:req-1");
     assert.deepEqual(
       firstRequest.buttons.map((row: Array<{ label: string }>) => row.map((button) => button.label)),
       [["Staging", "Production"]],
@@ -2205,6 +2208,7 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(calls.length, 2);
     const secondRequest = calls[1][1];
     assert.equal(secondRequest.label, "waiting");
+    assert.equal(secondRequest.idempotencyKey, "waiting:s-codex-pending-input:req-2");
     assert.match(secondRequest.userMessage, /Choose the second environment/);
     assert.deepEqual(
       secondRequest.buttons.map((row: Array<{ label: string }>) => row.map((button) => button.label)),
