@@ -346,7 +346,7 @@ export class CompletionSummaryCoordinator {
     if (!records?.length) return [];
     return records
       .filter((record) => record.key.trim() && Number.isFinite(Date.parse(record.recordedAt)))
-      .slice(Math.max(0, records.length - this.maxCompletedKeys));
+      .slice(-this.maxCompletedKeys);
   }
 
   private deliveredRecords(
