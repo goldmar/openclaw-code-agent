@@ -144,6 +144,25 @@ class OpenCodeHttpError extends Error {
   }
 }
 
+function responseContentType(response: Response): string {
+  return response.headers.get("content-type")?.toLowerCase() ?? "";
+}
+
+function previewResponseBody(text: string): string {
+  return text.replace(/\s+/g, " ").trim().slice(0, 300);
+}
+
+function isHtmlResponse(contentType: string, text: string): boolean {
+  return contentType.includes("text/html") || /^\s*<!doctype html\b/i.test(text) || /^\s*<html[\s>]/i.test(text);
+}
+
+function unexpectedJsonResponseMessage(method: string, path: string, contentType: string, text: string): string {
+  const typeDescription = contentType ? `content-type ${contentType}` : "missing content-type";
+  const body = previewResponseBody(text);
+  const htmlHint = isHtmlResponse(contentType, text) ? " (looks like the OpenCode web UI HTML app shell)" : "";
+  return `OpenCode ${method} ${path} expected JSON API response but received ${typeDescription}${htmlHint}${body ? `: ${body}` : ""}`;
+}
+
 function classicPromptBody(text: string, model: string | undefined, systemPrompt: string | undefined): Record<string, unknown> {
   const parsed = parseModel(model);
   return {
@@ -259,11 +278,21 @@ class OpenCodeClient {
       });
       if (!response.ok) {
         const text = await response.text().catch(() => "");
-        throw new OpenCodeHttpError(method, path, response.status, text);
+        throw new OpenCodeHttpError(method, path, response.status, previewResponseBody(text));
       }
       if (response.status === 204) return undefined as T;
       const text = await response.text();
-      return (text ? JSON.parse(text) : undefined) as T;
+      if (!text) return undefined as T;
+      const contentType = responseContentType(response);
+      if (!contentType.includes("application/json") && !contentType.includes("+json")) {
+        throw new Error(unexpectedJsonResponseMessage(method, path, contentType, text));
+      }
+      try {
+        return JSON.parse(text) as T;
+      } catch (error) {
+        const preview = previewResponseBody(text);
+        throw new Error(`OpenCode ${method} ${path} returned invalid JSON: ${errorMessage(error)}${preview ? `: ${preview}` : ""}`);
+      }
     } finally {
       clearTimeout(timeout);
       options.signal?.removeEventListener("abort", abortFromCaller);
@@ -274,7 +303,7 @@ class OpenCodeClient {
     onEvent: (event: unknown) => void | Promise<void>,
     signal: AbortSignal,
   ): Promise<void> {
-    const response = await this.fetchImpl(`${this.baseUrl}/api/event`, {
+    const response = await this.fetchImpl(`${this.baseUrl}/event`, {
       headers: authHeader(),
       signal,
     });

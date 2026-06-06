@@ -33,7 +33,7 @@ class MockOpenCodeServer {
     const body = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
     this.requests.push({ method, path, body });
 
-    if (path === "/api/event") {
+    if (path === "/event") {
       return new Response(new ReadableStream<Uint8Array>({
         start: (controller) => {
           this.streamController = controller;
@@ -115,6 +115,13 @@ function json(value: unknown): Response {
   return new Response(JSON.stringify(value), {
     status: 200,
     headers: { "content-type": "application/json" },
+  });
+}
+
+function htmlShell(): Response {
+  return new Response("<!doctype html><html><head><title>OpenCode</title></head><body><div id=\"root\"></div></body></html>", {
+    status: 200,
+    headers: { "content-type": "text/html; charset=utf-8" },
   });
 }
 
@@ -244,6 +251,61 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     assert.equal(mock.closed, true);
   });
 
+  it("uses the real OpenCode classic JSON lifecycle endpoints", async () => {
+    const mock = new MockOpenCodeServer();
+    const harness = new OpenCodeHarness({
+      createServer: async () => mock.handle(),
+      fetch: mock.fetch,
+    });
+
+    await collectMessages(harness.launch({
+      prompt: "ship it",
+      cwd: "/repo",
+      permissionMode: "plan",
+    }));
+
+    const lifecyclePaths = mock.requests
+      .map((request) => request.path)
+      .filter((path) => path !== "/event");
+    assert.ok(lifecyclePaths.length > 0);
+    assert.equal(lifecyclePaths.some((path) => path.startsWith("/api/session")), false);
+    assert.deepEqual(new Set(lifecyclePaths), new Set([
+      "/session",
+      "/session/ses_test/message",
+      "/session/ses_test/prompt_async",
+      "/session/status",
+    ]));
+  });
+
+  it("rejects HTML 200 responses instead of accepting the OpenCode app shell as JSON", async () => {
+    const mock = new MockOpenCodeServer();
+    const originalFetch = mock.fetch;
+    mock.fetch = async (input, init) => {
+      const url = new URL(typeof input === "string" ? input : input.url);
+      if ((init?.method ?? "GET") === "POST" && url.pathname === "/session") {
+        mock.requests.push({ method: "POST", path: url.pathname, body: typeof init?.body === "string" ? JSON.parse(init.body) : undefined });
+        return htmlShell();
+      }
+      return originalFetch(input, init);
+    };
+    const harness = new OpenCodeHarness({
+      createServer: async () => mock.handle(),
+      fetch: mock.fetch,
+    });
+
+    const messages = await collectMessages(harness.launch({
+      prompt: "ship it",
+      cwd: "/repo",
+    }));
+
+    const result = messages.find((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }> | undefined;
+    assert.equal(result?.data.success, false);
+    assert.match(result?.data.result ?? "", /OpenCode POST \/session expected JSON API response/);
+    assert.match(result?.data.result ?? "", /content-type text\/html/);
+    assert.match(result?.data.result ?? "", /web UI HTML app shell/);
+    assert.doesNotMatch(result?.data.result ?? "", /<\/html>.*<\/html>/);
+  });
+
   it("waits for classic status polling before completing", async () => {
     const mock = new MockOpenCodeServer();
     mock.statusMode = "busy-then-idle";
@@ -327,14 +389,14 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     assert.equal(mock.requests.filter((request) => request.method === "GET" && request.path === "/session/status").length, 3);
   });
 
-  it("streams text deltas and tool calls from v2 events", async () => {
+  it("streams text deltas and tool calls from OpenCode events", async () => {
     const mock = new MockOpenCodeServer();
     const waitForEventStream = new Promise<void>((resolve) => {
       const originalFetch = mock.fetch;
       mock.fetch = async (input, init) => {
         const response = await originalFetch(input, init);
         const url = new URL(typeof input === "string" ? input : input.url);
-        if (url.pathname === "/api/event") resolve();
+        if (url.pathname === "/event") resolve();
         return response;
       };
     });
@@ -369,7 +431,7 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
       mock.fetch = async (input, init) => {
         const response = await originalFetch(input, init);
         const url = new URL(typeof input === "string" ? input : input.url);
-        if (url.pathname === "/api/event") resolve();
+        if (url.pathname === "/event") resolve();
         return response;
       };
     });
@@ -398,7 +460,7 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
       mock.fetch = async (input, init) => {
         const response = await originalFetch(input, init);
         const url = new URL(typeof input === "string" ? input : input.url);
-        if (url.pathname === "/api/event") resolve();
+        if (url.pathname === "/event") resolve();
         return response;
       };
     });
@@ -430,7 +492,7 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
       mock.fetch = async (input, init) => {
         const response = await originalFetch(input, init);
         const url = new URL(typeof input === "string" ? input : input.url);
-        if (url.pathname === "/api/event") resolve();
+        if (url.pathname === "/event") resolve();
         return response;
       };
     });
@@ -476,7 +538,7 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
       mock.fetch = async (input, init) => {
         const response = await originalFetch(input, init);
         const url = new URL(typeof input === "string" ? input : input.url);
-        if (url.pathname === "/api/event") resolve();
+        if (url.pathname === "/event") resolve();
         return response;
       };
     });
@@ -529,7 +591,7 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
       mock.fetch = async (input, init) => {
         const response = await originalFetch(input, init);
         const url = new URL(typeof input === "string" ? input : input.url);
-        if (url.pathname === "/api/event") resolve();
+        if (url.pathname === "/event") resolve();
         return response;
       };
     });
@@ -640,7 +702,7 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
       mock.fetch = async (input, init) => {
         const response = await originalFetch(input, init);
         const url = new URL(typeof input === "string" ? input : input.url);
-        if (url.pathname === "/api/event") resolve();
+        if (url.pathname === "/event") resolve();
         return response;
       };
     });
@@ -792,7 +854,7 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
       mock.fetch = async (input, init) => {
         const response = await originalFetch(input, init);
         const url = new URL(typeof input === "string" ? input : input.url);
-        if (url.pathname === "/api/event") resolve();
+        if (url.pathname === "/event") resolve();
         return response;
       };
     });
@@ -825,7 +887,7 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
       mock.fetch = async (input, init) => {
         const response = await originalFetch(input, init);
         const url = new URL(typeof input === "string" ? input : input.url);
-        if (url.pathname === "/api/event") resolve();
+        if (url.pathname === "/event") resolve();
         return response;
       };
     });
@@ -1162,7 +1224,7 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     mock.closeStream();
     await new Promise((resolve) => setTimeout(resolve, 0));
     nextPrompt.resolve();
-    await waitForRequestCount(mock, "/api/event", 2);
+    await waitForRequestCount(mock, "/event", 2);
     await waitForRequestCount(mock, "/session/ses_test/prompt_async", 2);
     mock.emit({
       type: "permission.asked",
@@ -1192,7 +1254,7 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     const completions = seen.filter((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }>[];
     assert.equal(pending?.state.requestId, "per_second");
     assert.equal(completions.length, 2);
-    assert.equal(mock.requests.filter((request) => request.path === "/api/event").length, 2);
+    assert.equal(mock.requests.filter((request) => request.path === "/event").length, 2);
   });
 
   it("switches permission mode by patching the classic session endpoint", async () => {
