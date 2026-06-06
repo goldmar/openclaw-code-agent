@@ -295,7 +295,8 @@ class OpenCodeClient {
       try {
         return JSON.parse(text) as T;
       } catch (error) {
-        throw new Error(`OpenCode ${method} ${apiPath} returned invalid JSON: ${errorMessage(error)}${previewResponseBody(text) ? `: ${previewResponseBody(text)}` : ""}`);
+        const preview = previewResponseBody(text);
+        throw new Error(`OpenCode ${method} ${apiPath} returned invalid JSON: ${errorMessage(error)}${preview ? `: ${preview}` : ""}`);
       }
     } finally {
       clearTimeout(timeout);
