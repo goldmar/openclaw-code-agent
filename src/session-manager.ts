@@ -879,6 +879,12 @@ export class SessionManager {
     routingProxy.originThreadId = task.originThreadId;
     routingProxy.originSessionKey = task.originSessionKey;
     const requiresGoalSuccessFollowup = label === "goal-task-succeeded";
+    const goalSuccessUserMessage = [
+      `✅ [${task.name}] Goal task succeeded`,
+      task.sessionId ? `Session: ${task.sessionName ?? task.name} [${task.sessionId}]` : undefined,
+    ]
+      .filter((line): line is string => Boolean(line))
+      .join("\n");
     const buildWakeMessage = (canonicalStatusDelivered: boolean): string => buildGoalTaskSucceededFollowupWake({
       sessionId,
       sessionName: task.sessionName,
@@ -889,8 +895,8 @@ export class SessionManager {
     });
     this.dispatchSessionNotification(routingProxy, {
       label,
-      userMessage: requiresGoalSuccessFollowup ? undefined : text,
-      notifyUser: requiresGoalSuccessFollowup ? "never" : "always",
+      userMessage: requiresGoalSuccessFollowup ? goalSuccessUserMessage : text,
+      notifyUser: "always",
       completionSummary: requiresGoalSuccessFollowup
         ? {
             required: true,
@@ -900,7 +906,8 @@ export class SessionManager {
         : undefined,
       completionWakeSummaryRequired: requiresGoalSuccessFollowup,
       completionWakeOutcomeKey: requiresGoalSuccessFollowup ? `goal:${task.id}` : undefined,
-      wakeMessage: requiresGoalSuccessFollowup ? buildWakeMessage(false) : undefined,
+      wakeMessageOnNotifySuccess: requiresGoalSuccessFollowup ? buildWakeMessage(true) : undefined,
+      wakeMessageOnNotifyFailed: requiresGoalSuccessFollowup ? buildWakeMessage(false) : undefined,
     });
   }
 

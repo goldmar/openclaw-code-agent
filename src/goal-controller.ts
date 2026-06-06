@@ -675,7 +675,11 @@ export class GoalController {
 
   private notifyIterationStatus(task: GoalTaskState, heading: string, session?: Session, iterationSummary?: string): void {
     const runtime = buildGoalTaskRuntimeSnapshot(session ?? (task.sessionId ? this.sessionManager.resolve(task.sessionId) : undefined));
-    const text = `${heading}\n\n${formatGoalTask(task, runtime, iterationSummary)}`;
+    const iterationLabel = task.loopMode === "ralph" ? "iteration" : "repair iteration";
+    const progressHeading = /\b(?:repair\s+)?iteration\s+\d+\/\d+\b/i.test(heading)
+      ? heading
+      : `${heading} (${iterationLabel} ${task.iteration}/${task.maxIterations})`;
+    const text = `${progressHeading}\n\n${formatGoalTask(task, runtime, iterationSummary)}`;
     this.notify(task, text, "goal-task-progress");
   }
 
