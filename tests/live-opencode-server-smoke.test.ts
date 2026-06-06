@@ -20,7 +20,7 @@ async function collectUntilCompleted(session: { messages: AsyncIterable<HarnessM
 }
 
 describe("OpenCode live server smoke", { skip: !RUN_LIVE }, () => {
-  it("runs a trivial prompt through opencode serve and v2 prompt/wait", async () => {
+  it("runs a trivial prompt through opencode serve", async () => {
     const version = execFileSync("opencode", ["--version"], { encoding: "utf8" }).trim();
     const [major, minor] = version.split(".").map((part) => Number.parseInt(part, 10));
     assert.ok(major > 1 || (major === 1 && minor >= 16), `expected opencode >= 1.16, got ${version}`);

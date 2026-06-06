@@ -108,7 +108,7 @@ The host wizard does not currently provide a plugin-specific readiness panel, so
   - Authenticated usability may still require Claude-side login/account setup when you launch the first session.
 - `opencode`
   - Experimental. Expect this to work only with local `opencode >= 1.16.2` and provider auth already configured for OpenCode.
-  - The plugin launches one `opencode serve` process per session on `127.0.0.1`, uses the current `/api/*` routes where available, and falls back to classic OpenCode routes only for session create/fork/abort/session permission-rule updates.
+  - The plugin launches one `opencode serve` process per session on `127.0.0.1` and uses OpenCode's classic session lifecycle routes for prompt submission, status polling, message fetches, and replies while v2 session wait remains unavailable.
   - Leave the model unset for OpenCode's configured provider default, or pass an explicit `provider/model` string.
 
 When choosing `defaultHarness`:
@@ -183,7 +183,7 @@ OpenCode harness details:
 
 - Experimental support targets `opencode >= 1.16.2`.
 - The plugin starts `opencode serve` in the prepared session cwd, binds it to localhost, and shuts it down when the session finishes or is interrupted.
-- Fresh launches create sessions through OpenCode's classic session-create route because the current v2 API has no create endpoint. Prompt, wait, context/message, permission reply, and question reply flows use current `/api/*` routes.
+- Fresh launches create sessions through OpenCode's classic session-create route because the current v2 API has no create endpoint. Prompt, wait, context/message, permission reply, and question reply flows use classic `prompt_async`, session status, message, permission reply, and question reply routes because v2 session wait is not available yet.
 - `OPENCLAW_OPENCODE_COMMAND` can override the `opencode` executable. If `OPENCODE_SERVER_PASSWORD` is set, the plugin sends Basic Auth using `OPENCODE_SERVER_USERNAME` or `opencode` as the default username.
 - Native OpenCode worktrees are out of scope for this integration. Worktree strategies use the plugin-managed worktree path.
 - OpenCode does not emit structured OpenClaw plan artifacts in this version, so `nativePlanArtifacts` is false and the plugin owns the plan approval gate.

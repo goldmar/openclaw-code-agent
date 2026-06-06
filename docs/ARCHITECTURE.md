@@ -110,13 +110,13 @@ When the OpenClaw runtime exposes the managed TaskFlow API, sessions also mirror
 
 - `claude-code`: native Claude Code harness with plan-mode and `AskUserQuestion` interception
 - `codex`: native Codex App Server harness with structured pending input, structured plan artifacts, backend refs, and native worktree thread state
-- `opencode`: experimental OpenCode server harness using a per-session local `opencode serve` process, current `/api/*` routes where available, native pending input, plugin-managed worktrees, and no native OpenClaw plan artifacts
+- `opencode`: experimental OpenCode server harness using a per-session local `opencode serve` process, classic session lifecycle routes for prompt/status/messages/replies, native pending input, plugin-managed worktrees, and no native OpenClaw plan artifacts
 
 Important mapping detail:
 
 - Claude Code maps plugin `permissionMode` directly to the SDK modes.
 - Codex runs through the Codex App Server transport. Plugin `plan` mode remains a plugin-owned approval workflow even when the backend exposes structured plan artifacts. Fresh Codex worktree launches use the plugin-managed worktree cwd, while persisted backend refs can restore Codex backend worktree context during resume.
-- OpenCode runs through a localhost OpenCode server transport. Fresh prompts, waits, messages/context fetches, permission replies, and question replies use OpenCode's current `/api/*` routes; session create, fork, abort, and permission-rule updates use classic routes until v2 equivalents exist.
+- OpenCode runs through a localhost OpenCode server transport. Fresh prompts use classic `prompt_async`, completion waits poll classic session status, message/result fetches use classic message routes, and permission/question replies use classic reply routes because v2 session wait is not available yet. Session create, fork, abort, and permission-rule updates also use classic routes.
 - `agent_respond` is the only continuation primitive across built-in backends; fork flows still go through `agent_launch(..., resume_session_id=..., fork_session=true)`.
 
 Boundary note:

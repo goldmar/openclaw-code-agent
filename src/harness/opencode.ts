@@ -133,6 +133,32 @@ async function delay(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+class OpenCodeHttpError extends Error {
+  constructor(
+    readonly method: string,
+    readonly path: string,
+    readonly status: number,
+    readonly body: string,
+  ) {
+    super(`OpenCode ${method} ${path} failed with ${status}${body ? `: ${body}` : ""}`);
+  }
+}
+
+function classicPromptBody(text: string, model: string | undefined, systemPrompt: string | undefined): Record<string, unknown> {
+  const parsed = parseModel(model);
+  return {
+    ...(parsed ? { model: { providerID: parsed.providerID, modelID: parsed.modelID } } : {}),
+    ...(systemPrompt?.trim() ? { system: systemPrompt.trim() } : {}),
+    parts: [{ type: "text", text }],
+  };
+}
+
+function isIdleSessionStatus(statuses: unknown, sessionId: string): boolean {
+  if (!isRecord(statuses)) return false;
+  const status = statuses[sessionId];
+  return isRecord(status) && status.type === "idle";
+}
+
 async function startOpenCodeServerOnce(options: { cwd: string }): Promise<OpenCodeServerHandle> {
   const port = await getFreePort();
   const command = process.env[OPENCODE_COMMAND_ENV]?.trim() || "opencode";
@@ -233,7 +259,7 @@ class OpenCodeClient {
       });
       if (!response.ok) {
         const text = await response.text().catch(() => "");
-        throw new Error(`OpenCode ${method} ${path} failed with ${response.status}${text ? `: ${text}` : ""}`);
+        throw new OpenCodeHttpError(method, path, response.status, text);
       }
       if (response.status === 204) return undefined as T;
       const text = await response.text();
@@ -358,6 +384,10 @@ function buildQuestionPendingInput(request: Record<string, unknown>): PendingInp
 }
 
 function extractAssistantResult(messages: unknown): string | undefined {
+  return extractAssistantMessageState(messages).result;
+}
+
+function extractAssistantMessageState(messages: unknown): { count: number; result?: string } {
   const records = Array.isArray(messages)
     ? messages
     : isRecord(messages) && Array.isArray(messages.messages)
@@ -376,12 +406,7 @@ function extractAssistantResult(messages: unknown): string | undefined {
       }
     }
   }
-  return texts.at(-1);
-}
-
-function buildPromptText(text: string, systemPrompt: string | undefined): string {
-  const trimmedSystemPrompt = systemPrompt?.trim();
-  return trimmedSystemPrompt ? `${trimmedSystemPrompt}\n\n${text}` : text;
+  return { count: texts.length, result: texts.at(-1) };
 }
 
 export class OpenCodeHarness implements AgentHarness {
@@ -410,7 +435,6 @@ export class OpenCodeHarness implements AgentHarness {
     let runCounter = 0;
     let currentPermissionMode = options.permissionMode ?? "default";
     let currentPendingInput: OpenCodePendingInput | undefined;
-    let firstResumedPrompt = !!options.resumeSessionId;
     let sessionValidated = !options.resumeSessionId;
     let sessionForked = false;
     let systemPromptInjected = false;
@@ -479,14 +503,14 @@ export class OpenCodeHarness implements AgentHarness {
 
     const replyPermission = async (requestId: string, response: string): Promise<void> => {
       if (!client || !sessionId) return;
-      await client.request("POST", `/api/session/${encodeURIComponent(sessionId)}/permission/request/${encodeURIComponent(requestId)}/reply`, {
-        response,
+      await client.request("POST", `/permission/${encodeURIComponent(requestId)}/reply`, {
+        reply: response,
       });
     };
 
     const replyQuestion = async (requestId: string, answer: string): Promise<void> => {
       if (!client || !sessionId) return;
-      await client.request("POST", `/api/session/${encodeURIComponent(sessionId)}/question/request/${encodeURIComponent(requestId)}/reply`, {
+      await client.request("POST", `/question/${encodeURIComponent(requestId)}/reply`, {
         answers: [[answer]],
       });
     };
@@ -576,6 +600,39 @@ export class OpenCodeHarness implements AgentHarness {
         });
     };
 
+    const fetchSessionMessages = async (http: OpenCodeClient, id: string): Promise<unknown> => {
+      return await http.request<unknown>("GET", `/session/${encodeURIComponent(id)}/message`);
+    };
+
+    const sendPrompt = async (http: OpenCodeClient, id: string, text: string, promptSystemPrompt: string | undefined, signal: AbortSignal): Promise<void> => {
+      await http.request("POST", `/session/${encodeURIComponent(id)}/prompt_async`, classicPromptBody(text, options.model, promptSystemPrompt), { signal });
+    };
+
+    const waitForTurn = async (http: OpenCodeClient, id: string, baselineAssistantCount: number, signal: AbortSignal): Promise<void> => {
+      const startedAt = Date.now();
+      let observedBusy = false;
+      while (true) {
+        if (signal.aborted) throw new Error("wait aborted");
+        const statuses = await http.request<unknown>("GET", "/session/status", undefined, {
+          signal,
+          timeoutMs: Math.min(this.deps.requestTimeoutMs ?? REQUEST_TIMEOUT_MS, 10_000),
+        });
+        const idle = isIdleSessionStatus(statuses, id);
+        if (!idle) {
+          observedBusy = true;
+        }
+        const messages = await fetchSessionMessages(http, id).catch((): undefined => undefined);
+        const assistantState = extractAssistantMessageState(messages);
+        if (idle && (observedBusy || assistantState.count > baselineAssistantCount)) {
+          return;
+        }
+        if (Date.now() - startedAt > (this.deps.requestTimeoutMs ?? REQUEST_TIMEOUT_MS)) {
+          throw new Error(`Timed out waiting for OpenCode session ${id} to become idle.`);
+        }
+        await delay(250);
+      }
+    };
+
     const ensureSession = async (): Promise<string> => {
       const http = await ensureClient();
       if (sessionId) {
@@ -585,9 +642,8 @@ export class OpenCodeHarness implements AgentHarness {
           sessionId = forked.id;
           sessionForked = true;
           sessionValidated = true;
-          firstResumedPrompt = false;
         } else if (!sessionValidated) {
-          await http.request("GET", `/api/session/${encodeURIComponent(sessionId)}/context`);
+          await fetchSessionMessages(http, sessionId);
           sessionValidated = true;
         }
         emitBackendRef();
@@ -612,7 +668,7 @@ export class OpenCodeHarness implements AgentHarness {
     const completeTurn = async (success: boolean, result?: string, outcome: "completed" | "failed" | "interrupted" = success ? "completed" : "failed"): Promise<void> => {
       let finalResult = result;
       if (success && client && sessionId) {
-        const messages = await client.request<unknown>("GET", `/api/session/${encodeURIComponent(sessionId)}/context`)
+        const messages = await fetchSessionMessages(client, sessionId)
           .catch((): undefined => undefined);
         finalResult = finalResult ?? extractAssistantResult(messages);
       }
@@ -631,18 +687,13 @@ export class OpenCodeHarness implements AgentHarness {
         queue.enqueue(createRunStartedEvent());
         runCounter += 1;
         const promptSystemPrompt = systemPromptInjected ? undefined : options.systemPrompt;
-        await http.request("POST", `/api/session/${encodeURIComponent(id)}/prompt`, {
-          prompt: { text: buildPromptText(text, promptSystemPrompt) },
-          delivery: "queue",
-          ...(firstResumedPrompt ? { resume: true } : {}),
-        });
-        systemPromptInjected = true;
-        firstResumedPrompt = false;
+        const baselineMessages = await fetchSessionMessages(http, id).catch((): undefined => undefined);
+        const baselineAssistantCount = extractAssistantMessageState(baselineMessages).count;
         const waitController = new AbortController();
         activeWaitController = waitController;
-        await http.request("POST", `/api/session/${encodeURIComponent(id)}/wait`, undefined, {
-          signal: waitController.signal,
-        });
+        await sendPrompt(http, id, text, promptSystemPrompt, waitController.signal);
+        systemPromptInjected = true;
+        await waitForTurn(http, id, baselineAssistantCount, waitController.signal);
         activeWaitController = undefined;
         turnWaitCompleted = true;
         await completeTurn(true);

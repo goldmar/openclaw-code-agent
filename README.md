@@ -135,7 +135,7 @@ If you use Codex, make sure the local `codex` command or `OPENCLAW_CODEX_APP_SER
 forced_login_method = "chatgpt"
 ```
 
-If you use experimental OpenCode, make sure local `opencode >= 1.16.2` is available and configured with provider auth. The plugin starts `opencode serve` per session on localhost and uses OpenCode's current `/api/*` session APIs where available. Leave `harnesses.opencode.defaultModel` unset to let OpenCode choose its configured provider default, or pass an explicit `provider/model` string for a launch.
+If you use experimental OpenCode, make sure local `opencode >= 1.16.2` is available and configured with provider auth. The plugin starts `opencode serve` per session on localhost and uses OpenCode's classic session lifecycle routes while v2 session wait remains unavailable. Leave `harnesses.opencode.defaultModel` unset to let OpenCode choose its configured provider default, or pass an explicit `provider/model` string for a launch.
 
 ## First Session
 
