@@ -439,7 +439,7 @@ describe("plugin entry source", () => {
     assert.doesNotMatch(harnessSources, /agentRuntime\.id/);
   });
 
-  it("bundles the OpenClaw plugin SDK entry helper into the release artifact", () => {
+  it("externalizes only the canonical OpenClaw plugin SDK entry helper", () => {
     const packageJson = JSON.parse(readFileSync(join(rootDir, "package.json"), "utf8")) as {
       scripts?: Record<string, string>;
     };
@@ -448,6 +448,7 @@ describe("plugin entry source", () => {
     assert.doesNotMatch(buildScript, /--external:openclaw(?:\s|$)/);
     assert.doesNotMatch(buildScript, /--external:openclaw\/plugin-sdk(?:\s|$)/);
     assert.doesNotMatch(buildScript, /--external:openclaw\/plugin-sdk\/\*(?:\s|$)/);
+    assert.match(buildScript, /--external:openclaw\/plugin-sdk\/plugin-entry/);
     assert.match(buildScript, /--external:@anthropic-ai\/claude-agent-sdk/);
   });
 

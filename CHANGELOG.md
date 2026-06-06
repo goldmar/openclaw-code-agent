@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - Allowed OpenCode launches and goal tasks to omit a plugin default model so OpenCode can use its configured provider default.
+- Externalized the canonical OpenClaw plugin SDK entry helper from the bundled release artifact to keep bundle size comfortably below the CI limit.
 
 ## [4.3.8] - 2026-06-04
 
