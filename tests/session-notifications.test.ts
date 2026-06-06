@@ -285,12 +285,18 @@ describe("SessionNotificationService", () => {
     let attempts = 0;
     let shouldDispatch = true;
     const fakeDispatcher = {
-      dispatchSessionNotification: (_session: unknown, request: { shouldDispatch?: () => boolean; hooks?: Record<string, () => void> }) => {
+      dispatchSessionNotification: (
+        _session: unknown,
+        request: { shouldDispatch?: () => boolean; hooks?: Record<string, (reason?: string) => void> },
+      ) => {
         attempts += 1;
         request.hooks?.onNotifyStarted?.();
         request.hooks?.onNotifyFailed?.();
         shouldDispatch = attempts > 1;
-        if (request.shouldDispatch?.() === false) return;
+        if (request.shouldDispatch?.() === false) {
+          request.hooks?.onWakeSkipped?.("guard canceled");
+          return;
+        }
         request.hooks?.onWakeStarted?.();
         request.hooks?.onWakeSucceeded?.();
       },

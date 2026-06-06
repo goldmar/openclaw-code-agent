@@ -182,6 +182,10 @@ export class SessionNotificationService {
         dispatchRequest.hooks?.onWakeSucceeded?.();
       },
       onWakeSkipped: (reason) => {
+        if (dispatchCancelled) {
+          dispatchRequest.hooks?.onWakeSkipped?.(reason);
+          return;
+        }
         notificationDedupeResolved = true;
         this.markNotificationDedupeDelivered(deliveryRef, notificationDedupeKey, dispatchRequest.label);
         this.applyPersistedPatchWithCompletionWake(deliveryRef, "idle", this.buildCompletionWakeSucceededPatch(completionWakePatch), {
