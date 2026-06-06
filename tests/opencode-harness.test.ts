@@ -448,6 +448,61 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     });
   });
 
+  it("validates resumed sessions only once across multi-turn prompts", async () => {
+    const mock = new MockOpenCodeServer();
+    const harness = new OpenCodeHarness({
+      createServer: async () => mock.handle(),
+      fetch: mock.fetch,
+    });
+
+    async function* prompts(): AsyncGenerator<unknown> {
+      yield { type: "user", text: "first" };
+      yield { type: "user", text: "second" };
+    }
+
+    await collectAllMessages(harness.launch({
+      prompt: prompts(),
+      cwd: "/repo",
+      resumeSessionId: "ses_existing",
+    }));
+
+    const contextRequests = mock.requests.filter((request) => request.method === "GET" && request.path === "/api/session/ses_existing/context");
+    const promptsSent = mock.requests.filter((request) => request.method === "POST" && request.path === "/api/session/ses_existing/prompt");
+    assert.equal(contextRequests.length, 3);
+    assert.deepEqual(promptsSent.map((request) => request.body), [
+      { prompt: { text: "first" }, delivery: "queue", resume: true },
+      { prompt: { text: "second" }, delivery: "queue" },
+    ]);
+  });
+
+  it("forks resumed sessions only once across multi-turn prompts", async () => {
+    const mock = new MockOpenCodeServer();
+    const harness = new OpenCodeHarness({
+      createServer: async () => mock.handle(),
+      fetch: mock.fetch,
+    });
+
+    async function* prompts(): AsyncGenerator<unknown> {
+      yield { type: "user", text: "first" };
+      yield { type: "user", text: "second" };
+    }
+
+    await collectAllMessages(harness.launch({
+      prompt: prompts(),
+      cwd: "/repo",
+      resumeSessionId: "ses_existing",
+      forkSession: true,
+    }));
+
+    const forkRequests = mock.requests.filter((request) => request.method === "POST" && request.path.endsWith("/fork"));
+    const promptsSent = mock.requests.filter((request) => request.method === "POST" && request.path === "/api/session/ses_forked/prompt");
+    assert.deepEqual(forkRequests.map((request) => request.path), ["/session/ses_existing/fork"]);
+    assert.deepEqual(promptsSent.map((request) => request.body), [
+      { prompt: { text: "first" }, delivery: "queue" },
+      { prompt: { text: "second" }, delivery: "queue" },
+    ]);
+  });
+
   it("prepends system prompts because v2 prompt has no system field", async () => {
     const mock = new MockOpenCodeServer();
     const harness = new OpenCodeHarness({

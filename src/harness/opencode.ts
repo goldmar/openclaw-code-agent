@@ -403,6 +403,8 @@ export class OpenCodeHarness implements AgentHarness {
     let currentPermissionMode = options.permissionMode ?? "default";
     let currentPendingInput: OpenCodePendingInput | undefined;
     let firstResumedPrompt = !!options.resumeSessionId;
+    let sessionValidated = !options.resumeSessionId;
+    let sessionForked = false;
     let systemPromptInjected = false;
     const streamController = new AbortController();
     let activeWaitController: AbortController | undefined;
@@ -556,26 +558,31 @@ export class OpenCodeHarness implements AgentHarness {
     const ensureSession = async (): Promise<string> => {
       const http = await ensureClient();
       if (sessionId) {
-        if (options.forkSession) {
+        if (options.forkSession && !sessionForked) {
           const forked = await http.request<OpenCodeSession>("POST", `/session/${encodeURIComponent(sessionId)}/fork`, {});
           if (!forked.id) throw new Error("OpenCode fork did not return a session id.");
           sessionId = forked.id;
+          sessionForked = true;
+          sessionValidated = true;
           firstResumedPrompt = false;
-        } else {
+        } else if (!sessionValidated) {
           await http.request("GET", `/api/session/${encodeURIComponent(sessionId)}/context`);
+          sessionValidated = true;
         }
         emitBackendRef();
         startEventStream();
         return sessionId;
       }
 
+      const model = toOpenCodeModel(options.model);
       const created = await http.request<OpenCodeSession>("POST", "/session", {
-        ...(toOpenCodeModel(options.model) ? { model: toOpenCodeModel(options.model) } : {}),
+        ...(model ? { model } : {}),
         metadata: { client: "openclaw-code-agent" },
         permission: permissionRulesForMode(currentPermissionMode),
       });
       if (!created.id) throw new Error("OpenCode did not return a session id.");
       sessionId = created.id;
+      sessionValidated = true;
       emitBackendRef();
       startEventStream();
       return sessionId;
