@@ -403,6 +403,7 @@ export class OpenCodeHarness implements AgentHarness {
     let currentPermissionMode = options.permissionMode ?? "default";
     let currentPendingInput: OpenCodePendingInput | undefined;
     let firstResumedPrompt = !!options.resumeSessionId;
+    let systemPromptInjected = false;
     const streamController = new AbortController();
     let activeWaitController: AbortController | undefined;
     let streamStarted = false;
@@ -600,11 +601,13 @@ export class OpenCodeHarness implements AgentHarness {
         if (sessionInterrupted) return;
         queue.enqueue(createRunStartedEvent());
         runCounter += 1;
+        const promptSystemPrompt = systemPromptInjected ? undefined : options.systemPrompt;
         await http.request("POST", `/api/session/${encodeURIComponent(id)}/prompt`, {
-          prompt: { text: buildPromptText(text, options.systemPrompt) },
+          prompt: { text: buildPromptText(text, promptSystemPrompt) },
           delivery: "queue",
           ...(firstResumedPrompt ? { resume: true } : {}),
         });
+        systemPromptInjected = true;
         firstResumedPrompt = false;
         const waitController = new AbortController();
         activeWaitController = waitController;

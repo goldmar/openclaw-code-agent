@@ -468,6 +468,31 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     });
   });
 
+  it("prepends system prompts only to the first multi-turn prompt", async () => {
+    const mock = new MockOpenCodeServer();
+    const harness = new OpenCodeHarness({
+      createServer: async () => mock.handle(),
+      fetch: mock.fetch,
+    });
+
+    async function* prompts(): AsyncGenerator<unknown> {
+      yield { type: "user", text: "first" };
+      yield { type: "user", text: "second" };
+    }
+
+    await collectAllMessages(harness.launch({
+      prompt: prompts(),
+      cwd: "/repo",
+      systemPrompt: "Use the project conventions.",
+    }));
+
+    const promptsSent = mock.requests.filter((request) => request.method === "POST" && request.path === "/api/session/ses_test/prompt");
+    assert.deepEqual(promptsSent.map((request) => request.body), [
+      { prompt: { text: "Use the project conventions.\n\nfirst" }, delivery: "queue" },
+      { prompt: { text: "second" }, delivery: "queue" },
+    ]);
+  });
+
   it("emits failed completion from failed session events", async () => {
     const mock = new MockOpenCodeServer();
     const waitForEventStream = new Promise<void>((resolve) => {
