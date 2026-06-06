@@ -46,14 +46,14 @@ class MockOpenCodeServer {
     }
 
     if (path === "/api/health") return json({ healthy: true, version: "1.16.2" });
-    if (method === "POST" && path === "/session") return json({ id: "ses_test" });
-    if (method === "POST" && path === "/session/ses_existing/fork") return json({ id: "ses_forked" });
-    if (method === "GET" && path === "/session/status") {
+    if (method === "POST" && path === "/api/session") return json({ id: "ses_test" });
+    if (method === "POST" && path === "/api/session/ses_existing/fork") return json({ id: "ses_forked" });
+    if (method === "GET" && path === "/api/session/status") {
       this.statusRequests += 1;
       const type = this.statusMode === "busy-then-idle" && this.statusRequests === 1 ? "busy" : "idle";
       return json({ ses_test: { type }, ses_existing: { type }, ses_forked: { type } });
     }
-    if (method === "GET" && /^\/session\/[^/]+\/message$/.test(path)) {
+    if (method === "GET" && /^\/api\/session\/[^/]+\/message$/.test(path)) {
       if (this.statusRequests < this.assistantAvailableAfterStatusRequests) return json([]);
       return json(Array.from({ length: this.promptAsyncRequests }, () => ({
         info: { type: "assistant", content: [{ type: "text", text: "Final." }] },
@@ -70,20 +70,20 @@ class MockOpenCodeServer {
       }
       return new Response(null, { status: 204 });
     }
-    if (method === "POST" && path.startsWith("/permission/") && path.endsWith("/reply")) return json(true);
-    if (method === "POST" && path.startsWith("/question/") && path.endsWith("/reply")) {
+    if (method === "POST" && path.startsWith("/api/permission/") && path.endsWith("/reply")) return json(true);
+    if (method === "POST" && path.startsWith("/api/question/") && path.endsWith("/reply")) {
       if (this.failQuestionReplies) {
         return new Response(JSON.stringify({ error: "question reply failed" }), { status: 500 });
       }
       return json(true);
     }
-    if (method === "PATCH" && path === "/session/ses_test") {
+    if (method === "PATCH" && path === "/api/session/ses_test") {
       if (this.failSessionPatch) {
         return new Response(JSON.stringify({ error: "permission patch failed" }), { status: 500 });
       }
       return json({ id: "ses_test" });
     }
-    if (method === "POST" && path === "/session/ses_test/abort") return json(true);
+    if (method === "POST" && path === "/api/session/ses_test/abort") return json(true);
     return new Response(JSON.stringify({ error: `unexpected ${method} ${path}` }), { status: 404 });
   };
 
@@ -115,6 +115,13 @@ function json(value: unknown): Response {
   return new Response(JSON.stringify(value), {
     status: 200,
     headers: { "content-type": "application/json" },
+  });
+}
+
+function htmlShell(): Response {
+  return new Response("<!doctype html><html><head><title>OpenCode</title></head><body><div id=\"root\"></div></body></html>", {
+    status: 200,
+    headers: { "content-type": "text/html; charset=utf-8" },
   });
 }
 
@@ -215,7 +222,7 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
       model: "anthropic/claude-sonnet-4-5",
     }));
 
-    const create = mock.requests.find((request) => request.method === "POST" && request.path === "/session");
+    const create = mock.requests.find((request) => request.method === "POST" && request.path === "/api/session");
     assert.deepEqual(create?.body, {
       model: { id: "claude-sonnet-4-5", providerID: "anthropic" },
       metadata: { client: "openclaw-code-agent" },
@@ -228,12 +235,12 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
       ],
     });
 
-    const prompt = mock.requests.find((request) => request.method === "POST" && request.path === "/session/ses_test/prompt_async");
+    const prompt = mock.requests.find((request) => request.method === "POST" && request.path === "/api/session/ses_test/prompt_async");
     assert.deepEqual(prompt?.body, {
       model: { providerID: "anthropic", modelID: "claude-sonnet-4-5" },
       parts: [{ type: "text", text: "ship it" }],
     });
-    assert.equal(mock.requests.some((request) => request.method === "GET" && request.path === "/session/status"), true);
+    assert.equal(mock.requests.some((request) => request.method === "GET" && request.path === "/api/session/status"), true);
 
     const ref = messages.find((message) => message.type === "backend_ref") as Extract<HarnessMessage, { type: "backend_ref" }> | undefined;
     const result = messages.find((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }> | undefined;
@@ -242,6 +249,62 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     assert.equal(result?.data.success, true);
     assert.equal(result?.data.result, "Final.");
     assert.equal(mock.closed, true);
+  });
+
+  it("uses /api for every OpenCode JSON lifecycle endpoint", async () => {
+    const mock = new MockOpenCodeServer();
+    const harness = new OpenCodeHarness({
+      createServer: async () => mock.handle(),
+      fetch: mock.fetch,
+    });
+
+    await collectMessages(harness.launch({
+      prompt: "ship it",
+      cwd: "/repo",
+      permissionMode: "plan",
+    }));
+
+    const lifecyclePaths = mock.requests
+      .map((request) => request.path)
+      .filter((path) => path !== "/api/event");
+    assert.deepEqual(lifecyclePaths, [
+      "/api/session",
+      "/api/session/ses_test/message",
+      "/api/session/ses_test/prompt_async",
+      "/api/session/status",
+      "/api/session/ses_test/message",
+      "/api/session/ses_test/message",
+    ]);
+    assert.equal(lifecyclePaths.every((path) => path.startsWith("/api/")), true);
+  });
+
+  it("rejects HTML 200 responses instead of accepting the OpenCode app shell as JSON", async () => {
+    const mock = new MockOpenCodeServer();
+    const originalFetch = mock.fetch;
+    mock.fetch = async (input, init) => {
+      const url = new URL(typeof input === "string" ? input : input.url);
+      if ((init?.method ?? "GET") === "POST" && url.pathname === "/api/session") {
+        mock.requests.push({ method: "POST", path: url.pathname, body: typeof init?.body === "string" ? JSON.parse(init.body) : undefined });
+        return htmlShell();
+      }
+      return originalFetch(input, init);
+    };
+    const harness = new OpenCodeHarness({
+      createServer: async () => mock.handle(),
+      fetch: mock.fetch,
+    });
+
+    const messages = await collectMessages(harness.launch({
+      prompt: "ship it",
+      cwd: "/repo",
+    }));
+
+    const result = messages.find((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }> | undefined;
+    assert.equal(result?.data.success, false);
+    assert.match(result?.data.result ?? "", /OpenCode POST \/api\/session expected JSON API response/);
+    assert.match(result?.data.result ?? "", /content-type text\/html/);
+    assert.match(result?.data.result ?? "", /web UI HTML app shell/);
+    assert.doesNotMatch(result?.data.result ?? "", /<\/html>.*<\/html>/);
   });
 
   it("waits for classic status polling before completing", async () => {
@@ -258,7 +321,7 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     }));
 
     const result = messages.find((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }> | undefined;
-    assert.equal(mock.requests.some((request) => request.method === "GET" && request.path === "/session/status"), true);
+    assert.equal(mock.requests.some((request) => request.method === "GET" && request.path === "/api/session/status"), true);
     assert.equal(result?.data.success, true);
     assert.equal(result?.data.result, "Final.");
   });
@@ -279,7 +342,7 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     const completions = messages.filter((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }>[];
     assert.equal(completions.length, 2);
     assert.equal(completions.every((completion) => completion.data.success), true);
-    assert.equal(mock.requests.filter((request) => request.path === "/session/status").length, 2);
+    assert.equal(mock.requests.filter((request) => request.path === "/api/session/status").length, 2);
   });
 
   it("uses classic prompt_async and message routes", async () => {
@@ -296,14 +359,14 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
       systemPrompt: "Use project conventions.",
     }));
 
-    const classicPrompt = mock.requests.find((request) => request.method === "POST" && request.path === "/session/ses_test/prompt_async");
+    const classicPrompt = mock.requests.find((request) => request.method === "POST" && request.path === "/api/session/ses_test/prompt_async");
     const result = messages.find((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }> | undefined;
     assert.deepEqual(classicPrompt?.body, {
       model: { providerID: "anthropic", modelID: "claude-sonnet-4-5" },
       system: "Use project conventions.",
       parts: [{ type: "text", text: "implement" }],
     });
-    assert.equal(mock.requests.some((request) => request.method === "GET" && request.path === "/session/ses_test/message"), true);
+    assert.equal(mock.requests.some((request) => request.method === "GET" && request.path === "/api/session/ses_test/message"), true);
     assert.equal(result?.data.success, true);
     assert.equal(result?.data.result, "Final.");
   });
@@ -324,7 +387,7 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     const result = messages.find((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }> | undefined;
     assert.equal(result?.data.success, true);
     assert.equal(result?.data.result, "Final.");
-    assert.equal(mock.requests.filter((request) => request.method === "GET" && request.path === "/session/status").length, 3);
+    assert.equal(mock.requests.filter((request) => request.method === "GET" && request.path === "/api/session/status").length, 3);
   });
 
   it("streams text deltas and tool calls from v2 events", async () => {
@@ -465,7 +528,7 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     const pending = seen.find((message) => message.type === "pending_input") as Extract<HarnessMessage, { type: "pending_input" }> | undefined;
     assert.equal(pending?.state.kind, "approval");
     assert.equal(pending?.state.requestId, "per_1");
-    const reply = mock.requests.find((request) => request.path === "/permission/per_1/reply");
+    const reply = mock.requests.find((request) => request.path === "/api/permission/per_1/reply");
     assert.deepEqual(reply?.body, { reply: "once" });
   });
 
@@ -571,7 +634,7 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     }
 
     const resolved = seen.filter((message) => message.type === "pending_input_resolved") as Extract<HarnessMessage, { type: "pending_input_resolved" }>[];
-    const reply = mock.requests.find((request) => request.path === "/question/q_echo/reply");
+    const reply = mock.requests.find((request) => request.path === "/api/question/q_echo/reply");
     assert.deepEqual(reply?.body, { answers: [["main"]] });
     assert.equal(resolved.length, 1);
     assert.equal(resolved[0]?.requestId, "q_echo");
@@ -664,7 +727,7 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     });
 
     await collectMessages(session);
-    const reply = mock.requests.find((request) => request.path === "/permission/per_auto/reply");
+    const reply = mock.requests.find((request) => request.path === "/api/permission/per_auto/reply");
     assert.deepEqual(reply?.body, { reply: "once" });
   });
 
@@ -681,7 +744,7 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
       resumeSessionId: "ses_existing",
     }));
 
-    const prompt = mock.requests.find((request) => request.method === "POST" && request.path === "/session/ses_existing/prompt_async");
+    const prompt = mock.requests.find((request) => request.method === "POST" && request.path === "/api/session/ses_existing/prompt_async");
     assert.deepEqual(prompt?.body, {
       parts: [{ type: "text", text: "continue" }],
     });
@@ -705,7 +768,7 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
       resumeSessionId: "ses_existing",
     }));
 
-    const promptsSent = mock.requests.filter((request) => request.method === "POST" && request.path === "/session/ses_existing/prompt_async");
+    const promptsSent = mock.requests.filter((request) => request.method === "POST" && request.path === "/api/session/ses_existing/prompt_async");
     assert.deepEqual(promptsSent.map((request) => request.body), [
       { parts: [{ type: "text", text: "first" }] },
       { parts: [{ type: "text", text: "second" }] },
@@ -732,8 +795,8 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     }));
 
     const forkRequests = mock.requests.filter((request) => request.method === "POST" && request.path.endsWith("/fork"));
-    const promptsSent = mock.requests.filter((request) => request.method === "POST" && request.path === "/session/ses_forked/prompt_async");
-    assert.deepEqual(forkRequests.map((request) => request.path), ["/session/ses_existing/fork"]);
+    const promptsSent = mock.requests.filter((request) => request.method === "POST" && request.path === "/api/session/ses_forked/prompt_async");
+    assert.deepEqual(forkRequests.map((request) => request.path), ["/api/session/ses_existing/fork"]);
     assert.deepEqual(promptsSent.map((request) => request.body), [
       { parts: [{ type: "text", text: "first" }] },
       { parts: [{ type: "text", text: "second" }] },
@@ -753,7 +816,7 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
       systemPrompt: "Use the project conventions.",
     }));
 
-    const prompt = mock.requests.find((request) => request.method === "POST" && request.path === "/session/ses_test/prompt_async");
+    const prompt = mock.requests.find((request) => request.method === "POST" && request.path === "/api/session/ses_test/prompt_async");
     assert.deepEqual(prompt?.body, {
       system: "Use the project conventions.",
       parts: [{ type: "text", text: "implement" }],
@@ -778,7 +841,7 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
       systemPrompt: "Use the project conventions.",
     }));
 
-    const promptsSent = mock.requests.filter((request) => request.method === "POST" && request.path === "/session/ses_test/prompt_async");
+    const promptsSent = mock.requests.filter((request) => request.method === "POST" && request.path === "/api/session/ses_test/prompt_async");
     assert.deepEqual(promptsSent.map((request) => request.body), [
       { system: "Use the project conventions.", parts: [{ type: "text", text: "first" }] },
       { parts: [{ type: "text", text: "second" }] },
@@ -836,7 +899,7 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
 
     const session = harness.launch({ prompt: "fail once", cwd: "/repo" });
     await waitForEventStream;
-    await waitForRequest(mock, "/session/ses_test/prompt_async");
+    await waitForRequest(mock, "/api/session/ses_test/prompt_async");
     mock.emit({
       type: "session.next.step.failed",
       properties: {
@@ -864,7 +927,7 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
       const responsePromise = originalFetch(input, init);
       const url = new URL(typeof input === "string" ? input : input.url);
       const method = init?.method ?? "GET";
-      if (method === "GET" && url.pathname === "/session/ses_test/message") {
+      if (method === "GET" && url.pathname === "/api/session/ses_test/message") {
         messageFetches += 1;
         if (messageFetches === 3) {
           contextRequested.resolve();
@@ -925,7 +988,7 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     });
 
     const session = harness.launch({ prompt: "stop", cwd: "/repo" });
-    await waitForRequest(mock, "/session/ses_test/prompt_async");
+    await waitForRequest(mock, "/api/session/ses_test/prompt_async");
     await session.interrupt?.();
 
     const messages = await collectAllMessages(session);
@@ -933,7 +996,7 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     assert.equal(completions.length, 1);
     assert.equal(completions[0]?.data.success, false);
     assert.equal(completions[0]?.data.outcome, "interrupted");
-    assert.equal(mock.requests.some((request) => request.method === "POST" && request.path === "/session/ses_test/abort"), true);
+    assert.equal(mock.requests.some((request) => request.method === "POST" && request.path === "/api/session/ses_test/abort"), true);
   });
 
   it("stops a multi-message prompt stream after interrupting an active turn", async () => {
@@ -950,7 +1013,7 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     }
 
     const session = harness.launch({ prompt: prompts(), cwd: "/repo" });
-    await waitForRequest(mock, "/session/ses_test/prompt_async");
+    await waitForRequest(mock, "/api/session/ses_test/prompt_async");
     await session.interrupt?.();
 
     const messages = await collectAllMessages(session);
@@ -958,7 +1021,7 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     assert.equal(completions.length, 1);
     assert.equal(completions[0]?.data.outcome, "interrupted");
 
-    const promptsSent = mock.requests.filter((request) => request.method === "POST" && request.path === "/session/ses_test/prompt_async");
+    const promptsSent = mock.requests.filter((request) => request.method === "POST" && request.path === "/api/session/ses_test/prompt_async");
     assert.deepEqual(promptsSent.map((request) => request.body), [
       { parts: [{ type: "text", text: "first" }] },
     ]);
@@ -989,8 +1052,8 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     assert.equal(completions.length, 1);
     assert.equal(completions[0]?.data.success, false);
     assert.equal(completions[0]?.data.outcome, "interrupted");
-    assert.equal(mock.requests.some((request) => request.path === "/session"), false);
-    assert.equal(mock.requests.some((request) => request.path === "/session/ses_test/prompt_async"), false);
+    assert.equal(mock.requests.some((request) => request.path === "/api/session"), false);
+    assert.equal(mock.requests.some((request) => request.path === "/api/session/ses_test/prompt_async"), false);
   });
 
   it("shares startup across concurrent client requests", async () => {
@@ -1048,7 +1111,7 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     releasePrompt.resolve();
     const messages = await collectAllMessages(session);
     const settings = messages.find((message) => message.type === "settings_changed") as Extract<HarnessMessage, { type: "settings_changed" }> | undefined;
-    const create = mock.requests.find((request) => request.method === "POST" && request.path === "/session");
+    const create = mock.requests.find((request) => request.method === "POST" && request.path === "/api/session");
     assert.equal(settings?.permissionMode, "plan");
     assert.deepEqual(create?.body, {
       metadata: { client: "openclaw-code-agent" },
@@ -1100,7 +1163,7 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     assert.equal(completions[1]?.data.success, false);
     assert.equal(completions[1]?.data.outcome, "interrupted");
 
-    const promptsSent = mock.requests.filter((request) => request.method === "POST" && request.path === "/session/ses_test/prompt_async");
+    const promptsSent = mock.requests.filter((request) => request.method === "POST" && request.path === "/api/session/ses_test/prompt_async");
     assert.deepEqual(promptsSent.map((request) => request.body), [
       { parts: [{ type: "text", text: "first" }] },
     ]);
@@ -1125,7 +1188,7 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     assert.equal(backendRefs.length, 1);
     assert.equal(backendRefs[0]?.ref.conversationId, "ses_test");
     assert.equal(completions.every((completion) => completion.data.success), true);
-    const promptsSent = mock.requests.filter((request) => request.method === "POST" && request.path === "/session/ses_test/prompt_async");
+    const promptsSent = mock.requests.filter((request) => request.method === "POST" && request.path === "/api/session/ses_test/prompt_async");
     assert.deepEqual(promptsSent.map((request) => request.body), [
       { parts: [{ type: "text", text: "first" }] },
       { parts: [{ type: "text", text: "second" }] },
@@ -1150,7 +1213,7 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     const session = harness.launch({ prompt: prompts(), cwd: "/repo" });
     const iterator = session.messages[Symbol.asyncIterator]();
     const seen: HarnessMessage[] = [];
-    await waitForRequest(mock, "/session/ses_test/prompt_async");
+    await waitForRequest(mock, "/api/session/ses_test/prompt_async");
     mock.resolveWait();
     while (true) {
       const next = await iterator.next();
@@ -1163,7 +1226,7 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     nextPrompt.resolve();
     await waitForRequestCount(mock, "/api/event", 2);
-    await waitForRequestCount(mock, "/session/ses_test/prompt_async", 2);
+    await waitForRequestCount(mock, "/api/session/ses_test/prompt_async", 2);
     mock.emit({
       type: "permission.asked",
       properties: {
@@ -1206,7 +1269,7 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
 
     await session.setPermissionMode?.("bypassPermissions");
 
-    const patch = mock.requests.find((request) => request.method === "PATCH" && request.path === "/session/ses_test");
+    const patch = mock.requests.find((request) => request.method === "PATCH" && request.path === "/api/session/ses_test");
     assert.deepEqual(patch?.body, {
       permission: [
         { permission: "edit", pattern: "*", action: "allow" },
@@ -1228,7 +1291,7 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     const session = harness.launch({ prompt: "switch", cwd: "/repo", permissionMode: "plan" });
     const iterator = session.messages[Symbol.asyncIterator]();
     const seen: HarnessMessage[] = [];
-    await waitForRequest(mock, "/session/ses_test/prompt_async");
+    await waitForRequest(mock, "/api/session/ses_test/prompt_async");
     mock.failSessionPatch = true;
 
     await assert.rejects(
@@ -1236,7 +1299,7 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
       /permission patch failed/,
     );
 
-    const patch = mock.requests.find((request) => request.method === "PATCH" && request.path === "/session/ses_test");
+    const patch = mock.requests.find((request) => request.method === "PATCH" && request.path === "/api/session/ses_test");
     assert.ok(patch);
     mock.emit({
       type: "permission.asked",
