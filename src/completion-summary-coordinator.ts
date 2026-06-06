@@ -218,6 +218,7 @@ export class CompletionSummaryCoordinator {
       const goalLike = this.isGoalLike(session, fact, outcomeKey);
       const visibleSessionKeys = this.buildSessionAliasKeys(deliveryRef, session, "visible-summary");
       const goalSessionKeys = this.buildSessionAliasKeys(deliveryRef, session, "goal-summary");
+      const terminalLike = this.isTerminalLike(fact, outcomeKey);
       return {
         primary,
         explicit: true,
@@ -228,7 +229,8 @@ export class CompletionSummaryCoordinator {
         ],
         decisionKeys: [
           primary,
-          ...(goalLike ? [...visibleSessionKeys, ...goalSessionKeys] : goalSessionKeys),
+          ...(goalLike || terminalLike ? visibleSessionKeys : []),
+          ...goalSessionKeys,
         ],
       };
     }
@@ -250,6 +252,10 @@ export class CompletionSummaryCoordinator {
     outcomeKey: string,
   ): boolean {
     return Boolean(session.goalTaskId?.trim()) || fact.producer === "goal" || /^goal:/i.test(outcomeKey);
+  }
+
+  private isTerminalLike(fact: CompletionSummaryFact, outcomeKey: string): boolean {
+    return fact.producer === "terminal" || /^terminal:/i.test(outcomeKey);
   }
 
   private normalizeOutcomeKey(

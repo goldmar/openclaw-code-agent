@@ -226,6 +226,68 @@ describe("CompletionSummaryCoordinator", () => {
     assert.equal(routedFollowup.skipReason, PRIOR_VISIBLE_SUMMARY_SKIP_REASON);
   });
 
+  it("skips a later terminal wake after a prior visible worktree merge summary", () => {
+    const coordinator = new CompletionSummaryCoordinator();
+    const session = {
+      id: "include-harness-in-oca-notifications",
+      harnessSessionId: "h-include-harness-in-oca-notifications",
+      route: {
+        provider: "telegram",
+        target: "openclaw-topic-fixture",
+        threadId: "13832",
+      },
+    };
+
+    const visibleMergeSummary = coordinator.recordVisibleDelivery(session, {
+      required: true,
+      producer: "worktree",
+      outcomeKey: "terminal:include-harness-in-oca-notifications",
+    });
+    const duplicateTerminalWake = coordinator.decide(
+      { ...session, id: "include-harness-in-oca-notifications-retry" },
+      {
+        required: true,
+        producer: "terminal",
+        outcomeKey: "terminal:include-harness-in-oca-notifications-retry",
+      },
+    );
+
+    assert.equal(visibleMergeSummary.allowed, true);
+    assert.equal(duplicateTerminalWake.allowed, false);
+    assert.equal(duplicateTerminalWake.skipReason, PRIOR_VISIBLE_SUMMARY_SKIP_REASON);
+  });
+
+  it("skips a later terminal wake after a prior visible PR-open summary", () => {
+    const coordinator = new CompletionSummaryCoordinator();
+    const session = {
+      id: "fix-duplicate-completion-notifications",
+      harnessSessionId: "h-fix-duplicate-completion-notifications",
+      route: {
+        provider: "telegram",
+        target: "openclaw-topic-fixture",
+        threadId: "13832",
+      },
+    };
+
+    const visiblePrSummary = coordinator.recordVisibleDelivery(session, {
+      required: true,
+      producer: "worktree-pr",
+      outcomeKey: "worktree-pr:opened:goldmar/openclaw-code-agent:#171:agent/fix-duplicate-completion-notifications:created",
+    });
+    const duplicateTerminalWake = coordinator.decide(
+      { ...session, id: "fix-duplicate-completion-notifications-terminal-retry" },
+      {
+        required: true,
+        producer: "terminal",
+        outcomeKey: "terminal:fix-duplicate-completion-notifications-terminal-retry",
+      },
+    );
+
+    assert.equal(visiblePrSummary.allowed, true);
+    assert.equal(duplicateTerminalWake.allowed, false);
+    assert.equal(duplicateTerminalWake.skipReason, PRIOR_VISIBLE_SUMMARY_SKIP_REASON);
+  });
+
   it("lets a foreground goal summary supersede an in-flight goal wake claim", () => {
     const coordinator = new CompletionSummaryCoordinator();
     const session = {
