@@ -286,6 +286,112 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     assert.deepEqual(reply?.body, { response: "once" });
   });
 
+  it("deduplicates permission resolved events when the server echoes the reply", async () => {
+    const mock = new MockOpenCodeServer();
+    const waitForEventStream = new Promise<void>((resolve) => {
+      const originalFetch = mock.fetch;
+      mock.fetch = async (input, init) => {
+        const response = await originalFetch(input, init);
+        const url = new URL(typeof input === "string" ? input : input.url);
+        if (url.pathname === "/api/event") resolve();
+        return response;
+      };
+    });
+    const harness = new OpenCodeHarness({
+      createServer: async () => mock.handle(),
+      fetch: mock.fetch,
+    });
+
+    const session = harness.launch({ prompt: "needs permission", cwd: "/repo" });
+    await waitForEventStream;
+    mock.emit({
+      type: "permission.asked",
+      properties: {
+        id: "per_echo",
+        sessionID: "ses_test",
+        permission: "bash",
+        patterns: ["npm test"],
+      },
+    });
+
+    const seen: HarnessMessage[] = [];
+    const iterator = session.messages[Symbol.asyncIterator]();
+    while (true) {
+      const next = await iterator.next();
+      assert.equal(next.done, false);
+      seen.push(next.value);
+      if (next.value.type === "pending_input") {
+        assert.equal(await session.submitPendingInputOption?.(0), true);
+        mock.emit({
+          type: "permission.replied",
+          properties: { sessionID: "ses_test", requestID: "per_echo" },
+        });
+      }
+      if (seen.filter((message) => message.type === "pending_input_resolved").length === 1) break;
+    }
+    mock.resolveWait();
+    for await (const message of iterator) {
+      seen.push(message);
+    }
+
+    const resolved = seen.filter((message) => message.type === "pending_input_resolved") as Extract<HarnessMessage, { type: "pending_input_resolved" }>[];
+    assert.equal(resolved.length, 1);
+    assert.equal(resolved[0]?.requestId, "per_echo");
+  });
+
+  it("deduplicates question resolved events when the server echoes the reply", async () => {
+    const mock = new MockOpenCodeServer();
+    const waitForEventStream = new Promise<void>((resolve) => {
+      const originalFetch = mock.fetch;
+      mock.fetch = async (input, init) => {
+        const response = await originalFetch(input, init);
+        const url = new URL(typeof input === "string" ? input : input.url);
+        if (url.pathname === "/api/event") resolve();
+        return response;
+      };
+    });
+    const harness = new OpenCodeHarness({
+      createServer: async () => mock.handle(),
+      fetch: mock.fetch,
+    });
+
+    const session = harness.launch({ prompt: "needs answer", cwd: "/repo" });
+    await waitForEventStream;
+    mock.emit({
+      type: "question.asked",
+      properties: {
+        id: "q_echo",
+        sessionID: "ses_test",
+        question: "Which branch?",
+        options: ["main"],
+      },
+    });
+
+    const seen: HarnessMessage[] = [];
+    const iterator = session.messages[Symbol.asyncIterator]();
+    while (true) {
+      const next = await iterator.next();
+      assert.equal(next.done, false);
+      seen.push(next.value);
+      if (next.value.type === "pending_input") {
+        assert.equal(await session.submitPendingInputText?.("main"), true);
+        mock.emit({
+          type: "question.replied",
+          properties: { sessionID: "ses_test", requestID: "q_echo" },
+        });
+      }
+      if (seen.filter((message) => message.type === "pending_input_resolved").length === 1) break;
+    }
+    mock.resolveWait();
+    for await (const message of iterator) {
+      seen.push(message);
+    }
+
+    const resolved = seen.filter((message) => message.type === "pending_input_resolved") as Extract<HarnessMessage, { type: "pending_input_resolved" }>[];
+    assert.equal(resolved.length, 1);
+    assert.equal(resolved[0]?.requestId, "q_echo");
+  });
+
   it("auto-approves permission requests in bypassPermissions mode", async () => {
     const mock = new MockOpenCodeServer();
     const waitForEventStream = new Promise<void>((resolve) => {

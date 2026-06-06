@@ -410,6 +410,7 @@ export class OpenCodeHarness implements AgentHarness {
     let turnCompletionEmitted = false;
     let sessionInterrupted = false;
     let lastBackendRefConversationId: string | undefined;
+    const resolvedPendingInputRequestIds = new Set<string>();
 
     const emitRunCompleted = (data: Parameters<typeof createRunCompletedEvent>[0]): boolean => {
       if (turnCompletionEmitted) return false;
@@ -439,6 +440,14 @@ export class OpenCodeHarness implements AgentHarness {
         kind: "opencode-server",
         conversationId: sessionId,
       }));
+    };
+    const resolvePendingInput = (requestId: string | undefined): void => {
+      if (requestId && resolvedPendingInputRequestIds.has(requestId)) return;
+      if (requestId) resolvedPendingInputRequestIds.add(requestId);
+      queue.enqueue(createPendingInputResolvedEvent(requestId));
+      if (requestId && currentPendingInput?.requestId === requestId) {
+        currentPendingInput = undefined;
+      }
     };
 
     const ensureClient = async (): Promise<OpenCodeClient> => {
@@ -492,7 +501,7 @@ export class OpenCodeHarness implements AgentHarness {
           const requestId = typeof event.properties.id === "string" ? event.properties.id : undefined;
           if (requestId) {
             await replyPermission(requestId, "once").catch((): undefined => undefined);
-            queue.enqueue(createPendingInputResolvedEvent(requestId));
+            resolvePendingInput(requestId);
           }
           return;
         }
@@ -508,10 +517,7 @@ export class OpenCodeHarness implements AgentHarness {
       }
       if (event.type === "permission.replied") {
         const requestId = typeof event.properties.requestID === "string" ? event.properties.requestID : undefined;
-        queue.enqueue(createPendingInputResolvedEvent(requestId));
-        if (requestId && currentPendingInput?.requestId === requestId) {
-          currentPendingInput = undefined;
-        }
+        resolvePendingInput(requestId);
         return;
       }
       if (event.type === "question.asked") {
@@ -527,10 +533,7 @@ export class OpenCodeHarness implements AgentHarness {
       }
       if (event.type === "question.replied" || event.type === "question.rejected") {
         const requestId = typeof event.properties.requestID === "string" ? event.properties.requestID : undefined;
-        queue.enqueue(createPendingInputResolvedEvent(requestId));
-        if (requestId && currentPendingInput?.requestId === requestId) {
-          currentPendingInput = undefined;
-        }
+        resolvePendingInput(requestId);
         return;
       }
       if (event.type?.startsWith("session.next.") || event.type === "session.idle") {
@@ -632,8 +635,7 @@ export class OpenCodeHarness implements AgentHarness {
           if (!text) continue;
           if (currentPendingInput?.kind === "question") {
             await replyQuestion(currentPendingInput.requestId, text);
-            queue.enqueue(createPendingInputResolvedEvent(currentPendingInput.requestId));
-            currentPendingInput = undefined;
+            resolvePendingInput(currentPendingInput.requestId);
             continue;
           }
           await runTurn(text);
@@ -672,15 +674,13 @@ export class OpenCodeHarness implements AgentHarness {
           const response = action?.kind === "approval" ? action.responseDecision : undefined;
           if (!response) return false;
           await replyPermission(pending.requestId, response);
-          queue.enqueue(createPendingInputResolvedEvent(pending.requestId));
-          currentPendingInput = undefined;
+          resolvePendingInput(pending.requestId);
           return true;
         }
         const option = pending.options[index];
         if (!option) return false;
         await replyQuestion(pending.requestId, option);
-        queue.enqueue(createPendingInputResolvedEvent(pending.requestId));
-        currentPendingInput = undefined;
+        resolvePendingInput(pending.requestId);
         return true;
       },
 
@@ -688,8 +688,7 @@ export class OpenCodeHarness implements AgentHarness {
         const pending = currentPendingInput;
         if (!pending || pending.kind !== "question") return false;
         await replyQuestion(pending.requestId, text);
-        queue.enqueue(createPendingInputResolvedEvent(pending.requestId));
-        currentPendingInput = undefined;
+        resolvePendingInput(pending.requestId);
         return true;
       },
 
