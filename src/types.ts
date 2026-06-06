@@ -85,7 +85,7 @@ export type CodexApprovalPolicy = "never";
 export const REASONING_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 export type ReasoningEffort = typeof REASONING_EFFORTS[number];
 export const REASONING_EFFORT_SET: ReadonlySet<ReasoningEffort> = new Set(REASONING_EFFORTS);
-export type SessionBackendKind = "claude-code" | "codex-app-server";
+export type SessionBackendKind = "claude-code" | "codex-app-server" | "opencode-server";
 export type BackendWorktreeCapability = "plugin-managed" | "native-execution" | "native-restore";
 
 export interface SessionBackendRef {

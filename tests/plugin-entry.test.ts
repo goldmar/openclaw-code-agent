@@ -292,7 +292,9 @@ describe("plugin entry source", () => {
     assert.deepEqual(pluginManifest.configSchema?.properties?.defaultHarness?.enum, [
       "claude-code",
       "codex",
+      "opencode",
     ]);
+    assert.match(pluginManifest.configSchema?.properties?.defaultHarness?.description ?? "", /experimental harness/);
     assert.equal(pluginManifest.configSchema?.properties?.planApproval?.default, "delegate");
     assert.equal(pluginManifest.configSchema?.properties?.defaultWorktreeStrategy?.default, "delegate");
     assert.match(pluginManifest.configSchema?.properties?.defaultWorkdir?.description ?? "", /git repository root/);
@@ -305,7 +307,9 @@ describe("plugin entry source", () => {
     ]);
     assert.equal(pluginManifest.configSchema?.properties?.harnesses?.additionalProperties?.properties?.fastMode?.type, "boolean");
     assert.equal(pluginManifest.configSchema?.properties?.harnesses?.default?.codex?.fastMode, false);
+    assert.deepEqual(pluginManifest.configSchema?.properties?.harnesses?.default?.opencode, {});
     assert.match(pluginManifest.uiHints?.harnesses?.help ?? "", /harnesses\.codex\.fastMode=true/);
+    assert.match(pluginManifest.uiHints?.harnesses?.help ?? "", /OpenCode is experimental/);
   });
 
   it("keeps declared tool contracts synced with runtime registrations", () => {
@@ -435,7 +439,7 @@ describe("plugin entry source", () => {
     assert.doesNotMatch(harnessSources, /agentRuntime\.id/);
   });
 
-  it("bundles the OpenClaw plugin SDK entry helper into the release artifact", () => {
+  it("externalizes only the canonical OpenClaw plugin SDK entry helper", () => {
     const packageJson = JSON.parse(readFileSync(join(rootDir, "package.json"), "utf8")) as {
       scripts?: Record<string, string>;
     };
@@ -444,6 +448,7 @@ describe("plugin entry source", () => {
     assert.doesNotMatch(buildScript, /--external:openclaw(?:\s|$)/);
     assert.doesNotMatch(buildScript, /--external:openclaw\/plugin-sdk(?:\s|$)/);
     assert.doesNotMatch(buildScript, /--external:openclaw\/plugin-sdk\/\*(?:\s|$)/);
+    assert.match(buildScript, /--external:openclaw\/plugin-sdk\/plugin-entry/);
     assert.match(buildScript, /--external:@anthropic-ai\/claude-agent-sdk/);
   });
 

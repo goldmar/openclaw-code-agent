@@ -31,6 +31,7 @@ const BUILTIN_HARNESS_CONFIGS: Record<string, HarnessConfig> = {
     allowedModels: ["gpt-5.5", "gpt-5.5-pro"],
     reasoningEffort: "medium",
   },
+  opencode: {},
 };
 
 /** Load and cache global MCP server definitions from `~/.claude.json`. */
@@ -60,6 +61,7 @@ export let pluginConfig: PluginConfig = {
   harnesses: {
     "claude-code": { ...BUILTIN_HARNESS_CONFIGS["claude-code"] },
     codex: { ...BUILTIN_HARNESS_CONFIGS.codex },
+    opencode: { ...BUILTIN_HARNESS_CONFIGS.opencode },
   },
 };
 
@@ -69,10 +71,11 @@ export function setPluginConfig(config: Partial<RawPluginConfig>): void {
   const harnesses: Record<string, HarnessConfig> = {};
 
   for (const [name, builtin] of Object.entries(BUILTIN_HARNESS_CONFIGS)) {
-    harnesses[name] = {
-      ...builtin,
-      allowedModels: builtin.allowedModels ? [...builtin.allowedModels] : undefined,
-    };
+    const next: HarnessConfig = { ...builtin };
+    if (builtin.allowedModels) {
+      next.allowedModels = [...builtin.allowedModels];
+    }
+    harnesses[name] = next;
   }
 
   for (const [name, value] of Object.entries(config.harnesses ?? {})) {

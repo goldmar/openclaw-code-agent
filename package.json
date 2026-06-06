@@ -6,7 +6,7 @@
   "main": "dist/index.js",
   "scripts": {
     "audit:prod": "pnpm audit --prod",
-    "build": "esbuild index.ts --bundle --platform=node --target=node22 --format=esm --outfile=dist/index.js --minify --external:@anthropic-ai/claude-agent-sdk",
+    "build": "esbuild index.ts --bundle --platform=node --target=node22 --format=esm --outfile=dist/index.js --minify --charset=utf8 --pure:console.log --pure:console.warn --pure:console.info --pure:console.debug --external:@anthropic-ai/claude-agent-sdk --external:openclaw/plugin-sdk/plugin-entry",
     "check-plugin-security": "node scripts/check-plugin-security.mjs",
     "test": "node scripts/run-tests.mjs",
     "test:serial": "node scripts/run-tests.mjs",
@@ -16,6 +16,7 @@
     "smoke:codex-worktrees": "node scripts/run-tests.mjs tests/codex-harness.test.ts tests/session-bootstrap.test.ts tests/session-restore-service.test.ts",
     "smoke:codex-live": "OPENCLAW_RUN_LIVE_CODEX_SMOKE=1 node scripts/run-tests.mjs tests/live-codex-app-server-smoke.test.ts",
     "smoke:codex-release": "OPENCLAW_RUN_LIVE_CODEX_RELEASE_SMOKE=1 node scripts/run-tests.mjs tests/live-codex-app-server-smoke.test.ts",
+    "smoke:opencode-live": "OPENCLAW_RUN_LIVE_OPENCODE_SMOKE=1 node scripts/run-tests.mjs tests/live-opencode-server-smoke.test.ts",
     "typecheck": "tsc -p tsconfig.typecheck.json --noEmit",
     "validate:release-metadata": "node scripts/validate-release-metadata.mjs",
     "verify": "pnpm typecheck && pnpm build && pnpm test"
@@ -61,6 +62,7 @@
     "plugin",
     "claude",
     "claude-code",
+    "opencode",
     "coding-agent",
     "codex",
     "ai",
@@ -85,7 +87,7 @@
   "publishConfig": {
     "access": "public"
   },
-  "description": "An OpenClaw plugin that orchestrates coding agent sessions as managed background processes. Launch, monitor, and control coding agents (Claude Code, Codex, and more) directly from your AI gateway.",
+  "description": "An OpenClaw plugin that orchestrates coding agent sessions as managed background processes. Launch, monitor, and control coding agents (Claude Code, Codex, experimental OpenCode, and more) directly from your AI gateway.",
   "peerDependencies": {
     "openclaw": ">=2026.4.21"
   },

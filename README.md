@@ -4,7 +4,7 @@
 [![npm downloads](https://img.shields.io/npm/dm/openclaw-code-agent.svg)](https://www.npmjs.com/package/openclaw-code-agent)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-`openclaw-code-agent` runs Claude Code and Codex as managed background coding sessions from OpenClaw chat. It adds plan approval, session lifecycle, wake routing, worktree isolation, merge/PR follow-through, and explicit goal loops on top of the agent backends.
+`openclaw-code-agent` runs Claude Code, Codex, and experimental OpenCode as managed background coding sessions from OpenClaw chat. It adds plan approval, session lifecycle, wake routing, worktree isolation, merge/PR follow-through, and explicit goal loops on top of the agent backends.
 
 Use it when you want to start coding work from Telegram, Discord, or another OpenClaw-supported channel and keep the job observable after the first message.
 
@@ -18,10 +18,10 @@ Use it when you want to start coding work from Telegram, Discord, or another Ope
 - **Full session lifecycle**. Suspend, resume, fork, interrupt, and recover sessions across restarts with persisted metadata and output.
 - **Explicit goal-task loops**. Opt into verifier-driven repair loops or Ralph-style completion loops when you need iterative autonomous execution toward a specific goal.
 - **Real operator visibility**. `agent_sessions`, `agent_output`, and `agent_stats` show status, buffered output, duration, and USD cost.
-- **Two harnesses, one control plane**. Claude Code and Codex share the same tools, routing, notification pipeline, and worktree strategy model while each backend uses its own adapter and resume substrate.
+- **Multiple harnesses, one control plane**. Claude Code, Codex, and experimental OpenCode share the same tools, routing, notification pipeline, and worktree strategy model while each backend uses its own adapter and resume substrate.
 - **One continuation path**. Follow-ups, approvals, revisions, interrupts, and redirects all continue the existing session instead of launching a duplicate.
 
-This plugin is separate from OpenClaw's bundled `acpx` runtime plugin and bundled core `codex` plugin. Those own adjacent OpenClaw runtime/provider surfaces; `openclaw-code-agent` owns chat orchestration and repository follow-through for its own Claude Code and Codex harnesses. See [docs/ACP-COMPARISON.md](docs/ACP-COMPARISON.md) for the boundary details.
+This plugin is separate from OpenClaw's bundled `acpx` runtime plugin and bundled core `codex` plugin. Those own adjacent OpenClaw runtime/provider surfaces; `openclaw-code-agent` owns chat orchestration and repository follow-through for its own Claude Code, Codex, and experimental OpenCode harnesses. See [docs/ACP-COMPARISON.md](docs/ACP-COMPARISON.md) for the boundary details.
 
 ## From Chat To Resolved Work
 
@@ -32,13 +32,13 @@ This plugin is separate from OpenClaw's bundled `acpx` runtime plugin and bundle
 
 ### Direct Completion
 
-For small trusted changes, an orchestrator can launch a session, let Codex or Claude Code finish, and report the verified outcome back to chat. The session stays observable through launch, completion, cost, duration, and commit summary.
+For small trusted changes, an orchestrator can launch a session, let the selected harness finish, and report the verified outcome back to chat. The session stays observable through launch, completion, cost, duration, and commit summary.
 
 ![Direct completion](https://raw.githubusercontent.com/goldmar/openclaw-code-agent/main/assets/no-plan.png)
 
 ### Plan Review
 
-The default review loop is plan-first. Claude Code and Codex feed the same approval UX: the plugin receives a structured plan artifact, blocks implementation until approval, and continues the same session after the plan is approved. The user can approve, request a revision, or reject the plan from the originating thread.
+The default review loop is plan-first. Claude Code, Codex, and experimental OpenCode feed the same approval UX: the plugin blocks implementation until approval, then continues the same session after the plan is approved. Codex can provide structured plan artifacts; OpenCode is currently treated as text-only with plugin-owned plan gating. The user can approve, request a revision, or reject the plan from the originating thread.
 
 ![Plan review](https://raw.githubusercontent.com/goldmar/openclaw-code-agent/main/assets/plan-review.png)
 
@@ -115,7 +115,7 @@ Add the smallest useful config under `plugins.entries["openclaw-code-agent"]` in
 For the first run, choose:
 
 - `defaultWorkdir`: a git repository root you expect to use often.
-- `defaultHarness`: `claude-code` or `codex`.
+- `defaultHarness`: `claude-code`, `codex`, or `opencode`. Treat `opencode` as experimental.
 
 The default policy is intentionally review-first:
 
@@ -127,13 +127,15 @@ Because worktree isolation defaults to `delegate`, `defaultWorkdir` should norma
 
 Chat-launched sessions route updates back to their originating chat thread. For agent-launched tool sessions without an origin route, configure `fallbackChannel` or `agentChannels` in the reference guide.
 
-Release `4.3.6` targets and validates against the OpenClaw SDK package `openclaw@2026.6.1`, while keeping the plugin peer floor at `>=2026.4.21`. No host upgrade or host config change is required for this plugin compatibility update. OpenClaw `2026.6.1` changes plugin runtime/install lookup, plugin SDK exports, approval normalization, cron/session delivery, Telegram callback and topic delivery, runtime tool allowlists, Codex App Server recovery, and adjacent bundled/external agent plugins, but `openclaw-code-agent` does not need new SDK imports for them: the manifest already declares `contracts.tools`, the plugin still imports only `openclaw/plugin-sdk/plugin-entry`, and its own session store, wake routing, callbacks, worktree flows, and Codex/Claude harness model restrictions remain plugin-owned.
+The current package targets and validates against the OpenClaw SDK package `openclaw@2026.6.1`, while keeping the plugin peer floor at `>=2026.4.21`. No host upgrade or host config change is required for this plugin compatibility update. OpenClaw `2026.6.1` changes plugin runtime/install lookup, plugin SDK exports, approval normalization, cron/session delivery, Telegram callback and topic delivery, runtime tool allowlists, Codex App Server recovery, and adjacent bundled/external agent plugins, but `openclaw-code-agent` does not need new SDK imports for them: the manifest already declares `contracts.tools`, the plugin still imports only `openclaw/plugin-sdk/plugin-entry`, and its own session store, wake routing, callbacks, worktree flows, and harness model restrictions remain plugin-owned.
 
 If you use Codex, make sure the local `codex` command or `OPENCLAW_CODEX_APP_SERVER_COMMAND` override is available and authenticated. Codex-specific defaults live under `harnesses.codex`: `reasoningEffort` is sent as `reasoningEffort`, and `fastMode: true` sends `service_tier: "fast"` on Codex App Server thread, resume, and turn payloads. When Codex auth is inconsistent, this is the recommended `~/.codex/config.toml` setting:
 
 ```toml
 forced_login_method = "chatgpt"
 ```
+
+If you use experimental OpenCode, make sure local `opencode >= 1.16.2` is available and configured with provider auth. The plugin starts `opencode serve` per session on localhost and uses OpenCode's current `/api/*` session APIs where available. Leave `harnesses.opencode.defaultModel` unset to let OpenCode choose its configured provider default, or pass an explicit `provider/model` string for a launch.
 
 ## First Session
 
@@ -161,7 +163,7 @@ Stop this session.
 
 ### Plan Review
 
-By default, Claude Code and Codex produce a plan before implementation. The plan can be approved, revised, or rejected through buttons when available, or with plain-text `Approve`, `Revise`, or `Reject` in the same thread.
+By default, Claude Code, Codex, and experimental OpenCode produce a plan before implementation. The plan can be approved, revised, or rejected through buttons when available, or with plain-text `Approve`, `Revise`, or `Reject` in the same thread.
 
 Revisions stay attached to the same session, so the newest plan is the actionable one.
 

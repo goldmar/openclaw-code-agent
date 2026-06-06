@@ -50,7 +50,7 @@ openclaw-code-agent/
 - `src/session-state.ts`: reducer-backed lifecycle / approval / runtime / worktree transitions
 - `src/session-interactions.ts`: action-token creation and state-driven button sets
 - `src/session-notifications.ts`: delivery-state-aware wrapper around lifecycle notifications
-- `src/harness/*`: Claude Code and Codex integrations
+- `src/harness/*`: Claude Code, Codex, and experimental OpenCode integrations
 - `src/tools/*`: OpenClaw tool implementations
 - `src/commands/*`: chat command implementations
 - `src/worktree.ts`: git worktree, merge, and PR helpers
@@ -111,6 +111,7 @@ Additional smoke entry points:
 - `pnpm smoke:codex-worktrees` for Codex plugin-managed worktree bootstrap and backend restore behavior
 - `pnpm smoke:codex-live` for opt-in real App Server validation when a live Codex environment is available
 - `pnpm smoke:codex-release` for the fuller opt-in operator/release check covering launch, `agent_respond`-style resume, structured plan delivery, restart/resume, and worktree restore behavior
+- `pnpm smoke:opencode-live` for opt-in real OpenCode server validation when `opencode >= 1.16.2` and provider auth are available
 
 ### Live Codex Release Check
 
@@ -121,6 +122,10 @@ Before running it:
 1. Make sure the local Codex App Server environment is configured and reachable.
 2. Run it from a workspace where creating plugin-managed worktrees and restoring Codex backend refs is acceptable.
 3. Treat failures as operator/runtime regressions first, not just test flakes.
+
+### Live OpenCode Smoke Check
+
+Use `pnpm smoke:opencode-live` only when a real OpenCode environment is available. It starts `opencode serve`, creates a trivial session, sends a current `/api/*` queued prompt, waits for completion, and verifies that an assistant response was produced. It intentionally stays out of `pnpm verify` because it depends on local OpenCode installation and provider auth.
 
 ## Extending The Plugin
 
@@ -147,6 +152,7 @@ Before running it:
 4. Update `openclaw.plugin.json` if the harness adds user-facing config.
 5. Add launch, resume, and waiting-path tests.
 6. Document the harness behavior in [REFERENCE.md](REFERENCE.md) and [ARCHITECTURE.md](ARCHITECTURE.md).
+7. If the harness is experimental, mark that status in README, reference docs, manifest help text, and skill guidance without adding invalid config keys.
 
 ## Contributor Notes
 

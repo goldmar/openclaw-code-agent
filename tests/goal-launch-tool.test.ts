@@ -124,4 +124,40 @@ describe("goal_launch tool", () => {
     assert.equal(launchConfig?.originThreadId, "thread-7");
     assert.equal((launchConfig?.route as { accountId?: string } | undefined)?.accountId, "acct-1");
   });
+
+  it("allows experimental OpenCode goal tasks to use the OpenCode provider default model", async () => {
+    let launchConfig: Record<string, unknown> | undefined;
+
+    setPluginConfig({
+      defaultHarness: "opencode",
+    });
+
+    setGoalController({
+      async launchTask(config: Record<string, unknown>) {
+        launchConfig = config;
+        return {
+          id: "goal-3",
+          name: "goal-opencode",
+          workdir: config.workdir,
+          sessionId: "sess-3",
+          sessionName: "goal-opencode",
+          maxIterations: config.maxIterations ?? 8,
+          loopMode: config.loopMode ?? "ralph",
+          completionPromise: config.completionPromise,
+        };
+      },
+    } as any);
+
+    const tool = makeGoalLaunchTool({ workspaceDir: "/tmp" } as any);
+
+    const result = await tool.execute("tool-id", {
+      goal: "Keep going until DONE",
+    });
+
+    assert.ok(launchConfig, "launchTask should be called");
+    assert.equal(launchConfig?.harness, "opencode");
+    assert.equal(launchConfig?.model, undefined);
+    assert.match((result.content[0] as { text: string }).text, /Harness: opencode/);
+    assert.match((result.content[0] as { text: string }).text, /Model: default/);
+  });
 });

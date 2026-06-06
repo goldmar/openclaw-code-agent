@@ -42,9 +42,8 @@ export function isCompletedByDefault(session: ResumableSessionLike): boolean {
 }
 
 function canResumeCompletedSession(session: ResumableSessionLike): boolean {
-  return isCompletedByDefault(session)
-    && session.backendRef?.kind === "codex-app-server"
-    && !!getBackendConversationId(session);
+  if (!isCompletedByDefault(session) || !getBackendConversationId(session)) return false;
+  return session.backendRef?.kind === "codex-app-server" || session.backendRef?.kind === "opencode-server";
 }
 
 export function isNeverStartedRelaunch(session: ResumableSessionLike): boolean {

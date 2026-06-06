@@ -57,7 +57,7 @@ export function makeGoalLaunchTool(ctx: OpenClawPluginToolContext) {
           { description: "Permission mode for the underlying agent session. Defaults to bypassPermissions for autonomous goal loops." },
         ),
       ),
-      harness: Type.Optional(Type.String({ description: "Agent harness to use (e.g. 'codex' or 'claude-code')." })),
+      harness: Type.Optional(Type.String({ description: "Agent harness to use ('claude-code', 'codex', or experimental 'opencode')." })),
     }),
     async execute(_id: string, params: unknown) {
       if (!goalController) {

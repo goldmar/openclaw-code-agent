@@ -405,6 +405,7 @@ describe("setPluginConfig", () => {
     assert.deepEqual(pluginConfig.harnesses.codex?.allowedModels, ["gpt-5.5", "gpt-5.5-pro"]);
     assert.equal(pluginConfig.harnesses.codex?.reasoningEffort, "medium");
     assert.equal(pluginConfig.harnesses.codex?.fastMode, undefined);
+    assert.deepEqual(pluginConfig.harnesses.opencode, {});
   });
 
   it("uses default for missing permissionMode", () => {
@@ -441,6 +442,7 @@ describe("setPluginConfig", () => {
     assert.deepEqual(pluginConfig.harnesses["claude-code"]?.allowedModels, ["sonnet", "opus"]);
     assert.equal(pluginConfig.harnesses.codex?.defaultModel, "gpt-5.5");
     assert.deepEqual(pluginConfig.harnesses.codex?.allowedModels, ["gpt-5.5", "gpt-5.5-pro"]);
+    assert.deepEqual(pluginConfig.harnesses.opencode, {});
     assert.equal(pluginConfig.defaultWorkdir, undefined);
     assert.equal(pluginConfig.fallbackChannel, undefined);
     assert.equal(pluginConfig.agentChannels, undefined);
@@ -506,6 +508,7 @@ describe("pluginConfig singleton", () => {
     assert.deepEqual(pluginConfig.harnesses.codex?.allowedModels, ["gpt-5.5", "gpt-5.5-pro"]);
     assert.equal(pluginConfig.harnesses.codex?.reasoningEffort, "medium");
     assert.equal(pluginConfig.harnesses.codex?.fastMode, undefined);
+    assert.deepEqual(pluginConfig.harnesses.opencode, {});
   });
 
   it("setPluginConfig mutates the module-level singleton", () => {
