@@ -218,7 +218,8 @@ export class CompletionSummaryCoordinator {
     this.claimKeysByPrimary.delete(primary);
     if (!completed) return;
 
-    for (const key of keys) {
+    const orderedKeys = keys.length > 1 ? [...keys.slice(1), keys[0]] : keys;
+    for (const key of orderedKeys) {
       const completedRecord = this.completed.get(key);
       if (
         completedRecord?.skipReason === PRIOR_VISIBLE_SUMMARY_SKIP_REASON
@@ -252,6 +253,8 @@ export class CompletionSummaryCoordinator {
       const visibleSessionKeys = this.buildSessionAliasKeys(deliveryRef, session, "visible-summary");
       const goalSessionKeys = this.buildSessionAliasKeys(deliveryRef, session, "goal-summary");
       const terminalLike = this.isTerminalLike(fact, outcomeKey);
+      const prIdentityKeys = this.buildPrIdentityAliasKeys(deliveryRef, session, fact, outcomeKey);
+      const stalePrOpenLike = this.isStalePrOpenLike(fact, outcomeKey);
       return {
         primary,
         explicit: true,
@@ -259,11 +262,13 @@ export class CompletionSummaryCoordinator {
           primary,
           ...visibleSessionKeys,
           ...(goalLike ? goalSessionKeys : []),
+          ...prIdentityKeys,
         ],
         decisionKeys: [
           primary,
           ...(goalLike || terminalLike ? visibleSessionKeys : []),
           ...goalSessionKeys,
+          ...(stalePrOpenLike ? prIdentityKeys : []),
         ],
       };
     }
@@ -289,6 +294,49 @@ export class CompletionSummaryCoordinator {
 
   private isTerminalLike(fact: CompletionSummaryFact, outcomeKey: string): boolean {
     return fact.producer === "terminal" || /^terminal:/i.test(outcomeKey);
+  }
+
+  private isStalePrOpenLike(fact: CompletionSummaryFact, outcomeKey: string): boolean {
+    return fact.producer === "worktree-pr" && /^worktree-pr:(opened|draft-opened):/i.test(outcomeKey);
+  }
+
+  private buildPrIdentityAliasKeys(
+    deliveryRef: string,
+    session: CompletionSummarySession | PersistedCompletionSummarySession,
+    fact: CompletionSummaryFact,
+    outcomeKey: string,
+  ): string[] {
+    if (fact.producer !== "worktree-pr") return [];
+    const parsed = this.parseWorktreePrOutcomeKey(outcomeKey);
+    if (!parsed) return [];
+    const scope = this.buildVisibleScope(deliveryRef, session);
+    const identity = [
+      parsed.repo,
+      parsed.prIdentity,
+      parsed.branch,
+    ].join(":");
+    return [`${scope}:pr-summary:${this.digest(identity)}`];
+  }
+
+  private parseWorktreePrOutcomeKey(outcomeKey: string): {
+    repo: string;
+    prIdentity: string;
+    branch: string;
+  } | undefined {
+    const parts = outcomeKey.split(":");
+    if (parts.length < 6) return undefined;
+    if (parts[0] !== "worktree-pr") return undefined;
+    const [, action, repo, prIdentity, ...rest] = parts;
+    if (!action || !repo || !prIdentity) return undefined;
+    const materialChange = rest.at(-1);
+    const branchParts = materialChange === undefined ? rest : rest.slice(0, -1);
+    const branch = branchParts.join(":").trim();
+    if (!branch) return undefined;
+    return {
+      repo: repo.trim(),
+      prIdentity: prIdentity.trim(),
+      branch,
+    };
   }
 
   private normalizeOutcomeKey(
@@ -360,7 +408,7 @@ export class CompletionSummaryCoordinator {
     const withoutKeys = normalizedRecords.filter((record) => !keys.includes(record.key));
     const nextRecords = [
       ...withoutKeys,
-      ...keys.map((key) => ({
+      ...this.capDeliveredKeys(keys).map((key) => ({
         key,
         recordedAt: now,
         label,
@@ -368,5 +416,15 @@ export class CompletionSummaryCoordinator {
       })),
     ];
     return nextRecords.slice(Math.max(0, nextRecords.length - this.maxCompletedKeys));
+  }
+
+  private capDeliveredKeys(keys: string[]): string[] {
+    const uniqueKeys = [...new Set(keys)];
+    if (uniqueKeys.length <= this.maxCompletedKeys) return uniqueKeys;
+    const primary = uniqueKeys[0];
+    return [
+      primary,
+      ...uniqueKeys.slice(1).slice(Math.max(0, uniqueKeys.length - this.maxCompletedKeys)),
+    ].slice(0, this.maxCompletedKeys);
   }
 }

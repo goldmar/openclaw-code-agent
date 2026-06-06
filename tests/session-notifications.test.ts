@@ -1746,6 +1746,130 @@ describe("SessionNotificationService", () => {
     assert.deepEqual(skippedReasons, ["COMPLETION_FOLLOWUP_SKIPPED: prior human-visible summary already delivered"]);
   });
 
+  it("keeps one PR #185 follow-up when stale draft-open and completion wake paths race the same route", () => {
+    const requests: Array<Record<string, unknown>> = [];
+    const userMessages: string[] = [];
+    const skippedReasons: string[] = [];
+    let wakeAttempts = 0;
+    const fakeDispatcher = {
+      dispatchSessionNotification: (_session: unknown, request: Record<string, unknown> & { hooks?: Record<string, (reason?: string) => void> }) => {
+        requests.push(request as Record<string, unknown>);
+        if (typeof request.userMessage === "string" && request.userMessage.trim()) {
+          userMessages.push(request.userMessage);
+        }
+        request.hooks?.onNotifyStarted?.();
+        request.hooks?.onNotifySucceeded?.();
+        if (request.wakeMessage || request.wakeMessageOnNotifySuccess || request.wakeMessageOnNotifyFailed) {
+          wakeAttempts += 1;
+          request.hooks?.onWakeStarted?.();
+          request.hooks?.onWakeSucceeded?.();
+        }
+      },
+      dispose: () => {},
+    };
+
+    const service = new SessionNotificationService(
+      fakeDispatcher as any,
+      () => {},
+    );
+    const route = {
+      provider: "telegram",
+      target: "-1003863755361",
+      threadId: "13832",
+      sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+    };
+    const session = {
+      id: "format-launch-notification-model-separator",
+      harnessSessionId: "TZtxgbk4",
+      name: "format-launch-notification-model-separator",
+      route,
+    } as any;
+    const updatedOutcomeKey = "worktree-pr:updated:goldmar/openclaw-code-agent:#185:agent/format-launch-notification-model-separator:abc1850";
+    const staleOpenedOutcomeKey = "worktree-pr:opened:goldmar/openclaw-code-agent:#185:agent/format-launch-notification-model-separator:created";
+
+    service.dispatch(session, {
+      label: "worktree-outcome",
+      userMessage: "✅ PR updated: https://github.com/goldmar/openclaw-code-agent/pull/185",
+      notifyUser: "always",
+    });
+    service.dispatch(
+      { ...session, id: "format-launch-notification-model-separator-routed-summary" },
+      {
+        label: "worktree-foreground-summary",
+        userMessage: "PR #185 is open and updated with the notification separator fix.",
+        completionSummaryOwner: "foreground",
+        completionSummary: {
+          required: true,
+          producer: "worktree-pr",
+          outcomeKey: updatedOutcomeKey,
+        },
+        completionWakeSummaryRequired: true,
+        completionWakeOutcomeKey: updatedOutcomeKey,
+        notifyUser: "always",
+      },
+    );
+    service.dispatch(
+      { ...session, id: "format-launch-notification-model-separator-draft-open-summary" },
+      {
+        label: "worktree-foreground-summary",
+        userMessage: "Draft PR #185 opened: https://github.com/goldmar/openclaw-code-agent/pull/185",
+        completionSummaryOwner: "foreground",
+        completionSummary: {
+          required: true,
+          producer: "worktree-pr",
+          outcomeKey: staleOpenedOutcomeKey,
+        },
+        completionWakeSummaryRequired: true,
+        completionWakeOutcomeKey: staleOpenedOutcomeKey,
+        notifyUser: "always",
+        hooks: {
+          onWakeSkipped: (reason?: string) => {
+            skippedReasons.push(reason ?? "");
+          },
+        },
+      },
+    );
+    service.dispatch(
+      { ...session, id: "format-launch-notification-model-separator-completion-wake" },
+      {
+        label: "completed",
+        userMessage: "✅ [format-launch-notification-model-separator] Completed",
+        wakeMessageOnNotifySuccess: "duplicate completion wake: summarize PR #185",
+        completionSummary: {
+          required: true,
+          producer: "terminal",
+          outcomeKey: "terminal:format-launch-notification-model-separator-completion-wake",
+        },
+        completionWakeSummaryRequired: true,
+        completionWakeOutcomeKey: "terminal:format-launch-notification-model-separator-completion-wake",
+        notifyUser: "always",
+        hooks: {
+          onWakeSkipped: (reason?: string) => {
+            skippedReasons.push(reason ?? "");
+          },
+        },
+      },
+    );
+
+    assert.deepEqual(userMessages, [
+      "✅ PR updated: https://github.com/goldmar/openclaw-code-agent/pull/185",
+      "PR #185 is open and updated with the notification separator fix.",
+      "✅ [format-launch-notification-model-separator] Completed",
+    ]);
+    assert.equal(
+      userMessages.filter((message) => /PR #185|Draft PR #185/i.test(message) && !message.startsWith("✅")).length,
+      1,
+    );
+    assert.equal(requests.some((request) => request.userMessage === "Draft PR #185 opened: https://github.com/goldmar/openclaw-code-agent/pull/185"), false);
+    assert.equal(requests.at(-1)?.completionWakeSummaryRequired, false);
+    assert.equal(requests.at(-1)?.wakeMessageOnNotifySuccess, undefined);
+    assert.equal(wakeAttempts, 0);
+    assert.deepEqual(skippedReasons, [
+      "COMPLETION_FOLLOWUP_SKIPPED: prior human-visible summary already delivered",
+      "COMPLETION_FOLLOWUP_SKIPPED: prior human-visible summary already delivered",
+    ]);
+  });
+
   it("suppresses a PR #175 follow-through wake after a substantive same-topic routed summary is visible", () => {
     const requests: Array<Record<string, unknown>> = [];
     const userMessages: string[] = [];

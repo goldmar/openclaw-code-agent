@@ -288,6 +288,37 @@ describe("CompletionSummaryCoordinator", () => {
     assert.equal(duplicateTerminalWake.skipReason, PRIOR_VISIBLE_SUMMARY_SKIP_REASON);
   });
 
+  it("skips stale PR-open follow-ups after a same-topic PR-update summary already owned that PR", () => {
+    const coordinator = new CompletionSummaryCoordinator();
+    const session = {
+      id: "format-launch-notification-model-separator",
+      harnessSessionId: "TZtxgbk4",
+      route: {
+        provider: "telegram",
+        target: "openclaw-topic-fixture",
+        threadId: "13832",
+      },
+    };
+
+    const visiblePrUpdate = coordinator.recordVisibleDelivery(session, {
+      required: true,
+      producer: "worktree-pr",
+      outcomeKey: "worktree-pr:updated:goldmar/openclaw-code-agent:#185:agent/format-launch-notification-model-separator:abc1850",
+    });
+    const stalePrOpenWake = coordinator.decide(
+      { ...session, id: "format-launch-notification-model-separator-draft-pr-summary" },
+      {
+        required: true,
+        producer: "worktree-pr",
+        outcomeKey: "worktree-pr:opened:goldmar/openclaw-code-agent:#185:agent/format-launch-notification-model-separator:created",
+      },
+    );
+
+    assert.equal(visiblePrUpdate.allowed, true);
+    assert.equal(stalePrOpenWake.allowed, false);
+    assert.equal(stalePrOpenWake.skipReason, PRIOR_VISIBLE_SUMMARY_SKIP_REASON);
+  });
+
   it("lets a foreground goal summary supersede an in-flight goal wake claim", () => {
     const coordinator = new CompletionSummaryCoordinator();
     const session = {
