@@ -1049,7 +1049,8 @@ describe("SessionNotificationService", () => {
     service.dispatch(session, {
       label: "goal-task-progress",
       userMessage: [
-        "🔁 [trading-platform-full-repo-review-2-20-iter] Continued (iteration 1/20)",
+        "🔁 [trading-platform-full-repo-review-2-20-iter] Continued iteration 1/20",
+        "",
         "Agent: Hardened paper runtime review guards.",
       ].join("\n"),
       notifyUser: "always",
@@ -1076,7 +1077,7 @@ describe("SessionNotificationService", () => {
     });
     service.dispatch(session, {
       label: "goal-task-progress",
-      userMessage: "🔁 [trading-platform-full-repo-review-2-20-iter] Continued (iteration 2/20)",
+      userMessage: "🔁 [trading-platform-full-repo-review-2-20-iter] Continued iteration 2/20",
       notifyUser: "always",
     });
     service.dispatch(session, {
@@ -1098,13 +1099,13 @@ describe("SessionNotificationService", () => {
     });
 
     assert.equal(requests.length, 4);
-    assert.match(userMessages[0] ?? "", /Continued \(iteration 1\/20\)/);
+    assert.match(userMessages[0] ?? "", /Continued iteration 1\/20/);
     assert.match(userMessages[0] ?? "", /Agent: Hardened paper runtime review guards/);
     assert.doesNotMatch(userMessages[0] ?? "", /Iteration summary:/);
     assert.doesNotMatch(userMessages[0] ?? "", /Status: running/);
     assert.match(userMessages[1] ?? "", /Goal task succeeded/);
     assert.doesNotMatch(userMessages[1] ?? "", /Completion promise/);
-    assert.match(userMessages[2] ?? "", /Continued \(iteration 2\/20\)/);
+    assert.match(userMessages[2] ?? "", /Continued iteration 2\/20/);
     assert.equal(userMessages.filter((message) => /Goal task succeeded/.test(message)).length, 1);
     assert.equal(wakeAttempts, 1);
     assert.equal(requests[3]?.wakeMessage, undefined);

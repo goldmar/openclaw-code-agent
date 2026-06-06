@@ -688,9 +688,9 @@ export class GoalController {
     const iterationLabel = task.loopMode === "ralph" ? "iteration" : "repair iteration";
     const progressHeading = /\b(?:repair\s+)?iteration\s+\d+\/\d+\b/i.test(heading)
       ? heading
-      : `${heading} (${iterationLabel} ${task.iteration}/${task.maxIterations})`;
+      : `${heading} ${iterationLabel} ${task.iteration}/${task.maxIterations}`;
     const compactSummary = formatIterationSummaryForNotification(iterationSummary);
-    const text = compactSummary ? `${progressHeading}\n${compactSummary}` : progressHeading;
+    const text = compactSummary ? `${progressHeading}\n\n${compactSummary}` : progressHeading;
     this.notify(task, text, "goal-task-progress");
   }
 
