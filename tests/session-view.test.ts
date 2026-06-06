@@ -49,7 +49,7 @@ describe("session-view app layer", () => {
     };
 
     const text = getSessionsListingText(sm, "all", undefined, { full: true });
-    assert.match(text, /🧰 Harness \/ model: codex \/ gpt-5\.5/);
+    assert.match(text, /🧰 Harness \| model: codex \| gpt-5\.5/);
   });
 
   it("shows all sessions from the last 24h when full is enabled", () => {
