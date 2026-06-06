@@ -142,6 +142,21 @@ Security boundary note:
 - direct notifications use the gateway-owned in-process outbound adapter instead of shelling back into `openclaw message send`, avoiding service re-entry while preserving account and topic/thread routing
 - Telegram and Discord interactive direct notifications share the same gateway-owned presentation contract; only callback/routing details remain provider-specific
 
+### Notification Idempotency
+
+Notification delivery is at-least-once at the transport layer. Producers must make user-visible one-shot outcomes idempotent before they reach `WakeDispatcher`.
+
+`SessionNotificationService` owns that boundary:
+
+- producers attach a semantic `idempotencyKey` for one-shot user-visible outcomes such as plan prompts, goal success, terminal completion, worktree decisions, PR outcomes, and structured questions
+- the service scopes the semantic key to the resolved notification route, hashes it, and stores a bounded `notificationDedupe` ledger on the persisted session
+- duplicate claims in the same route are suppressed before direct notification or wake delivery starts
+- successful notification or wake delivery marks the key `delivered`
+- notify-only failures and wake failures release the in-flight key so retries can try again
+- completion-summary wakes still use `CompletionSummaryCoordinator`; the generic dedupe ledger prevents the visible status line itself from being emitted twice
+
+The invariant is: if two code paths represent the same user-visible outcome in the same chat/topic, they must share the same semantic `idempotencyKey`. If the outcome is intentionally repeatable, include the natural version in the key, such as plan version, turn number, question request id, PR number plus update identity, or snooze timestamp.
+
 ### `CallbackHandler`
 
 `src/callback-handler.ts` handles interactive callbacks under the `code-agent` namespace for both Telegram and Discord.
