@@ -13,6 +13,7 @@ class MockOpenCodeServer {
   requests: RequestRecord[] = [];
   closed = false;
   waitMode: "immediate" | "defer" = "immediate";
+  failQuestionReplies = false;
   private streamController?: ReadableStreamDefaultController<Uint8Array>;
   private readonly encoder = new TextEncoder();
   private deferredWait?: {
@@ -60,7 +61,12 @@ class MockOpenCodeServer {
     }
     if (method === "POST" && path.endsWith("/prompt")) return json({ type: "assistant", content: [] });
     if (method === "POST" && path.includes("/permission/request/")) return json(true);
-    if (method === "POST" && path.includes("/question/request/")) return json(true);
+    if (method === "POST" && path.includes("/question/request/")) {
+      if (this.failQuestionReplies) {
+        return new Response(JSON.stringify({ error: "question reply failed" }), { status: 500 });
+      }
+      return json(true);
+    }
     if (method === "PATCH" && path === "/session/ses_test") return json({ id: "ses_test" });
     if (method === "POST" && path === "/session/ses_test/abort") return json(true);
     return new Response(JSON.stringify({ error: `unexpected ${method} ${path}` }), { status: 404 });
@@ -392,6 +398,62 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     assert.equal(resolved[0]?.requestId, "q_echo");
   });
 
+  it("emits failed completion when inline question reply fails after a completed turn", async () => {
+    const mock = new MockOpenCodeServer();
+    mock.failQuestionReplies = true;
+    const harness = new OpenCodeHarness({
+      createServer: async () => mock.handle(),
+      fetch: mock.fetch,
+    });
+    const nextPrompt = Promise.withResolvers<void>();
+
+    async function* prompts(): AsyncGenerator<unknown> {
+      yield { type: "user", text: "first" };
+      await nextPrompt.promise;
+      yield { type: "user", text: "main" };
+    }
+
+    const session = harness.launch({ prompt: prompts(), cwd: "/repo" });
+    const iterator = session.messages[Symbol.asyncIterator]();
+    const seen: HarnessMessage[] = [];
+    while (true) {
+      const next = await iterator.next();
+      assert.equal(next.done, false);
+      seen.push(next.value);
+      if (next.value.type === "run_completed") break;
+    }
+
+    const firstCompletion = seen.find((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }> | undefined;
+    assert.equal(firstCompletion?.data.success, true);
+
+    mock.emit({
+      type: "question.asked",
+      properties: {
+        id: "q_fail",
+        sessionID: "ses_test",
+        question: "Which branch?",
+        options: ["main"],
+      },
+    });
+
+    while (!seen.some((message) => message.type === "pending_input")) {
+      const next = await iterator.next();
+      assert.equal(next.done, false);
+      seen.push(next.value);
+    }
+
+    nextPrompt.resolve();
+    for await (const message of iterator) {
+      seen.push(message);
+    }
+
+    const completions = seen.filter((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }>[];
+    assert.equal(completions.length, 2);
+    assert.equal(completions[1]?.data.success, false);
+    assert.equal(completions[1]?.data.outcome, "failed");
+    assert.match(completions[1]?.data.result ?? "", /question reply failed/);
+  });
+
   it("auto-approves permission requests in bypassPermissions mode", async () => {
     const mock = new MockOpenCodeServer();
     const waitForEventStream = new Promise<void>((resolve) => {
@@ -615,6 +677,46 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     assert.equal(completions[0]?.data.success, false);
     assert.equal(completions[0]?.data.outcome, "failed");
     assert.equal(completions[0]?.data.result, "tool failed");
+  });
+
+  it("keeps wait success when an SSE failure arrives during context fetch", async () => {
+    const mock = new MockOpenCodeServer();
+    const contextRequested = Promise.withResolvers<void>();
+    const releaseContext = Promise.withResolvers<void>();
+    const originalFetch = mock.fetch;
+    mock.fetch = async (input, init) => {
+      const responsePromise = originalFetch(input, init);
+      const url = new URL(typeof input === "string" ? input : input.url);
+      const method = init?.method ?? "GET";
+      if (method === "GET" && url.pathname === "/api/session/ses_test/context") {
+        contextRequested.resolve();
+        await releaseContext.promise;
+      }
+      return await responsePromise;
+    };
+    const harness = new OpenCodeHarness({
+      createServer: async () => mock.handle(),
+      fetch: mock.fetch,
+    });
+
+    const session = harness.launch({ prompt: "succeed", cwd: "/repo" });
+    await contextRequested.promise;
+    mock.emit({
+      type: "session.next.step.failed",
+      properties: {
+        sessionID: "ses_test",
+        error: { message: "late tool failed" },
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    releaseContext.resolve();
+
+    const messages = await collectAllMessages(session);
+    const completions = messages.filter((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }>[];
+    assert.equal(completions.length, 1);
+    assert.equal(completions[0]?.data.success, true);
+    assert.equal(completions[0]?.data.outcome, "completed");
+    assert.equal(completions[0]?.data.result, "Final.");
   });
 
   it("does not emit a failed completion after interrupt aborts an active wait", async () => {

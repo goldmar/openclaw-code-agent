@@ -410,6 +410,7 @@ export class OpenCodeHarness implements AgentHarness {
     let activeWaitController: AbortController | undefined;
     let streamStarted = false;
     let turnInProgress = false;
+    let turnWaitCompleted = false;
     let turnCompletionEmitted = false;
     let sessionInterrupted = false;
     let lastBackendRefConversationId: string | undefined;
@@ -493,7 +494,7 @@ export class OpenCodeHarness implements AgentHarness {
           && typeof event.properties.error.message === "string"
           ? event.properties.error.message
           : `${event.type} failed`;
-        if (turnInProgress) {
+        if (turnInProgress && !turnWaitCompleted) {
           activeWaitController?.abort();
           finishTurn(false, "failed", reason);
         }
@@ -548,7 +549,7 @@ export class OpenCodeHarness implements AgentHarness {
       if (streamStarted || !client) return;
       streamStarted = true;
       void client.streamEvents(handleEvent, streamController.signal).catch((error) => {
-        if (!streamController.signal.aborted && turnInProgress) {
+        if (!streamController.signal.aborted && turnInProgress && !turnWaitCompleted) {
           activeWaitController?.abort();
           finishTurn(false, "failed", errorMessage(error));
         }
@@ -600,6 +601,7 @@ export class OpenCodeHarness implements AgentHarness {
 
     const runTurn = async (text: string): Promise<void> => {
       turnInProgress = true;
+      turnWaitCompleted = false;
       turnCompletionEmitted = false;
       try {
         const http = await ensureClient();
@@ -622,12 +624,14 @@ export class OpenCodeHarness implements AgentHarness {
           signal: waitController.signal,
         });
         activeWaitController = undefined;
+        turnWaitCompleted = true;
         await completeTurn(true);
       } catch (error) {
         activeWaitController = undefined;
         await completeTurn(false, errorMessage(error));
       } finally {
         turnInProgress = false;
+        turnWaitCompleted = false;
       }
     };
 
@@ -653,6 +657,7 @@ export class OpenCodeHarness implements AgentHarness {
         }
       } catch (error) {
         if (!sessionInterrupted) {
+          if (!turnInProgress) turnCompletionEmitted = false;
           finishTurn(false, "failed", errorMessage(error));
         }
       } finally {
