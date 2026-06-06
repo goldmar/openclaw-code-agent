@@ -14,6 +14,7 @@ export class WakeTransport {
     sessionKey: string,
     text: string,
     deliver: boolean,
+    idempotencyKey: string = randomUUID(),
   ): string[] {
     return [
       "gateway",
@@ -27,7 +28,7 @@ export class WakeTransport {
         sessionKey,
         message: text,
         deliver,
-        idempotencyKey: randomUUID(),
+        idempotencyKey,
       }),
     ];
   }

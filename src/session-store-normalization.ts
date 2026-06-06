@@ -24,6 +24,8 @@ import type {
   SessionActionKind,
   SessionRoute,
   SessionBackendRef,
+  SessionNotificationDedupeRecord,
+  SessionNotificationDedupeStatus,
   WorktreeStrategy,
 } from "./types";
 
@@ -182,6 +184,30 @@ function toOptionalDeliveryState(value: unknown): SessionDeliveryState | undefin
   return value === "idle" || value === "notifying" || value === "wake_pending" || value === "failed"
     ? value
     : undefined;
+}
+
+function toOptionalNotificationDedupeStatus(value: unknown): SessionNotificationDedupeStatus | undefined {
+  return value === "in_flight" || value === "delivered" ? value : undefined;
+}
+
+function normalizeNotificationDedupeRecords(value: unknown): SessionNotificationDedupeRecord[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const records = value
+    .map((raw): SessionNotificationDedupeRecord | undefined => {
+      if (!isRecord(raw)) return undefined;
+      const key = toOptionalString(raw.key);
+      const status = toOptionalNotificationDedupeStatus(raw.status);
+      const recordedAt = toOptionalString(raw.recordedAt);
+      if (!key || !status || !recordedAt || !Number.isFinite(Date.parse(recordedAt))) return undefined;
+      return {
+        key,
+        status,
+        recordedAt,
+        label: toOptionalString(raw.label),
+      };
+    })
+    .filter((record): record is SessionNotificationDedupeRecord => Boolean(record));
+  return records.length > 0 ? records.slice(-64) : undefined;
 }
 
 function toOptionalApprovalExecutionState(value: unknown): ApprovalExecutionState | undefined {
@@ -420,6 +446,7 @@ export function normalizePersistedEntry(raw: unknown): PersistedSessionInfo | un
     worktreeState: toOptionalWorktreeState(raw.worktreeState),
     runtimeState: recoveredFromRunning ? "stopped" : toOptionalRuntimeState(raw.runtimeState),
     deliveryState: toOptionalDeliveryState(raw.deliveryState),
+    notificationDedupe: normalizeNotificationDedupeRecords(raw.notificationDedupe),
     completionWakeIssuedAt: toOptionalString(raw.completionWakeIssuedAt),
     completionWakeSucceededAt,
     completionWakeFailedAt: toOptionalString(raw.completionWakeFailedAt),

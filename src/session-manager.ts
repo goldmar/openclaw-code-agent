@@ -135,6 +135,9 @@ export class SessionManager {
     this.notifications = new SessionNotificationService(
       this.wakeDispatcher,
       (ref, patch) => this.stateSync.applySessionPatch(ref, patch),
+      {
+        getPersistedSession: (ref) => this.store.getPersistedSession(ref),
+      },
     );
     this.worktrees = new SessionWorktreeController();
     this.restore = new SessionRestoreService((ref) => this.store.getPersistedSession(ref));
@@ -480,6 +483,7 @@ export class SessionManager {
     const attemptedAt = new Date().toISOString();
     this.notifications.dispatch(session, {
       label: "plan-approval-fallback",
+      idempotencyKey: `plan-approval:${session.id}:v${planDecisionVersion ?? "unknown"}:fallback`,
       userMessage: buildPlanApprovalFallbackText({ session, summary }),
       notifyUser: "always",
       shouldDispatch: () => this.isCurrentPendingPlanDecision(session.id, planDecisionVersion),
@@ -611,6 +615,7 @@ export class SessionManager {
       }),
       {
         label: "plan-approval",
+        idempotencyKey: `plan-approval:${sessionId}:v${actionableVersion ?? "unknown"}:canonical`,
         userMessage: message,
         notifyUser: "always",
         buttons,
@@ -781,6 +786,7 @@ export class SessionManager {
 
     this.dispatchSessionNotification(parentRoutingTarget, {
       label: "worktree-merge-conflict-resolver-failed",
+      idempotencyKey: `worktree-merge-conflict-resolver-failed:${parentRef}:${session.id}`,
       userMessage: [
         `⚠️ [${parentRoutingTarget.name}] Auto-merge conflict resolution did not complete successfully.`,
         `Branch \`${worktreeBranch}\` was preserved for manual follow-up in ${worktreePath}.`,
@@ -824,6 +830,7 @@ export class SessionManager {
   notifySession(session: Session, text: string, label: string = "notification"): void {
     this.dispatchSessionNotification(session, {
       label,
+      idempotencyKey: label === "agent-respond" ? undefined : `notify:${session.id}:${label}:${text}`,
       userMessage: text,
       notifyUser: "always",
     });
@@ -851,6 +858,7 @@ export class SessionManager {
       route: args.route,
     }), {
       label: "plan-offer",
+      idempotencyKey: `plan-offer:${args.offerId}`,
       userMessage: args.text,
       notifyUser: "always",
       buttons,
@@ -895,6 +903,7 @@ export class SessionManager {
     });
     this.dispatchSessionNotification(routingProxy, {
       label,
+      idempotencyKey: `goal:${task.id}:${label}:${requiresGoalSuccessFollowup ? "success" : text}`,
       userMessage: requiresGoalSuccessFollowup ? goalSuccessUserMessage : text,
       notifyUser: "always",
       completionSummary: requiresGoalSuccessFollowup

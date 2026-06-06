@@ -50,6 +50,8 @@ export class SessionQuestionService {
     const options = firstQuestion.options ?? [];
     const buttons = this.getQuestionButtons(session.id, options);
     const userMessage = `❓ [${session.name}] ${firstQuestion.question}`;
+    const questionKey = session.pendingInputState?.requestId
+      ?? `${firstQuestion.question}:${options.map((option) => option.label).join("|")}`;
     const fallbackWakeText = [
       `[ASK USER QUESTION] Session "${session.name}" has a question requiring user input.`,
       ``,
@@ -75,6 +77,7 @@ export class SessionQuestionService {
 
       this.dispatchSessionNotification(session, {
         label: "ask-user-question",
+        idempotencyKey: `ask-user-question:${session.id}:${questionKey}`,
         userMessage,
         notifyUser: "always",
         buttons,

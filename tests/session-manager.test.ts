@@ -1365,6 +1365,7 @@ describe("SessionManager.notifySession()", () => {
     sm.notifySession(s, "hello", "launch");
     assert.deepEqual((sm as any).__dispatchCalls, [[s, {
       label: "launch",
+      idempotencyKey: "notify:s1:launch:hello",
       userMessage: "hello",
       notifyUser: "always",
     }]]);
@@ -2120,6 +2121,7 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(calls.length, 1);
     const [_sessionArg, request] = calls[0];
     assert.equal(request.label, "waiting");
+    assert.equal(request.idempotencyKey, "waiting:s-pending-input:req-1");
     assert.equal(request.wakeMessage, undefined);
     assert.match(request.userMessage, /allow read-only workspace inspection/);
     assert.match(request.wakeMessageOnNotifyFailed, /allow read-only workspace inspection/);
@@ -2150,6 +2152,7 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(calls.length, 1);
     const [_sessionArg, request] = calls[0];
     assert.equal(request.label, "waiting");
+    assert.equal(request.idempotencyKey, "waiting:s-pending-input-context:req-context-1");
     assert.match(request.userMessage, /Question:/);
     assert.match(request.userMessage, /What host-version policy should the plan target\?/);
     assert.match(request.userMessage, /Recent context:/);
@@ -2183,6 +2186,7 @@ describe("SessionManager turn-end wake", () => {
     await (sm as any).triggerWaitingForInputEvent(s);
     const firstRequest = (sm as any).__dispatchCalls[0][1];
     assert.equal(firstRequest.label, "waiting");
+    assert.equal(firstRequest.idempotencyKey, "waiting:s-codex-pending-input:req-1");
     assert.deepEqual(
       firstRequest.buttons.map((row: Array<{ label: string }>) => row.map((button) => button.label)),
       [["Staging", "Production"]],
@@ -2204,6 +2208,7 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(calls.length, 2);
     const secondRequest = calls[1][1];
     assert.equal(secondRequest.label, "waiting");
+    assert.equal(secondRequest.idempotencyKey, "waiting:s-codex-pending-input:req-2");
     assert.match(secondRequest.userMessage, /Choose the second environment/);
     assert.deepEqual(
       secondRequest.buttons.map((row: Array<{ label: string }>) => row.map((button) => button.label)),
@@ -2765,6 +2770,7 @@ describe("SessionManager terminal wake behavior", () => {
       name: "idle-run",
       status: "killed",
       killReason: "idle-timeout",
+      completedAt: 1700000003000,
       costUsd: 0.25,
       startedAt: Date.now() - 2_000,
     });
@@ -2775,6 +2781,7 @@ describe("SessionManager terminal wake behavior", () => {
     assert.equal(calls.length, 1);
     const [_sessionArg, request] = calls[0];
     assert.equal(request.label, "suspended");
+    assert.equal(request.idempotencyKey, "suspended:s-idle-timeout:idle-timeout:1700000003000");
     assert.match(request.userMessage, /💤 \[idle-run\] Suspended after idle timeout/);
   });
 
@@ -2999,6 +3006,13 @@ describe("SessionManager.handleAskUserQuestion()", () => {
       id: "s-cc-question",
       name: "cc-question",
       worktreeStrategy: "ask",
+      pendingInputState: {
+        requestId: "native-question-1",
+        kind: "question",
+        promptText: "Which environment should I target?",
+        options: ["Staging", "Production"],
+        allowsFreeText: false,
+      },
     });
     (sm as any).sessions.set(session.id, session);
 
@@ -3016,6 +3030,7 @@ describe("SessionManager.handleAskUserQuestion()", () => {
     assert.equal(calls.length, 1);
     const [_sessionArg, request] = calls[0];
     assert.equal(request.label, "ask-user-question");
+    assert.equal(request.idempotencyKey, "ask-user-question:s-cc-question:native-question-1");
     assert.equal(request.buttons[0][0].label, "Staging");
     assert.equal(request.buttons[0][1].label, "Production");
     assert.match(request.wakeMessageOnNotifySuccess, /Session: cc-question \| ID: s-cc-question/);

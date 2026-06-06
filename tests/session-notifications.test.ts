@@ -29,6 +29,302 @@ describe("SessionNotificationService", () => {
     ]);
   });
 
+  it("suppresses duplicate idempotent notifications and persists the delivered key", () => {
+    const persisted = { notificationDedupe: undefined } as any;
+    const requests: Array<Record<string, unknown>> = [];
+    const skippedReasons: string[] = [];
+    const fakeDispatcher = {
+      dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, (reason?: string) => void> }) => {
+        requests.push(request as Record<string, unknown>);
+        request.hooks?.onNotifyStarted?.();
+        request.hooks?.onNotifySucceeded?.();
+      },
+      dispose: () => {},
+    };
+
+    const service = new SessionNotificationService(
+      fakeDispatcher as any,
+      (_ref, patch) => Object.assign(persisted, patch),
+      { getPersistedSession: () => persisted },
+    );
+    const session = {
+      id: "session-idempotent-notify",
+      harnessSessionId: "h-idempotent-notify",
+      route: {
+        provider: "telegram",
+        target: "topic",
+        threadId: "42",
+        sessionKey: "agent:x:telegram:channel:topic:topic:42",
+      },
+    } as any;
+    const request = {
+      label: "plan-approval",
+      idempotencyKey: "plan-approval:session-idempotent-notify:v1:canonical",
+      userMessage: "Plan v1 needs approval",
+      notifyUser: "always" as const,
+      hooks: {
+        onDuplicateSkipped: (reason?: string) => skippedReasons.push(reason ?? ""),
+      },
+    };
+
+    service.dispatch(session, request);
+    service.dispatch(session, request);
+
+    assert.equal(requests.length, 1);
+    assert.match(String(requests[0]?.idempotencyKey), /^notification:[0-9a-f]{16}$/);
+    assert.notEqual(requests[0]?.idempotencyKey, request.idempotencyKey);
+    assert.deepEqual(skippedReasons, ["duplicate notification already delivered or in flight"]);
+    assert.equal(persisted.notificationDedupe?.length, 1);
+    assert.equal(persisted.notificationDedupe?.[0]?.status, "delivered");
+    assert.equal(persisted.notificationDedupe?.[0]?.label, "plan-approval");
+  });
+
+  it("suppresses duplicate idempotent notifications while the first delivery is in flight", () => {
+    const persisted = { notificationDedupe: undefined } as any;
+    const requests: Array<{ hooks?: Record<string, (reason?: string) => void> }> = [];
+    const skippedReasons: string[] = [];
+    const fakeDispatcher = {
+      dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, (reason?: string) => void> }) => {
+        requests.push(request);
+        request.hooks?.onNotifyStarted?.();
+      },
+      dispose: () => {},
+    };
+    const service = new SessionNotificationService(
+      fakeDispatcher as any,
+      (_ref, patch) => Object.assign(persisted, patch),
+      { getPersistedSession: () => persisted },
+    );
+    const session = { id: "session-in-flight-dedupe", harnessSessionId: "h-in-flight-dedupe" } as any;
+    const request = {
+      label: "plan-approval",
+      idempotencyKey: "plan-approval:session-in-flight-dedupe:v1:canonical",
+      userMessage: "Plan v1 needs approval",
+      notifyUser: "always" as const,
+      hooks: {
+        onDuplicateSkipped: (reason?: string) => skippedReasons.push(reason ?? ""),
+      },
+    };
+
+    service.dispatch(session, request);
+    service.dispatch(session, request);
+
+    assert.equal(requests.length, 1);
+    assert.equal(persisted.notificationDedupe?.[0]?.status, "in_flight");
+    assert.deepEqual(skippedReasons, ["duplicate notification already delivered or in flight"]);
+
+    requests[0]?.hooks?.onNotifySucceeded?.();
+
+    assert.equal(persisted.notificationDedupe?.[0]?.status, "delivered");
+  });
+
+  it("allows the same semantic notification key on different delivery routes", () => {
+    const persistedByRef = new Map<string, any>();
+    const requests: Array<Record<string, unknown>> = [];
+    const fakeDispatcher = {
+      dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, () => void> }) => {
+        requests.push(request as Record<string, unknown>);
+        request.hooks?.onNotifyStarted?.();
+        request.hooks?.onNotifySucceeded?.();
+      },
+      dispose: () => {},
+    };
+    const service = new SessionNotificationService(
+      fakeDispatcher as any,
+      (ref, patch) => {
+        const persisted = persistedByRef.get(ref) ?? {};
+        Object.assign(persisted, patch);
+        persistedByRef.set(ref, persisted);
+      },
+      { getPersistedSession: (ref) => persistedByRef.get(ref) },
+    );
+    const baseRequest = {
+      label: "plan-approval",
+      idempotencyKey: "plan-approval:shared:v1:canonical",
+      userMessage: "Plan v1 needs approval",
+      notifyUser: "always" as const,
+    };
+
+    service.dispatch(
+      {
+        id: "session-route-a",
+        route: { provider: "telegram", target: "chat-a", threadId: "1", sessionKey: "session:a" },
+      } as any,
+      baseRequest,
+    );
+    service.dispatch(
+      {
+        id: "session-route-b",
+        route: { provider: "telegram", target: "chat-b", threadId: "1", sessionKey: "session:b" },
+      } as any,
+      baseRequest,
+    );
+
+    assert.equal(requests.length, 2);
+    assert.match(String(requests[0]?.idempotencyKey), /^notification:[0-9a-f]{16}$/);
+    assert.match(String(requests[1]?.idempotencyKey), /^notification:[0-9a-f]{16}$/);
+    assert.notEqual(requests[0]?.idempotencyKey, requests[1]?.idempotencyKey);
+    assert.equal(persistedByRef.get("session-route-a")?.notificationDedupe?.[0]?.status, "delivered");
+    assert.equal(persistedByRef.get("session-route-b")?.notificationDedupe?.[0]?.status, "delivered");
+  });
+
+  it("uses persisted idempotency records to suppress duplicates after service restart", () => {
+    const persisted = { notificationDedupe: undefined } as any;
+    const session = { id: "session-restarted-dedupe", harnessSessionId: "h-restarted-dedupe" } as any;
+    const request = {
+      label: "worktree-outcome",
+      idempotencyKey: "worktree-outcome:terminal:session-restarted-dedupe",
+      userMessage: "PR opened",
+      notifyUser: "always" as const,
+    };
+    const firstDispatcher = {
+      dispatchSessionNotification: (_session: unknown, dispatched: { hooks?: Record<string, () => void> }) => {
+        dispatched.hooks?.onNotifyStarted?.();
+        dispatched.hooks?.onNotifySucceeded?.();
+      },
+      dispose: () => {},
+    };
+    const firstService = new SessionNotificationService(
+      firstDispatcher as any,
+      (_ref, patch) => Object.assign(persisted, patch),
+      { getPersistedSession: () => persisted },
+    );
+
+    firstService.dispatch(session, request);
+
+    let restartedDispatches = 0;
+    const restartedService = new SessionNotificationService(
+      {
+        dispatchSessionNotification: () => { restartedDispatches += 1; },
+        dispose: () => {},
+      } as any,
+      (_ref, patch) => Object.assign(persisted, patch),
+      { getPersistedSession: () => persisted },
+    );
+
+    restartedService.dispatch(session, request);
+
+    assert.equal(restartedDispatches, 0);
+    assert.equal(persisted.notificationDedupe?.[0]?.status, "delivered");
+  });
+
+  it("releases an idempotency key after notify-only delivery fails", () => {
+    const persisted = { notificationDedupe: undefined } as any;
+    let attempts = 0;
+    const fakeDispatcher = {
+      dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, () => void> }) => {
+        attempts += 1;
+        request.hooks?.onNotifyStarted?.();
+        if (attempts === 1) {
+          request.hooks?.onNotifyFailed?.();
+        } else {
+          request.hooks?.onNotifySucceeded?.();
+        }
+      },
+      dispose: () => {},
+    };
+    const service = new SessionNotificationService(
+      fakeDispatcher as any,
+      (_ref, patch) => Object.assign(persisted, patch),
+      { getPersistedSession: () => persisted },
+    );
+    const session = { id: "session-retry-idempotent", harnessSessionId: "h-retry-idempotent" } as any;
+    const request = {
+      label: "launch",
+      idempotencyKey: "launch:session-retry-idempotent",
+      userMessage: "launched",
+      notifyUser: "always" as const,
+    };
+
+    service.dispatch(session, request);
+    service.dispatch(session, request);
+
+    assert.equal(attempts, 2);
+    assert.equal(persisted.notificationDedupe?.length, 1);
+    assert.equal(persisted.notificationDedupe?.[0]?.status, "delivered");
+  });
+
+  it("releases an idempotency key when shouldDispatch cancels before delivery", () => {
+    const persisted = { notificationDedupe: undefined } as any;
+    let attempts = 0;
+    let shouldDispatch = false;
+    const fakeDispatcher = {
+      dispatchSessionNotification: (_session: unknown, request: { shouldDispatch?: () => boolean; hooks?: Record<string, () => void> }) => {
+        attempts += 1;
+        if (request.shouldDispatch?.() === false) return;
+        request.hooks?.onNotifyStarted?.();
+        request.hooks?.onNotifySucceeded?.();
+      },
+      dispose: () => {},
+    };
+    const service = new SessionNotificationService(
+      fakeDispatcher as any,
+      (_ref, patch) => Object.assign(persisted, patch),
+      { getPersistedSession: () => persisted },
+    );
+    const session = { id: "session-stale-plan", harnessSessionId: "h-stale-plan" } as any;
+    const request = {
+      label: "plan-approval",
+      idempotencyKey: "plan-approval:session-stale-plan:v2:canonical",
+      userMessage: "Plan v2 needs approval",
+      notifyUser: "always" as const,
+      shouldDispatch: () => shouldDispatch,
+    };
+
+    service.dispatch(session, request);
+    shouldDispatch = true;
+    service.dispatch(session, request);
+
+    assert.equal(attempts, 2);
+    assert.equal(persisted.notificationDedupe?.length, 1);
+    assert.equal(persisted.notificationDedupe?.[0]?.status, "delivered");
+  });
+
+  it("releases an idempotency key when a guarded wake fallback is canceled", () => {
+    const persisted = { notificationDedupe: undefined } as any;
+    let attempts = 0;
+    let shouldDispatch = true;
+    const fakeDispatcher = {
+      dispatchSessionNotification: (
+        _session: unknown,
+        request: { shouldDispatch?: () => boolean; hooks?: Record<string, (reason?: string) => void> },
+      ) => {
+        attempts += 1;
+        request.hooks?.onNotifyStarted?.();
+        request.hooks?.onNotifyFailed?.();
+        shouldDispatch = attempts > 1;
+        if (request.shouldDispatch?.() === false) {
+          request.hooks?.onWakeSkipped?.("guard canceled");
+          return;
+        }
+        request.hooks?.onWakeStarted?.();
+        request.hooks?.onWakeSucceeded?.();
+      },
+      dispose: () => {},
+    };
+    const service = new SessionNotificationService(
+      fakeDispatcher as any,
+      (_ref, patch) => Object.assign(persisted, patch),
+      { getPersistedSession: () => persisted },
+    );
+    const session = { id: "session-stale-fallback", harnessSessionId: "h-stale-fallback" } as any;
+    const request = {
+      label: "plan-approval-fallback",
+      idempotencyKey: "plan-approval:session-stale-fallback:v3:fallback",
+      userMessage: "Plan v3 fallback",
+      wakeMessageOnNotifyFailed: "Plan delivery failed",
+      notifyUser: "always" as const,
+      shouldDispatch: () => shouldDispatch,
+    };
+
+    service.dispatch(session, request);
+    service.dispatch(session, request);
+
+    assert.equal(attempts, 2);
+    assert.equal(persisted.notificationDedupe?.length, 1);
+    assert.equal(persisted.notificationDedupe?.[0]?.status, "delivered");
+  });
+
   it("marks failed notify paths as failed when no wake fallback exists", () => {
     const patches: Array<{ ref: string; deliveryState?: string }> = [];
     const fakeDispatcher = {
@@ -1288,13 +1584,9 @@ describe("SessionNotificationService", () => {
       },
     );
 
-    assert.equal(requests.length, 2);
+    assert.equal(requests.length, 1);
     assert.equal(requests[0]?.wakeMessageOnNotifySuccess === undefined, false);
     assert.equal(requests[0]?.completionWakeSummaryRequired, true);
-    assert.equal(requests[1]?.label, "worktree-outcome");
-    assert.equal(requests[1]?.userMessage, "✅ PR opened: https://github.example.test/repo/pull/171");
-    assert.equal(requests[1]?.wakeMessageOnNotifySuccess, undefined);
-    assert.equal(requests[1]?.completionWakeSummaryRequired, false);
     assert.equal(wakeAttempts, 1);
   });
 
@@ -1354,7 +1646,7 @@ describe("SessionNotificationService", () => {
     notify("trading-platform-topic-first", tradingPlatformTopic);
     notify("trading-platform-topic-duplicate", tradingPlatformTopic);
 
-    assert.equal(requests.length, 4);
+    assert.equal(requests.length, 2);
     assert.equal(wakeAttempts, 2);
     assert.deepEqual(
       requests.map((request) => ({
@@ -1364,13 +1656,11 @@ describe("SessionNotificationService", () => {
       })),
       [
         { label: "worktree-outcome", completionWakeSummaryRequired: true, hasWake: true },
-        { label: "worktree-outcome", completionWakeSummaryRequired: false, hasWake: false },
         { label: "worktree-outcome", completionWakeSummaryRequired: true, hasWake: true },
-        { label: "worktree-outcome", completionWakeSummaryRequired: false, hasWake: false },
       ],
     );
     assert.match(requests[0]?.wakeMessageOnNotifySuccess as string, /"threadId":"13832"/);
-    assert.match(requests[2]?.wakeMessageOnNotifySuccess as string, /"threadId":"32947"/);
+    assert.match(requests[1]?.wakeMessageOnNotifySuccess as string, /"threadId":"32947"/);
   });
 
   it("suppresses a routed PR follow-up after a foreground summary already owned topic 13832", () => {

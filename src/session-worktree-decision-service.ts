@@ -24,7 +24,7 @@ export class SessionWorktreeDecisionService {
       updatePersistedSession: (ref: string, patch: Partial<PersistedSessionInfo>) => boolean;
       dispatchNotification: (
         session: Session,
-        request: { label: string; userMessage?: string; notifyUser?: "always" | "never" },
+        request: { label: string; idempotencyKey?: string; userMessage?: string; notifyUser?: "always" | "never" },
       ) => void;
       buildRoutingProxy: (session: {
         id?: string;
@@ -92,6 +92,7 @@ export class SessionWorktreeDecisionService {
       }),
       {
         label: "worktree-dismissed",
+        idempotencyKey: `worktree-dismissed:${getPrimarySessionLookupRef(activeSession ?? persistedSession ?? { id: ref }) ?? ref}:${branchName ?? "unknown"}`,
         userMessage: msg,
         notifyUser: "always",
       },
@@ -127,6 +128,7 @@ export class SessionWorktreeDecisionService {
         }),
         {
           label: "worktree-snoozed",
+          idempotencyKey: `worktree-snoozed:${getPrimarySessionLookupRef(persistedSession) ?? getBackendConversationId(persistedSession) ?? persistedSession.harnessSessionId}:${snoozedUntil}`,
           userMessage: msg,
           notifyUser: "always",
         },

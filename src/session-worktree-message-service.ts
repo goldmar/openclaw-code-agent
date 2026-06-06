@@ -56,6 +56,7 @@ export class SessionWorktreeMessageService {
 
     return {
       label: cleanupSucceeded ? "worktree-no-changes" : "worktree-no-changes-cleanup-failed",
+      idempotencyKey: `worktree-no-change:${session.id}:${cleanupSucceeded ? "cleaned" : "cleanup-failed"}`,
       userMessage: cleanupSucceeded
         ? nativeBackendWorktree
           ? `ℹ️ [${session.name}] Session completed with no changes — native backend worktree released for backend cleanup`
@@ -99,6 +100,14 @@ export class SessionWorktreeMessageService {
 
     return {
       label: "worktree-merge-ask",
+      idempotencyKey: [
+        "worktree-decision",
+        session.id,
+        branchName,
+        baseBranch,
+        diffSummary.commits,
+        diffSummary.commitMessages.map((commit) => commit.hash).join(","),
+      ].join(":"),
       userMessage: [
         `🔀 Worktree decision required for session \`${session.name}\``,
         ``,
@@ -147,6 +156,14 @@ export class SessionWorktreeMessageService {
 
     return {
       label: "worktree-delegate",
+      idempotencyKey: [
+        "worktree-delegate",
+        session.id,
+        branchName,
+        baseBranch,
+        diffSummary.commits,
+        diffSummary.commitMessages.map((commit) => commit.hash).join(","),
+      ].join(":"),
       wakeMessage: buildDelegateWorktreeWakeMessage({
         sessionName: session.name,
         sessionId: session.id,
