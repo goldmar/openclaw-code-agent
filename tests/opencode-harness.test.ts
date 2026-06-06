@@ -12,8 +12,13 @@ type RequestRecord = {
 class MockOpenCodeServer {
   requests: RequestRecord[] = [];
   closed = false;
+  waitMode: "immediate" | "defer" = "immediate";
   private streamController?: ReadableStreamDefaultController<Uint8Array>;
   private readonly encoder = new TextEncoder();
+  private deferredWait?: {
+    resolve: (response: Response) => void;
+    reject: (error: unknown) => void;
+  };
 
   fetch: typeof fetch = async (input, init) => {
     const url = new URL(typeof input === "string" ? input : input.url);
@@ -44,7 +49,15 @@ class MockOpenCodeServer {
     if (method === "GET" && path === "/api/session/ses_existing/context") {
       return json([{ type: "assistant", content: [{ type: "text", text: "Resumed." }] }]);
     }
-    if (method === "POST" && path.endsWith("/wait")) return new Response(null, { status: 204 });
+    if (method === "POST" && path.endsWith("/wait")) {
+      if (this.waitMode === "defer") {
+        return await new Promise<Response>((resolve, reject) => {
+          this.deferredWait = { resolve, reject };
+          init?.signal?.addEventListener("abort", () => reject(new Error("wait aborted")), { once: true });
+        });
+      }
+      return new Response(null, { status: 204 });
+    }
     if (method === "POST" && path.endsWith("/prompt")) return json({ type: "assistant", content: [] });
     if (method === "POST" && path.includes("/permission/request/")) return json(true);
     if (method === "POST" && path.includes("/question/request/")) return json(true);
@@ -59,6 +72,11 @@ class MockOpenCodeServer {
 
   closeStream(): void {
     this.streamController?.close();
+  }
+
+  resolveWait(response = new Response(null, { status: 204 })): void {
+    this.deferredWait?.resolve(response);
+    this.deferredWait = undefined;
   }
 
   handle() {
@@ -90,6 +108,34 @@ async function collectMessages(
     if (message.type === "run_completed") break;
   }
   return out;
+}
+
+async function collectAllMessages(
+  session: { messages: AsyncIterable<HarnessMessage> },
+): Promise<HarnessMessage[]> {
+  const out: HarnessMessage[] = [];
+  for await (const message of session.messages) {
+    out.push(message);
+  }
+  return out;
+}
+
+function waitForRequest(mock: MockOpenCodeServer, path: string, timeoutMs = 1_000): Promise<void> {
+  const startedAt = Date.now();
+  return new Promise((resolve, reject) => {
+    const check = () => {
+      if (mock.requests.some((request) => request.path === path)) {
+        resolve();
+        return;
+      }
+      if (Date.now() - startedAt > timeoutMs) {
+        reject(new Error(`Timed out waiting for request ${path}`));
+        return;
+      }
+      setTimeout(check, 5);
+    };
+    check();
+  });
 }
 
 describe("OpenCodeHarness static properties", () => {
@@ -346,6 +392,86 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     const result = messages.find((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }> | undefined;
     assert.equal(result?.data.success, false);
     assert.equal(result?.data.result, "tool failed");
+  });
+
+  it("does not emit a second completion when an SSE failure races with wait success", async () => {
+    const mock = new MockOpenCodeServer();
+    mock.waitMode = "defer";
+    const waitForEventStream = new Promise<void>((resolve) => {
+      const originalFetch = mock.fetch;
+      mock.fetch = async (input, init) => {
+        const response = await originalFetch(input, init);
+        const url = new URL(typeof input === "string" ? input : input.url);
+        if (url.pathname === "/api/event") resolve();
+        return response;
+      };
+    });
+    const harness = new OpenCodeHarness({
+      createServer: async () => mock.handle(),
+      fetch: mock.fetch,
+    });
+
+    const session = harness.launch({ prompt: "fail once", cwd: "/repo" });
+    await waitForEventStream;
+    await waitForRequest(mock, "/api/session/ses_test/wait");
+    mock.emit({
+      type: "session.next.step.failed",
+      properties: {
+        sessionID: "ses_test",
+        error: { message: "tool failed" },
+      },
+    });
+    mock.resolveWait();
+
+    const messages = await collectAllMessages(session);
+    const completions = messages.filter((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }>[];
+    assert.equal(completions.length, 1);
+    assert.equal(completions[0]?.data.success, false);
+    assert.equal(completions[0]?.data.outcome, "failed");
+    assert.equal(completions[0]?.data.result, "tool failed");
+  });
+
+  it("does not emit a failed completion after interrupt aborts an active wait", async () => {
+    const mock = new MockOpenCodeServer();
+    mock.waitMode = "defer";
+    const harness = new OpenCodeHarness({
+      createServer: async () => mock.handle(),
+      fetch: mock.fetch,
+    });
+
+    const session = harness.launch({ prompt: "stop", cwd: "/repo" });
+    await waitForRequest(mock, "/api/session/ses_test/wait");
+    await session.interrupt?.();
+
+    const messages = await collectAllMessages(session);
+    const completions = messages.filter((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }>[];
+    assert.equal(completions.length, 1);
+    assert.equal(completions[0]?.data.success, false);
+    assert.equal(completions[0]?.data.outcome, "interrupted");
+    assert.equal(mock.requests.some((request) => request.method === "POST" && request.path === "/session/ses_test/abort"), true);
+  });
+
+  it("still emits one completion per prompt in a multi-turn launch stream", async () => {
+    const mock = new MockOpenCodeServer();
+    const harness = new OpenCodeHarness({
+      createServer: async () => mock.handle(),
+      fetch: mock.fetch,
+    });
+
+    async function* prompts(): AsyncGenerator<unknown> {
+      yield { type: "user", text: "first" };
+      yield { type: "user", text: "second" };
+    }
+
+    const messages = await collectAllMessages(harness.launch({ prompt: prompts(), cwd: "/repo" }));
+    const completions = messages.filter((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }>[];
+    assert.equal(completions.length, 2);
+    assert.equal(completions.every((completion) => completion.data.success), true);
+    const promptsSent = mock.requests.filter((request) => request.method === "POST" && request.path === "/api/session/ses_test/prompt");
+    assert.deepEqual(promptsSent.map((request) => request.body), [
+      { prompt: { text: "first" }, delivery: "queue" },
+      { prompt: { text: "second" }, delivery: "queue" },
+    ]);
   });
 
   it("switches permission mode by patching the classic session endpoint", async () => {
