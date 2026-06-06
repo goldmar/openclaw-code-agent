@@ -183,6 +183,7 @@ export class SessionNotificationService {
 
     this.wakeDispatcher.dispatchSessionNotification(session as Session, {
       ...dispatchRequest,
+      idempotencyKey: notificationDedupeKey ?? dispatchRequest.idempotencyKey,
       hooks: mergedHooks,
     });
   }

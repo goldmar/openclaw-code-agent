@@ -71,6 +71,8 @@ describe("SessionNotificationService", () => {
     service.dispatch(session, request);
 
     assert.equal(requests.length, 1);
+    assert.match(String(requests[0]?.idempotencyKey), /^notification:[0-9a-f]{16}$/);
+    assert.notEqual(requests[0]?.idempotencyKey, request.idempotencyKey);
     assert.deepEqual(skippedReasons, ["duplicate notification already delivered or in flight"]);
     assert.equal(persisted.notificationDedupe?.length, 1);
     assert.equal(persisted.notificationDedupe?.[0]?.status, "delivered");
