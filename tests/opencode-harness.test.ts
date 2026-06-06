@@ -566,7 +566,10 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
 
     const messages = await collectAllMessages(harness.launch({ prompt: prompts(), cwd: "/repo" }));
     const completions = messages.filter((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }>[];
+    const backendRefs = messages.filter((message) => message.type === "backend_ref") as Extract<HarnessMessage, { type: "backend_ref" }>[];
     assert.equal(completions.length, 2);
+    assert.equal(backendRefs.length, 1);
+    assert.equal(backendRefs[0]?.ref.conversationId, "ses_test");
     assert.equal(completions.every((completion) => completion.data.success), true);
     const promptsSent = mock.requests.filter((request) => request.method === "POST" && request.path === "/api/session/ses_test/prompt");
     assert.deepEqual(promptsSent.map((request) => request.body), [

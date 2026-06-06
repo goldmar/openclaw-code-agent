@@ -409,6 +409,7 @@ export class OpenCodeHarness implements AgentHarness {
     let turnInProgress = false;
     let turnCompletionEmitted = false;
     let sessionInterrupted = false;
+    let lastBackendRefConversationId: string | undefined;
 
     const emitRunCompleted = (data: Parameters<typeof createRunCompletedEvent>[0]): boolean => {
       if (turnCompletionEmitted) return false;
@@ -432,6 +433,8 @@ export class OpenCodeHarness implements AgentHarness {
 
     const emitBackendRef = (): void => {
       if (!sessionId) return;
+      if (lastBackendRefConversationId === sessionId) return;
+      lastBackendRefConversationId = sessionId;
       queue.enqueue(createBackendRefEvent({
         kind: "opencode-server",
         conversationId: sessionId,
