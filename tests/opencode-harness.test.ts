@@ -975,7 +975,7 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     assert.equal(completions.length, 1);
     assert.equal(completions[0]?.data.success, false);
     assert.equal(completions[0]?.data.outcome, "failed");
-    assert.match(completions[0]?.data.result ?? "", /wait aborted/);
+    assert.match(completions[0]?.data.result ?? "", /OpenCode POST \/session\/ses_test\/prompt_async timed out after 5ms/);
   });
 
   it("does not emit a failed completion after interrupt aborts an active wait", async () => {
@@ -1051,8 +1051,65 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     assert.equal(completions.length, 1);
     assert.equal(completions[0]?.data.success, false);
     assert.equal(completions[0]?.data.outcome, "interrupted");
+    assert.equal(mock.closed, true);
     assert.equal(mock.requests.some((request) => request.path === "/session"), false);
     assert.equal(mock.requests.some((request) => request.path === "/session/ses_test/prompt_async"), false);
+  });
+
+  it("closes a late OpenCode server handle after startup abort", async () => {
+    const mock = new MockOpenCodeServer();
+    let capturedSignal: AbortSignal | undefined;
+    let resolveServer!: (handle: ReturnType<MockOpenCodeServer["handle"]>) => void;
+    const serverRequested = Promise.withResolvers<void>();
+    const serverReady = new Promise<ReturnType<MockOpenCodeServer["handle"]>>((resolve) => {
+      resolveServer = resolve;
+    });
+    const abortController = new AbortController();
+    const harness = new OpenCodeHarness({
+      createServer: async (options) => {
+        capturedSignal = options.signal;
+        serverRequested.resolve();
+        return await serverReady;
+      },
+      fetch: mock.fetch,
+    });
+
+    const session = harness.launch({ prompt: "stop during startup", cwd: "/repo", abortController });
+    await serverRequested.promise;
+    abortController.abort();
+    resolveServer(mock.handle());
+
+    const messages = await collectAllMessages(session);
+    const completion = messages.find((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }> | undefined;
+    assert.equal(capturedSignal?.aborted, true);
+    assert.equal(mock.closed, true);
+    assert.equal(mock.requests.some((request) => request.path === "/session"), false);
+    assert.equal(completion?.data.success, false);
+    assert.match(completion?.data.result ?? "", /interrupted before session creation/);
+  });
+
+  it("reports the OpenCode route that times out during startup", async () => {
+    const mock = new MockOpenCodeServer();
+    const harness = new OpenCodeHarness({
+      createServer: async () => mock.handle(),
+      requestTimeoutMs: 5,
+      fetch: async (input, init) => {
+        const url = new URL(typeof input === "string" ? input : input.url);
+        const method = init?.method ?? "GET";
+        if (method === "POST" && url.pathname === "/session") {
+          return await new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () => reject(new Error("aborted by test")), { once: true });
+          });
+        }
+        return await mock.fetch(input, init);
+      },
+    });
+
+    const messages = await collectAllMessages(harness.launch({ prompt: "start", cwd: "/repo" }));
+    const completion = messages.find((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }> | undefined;
+    assert.equal(completion?.data.success, false);
+    assert.match(completion?.data.result ?? "", /OpenCode POST \/session timed out after 5ms/);
+    assert.equal(mock.closed, true);
   });
 
   it("shares startup across concurrent client requests", async () => {
