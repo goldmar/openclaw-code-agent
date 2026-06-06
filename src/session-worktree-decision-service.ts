@@ -100,35 +100,38 @@ export class SessionWorktreeDecisionService {
     return msg;
   }
 
-  snoozeWorktreeDecision(ref: string): string {
+  snoozeWorktreeDecision(ref: string, options: { notifyUser?: boolean } = {}): string {
     const persistedSession = this.deps.getPersistedSession(ref);
     if (!persistedSession) return `Error: Session "${ref}" not found.`;
 
-    const snoozedUntil = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    const now = Date.now();
+    const snoozedUntil = new Date(now + 24 * 60 * 60 * 1000).toISOString();
     for (const mutationRef of getPersistedMutationRefs(persistedSession)) {
       this.deps.updatePersistedSession(mutationRef, {
         worktreeDecisionSnoozedUntil: snoozedUntil,
-        lastWorktreeReminderAt: new Date().toISOString(),
+        lastWorktreeReminderAt: new Date(now).toISOString(),
       } as Partial<PersistedSessionInfo>);
     }
 
     const branchName = persistedSession.worktreeBranch ?? "unknown";
     const msg = `⏭️ Reminder snoozed 24h for \`${branchName}\` (session: ${persistedSession.name})`;
 
-    this.deps.dispatchNotification(
-      this.deps.buildRoutingProxy({
-        id: getPrimarySessionLookupRef(persistedSession) ?? getBackendConversationId(persistedSession) ?? persistedSession.harnessSessionId,
-        sessionId: persistedSession.sessionId,
-        harnessSessionId: persistedSession.harnessSessionId,
-        backendRef: persistedSession.backendRef,
-        route: persistedSession.route,
-      }),
-      {
-        label: "worktree-snoozed",
-        userMessage: msg,
-        notifyUser: "always",
-      },
-    );
+    if (options.notifyUser !== false) {
+      this.deps.dispatchNotification(
+        this.deps.buildRoutingProxy({
+          id: getPrimarySessionLookupRef(persistedSession) ?? getBackendConversationId(persistedSession) ?? persistedSession.harnessSessionId,
+          sessionId: persistedSession.sessionId,
+          harnessSessionId: persistedSession.harnessSessionId,
+          backendRef: persistedSession.backendRef,
+          route: persistedSession.route,
+        }),
+        {
+          label: "worktree-snoozed",
+          userMessage: msg,
+          notifyUser: "always",
+        },
+      );
+    }
 
     return msg;
   }

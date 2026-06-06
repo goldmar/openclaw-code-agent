@@ -706,8 +706,8 @@ export class SessionManager {
     return this.worktreeDecisions.dismissWorktree(ref);
   }
 
-  snoozeWorktreeDecision(ref: string): string {
-    return this.worktreeDecisions.snoozeWorktreeDecision(ref);
+  snoozeWorktreeDecision(ref: string, options?: { notifyUser?: boolean }): string {
+    return this.worktreeDecisions.snoozeWorktreeDecision(ref, options);
   }
 
   /**

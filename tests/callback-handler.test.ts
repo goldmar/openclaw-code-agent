@@ -633,13 +633,17 @@ describe("createCallbackHandler()", () => {
     assert.equal(state.replies[0], "✅ Answer submitted.");
   });
 
-  it("rewrites worktree decision prompts to a resolved state before replying", async () => {
+  it("rewrites worktree decision prompts to a single snoozed confirmation", async () => {
+    const snoozeCalls: Array<{ sessionId: string; notifyUser?: boolean }> = [];
     setSessionManager({
       getActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
       consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
       resolve: () => undefined,
       getPersistedSession: () => ({ name: "ux-fix" }),
-      snoozeWorktreeDecision: () => "⏭️ Reminder snoozed 24h for `agent/ux-fix` (session: ux-fix)",
+      snoozeWorktreeDecision: (sessionId: string, options?: { notifyUser?: boolean }) => {
+        snoozeCalls.push({ sessionId, notifyUser: options?.notifyUser });
+        return "⏭️ Reminder snoozed 24h for `agent/ux-fix` (session: ux-fix)";
+      },
     } as any);
 
     const handler = createCallbackHandler();
@@ -647,10 +651,11 @@ describe("createCallbackHandler()", () => {
     const result = await handler.handler(state.ctx as any);
 
     assert.deepEqual(result, { handled: true });
-    assert.deepEqual(state.editedMessages, ["⏭️ Deferred for [ux-fix]"]);
+    assert.deepEqual(snoozeCalls, [{ sessionId: "sess-42", notifyUser: false }]);
+    assert.deepEqual(state.editedMessages, ["⏭️ Snoozed 24h for [ux-fix]"]);
     assert.equal(state.buttonsCleared, 1);
-    assert.equal(state.replies[0], "⏭️ Snoozed 24h");
-    assert.deepEqual(state.events, ["acknowledge", "editMessage", "clearButtons", "reply"]);
+    assert.deepEqual(state.replies, []);
+    assert.deepEqual(state.events, ["acknowledge", "editMessage", "clearButtons"]);
   });
 
   it("keeps Telegram worktree decision buttons when the action fails", async () => {
@@ -696,7 +701,7 @@ describe("createCallbackHandler()", () => {
 
       assert.deepEqual(result, { handled: true });
       assert.equal(state.buttonsCleared, testCase.success ? 1 : 0, testCase.result);
-      assert.deepEqual(state.editedMessages, testCase.success ? ["⏭️ Deferred for [ux-fix]"] : [], testCase.result);
+      assert.deepEqual(state.editedMessages, testCase.success ? ["⏭️ Snoozed 24h for [ux-fix]"] : [], testCase.result);
       assert.equal(state.replies[0], testCase.reply);
     }
   });
@@ -789,8 +794,8 @@ describe("createCallbackHandler()", () => {
     const result = await handler.handler(ctx as any);
 
     assert.deepEqual(result, { handled: true });
-    assert.deepEqual(clearedMessages, [{ text: "⏭️ Deferred for [ux-fix]" }]);
-    assert.deepEqual(replies, [{ text: "⏭️ Snoozed 24h", ephemeral: true }]);
+    assert.deepEqual(clearedMessages, [{ text: "⏭️ Snoozed 24h for [ux-fix]" }]);
+    assert.deepEqual(replies, []);
   });
 
   it("falls back to clearing Telegram buttons when worktree prompt edit fails", async () => {
@@ -827,7 +832,7 @@ describe("createCallbackHandler()", () => {
 
       assert.deepEqual(result, { handled: true });
       assert.equal(buttonsCleared, 1);
-      assert.equal(replies[0], "⏭️ Snoozed 24h");
+      assert.deepEqual(replies, ["⏭️ Snoozed 24h for [ux-fix]"]);
       assert.match(
         warnings[0],
         /Failed to edit Telegram worktree prompt before clearing buttons: telegram edit failed/,
@@ -869,9 +874,9 @@ describe("createCallbackHandler()", () => {
       const result = await handler.handler(ctx as any);
 
       assert.deepEqual(result, { handled: true });
-      assert.deepEqual(editedMessages, ["⏭️ Deferred for [ux-fix]"]);
+      assert.deepEqual(editedMessages, ["⏭️ Snoozed 24h for [ux-fix]"]);
       assert.equal(buttonsCleared, 1);
-      assert.equal(replies[0], "⏭️ Snoozed 24h");
+      assert.deepEqual(replies, []);
       assert.deepEqual(warnings, []);
     } finally {
       console.warn = originalWarn;
@@ -912,7 +917,7 @@ describe("createCallbackHandler()", () => {
 
       assert.deepEqual(result, { handled: true });
       assert.equal(buttonsCleared, 1);
-      assert.equal(replies[0], "⏭️ Snoozed 24h");
+      assert.deepEqual(replies, ["⏭️ Snoozed 24h for [ux-fix]"]);
       assert.match(warnings[0], /clearComponents failed before text fallback: clearComponents failed/);
     } finally {
       console.warn = originalWarn;
@@ -953,7 +958,7 @@ describe("createCallbackHandler()", () => {
 
       assert.deepEqual(result, { handled: true });
       assert.equal(buttonsCleared, 1);
-      assert.equal(replies[0], "⏭️ Snoozed 24h");
+      assert.deepEqual(replies, []);
       assert.deepEqual(warnings, []);
     } finally {
       console.warn = originalWarn;
@@ -994,7 +999,7 @@ describe("createCallbackHandler()", () => {
 
       assert.deepEqual(result, { handled: true });
       assert.equal(buttonsCleared, 1);
-      assert.equal(replies[0], "⏭️ Snoozed 24h");
+      assert.deepEqual(replies, ["⏭️ Snoozed 24h for [ux-fix]"]);
       assert.match(warnings[0], /Failed to edit worktree prompt before clearing interactive state: edit failed/);
     } finally {
       console.warn = originalWarn;
@@ -1036,9 +1041,9 @@ describe("createCallbackHandler()", () => {
       const result = await handler.handler(ctx as any);
 
       assert.deepEqual(result, { handled: true });
-      assert.deepEqual(editedMessages, ["⏭️ Deferred for [ux-fix]"]);
+      assert.deepEqual(editedMessages, ["⏭️ Snoozed 24h for [ux-fix]"]);
       assert.equal(clearAttempts, 1);
-      assert.equal(replies[0], "⏭️ Snoozed 24h");
+      assert.deepEqual(replies, ["⏭️ Snoozed 24h for [ux-fix]"]);
       assert.match(warnings[0], /Failed to resolve worktree prompt: clear failed/);
     } finally {
       console.warn = originalWarn;
