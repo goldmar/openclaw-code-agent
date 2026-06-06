@@ -104,8 +104,14 @@ export class SessionStore {
   }
 
   private buildPersistedBackendRef(session: Session): PersistedSessionInfo["backendRef"] {
+    const harnessName = resolveHarnessName(session);
+    const fallbackKind = harnessName === "codex"
+      ? "codex-app-server"
+      : harnessName === "opencode"
+        ? "opencode-server"
+        : "claude-code";
     return session.backendRef ?? {
-      kind: resolveHarnessName(session) === "codex" ? "codex-app-server" : "claude-code",
+      kind: session.backendKind ?? fallbackKind,
       conversationId: session.harnessSessionId!,
     };
   }

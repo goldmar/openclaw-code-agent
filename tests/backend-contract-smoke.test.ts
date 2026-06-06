@@ -4,11 +4,12 @@ import { getHarness } from "../src/harness";
 import { assertStructuredBackendContract } from "./backend-contract-fixture";
 
 describe("backend contract smoke", () => {
-  it("keeps both built-in backends on the shared structured contract", () => {
+  it("keeps built-in backends on the shared structured contract", () => {
     const codex = getHarness("codex");
     const claude = getHarness("claude-code");
+    const opencode = getHarness("opencode");
 
-    for (const harness of [codex, claude]) {
+    for (const harness of [codex, claude, opencode]) {
       assertStructuredBackendContract(harness);
     }
 
@@ -21,5 +22,10 @@ describe("backend contract smoke", () => {
     assert.equal(claude.capabilities.nativePendingInput, false);
     assert.equal(claude.capabilities.nativePlanArtifacts, false);
     assert.equal(claude.capabilities.worktrees, "plugin-managed");
+
+    assert.equal(opencode.backendKind, "opencode-server");
+    assert.equal(opencode.capabilities.nativePendingInput, true);
+    assert.equal(opencode.capabilities.nativePlanArtifacts, false);
+    assert.equal(opencode.capabilities.worktrees, "plugin-managed");
   });
 });

@@ -1,5 +1,6 @@
 import { decideResumeSessionId } from "./resume-policy";
 import { getBackendConversationId } from "./session-backend-ref";
+import { getHarness } from "./harness";
 import type { Session } from "./session";
 import type { PersistedSessionInfo } from "./types";
 
@@ -42,9 +43,16 @@ export function isCompletedByDefault(session: ResumableSessionLike): boolean {
 }
 
 function canResumeCompletedSession(session: ResumableSessionLike): boolean {
-  return isCompletedByDefault(session)
-    && session.backendRef?.kind === "codex-app-server"
-    && !!getBackendConversationId(session);
+  if (!isCompletedByDefault(session) || !getBackendConversationId(session)) return false;
+  if (session.backendRef?.kind === "codex-app-server" || session.backendRef?.kind === "opencode-server") return true;
+  const harnessName = "harnessName" in session ? session.harnessName : session.harness;
+  if (!harnessName) return false;
+  try {
+    const harness = getHarness(harnessName);
+    return harness.backendKind === session.backendRef?.kind;
+  } catch {
+    return false;
+  }
 }
 
 export function isNeverStartedRelaunch(session: ResumableSessionLike): boolean {

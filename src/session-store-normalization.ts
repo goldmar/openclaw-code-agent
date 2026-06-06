@@ -235,7 +235,7 @@ function normalizeBackendRef(
     const conversationId = toOptionalString(raw.conversationId);
     if (
       conversationId &&
-      (kind === "claude-code" || kind === "codex-app-server")
+      (kind === "claude-code" || kind === "codex-app-server" || kind === "opencode-server")
     ) {
       return {
         kind,

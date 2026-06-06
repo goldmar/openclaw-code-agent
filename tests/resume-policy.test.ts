@@ -27,4 +27,17 @@ describe("decideResumeSessionId()", () => {
     assert.equal(decision.resumeSessionId, undefined);
     assert.equal(decision.clearedPersistedCodexResume, true);
   });
+
+  it("keeps persisted OpenCode server sessions resumable", () => {
+    const decision = decideResumeSessionId({
+      requestedResumeSessionId: "ses_opencode",
+      persistedSession: {
+        harness: "opencode",
+        backendRef: { kind: "opencode-server" },
+      },
+    });
+
+    assert.equal(decision.resumeSessionId, "ses_opencode");
+    assert.equal(decision.clearedPersistedCodexResume, false);
+  });
 });

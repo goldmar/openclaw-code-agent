@@ -27,6 +27,8 @@ describe("harness registry — built-in registration", () => {
   it("listHarnesses() includes 'claude-code'", () => {
     const list = listHarnesses();
     assert.ok(list.includes("claude-code"));
+    assert.ok(list.includes("codex"));
+    assert.ok(list.includes("opencode"));
   });
 });
 

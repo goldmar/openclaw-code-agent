@@ -5,6 +5,7 @@
 import type { AgentHarness } from "./types";
 import { ClaudeCodeHarness } from "./claude-code";
 import { CodexHarness } from "./codex";
+import { OpenCodeHarness } from "./opencode";
 import { getDefaultHarnessName } from "../config";
 
 const registry = new Map<string, AgentHarness>();
@@ -38,6 +39,7 @@ export function listHarnesses(): string[] {
 // Register built-in harnesses
 registerHarness(new ClaudeCodeHarness());
 registerHarness(new CodexHarness());
+registerHarness(new OpenCodeHarness());
 
 // Re-export types for convenience
 export type {

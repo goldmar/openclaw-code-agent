@@ -1,0 +1,373 @@
+import { describe, it } from "node:test";
+import assert from "node:assert/strict";
+import { OpenCodeHarness } from "../src/harness/opencode";
+import type { HarnessMessage } from "../src/harness/types";
+
+type RequestRecord = {
+  method: string;
+  path: string;
+  body?: unknown;
+};
+
+class MockOpenCodeServer {
+  requests: RequestRecord[] = [];
+  closed = false;
+  private streamController?: ReadableStreamDefaultController<Uint8Array>;
+  private readonly encoder = new TextEncoder();
+
+  fetch: typeof fetch = async (input, init) => {
+    const url = new URL(typeof input === "string" ? input : input.url);
+    const method = init?.method ?? "GET";
+    const path = `${url.pathname}${url.search}`;
+    const body = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
+    this.requests.push({ method, path, body });
+
+    if (path === "/api/event") {
+      return new Response(new ReadableStream<Uint8Array>({
+        start: (controller) => {
+          this.streamController = controller;
+        },
+        cancel: () => undefined,
+      }), {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      });
+    }
+
+    if (path === "/api/health") return json({ healthy: true, version: "1.16.2" });
+    if (method === "POST" && path === "/session") return json({ id: "ses_test" });
+    if (method === "POST" && path === "/session/ses_existing/fork") return json({ id: "ses_forked" });
+    if (method === "GET" && path === "/api/session/ses_existing/context") return json([]);
+    if (method === "GET" && path === "/api/session/ses_test/context") {
+      return json([{ type: "assistant", content: [{ type: "text", text: "Final." }] }]);
+    }
+    if (method === "GET" && path === "/api/session/ses_existing/context") {
+      return json([{ type: "assistant", content: [{ type: "text", text: "Resumed." }] }]);
+    }
+    if (method === "POST" && path.endsWith("/wait")) return new Response(null, { status: 204 });
+    if (method === "POST" && path.endsWith("/prompt")) return json({ type: "assistant", content: [] });
+    if (method === "POST" && path.includes("/permission/request/")) return json(true);
+    if (method === "POST" && path.includes("/question/request/")) return json(true);
+    if (method === "PATCH" && path === "/session/ses_test") return json({ id: "ses_test" });
+    if (method === "POST" && path === "/session/ses_test/abort") return json(true);
+    return new Response(JSON.stringify({ error: `unexpected ${method} ${path}` }), { status: 404 });
+  };
+
+  emit(event: unknown): void {
+    this.streamController?.enqueue(this.encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+  }
+
+  closeStream(): void {
+    this.streamController?.close();
+  }
+
+  handle() {
+    return {
+      baseUrl: "http://opencode.test",
+      close: async () => {
+        this.closed = true;
+        this.closeStream();
+      },
+    };
+  }
+}
+
+function json(value: unknown): Response {
+  return new Response(JSON.stringify(value), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+async function collectMessages(
+  session: { messages: AsyncIterable<HarnessMessage> },
+  limit = 20,
+): Promise<HarnessMessage[]> {
+  const out: HarnessMessage[] = [];
+  for await (const message of session.messages) {
+    out.push(message);
+    if (out.length >= limit) break;
+    if (message.type === "run_completed") break;
+  }
+  return out;
+}
+
+describe("OpenCodeHarness static properties", () => {
+  const h = new OpenCodeHarness();
+
+  it("exposes the OpenCode backend contract", () => {
+    assert.equal(h.name, "opencode");
+    assert.equal(h.backendKind, "opencode-server");
+    assert.ok(h.supportedPermissionModes.includes("default"));
+    assert.ok(h.supportedPermissionModes.includes("plan"));
+    assert.ok(h.supportedPermissionModes.includes("bypassPermissions"));
+    assert.equal(h.capabilities.nativePendingInput, true);
+    assert.equal(h.capabilities.nativePlanArtifacts, false);
+    assert.equal(h.capabilities.worktrees, "plugin-managed");
+  });
+
+  it("builds user messages", () => {
+    assert.deepEqual(h.buildUserMessage("hello", "ses_1"), {
+      type: "user",
+      text: "hello",
+      session_id: "ses_1",
+    });
+  });
+});
+
+describe("OpenCodeHarness HTTP/SSE mapping", () => {
+  it("creates a session, sends a queued v2 prompt, and emits backend/completion", async () => {
+    const mock = new MockOpenCodeServer();
+    const harness = new OpenCodeHarness({
+      createServer: async () => mock.handle(),
+      fetch: mock.fetch,
+    });
+
+    const messages = await collectMessages(harness.launch({
+      prompt: "ship it",
+      cwd: "/repo",
+      permissionMode: "plan",
+      model: "anthropic/claude-sonnet-4-5",
+    }));
+
+    const create = mock.requests.find((request) => request.method === "POST" && request.path === "/session");
+    assert.deepEqual(create?.body, {
+      model: { id: "claude-sonnet-4-5", providerID: "anthropic" },
+      metadata: { client: "openclaw-code-agent" },
+      permission: [
+        { permission: "edit", pattern: "*", action: "deny" },
+        { permission: "bash", pattern: "*", action: "deny" },
+        { permission: "task", pattern: "*", action: "deny" },
+        { permission: "todowrite", pattern: "*", action: "deny" },
+        { permission: "external_directory", pattern: "*", action: "deny" },
+      ],
+    });
+
+    const prompt = mock.requests.find((request) => request.method === "POST" && request.path === "/api/session/ses_test/prompt");
+    assert.deepEqual(prompt?.body, {
+      prompt: { text: "ship it" },
+      delivery: "queue",
+    });
+    assert.equal(mock.requests.some((request) => request.path === "/api/session/ses_test/wait"), true);
+
+    const ref = messages.find((message) => message.type === "backend_ref") as Extract<HarnessMessage, { type: "backend_ref" }> | undefined;
+    const result = messages.find((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }> | undefined;
+    assert.equal(ref?.ref.kind, "opencode-server");
+    assert.equal(ref?.ref.conversationId, "ses_test");
+    assert.equal(result?.data.success, true);
+    assert.equal(result?.data.result, "Final.");
+    assert.equal(mock.closed, true);
+  });
+
+  it("streams text deltas and tool calls from v2 events", async () => {
+    const mock = new MockOpenCodeServer();
+    const waitForEventStream = new Promise<void>((resolve) => {
+      const originalFetch = mock.fetch;
+      mock.fetch = async (input, init) => {
+        const response = await originalFetch(input, init);
+        const url = new URL(typeof input === "string" ? input : input.url);
+        if (url.pathname === "/api/event") resolve();
+        return response;
+      };
+    });
+    const harness = new OpenCodeHarness({
+      createServer: async () => mock.handle(),
+      fetch: mock.fetch,
+    });
+
+    const session = harness.launch({ prompt: "stream", cwd: "/repo" });
+    await waitForEventStream;
+    mock.emit({
+      type: "session.next.text.delta",
+      properties: { sessionID: "ses_test", delta: "Hello" },
+    });
+    mock.emit({
+      type: "session.next.tool.called",
+      properties: { sessionID: "ses_test", tool: "bash", input: { command: "pwd" } },
+    });
+
+    const messages = await collectMessages(session);
+    const text = messages.find((message) => message.type === "text_delta") as Extract<HarnessMessage, { type: "text_delta" }> | undefined;
+    const tool = messages.find((message) => message.type === "tool_call") as Extract<HarnessMessage, { type: "tool_call" }> | undefined;
+    assert.equal(text?.text, "Hello");
+    assert.equal(tool?.name, "bash");
+    assert.deepEqual(tool?.input, { command: "pwd" });
+  });
+
+  it("maps permission requests to pending input and replies with v2 endpoint", async () => {
+    const mock = new MockOpenCodeServer();
+    const waitForEventStream = new Promise<void>((resolve) => {
+      const originalFetch = mock.fetch;
+      mock.fetch = async (input, init) => {
+        const response = await originalFetch(input, init);
+        const url = new URL(typeof input === "string" ? input : input.url);
+        if (url.pathname === "/api/event") resolve();
+        return response;
+      };
+    });
+    const harness = new OpenCodeHarness({
+      createServer: async () => mock.handle(),
+      fetch: mock.fetch,
+    });
+
+    const session = harness.launch({ prompt: "needs permission", cwd: "/repo" });
+    await waitForEventStream;
+    mock.emit({
+      type: "permission.asked",
+      properties: {
+        id: "per_1",
+        sessionID: "ses_test",
+        permission: "bash",
+        patterns: ["npm test"],
+        metadata: {},
+        always: [],
+      },
+    });
+
+    const seen: HarnessMessage[] = [];
+    for await (const message of session.messages) {
+      seen.push(message);
+      if (message.type === "pending_input") {
+        assert.equal(await session.submitPendingInputOption?.(0), true);
+      }
+      if (message.type === "pending_input_resolved") break;
+    }
+
+    const pending = seen.find((message) => message.type === "pending_input") as Extract<HarnessMessage, { type: "pending_input" }> | undefined;
+    assert.equal(pending?.state.kind, "approval");
+    assert.equal(pending?.state.requestId, "per_1");
+    const reply = mock.requests.find((request) => request.path === "/api/session/ses_test/permission/request/per_1/reply");
+    assert.deepEqual(reply?.body, { response: "once" });
+  });
+
+  it("auto-approves permission requests in bypassPermissions mode", async () => {
+    const mock = new MockOpenCodeServer();
+    const waitForEventStream = new Promise<void>((resolve) => {
+      const originalFetch = mock.fetch;
+      mock.fetch = async (input, init) => {
+        const response = await originalFetch(input, init);
+        const url = new URL(typeof input === "string" ? input : input.url);
+        if (url.pathname === "/api/event") resolve();
+        return response;
+      };
+    });
+    const harness = new OpenCodeHarness({
+      createServer: async () => mock.handle(),
+      fetch: mock.fetch,
+    });
+
+    const session = harness.launch({ prompt: "go", cwd: "/repo", permissionMode: "bypassPermissions" });
+    await waitForEventStream;
+    mock.emit({
+      type: "permission.asked",
+      properties: {
+        id: "per_auto",
+        sessionID: "ses_test",
+        permission: "bash",
+        patterns: ["npm test"],
+        metadata: {},
+        always: [],
+      },
+    });
+
+    await collectMessages(session);
+    const reply = mock.requests.find((request) => request.path === "/api/session/ses_test/permission/request/per_auto/reply");
+    assert.deepEqual(reply?.body, { response: "once" });
+  });
+
+  it("resumes with resume=true on the first prompt", async () => {
+    const mock = new MockOpenCodeServer();
+    const harness = new OpenCodeHarness({
+      createServer: async () => mock.handle(),
+      fetch: mock.fetch,
+    });
+
+    await collectMessages(harness.launch({
+      prompt: "continue",
+      cwd: "/repo",
+      resumeSessionId: "ses_existing",
+    }));
+
+    const prompt = mock.requests.find((request) => request.method === "POST" && request.path === "/api/session/ses_existing/prompt");
+    assert.deepEqual(prompt?.body, {
+      prompt: { text: "continue" },
+      delivery: "queue",
+      resume: true,
+    });
+  });
+
+  it("prepends system prompts because v2 prompt has no system field", async () => {
+    const mock = new MockOpenCodeServer();
+    const harness = new OpenCodeHarness({
+      createServer: async () => mock.handle(),
+      fetch: mock.fetch,
+    });
+
+    await collectMessages(harness.launch({
+      prompt: "implement",
+      cwd: "/repo",
+      systemPrompt: "Use the project conventions.",
+    }));
+
+    const prompt = mock.requests.find((request) => request.method === "POST" && request.path === "/api/session/ses_test/prompt");
+    assert.deepEqual(prompt?.body, {
+      prompt: { text: "Use the project conventions.\n\nimplement" },
+      delivery: "queue",
+    });
+  });
+
+  it("emits failed completion from failed session events", async () => {
+    const mock = new MockOpenCodeServer();
+    const waitForEventStream = new Promise<void>((resolve) => {
+      const originalFetch = mock.fetch;
+      mock.fetch = async (input, init) => {
+        const response = await originalFetch(input, init);
+        const url = new URL(typeof input === "string" ? input : input.url);
+        if (url.pathname === "/api/event") resolve();
+        return response;
+      };
+    });
+    const harness = new OpenCodeHarness({
+      createServer: async () => mock.handle(),
+      fetch: mock.fetch,
+    });
+
+    const session = harness.launch({ prompt: "fail", cwd: "/repo" });
+    await waitForEventStream;
+    mock.emit({
+      type: "session.next.step.failed",
+      properties: {
+        sessionID: "ses_test",
+        error: { message: "tool failed" },
+      },
+    });
+
+    const messages = await collectMessages(session);
+    const result = messages.find((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }> | undefined;
+    assert.equal(result?.data.success, false);
+    assert.equal(result?.data.result, "tool failed");
+  });
+
+  it("switches permission mode by patching the classic session endpoint", async () => {
+    const mock = new MockOpenCodeServer();
+    const harness = new OpenCodeHarness({
+      createServer: async () => mock.handle(),
+      fetch: mock.fetch,
+    });
+    const session = harness.launch({ prompt: "switch", cwd: "/repo", permissionMode: "plan" });
+    await collectMessages(session);
+
+    await session.setPermissionMode?.("bypassPermissions");
+
+    const patch = mock.requests.find((request) => request.method === "PATCH" && request.path === "/session/ses_test");
+    assert.deepEqual(patch?.body, {
+      permission: [
+        { permission: "edit", pattern: "*", action: "allow" },
+        { permission: "bash", pattern: "*", action: "allow" },
+        { permission: "task", pattern: "*", action: "allow" },
+        { permission: "todowrite", pattern: "*", action: "allow" },
+        { permission: "external_directory", pattern: "*", action: "allow" },
+      ],
+    });
+  });
+});

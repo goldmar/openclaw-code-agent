@@ -31,6 +31,7 @@ const BUILTIN_HARNESS_CONFIGS: Record<string, HarnessConfig> = {
     allowedModels: ["gpt-5.5", "gpt-5.5-pro"],
     reasoningEffort: "medium",
   },
+  opencode: {},
 };
 
 /** Load and cache global MCP server definitions from `~/.claude.json`. */
