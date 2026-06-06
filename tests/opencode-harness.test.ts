@@ -14,6 +14,7 @@ class MockOpenCodeServer {
   closed = false;
   waitMode: "immediate" | "defer" = "immediate";
   failQuestionReplies = false;
+  failSessionPatch = false;
   private streamController?: ReadableStreamDefaultController<Uint8Array>;
   private readonly encoder = new TextEncoder();
   private deferredWait?: {
@@ -47,9 +48,6 @@ class MockOpenCodeServer {
     if (method === "GET" && path === "/api/session/ses_test/context") {
       return json([{ type: "assistant", content: [{ type: "text", text: "Final." }] }]);
     }
-    if (method === "GET" && path === "/api/session/ses_existing/context") {
-      return json([{ type: "assistant", content: [{ type: "text", text: "Resumed." }] }]);
-    }
     if (method === "POST" && path.endsWith("/wait")) {
       if (this.waitMode === "defer") {
         return await new Promise<Response>((resolve, reject) => {
@@ -67,7 +65,12 @@ class MockOpenCodeServer {
       }
       return json(true);
     }
-    if (method === "PATCH" && path === "/session/ses_test") return json({ id: "ses_test" });
+    if (method === "PATCH" && path === "/session/ses_test") {
+      if (this.failSessionPatch) {
+        return new Response(JSON.stringify({ error: "permission patch failed" }), { status: 500 });
+      }
+      return json({ id: "ses_test" });
+    }
     if (method === "POST" && path === "/session/ses_test/abort") return json(true);
     return new Response(JSON.stringify({ error: `unexpected ${method} ${path}` }), { status: 404 });
   };
@@ -1057,5 +1060,52 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
         { permission: "external_directory", pattern: "*", action: "allow" },
       ],
     });
+  });
+
+  it("does not emit settings changes when active permission patch fails", async () => {
+    const mock = new MockOpenCodeServer();
+    mock.waitMode = "defer";
+    const harness = new OpenCodeHarness({
+      createServer: async () => mock.handle(),
+      fetch: mock.fetch,
+    });
+    const session = harness.launch({ prompt: "switch", cwd: "/repo", permissionMode: "plan" });
+    const iterator = session.messages[Symbol.asyncIterator]();
+    const seen: HarnessMessage[] = [];
+    await waitForRequest(mock, "/api/session/ses_test/wait");
+    mock.failSessionPatch = true;
+
+    await assert.rejects(
+      session.setPermissionMode?.("bypassPermissions"),
+      /permission patch failed/,
+    );
+
+    const patch = mock.requests.find((request) => request.method === "PATCH" && request.path === "/session/ses_test");
+    assert.ok(patch);
+    mock.emit({
+      type: "permission.asked",
+      properties: {
+        id: "per_after_failed_patch",
+        sessionID: "ses_test",
+        permission: "bash",
+        patterns: ["npm test"],
+        metadata: {},
+        always: [],
+      },
+    });
+
+    while (!seen.some((message) => message.type === "pending_input")) {
+      const next = await iterator.next();
+      assert.equal(next.done, false);
+      seen.push(next.value);
+    }
+
+    const pending = seen.find((message) => message.type === "pending_input") as Extract<HarnessMessage, { type: "pending_input" }> | undefined;
+    assert.equal(pending?.state.requestId, "per_after_failed_patch");
+    assert.equal(seen.some((message) => message.type === "settings_changed"), false);
+    mock.resolveWait();
+    for await (const message of iterator) {
+      seen.push(message);
+    }
   });
 });

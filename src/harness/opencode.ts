@@ -691,13 +691,13 @@ export class OpenCodeHarness implements AgentHarness {
       messages: queue.messages(),
 
       async setPermissionMode(mode: string): Promise<void> {
-        currentPermissionMode = mode;
         if (sessionId) {
           const http = await ensureClient();
           await http.request("PATCH", `/session/${encodeURIComponent(sessionId)}`, {
             permission: permissionRulesForMode(mode),
           });
         }
+        currentPermissionMode = mode;
         queue.enqueue(createSettingsChangedEvent(mode));
       },
 
