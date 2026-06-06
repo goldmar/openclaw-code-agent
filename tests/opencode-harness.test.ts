@@ -739,6 +739,24 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     assert.equal(completions[0]?.data.result, "Final.");
   });
 
+  it("times out an active wait even when an interrupt signal is attached", async () => {
+    const mock = new MockOpenCodeServer();
+    mock.waitMode = "defer";
+    const harness = new OpenCodeHarness({
+      createServer: async () => mock.handle(),
+      fetch: mock.fetch,
+      requestTimeoutMs: 5,
+    });
+
+    const messages = await collectAllMessages(harness.launch({ prompt: "hang", cwd: "/repo" }));
+
+    const completions = messages.filter((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }>[];
+    assert.equal(completions.length, 1);
+    assert.equal(completions[0]?.data.success, false);
+    assert.equal(completions[0]?.data.outcome, "failed");
+    assert.match(completions[0]?.data.result ?? "", /wait aborted/);
+  });
+
   it("does not emit a failed completion after interrupt aborts an active wait", async () => {
     const mock = new MockOpenCodeServer();
     mock.waitMode = "defer";
@@ -845,6 +863,44 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     const completion = messages.find((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }> | undefined;
     assert.equal(createServerCalls, 1);
     assert.equal(completion?.data.success, true);
+  });
+
+  it("stores permission mode changes before startup without starting OpenCode", async () => {
+    const mock = new MockOpenCodeServer();
+    let createServerCalls = 0;
+    const releasePrompt = Promise.withResolvers<void>();
+    const harness = new OpenCodeHarness({
+      createServer: async () => {
+        createServerCalls += 1;
+        return mock.handle();
+      },
+      fetch: mock.fetch,
+    });
+
+    async function* prompts(): AsyncGenerator<unknown> {
+      await releasePrompt.promise;
+      yield { type: "user", text: "start" };
+    }
+
+    const session = harness.launch({ prompt: prompts(), cwd: "/repo" });
+    await session.setPermissionMode?.("plan");
+    assert.equal(createServerCalls, 0);
+
+    releasePrompt.resolve();
+    const messages = await collectAllMessages(session);
+    const settings = messages.find((message) => message.type === "settings_changed") as Extract<HarnessMessage, { type: "settings_changed" }> | undefined;
+    const create = mock.requests.find((request) => request.method === "POST" && request.path === "/session");
+    assert.equal(settings?.permissionMode, "plan");
+    assert.deepEqual(create?.body, {
+      metadata: { client: "openclaw-code-agent" },
+      permission: [
+        { permission: "edit", pattern: "*", action: "deny" },
+        { permission: "bash", pattern: "*", action: "deny" },
+        { permission: "task", pattern: "*", action: "deny" },
+        { permission: "todowrite", pattern: "*", action: "deny" },
+        { permission: "external_directory", pattern: "*", action: "deny" },
+      ],
+    });
   });
 
   it("emits interrupted completion when interrupted between stream turns", async () => {

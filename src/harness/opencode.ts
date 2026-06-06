@@ -32,6 +32,7 @@ interface OpenCodeServerHandle {
 interface OpenCodeHarnessDeps {
   createServer?: (options: { cwd: string }) => Promise<OpenCodeServerHandle>;
   fetch?: FetchLike;
+  requestTimeoutMs?: number;
 }
 
 interface OpenCodeSession {
@@ -203,6 +204,7 @@ class OpenCodeClient {
   constructor(
     private readonly baseUrl: string,
     private readonly fetchImpl: FetchLike,
+    private readonly requestTimeoutMs = REQUEST_TIMEOUT_MS,
   ) {}
 
   async request<T>(
@@ -211,10 +213,14 @@ class OpenCodeClient {
     body?: unknown,
     options: { signal?: AbortSignal; timeoutMs?: number } = {},
   ): Promise<T> {
-    const controller = options.signal ? undefined : new AbortController();
-    const timeout = controller
-      ? setTimeout(() => controller.abort(), options.timeoutMs ?? REQUEST_TIMEOUT_MS)
-      : undefined;
+    const controller = new AbortController();
+    const abortFromCaller = (): void => controller.abort();
+    if (options.signal?.aborted) {
+      controller.abort();
+    } else {
+      options.signal?.addEventListener("abort", abortFromCaller, { once: true });
+    }
+    const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? this.requestTimeoutMs);
     try {
       const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
         method,
@@ -223,7 +229,7 @@ class OpenCodeClient {
           ...(body === undefined ? {} : { "content-type": "application/json" }),
         },
         body: body === undefined ? undefined : JSON.stringify(body),
-        signal: options.signal ?? controller?.signal,
+        signal: controller.signal,
       });
       if (!response.ok) {
         const text = await response.text().catch(() => "");
@@ -233,7 +239,8 @@ class OpenCodeClient {
       const text = await response.text();
       return (text ? JSON.parse(text) : undefined) as T;
     } finally {
-      if (timeout) clearTimeout(timeout);
+      clearTimeout(timeout);
+      options.signal?.removeEventListener("abort", abortFromCaller);
     }
   }
 
@@ -459,7 +466,7 @@ export class OpenCodeHarness implements AgentHarness {
       if (client) return client;
       clientPromise ??= (async () => {
         server = await (this.deps.createServer ?? defaultCreateServer)({ cwd: options.cwd });
-        client = new OpenCodeClient(server.baseUrl, fetchImpl);
+        client = new OpenCodeClient(server.baseUrl, fetchImpl, this.deps.requestTimeoutMs);
         return client;
       })();
       try {
@@ -685,8 +692,8 @@ export class OpenCodeHarness implements AgentHarness {
 
       async setPermissionMode(mode: string): Promise<void> {
         currentPermissionMode = mode;
-        const http = await ensureClient();
         if (sessionId) {
+          const http = await ensureClient();
           await http.request("PATCH", `/session/${encodeURIComponent(sessionId)}`, {
             permission: permissionRulesForMode(mode),
           });
