@@ -69,7 +69,8 @@ describe("goal_launch tool", () => {
 
     assert.match((result.content[0] as { text: string }).text, /Goal task launched\./);
     assert.match((result.content[0] as { text: string }).text, /Harness: codex/);
-    assert.match((result.content[0] as { text: string }).text, /Max iterations: 5/);
+    assert.match((result.content[0] as { text: string }).text, /Max controller iterations: 5/);
+    assert.match((result.content[0] as { text: string }).text, /internal agent review passes are reported in the completion summary/);
   });
 
   it("uses deliveryContext routing on the current SDK surface", async () => {

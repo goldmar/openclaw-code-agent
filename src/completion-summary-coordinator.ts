@@ -54,6 +54,13 @@ interface CompletedSummaryRecord {
   skipReason: string;
 }
 
+interface CompletionSummaryKeySet {
+  primary: string;
+  explicit: boolean;
+  claimKeys: string[];
+  decisionKeys: string[];
+}
+
 export interface CompletionSummaryCoordinatorOptions {
   maxCompletedKeys?: number;
 }
@@ -66,6 +73,7 @@ export const PRIOR_VISIBLE_SUMMARY_SKIP_REASON =
 export class CompletionSummaryCoordinator {
   private readonly inFlight = new Set<string>();
   private readonly completed = new Map<string, CompletedSummaryRecord>();
+  private readonly claimKeysByPrimary = new Map<string, string[]>();
   private readonly maxCompletedKeys: number;
 
   constructor(options: CompletionSummaryCoordinatorOptions = {}) {
@@ -83,27 +91,28 @@ export class CompletionSummaryCoordinator {
       return { required: false, allowed: false, explicit: false };
     }
 
-    const key = this.buildKey(session, fact);
-    if (!key) {
+    const keys = this.buildKeySet(session, fact);
+    if (!keys) {
       return { required: true, allowed: true, explicit: false };
     }
 
-    const completedRecord = this.completed.get(key.key);
-    if (this.inFlight.has(key.key) || completedRecord) {
+    const blockingKey = keys.decisionKeys.find((candidate) => this.inFlight.has(candidate) || this.completed.has(candidate));
+    const completedRecord = blockingKey ? this.completed.get(blockingKey) : undefined;
+    if (blockingKey) {
       return {
         required: true,
         allowed: false,
-        explicit: key.explicit,
+        explicit: keys.explicit,
         skipReason: completedRecord?.skipReason ?? DUPLICATE_REASON,
       };
     }
 
-    this.inFlight.add(key.key);
+    this.registerClaim(keys.primary, keys.claimKeys);
     return {
       required: true,
       allowed: true,
-      key: key.key,
-      explicit: key.explicit,
+      key: keys.primary,
+      explicit: keys.explicit,
     };
   }
 
@@ -115,46 +124,80 @@ export class CompletionSummaryCoordinator {
       return { required: false, allowed: false, explicit: false };
     }
 
-    const key = this.buildKey(session, fact);
-    if (!key) {
+    const keys = this.buildKeySet(session, fact);
+    if (!keys) {
       return { required: true, allowed: true, explicit: false };
     }
 
-    const completedRecord = this.completed.get(key.key);
+    const completedKey = keys.decisionKeys.find((candidate) => this.completed.has(candidate));
+    const completedRecord = completedKey ? this.completed.get(completedKey) : undefined;
     if (completedRecord) {
       return {
         required: true,
         allowed: false,
-        explicit: key.explicit,
+        explicit: keys.explicit,
         skipReason: completedRecord.skipReason,
       };
     }
 
-    this.inFlight.delete(key.key);
-    this.finish(key.key, true, PRIOR_VISIBLE_SUMMARY_SKIP_REASON);
+    this.finishKeys(keys.primary, keys.claimKeys, true, PRIOR_VISIBLE_SUMMARY_SKIP_REASON);
     return {
       required: true,
       allowed: true,
-      key: key.key,
-      explicit: key.explicit,
+      key: keys.primary,
+      explicit: keys.explicit,
     };
   }
 
   finish(key: string | undefined, completed: boolean, skipReason = DUPLICATE_REASON): void {
     if (!key) return;
-    this.inFlight.delete(key);
+    const claimKeys = this.claimKeysByPrimary.get(key) ?? [key];
+    this.finishKeys(key, claimKeys, completed, skipReason);
+  }
+
+  private registerClaim(primary: string, claimKeys: string[]): void {
+    for (const key of claimKeys) {
+      this.inFlight.add(key);
+    }
+    this.claimKeysByPrimary.delete(primary);
+    this.claimKeysByPrimary.set(primary, claimKeys);
+
+    while (this.claimKeysByPrimary.size > this.maxCompletedKeys) {
+      const oldestPrimary = this.claimKeysByPrimary.keys().next().value;
+      if (oldestPrimary === undefined) break;
+      const oldestClaimKeys = this.claimKeysByPrimary.get(oldestPrimary) ?? [oldestPrimary];
+      for (const key of oldestClaimKeys) {
+        this.inFlight.delete(key);
+      }
+      this.claimKeysByPrimary.delete(oldestPrimary);
+    }
+  }
+
+  private finishKeys(
+    primary: string,
+    keys: string[],
+    completed: boolean,
+    skipReason = DUPLICATE_REASON,
+  ): void {
+    for (const key of keys) {
+      this.inFlight.delete(key);
+    }
+    this.claimKeysByPrimary.delete(primary);
     if (!completed) return;
 
-    const completedRecord = this.completed.get(key);
-    if (
-      completedRecord?.skipReason === PRIOR_VISIBLE_SUMMARY_SKIP_REASON
-      && skipReason !== PRIOR_VISIBLE_SUMMARY_SKIP_REASON
-    ) {
-      return;
+    for (const key of keys) {
+      const completedRecord = this.completed.get(key);
+      if (
+        completedRecord?.skipReason === PRIOR_VISIBLE_SUMMARY_SKIP_REASON
+        && skipReason !== PRIOR_VISIBLE_SUMMARY_SKIP_REASON
+      ) {
+        continue;
+      }
+
+      this.completed.delete(key);
+      this.completed.set(key, { skipReason });
     }
 
-    this.completed.delete(key);
-    this.completed.set(key, { skipReason });
     while (this.completed.size > this.maxCompletedKeys) {
       const oldestKey = this.completed.keys().next().value;
       if (oldestKey === undefined) break;
@@ -162,27 +205,51 @@ export class CompletionSummaryCoordinator {
     }
   }
 
-  private buildKey(
+  private buildKeySet(
     session: CompletionSummarySession | PersistedCompletionSummarySession,
     fact: CompletionSummaryFact,
-  ): { key: string; explicit: boolean } | undefined {
+  ): CompletionSummaryKeySet | undefined {
     const deliveryRef = this.getDeliveryRef(session);
     if (!deliveryRef) return undefined;
 
     const outcomeKey = this.normalizeOutcomeKey(session, fact.outcomeKey?.trim());
     if (outcomeKey) {
+      const primary = `${this.buildVisibleScope(deliveryRef, session)}:outcome:${this.digest(outcomeKey)}`;
+      const goalLike = this.isGoalLike(session, fact, outcomeKey);
+      const visibleSessionKeys = this.buildSessionAliasKeys(deliveryRef, session, "visible-summary");
+      const goalSessionKeys = this.buildSessionAliasKeys(deliveryRef, session, "goal-summary");
       return {
-        key: `${this.buildVisibleScope(deliveryRef, session)}:outcome:${this.digest(outcomeKey)}`,
+        primary,
         explicit: true,
+        claimKeys: [
+          primary,
+          ...visibleSessionKeys,
+          ...(goalLike ? goalSessionKeys : []),
+        ],
+        decisionKeys: [
+          primary,
+          ...(goalLike ? [...visibleSessionKeys, ...goalSessionKeys] : goalSessionKeys),
+        ],
       };
     }
 
     const fingerprint = fact.fallbackFingerprint?.trim();
     if (!fingerprint) return undefined;
+    const primary = `${deliveryRef}:${fact.producer}:${this.digest(fingerprint)}`;
     return {
-      key: `${deliveryRef}:${fact.producer}:${this.digest(fingerprint)}`,
+      primary,
       explicit: false,
+      claimKeys: [primary],
+      decisionKeys: [primary],
     };
+  }
+
+  private isGoalLike(
+    session: CompletionSummarySession | PersistedCompletionSummarySession,
+    fact: CompletionSummaryFact,
+    outcomeKey: string,
+  ): boolean {
+    return Boolean(session.goalTaskId?.trim()) || fact.producer === "goal" || /^goal:/i.test(outcomeKey);
   }
 
   private normalizeOutcomeKey(
@@ -206,6 +273,26 @@ export class CompletionSummaryCoordinator {
       target: route.target,
       threadId: route.threadId,
     }))}`;
+  }
+
+  private buildSessionAliasKeys(
+    deliveryRef: string,
+    session: CompletionSummarySession | PersistedCompletionSummarySession,
+    aliasKind: "visible-summary" | "goal-summary",
+  ): string[] {
+    const scope = this.buildVisibleScope(deliveryRef, session);
+    const refs = [
+      "id" in session ? session.id : undefined,
+      "sessionId" in session ? session.sessionId : undefined,
+      session.name,
+      getBackendConversationId(session),
+      session.harnessSessionId,
+      deliveryRef,
+    ]
+      .map((ref) => ref?.trim())
+      .filter((ref): ref is string => Boolean(ref));
+    return [...new Set(refs)]
+      .map((ref) => `${scope}:session:${this.digest(ref)}:${aliasKind}`);
   }
 
   private getDeliveryRef(session: CompletionSummarySession | PersistedCompletionSummarySession): string {

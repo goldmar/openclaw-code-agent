@@ -3,7 +3,7 @@ import { createHash } from "crypto";
 import { nanoid } from "nanoid";
 
 import { executeRespond } from "./actions/respond";
-import { buildGoalIterationSummary, buildGoalTaskRuntimeSnapshot, formatGoalTask } from "./goal-format";
+import { buildGoalIterationSummary } from "./goal-format";
 import { GoalTaskStore } from "./goal-store";
 import { decideResumeSessionId } from "./resume-policy";
 import type { Session } from "./session";
@@ -48,6 +48,17 @@ function summarizeLines(text: string, maxLines: number = 20): string {
     .filter((line) => line.trim().length > 0);
   if (lines.length <= maxLines) return lines.join("\n");
   return lines.slice(-maxLines).join("\n");
+}
+
+function formatIterationSummaryForNotification(summary: string | undefined): string | undefined {
+  const lines = (summary ?? "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .filter((line) => !/^Iteration summary:$/i.test(line))
+    .map((line) => line.replace(/^[-*]\s+/, ""));
+
+  return lines.length > 0 ? lines.join("\n") : undefined;
 }
 
 function escapeRegExp(value: string): string {
@@ -673,13 +684,13 @@ export class GoalController {
     this.sessionManager.emitGoalTaskUpdate(task, text, label);
   }
 
-  private notifyIterationStatus(task: GoalTaskState, heading: string, session?: Session, iterationSummary?: string): void {
-    const runtime = buildGoalTaskRuntimeSnapshot(session ?? (task.sessionId ? this.sessionManager.resolve(task.sessionId) : undefined));
+  private notifyIterationStatus(task: GoalTaskState, heading: string, _session?: Session, iterationSummary?: string): void {
     const iterationLabel = task.loopMode === "ralph" ? "iteration" : "repair iteration";
     const progressHeading = /\b(?:repair\s+)?iteration\s+\d+\/\d+\b/i.test(heading)
       ? heading
-      : `${heading} (${iterationLabel} ${task.iteration}/${task.maxIterations})`;
-    const text = `${progressHeading}\n\n${formatGoalTask(task, runtime, iterationSummary)}`;
+      : `${heading} ${iterationLabel} ${task.iteration}/${task.maxIterations}`;
+    const compactSummary = formatIterationSummaryForNotification(iterationSummary);
+    const text = compactSummary ? `${progressHeading}\n\n${compactSummary}` : progressHeading;
     this.notify(task, text, "goal-task-progress");
   }
 
@@ -1013,7 +1024,7 @@ export class GoalController {
       try {
         const resumed = await this.resumeTaskSession(task, prompt, session);
         this.setTaskRunningWithSession(task, resumed);
-        this.notifyIterationStatus(task, `🔁 [${task.name}] Ralph iteration continued`, undefined, iterationSummary);
+        this.notifyIterationStatus(task, `🔁 [${task.name}] Continued`, undefined, iterationSummary);
         this.scheduleTaskEvaluation(task.id, "ralph-continue", resumed.id);
       } catch (err: unknown) {
         this.markTaskFailed(task, `Failed to continue the Ralph goal task: ${errorMessage(err)}`);

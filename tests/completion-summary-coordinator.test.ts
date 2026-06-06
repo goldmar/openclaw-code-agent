@@ -92,6 +92,44 @@ describe("CompletionSummaryCoordinator", () => {
     assert.equal(third.allowed, false);
   });
 
+  it("bounds abandoned in-flight claim aliases with the completed-key cap", () => {
+    const coordinator = new CompletionSummaryCoordinator({ maxCompletedKeys: 1 });
+    const route = {
+      provider: "telegram",
+      target: "topic-fixture",
+      threadId: "13832",
+    };
+
+    const abandoned = coordinator.decide(
+      { id: "abandoned-session", route },
+      {
+        required: true,
+        producer: "terminal",
+        outcomeKey: "terminal:abandoned-session",
+      },
+    );
+    const newer = coordinator.decide(
+      { id: "newer-session", route },
+      {
+        required: true,
+        producer: "terminal",
+        outcomeKey: "terminal:newer-session",
+      },
+    );
+    const abandonedRetry = coordinator.decide(
+      { id: "abandoned-session", route },
+      {
+        required: true,
+        producer: "terminal",
+        outcomeKey: "terminal:abandoned-session",
+      },
+    );
+
+    assert.equal(abandoned.allowed, true);
+    assert.equal(newer.allowed, true);
+    assert.equal(abandonedRetry.allowed, true);
+  });
+
   it("deduplicates ordinary terminal/manual completions by fallback fingerprint", () => {
     const coordinator = new CompletionSummaryCoordinator();
     const session = { id: "manual-terminal-session" };
@@ -215,6 +253,40 @@ describe("CompletionSummaryCoordinator", () => {
 
     assert.equal(goalWakeClaim.allowed, true);
     assert.equal(foregroundClaim.allowed, true);
+    assert.equal(laterGoalWake.allowed, false);
+    assert.equal(laterGoalWake.skipReason, PRIOR_VISIBLE_SUMMARY_SKIP_REASON);
+  });
+
+  it("lets a same-route visible terminal summary suppress a later goal success wake without goalTaskId", () => {
+    const coordinator = new CompletionSummaryCoordinator();
+    const route = {
+      provider: "telegram",
+      target: "trading-topic-fixture",
+      threadId: "review-topic-fixture",
+    };
+    const visibleSummarySession = {
+      id: "trading-platform-full-repo-review-2-20-iter",
+      name: "trading-platform-full-repo-review-2-20-iter",
+      route,
+    };
+    const goalRoutingProxy = {
+      id: "trading-platform-full-repo-review-2-20-iter",
+      name: "trading-platform-full-repo-review-2-20-iter",
+      route,
+    };
+
+    const visibleClaim = coordinator.recordVisibleDelivery(visibleSummarySession, {
+      required: true,
+      producer: "terminal",
+      outcomeKey: "terminal:trading-platform-full-repo-review-2-20-iter",
+    });
+    const laterGoalWake = coordinator.decide(goalRoutingProxy, {
+      required: true,
+      producer: "goal",
+      outcomeKey: "goal:goal-trading-platform-full-repo-review-2-20-iter",
+    });
+
+    assert.equal(visibleClaim.allowed, true);
     assert.equal(laterGoalWake.allowed, false);
     assert.equal(laterGoalWake.skipReason, PRIOR_VISIBLE_SUMMARY_SKIP_REASON);
   });
