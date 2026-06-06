@@ -557,12 +557,16 @@ export class OpenCodeHarness implements AgentHarness {
     const startEventStream = (): void => {
       if (streamStarted || !client) return;
       streamStarted = true;
-      void client.streamEvents(handleEvent, streamController.signal).catch((error) => {
-        if (!streamController.signal.aborted && turnInProgress && !turnWaitCompleted) {
-          activeWaitController?.abort();
-          finishTurn(false, "failed", errorMessage(error));
-        }
-      });
+      void client.streamEvents(handleEvent, streamController.signal)
+        .catch((error) => {
+          if (!streamController.signal.aborted && turnInProgress && !turnWaitCompleted) {
+            activeWaitController?.abort();
+            finishTurn(false, "failed", errorMessage(error));
+          }
+        })
+        .finally(() => {
+          streamStarted = false;
+        });
     };
 
     const ensureSession = async (): Promise<string> => {

@@ -144,6 +144,24 @@ function waitForRequest(mock: MockOpenCodeServer, path: string, timeoutMs = 1_00
   });
 }
 
+function waitForRequestCount(mock: MockOpenCodeServer, path: string, count: number, timeoutMs = 1_000): Promise<void> {
+  const startedAt = Date.now();
+  return new Promise((resolve, reject) => {
+    const check = () => {
+      if (mock.requests.filter((request) => request.path === path).length >= count) {
+        resolve();
+        return;
+      }
+      if (Date.now() - startedAt > timeoutMs) {
+        reject(new Error(`Timed out waiting for ${count} requests to ${path}`));
+        return;
+      }
+      setTimeout(check, 5);
+    };
+    check();
+  });
+}
+
 describe("OpenCodeHarness static properties", () => {
   const h = new OpenCodeHarness();
 
@@ -394,6 +412,8 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     }
 
     const resolved = seen.filter((message) => message.type === "pending_input_resolved") as Extract<HarnessMessage, { type: "pending_input_resolved" }>[];
+    const reply = mock.requests.find((request) => request.path === "/api/session/ses_test/question/request/q_echo/reply");
+    assert.deepEqual(reply?.body, { answers: [["main"]] });
     assert.equal(resolved.length, 1);
     assert.equal(resolved[0]?.requestId, "q_echo");
   });
@@ -895,6 +915,69 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
       { prompt: { text: "first" }, delivery: "queue" },
       { prompt: { text: "second" }, delivery: "queue" },
     ]);
+  });
+
+  it("reopens the event stream after it closes between turns", async () => {
+    const mock = new MockOpenCodeServer();
+    mock.waitMode = "defer";
+    const nextPrompt = Promise.withResolvers<void>();
+    const harness = new OpenCodeHarness({
+      createServer: async () => mock.handle(),
+      fetch: mock.fetch,
+    });
+
+    async function* prompts(): AsyncGenerator<unknown> {
+      yield { type: "user", text: "first" };
+      await nextPrompt.promise;
+      yield { type: "user", text: "second" };
+    }
+
+    const session = harness.launch({ prompt: prompts(), cwd: "/repo" });
+    const iterator = session.messages[Symbol.asyncIterator]();
+    const seen: HarnessMessage[] = [];
+    await waitForRequest(mock, "/api/session/ses_test/wait");
+    mock.resolveWait();
+    while (true) {
+      const next = await iterator.next();
+      assert.equal(next.done, false);
+      seen.push(next.value);
+      if (next.value.type === "run_completed") break;
+    }
+
+    mock.closeStream();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    nextPrompt.resolve();
+    await waitForRequestCount(mock, "/api/event", 2);
+    await waitForRequestCount(mock, "/api/session/ses_test/wait", 2);
+    mock.emit({
+      type: "permission.asked",
+      properties: {
+        id: "per_second",
+        sessionID: "ses_test",
+        permission: "bash",
+        patterns: ["npm test"],
+        metadata: {},
+        always: [],
+      },
+    });
+
+    while (!seen.some((message) => message.type === "pending_input")) {
+      const next = await iterator.next();
+      assert.equal(next.done, false);
+      seen.push(next.value);
+    }
+
+    assert.equal(await session.submitPendingInputOption?.(0), true);
+    mock.resolveWait();
+    for await (const message of iterator) {
+      seen.push(message);
+    }
+
+    const pending = seen.find((message) => message.type === "pending_input") as Extract<HarnessMessage, { type: "pending_input" }> | undefined;
+    const completions = seen.filter((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }>[];
+    assert.equal(pending?.state.requestId, "per_second");
+    assert.equal(completions.length, 2);
+    assert.equal(mock.requests.filter((request) => request.path === "/api/event").length, 2);
   });
 
   it("switches permission mode by patching the classic session endpoint", async () => {
