@@ -182,6 +182,7 @@ Merge, PR, ordinary terminal, and no-change worktree outcomes use a two-step com
 ### Goal Tasks
 
 Goal tasks are explicit autonomous loops for work that should keep iterating toward a defined finish line. They do not replace ordinary coding sessions.
+Goal iteration progress is controller progress: the counter advances only when the goal controller starts another agent turn after a missing completion promise or failed verifier. If the agent performs several review/implementation passes inside one successful turn, those internal passes should appear in the single completion summary rather than as separate goal iteration notifications.
 
 Ask in normal chat:
 

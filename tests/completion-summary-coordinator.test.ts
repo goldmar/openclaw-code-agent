@@ -218,4 +218,38 @@ describe("CompletionSummaryCoordinator", () => {
     assert.equal(laterGoalWake.allowed, false);
     assert.equal(laterGoalWake.skipReason, PRIOR_VISIBLE_SUMMARY_SKIP_REASON);
   });
+
+  it("lets a same-route visible terminal summary suppress a later goal success wake without goalTaskId", () => {
+    const coordinator = new CompletionSummaryCoordinator();
+    const route = {
+      provider: "telegram",
+      target: "trading-topic-fixture",
+      threadId: "review-topic-fixture",
+    };
+    const visibleSummarySession = {
+      id: "trading-platform-full-repo-review-2-20-iter",
+      name: "trading-platform-full-repo-review-2-20-iter",
+      route,
+    };
+    const goalRoutingProxy = {
+      id: "trading-platform-full-repo-review-2-20-iter",
+      name: "trading-platform-full-repo-review-2-20-iter",
+      route,
+    };
+
+    const visibleClaim = coordinator.recordVisibleDelivery(visibleSummarySession, {
+      required: true,
+      producer: "terminal",
+      outcomeKey: "terminal:trading-platform-full-repo-review-2-20-iter",
+    });
+    const laterGoalWake = coordinator.decide(goalRoutingProxy, {
+      required: true,
+      producer: "goal",
+      outcomeKey: "goal:goal-trading-platform-full-repo-review-2-20-iter",
+    });
+
+    assert.equal(visibleClaim.allowed, true);
+    assert.equal(laterGoalWake.allowed, false);
+    assert.equal(laterGoalWake.skipReason, PRIOR_VISIBLE_SUMMARY_SKIP_REASON);
+  });
 });

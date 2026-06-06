@@ -192,6 +192,7 @@ describe("SessionManager.emitGoalTaskUpdate", () => {
     assert.equal(request.wakeMessageOnNotifySuccess, undefined);
     assert.equal(request.wakeMessageOnNotifyFailed, undefined);
   });
+
 });
 
 // =========================================================================

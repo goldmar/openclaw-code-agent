@@ -151,7 +151,7 @@ export function formatGoalLaunchResult(task: GoalTaskState, resolution: Pick<
     `  Model: ${resolution.model}`,
     ...(resolution.fastMode ? [`  Fast mode: enabled`] : []),
     `  Loop mode: ${task.loopMode}`,
-    `  Max iterations: ${task.maxIterations}`,
+    `  Max controller iterations: ${task.maxIterations}`,
     `  Goal: "${resolution.goal.length > 100 ? `${resolution.goal.slice(0, 100)}...` : resolution.goal}"`,
     ...(task.loopMode === "ralph"
       ? [`  Completion promise: ${task.completionPromise}`]
@@ -159,6 +159,8 @@ export function formatGoalLaunchResult(task: GoalTaskState, resolution: Pick<
           `  Verifiers:`,
           ...resolution.verifierCommands.map((command) => `  - ${command.command}`),
         ]),
+    ``,
+    `Controller iteration progress advances only when the goal controller starts another agent turn; internal agent review passes are reported in the completion summary.`,
     ``,
     `Use goal_status to follow progress or goal_stop to terminate the task.`,
   ];

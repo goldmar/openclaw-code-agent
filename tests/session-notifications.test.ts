@@ -914,6 +914,99 @@ describe("SessionNotificationService", () => {
     assert.deepEqual(skippedReasons, ["COMPLETION_FOLLOWUP_SKIPPED: prior human-visible summary already delivered"]);
   });
 
+  it("suppresses a later goal success wake after a same-topic foreground summary without goalTaskId", () => {
+    const requests: Array<Record<string, unknown>> = [];
+    const userMessages: string[] = [];
+    const skippedReasons: string[] = [];
+    let wakeAttempts = 0;
+    const fakeDispatcher = {
+      dispatchSessionNotification: (_session: unknown, request: Record<string, unknown> & { hooks?: Record<string, (reason?: string) => void> }) => {
+        requests.push(request as Record<string, unknown>);
+        if (typeof request.userMessage === "string" && request.userMessage.trim()) {
+          userMessages.push(request.userMessage);
+        }
+        request.hooks?.onNotifyStarted?.();
+        request.hooks?.onNotifySucceeded?.();
+        if (request.wakeMessage || request.wakeMessageOnNotifySuccess || request.wakeMessageOnNotifyFailed) {
+          wakeAttempts += 1;
+          request.hooks?.onWakeStarted?.();
+          request.hooks?.onWakeSucceeded?.();
+        }
+      },
+      dispose: () => {},
+    };
+
+    const service = new SessionNotificationService(
+      fakeDispatcher as any,
+      () => {},
+    );
+    const route = {
+      provider: "telegram",
+      target: "trading-topic-fixture",
+      threadId: "review-topic-fixture",
+      sessionKey: "agent:x:telegram:channel:trading-topic-fixture:topic:review-topic-fixture",
+    };
+    const session = {
+      id: "trading-platform-full-repo-review-2-20-iter",
+      harnessSessionId: "h-trading-platform-full-repo-review-2-20-iter",
+      name: "trading-platform-full-repo-review-2-20-iter",
+      route,
+    } as any;
+
+    service.dispatch(session, {
+      label: "goal-task-succeeded",
+      userMessage: [
+        "✅ [trading-platform-full-repo-review-2-20-iter] Goal task succeeded",
+        "Session: trading-platform-full-repo-review-2-20-iter [session-fixture]",
+      ].join("\n"),
+      notifyUser: "always",
+    });
+    service.dispatch(session, {
+      label: "foreground-routed-summary",
+      userMessage: [
+        "Full-repo OCA review finished and pushed.",
+        "Commit `abc1234` (`Harden repo hygiene checks`).",
+        "Two review/implementation iterations completed; verification passed.",
+      ].join("\n"),
+      completionSummaryOwner: "foreground",
+      completionSummary: {
+        required: true,
+        producer: "terminal",
+        outcomeKey: "terminal:trading-platform-full-repo-review-2-20-iter",
+      },
+      completionWakeSummaryRequired: true,
+      completionWakeOutcomeKey: "terminal:trading-platform-full-repo-review-2-20-iter",
+      notifyUser: "always",
+    });
+    service.dispatch(session, {
+      label: "goal-task-succeeded",
+      wakeMessage: "duplicate goal success follow-up wake",
+      completionSummary: {
+        required: true,
+        producer: "goal",
+        outcomeKey: "goal:goal-trading-platform-full-repo-review-2-20-iter",
+      },
+      completionWakeSummaryRequired: true,
+      completionWakeOutcomeKey: "goal:goal-trading-platform-full-repo-review-2-20-iter",
+      notifyUser: "never",
+      hooks: {
+        onWakeSkipped: (reason?: string) => {
+          skippedReasons.push(reason ?? "");
+        },
+      },
+    });
+
+    assert.equal(requests.length, 3);
+    assert.match(userMessages[0] ?? "", /Goal task succeeded/);
+    assert.match(userMessages[1] ?? "", /Full-repo OCA review finished and pushed/);
+    assert.equal(userMessages.length, 2);
+    assert.equal(requests[1]?.completionWakeSummaryRequired, false);
+    assert.equal(requests[2]?.wakeMessage, undefined);
+    assert.equal(requests[2]?.completionWakeSummaryRequired, false);
+    assert.equal(wakeAttempts, 0);
+    assert.deepEqual(skippedReasons, ["COMPLETION_FOLLOWUP_SKIPPED: prior human-visible summary already delivered"]);
+  });
+
   it("keeps iteration progress visible while final goal completion has one status and one summary wake", () => {
     const requests: Array<Record<string, unknown>> = [];
     const userMessages: string[] = [];
@@ -956,14 +1049,8 @@ describe("SessionNotificationService", () => {
     service.dispatch(session, {
       label: "goal-task-progress",
       userMessage: [
-        "🔁 [trading-platform-full-repo-review-2-20-iter] Ralph iteration continued (iteration 1/20)",
-        "",
-        "trading-platform-full-repo-review-2-20-iter [goal-trading-platform-full-repo-review-2-20-iter]",
-        "  Status: running",
-        "  Iteration: 1/20",
-        "  Session: trading-platform-full-repo-review-2-20-iter [kzKq9Grv]",
-        "  Iteration summary:",
-        "  - Agent: Hardened paper runtime review guards.",
+        "🔁 [trading-platform-full-repo-review-2-20-iter] Continued (iteration 1/20)",
+        "Agent: Hardened paper runtime review guards.",
       ].join("\n"),
       notifyUser: "always",
     });
@@ -989,7 +1076,7 @@ describe("SessionNotificationService", () => {
     });
     service.dispatch(session, {
       label: "goal-task-progress",
-      userMessage: "🔁 [trading-platform-full-repo-review-2-20-iter] Ralph iteration continued (iteration 2/20)",
+      userMessage: "🔁 [trading-platform-full-repo-review-2-20-iter] Continued (iteration 2/20)",
       notifyUser: "always",
     });
     service.dispatch(session, {
@@ -1011,11 +1098,13 @@ describe("SessionNotificationService", () => {
     });
 
     assert.equal(requests.length, 4);
-    assert.match(userMessages[0] ?? "", /Ralph iteration continued \(iteration 1\/20\)/);
-    assert.match(userMessages[0] ?? "", /Iteration summary:/);
+    assert.match(userMessages[0] ?? "", /Continued \(iteration 1\/20\)/);
+    assert.match(userMessages[0] ?? "", /Agent: Hardened paper runtime review guards/);
+    assert.doesNotMatch(userMessages[0] ?? "", /Iteration summary:/);
+    assert.doesNotMatch(userMessages[0] ?? "", /Status: running/);
     assert.match(userMessages[1] ?? "", /Goal task succeeded/);
     assert.doesNotMatch(userMessages[1] ?? "", /Completion promise/);
-    assert.match(userMessages[2] ?? "", /Ralph iteration continued \(iteration 2\/20\)/);
+    assert.match(userMessages[2] ?? "", /Continued \(iteration 2\/20\)/);
     assert.equal(userMessages.filter((message) => /Goal task succeeded/.test(message)).length, 1);
     assert.equal(wakeAttempts, 1);
     assert.equal(requests[3]?.wakeMessage, undefined);
