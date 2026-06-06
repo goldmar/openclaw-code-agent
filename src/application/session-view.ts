@@ -54,6 +54,7 @@ interface SessionListingItem {
   lifecycle?: string;
   resumable?: boolean;
   harness?: string;
+  model?: string;
   backendRef?: PersistedSessionInfo["backendRef"];
   harnessSessionId?: string;
   requestedPermissionMode?: PermissionMode;
@@ -313,6 +314,7 @@ function mergeActiveAndPersistedSessions(active: Session[], persisted: Persisted
       lifecycle: p.lifecycle,
       resumable: p.resumable,
       harness: p.harness,
+      model: p.model,
       backendRef: p.backendRef,
       harnessSessionId: p.harnessSessionId,
       requestedPermissionMode: p.requestedPermissionMode,
@@ -348,6 +350,7 @@ function mergeActiveAndPersistedSessions(active: Session[], persisted: Persisted
       lifecycle: session.lifecycle,
       resumable: session.isExplicitlyResumable,
       harness: session.harnessName,
+      model: session.model,
       backendRef: session.backendRef,
       harnessSessionId: session.harnessSessionId,
       requestedPermissionMode: session.requestedPermissionMode,

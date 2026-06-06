@@ -480,6 +480,24 @@ describe("session-notification-builder", () => {
     assert.match(payload.wakeMessageOnNotifyFailed, /do NOT assume the plugin already reached the user/i);
   });
 
+  it("includes harness and model in terminal completion status lines", () => {
+    const payload = buildCompletedPayload({
+      session: {
+        id: "session-2",
+        name: "done-session",
+        status: "completed",
+        costUsd: 1.25,
+        duration: 61_000,
+        harnessName: "codex",
+        model: "gpt-5.5",
+      } as any,
+      originThreadLine: "",
+      preview: "Final output",
+    });
+
+    assert.equal(payload.userMessage, "✅ [done-session] Completed | $1.25 | 1m1s | codex / gpt-5.5");
+  });
+
   it("omits route-block follow-up guidance when terminal completion has no origin route block", () => {
     const payload = buildCompletedPayload({
       session: {

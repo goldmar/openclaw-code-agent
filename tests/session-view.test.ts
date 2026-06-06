@@ -26,7 +26,7 @@ describe("session-view app layer", () => {
     assert.doesNotMatch(text, /🟢 s6 \[6\]/);
   });
 
-  it("includes harness metadata for active sessions in the listing text", () => {
+  it("includes harness and model metadata for active sessions in the listing text", () => {
     const now = Date.now();
     const sm: any = {
       list: () => [
@@ -41,6 +41,7 @@ describe("session-view app layer", () => {
           costUsd: 0,
           phase: "implementing",
           harnessName: "codex",
+          model: "gpt-5.5",
           startedAt: now - 1000,
         },
       ],
@@ -48,7 +49,7 @@ describe("session-view app layer", () => {
     };
 
     const text = getSessionsListingText(sm, "all", undefined, { full: true });
-    assert.match(text, /🧰 Harness: codex/);
+    assert.match(text, /🧰 Harness \/ model: codex \/ gpt-5\.5/);
   });
 
   it("shows all sessions from the last 24h when full is enabled", () => {
