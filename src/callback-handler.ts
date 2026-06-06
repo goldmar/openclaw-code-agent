@@ -240,10 +240,8 @@ async function clearInteractiveState(
         }
         return { textDelivered: true };
       }
-      {
-        const errText = err instanceof Error ? err.message : String(err);
-        console.warn(`[callback-handler] Failed to edit worktree prompt before clearing interactive state: ${errText}`);
-      }
+      const errText = err instanceof Error ? err.message : String(err);
+      console.warn(`[callback-handler] Failed to edit worktree prompt before clearing interactive state: ${errText}`);
       if (typeof responder.clearButtons === "function") {
         await responder.clearButtons();
       }
