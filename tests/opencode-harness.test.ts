@@ -508,6 +508,50 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     assert.equal(mock.requests.some((request) => request.path === "/api/session/ses_test/prompt"), false);
   });
 
+  it("emits interrupted completion when interrupted between stream turns", async () => {
+    const mock = new MockOpenCodeServer();
+    const nextPrompt = Promise.withResolvers<void>();
+    const harness = new OpenCodeHarness({
+      createServer: async () => mock.handle(),
+      fetch: mock.fetch,
+    });
+
+    async function* prompts(): AsyncGenerator<unknown> {
+      yield { type: "user", text: "first" };
+      await nextPrompt.promise;
+      yield { type: "user", text: "second" };
+    }
+
+    const session = harness.launch({ prompt: prompts(), cwd: "/repo" });
+    const iterator = session.messages[Symbol.asyncIterator]();
+    const seen: HarnessMessage[] = [];
+    while (true) {
+      const next = await iterator.next();
+      assert.equal(next.done, false);
+      seen.push(next.value);
+      if (next.value.type === "run_completed") break;
+    }
+
+    await session.interrupt?.();
+    nextPrompt.resolve();
+    while (true) {
+      const next = await iterator.next();
+      if (next.done) break;
+      seen.push(next.value);
+    }
+
+    const completions = seen.filter((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }>[];
+    assert.equal(completions.length, 2);
+    assert.equal(completions[0]?.data.outcome, "completed");
+    assert.equal(completions[1]?.data.success, false);
+    assert.equal(completions[1]?.data.outcome, "interrupted");
+
+    const promptsSent = mock.requests.filter((request) => request.method === "POST" && request.path === "/api/session/ses_test/prompt");
+    assert.deepEqual(promptsSent.map((request) => request.body), [
+      { prompt: { text: "first" }, delivery: "queue" },
+    ]);
+  });
+
   it("still emits one completion per prompt in a multi-turn launch stream", async () => {
     const mock = new MockOpenCodeServer();
     const harness = new OpenCodeHarness({

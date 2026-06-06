@@ -692,6 +692,9 @@ export class OpenCodeHarness implements AgentHarness {
 
       async interrupt(): Promise<void> {
         sessionInterrupted = true;
+        if (!turnInProgress) {
+          turnCompletionEmitted = false;
+        }
         finishTurn(false, "interrupted");
         if (!client || !sessionId) return;
         const abortRequest = client.request("POST", `/session/${encodeURIComponent(sessionId)}/abort`).catch((): undefined => undefined);
