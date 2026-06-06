@@ -298,6 +298,48 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
     assert.equal(wakeParams.message, "Worktree follow-through outcome recorded.");
   });
 
+  it("honors an explicit conditional wake grace delay", async (t) => {
+    const dispatcher = new WakeDispatcher({
+      directNotifications: null,
+    });
+    const session: FakeSession = {
+      id: "session-worktree-grace-delay",
+      route: buildRoute({ threadId: "13832", sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832" }),
+      originChannel: "telegram|bot|-1003863755361",
+      originThreadId: 13832,
+      originSessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+    };
+    const delays: number[] = [];
+
+    global.setTimeout = (((fn: (...args: any[]) => void, delay?: number) => {
+      delays.push(delay ?? 0);
+      queueMicrotask(() => fn());
+      return { fake: true, unref() { return this; } } as any;
+    }) as typeof setTimeout);
+    global.clearTimeout = ((() => {}) as typeof clearTimeout);
+    t.mock.method(wakeDeliveryExecutorInternals, "execFile", ((_file, args, _options, callback) => {
+      writeFileSync(logPath, `${JSON.stringify(args)}\n`, { flag: "a" });
+      callback?.(null, "COMPLETION_FOLLOWUP_DELIVERED", "");
+      return {} as any;
+    }) as typeof wakeDeliveryExecutorInternals.execFile);
+
+    dispatcher.dispatchSessionNotification(session as any, {
+      label: "worktree-outcome",
+      userMessage: "✅ PR updated: https://github.example.test/repo/pull/175",
+      wakeMessageOnNotifySuccess: "Worktree follow-through outcome recorded.",
+      notifyUser: "always",
+      requireDirectUserNotification: true,
+      completionWakeSummaryRequired: true,
+      deferConditionalWakeMs: 2000,
+    });
+
+    const calls = await waitForCalls(logPath, 2);
+    assert.equal(delays.includes(2000), true);
+    const wakeCall = calls.find((call) => call[0] === "gateway");
+    assert.ok(wakeCall, "expected delayed wake");
+    assert.equal(parseChatSendParams(wakeCall).message, "Worktree follow-through outcome recorded.");
+  });
+
   it("suppresses queued revised plan prompts when the plan decision is rejected before delivery starts", async (t) => {
     const dispatcher = createDispatcher();
     const session: FakeSession = {

@@ -43,6 +43,8 @@ export interface SessionNotificationServiceOptions {
   maxCompletedCompletionWakeKeys?: number;
 }
 
+const WORKTREE_FOLLOWUP_CONTEXT_GRACE_MS = 2_000;
+
 export class SessionNotificationService {
   private readonly completionSummaries: CompletionSummaryCoordinator;
 
@@ -190,6 +192,7 @@ export class SessionNotificationService {
       completionWakeSummaryRequired: summaryWakeRequired && wakeOwnsSummary,
       completionWakeOutcomeKey: options.completionWakeOutcomeKey ?? `terminal:${sessionId}`,
       deferConditionalWakeUntilNextTick: true,
+      deferConditionalWakeMs: WORKTREE_FOLLOWUP_CONTEXT_GRACE_MS,
       wakeMessageOnNotifySuccess: summaryWakeRequired && wakeOwnsSummary ? buildWakeMessage(true) : undefined,
       wakeMessageOnNotifyFailed: summaryWakeRequired && wakeOwnsSummary ? buildWakeMessage(false) : undefined,
     });

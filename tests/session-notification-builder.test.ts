@@ -202,6 +202,8 @@ describe("session-notification-builder", () => {
     assert.match(wake, /If the visible result is only the plugin's terse status line/);
     assert.match(wake, /send the user one short factual outcome summary/);
     assert.match(wake, /Do this even when agent_output already contains a good final summary/);
+    assert.match(wake, /normal final assistant reply or a routed message tool send\/delivery mirror/);
+    assert.match(wake, /delivered to this same originRoute/);
     assert.match(wake, /prior human-visible assistant or routed message already gave a substantive summary/);
     assert.match(wake, /prior human-visible summary already delivered/);
     assert.match(wake, /Send at most one human-visible summary/);

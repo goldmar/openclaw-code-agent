@@ -1126,10 +1126,12 @@ describe("SessionNotificationService", () => {
     assert.equal(requests.length, 1);
     assert.deepEqual(userMessages, ["✅ PR updated: https://github.com/goldmar/openclaw-code-agent/pull/174"]);
     assert.equal(requests[0]?.completionWakeSummaryRequired, true);
+    assert.equal(requests[0]?.deferConditionalWakeMs, 2000);
     assert.equal(wakeAttempts, 1);
     assert.match(requests[0]?.wakeMessageOnNotifySuccess as string, /agent_output\(session='pr-174-update-session', full=true\)/);
     assert.match(requests[0]?.wakeMessageOnNotifySuccess as string, /If the visible result is only the plugin's terse status line/);
     assert.match(requests[0]?.wakeMessageOnNotifySuccess as string, /Do this even when agent_output already contains a good final summary/);
+    assert.match(requests[0]?.wakeMessageOnNotifySuccess as string, /routed message tool send\/delivery mirror/);
   });
 
   it("suppresses duplicate opened PR follow-through wakes across session refs for the same routed outcome", () => {
@@ -1360,6 +1362,111 @@ describe("SessionNotificationService", () => {
     assert.equal(requests[0]?.wakeMessageOnNotifySuccess, undefined);
     assert.equal(requests[1]?.completionWakeSummaryRequired, false);
     assert.equal(requests[1]?.wakeMessageOnNotifySuccess, undefined);
+    assert.equal(wakeAttempts, 0);
+    assert.deepEqual(skippedReasons, ["COMPLETION_FOLLOWUP_SKIPPED: prior human-visible summary already delivered"]);
+  });
+
+  it("suppresses a PR #175 follow-through wake after a substantive same-topic routed summary is visible", () => {
+    const requests: Array<Record<string, unknown>> = [];
+    const userMessages: string[] = [];
+    const skippedReasons: string[] = [];
+    let wakeAttempts = 0;
+    const fakeDispatcher = {
+      dispatchSessionNotification: (_session: unknown, request: Record<string, unknown> & { hooks?: Record<string, (reason?: string) => void> }) => {
+        requests.push(request as Record<string, unknown>);
+        if (typeof request.userMessage === "string" && request.userMessage.trim()) {
+          userMessages.push(request.userMessage);
+        }
+        request.hooks?.onNotifyStarted?.();
+        request.hooks?.onNotifySucceeded?.();
+        if (request.wakeMessage || request.wakeMessageOnNotifySuccess || request.wakeMessageOnNotifyFailed) {
+          wakeAttempts += 1;
+          request.hooks?.onWakeStarted?.();
+          request.hooks?.onWakeSucceeded?.();
+        }
+      },
+      dispose: () => {},
+    };
+
+    const service = new SessionNotificationService(
+      fakeDispatcher as any,
+      () => {},
+    );
+    const route = {
+      provider: "telegram",
+      target: "openclaw-topic-fixture",
+      threadId: "13832",
+      sessionKey: "agent:x:telegram:channel:openclaw-topic-fixture:topic:13832",
+    };
+    const outcomeKey = "worktree-pr:updated:goldmar/openclaw-code-agent:#175:agent/fix-goal-iteration-completion-notifications:a0de54a";
+    const session = {
+      id: "pr-175-update-session",
+      harnessSessionId: "h-pr-175-update-session",
+      name: "fix-goal-iteration-completion-notifications",
+      route,
+    } as any;
+
+    service.dispatch(session, {
+      label: "worktree-outcome",
+      userMessage: "✅ PR updated: https://github.com/goldmar/openclaw-code-agent/pull/175",
+      notifyUser: "always",
+    });
+    service.dispatch(
+      { ...session, id: "pr-175-foreground-routed-summary" },
+      {
+        label: "worktree-foreground-summary",
+        userMessage: [
+          "PR #175 is open and updated.",
+          "Restored a sanitized visible goal success status and explicit iteration 1/20 progress.",
+          "Commit: a0de54a. Verification passed.",
+        ].join("\n"),
+        completionSummaryOwner: "foreground",
+        completionSummary: {
+          required: true,
+          producer: "worktree-pr",
+          outcomeKey,
+        },
+        completionWakeSummaryRequired: true,
+        completionWakeOutcomeKey: outcomeKey,
+        notifyUser: "always",
+      },
+    );
+    service.dispatch(
+      { ...session, id: "pr-175-later-routed-followup" },
+      {
+        label: "worktree-outcome",
+        userMessage: "✅ PR updated: https://github.com/goldmar/openclaw-code-agent/pull/175",
+        wakeMessageOnNotifySuccess: "duplicate PR #175 follow-through summary wake",
+        completionSummary: {
+          required: true,
+          producer: "worktree-pr",
+          outcomeKey,
+        },
+        completionWakeSummaryRequired: true,
+        completionWakeOutcomeKey: outcomeKey,
+        notifyUser: "always",
+        hooks: {
+          onWakeSkipped: (reason?: string) => {
+            skippedReasons.push(reason ?? "");
+          },
+        },
+      },
+    );
+
+    assert.equal(requests.length, 3);
+    assert.deepEqual(userMessages, [
+      "✅ PR updated: https://github.com/goldmar/openclaw-code-agent/pull/175",
+      [
+        "PR #175 is open and updated.",
+        "Restored a sanitized visible goal success status and explicit iteration 1/20 progress.",
+        "Commit: a0de54a. Verification passed.",
+      ].join("\n"),
+      "✅ PR updated: https://github.com/goldmar/openclaw-code-agent/pull/175",
+    ]);
+    assert.notEqual(requests[0]?.completionWakeSummaryRequired, true);
+    assert.equal(requests[1]?.completionWakeSummaryRequired, false);
+    assert.equal(requests[2]?.completionWakeSummaryRequired, false);
+    assert.equal(requests[2]?.wakeMessageOnNotifySuccess, undefined);
     assert.equal(wakeAttempts, 0);
     assert.deepEqual(skippedReasons, ["COMPLETION_FOLLOWUP_SKIPPED: prior human-visible summary already delivered"]);
   });

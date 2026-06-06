@@ -29,6 +29,7 @@ export interface SessionNotificationRequest {
   completionWakeSummaryRequired?: boolean;
   completionWakeOutcomeKey?: string;
   deferConditionalWakeUntilNextTick?: boolean;
+  deferConditionalWakeMs?: number;
   requireDirectUserNotification?: boolean;
   notifyUser?: SessionNotificationPolicy;
   buttons?: Array<Array<{ label: string; callbackData: string }>>;
@@ -582,8 +583,9 @@ export class WakeDispatcher {
       };
       const dispatchWake = (wakeText: string): void => {
         if (!wakeText) return;
-        if (request.deferConditionalWakeUntilNextTick === true) {
-          setTimeout(() => sendDeferredWake(wakeText), 0).unref?.();
+        if (request.deferConditionalWakeUntilNextTick === true || request.deferConditionalWakeMs !== undefined) {
+          const delayMs = Math.max(0, Math.floor(request.deferConditionalWakeMs ?? 0));
+          setTimeout(() => sendDeferredWake(wakeText), delayMs).unref?.();
           return;
         }
         sendDeferredWake(wakeText);
