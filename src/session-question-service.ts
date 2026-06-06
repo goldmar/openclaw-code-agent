@@ -75,6 +75,7 @@ export class SessionQuestionService {
 
       this.dispatchSessionNotification(session, {
         label: "ask-user-question",
+        idempotencyKey: `ask-user-question:${session.id}:${firstQuestion.question}:${options.map((option) => option.label).join("|")}`,
         userMessage,
         notifyUser: "always",
         buttons,

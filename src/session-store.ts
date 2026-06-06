@@ -166,6 +166,7 @@ export class SessionStore {
       worktreeState: session.worktreeState,
       runtimeState: session.runtimeState,
       deliveryState: session.deliveryState,
+      notificationDedupe: this.getExistingNotificationDedupe(session),
       costUsd: 0,
       originAgentId: session.originAgentId,
       originChannel: session.originChannel,
@@ -269,6 +270,7 @@ export class SessionStore {
       worktreeState: session.worktreeState,
       runtimeState: session.runtimeState,
       deliveryState: session.deliveryState,
+      notificationDedupe: this.getExistingNotificationDedupe(session),
       killReason: session.killReason,
       costUsd: session.costUsd,
       originAgentId: session.originAgentId,
@@ -314,6 +316,12 @@ export class SessionStore {
 
     this.indexPersistedEntry(info);
     this.saveIndex();
+  }
+
+  private getExistingNotificationDedupe(session: Session): PersistedSessionInfo["notificationDedupe"] {
+    return this.getPersistedSession(session.id)?.notificationDedupe
+      ?? (session.harnessSessionId ? this.getPersistedSession(session.harnessSessionId)?.notificationDedupe : undefined)
+      ?? (getBackendConversationId(session) ? this.getPersistedSession(getBackendConversationId(session)!)?.notificationDedupe : undefined);
   }
 
   /** Return newest persisted entry for a user-facing name, handling name collisions. */

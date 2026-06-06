@@ -90,6 +90,7 @@ export class SessionLifecycleService {
     const now = new Date().toISOString();
     this.deps.dispatchSessionNotification(session, {
       label: "plan-approval-fallback",
+      idempotencyKey: `plan-approval:${session.id}:v${planDecisionVersion ?? "unknown"}:fallback`,
       userMessage: buildPlanApprovalFallbackText({ session, summary }),
       notifyUser: "always",
       shouldDispatch: () => isCurrentPendingPlanDecision(session, planDecisionVersion),
@@ -426,6 +427,7 @@ export class SessionLifecycleService {
     if (payload.label === "plan-approval" && planApprovalMode === "ask" && promptAlreadyProven) {
       this.deps.dispatchSessionNotification(session, {
         label: payload.label,
+        idempotencyKey: `plan-approval:${session.id}:v${planDecisionVersion ?? "unknown"}:canonical`,
         userMessage: payload.userMessage,
         userMessages: payload.userMessages,
         notifyUser: "never",
@@ -438,6 +440,7 @@ export class SessionLifecycleService {
     if (payload.label === "plan-approval" && planApprovalMode === "ask") {
       this.deps.dispatchSessionNotification(session, {
         label: payload.label,
+        idempotencyKey: `plan-approval:${session.id}:v${planDecisionVersion ?? "unknown"}:canonical`,
         userMessage: payload.userMessage,
         userMessages: payload.userMessages,
         notifyUser: "always",

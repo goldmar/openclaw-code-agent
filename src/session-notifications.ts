@@ -1,9 +1,12 @@
+import { createHash } from "crypto";
 import type { PersistedSessionInfo } from "./types";
 import { WakeDispatcher, type SessionNotificationHooks, type SessionNotificationRequest } from "./wake-dispatcher";
 import type { Session } from "./session";
 import { getBackendConversationId, getPrimarySessionLookupRef } from "./session-backend-ref";
 import { formatOriginRouteWakeBlock } from "./session-route";
 import { buildWorktreeOutcomeFollowupWake } from "./session-notification-builder";
+import { NotificationDedupeCoordinator } from "./notification-dedupe";
+import { resolveNotificationRoute } from "./session-route";
 import {
   CompletionSummaryCoordinator,
   type CompletionSummaryFact,
@@ -41,12 +44,16 @@ export interface WorktreeOutcomeNotificationOptions {
 
 export interface SessionNotificationServiceOptions {
   maxCompletedCompletionWakeKeys?: number;
+  maxNotificationDedupeRecords?: number;
+  getPersistedSession?: (ref: string) => PersistedSessionInfo | undefined;
 }
 
 const WORKTREE_FOLLOWUP_CONTEXT_GRACE_MS = 2_000;
 
 export class SessionNotificationService {
   private readonly completionSummaries: CompletionSummaryCoordinator;
+  private readonly notificationDedupe: NotificationDedupeCoordinator;
+  private readonly getPersistedSession?: (ref: string) => PersistedSessionInfo | undefined;
 
   constructor(
     private readonly wakeDispatcher: WakeDispatcher,
@@ -56,6 +63,10 @@ export class SessionNotificationService {
     this.completionSummaries = new CompletionSummaryCoordinator({
       maxCompletedKeys: options.maxCompletedCompletionWakeKeys,
     });
+    this.notificationDedupe = new NotificationDedupeCoordinator({
+      maxRecords: options.maxNotificationDedupeRecords,
+    });
+    this.getPersistedSession = options.getPersistedSession;
   }
 
   dispatch(
@@ -63,6 +74,19 @@ export class SessionNotificationService {
     request: SessionNotificationRequest,
   ): void {
     const deliveryRef = this.getDeliveryRef(session);
+    const notificationDedupeKey = this.buildNotificationDedupeKey(session, request);
+    const notificationDedupeClaim = this.notificationDedupe.claim(
+      notificationDedupeKey,
+      this.getPersistedSession?.(deliveryRef)?.notificationDedupe,
+      request.label,
+    );
+    if (notificationDedupeClaim.records) {
+      this.applyNotificationDedupePatch(deliveryRef, notificationDedupeClaim.records);
+    }
+    if (!notificationDedupeClaim.allowed) {
+      request.hooks?.onDuplicateSkipped?.(notificationDedupeClaim.reason ?? "duplicate notification skipped");
+      return;
+    }
     const completionSummaryFact = this.buildCompletionSummaryFact(request);
     const foregroundOwnsSummary =
       request.completionSummaryOwner === "foreground" && completionSummaryFact?.required === true;
@@ -73,10 +97,12 @@ export class SessionNotificationService {
     if (completionSummaryDecision.required && !completionSummaryDecision.allowed) {
       request.hooks?.onWakeSkipped?.(completionSummaryDecision.skipReason ?? "completion follow-up wake suppressed");
       if (foregroundOwnsSummary) {
+        this.releaseNotificationDedupe(deliveryRef, notificationDedupeKey);
         return;
       } else if (completionSummaryDecision.explicit) {
         dispatchRequest = this.withoutCompletionWake(request);
       } else {
+        this.releaseNotificationDedupe(deliveryRef, notificationDedupeKey);
         return;
       }
     }
@@ -90,6 +116,7 @@ export class SessionNotificationService {
         dispatchRequest.hooks?.onNotifyStarted?.();
       },
       onNotifySucceeded: () => {
+        this.markNotificationDedupeDelivered(deliveryRef, notificationDedupeKey, dispatchRequest.label);
         this.applyNotifyDeliveryState(
           deliveryRef,
           hasWakeAfterNotifySuccess ? "wake_pending" : "idle",
@@ -108,6 +135,7 @@ export class SessionNotificationService {
         );
         if (!hasWakeAfterNotifyFailure) {
           this.completionSummaries.finish(completionSummaryDecision.key, false);
+          this.releaseNotificationDedupe(deliveryRef, notificationDedupeKey);
         }
         dispatchRequest.hooks?.onNotifyFailed?.();
       },
@@ -122,6 +150,7 @@ export class SessionNotificationService {
         dispatchRequest.hooks?.onWakeStarted?.();
       },
       onWakeSucceeded: () => {
+        this.markNotificationDedupeDelivered(deliveryRef, notificationDedupeKey, dispatchRequest.label);
         this.applyPersistedPatchWithCompletionWake(deliveryRef, "idle", this.buildCompletionWakeSucceededPatch(completionWakePatch), {
           completionWakeSucceededAt: new Date().toISOString(),
           completionWakeFailedAt: undefined,
@@ -132,6 +161,7 @@ export class SessionNotificationService {
         dispatchRequest.hooks?.onWakeSucceeded?.();
       },
       onWakeSkipped: (reason) => {
+        this.markNotificationDedupeDelivered(deliveryRef, notificationDedupeKey, dispatchRequest.label);
         this.applyPersistedPatchWithCompletionWake(deliveryRef, "idle", this.buildCompletionWakeSucceededPatch(completionWakePatch), {
           completionWakeSucceededAt: undefined,
           completionWakeFailedAt: undefined,
@@ -146,6 +176,7 @@ export class SessionNotificationService {
           completionWakeFailedAt: new Date().toISOString(),
         });
         this.completionSummaries.finish(completionSummaryDecision.key, false);
+        this.releaseNotificationDedupe(deliveryRef, notificationDedupeKey);
         dispatchRequest.hooks?.onWakeFailed?.();
       },
     };
@@ -191,6 +222,7 @@ export class SessionNotificationService {
       },
       completionWakeSummaryRequired: summaryWakeRequired && wakeOwnsSummary,
       completionWakeOutcomeKey: options.completionWakeOutcomeKey ?? `terminal:${sessionId}`,
+      idempotencyKey: `worktree-outcome:${options.completionWakeOutcomeKey ?? outcomeLine}`,
       deferConditionalWakeUntilNextTick: true,
       deferConditionalWakeMs: WORKTREE_FOLLOWUP_CONTEXT_GRACE_MS,
       wakeMessageOnNotifySuccess: summaryWakeRequired && wakeOwnsSummary ? buildWakeMessage(true) : undefined,
@@ -300,5 +332,55 @@ export class SessionNotificationService {
         ? `${request.label}\n${wakeTexts.join("\n---completion-wake---\n")}`
         : undefined,
     };
+  }
+
+  private buildNotificationDedupeKey(
+    session: RoutableSession | PersistedRoutingSession,
+    request: SessionNotificationRequest,
+  ): string | undefined {
+    const semanticKey = request.idempotencyKey?.trim();
+    if (!semanticKey) return undefined;
+    const deliveryRef = this.getDeliveryRef(session);
+    if (!deliveryRef) return undefined;
+    const route = resolveNotificationRoute(session);
+    const scope = route
+      ? {
+          provider: route.provider,
+          accountId: route.accountId,
+          target: route.target,
+          threadId: route.threadId,
+        }
+      : { deliveryRef };
+    return `notification:${this.digest(JSON.stringify({ scope, semanticKey }))}`;
+  }
+
+  private markNotificationDedupeDelivered(ref: string, key: string | undefined, label: string): void {
+    const records = this.notificationDedupe.deliveredRecords(
+      key,
+      ref ? this.getPersistedSession?.(ref)?.notificationDedupe : undefined,
+      label,
+    );
+    if (records) this.applyNotificationDedupePatch(ref, records);
+  }
+
+  private releaseNotificationDedupe(ref: string, key: string | undefined): void {
+    const records = this.notificationDedupe.releasedRecords(
+      key,
+      ref ? this.getPersistedSession?.(ref)?.notificationDedupe : undefined,
+    );
+    if (records) this.applyNotificationDedupePatch(ref, records);
+  }
+
+  private applyNotificationDedupePatch(
+    ref: string,
+    notificationDedupe: PersistedSessionInfo["notificationDedupe"],
+  ): void {
+    if (!this.getPersistedSession) return;
+    if (!ref) return;
+    this.applyPersistedPatch(ref, { notificationDedupe });
+  }
+
+  private digest(value: string): string {
+    return createHash("sha256").update(value).digest("hex").slice(0, 16);
   }
 }

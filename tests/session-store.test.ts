@@ -804,6 +804,41 @@ describe("SessionStore new worktree lifecycle fields", () => {
     assert.equal(persisted?.planApproval, "approve");
   });
 
+  it("persists and reloads notification dedupe records", () => {
+    const recordedAt = new Date().toISOString();
+    writeStore(indexPath, [{
+      harnessSessionId: "h-notification-dedupe",
+      name: "notification-dedupe-session",
+      prompt: "p",
+      workdir: "/tmp",
+      status: "completed",
+      lifecycle: "terminal",
+      costUsd: 0,
+      notificationDedupe: [
+        {
+          key: "notification:key",
+          status: "delivered",
+          recordedAt,
+          label: "plan-approval",
+        },
+        {
+          key: "",
+          status: "delivered",
+          recordedAt,
+        },
+      ],
+    }]);
+
+    const store = new SessionStore({ indexPath, env: {} });
+    const persisted = store.getPersistedSession("h-notification-dedupe");
+    assert.deepEqual(persisted?.notificationDedupe, [{
+      key: "notification:key",
+      status: "delivered",
+      recordedAt,
+      label: "plan-approval",
+    }]);
+  });
+
   it("persists and reloads deterministic approval/execution context separately from effective mode", () => {
     writeStore(indexPath, [{
       harnessSessionId: "h-approval-state",

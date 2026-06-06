@@ -28,6 +28,7 @@ export interface SessionNotificationRequest {
   completionSummaryOwner?: "wake" | "foreground";
   completionWakeSummaryRequired?: boolean;
   completionWakeOutcomeKey?: string;
+  idempotencyKey?: string;
   deferConditionalWakeUntilNextTick?: boolean;
   deferConditionalWakeMs?: number;
   requireDirectUserNotification?: boolean;
@@ -46,6 +47,7 @@ export interface SessionNotificationHooks {
   onWakeSucceeded?: () => void;
   onWakeSkipped?: (reason: string) => void;
   onWakeFailed?: () => void;
+  onDuplicateSkipped?: (reason: string) => void;
 }
 
 export const COMPLETION_FOLLOWUP_DELIVERED_MARKER = "COMPLETION_FOLLOWUP_DELIVERED";
@@ -203,6 +205,7 @@ export class WakeDispatcher {
     shouldDispatch?: () => boolean,
     successValidator?: (stdout: string) => DispatchSuccessValidationResult,
     onSkipped?: (reason: string) => void,
+    idempotencyKey?: string,
   ): void {
     const route = this.routes.resolve(session);
     const shouldContinue = shouldDispatch;
@@ -233,7 +236,7 @@ export class WakeDispatcher {
     }
 
     this.executor.execute(
-      this.transport.buildChatSendArgs(sessionKey, text, true),
+      this.transport.buildChatSendArgs(sessionKey, text, true, idempotencyKey),
       {
         label,
         sessionId: session.id,
@@ -579,6 +582,7 @@ export class WakeDispatcher {
           shouldDispatch,
           wakeSuccessValidator,
           hooks?.onWakeSkipped,
+          request.idempotencyKey,
         );
       };
       const dispatchWake = (wakeText: string): void => {
@@ -683,6 +687,7 @@ export class WakeDispatcher {
       shouldDispatch,
       wakeSuccessValidator,
       hooks?.onWakeSkipped,
+      request.idempotencyKey,
     );
   }
 }

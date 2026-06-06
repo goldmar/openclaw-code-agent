@@ -54,6 +54,7 @@ export type SessionDeliveryState = "idle" | "notifying" | "wake_pending" | "fail
 export type SessionApprovalPromptStatus = "not_sent" | "sending" | "delivered" | "fallback_delivered" | "failed";
 export type SessionApprovalPromptTransport = "none" | "direct-message" | "wake-only";
 export type SessionApprovalPromptMessageKind = "none" | "canonical_buttons" | "explicit_fallback_text";
+export type SessionNotificationDedupeStatus = "in_flight" | "delivered";
 export type ApprovalExecutionState =
   | "awaiting_plan_output"
   | "awaiting_approval"
@@ -230,6 +231,13 @@ export interface SessionActionToken {
   launchWorktreeStrategy?: WorktreeStrategy;
 }
 
+export interface SessionNotificationDedupeRecord {
+  key: string;
+  status: SessionNotificationDedupeStatus;
+  recordedAt: string;
+  label?: string;
+}
+
 /** Harness-scoped launch defaults and model restrictions. */
 export interface HarnessConfig {
   defaultModel?: string;
@@ -386,6 +394,7 @@ export interface PersistedSessionInfo {
   worktreeState?: SessionWorktreeState;
   runtimeState?: SessionRuntimeState;
   deliveryState?: SessionDeliveryState;
+  notificationDedupe?: SessionNotificationDedupeRecord[];
   completionWakeIssuedAt?: string;
   /** The required human-visible completion follow-up was confirmed delivered. */
   completionWakeSucceededAt?: string;

@@ -122,6 +122,7 @@ export class SessionWorktreeStrategyService {
   ): void {
     this.deps.dispatchSessionNotification(session, {
       label: "worktree-merge-conflict-escalated",
+      idempotencyKey: `worktree-merge-conflict-escalated:${session.id}:${branchName}`,
       userMessage: [
         `⚠️ [${session.name}] Auto-merge could not finish after one conflict-resolution attempt.`,
         `Branch \`${branchName}\` was preserved for manual follow-up.`,
@@ -180,6 +181,7 @@ export class SessionWorktreeStrategyService {
     if (action.kind === "notify") {
       this.deps.dispatchSessionNotification(session, {
         label: action.label,
+        idempotencyKey: `worktree-action:${session.id}:${action.label}`,
         userMessage: action.message,
       });
       return { notificationSent: true, worktreeRemoved: false };
@@ -329,6 +331,7 @@ export class SessionWorktreeStrategyService {
     const moreLine = dirtyEntries.length > 20 ? [`- ...and ${dirtyEntries.length - 20} more`] : [];
     this.deps.dispatchSessionNotification(session, {
       label: "worktree-dirty-uncommitted",
+      idempotencyKey: `worktree-dirty-uncommitted:${session.id}:${branchName}:${baseBranch}`,
       userMessage: [
         `⚠️ [${session.name}] Session completed with uncommitted worktree changes.`,
         ``,
@@ -383,6 +386,7 @@ export class SessionWorktreeStrategyService {
 
     this.deps.dispatchSessionNotification(session, {
       label: "worktree-merge-success",
+      idempotencyKey: `worktree-merge-success:${session.id}:${branchName}:${baseBranch}`,
       userMessage: successMsg,
       notifyUser: "always",
       completionSummary: {
@@ -455,6 +459,7 @@ export class SessionWorktreeStrategyService {
       this.markAutoMergeConflictResolving(session, resolverSession.id, attemptsUsed + 1);
       this.deps.dispatchSessionNotification(session, {
         label: "worktree-merge-conflict-resolving",
+        idempotencyKey: `worktree-merge-conflict-resolving:${session.id}:${branchName}:${resolverSession.id}`,
         userMessage: `⚠️ [${session.name}] Auto-merge hit a rebase conflict. Started resolver session ${resolverSession.name} and will retry automatically if it succeeds.`,
       });
     } catch (err) {
@@ -463,6 +468,7 @@ export class SessionWorktreeStrategyService {
       });
       this.deps.dispatchSessionNotification(session, {
         label: "worktree-merge-conflict-spawn-failed",
+        idempotencyKey: `worktree-merge-conflict-spawn-failed:${session.id}:${branchName}`,
         userMessage: `❌ [${session.name}] Auto-merge hit a rebase conflict and failed to start the resolver: ${err instanceof Error ? err.message : String(err)}`,
         buttons: [[this.deps.makeOpenPrButton(session.id)]],
       });
@@ -481,6 +487,7 @@ export class SessionWorktreeStrategyService {
     });
     this.deps.dispatchSessionNotification(session, {
       label: "worktree-merge-error",
+      idempotencyKey: `worktree-merge-error:${session.id}:${branchName}`,
       userMessage: [
         errorMsg,
         "",
@@ -539,12 +546,14 @@ export class SessionWorktreeStrategyService {
         }
         this.deps.dispatchSessionNotification(session, {
           label: "worktree-merge-error",
+          idempotencyKey: `worktree-merge-error:${session.id}:${branchName}`,
           userMessage: errorMsg,
         });
       },
       () => {
         this.deps.dispatchSessionNotification(session, {
           label: "worktree-merge-queued",
+          idempotencyKey: `worktree-merge-queued:${session.id}:${branchName}`,
           userMessage: `🕐 [${session.name}] Merge queued — another merge for this repo is in progress. Will notify when complete.`,
         });
       },
@@ -564,6 +573,7 @@ export class SessionWorktreeStrategyService {
       this.markPendingDecision(session);
       this.deps.dispatchSessionNotification(session, {
         label: "worktree-auto-pr-failed",
+        idempotencyKey: `worktree-auto-pr-failed:${session.id}:${baseBranch}`,
         userMessage: `⚠️ [${session.name}] Auto-PR did not complete. The worktree is preserved for an explicit merge or PR decision.`,
         buttons: this.deps.getWorktreeDecisionButtons(session.id),
       });
