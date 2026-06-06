@@ -1,11 +1,14 @@
 export function formatHarnessModelLabel(input: {
   harness?: string;
   model?: string;
-}): string | undefined {
+}, options: {
+  separator?: string;
+} = {}): string | undefined {
+  const separator = options.separator ?? " / ";
   const harness = input.harness?.trim();
   const model = input.model?.trim();
-  if (harness && model) return `${harness} / ${model}`;
-  if (harness) return `${harness} / default`;
+  if (harness && model) return `${harness}${separator}${model}`;
+  if (harness) return `${harness}${separator}default`;
   return model;
 }
 

@@ -61,7 +61,7 @@ export class SessionRuntimeBootstrapService {
       const launchText = `🚀 [${session.name}] Launched | ${workdirLabel} | ${formatHarnessModelLabel({
         harness: session.harnessName,
         model: session.model,
-      }) ?? "default"}`;
+      }, { separator: " | " }) ?? "default"}`;
       this.deps.notifySession(session, launchText, "launch");
     }
 

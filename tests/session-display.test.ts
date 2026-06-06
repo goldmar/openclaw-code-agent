@@ -17,4 +17,14 @@ describe("session display formatting", () => {
   it("makes provider defaults explicit when the harness is known", () => {
     assert.equal(formatHarnessModelLabel({ harness: "opencode" }), "opencode / default");
   });
+
+  it("supports launch notification pipe separation", () => {
+    assert.equal(
+      formatHarnessModelLabel(
+        { harness: "opencode", model: "xai/grok-build-0.1" },
+        { separator: " | " },
+      ),
+      "opencode | xai/grok-build-0.1",
+    );
+  });
 });
