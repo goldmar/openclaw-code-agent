@@ -292,7 +292,7 @@ function normalizeEvent(raw: unknown): { type?: string; properties: Record<strin
   const wrapped = isRecord(raw) && isRecord(raw.payload) ? raw.payload : raw;
   if (!isRecord(wrapped)) return { properties: {} };
   if (wrapped.type === "sync") {
-    const name = typeof wrapped.name === "string" ? wrapped.name.replace(/\.1$/, "") : undefined;
+    const name = typeof wrapped.name === "string" ? wrapped.name.replace(/\.\d+$/, "") : undefined;
     return {
       type: name,
       properties: isRecord(wrapped.data) ? wrapped.data : {},
@@ -494,7 +494,7 @@ export class OpenCodeHarness implements AgentHarness {
     const handleEvent = async (raw: unknown): Promise<void> => {
       const event = normalizeEvent(raw);
       const eventSessionId = sessionIdFromProperties(event.properties);
-      if (eventSessionId && sessionId && eventSessionId !== sessionId) return;
+      if (eventSessionId && eventSessionId !== sessionId) return;
 
       if (event.type === "session.next.text.delta" && typeof event.properties.delta === "string") {
         queue.enqueue(createTextDeltaEvent(event.properties.delta));

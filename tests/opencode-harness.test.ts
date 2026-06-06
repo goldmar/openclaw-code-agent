@@ -267,6 +267,67 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     assert.deepEqual(tool?.input, { command: "pwd" });
   });
 
+  it("normalizes numbered sync event names", async () => {
+    const mock = new MockOpenCodeServer();
+    const waitForEventStream = new Promise<void>((resolve) => {
+      const originalFetch = mock.fetch;
+      mock.fetch = async (input, init) => {
+        const response = await originalFetch(input, init);
+        const url = new URL(typeof input === "string" ? input : input.url);
+        if (url.pathname === "/api/event") resolve();
+        return response;
+      };
+    });
+    const harness = new OpenCodeHarness({
+      createServer: async () => mock.handle(),
+      fetch: mock.fetch,
+    });
+
+    const session = harness.launch({ prompt: "stream", cwd: "/repo" });
+    await waitForEventStream;
+    mock.emit({
+      type: "sync",
+      name: "session.next.text.delta.12",
+      data: { sessionID: "ses_test", delta: "Hello" },
+    });
+
+    const messages = await collectMessages(session);
+    const text = messages.find((message) => message.type === "text_delta") as Extract<HarnessMessage, { type: "text_delta" }> | undefined;
+    assert.equal(text?.text, "Hello");
+  });
+
+  it("ignores events for other OpenCode sessions", async () => {
+    const mock = new MockOpenCodeServer();
+    const waitForEventStream = new Promise<void>((resolve) => {
+      const originalFetch = mock.fetch;
+      mock.fetch = async (input, init) => {
+        const response = await originalFetch(input, init);
+        const url = new URL(typeof input === "string" ? input : input.url);
+        if (url.pathname === "/api/event") resolve();
+        return response;
+      };
+    });
+    const harness = new OpenCodeHarness({
+      createServer: async () => mock.handle(),
+      fetch: mock.fetch,
+    });
+
+    const session = harness.launch({ prompt: "stream", cwd: "/repo" });
+    await waitForEventStream;
+    mock.emit({
+      type: "session.next.text.delta",
+      properties: { sessionID: "ses_other", delta: "wrong" },
+    });
+    mock.emit({
+      type: "session.next.text.delta",
+      properties: { sessionID: "ses_test", delta: "right" },
+    });
+
+    const messages = await collectMessages(session);
+    const text = messages.filter((message) => message.type === "text_delta") as Extract<HarnessMessage, { type: "text_delta" }>[];
+    assert.deepEqual(text.map((message) => message.text), ["right"]);
+  });
+
   it("maps permission requests to pending input and replies with v2 endpoint", async () => {
     const mock = new MockOpenCodeServer();
     const waitForEventStream = new Promise<void>((resolve) => {
