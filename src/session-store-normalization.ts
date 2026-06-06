@@ -24,6 +24,7 @@ import type {
   SessionActionKind,
   SessionRoute,
   SessionBackendRef,
+  SessionCompletionSummaryRecord,
   SessionNotificationDedupeRecord,
   SessionNotificationDedupeStatus,
   WorktreeStrategy,
@@ -208,6 +209,25 @@ function normalizeNotificationDedupeRecords(value: unknown): SessionNotification
     })
     .filter((record): record is SessionNotificationDedupeRecord => Boolean(record));
   return records.length > 0 ? records.slice(-64) : undefined;
+}
+
+function normalizeCompletionSummaryRecords(value: unknown): SessionCompletionSummaryRecord[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const records = value
+    .map((raw): SessionCompletionSummaryRecord | undefined => {
+      if (!isRecord(raw)) return undefined;
+      const key = toOptionalString(raw.key);
+      const recordedAt = toOptionalString(raw.recordedAt);
+      if (!key || !recordedAt || !Number.isFinite(Date.parse(recordedAt))) return undefined;
+      return {
+        key,
+        recordedAt,
+        label: toOptionalString(raw.label),
+        skipReason: toOptionalString(raw.skipReason),
+      };
+    })
+    .filter((record): record is SessionCompletionSummaryRecord => Boolean(record));
+  return records.length > 0 ? records.slice(-1024) : undefined;
 }
 
 function toOptionalApprovalExecutionState(value: unknown): ApprovalExecutionState | undefined {
@@ -447,6 +467,7 @@ export function normalizePersistedEntry(raw: unknown): PersistedSessionInfo | un
     runtimeState: recoveredFromRunning ? "stopped" : toOptionalRuntimeState(raw.runtimeState),
     deliveryState: toOptionalDeliveryState(raw.deliveryState),
     notificationDedupe: normalizeNotificationDedupeRecords(raw.notificationDedupe),
+    completionSummaryDedupe: normalizeCompletionSummaryRecords(raw.completionSummaryDedupe),
     completionWakeIssuedAt: toOptionalString(raw.completionWakeIssuedAt),
     completionWakeSucceededAt,
     completionWakeFailedAt: toOptionalString(raw.completionWakeFailedAt),

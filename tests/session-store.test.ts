@@ -870,6 +870,40 @@ describe("SessionStore new worktree lifecycle fields", () => {
     }]);
   });
 
+  it("persists and reloads completion summary dedupe records", () => {
+    const recordedAt = new Date().toISOString();
+    writeStore(indexPath, [{
+      harnessSessionId: "h-completion-summary-dedupe",
+      name: "completion-summary-dedupe-session",
+      prompt: "p",
+      workdir: "/tmp",
+      status: "completed",
+      lifecycle: "terminal",
+      costUsd: 0,
+      completionSummaryDedupe: [
+        {
+          key: "route:key:outcome",
+          recordedAt,
+          label: "worktree-outcome",
+          skipReason: "COMPLETION_FOLLOWUP_SKIPPED: prior human-visible summary already delivered",
+        },
+        {
+          key: "",
+          recordedAt,
+        },
+      ],
+    }]);
+
+    const store = new SessionStore({ indexPath, env: {} });
+    const persisted = store.getPersistedSession("h-completion-summary-dedupe");
+    assert.deepEqual(persisted?.completionSummaryDedupe, [{
+      key: "route:key:outcome",
+      recordedAt,
+      label: "worktree-outcome",
+      skipReason: "COMPLETION_FOLLOWUP_SKIPPED: prior human-visible summary already delivered",
+    }]);
+  });
+
   it("persists and reloads deterministic approval/execution context separately from effective mode", () => {
     writeStore(indexPath, [{
       harnessSessionId: "h-approval-state",

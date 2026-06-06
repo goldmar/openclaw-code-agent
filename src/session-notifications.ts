@@ -50,6 +50,10 @@ export interface SessionNotificationServiceOptions {
 
 const WORKTREE_FOLLOWUP_CONTEXT_GRACE_MS = 2_000;
 
+function writeNotificationDecisionLog(payload: Record<string, unknown>): void {
+  process.stderr.write(`[SessionNotification] ${JSON.stringify(payload)}\n`);
+}
+
 export class SessionNotificationService {
   private readonly completionSummaries: CompletionSummaryCoordinator;
   private readonly notificationDedupe: NotificationDedupeCoordinator;
@@ -74,16 +78,26 @@ export class SessionNotificationService {
     request: SessionNotificationRequest,
   ): void {
     const deliveryRef = this.getDeliveryRef(session);
+    const persistedSession = this.getPersistedSession?.(deliveryRef);
     const notificationDedupeKey = this.buildNotificationDedupeKey(session, request);
     const notificationDedupeClaim = this.notificationDedupe.claim(
       notificationDedupeKey,
-      this.getPersistedSession?.(deliveryRef)?.notificationDedupe,
+      persistedSession?.notificationDedupe,
       request.label,
     );
     if (notificationDedupeClaim.records) {
       this.applyNotificationDedupePatch(deliveryRef, notificationDedupeClaim.records);
     }
     if (!notificationDedupeClaim.allowed) {
+      this.logNotificationDecision({
+        session,
+        request,
+        deliveryRef,
+        dedupeKey: notificationDedupeKey,
+        decision: "skip",
+        reason: notificationDedupeClaim.reason ?? "duplicate notification skipped",
+        deliveryPath: "notify",
+      });
       request.hooks?.onDuplicateSkipped?.(notificationDedupeClaim.reason ?? "duplicate notification skipped");
       return;
     }
@@ -91,10 +105,33 @@ export class SessionNotificationService {
     const foregroundOwnsSummary =
       request.completionSummaryOwner === "foreground" && completionSummaryFact?.required === true;
     const completionSummaryDecision = foregroundOwnsSummary
-      ? this.completionSummaries.recordVisibleDelivery(session, completionSummaryFact)
-      : this.completionSummaries.decide(session, completionSummaryFact);
+      ? this.completionSummaries.recordVisibleDelivery(
+          session,
+          completionSummaryFact,
+          persistedSession?.completionSummaryDedupe,
+          request.label,
+        )
+      : this.completionSummaries.decide(
+          session,
+          completionSummaryFact,
+          persistedSession?.completionSummaryDedupe,
+        );
+    if (completionSummaryDecision.records) {
+      this.applyCompletionSummaryDedupePatch(deliveryRef, completionSummaryDecision.records);
+    }
     let dispatchRequest = foregroundOwnsSummary ? this.withoutCompletionWake(request) : request;
     if (completionSummaryDecision.required && !completionSummaryDecision.allowed) {
+      this.logNotificationDecision({
+        session,
+        request,
+        deliveryRef,
+        dedupeKey: completionSummaryDecision.dedupeKey ?? completionSummaryDecision.key,
+        outcomeKey: completionSummaryFact?.outcomeKey,
+        decision: foregroundOwnsSummary ? "skip" : completionSummaryDecision.explicit ? "send_without_followup" : "skip",
+        reason: completionSummaryDecision.skipReason ?? "completion follow-up wake suppressed",
+        deliveryPath: foregroundOwnsSummary ? "foreground-summary" : "wake",
+        followupKind: completionSummaryFact?.producer,
+      });
       request.hooks?.onWakeSkipped?.(completionSummaryDecision.skipReason ?? "completion follow-up wake suppressed");
       if (foregroundOwnsSummary) {
         this.releaseNotificationDedupe(deliveryRef, notificationDedupeKey);
@@ -105,6 +142,19 @@ export class SessionNotificationService {
         this.releaseNotificationDedupe(deliveryRef, notificationDedupeKey);
         return;
       }
+    }
+    if (completionSummaryFact?.required === true) {
+      this.logNotificationDecision({
+        session,
+        request: dispatchRequest,
+        deliveryRef,
+        dedupeKey: completionSummaryDecision.dedupeKey ?? completionSummaryDecision.key,
+        outcomeKey: completionSummaryFact.outcomeKey,
+        decision: foregroundOwnsSummary ? "record_visible" : dispatchRequest.completionWakeSummaryRequired === true ? "send_with_followup" : "send_without_followup",
+        reason: foregroundOwnsSummary ? "foreground summary owns completion follow-up" : undefined,
+        deliveryPath: foregroundOwnsSummary ? "foreground-summary" : "wake",
+        followupKind: completionSummaryFact.producer,
+      });
     }
     const completionWakePatch = this.buildCompletionWakePatch(dispatchRequest);
     const hasWakeAfterNotifySuccess = Boolean(dispatchRequest.wakeMessage?.trim() || dispatchRequest.wakeMessageOnNotifySuccess?.trim());
@@ -172,6 +222,11 @@ export class SessionNotificationService {
       onWakeSucceeded: () => {
         notificationDedupeResolved = true;
         this.markNotificationDedupeDelivered(deliveryRef, notificationDedupeKey, dispatchRequest.label);
+        this.markCompletionSummaryDelivered(
+          deliveryRef,
+          completionSummaryDecision.key,
+          dispatchRequest.label,
+        );
         this.applyPersistedPatchWithCompletionWake(deliveryRef, "idle", this.buildCompletionWakeSucceededPatch(completionWakePatch), {
           completionWakeSucceededAt: new Date().toISOString(),
           completionWakeFailedAt: undefined,
@@ -188,6 +243,12 @@ export class SessionNotificationService {
         }
         notificationDedupeResolved = true;
         this.markNotificationDedupeDelivered(deliveryRef, notificationDedupeKey, dispatchRequest.label);
+        this.markCompletionSummaryDelivered(
+          deliveryRef,
+          completionSummaryDecision.key,
+          dispatchRequest.label,
+          reason,
+        );
         this.applyPersistedPatchWithCompletionWake(deliveryRef, "idle", this.buildCompletionWakeSucceededPatch(completionWakePatch), {
           completionWakeSucceededAt: undefined,
           completionWakeFailedAt: undefined,
@@ -238,7 +299,16 @@ export class SessionNotificationService {
     };
     const wakeOwnsSummary = options.completionSummaryOwner !== "foreground";
     if (summaryWakeRequired && !wakeOwnsSummary) {
-      this.completionSummaries.recordVisibleDelivery(session, completionSummary);
+      const deliveryRef = this.getDeliveryRef(session);
+      const decision = this.completionSummaries.recordVisibleDelivery(
+        session,
+        completionSummary,
+        deliveryRef ? this.getPersistedSession?.(deliveryRef)?.completionSummaryDedupe : undefined,
+        "worktree-outcome",
+      );
+      if (decision.records) {
+        this.applyCompletionSummaryDedupePatch(deliveryRef, decision.records);
+      }
     }
     this.dispatch(session, {
       label: "worktree-outcome",
@@ -407,6 +477,68 @@ export class SessionNotificationService {
     if (!this.getPersistedSession) return;
     if (!ref) return;
     this.applyPersistedPatch(ref, { notificationDedupe });
+  }
+
+  private markCompletionSummaryDelivered(
+    ref: string,
+    key: string | undefined,
+    label: string,
+    skipReason?: string,
+  ): void {
+    const records = this.completionSummaries.completionRecordsAfterDelivery(
+      key,
+      ref ? this.getPersistedSession?.(ref)?.completionSummaryDedupe : undefined,
+      label,
+      skipReason,
+    );
+    if (records) this.applyCompletionSummaryDedupePatch(ref, records);
+  }
+
+  private applyCompletionSummaryDedupePatch(
+    ref: string,
+    completionSummaryDedupe: PersistedSessionInfo["completionSummaryDedupe"],
+  ): void {
+    if (!this.getPersistedSession) return;
+    if (!ref) return;
+    this.applyPersistedPatch(ref, { completionSummaryDedupe });
+  }
+
+  private logNotificationDecision(args: {
+    session: RoutableSession | PersistedRoutingSession;
+    request: SessionNotificationRequest;
+    deliveryRef: string;
+    dedupeKey?: string;
+    outcomeKey?: string;
+    decision: "send_with_followup" | "send_without_followup" | "record_visible" | "skip";
+    reason?: string;
+    deliveryPath: "notify" | "wake" | "foreground-summary";
+    followupKind?: string;
+  }): void {
+    const route = resolveNotificationRoute(args.session);
+    writeNotificationDecisionLog({
+      event: "oca_notification_decision",
+      sessionId: "id" in args.session ? args.session.id : args.session.sessionId,
+      sessionName: args.session.name,
+      harnessSessionId: args.session.harnessSessionId,
+      originRoute: route
+        ? {
+            provider: route.provider,
+            accountId: route.accountId,
+            target: route.target,
+            threadId: route.threadId,
+            sessionKey: route.sessionKey,
+          }
+        : undefined,
+      outcomeType: args.outcomeKey?.split(":").slice(0, 2).join(":") ?? args.request.label,
+      notificationKind: args.request.label,
+      followupKind: args.followupKind,
+      dedupeKey: args.dedupeKey,
+      deliveryPath: args.deliveryPath,
+      decision: args.decision,
+      reason: args.reason,
+      completionWakeSummaryRequired: args.request.completionWakeSummaryRequired,
+      deliveryRef: args.deliveryRef,
+    });
   }
 
   private digest(value: string): string {

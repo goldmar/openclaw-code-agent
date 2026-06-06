@@ -352,4 +352,37 @@ describe("CompletionSummaryCoordinator", () => {
     assert.equal(laterGoalWake.allowed, false);
     assert.equal(laterGoalWake.skipReason, PRIOR_VISIBLE_SUMMARY_SKIP_REASON);
   });
+
+  it("keeps valid persisted records when raw input also contains invalid records", () => {
+    const coordinator = new CompletionSummaryCoordinator({ maxCompletedKeys: 2 });
+    const session = {
+      id: "raw-persisted-record-session",
+      route: {
+        provider: "telegram",
+        target: "openclaw-topic-fixture",
+        threadId: "13832",
+      },
+    };
+    const fact = {
+      required: true,
+      producer: "worktree-pr" as const,
+      outcomeKey: "worktree-pr:updated:goldmar/openclaw-code-agent:#184:agent/fix-duplicate-oca-notification-logging:commit-fixture",
+    };
+
+    const visibleClaim = coordinator.recordVisibleDelivery(session, fact);
+    assert.ok(visibleClaim.records?.length);
+
+    const duplicate = new CompletionSummaryCoordinator({ maxCompletedKeys: 2 }).decide(
+      { ...session, id: "raw-persisted-record-session-duplicate" },
+      fact,
+      [
+        { key: "", recordedAt: new Date().toISOString() },
+        { key: "invalid-date-key", recordedAt: "not-a-date" },
+        visibleClaim.records[0],
+      ],
+    );
+
+    assert.equal(duplicate.allowed, false);
+    assert.equal(duplicate.skipReason, PRIOR_VISIBLE_SUMMARY_SKIP_REASON);
+  });
 });

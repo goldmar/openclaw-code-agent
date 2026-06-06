@@ -238,6 +238,13 @@ export interface SessionNotificationDedupeRecord {
   label?: string;
 }
 
+export interface SessionCompletionSummaryRecord {
+  key: string;
+  recordedAt: string;
+  label?: string;
+  skipReason?: string;
+}
+
 /** Harness-scoped launch defaults and model restrictions. */
 export interface HarnessConfig {
   defaultModel?: string;
@@ -395,6 +402,7 @@ export interface PersistedSessionInfo {
   runtimeState?: SessionRuntimeState;
   deliveryState?: SessionDeliveryState;
   notificationDedupe?: SessionNotificationDedupeRecord[];
+  completionSummaryDedupe?: SessionCompletionSummaryRecord[];
   completionWakeIssuedAt?: string;
   /** The required human-visible completion follow-up was confirmed delivered. */
   completionWakeSucceededAt?: string;

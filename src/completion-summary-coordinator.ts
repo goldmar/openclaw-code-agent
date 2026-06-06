@@ -2,7 +2,7 @@ import { createHash } from "crypto";
 import type { Session } from "./session";
 import { getBackendConversationId, getPrimarySessionLookupRef } from "./session-backend-ref";
 import { resolveNotificationRoute } from "./session-route";
-import type { PersistedSessionInfo } from "./types";
+import type { PersistedSessionInfo, SessionCompletionSummaryRecord } from "./types";
 
 export type CompletionSummaryProducer =
   | "terminal"
@@ -46,8 +46,10 @@ export interface CompletionSummaryDecision {
   required: boolean;
   allowed: boolean;
   key?: string;
+  dedupeKey?: string;
   explicit: boolean;
   skipReason?: string;
+  records?: SessionCompletionSummaryRecord[];
 }
 
 interface CompletedSummaryRecord {
@@ -86,6 +88,7 @@ export class CompletionSummaryCoordinator {
   decide(
     session: CompletionSummarySession | PersistedCompletionSummarySession,
     fact: CompletionSummaryFact | undefined,
+    persistedRecords?: SessionCompletionSummaryRecord[],
   ): CompletionSummaryDecision {
     if (fact?.required !== true) {
       return { required: false, allowed: false, explicit: false };
@@ -96,14 +99,20 @@ export class CompletionSummaryCoordinator {
       return { required: true, allowed: true, explicit: false };
     }
 
-    const blockingKey = keys.decisionKeys.find((candidate) => this.inFlight.has(candidate) || this.completed.has(candidate));
+    const normalizedRecords = this.normalizeRecords(persistedRecords);
+    const persistedKeys = new Map(normalizedRecords.map((record) => [record.key, record]));
+    const blockingKey = keys.decisionKeys.find((candidate) =>
+      this.inFlight.has(candidate) || this.completed.has(candidate) || persistedKeys.has(candidate)
+    );
     const completedRecord = blockingKey ? this.completed.get(blockingKey) : undefined;
+    const persistedRecord = blockingKey ? persistedKeys.get(blockingKey) : undefined;
     if (blockingKey) {
       return {
         required: true,
         allowed: false,
         explicit: keys.explicit,
-        skipReason: completedRecord?.skipReason ?? DUPLICATE_REASON,
+        dedupeKey: keys.primary,
+        skipReason: completedRecord?.skipReason ?? persistedRecord?.skipReason ?? DUPLICATE_REASON,
       };
     }
 
@@ -119,6 +128,8 @@ export class CompletionSummaryCoordinator {
   recordVisibleDelivery(
     session: CompletionSummarySession | PersistedCompletionSummarySession,
     fact: CompletionSummaryFact,
+    persistedRecords?: SessionCompletionSummaryRecord[],
+    label?: string,
   ): CompletionSummaryDecision {
     if (fact.required !== true) {
       return { required: false, allowed: false, explicit: false };
@@ -129,23 +140,34 @@ export class CompletionSummaryCoordinator {
       return { required: true, allowed: true, explicit: false };
     }
 
-    const completedKey = keys.decisionKeys.find((candidate) => this.completed.has(candidate));
+    const normalizedRecords = this.normalizeRecords(persistedRecords);
+    const persistedKeys = new Map(normalizedRecords.map((record) => [record.key, record]));
+    const completedKey = keys.decisionKeys.find((candidate) => this.completed.has(candidate) || persistedKeys.has(candidate));
     const completedRecord = completedKey ? this.completed.get(completedKey) : undefined;
-    if (completedRecord) {
+    const persistedRecord = completedKey ? persistedKeys.get(completedKey) : undefined;
+    if (completedRecord || persistedRecord) {
       return {
         required: true,
         allowed: false,
         explicit: keys.explicit,
-        skipReason: completedRecord.skipReason,
+        dedupeKey: keys.primary,
+        skipReason: completedRecord?.skipReason ?? persistedRecord?.skipReason,
       };
     }
 
     this.finishKeys(keys.primary, keys.claimKeys, true, PRIOR_VISIBLE_SUMMARY_SKIP_REASON);
+    const records = this.deliveredRecords(
+      keys.claimKeys,
+      normalizedRecords,
+      label,
+      PRIOR_VISIBLE_SUMMARY_SKIP_REASON,
+    );
     return {
       required: true,
       allowed: true,
       key: keys.primary,
       explicit: keys.explicit,
+      records,
     };
   }
 
@@ -153,6 +175,17 @@ export class CompletionSummaryCoordinator {
     if (!key) return;
     const claimKeys = this.claimKeysByPrimary.get(key) ?? [key];
     this.finishKeys(key, claimKeys, completed, skipReason);
+  }
+
+  completionRecordsAfterDelivery(
+    key: string | undefined,
+    persistedRecords: SessionCompletionSummaryRecord[] | undefined,
+    label?: string,
+    skipReason = DUPLICATE_REASON,
+  ): SessionCompletionSummaryRecord[] | undefined {
+    if (!key) return undefined;
+    const claimKeys = this.claimKeysByPrimary.get(key) ?? [key];
+    return this.deliveredRecords(claimKeys, persistedRecords, label, skipReason);
   }
 
   private registerClaim(primary: string, claimKeys: string[]): void {
@@ -307,5 +340,33 @@ export class CompletionSummaryCoordinator {
 
   private digest(value: string): string {
     return createHash("sha256").update(value).digest("hex").slice(0, 16);
+  }
+
+  private normalizeRecords(records: SessionCompletionSummaryRecord[] | undefined): SessionCompletionSummaryRecord[] {
+    if (!records?.length) return [];
+    return records
+      .filter((record) => record.key.trim() && Number.isFinite(Date.parse(record.recordedAt)))
+      .slice(-this.maxCompletedKeys);
+  }
+
+  private deliveredRecords(
+    keys: string[],
+    persistedRecords: SessionCompletionSummaryRecord[] | undefined,
+    label?: string,
+    skipReason = DUPLICATE_REASON,
+  ): SessionCompletionSummaryRecord[] {
+    const now = new Date().toISOString();
+    const normalizedRecords = this.normalizeRecords(persistedRecords);
+    const withoutKeys = normalizedRecords.filter((record) => !keys.includes(record.key));
+    const nextRecords = [
+      ...withoutKeys,
+      ...keys.map((key) => ({
+        key,
+        recordedAt: now,
+        label,
+        skipReason,
+      })),
+    ];
+    return nextRecords.slice(Math.max(0, nextRecords.length - this.maxCompletedKeys));
   }
 }
