@@ -155,6 +155,81 @@ describe("SessionNotificationService", () => {
     assert.equal(persisted.notificationDedupe?.[0]?.status, "delivered");
   });
 
+  it("releases an idempotency key when shouldDispatch cancels before delivery", () => {
+    const persisted = { notificationDedupe: undefined } as any;
+    let attempts = 0;
+    let shouldDispatch = false;
+    const fakeDispatcher = {
+      dispatchSessionNotification: (_session: unknown, request: { shouldDispatch?: () => boolean; hooks?: Record<string, () => void> }) => {
+        attempts += 1;
+        if (request.shouldDispatch?.() === false) return;
+        request.hooks?.onNotifyStarted?.();
+        request.hooks?.onNotifySucceeded?.();
+      },
+      dispose: () => {},
+    };
+    const service = new SessionNotificationService(
+      fakeDispatcher as any,
+      (_ref, patch) => Object.assign(persisted, patch),
+      { getPersistedSession: () => persisted },
+    );
+    const session = { id: "session-stale-plan", harnessSessionId: "h-stale-plan" } as any;
+    const request = {
+      label: "plan-approval",
+      idempotencyKey: "plan-approval:session-stale-plan:v2:canonical",
+      userMessage: "Plan v2 needs approval",
+      notifyUser: "always" as const,
+      shouldDispatch: () => shouldDispatch,
+    };
+
+    service.dispatch(session, request);
+    shouldDispatch = true;
+    service.dispatch(session, request);
+
+    assert.equal(attempts, 2);
+    assert.equal(persisted.notificationDedupe?.length, 1);
+    assert.equal(persisted.notificationDedupe?.[0]?.status, "delivered");
+  });
+
+  it("releases an idempotency key when a guarded wake fallback is canceled", () => {
+    const persisted = { notificationDedupe: undefined } as any;
+    let attempts = 0;
+    let shouldDispatch = true;
+    const fakeDispatcher = {
+      dispatchSessionNotification: (_session: unknown, request: { shouldDispatch?: () => boolean; hooks?: Record<string, () => void> }) => {
+        attempts += 1;
+        request.hooks?.onNotifyStarted?.();
+        request.hooks?.onNotifyFailed?.();
+        shouldDispatch = attempts > 1;
+        if (request.shouldDispatch?.() === false) return;
+        request.hooks?.onWakeStarted?.();
+        request.hooks?.onWakeSucceeded?.();
+      },
+      dispose: () => {},
+    };
+    const service = new SessionNotificationService(
+      fakeDispatcher as any,
+      (_ref, patch) => Object.assign(persisted, patch),
+      { getPersistedSession: () => persisted },
+    );
+    const session = { id: "session-stale-fallback", harnessSessionId: "h-stale-fallback" } as any;
+    const request = {
+      label: "plan-approval-fallback",
+      idempotencyKey: "plan-approval:session-stale-fallback:v3:fallback",
+      userMessage: "Plan v3 fallback",
+      wakeMessageOnNotifyFailed: "Plan delivery failed",
+      notifyUser: "always" as const,
+      shouldDispatch: () => shouldDispatch,
+    };
+
+    service.dispatch(session, request);
+    service.dispatch(session, request);
+
+    assert.equal(attempts, 2);
+    assert.equal(persisted.notificationDedupe?.length, 1);
+    assert.equal(persisted.notificationDedupe?.[0]?.status, "delivered");
+  });
+
   it("marks failed notify paths as failed when no wake fallback exists", () => {
     const patches: Array<{ ref: string; deliveryState?: string }> = [];
     const fakeDispatcher = {

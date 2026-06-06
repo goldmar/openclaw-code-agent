@@ -109,6 +109,24 @@ export class SessionNotificationService {
     const completionWakePatch = this.buildCompletionWakePatch(dispatchRequest);
     const hasWakeAfterNotifySuccess = Boolean(dispatchRequest.wakeMessage?.trim() || dispatchRequest.wakeMessageOnNotifySuccess?.trim());
     const hasWakeAfterNotifyFailure = Boolean(dispatchRequest.wakeMessage?.trim() || dispatchRequest.wakeMessageOnNotifyFailed?.trim());
+    let notificationDedupeResolved = false;
+    let dispatchCancelled = false;
+    const cancelDispatch = (): void => {
+      if (dispatchCancelled) return;
+      dispatchCancelled = true;
+      if (!notificationDedupeResolved) {
+        this.releaseNotificationDedupe(deliveryRef, notificationDedupeKey);
+        notificationDedupeResolved = true;
+      }
+      this.completionSummaries.finish(completionSummaryDecision.key, false);
+    };
+    const shouldDispatch = dispatchRequest.shouldDispatch
+      ? () => {
+          const allowed = dispatchRequest.shouldDispatch?.() !== false;
+          if (!allowed) cancelDispatch();
+          return allowed;
+        }
+      : undefined;
 
     const mergedHooks: SessionNotificationHooks = {
       onNotifyStarted: () => {
@@ -116,6 +134,7 @@ export class SessionNotificationService {
         dispatchRequest.hooks?.onNotifyStarted?.();
       },
       onNotifySucceeded: () => {
+        notificationDedupeResolved = true;
         this.markNotificationDedupeDelivered(deliveryRef, notificationDedupeKey, dispatchRequest.label);
         this.applyNotifyDeliveryState(
           deliveryRef,
@@ -136,6 +155,7 @@ export class SessionNotificationService {
         if (!hasWakeAfterNotifyFailure) {
           this.completionSummaries.finish(completionSummaryDecision.key, false);
           this.releaseNotificationDedupe(deliveryRef, notificationDedupeKey);
+          notificationDedupeResolved = true;
         }
         dispatchRequest.hooks?.onNotifyFailed?.();
       },
@@ -150,6 +170,7 @@ export class SessionNotificationService {
         dispatchRequest.hooks?.onWakeStarted?.();
       },
       onWakeSucceeded: () => {
+        notificationDedupeResolved = true;
         this.markNotificationDedupeDelivered(deliveryRef, notificationDedupeKey, dispatchRequest.label);
         this.applyPersistedPatchWithCompletionWake(deliveryRef, "idle", this.buildCompletionWakeSucceededPatch(completionWakePatch), {
           completionWakeSucceededAt: new Date().toISOString(),
@@ -161,6 +182,7 @@ export class SessionNotificationService {
         dispatchRequest.hooks?.onWakeSucceeded?.();
       },
       onWakeSkipped: (reason) => {
+        notificationDedupeResolved = true;
         this.markNotificationDedupeDelivered(deliveryRef, notificationDedupeKey, dispatchRequest.label);
         this.applyPersistedPatchWithCompletionWake(deliveryRef, "idle", this.buildCompletionWakeSucceededPatch(completionWakePatch), {
           completionWakeSucceededAt: undefined,
@@ -177,6 +199,7 @@ export class SessionNotificationService {
         });
         this.completionSummaries.finish(completionSummaryDecision.key, false);
         this.releaseNotificationDedupe(deliveryRef, notificationDedupeKey);
+        notificationDedupeResolved = true;
         dispatchRequest.hooks?.onWakeFailed?.();
       },
     };
@@ -184,6 +207,7 @@ export class SessionNotificationService {
     this.wakeDispatcher.dispatchSessionNotification(session as Session, {
       ...dispatchRequest,
       idempotencyKey: notificationDedupeKey ?? dispatchRequest.idempotencyKey,
+      shouldDispatch,
       hooks: mergedHooks,
     });
   }
