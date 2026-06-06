@@ -191,6 +191,7 @@ function classicPromptBody(text: string, model: string | undefined, systemPrompt
 
 function isIdleSessionStatus(statuses: unknown, sessionId: string): boolean {
   if (!isRecord(statuses)) return false;
+  if (!(sessionId in statuses)) return true;
   const status = statuses[sessionId];
   return isRecord(status) && status.type === "idle";
 }

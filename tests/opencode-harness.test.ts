@@ -14,6 +14,7 @@ class MockOpenCodeServer {
   closed = false;
   waitMode: "immediate" | "defer" = "immediate";
   statusMode: "idle" | "busy-then-idle" = "idle";
+  omitIdleStatus = false;
   assistantAvailableAfterStatusRequests = 0;
   failQuestionReplies = false;
   failSessionPatch = false;
@@ -51,6 +52,7 @@ class MockOpenCodeServer {
     if (method === "GET" && path === "/session/status") {
       this.statusRequests += 1;
       const type = this.statusMode === "busy-then-idle" && this.statusRequests === 1 ? "busy" : "idle";
+      if (this.omitIdleStatus && type === "idle") return json({});
       return json({ ses_test: { type }, ses_existing: { type }, ses_forked: { type } });
     }
     if (method === "GET" && /^\/session\/[^/]+\/message$/.test(path)) {
@@ -321,6 +323,29 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
 
     const result = messages.find((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }> | undefined;
     assert.equal(mock.requests.some((request) => request.method === "GET" && request.path === "/session/status"), true);
+    assert.equal(result?.data.success, true);
+    assert.equal(result?.data.result, "Final.");
+  });
+
+  it("treats sessions missing from the classic active status map as idle", async () => {
+    const mock = new MockOpenCodeServer();
+    mock.statusMode = "busy-then-idle";
+    mock.omitIdleStatus = true;
+    const harness = new OpenCodeHarness({
+      createServer: async () => mock.handle(),
+      fetch: mock.fetch,
+    });
+
+    const messages = await collectMessages(harness.launch({
+      prompt: "ship it",
+      cwd: "/repo",
+    }));
+
+    const result = messages.find((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }> | undefined;
+    assert.equal(
+      mock.requests.filter((request) => request.method === "GET" && request.path === "/session/status").length,
+      2,
+    );
     assert.equal(result?.data.success, true);
     assert.equal(result?.data.result, "Final.");
   });
