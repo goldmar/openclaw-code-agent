@@ -889,8 +889,8 @@ export class SessionManager {
     });
     this.dispatchSessionNotification(routingProxy, {
       label,
-      userMessage: text,
-      notifyUser: "always",
+      userMessage: requiresGoalSuccessFollowup ? undefined : text,
+      notifyUser: requiresGoalSuccessFollowup ? "never" : "always",
       completionSummary: requiresGoalSuccessFollowup
         ? {
             required: true,
@@ -900,9 +900,7 @@ export class SessionManager {
         : undefined,
       completionWakeSummaryRequired: requiresGoalSuccessFollowup,
       completionWakeOutcomeKey: requiresGoalSuccessFollowup ? `goal:${task.id}` : undefined,
-      requireDirectUserNotification: requiresGoalSuccessFollowup,
-      wakeMessageOnNotifySuccess: requiresGoalSuccessFollowup ? buildWakeMessage(true) : undefined,
-      wakeMessageOnNotifyFailed: requiresGoalSuccessFollowup ? buildWakeMessage(false) : undefined,
+      wakeMessage: requiresGoalSuccessFollowup ? buildWakeMessage(false) : undefined,
     });
   }
 

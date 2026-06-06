@@ -120,7 +120,7 @@ describe("SessionManager.uniqueName", () => {
 });
 
 describe("SessionManager.emitGoalTaskUpdate", () => {
-  it("requests a routed completion follow-up wake for goal success notifications", () => {
+  it("routes goal success through the completion follow-up wake without a direct promise-status notification", () => {
     const sm = new SessionManager(5);
     stubDispatch(sm);
 
@@ -150,17 +150,20 @@ describe("SessionManager.emitGoalTaskUpdate", () => {
     assert.equal(calls.length, 1);
     const [_sessionArg, request] = calls[0];
     assert.equal(request.label, "goal-task-succeeded");
-    assert.equal(request.notifyUser, "always");
+    assert.equal(request.userMessage, undefined);
+    assert.equal(request.notifyUser, "never");
     assert.equal(request.completionWakeSummaryRequired, true);
-    assert.equal(request.requireDirectUserNotification, true);
-    assert.match(request.wakeMessageOnNotifySuccess, /Goal task succeeded\./);
-    assert.match(request.wakeMessageOnNotifySuccess, /agent_output\(session='bdTo6WBy', full=true\)/);
-    assert.match(request.wakeMessageOnNotifySuccess, /"provider":"telegram"/);
-    assert.match(request.wakeMessageOnNotifySuccess, /"target":"12345"/);
-    assert.match(request.wakeMessageOnNotifySuccess, /"threadId":"42"/);
-    assert.match(request.wakeMessageOnNotifySuccess, /COMPLETION_FOLLOWUP_DELIVERED/);
-    assert.match(request.wakeMessageOnNotifySuccess, /COMPLETION_FOLLOWUP_SKIPPED: <brief reason>/);
-    assert.match(request.wakeMessageOnNotifyFailed, /Canonical goal success status delivered to user: no/);
+    assert.equal(request.requireDirectUserNotification, undefined);
+    assert.match(request.wakeMessage, /Goal task succeeded\./);
+    assert.match(request.wakeMessage, /agent_output\(session='bdTo6WBy', full=true\)/);
+    assert.match(request.wakeMessage, /"provider":"telegram"/);
+    assert.match(request.wakeMessage, /"target":"12345"/);
+    assert.match(request.wakeMessage, /"threadId":"42"/);
+    assert.match(request.wakeMessage, /COMPLETION_FOLLOWUP_DELIVERED/);
+    assert.match(request.wakeMessage, /COMPLETION_FOLLOWUP_SKIPPED: <brief reason>/);
+    assert.match(request.wakeMessage, /Canonical goal success status delivered to user: no/);
+    assert.equal(request.wakeMessageOnNotifySuccess, undefined);
+    assert.equal(request.wakeMessageOnNotifyFailed, undefined);
   });
 
   it("does not request completion follow-up wakes for non-success goal updates", () => {
