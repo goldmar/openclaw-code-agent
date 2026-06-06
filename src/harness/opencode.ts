@@ -589,7 +589,9 @@ export class OpenCodeHarness implements AgentHarness {
       turnCompletionEmitted = false;
       try {
         const http = await ensureClient();
+        if (sessionInterrupted) return;
         const id = await ensureSession();
+        if (sessionInterrupted) return;
         queue.enqueue(createRunStartedEvent());
         runCounter += 1;
         await http.request("POST", `/api/session/${encodeURIComponent(id)}/prompt`, {
@@ -690,10 +692,10 @@ export class OpenCodeHarness implements AgentHarness {
 
       async interrupt(): Promise<void> {
         sessionInterrupted = true;
+        finishTurn(false, "interrupted");
         if (!client || !sessionId) return;
         const abortRequest = client.request("POST", `/session/${encodeURIComponent(sessionId)}/abort`).catch((): undefined => undefined);
         activeWaitController?.abort();
-        finishTurn(false, "interrupted");
         await abortRequest;
       },
     };
