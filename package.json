@@ -62,6 +62,7 @@
     "plugin",
     "claude",
     "claude-code",
+    "opencode",
     "coding-agent",
     "codex",
     "ai",
@@ -86,7 +87,7 @@
   "publishConfig": {
     "access": "public"
   },
-  "description": "An OpenClaw plugin that orchestrates coding agent sessions as managed background processes. Launch, monitor, and control coding agents (Claude Code, Codex, and more) directly from your AI gateway.",
+  "description": "An OpenClaw plugin that orchestrates coding agent sessions as managed background processes. Launch, monitor, and control coding agents (Claude Code, Codex, experimental OpenCode, and more) directly from your AI gateway.",
   "peerDependencies": {
     "openclaw": ">=2026.4.21"
   },

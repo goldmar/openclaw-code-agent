@@ -16,7 +16,7 @@ metadata:
 
 # Code Agent Orchestration
 
-Use `openclaw-code-agent` to run Claude Code or Codex sessions as background coding jobs from chat.
+Use `openclaw-code-agent` to run Claude Code, Codex, or experimental OpenCode sessions as background coding jobs from chat.
 
 ## Launch
 
@@ -26,6 +26,7 @@ Use `openclaw-code-agent` to run Claude Code or Codex sessions as background cod
 - Set `workdir` to the target repo.
 - Use `permission_mode: "plan"` when the user wants a real review gate before implementation.
 - Use `permission_mode: "bypassPermissions"` only for autonomous execution.
+- Treat `harness: "opencode"` as experimental. Use it only when requested or configured and local `opencode >= 1.16.2` has provider auth ready.
 - `defaultWorktreeStrategy` defaults to `delegate`, so new sessions normally use branch isolation and orchestrator-led follow-through. Use `worktree_strategy: "off"` only when the task must run in the main checkout or outside a git repo.
 - In `plan` mode, the plan belongs in normal session output. Do not ask the coding agent to write plan docs or transcript artifacts unless the user explicitly asked for a file.
 

@@ -12,6 +12,7 @@ Canonical operator reference for `openclaw-code-agent`: install, configuration, 
 | `harnesses.codex.allowedModels` | `["gpt-5.5", "gpt-5.5-pro"]` |
 | `harnesses.codex.reasoningEffort` | `medium` |
 | `harnesses.codex.fastMode` | `false` |
+| `harnesses.opencode.defaultModel` | unset; OpenCode uses its configured provider default |
 | `permissionMode` | `plan` |
 | `planApproval` | `delegate` |
 | `defaultWorktreeStrategy` | `delegate` |
@@ -29,7 +30,7 @@ Current releases treat persisted session storage as new-schema-only. If startup 
 
 ### OpenClaw 2026.6.1 SDK Readiness
 
-`openclaw-code-agent` `4.3.6` is validated against the OpenClaw SDK package `openclaw@2026.6.1`. The plugin keeps the peer floor at `>=2026.4.21` for compatible existing installs, while package build metadata targets OpenClaw `2026.6.1` for both host and SDK readiness.
+The current `openclaw-code-agent` package is validated against the OpenClaw SDK package `openclaw@2026.6.1`. The plugin keeps the peer floor at `>=2026.4.21` for compatible existing installs, while package build metadata targets OpenClaw `2026.6.1` for both host and SDK readiness.
 
 No host upgrade, `openclaw doctor --fix`, Gateway restart, or host config change is required for this plugin compatibility update. No plugin compatibility source update was needed for `2026.6.1`: the release adds plugin SDK exports, SQLite-backed plugin install lookup, plugin loader failure guidance, approval normalization, cron/session delivery hardening, Telegram callback and topic delivery fixes, runtime tool policy updates, and material bundled Codex App Server recovery changes, but this plugin does not depend on those new imports. Runtime code still imports only `openclaw/plugin-sdk/plugin-entry` from the OpenClaw SDK, `openclaw.plugin.json` already declares tools through `contracts.tools`, and code-agent session storage remains plugin-owned.
 
@@ -37,7 +38,7 @@ Configuration guidance for `2026.6.1`:
 
 - If `plugins.allow` is present, add `openclaw-code-agent`. OpenClaw treats that allowlist as exclusive, so `tools.allow` cannot make this plugin's tools available when the owning plugin is blocked.
 - New OpenClaw configs default `plugins.bundledDiscovery` to `allowlist`, so a restrictive `plugins.allow` list can also block omitted bundled provider or runtime plugins. Disabled bundled plugins remain disabled unless explicitly enabled or auto-enabled by their own OpenClaw contracts. Do not assume adjacent bundled plugins are available to code-agent sessions.
-- Use `harnesses.codex.defaultModel`, `harnesses.codex.allowedModels`, `harnesses.codex.reasoningEffort`, and `harnesses.codex.fastMode` for Codex. Use `harnesses["claude-code"].defaultModel`, `harnesses["claude-code"].allowedModels`, and optional `harnesses["claude-code"].reasoningEffort` for Claude Code.
+- Use `harnesses.codex.defaultModel`, `harnesses.codex.allowedModels`, `harnesses.codex.reasoningEffort`, and `harnesses.codex.fastMode` for Codex. Use `harnesses["claude-code"].defaultModel`, `harnesses["claude-code"].allowedModels`, and optional `harnesses["claude-code"].reasoningEffort` for Claude Code. Use `harnesses.opencode` only for the experimental OpenCode harness; leave `defaultModel` unset to use OpenCode's configured provider default, or set/pass a `provider/model` string when you need an explicit model.
 - Codex `reasoningEffort` is sent as `reasoningEffort` on current App Server thread, resume, and turn-start collaboration settings. Codex `fastMode: true` sends `service_tier: "fast"` on current App Server thread, resume, and turn payloads; the plugin does not emit a `fastMode` payload field.
 - OpenClaw core documents Codex routing as an explicit provider/runtime split: `openai/gpt-5.5` plus `agentRuntime.id: "codex"` uses the bundled native Codex app-server runtime, while `openai-codex/gpt-5.5` remains the PI Codex OAuth route. This plugin's own Codex harness is configured through `harnesses.codex.*`, not through OpenClaw's bundled `codex` provider route.
 - Telegram topic routes remain plain code-agent route metadata. OpenClaw `2026.6.1` keeps tightening callback payload validation, forum-topic propagation, thread bindings, targeted bot-command mentions, and native progress callback preservation; for cron or release-monitor wakeups, still use fully routable channel strings and preserve topic/thread ids such as `telegram|-1003863755361` with thread `13832`. The plugin's Start Plan, approval, completion, merge, and PR callbacks continue to route through stored delivery context and action tokens.
@@ -105,11 +106,16 @@ The host wizard does not currently provide a plugin-specific readiness panel, so
 - `claude-code`
   - The bundled Claude SDK/CLI is part of the plugin dependency set, so installation is usually the easy part.
   - Authenticated usability may still require Claude-side login/account setup when you launch the first session.
+- `opencode`
+  - Experimental. Expect this to work only with local `opencode >= 1.16.2` and provider auth already configured for OpenCode.
+  - The plugin launches one `opencode serve` process per session on `127.0.0.1`, uses the current `/api/*` routes where available, and falls back to classic OpenCode routes only for session create/fork/abort/session permission-rule updates.
+  - Leave the model unset for OpenCode's configured provider default, or pass an explicit `provider/model` string.
 
 When choosing `defaultHarness`:
 
 - prefer `codex` if the command and auth are already working on this machine
 - prefer `claude-code` if Claude Code is the expected path and Codex is not locally ready
+- choose `opencode` only for experimental use after `opencode serve` works locally
 - if neither harness is ready, finish onboarding with `defaultWorkdir` and optional `fallbackChannel`, then fix harness setup before launching sessions
 
 This setting picks between this plugin's own harnesses. It does not select OpenClaw ACPX, and it does not enable or disable OpenClaw core's bundled `codex` provider/harness plugin. Those are adjacent OpenClaw surfaces with different responsibilities. See [ACP-COMPARISON.md](ACP-COMPARISON.md).
@@ -135,7 +141,8 @@ Add this under `plugins.entries["openclaw-code-agent"]` in `~/.openclaw/openclaw
         "allowedModels": ["gpt-5.5", "gpt-5.5-pro"],
         "reasoningEffort": "medium",
         "fastMode": false
-      }
+      },
+      "opencode": {}
     }
   }
 }
@@ -161,8 +168,9 @@ forced_login_method = "chatgpt"
 | --- | --- | --- |
 | `claude-code` | Controlled by `harnesses.claude-code.allowedModels` | Native Claude Code harness with plan-mode interception |
 | `codex` | Controlled by `harnesses.codex.allowedModels` | Native Codex App Server harness with structured pending input, structured plans, and native backend worktree refs |
+| `opencode` | Optional `provider/model`; unset uses OpenCode's configured provider default | Experimental OpenCode server harness with native pending input, plugin-owned plan gating, and plugin-managed worktrees |
 
-Allowed-model matching is case-insensitive substring matching. If the resolved model is not allowed, `agent_launch` fails immediately.
+Allowed-model matching is case-insensitive substring matching. If the resolved model is not allowed, `agent_launch` fails immediately. Because OpenCode can use its own configured provider default, do not configure `harnesses.opencode.allowedModels` unless you also configure or pass an explicit OpenCode model that can be checked.
 
 Codex harness details:
 
@@ -171,11 +179,21 @@ Codex harness details:
 - `harnesses.codex.fastMode: true` sends `service_tier: "fast"` on Codex App Server thread/resume/turn payloads. It is Codex-only and is ignored for Claude Code.
 - Codex execution policy remains fixed to the supported App Server path; use plugin `permissionMode` and `planApproval` for review behavior.
 
+OpenCode harness details:
+
+- Experimental support targets `opencode >= 1.16.2`.
+- The plugin starts `opencode serve` in the prepared session cwd, binds it to localhost, and shuts it down when the session finishes or is interrupted.
+- Fresh launches create sessions through OpenCode's classic session-create route because the current v2 API has no create endpoint. Prompt, wait, context/message, permission reply, and question reply flows use current `/api/*` routes.
+- `OPENCLAW_OPENCODE_COMMAND` can override the `opencode` executable. If `OPENCODE_SERVER_PASSWORD` is set, the plugin sends Basic Auth using `OPENCODE_SERVER_USERNAME` or `opencode` as the default username.
+- Native OpenCode worktrees are out of scope for this integration. Worktree strategies use the plugin-managed worktree path.
+- OpenCode does not emit structured OpenClaw plan artifacts in this version, so `nativePlanArtifacts` is false and the plugin owns the plan approval gate.
+
 Important boundary:
 
 - this plugin's `codex` harness is part of `openclaw-code-agent`
 - it is not the same thing as OpenClaw ACPX
 - it is not the same thing as OpenClaw core's bundled `codex` plugin, even though both can use the same local Codex App Server substrate
+- this plugin's experimental `opencode` harness is also plugin-local; it is not OpenClaw ACPX's broader external-harness path
 
 ## Security Model
 
@@ -185,6 +203,7 @@ Accepted subprocess surfaces:
 
 - local `openclaw` CLI calls for wakes and notifications
 - Codex App Server launch over stdio
+- OpenCode server launch on `127.0.0.1` for experimental OpenCode sessions
 - local `git` / `gh` commands for worktree and PR flows
 - operator-provided verifier shell commands in explicit goal tasks
 
@@ -238,7 +257,7 @@ Do not use these for new setup:
 | `plan` | Present the plan first, then block implementation until approval |
 | `bypassPermissions` | Fully autonomous execution with no plan checkpoint |
 
-`plan` is the plugin default. Claude Code and Codex both feed the same plugin-owned approval workflow; Codex now supplies structured plan artifacts through the App Server backend instead of relying on text-shape inference.
+`plan` is the plugin default. Claude Code, Codex, and experimental OpenCode feed the same plugin-owned approval workflow. Codex supplies structured plan artifacts through the App Server backend; OpenCode support is text-only for plan review in this version.
 
 For Codex, approval behavior is fixed to the supported execution path and is not user-configurable. Use `permissionMode` and `planApproval` to control review gates instead.
 
@@ -322,7 +341,7 @@ Notes:
 - Resumed sessions keep the worktree strategy they already had.
 - Worktrees are kept alive until explicitly resolved (merge/PR/dismiss) when using non-trivial strategies.
 - Stale-decision reminders fire every 3h; users can snooze per-session for 24h.
-- Claude Code and fresh Codex `ask` / `delegate` launches use plugin-managed worktrees for isolated edits. Persisted Codex App Server backend refs can still restore native backend worktree context when resuming an existing thread.
+- Claude Code, experimental OpenCode, and fresh Codex `ask` / `delegate` launches use plugin-managed worktrees for isolated edits. Persisted Codex App Server backend refs can still restore native backend worktree context when resuming an existing thread.
 - `released` covers different-SHA cases where the base branch already contains the branch content after rebase, cherry-pick, or squash.
 - `agent_worktree_cleanup(mode="preview_safe")` previews what Clean all safe would remove, `mode="clean_safe"` performs it, and `mode="preview_all"` shows both safe sandboxes and retained reasons.
 
@@ -337,7 +356,7 @@ Launch a background coding session.
 | `prompt` | `string` | Yes | Task to execute |
 | `name` | `string` | No | Short session name; auto-generated if omitted |
 | `workdir` | `string` | No | Defaults to tool workspace, plugin `defaultWorkdir`, or cwd |
-| `model` | `string` | No | Defaults to the selected harness default model |
+| `model` | `string` | No | Defaults to the selected harness default model. For experimental OpenCode, omit to use OpenCode's configured provider default or pass `provider/model` explicitly |
 | `system_prompt` | `string` | No | Extra system prompt |
 | `allowed_tools` | `string[]` | No | Harness tool allowlist |
 | `resume_session_id` | `string` | No | Resume by plugin session ID or name. Persisted backend conversation IDs still work for recovery/diagnostics, but they are not the normal operator-facing path |

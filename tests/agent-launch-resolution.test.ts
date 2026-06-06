@@ -102,6 +102,46 @@ describe("resolveAgentLaunchRequest", () => {
     }
   });
 
+  it("allows experimental OpenCode to use its configured provider default when no model is set", () => {
+    const result = resolveAgentLaunchRequest(
+      {
+        prompt: "Use OpenCode defaults",
+        harness: "opencode",
+      },
+      { workspaceDir: "/tmp" } as any,
+      {},
+    );
+
+    assert.equal(result.kind, "resolved");
+    if (result.kind === "resolved") {
+      assert.equal(result.resolvedModel, undefined);
+    }
+  });
+
+  it("requires an explicit OpenCode model when an OpenCode allowlist is configured", () => {
+    setPluginConfig({
+      harnesses: {
+        opencode: {
+          allowedModels: ["anthropic/claude-sonnet-4-7"],
+        },
+      },
+    });
+
+    const result = resolveAgentLaunchRequest(
+      {
+        prompt: "Use OpenCode with a restricted model set",
+        harness: "opencode",
+      },
+      { workspaceDir: "/tmp" } as any,
+      {},
+    );
+
+    assert.equal(result.kind, "error");
+    if (result.kind === "error") {
+      assert.match(result.text, /No default model configured for harness "opencode"/);
+    }
+  });
+
   it("resolves Codex fastMode from harness config only for Codex", () => {
     setPluginConfig({
       harnesses: {

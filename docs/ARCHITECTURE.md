@@ -10,7 +10,7 @@ User (Telegram / Discord / other OpenClaw channel)
   -> orchestrator agent
   -> plugin tools / commands
   -> SessionManager
-  -> Agent harness (Claude Code or Codex)
+  -> Agent harness (Claude Code, Codex, or experimental OpenCode)
   -> coding session
 
 SessionManager
@@ -110,17 +110,20 @@ When the OpenClaw runtime exposes the managed TaskFlow API, sessions also mirror
 
 - `claude-code`: native Claude Code harness with plan-mode and `AskUserQuestion` interception
 - `codex`: native Codex App Server harness with structured pending input, structured plan artifacts, backend refs, and native worktree thread state
+- `opencode`: experimental OpenCode server harness using a per-session local `opencode serve` process, current `/api/*` routes where available, native pending input, plugin-managed worktrees, and no native OpenClaw plan artifacts
 
 Important mapping detail:
 
 - Claude Code maps plugin `permissionMode` directly to the SDK modes.
 - Codex runs through the Codex App Server transport. Plugin `plan` mode remains a plugin-owned approval workflow even when the backend exposes structured plan artifacts. Fresh Codex worktree launches use the plugin-managed worktree cwd, while persisted backend refs can restore Codex backend worktree context during resume.
-- `agent_respond` is the only continuation primitive across both backends; fork flows still go through `agent_launch(..., resume_session_id=..., fork_session=true)`.
+- OpenCode runs through a localhost OpenCode server transport. Fresh prompts, waits, messages/context fetches, permission replies, and question replies use OpenCode's current `/api/*` routes; session create, fork, abort, and permission-rule updates use classic routes until v2 equivalents exist.
+- `agent_respond` is the only continuation primitive across built-in backends; fork flows still go through `agent_launch(..., resume_session_id=..., fork_session=true)`.
 
 Boundary note:
 
 - this plugin's internal `codex` harness is local to this plugin
 - it is separate from OpenClaw core's bundled `codex` provider/harness plugin
+- this plugin's experimental `opencode` harness is local to this plugin
 - it is also separate from ACPX, which is an ACP backend rather than this plugin's execution runtime
 
 ### `WakeDispatcher`
@@ -225,7 +228,7 @@ This avoids treating “ahead of main” as the only truth source for cleanup.
 - `agent_respond(..., interrupt=true)` aborts the current turn in place and sends a redirect notification
 - `agent_respond` is the only continuation primitive for active and explicitly suspended sessions
 - sessions found in `running` state during startup recovery are normalized into resumable persisted entries instead of being implicitly restarted
-- persisted Codex resume state is restored through the backend thread ref, not through SDK-era harness session guessing
+- persisted Codex and OpenCode resume state is restored through the backend thread ref, not through SDK-era harness session guessing
 
 ## Persistence Model
 
@@ -248,7 +251,7 @@ Stored data includes:
 - backend conversation ID for diagnostics and recovery
 - output stubs and persisted stream references
 
-`backendRef` is required for all new-schema sessions. Codex SDK-era persisted sessions are archived and not loaded.
+`backendRef` is required for all new-schema sessions. Codex SDK-era persisted sessions are archived and not loaded; that legacy cleanup is Codex-specific and does not apply to OpenCode backend refs.
 
 ## Notification Pipeline
 
@@ -286,7 +289,7 @@ Worktree terminal outcomes use a two-step UX contract. The plugin first delivers
 Important constraints:
 
 - worktree creation only happens for git repos
-- fresh Codex worktree launches use plugin-managed worktrees, while persisted Codex backend refs can restore native backend worktree context during resume
+- fresh Codex and OpenCode worktree launches use plugin-managed worktrees, while persisted Codex backend refs can restore native backend worktree context during resume
 - push and PR flows need a configured remote
 - the main checkout is not modified during isolated worktree execution
 - cleanup is lifecycle-driven: safe cleanup applies only to `merged`, `released`, `dismissed`, and `no_change`
@@ -295,7 +298,8 @@ Backend capabilities intentionally differ:
 
 - Claude Code: plugin-managed worktree substrate
 - Codex App Server: plugin-managed fresh worktrees plus native backend worktree restore refs
-- User-facing worktree strategy and decision UX remain identical above both
+- OpenCode: plugin-managed worktree substrate
+- User-facing worktree strategy and decision UX remain identical above all built-in harnesses
 
 ## Design Decisions
 
@@ -305,7 +309,7 @@ Backend capabilities intentionally differ:
 4. Subprocess use is an accepted part of the architecture, but it should stay limited to backend launch, worktree/PR operations, gateway-owned delivery, and explicit verifier commands.
 5. Runtime GC and persisted resume are separate concerns. Eviction from memory does not mean losing the session.
 6. Worktree decisions are first-class orchestration states, not afterthoughts bolted on after completion.
-7. Codex and Claude Code share the same session-centric control plane even though their backend transports differ.
+7. Codex, Claude Code, and experimental OpenCode share the same session-centric control plane even though their backend transports differ.
 8. Worktree cleanup is lifecycle-first and evidence-based. Tooling and maintenance only remove worktrees when local repository evidence proves a safe resolved state such as `merged`, `released`, `dismissed`, or `no_change`.
 
 ## Config Touchpoints

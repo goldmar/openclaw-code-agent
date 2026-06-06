@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Added experimental OpenCode harness documentation, manifest guidance, and smoke-test instructions for the local `opencode serve` integration.
+
+### Fixed
+- Allowed OpenCode launches and goal tasks to omit a plugin default model so OpenCode can use its configured provider default.
+
 ## [4.3.8] - 2026-06-04
 
 ### Added

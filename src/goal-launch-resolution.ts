@@ -44,7 +44,7 @@ export type GoalLaunchResolution =
       goal: string;
       name?: string;
       workdir: string;
-      model: string;
+      model?: string;
       reasoningEffort?: ReasoningEffort;
       fastMode?: boolean;
       systemPrompt?: string;
@@ -93,15 +93,15 @@ export function resolveGoalLaunchRequest(
 
   const harness = request.harness ?? getDefaultHarnessName();
   const model = request.model ?? resolveDefaultModelForHarness(harness);
-  if (!model) {
+  const allowedModels = resolveAllowedModelsForHarness(harness);
+  if (!model && (harness !== "opencode" || (allowedModels && allowedModels.length > 0))) {
     return {
       kind: "error",
       text: `Error: No default model configured for harness "${harness}". Set plugins.entries["openclaw-code-agent"].config.harnesses.${harness}.defaultModel or pass model explicitly.`,
     };
   }
 
-  const allowedModels = resolveAllowedModelsForHarness(harness);
-  if (!isModelAllowed(model, allowedModels)) {
+  if (model && !isModelAllowed(model, allowedModels)) {
     return {
       kind: "error",
       text: `Error: Model "${model}" is not allowed. Permitted models: ${allowedModels?.join(", ")}`,
@@ -148,7 +148,7 @@ export function formatGoalLaunchResult(task: GoalTaskState, resolution: Pick<
     `  Dir: ${task.workdir}`,
     `  Session: ${task.sessionName} [${task.sessionId}]`,
     `  Harness: ${resolution.harness}`,
-    `  Model: ${resolution.model}`,
+    `  Model: ${resolution.model ?? "default"}`,
     ...(resolution.fastMode ? [`  Fast mode: enabled`] : []),
     `  Loop mode: ${task.loopMode}`,
     `  Max iterations: ${task.maxIterations}`,

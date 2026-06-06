@@ -84,7 +84,7 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
         ),
       ),
       harness: Type.Optional(
-        Type.String({ description: "Agent harness to use (e.g. 'claude-code'). Defaults to 'claude-code'." }),
+        Type.String({ description: "Agent harness to use ('claude-code', 'codex', or experimental 'opencode'). Defaults to the plugin defaultHarness." }),
       ),
       worktree_strategy: Type.Optional(
         Type.Union(

@@ -28,6 +28,9 @@ The reviewed subprocess surfaces are:
 - Codex App Server launch over stdio.
   Source: `src/harness/codex-rpc.ts`
   Rationale: this is the native Codex backend transport.
+- OpenCode server launch on localhost.
+  Source: `src/harness/opencode.ts`
+  Rationale: experimental OpenCode support uses the current `opencode serve` HTTP/SSE API. The plugin binds to `127.0.0.1`, polls `/api/health`, and shuts down the child process with the session.
 - Git and GitHub CLI operations for worktree lifecycle, merge, and PR flows.
   Sources: `src/worktree*.ts`, `index.ts`
   Rationale: worktree creation, merge, status, and PR handling are core product features.
@@ -72,6 +75,7 @@ The release checker installs the packed plugin with OpenClaw's unsafe-install ov
 The source tree does read environment variables for normal local configuration, for example:
 
 - Codex command overrides
+- OpenCode command and localhost server auth overrides: `OPENCLAW_OPENCODE_COMMAND`, `OPENCODE_SERVER_USERNAME`, and `OPENCODE_SERVER_PASSWORD`
 - worktree directory overrides
 - persisted-path resolution
 

@@ -88,7 +88,8 @@
               "sonnet",
               "opus"
             ]
-          }
+          },
+          "opencode": {}
         },
         "additionalProperties": {
           "type": "object",
@@ -96,7 +97,7 @@
           "properties": {
             "defaultModel": {
               "type": "string",
-              "description": "Default model for this harness when agent_launch omits model."
+              "description": "Default model for this harness when agent_launch omits model. For experimental OpenCode, omit this to use OpenCode's configured provider default."
             },
             "allowedModels": {
               "type": "array",
@@ -200,9 +201,9 @@
       },
       "defaultHarness": {
         "type": "string",
-        "enum": ["claude-code", "codex"],
+        "enum": ["claude-code", "codex", "opencode"],
         "default": "claude-code",
-        "description": "Default agent harness when agent_launch omits the harness parameter."
+        "description": "Default agent harness when agent_launch omits the harness parameter. OpenCode is available as an experimental harness."
       },
       "defaultWorktreeStrategy": {
         "type": "string",
@@ -242,7 +243,7 @@
     },
     "harnesses": {
       "label": "Harness configuration",
-      "help": "Per-harness defaults and model restrictions. Set harnesses.codex.fastMode=true to send service_tier=\"fast\" on Codex App Server thread/resume/turn payloads for Codex sessions. Default: {\"codex\":{\"defaultModel\":\"gpt-5.5\",\"allowedModels\":[\"gpt-5.5\",\"gpt-5.5-pro\"],\"reasoningEffort\":\"medium\",\"fastMode\":false},\"claude-code\":{\"defaultModel\":\"anthropic/claude-sonnet-4-7\",\"allowedModels\":[\"sonnet\",\"opus\"]}}.",
+      "help": "Per-harness defaults and model restrictions. Set harnesses.codex.fastMode=true to send service_tier=\"fast\" on Codex App Server thread/resume/turn payloads for Codex sessions. OpenCode is experimental; leave harnesses.opencode.defaultModel unset to use OpenCode's provider default, or pass provider/model explicitly. Default: {\"codex\":{\"defaultModel\":\"gpt-5.5\",\"allowedModels\":[\"gpt-5.5\",\"gpt-5.5-pro\"],\"reasoningEffort\":\"medium\",\"fastMode\":false},\"claude-code\":{\"defaultModel\":\"anthropic/claude-sonnet-4-7\",\"allowedModels\":[\"sonnet\",\"opus\"]},\"opencode\":{}}.",
       "advanced": true
     },
     "maxSessions": {
@@ -257,7 +258,7 @@
     },
     "defaultHarness": {
       "label": "Default harness",
-      "help": "Choose the harness you expect to use most often. Pick Codex only when the Codex command and local auth are ready on this machine.",
+      "help": "Choose the harness you expect to use most often. Pick Codex only when the Codex command and local auth are ready on this machine. Pick OpenCode only for experimental use when local opencode >= 1.16.2 and provider auth are ready.",
       "placeholder": "claude-code"
     },
     "permissionMode": {

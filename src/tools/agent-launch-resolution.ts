@@ -74,7 +74,7 @@ export type AgentLaunchResolution =
       kind: "resolved";
       workdir: string;
       harness: string;
-      resolvedModel: string;
+      resolvedModel?: string;
       permissionMode: "default" | "plan" | "bypassPermissions";
       planApproval: "ask" | "delegate" | "approve";
       originChannel: string;
@@ -224,15 +224,15 @@ export function resolveAgentLaunchRequest(
   const defaultModel = resolveDefaultModelForHarness(harness);
   const resolvedModel = params.model ?? defaultModel;
   const wasExplicitModel = params.model !== undefined;
-  if (!resolvedModel) {
+  const allowedModels = resolveAllowedModelsForHarness(harness);
+  if (!resolvedModel && (harness !== "opencode" || (allowedModels && allowedModels.length > 0))) {
     return {
       kind: "error",
       text: `Error: No default model configured for harness "${harness}". Set plugins.entries["openclaw-code-agent"].config.harnesses.${harness}.defaultModel or pass model explicitly.`,
     };
   }
 
-  const allowedModels = resolveAllowedModelsForHarness(harness);
-  if (allowedModels && allowedModels.length > 0 && !isModelAllowed(resolvedModel, allowedModels)) {
+  if (resolvedModel && allowedModels && allowedModels.length > 0 && !isModelAllowed(resolvedModel, allowedModels)) {
     return {
       kind: "error",
       text: wasExplicitModel
