@@ -158,7 +158,7 @@ export function formatSessionListing(session: SessionListRenderable): string {
     lines.push(`   🧰 Harness / model: ${formatHarnessModelLabel({
       harness: session.harness,
       model: session.model,
-    }) ?? session.harness}`);
+    })}`);
   } else if (session.model) {
     lines.push(`   🧰 Harness / model: ${session.model}`);
   }
