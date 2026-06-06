@@ -181,7 +181,14 @@ export class SessionWorktreeStrategyService {
     if (action.kind === "notify") {
       this.deps.dispatchSessionNotification(session, {
         label: action.label,
-        idempotencyKey: `worktree-action:${session.id}:${action.label}`,
+        idempotencyKey: [
+          "worktree-action",
+          session.id,
+          action.label,
+          session.completedAt ?? "unknown",
+          session.worktreeBranch ?? "unknown",
+          session.worktreePath ?? "unknown",
+        ].join(":"),
         userMessage: action.message,
       });
       return { notificationSent: true, worktreeRemoved: false };

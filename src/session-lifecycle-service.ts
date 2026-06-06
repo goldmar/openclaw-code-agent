@@ -364,7 +364,7 @@ export class SessionLifecycleService {
       }
       this.deps.dispatchSessionNotification(session, {
         label: "suspended",
-        idempotencyKey: `suspended:${session.id}:${session.killReason ?? "idle-timeout"}`,
+        idempotencyKey: `suspended:${session.id}:${session.killReason ?? "idle-timeout"}:${session.completedAt ?? "unknown"}`,
         userMessage: `💤 [${session.name}] Suspended after idle timeout | ${costStr} | ${formatDuration(duration)}`,
         notifyUser: "always",
         buttons: this.deps.getResumeButtons(session.id, session),

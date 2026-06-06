@@ -2766,6 +2766,7 @@ describe("SessionManager terminal wake behavior", () => {
       name: "idle-run",
       status: "killed",
       killReason: "idle-timeout",
+      completedAt: 1700000003000,
       costUsd: 0.25,
       startedAt: Date.now() - 2_000,
     });
@@ -2776,6 +2777,7 @@ describe("SessionManager terminal wake behavior", () => {
     assert.equal(calls.length, 1);
     const [_sessionArg, request] = calls[0];
     assert.equal(request.label, "suspended");
+    assert.equal(request.idempotencyKey, "suspended:s-idle-timeout:idle-timeout:1700000003000");
     assert.match(request.userMessage, /💤 \[idle-run\] Suspended after idle timeout/);
   });
 
@@ -3000,6 +3002,13 @@ describe("SessionManager.handleAskUserQuestion()", () => {
       id: "s-cc-question",
       name: "cc-question",
       worktreeStrategy: "ask",
+      pendingInputState: {
+        requestId: "native-question-1",
+        kind: "question",
+        promptText: "Which environment should I target?",
+        options: ["Staging", "Production"],
+        allowsFreeText: false,
+      },
     });
     (sm as any).sessions.set(session.id, session);
 
@@ -3017,6 +3026,7 @@ describe("SessionManager.handleAskUserQuestion()", () => {
     assert.equal(calls.length, 1);
     const [_sessionArg, request] = calls[0];
     assert.equal(request.label, "ask-user-question");
+    assert.equal(request.idempotencyKey, "ask-user-question:s-cc-question:native-question-1");
     assert.equal(request.buttons[0][0].label, "Staging");
     assert.equal(request.buttons[0][1].label, "Production");
     assert.match(request.wakeMessageOnNotifySuccess, /Session: cc-question \| ID: s-cc-question/);

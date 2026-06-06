@@ -65,6 +65,53 @@ function createMergeableWorktree(name: string): {
 }
 
 describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
+  it("keys generic worktree notifications by terminal cycle and worktree identity", async () => {
+    const notifications: Array<Record<string, unknown>> = [];
+    const service = new SessionWorktreeStrategyService({
+      shouldRunWorktreeStrategy: () => true,
+      isAlreadyMerged: () => false,
+      resolveWorktreeRepoDir: () => undefined,
+      getWorktreeCompletionState: () => {
+        throw new Error("missing repo notifications should not inspect completion state");
+      },
+      updatePersistedSession: () => true,
+      dispatchSessionNotification: (_session, request) => {
+        notifications.push(request as Record<string, unknown>);
+      },
+      getOutputPreview: () => "",
+      originThreadLine: () => "thread",
+      getWorktreeDecisionButtons: () => undefined,
+      makeOpenPrButton: () => ({ label: "Open PR", callbackData: "open-pr" }),
+      worktreeMessages: new SessionWorktreeMessageService(),
+      enqueueMerge: async (_repoDir, fn) => { await fn(); },
+      mergeBranch,
+      spawnConflictResolver: async () => ({ id: "resolver-unused", name: "unused" }),
+      runAutoPr: async () => ({ success: true }),
+    });
+
+    await service.handleWorktreeStrategy({
+      id: "s-worktree-generic",
+      name: "generic-worktree",
+      status: "completed",
+      phase: "implementing",
+      lifecycle: "active",
+      worktreeState: "active",
+      worktreePath: "/tmp/repo/.worktrees/generic",
+      worktreeBranch: "agent/generic",
+      worktreeStrategy: "ask",
+      completedAt: 1700000004000,
+      originalWorkdir: "/tmp/repo",
+      harnessSessionId: "h-worktree-generic",
+      getOutput: () => [],
+    } as any);
+
+    assert.equal(notifications.length, 1);
+    assert.equal(
+      notifications[0]?.idempotencyKey,
+      "worktree-action:s-worktree-generic:worktree-missing-repo-dir:1700000004000:agent/generic:/tmp/repo/.worktrees/generic",
+    );
+  });
+
   it("does not re-emit an ask-mode worktree prompt after the worktree is PR-open", async () => {
     const notifications: Array<Record<string, unknown>> = [];
     const service = new SessionWorktreeStrategyService({
