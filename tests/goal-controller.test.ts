@@ -493,7 +493,7 @@ describe("GoalController", () => {
 
     assert.equal(task.iteration, 1);
     assert.deepEqual(notifications.map((note) => note.label), ["goal-task-progress"]);
-    assert.match(notifications[0]?.text ?? "", /Ralph iteration continued/);
+    assert.match(notifications[0]?.text ?? "", /Ralph iteration continued \(iteration 1\/8\)/);
     assert.match(notifications[0]?.text ?? "", /Iteration summary:/);
     assert.match(notifications[0]?.text ?? "", /Readiness check ran; broker gate is still closed/);
     assert.match(notifications[0]?.text ?? "", /No eligible paper intents appeared/);
@@ -533,6 +533,7 @@ describe("GoalController", () => {
     await (controller as any).handleTerminalSession(task, session);
 
     assert.deepEqual(notifications.map((note) => note.label), ["goal-task-progress"]);
+    assert.match(notifications[0]?.text ?? "", /Ralph iteration continued \(iteration 1\/8\)/);
     assert.doesNotMatch(notifications[0]?.text ?? "", /Iteration summary:/);
     assert.match(notifications[0]?.text ?? "", /Status: running/);
   });
@@ -580,7 +581,7 @@ describe("GoalController", () => {
 
     assert.equal(task.iteration, 1);
     assert.deepEqual(notifications.map((note) => note.label), ["goal-task-progress"]);
-    assert.match(notifications[0]?.text ?? "", /Completion claimed but verifiers still failed/);
+    assert.match(notifications[0]?.text ?? "", /Completion claimed but verifiers still failed \(iteration 1\/8\)/);
     assert.match(notifications[0]?.text ?? "", /Iteration summary:/);
     assert.match(notifications[0]?.text ?? "", /Completion was claimed, but the loop is continuing after verification/);
     assert.match(notifications[0]?.text ?? "", /Verifier: FAIL readiness/);
@@ -627,7 +628,7 @@ describe("GoalController", () => {
 
     assert.equal(task.iteration, 1);
     assert.deepEqual(notifications.map((note) => note.label), ["goal-task-progress"]);
-    assert.match(notifications[0]?.text ?? "", /Repair iteration started after verifier failure/);
+    assert.match(notifications[0]?.text ?? "", /Repair iteration started after verifier failure \(repair iteration 1\/8\)/);
     assert.match(notifications[0]?.text ?? "", /Iteration summary:/);
     assert.match(notifications[0]?.text ?? "", /Verifier: FAIL readiness/);
     assert.match(notifications[0]?.text ?? "", /Verifier: broker gate stayed closed/);
