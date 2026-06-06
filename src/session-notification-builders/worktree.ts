@@ -46,8 +46,8 @@ export function buildDelegateWorktreeWakeMessage(args: {
     ``,
     `You own the next step for this worktree.`,
     `- Merge immediately with agent_merge(session="${sessionName}", base_branch="${baseBranch}") if the changes are clearly in-scope and low-risk.`,
-    `- If a PR is safer, message the user with the summary and ask for confirmation before calling agent_pr().`,
-    `- If scope or risk is unclear, message the user and ask for guidance.`,
+    `- If a PR is safer or human choice is needed, call agent_request_worktree_decision(session="${sessionName}", summary="...") so the user gets the canonical Merge/Open PR/Later/Discard buttons.`,
+    `- If scope or risk is unclear, call agent_request_worktree_decision(session="${sessionName}", summary="...") with a concise risk summary instead of sending a plain-text-only question.`,
     `- Never call agent_pr() autonomously in delegate mode.`,
     `- After deciding, notify the user briefly with what you did and why.`,
     ...(hasOriginRouteBlock

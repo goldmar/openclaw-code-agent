@@ -164,6 +164,14 @@ export class SessionWorktreeMessageService {
         diffSummary.commits,
         diffSummary.commitMessages.map((commit) => commit.hash).join(","),
       ].join(":"),
+      userMessage: [
+        `🔀 Worktree decision pending for session \`${session.name}\``,
+        ``,
+        `Branch: \`${branchName}\` → \`${baseBranch}\``,
+        `Commits: ${diffSummary.commits} | Files: ${diffSummary.filesChanged} | +${diffSummary.insertions} / -${diffSummary.deletions}`,
+        ``,
+        `The delegated reviewer is deciding whether to merge, open a PR, or ask for your choice.`,
+      ].join("\n"),
       wakeMessage: buildDelegateWorktreeWakeMessage({
         sessionName: session.name,
         sessionId: session.id,
@@ -175,7 +183,7 @@ export class SessionWorktreeMessageService {
         originThreadLine,
         diffSummary,
       }),
-      notifyUser: "never",
+      notifyUser: "always",
     };
   }
 }

@@ -1851,6 +1851,195 @@ describe("SessionNotificationService", () => {
     assert.deepEqual(skippedReasons, ["COMPLETION_FOLLOWUP_SKIPPED: prior human-visible summary already delivered"]);
   });
 
+  it("suppresses a later terminal wake after canonical merge status plus one visible follow-up summary", () => {
+    const requests: Array<Record<string, unknown>> = [];
+    const userMessages: string[] = [];
+    const skippedReasons: string[] = [];
+    let wakeAttempts = 0;
+    const fakeDispatcher = {
+      dispatchSessionNotification: (_session: unknown, request: Record<string, unknown> & { hooks?: Record<string, (reason?: string) => void> }) => {
+        requests.push(request as Record<string, unknown>);
+        if (typeof request.userMessage === "string" && request.userMessage.trim()) {
+          userMessages.push(request.userMessage);
+        }
+        request.hooks?.onNotifyStarted?.();
+        request.hooks?.onNotifySucceeded?.();
+        if (request.wakeMessage || request.wakeMessageOnNotifySuccess || request.wakeMessageOnNotifyFailed) {
+          wakeAttempts += 1;
+          request.hooks?.onWakeStarted?.();
+          request.hooks?.onWakeSucceeded?.();
+        }
+      },
+      dispose: () => {},
+    };
+
+    const service = new SessionNotificationService(
+      fakeDispatcher as any,
+      () => {},
+    );
+    const route = {
+      provider: "telegram",
+      target: "openclaw-topic-fixture",
+      threadId: "13832",
+      sessionKey: "agent:x:telegram:channel:openclaw-topic-fixture:topic:13832",
+    };
+    const session = {
+      id: "include-harness-in-oca-notifications",
+      harnessSessionId: "h-include-harness-in-oca-notifications",
+      name: "include-harness-in-oca-notifications",
+      route,
+    } as any;
+    const mergeOutcomeKey = "terminal:include-harness-in-oca-notifications";
+
+    service.dispatch(session, {
+      label: "worktree-outcome",
+      userMessage: "✅ Merged: agent/include-harness-in-oca-notifications → main (10 files, +128/-11)",
+      notifyUser: "always",
+    });
+    service.dispatch(
+      { ...session, id: "include-harness-in-oca-notifications-routed-summary" },
+      {
+        label: "worktree-foreground-summary",
+        userMessage: [
+          "Merged `include-harness-in-oca-notifications` into `main` by fast-forward.",
+          "Scope was tight: notifications now show `harness / model` instead of model-only ambiguity.",
+        ].join("\n"),
+        completionSummaryOwner: "foreground",
+        completionSummary: {
+          required: true,
+          producer: "worktree",
+          outcomeKey: mergeOutcomeKey,
+        },
+        completionWakeSummaryRequired: true,
+        completionWakeOutcomeKey: mergeOutcomeKey,
+        notifyUser: "always",
+      },
+    );
+    service.dispatch(
+      { ...session, id: "include-harness-in-oca-notifications-terminal-retry" },
+      {
+        label: "completed",
+        userMessage: "✅ [include-harness-in-oca-notifications] Completed",
+        wakeMessageOnNotifySuccess: "duplicate terminal wake: summarize the merge outcome",
+        completionSummary: {
+          required: true,
+          producer: "terminal",
+          outcomeKey: "terminal:include-harness-in-oca-notifications-terminal-retry",
+        },
+        completionWakeSummaryRequired: true,
+        completionWakeOutcomeKey: "terminal:include-harness-in-oca-notifications-terminal-retry",
+        notifyUser: "always",
+        hooks: {
+          onWakeSkipped: (reason?: string) => {
+            skippedReasons.push(reason ?? "");
+          },
+        },
+      },
+    );
+
+    assert.equal(requests.length, 3);
+    assert.deepEqual(userMessages, [
+      "✅ Merged: agent/include-harness-in-oca-notifications → main (10 files, +128/-11)",
+      [
+        "Merged `include-harness-in-oca-notifications` into `main` by fast-forward.",
+        "Scope was tight: notifications now show `harness / model` instead of model-only ambiguity.",
+      ].join("\n"),
+      "✅ [include-harness-in-oca-notifications] Completed",
+    ]);
+    assert.equal(requests[1]?.completionWakeSummaryRequired, false);
+    assert.equal(requests[2]?.completionWakeSummaryRequired, false);
+    assert.equal(requests[2]?.wakeMessageOnNotifySuccess, undefined);
+    assert.equal(wakeAttempts, 0);
+    assert.deepEqual(skippedReasons, ["COMPLETION_FOLLOWUP_SKIPPED: prior human-visible summary already delivered"]);
+  });
+
+  it("suppresses a later terminal wake after canonical PR-open status plus one visible follow-up summary", () => {
+    const requests: Array<Record<string, unknown>> = [];
+    const skippedReasons: string[] = [];
+    let wakeAttempts = 0;
+    const fakeDispatcher = {
+      dispatchSessionNotification: (_session: unknown, request: Record<string, unknown> & { hooks?: Record<string, (reason?: string) => void> }) => {
+        requests.push(request as Record<string, unknown>);
+        request.hooks?.onNotifyStarted?.();
+        request.hooks?.onNotifySucceeded?.();
+        if (request.wakeMessage || request.wakeMessageOnNotifySuccess || request.wakeMessageOnNotifyFailed) {
+          wakeAttempts += 1;
+          request.hooks?.onWakeStarted?.();
+          request.hooks?.onWakeSucceeded?.();
+        }
+      },
+      dispose: () => {},
+    };
+
+    const service = new SessionNotificationService(
+      fakeDispatcher as any,
+      () => {},
+    );
+    const route = {
+      provider: "telegram",
+      target: "openclaw-topic-fixture",
+      threadId: "13832",
+      sessionKey: "agent:x:telegram:channel:openclaw-topic-fixture:topic:13832",
+    };
+    const session = {
+      id: "fix-duplicate-completion-notifications",
+      harnessSessionId: "h-fix-duplicate-completion-notifications",
+      name: "fix-duplicate-completion-notifications",
+      route,
+    } as any;
+    const prOutcomeKey = "worktree-pr:opened:goldmar/openclaw-code-agent:#171:agent/fix-duplicate-completion-notifications:created";
+
+    service.dispatch(session, {
+      label: "worktree-outcome",
+      userMessage: "✅ PR opened: https://github.com/goldmar/openclaw-code-agent/pull/171",
+      notifyUser: "always",
+    });
+    service.dispatch(
+      { ...session, id: "fix-duplicate-completion-notifications-routed-summary" },
+      {
+        label: "worktree-foreground-summary",
+        userMessage: "Opened PR #171 for `agent/fix-duplicate-completion-notifications` into `main`.",
+        completionSummaryOwner: "foreground",
+        completionSummary: {
+          required: true,
+          producer: "worktree-pr",
+          outcomeKey: prOutcomeKey,
+        },
+        completionWakeSummaryRequired: true,
+        completionWakeOutcomeKey: prOutcomeKey,
+        notifyUser: "always",
+      },
+    );
+    service.dispatch(
+      { ...session, id: "fix-duplicate-completion-notifications-terminal-retry" },
+      {
+        label: "completed",
+        userMessage: "✅ [fix-duplicate-completion-notifications] Completed",
+        wakeMessageOnNotifySuccess: "duplicate terminal wake: summarize PR #171",
+        completionSummary: {
+          required: true,
+          producer: "terminal",
+          outcomeKey: "terminal:fix-duplicate-completion-notifications-terminal-retry",
+        },
+        completionWakeSummaryRequired: true,
+        completionWakeOutcomeKey: "terminal:fix-duplicate-completion-notifications-terminal-retry",
+        notifyUser: "always",
+        hooks: {
+          onWakeSkipped: (reason?: string) => {
+            skippedReasons.push(reason ?? "");
+          },
+        },
+      },
+    );
+
+    assert.equal(requests.length, 3);
+    assert.equal(requests[1]?.completionWakeSummaryRequired, false);
+    assert.equal(requests[2]?.completionWakeSummaryRequired, false);
+    assert.equal(requests[2]?.wakeMessageOnNotifySuccess, undefined);
+    assert.equal(wakeAttempts, 0);
+    assert.deepEqual(skippedReasons, ["COMPLETION_FOLLOWUP_SKIPPED: prior human-visible summary already delivered"]);
+  });
+
   it("keeps materially new PR follow-through outcomes visible for the same route", () => {
     const requests: Array<Record<string, unknown>> = [];
     const fakeDispatcher = {
