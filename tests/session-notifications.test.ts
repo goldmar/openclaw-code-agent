@@ -964,6 +964,65 @@ describe("SessionNotificationService", () => {
     assert.equal(requests[1]?.completionWakeSummaryRequired, false);
   });
 
+  it("requests one follow-up summary after a terse PR-updated status when agent output has the substantive summary", () => {
+    const requests: Array<Record<string, unknown>> = [];
+    const userMessages: string[] = [];
+    let wakeAttempts = 0;
+    const fakeDispatcher = {
+      dispatchSessionNotification: (_session: unknown, request: Record<string, unknown> & { hooks?: Record<string, () => void> }) => {
+        requests.push(request as Record<string, unknown>);
+        if (typeof request.userMessage === "string" && request.userMessage.trim()) {
+          userMessages.push(request.userMessage);
+        }
+        request.hooks?.onNotifyStarted?.();
+        request.hooks?.onNotifySucceeded?.();
+        if (request.wakeMessage || request.wakeMessageOnNotifySuccess || request.wakeMessageOnNotifyFailed) {
+          wakeAttempts += 1;
+          request.hooks?.onWakeStarted?.();
+          request.hooks?.onWakeSucceeded?.();
+        }
+      },
+      dispose: () => {},
+    };
+
+    const service = new SessionNotificationService(
+      fakeDispatcher as any,
+      () => {},
+    );
+    const session = {
+      id: "pr-174-update-session",
+      harnessSessionId: "h-pr-174-update-session",
+      name: "fix-trading-platform-goal-summary-dup",
+      route: {
+        provider: "telegram",
+        target: "topic-fixture",
+        threadId: "13832",
+        sessionKey: "agent:x:telegram:channel:topic-fixture:topic:13832",
+      },
+    } as any;
+
+    service.notifyWorktreeOutcome(
+      session,
+      "✅ PR updated: https://github.com/goldmar/openclaw-code-agent/pull/174",
+      {
+        completionWakeOutcomeKey: "worktree-pr:updated:goldmar/openclaw-code-agent:#174:agent/fix-trading-platform-goal-summary-dup:6b9c5a4",
+        detailLines: [
+          "Updated PR for branch agent/fix-trading-platform-goal-summary-dup into main.",
+          "PR number: #174.",
+          "Pushed 1 new commit (+57/-42).",
+        ],
+      },
+    );
+
+    assert.equal(requests.length, 1);
+    assert.deepEqual(userMessages, ["✅ PR updated: https://github.com/goldmar/openclaw-code-agent/pull/174"]);
+    assert.equal(requests[0]?.completionWakeSummaryRequired, true);
+    assert.equal(wakeAttempts, 1);
+    assert.match(requests[0]?.wakeMessageOnNotifySuccess as string, /agent_output\(session='pr-174-update-session', full=true\)/);
+    assert.match(requests[0]?.wakeMessageOnNotifySuccess as string, /If the visible result is only the plugin's terse status line/);
+    assert.match(requests[0]?.wakeMessageOnNotifySuccess as string, /Do this even when agent_output already contains a good final summary/);
+  });
+
   it("suppresses duplicate opened PR follow-through wakes across session refs for the same routed outcome", () => {
     const requests: Array<Record<string, unknown>> = [];
     let wakeAttempts = 0;

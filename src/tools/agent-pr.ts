@@ -562,7 +562,6 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
               target.notificationTarget!,
               updateOutcomeLine,
               {
-                completionSummaryOwner: "foreground",
                 completionWakeOutcomeKey: buildPrCompletionWakeOutcomeKey({
                   action: "updated",
                   branchName,
@@ -713,7 +712,6 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
             target.notificationTarget!,
             outcomeLine,
             {
-              completionSummaryOwner: "foreground",
               completionWakeOutcomeKey: buildPrCompletionWakeOutcomeKey({
                 action: "opened",
                 branchName,
