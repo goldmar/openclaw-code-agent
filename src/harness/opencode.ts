@@ -144,10 +144,6 @@ class OpenCodeHttpError extends Error {
   }
 }
 
-function openCodeApiPath(path: string): string {
-  return path.startsWith("/api/") ? path : `/api${path.startsWith("/") ? path : `/${path}`}`;
-}
-
 function responseContentType(response: Response): string {
   return response.headers.get("content-type")?.toLowerCase() ?? "";
 }
@@ -270,9 +266,8 @@ class OpenCodeClient {
       options.signal?.addEventListener("abort", abortFromCaller, { once: true });
     }
     const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? this.requestTimeoutMs);
-    const apiPath = openCodeApiPath(path);
     try {
-      const response = await this.fetchImpl(`${this.baseUrl}${apiPath}`, {
+      const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
         method,
         headers: {
           ...authHeader(),
@@ -283,20 +278,20 @@ class OpenCodeClient {
       });
       if (!response.ok) {
         const text = await response.text().catch(() => "");
-        throw new OpenCodeHttpError(method, apiPath, response.status, previewResponseBody(text));
+        throw new OpenCodeHttpError(method, path, response.status, previewResponseBody(text));
       }
       if (response.status === 204) return undefined as T;
       const text = await response.text();
       if (!text) return undefined as T;
       const contentType = responseContentType(response);
       if (!contentType.includes("application/json") && !contentType.includes("+json")) {
-        throw new Error(unexpectedJsonResponseMessage(method, apiPath, contentType, text));
+        throw new Error(unexpectedJsonResponseMessage(method, path, contentType, text));
       }
       try {
         return JSON.parse(text) as T;
       } catch (error) {
         const preview = previewResponseBody(text);
-        throw new Error(`OpenCode ${method} ${apiPath} returned invalid JSON: ${errorMessage(error)}${preview ? `: ${preview}` : ""}`);
+        throw new Error(`OpenCode ${method} ${path} returned invalid JSON: ${errorMessage(error)}${preview ? `: ${preview}` : ""}`);
       }
     } finally {
       clearTimeout(timeout);
@@ -308,7 +303,7 @@ class OpenCodeClient {
     onEvent: (event: unknown) => void | Promise<void>,
     signal: AbortSignal,
   ): Promise<void> {
-    const response = await this.fetchImpl(`${this.baseUrl}/api/event`, {
+    const response = await this.fetchImpl(`${this.baseUrl}/event`, {
       headers: authHeader(),
       signal,
     });
