@@ -1,4 +1,5 @@
 import type { Session } from "./session";
+import { formatHarnessModelLabel } from "./session-display";
 import type { SessionConfig, SessionLifecycle, SessionStatus } from "./types";
 
 type SpawnOptions = {
@@ -57,7 +58,10 @@ export class SessionRuntimeBootstrapService {
 
     if (options.notifyLaunch !== false) {
       const workdirLabel = this.deps.formatLaunchWorkdirLabel(session);
-      const launchText = `🚀 [${session.name}] Launched | ${workdirLabel} | ${session.model ?? "default"}`;
+      const launchText = `🚀 [${session.name}] Launched | ${workdirLabel} | ${formatHarnessModelLabel({
+        harness: session.harnessName,
+        model: session.model,
+      }) ?? "default"}`;
       this.deps.notifySession(session, launchText, "launch");
     }
 

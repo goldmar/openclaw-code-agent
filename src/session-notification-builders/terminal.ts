@@ -1,4 +1,5 @@
 import { formatDuration } from "../format";
+import { formatHarnessModelSuffix } from "../session-display";
 import type { NotificationButton } from "../session-interactions";
 import type { ApprovalExecutionState, KillReason, PermissionMode } from "../types";
 import type { Session } from "../session";
@@ -180,6 +181,8 @@ export function buildCompletedPayload(args: {
     | "approvalPromptStatus"
     | "approvalPromptMessageKind"
     | "approvalPromptDeliveredAt"
+    | "harnessName"
+    | "model"
   >;
   originThreadLine: OriginThreadLine;
   preview: string;
@@ -214,7 +217,10 @@ export function buildCompletedPayload(args: {
   ].join("\n");
 
   return {
-    userMessage: `✅ [${session.name}] Completed | ${costStr} | ${duration}`,
+    userMessage: `✅ [${session.name}] Completed | ${costStr} | ${duration}${formatHarnessModelSuffix({
+      harness: session.harnessName,
+      model: session.model,
+    })}`,
     wakeMessageOnNotifySuccess: buildWakeMessage(true),
     wakeMessageOnNotifyFailed: buildWakeMessage(false),
     followupContract,
@@ -319,6 +325,8 @@ export function buildFailedPayload(args: {
     | "approvalPromptStatus"
     | "approvalPromptMessageKind"
     | "approvalPromptDeliveredAt"
+    | "harnessName"
+    | "model"
   > & { harnessSessionId?: string };
   originThreadLine: OriginThreadLine;
   errorSummary: string;
@@ -336,7 +344,10 @@ export function buildFailedPayload(args: {
 
   return {
     userMessage: [
-      `❌ [${session.name}] Failed | ${costStr} | ${duration}`,
+      `❌ [${session.name}] Failed | ${costStr} | ${duration}${formatHarnessModelSuffix({
+        harness: session.harnessName,
+        model: session.model,
+      })}`,
       `   ⚠️ ${errorSummary}`,
     ].join("\n"),
     wakeMessage: [
@@ -364,14 +375,17 @@ export function buildFailedPayload(args: {
 }
 
 export function buildTurnCompletePayload(args: {
-  session: Pick<Session, "id" | "name" | "status" | "lifecycle" | "costUsd"> & { worktreeStrategy?: Session["worktreeStrategy"] };
+  session: Pick<Session, "id" | "name" | "status" | "lifecycle" | "costUsd" | "harnessName" | "model"> & { worktreeStrategy?: Session["worktreeStrategy"] };
   originThreadLine: OriginThreadLine;
   preview: string;
 }): { userMessage: string; wakeMessage: string } {
   const { session, originThreadLine, preview } = args;
   const costStr = `$${(session.costUsd ?? 0).toFixed(2)}`;
   return {
-    userMessage: `⏸️ [${session.name}] Turn completed | ${costStr}`,
+    userMessage: `⏸️ [${session.name}] Turn completed | ${costStr}${formatHarnessModelSuffix({
+      harness: session.harnessName,
+      model: session.model,
+    })}`,
     wakeMessage: [
       `Coding agent session turn ended.`,
       `Name: ${session.name}`,

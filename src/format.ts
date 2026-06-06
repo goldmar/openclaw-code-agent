@@ -16,6 +16,7 @@ import type {
   SessionWorktreeState,
 } from "./types";
 import { getBackendConversationId } from "./session-backend-ref";
+import { formatHarnessModelLabel } from "./session-display";
 
 /** Session shape needed by list formatting utilities. */
 export interface SessionListRenderable {
@@ -31,6 +32,7 @@ export interface SessionListRenderable {
   lifecycle?: string;
   resumable?: boolean;
   harness?: string;
+  model?: string;
   backendRef?: SessionBackendRef;
   harnessSessionId?: string;
   resumeSessionId?: string;
@@ -153,7 +155,12 @@ export function formatSessionListing(session: SessionListRenderable): string {
   }
 
   if (session.harness) {
-    lines.push(`   🧰 Harness: ${session.harness}`);
+    lines.push(`   🧰 Harness / model: ${formatHarnessModelLabel({
+      harness: session.harness,
+      model: session.model,
+    })}`);
+  } else if (session.model) {
+    lines.push(`   🧰 Harness / model: ${session.model}`);
   }
 
   const backendConversationId = getBackendConversationId(session);
