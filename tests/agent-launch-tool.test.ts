@@ -17,6 +17,7 @@ describe("agent_launch tool defaults", () => {
 
   it("uses plugin Codex model and reasoningEffort defaults when no model is provided", async () => {
     let spawnConfig: Record<string, unknown> | undefined;
+    let spawnOptions: Record<string, unknown> | undefined;
     setPluginConfig({
       defaultHarness: "codex",
       harnesses: {
@@ -31,8 +32,9 @@ describe("agent_launch tool defaults", () => {
 
     setSessionManager({
       resolveHarnessSessionId: (id: string) => id,
-      spawn(config: Record<string, unknown>) {
+      spawn(config: Record<string, unknown>, options?: Record<string, unknown>) {
         spawnConfig = config;
+        spawnOptions = options;
         return {
           id: "sess-1",
           name: "codex-defaults",
@@ -51,6 +53,7 @@ describe("agent_launch tool defaults", () => {
     assert.equal(spawnConfig?.reasoningEffort, "high");
     assert.equal(spawnConfig?.fastMode, true);
     assert.equal(spawnConfig?.codexApprovalPolicy, "never");
+    assert.deepEqual(spawnOptions, { notifyLaunch: false });
     const text = (result.content[0] as { text: string }).text;
     assert.match(text, /Harness: codex/);
     assert.match(text, /Permission mode: plan/);

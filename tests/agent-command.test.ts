@@ -26,11 +26,13 @@ describe("agent command", () => {
 
   it("uses the shared launch resolver for routing and policy defaults", () => {
     let spawnConfig: Record<string, unknown> | undefined;
+    let spawnOptions: Record<string, unknown> | undefined;
     setSessionManager({
       list: () => [],
       listPersistedSessions: () => [],
-      spawn(config: Record<string, unknown>) {
+      spawn(config: Record<string, unknown>, options?: Record<string, unknown>) {
         spawnConfig = config;
+        spawnOptions = options;
         return {
           id: "sess-agent-command",
           name: config.name,
@@ -64,6 +66,7 @@ describe("agent command", () => {
     assert.equal(spawnConfig?.originChannel, "telegram|bot1|-1003863755361");
     assert.equal(spawnConfig?.originThreadId, 13832);
     assert.equal((spawnConfig?.route as { accountId?: string } | undefined)?.accountId, "bot1");
+    assert.deepEqual(spawnOptions, { notifyLaunch: false });
   });
 
   it("applies resume-first protection for linked chat sessions", () => {

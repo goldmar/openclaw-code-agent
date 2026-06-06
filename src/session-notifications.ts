@@ -121,19 +121,25 @@ export class SessionNotificationService {
     }
     let dispatchRequest = foregroundOwnsSummary ? this.withoutCompletionWake(request) : request;
     if (completionSummaryDecision.required && !completionSummaryDecision.allowed) {
+      const duplicateSummaryMessage = completionSummaryDecision.explicit && this.isCompletionSummaryMessage(request);
       this.logNotificationDecision({
         session,
         request,
         deliveryRef,
         dedupeKey: completionSummaryDecision.dedupeKey ?? completionSummaryDecision.key,
         outcomeKey: completionSummaryFact?.outcomeKey,
-        decision: foregroundOwnsSummary ? "skip" : completionSummaryDecision.explicit ? "send_without_followup" : "skip",
+        decision: foregroundOwnsSummary || duplicateSummaryMessage
+          ? "skip"
+          : completionSummaryDecision.explicit ? "send_without_followup" : "skip",
         reason: completionSummaryDecision.skipReason ?? "completion follow-up wake suppressed",
         deliveryPath: foregroundOwnsSummary ? "foreground-summary" : "wake",
         followupKind: completionSummaryFact?.producer,
       });
       request.hooks?.onWakeSkipped?.(completionSummaryDecision.skipReason ?? "completion follow-up wake suppressed");
       if (foregroundOwnsSummary) {
+        this.releaseNotificationDedupe(deliveryRef, notificationDedupeKey);
+        return;
+      } else if (duplicateSummaryMessage) {
         this.releaseNotificationDedupe(deliveryRef, notificationDedupeKey);
         return;
       } else if (completionSummaryDecision.explicit) {
@@ -431,6 +437,11 @@ export class SessionNotificationService {
         ? `${request.label}\n${wakeTexts.join("\n---completion-wake---\n")}`
         : undefined,
     };
+  }
+
+  private isCompletionSummaryMessage(request: SessionNotificationRequest): boolean {
+    if (request.completionSummaryOwner === "foreground") return true;
+    return /\b(?:summary|follow-?up)\b/i.test(request.label);
   }
 
   private buildNotificationDedupeKey(

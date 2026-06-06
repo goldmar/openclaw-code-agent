@@ -495,7 +495,7 @@ describe("session-notification-builder", () => {
       preview: "Final output",
     });
 
-    assert.equal(payload.userMessage, "✅ [done-session] Completed | $1.25 | 1m1s | codex / gpt-5.5");
+    assert.equal(payload.userMessage, "✅ [done-session] Completed | $1.25 | 1m1s | codex | gpt-5.5");
   });
 
   it("omits route-block follow-up guidance when terminal completion has no origin route block", () => {

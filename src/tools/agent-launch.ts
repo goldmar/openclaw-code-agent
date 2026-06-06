@@ -191,7 +191,7 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
           worktreeStrategy: params.worktree_strategy,
           worktreeBaseBranch: params.worktree_base_branch,
           worktreePrTargetRepo: params.worktree_pr_target_repo,
-        });
+        }, { notifyLaunch: false });
 
         const launchText = hasFormatLaunchResult(sessionManager)
           ? sessionManager.formatLaunchResult({

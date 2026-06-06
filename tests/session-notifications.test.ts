@@ -1902,7 +1902,7 @@ describe("SessionNotificationService", () => {
         label: "worktree-foreground-summary",
         userMessage: [
           "Merged `include-harness-in-oca-notifications` into `main` by fast-forward.",
-          "Scope was tight: notifications now show `harness / model` instead of model-only ambiguity.",
+          "Scope was tight: notifications now show `harness | model` instead of model-only ambiguity.",
         ].join("\n"),
         completionSummaryOwner: "foreground",
         completionSummary: {
@@ -1942,7 +1942,7 @@ describe("SessionNotificationService", () => {
       "✅ Merged: agent/include-harness-in-oca-notifications → main (10 files, +128/-11)",
       [
         "Merged `include-harness-in-oca-notifications` into `main` by fast-forward.",
-        "Scope was tight: notifications now show `harness / model` instead of model-only ambiguity.",
+        "Scope was tight: notifications now show `harness | model` instead of model-only ambiguity.",
       ].join("\n"),
       "✅ [include-harness-in-oca-notifications] Completed",
     ]);
@@ -2113,12 +2113,9 @@ describe("SessionNotificationService", () => {
         notifyUser: "never",
       });
 
-      assert.equal(requests.length, 2);
+      assert.equal(requests.length, 1);
       assert.equal(requests[0]?.completionWakeSummaryRequired, false);
       assert.equal(requests[0]?.userMessage, "✅ PR updated: https://github.com/goldmar/openclaw-code-agent/pull/183");
-      assert.equal(requests[1]?.label, "routed-followup-summary");
-      assert.equal(requests[1]?.completionWakeSummaryRequired, false);
-      assert.equal(requests[1]?.wakeMessage, undefined);
       assert.ok(persisted.completionSummaryDedupe?.length > 0);
       const parsedLogs = logs
         .map((line) => {
@@ -2134,7 +2131,7 @@ describe("SessionNotificationService", () => {
         && entry.notificationKind === "routed-followup-summary"
         && entry.followupKind === "worktree-pr"
         && entry.deliveryPath === "wake"
-        && entry.decision === "send_without_followup"
+        && entry.decision === "skip"
         && typeof entry.dedupeKey === "string"
         && typeof (entry.originRoute as Record<string, unknown> | undefined)?.threadId === "string"
       ), true);
@@ -2143,7 +2140,138 @@ describe("SessionNotificationService", () => {
     }
   });
 
-  it("keeps materially new PR follow-through outcomes visible for the same route", () => {
+  it("blocks the reported PR-updated plus foreground plus routed duplicate summary sequence", () => {
+    const persisted = { completionSummaryDedupe: undefined, notificationDedupe: undefined } as any;
+    const requests: Array<Record<string, unknown>> = [];
+    const userMessages: string[] = [];
+    const skippedReasons: string[] = [];
+    let wakeAttempts = 0;
+    const fakeDispatcher = {
+      dispatchSessionNotification: (_session: unknown, request: Record<string, unknown> & { hooks?: Record<string, (reason?: string) => void> }) => {
+        requests.push(request as Record<string, unknown>);
+        if (typeof request.userMessage === "string" && request.userMessage.trim()) {
+          userMessages.push(request.userMessage);
+        }
+        request.hooks?.onNotifyStarted?.();
+        request.hooks?.onNotifySucceeded?.();
+        if (request.wakeMessage || request.wakeMessageOnNotifySuccess || request.wakeMessageOnNotifyFailed) {
+          wakeAttempts += 1;
+          request.hooks?.onWakeStarted?.();
+          if (request.label !== "worktree-outcome") {
+            request.hooks?.onWakeSucceeded?.();
+          }
+        }
+      },
+      dispose: () => {},
+    };
+    const route = {
+      provider: "telegram",
+      target: "-1003863755361",
+      threadId: "13832",
+      sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+    };
+    const session = {
+      id: "TZtxgbk4",
+      harnessSessionId: "TZtxgbk4",
+      name: "format-launch-notification-model-separator",
+      route,
+    } as any;
+    const service = new SessionNotificationService(
+      fakeDispatcher as any,
+      (_ref, patch) => Object.assign(persisted, patch),
+      { getPersistedSession: () => persisted },
+    );
+    const updatedOutcomeKey = "worktree-pr:updated:goldmar/openclaw-code-agent:#185:agent/format-launch-notification-model-separator:a1b2c3d";
+    const openedOutcomeKey = "worktree-pr:opened:goldmar/openclaw-code-agent:#185:agent/format-launch-notification-model-separator:created";
+
+    service.notifyWorktreeOutcome(
+      session,
+      "✅ PR updated: https://github.com/goldmar/openclaw-code-agent/pull/185",
+      {
+        completionWakeOutcomeKey: updatedOutcomeKey,
+        detailLines: ["PR number: #185.", "Pushed 1 new commit."],
+      },
+    );
+    service.dispatch(session, {
+      label: "worktree-foreground-summary",
+      userMessage: "PR #185 was updated for `agent/format-launch-notification-model-separator`.",
+      completionSummaryOwner: "foreground",
+      completionSummary: {
+        required: true,
+        producer: "worktree-pr",
+        outcomeKey: updatedOutcomeKey,
+      },
+      completionWakeSummaryRequired: true,
+      completionWakeOutcomeKey: updatedOutcomeKey,
+      notifyUser: "always",
+    });
+    service.dispatch(session, {
+      label: "completed",
+      userMessage: "✅ [format-launch-notification-model-separator] Completed",
+      wakeMessageOnNotifySuccess: "duplicate completion wake for PR #185",
+      completionSummary: {
+        required: true,
+        producer: "terminal",
+        outcomeKey: "terminal:format-launch-notification-model-separator",
+      },
+      completionWakeSummaryRequired: true,
+      completionWakeOutcomeKey: "terminal:format-launch-notification-model-separator",
+      notifyUser: "always",
+      hooks: {
+        onWakeSkipped: (reason?: string) => {
+          skippedReasons.push(reason ?? "");
+        },
+      },
+    });
+    service.dispatch(session, {
+      label: "routed-followup-summary",
+      idempotencyKey: "routed-followup-summary:pr-185-opened",
+      userMessage: "Draft PR #185 is open for `agent/format-launch-notification-model-separator`.",
+      wakeMessageOnNotifySuccess: "duplicate opened PR #185 follow-up",
+      completionSummary: {
+        required: true,
+        producer: "worktree-pr",
+        outcomeKey: openedOutcomeKey,
+      },
+      completionWakeSummaryRequired: true,
+      completionWakeOutcomeKey: openedOutcomeKey,
+      notifyUser: "always",
+      hooks: {
+        onWakeSkipped: (reason?: string) => {
+          skippedReasons.push(reason ?? "");
+        },
+      },
+    });
+
+    assert.deepEqual(userMessages, [
+      "✅ PR updated: https://github.com/goldmar/openclaw-code-agent/pull/185",
+      "PR #185 was updated for `agent/format-launch-notification-model-separator`.",
+      "✅ [format-launch-notification-model-separator] Completed",
+    ]);
+    assert.equal(
+      userMessages.filter((message) => /^PR #185|^Draft PR #185/.test(message)).length,
+      1,
+    );
+    assert.deepEqual(
+      requests.map((request) => ({
+        label: request.label,
+        completionWakeSummaryRequired: request.completionWakeSummaryRequired,
+        hasWake: Boolean(request.wakeMessage || request.wakeMessageOnNotifySuccess || request.wakeMessageOnNotifyFailed),
+      })),
+      [
+        { label: "worktree-outcome", completionWakeSummaryRequired: true, hasWake: true },
+        { label: "worktree-foreground-summary", completionWakeSummaryRequired: false, hasWake: false },
+        { label: "completed", completionWakeSummaryRequired: false, hasWake: false },
+      ],
+    );
+    assert.equal(wakeAttempts, 1);
+    assert.deepEqual(skippedReasons, [
+      "COMPLETION_FOLLOWUP_SKIPPED: prior human-visible summary already delivered",
+      "COMPLETION_FOLLOWUP_SKIPPED: prior human-visible summary already delivered",
+    ]);
+  });
+
+  it("keeps repeated PR status lines visible while allowing only one follow-up summary for the same PR route", () => {
     const requests: Array<Record<string, unknown>> = [];
     const fakeDispatcher = {
       dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, (reason?: string) => void> }) => {
@@ -2190,9 +2318,10 @@ describe("SessionNotificationService", () => {
     assert.equal(requests.length, 2);
     assert.deepEqual(
       requests.map((request) => request.completionWakeSummaryRequired),
-      [true, true],
+      [true, false],
     );
-    assert.equal(requests.every((request) => typeof request.wakeMessageOnNotifySuccess === "string"), true);
+    assert.equal(typeof requests[0]?.wakeMessageOnNotifySuccess, "string");
+    assert.equal(requests[1]?.wakeMessageOnNotifySuccess, undefined);
   });
 
   it("bounds completed completion wake keys while retaining recent duplicate suppression", () => {

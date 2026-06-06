@@ -102,7 +102,7 @@ export function registerAgentCommand(api: CommandApi): void {
           permissionMode: resolution.permissionMode,
           planApproval: resolution.planApproval,
           taskLifecycle: resolveSessionTaskLifecycle(ctx as OpenClawPluginToolContext),
-        });
+        }, { notifyLaunch: false });
 
         return { text: sessionManager.formatLaunchResult({
           prompt,

@@ -297,6 +297,11 @@ export class CompletionSummaryCoordinator {
   ): string | undefined {
     const goalTaskId = session.goalTaskId?.trim();
     if (goalTaskId) return `goal:${goalTaskId}`;
+    const prOutcome = outcomeKey?.match(/^worktree-pr:(?:opened|updated):([^:]+):(#\d+):([^:]+):/i);
+    if (prOutcome) {
+      const [, repo, prNumber, branch] = prOutcome;
+      return `worktree-pr:${repo}:${prNumber}:${branch}`;
+    }
     return outcomeKey;
   }
 
