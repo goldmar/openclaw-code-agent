@@ -13,17 +13,14 @@ class MockOpenCodeServer {
   requests: RequestRecord[] = [];
   closed = false;
   waitMode: "immediate" | "defer" = "immediate";
-  unsupportedV2Wait = false;
-  unsupportedV2Prompt = false;
-  unsupportedV2Context = false;
-  unsupportedV2PermissionReply = false;
-  unsupportedV2QuestionReply = false;
   statusMode: "idle" | "busy-then-idle" = "idle";
+  assistantAvailableAfterStatusRequests = 0;
   failQuestionReplies = false;
   failSessionPatch = false;
   private streamController?: ReadableStreamDefaultController<Uint8Array>;
   private readonly encoder = new TextEncoder();
   private statusRequests = 0;
+  private promptAsyncRequests = 0;
   private deferredWait?: {
     resolve: (response: Response) => void;
     reject: (error: unknown) => void;
@@ -56,20 +53,15 @@ class MockOpenCodeServer {
       const type = this.statusMode === "busy-then-idle" && this.statusRequests === 1 ? "busy" : "idle";
       return json({ ses_test: { type }, ses_existing: { type }, ses_forked: { type } });
     }
-    if (method === "GET" && path === "/api/session/ses_existing/context") {
-      if (this.unsupportedV2Context) return serviceUnavailable("v2.session.context");
-      return json([]);
+    if (method === "GET" && /^\/session\/[^/]+\/message$/.test(path)) {
+      if (this.statusRequests < this.assistantAvailableAfterStatusRequests) return json([]);
+      return json(Array.from({ length: this.promptAsyncRequests }, () => ({
+        info: { type: "assistant", content: [{ type: "text", text: "Final." }] },
+        parts: [],
+      })));
     }
-    if (method === "GET" && path === "/api/session/ses_test/context") {
-      if (this.unsupportedV2Context) return serviceUnavailable("v2.session.context");
-      return json([{ type: "assistant", content: [{ type: "text", text: "Final." }] }]);
-    }
-    if (method === "GET" && path === "/session/ses_existing/message") return json([]);
-    if (method === "GET" && path === "/session/ses_test/message") {
-      return json([{ info: { type: "assistant", content: [{ type: "text", text: "Final." }] }, parts: [] }]);
-    }
-    if (method === "POST" && path.endsWith("/wait")) {
-      if (this.unsupportedV2Wait) return serviceUnavailable("v2.session.wait");
+    if (method === "POST" && path.endsWith("/prompt_async")) {
+      this.promptAsyncRequests += 1;
       if (this.waitMode === "defer") {
         return await new Promise<Response>((resolve, reject) => {
           this.deferredWait = { resolve, reject };
@@ -78,23 +70,7 @@ class MockOpenCodeServer {
       }
       return new Response(null, { status: 204 });
     }
-    if (method === "POST" && path.endsWith("/prompt")) {
-      if (this.unsupportedV2Prompt) return serviceUnavailable("v2.session.prompt");
-      return json({ type: "assistant", content: [] });
-    }
-    if (method === "POST" && path.endsWith("/prompt_async")) return new Response(null, { status: 204 });
-    if (method === "POST" && path.includes("/permission/request/")) {
-      if (this.unsupportedV2PermissionReply) return serviceUnavailable("v2.permission.reply");
-      return json(true);
-    }
     if (method === "POST" && path.startsWith("/permission/") && path.endsWith("/reply")) return json(true);
-    if (method === "POST" && path.includes("/question/request/")) {
-      if (this.unsupportedV2QuestionReply) return serviceUnavailable("v2.question.reply");
-      if (this.failQuestionReplies) {
-        return new Response(JSON.stringify({ error: "question reply failed" }), { status: 500 });
-      }
-      return json(true);
-    }
     if (method === "POST" && path.startsWith("/question/") && path.endsWith("/reply")) {
       if (this.failQuestionReplies) {
         return new Response(JSON.stringify({ error: "question reply failed" }), { status: 500 });
@@ -138,17 +114,6 @@ class MockOpenCodeServer {
 function json(value: unknown): Response {
   return new Response(JSON.stringify(value), {
     status: 200,
-    headers: { "content-type": "application/json" },
-  });
-}
-
-function serviceUnavailable(service: string): Response {
-  return new Response(JSON.stringify({
-    _tag: "ServiceUnavailableError",
-    message: `${service} is not available yet`,
-    service,
-  }), {
-    status: 503,
     headers: { "content-type": "application/json" },
   });
 }
@@ -236,7 +201,7 @@ describe("OpenCodeHarness static properties", () => {
 });
 
 describe("OpenCodeHarness HTTP/SSE mapping", () => {
-  it("creates a session, sends a queued v2 prompt, and emits backend/completion", async () => {
+  it("creates a session, sends a classic async prompt, and emits backend/completion", async () => {
     const mock = new MockOpenCodeServer();
     const harness = new OpenCodeHarness({
       createServer: async () => mock.handle(),
@@ -263,12 +228,12 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
       ],
     });
 
-    const prompt = mock.requests.find((request) => request.method === "POST" && request.path === "/api/session/ses_test/prompt");
+    const prompt = mock.requests.find((request) => request.method === "POST" && request.path === "/session/ses_test/prompt_async");
     assert.deepEqual(prompt?.body, {
-      prompt: { text: "ship it" },
-      delivery: "queue",
+      model: { providerID: "anthropic", modelID: "claude-sonnet-4-5" },
+      parts: [{ type: "text", text: "ship it" }],
     });
-    assert.equal(mock.requests.some((request) => request.path === "/api/session/ses_test/wait"), true);
+    assert.equal(mock.requests.some((request) => request.method === "GET" && request.path === "/session/status"), true);
 
     const ref = messages.find((message) => message.type === "backend_ref") as Extract<HarnessMessage, { type: "backend_ref" }> | undefined;
     const result = messages.find((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }> | undefined;
@@ -279,9 +244,8 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     assert.equal(mock.closed, true);
   });
 
-  it("falls back to classic status polling when v2 session wait is unavailable", async () => {
+  it("waits for classic status polling before completing", async () => {
     const mock = new MockOpenCodeServer();
-    mock.unsupportedV2Wait = true;
     mock.statusMode = "busy-then-idle";
     const harness = new OpenCodeHarness({
       createServer: async () => mock.handle(),
@@ -294,15 +258,13 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     }));
 
     const result = messages.find((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }> | undefined;
-    assert.equal(mock.requests.some((request) => request.method === "POST" && request.path === "/api/session/ses_test/wait"), true);
     assert.equal(mock.requests.some((request) => request.method === "GET" && request.path === "/session/status"), true);
     assert.equal(result?.data.success, true);
     assert.equal(result?.data.result, "Final.");
   });
 
-  it("remembers unsupported v2 wait and polls status on later turns", async () => {
+  it("uses classic status polling on later turns", async () => {
     const mock = new MockOpenCodeServer();
-    mock.unsupportedV2Wait = true;
     const harness = new OpenCodeHarness({
       createServer: async () => mock.handle(),
       fetch: mock.fetch,
@@ -317,14 +279,11 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     const completions = messages.filter((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }>[];
     assert.equal(completions.length, 2);
     assert.equal(completions.every((completion) => completion.data.success), true);
-    assert.equal(mock.requests.filter((request) => request.path === "/api/session/ses_test/wait").length, 1);
-    assert.equal(mock.requests.filter((request) => request.path === "/session/status").length, 4);
+    assert.equal(mock.requests.filter((request) => request.path === "/session/status").length, 2);
   });
 
-  it("falls back to classic prompt_async and message routes when v2 prompt/context are unavailable", async () => {
+  it("uses classic prompt_async and message routes", async () => {
     const mock = new MockOpenCodeServer();
-    mock.unsupportedV2Prompt = true;
-    mock.unsupportedV2Context = true;
     const harness = new OpenCodeHarness({
       createServer: async () => mock.handle(),
       fetch: mock.fetch,
@@ -347,6 +306,25 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     assert.equal(mock.requests.some((request) => request.method === "GET" && request.path === "/session/ses_test/message"), true);
     assert.equal(result?.data.success, true);
     assert.equal(result?.data.result, "Final.");
+  });
+
+  it("does not complete from idle status before a classic async prompt produces an assistant message", async () => {
+    const mock = new MockOpenCodeServer();
+    mock.assistantAvailableAfterStatusRequests = 3;
+    const harness = new OpenCodeHarness({
+      createServer: async () => mock.handle(),
+      fetch: mock.fetch,
+    });
+
+    const messages = await collectMessages(harness.launch({
+      prompt: "avoid stale result",
+      cwd: "/repo",
+    }));
+
+    const result = messages.find((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }> | undefined;
+    assert.equal(result?.data.success, true);
+    assert.equal(result?.data.result, "Final.");
+    assert.equal(mock.requests.filter((request) => request.method === "GET" && request.path === "/session/status").length, 3);
   });
 
   it("streams text deltas and tool calls from v2 events", async () => {
@@ -445,7 +423,7 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     assert.deepEqual(text.map((message) => message.text), ["right"]);
   });
 
-  it("maps permission requests to pending input and replies with v2 endpoint", async () => {
+  it("maps permission requests to pending input and replies with classic endpoint", async () => {
     const mock = new MockOpenCodeServer();
     const waitForEventStream = new Promise<void>((resolve) => {
       const originalFetch = mock.fetch;
@@ -487,50 +465,8 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     const pending = seen.find((message) => message.type === "pending_input") as Extract<HarnessMessage, { type: "pending_input" }> | undefined;
     assert.equal(pending?.state.kind, "approval");
     assert.equal(pending?.state.requestId, "per_1");
-    const reply = mock.requests.find((request) => request.path === "/api/session/ses_test/permission/request/per_1/reply");
-    assert.deepEqual(reply?.body, { response: "once" });
-  });
-
-  it("falls back to classic permission reply when v2 permission reply is unavailable", async () => {
-    const mock = new MockOpenCodeServer();
-    mock.unsupportedV2PermissionReply = true;
-    const waitForEventStream = new Promise<void>((resolve) => {
-      const originalFetch = mock.fetch;
-      mock.fetch = async (input, init) => {
-        const response = await originalFetch(input, init);
-        const url = new URL(typeof input === "string" ? input : input.url);
-        if (url.pathname === "/api/event") resolve();
-        return response;
-      };
-    });
-    const harness = new OpenCodeHarness({
-      createServer: async () => mock.handle(),
-      fetch: mock.fetch,
-    });
-
-    const session = harness.launch({ prompt: "needs permission", cwd: "/repo" });
-    await waitForEventStream;
-    mock.emit({
-      type: "permission.asked",
-      properties: {
-        id: "per_classic",
-        sessionID: "ses_test",
-        permission: "bash",
-        patterns: ["npm test"],
-      },
-    });
-
-    for await (const message of session.messages) {
-      if (message.type === "pending_input") {
-        assert.equal(await session.submitPendingInputOption?.(0), true);
-      }
-      if (message.type === "pending_input_resolved") break;
-    }
-
-    const v2Reply = mock.requests.find((request) => request.path === "/api/session/ses_test/permission/request/per_classic/reply");
-    const classicReply = mock.requests.find((request) => request.path === "/permission/per_classic/reply");
-    assert.deepEqual(v2Reply?.body, { response: "once" });
-    assert.deepEqual(classicReply?.body, { reply: "once" });
+    const reply = mock.requests.find((request) => request.path === "/permission/per_1/reply");
+    assert.deepEqual(reply?.body, { reply: "once" });
   });
 
   it("deduplicates permission resolved events when the server echoes the reply", async () => {
@@ -635,52 +571,10 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     }
 
     const resolved = seen.filter((message) => message.type === "pending_input_resolved") as Extract<HarnessMessage, { type: "pending_input_resolved" }>[];
-    const reply = mock.requests.find((request) => request.path === "/api/session/ses_test/question/request/q_echo/reply");
+    const reply = mock.requests.find((request) => request.path === "/question/q_echo/reply");
     assert.deepEqual(reply?.body, { answers: [["main"]] });
     assert.equal(resolved.length, 1);
     assert.equal(resolved[0]?.requestId, "q_echo");
-  });
-
-  it("falls back to classic question reply when v2 question reply is unavailable", async () => {
-    const mock = new MockOpenCodeServer();
-    mock.unsupportedV2QuestionReply = true;
-    const waitForEventStream = new Promise<void>((resolve) => {
-      const originalFetch = mock.fetch;
-      mock.fetch = async (input, init) => {
-        const response = await originalFetch(input, init);
-        const url = new URL(typeof input === "string" ? input : input.url);
-        if (url.pathname === "/api/event") resolve();
-        return response;
-      };
-    });
-    const harness = new OpenCodeHarness({
-      createServer: async () => mock.handle(),
-      fetch: mock.fetch,
-    });
-
-    const session = harness.launch({ prompt: "needs answer", cwd: "/repo" });
-    await waitForEventStream;
-    mock.emit({
-      type: "question.asked",
-      properties: {
-        id: "q_classic",
-        sessionID: "ses_test",
-        question: "Which branch?",
-        options: ["main"],
-      },
-    });
-
-    for await (const message of session.messages) {
-      if (message.type === "pending_input") {
-        assert.equal(await session.submitPendingInputText?.("main"), true);
-      }
-      if (message.type === "pending_input_resolved") break;
-    }
-
-    const v2Reply = mock.requests.find((request) => request.path === "/api/session/ses_test/question/request/q_classic/reply");
-    const classicReply = mock.requests.find((request) => request.path === "/question/q_classic/reply");
-    assert.deepEqual(v2Reply?.body, { answers: [["main"]] });
-    assert.deepEqual(classicReply?.body, { answers: [["main"]] });
   });
 
   it("emits failed completion when inline question reply fails after a completed turn", async () => {
@@ -770,11 +664,11 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     });
 
     await collectMessages(session);
-    const reply = mock.requests.find((request) => request.path === "/api/session/ses_test/permission/request/per_auto/reply");
-    assert.deepEqual(reply?.body, { response: "once" });
+    const reply = mock.requests.find((request) => request.path === "/permission/per_auto/reply");
+    assert.deepEqual(reply?.body, { reply: "once" });
   });
 
-  it("resumes with resume=true on the first prompt", async () => {
+  it("resumes by sending the first prompt on the classic session", async () => {
     const mock = new MockOpenCodeServer();
     const harness = new OpenCodeHarness({
       createServer: async () => mock.handle(),
@@ -787,11 +681,9 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
       resumeSessionId: "ses_existing",
     }));
 
-    const prompt = mock.requests.find((request) => request.method === "POST" && request.path === "/api/session/ses_existing/prompt");
+    const prompt = mock.requests.find((request) => request.method === "POST" && request.path === "/session/ses_existing/prompt_async");
     assert.deepEqual(prompt?.body, {
-      prompt: { text: "continue" },
-      delivery: "queue",
-      resume: true,
+      parts: [{ type: "text", text: "continue" }],
     });
   });
 
@@ -813,12 +705,10 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
       resumeSessionId: "ses_existing",
     }));
 
-    const contextRequests = mock.requests.filter((request) => request.method === "GET" && request.path === "/api/session/ses_existing/context");
-    const promptsSent = mock.requests.filter((request) => request.method === "POST" && request.path === "/api/session/ses_existing/prompt");
-    assert.equal(contextRequests.length, 3);
+    const promptsSent = mock.requests.filter((request) => request.method === "POST" && request.path === "/session/ses_existing/prompt_async");
     assert.deepEqual(promptsSent.map((request) => request.body), [
-      { prompt: { text: "first" }, delivery: "queue", resume: true },
-      { prompt: { text: "second" }, delivery: "queue" },
+      { parts: [{ type: "text", text: "first" }] },
+      { parts: [{ type: "text", text: "second" }] },
     ]);
   });
 
@@ -842,15 +732,15 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     }));
 
     const forkRequests = mock.requests.filter((request) => request.method === "POST" && request.path.endsWith("/fork"));
-    const promptsSent = mock.requests.filter((request) => request.method === "POST" && request.path === "/api/session/ses_forked/prompt");
+    const promptsSent = mock.requests.filter((request) => request.method === "POST" && request.path === "/session/ses_forked/prompt_async");
     assert.deepEqual(forkRequests.map((request) => request.path), ["/session/ses_existing/fork"]);
     assert.deepEqual(promptsSent.map((request) => request.body), [
-      { prompt: { text: "first" }, delivery: "queue" },
-      { prompt: { text: "second" }, delivery: "queue" },
+      { parts: [{ type: "text", text: "first" }] },
+      { parts: [{ type: "text", text: "second" }] },
     ]);
   });
 
-  it("prepends system prompts because v2 prompt has no system field", async () => {
+  it("sends system prompts on the first classic prompt", async () => {
     const mock = new MockOpenCodeServer();
     const harness = new OpenCodeHarness({
       createServer: async () => mock.handle(),
@@ -863,14 +753,14 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
       systemPrompt: "Use the project conventions.",
     }));
 
-    const prompt = mock.requests.find((request) => request.method === "POST" && request.path === "/api/session/ses_test/prompt");
+    const prompt = mock.requests.find((request) => request.method === "POST" && request.path === "/session/ses_test/prompt_async");
     assert.deepEqual(prompt?.body, {
-      prompt: { text: "Use the project conventions.\n\nimplement" },
-      delivery: "queue",
+      system: "Use the project conventions.",
+      parts: [{ type: "text", text: "implement" }],
     });
   });
 
-  it("prepends system prompts only to the first multi-turn prompt", async () => {
+  it("sends system prompts only on the first multi-turn prompt", async () => {
     const mock = new MockOpenCodeServer();
     const harness = new OpenCodeHarness({
       createServer: async () => mock.handle(),
@@ -888,10 +778,10 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
       systemPrompt: "Use the project conventions.",
     }));
 
-    const promptsSent = mock.requests.filter((request) => request.method === "POST" && request.path === "/api/session/ses_test/prompt");
+    const promptsSent = mock.requests.filter((request) => request.method === "POST" && request.path === "/session/ses_test/prompt_async");
     assert.deepEqual(promptsSent.map((request) => request.body), [
-      { prompt: { text: "Use the project conventions.\n\nfirst" }, delivery: "queue" },
-      { prompt: { text: "second" }, delivery: "queue" },
+      { system: "Use the project conventions.", parts: [{ type: "text", text: "first" }] },
+      { parts: [{ type: "text", text: "second" }] },
     ]);
   });
 
@@ -946,7 +836,7 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
 
     const session = harness.launch({ prompt: "fail once", cwd: "/repo" });
     await waitForEventStream;
-    await waitForRequest(mock, "/api/session/ses_test/wait");
+    await waitForRequest(mock, "/session/ses_test/prompt_async");
     mock.emit({
       type: "session.next.step.failed",
       properties: {
@@ -968,14 +858,18 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     const mock = new MockOpenCodeServer();
     const contextRequested = Promise.withResolvers<void>();
     const releaseContext = Promise.withResolvers<void>();
+    let messageFetches = 0;
     const originalFetch = mock.fetch;
     mock.fetch = async (input, init) => {
       const responsePromise = originalFetch(input, init);
       const url = new URL(typeof input === "string" ? input : input.url);
       const method = init?.method ?? "GET";
-      if (method === "GET" && url.pathname === "/api/session/ses_test/context") {
-        contextRequested.resolve();
-        await releaseContext.promise;
+      if (method === "GET" && url.pathname === "/session/ses_test/message") {
+        messageFetches += 1;
+        if (messageFetches === 3) {
+          contextRequested.resolve();
+          await releaseContext.promise;
+        }
       }
       return await responsePromise;
     };
@@ -1031,7 +925,7 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     });
 
     const session = harness.launch({ prompt: "stop", cwd: "/repo" });
-    await waitForRequest(mock, "/api/session/ses_test/wait");
+    await waitForRequest(mock, "/session/ses_test/prompt_async");
     await session.interrupt?.();
 
     const messages = await collectAllMessages(session);
@@ -1056,7 +950,7 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     }
 
     const session = harness.launch({ prompt: prompts(), cwd: "/repo" });
-    await waitForRequest(mock, "/api/session/ses_test/wait");
+    await waitForRequest(mock, "/session/ses_test/prompt_async");
     await session.interrupt?.();
 
     const messages = await collectAllMessages(session);
@@ -1064,9 +958,9 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     assert.equal(completions.length, 1);
     assert.equal(completions[0]?.data.outcome, "interrupted");
 
-    const promptsSent = mock.requests.filter((request) => request.method === "POST" && request.path === "/api/session/ses_test/prompt");
+    const promptsSent = mock.requests.filter((request) => request.method === "POST" && request.path === "/session/ses_test/prompt_async");
     assert.deepEqual(promptsSent.map((request) => request.body), [
-      { prompt: { text: "first" }, delivery: "queue" },
+      { parts: [{ type: "text", text: "first" }] },
     ]);
   });
 
@@ -1096,7 +990,7 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     assert.equal(completions[0]?.data.success, false);
     assert.equal(completions[0]?.data.outcome, "interrupted");
     assert.equal(mock.requests.some((request) => request.path === "/session"), false);
-    assert.equal(mock.requests.some((request) => request.path === "/api/session/ses_test/prompt"), false);
+    assert.equal(mock.requests.some((request) => request.path === "/session/ses_test/prompt_async"), false);
   });
 
   it("shares startup across concurrent client requests", async () => {
@@ -1206,9 +1100,9 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     assert.equal(completions[1]?.data.success, false);
     assert.equal(completions[1]?.data.outcome, "interrupted");
 
-    const promptsSent = mock.requests.filter((request) => request.method === "POST" && request.path === "/api/session/ses_test/prompt");
+    const promptsSent = mock.requests.filter((request) => request.method === "POST" && request.path === "/session/ses_test/prompt_async");
     assert.deepEqual(promptsSent.map((request) => request.body), [
-      { prompt: { text: "first" }, delivery: "queue" },
+      { parts: [{ type: "text", text: "first" }] },
     ]);
   });
 
@@ -1231,10 +1125,10 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     assert.equal(backendRefs.length, 1);
     assert.equal(backendRefs[0]?.ref.conversationId, "ses_test");
     assert.equal(completions.every((completion) => completion.data.success), true);
-    const promptsSent = mock.requests.filter((request) => request.method === "POST" && request.path === "/api/session/ses_test/prompt");
+    const promptsSent = mock.requests.filter((request) => request.method === "POST" && request.path === "/session/ses_test/prompt_async");
     assert.deepEqual(promptsSent.map((request) => request.body), [
-      { prompt: { text: "first" }, delivery: "queue" },
-      { prompt: { text: "second" }, delivery: "queue" },
+      { parts: [{ type: "text", text: "first" }] },
+      { parts: [{ type: "text", text: "second" }] },
     ]);
   });
 
@@ -1256,7 +1150,7 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     const session = harness.launch({ prompt: prompts(), cwd: "/repo" });
     const iterator = session.messages[Symbol.asyncIterator]();
     const seen: HarnessMessage[] = [];
-    await waitForRequest(mock, "/api/session/ses_test/wait");
+    await waitForRequest(mock, "/session/ses_test/prompt_async");
     mock.resolveWait();
     while (true) {
       const next = await iterator.next();
@@ -1269,7 +1163,7 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     nextPrompt.resolve();
     await waitForRequestCount(mock, "/api/event", 2);
-    await waitForRequestCount(mock, "/api/session/ses_test/wait", 2);
+    await waitForRequestCount(mock, "/session/ses_test/prompt_async", 2);
     mock.emit({
       type: "permission.asked",
       properties: {
@@ -1334,7 +1228,7 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     const session = harness.launch({ prompt: "switch", cwd: "/repo", permissionMode: "plan" });
     const iterator = session.messages[Symbol.asyncIterator]();
     const seen: HarnessMessage[] = [];
-    await waitForRequest(mock, "/api/session/ses_test/wait");
+    await waitForRequest(mock, "/session/ses_test/prompt_async");
     mock.failSessionPatch = true;
 
     await assert.rejects(

@@ -41,14 +41,6 @@ interface OpenCodeSession {
   title?: string;
 }
 
-type OpenCodeCapabilities = {
-  v2Prompt: "unknown" | "supported" | "unsupported";
-  v2Wait: "unknown" | "supported" | "unsupported";
-  v2Context: "unknown" | "supported" | "unsupported";
-  v2PermissionReply: "unknown" | "supported" | "unsupported";
-  v2QuestionReply: "unknown" | "supported" | "unsupported";
-};
-
 type OpenCodePendingInput = {
   requestId: string;
   kind: "approval" | "question";
@@ -150,35 +142,6 @@ class OpenCodeHttpError extends Error {
   ) {
     super(`OpenCode ${method} ${path} failed with ${status}${body ? `: ${body}` : ""}`);
   }
-}
-
-function isOpenCodeHttpError(error: unknown): error is OpenCodeHttpError {
-  return error instanceof OpenCodeHttpError;
-}
-
-function isUnsupportedOpenCodeRoute(error: unknown): boolean {
-  if (!isOpenCodeHttpError(error)) return false;
-  if (error.status === 404 || error.status === 405 || error.status === 501) return true;
-  if (error.status !== 503) return false;
-  if (/not available yet|ServiceUnavailableError/i.test(error.body)) return true;
-  try {
-    const parsed = JSON.parse(error.body) as unknown;
-    return isRecord(parsed)
-      && parsed._tag === "ServiceUnavailableError"
-      && typeof parsed.service === "string";
-  } catch {
-    return false;
-  }
-}
-
-function createOpenCodeCapabilities(): OpenCodeCapabilities {
-  return {
-    v2Prompt: "unknown",
-    v2Wait: "unknown",
-    v2Context: "unknown",
-    v2PermissionReply: "unknown",
-    v2QuestionReply: "unknown",
-  };
 }
 
 function classicPromptBody(text: string, model: string | undefined, systemPrompt: string | undefined): Record<string, unknown> {
@@ -421,6 +384,10 @@ function buildQuestionPendingInput(request: Record<string, unknown>): PendingInp
 }
 
 function extractAssistantResult(messages: unknown): string | undefined {
+  return extractAssistantMessageState(messages).result;
+}
+
+function extractAssistantMessageState(messages: unknown): { count: number; result?: string } {
   const records = Array.isArray(messages)
     ? messages
     : isRecord(messages) && Array.isArray(messages.messages)
@@ -439,12 +406,7 @@ function extractAssistantResult(messages: unknown): string | undefined {
       }
     }
   }
-  return texts.at(-1);
-}
-
-function buildPromptText(text: string, systemPrompt: string | undefined): string {
-  const trimmedSystemPrompt = systemPrompt?.trim();
-  return trimmedSystemPrompt ? `${trimmedSystemPrompt}\n\n${text}` : text;
+  return { count: texts.length, result: texts.at(-1) };
 }
 
 export class OpenCodeHarness implements AgentHarness {
@@ -473,11 +435,9 @@ export class OpenCodeHarness implements AgentHarness {
     let runCounter = 0;
     let currentPermissionMode = options.permissionMode ?? "default";
     let currentPendingInput: OpenCodePendingInput | undefined;
-    let firstResumedPrompt = !!options.resumeSessionId;
     let sessionValidated = !options.resumeSessionId;
     let sessionForked = false;
     let systemPromptInjected = false;
-    const capabilities = createOpenCodeCapabilities();
     const streamController = new AbortController();
     let activeWaitController: AbortController | undefined;
     let streamStarted = false;
@@ -543,18 +503,6 @@ export class OpenCodeHarness implements AgentHarness {
 
     const replyPermission = async (requestId: string, response: string): Promise<void> => {
       if (!client || !sessionId) return;
-      if (capabilities.v2PermissionReply !== "unsupported") {
-        try {
-          await client.request("POST", `/api/session/${encodeURIComponent(sessionId)}/permission/request/${encodeURIComponent(requestId)}/reply`, {
-            response,
-          });
-          capabilities.v2PermissionReply = "supported";
-          return;
-        } catch (error) {
-          if (!isUnsupportedOpenCodeRoute(error)) throw error;
-          capabilities.v2PermissionReply = "unsupported";
-        }
-      }
       await client.request("POST", `/permission/${encodeURIComponent(requestId)}/reply`, {
         reply: response,
       });
@@ -562,18 +510,6 @@ export class OpenCodeHarness implements AgentHarness {
 
     const replyQuestion = async (requestId: string, answer: string): Promise<void> => {
       if (!client || !sessionId) return;
-      if (capabilities.v2QuestionReply !== "unsupported") {
-        try {
-          await client.request("POST", `/api/session/${encodeURIComponent(sessionId)}/question/request/${encodeURIComponent(requestId)}/reply`, {
-            answers: [[answer]],
-          });
-          capabilities.v2QuestionReply = "supported";
-          return;
-        } catch (error) {
-          if (!isUnsupportedOpenCodeRoute(error)) throw error;
-          capabilities.v2QuestionReply = "unsupported";
-        }
-      }
       await client.request("POST", `/question/${encodeURIComponent(requestId)}/reply`, {
         answers: [[answer]],
       });
@@ -665,40 +601,15 @@ export class OpenCodeHarness implements AgentHarness {
     };
 
     const fetchSessionMessages = async (http: OpenCodeClient, id: string): Promise<unknown> => {
-      if (capabilities.v2Context !== "unsupported") {
-        try {
-          const messages = await http.request<unknown>("GET", `/api/session/${encodeURIComponent(id)}/context`);
-          capabilities.v2Context = "supported";
-          return messages;
-        } catch (error) {
-          if (!isUnsupportedOpenCodeRoute(error)) throw error;
-          capabilities.v2Context = "unsupported";
-        }
-      }
       return await http.request<unknown>("GET", `/session/${encodeURIComponent(id)}/message`);
     };
 
-    const sendPrompt = async (http: OpenCodeClient, id: string, text: string, promptSystemPrompt: string | undefined): Promise<void> => {
-      if (capabilities.v2Prompt !== "unsupported") {
-        try {
-          await http.request("POST", `/api/session/${encodeURIComponent(id)}/prompt`, {
-            prompt: { text: buildPromptText(text, promptSystemPrompt) },
-            delivery: "queue",
-            ...(firstResumedPrompt ? { resume: true } : {}),
-          });
-          capabilities.v2Prompt = "supported";
-          return;
-        } catch (error) {
-          if (!isUnsupportedOpenCodeRoute(error)) throw error;
-          capabilities.v2Prompt = "unsupported";
-        }
-      }
-      await http.request("POST", `/session/${encodeURIComponent(id)}/prompt_async`, classicPromptBody(text, options.model, promptSystemPrompt));
+    const sendPrompt = async (http: OpenCodeClient, id: string, text: string, promptSystemPrompt: string | undefined, signal: AbortSignal): Promise<void> => {
+      await http.request("POST", `/session/${encodeURIComponent(id)}/prompt_async`, classicPromptBody(text, options.model, promptSystemPrompt), { signal });
     };
 
-    const waitForIdleStatus = async (http: OpenCodeClient, id: string, signal: AbortSignal): Promise<void> => {
+    const waitForTurn = async (http: OpenCodeClient, id: string, baselineAssistantCount: number, signal: AbortSignal): Promise<void> => {
       const startedAt = Date.now();
-      let consecutiveIdle = 0;
       let observedBusy = false;
       while (true) {
         if (signal.aborted) throw new Error("wait aborted");
@@ -706,32 +617,20 @@ export class OpenCodeHarness implements AgentHarness {
           signal,
           timeoutMs: Math.min(this.deps.requestTimeoutMs ?? REQUEST_TIMEOUT_MS, 10_000),
         });
-        if (isIdleSessionStatus(statuses, id)) {
-          consecutiveIdle += 1;
-          if (observedBusy || consecutiveIdle >= 2) return;
-        } else {
+        const idle = isIdleSessionStatus(statuses, id);
+        if (!idle) {
           observedBusy = true;
-          consecutiveIdle = 0;
+        }
+        const messages = await fetchSessionMessages(http, id).catch((): undefined => undefined);
+        const assistantState = extractAssistantMessageState(messages);
+        if (idle && (observedBusy || assistantState.count > baselineAssistantCount)) {
+          return;
         }
         if (Date.now() - startedAt > (this.deps.requestTimeoutMs ?? REQUEST_TIMEOUT_MS)) {
           throw new Error(`Timed out waiting for OpenCode session ${id} to become idle.`);
         }
         await delay(250);
       }
-    };
-
-    const waitForTurn = async (http: OpenCodeClient, id: string, signal: AbortSignal): Promise<void> => {
-      if (capabilities.v2Wait !== "unsupported") {
-        try {
-          await http.request("POST", `/api/session/${encodeURIComponent(id)}/wait`, undefined, { signal });
-          capabilities.v2Wait = "supported";
-          return;
-        } catch (error) {
-          if (!isUnsupportedOpenCodeRoute(error)) throw error;
-          capabilities.v2Wait = "unsupported";
-        }
-      }
-      await waitForIdleStatus(http, id, signal);
     };
 
     const ensureSession = async (): Promise<string> => {
@@ -743,7 +642,6 @@ export class OpenCodeHarness implements AgentHarness {
           sessionId = forked.id;
           sessionForked = true;
           sessionValidated = true;
-          firstResumedPrompt = false;
         } else if (!sessionValidated) {
           await fetchSessionMessages(http, sessionId);
           sessionValidated = true;
@@ -789,12 +687,13 @@ export class OpenCodeHarness implements AgentHarness {
         queue.enqueue(createRunStartedEvent());
         runCounter += 1;
         const promptSystemPrompt = systemPromptInjected ? undefined : options.systemPrompt;
-        await sendPrompt(http, id, text, promptSystemPrompt);
-        systemPromptInjected = true;
-        firstResumedPrompt = false;
+        const baselineMessages = await fetchSessionMessages(http, id).catch((): undefined => undefined);
+        const baselineAssistantCount = extractAssistantMessageState(baselineMessages).count;
         const waitController = new AbortController();
         activeWaitController = waitController;
-        await waitForTurn(http, id, waitController.signal);
+        await sendPrompt(http, id, text, promptSystemPrompt, waitController.signal);
+        systemPromptInjected = true;
+        await waitForTurn(http, id, baselineAssistantCount, waitController.signal);
         activeWaitController = undefined;
         turnWaitCompleted = true;
         await completeTurn(true);
