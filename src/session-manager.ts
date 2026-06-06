@@ -56,6 +56,8 @@ import {
   getStoppedStatusLabel as formatStoppedStatusLabel,
 } from "./session-notification-builder";
 import {
+  detectDefaultBranch,
+  getDiffSummary,
   getPrimaryRepoRootFromWorktree,
   isGitHubCLIAvailable,
   mergeBranch,
@@ -527,9 +529,9 @@ export class SessionManager {
     });
   }
 
-  private getWorktreeDecisionButtons(sessionId: string): NotificationButton[][] | undefined {
+  private getWorktreeDecisionButtons(sessionId: string, options: { allowDelegate?: boolean } = {}): NotificationButton[][] | undefined {
     const session = this.resolve(sessionId) ?? this.getPersistedSession(sessionId);
-    if (!session || session.worktreeStrategy === "delegate") return undefined;
+    if (!session || (session.worktreeStrategy === "delegate" && options.allowDelegate !== true)) return undefined;
     return this.interactions.getWorktreeDecisionButtons(sessionId, session);
   }
 
@@ -674,6 +676,87 @@ export class SessionManager {
       `Canonical plan approval prompt sent for session ${session.name} [${sessionId}].`,
       `Wait for the user's Approve, Revise, or Reject response.`,
       `Do not send a separate plain-text approval message.`,
+    ].join(" ");
+  }
+
+  requestWorktreeDecisionFromUser(ref: string, summary: string): string {
+    const trimmedSummary = summary.trim();
+    if (!trimmedSummary) return "Error: summary must not be empty.";
+
+    const activeSession = this.resolve(ref);
+    const persistedSession = this.getPersistedSession(ref);
+    const session = activeSession ?? persistedSession;
+    if (!session) return `Error: Session "${ref}" not found.`;
+    if (session.worktreeStrategy !== "delegate") {
+      return `Error: Session "${ref}" already uses direct user worktree decisions. Do not send a duplicate decision prompt.`;
+    }
+    const pendingWorktreeDecisionSince = "pendingWorktreeDecisionSince" in session
+      ? session.pendingWorktreeDecisionSince
+      : undefined;
+    const pendingDecision =
+      Boolean(pendingWorktreeDecisionSince)
+      || session.worktreeState === "pending_decision"
+      || session.worktreeLifecycle?.state === "pending_decision";
+    if (!pendingDecision) {
+      return `Error: Session "${ref}" is not awaiting a delegated worktree decision.`;
+    }
+
+    const sessionId = getPrimarySessionLookupRef(activeSession ?? persistedSession ?? { id: ref }) ?? ref;
+    const worktreePath = activeSession?.worktreePath ?? persistedSession?.worktreePath;
+    const branchName = activeSession?.worktreeBranch ?? persistedSession?.worktreeBranch;
+    const repoDir = this.resolveWorktreeRepoDir(
+      activeSession?.originalWorkdir ?? persistedSession?.workdir,
+      worktreePath,
+    );
+    if (!worktreePath) return `Error: Session "${ref}" has no managed worktree path.`;
+    if (!branchName) return `Error: Session "${ref}" has no managed worktree branch.`;
+    if (!repoDir) return `Error: Session "${ref}" has no resolvable repository root for worktree ${worktreePath}.`;
+
+    const baseBranch = activeSession?.worktreeBaseBranch
+      ?? persistedSession?.worktreeBaseBranch
+      ?? detectDefaultBranch(repoDir);
+    const diffSummary = getDiffSummary(repoDir, branchName, baseBranch);
+    if (!diffSummary) {
+      return `Error: Could not compute worktree diff summary for session "${ref}".`;
+    }
+
+    const buttons = this.getWorktreeDecisionButtons(sessionId, { allowDelegate: true });
+    if (!buttons || buttons.length === 0) {
+      return `Error: Could not create worktree decision buttons for session "${ref}".`;
+    }
+
+    const summaryLines = trimmedSummary
+      .split(/\r?\n/)
+      .map((line) => line.replace(/^[-*]\s+/, "").trim())
+      .filter((line) => line.length > 0);
+
+    this.notifications.dispatch(
+      this.buildRoutingProxy({
+        id: sessionId,
+        name: session.name,
+        sessionId: persistedSession?.sessionId,
+        harnessSessionId: activeSession?.harnessSessionId ?? persistedSession?.harnessSessionId,
+        backendRef: activeSession?.backendRef ?? persistedSession?.backendRef,
+        route: activeSession?.route ?? persistedSession?.route,
+      }),
+      this.worktreeMessages.buildAskNotification({
+        session: {
+          id: sessionId,
+          name: session.name,
+          worktreePrTargetRepo: activeSession?.worktreePrTargetRepo ?? persistedSession?.worktreePrTargetRepo,
+        },
+        branchName,
+        baseBranch,
+        diffSummary,
+        summaryLines,
+        buttons,
+      }),
+    );
+
+    return [
+      `Canonical worktree decision prompt sent for session ${session.name} [${sessionId}].`,
+      `Wait for the user's Merge, Open PR, Later, or Discard response.`,
+      `Do not send a separate plain-text worktree decision message.`,
     ].join(" ");
   }
 

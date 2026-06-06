@@ -414,7 +414,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
     }
   });
 
-  it("routes delegate mode to the orchestrator without user buttons", async () => {
+  it("routes delegate mode with a visible pending status and orchestrator wake", async () => {
     const repoDir = mkdtempSync(join(tmpdir(), "sm-worktree-delegate-"));
     let cleanup = () => {};
     try {
@@ -487,8 +487,9 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       assert.equal(calls.length, 1);
       const [_sessionArg, request] = calls[0];
       assert.equal(request.label, "worktree-delegate");
-      assert.equal(request.notifyUser, "never");
-      assert.equal(request.userMessage, undefined);
+      assert.equal(request.notifyUser, "always");
+      assert.match(request.userMessage, /Worktree decision pending for session `delegate-session`/);
+      assert.match(request.userMessage, /delegated reviewer is deciding/i);
       assert.equal(request.buttons, undefined);
       assert.match(request.wakeMessage, /DELEGATED WORKTREE DECISION/);
       assert.match(request.wakeMessage, /Session origin route \(authoritative for human follow-ups\):/);
@@ -496,9 +497,32 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       assert.match(request.wakeMessage, /"threadId":"13832"/);
       assert.match(request.wakeMessage, /do not use a plain final assistant reply/i);
       assert.match(request.wakeMessage, /agent_merge\(session="delegate-session"/);
+      assert.match(request.wakeMessage, /agent_request_worktree_decision\(session="delegate-session"/);
       assert.match(request.wakeMessage, /Never call agent_pr\(\) autonomously/);
       const persisted = (sm as any).store.persisted.get("h-delegate");
       assert.match(persisted.pendingWorktreeDecisionSince, /^\d{4}-\d{2}-\d{2}T/);
+
+      const response = (sm as any).requestWorktreeDecisionFromUser(
+        "delegate-session",
+        [
+          "PR is safer because the branch changes user-visible notification behavior.",
+          "Please choose whether to merge locally or open a PR.",
+        ].join("\n"),
+      );
+
+      assert.match(response, /Canonical worktree decision prompt sent/);
+      assert.equal(calls.length, 2);
+      const [_promptSessionArg, promptRequest] = calls[1];
+      assert.equal(promptRequest.label, "worktree-merge-ask");
+      assert.equal(promptRequest.notifyUser, "always");
+      assert.match(promptRequest.userMessage, /PR is safer because the branch changes user-visible notification behavior/);
+      assert.deepEqual(
+        promptRequest.buttons.map((row: Array<{ label: string }>) => row.map((button) => button.label)),
+        [
+          ["Merge", "Open PR"],
+          ["Later", "Discard"],
+        ],
+      );
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
       cleanup();
