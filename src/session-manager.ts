@@ -786,6 +786,7 @@ export class SessionManager {
 
     this.dispatchSessionNotification(parentRoutingTarget, {
       label: "worktree-merge-conflict-resolver-failed",
+      idempotencyKey: `worktree-merge-conflict-resolver-failed:${parentRef}:${session.id}`,
       userMessage: [
         `⚠️ [${parentRoutingTarget.name}] Auto-merge conflict resolution did not complete successfully.`,
         `Branch \`${worktreeBranch}\` was preserved for manual follow-up in ${worktreePath}.`,
@@ -829,6 +830,7 @@ export class SessionManager {
   notifySession(session: Session, text: string, label: string = "notification"): void {
     this.dispatchSessionNotification(session, {
       label,
+      idempotencyKey: label === "agent-respond" ? undefined : `notify:${session.id}:${label}:${text}`,
       userMessage: text,
       notifyUser: "always",
     });

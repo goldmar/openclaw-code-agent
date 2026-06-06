@@ -309,6 +309,7 @@ export class SessionLifecycleService {
         if (planApprovalMode === "delegate") {
           this.deps.dispatchSessionNotification(session, {
             label: "plan-approval-timeout",
+            idempotencyKey: `plan-approval-timeout:${session.id}:v${actionableVersion ?? "unknown"}:delegate`,
             wakeMessage: [
               `[DELEGATED PLAN APPROVAL REMINDER] Plan review is still pending after the session hit idle timeout.`,
               `Name: ${session.name} | ID: ${session.id}`,
@@ -327,6 +328,7 @@ export class SessionLifecycleService {
         if (planApprovalMode === "ask" && promptAlreadyProven) {
           this.deps.dispatchSessionNotification(session, {
             label: "plan-approval-timeout",
+            idempotencyKey: `plan-approval-timeout:${session.id}:v${actionableVersion ?? "unknown"}:already-delivered`,
             notifyUser: "never",
             wakeMessage: [
               `[PLAN APPROVAL REMINDER] The user already has an actionable plan review prompt for this plan version.`,
@@ -340,6 +342,7 @@ export class SessionLifecycleService {
         }
         this.deps.dispatchSessionNotification(session, {
           label: "plan-approval-timeout",
+          idempotencyKey: `plan-approval-timeout:${session.id}:v${actionableVersion ?? "unknown"}:user-prompt`,
           userMessage: [
             `📋 [${session.name}] Plan v${actionableVersion ?? "?"} still awaiting approval after idle timeout | ${costStr} | ${formatDuration(duration)}`,
             ``,
@@ -361,6 +364,7 @@ export class SessionLifecycleService {
       }
       this.deps.dispatchSessionNotification(session, {
         label: "suspended",
+        idempotencyKey: `suspended:${session.id}:${session.killReason ?? "idle-timeout"}`,
         userMessage: `💤 [${session.name}] Suspended after idle timeout | ${costStr} | ${formatDuration(duration)}`,
         notifyUser: "always",
         buttons: this.deps.getResumeButtons(session.id, session),
@@ -489,6 +493,7 @@ export class SessionLifecycleService {
     if (payload.label === "plan-approval") {
       this.deps.dispatchSessionNotification(session, {
         label: payload.label,
+        idempotencyKey: `plan-approval:${session.id}:v${planDecisionVersion ?? "unknown"}:wake-only`,
         userMessage: payload.userMessage,
         wakeMessage: payload.wakeMessage,
         notifyUser: "never",
@@ -499,6 +504,7 @@ export class SessionLifecycleService {
 
     this.deps.dispatchSessionNotification(session, {
       label: payload.label,
+      idempotencyKey: `waiting:${session.id}:${session.pendingInputState?.requestId ?? payload.label}:${payload.userMessage}`,
       userMessage: payload.userMessage,
       notifyUser: "always",
       buttons: payload.buttons,
@@ -519,6 +525,7 @@ export class SessionLifecycleService {
 
     this.deps.dispatchSessionNotification(session, {
       label: "turn-complete",
+      idempotencyKey: `turn-complete:${session.id}:${session.result?.num_turns ?? 0}`,
       userMessage: payload.userMessage,
       wakeMessage: payload.wakeMessage,
       notifyUser: "always",
@@ -543,6 +550,7 @@ export class SessionLifecycleService {
     let canonicalStatusDelivered: boolean | undefined;
     this.deps.dispatchSessionNotification(session, {
       label: "completed",
+      idempotencyKey: `terminal-completed:${session.id}`,
       userMessage: payload.userMessage,
       notifyUser: "always",
       completionSummary: {
@@ -597,6 +605,7 @@ export class SessionLifecycleService {
     });
     this.deps.dispatchSessionNotification(session, {
       label: "failed",
+      idempotencyKey: `terminal-failed:${session.id}:${errorSummary}`,
       userMessage: payload.userMessage,
       wakeMessage: payload.wakeMessage,
       notifyUser: "always",

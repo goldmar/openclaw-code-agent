@@ -1365,6 +1365,7 @@ describe("SessionManager.notifySession()", () => {
     sm.notifySession(s, "hello", "launch");
     assert.deepEqual((sm as any).__dispatchCalls, [[s, {
       label: "launch",
+      idempotencyKey: "notify:s1:launch:hello",
       userMessage: "hello",
       notifyUser: "always",
     }]]);
