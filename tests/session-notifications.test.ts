@@ -2040,6 +2040,109 @@ describe("SessionNotificationService", () => {
     assert.deepEqual(skippedReasons, ["COMPLETION_FOLLOWUP_SKIPPED: prior human-visible summary already delivered"]);
   });
 
+  it("persists a PR-updated foreground summary ledger so later worktree follow-through keeps only the canonical status", () => {
+    const persisted = { completionSummaryDedupe: undefined, notificationDedupe: undefined } as any;
+    const requests: Array<Record<string, unknown>> = [];
+    const logs: string[] = [];
+    const originalStderrWrite = process.stderr.write;
+    process.stderr.write = ((chunk: string | Uint8Array, ...args: any[]) => {
+      logs.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      const fakeDispatcher = {
+        dispatchSessionNotification: (_session: unknown, request: Record<string, unknown> & { hooks?: Record<string, (reason?: string) => void> }) => {
+          requests.push(request as Record<string, unknown>);
+          request.hooks?.onNotifyStarted?.();
+          request.hooks?.onNotifySucceeded?.();
+          if (request.wakeMessage || request.wakeMessageOnNotifySuccess || request.wakeMessageOnNotifyFailed) {
+            request.hooks?.onWakeStarted?.();
+            request.hooks?.onWakeSucceeded?.();
+          }
+        },
+        dispose: () => {},
+      };
+      const route = {
+        provider: "telegram",
+        target: "-1003863755361",
+        threadId: "13832",
+        sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+      };
+      const session = {
+        id: "tiPnvl0H",
+        harnessSessionId: "tiPnvl0H",
+        name: "fix-opencode-api-prefix-startup-timeout",
+        route,
+      } as any;
+      const outcomeKey = "worktree-pr:updated:goldmar/openclaw-code-agent:#183:agent/fix-opencode-api-prefix-startup-timeout:abc1234";
+      const firstService = new SessionNotificationService(
+        fakeDispatcher as any,
+        (_ref, patch) => Object.assign(persisted, patch),
+        { getPersistedSession: () => persisted },
+      );
+
+      firstService.notifyWorktreeOutcome(
+        session,
+        "✅ PR updated: https://github.com/goldmar/openclaw-code-agent/pull/183",
+        {
+          completionSummaryOwner: "foreground",
+          completionWakeOutcomeKey: outcomeKey,
+          detailLines: [
+            "PR number: #183.",
+            "Pushed 1 new commit (+8/-2).",
+          ],
+        },
+      );
+
+      const secondService = new SessionNotificationService(
+        fakeDispatcher as any,
+        (_ref, patch) => Object.assign(persisted, patch),
+        { getPersistedSession: () => persisted },
+      );
+      secondService.dispatch(session, {
+        label: "routed-followup-summary",
+        idempotencyKey: "routed-followup-summary:pr-183",
+        wakeMessage: "Duplicate routed PR #183 updated summary wake",
+        completionSummary: {
+          required: true,
+          producer: "worktree-pr",
+          outcomeKey,
+        },
+        completionWakeSummaryRequired: true,
+        completionWakeOutcomeKey: outcomeKey,
+        notifyUser: "never",
+      });
+
+      assert.equal(requests.length, 2);
+      assert.equal(requests[0]?.completionWakeSummaryRequired, false);
+      assert.equal(requests[0]?.userMessage, "✅ PR updated: https://github.com/goldmar/openclaw-code-agent/pull/183");
+      assert.equal(requests[1]?.label, "routed-followup-summary");
+      assert.equal(requests[1]?.completionWakeSummaryRequired, false);
+      assert.equal(requests[1]?.wakeMessage, undefined);
+      assert.ok(persisted.completionSummaryDedupe?.length > 0);
+      const parsedLogs = logs
+        .map((line) => {
+          const jsonStart = line.indexOf("{");
+          if (jsonStart < 0) return undefined;
+          try { return JSON.parse(line.slice(jsonStart)); } catch { return undefined; }
+        })
+        .filter((entry): entry is Record<string, unknown> => Boolean(entry));
+      assert.equal(parsedLogs.some((entry) =>
+        entry.event === "oca_notification_decision"
+        && entry.sessionId === "tiPnvl0H"
+        && entry.sessionName === "fix-opencode-api-prefix-startup-timeout"
+        && entry.notificationKind === "routed-followup-summary"
+        && entry.followupKind === "worktree-pr"
+        && entry.deliveryPath === "wake"
+        && entry.decision === "send_without_followup"
+        && typeof entry.dedupeKey === "string"
+        && typeof (entry.originRoute as Record<string, unknown> | undefined)?.threadId === "string"
+      ), true);
+    } finally {
+      process.stderr.write = originalStderrWrite;
+    }
+  });
+
   it("keeps materially new PR follow-through outcomes visible for the same route", () => {
     const requests: Array<Record<string, unknown>> = [];
     const fakeDispatcher = {
