@@ -46,6 +46,7 @@ export interface CompletionSummaryDecision {
   required: boolean;
   allowed: boolean;
   key?: string;
+  dedupeKey?: string;
   explicit: boolean;
   skipReason?: string;
   records?: SessionCompletionSummaryRecord[];
@@ -110,7 +111,7 @@ export class CompletionSummaryCoordinator {
         required: true,
         allowed: false,
         explicit: keys.explicit,
-        key: keys.primary,
+        dedupeKey: keys.primary,
         skipReason: completedRecord?.skipReason ?? persistedRecord?.skipReason ?? DUPLICATE_REASON,
       };
     }
@@ -149,7 +150,7 @@ export class CompletionSummaryCoordinator {
         required: true,
         allowed: false,
         explicit: keys.explicit,
-        key: keys.primary,
+        dedupeKey: keys.primary,
         skipReason: completedRecord?.skipReason ?? persistedRecord?.skipReason,
       };
     }
