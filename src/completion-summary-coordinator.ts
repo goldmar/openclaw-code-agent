@@ -107,10 +107,7 @@ export class CompletionSummaryCoordinator {
       };
     }
 
-    for (const key of keys.claimKeys) {
-      this.inFlight.add(key);
-    }
-    this.claimKeysByPrimary.set(keys.primary, keys.claimKeys);
+    this.registerClaim(keys.primary, keys.claimKeys);
     return {
       required: true,
       allowed: true,
@@ -143,7 +140,7 @@ export class CompletionSummaryCoordinator {
       };
     }
 
-    this.finishKeys(keys.claimKeys, true, PRIOR_VISIBLE_SUMMARY_SKIP_REASON);
+    this.finishKeys(keys.primary, keys.claimKeys, true, PRIOR_VISIBLE_SUMMARY_SKIP_REASON);
     return {
       required: true,
       allowed: true,
@@ -155,14 +152,37 @@ export class CompletionSummaryCoordinator {
   finish(key: string | undefined, completed: boolean, skipReason = DUPLICATE_REASON): void {
     if (!key) return;
     const claimKeys = this.claimKeysByPrimary.get(key) ?? [key];
-    this.finishKeys(claimKeys, completed, skipReason);
+    this.finishKeys(key, claimKeys, completed, skipReason);
   }
 
-  private finishKeys(keys: string[], completed: boolean, skipReason = DUPLICATE_REASON): void {
+  private registerClaim(primary: string, claimKeys: string[]): void {
+    for (const key of claimKeys) {
+      this.inFlight.add(key);
+    }
+    this.claimKeysByPrimary.delete(primary);
+    this.claimKeysByPrimary.set(primary, claimKeys);
+
+    while (this.claimKeysByPrimary.size > this.maxCompletedKeys) {
+      const oldestPrimary = this.claimKeysByPrimary.keys().next().value;
+      if (oldestPrimary === undefined) break;
+      const oldestClaimKeys = this.claimKeysByPrimary.get(oldestPrimary) ?? [oldestPrimary];
+      for (const key of oldestClaimKeys) {
+        this.inFlight.delete(key);
+      }
+      this.claimKeysByPrimary.delete(oldestPrimary);
+    }
+  }
+
+  private finishKeys(
+    primary: string,
+    keys: string[],
+    completed: boolean,
+    skipReason = DUPLICATE_REASON,
+  ): void {
     for (const key of keys) {
       this.inFlight.delete(key);
     }
-    this.claimKeysByPrimary.delete(keys[0] ?? "");
+    this.claimKeysByPrimary.delete(primary);
     if (!completed) return;
 
     for (const key of keys) {

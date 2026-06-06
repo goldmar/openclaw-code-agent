@@ -92,6 +92,44 @@ describe("CompletionSummaryCoordinator", () => {
     assert.equal(third.allowed, false);
   });
 
+  it("bounds abandoned in-flight claim aliases with the completed-key cap", () => {
+    const coordinator = new CompletionSummaryCoordinator({ maxCompletedKeys: 1 });
+    const route = {
+      provider: "telegram",
+      target: "topic-fixture",
+      threadId: "13832",
+    };
+
+    const abandoned = coordinator.decide(
+      { id: "abandoned-session", route },
+      {
+        required: true,
+        producer: "terminal",
+        outcomeKey: "terminal:abandoned-session",
+      },
+    );
+    const newer = coordinator.decide(
+      { id: "newer-session", route },
+      {
+        required: true,
+        producer: "terminal",
+        outcomeKey: "terminal:newer-session",
+      },
+    );
+    const abandonedRetry = coordinator.decide(
+      { id: "abandoned-session", route },
+      {
+        required: true,
+        producer: "terminal",
+        outcomeKey: "terminal:abandoned-session",
+      },
+    );
+
+    assert.equal(abandoned.allowed, true);
+    assert.equal(newer.allowed, true);
+    assert.equal(abandonedRetry.allowed, true);
+  });
+
   it("deduplicates ordinary terminal/manual completions by fallback fingerprint", () => {
     const coordinator = new CompletionSummaryCoordinator();
     const session = { id: "manual-terminal-session" };
