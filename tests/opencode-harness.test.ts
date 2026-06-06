@@ -796,6 +796,37 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     assert.equal(mock.requests.some((request) => request.path === "/api/session/ses_test/prompt"), false);
   });
 
+  it("shares startup across concurrent client requests", async () => {
+    const mock = new MockOpenCodeServer();
+    let createServerCalls = 0;
+    let resolveServer!: (handle: ReturnType<MockOpenCodeServer["handle"]>) => void;
+    const serverRequested = Promise.withResolvers<void>();
+    const serverReady = new Promise<ReturnType<MockOpenCodeServer["handle"]>>((resolve) => {
+      resolveServer = resolve;
+    });
+    const harness = new OpenCodeHarness({
+      createServer: async () => {
+        createServerCalls += 1;
+        serverRequested.resolve();
+        return await serverReady;
+      },
+      fetch: mock.fetch,
+    });
+
+    const session = harness.launch({ prompt: "start", cwd: "/repo" });
+    await serverRequested.promise;
+    const modePromise = session.setPermissionMode?.("plan");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(createServerCalls, 1);
+    resolveServer(mock.handle());
+    await modePromise;
+
+    const messages = await collectAllMessages(session);
+    const completion = messages.find((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }> | undefined;
+    assert.equal(createServerCalls, 1);
+    assert.equal(completion?.data.success, true);
+  });
+
   it("emits interrupted completion when interrupted between stream turns", async () => {
     const mock = new MockOpenCodeServer();
     const nextPrompt = Promise.withResolvers<void>();

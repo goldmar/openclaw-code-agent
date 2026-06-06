@@ -398,6 +398,7 @@ export class OpenCodeHarness implements AgentHarness {
     const fetchImpl = this.deps.fetch ?? fetch;
     let server: OpenCodeServerHandle | undefined;
     let client: OpenCodeClient | undefined;
+    let clientPromise: Promise<OpenCodeClient> | undefined;
     let sessionId = options.resumeSessionId;
     let runCounter = 0;
     let currentPermissionMode = options.permissionMode ?? "default";
@@ -456,9 +457,17 @@ export class OpenCodeHarness implements AgentHarness {
 
     const ensureClient = async (): Promise<OpenCodeClient> => {
       if (client) return client;
-      server = await (this.deps.createServer ?? defaultCreateServer)({ cwd: options.cwd });
-      client = new OpenCodeClient(server.baseUrl, fetchImpl);
-      return client;
+      clientPromise ??= (async () => {
+        server = await (this.deps.createServer ?? defaultCreateServer)({ cwd: options.cwd });
+        client = new OpenCodeClient(server.baseUrl, fetchImpl);
+        return client;
+      })();
+      try {
+        return await clientPromise;
+      } catch (error) {
+        clientPromise = undefined;
+        throw error;
+      }
     };
 
     const replyPermission = async (requestId: string, response: string): Promise<void> => {
