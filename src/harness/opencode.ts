@@ -1,5 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { constants as fsConstants, accessSync } from "node:fs";
 import { createServer } from "node:net";
+import { delimiter, dirname, join, sep } from "node:path";
 import type {
   PendingInputAction,
   PendingInputState,
@@ -30,9 +32,11 @@ interface OpenCodeServerHandle {
 }
 
 interface OpenCodeHarnessDeps {
-  createServer?: (options: { cwd: string }) => Promise<OpenCodeServerHandle>;
+  createServer?: (options: { cwd: string; signal?: AbortSignal; fetch?: FetchLike; requestTimeoutMs?: number; startupTimeoutMs?: number }) => Promise<OpenCodeServerHandle>;
   fetch?: FetchLike;
   requestTimeoutMs?: number;
+  startupTimeoutMs?: number;
+  turnTimeoutMs?: number;
 }
 
 interface OpenCodeSession {
@@ -51,6 +55,7 @@ type OpenCodePendingInput = {
 const OPENCODE_COMMAND_ENV = "OPENCLAW_OPENCODE_COMMAND";
 const STARTUP_TIMEOUT_MS = 15_000;
 const REQUEST_TIMEOUT_MS = 60_000;
+const TURN_TIMEOUT_MS = 15 * 60_000;
 const MUTATION_PERMISSIONS = [
   "edit",
   "bash",
@@ -61,6 +66,44 @@ const MUTATION_PERMISSIONS = [
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function isExecutable(file: string): boolean {
+  try {
+    accessSync(file, fsConstants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function commandHasPathSeparator(command: string): boolean {
+  return command.includes("/") || (sep === "\\" && command.includes("\\"));
+}
+
+function candidateSearchPaths(envPath: string | undefined): string[] {
+  const paths = (envPath ?? "")
+    .split(delimiter)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  const expanded = [...paths];
+  for (const entry of paths) {
+    const normalized = entry.replaceAll("\\", "/");
+    if (normalized.endsWith("/opt/node/bin")) {
+      expanded.push(join(dirname(dirname(dirname(entry))), "bin"));
+    }
+  }
+  expanded.push("/home/linuxbrew/.linuxbrew/bin", "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin");
+  return [...new Set(expanded)];
+}
+
+function resolveCommandPath(command: string, envPath = process.env.PATH): string {
+  if (commandHasPathSeparator(command)) return command;
+  for (const entry of candidateSearchPaths(envPath)) {
+    const candidate = join(entry, command);
+    if (isExecutable(candidate)) return candidate;
+  }
+  return command;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -133,6 +176,65 @@ async function delay(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function boundedPromise<T>(
+  promise: Promise<T>,
+  options: {
+    timeoutMs: number;
+    timeoutMessage: string;
+    signal?: AbortSignal;
+    abortMessage?: string;
+    onTimeout?: () => void;
+  },
+): Promise<T> {
+  if (options.signal?.aborted) {
+    throw new Error(options.abortMessage ?? "Operation was aborted.");
+  }
+  return await new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const cleanup = (): void => {
+      clearTimeout(timeout);
+      options.signal?.removeEventListener("abort", onAbort);
+    };
+    const finish = (fn: () => void): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      fn();
+    };
+    const onAbort = (): void => {
+      finish(() => reject(new Error(options.abortMessage ?? "Operation was aborted.")));
+    };
+    const timeout = setTimeout(() => {
+      finish(() => {
+        options.onTimeout?.();
+        reject(new Error(options.timeoutMessage));
+      });
+    }, options.timeoutMs);
+    options.signal?.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => finish(() => resolve(value)),
+      (error) => finish(() => reject(error)),
+    );
+  });
+}
+
+async function terminateChild(child: ChildProcessWithoutNullStreams): Promise<void> {
+  if (child.exitCode !== null) return;
+  await new Promise<void>((resolve) => {
+    let killTimeout: NodeJS.Timeout | undefined;
+    const forceTimeout = setTimeout(() => {
+      if (child.exitCode === null) child.kill("SIGKILL");
+      killTimeout = setTimeout(resolve, 1_000);
+    }, 2_000);
+    child.once("exit", () => {
+      clearTimeout(forceTimeout);
+      if (killTimeout) clearTimeout(killTimeout);
+      resolve();
+    });
+    child.kill("SIGTERM");
+  });
+}
+
 class OpenCodeHttpError extends Error {
   constructor(
     readonly method: string,
@@ -174,66 +276,125 @@ function classicPromptBody(text: string, model: string | undefined, systemPrompt
 
 function isIdleSessionStatus(statuses: unknown, sessionId: string): boolean {
   if (!isRecord(statuses)) return false;
+  if (!(sessionId in statuses)) return true;
   const status = statuses[sessionId];
   return isRecord(status) && status.type === "idle";
 }
 
-async function startOpenCodeServerOnce(options: { cwd: string }): Promise<OpenCodeServerHandle> {
+async function startOpenCodeServerOnce(options: { cwd: string; signal?: AbortSignal; fetch?: FetchLike; requestTimeoutMs?: number; startupTimeoutMs?: number }): Promise<OpenCodeServerHandle> {
   const port = await getFreePort();
-  const command = process.env[OPENCODE_COMMAND_ENV]?.trim() || "opencode";
-  const child = spawn(command, [
+  const requestedCommand = process.env[OPENCODE_COMMAND_ENV]?.trim() || "opencode";
+  const command = resolveCommandPath(requestedCommand);
+  const args = [
     "serve",
     "--hostname",
     "127.0.0.1",
     "--port",
     String(port),
-  ], {
+    "--print-logs",
+  ];
+  const fetchImpl = options.fetch ?? fetch;
+  const readinessRequestTimeoutMs = Math.min(options.requestTimeoutMs ?? REQUEST_TIMEOUT_MS, 10_000);
+  const startupTimeoutMs = options.startupTimeoutMs ?? STARTUP_TIMEOUT_MS;
+  const child = spawn(command, args, {
     cwd: options.cwd,
     stdio: ["ignore", "pipe", "pipe"],
   }) as ChildProcessWithoutNullStreams;
   const baseUrl = `http://127.0.0.1:${port}`;
+  let stdout = "";
   let stderr = "";
-  child.stderr.on("data", (chunk) => {
-    stderr += String(chunk);
+  let spawnError: Error | undefined;
+  const appendOutput = (current: string, chunk: unknown): string => {
+    const next = current + String(chunk);
+    return next.length > 8_000 ? next.slice(-8_000) : next;
+  };
+  child.stdout.on("data", (chunk) => {
+    stdout = appendOutput(stdout, chunk);
   });
-
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < STARTUP_TIMEOUT_MS) {
-    if (child.exitCode !== null) {
-      throw new Error(`OpenCode server exited before readiness.${stderr ? ` ${stderr.trim()}` : ""}`);
-    }
-    try {
-      const response = await fetch(`${baseUrl}/api/health`, { headers: authHeader() });
-      if (response.ok) {
-        return {
-          baseUrl,
-          async close(): Promise<void> {
-            if (child.exitCode !== null) return;
-            child.kill("SIGTERM");
-            await new Promise<void>((resolve) => {
-              const timeout = setTimeout(() => {
-                if (child.exitCode === null) child.kill("SIGKILL");
-                resolve();
-              }, 2_000);
-              child.once("exit", () => {
-                clearTimeout(timeout);
-                resolve();
-              });
-            });
-          },
-        };
-      }
-    } catch {
-      // Retry until the process exits or the startup deadline is reached.
-    }
-    await delay(100);
+  child.stderr.on("data", (chunk) => {
+    stderr = appendOutput(stderr, chunk);
+  });
+  child.once("error", (error) => {
+    spawnError = error;
+  });
+  const launchDescription = (): string => {
+    const commandDescription = requestedCommand === command ? command : `${command} (resolved from ${requestedCommand})`;
+    return ` Command: ${commandDescription} ${args.join(" ")}. Cwd: ${options.cwd}. Port: ${port}. PATH: ${process.env.PATH ?? ""}.`;
+  };
+  const outputSuffix = (): string => {
+    const output = [stdout.trim(), stderr.trim()].filter(Boolean).join("\n").trim();
+    return `${launchDescription()}${output ? ` Output:\n${output}` : ""}`;
+  };
+  const abortStartup = (): void => {
+    void terminateChild(child);
+  };
+  if (options.signal?.aborted) {
+    await terminateChild(child);
+    throw new Error(`OpenCode server startup aborted before readiness.${outputSuffix()}`);
   }
+  options.signal?.addEventListener("abort", abortStartup, { once: true });
 
-  child.kill("SIGTERM");
-  throw new Error(`Timed out waiting for OpenCode server readiness.${stderr ? ` ${stderr.trim()}` : ""}`);
+  try {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < startupTimeoutMs) {
+      if (options.signal?.aborted) {
+        await terminateChild(child);
+        throw new Error(`OpenCode server startup aborted before readiness.${outputSuffix()}`);
+      }
+      if (spawnError) {
+        throw new Error(`OpenCode server failed to start: ${spawnError.message}${outputSuffix()}`);
+      }
+      if (child.exitCode !== null) {
+        throw new Error(`OpenCode server exited before readiness.${outputSuffix()}`);
+      }
+      try {
+        const controller = new AbortController();
+        const abortController = (): void => controller.abort();
+        if (options.signal?.aborted) {
+          controller.abort();
+        } else {
+          options.signal?.addEventListener("abort", abortController, { once: true });
+        }
+        try {
+          const response = await boundedPromise(
+            fetchImpl(`${baseUrl}/api/health`, { headers: authHeader(), signal: controller.signal }),
+            {
+              timeoutMs: readinessRequestTimeoutMs,
+              timeoutMessage: `OpenCode GET /api/health timed out after ${readinessRequestTimeoutMs}ms during server readiness.${outputSuffix()}`,
+              signal: options.signal,
+              abortMessage: `OpenCode server startup aborted before readiness.${outputSuffix()}`,
+              onTimeout: () => controller.abort(),
+            },
+          );
+          if (response.ok) {
+            return {
+              baseUrl,
+              close: async () => {
+                await terminateChild(child);
+              },
+            };
+          }
+        } finally {
+          options.signal?.removeEventListener("abort", abortController);
+        }
+      } catch (error) {
+        if (options.signal?.aborted) {
+          await terminateChild(child);
+          throw new Error(`OpenCode server startup aborted before readiness.${outputSuffix()}`);
+        }
+        // Retry until the process exits or the startup deadline is reached.
+      }
+      await delay(100);
+    }
+
+    await terminateChild(child);
+    throw new Error(`Timed out waiting for OpenCode server readiness.${outputSuffix()}`);
+  } finally {
+    options.signal?.removeEventListener("abort", abortStartup);
+  }
 }
 
-async function defaultCreateServer(options: { cwd: string }): Promise<OpenCodeServerHandle> {
+async function defaultCreateServer(options: { cwd: string; signal?: AbortSignal; fetch?: FetchLike; requestTimeoutMs?: number; startupTimeoutMs?: number }): Promise<OpenCodeServerHandle> {
   for (let attempt = 1; ; attempt += 1) {
     try {
       return await startOpenCodeServerOnce(options);
@@ -259,29 +420,67 @@ class OpenCodeClient {
     options: { signal?: AbortSignal; timeoutMs?: number } = {},
   ): Promise<T> {
     const controller = new AbortController();
-    const abortFromCaller = (): void => controller.abort();
+    let callerAborted = false;
+    let timedOut = false;
+    const timeoutMs = options.timeoutMs ?? this.requestTimeoutMs;
+    const timeoutMessage = `OpenCode ${method} ${path} timed out after ${timeoutMs}ms.`;
+    const abortMessage = `OpenCode ${method} ${path} was aborted.`;
+    const abortFromCaller = (): void => {
+      callerAborted = true;
+      controller.abort();
+    };
     if (options.signal?.aborted) {
+      callerAborted = true;
       controller.abort();
     } else {
       options.signal?.addEventListener("abort", abortFromCaller, { once: true });
     }
-    const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? this.requestTimeoutMs);
     try {
-      const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
-        method,
-        headers: {
-          ...authHeader(),
-          ...(body === undefined ? {} : { "content-type": "application/json" }),
+      const response = await boundedPromise(
+        this.fetchImpl(`${this.baseUrl}${path}`, {
+          method,
+          headers: {
+            ...authHeader(),
+            ...(body === undefined ? {} : { "content-type": "application/json" }),
+          },
+          body: body === undefined ? undefined : JSON.stringify(body),
+          signal: controller.signal,
+        }),
+        {
+          timeoutMs,
+          timeoutMessage,
+          signal: options.signal,
+          abortMessage,
+          onTimeout: () => {
+            timedOut = true;
+            controller.abort();
+          },
         },
-        body: body === undefined ? undefined : JSON.stringify(body),
-        signal: controller.signal,
-      });
+      );
       if (!response.ok) {
-        const text = await response.text().catch(() => "");
+        const text = await boundedPromise(response.text(), {
+          timeoutMs,
+          timeoutMessage,
+          signal: options.signal,
+          abortMessage,
+          onTimeout: () => {
+            timedOut = true;
+            controller.abort();
+          },
+        }).catch(() => "");
         throw new OpenCodeHttpError(method, path, response.status, previewResponseBody(text));
       }
       if (response.status === 204) return undefined as T;
-      const text = await response.text();
+      const text = await boundedPromise(response.text(), {
+        timeoutMs,
+        timeoutMessage,
+        signal: options.signal,
+        abortMessage,
+        onTimeout: () => {
+          timedOut = true;
+          controller.abort();
+        },
+      });
       if (!text) return undefined as T;
       const contentType = responseContentType(response);
       if (!contentType.includes("application/json") && !contentType.includes("+json")) {
@@ -293,8 +492,17 @@ class OpenCodeClient {
         const preview = previewResponseBody(text);
         throw new Error(`OpenCode ${method} ${path} returned invalid JSON: ${errorMessage(error)}${preview ? `: ${preview}` : ""}`);
       }
+    } catch (error) {
+      if (controller.signal.aborted) {
+        if (timedOut) {
+          throw new Error(`OpenCode ${method} ${path} timed out after ${timeoutMs}ms.`);
+        }
+        if (callerAborted) {
+          throw new Error(`OpenCode ${method} ${path} was aborted.`);
+        }
+      }
+      throw error;
     } finally {
-      clearTimeout(timeout);
       options.signal?.removeEventListener("abort", abortFromCaller);
     }
   }
@@ -427,12 +635,13 @@ function extractAssistantMessageState(messages: unknown): { count: number; resul
   const texts: string[] = [];
   for (const entry of records) {
     const message = isRecord(entry) && isRecord(entry.info) ? entry.info : entry;
-    if (!isRecord(message) || message.type !== "assistant") continue;
+    if (!isRecord(message)) continue;
+    const role = typeof message.role === "string" ? message.role : message.type;
+    if (role !== "assistant") continue;
     const content = Array.isArray(message.content) ? message.content : [];
-    for (const part of content) {
-      if (isRecord(part) && part.type === "text" && typeof part.text === "string") {
-        texts.push(part.text);
-      }
+    const parts = isRecord(entry) && Array.isArray(entry.parts) ? entry.parts : [];
+    for (const part of [...content, ...parts]) {
+      if (isRecord(part) && part.type === "text" && typeof part.text === "string") texts.push(part.text);
     }
   }
   return { count: texts.length, result: texts.at(-1) };
@@ -518,8 +727,19 @@ export class OpenCodeHarness implements AgentHarness {
     const ensureClient = async (): Promise<OpenCodeClient> => {
       if (client) return client;
       clientPromise ??= (async () => {
-        server = await (this.deps.createServer ?? defaultCreateServer)({ cwd: options.cwd });
-        client = new OpenCodeClient(server.baseUrl, fetchImpl, this.deps.requestTimeoutMs);
+        const handle = await (this.deps.createServer ?? defaultCreateServer)({
+          cwd: options.cwd,
+          signal: options.abortController?.signal,
+          fetch: fetchImpl,
+          requestTimeoutMs: this.deps.requestTimeoutMs,
+          startupTimeoutMs: this.deps.startupTimeoutMs,
+        });
+        if (sessionInterrupted || options.abortController?.signal.aborted) {
+          await handle.close().catch((): undefined => undefined);
+          throw new Error("OpenCode startup was interrupted before session creation.");
+        }
+        server = handle;
+        client = new OpenCodeClient(handle.baseUrl, fetchImpl, this.deps.requestTimeoutMs);
         return client;
       })();
       try {
@@ -549,12 +769,25 @@ export class OpenCodeHarness implements AgentHarness {
       const eventSessionId = sessionIdFromProperties(event.properties);
       if (eventSessionId && eventSessionId !== sessionId) return;
 
-      if (event.type === "session.next.text.delta" && typeof event.properties.delta === "string") {
+      if (
+        (event.type === "session.next.text.delta" || event.type === "message.part.delta")
+        && event.properties.field !== "reasoning"
+        && typeof event.properties.delta === "string"
+      ) {
         queue.enqueue(createTextDeltaEvent(event.properties.delta));
         return;
       }
-      if (event.type === "session.next.tool.called") {
-        const tool = typeof event.properties.tool === "string" ? event.properties.tool : "tool";
+      if (event.type === "session.next.tool.called" || event.type === "message.part.updated") {
+        const part = isRecord(event.properties.part) ? event.properties.part : undefined;
+        if (event.type === "message.part.updated" && part?.type !== "tool") {
+          queue.enqueue({ type: "activity" });
+          return;
+        }
+        const tool = typeof event.properties.tool === "string"
+          ? event.properties.tool
+          : typeof part?.tool === "string"
+            ? part.tool
+            : "tool";
         queue.enqueue(createToolCallEvent(tool, event.properties.input));
         return;
       }
@@ -609,7 +842,12 @@ export class OpenCodeHarness implements AgentHarness {
         resolvePendingInput(requestId);
         return;
       }
-      if (event.type?.startsWith("session.next.") || event.type === "session.idle") {
+      if (
+        event.type?.startsWith("session.next.")
+        || event.type?.startsWith("message.")
+        || event.type === "session.status"
+        || event.type === "session.idle"
+      ) {
         queue.enqueue({ type: "activity" });
       }
     };
@@ -640,6 +878,7 @@ export class OpenCodeHarness implements AgentHarness {
     const waitForTurn = async (http: OpenCodeClient, id: string, baselineAssistantCount: number, signal: AbortSignal): Promise<void> => {
       const startedAt = Date.now();
       let observedBusy = false;
+      const turnTimeoutMs = this.deps.turnTimeoutMs ?? TURN_TIMEOUT_MS;
       while (true) {
         if (signal.aborted) throw new Error("wait aborted");
         const statuses = await http.request<unknown>("GET", "/session/status", undefined, {
@@ -655,8 +894,8 @@ export class OpenCodeHarness implements AgentHarness {
         if (idle && (observedBusy || assistantState.count > baselineAssistantCount)) {
           return;
         }
-        if (Date.now() - startedAt > (this.deps.requestTimeoutMs ?? REQUEST_TIMEOUT_MS)) {
-          throw new Error(`Timed out waiting for OpenCode session ${id} to become idle.`);
+        if (Date.now() - startedAt > turnTimeoutMs) {
+          throw new Error(`Timed out waiting for OpenCode session ${id} to become idle after ${turnTimeoutMs}ms.`);
         }
         await delay(250);
       }
@@ -809,13 +1048,18 @@ export class OpenCodeHarness implements AgentHarness {
 
       async interrupt(): Promise<void> {
         sessionInterrupted = true;
+        streamController.abort();
+        activeWaitController?.abort();
         if (!turnInProgress) {
           turnCompletionEmitted = false;
         }
         finishTurn(false, "interrupted");
-        if (!client || !sessionId) return;
+        if (!client) {
+          await server?.close().catch((): undefined => undefined);
+          return;
+        }
+        if (!sessionId) return;
         const abortRequest = client.request("POST", `/session/${encodeURIComponent(sessionId)}/abort`).catch((): undefined => undefined);
-        activeWaitController?.abort();
         await abortRequest;
       },
     };
