@@ -681,7 +681,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
         },
       });
 
-      (sm as any).reconcileResolvedWorktreeRetention((sm as any).store.persisted.get("h-resolved"), Date.now());
+      (sm as any).maintenance.reconcileResolvedWorktreeRetention((sm as any).store.persisted.get("h-resolved"), Date.now());
 
       assert.equal(existsSync(worktreePath), false);
       const persisted = (sm as any).store.persisted.get("h-resolved");
@@ -731,7 +731,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
         pendingWorktreeDecisionSince: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString(),
       });
 
-      (sm as any).reconcileResolvedWorktreeRetention((sm as any).store.persisted.get("h-pending"), Date.now());
+      (sm as any).maintenance.reconcileResolvedWorktreeRetention((sm as any).store.persisted.get("h-pending"), Date.now());
 
       assert.equal(existsSync(worktreePath), true);
       const persisted = (sm as any).store.persisted.get("h-pending");
@@ -780,7 +780,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
         worktreeDismissedAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString(),
       });
 
-      (sm as any).reconcileResolvedWorktreeRetention((sm as any).store.persisted.get("h-legacy-dismissed"), Date.now());
+      (sm as any).maintenance.reconcileResolvedWorktreeRetention((sm as any).store.persisted.get("h-legacy-dismissed"), Date.now());
 
       assert.equal(existsSync(worktreePath), false);
       const persisted = (sm as any).store.persisted.get("h-legacy-dismissed");

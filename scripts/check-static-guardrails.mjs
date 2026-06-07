@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, readFileSync } from "fs";
-import { join, relative } from "path";
+import { basename, join, relative } from "path";
 
 const root = process.cwd();
 const srcDir = join(root, "src");
@@ -111,12 +111,82 @@ function stripCommentsAndStrings(source) {
   return output;
 }
 
+function stripComments(source) {
+  let output = "";
+  let i = 0;
+  let state = "code";
+
+  while (i < source.length) {
+    const char = source[i];
+    const next = source[i + 1];
+
+    if (state === "line-comment") {
+      output += char === "\n" ? "\n" : " ";
+      if (char === "\n") state = "code";
+      i += 1;
+      continue;
+    }
+
+    if (state === "block-comment") {
+      output += char === "\n" ? "\n" : " ";
+      if (char === "*" && next === "/") {
+        output += " ";
+        i += 2;
+        state = "code";
+      } else {
+        i += 1;
+      }
+      continue;
+    }
+
+    if (char === "/" && next === "/") {
+      output += "  ";
+      state = "line-comment";
+      i += 2;
+      continue;
+    }
+    if (char === "/" && next === "*") {
+      output += "  ";
+      state = "block-comment";
+      i += 2;
+      continue;
+    }
+
+    output += char;
+    i += 1;
+  }
+
+  return output;
+}
+
 function lineForIndex(source, index) {
   return source.slice(0, index).split("\n").length;
 }
 
 function rel(path) {
   return relative(root, path);
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function nearestClassNameBefore(source, index) {
+  let className;
+  const classPattern = /\bclass\s+([A-Za-z_]\w*)\b/g;
+  for (const match of source.slice(0, index).matchAll(classPattern)) {
+    className = match[1];
+  }
+  return className;
+}
+
+function classTypedAliases(source, className) {
+  const aliases = new Set();
+  const typedAliasPattern = new RegExp(`\\b([A-Za-z_]\\w*)\\s*:\\s*${escapeRegExp(className)}\\b`, "g");
+  for (const match of source.matchAll(typedAliasPattern)) {
+    aliases.add(match[1]);
+  }
+  return [...aliases];
 }
 
 const failures = [];
@@ -126,22 +196,28 @@ const testFiles = collectFiles(testsDir, (path) => path.endsWith(".ts"));
 for (const path of srcFiles) {
   const source = readFileSync(path, "utf8");
   const stripped = stripCommentsAndStrings(source);
+  const privateReferenceSource = stripComments(source);
   const explicitAnyPattern = /(?:\bas\s+any\b|:\s*any\b|:\s*any\[\]\b|<\s*any\b|,\s*any\b|\(\s*any\b|\bextends\s+any\b)/g;
   for (const match of stripped.matchAll(explicitAnyPattern)) {
     failures.push(`${rel(path)}:${lineForIndex(stripped, match.index ?? 0)} explicit any is not allowed in src`);
   }
 
-  const privateMethodPattern = /\bprivate\s+(?:static\s+)?(?:async\s+)?([A-Za-z_]\w*)\s*\(/g;
+  const privateMethodPattern = /\bprivate\s+(static\s+)?(?:async\s+)?([A-Za-z_]\w*)\s*\(/g;
   for (const match of stripped.matchAll(privateMethodPattern)) {
-    const name = match[1];
-    const references = stripped.match(new RegExp(`\\b${name}\\b`, "g"))?.length ?? 0;
-    if (references <= 1) {
+    const name = match[2];
+    const receivers = ["this"];
+    const className = nearestClassNameBefore(stripped, match.index ?? 0);
+    if (className) receivers.push(className, ...classTypedAliases(privateReferenceSource, className));
+    const receiverPattern = receivers.map(escapeRegExp).join("|");
+    const memberReferencePattern = new RegExp(`\\b(?:${receiverPattern})\\s*\\.\\s*${escapeRegExp(name)}\\b`, "g");
+    const references = privateReferenceSource.match(memberReferencePattern)?.length ?? 0;
+    if (references === 0) {
       failures.push(`${rel(path)}:${lineForIndex(stripped, match.index ?? 0)} private method "${name}" appears unused`);
     }
   }
 }
 
-for (const path of collectFiles(join(srcDir, "commands"), (file) => /^goal-.*\.ts$/.test(file.split("/").pop() ?? ""))) {
+for (const path of collectFiles(join(srcDir, "commands"), (file) => /^goal-.*\.ts$/.test(basename(file)))) {
   const source = readFileSync(path, "utf8");
   if (source.includes("../tools/")) {
     failures.push(`${rel(path)} imports from tools; goal command/tool presentation should go through src/application/goal-view.ts`);

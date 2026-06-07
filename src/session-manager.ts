@@ -53,9 +53,6 @@ import {
   isCurrentPendingPlanDecision as isCurrentPendingPlanDecisionState,
 } from "./session-plan-approval-delivery";
 import {
-  getStoppedStatusLabel as formatStoppedStatusLabel,
-} from "./session-notification-builder";
-import {
   detectDefaultBranch,
   getDiffSummary,
   getPrimaryRepoRootFromWorktree,
@@ -346,10 +343,6 @@ export class SessionManager {
     this.maintenance.syncRuntimeGcDeadline(session);
   }
 
-  private cancelPersistedMaintenance(session: Pick<PersistedSessionInfo, "sessionId" | "harnessSessionId" | "backendRef">): void {
-    this.maintenance.cancelPersistedMaintenance(session);
-  }
-
   private onPersistedSessionChanged(session?: PersistedSessionInfo): void {
     if (!session) return;
     this.syncPersistedSessionMaintenance(session);
@@ -358,10 +351,6 @@ export class SessionManager {
 
   private syncPersistedSessionMaintenance(session: PersistedSessionInfo): void {
     this.maintenance.syncPersistedSessionMaintenance(session);
-  }
-
-  private reconcileResolvedWorktreeRetention(session: PersistedSessionInfo, now: number): void {
-    this.maintenance.reconcileResolvedWorktreeRetention(session, now);
   }
 
   private syncActionTokenExpiryDeadline(): void {
@@ -949,10 +938,6 @@ export class SessionManager {
       ].join("\n"),
       buttons: [[this.makeActionButton(parentRef, "worktree-create-pr", "Open PR")]],
     });
-  }
-
-  private getStoppedStatusLabel(killReason?: KillReason): string {
-    return formatStoppedStatusLabel(killReason);
   }
 
   private persistSession(session: Session, options: { scheduleRuntimeGc?: boolean } = {}): void {
