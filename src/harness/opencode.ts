@@ -36,6 +36,7 @@ interface OpenCodeHarnessDeps {
   fetch?: FetchLike;
   requestTimeoutMs?: number;
   startupTimeoutMs?: number;
+  turnTimeoutMs?: number;
 }
 
 interface OpenCodeSession {
@@ -54,6 +55,7 @@ type OpenCodePendingInput = {
 const OPENCODE_COMMAND_ENV = "OPENCLAW_OPENCODE_COMMAND";
 const STARTUP_TIMEOUT_MS = 15_000;
 const REQUEST_TIMEOUT_MS = 60_000;
+const TURN_TIMEOUT_MS = 15 * 60_000;
 const MUTATION_PERMISSIONS = [
   "edit",
   "bash",
@@ -633,12 +635,13 @@ function extractAssistantMessageState(messages: unknown): { count: number; resul
   const texts: string[] = [];
   for (const entry of records) {
     const message = isRecord(entry) && isRecord(entry.info) ? entry.info : entry;
-    if (!isRecord(message) || message.type !== "assistant") continue;
+    if (!isRecord(message)) continue;
+    const role = typeof message.role === "string" ? message.role : message.type;
+    if (role !== "assistant") continue;
     const content = Array.isArray(message.content) ? message.content : [];
-    for (const part of content) {
-      if (isRecord(part) && part.type === "text" && typeof part.text === "string") {
-        texts.push(part.text);
-      }
+    const parts = isRecord(entry) && Array.isArray(entry.parts) ? entry.parts : [];
+    for (const part of [...content, ...parts]) {
+      if (isRecord(part) && part.type === "text" && typeof part.text === "string") texts.push(part.text);
     }
   }
   return { count: texts.length, result: texts.at(-1) };
@@ -766,12 +769,25 @@ export class OpenCodeHarness implements AgentHarness {
       const eventSessionId = sessionIdFromProperties(event.properties);
       if (eventSessionId && eventSessionId !== sessionId) return;
 
-      if (event.type === "session.next.text.delta" && typeof event.properties.delta === "string") {
+      if (
+        (event.type === "session.next.text.delta" || event.type === "message.part.delta")
+        && event.properties.field !== "reasoning"
+        && typeof event.properties.delta === "string"
+      ) {
         queue.enqueue(createTextDeltaEvent(event.properties.delta));
         return;
       }
-      if (event.type === "session.next.tool.called") {
-        const tool = typeof event.properties.tool === "string" ? event.properties.tool : "tool";
+      if (event.type === "session.next.tool.called" || event.type === "message.part.updated") {
+        const part = isRecord(event.properties.part) ? event.properties.part : undefined;
+        if (event.type === "message.part.updated" && part?.type !== "tool") {
+          queue.enqueue({ type: "activity" });
+          return;
+        }
+        const tool = typeof event.properties.tool === "string"
+          ? event.properties.tool
+          : typeof part?.tool === "string"
+            ? part.tool
+            : "tool";
         queue.enqueue(createToolCallEvent(tool, event.properties.input));
         return;
       }
@@ -826,7 +842,12 @@ export class OpenCodeHarness implements AgentHarness {
         resolvePendingInput(requestId);
         return;
       }
-      if (event.type?.startsWith("session.next.") || event.type === "session.idle") {
+      if (
+        event.type?.startsWith("session.next.")
+        || event.type?.startsWith("message.")
+        || event.type === "session.status"
+        || event.type === "session.idle"
+      ) {
         queue.enqueue({ type: "activity" });
       }
     };
@@ -857,6 +878,7 @@ export class OpenCodeHarness implements AgentHarness {
     const waitForTurn = async (http: OpenCodeClient, id: string, baselineAssistantCount: number, signal: AbortSignal): Promise<void> => {
       const startedAt = Date.now();
       let observedBusy = false;
+      const turnTimeoutMs = this.deps.turnTimeoutMs ?? TURN_TIMEOUT_MS;
       while (true) {
         if (signal.aborted) throw new Error("wait aborted");
         const statuses = await http.request<unknown>("GET", "/session/status", undefined, {
@@ -872,8 +894,8 @@ export class OpenCodeHarness implements AgentHarness {
         if (idle && (observedBusy || assistantState.count > baselineAssistantCount)) {
           return;
         }
-        if (Date.now() - startedAt > (this.deps.requestTimeoutMs ?? REQUEST_TIMEOUT_MS)) {
-          throw new Error(`Timed out waiting for OpenCode session ${id} to become idle.`);
+        if (Date.now() - startedAt > turnTimeoutMs) {
+          throw new Error(`Timed out waiting for OpenCode session ${id} to become idle after ${turnTimeoutMs}ms.`);
         }
         await delay(250);
       }

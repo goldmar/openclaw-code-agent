@@ -17,8 +17,10 @@ class MockOpenCodeServer {
   closed = false;
   waitMode: "immediate" | "defer" = "immediate";
   statusMode: "idle" | "busy-then-idle" = "idle";
+  busyStatusResponses = 0;
   omitIdleStatus = false;
   assistantAvailableAfterStatusRequests = 0;
+  assistantMessageShape: "classic" | "current" = "classic";
   failQuestionReplies = false;
   failSessionPatch = false;
   private streamController?: ReadableStreamDefaultController<Uint8Array>;
@@ -54,16 +56,24 @@ class MockOpenCodeServer {
     if (method === "POST" && path === "/session/ses_existing/fork") return json({ id: "ses_forked" });
     if (method === "GET" && path === "/session/status") {
       this.statusRequests += 1;
-      const type = this.statusMode === "busy-then-idle" && this.statusRequests === 1 ? "busy" : "idle";
+      const type = (this.busyStatusResponses > 0 && this.statusRequests <= this.busyStatusResponses)
+        || (this.statusMode === "busy-then-idle" && this.statusRequests === 1)
+        ? "busy"
+        : "idle";
       if (this.omitIdleStatus && type === "idle") return json({});
       return json({ ses_test: { type }, ses_existing: { type }, ses_forked: { type } });
     }
     if (method === "GET" && /^\/session\/[^/]+\/message$/.test(path)) {
       if (this.statusRequests < this.assistantAvailableAfterStatusRequests) return json([]);
-      return json(Array.from({ length: this.promptAsyncRequests }, () => ({
-        info: { type: "assistant", content: [{ type: "text", text: "Final." }] },
-        parts: [],
-      })));
+      return json(Array.from({ length: this.promptAsyncRequests }, () => this.assistantMessageShape === "current"
+        ? {
+            info: { role: "assistant", finish: "stop" },
+            parts: [{ type: "text", text: "Final from current shape." }],
+          }
+        : {
+            info: { type: "assistant", content: [{ type: "text", text: "Final." }] },
+            parts: [],
+          }));
     }
     if (method === "POST" && path.endsWith("/prompt_async")) {
       this.promptAsyncRequests += 1;
@@ -410,6 +420,45 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
       parts: [{ type: "text", text: "implement" }],
     });
     assert.equal(mock.requests.some((request) => request.method === "GET" && request.path === "/session/ses_test/message"), true);
+    assert.equal(result?.data.success, true);
+    assert.equal(result?.data.result, "Final.");
+  });
+
+  it("extracts assistant results from current OpenCode role/parts messages", async () => {
+    const mock = new MockOpenCodeServer();
+    mock.assistantMessageShape = "current";
+    const harness = new OpenCodeHarness({
+      createServer: async () => mock.handle(),
+      fetch: mock.fetch,
+    });
+
+    const messages = await collectMessages(harness.launch({
+      prompt: "ship it",
+      cwd: "/repo",
+    }));
+
+    const result = messages.find((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }> | undefined;
+    assert.equal(result?.data.success, true);
+    assert.equal(result?.data.result, "Final from current shape.");
+  });
+
+  it("waits for OpenCode turns beyond the short HTTP request timeout", async () => {
+    const mock = new MockOpenCodeServer();
+    mock.busyStatusResponses = 2;
+    const harness = new OpenCodeHarness({
+      createServer: async () => mock.handle(),
+      fetch: mock.fetch,
+      requestTimeoutMs: 5,
+      turnTimeoutMs: 1_000,
+    });
+
+    const messages = await collectMessages(harness.launch({
+      prompt: "long enough",
+      cwd: "/repo",
+    }));
+
+    const result = messages.find((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }> | undefined;
+    assert.equal(mock.requests.filter((request) => request.method === "GET" && request.path === "/session/status").length, 3);
     assert.equal(result?.data.success, true);
     assert.equal(result?.data.result, "Final.");
   });
