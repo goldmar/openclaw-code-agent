@@ -50,9 +50,6 @@ export interface SessionNotificationHooks {
   onDuplicateSkipped?: (reason: string) => void;
 }
 
-export const COMPLETION_FOLLOWUP_DELIVERED_MARKER = "COMPLETION_FOLLOWUP_DELIVERED";
-export const COMPLETION_FOLLOWUP_SKIPPED_MARKER = "COMPLETION_FOLLOWUP_SKIPPED";
-
 export function validateCompletionFollowupWakeSuccess(stdout: string): DispatchSuccessValidationResult {
   const finalText = extractWakeFinalText(stdout).trim();
   if (!finalText) {
@@ -60,22 +57,6 @@ export function validateCompletionFollowupWakeSuccess(stdout: string): DispatchS
   }
   if (/^NO_REPLY$/i.test(finalText)) {
     return { outcome: "failure", reason: "completion follow-up wake ended with NO_REPLY" };
-  }
-  if (!finalText.includes(COMPLETION_FOLLOWUP_DELIVERED_MARKER)) {
-    const skipReason = extractCompletionFollowupSkipReason(finalText);
-    if (skipReason) {
-      if (isInvalidCompletionFollowupSkipReason(skipReason)) {
-        return {
-          outcome: "failure",
-          reason: "completion follow-up wake skipped because the summary was only in agent output, not visibly delivered",
-        };
-      }
-      return { outcome: "skipped", reason: skipReason };
-    }
-    return {
-      outcome: "failure",
-      reason: `completion follow-up wake did not confirm ${COMPLETION_FOLLOWUP_DELIVERED_MARKER}`,
-    };
   }
   return { outcome: "success" };
 }
@@ -118,18 +99,6 @@ function extractJsonFinalText(value: unknown): string {
     if (nested.trim()) return nested;
   }
   return "";
-}
-
-function extractCompletionFollowupSkipReason(finalText: string): string | undefined {
-  const markerIndex = finalText.indexOf(COMPLETION_FOLLOWUP_SKIPPED_MARKER);
-  if (markerIndex < 0) return undefined;
-  const suffix = finalText.slice(markerIndex + COMPLETION_FOLLOWUP_SKIPPED_MARKER.length);
-  const reason = suffix.replace(/^[:\s-]+/, "").split(/\r?\n/, 1)[0]?.trim();
-  return reason || "explicitly skipped by wake agent";
-}
-
-function isInvalidCompletionFollowupSkipReason(reason: string): boolean {
-  return /\balready summarized by completed session\b/i.test(reason);
 }
 
 export interface WakeDispatcherOptions {

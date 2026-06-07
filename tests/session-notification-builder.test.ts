@@ -199,15 +199,14 @@ describe("session-notification-builder", () => {
       canonicalStatusDelivered: true,
     });
 
-    assert.match(wake, /If the visible result is only the plugin's terse status line/);
+    assert.match(wake, /plugin's terse status line/);
     assert.match(wake, /send the user one short factual outcome summary/);
     assert.match(wake, /Do this even when agent_output already contains a good final summary/);
-    assert.match(wake, /normal final assistant reply or a routed message tool send\/delivery mirror/);
-    assert.match(wake, /delivered to this same originRoute/);
-    assert.match(wake, /prior human-visible assistant or routed message already gave a substantive summary/);
-    assert.match(wake, /prior human-visible summary already delivered/);
+    assert.match(wake, /Do not include raw PR URLs/);
+    assert.match(wake, /Send a normal concise final response/);
     assert.match(wake, /Send at most one human-visible summary/);
     assert.match(wake, /foreground assistant turn or routed message tools/);
+    assert.doesNotMatch(wake, /COMPLETION_FOLLOWUP_/);
     assert.doesNotMatch(wake, /already summarized by completed session/);
   });
 
@@ -518,7 +517,7 @@ describe("session-notification-builder", () => {
     assert.doesNotMatch(payload.wakeMessageOnNotifySuccess, /originRoute differs from the current chat/i);
   });
 
-  it("allows goal success follow-up wakes to skip when a prior visible summary exists", () => {
+  it("builds marker-free goal success follow-up wakes", () => {
     const message = buildGoalTaskSucceededFollowupWake({
       sessionId: "session-goal-summary",
       sessionName: "trading-platform-readiness-gate-fix-restart",
@@ -537,15 +536,34 @@ describe("session-notification-builder", () => {
     });
 
     assert.match(message, /Goal task succeeded\./);
-    assert.match(message, /First inspect the visible conversation context for this same goal outcome/);
-    assert.match(message, /prior human-visible assistant or routed message already gave a substantive summary/i);
-    assert.match(message, /COMPLETION_FOLLOWUP_SKIPPED: prior human-visible summary already delivered/);
+    assert.doesNotMatch(message, /COMPLETION_FOLLOWUP_/);
+    assert.match(message, /Send a normal concise final response/);
     assert.match(message, /Treat the completed session output as source material, not visible delivery/i);
     assert.match(message, /Do this even when agent_output already contains a good final summary/);
     assert.match(message, /Send at most one human-visible summary for this goal success outcome/i);
     assert.match(message, /"threadId":"32947"/);
     assert.match(message, /originRoute differs from the current chat/i);
     assert.doesNotMatch(message, /already summarized by completed session/);
+  });
+
+  it("omits raw PR URLs from worktree follow-up wake content", () => {
+    const message = buildWorktreeOutcomeFollowupWake({
+      sessionId: "session-pr-summary",
+      sessionName: "format-launch-notification-model-separator",
+      outcomeLine: "✅ PR updated: https://github.com/goldmar/openclaw-code-agent/pull/185",
+      originThreadLine: "",
+      detailLines: [
+        "PR URL: https://github.com/goldmar/openclaw-code-agent/pull/185.",
+        "PR number: #185.",
+        "Updated PR for branch agent/format-launch-notification-model-separator into main.",
+      ],
+      canonicalStatusDelivered: true,
+    });
+
+    assert.doesNotMatch(message, /https:\/\/github\.com\/goldmar\/openclaw-code-agent\/pull\/185/);
+    assert.match(message, /PR #185/);
+    assert.match(message, /Do not include raw PR URLs/);
+    assert.doesNotMatch(message, /COMPLETION_FOLLOWUP_/);
   });
 
   it("uses agent_respond as the primary continuation path in failure wakes", () => {

@@ -70,7 +70,7 @@ export interface CompletionSummaryCoordinatorOptions {
 const DEFAULT_MAX_COMPLETED_KEYS = 1024;
 const DUPLICATE_REASON = "duplicate completion follow-up wake already handled";
 export const PRIOR_VISIBLE_SUMMARY_SKIP_REASON =
-  "COMPLETION_FOLLOWUP_SKIPPED: prior human-visible summary already delivered";
+  "prior human-visible summary already delivered";
 
 export class CompletionSummaryCoordinator {
   private readonly inFlight = new Set<string>();
@@ -297,7 +297,34 @@ export class CompletionSummaryCoordinator {
   ): string | undefined {
     const goalTaskId = session.goalTaskId?.trim();
     if (goalTaskId) return `goal:${goalTaskId}`;
+    const prOutcomeKey = this.normalizeWorktreePrOutcomeKey(outcomeKey);
+    if (prOutcomeKey) return prOutcomeKey;
     return outcomeKey;
+  }
+
+  private normalizeWorktreePrOutcomeKey(outcomeKey: string | undefined): string | undefined {
+    if (!outcomeKey) return undefined;
+    const parts = outcomeKey.split(":");
+    if (parts[0] !== "worktree-pr" || parts.length < 5) return undefined;
+
+    const action = parts[1]?.trim().toLowerCase();
+    if (!action || !/^(?:draft-)?(?:opened|updated)$/.test(action)) return undefined;
+
+    const repo = parts[2]?.trim() || "default-repo";
+    const prIdentity = this.normalizePrIdentity(parts[3]?.trim() || outcomeKey);
+    const branch = parts[4]?.trim();
+    if (!prIdentity || !branch) return undefined;
+
+    return ["worktree-pr", repo.toLowerCase(), prIdentity, branch].join(":");
+  }
+
+  private normalizePrIdentity(value: string): string | undefined {
+    const numberMatch = value.match(/#?(\d+)$/);
+    if (numberMatch?.[1]) return `#${numberMatch[1]}`;
+    const urlMatch = value.match(/\/pull\/(\d+)(?:\b|\/|$)/);
+    if (urlMatch?.[1]) return `#${urlMatch[1]}`;
+    const trimmed = value.trim();
+    return trimmed ? trimmed : undefined;
   }
 
   private buildVisibleScope(

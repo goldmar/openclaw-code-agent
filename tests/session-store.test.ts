@@ -885,7 +885,7 @@ describe("SessionStore new worktree lifecycle fields", () => {
           key: "route:key:outcome",
           recordedAt,
           label: "worktree-outcome",
-          skipReason: "COMPLETION_FOLLOWUP_SKIPPED: prior human-visible summary already delivered",
+          skipReason: "prior human-visible summary already delivered",
         },
         {
           key: "",
@@ -900,7 +900,7 @@ describe("SessionStore new worktree lifecycle fields", () => {
       key: "route:key:outcome",
       recordedAt,
       label: "worktree-outcome",
-      skipReason: "COMPLETION_FOLLOWUP_SKIPPED: prior human-visible summary already delivered",
+      skipReason: "prior human-visible summary already delivered",
     }]);
   });
 

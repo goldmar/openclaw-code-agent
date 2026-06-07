@@ -165,8 +165,8 @@ describe("SessionManager.emitGoalTaskUpdate", () => {
     assert.match(request.wakeMessageOnNotifySuccess, /"provider":"telegram"/);
     assert.match(request.wakeMessageOnNotifySuccess, /"target":"12345"/);
     assert.match(request.wakeMessageOnNotifySuccess, /"threadId":"42"/);
-    assert.match(request.wakeMessageOnNotifySuccess, /COMPLETION_FOLLOWUP_DELIVERED/);
-    assert.match(request.wakeMessageOnNotifySuccess, /COMPLETION_FOLLOWUP_SKIPPED: <brief reason>/);
+    assert.doesNotMatch(request.wakeMessageOnNotifySuccess, /COMPLETION_FOLLOWUP_/);
+    assert.match(request.wakeMessageOnNotifySuccess, /Send a normal concise final response/);
     assert.match(request.wakeMessageOnNotifySuccess, /Canonical goal success status delivered to user: yes/);
     assert.match(request.wakeMessageOnNotifyFailed, /Canonical goal success status delivered to user: no/);
   });
