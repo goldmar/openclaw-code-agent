@@ -297,6 +297,36 @@ describe("CompletionSummaryCoordinator", () => {
     assert.equal(secondRoute.allowed, true);
   });
 
+  it("does not derive PR identity from trailing digits when the PR identity field is missing", () => {
+    const coordinator = new CompletionSummaryCoordinator();
+    const session = {
+      id: "malformed-pr-outcome",
+      route: {
+        provider: "telegram",
+        target: "topic-fixture",
+        threadId: "13832",
+      },
+    };
+
+    const malformed = coordinator.decide(session, {
+      required: true,
+      producer: "worktree-pr",
+      outcomeKey: "worktree-pr:updated:goldmar/openclaw-code-agent::agent/example:d10aac0",
+    });
+    coordinator.finish(malformed.key, true);
+    const realPrZero = coordinator.decide(
+      { ...session, id: "real-pr-zero" },
+      {
+        required: true,
+        producer: "worktree-pr",
+        outcomeKey: "worktree-pr:opened:goldmar/openclaw-code-agent:#0:agent/example:created",
+      },
+    );
+
+    assert.equal(malformed.allowed, true);
+    assert.equal(realPrZero.allowed, true);
+  });
+
   it("skips a later terminal wake after a prior visible worktree merge summary", () => {
     const coordinator = new CompletionSummaryCoordinator();
     const session = {

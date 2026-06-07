@@ -311,7 +311,9 @@ export class CompletionSummaryCoordinator {
     if (!action || !/^(?:draft-)?(?:opened|updated)$/.test(action)) return undefined;
 
     const repo = parts[2]?.trim() || "default-repo";
-    const prIdentity = this.normalizePrIdentity(parts[3]?.trim() || outcomeKey);
+    const rawPrIdentity = parts[3]?.trim();
+    if (!rawPrIdentity) return undefined;
+    const prIdentity = this.normalizePrIdentity(rawPrIdentity);
     const branch = parts[4]?.trim();
     if (!prIdentity || !branch) return undefined;
 

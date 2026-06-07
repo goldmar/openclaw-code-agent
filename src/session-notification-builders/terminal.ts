@@ -61,8 +61,13 @@ export interface GoalTaskFollowupContract {
   appliesToGoalTaskCompletions: true;
 }
 
-const GITHUB_PR_URL_RE = /https?:\/\/github\.com\/[^\s)]+\/[^\s)]+\/pull\/(\d+)(?=[\s).,;:]|$)/gi;
-const RAW_URL_RE = /https?:\/\/\S+/gi;
+function makeGithubPrUrlRe(): RegExp {
+  return /https?:\/\/github\.com\/[^\s)]+\/[^\s)]+\/pull\/(\d+)(?=[\s).,;:]|$)/gi;
+}
+
+function makeRawUrlRe(): RegExp {
+  return /https?:\/\/\S+/gi;
+}
 
 export function formatApprovalExecutionContextLines(
   context: ApprovalExecutionContext,
@@ -311,8 +316,8 @@ export function buildGoalTaskSucceededFollowupWake(args: {
 
 function sanitizeFollowupLine(line: string): string {
   return line
-    .replace(GITHUB_PR_URL_RE, "PR #$1")
-    .replace(RAW_URL_RE, "[link omitted]");
+    .replace(makeGithubPrUrlRe(), "PR #$1")
+    .replace(makeRawUrlRe(), "[link omitted]");
 }
 
 export function buildFailedPayload(args: {
