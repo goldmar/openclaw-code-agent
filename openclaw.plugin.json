@@ -2,7 +2,7 @@
   "id": "openclaw-code-agent",
   "name": "OpenClaw Code Agent",
   "description": "Multi-session coding-agent orchestration from OpenClaw chat",
-  "version": "4.3.8",
+  "version": "4.4.0",
   "contracts": {
     "tools": [
       "agent_launch",
