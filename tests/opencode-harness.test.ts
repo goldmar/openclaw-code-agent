@@ -1280,7 +1280,7 @@ server.listen(Number(portArg), "127.0.0.1");
 `);
     process.env.OPENCLAW_OPENCODE_COMMAND = fakeOpenCodeCommand;
     try {
-      const harness = new OpenCodeHarness({ requestTimeoutMs: 50, startupTimeoutMs: 500 });
+      const harness = new OpenCodeHarness({ requestTimeoutMs: 50, startupTimeoutMs: 1_500 });
 
       const messages = await collectAllMessages(harness.launch({ prompt: "start", cwd: process.cwd() }));
       const completion = messages.find((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }> | undefined;

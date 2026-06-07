@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.4.1] - 2026-06-07
+
+### Added
+- Added static guardrails for source-level explicit `any`, unused private methods, goal command/tool drift, PR metadata safety placement, and notification diagnostic gating.
+- Added grouped session state snapshot helpers for approval, worktree, backend, and routing state so persistence paths can consume stable typed state groups.
+
+### Fixed
+- Fixed session control patch semantics so explicit `undefined` clears optional active-session fields while omitted persisted patch fields preserve live state.
+- Fixed persisted-to-active state sync so approval prompt fields, completion wake fields, and pending worktree decision fields clear deterministically without accidental drift.
+- Stabilized OpenCode startup readiness retries so a timed-out `/api/health` probe is isolated and later startup probes can still succeed.
+- Gated notification decision stderr diagnostics behind opt-in diagnostics configuration while preserving testable decision logs.
+
+### Changed
+- Moved `SessionManager` service assembly into an internal factory while keeping `SessionManager` focused on orchestration entrypoints.
+- Consolidated goal status, stop, and edit rendering through a shared application layer used by both tools and chat commands.
+- Moved generated PR metadata evidence, redaction, schema validation, prompt-leak checks, and body formatting out of `agent_pr` into a dedicated PR metadata module.
+- Migrated metrics and lifecycle coverage away from private `SessionManager` compatibility wrappers and hardened guardrails so those wrappers do not return.
+
 ## [4.4.0] - 2026-06-06
 
 ### Added
@@ -446,7 +464,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Default Codex approval policy to `on-request`.
 - Raised the default session limit.
 
-[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.4.0...HEAD
+[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.4.1...HEAD
+[4.4.1]: https://github.com/goldmar/openclaw-code-agent/compare/v4.4.0...v4.4.1
 [4.4.0]: https://github.com/goldmar/openclaw-code-agent/compare/v4.3.8...v4.4.0
 [4.3.8]: https://github.com/goldmar/openclaw-code-agent/compare/v4.3.7...v4.3.8
 [4.3.7]: https://github.com/goldmar/openclaw-code-agent/compare/v4.3.6...v4.3.7

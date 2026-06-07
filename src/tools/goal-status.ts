@@ -1,6 +1,6 @@
 import { Type } from "../tool-schema";
 
-import { buildGoalTaskRuntimeSnapshot, formatGoalTask } from "../goal-format";
+import { GOAL_CONTROLLER_MISSING_MESSAGE, renderGoalStatus } from "../application/goal-view";
 import { goalController, sessionManager } from "../singletons";
 import type { OpenClawPluginToolContext } from "../types";
 
@@ -17,34 +17,17 @@ export function makeGoalStatusTool(_ctx: OpenClawPluginToolContext) {
     }),
     async execute(_id: string, params: unknown) {
       if (!goalController) {
-        return { content: [{ type: "text", text: "Error: GoalController not initialized. The code-agent service must be running." }] };
+        return { content: [{ type: "text", text: GOAL_CONTROLLER_MISSING_MESSAGE }] };
       }
 
       const taskRef = params && typeof params === "object" && typeof (params as GoalStatusParams).task === "string"
         ? (params as GoalStatusParams).task
         : undefined;
 
-      if (taskRef) {
-        const task = goalController.getTask(taskRef);
-        if (!task) {
-          return { content: [{ type: "text", text: `Error: Goal task "${taskRef}" not found.` }] };
-        }
-        const session = task.sessionId ? sessionManager?.resolve(task.sessionId) : undefined;
-        return { content: [{ type: "text", text: formatGoalTask(task, buildGoalTaskRuntimeSnapshot(session)) }] };
-      }
-
-      const tasks = goalController.listTasks();
-      if (tasks.length === 0) {
-        return { content: [{ type: "text", text: "No goal tasks found." }] };
-      }
-
       return {
         content: [{
           type: "text",
-          text: tasks.map((task) => {
-            const session = task.sessionId ? sessionManager?.resolve(task.sessionId) : undefined;
-            return formatGoalTask(task, buildGoalTaskRuntimeSnapshot(session));
-          }).join("\n\n"),
+          text: renderGoalStatus(goalController, (sessionId) => sessionManager?.resolve(sessionId), taskRef),
         }],
       };
     },

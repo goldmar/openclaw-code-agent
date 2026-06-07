@@ -215,4 +215,134 @@ describe("SessionStateSyncService", () => {
       baseBranch: "main",
     });
   });
+
+  it("forwards only present control fields and preserves omitted active state", () => {
+    const controlPatches: Array<Record<string, unknown>> = [];
+    const liveSession = {
+      id: "session-3",
+      harnessSessionId: "h-session-3",
+      name: "session-3",
+      approvalPromptRequiredVersion: 7,
+      approvalPromptVersion: 7,
+      approvalPromptStatus: "delivered",
+      approvalPromptTransport: "direct-message",
+      approvalPromptMessageKind: "canonical_buttons",
+      approvalPromptDeliveredAt: "2026-04-10T12:01:00.000Z",
+      applyControlPatch(patch: Record<string, unknown>) {
+        controlPatches.push(patch);
+        Object.assign(this, patch);
+      },
+    } as any;
+
+    const service = new SessionStateSyncService({
+      store: {
+        getPersistedSession: () => undefined,
+        assertPersistedEntry: () => {},
+        saveIndex: () => {},
+      } as any,
+      sessions: new Map(),
+      resolveSession: () => liveSession,
+    });
+
+    const updated = service.applySessionPatch("session-3", {
+      deliveryState: "notifying",
+    });
+
+    assert.equal(updated, true);
+    assert.equal(controlPatches.length, 1);
+    assert.deepEqual(Object.keys(controlPatches[0]).sort(), ["deliveryState"]);
+    assert.equal(liveSession.deliveryState, "notifying");
+    assert.equal(liveSession.approvalPromptRequiredVersion, 7);
+    assert.equal(liveSession.approvalPromptVersion, 7);
+    assert.equal(liveSession.approvalPromptStatus, "delivered");
+    assert.equal(liveSession.approvalPromptTransport, "direct-message");
+    assert.equal(liveSession.approvalPromptMessageKind, "canonical_buttons");
+    assert.equal(liveSession.approvalPromptDeliveredAt, "2026-04-10T12:01:00.000Z");
+  });
+
+  it("forwards explicit undefined clears for active control fields", () => {
+    const liveSession = {
+      id: "session-4",
+      harnessSessionId: "h-session-4",
+      name: "session-4",
+      approvalPromptRequiredVersion: 7,
+      approvalPromptVersion: 7,
+      approvalPromptStatus: "delivered",
+      approvalPromptTransport: "direct-message",
+      approvalPromptMessageKind: "canonical_buttons",
+      approvalPromptLastAttemptAt: "2026-04-10T12:00:00.000Z",
+      approvalPromptDeliveredAt: "2026-04-10T12:01:00.000Z",
+      approvalPromptFailedAt: "2026-04-10T12:02:00.000Z",
+      applyControlPatch(patch: Record<string, unknown>) {
+        Object.assign(this, patch);
+      },
+    } as any;
+
+    const service = new SessionStateSyncService({
+      store: {
+        getPersistedSession: () => undefined,
+        assertPersistedEntry: () => {},
+        saveIndex: () => {},
+      } as any,
+      sessions: new Map(),
+      resolveSession: () => liveSession,
+    });
+
+    const updated = service.applySessionPatch("session-4", {
+      approvalPromptRequiredVersion: undefined,
+      approvalPromptVersion: undefined,
+      approvalPromptStatus: "not_sent",
+      approvalPromptTransport: "none",
+      approvalPromptMessageKind: "none",
+      approvalPromptLastAttemptAt: undefined,
+      approvalPromptDeliveredAt: undefined,
+      approvalPromptFailedAt: undefined,
+    });
+
+    assert.equal(updated, true);
+    assert.equal(liveSession.approvalPromptRequiredVersion, undefined);
+    assert.equal(liveSession.approvalPromptVersion, undefined);
+    assert.equal(liveSession.approvalPromptStatus, "not_sent");
+    assert.equal(liveSession.approvalPromptTransport, "none");
+    assert.equal(liveSession.approvalPromptMessageKind, "none");
+    assert.equal(liveSession.approvalPromptLastAttemptAt, undefined);
+    assert.equal(liveSession.approvalPromptDeliveredAt, undefined);
+    assert.equal(liveSession.approvalPromptFailedAt, undefined);
+  });
+
+  it("clears durable completion wake requirement after persisted wake success", () => {
+    const persisted = new Map<string, PersistedSessionInfo>();
+    const entry: PersistedSessionInfo = {
+      harnessSessionId: "h-session-5",
+      sessionId: "session-5",
+      name: "session-5",
+      prompt: "p",
+      workdir: "/tmp",
+      status: "completed",
+      costUsd: 0,
+      route: ROUTE,
+      completionWakeSummaryRequired: true,
+    };
+    persisted.set(entry.harnessSessionId, entry);
+    let saveCount = 0;
+
+    const service = new SessionStateSyncService({
+      store: {
+        getPersistedSession: (ref: string) => persisted.get(ref),
+        assertPersistedEntry: () => {},
+        saveIndex: () => { saveCount++; },
+      } as any,
+      sessions: new Map(),
+      resolveSession: () => undefined,
+    });
+
+    const updated = service.applySessionPatch("h-session-5", {
+      completionWakeSucceededAt: "2026-04-10T12:03:00.000Z",
+    });
+
+    assert.equal(updated, true);
+    assert.equal(saveCount, 1);
+    assert.equal(entry.completionWakeSucceededAt, "2026-04-10T12:03:00.000Z");
+    assert.equal(entry.completionWakeSummaryRequired, undefined);
+  });
 });

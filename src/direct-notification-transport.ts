@@ -24,7 +24,7 @@ const TELEGRAM_BUTTON_STYLE_ALIASES: Record<string, string> = {
 
 type RuntimeOutboundAdapter = NonNullable<
   NonNullable<ReturnType<typeof getPluginRuntime>>["channel"]
->["outbound"] extends { loadAdapter?: (...args: any[]) => Promise<infer T> }
+>["outbound"] extends { loadAdapter?: (...args: unknown[]) => Promise<infer T> }
   ? NonNullable<T>
   : never;
 

@@ -1,18 +1,23 @@
+import {
+  GOAL_CONTROLLER_MISSING_MESSAGE,
+  GoalCommandApi,
+  GoalCommandContext,
+  renderGoalEditResult,
+} from "../application/goal-view";
 import { goalController } from "../singletons";
 import { consumeFirstCommandArg } from "./args";
-import { formatGoalEditResult } from "../tools/goal-edit";
 
 const GOAL_EDIT_USAGE = "Usage: /goal_edit <task-id-or-name> <replacement-goal>";
 
-export function registerGoalEditCommand(api: any): void {
+export function registerGoalEditCommand(api: GoalCommandApi): void {
   api.registerCommand({
     name: "goal_edit",
     description: "Edit a running goal task. Usage: /goal_edit <task-id-or-name> <replacement-goal>",
     acceptsArgs: true,
     requireAuth: true,
-    handler: (ctx: any) => {
+    handler: (ctx: GoalCommandContext) => {
       if (!goalController) {
-        return { text: "Error: GoalController not initialized. The code-agent service must be running." };
+        return { text: GOAL_CONTROLLER_MISSING_MESSAGE };
       }
 
       const raw = (ctx.args ?? "").trim();
@@ -28,7 +33,7 @@ export function registerGoalEditCommand(api: any): void {
       }
 
       const result = goalController.editTask(ref, replacementGoal);
-      return { text: formatGoalEditResult(result, ref) };
+      return { text: renderGoalEditResult(result, ref) };
     },
   });
 }

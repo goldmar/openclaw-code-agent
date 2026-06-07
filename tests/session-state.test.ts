@@ -128,6 +128,62 @@ describe("session-state reducer", () => {
     assert.equal(next.lifecycle, "awaiting_user_input");
   });
 
+  it("clears optional approval prompt fields when patch explicitly sets undefined", () => {
+    const next = applySessionControlPatch(baseState({
+      status: "running",
+      lifecycle: "awaiting_plan_decision",
+      approvalPromptRequiredVersion: 4,
+      approvalPromptVersion: 4,
+      approvalPromptStatus: "delivered",
+      approvalPromptTransport: "direct-message",
+      approvalPromptMessageKind: "canonical_buttons",
+      approvalPromptLastAttemptAt: "2026-04-10T12:00:00.000Z",
+      approvalPromptDeliveredAt: "2026-04-10T12:01:00.000Z",
+      approvalPromptFailedAt: "2026-04-10T12:02:00.000Z",
+    }), {
+      approvalPromptRequiredVersion: undefined,
+      approvalPromptVersion: undefined,
+      approvalPromptStatus: "not_sent",
+      approvalPromptTransport: "none",
+      approvalPromptMessageKind: "none",
+      approvalPromptLastAttemptAt: undefined,
+      approvalPromptDeliveredAt: undefined,
+      approvalPromptFailedAt: undefined,
+    });
+
+    assert.equal(next.approvalPromptRequiredVersion, undefined);
+    assert.equal(next.approvalPromptVersion, undefined);
+    assert.equal(next.approvalPromptStatus, "not_sent");
+    assert.equal(next.approvalPromptTransport, "none");
+    assert.equal(next.approvalPromptMessageKind, "none");
+    assert.equal(next.approvalPromptLastAttemptAt, undefined);
+    assert.equal(next.approvalPromptDeliveredAt, undefined);
+    assert.equal(next.approvalPromptFailedAt, undefined);
+  });
+
+  it("keeps optional approval prompt fields when patch omits them", () => {
+    const next = applySessionControlPatch(baseState({
+      status: "running",
+      lifecycle: "awaiting_plan_decision",
+      approvalPromptRequiredVersion: 4,
+      approvalPromptVersion: 4,
+      approvalPromptStatus: "delivered",
+      approvalPromptTransport: "direct-message",
+      approvalPromptMessageKind: "canonical_buttons",
+      approvalPromptDeliveredAt: "2026-04-10T12:01:00.000Z",
+    }), {
+      deliveryState: "notifying",
+    });
+
+    assert.equal(next.deliveryState, "notifying");
+    assert.equal(next.approvalPromptRequiredVersion, 4);
+    assert.equal(next.approvalPromptVersion, 4);
+    assert.equal(next.approvalPromptStatus, "delivered");
+    assert.equal(next.approvalPromptTransport, "direct-message");
+    assert.equal(next.approvalPromptMessageKind, "canonical_buttons");
+    assert.equal(next.approvalPromptDeliveredAt, "2026-04-10T12:01:00.000Z");
+  });
+
   it("treats revised-plan submission as the latest actionable version", () => {
     const next = reduceSessionControlState(baseState({
       status: "running",

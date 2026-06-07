@@ -1,12 +1,13 @@
 {
   "name": "openclaw-code-agent",
-  "version": "4.4.0",
+  "version": "4.4.1",
   "type": "module",
   "packageManager": "pnpm@10.30.0",
   "main": "dist/index.js",
   "scripts": {
     "audit:prod": "pnpm audit --prod",
     "build": "esbuild index.ts --bundle --platform=node --target=node22 --format=esm --outfile=dist/index.js --minify --charset=utf8 --pure:console.log --pure:console.warn --pure:console.info --pure:console.debug --external:@anthropic-ai/claude-agent-sdk --external:openclaw/plugin-sdk/plugin-entry",
+    "check-static-guardrails": "node scripts/check-static-guardrails.mjs",
     "check-plugin-security": "node scripts/check-plugin-security.mjs",
     "test": "node scripts/run-tests.mjs",
     "test:serial": "node scripts/run-tests.mjs",
@@ -19,7 +20,7 @@
     "smoke:opencode-live": "OPENCLAW_RUN_LIVE_OPENCODE_SMOKE=1 node scripts/run-tests.mjs tests/live-opencode-server-smoke.test.ts",
     "typecheck": "tsc -p tsconfig.typecheck.json --noEmit",
     "validate:release-metadata": "node scripts/validate-release-metadata.mjs",
-    "verify": "pnpm typecheck && pnpm build && pnpm test"
+    "verify": "pnpm check-static-guardrails && pnpm typecheck && pnpm build && pnpm test"
   },
   "openclaw": {
     "extensions": [

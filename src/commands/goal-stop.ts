@@ -1,14 +1,20 @@
+import {
+  GOAL_CONTROLLER_MISSING_MESSAGE,
+  GoalCommandApi,
+  GoalCommandContext,
+  renderGoalStopResult,
+} from "../application/goal-view";
 import { goalController } from "../singletons";
 
-export function registerGoalStopCommand(api: any): void {
+export function registerGoalStopCommand(api: GoalCommandApi): void {
   api.registerCommand({
     name: "goal_stop",
     description: "Stop a goal task. Usage: /goal_stop <task-id-or-name>",
     acceptsArgs: true,
     requireAuth: true,
-    handler: (ctx: any) => {
+    handler: (ctx: GoalCommandContext) => {
       if (!goalController) {
-        return { text: "Error: GoalController not initialized. The code-agent service must be running." };
+        return { text: GOAL_CONTROLLER_MISSING_MESSAGE };
       }
 
       const ref = (ctx.args ?? "").trim();
@@ -17,15 +23,7 @@ export function registerGoalStopCommand(api: any): void {
       }
 
       const result = goalController.stopTask(ref);
-      if (!result) {
-        return { text: `Error: Goal task "${ref}" not found.` };
-      }
-
-      if (result.action === "already_terminal") {
-        return { text: `Task is already ${result.task.status}.` };
-      }
-
-      return { text: `Task "${result.task.name}" (${result.task.id}) stopped.` };
+      return { text: renderGoalStopResult(result, ref) };
     },
   });
 }

@@ -116,6 +116,65 @@ export class SessionStore {
     };
   }
 
+  private getSessionApprovalSnapshot(session: Session): ReturnType<Session["approvalSnapshot"]> {
+    if (typeof session.approvalSnapshot === "function") {
+      return session.approvalSnapshot();
+    }
+    const control = typeof session.controlStateSnapshot === "function"
+      ? session.controlStateSnapshot()
+      : { planModeApproved: false };
+    return {
+      requestedPermissionMode: session.requestedPermissionMode,
+      currentPermissionMode: session.currentPermissionMode,
+      approvalExecutionState: session.approvalExecutionState,
+      approvalRationale: session.approvalRationale,
+      planModeApproved: control.planModeApproved,
+      pendingPlanApproval: session.pendingPlanApproval,
+      planApprovalContext: session.planApprovalContext,
+      planDecisionVersion: session.planDecisionVersion,
+      actionablePlanDecisionVersion: session.actionablePlanDecisionVersion,
+      canonicalPlanPromptVersion: session.canonicalPlanPromptVersion,
+      approvalPromptRequiredVersion: session.approvalPromptRequiredVersion,
+      approvalPromptVersion: session.approvalPromptVersion,
+      approvalPromptStatus: session.approvalPromptStatus,
+      approvalPromptTransport: session.approvalPromptTransport,
+      approvalPromptMessageKind: session.approvalPromptMessageKind,
+      approvalPromptLastAttemptAt: session.approvalPromptLastAttemptAt,
+      approvalPromptDeliveredAt: session.approvalPromptDeliveredAt,
+      approvalPromptFailedAt: session.approvalPromptFailedAt,
+      planApproval: session.planApproval,
+      codexApprovalPolicy: session.codexApprovalPolicy,
+    };
+  }
+
+  private getSessionRoutingSnapshot(session: Session): ReturnType<Session["routingSnapshot"]> {
+    return typeof session.routingSnapshot === "function"
+      ? session.routingSnapshot()
+      : {
+          route: session.route,
+          originAgentId: session.originAgentId,
+          originChannel: session.originChannel,
+          originThreadId: session.originThreadId,
+          originSessionKey: session.originSessionKey,
+        };
+  }
+
+  private getSessionWorktreeSnapshot(session: Session): ReturnType<Session["worktreeSnapshot"]> {
+    return typeof session.worktreeSnapshot === "function"
+      ? session.worktreeSnapshot()
+      : {
+          worktreePath: session.worktreePath,
+          worktreeBranch: session.worktreeBranch,
+          worktreeStrategy: session.worktreeStrategy,
+          worktreeBaseBranch: session.worktreeBaseBranch,
+          worktreePrTargetRepo: session.worktreePrTargetRepo,
+          autoMergeParentSessionId: session.autoMergeParentSessionId,
+          autoMergeConflictResolutionAttemptCount: session.autoMergeConflictResolutionAttemptCount,
+          autoMergeResolverSessionId: session.autoMergeResolverSessionId,
+          worktreeLifecycle: session.worktreeLifecycle,
+        };
+  }
+
   private indexPersistedEntry(entry: PersistedSessionInfo): void {
     const storageKey = this.getEntryStorageKey(entry);
     this.persisted.set(storageKey, entry);
@@ -143,16 +202,14 @@ export class SessionStore {
   /** Persist a running-session stub so crash/restart can recover routing metadata. */
   markRunning(session: Session): void {
     if (!session.harnessSessionId) return;
-    const control = typeof session.controlStateSnapshot === "function"
-      ? session.controlStateSnapshot()
-      : {
-          planModeApproved: false,
-        };
+    const approval = this.getSessionApprovalSnapshot(session);
+    const routing = this.getSessionRoutingSnapshot(session);
+    const worktree = this.getSessionWorktreeSnapshot(session);
     const route = canonicalizeSessionRoute({
-      route: session.route,
-      originChannel: session.originChannel,
-      originThreadId: session.originThreadId,
-      originSessionKey: session.originSessionKey,
+      route: routing.route,
+      originChannel: routing.originChannel,
+      originThreadId: routing.originThreadId,
+      originSessionKey: routing.originSessionKey,
     });
     if (!route) return;
     const stub: PersistedSessionInfo = {
@@ -174,41 +231,41 @@ export class SessionStore {
       deliveryState: session.deliveryState,
       notificationDedupe: this.getExistingNotificationDedupe(session),
       costUsd: 0,
-      originAgentId: session.originAgentId,
-      originChannel: session.originChannel,
-      originThreadId: session.originThreadId,
-      originSessionKey: session.originSessionKey,
+      originAgentId: routing.originAgentId,
+      originChannel: routing.originChannel,
+      originThreadId: routing.originThreadId,
+      originSessionKey: routing.originSessionKey,
       route,
       harness: session.harnessName,
-      requestedPermissionMode: session.requestedPermissionMode,
-      currentPermissionMode: session.currentPermissionMode,
-      approvalExecutionState: session.approvalExecutionState,
-      approvalRationale: session.approvalRationale,
-      planModeApproved: control.planModeApproved,
-      pendingPlanApproval: session.pendingPlanApproval,
-      planApprovalContext: session.planApprovalContext,
-      planDecisionVersion: session.planDecisionVersion,
-      actionablePlanDecisionVersion: session.actionablePlanDecisionVersion,
-      canonicalPlanPromptVersion: session.canonicalPlanPromptVersion,
-      approvalPromptRequiredVersion: session.approvalPromptRequiredVersion,
-      approvalPromptVersion: session.approvalPromptVersion,
-      approvalPromptStatus: session.approvalPromptStatus,
-      approvalPromptTransport: session.approvalPromptTransport,
-      approvalPromptMessageKind: session.approvalPromptMessageKind,
-      approvalPromptLastAttemptAt: session.approvalPromptLastAttemptAt,
-      approvalPromptDeliveredAt: session.approvalPromptDeliveredAt,
-      approvalPromptFailedAt: session.approvalPromptFailedAt,
-      planApproval: session.planApproval,
-      codexApprovalPolicy: session.codexApprovalPolicy,
-      worktreePath: session.worktreePath,
-      worktreeBranch: session.worktreeBranch,
-      worktreeStrategy: session.worktreeStrategy,
-      worktreeBaseBranch: session.worktreeBaseBranch,
-      worktreePrTargetRepo: session.worktreePrTargetRepo,
-      autoMergeParentSessionId: session.autoMergeParentSessionId,
-      autoMergeConflictResolutionAttemptCount: session.autoMergeConflictResolutionAttemptCount,
-      autoMergeResolverSessionId: session.autoMergeResolverSessionId,
-      worktreeLifecycle: session.worktreeLifecycle,
+      requestedPermissionMode: approval.requestedPermissionMode,
+      currentPermissionMode: approval.currentPermissionMode,
+      approvalExecutionState: approval.approvalExecutionState,
+      approvalRationale: approval.approvalRationale,
+      planModeApproved: approval.planModeApproved,
+      pendingPlanApproval: approval.pendingPlanApproval,
+      planApprovalContext: approval.planApprovalContext,
+      planDecisionVersion: approval.planDecisionVersion,
+      actionablePlanDecisionVersion: approval.actionablePlanDecisionVersion,
+      canonicalPlanPromptVersion: approval.canonicalPlanPromptVersion,
+      approvalPromptRequiredVersion: approval.approvalPromptRequiredVersion,
+      approvalPromptVersion: approval.approvalPromptVersion,
+      approvalPromptStatus: approval.approvalPromptStatus,
+      approvalPromptTransport: approval.approvalPromptTransport,
+      approvalPromptMessageKind: approval.approvalPromptMessageKind,
+      approvalPromptLastAttemptAt: approval.approvalPromptLastAttemptAt,
+      approvalPromptDeliveredAt: approval.approvalPromptDeliveredAt,
+      approvalPromptFailedAt: approval.approvalPromptFailedAt,
+      planApproval: approval.planApproval,
+      codexApprovalPolicy: approval.codexApprovalPolicy,
+      worktreePath: worktree.worktreePath,
+      worktreeBranch: worktree.worktreeBranch,
+      worktreeStrategy: worktree.worktreeStrategy,
+      worktreeBaseBranch: worktree.worktreeBaseBranch,
+      worktreePrTargetRepo: worktree.worktreePrTargetRepo,
+      autoMergeParentSessionId: worktree.autoMergeParentSessionId,
+      autoMergeConflictResolutionAttemptCount: worktree.autoMergeConflictResolutionAttemptCount,
+      autoMergeResolverSessionId: worktree.autoMergeResolverSessionId,
+      worktreeLifecycle: worktree.worktreeLifecycle,
       resumable: session.isExplicitlyResumable,
     };
     assertNewSchemaEntry(stub);
@@ -224,16 +281,14 @@ export class SessionStore {
   /** Persist terminal session metadata and write a best-effort tmp output snapshot. */
   persistTerminal(session: Session): void {
     if (!session.harnessSessionId) return;
-    const control = typeof session.controlStateSnapshot === "function"
-      ? session.controlStateSnapshot()
-      : {
-          planModeApproved: false,
-        };
+    const approval = this.getSessionApprovalSnapshot(session);
+    const routing = this.getSessionRoutingSnapshot(session);
+    const worktree = this.getSessionWorktreeSnapshot(session);
     const route = canonicalizeSessionRoute({
-      route: session.route,
-      originChannel: session.originChannel,
-      originThreadId: session.originThreadId,
-      originSessionKey: session.originSessionKey,
+      route: routing.route,
+      originChannel: routing.originChannel,
+      originThreadId: routing.originThreadId,
+      originSessionKey: routing.originSessionKey,
     });
     if (!route) return;
 
@@ -279,43 +334,43 @@ export class SessionStore {
       notificationDedupe: this.getExistingNotificationDedupe(session),
       killReason: session.killReason,
       costUsd: session.costUsd,
-      originAgentId: session.originAgentId,
-      originChannel: session.originChannel,
-      originThreadId: session.originThreadId,
-      originSessionKey: session.originSessionKey,
+      originAgentId: routing.originAgentId,
+      originChannel: routing.originChannel,
+      originThreadId: routing.originThreadId,
+      originSessionKey: routing.originSessionKey,
       route,
       outputPath,
       harness: session.harnessName,
       goalTaskId: session.goalTaskId,
-      requestedPermissionMode: session.requestedPermissionMode,
-      currentPermissionMode: session.currentPermissionMode,
-      approvalExecutionState: session.approvalExecutionState,
-      approvalRationale: session.approvalRationale,
-      planModeApproved: control.planModeApproved,
-      pendingPlanApproval: session.pendingPlanApproval,
-      planApprovalContext: session.planApprovalContext,
-      planDecisionVersion: session.planDecisionVersion,
-      actionablePlanDecisionVersion: session.actionablePlanDecisionVersion,
-      canonicalPlanPromptVersion: session.canonicalPlanPromptVersion,
-      approvalPromptRequiredVersion: session.approvalPromptRequiredVersion,
-      approvalPromptVersion: session.approvalPromptVersion,
-      approvalPromptStatus: session.approvalPromptStatus,
-      approvalPromptTransport: session.approvalPromptTransport,
-      approvalPromptMessageKind: session.approvalPromptMessageKind,
-      approvalPromptLastAttemptAt: session.approvalPromptLastAttemptAt,
-      approvalPromptDeliveredAt: session.approvalPromptDeliveredAt,
-      approvalPromptFailedAt: session.approvalPromptFailedAt,
-      planApproval: session.planApproval,
-      codexApprovalPolicy: session.codexApprovalPolicy,
-      worktreePath: session.worktreePath,
-      worktreeBranch: session.worktreeBranch,
-      worktreeStrategy: session.worktreeStrategy,
-      worktreeBaseBranch: session.worktreeBaseBranch,
-      worktreePrTargetRepo: session.worktreePrTargetRepo,
-      autoMergeParentSessionId: session.autoMergeParentSessionId,
-      autoMergeConflictResolutionAttemptCount: session.autoMergeConflictResolutionAttemptCount,
-      autoMergeResolverSessionId: session.autoMergeResolverSessionId,
-      worktreeLifecycle: session.worktreeLifecycle,
+      requestedPermissionMode: approval.requestedPermissionMode,
+      currentPermissionMode: approval.currentPermissionMode,
+      approvalExecutionState: approval.approvalExecutionState,
+      approvalRationale: approval.approvalRationale,
+      planModeApproved: approval.planModeApproved,
+      pendingPlanApproval: approval.pendingPlanApproval,
+      planApprovalContext: approval.planApprovalContext,
+      planDecisionVersion: approval.planDecisionVersion,
+      actionablePlanDecisionVersion: approval.actionablePlanDecisionVersion,
+      canonicalPlanPromptVersion: approval.canonicalPlanPromptVersion,
+      approvalPromptRequiredVersion: approval.approvalPromptRequiredVersion,
+      approvalPromptVersion: approval.approvalPromptVersion,
+      approvalPromptStatus: approval.approvalPromptStatus,
+      approvalPromptTransport: approval.approvalPromptTransport,
+      approvalPromptMessageKind: approval.approvalPromptMessageKind,
+      approvalPromptLastAttemptAt: approval.approvalPromptLastAttemptAt,
+      approvalPromptDeliveredAt: approval.approvalPromptDeliveredAt,
+      approvalPromptFailedAt: approval.approvalPromptFailedAt,
+      planApproval: approval.planApproval,
+      codexApprovalPolicy: approval.codexApprovalPolicy,
+      worktreePath: worktree.worktreePath,
+      worktreeBranch: worktree.worktreeBranch,
+      worktreeStrategy: worktree.worktreeStrategy,
+      worktreeBaseBranch: worktree.worktreeBaseBranch,
+      worktreePrTargetRepo: worktree.worktreePrTargetRepo,
+      autoMergeParentSessionId: worktree.autoMergeParentSessionId,
+      autoMergeConflictResolutionAttemptCount: worktree.autoMergeConflictResolutionAttemptCount,
+      autoMergeResolverSessionId: worktree.autoMergeResolverSessionId,
+      worktreeLifecycle: worktree.worktreeLifecycle,
       resumable: session.isExplicitlyResumable,
     };
     assertNewSchemaEntry(info);

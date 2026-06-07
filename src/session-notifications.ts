@@ -7,6 +7,7 @@ import { formatOriginRouteWakeBlock } from "./session-route";
 import { buildWorktreeOutcomeFollowupWake } from "./session-notification-builder";
 import { NotificationDedupeCoordinator } from "./notification-dedupe";
 import { resolveNotificationRoute } from "./session-route";
+import { areButtonDiagnosticsEnabled } from "./button-diagnostics";
 import {
   CompletionSummaryCoordinator,
   type CompletionSummaryFact,
@@ -49,8 +50,15 @@ export interface SessionNotificationServiceOptions {
 }
 
 const WORKTREE_FOLLOWUP_CONTEXT_GRACE_MS = 2_000;
+const ENABLED_DIAGNOSTIC_VALUES = new Set(["1", "true", "yes", "on"]);
+
+function areNotificationDiagnosticsEnabled(): boolean {
+  const value = process.env.OPENCLAW_CODE_AGENT_NOTIFICATION_DIAGNOSTICS?.trim().toLowerCase();
+  return Boolean(value && ENABLED_DIAGNOSTIC_VALUES.has(value)) || areButtonDiagnosticsEnabled();
+}
 
 function writeNotificationDecisionLog(payload: Record<string, unknown>): void {
+  if (!areNotificationDiagnosticsEnabled()) return;
   process.stderr.write(`[SessionNotification] ${JSON.stringify(payload)}\n`);
 }
 
