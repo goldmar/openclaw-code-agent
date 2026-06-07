@@ -1,5 +1,6 @@
 import { Type } from "../tool-schema";
 
+import { GOAL_CONTROLLER_MISSING_MESSAGE, renderGoalStopResult } from "../application/goal-view";
 import { goalController } from "../singletons";
 import type { OpenClawPluginToolContext } from "../types";
 
@@ -20,25 +21,17 @@ export function makeGoalStopTool(_ctx: OpenClawPluginToolContext) {
     }),
     async execute(_id: string, params: unknown) {
       if (!goalController) {
-        return { content: [{ type: "text", text: "Error: GoalController not initialized. The code-agent service must be running." }] };
+        return { content: [{ type: "text", text: GOAL_CONTROLLER_MISSING_MESSAGE }] };
       }
       if (!isGoalStopParams(params)) {
         return { content: [{ type: "text", text: "Error: Invalid parameters. Expected { task }." }] };
       }
 
       const result = goalController.stopTask(params.task);
-      if (!result) {
-        return { content: [{ type: "text", text: `Error: Goal task "${params.task}" not found.` }] };
-      }
-
-      const text = result.action === "already_terminal"
-        ? `Task is already ${result.task.status}.`
-        : `Task "${result.task.name}" (${result.task.id}) stopped.`;
-
       return {
         content: [{
           type: "text",
-          text,
+          text: renderGoalStopResult(result, params.task),
         }],
       };
     },

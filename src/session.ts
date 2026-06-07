@@ -394,6 +394,104 @@ export class Session extends EventEmitter {
     return getBackendConversationId(this);
   }
 
+  approvalSnapshot(): Pick<
+    Session,
+    | "requestedPermissionMode"
+    | "currentPermissionMode"
+    | "approvalExecutionState"
+    | "approvalRationale"
+    | "pendingPlanApproval"
+    | "planApprovalContext"
+    | "planDecisionVersion"
+    | "actionablePlanDecisionVersion"
+    | "canonicalPlanPromptVersion"
+    | "approvalPromptRequiredVersion"
+    | "approvalPromptVersion"
+    | "approvalPromptStatus"
+    | "approvalPromptTransport"
+    | "approvalPromptMessageKind"
+    | "approvalPromptLastAttemptAt"
+    | "approvalPromptDeliveredAt"
+    | "approvalPromptFailedAt"
+    | "planApproval"
+    | "codexApprovalPolicy"
+  > & { planModeApproved: boolean } {
+    return {
+      requestedPermissionMode: this.requestedPermissionMode,
+      currentPermissionMode: this.currentPermissionMode,
+      approvalExecutionState: this.approvalExecutionState,
+      approvalRationale: this.approvalRationale,
+      planModeApproved: this.controlStateSnapshot().planModeApproved,
+      pendingPlanApproval: this.pendingPlanApproval,
+      planApprovalContext: this.planApprovalContext,
+      planDecisionVersion: this.planDecisionVersion,
+      actionablePlanDecisionVersion: this.actionablePlanDecisionVersion,
+      canonicalPlanPromptVersion: this.canonicalPlanPromptVersion,
+      approvalPromptRequiredVersion: this.approvalPromptRequiredVersion,
+      approvalPromptVersion: this.approvalPromptVersion,
+      approvalPromptStatus: this.approvalPromptStatus,
+      approvalPromptTransport: this.approvalPromptTransport,
+      approvalPromptMessageKind: this.approvalPromptMessageKind,
+      approvalPromptLastAttemptAt: this.approvalPromptLastAttemptAt,
+      approvalPromptDeliveredAt: this.approvalPromptDeliveredAt,
+      approvalPromptFailedAt: this.approvalPromptFailedAt,
+      planApproval: this.planApproval,
+      codexApprovalPolicy: this.codexApprovalPolicy,
+    };
+  }
+
+  worktreeSnapshot(): Pick<
+    Session,
+    | "worktreePath"
+    | "worktreeBranch"
+    | "worktreeStrategy"
+    | "worktreeBaseBranch"
+    | "worktreePrTargetRepo"
+    | "autoMergeParentSessionId"
+    | "autoMergeConflictResolutionAttemptCount"
+    | "autoMergeResolverSessionId"
+    | "worktreeLifecycle"
+  > {
+    return {
+      worktreePath: this.worktreePath,
+      worktreeBranch: this.worktreeBranch,
+      worktreeStrategy: this.worktreeStrategy,
+      worktreeBaseBranch: this.worktreeBaseBranch,
+      worktreePrTargetRepo: this.worktreePrTargetRepo,
+      autoMergeParentSessionId: this.autoMergeParentSessionId,
+      autoMergeConflictResolutionAttemptCount: this.autoMergeConflictResolutionAttemptCount,
+      autoMergeResolverSessionId: this.autoMergeResolverSessionId,
+      worktreeLifecycle: this.worktreeLifecycle,
+    };
+  }
+
+  backendSnapshot(): Pick<Session, "harnessSessionId" | "backendRef"> & {
+    harness: string;
+    backendKind: SessionBackendRef["kind"];
+    backendConversationId?: string;
+  } {
+    return {
+      harnessSessionId: this.harnessSessionId,
+      backendRef: this.backendRef,
+      harness: this.harnessName,
+      backendKind: this.backendKind,
+      backendConversationId: this.backendConversationId,
+    };
+  }
+
+  routingSnapshot(): Pick<
+    Session,
+    "route" | "originAgentId" | "originChannel" | "originThreadId" | "originSessionKey"
+  > {
+    return {
+      route: this.route,
+      originAgentId: this.originAgentId,
+      originChannel: this.originChannel,
+      originThreadId: this.originThreadId,
+      originSessionKey: this.originSessionKey,
+    };
+  }
+
   private get waitingForInputFired(): boolean {
     return this.turnRuntime.waitingForInputFired;
   }

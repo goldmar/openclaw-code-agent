@@ -77,10 +77,32 @@ type SpawnOptions = {
 };
 
 type LaunchConfirmationSession = Pick<Session, "status" | "name" | "id" | "killReason" | "error" | "result"> & {
-  on?: (event: string, listener: (...args: any[]) => void) => unknown;
-  off?: (event: string, listener: (...args: any[]) => void) => unknown;
-  removeListener?: (event: string, listener: (...args: any[]) => void) => unknown;
+  on?: (event: string, listener: (...args: unknown[]) => void) => unknown;
+  off?: (event: string, listener: (...args: unknown[]) => void) => unknown;
+  removeListener?: (event: string, listener: (...args: unknown[]) => void) => unknown;
 };
+
+interface SessionManagerServiceBundle {
+  registry: SessionRuntimeRegistry;
+  sessions: Map<string, Session>;
+  store: SessionStore;
+  metrics: SessionMetricsRecorder;
+  wakeDispatcher: WakeDispatcher;
+  interactions: SessionInteractionService;
+  notifications: SessionNotificationService;
+  worktrees: SessionWorktreeController;
+  questions: SessionQuestionService;
+  reminders: SessionReminderService;
+  lifecycle: SessionLifecycleService;
+  restore: SessionRestoreService;
+  stateSync: SessionStateSyncService;
+  references: SessionReferenceService;
+  worktreeStrategy: SessionWorktreeStrategyService;
+  worktreeDecisions: SessionWorktreeDecisionService;
+  runtimeBootstrap: SessionRuntimeBootstrapService;
+  worktreeMessages: SessionWorktreeMessageService;
+  maintenance: SessionMaintenanceService;
+}
 
 /**
  * Orchestrates active session lifecycles, wake signaling, persistence, and GC.
@@ -122,47 +144,73 @@ export class SessionManager {
   ) {
     this.maxSessions = maxSessions;
     this.maxPersistedSessions = maxPersistedSessions;
-    this.registry = new SessionRuntimeRegistry();
-    this.sessions = this.registry.sessions;
-    this.store = new SessionStore(options.store);
-    this.metrics = new SessionMetricsRecorder();
-    this.wakeDispatcher = new WakeDispatcher();
-    this.interactions = new SessionInteractionService(this.store.actionTokenStore, isGitHubCLIAvailable);
-    this.references = new SessionReferenceService(this.sessions, this.store);
-    this.stateSync = new SessionStateSyncService({
-      store: this.store,
-      sessions: this.sessions,
-      resolveSession: (ref) => this.references.resolveActive(ref),
+    const services = SessionManager.createServiceBundle(this, options);
+    this.registry = services.registry;
+    this.sessions = services.sessions;
+    this.store = services.store;
+    this.metrics = services.metrics;
+    this.wakeDispatcher = services.wakeDispatcher;
+    this.interactions = services.interactions;
+    this.notifications = services.notifications;
+    this.worktrees = services.worktrees;
+    this.questions = services.questions;
+    this.reminders = services.reminders;
+    this.lifecycle = services.lifecycle;
+    this.restore = services.restore;
+    this.stateSync = services.stateSync;
+    this.references = services.references;
+    this.worktreeStrategy = services.worktreeStrategy;
+    this.worktreeDecisions = services.worktreeDecisions;
+    this.runtimeBootstrap = services.runtimeBootstrap;
+    this.worktreeMessages = services.worktreeMessages;
+    this.maintenance = services.maintenance;
+  }
+
+  private static createServiceBundle(
+    manager: SessionManager,
+    options: { store?: SessionStoreOptions; worktreeSummaryProvider?: WorktreeDecisionSummaryProvider },
+  ): SessionManagerServiceBundle {
+    const registry = new SessionRuntimeRegistry();
+    const sessions = registry.sessions;
+    const store = new SessionStore(options.store);
+    const metrics = new SessionMetricsRecorder();
+    const wakeDispatcher = new WakeDispatcher();
+    const interactions = new SessionInteractionService(store.actionTokenStore, isGitHubCLIAvailable);
+    const references = new SessionReferenceService(sessions, store);
+    const stateSync = new SessionStateSyncService({
+      store,
+      sessions,
+      resolveSession: (ref) => references.resolveActive(ref),
     });
-    this.notifications = new SessionNotificationService(
-      this.wakeDispatcher,
-      (ref, patch) => this.stateSync.applySessionPatch(ref, patch),
+    const notifications = new SessionNotificationService(
+      wakeDispatcher,
+      (ref, patch) => stateSync.applySessionPatch(ref, patch),
       {
-        getPersistedSession: (ref) => this.store.getPersistedSession(ref),
+        getPersistedSession: (ref) => store.getPersistedSession(ref),
       },
     );
-    this.worktrees = new SessionWorktreeController();
-    this.restore = new SessionRestoreService((ref) => this.store.getPersistedSession(ref));
-    this.worktreeMessages = new SessionWorktreeMessageService();
-    this.worktreeStrategy = new SessionWorktreeStrategyService({
-      shouldRunWorktreeStrategy: (session) => this.shouldRunWorktreeStrategy(session),
-      isAlreadyMerged: (ref) => this.isAlreadyMerged(ref),
-      resolveWorktreeRepoDir: (repoDir, worktreePath) => this.resolveWorktreeRepoDir(repoDir, worktreePath),
+    const worktrees = new SessionWorktreeController();
+    const restore = new SessionRestoreService((ref) => store.getPersistedSession(ref));
+    const worktreeMessages = new SessionWorktreeMessageService();
+    const worktreeStrategy = new SessionWorktreeStrategyService({
+      shouldRunWorktreeStrategy: (session) => manager.shouldRunWorktreeStrategy(session),
+      isAlreadyMerged: (ref) => manager.isAlreadyMerged(ref),
+      resolveWorktreeRepoDir: (repoDir, worktreePath) => manager.resolveWorktreeRepoDir(repoDir, worktreePath),
       getWorktreeCompletionState: (repoDir, worktreePath, branchName, baseBranch) => (
-        this.getWorktreeCompletionState(repoDir, worktreePath, branchName, baseBranch)
+        manager.getWorktreeCompletionState(repoDir, worktreePath, branchName, baseBranch)
       ),
-      updatePersistedSession: (ref, patch) => this.updatePersistedSession(ref, patch),
-      dispatchSessionNotification: (session, request) => this.dispatchSessionNotification(session, request),
-      getOutputPreview: (session, maxChars) => this.getOutputPreview(session, maxChars),
-      originThreadLine: (session) => this.originThreadLine(session),
-      getWorktreeDecisionButtons: (sessionId) => this.getWorktreeDecisionButtons(sessionId),
-      makeOpenPrButton: (sessionId) => this.makeActionButton(sessionId, "worktree-create-pr", "Open PR"),
+      updatePersistedSession: (ref, patch) => manager.updatePersistedSession(ref, patch),
+      dispatchSessionNotification: (session, request) => manager.dispatchSessionNotification(session, request),
+      getOutputPreview: (session, maxChars) => manager.getOutputPreview(session, maxChars),
+      originThreadLine: (session) => manager.originThreadLine(session),
+      getWorktreeDecisionButtons: (sessionId) => manager.getWorktreeDecisionButtons(sessionId),
+      makeOpenPrButton: (sessionId) => manager.makeActionButton(sessionId, "worktree-create-pr", "Open PR"),
       worktreeSummaryProvider: options.worktreeSummaryProvider,
-      worktreeMessages: this.worktreeMessages,
-      enqueueMerge: (repoDir, fn, onQueued) => this.enqueueMerge(repoDir, fn, onQueued),
+      worktreeMessages,
+      enqueueMerge: (repoDir, fn, onQueued) => manager.enqueueMerge(repoDir, fn, onQueued),
       mergeBranch,
       spawnConflictResolver: async ({ session, worktreePath, prompt }) => {
-        return this.spawn({
+        return manager.spawn({
           prompt,
           workdir: worktreePath,
           name: `${session.name}-conflict-resolver`,
@@ -190,77 +238,99 @@ export class SessionManager {
         return { success: result?.meta?.success === true };
       },
     });
-    this.questions = new SessionQuestionService(
-      this.pendingAskUserQuestions,
-      (session, request) => this.dispatchSessionNotification(session, request),
-      (sessionId) => { this.lastWaitingEventTimestamps.delete(sessionId); },
-      (sessionId, options) => this.interactions.getQuestionButtons(sessionId, options),
+    const questions = new SessionQuestionService(
+      manager.pendingAskUserQuestions,
+      (session, request) => manager.dispatchSessionNotification(session, request),
+      (sessionId) => { manager.lastWaitingEventTimestamps.delete(sessionId); },
+      (sessionId, questionOptions) => interactions.getQuestionButtons(sessionId, questionOptions),
     );
-    this.reminders = new SessionReminderService(
-      (session) => this.buildRoutingProxy(session),
-      (session, request) => this.notifications.dispatch(session, request),
-      (ref, patch) => this.updatePersistedSession(ref, patch),
-      (sessionId) => this.getWorktreeDecisionButtons(sessionId),
+    const reminders = new SessionReminderService(
+      (session) => manager.buildRoutingProxy(session),
+      (session, request) => notifications.dispatch(session, request),
+      (ref, patch) => manager.updatePersistedSession(ref, patch),
+      (sessionId) => manager.getWorktreeDecisionButtons(sessionId),
     );
-    this.maintenance = new SessionMaintenanceService({
-      store: this.store,
-      sessions: this.sessions,
-      reminders: this.reminders,
-      removeRuntimeSession: (sessionId) => this.registry.remove(sessionId),
-      persistSession: (session, persistOptions) => this.persistSession(session, persistOptions),
+    const maintenance = new SessionMaintenanceService({
+      store,
+      sessions,
+      reminders,
+      removeRuntimeSession: (sessionId) => registry.remove(sessionId),
+      persistSession: (session, persistOptions) => manager.persistSession(session, persistOptions),
       clearRuntimeSessionState: (sessionId) => {
-        this.lastWaitingEventTimestamps.delete(sessionId);
-        this.lastTurnCompleteMarkers.delete(sessionId);
-        this.lastTerminalWakeMarkers.delete(sessionId);
+        manager.lastWaitingEventTimestamps.delete(sessionId);
+        manager.lastTurnCompleteMarkers.delete(sessionId);
+        manager.lastTerminalWakeMarkers.delete(sessionId);
       },
-      resolveWorktreeRepoDir: (repoDir, worktreePath) => this.resolveWorktreeRepoDir(repoDir, worktreePath),
-      updatePersistedSession: (ref, patch) => this.updatePersistedSession(ref, patch),
-      getMaxPersistedSessions: () => this.maxPersistedSessions,
+      resolveWorktreeRepoDir: (repoDir, worktreePath) => manager.resolveWorktreeRepoDir(repoDir, worktreePath),
+      updatePersistedSession: (ref, patch) => manager.updatePersistedSession(ref, patch),
+      getMaxPersistedSessions: () => manager.maxPersistedSessions,
     });
-    this.store.onActionTokensChanged(() => this.syncActionTokenExpiryDeadline());
-    this.lifecycle = new SessionLifecycleService({
-      persistSession: (session) => this.persistSession(session),
-      clearWaitingTimestamp: (sessionId) => { this.lastWaitingEventTimestamps.delete(sessionId); },
-      handleWorktreeStrategy: (session) => this.handleWorktreeStrategy(session),
-      resolveWorktreeRepoDir: (repoDir, worktreePath) => this.resolveWorktreeRepoDir(repoDir, worktreePath),
-      updatePersistedSession: (ref, patch) => this.updatePersistedSession(ref, patch),
-      dispatchSessionNotification: (session, request) => this.dispatchSessionNotification(session, request),
-      notifySession: (session, text, label) => this.notifySession(session, text, label),
-      clearRetryTimersForSession: (sessionId) => this.wakeDispatcher.clearRetryTimersForSession(sessionId),
-      hasTurnCompleteWakeMarker: (sessionId) => this.lastTurnCompleteMarkers.has(sessionId),
-      shouldEmitTurnCompleteWake: (session) => this.shouldEmitTurnCompleteWake(session),
-      shouldEmitTerminalWake: (session) => this.shouldEmitTerminalWake(session),
-      resolvePlanApprovalMode: (session) => this.resolvePlanApprovalMode(session),
-      getPlanApprovalButtons: (sessionId, session) => this.interactions.getPlanApprovalButtons(sessionId, session),
-      getResumeButtons: (sessionId, session) => this.interactions.getResumeButtons(sessionId, session),
-      getQuestionButtons: (sessionId, options) => this.interactions.getQuestionButtons(sessionId, options),
-      extractLastOutputLine: (session) => this.extractLastOutputLine(session),
-      getOutputPreview: (session, maxChars) => this.getOutputPreview(session, maxChars),
-      originThreadLine: (session) => this.originThreadLine(session),
-      debounceWaitingEvent: (sessionId) => this.debounceWaitingEvent(sessionId),
-      isAlreadyMerged: (ref) => this.isAlreadyMerged(ref),
+    store.onActionTokensChanged(() => manager.syncActionTokenExpiryDeadline());
+    const lifecycle = new SessionLifecycleService({
+      persistSession: (session) => manager.persistSession(session),
+      clearWaitingTimestamp: (sessionId) => { manager.lastWaitingEventTimestamps.delete(sessionId); },
+      handleWorktreeStrategy: (session) => manager.handleWorktreeStrategy(session),
+      resolveWorktreeRepoDir: (repoDir, worktreePath) => manager.resolveWorktreeRepoDir(repoDir, worktreePath),
+      updatePersistedSession: (ref, patch) => manager.updatePersistedSession(ref, patch),
+      dispatchSessionNotification: (session, request) => manager.dispatchSessionNotification(session, request),
+      notifySession: (session, text, label) => manager.notifySession(session, text, label),
+      clearRetryTimersForSession: (sessionId) => wakeDispatcher.clearRetryTimersForSession(sessionId),
+      hasTurnCompleteWakeMarker: (sessionId) => manager.lastTurnCompleteMarkers.has(sessionId),
+      shouldEmitTurnCompleteWake: (session) => manager.shouldEmitTurnCompleteWake(session),
+      shouldEmitTerminalWake: (session) => manager.shouldEmitTerminalWake(session),
+      resolvePlanApprovalMode: (session) => manager.resolvePlanApprovalMode(session),
+      getPlanApprovalButtons: (sessionId, session) => interactions.getPlanApprovalButtons(sessionId, session),
+      getResumeButtons: (sessionId, session) => interactions.getResumeButtons(sessionId, session),
+      getQuestionButtons: (sessionId, questionOptions) => interactions.getQuestionButtons(sessionId, questionOptions),
+      extractLastOutputLine: (session) => manager.extractLastOutputLine(session),
+      getOutputPreview: (session, maxChars) => manager.getOutputPreview(session, maxChars),
+      originThreadLine: (session) => manager.originThreadLine(session),
+      debounceWaitingEvent: (sessionId) => manager.debounceWaitingEvent(sessionId),
+      isAlreadyMerged: (ref) => manager.isAlreadyMerged(ref),
     });
-    this.worktreeDecisions = new SessionWorktreeDecisionService({
-      getPersistedSession: (ref) => this.store.getPersistedSession(ref),
-      resolveActiveSession: (ref) => this.references.resolveActive(ref),
-      resolveWorktreeRepoDir: (repoDir, worktreePath) => this.resolveWorktreeRepoDir(repoDir, worktreePath),
-      updatePersistedSession: (ref, patch) => this.updatePersistedSession(ref, patch),
-      dispatchNotification: (session, request) => this.notifications.dispatch(session, request),
-      buildRoutingProxy: (session) => this.buildRoutingProxy(session),
+    const worktreeDecisions = new SessionWorktreeDecisionService({
+      getPersistedSession: (ref) => store.getPersistedSession(ref),
+      resolveActiveSession: (ref) => references.resolveActive(ref),
+      resolveWorktreeRepoDir: (repoDir, worktreePath) => manager.resolveWorktreeRepoDir(repoDir, worktreePath),
+      updatePersistedSession: (ref, patch) => manager.updatePersistedSession(ref, patch),
+      dispatchNotification: (session, request) => notifications.dispatch(session, request),
+      buildRoutingProxy: (session) => manager.buildRoutingProxy(session),
     });
-    this.runtimeBootstrap = new SessionRuntimeBootstrapService({
+    const runtimeBootstrap = new SessionRuntimeBootstrapService({
       hydrateSpawnedSession: (session, preparedLaunch, config) => {
-        this.restore.hydrateSpawnedSession(session, preparedLaunch, config);
+        restore.hydrateSpawnedSession(session, preparedLaunch, config);
       },
       markRunning: (session) => {
-        this.store.markRunning(session);
-        this.onPersistedSessionChanged(this.store.getPersistedSession(session.id));
+        store.markRunning(session);
+        manager.onPersistedSessionChanged(store.getPersistedSession(session.id));
       },
-      handleTerminal: async (session) => this.onSessionTerminal(session),
-      handleTurnEnd: (session, hadQuestion) => this.onTurnEnd(session, hadQuestion),
-      formatLaunchWorkdirLabel: (session) => this.formatLaunchWorkdirLabel(session),
-      notifySession: (session, text, label) => this.notifySession(session, text, label),
+      handleTerminal: async (session) => manager.onSessionTerminal(session),
+      handleTurnEnd: (session, hadQuestion) => lifecycle.handleTurnEnd(session, hadQuestion),
+      formatLaunchWorkdirLabel: (session) => manager.formatLaunchWorkdirLabel(session),
+      notifySession: (session, text, label) => manager.notifySession(session, text, label),
     });
+
+    return {
+      registry,
+      sessions,
+      store,
+      metrics,
+      wakeDispatcher,
+      interactions,
+      notifications,
+      worktrees,
+      questions,
+      reminders,
+      lifecycle,
+      restore,
+      stateSync,
+      references,
+      worktreeStrategy,
+      worktreeDecisions,
+      runtimeBootstrap,
+      worktreeMessages,
+      maintenance,
+    };
   }
 
   // Back-compat for tests and internal inspection.
@@ -903,11 +973,6 @@ export class SessionManager {
 
   getMetrics(): SessionMetrics { return this.metrics.getMetrics(); }
 
-  // Back-compat helper retained for test access.
-  private recordSessionMetrics(session: Session): void {
-    this.metrics.recordSession(session);
-  }
-
   // -- Wake / notification delivery --
 
   notifySession(session: Session, text: string, label: string = "notification"): void {
@@ -1060,24 +1125,8 @@ export class SessionManager {
     return getSessionOutputPreview(session, maxChars);
   }
 
-  private triggerAgentEvent(session: Session): void {
-    this.lifecycle.emitCompleted(session);
-  }
-
-  private triggerFailedEvent(session: Session, errorSummary: string, worktreeAutoCleaned: boolean = false): void {
-    this.lifecycle.emitFailed(session, errorSummary, worktreeAutoCleaned);
-  }
-
-  private triggerWaitingForInputEvent(session: Session): void {
-    this.lifecycle.emitWaitingForInput(session);
-  }
-
   private resolvePlanApprovalMode(session: Session | PersistedSessionInfo): PlanApprovalMode {
     return session.planApproval ?? pluginConfig.planApproval ?? "delegate";
-  }
-
-  private onTurnEnd(session: Session, hadQuestion: boolean): void {
-    this.lifecycle.handleTurnEnd(session, hadQuestion);
   }
 
   private shouldEmitTurnCompleteWake(session: Session): boolean {
@@ -1100,10 +1149,6 @@ export class SessionManager {
     if (prev === marker) return false;
     this.lastTerminalWakeMarkers.set(session.id, marker);
     return true;
-  }
-
-  private triggerTurnCompleteEventWithSignal(session: Session): void {
-    this.lifecycle.emitTurnComplete(session);
   }
 
   // -- Public API --

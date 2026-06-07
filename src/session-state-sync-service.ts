@@ -91,59 +91,58 @@ export class SessionStateSyncService {
   }
 
   private applyControlStatePatch(session: Session, patch: Partial<PersistedSessionInfo>): void {
-    const controlPatch = {
-      lifecycle: patch.lifecycle,
-      approvalState: patch.approvalState,
-      approvalExecutionState: patch.approvalExecutionState,
-      worktreeState: patch.worktreeState,
-      runtimeState: patch.runtimeState,
-      deliveryState: patch.deliveryState,
-      requestedPermissionMode: patch.requestedPermissionMode,
-      currentPermissionMode: patch.currentPermissionMode,
-      pendingPlanApproval: patch.pendingPlanApproval,
-      planApprovalContext: patch.planApprovalContext,
-      planDecisionVersion: patch.planDecisionVersion,
-      actionablePlanDecisionVersion: patch.actionablePlanDecisionVersion,
-      canonicalPlanPromptVersion: patch.canonicalPlanPromptVersion,
-      approvalPromptRequiredVersion: patch.approvalPromptRequiredVersion,
-      approvalPromptVersion: patch.approvalPromptVersion,
-      approvalPromptStatus: patch.approvalPromptStatus,
-      approvalPromptTransport: patch.approvalPromptTransport,
-      approvalPromptMessageKind: patch.approvalPromptMessageKind,
-      approvalPromptLastAttemptAt: patch.approvalPromptLastAttemptAt,
-      approvalPromptDeliveredAt: patch.approvalPromptDeliveredAt,
-      approvalPromptFailedAt: patch.approvalPromptFailedAt,
-      planModeApproved: patch.planModeApproved,
-      pendingWorktreeDecisionSince: patch.pendingWorktreeDecisionSince,
-    };
+    const controlPatch: SessionControlPatch = {};
+    this.copyControlPatchField(controlPatch, patch, "lifecycle");
+    this.copyControlPatchField(controlPatch, patch, "approvalState");
+    this.copyControlPatchField(controlPatch, patch, "approvalExecutionState");
+    this.copyControlPatchField(controlPatch, patch, "worktreeState");
+    this.copyControlPatchField(controlPatch, patch, "runtimeState");
+    this.copyControlPatchField(controlPatch, patch, "deliveryState");
+    this.copyControlPatchField(controlPatch, patch, "requestedPermissionMode");
+    this.copyControlPatchField(controlPatch, patch, "currentPermissionMode");
+    this.copyControlPatchField(controlPatch, patch, "pendingPlanApproval");
+    this.copyControlPatchField(controlPatch, patch, "planApprovalContext");
+    this.copyControlPatchField(controlPatch, patch, "planDecisionVersion");
+    this.copyControlPatchField(controlPatch, patch, "actionablePlanDecisionVersion");
+    this.copyControlPatchField(controlPatch, patch, "canonicalPlanPromptVersion");
+    this.copyControlPatchField(controlPatch, patch, "approvalPromptRequiredVersion");
+    this.copyControlPatchField(controlPatch, patch, "approvalPromptVersion");
+    this.copyControlPatchField(controlPatch, patch, "approvalPromptStatus");
+    this.copyControlPatchField(controlPatch, patch, "approvalPromptTransport");
+    this.copyControlPatchField(controlPatch, patch, "approvalPromptMessageKind");
+    this.copyControlPatchField(controlPatch, patch, "approvalPromptLastAttemptAt");
+    this.copyControlPatchField(controlPatch, patch, "approvalPromptDeliveredAt");
+    this.copyControlPatchField(controlPatch, patch, "approvalPromptFailedAt");
+    this.copyControlPatchField(controlPatch, patch, "planModeApproved");
+    this.copyControlPatchField(controlPatch, patch, "pendingWorktreeDecisionSince");
 
     if (typeof (session as Session & { applyControlPatch?: unknown }).applyControlPatch === "function") {
       session.applyControlPatch(controlPatch);
       return;
     }
 
-    this.assignIfDefined(session, "lifecycle", patch.lifecycle);
-    this.assignIfDefined(session, "approvalState", patch.approvalState);
-    this.assignIfDefined(session, "approvalExecutionState", patch.approvalExecutionState);
-    this.assignIfDefined(session, "worktreeState", patch.worktreeState);
-    this.assignIfDefined(session, "runtimeState", patch.runtimeState);
-    this.assignIfDefined(session, "deliveryState", patch.deliveryState);
-    this.assignIfDefined(session, "requestedPermissionMode", patch.requestedPermissionMode);
-    this.assignIfDefined(session, "currentPermissionMode", patch.currentPermissionMode);
-    this.assignIfDefined(session, "pendingPlanApproval", patch.pendingPlanApproval);
-    this.assignIfDefined(session, "planApprovalContext", patch.planApprovalContext);
-    this.assignIfDefined(session, "planDecisionVersion", patch.planDecisionVersion);
-    this.assignIfDefined(session, "actionablePlanDecisionVersion", patch.actionablePlanDecisionVersion);
-    this.assignIfDefined(session, "canonicalPlanPromptVersion", patch.canonicalPlanPromptVersion);
-    this.assignIfDefined(session, "approvalPromptRequiredVersion", patch.approvalPromptRequiredVersion);
-    this.assignIfDefined(session, "approvalPromptVersion", patch.approvalPromptVersion);
-    this.assignIfDefined(session, "approvalPromptStatus", patch.approvalPromptStatus);
-    this.assignIfDefined(session, "approvalPromptTransport", patch.approvalPromptTransport);
-    this.assignIfDefined(session, "approvalPromptMessageKind", patch.approvalPromptMessageKind);
-    this.assignIfDefined(session, "approvalPromptLastAttemptAt", patch.approvalPromptLastAttemptAt);
-    this.assignIfDefined(session, "approvalPromptDeliveredAt", patch.approvalPromptDeliveredAt);
-    this.assignIfDefined(session, "approvalPromptFailedAt", patch.approvalPromptFailedAt);
-    this.setControlFieldIfDefined(session, "planModeApproved", patch.planModeApproved);
+    this.assignIfPresent(session, "lifecycle", patch, "lifecycle");
+    this.assignIfPresent(session, "approvalState", patch, "approvalState");
+    this.assignIfPresent(session, "approvalExecutionState", patch, "approvalExecutionState");
+    this.assignIfPresent(session, "worktreeState", patch, "worktreeState");
+    this.assignIfPresent(session, "runtimeState", patch, "runtimeState");
+    this.assignIfPresent(session, "deliveryState", patch, "deliveryState");
+    this.assignIfPresent(session, "requestedPermissionMode", patch, "requestedPermissionMode");
+    this.assignIfPresent(session, "currentPermissionMode", patch, "currentPermissionMode");
+    this.assignIfPresent(session, "pendingPlanApproval", patch, "pendingPlanApproval");
+    this.assignIfPresent(session, "planApprovalContext", patch, "planApprovalContext");
+    this.assignIfPresent(session, "planDecisionVersion", patch, "planDecisionVersion");
+    this.assignIfPresent(session, "actionablePlanDecisionVersion", patch, "actionablePlanDecisionVersion");
+    this.assignIfPresent(session, "canonicalPlanPromptVersion", patch, "canonicalPlanPromptVersion");
+    this.assignIfPresent(session, "approvalPromptRequiredVersion", patch, "approvalPromptRequiredVersion");
+    this.assignIfPresent(session, "approvalPromptVersion", patch, "approvalPromptVersion");
+    this.assignIfPresent(session, "approvalPromptStatus", patch, "approvalPromptStatus");
+    this.assignIfPresent(session, "approvalPromptTransport", patch, "approvalPromptTransport");
+    this.assignIfPresent(session, "approvalPromptMessageKind", patch, "approvalPromptMessageKind");
+    this.assignIfPresent(session, "approvalPromptLastAttemptAt", patch, "approvalPromptLastAttemptAt");
+    this.assignIfPresent(session, "approvalPromptDeliveredAt", patch, "approvalPromptDeliveredAt");
+    this.assignIfPresent(session, "approvalPromptFailedAt", patch, "approvalPromptFailedAt");
+    this.setControlFieldIfPresent(session, "planModeApproved", patch);
   }
 
   private applySessionMetadataPatch(session: Session, patch: Partial<PersistedSessionInfo>): void {
@@ -178,13 +177,34 @@ export class SessionStateSyncService {
     }
   }
 
-  private setControlFieldIfDefined<K extends keyof SessionControlPatch>(
+  private assignIfPresent<K extends keyof Session, P extends keyof PersistedSessionInfo>(
+    session: Session,
+    sessionKey: K,
+    patch: Partial<PersistedSessionInfo>,
+    patchKey: P,
+  ): void {
+    if (Object.hasOwn(patch, patchKey)) {
+      session[sessionKey] = patch[patchKey] as unknown as Session[K];
+    }
+  }
+
+  private copyControlPatchField<K extends keyof SessionControlPatch & keyof PersistedSessionInfo>(
+    controlPatch: SessionControlPatch,
+    patch: Partial<PersistedSessionInfo>,
+    key: K,
+  ): void {
+    if (Object.hasOwn(patch, key)) {
+      controlPatch[key] = patch[key] as SessionControlPatch[K];
+    }
+  }
+
+  private setControlFieldIfPresent<K extends keyof SessionControlPatch>(
     session: Session,
     key: K,
-    value: SessionControlPatch[K] | undefined,
+    patch: Partial<PersistedSessionInfo>,
   ): void {
-    if (value !== undefined) {
-      (session as Session & ControlFieldSetter).setControlField?.(key, value);
+    if (Object.hasOwn(patch, key)) {
+      (session as Session & ControlFieldSetter).setControlField?.(key, patch[key] as SessionControlPatch[K]);
     }
   }
 }

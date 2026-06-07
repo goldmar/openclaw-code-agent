@@ -2121,6 +2121,8 @@ describe("SessionNotificationService", () => {
     const requests: Array<Record<string, unknown>> = [];
     const logs: string[] = [];
     const originalStderrWrite = process.stderr.write;
+    const originalNotificationDiagnostics = process.env.OPENCLAW_CODE_AGENT_NOTIFICATION_DIAGNOSTICS;
+    process.env.OPENCLAW_CODE_AGENT_NOTIFICATION_DIAGNOSTICS = "1";
     process.stderr.write = ((chunk: string | Uint8Array, ...args: any[]) => {
       logs.push(String(chunk));
       return true;
@@ -2216,6 +2218,11 @@ describe("SessionNotificationService", () => {
       ), true);
     } finally {
       process.stderr.write = originalStderrWrite;
+      if (originalNotificationDiagnostics === undefined) {
+        delete process.env.OPENCLAW_CODE_AGENT_NOTIFICATION_DIAGNOSTICS;
+      } else {
+        process.env.OPENCLAW_CODE_AGENT_NOTIFICATION_DIAGNOSTICS = originalNotificationDiagnostics;
+      }
     }
   });
 

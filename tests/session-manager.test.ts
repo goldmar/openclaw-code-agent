@@ -8,6 +8,7 @@ import { setPluginConfig } from "../src/config";
 import { buildPresentation } from "../src/direct-notification-transport";
 import { SessionNotificationService } from "../src/session-notifications";
 import { SessionWorktreeDecisionService } from "../src/session-worktree-decision-service";
+import { SessionMetricsRecorder } from "../src/session-metrics";
 
 // ---------------------------------------------------------------------------
 // Helper to create a fake session-like object for injection
@@ -707,37 +708,37 @@ describe("SessionManager.updatePersistedSession()", () => {
 });
 
 // =========================================================================
-// recordSessionMetrics
+// SessionMetricsRecorder
 // =========================================================================
 
-describe("SessionManager.recordSessionMetrics()", () => {
-  let sm: SessionManager;
+describe("SessionMetricsRecorder.recordSession()", () => {
+  let recorder: SessionMetricsRecorder;
 
   beforeEach(() => {
-    sm = new SessionManager(5);
+    recorder = new SessionMetricsRecorder();
   });
 
   it("accumulates totalCostUsd", () => {
     const s1 = fakeSession({ costUsd: 0.5, status: "completed", completedAt: Date.now(), startedAt: Date.now() - 10000 });
     const s2 = fakeSession({ costUsd: 1.2, status: "completed", completedAt: Date.now(), startedAt: Date.now() - 20000 });
-    (sm as any).recordSessionMetrics(s1);
-    (sm as any).recordSessionMetrics(s2);
-    assert.equal(sm.getMetrics().totalCostUsd, 1.7);
+    recorder.recordSession(s1);
+    recorder.recordSession(s2);
+    assert.equal(recorder.getMetrics().totalCostUsd, 1.7);
   });
 
   it("tracks costPerDay correctly", () => {
     const now = Date.now();
     const s = fakeSession({ costUsd: 0.3, status: "completed", completedAt: now, startedAt: now - 5000 });
-    (sm as any).recordSessionMetrics(s);
+    recorder.recordSession(s);
     const dateKey = new Date(now).toISOString().slice(0, 10);
-    assert.equal(sm.getMetrics().costPerDay.get(dateKey), 0.3);
+    assert.equal(recorder.getMetrics().costPerDay.get(dateKey), 0.3);
   });
 
   it("increments sessionsByStatus counters", () => {
-    (sm as any).recordSessionMetrics(fakeSession({ status: "completed", costUsd: 0, startedAt: 1000, completedAt: 2000 }));
-    (sm as any).recordSessionMetrics(fakeSession({ status: "failed", costUsd: 0, startedAt: 1000, completedAt: 2000 }));
-    (sm as any).recordSessionMetrics(fakeSession({ status: "killed", costUsd: 0, startedAt: 1000, completedAt: 2000 }));
-    const metrics = sm.getMetrics();
+    recorder.recordSession(fakeSession({ status: "completed", costUsd: 0, startedAt: 1000, completedAt: 2000 }));
+    recorder.recordSession(fakeSession({ status: "failed", costUsd: 0, startedAt: 1000, completedAt: 2000 }));
+    recorder.recordSession(fakeSession({ status: "killed", costUsd: 0, startedAt: 1000, completedAt: 2000 }));
+    const metrics = recorder.getMetrics();
     assert.equal(metrics.sessionsByStatus.completed, 1);
     assert.equal(metrics.sessionsByStatus.failed, 1);
     assert.equal(metrics.sessionsByStatus.killed, 1);
@@ -745,17 +746,17 @@ describe("SessionManager.recordSessionMetrics()", () => {
 
   it("tracks duration when completedAt is set", () => {
     const s = fakeSession({ costUsd: 0, status: "completed", startedAt: 1000, completedAt: 11000 });
-    (sm as any).recordSessionMetrics(s);
-    assert.equal(sm.getMetrics().totalDurationMs, 10000);
-    assert.equal(sm.getMetrics().sessionsWithDuration, 1);
+    recorder.recordSession(s);
+    assert.equal(recorder.getMetrics().totalDurationMs, 10000);
+    assert.equal(recorder.getMetrics().sessionsWithDuration, 1);
   });
 
   it("tracks mostExpensive session", () => {
     const s1 = fakeSession({ id: "cheap", name: "cheap", costUsd: 0.1, status: "completed", prompt: "a", startedAt: 1000, completedAt: 2000 });
     const s2 = fakeSession({ id: "expensive", name: "expensive", costUsd: 5.0, status: "completed", prompt: "b", startedAt: 1000, completedAt: 2000 });
-    (sm as any).recordSessionMetrics(s1);
-    (sm as any).recordSessionMetrics(s2);
-    const most = sm.getMetrics().mostExpensive;
+    recorder.recordSession(s1);
+    recorder.recordSession(s2);
+    const most = recorder.getMetrics().mostExpensive;
     assert.ok(most);
     assert.equal(most!.name, "expensive");
     assert.equal(most!.costUsd, 5.0);
@@ -763,14 +764,14 @@ describe("SessionManager.recordSessionMetrics()", () => {
 
   it("returns a defensive copy from getMetrics()", () => {
     const s = fakeSession({ costUsd: 1.0, status: "completed", startedAt: 1000, completedAt: 2000 });
-    (sm as any).recordSessionMetrics(s);
+    recorder.recordSession(s);
 
-    const snapshot = sm.getMetrics();
+    const snapshot = recorder.getMetrics();
     snapshot.totalCostUsd = 999;
     snapshot.costPerDay.set("2099-01-01", 50);
     snapshot.sessionsByStatus.completed = 999;
 
-    const fresh = sm.getMetrics();
+    const fresh = recorder.getMetrics();
     assert.equal(fresh.totalCostUsd, 1.0);
     assert.equal(fresh.costPerDay.has("2099-01-01"), false);
     assert.equal(fresh.sessionsByStatus.completed, 1);
@@ -1477,7 +1478,7 @@ describe("SessionManager turn-end wake", () => {
       getOutput: () => ["I completed the patch.", "Should I continue and apply tests?"],
     });
 
-    (sm as any).onTurnEnd(s, false);
+    (sm as any).lifecycle.handleTurnEnd(s, false);
 
     const calls = (sm as any).__dispatchCalls;
     assert.equal(calls.length, 1);
@@ -1500,7 +1501,7 @@ describe("SessionManager turn-end wake", () => {
       getOutput: () => ["Need your decision."],
     });
 
-    (sm as any).onTurnEnd(s, true);
+    (sm as any).lifecycle.handleTurnEnd(s, true);
 
     const calls = (sm as any).__dispatchCalls;
     assert.equal(calls.length, 1);
@@ -1526,7 +1527,7 @@ describe("SessionManager turn-end wake", () => {
       getOutput: () => ["Plan preview"],
     });
 
-    await (sm as any).triggerWaitingForInputEvent(s);
+    await (sm as any).lifecycle.emitWaitingForInput(s);
 
     const calls = (sm as any).__dispatchCalls;
     assert.equal(calls.length, 1);
@@ -1556,7 +1557,7 @@ describe("SessionManager turn-end wake", () => {
       getOutput: () => ["Codex plan preview"],
     });
 
-    await (sm as any).triggerWaitingForInputEvent(s);
+    await (sm as any).lifecycle.emitWaitingForInput(s);
 
     const calls = (sm as any).__dispatchCalls;
     assert.equal(calls.length, 1);
@@ -1579,7 +1580,7 @@ describe("SessionManager turn-end wake", () => {
       getOutput: () => ["Plan preview"],
     });
 
-    await (sm as any).triggerWaitingForInputEvent(s);
+    await (sm as any).lifecycle.emitWaitingForInput(s);
 
     const calls = (sm as any).__dispatchCalls;
     assert.equal(calls.length, 1);
@@ -1603,7 +1604,7 @@ describe("SessionManager turn-end wake", () => {
       getOutput: () => ["Codex plan preview"],
     });
 
-    await (sm as any).triggerWaitingForInputEvent(s);
+    await (sm as any).lifecycle.emitWaitingForInput(s);
 
     const calls = (sm as any).__dispatchCalls;
     assert.equal(calls.length, 1);
@@ -1622,7 +1623,7 @@ describe("SessionManager turn-end wake", () => {
       getOutput: () => ["Proposed plan:\n- Inspect state flow\n- Add buttons"],
     });
 
-    await (sm as any).triggerWaitingForInputEvent(s);
+    await (sm as any).lifecycle.emitWaitingForInput(s);
 
     const calls = (sm as any).__dispatchCalls;
     assert.equal(calls.length, 1);
@@ -1654,7 +1655,7 @@ describe("SessionManager turn-end wake", () => {
       getOutput: () => ["Plan preview that should not be used when structured data matches."],
     });
 
-    await (sm as any).triggerWaitingForInputEvent(s);
+    await (sm as any).lifecycle.emitWaitingForInput(s);
 
     const calls = (sm as any).__dispatchCalls;
     assert.equal(calls.length, 1);
@@ -1690,7 +1691,7 @@ describe("SessionManager turn-end wake", () => {
       ],
     });
 
-    await (sm as any).triggerWaitingForInputEvent(s);
+    await (sm as any).lifecycle.emitWaitingForInput(s);
 
     const calls = (sm as any).__dispatchCalls;
     assert.equal(calls.length, 1);
@@ -1725,7 +1726,7 @@ describe("SessionManager turn-end wake", () => {
       getOutput: () => ["running progress that should not be used here"],
     });
 
-    await (sm as any).triggerWaitingForInputEvent(s);
+    await (sm as any).lifecycle.emitWaitingForInput(s);
 
     const calls = (sm as any).__dispatchCalls;
     assert.equal(calls.length, 1);
@@ -1758,7 +1759,7 @@ describe("SessionManager turn-end wake", () => {
       getOutput: () => ["running progress that should not be used here"],
     });
 
-    await (sm as any).triggerWaitingForInputEvent(s);
+    await (sm as any).lifecycle.emitWaitingForInput(s);
 
     const calls = (sm as any).__dispatchCalls;
     assert.equal(calls.length, 1);
@@ -1804,7 +1805,7 @@ describe("SessionManager turn-end wake", () => {
       getOutput: () => ["running progress that should not be used here"],
     });
 
-    await (sm as any).triggerWaitingForInputEvent(s);
+    await (sm as any).lifecycle.emitWaitingForInput(s);
 
     const calls = (sm as any).__dispatchCalls;
     assert.equal(calls.length, 1);
@@ -1848,7 +1849,7 @@ describe("SessionManager turn-end wake", () => {
         ],
       });
 
-      await (sm as any).triggerWaitingForInputEvent(s);
+      await (sm as any).lifecycle.emitWaitingForInput(s);
 
       const calls = (sm as any).__dispatchCalls;
       assert.equal(calls.length, 1);
@@ -1892,7 +1893,7 @@ describe("SessionManager turn-end wake", () => {
       ],
     });
 
-    await (sm as any).triggerWaitingForInputEvent(s);
+    await (sm as any).lifecycle.emitWaitingForInput(s);
 
     const calls = (sm as any).__dispatchCalls;
     assert.equal(calls.length, 1);
@@ -2088,7 +2089,7 @@ describe("SessionManager turn-end wake", () => {
       getOutput: () => ["Should I continue and apply the migration?"],
     });
 
-    (sm as any).onTurnEnd(s, true);
+    (sm as any).lifecycle.handleTurnEnd(s, true);
 
     const calls = (sm as any).__dispatchCalls;
     assert.equal(calls.length, 1);
@@ -2115,7 +2116,7 @@ describe("SessionManager turn-end wake", () => {
       getOutput: () => ["Do you want to allow read-only workspace inspection so I can gather the files needed for the investigation memo?"],
     });
 
-    await (sm as any).triggerWaitingForInputEvent(s);
+    await (sm as any).lifecycle.emitWaitingForInput(s);
 
     const calls = (sm as any).__dispatchCalls;
     assert.equal(calls.length, 1);
@@ -2146,7 +2147,7 @@ describe("SessionManager turn-end wake", () => {
       ],
     });
 
-    await (sm as any).triggerWaitingForInputEvent(s);
+    await (sm as any).lifecycle.emitWaitingForInput(s);
 
     const calls = (sm as any).__dispatchCalls;
     assert.equal(calls.length, 1);
@@ -2183,7 +2184,7 @@ describe("SessionManager turn-end wake", () => {
     });
     (sm as any).sessions.set(s.id, s);
 
-    await (sm as any).triggerWaitingForInputEvent(s);
+    await (sm as any).lifecycle.emitWaitingForInput(s);
     const firstRequest = (sm as any).__dispatchCalls[0][1];
     assert.equal(firstRequest.label, "waiting");
     assert.equal(firstRequest.idempotencyKey, "waiting:s-codex-pending-input:req-1");
@@ -2202,7 +2203,7 @@ describe("SessionManager turn-end wake", () => {
       options: ["Preview", "Prod"],
     };
 
-    await (sm as any).triggerWaitingForInputEvent(s);
+    await (sm as any).lifecycle.emitWaitingForInput(s);
 
     const calls = (sm as any).__dispatchCalls;
     assert.equal(calls.length, 2);
@@ -2227,7 +2228,7 @@ describe("SessionManager turn-end wake", () => {
       getOutput: () => ["Plan preview"],
     });
 
-    (sm as any).onTurnEnd(s, true);
+    (sm as any).lifecycle.handleTurnEnd(s, true);
 
     const calls = (sm as any).__dispatchCalls;
     assert.equal(calls.length, 1);
@@ -2250,8 +2251,8 @@ describe("SessionManager turn-end wake", () => {
       getOutput: () => ["Turn output."],
     });
 
-    (sm as any).onTurnEnd(s, false);
-    (sm as any).onTurnEnd(s, false);
+    (sm as any).lifecycle.handleTurnEnd(s, false);
+    (sm as any).lifecycle.handleTurnEnd(s, false);
 
     const calls = (sm as any).__dispatchCalls;
     assert.equal(calls.length, 1);
@@ -2271,7 +2272,7 @@ describe("SessionManager turn-end wake", () => {
       getOutput: () => ["Codex first-turn plan preview"],
     });
 
-    await (sm as any).triggerWaitingForInputEvent(s);
+    await (sm as any).lifecycle.emitWaitingForInput(s);
 
     const calls = (sm as any).__dispatchCalls;
     assert.equal(calls.length, 1);
@@ -2421,7 +2422,7 @@ describe("SessionManager turn-end wake", () => {
       },
       getOutput: () => ["Applied the completion fix and added tests."],
     });
-    (sm as any).onTurnEnd(s, false);
+    (sm as any).lifecycle.handleTurnEnd(s, false);
     await (sm as any).onSessionTerminal(s);
 
     const calls = (sm as any).__dispatchCalls;
@@ -2524,7 +2525,7 @@ describe("SessionManager terminal wakes", () => {
       startedAt: Date.now() - 1_500,
     });
 
-    (sm as any).triggerAgentEvent(s);
+    (sm as any).lifecycle.emitCompleted(s);
 
     assert.equal((sm as any).__dispatchCalls.length, 1);
     const [_sessionArg, request] = (sm as any).__dispatchCalls[0];

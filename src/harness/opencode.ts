@@ -348,34 +348,21 @@ async function startOpenCodeServerOnce(options: { cwd: string; signal?: AbortSig
         throw new Error(`OpenCode server exited before readiness.${outputSuffix()}`);
       }
       try {
-        const controller = new AbortController();
-        const abortController = (): void => controller.abort();
-        if (options.signal?.aborted) {
-          controller.abort();
-        } else {
-          options.signal?.addEventListener("abort", abortController, { once: true });
-        }
-        try {
-          const response = await boundedPromise(
-            fetchImpl(`${baseUrl}/api/health`, { headers: authHeader(), signal: controller.signal }),
-            {
-              timeoutMs: readinessRequestTimeoutMs,
-              timeoutMessage: `OpenCode GET /api/health timed out after ${readinessRequestTimeoutMs}ms during server readiness.${outputSuffix()}`,
-              signal: options.signal,
-              abortMessage: `OpenCode server startup aborted before readiness.${outputSuffix()}`,
-              onTimeout: () => controller.abort(),
+        const ready = await probeOpenCodeHealth({
+          baseUrl,
+          fetchImpl,
+          requestTimeoutMs: readinessRequestTimeoutMs,
+          startupSignal: options.signal,
+          timeoutMessage: `OpenCode GET /api/health timed out after ${readinessRequestTimeoutMs}ms during server readiness.${outputSuffix()}`,
+          abortMessage: `OpenCode server startup aborted before readiness.${outputSuffix()}`,
+        });
+        if (ready) {
+          return {
+            baseUrl,
+            close: async () => {
+              await terminateChild(child);
             },
-          );
-          if (response.ok) {
-            return {
-              baseUrl,
-              close: async () => {
-                await terminateChild(child);
-              },
-            };
-          }
-        } finally {
-          options.signal?.removeEventListener("abort", abortController);
+          };
         }
       } catch (error) {
         if (options.signal?.aborted) {
@@ -403,6 +390,38 @@ async function defaultCreateServer(options: { cwd: string; signal?: AbortSignal;
         throw error;
       }
     }
+  }
+}
+
+async function probeOpenCodeHealth(args: {
+  baseUrl: string;
+  fetchImpl: FetchLike;
+  requestTimeoutMs: number;
+  startupSignal?: AbortSignal;
+  timeoutMessage: string;
+  abortMessage: string;
+}): Promise<boolean> {
+  const controller = new AbortController();
+  const abortController = (): void => controller.abort();
+  if (args.startupSignal?.aborted) {
+    controller.abort();
+  } else {
+    args.startupSignal?.addEventListener("abort", abortController, { once: true });
+  }
+  try {
+    const response = await boundedPromise(
+      args.fetchImpl(`${args.baseUrl}/api/health`, { headers: authHeader(), signal: controller.signal }),
+      {
+        timeoutMs: args.requestTimeoutMs,
+        timeoutMessage: args.timeoutMessage,
+        signal: args.startupSignal,
+        abortMessage: args.abortMessage,
+        onTimeout: () => controller.abort(),
+      },
+    );
+    return response.ok;
+  } finally {
+    args.startupSignal?.removeEventListener("abort", abortController);
   }
 }
 

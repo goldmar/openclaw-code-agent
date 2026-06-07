@@ -114,7 +114,7 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
       }
 
       try {
-        const resolution = resolveAgentLaunchRequest(params, ctx, sessionManager as any);
+        const resolution = resolveAgentLaunchRequest(params, ctx, sessionManager);
         if (resolution.kind !== "resolved") {
           return { content: [{ type: "text", text: resolution.text }] };
         }

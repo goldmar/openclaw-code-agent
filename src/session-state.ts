@@ -88,6 +88,13 @@ export interface SessionControlPatch {
   pendingWorktreeDecisionSince?: string;
 }
 
+function hasPatchField<K extends keyof SessionControlPatch>(
+  patch: SessionControlPatch,
+  key: K,
+): patch is SessionControlPatch & Record<K, SessionControlPatch[K]> {
+  return Object.hasOwn(patch, key);
+}
+
 const RESOLVED_WORKTREE_STATES = new Set<SessionWorktreeState>([
   "merged",
   "released",
@@ -289,28 +296,28 @@ export function applySessionControlPatch(
 ): SessionControlState {
   let next: SessionControlState = {
     ...state,
-    ...(patch.lifecycle !== undefined ? { lifecycle: patch.lifecycle } : {}),
-    ...(patch.approvalState !== undefined ? { approvalState: patch.approvalState } : {}),
-    ...(patch.approvalExecutionState !== undefined ? { approvalExecutionState: patch.approvalExecutionState } : {}),
-    ...(patch.worktreeState !== undefined ? { worktreeState: patch.worktreeState } : {}),
-    ...(patch.runtimeState !== undefined ? { runtimeState: patch.runtimeState } : {}),
-    ...(patch.deliveryState !== undefined ? { deliveryState: patch.deliveryState } : {}),
-    ...(patch.requestedPermissionMode !== undefined ? { requestedPermissionMode: patch.requestedPermissionMode } : {}),
-    ...(patch.currentPermissionMode !== undefined ? { currentPermissionMode: patch.currentPermissionMode } : {}),
-    ...(patch.pendingPlanApproval !== undefined ? { pendingPlanApproval: patch.pendingPlanApproval } : {}),
-    ...(patch.planApprovalContext !== undefined ? { planApprovalContext: patch.planApprovalContext } : {}),
-    ...(patch.planDecisionVersion !== undefined ? { planDecisionVersion: patch.planDecisionVersion } : {}),
-    ...(patch.actionablePlanDecisionVersion !== undefined ? { actionablePlanDecisionVersion: patch.actionablePlanDecisionVersion } : {}),
-    ...(patch.canonicalPlanPromptVersion !== undefined ? { canonicalPlanPromptVersion: patch.canonicalPlanPromptVersion } : {}),
-    ...(patch.approvalPromptRequiredVersion !== undefined ? { approvalPromptRequiredVersion: patch.approvalPromptRequiredVersion } : {}),
-    ...(patch.approvalPromptVersion !== undefined ? { approvalPromptVersion: patch.approvalPromptVersion } : {}),
-    ...(patch.approvalPromptStatus !== undefined ? { approvalPromptStatus: patch.approvalPromptStatus } : {}),
-    ...(patch.approvalPromptTransport !== undefined ? { approvalPromptTransport: patch.approvalPromptTransport } : {}),
-    ...(patch.approvalPromptMessageKind !== undefined ? { approvalPromptMessageKind: patch.approvalPromptMessageKind } : {}),
-    ...(patch.approvalPromptLastAttemptAt !== undefined ? { approvalPromptLastAttemptAt: patch.approvalPromptLastAttemptAt } : {}),
-    ...(patch.approvalPromptDeliveredAt !== undefined ? { approvalPromptDeliveredAt: patch.approvalPromptDeliveredAt } : {}),
-    ...(patch.approvalPromptFailedAt !== undefined ? { approvalPromptFailedAt: patch.approvalPromptFailedAt } : {}),
-    ...(patch.planModeApproved !== undefined ? { planModeApproved: patch.planModeApproved } : {}),
+    ...(hasPatchField(patch, "lifecycle") ? { lifecycle: patch.lifecycle } : {}),
+    ...(hasPatchField(patch, "approvalState") ? { approvalState: patch.approvalState } : {}),
+    ...(hasPatchField(patch, "approvalExecutionState") ? { approvalExecutionState: patch.approvalExecutionState } : {}),
+    ...(hasPatchField(patch, "worktreeState") ? { worktreeState: patch.worktreeState } : {}),
+    ...(hasPatchField(patch, "runtimeState") ? { runtimeState: patch.runtimeState } : {}),
+    ...(hasPatchField(patch, "deliveryState") ? { deliveryState: patch.deliveryState } : {}),
+    ...(hasPatchField(patch, "requestedPermissionMode") ? { requestedPermissionMode: patch.requestedPermissionMode } : {}),
+    ...(hasPatchField(patch, "currentPermissionMode") ? { currentPermissionMode: patch.currentPermissionMode } : {}),
+    ...(hasPatchField(patch, "pendingPlanApproval") ? { pendingPlanApproval: patch.pendingPlanApproval } : {}),
+    ...(hasPatchField(patch, "planApprovalContext") ? { planApprovalContext: patch.planApprovalContext } : {}),
+    ...(hasPatchField(patch, "planDecisionVersion") ? { planDecisionVersion: patch.planDecisionVersion } : {}),
+    ...(hasPatchField(patch, "actionablePlanDecisionVersion") ? { actionablePlanDecisionVersion: patch.actionablePlanDecisionVersion } : {}),
+    ...(hasPatchField(patch, "canonicalPlanPromptVersion") ? { canonicalPlanPromptVersion: patch.canonicalPlanPromptVersion } : {}),
+    ...(hasPatchField(patch, "approvalPromptRequiredVersion") ? { approvalPromptRequiredVersion: patch.approvalPromptRequiredVersion } : {}),
+    ...(hasPatchField(patch, "approvalPromptVersion") ? { approvalPromptVersion: patch.approvalPromptVersion } : {}),
+    ...(hasPatchField(patch, "approvalPromptStatus") ? { approvalPromptStatus: patch.approvalPromptStatus } : {}),
+    ...(hasPatchField(patch, "approvalPromptTransport") ? { approvalPromptTransport: patch.approvalPromptTransport } : {}),
+    ...(hasPatchField(patch, "approvalPromptMessageKind") ? { approvalPromptMessageKind: patch.approvalPromptMessageKind } : {}),
+    ...(hasPatchField(patch, "approvalPromptLastAttemptAt") ? { approvalPromptLastAttemptAt: patch.approvalPromptLastAttemptAt } : {}),
+    ...(hasPatchField(patch, "approvalPromptDeliveredAt") ? { approvalPromptDeliveredAt: patch.approvalPromptDeliveredAt } : {}),
+    ...(hasPatchField(patch, "approvalPromptFailedAt") ? { approvalPromptFailedAt: patch.approvalPromptFailedAt } : {}),
+    ...(hasPatchField(patch, "planModeApproved") ? { planModeApproved: patch.planModeApproved } : {}),
   };
 
   if (patch.approvalState === "changes_requested" && patch.pendingPlanApproval === undefined) {
@@ -335,7 +342,10 @@ export function applySessionControlPatch(
     };
   }
 
-  if (patch.pendingWorktreeDecisionSince !== undefined || next.worktreeState === "pending_decision") {
+  if (
+    (hasPatchField(patch, "pendingWorktreeDecisionSince") && patch.pendingWorktreeDecisionSince !== undefined)
+    || next.worktreeState === "pending_decision"
+  ) {
     next = reduceSessionControlState(next, { type: "worktree.decision_requested" });
   } else if (RESOLVED_WORKTREE_STATES.has(next.worktreeState)) {
     next = {
