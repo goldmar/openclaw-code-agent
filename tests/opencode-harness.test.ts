@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { OpenCodeHarness } from "../src/harness/opencode";
@@ -155,6 +155,14 @@ async function collectAllMessages(
 
 function installFakeOpenCodeServer(script: string): string {
   const dir = mkdtempSync(join(tmpdir(), "openclaw-opencode-test-"));
+  const file = join(dir, "opencode");
+  writeFileSync(file, `#!/usr/bin/env node\n${script}`);
+  chmodSync(file, 0o755);
+  return file;
+}
+
+function installFakeOpenCodeServerInDir(dir: string, script: string): string {
+  mkdirSync(dir, { recursive: true });
   const file = join(dir, "opencode");
   writeFileSync(file, `#!/usr/bin/env node\n${script}`);
   chmodSync(file, 0o755);
@@ -1157,19 +1165,115 @@ const server = http.createServer((_req, _res) => {});
 server.listen(Number(portArg), "127.0.0.1");
 `);
     try {
-      const harness = new OpenCodeHarness({ requestTimeoutMs: 5 });
+      const harness = new OpenCodeHarness({ requestTimeoutMs: 5, startupTimeoutMs: 25 });
 
       const messages = await collectAllMessages(harness.launch({ prompt: "start", cwd: process.cwd() }));
       const completion = messages.find((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }> | undefined;
       assert.equal(messages.some((message) => message.type === "backend_ref"), false);
       assert.equal(completion?.data.success, false);
-      assert.match(completion?.data.result ?? "", /OpenCode GET \/api\/health timed out after 5ms during server readiness/);
+      assert.match(completion?.data.result ?? "", /Timed out waiting for OpenCode server readiness/);
+      assert.match(completion?.data.result ?? "", /Command: .*opencode serve --hostname 127\.0\.0\.1 --port \d+ --print-logs/);
+      assert.match(completion?.data.result ?? "", /PATH:/);
     } finally {
       if (previousCommand === undefined) {
         delete process.env.OPENCLAW_OPENCODE_COMMAND;
       } else {
         process.env.OPENCLAW_OPENCODE_COMMAND = previousCommand;
       }
+    }
+  });
+
+  it("retries a timed-out OpenCode health fetch during startup", async () => {
+    const previousCommand = process.env.OPENCLAW_OPENCODE_COMMAND;
+    process.env.OPENCLAW_OPENCODE_COMMAND = installFakeOpenCodeServer(`
+const http = require("node:http");
+const portArg = process.argv[process.argv.indexOf("--port") + 1];
+let healthRequests = 0;
+let prompted = false;
+let statusRequests = 0;
+const json = (res, value) => {
+  res.writeHead(200, { "content-type": "application/json" });
+  res.end(JSON.stringify(value));
+};
+const server = http.createServer((req, res) => {
+  const path = new URL(req.url, "http://127.0.0.1").pathname;
+  if (path === "/api/health") {
+    healthRequests += 1;
+    if (healthRequests === 1) return;
+    return json(res, { healthy: true });
+  }
+  if (path === "/event") {
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    return;
+  }
+  if (req.method === "POST" && path === "/session") return json(res, { id: "ses_retry" });
+  if (req.method === "POST" && path === "/session/ses_retry/prompt_async") {
+    prompted = true;
+    res.writeHead(204);
+    res.end();
+    return;
+  }
+  if (req.method === "GET" && path === "/session/status") {
+    statusRequests += 1;
+    return json(res, { ses_retry: { type: prompted && statusRequests > 1 ? "idle" : "busy" } });
+  }
+  if (req.method === "GET" && path === "/session/ses_retry/message") {
+    return json(res, prompted && statusRequests > 1
+      ? [{ type: "assistant", content: [{ type: "text", text: "READY_AFTER_RETRY" }] }]
+      : []);
+  }
+  res.writeHead(404, { "content-type": "application/json" });
+  res.end("{}");
+});
+server.listen(Number(portArg), "127.0.0.1");
+`);
+    try {
+      const harness = new OpenCodeHarness({ requestTimeoutMs: 50, startupTimeoutMs: 500 });
+
+      const messages = await collectAllMessages(harness.launch({ prompt: "start", cwd: process.cwd() }));
+      const completion = messages.find((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }> | undefined;
+      assert.equal(messages.some((message) => message.type === "backend_ref"), true);
+      assert.equal(completion?.data.success, true);
+      assert.match(completion?.data.result ?? "", /READY_AFTER_RETRY/);
+    } finally {
+      if (previousCommand === undefined) {
+        delete process.env.OPENCLAW_OPENCODE_COMMAND;
+      } else {
+        process.env.OPENCLAW_OPENCODE_COMMAND = previousCommand;
+      }
+    }
+  });
+
+  it("resolves OpenCode from a Homebrew bin next to a Gateway node opt path", async () => {
+    const previousCommand = process.env.OPENCLAW_OPENCODE_COMMAND;
+    const previousPath = process.env.PATH;
+    const prefix = mkdtempSync(join(tmpdir(), "openclaw-opencode-prefix-"));
+    installFakeOpenCodeServerInDir(join(prefix, "bin"), `
+const http = require("node:http");
+const portArg = process.argv[process.argv.indexOf("--port") + 1];
+const server = http.createServer((_req, res) => {
+  res.writeHead(200, { "content-type": "application/json" });
+  res.end(JSON.stringify({ healthy: true }));
+});
+server.listen(Number(portArg), "127.0.0.1");
+`);
+    mkdirSync(join(prefix, "opt", "node", "bin"), { recursive: true });
+    delete process.env.OPENCLAW_OPENCODE_COMMAND;
+    process.env.PATH = join(prefix, "opt", "node", "bin");
+    try {
+      const harness = new OpenCodeHarness({ requestTimeoutMs: 5, startupTimeoutMs: 25 });
+
+      const messages = await collectAllMessages(harness.launch({ prompt: "start", cwd: process.cwd() }));
+      const completion = messages.find((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }> | undefined;
+      assert.equal(completion?.data.success, false);
+      assert.match(completion?.data.result ?? "", new RegExp(`Command: ${join(prefix, "bin", "opencode").replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")} \\(resolved from opencode\\)`));
+    } finally {
+      if (previousCommand === undefined) {
+        delete process.env.OPENCLAW_OPENCODE_COMMAND;
+      } else {
+        process.env.OPENCLAW_OPENCODE_COMMAND = previousCommand;
+      }
+      process.env.PATH = previousPath;
     }
   });
 

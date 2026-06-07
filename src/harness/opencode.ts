@@ -1,5 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { constants as fsConstants, accessSync } from "node:fs";
 import { createServer } from "node:net";
+import { delimiter, dirname, join, sep } from "node:path";
 import type {
   PendingInputAction,
   PendingInputState,
@@ -30,9 +32,10 @@ interface OpenCodeServerHandle {
 }
 
 interface OpenCodeHarnessDeps {
-  createServer?: (options: { cwd: string; signal?: AbortSignal; fetch?: FetchLike; requestTimeoutMs?: number }) => Promise<OpenCodeServerHandle>;
+  createServer?: (options: { cwd: string; signal?: AbortSignal; fetch?: FetchLike; requestTimeoutMs?: number; startupTimeoutMs?: number }) => Promise<OpenCodeServerHandle>;
   fetch?: FetchLike;
   requestTimeoutMs?: number;
+  startupTimeoutMs?: number;
 }
 
 interface OpenCodeSession {
@@ -61,6 +64,44 @@ const MUTATION_PERMISSIONS = [
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function isExecutable(file: string): boolean {
+  try {
+    accessSync(file, fsConstants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function commandHasPathSeparator(command: string): boolean {
+  return command.includes("/") || (sep === "\\" && command.includes("\\"));
+}
+
+function candidateSearchPaths(envPath: string | undefined): string[] {
+  const paths = (envPath ?? "")
+    .split(delimiter)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  const expanded = [...paths];
+  for (const entry of paths) {
+    const normalized = entry.replaceAll("\\", "/");
+    if (normalized.endsWith("/opt/node/bin")) {
+      expanded.push(join(dirname(dirname(dirname(entry))), "bin"));
+    }
+  }
+  expanded.push("/home/linuxbrew/.linuxbrew/bin", "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin");
+  return [...new Set(expanded)];
+}
+
+function resolveCommandPath(command: string, envPath = process.env.PATH): string {
+  if (commandHasPathSeparator(command)) return command;
+  for (const entry of candidateSearchPaths(envPath)) {
+    const candidate = join(entry, command);
+    if (isExecutable(candidate)) return candidate;
+  }
+  return command;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -238,18 +279,22 @@ function isIdleSessionStatus(statuses: unknown, sessionId: string): boolean {
   return isRecord(status) && status.type === "idle";
 }
 
-async function startOpenCodeServerOnce(options: { cwd: string; signal?: AbortSignal; fetch?: FetchLike; requestTimeoutMs?: number }): Promise<OpenCodeServerHandle> {
+async function startOpenCodeServerOnce(options: { cwd: string; signal?: AbortSignal; fetch?: FetchLike; requestTimeoutMs?: number; startupTimeoutMs?: number }): Promise<OpenCodeServerHandle> {
   const port = await getFreePort();
-  const command = process.env[OPENCODE_COMMAND_ENV]?.trim() || "opencode";
-  const fetchImpl = options.fetch ?? fetch;
-  const readinessRequestTimeoutMs = Math.min(options.requestTimeoutMs ?? REQUEST_TIMEOUT_MS, 10_000);
-  const child = spawn(command, [
+  const requestedCommand = process.env[OPENCODE_COMMAND_ENV]?.trim() || "opencode";
+  const command = resolveCommandPath(requestedCommand);
+  const args = [
     "serve",
     "--hostname",
     "127.0.0.1",
     "--port",
     String(port),
-  ], {
+    "--print-logs",
+  ];
+  const fetchImpl = options.fetch ?? fetch;
+  const readinessRequestTimeoutMs = Math.min(options.requestTimeoutMs ?? REQUEST_TIMEOUT_MS, 10_000);
+  const startupTimeoutMs = options.startupTimeoutMs ?? STARTUP_TIMEOUT_MS;
+  const child = spawn(command, args, {
     cwd: options.cwd,
     stdio: ["ignore", "pipe", "pipe"],
   }) as ChildProcessWithoutNullStreams;
@@ -257,18 +302,26 @@ async function startOpenCodeServerOnce(options: { cwd: string; signal?: AbortSig
   let stdout = "";
   let stderr = "";
   let spawnError: Error | undefined;
+  const appendOutput = (current: string, chunk: unknown): string => {
+    const next = current + String(chunk);
+    return next.length > 8_000 ? next.slice(-8_000) : next;
+  };
   child.stdout.on("data", (chunk) => {
-    stdout += String(chunk);
+    stdout = appendOutput(stdout, chunk);
   });
   child.stderr.on("data", (chunk) => {
-    stderr += String(chunk);
+    stderr = appendOutput(stderr, chunk);
   });
   child.once("error", (error) => {
     spawnError = error;
   });
+  const launchDescription = (): string => {
+    const commandDescription = requestedCommand === command ? command : `${command} (resolved from ${requestedCommand})`;
+    return ` Command: ${commandDescription} ${args.join(" ")}. Cwd: ${options.cwd}. Port: ${port}. PATH: ${process.env.PATH ?? ""}.`;
+  };
   const outputSuffix = (): string => {
     const output = [stdout.trim(), stderr.trim()].filter(Boolean).join("\n").trim();
-    return output ? ` Output:\n${output}` : "";
+    return `${launchDescription()}${output ? ` Output:\n${output}` : ""}`;
   };
   const abortStartup = (): void => {
     void terminateChild(child);
@@ -281,7 +334,7 @@ async function startOpenCodeServerOnce(options: { cwd: string; signal?: AbortSig
 
   try {
     const startedAt = Date.now();
-    while (Date.now() - startedAt < STARTUP_TIMEOUT_MS) {
+    while (Date.now() - startedAt < startupTimeoutMs) {
       if (options.signal?.aborted) {
         await terminateChild(child);
         throw new Error(`OpenCode server startup aborted before readiness.${outputSuffix()}`);
@@ -327,10 +380,6 @@ async function startOpenCodeServerOnce(options: { cwd: string; signal?: AbortSig
           await terminateChild(child);
           throw new Error(`OpenCode server startup aborted before readiness.${outputSuffix()}`);
         }
-        if (/^OpenCode GET \/api\/health timed out after /i.test(errorMessage(error))) {
-          await terminateChild(child);
-          throw error;
-        }
         // Retry until the process exits or the startup deadline is reached.
       }
       await delay(100);
@@ -343,7 +392,7 @@ async function startOpenCodeServerOnce(options: { cwd: string; signal?: AbortSig
   }
 }
 
-async function defaultCreateServer(options: { cwd: string; signal?: AbortSignal; fetch?: FetchLike; requestTimeoutMs?: number }): Promise<OpenCodeServerHandle> {
+async function defaultCreateServer(options: { cwd: string; signal?: AbortSignal; fetch?: FetchLike; requestTimeoutMs?: number; startupTimeoutMs?: number }): Promise<OpenCodeServerHandle> {
   for (let attempt = 1; ; attempt += 1) {
     try {
       return await startOpenCodeServerOnce(options);
@@ -680,6 +729,7 @@ export class OpenCodeHarness implements AgentHarness {
           signal: options.abortController?.signal,
           fetch: fetchImpl,
           requestTimeoutMs: this.deps.requestTimeoutMs,
+          startupTimeoutMs: this.deps.startupTimeoutMs,
         });
         if (sessionInterrupted || options.abortController?.signal.aborted) {
           await handle.close().catch((): undefined => undefined);
