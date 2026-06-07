@@ -1058,7 +1058,7 @@ export class OpenCodeHarness implements AgentHarness {
           await server?.close().catch((): undefined => undefined);
           return;
         }
-        if (!client || !sessionId) return;
+        if (!sessionId) return;
         const abortRequest = client.request("POST", `/session/${encodeURIComponent(sessionId)}/abort`).catch((): undefined => undefined);
         await abortRequest;
       },

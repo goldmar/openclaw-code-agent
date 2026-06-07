@@ -1,8 +1,8 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { OpenCodeHarness } from "../src/harness/opencode";
 import type { HarnessMessage } from "../src/harness/types";
 
@@ -1207,12 +1207,13 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
 
   it("fails startup with a readiness diagnostic when the health fetch hangs", async () => {
     const previousCommand = process.env.OPENCLAW_OPENCODE_COMMAND;
-    process.env.OPENCLAW_OPENCODE_COMMAND = installFakeOpenCodeServer(`
+    const fakeOpenCodeCommand = installFakeOpenCodeServer(`
 const http = require("node:http");
 const portArg = process.argv[process.argv.indexOf("--port") + 1];
 const server = http.createServer((_req, _res) => {});
 server.listen(Number(portArg), "127.0.0.1");
 `);
+    process.env.OPENCLAW_OPENCODE_COMMAND = fakeOpenCodeCommand;
     try {
       const harness = new OpenCodeHarness({ requestTimeoutMs: 5, startupTimeoutMs: 25 });
 
@@ -1229,12 +1230,13 @@ server.listen(Number(portArg), "127.0.0.1");
       } else {
         process.env.OPENCLAW_OPENCODE_COMMAND = previousCommand;
       }
+      rmSync(dirname(fakeOpenCodeCommand), { recursive: true, force: true });
     }
   });
 
   it("retries a timed-out OpenCode health fetch during startup", async () => {
     const previousCommand = process.env.OPENCLAW_OPENCODE_COMMAND;
-    process.env.OPENCLAW_OPENCODE_COMMAND = installFakeOpenCodeServer(`
+    const fakeOpenCodeCommand = installFakeOpenCodeServer(`
 const http = require("node:http");
 const portArg = process.argv[process.argv.indexOf("--port") + 1];
 let healthRequests = 0;
@@ -1276,6 +1278,7 @@ const server = http.createServer((req, res) => {
 });
 server.listen(Number(portArg), "127.0.0.1");
 `);
+    process.env.OPENCLAW_OPENCODE_COMMAND = fakeOpenCodeCommand;
     try {
       const harness = new OpenCodeHarness({ requestTimeoutMs: 50, startupTimeoutMs: 500 });
 
@@ -1290,6 +1293,7 @@ server.listen(Number(portArg), "127.0.0.1");
       } else {
         process.env.OPENCLAW_OPENCODE_COMMAND = previousCommand;
       }
+      rmSync(dirname(fakeOpenCodeCommand), { recursive: true, force: true });
     }
   });
 
@@ -1323,6 +1327,7 @@ server.listen(Number(portArg), "127.0.0.1");
         process.env.OPENCLAW_OPENCODE_COMMAND = previousCommand;
       }
       process.env.PATH = previousPath;
+      rmSync(prefix, { recursive: true, force: true });
     }
   });
 
