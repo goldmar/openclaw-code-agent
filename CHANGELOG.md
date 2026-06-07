@@ -7,12 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.4.0] - 2026-06-06
+
 ### Added
 - Added experimental OpenCode harness documentation, manifest guidance, and smoke-test instructions for the local `opencode serve` integration.
+- Added experimental OpenCode harness support so `agent_launch`, `goal_launch`, resume handling, plan gating, worktree strategies, and session storage can run through `opencode`.
+- Added `agent_request_worktree_decision` as a tool contract so orchestrator wakes can request a state-aware worktree decision prompt without relying on chat commands.
 
 ### Fixed
 - Allowed OpenCode launches and goal tasks to omit a plugin default model so OpenCode can use its configured provider default.
 - Externalized the canonical OpenClaw plugin SDK entry helper from the bundled release artifact to keep bundle size comfortably below the CI limit.
+- Fixed OpenCode compatibility with v2 API routing, API-prefixed server routes, managed readiness retries, and classic session lifecycle handling while v2 session wait remains unavailable.
+- Fixed OpenCode turn-idle detection so sessions wait for stable assistant completion instead of timing out while backend activity has already settled.
+- Hardened completion-summary ownership and notification idempotency so goal, terminal, delegated worktree, PR, and routed wake paths collapse duplicate user-visible summaries while preserving retryable delivery state.
+- Fixed delegated worktree notification follow-through, duplicate goal completion statuses, foreground goal summary dedupe, duplicate Later snooze confirmations, and duplicate PR/worktree follow-up summaries.
+- Removed LLM-marker-based completion follow-up dedupe as the source of truth; delivery state and semantic outcome identity now govern whether a follow-up should be retried or suppressed.
+
+### Changed
+- Session and launch surfaces now include clearer harness/model labels using `harness | model` formatting where the launch status needs both values.
+- OpenCode docs now describe the experimental harness as a localhost `opencode serve` integration using OpenCode's configured provider default unless a launch passes an explicit `provider/model`.
 
 ## [4.3.8] - 2026-06-04
 
@@ -433,7 +446,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Default Codex approval policy to `on-request`.
 - Raised the default session limit.
 
-[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.3.7...HEAD
+[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.4.0...HEAD
+[4.4.0]: https://github.com/goldmar/openclaw-code-agent/compare/v4.3.8...v4.4.0
+[4.3.8]: https://github.com/goldmar/openclaw-code-agent/compare/v4.3.7...v4.3.8
 [4.3.7]: https://github.com/goldmar/openclaw-code-agent/compare/v4.3.6...v4.3.7
 [4.3.6]: https://github.com/goldmar/openclaw-code-agent/compare/v4.3.5...v4.3.6
 [4.3.5]: https://github.com/goldmar/openclaw-code-agent/compare/v4.3.4...v4.3.5
