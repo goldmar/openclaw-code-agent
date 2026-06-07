@@ -30,7 +30,7 @@ interface OpenCodeServerHandle {
 }
 
 interface OpenCodeHarnessDeps {
-  createServer?: (options: { cwd: string; signal?: AbortSignal }) => Promise<OpenCodeServerHandle>;
+  createServer?: (options: { cwd: string; signal?: AbortSignal; fetch?: FetchLike; requestTimeoutMs?: number }) => Promise<OpenCodeServerHandle>;
   fetch?: FetchLike;
   requestTimeoutMs?: number;
 }
@@ -133,6 +133,48 @@ async function delay(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function boundedPromise<T>(
+  promise: Promise<T>,
+  options: {
+    timeoutMs: number;
+    timeoutMessage: string;
+    signal?: AbortSignal;
+    abortMessage?: string;
+    onTimeout?: () => void;
+  },
+): Promise<T> {
+  if (options.signal?.aborted) {
+    throw new Error(options.abortMessage ?? "Operation was aborted.");
+  }
+  return await new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const cleanup = (): void => {
+      clearTimeout(timeout);
+      options.signal?.removeEventListener("abort", onAbort);
+    };
+    const finish = (fn: () => void): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      fn();
+    };
+    const onAbort = (): void => {
+      finish(() => reject(new Error(options.abortMessage ?? "Operation was aborted.")));
+    };
+    const timeout = setTimeout(() => {
+      finish(() => {
+        options.onTimeout?.();
+        reject(new Error(options.timeoutMessage));
+      });
+    }, options.timeoutMs);
+    options.signal?.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => finish(() => resolve(value)),
+      (error) => finish(() => reject(error)),
+    );
+  });
+}
+
 async function terminateChild(child: ChildProcessWithoutNullStreams): Promise<void> {
   if (child.exitCode !== null) return;
   await new Promise<void>((resolve) => {
@@ -196,9 +238,11 @@ function isIdleSessionStatus(statuses: unknown, sessionId: string): boolean {
   return isRecord(status) && status.type === "idle";
 }
 
-async function startOpenCodeServerOnce(options: { cwd: string; signal?: AbortSignal }): Promise<OpenCodeServerHandle> {
+async function startOpenCodeServerOnce(options: { cwd: string; signal?: AbortSignal; fetch?: FetchLike; requestTimeoutMs?: number }): Promise<OpenCodeServerHandle> {
   const port = await getFreePort();
   const command = process.env[OPENCODE_COMMAND_ENV]?.trim() || "opencode";
+  const fetchImpl = options.fetch ?? fetch;
+  const readinessRequestTimeoutMs = Math.min(options.requestTimeoutMs ?? REQUEST_TIMEOUT_MS, 10_000);
   const child = spawn(command, [
     "serve",
     "--hostname",
@@ -249,19 +293,43 @@ async function startOpenCodeServerOnce(options: { cwd: string; signal?: AbortSig
         throw new Error(`OpenCode server exited before readiness.${outputSuffix()}`);
       }
       try {
-        const response = await fetch(`${baseUrl}/api/health`, { headers: authHeader(), signal: options.signal });
-        if (response.ok) {
-          return {
-            baseUrl,
-            close: async () => {
-              await terminateChild(child);
+        const controller = new AbortController();
+        const abortController = (): void => controller.abort();
+        if (options.signal?.aborted) {
+          controller.abort();
+        } else {
+          options.signal?.addEventListener("abort", abortController, { once: true });
+        }
+        try {
+          const response = await boundedPromise(
+            fetchImpl(`${baseUrl}/api/health`, { headers: authHeader(), signal: controller.signal }),
+            {
+              timeoutMs: readinessRequestTimeoutMs,
+              timeoutMessage: `OpenCode GET /api/health timed out after ${readinessRequestTimeoutMs}ms during server readiness.${outputSuffix()}`,
+              signal: options.signal,
+              abortMessage: `OpenCode server startup aborted before readiness.${outputSuffix()}`,
+              onTimeout: () => controller.abort(),
             },
-          };
+          );
+          if (response.ok) {
+            return {
+              baseUrl,
+              close: async () => {
+                await terminateChild(child);
+              },
+            };
+          }
+        } finally {
+          options.signal?.removeEventListener("abort", abortController);
         }
       } catch (error) {
         if (options.signal?.aborted) {
           await terminateChild(child);
           throw new Error(`OpenCode server startup aborted before readiness.${outputSuffix()}`);
+        }
+        if (/^OpenCode GET \/api\/health timed out after /i.test(errorMessage(error))) {
+          await terminateChild(child);
+          throw error;
         }
         // Retry until the process exits or the startup deadline is reached.
       }
@@ -275,7 +343,7 @@ async function startOpenCodeServerOnce(options: { cwd: string; signal?: AbortSig
   }
 }
 
-async function defaultCreateServer(options: { cwd: string; signal?: AbortSignal }): Promise<OpenCodeServerHandle> {
+async function defaultCreateServer(options: { cwd: string; signal?: AbortSignal; fetch?: FetchLike; requestTimeoutMs?: number }): Promise<OpenCodeServerHandle> {
   for (let attempt = 1; ; attempt += 1) {
     try {
       return await startOpenCodeServerOnce(options);
@@ -303,6 +371,9 @@ class OpenCodeClient {
     const controller = new AbortController();
     let callerAborted = false;
     let timedOut = false;
+    const timeoutMs = options.timeoutMs ?? this.requestTimeoutMs;
+    const timeoutMessage = `OpenCode ${method} ${path} timed out after ${timeoutMs}ms.`;
+    const abortMessage = `OpenCode ${method} ${path} was aborted.`;
     const abortFromCaller = (): void => {
       callerAborted = true;
       controller.abort();
@@ -313,27 +384,52 @@ class OpenCodeClient {
     } else {
       options.signal?.addEventListener("abort", abortFromCaller, { once: true });
     }
-    const timeoutMs = options.timeoutMs ?? this.requestTimeoutMs;
-    const timeout = setTimeout(() => {
-      timedOut = true;
-      controller.abort();
-    }, timeoutMs);
     try {
-      const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
-        method,
-        headers: {
-          ...authHeader(),
-          ...(body === undefined ? {} : { "content-type": "application/json" }),
+      const response = await boundedPromise(
+        this.fetchImpl(`${this.baseUrl}${path}`, {
+          method,
+          headers: {
+            ...authHeader(),
+            ...(body === undefined ? {} : { "content-type": "application/json" }),
+          },
+          body: body === undefined ? undefined : JSON.stringify(body),
+          signal: controller.signal,
+        }),
+        {
+          timeoutMs,
+          timeoutMessage,
+          signal: options.signal,
+          abortMessage,
+          onTimeout: () => {
+            timedOut = true;
+            controller.abort();
+          },
         },
-        body: body === undefined ? undefined : JSON.stringify(body),
-        signal: controller.signal,
-      });
+      );
       if (!response.ok) {
-        const text = await response.text().catch(() => "");
+        const text = await boundedPromise(response.text(), {
+          timeoutMs,
+          timeoutMessage,
+          signal: options.signal,
+          abortMessage,
+          onTimeout: () => {
+            timedOut = true;
+            controller.abort();
+          },
+        }).catch(() => "");
         throw new OpenCodeHttpError(method, path, response.status, previewResponseBody(text));
       }
       if (response.status === 204) return undefined as T;
-      const text = await response.text();
+      const text = await boundedPromise(response.text(), {
+        timeoutMs,
+        timeoutMessage,
+        signal: options.signal,
+        abortMessage,
+        onTimeout: () => {
+          timedOut = true;
+          controller.abort();
+        },
+      });
       if (!text) return undefined as T;
       const contentType = responseContentType(response);
       if (!contentType.includes("application/json") && !contentType.includes("+json")) {
@@ -356,7 +452,6 @@ class OpenCodeClient {
       }
       throw error;
     } finally {
-      clearTimeout(timeout);
       options.signal?.removeEventListener("abort", abortFromCaller);
     }
   }
@@ -583,6 +678,8 @@ export class OpenCodeHarness implements AgentHarness {
         const handle = await (this.deps.createServer ?? defaultCreateServer)({
           cwd: options.cwd,
           signal: options.abortController?.signal,
+          fetch: fetchImpl,
+          requestTimeoutMs: this.deps.requestTimeoutMs,
         });
         if (sessionInterrupted || options.abortController?.signal.aborted) {
           await handle.close().catch((): undefined => undefined);

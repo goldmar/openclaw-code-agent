@@ -1,5 +1,8 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { OpenCodeHarness } from "../src/harness/opencode";
 import type { HarnessMessage } from "../src/harness/types";
 
@@ -148,6 +151,14 @@ async function collectAllMessages(
     out.push(message);
   }
   return out;
+}
+
+function installFakeOpenCodeServer(script: string): string {
+  const dir = mkdtempSync(join(tmpdir(), "openclaw-opencode-test-"));
+  const file = join(dir, "opencode");
+  writeFileSync(file, `#!/usr/bin/env node\n${script}`);
+  chmodSync(file, 0o755);
+  return file;
 }
 
 function waitForRequest(mock: MockOpenCodeServer, path: string, timeoutMs = 1_000): Promise<void> {
@@ -1132,6 +1143,55 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
 
     const messages = await collectAllMessages(harness.launch({ prompt: "start", cwd: "/repo" }));
     const completion = messages.find((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }> | undefined;
+    assert.equal(completion?.data.success, false);
+    assert.match(completion?.data.result ?? "", /OpenCode POST \/session timed out after 5ms/);
+    assert.equal(mock.closed, true);
+  });
+
+  it("fails startup with a readiness diagnostic when the health fetch hangs", async () => {
+    const previousCommand = process.env.OPENCLAW_OPENCODE_COMMAND;
+    process.env.OPENCLAW_OPENCODE_COMMAND = installFakeOpenCodeServer(`
+const http = require("node:http");
+const portArg = process.argv[process.argv.indexOf("--port") + 1];
+const server = http.createServer((_req, _res) => {});
+server.listen(Number(portArg), "127.0.0.1");
+`);
+    try {
+      const harness = new OpenCodeHarness({ requestTimeoutMs: 5 });
+
+      const messages = await collectAllMessages(harness.launch({ prompt: "start", cwd: process.cwd() }));
+      const completion = messages.find((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }> | undefined;
+      assert.equal(messages.some((message) => message.type === "backend_ref"), false);
+      assert.equal(completion?.data.success, false);
+      assert.match(completion?.data.result ?? "", /OpenCode GET \/api\/health timed out after 5ms during server readiness/);
+    } finally {
+      if (previousCommand === undefined) {
+        delete process.env.OPENCLAW_OPENCODE_COMMAND;
+      } else {
+        process.env.OPENCLAW_OPENCODE_COMMAND = previousCommand;
+      }
+    }
+  });
+
+  it("fails startup when session creation fetch never settles after abort", async () => {
+    const mock = new MockOpenCodeServer();
+    const harness = new OpenCodeHarness({
+      createServer: async () => mock.handle(),
+      requestTimeoutMs: 5,
+      fetch: async (input, init) => {
+        const url = new URL(typeof input === "string" ? input : input.url);
+        const method = init?.method ?? "GET";
+        if (method === "POST" && url.pathname === "/session") {
+          mock.requests.push({ method, path: url.pathname, body: typeof init?.body === "string" ? JSON.parse(init.body) : undefined });
+          return await new Promise<Response>(() => undefined);
+        }
+        return await mock.fetch(input, init);
+      },
+    });
+
+    const messages = await collectAllMessages(harness.launch({ prompt: "start", cwd: "/repo" }));
+    const completion = messages.find((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }> | undefined;
+    assert.equal(messages.some((message) => message.type === "backend_ref"), false);
     assert.equal(completion?.data.success, false);
     assert.match(completion?.data.result ?? "", /OpenCode POST \/session timed out after 5ms/);
     assert.equal(mock.closed, true);
