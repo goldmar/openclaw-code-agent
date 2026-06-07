@@ -165,7 +165,7 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
     return new WakeDispatcher({ directNotifications: null });
   }
 
-  it("does not accept a completion marker echoed only inside the wake prompt", () => {
+  it("does not accept NO_REPLY even when a completion marker appears elsewhere in the payload", () => {
     const failure = validateCompletionFollowupWakeSuccess(JSON.stringify({
       request: {
         message: "Prompt mentions COMPLETION_FOLLOWUP_DELIVERED as an instruction.",
@@ -176,26 +176,20 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
     assert.deepEqual(failure, { outcome: "failure", reason: "completion follow-up wake ended with NO_REPLY" });
   });
 
-  it("rejects completion follow-up skips when the summary only existed in agent output", () => {
-    const failure = validateCompletionFollowupWakeSuccess(
-      "COMPLETION_FOLLOWUP_SKIPPED: already summarized by completed session\n",
+  it("accepts marker-free completion follow-up final text", () => {
+    const success = validateCompletionFollowupWakeSuccess(
+      "Sent a concise routed summary for PR #185 without repeating the link.\n",
     );
 
-    assert.deepEqual(failure, {
-      outcome: "failure",
-      reason: "completion follow-up wake skipped because the summary was only in agent output, not visibly delivered",
-    });
+    assert.deepEqual(success, { outcome: "success" });
   });
 
-  it("accepts completion follow-up skips for prior human-visible summaries", () => {
-    const skipped = validateCompletionFollowupWakeSuccess(
+  it("treats legacy marker text as ordinary non-empty final text", () => {
+    const success = validateCompletionFollowupWakeSuccess(
       "COMPLETION_FOLLOWUP_SKIPPED: prior human-visible summary already delivered\n",
     );
 
-    assert.deepEqual(skipped, {
-      outcome: "skipped",
-      reason: "prior human-visible summary already delivered",
-    });
+    assert.deepEqual(success, { outcome: "success" });
   });
 
   it("uses message.send for direct user notifications and logs completion", async () => {
@@ -1470,8 +1464,8 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
     assert.equal(wakeFailed, 1);
   });
 
-  it("marks completion follow-up wakes successful only after explicit visible-delivery confirmation", async () => {
-    process.env.OPENCLAW_TEST_STDOUT = "Sent the routed summary. COMPLETION_FOLLOWUP_DELIVERED\n";
+  it("marks completion follow-up wakes successful after normal marker-free final text", async () => {
+    process.env.OPENCLAW_TEST_STDOUT = "Sent the routed summary for PR #185 without repeating the link.\n";
     const dispatcher = createDispatcher();
     const session: FakeSession = {
       id: "session-visible-followup",
@@ -1498,7 +1492,7 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
     assert.equal(wakeFailed, 0);
   });
 
-  it("records explicit completion follow-up skips with a reason", async () => {
+  it("does not treat legacy completion skip marker text as a transport skip", async () => {
     process.env.OPENCLAW_TEST_STDOUT = "COMPLETION_FOLLOWUP_SKIPPED: internal pipeline continuing\n";
     const dispatcher = createDispatcher();
     const session: FakeSession = {
@@ -1522,11 +1516,11 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
     });
 
     await waitForCalls(logPath, 1);
-    await waitFor(() => skippedReason.length > 0, "completion follow-up wake skip");
+    await waitFor(() => wakeSucceeded === 1, "completion follow-up wake success");
 
-    assert.equal(wakeSucceeded, 0);
+    assert.equal(wakeSucceeded, 1);
     assert.equal(wakeFailed, 0);
-    assert.equal(skippedReason, "internal pipeline continuing");
+    assert.equal(skippedReason, "");
   });
 
   it("repairs Telegram topic follow-ups before notifying or waking", async () => {

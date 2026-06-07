@@ -61,8 +61,13 @@ export interface GoalTaskFollowupContract {
   appliesToGoalTaskCompletions: true;
 }
 
-const COMPLETION_FOLLOWUP_DELIVERED_MARKER = "COMPLETION_FOLLOWUP_DELIVERED";
-const COMPLETION_FOLLOWUP_SKIPPED_MARKER = "COMPLETION_FOLLOWUP_SKIPPED";
+function makeGithubPrUrlRe(): RegExp {
+  return /https?:\/\/github\.com\/[^\s)]+\/[^\s)]+\/pull\/(\d+)(?=[\s).,;:]|$)/gi;
+}
+
+function makeRawUrlRe(): RegExp {
+  return /https?:\/\/\S+/gi;
+}
 
 export function formatApprovalExecutionContextLines(
   context: ApprovalExecutionContext,
@@ -148,7 +153,7 @@ export function buildCompletionFollowupInstructionLines(args: {
     ...(canonicalStatusDelivered
       ? [`${canonicalStatusInstructionIndex}. Do NOT repeat the plugin's status line, and do NOT rely on the plugin to summarize the completed work for you.`]
       : [`${canonicalStatusInstructionIndex}. Because canonical status delivery was not confirmed, account for that gap yourself when you follow up; do NOT assume the plugin already reached the user.`]),
-    `${canonicalStatusInstructionIndex + 1}. After the visible follow-up summary has actually been sent to the user or origin route, finish this wake turn with ${COMPLETION_FOLLOWUP_DELIVERED_MARKER}. Use ${COMPLETION_FOLLOWUP_SKIPPED_MARKER}: <brief reason> only for valid skip cases: silently continuing an internal multi-phase pipeline, no meaningful confirmed outcome to report, incomplete or unreliable result data, an explicit NO_REPLY/silent cron/system opt-out, or a duplicate wake where you can confirm a prior orchestrator follow-up summary for this same outcome was already visibly delivered. Do not skip merely because agent_output contains a meaningful summary. Otherwise do not use either marker and do not answer NO_REPLY.`,
+    `${canonicalStatusInstructionIndex + 1}. Send a normal concise final response after any routed follow-up is visibly sent. Do not use marker text, do not answer NO_REPLY, and do not ask the user whether they want the summary.`,
   ];
 }
 
@@ -238,8 +243,9 @@ export function buildWorktreeOutcomeFollowupWake(args: {
   const contract = buildWorktreeOutcomeFollowupContract();
   const hasOriginRouteBlock = Boolean(args.originThreadLine.trim());
   const details = (args.detailLines ?? [])
-    .map((line) => line.trim())
+    .map((line) => sanitizeFollowupLine(line).trim())
     .filter((line) => line.length > 0);
+  const sanitizedOutcomeLine = sanitizeFollowupLine(args.outcomeLine);
 
   return [
     `Worktree follow-through outcome recorded.`,
@@ -247,7 +253,7 @@ export function buildWorktreeOutcomeFollowupWake(args: {
     ...(hasOriginRouteBlock ? [args.originThreadLine] : []),
     ``,
     `Canonical outcome status:`,
-    args.outcomeLine,
+    sanitizedOutcomeLine,
     ...(details.length > 0 ? [``, `Outcome details:`, ...details.map((line) => `- ${line}`)] : []),
     ``,
     `Completion diagnostics:`,
@@ -256,17 +262,17 @@ export function buildWorktreeOutcomeFollowupWake(args: {
     `- Contract applies to worktree terminal outcomes: ${contract.appliesToWorktreeTerminalOutcomes ? "yes" : "no"}`,
     ``,
     `[ACTION REQUIRED] Follow your autonomy rules for worktree follow-through:`,
-    `1. First inspect the visible conversation context for this same outcome. If a prior human-visible assistant or routed message already gave a substantive summary for the same PR/merge/worktree outcome, send no additional user message and finish with ${COMPLETION_FOLLOWUP_SKIPPED_MARKER}: prior human-visible summary already delivered.`,
-    `2. Use agent_output(session='${args.sessionId}', full=true) to read the full result if output is available.`,
-    `3. Treat the completed session output as source material, not visible delivery. A meaningful final summary inside agent_output is not enough to skip, because the user may only have seen the plugin's terse status line. Exception: if the full output shows a normal final assistant reply or a routed message tool send/delivery mirror after the canonical PR/merge status, and that message was delivered to this same originRoute, count that as the prior human-visible summary.`,
-    `4. If the visible result is only the plugin's terse status line, use the full output plus the canonical outcome status above to send the user one short factual outcome summary. Do this even when agent_output already contains a good final summary.`,
-    `5. If full output is unavailable or not meaningful, say only what is proven by the merge/PR facts above; do not invent task details.`,
-    `6. Mention blockers such as push failure when present; do not describe a local-only merge as pushed.`,
+    `1. Use agent_output(session='${args.sessionId}', full=true) to read the full result if output is available.`,
+    `2. Treat the completed session output as source material, not visible delivery. A meaningful final summary inside agent_output is not enough to skip, because the user may only have seen the plugin's terse status line.`,
+    `3. Use the full output plus the canonical outcome facts above to send the user one short factual outcome summary. Do this even when agent_output already contains a good final summary.`,
+    `4. If full output is unavailable or not meaningful, say only what is proven by the merge/PR facts above; do not invent task details.`,
+    `5. Mention blockers such as push failure when present; do not describe a local-only merge as pushed.`,
+    `6. Do not include raw PR URLs in the follow-up summary. The plugin already posted the PR link in the canonical status; refer to PRs by number, repo, and branch instead.`,
     ...(hasOriginRouteBlock
       ? [`7. Before sending that follow-up, honor the Session origin route block above. If originRoute differs from the current chat, do NOT use a plain final assistant reply; use a routed send path that preserves provider/target/threadId.`]
       : []),
     `${hasOriginRouteBlock ? 8 : 7}. Do NOT repeat only the plugin status line; keep the follow-up brief, concrete, and non-duplicative. Send at most one human-visible summary for this terminal/worktree outcome, counting summaries already sent by the foreground assistant turn or routed message tools.`,
-    `${hasOriginRouteBlock ? 9 : 8}. After the visible follow-up summary has actually been sent to the user or origin route, finish this wake turn with ${COMPLETION_FOLLOWUP_DELIVERED_MARKER}. Use ${COMPLETION_FOLLOWUP_SKIPPED_MARKER}: <brief reason> only for valid skip cases: no meaningful confirmed outcome to report, incomplete or unreliable result data, an explicit NO_REPLY/silent cron/system opt-out, or a duplicate wake where you can confirm a prior human-visible summary for this same outcome was already delivered. Do not skip merely because agent_output contains a meaningful summary. Otherwise do not use either marker and do not answer NO_REPLY.`,
+    `${hasOriginRouteBlock ? 9 : 8}. Send a normal concise final response after any routed follow-up is visibly sent. Do not use marker text, do not answer NO_REPLY, and do not ask the user whether they want the summary.`,
   ].join("\n");
 }
 
@@ -296,17 +302,22 @@ export function buildGoalTaskSucceededFollowupWake(args: {
     `- Contract applies to goal task completions: ${contract.appliesToGoalTaskCompletions ? "yes" : "no"}`,
     ``,
     `[ACTION REQUIRED] Follow your autonomy rules for goal task completion:`,
-    `1. First inspect the visible conversation context for this same goal outcome. If a prior human-visible assistant or routed message already gave a substantive summary for the same goal success outcome, send no additional user message and finish with ${COMPLETION_FOLLOWUP_SKIPPED_MARKER}: prior human-visible summary already delivered.`,
-    `2. Use agent_output(session='${args.sessionId}', full=true) to read the full result if output is available.`,
-    `3. Treat the completed session output as source material, not visible delivery. A meaningful final summary inside agent_output is not enough to skip, because the user may only have seen the plugin's terse goal status line.`,
-    `4. If the visible result is only the plugin's terse goal status line, send the user one short factual completion summary grounded in the full output plus the canonical goal status above. Do this even when agent_output already contains a good final summary.`,
-    `5. If full output is unavailable or not meaningful, say only what is proven by the goal status above; do not invent task details.`,
+    `1. Use agent_output(session='${args.sessionId}', full=true) to read the full result if output is available.`,
+    `2. Treat the completed session output as source material, not visible delivery. A meaningful final summary inside agent_output is not enough to skip, because the user may only have seen the plugin's terse goal status line.`,
+    `3. Send the user one short factual completion summary grounded in the full output plus the canonical goal status above. Do this even when agent_output already contains a good final summary.`,
+    `4. If full output is unavailable or not meaningful, say only what is proven by the goal status above; do not invent task details.`,
     ...(hasOriginRouteBlock
-      ? [`6. Before sending that follow-up, honor the Session origin route block above. If originRoute differs from the current chat, do NOT use a plain final assistant reply; use a routed send path that preserves provider/target/threadId.`]
+      ? [`5. Before sending that follow-up, honor the Session origin route block above. If originRoute differs from the current chat, do NOT use a plain final assistant reply; use a routed send path that preserves provider/target/threadId.`]
       : []),
-    `${hasOriginRouteBlock ? 7 : 6}. Do NOT repeat only the plugin status line; keep the follow-up brief, concrete, and non-duplicative. Send at most one human-visible summary for this goal success outcome, counting summaries already sent by the foreground assistant turn or routed message tools.`,
-    `${hasOriginRouteBlock ? 8 : 7}. After the visible follow-up summary has actually been sent to the user or origin route, finish this wake turn with ${COMPLETION_FOLLOWUP_DELIVERED_MARKER}. Use ${COMPLETION_FOLLOWUP_SKIPPED_MARKER}: <brief reason> only for valid skip cases: no meaningful confirmed outcome to report, incomplete or unreliable result data, an explicit NO_REPLY/silent cron/system opt-out, or a duplicate wake where you can confirm a prior human-visible summary for this same goal outcome was already delivered. Do not skip merely because agent_output contains a meaningful summary. Otherwise do not use either marker and do not answer NO_REPLY.`,
+    `${hasOriginRouteBlock ? 6 : 5}. Do NOT repeat only the plugin status line; keep the follow-up brief, concrete, and non-duplicative. Send at most one human-visible summary for this goal success outcome, counting summaries already sent by the foreground assistant turn or routed message tools.`,
+    `${hasOriginRouteBlock ? 7 : 6}. Send a normal concise final response after any routed follow-up is visibly sent. Do not use marker text, do not answer NO_REPLY, and do not ask the user whether they want the summary.`,
   ].join("\n");
+}
+
+function sanitizeFollowupLine(line: string): string {
+  return line
+    .replace(makeGithubPrUrlRe(), "PR #$1")
+    .replace(makeRawUrlRe(), "[link omitted]");
 }
 
 export function buildFailedPayload(args: {

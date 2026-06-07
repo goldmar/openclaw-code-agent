@@ -226,6 +226,107 @@ describe("CompletionSummaryCoordinator", () => {
     assert.equal(routedFollowup.skipReason, PRIOR_VISIBLE_SUMMARY_SKIP_REASON);
   });
 
+  it("normalizes opened, updated, and draft-opened PR outcomes to one follow-up identity", () => {
+    const coordinator = new CompletionSummaryCoordinator();
+    const session = {
+      id: "pr-185-session",
+      route: {
+        provider: "telegram",
+        target: "topic-fixture",
+        threadId: "13832",
+      },
+    };
+
+    const updated = coordinator.decide(session, {
+      required: true,
+      producer: "worktree-pr",
+      outcomeKey: "worktree-pr:updated:goldmar/openclaw-code-agent:#185:agent/format-launch-notification-model-separator:d10aac0",
+    });
+    coordinator.finish(updated.key, true);
+
+    const staleOpened = coordinator.decide(
+      { ...session, id: "pr-185-stale-opened" },
+      {
+        required: true,
+        producer: "worktree-pr",
+        outcomeKey: "worktree-pr:opened:goldmar/openclaw-code-agent:#185:agent/format-launch-notification-model-separator:created",
+      },
+    );
+    const staleDraftOpened = coordinator.decide(
+      { ...session, id: "pr-185-stale-draft-opened" },
+      {
+        required: true,
+        producer: "worktree-pr",
+        outcomeKey: "worktree-pr:draft-opened:goldmar/openclaw-code-agent:#185:agent/format-launch-notification-model-separator:created",
+      },
+    );
+
+    assert.equal(updated.allowed, true);
+    assert.equal(staleOpened.allowed, false);
+    assert.equal(staleDraftOpened.allowed, false);
+  });
+
+  it("keeps normalized PR follow-up identities independent by route", () => {
+    const coordinator = new CompletionSummaryCoordinator();
+    const first = coordinator.decide(
+      {
+        id: "pr-185-route-a",
+        route: { provider: "telegram", target: "topic-fixture", threadId: "13832" },
+      },
+      {
+        required: true,
+        producer: "worktree-pr",
+        outcomeKey: "worktree-pr:updated:goldmar/openclaw-code-agent:#185:agent/format-launch-notification-model-separator:d10aac0",
+      },
+    );
+    coordinator.finish(first.key, true);
+
+    const secondRoute = coordinator.decide(
+      {
+        id: "pr-185-route-b",
+        route: { provider: "telegram", target: "topic-fixture", threadId: "32947" },
+      },
+      {
+        required: true,
+        producer: "worktree-pr",
+        outcomeKey: "worktree-pr:opened:goldmar/openclaw-code-agent:#185:agent/format-launch-notification-model-separator:created",
+      },
+    );
+
+    assert.equal(first.allowed, true);
+    assert.equal(secondRoute.allowed, true);
+  });
+
+  it("does not derive PR identity from trailing digits when the PR identity field is missing", () => {
+    const coordinator = new CompletionSummaryCoordinator();
+    const session = {
+      id: "malformed-pr-outcome",
+      route: {
+        provider: "telegram",
+        target: "topic-fixture",
+        threadId: "13832",
+      },
+    };
+
+    const malformed = coordinator.decide(session, {
+      required: true,
+      producer: "worktree-pr",
+      outcomeKey: "worktree-pr:updated:goldmar/openclaw-code-agent::agent/example:d10aac0",
+    });
+    coordinator.finish(malformed.key, true);
+    const realPrZero = coordinator.decide(
+      { ...session, id: "real-pr-zero" },
+      {
+        required: true,
+        producer: "worktree-pr",
+        outcomeKey: "worktree-pr:opened:goldmar/openclaw-code-agent:#0:agent/example:created",
+      },
+    );
+
+    assert.equal(malformed.allowed, true);
+    assert.equal(realPrZero.allowed, true);
+  });
+
   it("skips a later terminal wake after a prior visible worktree merge summary", () => {
     const coordinator = new CompletionSummaryCoordinator();
     const session = {

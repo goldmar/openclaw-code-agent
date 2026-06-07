@@ -1207,7 +1207,7 @@ describe("SessionNotificationService", () => {
     assert.match(userMessages[0] ?? "", /Second full-repo OCA review finished and pushed/);
     assert.doesNotMatch(userMessages[0] ?? "", /Completion promise/);
     assert.equal(wakeAttempts, 1);
-    assert.deepEqual(skippedReasons, ["COMPLETION_FOLLOWUP_SKIPPED: prior human-visible summary already delivered"]);
+    assert.deepEqual(skippedReasons, ["prior human-visible summary already delivered"]);
   });
 
   it("suppresses a later goal success wake after a same-topic foreground summary without goalTaskId", () => {
@@ -1300,7 +1300,7 @@ describe("SessionNotificationService", () => {
     assert.equal(requests[2]?.wakeMessage, undefined);
     assert.equal(requests[2]?.completionWakeSummaryRequired, false);
     assert.equal(wakeAttempts, 0);
-    assert.deepEqual(skippedReasons, ["COMPLETION_FOLLOWUP_SKIPPED: prior human-visible summary already delivered"]);
+    assert.deepEqual(skippedReasons, ["prior human-visible summary already delivered"]);
   });
 
   it("keeps iteration progress visible while final goal completion has one status and one summary wake", () => {
@@ -1515,9 +1515,14 @@ describe("SessionNotificationService", () => {
     assert.equal(requests[0]?.deferConditionalWakeMs, 2000);
     assert.equal(wakeAttempts, 1);
     assert.match(requests[0]?.wakeMessageOnNotifySuccess as string, /agent_output\(session='pr-174-update-session', full=true\)/);
-    assert.match(requests[0]?.wakeMessageOnNotifySuccess as string, /If the visible result is only the plugin's terse status line/);
+    assert.match(requests[0]?.wakeMessageOnNotifySuccess as string, /plugin's terse status line/);
     assert.match(requests[0]?.wakeMessageOnNotifySuccess as string, /Do this even when agent_output already contains a good final summary/);
-    assert.match(requests[0]?.wakeMessageOnNotifySuccess as string, /routed message tool send\/delivery mirror/);
+    assert.match(requests[0]?.wakeMessageOnNotifySuccess as string, /Do not include raw PR URLs/);
+    assert.doesNotMatch(
+      requests[0]?.wakeMessageOnNotifySuccess as string,
+      /https:\/\/github\.com\/goldmar\/openclaw-code-agent\/pull\/174/,
+    );
+    assert.match(requests[0]?.wakeMessageOnNotifySuccess as string, /PR #174/);
   });
 
   it("suppresses duplicate opened PR follow-through wakes across session refs for the same routed outcome", () => {
@@ -1588,6 +1593,77 @@ describe("SessionNotificationService", () => {
     assert.equal(requests[0]?.wakeMessageOnNotifySuccess === undefined, false);
     assert.equal(requests[0]?.completionWakeSummaryRequired, true);
     assert.equal(wakeAttempts, 1);
+  });
+
+  it("suppresses stale opened PR follow-up after an updated PR follow-up owns the same PR", () => {
+    const requests: Array<Record<string, unknown>> = [];
+    const userMessages: string[] = [];
+    const fakeDispatcher = {
+      dispatchSessionNotification: (_session: unknown, request: Record<string, unknown> & { hooks?: Record<string, () => void> }) => {
+        requests.push(request);
+        if (typeof request.userMessage === "string") userMessages.push(request.userMessage);
+        request.hooks?.onNotifyStarted?.();
+        request.hooks?.onNotifySucceeded?.();
+        if (request.wakeMessage || request.wakeMessageOnNotifySuccess || request.wakeMessageOnNotifyFailed) {
+          request.hooks?.onWakeStarted?.();
+          request.hooks?.onWakeSucceeded?.();
+        }
+      },
+      dispose: () => {},
+    };
+    const service = new SessionNotificationService(
+      fakeDispatcher as any,
+      () => {},
+    );
+    const route = {
+      provider: "telegram",
+      target: "-100123",
+      threadId: "13832",
+      sessionKey: "agent:x:telegram:channel:-100123:topic:13832",
+    };
+    const session = {
+      id: "format-launch-notification-model-separator",
+      harnessSessionId: "h-format-launch-notification-model-separator",
+      name: "format-launch-notification-model-separator",
+      route,
+    } as any;
+
+    service.notifyWorktreeOutcome(
+      session,
+      "✅ PR updated: https://github.com/goldmar/openclaw-code-agent/pull/185",
+      {
+        completionWakeOutcomeKey: "worktree-pr:updated:goldmar/openclaw-code-agent:#185:agent/format-launch-notification-model-separator:d10aac0",
+        detailLines: [
+          "PR URL: https://github.com/goldmar/openclaw-code-agent/pull/185.",
+          "PR number: #185.",
+          "Pushed 1 new commit (+8/-2).",
+        ],
+      },
+    );
+    service.notifyWorktreeOutcome(
+      { ...session, id: "stale-draft-opened-pr-185" },
+      "✅ PR opened: https://github.com/goldmar/openclaw-code-agent/pull/185",
+      {
+        completionWakeOutcomeKey: "worktree-pr:draft-opened:goldmar/openclaw-code-agent:#185:agent/format-launch-notification-model-separator:created",
+        detailLines: [
+          "PR URL: https://github.com/goldmar/openclaw-code-agent/pull/185.",
+          "PR number: #185.",
+        ],
+      },
+    );
+
+    assert.deepEqual(userMessages, [
+      "✅ PR updated: https://github.com/goldmar/openclaw-code-agent/pull/185",
+      "✅ PR opened: https://github.com/goldmar/openclaw-code-agent/pull/185",
+    ]);
+    assert.equal(requests[0]?.completionWakeSummaryRequired, true);
+    assert.equal(requests[1]?.completionWakeSummaryRequired, false);
+    assert.equal(requests[1]?.wakeMessageOnNotifySuccess, undefined);
+    assert.doesNotMatch(
+      requests[0]?.wakeMessageOnNotifySuccess as string,
+      /https:\/\/github\.com\/goldmar\/openclaw-code-agent\/pull\/185/,
+    );
+    assert.match(requests[0]?.wakeMessageOnNotifySuccess as string, /PR #185/);
   });
 
   it("deduplicates PR follow-through summaries independently in the reported Telegram topics", () => {
@@ -1743,7 +1819,7 @@ describe("SessionNotificationService", () => {
     assert.equal(requests[1]?.completionWakeSummaryRequired, false);
     assert.equal(requests[1]?.wakeMessageOnNotifySuccess, undefined);
     assert.equal(wakeAttempts, 0);
-    assert.deepEqual(skippedReasons, ["COMPLETION_FOLLOWUP_SKIPPED: prior human-visible summary already delivered"]);
+    assert.deepEqual(skippedReasons, ["prior human-visible summary already delivered"]);
   });
 
   it("suppresses a PR #175 follow-through wake after a substantive same-topic routed summary is visible", () => {
@@ -1848,7 +1924,7 @@ describe("SessionNotificationService", () => {
     assert.equal(requests[2]?.completionWakeSummaryRequired, false);
     assert.equal(requests[2]?.wakeMessageOnNotifySuccess, undefined);
     assert.equal(wakeAttempts, 0);
-    assert.deepEqual(skippedReasons, ["COMPLETION_FOLLOWUP_SKIPPED: prior human-visible summary already delivered"]);
+    assert.deepEqual(skippedReasons, ["prior human-visible summary already delivered"]);
   });
 
   it("suppresses a later terminal wake after canonical merge status plus one visible follow-up summary", () => {
@@ -1950,7 +2026,7 @@ describe("SessionNotificationService", () => {
     assert.equal(requests[2]?.completionWakeSummaryRequired, false);
     assert.equal(requests[2]?.wakeMessageOnNotifySuccess, undefined);
     assert.equal(wakeAttempts, 0);
-    assert.deepEqual(skippedReasons, ["COMPLETION_FOLLOWUP_SKIPPED: prior human-visible summary already delivered"]);
+    assert.deepEqual(skippedReasons, ["prior human-visible summary already delivered"]);
   });
 
   it("suppresses a later terminal wake after canonical PR-open status plus one visible follow-up summary", () => {
@@ -2037,7 +2113,7 @@ describe("SessionNotificationService", () => {
     assert.equal(requests[2]?.completionWakeSummaryRequired, false);
     assert.equal(requests[2]?.wakeMessageOnNotifySuccess, undefined);
     assert.equal(wakeAttempts, 0);
-    assert.deepEqual(skippedReasons, ["COMPLETION_FOLLOWUP_SKIPPED: prior human-visible summary already delivered"]);
+    assert.deepEqual(skippedReasons, ["prior human-visible summary already delivered"]);
   });
 
   it("persists a PR-updated foreground summary ledger so later worktree follow-through keeps only the canonical status", () => {
@@ -2143,7 +2219,7 @@ describe("SessionNotificationService", () => {
     }
   });
 
-  it("keeps materially new PR follow-through outcomes visible for the same route", () => {
+  it("keeps repeated PR update statuses visible while stripping duplicate follow-up summaries", () => {
     const requests: Array<Record<string, unknown>> = [];
     const fakeDispatcher = {
       dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, (reason?: string) => void> }) => {
@@ -2190,9 +2266,10 @@ describe("SessionNotificationService", () => {
     assert.equal(requests.length, 2);
     assert.deepEqual(
       requests.map((request) => request.completionWakeSummaryRequired),
-      [true, true],
+      [true, false],
     );
-    assert.equal(requests.every((request) => typeof request.wakeMessageOnNotifySuccess === "string"), true);
+    assert.equal(typeof requests[0]?.wakeMessageOnNotifySuccess, "string");
+    assert.equal(requests[1]?.wakeMessageOnNotifySuccess, undefined);
   });
 
   it("bounds completed completion wake keys while retaining recent duplicate suppression", () => {
