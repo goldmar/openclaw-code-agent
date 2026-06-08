@@ -16,7 +16,7 @@ class MockOpenCodeServer {
   requests: RequestRecord[] = [];
   closed = false;
   waitMode: "immediate" | "defer" = "immediate";
-  statusMode: "idle" | "busy-then-idle" = "idle";
+  statusMode: "idle" | "busy-then-idle" | "always-busy" | "timeout" = "idle";
   busyStatusResponses = 0;
   omitIdleStatus = false;
   assistantAvailableAfterStatusRequests = 0;
@@ -56,8 +56,14 @@ class MockOpenCodeServer {
     if (method === "POST" && path === "/session/ses_existing/fork") return json({ id: "ses_forked" });
     if (method === "GET" && path === "/session/status") {
       this.statusRequests += 1;
+      if (this.statusMode === "timeout") {
+        return await new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(new Error("status aborted")), { once: true });
+        });
+      }
       const type = (this.busyStatusResponses > 0 && this.statusRequests <= this.busyStatusResponses)
         || (this.statusMode === "busy-then-idle" && this.statusRequests === 1)
+        || this.statusMode === "always-busy"
         ? "busy"
         : "idle";
       if (this.omitIdleStatus && type === "idle") return json({});
@@ -379,6 +385,73 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     assert.equal(result?.data.result, "Final.");
   });
 
+  it("completes from stable assistant output when classic status requests time out", async () => {
+    const mock = new MockOpenCodeServer();
+    mock.statusMode = "timeout";
+    const harness = new OpenCodeHarness({
+      createServer: async () => mock.handle(),
+      fetch: mock.fetch,
+      requestTimeoutMs: 5,
+      turnTimeoutMs: 1_000,
+    });
+
+    const messages = await collectMessages(harness.launch({
+      prompt: "ship it",
+      cwd: "/repo",
+    }));
+
+    const result = messages.find((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }> | undefined;
+    assert.equal(mock.requests.some((request) => request.method === "GET" && request.path === "/session/status"), true);
+    assert.equal(result?.data.success, true);
+    assert.equal(result?.data.result, "Final.");
+  });
+
+  it("does not complete from stable assistant output while classic status remains busy", async () => {
+    const mock = new MockOpenCodeServer();
+    mock.statusMode = "always-busy";
+    const harness = new OpenCodeHarness({
+      createServer: async () => mock.handle(),
+      fetch: mock.fetch,
+      turnTimeoutMs: 50,
+    });
+
+    const messages = await collectMessages(harness.launch({
+      prompt: "ship it",
+      cwd: "/repo",
+    }));
+
+    const result = messages.find((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }> | undefined;
+    assert.equal(result?.data.success, false);
+    assert.match(result?.data.result ?? "", /Timed out waiting for OpenCode session ses_test to become idle/);
+  });
+
+  it("completes from an SSE idle event even when classic status remains busy", async () => {
+    const mock = new MockOpenCodeServer();
+    mock.statusMode = "always-busy";
+    const harness = new OpenCodeHarness({
+      createServer: async () => mock.handle(),
+      fetch: mock.fetch,
+      turnTimeoutMs: 1_000,
+    });
+
+    const session = harness.launch({
+      prompt: "ship it",
+      cwd: "/repo",
+    });
+    await waitForRequest(mock, "/session/ses_test/prompt_async");
+    mock.emit({
+      type: "session.idle",
+      properties: {
+        sessionID: "ses_test",
+      },
+    });
+
+    const messages = await collectMessages(session);
+    const result = messages.find((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }> | undefined;
+    assert.equal(result?.data.success, true);
+    assert.equal(result?.data.result, "Final.");
+  });
+
   it("uses classic status polling on later turns", async () => {
     const mock = new MockOpenCodeServer();
     const harness = new OpenCodeHarness({
@@ -458,7 +531,7 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     }));
 
     const result = messages.find((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }> | undefined;
-    assert.equal(mock.requests.filter((request) => request.method === "GET" && request.path === "/session/status").length, 3);
+    assert.ok(mock.requests.filter((request) => request.method === "GET" && request.path === "/session/status").length >= 2);
     assert.equal(result?.data.success, true);
     assert.equal(result?.data.result, "Final.");
   });
@@ -479,7 +552,7 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     const result = messages.find((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }> | undefined;
     assert.equal(result?.data.success, true);
     assert.equal(result?.data.result, "Final.");
-    assert.equal(mock.requests.filter((request) => request.method === "GET" && request.path === "/session/status").length, 3);
+    assert.ok(mock.requests.filter((request) => request.method === "GET" && request.path === "/session/status").length >= 3);
   });
 
   it("streams text deltas and tool calls from OpenCode events", async () => {

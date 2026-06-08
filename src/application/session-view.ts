@@ -71,6 +71,7 @@ interface SessionListingItem {
   worktreeMerged?: boolean;
   worktreeMergedAt?: string;
   worktreePrUrl?: string;
+  recovered?: boolean;
 }
 
 export interface SessionListingOptions {
@@ -172,7 +173,7 @@ function persistedOutputSource(persisted: PersistedSessionInfo): string {
 function unavailablePersistedOutputSource(persisted: PersistedSessionInfo): string {
   return persisted.outputPath
     ? `(persisted session metadata recovered; output file is unavailable at ${persisted.outputPath})`
-    : "(persisted session metadata recovered; no output file was recorded)";
+    : "(persisted session metadata recovered; no output file was recorded before the runtime was interrupted)";
 }
 
 function unavailablePersistedOutputText(persisted: PersistedSessionInfo, reason: string): string {
@@ -330,6 +331,7 @@ function mergeActiveAndPersistedSessions(active: Session[], persisted: Persisted
       worktreeMerged: p.worktreeMerged,
       worktreeMergedAt: p.worktreeMergedAt,
       worktreePrUrl: p.worktreePrUrl,
+      recovered: true,
     });
   }
 
@@ -366,6 +368,7 @@ function mergeActiveAndPersistedSessions(active: Session[], persisted: Persisted
       worktreeMerged: session.worktreeMerged ?? persistedMatch?.worktreeMerged,
       worktreeMergedAt: session.worktreeMergedAt ?? persistedMatch?.worktreeMergedAt,
       worktreePrUrl: session.worktreePrUrl ?? persistedMatch?.worktreePrUrl,
+      recovered: false,
     });
   }
 

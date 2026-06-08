@@ -29,6 +29,13 @@ export type PlannedWorktreeAction =
       nativeBackendWorktree: boolean;
     }
   | {
+      kind: "merged";
+      repoDir: string;
+      worktreePath: string;
+      branchName: string;
+      nativeBackendWorktree: boolean;
+    }
+  | {
       kind: "decision";
       strategy: "ask" | "delegate" | "auto-merge" | "auto-pr";
       repoDir: string;
@@ -113,6 +120,15 @@ export class SessionWorktreeActionService {
         kind: "no-change",
         repoDir,
         worktreePath,
+        nativeBackendWorktree: usesNativeBackendWorktree(session),
+      };
+    }
+    if (completionState === "merged") {
+      return {
+        kind: "merged",
+        repoDir,
+        worktreePath,
+        branchName,
         nativeBackendWorktree: usesNativeBackendWorktree(session),
       };
     }

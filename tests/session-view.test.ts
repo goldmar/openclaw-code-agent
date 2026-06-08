@@ -147,6 +147,7 @@ describe("session-view app layer", () => {
     };
     const text = getSessionsListingText(sm, "completed");
     assert.match(text, /✅ done-job \[s-persisted\]/);
+    assert.match(text, /Recovered: persisted metadata only; no live process to kill/);
   });
 
   it("does not crash when persisted rows are missing prompt/workdir fields", () => {
@@ -348,7 +349,7 @@ describe("session-view app layer", () => {
 
     const text = getSessionOutputText(sm, "Pb1J9UBH");
     assert.match(text, /Session: recovered-codex \| Status: KILLED \| Phase: suspended/);
-    assert.match(text, /persisted session metadata recovered; no output file was recorded/);
+    assert.match(text, /persisted session metadata recovered; no output file was recorded before the runtime was interrupted/);
     assert.match(text, /no outputPath is stored/);
     assert.doesNotMatch(text, /showing persisted output/);
     assert.doesNotMatch(text, /not found/);

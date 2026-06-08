@@ -5,6 +5,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { SessionWorktreeMessageService } from "../src/session-worktree-message-service";
+import { SessionWorktreeController } from "../src/session-worktree-controller";
 import { SessionWorktreeStrategyService } from "../src/session-worktree-strategy-service";
 import { createWorktree, getBranchName, getDiffSummary, mergeBranch } from "../src/worktree";
 
@@ -226,6 +227,98 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
     }
   });
 
+  it("releases an auto-pr worktree without suppressing the generic terminal wake", async () => {
+    const repoDir = mkdtempSync(join(tmpdir(), "openclaw-auto-pr-existing-head-"));
+    try {
+      git(repoDir, "init", "-b", "main");
+      git(repoDir, "config", "user.name", "Test User");
+      git(repoDir, "config", "user.email", "test@example.com");
+      writeFileSync(join(repoDir, "README.md"), "base\n", "utf-8");
+      git(repoDir, "add", "README.md");
+      git(repoDir, "commit", "-m", "init");
+
+      git(repoDir, "checkout", "-b", "agent/fix-oca-441-regression");
+      writeFileSync(join(repoDir, "README.md"), "release prep\n", "utf-8");
+      git(repoDir, "add", "README.md");
+      git(repoDir, "commit", "-m", "Fix OCA 4.4.1 session lifecycle regression");
+
+      const worktreePath = createWorktree(repoDir, "address-pr-194-comments");
+      const branchName = getBranchName(worktreePath);
+      assert.ok(branchName, "worktree branch should exist");
+      assert.equal(branchName, "agent/address-pr-194-comments");
+
+      writeFileSync(join(repoDir, "release.txt"), "4.4.2\n", "utf-8");
+      git(repoDir, "add", "release.txt");
+      git(repoDir, "commit", "-m", "Prepare release 4.4.2");
+      writeFileSync(join(repoDir, "review.txt"), "addressed\n", "utf-8");
+      git(repoDir, "add", "review.txt");
+      git(repoDir, "commit", "-m", "Address PR 194 review feedback");
+
+      assert.equal(git(repoDir, "rev-list", "--count", `main..${branchName}`), "1");
+      assert.equal(git(repoDir, "rev-list", "--count", `${branchName}..agent/fix-oca-441-regression`), "2");
+      git(repoDir, "merge-base", "--is-ancestor", branchName, "agent/fix-oca-441-regression");
+
+      const notifications: Array<Record<string, unknown>> = [];
+      let autoPrCalled = false;
+      const service = new SessionWorktreeStrategyService({
+        shouldRunWorktreeStrategy: () => true,
+        isAlreadyMerged: () => false,
+        resolveWorktreeRepoDir: (dir) => dir,
+        getWorktreeCompletionState: (repo, worktree, branch, base) => (
+          new SessionWorktreeController().getCompletionState(repo, worktree, branch, base)
+        ),
+        updatePersistedSession: (_ref, patch) => {
+          Object.assign(session, patch);
+          return true;
+        },
+        dispatchSessionNotification: (_session, request) => {
+          notifications.push(request as Record<string, unknown>);
+        },
+        getOutputPreview: () => "",
+        originThreadLine: () => "thread",
+        getWorktreeDecisionButtons: () => [[{ label: "Open PR", callbackData: "open-pr" }]],
+        makeOpenPrButton: () => ({ label: "Open PR", callbackData: "open-pr" }),
+        worktreeMessages: new SessionWorktreeMessageService(),
+        enqueueMerge: async (_repoDir, fn) => { await fn(); },
+        mergeBranch,
+        spawnConflictResolver: async () => ({ id: "resolver-existing-head", name: "unused" }),
+        runAutoPr: async (_session, baseBranch) => {
+          autoPrCalled = true;
+          assert.equal(baseBranch, "main");
+          return { success: false };
+        },
+      });
+
+      const session: any = {
+        id: "s-address-pr-194-comments",
+        name: "address-pr-194-comments",
+        status: "completed",
+        phase: "implementing",
+        lifecycle: "active",
+        worktreeState: "provisioned",
+        originalWorkdir: repoDir,
+        worktreePath,
+        worktreeBranch: branchName,
+        worktreeBaseBranch: "main",
+        worktreeStrategy: "auto-pr",
+        pendingPlanApproval: false,
+      };
+
+      const result = await service.handleWorktreeStrategy(session);
+
+      assert.deepEqual(result, { notificationSent: false, worktreeRemoved: true });
+      assert.equal(autoPrCalled, true);
+      assert.equal(notifications.length, 0);
+      assert.equal(session.worktreePath, undefined);
+      assert.equal(session.worktreeState, "released");
+      assert.equal(session.worktreeLifecycle?.state, "released");
+      assert.deepEqual(session.worktreeLifecycle?.notes, ["released_by_branch:agent/fix-oca-441-regression"]);
+      assert.throws(() => git(repoDir, "rev-parse", "--verify", branchName));
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
   it("requests a routed follow-up summary after auto-merge succeeds", async () => {
     const { repoDir, worktreePath, branchName } = createMergeableWorktree("summary-success");
     try {
@@ -282,6 +375,72 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       assert.match(String(notifications[0].wakeMessageOnNotifySuccess), /originRoute: \{"provider":"telegram","target":"-100123","threadId":"32947"\}/);
       assert.equal(session.worktreeState, "merged");
       assert.equal(session.worktreeLifecycle?.state, "merged");
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it("marks 0-ahead ancestry-merged auto-merge worktrees as merged without suppressing the generic terminal wake", async () => {
+    const { repoDir, worktreePath, branchName } = createMergeableWorktree("already-merged");
+    const notifications: Array<Record<string, unknown>> = [];
+    const controller = new SessionWorktreeController();
+    try {
+      git(repoDir, "merge", "--no-ff", branchName, "-m", "merge already-merged");
+      assert.equal(git(repoDir, "rev-list", "--count", `main..${branchName}`), "0");
+      assert.equal(git(repoDir, "rev-list", "--count", `${branchName}..main`), "1");
+      git(repoDir, "merge-base", "--is-ancestor", branchName, "main");
+
+      const service = new SessionWorktreeStrategyService({
+        shouldRunWorktreeStrategy: () => true,
+        isAlreadyMerged: () => false,
+        resolveWorktreeRepoDir: (dir) => dir,
+        getWorktreeCompletionState: (repo, worktree, branch, base) => (
+          controller.getCompletionState(repo, worktree, branch, base)
+        ),
+        updatePersistedSession: (_ref, patch) => {
+          Object.assign(session, patch);
+          return true;
+        },
+        dispatchSessionNotification: (_session, request) => {
+          notifications.push(request as Record<string, unknown>);
+        },
+        getOutputPreview: () => "",
+        originThreadLine: () => "thread",
+        getWorktreeDecisionButtons: () => undefined,
+        makeOpenPrButton: () => ({ label: "Open PR", callbackData: "open-pr" }),
+        worktreeMessages: new SessionWorktreeMessageService(),
+        enqueueMerge: async (_repoDir, fn) => { await fn(); },
+        mergeBranch,
+        spawnConflictResolver: async () => ({ id: "resolver-unused", name: "unused" }),
+        runAutoPr: async () => ({ success: true }),
+      });
+
+      const session: any = {
+        id: "s-already-merged",
+        name: "already-merged",
+        harnessSessionId: "h-already-merged",
+        status: "completed",
+        phase: "implementing",
+        lifecycle: "active",
+        worktreeState: "provisioned",
+        originalWorkdir: repoDir,
+        worktreePath,
+        worktreeBranch: branchName,
+        worktreeBaseBranch: "main",
+        worktreeStrategy: "auto-merge",
+        pendingPlanApproval: false,
+      };
+
+      const result = await service.handleWorktreeStrategy(session);
+
+      assert.deepEqual(result, { notificationSent: false, worktreeRemoved: true });
+      assert.throws(() => git(repoDir, "rev-parse", "--verify", branchName));
+      assert.equal(notifications.length, 0);
+      assert.equal(session.lifecycle, "terminal");
+      assert.equal(session.worktreeState, "merged");
+      assert.equal(session.worktreeMerged, true);
+      assert.equal(session.worktreeLifecycle?.state, "merged");
+      assert.equal(session.worktreeLifecycle?.resolutionSource, "agent_merge");
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }
@@ -528,7 +687,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       worktreePushRemote: undefined,
     };
 
-    const result = await (service as any).handleAutoPrStrategy(session, "main");
+    const result = await (service as any).handleAutoPrStrategy(session, "/tmp/repo", "/tmp/worktree", "agent/auto-pr-failure", "main");
 
     assert.deepEqual(result, { notificationSent: true, worktreeRemoved: false });
     assert.equal(session.worktreeState, "pending_decision");

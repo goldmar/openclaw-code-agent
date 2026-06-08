@@ -19,6 +19,8 @@ import {
 import {
   removeWorktree,
   getDiffSummary,
+  getBranchName,
+  isBranchAncestorOfBase,
   listDirtyWorktreeEntries,
   mergeBranch,
   deleteBranch,
@@ -171,6 +173,27 @@ export class SessionWorktreeStrategyService {
     }));
   }
 
+  private markReleased(session: Session, notes: string[] = []): void {
+    const updatedAt = new Date().toISOString();
+    this.updatePersistedSessionFor(session, {
+      lifecycle: "terminal",
+      worktreeState: "released",
+      pendingWorktreeDecisionSince: undefined,
+      lastWorktreeReminderAt: undefined,
+      worktreeDecisionSnoozedUntil: undefined,
+      worktreeLifecycle: {
+        state: "released",
+        updatedAt,
+        resolvedAt: updatedAt,
+        resolutionSource: "lifecycle_resolver",
+        baseBranch: session.worktreeBaseBranch,
+        targetRepo: session.worktreePrTargetRepo,
+        pushRemote: session.worktreePushRemote,
+        notes,
+      },
+    });
+  }
+
   async handleWorktreeStrategy(session: Session): Promise<WorktreeStrategyResult> {
     const action = await this.actions.plan(session);
 
@@ -212,6 +235,15 @@ export class SessionWorktreeStrategyService {
       );
     }
 
+    if (action.kind === "merged") {
+      const removed = action.nativeBackendWorktree
+        ? true
+        : removeWorktree(action.repoDir, action.worktreePath);
+      deleteBranch(action.repoDir, action.branchName);
+      this.markMerged(session);
+      return { notificationSent: false, worktreeRemoved: removed };
+    }
+
     if (action.strategy === "ask") {
       return await this.handleAskStrategy(session, action.branchName, action.baseBranch, action.diffSummary);
     }
@@ -231,7 +263,13 @@ export class SessionWorktreeStrategyService {
       return { notificationSent: true, worktreeRemoved: false };
     }
     if (action.strategy === "auto-pr") {
-      return this.handleAutoPrStrategy(session, action.baseBranch);
+      return this.handleAutoPrStrategy(
+        session,
+        action.repoDir,
+        action.worktreePath,
+        action.branchName,
+        action.baseBranch,
+      );
     }
     return { notificationSent: false, worktreeRemoved: false };
   }
@@ -569,6 +607,9 @@ export class SessionWorktreeStrategyService {
 
   private async handleAutoPrStrategy(
     session: Session,
+    repoDir: string,
+    worktreePath: string,
+    branchName: string,
     baseBranch: string,
   ): Promise<WorktreeStrategyResult> {
     this.updatePersistedSessionFor(session, {
@@ -577,6 +618,25 @@ export class SessionWorktreeStrategyService {
     });
     const result = await this.deps.runAutoPr(session, baseBranch);
     if (!result.success) {
+      const currentRepoBranch = getBranchName(repoDir);
+      const releasedByCurrentBranch = Boolean(
+        currentRepoBranch
+        && currentRepoBranch !== branchName
+        && isBranchAncestorOfBase(repoDir, branchName, currentRepoBranch)
+        && listDirtyWorktreeEntries(worktreePath).length === 0,
+      );
+      if (releasedByCurrentBranch) {
+        const removed = usesNativeBackendWorktree(session)
+          ? true
+          : removeWorktree(repoDir, worktreePath);
+        if (removed) {
+          session.worktreePath = undefined;
+          this.updatePersistedSessionFor(session, { worktreePath: undefined });
+        }
+        deleteBranch(repoDir, branchName);
+        this.markReleased(session, [`released_by_branch:${currentRepoBranch}`]);
+        return { notificationSent: false, worktreeRemoved: removed };
+      }
       this.markPendingDecision(session);
       this.deps.dispatchSessionNotification(session, {
         label: "worktree-auto-pr-failed",
