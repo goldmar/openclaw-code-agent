@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.4.2] - 2026-06-07
+
+### Fixed
+- Fixed recovered persisted-only sessions so `agent_kill` can dismiss interrupted records without reporting a missing live session.
+- Fixed OpenCode turn completion detection so stable assistant output or SSE idle events can complete a turn when classic status polling times out or remains busy.
+- Fixed already-merged auto-merge worktrees so ancestry-merged branches are marked merged instead of flagged as suspicious base advancement.
+- Preserved active or dirty worktree lifecycle state while recording repository-derived merged/released evidence, avoiding premature cleanup decisions.
+
 ## [4.4.1] - 2026-06-07
 
 ### Added
@@ -464,7 +472,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Default Codex approval policy to `on-request`.
 - Raised the default session limit.
 
-[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.4.1...HEAD
+[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.4.2...HEAD
+[4.4.2]: https://github.com/goldmar/openclaw-code-agent/compare/v4.4.1...v4.4.2
 [4.4.1]: https://github.com/goldmar/openclaw-code-agent/compare/v4.4.0...v4.4.1
 [4.4.0]: https://github.com/goldmar/openclaw-code-agent/compare/v4.3.8...v4.4.0
 [4.3.8]: https://github.com/goldmar/openclaw-code-agent/compare/v4.3.7...v4.3.8
