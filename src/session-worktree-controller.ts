@@ -1,11 +1,12 @@
 import { existsSync } from "fs";
 import type { PersistedSessionInfo } from "./types";
-import { hasCommitsAhead, hasDirtyWorktreeEntries } from "./worktree";
+import { hasCommitsAhead, hasDirtyWorktreeEntries, isBranchAncestorOfBase } from "./worktree";
 
 export type WorktreeCompletionState =
   | "no-change"
   | "dirty-uncommitted"
   | "base-advanced"
+  | "merged"
   | "has-commits";
 
 export class SessionWorktreeController {
@@ -17,7 +18,10 @@ export class SessionWorktreeController {
   ): WorktreeCompletionState {
     if (!hasCommitsAhead(repoDir, branchName, baseBranch)) {
       const baseBranchAdvanced = hasCommitsAhead(repoDir, baseBranch, branchName);
-      if (baseBranchAdvanced) return "base-advanced";
+      if (baseBranchAdvanced) {
+        if (isBranchAncestorOfBase(repoDir, branchName, baseBranch)) return "merged";
+        return "base-advanced";
+      }
       if (hasDirtyWorktreeEntries(worktreePath)) return "dirty-uncommitted";
       return "no-change";
     }

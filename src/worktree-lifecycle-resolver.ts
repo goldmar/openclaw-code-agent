@@ -136,11 +136,17 @@ export function resolveWorktreeLifecycle(
   if (prState === "open") reasons.add("pr_open");
   if (prState === "merged" && !topologyMerged && !releaseNoopMerge) reasons.add("pr_merged_not_reflected_locally");
 
-  let derivedState: ManagedWorktreeLifecycleState = lifecycle.state;
+  let repositoryDerivedState: ManagedWorktreeLifecycleState | undefined;
   if (topologyMerged) {
-    derivedState = "merged";
+    repositoryDerivedState = "merged";
   } else if (releaseNoopMerge) {
-    derivedState = "released";
+    repositoryDerivedState = "released";
+  }
+
+  const resolutionBlocked = options.activeSession || dirtyWorktreeEntries;
+  let derivedState: ManagedWorktreeLifecycleState = lifecycle.state;
+  if (!resolutionBlocked && repositoryDerivedState) {
+    derivedState = repositoryDerivedState;
   } else if (!branchPresent && lifecycle.state === "pending_decision") {
     derivedState = "cleanup_failed";
   }

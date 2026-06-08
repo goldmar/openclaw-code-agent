@@ -212,6 +212,11 @@ export class SessionWorktreeStrategyService {
       );
     }
 
+    if (action.kind === "merged") {
+      this.markMerged(session);
+      return { notificationSent: true, worktreeRemoved: false };
+    }
+
     if (action.strategy === "ask") {
       return await this.handleAskStrategy(session, action.branchName, action.baseBranch, action.diffSummary);
     }

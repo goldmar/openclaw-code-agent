@@ -281,6 +281,13 @@ function isIdleSessionStatus(statuses: unknown, sessionId: string): boolean {
   return isRecord(status) && status.type === "idle";
 }
 
+function eventIndicatesSessionIdle(event: { type?: string; properties: Record<string, unknown> }): boolean {
+  if (event.type === "session.idle") return true;
+  if (event.type !== "session.status") return false;
+  const status = event.properties.status ?? event.properties.type;
+  return status === "idle";
+}
+
 async function startOpenCodeServerOnce(options: { cwd: string; signal?: AbortSignal; fetch?: FetchLike; requestTimeoutMs?: number; startupTimeoutMs?: number }): Promise<OpenCodeServerHandle> {
   const port = await getFreePort();
   const requestedCommand = process.env[OPENCODE_COMMAND_ENV]?.trim() || "opencode";
@@ -702,6 +709,7 @@ export class OpenCodeHarness implements AgentHarness {
     let turnWaitCompleted = false;
     let turnCompletionEmitted = false;
     let sessionInterrupted = false;
+    let turnSawSseIdle = false;
     let lastBackendRefConversationId: string | undefined;
     const resolvedPendingInputRequestIds = new Set<string>();
 
@@ -867,6 +875,9 @@ export class OpenCodeHarness implements AgentHarness {
         || event.type === "session.status"
         || event.type === "session.idle"
       ) {
+        if (eventIndicatesSessionIdle(event)) {
+          turnSawSseIdle = true;
+        }
         queue.enqueue({ type: "activity" });
       }
     };
@@ -897,24 +908,52 @@ export class OpenCodeHarness implements AgentHarness {
     const waitForTurn = async (http: OpenCodeClient, id: string, baselineAssistantCount: number, signal: AbortSignal): Promise<void> => {
       const startedAt = Date.now();
       let observedBusy = false;
+      let lastAssistantCount = baselineAssistantCount;
+      let lastAssistantResult: string | undefined;
+      let stableAssistantPolls = 0;
+      let lastStatusError: string | undefined;
       const turnTimeoutMs = this.deps.turnTimeoutMs ?? TURN_TIMEOUT_MS;
       while (true) {
         if (signal.aborted) throw new Error("wait aborted");
-        const statuses = await http.request<unknown>("GET", "/session/status", undefined, {
-          signal,
-          timeoutMs: Math.min(this.deps.requestTimeoutMs ?? REQUEST_TIMEOUT_MS, 10_000),
-        });
-        const idle = isIdleSessionStatus(statuses, id);
-        if (!idle) {
-          observedBusy = true;
-        }
         const messages = await fetchSessionMessages(http, id).catch((): undefined => undefined);
         const assistantState = extractAssistantMessageState(messages);
+        const hasNewAssistantResult = assistantState.count > baselineAssistantCount && Boolean(assistantState.result);
+        if (hasNewAssistantResult && assistantState.count === lastAssistantCount && assistantState.result === lastAssistantResult) {
+          stableAssistantPolls += 1;
+        } else {
+          stableAssistantPolls = hasNewAssistantResult ? 1 : 0;
+          lastAssistantCount = assistantState.count;
+          lastAssistantResult = assistantState.result;
+        }
+
+        let idle = false;
+        try {
+          const statuses = await http.request<unknown>("GET", "/session/status", undefined, {
+            signal,
+            timeoutMs: Math.min(this.deps.requestTimeoutMs ?? REQUEST_TIMEOUT_MS, 10_000),
+          });
+          idle = isIdleSessionStatus(statuses, id);
+          lastStatusError = undefined;
+          if (!idle) {
+            observedBusy = true;
+          }
+        } catch (error) {
+          if (signal.aborted) throw new Error("wait aborted");
+          lastStatusError = errorMessage(error);
+        }
+
         if (idle && (observedBusy || assistantState.count > baselineAssistantCount)) {
           return;
         }
+        if (turnSawSseIdle && assistantState.count > baselineAssistantCount) {
+          return;
+        }
+        if (stableAssistantPolls >= 2 && (observedBusy || lastStatusError)) {
+          return;
+        }
         if (Date.now() - startedAt > turnTimeoutMs) {
-          throw new Error(`Timed out waiting for OpenCode session ${id} to become idle after ${turnTimeoutMs}ms.`);
+          const statusSuffix = lastStatusError ? ` Last status error: ${lastStatusError}` : "";
+          throw new Error(`Timed out waiting for OpenCode session ${id} to become idle after ${turnTimeoutMs}ms.${statusSuffix}`);
         }
         await delay(250);
       }
@@ -966,6 +1005,7 @@ export class OpenCodeHarness implements AgentHarness {
       turnInProgress = true;
       turnWaitCompleted = false;
       turnCompletionEmitted = false;
+      turnSawSseIdle = false;
       try {
         const http = await ensureClient();
         if (sessionInterrupted) return;

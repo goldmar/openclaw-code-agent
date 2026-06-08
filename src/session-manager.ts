@@ -30,7 +30,7 @@ import { SessionMetricsRecorder } from "./session-metrics";
 import { WakeDispatcher, type SessionNotificationRequest } from "./wake-dispatcher";
 import { SessionInteractionService, type NotificationButton } from "./session-interactions";
 import { SessionNotificationService } from "./session-notifications";
-import { SessionWorktreeController } from "./session-worktree-controller";
+import { SessionWorktreeController, type WorktreeCompletionState } from "./session-worktree-controller";
 import { SessionQuestionService, type PendingAskUserQuestion } from "./session-question-service";
 import { SessionReminderService } from "./session-reminder-service";
 import { SessionLifecycleService } from "./session-lifecycle-service";
@@ -599,7 +599,7 @@ export class SessionManager {
     worktreePath: string,
     branchName: string,
     baseBranch: string,
-  ): "no-change" | "dirty-uncommitted" | "base-advanced" | "has-commits" {
+  ): WorktreeCompletionState {
     return this.worktrees.getCompletionState(repoDir, worktreePath, branchName, baseBranch);
   }
 

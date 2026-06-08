@@ -48,6 +48,7 @@ export interface SessionListRenderable {
   worktreeMerged?: boolean;
   worktreeMergedAt?: string;
   worktreePrUrl?: string;
+  recovered?: boolean;
 }
 
 /** Format a duration in milliseconds as `MmSs` or `Ss`. */
@@ -152,6 +153,9 @@ export function formatSessionListing(session: SessionListRenderable): string {
   }
   if (session.resumable) {
     lines.push(`   ↩️  Resumable: yes`);
+  }
+  if (session.recovered) {
+    lines.push(`   ♻️  Recovered: persisted metadata only; no live process to kill`);
   }
 
   if (session.harness) {

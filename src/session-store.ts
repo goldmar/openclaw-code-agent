@@ -236,6 +236,7 @@ export class SessionStore {
       originThreadId: routing.originThreadId,
       originSessionKey: routing.originSessionKey,
       route,
+      outputPath: getSessionOutputFilePath(session.id),
       harness: session.harnessName,
       requestedPermissionMode: approval.requestedPermissionMode,
       currentPermissionMode: approval.currentPermissionMode,

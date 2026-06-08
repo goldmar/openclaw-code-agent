@@ -72,6 +72,66 @@ describe("resolveWorktreeLifecycle", () => {
     }
   });
 
+  it("does not derive merged while a matching session is still active", () => {
+    const repoDir = initRepo("resolver-active-merged-");
+    try {
+      git(repoDir, "checkout", "-b", "agent/active-merged");
+      writeFileSync(join(repoDir, "feature.txt"), "merged\n", "utf-8");
+      git(repoDir, "add", "feature.txt");
+      git(repoDir, "commit", "-m", "feat: active merged");
+      git(repoDir, "checkout", "main");
+      git(repoDir, "merge", "--ff-only", "agent/active-merged");
+
+      const resolved = resolveWorktreeLifecycle({
+        workdir: repoDir,
+        worktreeBranch: "agent/active-merged",
+        worktreeLifecycle: {
+          state: "provisioned",
+          updatedAt: new Date().toISOString(),
+        },
+      }, { activeSession: true });
+
+      assert.equal(resolved.derivedState, "provisioned");
+      assert.equal(resolved.cleanupSafe, false);
+      assert.equal(resolved.preserve, true);
+      assert.ok(resolved.reasons.includes("active_session"));
+      assert.ok(resolved.reasons.includes("topology_merged"));
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not derive merged while the worktree has dirty entries", () => {
+    const repoDir = initRepo("resolver-dirty-merged-");
+    try {
+      git(repoDir, "checkout", "-b", "agent/dirty-merged");
+      writeFileSync(join(repoDir, "feature.txt"), "merged\n", "utf-8");
+      git(repoDir, "add", "feature.txt");
+      git(repoDir, "commit", "-m", "feat: dirty merged");
+      git(repoDir, "checkout", "main");
+      git(repoDir, "merge", "--ff-only", "agent/dirty-merged");
+      writeFileSync(join(repoDir, "dirty.txt"), "uncommitted\n", "utf-8");
+
+      const resolved = resolveWorktreeLifecycle({
+        workdir: repoDir,
+        worktreePath: repoDir,
+        worktreeBranch: "agent/dirty-merged",
+        worktreeLifecycle: {
+          state: "provisioned",
+          updatedAt: new Date().toISOString(),
+        },
+      });
+
+      assert.equal(resolved.derivedState, "provisioned");
+      assert.equal(resolved.cleanupSafe, false);
+      assert.equal(resolved.preserve, true);
+      assert.ok(resolved.reasons.includes("dirty_worktree_entries"));
+      assert.ok(resolved.reasons.includes("topology_merged"));
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
   it("detects cherry-picked branch content as released", () => {
     const repoDir = initRepo("resolver-released-cherry-");
     try {

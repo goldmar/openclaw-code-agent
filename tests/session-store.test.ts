@@ -1,6 +1,7 @@
 import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { SessionStore } from "../src/session-store";
+import { getSessionOutputFilePath } from "../src/session";
 import { STORE_SCHEMA_VERSION } from "../src/session-store-normalization";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
@@ -323,6 +324,7 @@ describe("SessionStore path resolution", () => {
     assert.equal(persisted?.status, "killed");
     assert.equal(persisted?.lifecycle, "suspended");
     assert.equal(persisted?.runtimeState, "stopped");
+    assert.equal(persisted?.outputPath, getSessionOutputFilePath("GccpSIqJ"));
   });
 
   it("normalizes recovered running rows with active lifecycle to suspended", () => {

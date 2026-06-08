@@ -28,6 +28,7 @@ export type PlannedWorktreeAction =
       worktreePath: string;
       nativeBackendWorktree: boolean;
     }
+  | { kind: "merged" }
   | {
       kind: "decision";
       strategy: "ask" | "delegate" | "auto-merge" | "auto-pr";
@@ -115,6 +116,9 @@ export class SessionWorktreeActionService {
         worktreePath,
         nativeBackendWorktree: usesNativeBackendWorktree(session),
       };
+    }
+    if (completionState === "merged") {
+      return { kind: "merged" };
     }
     if (completionState === "base-advanced") {
       return {
