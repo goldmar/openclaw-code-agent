@@ -341,7 +341,8 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
 
       const result = await service.handleWorktreeStrategy(session);
 
-      assert.deepEqual(result, { notificationSent: true, worktreeRemoved: false });
+      assert.deepEqual(result, { notificationSent: true, worktreeRemoved: true });
+      assert.throws(() => git(repoDir, "rev-parse", "--verify", branchName));
       assert.equal(notifications.length, 0);
       assert.equal(session.lifecycle, "terminal");
       assert.equal(session.worktreeState, "merged");

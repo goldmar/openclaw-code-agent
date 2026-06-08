@@ -11,13 +11,18 @@ export function getKillSessionText(
     const persisted = sm.getPersistedSession(ref);
     if (!persisted) return `Error: Session "${ref}" not found.`;
     if (persisted.status === "killed" && persisted.lifecycle === "suspended") {
+      const completed = reason === "completed";
       const updated = sm.updatePersistedSession(ref, {
+        status: completed ? "completed" : "killed",
         lifecycle: "terminal",
         runtimeState: "stopped",
         resumable: false,
-        killReason: "user",
+        killReason: completed ? "done" : "user",
       });
       if (updated) {
+        if (completed) {
+          return `Recovered session ${persisted.name} [${persisted.sessionId ?? persisted.harnessSessionId}] marked as completed. No live process was running.`;
+        }
         return `Recovered session ${persisted.name} [${persisted.sessionId ?? persisted.harnessSessionId}] dismissed. No live process was running.`;
       }
     }

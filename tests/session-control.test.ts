@@ -31,11 +31,36 @@ describe("session-control app layer", () => {
     const text = getKillSessionText(sm, "recovered");
 
     assert.equal(patchRef, "recovered");
+    assert.equal(patch?.status, "killed");
     assert.equal(patch?.lifecycle, "terminal");
     assert.equal(patch?.runtimeState, "stopped");
     assert.equal(patch?.resumable, false);
+    assert.equal(patch?.killReason, "user");
     assert.match(text, /dismissed/);
     assert.match(text, /No live process was running/);
+  });
+
+  it("marks recovered persisted-only sessions completed when requested", () => {
+    let patch: Record<string, unknown> | undefined;
+    const sm: any = {
+      resolve: () => undefined,
+      getPersistedSession: () => ({
+        sessionId: "s-recovered",
+        name: "recovered",
+        status: "killed",
+        lifecycle: "suspended",
+      }),
+      updatePersistedSession: (_ref: string, nextPatch: Record<string, unknown>) => {
+        patch = nextPatch;
+        return true;
+      },
+    };
+
+    const text = getKillSessionText(sm, "recovered", "completed");
+
+    assert.equal(patch?.status, "completed");
+    assert.equal(patch?.killReason, "done");
+    assert.match(text, /marked as completed/);
   });
 
   it("marks session completed when requested", () => {

@@ -213,8 +213,12 @@ export class SessionWorktreeStrategyService {
     }
 
     if (action.kind === "merged") {
+      const removed = action.nativeBackendWorktree
+        ? true
+        : removeWorktree(action.repoDir, action.worktreePath);
+      deleteBranch(action.repoDir, action.branchName);
       this.markMerged(session);
-      return { notificationSent: true, worktreeRemoved: false };
+      return { notificationSent: true, worktreeRemoved: removed };
     }
 
     if (action.strategy === "ask") {

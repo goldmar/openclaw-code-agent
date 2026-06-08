@@ -948,7 +948,7 @@ export class OpenCodeHarness implements AgentHarness {
         if (turnSawSseIdle && assistantState.count > baselineAssistantCount) {
           return;
         }
-        if (stableAssistantPolls >= 2 && (observedBusy || lastStatusError)) {
+        if (stableAssistantPolls >= 2 && lastStatusError) {
           return;
         }
         if (Date.now() - startedAt > turnTimeoutMs) {

@@ -406,6 +406,25 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     assert.equal(result?.data.result, "Final.");
   });
 
+  it("does not complete from stable assistant output while classic status remains busy", async () => {
+    const mock = new MockOpenCodeServer();
+    mock.statusMode = "always-busy";
+    const harness = new OpenCodeHarness({
+      createServer: async () => mock.handle(),
+      fetch: mock.fetch,
+      turnTimeoutMs: 50,
+    });
+
+    const messages = await collectMessages(harness.launch({
+      prompt: "ship it",
+      cwd: "/repo",
+    }));
+
+    const result = messages.find((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }> | undefined;
+    assert.equal(result?.data.success, false);
+    assert.match(result?.data.result ?? "", /Timed out waiting for OpenCode session ses_test to become idle/);
+  });
+
   it("completes from an SSE idle event even when classic status remains busy", async () => {
     const mock = new MockOpenCodeServer();
     mock.statusMode = "always-busy";
