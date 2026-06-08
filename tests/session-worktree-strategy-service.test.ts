@@ -227,7 +227,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
     }
   });
 
-  it("releases an auto-pr worktree when the current PR head already contains its branch", async () => {
+  it("releases an auto-pr worktree without suppressing the generic terminal wake", async () => {
     const repoDir = mkdtempSync(join(tmpdir(), "openclaw-auto-pr-existing-head-"));
     try {
       git(repoDir, "init", "-b", "main");
@@ -294,7 +294,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         name: "address-pr-194-comments",
         status: "completed",
         phase: "implementing",
-        lifecycle: "terminal",
+        lifecycle: "active",
         worktreeState: "provisioned",
         originalWorkdir: repoDir,
         worktreePath,
@@ -306,7 +306,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
 
       const result = await service.handleWorktreeStrategy(session);
 
-      assert.deepEqual(result, { notificationSent: true, worktreeRemoved: true });
+      assert.deepEqual(result, { notificationSent: false, worktreeRemoved: true });
       assert.equal(autoPrCalled, true);
       assert.equal(notifications.length, 0);
       assert.equal(session.worktreePath, undefined);
@@ -380,7 +380,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
     }
   });
 
-  it("marks 0-ahead ancestry-merged auto-merge worktrees as merged instead of suspicious base advancement", async () => {
+  it("marks 0-ahead ancestry-merged auto-merge worktrees as merged without suppressing the generic terminal wake", async () => {
     const { repoDir, worktreePath, branchName } = createMergeableWorktree("already-merged");
     const notifications: Array<Record<string, unknown>> = [];
     const controller = new SessionWorktreeController();
@@ -433,7 +433,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
 
       const result = await service.handleWorktreeStrategy(session);
 
-      assert.deepEqual(result, { notificationSent: true, worktreeRemoved: true });
+      assert.deepEqual(result, { notificationSent: false, worktreeRemoved: true });
       assert.throws(() => git(repoDir, "rev-parse", "--verify", branchName));
       assert.equal(notifications.length, 0);
       assert.equal(session.lifecycle, "terminal");

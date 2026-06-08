@@ -241,7 +241,7 @@ export class SessionWorktreeStrategyService {
         : removeWorktree(action.repoDir, action.worktreePath);
       deleteBranch(action.repoDir, action.branchName);
       this.markMerged(session);
-      return { notificationSent: true, worktreeRemoved: removed };
+      return { notificationSent: false, worktreeRemoved: removed };
     }
 
     if (action.strategy === "ask") {
@@ -635,7 +635,7 @@ export class SessionWorktreeStrategyService {
         }
         deleteBranch(repoDir, branchName);
         this.markReleased(session, [`released_by_branch:${currentRepoBranch}`]);
-        return { notificationSent: true, worktreeRemoved: removed };
+        return { notificationSent: false, worktreeRemoved: removed };
       }
       this.markPendingDecision(session);
       this.deps.dispatchSessionNotification(session, {
