@@ -288,35 +288,54 @@ function eventIndicatesSessionIdle(event: { type?: string; properties: Record<st
   return status === "idle";
 }
 
+// Serialize OpenCode server startup (spawn + readiness probe) to avoid
+// SQLite lock contention on the shared global DB at
+// ~/.local/share/opencode/opencode.db when multiple harness sessions
+// (different worktrees) start concurrently inside the same OpenClaw process.
+//
+// This is a per-process promise-chain mutex. It sequences *startup* only;
+// once a server is ready and the client/handle is obtained, sessions run
+// independently (multiple concurrent OpenCode servers are expected and desired).
+// A single global server would kill parallelism across worktrees.
+let openCodeStartupMutex: Promise<void> = Promise.resolve();
+
+function withOpenCodeStartupMutex<T>(fn: () => Promise<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const next = openCodeStartupMutex.then(() => fn().then(resolve, reject));
+    openCodeStartupMutex = next.catch((): void => undefined);
+  });
+}
+
 async function startOpenCodeServerOnce(options: { cwd: string; signal?: AbortSignal; fetch?: FetchLike; requestTimeoutMs?: number; startupTimeoutMs?: number }): Promise<OpenCodeServerHandle> {
-  const port = await getFreePort();
-  const requestedCommand = process.env[OPENCODE_COMMAND_ENV]?.trim() || "opencode";
-  const command = resolveCommandPath(requestedCommand);
-  const args = [
-    "serve",
-    "--hostname",
-    "127.0.0.1",
-    "--port",
-    String(port),
-    "--print-logs",
-  ];
-  const fetchImpl = options.fetch ?? fetch;
-  const readinessRequestTimeoutMs = Math.min(options.requestTimeoutMs ?? REQUEST_TIMEOUT_MS, 10_000);
-  const startupTimeoutMs = options.startupTimeoutMs ?? STARTUP_TIMEOUT_MS;
-  const child = spawn(command, args, {
-    cwd: options.cwd,
-    stdio: ["ignore", "pipe", "pipe"],
-  }) as ChildProcessWithoutNullStreams;
-  const baseUrl = `http://127.0.0.1:${port}`;
-  let stdout = "";
-  let stderr = "";
-  let spawnError: Error | undefined;
-  const appendOutput = (current: string, chunk: unknown): string => {
-    const next = current + String(chunk);
-    return next.length > 8_000 ? next.slice(-8_000) : next;
-  };
-  child.stdout.on("data", (chunk) => {
-    stdout = appendOutput(stdout, chunk);
+  return withOpenCodeStartupMutex(async () => {
+    const port = await getFreePort();
+    const requestedCommand = process.env[OPENCODE_COMMAND_ENV]?.trim() || "opencode";
+    const command = resolveCommandPath(requestedCommand);
+    const args = [
+      "serve",
+      "--hostname",
+      "127.0.0.1",
+      "--port",
+      String(port),
+      "--print-logs",
+    ];
+    const fetchImpl = options.fetch ?? fetch;
+    const readinessRequestTimeoutMs = Math.min(options.requestTimeoutMs ?? REQUEST_TIMEOUT_MS, 10_000);
+    const startupTimeoutMs = options.startupTimeoutMs ?? STARTUP_TIMEOUT_MS;
+    const child = spawn(command, args, {
+      cwd: options.cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+    }) as ChildProcessWithoutNullStreams;
+    const baseUrl = `http://127.0.0.1:${port}`;
+    let stdout = "";
+    let stderr = "";
+    let spawnError: Error | undefined;
+    const appendOutput = (current: string, chunk: unknown): string => {
+      const next = current + String(chunk);
+      return next.length > 8_000 ? next.slice(-8_000) : next;
+    };
+    child.stdout.on("data", (chunk) => {
+      stdout = appendOutput(stdout, chunk);
   });
   child.stderr.on("data", (chunk) => {
     stderr = appendOutput(stderr, chunk);
@@ -386,6 +405,7 @@ async function startOpenCodeServerOnce(options: { cwd: string; signal?: AbortSig
   } finally {
     options.signal?.removeEventListener("abort", abortStartup);
   }
+  });
 }
 
 async function defaultCreateServer(options: { cwd: string; signal?: AbortSignal; fetch?: FetchLike; requestTimeoutMs?: number; startupTimeoutMs?: number }): Promise<OpenCodeServerHandle> {
