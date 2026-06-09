@@ -450,23 +450,33 @@ export class SessionLifecycleService {
     ];
     const fallbackPendingInputButtonOptions =
       session.pendingInputState?.options.map((label) => ({ label })) ?? [];
-    const pendingInputButtonOptions = pendingInputQuestions
-      ? (
-          activePendingInputQuestion
-            && activePendingInputQuestion.options.length > 0
-            && activePendingInputQuestion.options.length <= 6
-            && !activePendingInputQuestion.options.some((option) => option.isOther)
-            && !activePendingInputQuestion.multiSelect
-              ? activePendingInputQuestion.options
-              : (
-                  pendingInputQuestions.length === 1
-                    && activePendingInputQuestion
-                    && activePendingInputQuestion.options.length === 0
-                      ? fallbackPendingInputButtonOptions
-                      : []
-                )
-        )
-      : fallbackPendingInputButtonOptions;
+
+    // Resolve which buttons (if any) to show for the current pending input.
+    // Structured multi-question wizard: show per-question options only for simple single-select,
+    // non-"Other", ≤6-option questions. Fall back to top-level options only for the classic
+    // single-question no-structured-options case. Everything else uses no buttons (free-text or complex).
+    const pendingInputButtonOptions: Array<{ label: string }> = (() => {
+      if (!pendingInputQuestions || pendingInputQuestions.length === 0) {
+        return fallbackPendingInputButtonOptions;
+      }
+      if (
+        activePendingInputQuestion &&
+        activePendingInputQuestion.options.length > 0 &&
+        activePendingInputQuestion.options.length <= 6 &&
+        !activePendingInputQuestion.options.some((o) => o.isOther) &&
+        !activePendingInputQuestion.multiSelect
+      ) {
+        return activePendingInputQuestion.options;
+      }
+      if (
+        pendingInputQuestions.length === 1 &&
+        activePendingInputQuestion &&
+        activePendingInputQuestion.options.length === 0
+      ) {
+        return fallbackPendingInputButtonOptions;
+      }
+      return [];
+    })();
     const waitingButtons =
       session.pendingPlanApproval && planApprovalMode === "ask" && !promptAlreadyProven
         ? this.deps.getPlanApprovalButtons(session.id, {
