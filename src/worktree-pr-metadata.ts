@@ -268,12 +268,11 @@ function buildFallbackPrMetadata(evidence: PrMetadataEvidence, prompt: string | 
     redactSensitiveText(evidence.sessionName).replace(/[-_]+/g, " ").replace(/\s+/g, " ").trim() || "agent worktree",
     80,
   );
-  const branchPart = evidence.branchName ? ` (${evidence.branchName})` : "";
-  const title = truncateText(`OpenClaw agent changes${branchPart}: ${safeName}`, 90);
+  const title = truncateText(`OpenClaw agent changes: ${safeName}`, 90);
 
   const baseSummary = [
     "Deterministic fallback metadata generated because no LLM PR metadata provider is configured.",
-    `Session: ${safeName}${evidence.branchName ? ` (branch: ${evidence.branchName})` : ""}.`,
+    `Session: ${safeName}.`,
     ...(evidence.objective ? [`Objective: ${evidence.objective}`] : []),
     ...(evidence.stats
       ? [`Scope: ${evidence.stats.commits} commits, ${evidence.stats.filesChanged} files changed (+${evidence.stats.insertions} / -${evidence.stats.deletions}).`]
@@ -347,6 +346,14 @@ function buildFallbackPrMetadata(evidence: PrMetadataEvidence, prompt: string | 
     const warn = "Some content was stripped from fallback metadata due to safety checks (prompt leak guard or references to files outside the diff).";
     if (!metadata.notes.some((n) => n.toLowerCase().includes("stripped") || n.toLowerCase().includes("sanitized"))) {
       metadata.notes = [...metadata.notes, warn];
+    }
+  }
+
+  if (evidence.branchName) {
+    const safeBranch = sanitizeMetadataText(evidence.branchName);
+    // Append after guards so a branch name that looks like a file path cannot trigger unknown-file redaction on title/summary.
+    if (!metadata.notes.some((n) => n.toLowerCase().includes(safeBranch.toLowerCase()))) {
+      metadata.notes = [...metadata.notes, `Branch: ${safeBranch}`];
     }
   }
 

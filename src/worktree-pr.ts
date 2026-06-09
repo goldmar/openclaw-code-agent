@@ -86,7 +86,27 @@ export function createPR(
     const prUrl = result.trim();
     return { success: true, prUrl };
   } catch (err) {
-    return { success: false, error: err instanceof Error ? err.message : String(err) };
+    const msg = err instanceof Error ? err.message : String(err);
+    // Recovery: if we requested draft and the error indicates drafts are not supported or enabled
+    // on the target repo, retry once without --draft so that PR creation does not regress for repos
+    // that previously accepted non-draft PRs.
+    if ((options.draft ?? true) && /draft/i.test(msg)) {
+      try {
+        const retryArgs = args.filter((a) => a !== "--draft");
+        const retryResult = execFileSync("gh", retryArgs, {
+          cwd: repoDir,
+          timeout: 30_000,
+          encoding: "utf-8",
+          stdio: ["pipe", "pipe", "pipe"],
+        });
+        const retryUrl = retryResult.trim();
+        return { success: true, prUrl: retryUrl };
+      } catch (retryErr) {
+        const retryMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+        return { success: false, error: `Draft PR creation failed (${msg}); non-draft retry also failed: ${retryMsg}` };
+      }
+    }
+    return { success: false, error: msg };
   }
 }
 
