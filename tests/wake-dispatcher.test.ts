@@ -824,11 +824,6 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
 
     dispatcher.dispatchSessionNotification(session as any, {
       label: "worktree-delegate",
-      userMessage: [
-        "🔀 Worktree decision pending for session `proper-multi-strategy-node`",
-        "",
-        "The delegated reviewer is deciding whether to merge, open a PR, or ask for your choice.",
-      ].join("\n"),
       wakeMessage: "Delegated worktree decision wake",
       notifyUser: "never",
     });
