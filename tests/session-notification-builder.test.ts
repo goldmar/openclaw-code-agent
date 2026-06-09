@@ -227,7 +227,7 @@ describe("session-notification-builder", () => {
     assert.doesNotMatch(summary, /Should I proceed\?/);
   });
 
-  it("includes concise why-context for forwarded user questions without echoing the question twice", () => {
+  it("includes supplied LLM why-summary for forwarded user questions without echoing raw context", () => {
     const payload = buildWaitingForInputPayload({
       session: {
         id: "session-question-context",
@@ -242,15 +242,38 @@ describe("session-notification-builder", () => {
         "The repo currently pins Docker hosts to a yearly baseline, but the deployment plan draft switched to exact image tags.",
         "What host-version policy should the plan target?",
       ].join("\n"),
+      questionContextSummary: "The plan needs one host-version policy before deployment steps can be finalized.",
       originThreadLine: "Origin thread: telegram topic 42",
     });
 
     assert.equal(payload.label, "waiting");
-    assert.match(payload.userMessage ?? "", /Question:/);
     assert.match(payload.userMessage ?? "", /What host-version policy should the plan target\?/);
-    assert.match(payload.userMessage ?? "", /Why this is asked:/);
-    assert.match(payload.userMessage ?? "", /two competing conventions/);
+    assert.match(payload.userMessage ?? "", /Why: The plan needs one host-version policy before deployment steps can be finalized\./);
+    assert.doesNotMatch(payload.userMessage ?? "", /two competing conventions/);
+    assert.doesNotMatch(payload.userMessage ?? "", /exact image tags/);
     assert.equal((payload.userMessage ?? "").match(/What host-version policy should the plan target\?/g)?.length, 1);
+  });
+
+  it("omits why-context when no LLM micro-summary is supplied", () => {
+    const payload = buildWaitingForInputPayload({
+      session: {
+        id: "session-question-no-summary",
+        name: "question-no-summary",
+        multiTurn: true,
+        pendingPlanApproval: false,
+      } as any,
+      preview: "What host-version policy should the plan target?",
+      questionText: "What host-version policy should the plan target?",
+      questionContextPreview: [
+        "This raw recent output should not appear.",
+        "What host-version policy should the plan target?",
+      ].join("\n"),
+      originThreadLine: "Origin thread: telegram topic 42",
+    });
+
+    assert.match(payload.userMessage ?? "", /What host-version policy should the plan target\?/);
+    assert.doesNotMatch(payload.userMessage ?? "", /Why:/);
+    assert.doesNotMatch(payload.userMessage ?? "", /raw recent output/);
   });
 
   it("omits recent context walls from button-backed question prompts", () => {
@@ -268,6 +291,7 @@ describe("session-notification-builder", () => {
         "This context line should not appear in the button-backed prompt.",
         "Which environment should I target?",
       ].join("\n"),
+      questionContextSummary: "Deployment history narrowed this to the target environment.",
       originThreadLine: "Origin thread: telegram topic 42",
       questionButtons: [[
         { label: "Staging", callbackData: "stage-token" },
@@ -279,13 +303,13 @@ describe("session-notification-builder", () => {
     assert.match(payload.userMessage ?? "", /Question 1 - Environment/);
     assert.match(payload.userMessage ?? "", /Which environment should I target\?/);
     assert.match(payload.userMessage ?? "", /Options:/);
-    assert.doesNotMatch(payload.userMessage ?? "", /Why this is asked:/);
+    assert.match(payload.userMessage ?? "", /Why: Deployment history narrowed this to the target environment\./);
     assert.doesNotMatch(payload.userMessage ?? "", /long transcript/);
     assert.doesNotMatch(payload.userMessage ?? "", /This context line should not appear/);
     assert.deepEqual(payload.buttons?.[0]?.map((button) => button.label), ["Staging", "Production"]);
   });
 
-  it("keeps the newest complete lines when question context must be truncated", () => {
+  it("does not fall back to a raw context wall when no micro-summary is available", () => {
     const oldLine = "Older context line ".repeat(28).trimEnd();
     const middleLine = "Middle context line ".repeat(24).trimEnd();
     const recentLine = "The user-visible policy conflict is between annual baselines and exact tags.";
@@ -309,8 +333,9 @@ describe("session-notification-builder", () => {
       originThreadLine: "Origin thread: telegram topic 42",
     });
 
-    assert.match(payload.userMessage ?? "", new RegExp(recentLine.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
-    assert.match(payload.userMessage ?? "", new RegExp(latestLine.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    assert.match(payload.userMessage ?? "", /Which policy should we use\?/);
+    assert.doesNotMatch(payload.userMessage ?? "", new RegExp(recentLine.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    assert.doesNotMatch(payload.userMessage ?? "", new RegExp(latestLine.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
     assert.doesNotMatch(payload.userMessage ?? "", new RegExp(oldLine.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   });
 

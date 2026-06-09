@@ -43,6 +43,10 @@ import {
 } from "./session-notification-builder";
 import { SessionWorktreeDecisionService } from "./session-worktree-decision-service";
 import type { WorktreeDecisionSummaryProvider } from "./worktree-decision-summary";
+import {
+  createRuntimeQuestionContextSummaryProvider,
+  type QuestionContextSummaryProvider,
+} from "./question-context-summary";
 import { SessionRuntimeRegistry } from "./session-runtime-registry";
 import { SessionRuntimeBootstrapService } from "./session-runtime-bootstrap-service";
 import { SessionWorktreeMessageService } from "./session-worktree-message-service";
@@ -147,7 +151,11 @@ export class SessionManager {
   constructor(
     maxSessions: number = 20,
     maxPersistedSessions: number = 50,
-    options: { store?: SessionStoreOptions; worktreeSummaryProvider?: WorktreeDecisionSummaryProvider } = {},
+    options: {
+      store?: SessionStoreOptions;
+      worktreeSummaryProvider?: WorktreeDecisionSummaryProvider;
+      questionContextSummaryProvider?: QuestionContextSummaryProvider;
+    } = {},
   ) {
     this.maxSessions = maxSessions;
     this.maxPersistedSessions = maxPersistedSessions;
@@ -175,7 +183,11 @@ export class SessionManager {
 
   private static createServiceBundle(
     manager: SessionManager,
-    options: { store?: SessionStoreOptions; worktreeSummaryProvider?: WorktreeDecisionSummaryProvider },
+    options: {
+      store?: SessionStoreOptions;
+      worktreeSummaryProvider?: WorktreeDecisionSummaryProvider;
+      questionContextSummaryProvider?: QuestionContextSummaryProvider;
+    },
   ): SessionManagerServiceBundle {
     const registry = new SessionRuntimeRegistry();
     const sessions = registry.sessions;
@@ -297,6 +309,7 @@ export class SessionManager {
       originThreadLine: (session) => manager.originThreadLine(session),
       debounceWaitingEvent: (sessionId) => manager.debounceWaitingEvent(sessionId),
       isAlreadyMerged: (ref) => manager.isAlreadyMerged(ref),
+      questionContextSummaryProvider: options.questionContextSummaryProvider ?? createRuntimeQuestionContextSummaryProvider(),
     });
     const worktreeDecisions = new SessionWorktreeDecisionService({
       getPersistedSession: (ref) => store.getPersistedSession(ref),

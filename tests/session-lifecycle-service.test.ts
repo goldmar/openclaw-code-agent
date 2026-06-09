@@ -550,4 +550,128 @@ describe("SessionLifecycleService", () => {
     assert.doesNotMatch(String(requests[1]?.userMessage ?? ""), /Fallback preview/);
     assert.doesNotMatch(String(requests[1]?.userMessage ?? ""), /Why this is asked:/);
   });
+
+  it("adds an LLM micro-summary to compact question prompts without changing options", async () => {
+    const requests: Array<Record<string, unknown>> = [];
+
+    const service = new SessionLifecycleService({
+      persistSession: () => {},
+      clearWaitingTimestamp: () => {},
+      handleWorktreeStrategy: async () => ({
+        notificationSent: false,
+        worktreeRemoved: false,
+      }),
+      resolveWorktreeRepoDir: () => undefined,
+      updatePersistedSession: () => false,
+      dispatchSessionNotification: (_session, request) => {
+        requests.push(request as unknown as Record<string, unknown>);
+      },
+      notifySession: () => {},
+      clearRetryTimersForSession: () => {},
+      hasTurnCompleteWakeMarker: () => false,
+      shouldEmitTurnCompleteWake: () => true,
+      shouldEmitTerminalWake: () => true,
+      resolvePlanApprovalMode: () => "ask",
+      getPlanApprovalButtons: () => [],
+      getResumeButtons: () => [],
+      getQuestionButtons: (_sessionId, options) => [
+        options.map((option) => ({ label: option.label, callbackData: `token:${option.label}` })),
+      ],
+      extractLastOutputLine: () => undefined,
+      getOutputPreview: () => [
+        "The long deployment transcript should not be pasted into Telegram.",
+        "Codex needs the environment before it can continue.",
+      ].join("\n"),
+      originThreadLine: () => "Origin thread: telegram topic 42",
+      debounceWaitingEvent: () => true,
+      isAlreadyMerged: () => false,
+      questionContextSummaryProvider: {
+        async generateQuestionContextSummary(evidence) {
+          assert.match(evidence.context, /long deployment transcript/);
+          return { summary: "Codex needs the target environment before it can continue." };
+        },
+      },
+    });
+
+    await service.emitWaitingForInput(createStubSession({
+      id: "session-summary-question",
+      name: "summary-question",
+      pendingPlanApproval: false,
+      pendingInputState: {
+        requestId: "req-summary-question",
+        kind: "question",
+        promptText: "Which environment should I target?",
+        options: ["Staging", "Production"],
+      },
+    }));
+
+    assert.equal(requests.length, 1);
+    assert.match(String(requests[0]?.userMessage ?? ""), /Which environment should I target\?/);
+    assert.match(String(requests[0]?.userMessage ?? ""), /Why: Codex needs the target environment before it can continue\./);
+    assert.doesNotMatch(String(requests[0]?.userMessage ?? ""), /long deployment transcript/);
+    assert.deepEqual(
+      (requests[0]?.buttons as Array<Array<{ label: string }>>).map((row) => row.map((button) => button.label)),
+      [["Staging", "Production"]],
+    );
+  });
+
+  it("omits question context when LLM micro-summary generation fails", async () => {
+    const requests: Array<Record<string, unknown>> = [];
+
+    const service = new SessionLifecycleService({
+      persistSession: () => {},
+      clearWaitingTimestamp: () => {},
+      handleWorktreeStrategy: async () => ({
+        notificationSent: false,
+        worktreeRemoved: false,
+      }),
+      resolveWorktreeRepoDir: () => undefined,
+      updatePersistedSession: () => false,
+      dispatchSessionNotification: (_session, request) => {
+        requests.push(request as unknown as Record<string, unknown>);
+      },
+      notifySession: () => {},
+      clearRetryTimersForSession: () => {},
+      hasTurnCompleteWakeMarker: () => false,
+      shouldEmitTurnCompleteWake: () => true,
+      shouldEmitTerminalWake: () => true,
+      resolvePlanApprovalMode: () => "ask",
+      getPlanApprovalButtons: () => [],
+      getResumeButtons: () => [],
+      getQuestionButtons: (_sessionId, options) => [
+        options.map((option) => ({ label: option.label, callbackData: `token:${option.label}` })),
+      ],
+      extractLastOutputLine: () => undefined,
+      getOutputPreview: () => "This raw context must not appear if summarization fails.",
+      originThreadLine: () => "Origin thread: telegram topic 42",
+      debounceWaitingEvent: () => true,
+      isAlreadyMerged: () => false,
+      questionContextSummaryProvider: {
+        async generateQuestionContextSummary() {
+          return { summary: "This invalid summary is intentionally far too long to fit inside the strict one-sentence micro-summary budget for question prompts, so it must be omitted from the user-facing notification instead of being truncated or shown." };
+        },
+      },
+    });
+
+    await service.emitWaitingForInput(createStubSession({
+      id: "session-summary-failure",
+      name: "summary-failure",
+      pendingPlanApproval: false,
+      pendingInputState: {
+        requestId: "req-summary-failure",
+        kind: "question",
+        promptText: "Which environment should I target?",
+        options: ["Staging", "Production"],
+      },
+    }));
+
+    assert.equal(requests.length, 1);
+    assert.match(String(requests[0]?.userMessage ?? ""), /Which environment should I target\?/);
+    assert.doesNotMatch(String(requests[0]?.userMessage ?? ""), /Why:/);
+    assert.doesNotMatch(String(requests[0]?.userMessage ?? ""), /raw context/);
+    assert.deepEqual(
+      (requests[0]?.buttons as Array<Array<{ label: string }>>).map((row) => row.map((button) => button.label)),
+      [["Staging", "Production"]],
+    );
+  });
 });

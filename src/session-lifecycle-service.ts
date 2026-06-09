@@ -21,6 +21,10 @@ import type { PersistedSessionInfo, PlanApprovalMode, PlanArtifact } from "./typ
 import type { NotificationButton } from "./session-interactions";
 import type { SessionNotificationRequest } from "./wake-dispatcher";
 import { existsSync, readFileSync } from "fs";
+import {
+  buildQuestionContextMicroSummary,
+  type QuestionContextSummaryProvider,
+} from "./question-context-summary";
 
 type WorktreeStrategyResult = {
   notificationSent: boolean;
@@ -84,6 +88,7 @@ export class SessionLifecycleService {
       originThreadLine: (session: Session) => string;
       debounceWaitingEvent: (sessionId: string) => boolean;
       isAlreadyMerged: (ref: string | undefined) => boolean;
+      questionContextSummaryProvider?: QuestionContextSummaryProvider;
     },
   ) {}
 
@@ -378,7 +383,7 @@ export class SessionLifecycleService {
     this.deps.clearRetryTimersForSession(session.id);
   }
 
-  emitWaitingForInput(session: Session): void {
+  async emitWaitingForInput(session: Session): Promise<void> {
     if (!this.deps.debounceWaitingEvent(session.id)) return;
 
     const planApprovalMode = session.pendingPlanApproval
@@ -389,15 +394,16 @@ export class SessionLifecycleService {
       session.pendingPlanApproval
       && planApprovalMode === "ask"
       && hasProvablePlanReviewPrompt(session, planDecisionVersion);
+    const pendingInputPromptText = session.pendingInputState?.promptText?.trim() || undefined;
     const questionContextPreview = !session.pendingPlanApproval
       ? this.deps.getOutputPreview(session)
       : undefined;
     const preview =
-      (!session.pendingPlanApproval && session.pendingInputState?.promptText)
-        ? session.pendingInputState.promptText
+      (!session.pendingPlanApproval && pendingInputPromptText)
+        ? pendingInputPromptText
         : (!session.pendingPlanApproval && questionContextPreview !== undefined)
           ? questionContextPreview
-        : this.deps.getOutputPreview(
+          : this.deps.getOutputPreview(
             session,
             session.pendingPlanApproval && planApprovalMode !== "delegate"
               ? Number.POSITIVE_INFINITY
@@ -434,11 +440,20 @@ export class SessionLifecycleService {
             )
         : undefined;
     const matchingPlanArtifact = resolvePlanArtifactForPrompt(session, planDecisionVersion);
+    const questionContextSummary = !session.pendingPlanApproval && this.deps.questionContextSummaryProvider
+      ? await buildQuestionContextMicroSummary({
+          sessionName: session.name,
+          question: pendingInputPromptText ?? preview,
+          context: questionContextPreview,
+          provider: this.deps.questionContextSummaryProvider,
+        })
+      : undefined;
     const payload = buildWaitingForInputPayload({
       session,
       preview,
-      questionText: !session.pendingPlanApproval ? session.pendingInputState?.promptText : undefined,
+      questionText: !session.pendingPlanApproval ? pendingInputPromptText : undefined,
       questionContextPreview,
+      questionContextSummary,
       planArtifact: matchingPlanArtifact,
       originThreadLine: this.deps.originThreadLine(session),
       planApprovalMode,

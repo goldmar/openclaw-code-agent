@@ -1,7 +1,6 @@
 import type { Session } from "../session";
 import type { NotificationButton } from "../session-interactions";
 import type { PlanApprovalMode, PlanArtifact } from "../types";
-import { lastCompleteLines } from "../format";
 import { buildPlanApprovalPromptContent, buildPlanReviewSummary } from "../plan-review-summary";
 import type { SessionNotificationMessage } from "../wake-dispatcher";
 
@@ -15,65 +14,28 @@ type WaitingForInputPayload = {
   planReviewSummary?: string;
 };
 
-const QUESTION_CONTEXT_MAX_CHARS = 240;
-
 function normalizeQuestionText(text: string | undefined): string | undefined {
   const trimmed = text?.trim();
   return trimmed ? trimmed : undefined;
 }
 
-function stripQuestionEchoFromContext(question: string | undefined, context: string | undefined): string | undefined {
-  const normalizedContext = context?.trim();
-  if (!normalizedContext) return undefined;
-  if (!question) return normalizedContext;
-
-  const questionTrimmed = question.trim();
-  const lines = normalizedContext
-    .split("\n")
-    .map((line) => line.trimEnd());
-
-  while (lines.length > 0 && !lines[lines.length - 1]?.trim()) lines.pop();
-  while (lines.length > 0 && lines[lines.length - 1]?.trim() === questionTrimmed) lines.pop();
-
-  const filtered = lines.filter((line, index, all) => {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed !== questionTrimmed) return true;
-    const hasOtherContent = all.some((candidate, candidateIndex) =>
-      candidateIndex !== index && candidate.trim().length > 0 && candidate.trim() !== questionTrimmed,
-    );
-    return !hasOtherContent;
-  });
-
-  const joined = filtered.join("\n").trim();
-  if (!joined || joined === questionTrimmed) return undefined;
-  return joined.length > QUESTION_CONTEXT_MAX_CHARS
-    ? lastCompleteLines(joined, QUESTION_CONTEXT_MAX_CHARS)
-    : joined;
-}
-
 function buildQuestionUserMessage(args: {
   sessionName: string;
   questionText?: string;
-  contextPreview?: string;
+  contextSummary?: string;
   hasButtons?: boolean;
 }): string {
   const questionText = normalizeQuestionText(args.questionText) ?? "The session is waiting for your reply.";
-  if (args.hasButtons) {
+  const contextSummary = normalizeQuestionText(args.contextSummary);
+  if (!contextSummary) {
     return `❓ [${args.sessionName}] Question waiting for reply:\n\n${questionText}`;
   }
-  const contextPreview = stripQuestionEchoFromContext(questionText, args.contextPreview);
-  if (!contextPreview) {
-    return `❓ [${args.sessionName}] Question waiting for reply:\n\n${questionText}`;
-  }
-
   return [
     `❓ [${args.sessionName}] Question waiting for reply:`,
     ``,
-    `Question:`,
     questionText,
     ``,
-    `Why this is asked:`,
-    contextPreview,
+    `Why: ${contextSummary}`,
   ].join("\n");
 }
 
@@ -108,6 +70,7 @@ export function buildWaitingForInputPayload(args: {
   preview: string;
   questionText?: string;
   questionContextPreview?: string;
+  questionContextSummary?: string;
   planArtifact?: PlanArtifact;
   originThreadLine: OriginThreadLine;
   planApprovalMode?: PlanApprovalMode;
@@ -118,7 +81,7 @@ export function buildWaitingForInputPayload(args: {
     session,
     preview,
     questionText,
-    questionContextPreview,
+    questionContextSummary,
     planArtifact,
     originThreadLine,
     planApprovalMode,
@@ -154,7 +117,7 @@ export function buildWaitingForInputPayload(args: {
     : buildQuestionUserMessage({
         sessionName: session.name,
         questionText: questionText ?? preview,
-        contextPreview: questionContextPreview,
+        contextSummary: questionContextSummary,
         hasButtons: Boolean(questionButtons),
       });
   const userMessages = isPlanApproval
