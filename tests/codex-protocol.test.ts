@@ -185,21 +185,14 @@ describe("codex protocol turn payloads", () => {
     );
   });
 
-  it("keeps legacy top-level request_user_input fields working for Codex compatibility", () => {
-    const state = buildPendingInputState("tool/requestUserInput", "req-legacy", {
+  it("rejects top-level-only Codex request_user_input payloads with an explicit diagnostic", () => {
+    assert.throws(() => buildPendingInputState("tool/requestUserInput", "req-legacy", {
       question: "Choose an environment",
       options: [{
         label: "Staging",
         description: "Use staging credentials.",
       }, "Production"],
-    });
-
-    assert.equal(state.kind, "question");
-    assert.equal(state.promptText, "Choose an environment");
-    assert.deepEqual(state.options, ["Staging", "Production"]);
-    assert.equal(state.questions, undefined);
-    assert.deepEqual(state.actions?.map((action) => action.label), ["Staging", "Production"]);
-    assert.match(state.promptText ?? "", /Choose an environment/);
+    }), /Malformed Codex request_user_input payload for req-legacy: expected non-empty questions\[\]/);
   });
 
   it("defensively extracts observed nested Codex request_user_input questions and option metadata", () => {

@@ -302,7 +302,14 @@ export class CodexHarness implements AgentHarness {
       }
 
       const requestId = ids.requestId ?? `${threadId ?? "codex"}-${Date.now().toString(36)}`;
-      const state = buildPendingInputState(method, requestId, params);
+      let state: PendingInputState;
+      try {
+        state = buildPendingInputState(method, requestId, params);
+      } catch (error) {
+        const message = errorMessage(error);
+        console.warn(`[CodexHarness] ${message}`);
+        return { error: message };
+      }
       const methodLower = method.trim().toLowerCase();
       const options = state.options;
       const actions = state.actions ?? [];

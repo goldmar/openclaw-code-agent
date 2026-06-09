@@ -329,7 +329,7 @@ describe("CodexHarness App Server mapping", () => {
     assert.equal(result?.data.result, undefined);
   });
 
-  it("emits structured pending input and resolves button selections", async () => {
+  it("emits nested structured pending input and resolves button selections", async () => {
     const client = new MockJsonRpcClient({
       pendingInput: {
         method: "turn/requestUserInput",
@@ -337,8 +337,11 @@ describe("CodexHarness App Server mapping", () => {
           threadId: "thread-123",
           turnId: "turn-1",
           requestId: "req-1",
-          question: "Choose an environment",
-          options: ["Staging", "Production"],
+          questions: [{
+            id: "environment",
+            question: "Choose an environment",
+            options: ["Staging", "Production"],
+          }],
         },
       },
     });
@@ -367,10 +370,53 @@ describe("CodexHarness App Server mapping", () => {
 
     const pending = seen.find((message) => message.type === "pending_input") as Extract<HarnessMessage, { type: "pending_input" }> | undefined;
     const resolved = seen.find((message) => message.type === "pending_input_resolved") as Extract<HarnessMessage, { type: "pending_input_resolved" }> | undefined;
-    assert.equal(pending?.state.promptText, "Choose an environment");
+    assert.match(pending?.state.promptText ?? "", /^Choose an environment/);
+    assert.match(pending?.state.promptText ?? "", /Options:/);
     assert.deepEqual(pending?.state.options, ["Staging", "Production"]);
+    assert.equal(pending?.state.questions?.[0]?.id, "environment");
     assert.equal(Boolean(resolved), true);
-    assert.deepEqual(client.pendingInputResponses[0], { option: "Production", index: 1 });
+    assert.deepEqual(client.pendingInputResponses[0], {
+      answers: {
+        environment: {
+          answers: ["Production"],
+        },
+      },
+    });
+  });
+
+  it("logs and rejects top-level-only Codex request_user_input payloads without pending input", async () => {
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]) => {
+      warnings.push(args.map(String).join(" "));
+    };
+    try {
+      const client = new MockJsonRpcClient({
+        pendingInput: {
+          method: "turn/requestUserInput",
+          params: {
+            threadId: "thread-123",
+            turnId: "turn-1",
+            requestId: "req-1",
+            question: "Choose an environment",
+            options: ["Staging", "Production"],
+          },
+        },
+      });
+      const harness = new CodexHarness({
+        createClient: () => client as any,
+      });
+
+      const messages = await collectMessages(harness.launch({ prompt: "deploy it", cwd: "/tmp" }));
+
+      assert.equal(messages.some((message) => message.type === "pending_input"), false);
+      assert.match(warnings.join("\n"), /Malformed Codex request_user_input payload for req-1: expected non-empty questions\[\]/);
+      assert.deepEqual(client.pendingInputResponses[0], {
+        error: "Malformed Codex request_user_input payload for req-1: expected non-empty questions[]",
+      });
+    } finally {
+      console.warn = originalWarn;
+    }
   });
 
   it("resolves nested Codex question options as request_user_input answers", async () => {
@@ -632,8 +678,11 @@ describe("CodexHarness App Server mapping", () => {
           threadId: "thread-123",
           turnId: "turn-1",
           requestId: "req-1",
-          question: "Need rationale",
-          options: ["Short", "Long"],
+          questions: [{
+            id: "rationale",
+            question: "Need rationale",
+            options: ["Short", "Long"],
+          }],
         },
       },
     });
@@ -661,8 +710,14 @@ describe("CodexHarness App Server mapping", () => {
     }
 
     const pending = seen.find((message) => message.type === "pending_input") as Extract<HarnessMessage, { type: "pending_input" }> | undefined;
-    assert.equal(pending?.state.promptText, "Need rationale");
-    assert.deepEqual(client.pendingInputResponses[0], { text: "Use explicit names" });
+    assert.match(pending?.state.promptText ?? "", /^Need rationale/);
+    assert.deepEqual(client.pendingInputResponses[0], {
+      answers: {
+        rationale: {
+          answers: ["Use explicit names"],
+        },
+      },
+    });
   });
 
   it("emits finalized plan artifacts from Codex plan notifications", async () => {

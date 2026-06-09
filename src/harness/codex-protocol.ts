@@ -406,20 +406,26 @@ function normalizeApprovalDecision(value: string): string {
 
 export function buildPendingInputState(method: string, requestId: string, requestParams: unknown): PendingInputState {
   const methodLower = method.trim().toLowerCase();
+  const isApproval = methodLower.includes("requestapproval");
+  const isUserInput = methodLower.includes("requestuserinput");
   const questions = extractPendingInputQuestions(requestParams);
-  const topLevelOptions = extractPendingInputOptions(requestParams);
+  if (isUserInput && questions.length === 0) {
+    throw new Error(`Malformed Codex request_user_input payload for ${requestId}: expected non-empty questions[]`);
+  }
+  const topLevelOptions = isApproval ? extractPendingInputOptions(requestParams) : [];
   const activeQuestionIndex = questions.length > 0 ? 0 : undefined;
   const activeQuestion = activeQuestionIndex != null ? questions[activeQuestionIndex] : undefined;
   const structuredOptions = activeQuestion ? activeQuestion.options : [];
-  const optionRecords = structuredOptions.length > 0 ? structuredOptions : topLevelOptions;
+  const optionRecords = isApproval && structuredOptions.length === 0 ? topLevelOptions : structuredOptions;
   const options = optionRecords.map((option) => option.label);
   const promptText =
     (activeQuestion
       ? formatPendingInputWizardQuestion(activeQuestion, activeQuestionIndex ?? 0, questions.length)
       : formatPendingInputQuestions(questions)) ??
-    firstNestedString(requestParams, ["question", "prompt", "message", "text", "summary", "reason"]) ??
+    (isApproval
+      ? firstNestedString(requestParams, ["question", "prompt", "message", "text", "summary", "reason"])
+      : undefined) ??
     undefined;
-  const isApproval = methodLower.includes("requestapproval");
   const actions: PendingInputAction[] = isApproval
     ? options.map((option) => ({
         kind: "approval" as const,
