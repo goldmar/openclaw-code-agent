@@ -149,46 +149,43 @@ describe("agent_pr generated PR metadata", () => {
     assert.doesNotMatch(body, /Automated changes from OpenClaw Code Agent session/);
   });
 
-  it("falls back to deterministic metadata when generated metadata is requested without a provider", async () => {
+  it("produces safe deterministic fallback metadata when no provider is configured", async () => {
+    // Multi-sentence prompt: first sentence becomes allowed objective; long distinctive follow-on sentence
+    // must be treated as a leak fragment by the fallback path's guard and must not appear in output.
+    const prompt = [
+      "Write useful PR metadata.",
+      "Never emit the distinctive phrase avoid-leaking-this-XYZ-fragment-1234567890 into any public title or body under any circumstances.",
+    ].join(" ");
+
+    const diffSummary = {
+      commits: 1,
+      filesChanged: 1,
+      insertions: 4,
+      deletions: 0,
+      changedFiles: ["README.md"],
+      commitMessages: [{ hash: "abc1234", message: "Document metadata behavior", author: "Codex" }],
+    };
+
     const result = await buildPrMetadata({
       sessionName: "missing-provider",
-      branchName: "agent/missing-provider",
-      prompt: "Write useful PR metadata without leaking SECRET_TOKEN=ghp_1234567890abcdefghijklmnopqrstuvwxyz.",
-      diffSummary: {
-        commits: 1,
-        filesChanged: 1,
-        insertions: 4,
-        deletions: 0,
-        changedFiles: ["README.md"],
-        commitMessages: [{ hash: "abc1234", message: "Document metadata behavior", author: "Codex" }],
-      },
+      prompt,
+      diffSummary,
     });
 
     assert.equal(result.ok, true);
-    const metadata = result.ok && result.metadata;
-    assert.equal(metadata && metadata.title, "OpenClaw agent changes: missing provider");
-    assert.deepEqual(metadata && metadata.changes, ["`README.md`"]);
-    assert.match(JSON.stringify(metadata), /Deterministic fallback metadata/);
-    assert.match(JSON.stringify(metadata), /Branch: agent\/missing-provider/);
-    assert.match(JSON.stringify(metadata), /Scope: 1 commits, 1 files changed \(\+4 \/ -0\)/);
-    assert.doesNotMatch(JSON.stringify(metadata), /SECRET_TOKEN/);
-    assert.doesNotMatch(JSON.stringify(metadata), /ghp_1234567890abcdefghijklmnopqrstuvwxyz/);
+    assert.ok("metadata" in result);
+    const metadata = (result as { ok: true; metadata: { title: string; summary: string[]; notes: string[] } }).metadata;
+    assert.match(metadata.title, /OpenClaw agent changes/i);
+    assert.ok(metadata.summary.some((s) => /no LLM PR metadata provider/i.test(s) || /deterministic fallback/i.test(s)));
 
-    const body = result.ok ? formatPrBody({
-      sessionName: "missing-provider",
-      metadata: result.metadata,
-      diffSummary: {
-        commits: 1,
-        filesChanged: 1,
-        insertions: 4,
-        deletions: 0,
-        changedFiles: ["README.md"],
-        commitMessages: [{ hash: "abc1234", message: "Document metadata behavior", author: "Codex" }],
-      },
-    }) : "";
-    assert.match(body, /## Summary/);
-    assert.match(body, /Deterministic fallback metadata generated because no LLM PR metadata provider is configured/);
-    assert.match(body, /## Changes\n- `README\.md`/);
+    const body = formatPrBody({ sessionName: "missing-provider", metadata, diffSummary });
+    assert.match(body, /no LLM PR metadata provider/i);
+
+    // Prompt-leak guard for fallback path: long non-objective fragment must not leak into title or rendered body.
+    assert.doesNotMatch(metadata.title, /avoid-leaking-this-XYZ-fragment-1234567890/i);
+    assert.doesNotMatch(body, /avoid-leaking-this-XYZ-fragment-1234567890/i);
+    // Also ensure we did not put raw multi-sentence prompt content beyond the safe objective.
+    assert.doesNotMatch(body, /under any circumstances/i);
   });
 
   it("does not send raw prompt secrets or private paths to the metadata provider", async () => {

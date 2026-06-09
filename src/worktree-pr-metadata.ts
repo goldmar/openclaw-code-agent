@@ -2,7 +2,6 @@ import type { DiffSummary } from "./worktree";
 
 export interface PrMetadataEvidence {
   sessionName: string;
-  branchName?: string;
   objective?: string;
   stats?: {
     commits: number;
@@ -118,19 +117,8 @@ function defaultNotes(): string[] {
   ];
 }
 
-function formatSafeSessionName(sessionName: string): string {
-  return truncateText(
-    redactSensitiveText(sessionName)
-      .replace(/[-_]+/g, " ")
-      .replace(/\s+/g, " ")
-      .trim() || "agent worktree",
-    80,
-  );
-}
-
 function buildPrMetadataEvidence(args: {
   sessionName: string;
-  branchName?: string;
   prompt?: string;
   diffSummary?: DiffSummary;
 }): PrMetadataEvidence {
@@ -138,7 +126,6 @@ function buildPrMetadataEvidence(args: {
   const diffSummary = args.diffSummary;
   return {
     sessionName: args.sessionName,
-    branchName: args.branchName ? redactSensitiveText(args.branchName).replace(/\s+/g, " ").trim() : undefined,
     objective,
     stats: diffSummary
       ? {
@@ -152,37 +139,6 @@ function buildPrMetadataEvidence(args: {
     commitSubjects: formatCommitSubjects(diffSummary, 5),
     validation: defaultValidation(),
     notes: defaultNotes(),
-  };
-}
-
-function buildFallbackPrMetadata(evidence: PrMetadataEvidence): PrMetadata {
-  const safeSessionName = formatSafeSessionName(evidence.sessionName);
-  const title = truncateText(`OpenClaw agent changes: ${safeSessionName}`, 90);
-  const summary = [
-    "Deterministic fallback metadata generated because no LLM PR metadata provider is configured.",
-    `Session: ${safeSessionName}.`,
-    ...(evidence.branchName ? [`Branch: ${evidence.branchName}.`] : []),
-    ...(evidence.objective ? [`Objective: ${evidence.objective}`] : []),
-    ...(evidence.stats
-      ? [`Scope: ${evidence.stats.commits} commits, ${evidence.stats.filesChanged} files changed (+${evidence.stats.insertions} / -${evidence.stats.deletions}).`]
-      : ["Scope: Diff summary was unavailable when the PR body was generated."]),
-  ];
-  const changes = evidence.changedFiles.length > 0
-    ? evidence.changedFiles.slice(0, 10).map((file) => `\`${file}\``)
-    : ["Review the pushed worktree branch for the full set of changes."];
-  const moreFiles = evidence.changedFiles.length > 10
-    ? [`...and ${evidence.changedFiles.length - 10} more changed files.`]
-    : [];
-
-  return {
-    title,
-    summary,
-    changes: [...changes, ...moreFiles],
-    validation: evidence.validation,
-    notes: [
-      "Fallback metadata is conservative; review the diff and CI/checks before marking the draft PR ready.",
-      ...evidence.notes,
-    ],
   };
 }
 
@@ -304,16 +260,130 @@ function validateGeneratedPrMetadata(
   return metadata;
 }
 
+function buildFallbackPrMetadata(evidence: PrMetadataEvidence, prompt: string | undefined): PrMetadata {
+  const safeName = truncateText(
+    redactSensitiveText(evidence.sessionName).replace(/[-_]+/g, " ").replace(/\s+/g, " ").trim() || "agent worktree",
+    80,
+  );
+  const title = truncateText(`OpenClaw agent changes: ${safeName}`, 90);
+
+  const baseSummary = [
+    "Deterministic fallback metadata generated because no LLM PR metadata provider is configured.",
+    `Session: ${safeName}.`,
+    ...(evidence.objective ? [`Objective: ${evidence.objective}`] : []),
+    ...(evidence.stats
+      ? [`Scope: ${evidence.stats.commits} commits, ${evidence.stats.filesChanged} files changed (+${evidence.stats.insertions} / -${evidence.stats.deletions}).`]
+      : ["Scope: Diff summary was unavailable when the PR body was generated."]),
+  ];
+  const baseChanges = evidence.changedFiles.length > 0
+    ? evidence.changedFiles.slice(0, 10).map((f) => `\`${f}\``)
+    : ["Review the pushed worktree branch for the full set of changes."];
+  const moreFiles = evidence.changedFiles.length > 10 ? [`...and ${evidence.changedFiles.length - 10} more changed files.`] : [];
+  const baseNotes = [
+    "Fallback metadata is conservative; review the diff and CI/checks before marking the draft PR ready.",
+    ...evidence.notes,
+  ];
+
+  let metadata: PrMetadata = {
+    title,
+    summary: baseSummary,
+    changes: [...baseChanges, ...moreFiles],
+    validation: evidence.validation,
+    notes: baseNotes,
+  };
+
+  let sanitizedForLeak = false;
+  let sanitizedForUnknownFile = false;
+
+  const guard = (s: string): string => {
+    let out = sanitizeMetadataText(s);
+    if (includesPromptLeak(out, prompt, evidence)) {
+      sanitizedForLeak = true;
+      const frags = promptLeakFragments(prompt, evidence.objective);
+      for (const f of frags) {
+        const re = new RegExp(f.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+        out = out.replace(re, "[redacted prompt detail]");
+      }
+      out = sanitizeMetadataText(out);
+    }
+    if (mentionsUnknownFile(out, evidence)) {
+      sanitizedForUnknownFile = true;
+      out = "[redacted file reference outside change set]";
+    }
+    out = sanitizeMetadataText(out);
+    if (includesPromptLeak(out, prompt, evidence) || containsSensitiveText(out)) {
+      sanitizedForLeak = true;
+      out = "[redacted prompt detail]";
+    }
+    return out;
+  };
+
+  metadata = {
+    title: guard(metadata.title) || truncateText(`OpenClaw agent changes: ${safeName}`, 90),
+    summary: metadata.summary.map(guard).filter((s) => s && s.length > 0),
+    changes: metadata.changes.map(guard).filter((s) => s && s.length > 0),
+    validation: metadata.validation.map(guard).filter((s) => s && s.length > 0),
+    notes: metadata.notes.map(guard).filter((s) => s && s.length > 0),
+  };
+
+  if (metadata.summary.length === 0) {
+    metadata.summary = ["Deterministic fallback metadata generated because no LLM PR metadata provider is configured."];
+  }
+  if (metadata.changes.length === 0) {
+    metadata.changes = ["Review the pushed worktree branch for the full set of changes."];
+  }
+  if (metadata.validation.length === 0) {
+    metadata.validation = defaultValidation();
+  }
+  if (metadata.notes.length === 0) {
+    metadata.notes = defaultNotes();
+  }
+
+  if (sanitizedForLeak || sanitizedForUnknownFile) {
+    const warn = "Some content was stripped from fallback metadata due to safety checks (prompt leak guard or references to files outside the diff).";
+    if (!metadata.notes.some((n) => n.toLowerCase().includes("stripped") || n.toLowerCase().includes("sanitized"))) {
+      metadata.notes = [...metadata.notes, warn];
+    }
+  }
+
+  const finalAll = [
+    metadata.title,
+    ...metadata.summary,
+    ...metadata.changes,
+    ...metadata.validation,
+    ...metadata.notes,
+  ];
+  if (
+    finalAll.some((item) => !item) ||
+    finalAll.some((item) => containsSensitiveText(item) || includesPromptLeak(item, prompt, evidence)) ||
+    finalAll.some((item) => mentionsUnknownFile(item, evidence))
+  ) {
+    const ultraSafeName = truncateText(redactSensitiveText(evidence.sessionName).replace(/[-_]+/g, " ").trim() || "session", 60);
+    metadata = {
+      title: truncateText(`OpenClaw agent changes: ${ultraSafeName}`, 90),
+      summary: ["Deterministic fallback metadata (sanitized for safety)."],
+      changes: evidence.changedFiles.length > 0 ? evidence.changedFiles.slice(0, 5).map((f) => `\`${f}\``) : ["See the worktree branch diff for the full set of changes."],
+      validation: defaultValidation(),
+      notes: [
+        "Fallback metadata was hardened because prompt-leak or unknown-file checks were triggered after initial construction.",
+        "Review the actual diff, session output, and CI before merging.",
+      ],
+    };
+  }
+
+  return metadata;
+}
+
 export async function buildPrMetadata(args: {
   sessionName: string;
-  branchName?: string;
   prompt?: string;
   diffSummary?: DiffSummary;
   provider?: PrMetadataProvider;
 }): Promise<PrMetadataResult> {
   const evidence = buildPrMetadataEvidence(args);
   if (!args.provider) {
-    return { ok: true, metadata: buildFallbackPrMetadata(evidence), evidence };
+    const metadata = buildFallbackPrMetadata(evidence, args.prompt);
+    return { ok: true, metadata, evidence };
   }
 
   try {

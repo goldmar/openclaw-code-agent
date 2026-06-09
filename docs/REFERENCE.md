@@ -558,6 +558,14 @@ Successful cleanup clears the tracked branch/path and persists the resolved life
 
 ## Chat Commands
 
+For natural-language launches, the plugin ships with `oca` as a built-in short name for OpenClaw Code Agent. No custom local alias config is needed for these phrase shapes:
+
+```text
+Let oca do the auth middleware bug fix.
+Ask oca to add tests for the billing flow.
+Have oca handle the failing dashboard smoke test.
+```
+
 | Command | Purpose |
 | --- | --- |
 | `/agent` | Launch a session from chat |
