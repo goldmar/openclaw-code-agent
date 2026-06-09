@@ -407,10 +407,18 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
                 prNumber: newPrStatus.number,
                 targetRepo,
               }),
+
+              // Surface any warnings from createPR (e.g. fell back to non-draft)
+              warnings: prResult.warnings,
             },
           );
 
-          return { content: [{ type: "text", text: outcomeLine }], meta: { success: true, state: "created" } } satisfies AgentPrExecuteResult;
+          // If we had to fall back from draft, append a visible note
+          const finalText = prResult.warnings && prResult.warnings.length > 0
+            ? `${outcomeLine}\n\n\u26a0\ufe0f  ${prResult.warnings.join("; ")}`
+            : outcomeLine;
+
+          return { content: [{ type: "text", text: finalText }], meta: { success: true, state: "created" } } satisfies AgentPrExecuteResult;
         } else {
           return { content: [{ type: "text", text: `❌ Failed to create PR: ${prResult.error ?? "unknown error"}` }], meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
         }

@@ -349,14 +349,6 @@ function buildFallbackPrMetadata(evidence: PrMetadataEvidence, prompt: string | 
     }
   }
 
-  if (evidence.branchName) {
-    const safeBranch = sanitizeMetadataText(evidence.branchName);
-    // Append after guards so a branch name that looks like a file path cannot trigger unknown-file redaction on title/summary.
-    if (!metadata.notes.some((n) => n.toLowerCase().includes(safeBranch.toLowerCase()))) {
-      metadata.notes = [...metadata.notes, `Branch: ${safeBranch}`];
-    }
-  }
-
   const finalAll = [
     metadata.title,
     ...metadata.summary,
@@ -380,6 +372,14 @@ function buildFallbackPrMetadata(evidence: PrMetadataEvidence, prompt: string | 
         "Review the actual diff, session output, and CI before merging.",
       ],
     };
+  }
+
+  // Append branch note *after* the finalAll safety check (and any hardening) so a branch name that looks like a file path cannot trigger mentionsUnknownFile and cause redaction/hardening of the main metadata.
+  if (evidence.branchName) {
+    const safeBranch = sanitizeMetadataText(evidence.branchName);
+    if (!metadata.notes.some((n) => n.toLowerCase().includes(safeBranch.toLowerCase()))) {
+      metadata.notes = [...metadata.notes, `Branch: ${safeBranch}`];
+    }
   }
 
   return metadata;

@@ -5,6 +5,7 @@ export interface PRResult {
   success: boolean;
   prUrl?: string;
   error?: string;
+  warnings?: string[];
 }
 
 export interface PRStatus {
@@ -101,7 +102,7 @@ export function createPR(
           stdio: ["pipe", "pipe", "pipe"],
         });
         const retryUrl = retryResult.trim();
-        return { success: true, prUrl: retryUrl };
+        return { success: true, prUrl: retryUrl, warnings: ["Target repo does not support draft PRs; created as regular (non-draft) PR instead."] };
       } catch (retryErr) {
         const retryMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
         return { success: false, error: `Draft PR creation failed (${msg}); non-draft retry also failed: ${retryMsg}` };
