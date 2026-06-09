@@ -1,6 +1,6 @@
 ---
-name: Code Agent Orchestration
-description: Skill for orchestrating coding agent sessions from OpenClaw. Covers launching, monitoring, plan approval, lifecycle management, and worktree decisions.
+name: Code Agent Orchestration (OCA)
+description: Skill for orchestrating coding agent sessions from OpenClaw, including OCA requests such as "let oca do...", "ask oca to...", or "have oca handle...". Covers launching, monitoring, plan approval, lifecycle management, and worktree decisions.
 metadata:
   openclaw:
     homepage: https://github.com/goldmar/openclaw-code-agent
@@ -16,7 +16,7 @@ metadata:
 
 # Code Agent Orchestration
 
-Use `openclaw-code-agent` to run Claude Code, Codex, or experimental OpenCode sessions as background coding jobs from chat.
+Use `openclaw-code-agent` to run Claude Code, Codex, or experimental OpenCode sessions as background coding jobs from chat. Treat `oca` as the built-in short name for OpenClaw Code Agent when a user says phrases such as "let oca do ...", "ask oca to ...", or "have oca handle ...".
 
 ## Launch
 

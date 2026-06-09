@@ -170,6 +170,29 @@ describe("plugin entry source", () => {
     assert.doesNotMatch(frontmatter, /,\s*[\]}]/);
   });
 
+  it("declares OCA as a built-in natural-language trigger in skill metadata and docs", () => {
+    const skill = readFileSync(
+      join(rootDir, "skills", "code-agent-orchestration", "SKILL.md"),
+      "utf8",
+    );
+    const readme = readFileSync(join(rootDir, "README.md"), "utf8");
+    const reference = readFileSync(join(rootDir, "docs", "REFERENCE.md"), "utf8");
+    const frontmatter = skill.match(/^---\n([\s\S]*?)\n---\n/)?.[1] ?? "";
+
+    assert.match(frontmatter, /^name:\s+Code Agent Orchestration \(OCA\)$/m);
+    assert.match(frontmatter, /orchestrating coding agent sessions from OpenClaw/);
+    assert.match(frontmatter, /let oca do/);
+    assert.match(frontmatter, /ask oca to/);
+    assert.match(frontmatter, /have oca handle/);
+    assert.match(skill, /built-in short name for OpenClaw Code Agent/);
+    for (const source of [readme, reference]) {
+      assert.match(source, /[Nn]o (?:local alias config|custom local alias config) is needed/);
+      assert.match(source, /Let oca do/);
+      assert.match(source, /Ask oca to/);
+      assert.match(source, /Have oca handle/);
+    }
+  });
+
   it("does not use the removed OpenClaw embedded-extension factory API", () => {
     const removedApi = ["register", "Embedded", "Extension", "Factory"].join("");
     const trackedFiles = execFileSync("git", ["ls-files"], {
