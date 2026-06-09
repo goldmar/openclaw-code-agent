@@ -295,7 +295,7 @@ let openCodeStartupMutex: Promise<void> = Promise.resolve();
 function withOpenCodeStartupMutex<T>(fn: () => Promise<T>): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const next = openCodeStartupMutex.then(() => fn().then(resolve, reject));
-    openCodeStartupMutex = next.catch(() => undefined);
+    openCodeStartupMutex = next.catch((): void => undefined);
   });
 }
 
