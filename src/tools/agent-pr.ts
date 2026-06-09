@@ -341,6 +341,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
         if (!params.title || !params.body) {
           const metadataResult = await buildPrMetadata({
             sessionName,
+            branchName,
             prompt: target.prompt,
             diffSummary,
             provider: options.metadataProvider,
@@ -366,7 +367,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
         }
 
         // Open the PR after title/body generation is complete.
-        const prResult = createPR(originalWorkdir, branchName, baseBranch, prTitle, prBody, targetRepo);
+        const prResult = createPR(originalWorkdir, branchName, baseBranch, prTitle, prBody, targetRepo, { draft: true });
 
         if (prResult.success && prResult.prUrl) {
           // Sync again to get PR number

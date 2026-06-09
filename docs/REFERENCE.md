@@ -503,7 +503,9 @@ Create or update a GitHub PR for a worktree branch.
 | `base_branch` | `string` | No | Defaults to detected base branch |
 | `force_new` | `boolean` | No | Reject instead of updating an existing PR |
 
-The PR path pushes the worktree branch on demand, then handles open, merged, and closed PR states instead of blindly creating duplicates.
+The PR path pushes the worktree branch on demand, then handles open, merged, and closed PR states instead of blindly creating duplicates. Newly created agent-authored worktree PRs are opened as GitHub draft PRs by default so a human can review before marking them ready. Existing open PR updates preserve the PR's current draft/ready state.
+
+When `title` or `body` is omitted, `agent_pr` prefers configured LLM-generated PR metadata. If no metadata provider is configured, it falls back to deterministic conservative metadata derived from the session name, branch, prompt snippet, and diff summary so explicit PR creation flows can still complete.
 
 PR opened and PR updated outcomes use the same post-outcome follow-up contract as merge outcomes: the canonical PR status is delivered first, then the orchestrator is woken with the authoritative session origin route/thread block and must send one concise factual summary in that route/topic.
 

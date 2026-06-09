@@ -149,10 +149,11 @@ describe("agent_pr generated PR metadata", () => {
     assert.doesNotMatch(body, /Automated changes from OpenClaw Code Agent session/);
   });
 
-  it("fails explicitly when generated metadata is requested without a provider", async () => {
+  it("falls back to deterministic metadata when generated metadata is requested without a provider", async () => {
     const result = await buildPrMetadata({
       sessionName: "missing-provider",
-      prompt: "Write useful PR metadata.",
+      branchName: "agent/missing-provider",
+      prompt: "Write useful PR metadata without leaking SECRET_TOKEN=ghp_1234567890abcdefghijklmnopqrstuvwxyz.",
       diffSummary: {
         commits: 1,
         filesChanged: 1,
@@ -163,9 +164,31 @@ describe("agent_pr generated PR metadata", () => {
       },
     });
 
-    assert.equal(result.ok, false);
-    assert.match(result.ok ? "" : result.error, /requires an LLM metadata provider/);
-    assert.equal("metadata" in result, false);
+    assert.equal(result.ok, true);
+    const metadata = result.ok && result.metadata;
+    assert.equal(metadata && metadata.title, "OpenClaw agent changes: missing provider");
+    assert.deepEqual(metadata && metadata.changes, ["`README.md`"]);
+    assert.match(JSON.stringify(metadata), /Deterministic fallback metadata/);
+    assert.match(JSON.stringify(metadata), /Branch: agent\/missing-provider/);
+    assert.match(JSON.stringify(metadata), /Scope: 1 commits, 1 files changed \(\+4 \/ -0\)/);
+    assert.doesNotMatch(JSON.stringify(metadata), /SECRET_TOKEN/);
+    assert.doesNotMatch(JSON.stringify(metadata), /ghp_1234567890abcdefghijklmnopqrstuvwxyz/);
+
+    const body = result.ok ? formatPrBody({
+      sessionName: "missing-provider",
+      metadata: result.metadata,
+      diffSummary: {
+        commits: 1,
+        filesChanged: 1,
+        insertions: 4,
+        deletions: 0,
+        changedFiles: ["README.md"],
+        commitMessages: [{ hash: "abc1234", message: "Document metadata behavior", author: "Codex" }],
+      },
+    }) : "";
+    assert.match(body, /## Summary/);
+    assert.match(body, /Deterministic fallback metadata generated because no LLM PR metadata provider is configured/);
+    assert.match(body, /## Changes\n- `README\.md`/);
   });
 
   it("does not send raw prompt secrets or private paths to the metadata provider", async () => {

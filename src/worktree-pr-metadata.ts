@@ -2,6 +2,7 @@ import type { DiffSummary } from "./worktree";
 
 export interface PrMetadataEvidence {
   sessionName: string;
+  branchName?: string;
   objective?: string;
   stats?: {
     commits: number;
@@ -117,8 +118,19 @@ function defaultNotes(): string[] {
   ];
 }
 
+function formatSafeSessionName(sessionName: string): string {
+  return truncateText(
+    redactSensitiveText(sessionName)
+      .replace(/[-_]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim() || "agent worktree",
+    80,
+  );
+}
+
 function buildPrMetadataEvidence(args: {
   sessionName: string;
+  branchName?: string;
   prompt?: string;
   diffSummary?: DiffSummary;
 }): PrMetadataEvidence {
@@ -126,6 +138,7 @@ function buildPrMetadataEvidence(args: {
   const diffSummary = args.diffSummary;
   return {
     sessionName: args.sessionName,
+    branchName: args.branchName ? redactSensitiveText(args.branchName).replace(/\s+/g, " ").trim() : undefined,
     objective,
     stats: diffSummary
       ? {
@@ -139,6 +152,37 @@ function buildPrMetadataEvidence(args: {
     commitSubjects: formatCommitSubjects(diffSummary, 5),
     validation: defaultValidation(),
     notes: defaultNotes(),
+  };
+}
+
+function buildFallbackPrMetadata(evidence: PrMetadataEvidence): PrMetadata {
+  const safeSessionName = formatSafeSessionName(evidence.sessionName);
+  const title = truncateText(`OpenClaw agent changes: ${safeSessionName}`, 90);
+  const summary = [
+    "Deterministic fallback metadata generated because no LLM PR metadata provider is configured.",
+    `Session: ${safeSessionName}.`,
+    ...(evidence.branchName ? [`Branch: ${evidence.branchName}.`] : []),
+    ...(evidence.objective ? [`Objective: ${evidence.objective}`] : []),
+    ...(evidence.stats
+      ? [`Scope: ${evidence.stats.commits} commits, ${evidence.stats.filesChanged} files changed (+${evidence.stats.insertions} / -${evidence.stats.deletions}).`]
+      : ["Scope: Diff summary was unavailable when the PR body was generated."]),
+  ];
+  const changes = evidence.changedFiles.length > 0
+    ? evidence.changedFiles.slice(0, 10).map((file) => `\`${file}\``)
+    : ["Review the pushed worktree branch for the full set of changes."];
+  const moreFiles = evidence.changedFiles.length > 10
+    ? [`...and ${evidence.changedFiles.length - 10} more changed files.`]
+    : [];
+
+  return {
+    title,
+    summary,
+    changes: [...changes, ...moreFiles],
+    validation: evidence.validation,
+    notes: [
+      "Fallback metadata is conservative; review the diff and CI/checks before marking the draft PR ready.",
+      ...evidence.notes,
+    ],
   };
 }
 
@@ -262,17 +306,14 @@ function validateGeneratedPrMetadata(
 
 export async function buildPrMetadata(args: {
   sessionName: string;
+  branchName?: string;
   prompt?: string;
   diffSummary?: DiffSummary;
   provider?: PrMetadataProvider;
 }): Promise<PrMetadataResult> {
   const evidence = buildPrMetadataEvidence(args);
   if (!args.provider) {
-    return {
-      ok: false,
-      error: "PR metadata generation requires an LLM metadata provider. Pass explicit title and body, or configure a provider before creating the PR.",
-      evidence,
-    };
+    return { ok: true, metadata: buildFallbackPrMetadata(evidence), evidence };
   }
 
   try {

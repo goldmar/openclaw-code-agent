@@ -15,6 +15,10 @@ export interface PRStatus {
   title?: string;
 }
 
+export interface CreatePROptions {
+  draft?: boolean;
+}
+
 export interface WorktreeOutcomeParams {
   kind: "merge" | "pr-opened" | "pr-updated";
   branch: string;
@@ -33,6 +37,7 @@ export function createPR(
   title: string,
   body: string,
   targetRepo?: string,
+  options: CreatePROptions = {},
 ): PRResult {
   if (!isGitHubCLIAvailable()) {
     return { success: false, error: "GitHub CLI (gh) is not available" };
@@ -55,6 +60,9 @@ export function createPR(
     }
 
     const args = ["pr", "create", "--base", base];
+    if (options.draft ?? true) {
+      args.push("--draft");
+    }
     if (targetRepo) {
       args.push("--repo", targetRepo);
     }
