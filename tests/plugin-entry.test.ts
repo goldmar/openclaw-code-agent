@@ -170,7 +170,7 @@ describe("plugin entry source", () => {
     assert.doesNotMatch(frontmatter, /,\s*[\]}]/);
   });
 
-  it("declares OCA as a built-in natural-language trigger while preserving the existing skill trigger", () => {
+  it("declares OCA as a built-in natural-language trigger in skill metadata and docs", () => {
     const skill = readFileSync(
       join(rootDir, "skills", "code-agent-orchestration", "SKILL.md"),
       "utf8",
