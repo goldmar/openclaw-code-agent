@@ -301,34 +301,34 @@ function withOpenCodeStartupMutex<T>(fn: () => Promise<T>): Promise<T> {
 
 async function startOpenCodeServerOnce(options: { cwd: string; signal?: AbortSignal; fetch?: FetchLike; requestTimeoutMs?: number; startupTimeoutMs?: number }): Promise<OpenCodeServerHandle> {
   return withOpenCodeStartupMutex(async () => {
-  const port = await getFreePort();
-  const requestedCommand = process.env[OPENCODE_COMMAND_ENV]?.trim() || "opencode";
-  const command = resolveCommandPath(requestedCommand);
-  const args = [
-    "serve",
-    "--hostname",
-    "127.0.0.1",
-    "--port",
-    String(port),
-    "--print-logs",
-  ];
-  const fetchImpl = options.fetch ?? fetch;
-  const readinessRequestTimeoutMs = Math.min(options.requestTimeoutMs ?? REQUEST_TIMEOUT_MS, 10_000);
-  const startupTimeoutMs = options.startupTimeoutMs ?? STARTUP_TIMEOUT_MS;
-  const child = spawn(command, args, {
-    cwd: options.cwd,
-    stdio: ["ignore", "pipe", "pipe"],
-  }) as ChildProcessWithoutNullStreams;
-  const baseUrl = `http://127.0.0.1:${port}`;
-  let stdout = "";
-  let stderr = "";
-  let spawnError: Error | undefined;
-  const appendOutput = (current: string, chunk: unknown): string => {
-    const next = current + String(chunk);
-    return next.length > 8_000 ? next.slice(-8_000) : next;
-  };
-  child.stdout.on("data", (chunk) => {
-    stdout = appendOutput(stdout, chunk);
+    const port = await getFreePort();
+    const requestedCommand = process.env[OPENCODE_COMMAND_ENV]?.trim() || "opencode";
+    const command = resolveCommandPath(requestedCommand);
+    const args = [
+      "serve",
+      "--hostname",
+      "127.0.0.1",
+      "--port",
+      String(port),
+      "--print-logs",
+    ];
+    const fetchImpl = options.fetch ?? fetch;
+    const readinessRequestTimeoutMs = Math.min(options.requestTimeoutMs ?? REQUEST_TIMEOUT_MS, 10_000);
+    const startupTimeoutMs = options.startupTimeoutMs ?? STARTUP_TIMEOUT_MS;
+    const child = spawn(command, args, {
+      cwd: options.cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+    }) as ChildProcessWithoutNullStreams;
+    const baseUrl = `http://127.0.0.1:${port}`;
+    let stdout = "";
+    let stderr = "";
+    let spawnError: Error | undefined;
+    const appendOutput = (current: string, chunk: unknown): string => {
+      const next = current + String(chunk);
+      return next.length > 8_000 ? next.slice(-8_000) : next;
+    };
+    child.stdout.on("data", (chunk) => {
+      stdout = appendOutput(stdout, chunk);
   });
   child.stderr.on("data", (chunk) => {
     stderr = appendOutput(stderr, chunk);
