@@ -430,6 +430,20 @@ export class CodexHarness implements AgentHarness {
         });
         return true;
       }
+      const structuredQuestion = pending.state.questions?.length === 1
+        ? pending.state.questions[0]
+        : undefined;
+      const structuredOption = structuredQuestion?.options[index];
+      if (structuredQuestion && structuredOption) {
+        pending.resolveResponse({
+          answers: {
+            [structuredQuestion.id]: {
+              answers: [structuredOption.value ?? structuredOption.label],
+            },
+          },
+        });
+        return true;
+      }
       const option = pending.options[index];
       if (!option) return false;
       if (pending.methodLower.includes("requestapproval")) {

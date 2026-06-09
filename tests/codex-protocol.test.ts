@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   buildThreadStartPayloads,
   buildThreadResumePayloads,
+  buildPendingInputState,
   buildTurnStartPayloads,
   classifyTerminalOutcome,
   codexExecutionPolicyForMode,
@@ -182,5 +183,75 @@ describe("codex protocol turn payloads", () => {
       classifyTerminalOutcome("turn/cancelled", { turn: { status: "cancelled" } }),
       "interrupted",
     );
+  });
+
+  it("extracts nested request_user_input questions and option metadata", () => {
+    const state = buildPendingInputState("tool/requestUserInput", "req-questions", {
+      questions: [{
+        id: "confirm_path",
+        header: "Confirm",
+        question: "Proceed with the plan?",
+        isOther: true,
+        options: [{
+          label: "Yes (Recommended)",
+          description: "Continue the current plan.",
+        }, {
+          label: "No",
+          description: "Stop and revisit the approach.",
+        }],
+      }],
+    });
+
+    assert.equal(state.kind, "question");
+    assert.deepEqual(state.options, ["Yes (Recommended)", "No"]);
+    assert.deepEqual(state.questions, [{
+      id: "confirm_path",
+      header: "Confirm",
+      question: "Proceed with the plan?",
+      options: [
+        {
+          label: "Yes (Recommended)",
+          description: "Continue the current plan.",
+          recommended: true,
+        },
+        {
+          label: "No",
+          description: "Stop and revisit the approach.",
+          recommended: false,
+        },
+      ],
+      allowsFreeText: true,
+    }]);
+    assert.match(state.promptText ?? "", /Confirm/);
+    assert.match(state.promptText ?? "", /Yes \(Recommended\) - Continue the current plan\./);
+    assert.match(state.promptText ?? "", /Free-form answer is allowed\./);
+  });
+
+  it("formats multiple nested request_user_input questions without collapsing their options", () => {
+    const state = buildPendingInputState("tool/requestUserInput", "req-multi", {
+      questions: [{
+        id: "environment",
+        header: "Environment",
+        question: "Which environment should I target?",
+        options: [
+          { label: "Staging", description: "Use staging credentials." },
+          { label: "Production", description: "Use production credentials." },
+        ],
+      }, {
+        id: "scope",
+        header: "Scope",
+        question: "How broad should the rollout be?",
+        options: [
+          { label: "Canary", description: "Start with a small cohort." },
+          { label: "Everyone", description: "Roll out to all users." },
+        ],
+      }],
+    });
+
+    assert.deepEqual(state.options, ["Staging", "Production", "Canary", "Everyone"]);
+    assert.equal(state.questions?.length, 2);
+    assert.match(state.promptText ?? "", /Question 1 - Environment/);
+    assert.match(state.promptText ?? "", /Question 2 - Scope/);
+    assert.match(state.promptText ?? "", /Q1: \.\.\., Q2: \.\.\./);
   });
 });

@@ -373,6 +373,63 @@ describe("CodexHarness App Server mapping", () => {
     assert.deepEqual(client.pendingInputResponses[0], { option: "Production", index: 1 });
   });
 
+  it("resolves nested Codex question options as request_user_input answers", async () => {
+    const client = new MockJsonRpcClient({
+      pendingInput: {
+        method: "tool/requestUserInput",
+        params: {
+          threadId: "thread-123",
+          turnId: "turn-1",
+          requestId: "req-1",
+          questions: [{
+            id: "confirm_path",
+            header: "Confirm",
+            question: "Proceed with the plan?",
+            options: [{
+              label: "Yes (Recommended)",
+              description: "Continue the current plan.",
+            }, {
+              label: "No",
+              description: "Stop and revisit the approach.",
+            }],
+          }],
+        },
+      },
+    });
+    const harness = new CodexHarness({
+      createClient: () => client as any,
+    });
+    const session = harness.launch({ prompt: "confirm", cwd: "/tmp" });
+    const iter = session.messages[Symbol.asyncIterator]();
+
+    const seen: HarnessMessage[] = [];
+    for (let i = 0; i < 8; i += 1) {
+      const next = await iter.next();
+      if (next.done) break;
+      seen.push(next.value);
+      if (next.value.type === "pending_input") {
+        assert.deepEqual(next.value.state.options, ["Yes (Recommended)", "No"]);
+        assert.equal(next.value.state.questions?.[0]?.id, "confirm_path");
+        const submitted = await session.submitPendingInputOption?.(0);
+        assert.equal(submitted, true);
+      }
+      if (
+        next.value.type === "run_completed"
+        && seen.some((message) => message.type === "pending_input_resolved")
+      ) {
+        break;
+      }
+    }
+
+    assert.deepEqual(client.pendingInputResponses[0], {
+      answers: {
+        confirm_path: {
+          answers: ["Yes (Recommended)"],
+        },
+      },
+    });
+  });
+
   it("submits free-text answers into a live pending-input request", async () => {
     const client = new MockJsonRpcClient({
       pendingInput: {

@@ -133,11 +133,29 @@ export type PendingInputAction =
 
 export type PendingInputKind = "question" | "approval";
 
+export interface PendingInputOption {
+  label: string;
+  description?: string;
+  value?: string;
+  isOther?: boolean;
+  recommended?: boolean;
+}
+
+export interface PendingInputQuestion {
+  id: string;
+  header?: string;
+  question: string;
+  options: PendingInputOption[];
+  allowsFreeText?: boolean;
+  isSecret?: boolean;
+}
+
 export interface PendingInputState {
   requestId: string;
   kind: PendingInputKind;
   promptText?: string;
   options: string[];
+  questions?: PendingInputQuestion[];
   actions?: PendingInputAction[];
   allowsFreeText?: boolean;
   expiresAt?: number;

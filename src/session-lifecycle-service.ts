@@ -402,16 +402,27 @@ export class SessionLifecycleService {
               ? Number.POSITIVE_INFINITY
               : undefined,
           );
+    const pendingInputQuestions = session.pendingInputState?.questions;
+    const pendingInputButtonOptions = pendingInputQuestions
+      ? (
+          pendingInputQuestions.length === 1
+            && pendingInputQuestions[0].options.length > 0
+            && pendingInputQuestions[0].options.length <= 6
+            && !pendingInputQuestions[0].options.some((option) => option.isOther)
+              ? pendingInputQuestions[0].options
+              : []
+        )
+      : session.pendingInputState?.options.map((label) => ({ label })) ?? [];
     const waitingButtons =
       session.pendingPlanApproval && planApprovalMode === "ask" && !promptAlreadyProven
         ? this.deps.getPlanApprovalButtons(session.id, {
           ...session,
           planDecisionVersion,
         })
-        : (!session.pendingPlanApproval && session.pendingInputState?.options.length)
+        : (!session.pendingPlanApproval && pendingInputButtonOptions.length)
           ? this.deps.getQuestionButtons(
               session.id,
-              session.pendingInputState.options.map((label) => ({ label })),
+              pendingInputButtonOptions,
             )
         : undefined;
     const matchingPlanArtifact = resolvePlanArtifactForPrompt(session, planDecisionVersion);

@@ -424,4 +424,90 @@ describe("SessionLifecycleService", () => {
     assert.equal(requests.length, 1);
     assert.match(String(requests[0]?.userMessage ?? ""), /Fallback preview/);
   });
+
+  it("renders multi-question pending input as text fallback without ambiguous buttons", () => {
+    const requests: Array<Record<string, unknown>> = [];
+    let questionButtonsCalled = false;
+
+    const service = new SessionLifecycleService({
+      persistSession: () => {},
+      clearWaitingTimestamp: () => {},
+      handleWorktreeStrategy: async () => ({
+        notificationSent: false,
+        worktreeRemoved: false,
+      }),
+      resolveWorktreeRepoDir: () => undefined,
+      updatePersistedSession: () => false,
+      dispatchSessionNotification: (_session, request) => {
+        requests.push(request as unknown as Record<string, unknown>);
+      },
+      notifySession: () => {},
+      clearRetryTimersForSession: () => {},
+      hasTurnCompleteWakeMarker: () => false,
+      shouldEmitTurnCompleteWake: () => true,
+      shouldEmitTerminalWake: () => true,
+      resolvePlanApprovalMode: () => "ask",
+      getPlanApprovalButtons: () => [],
+      getResumeButtons: () => [],
+      getQuestionButtons: () => {
+        questionButtonsCalled = true;
+        return [[{ label: "Unexpected", callbackData: "unexpected-token" }]];
+      },
+      extractLastOutputLine: () => undefined,
+      getOutputPreview: () => "Fallback preview",
+      originThreadLine: () => "Origin thread: telegram topic 42",
+      debounceWaitingEvent: () => true,
+      isAlreadyMerged: () => false,
+    });
+
+    service.emitWaitingForInput(createStubSession({
+      id: "session-multi-question",
+      name: "multi-question",
+      pendingPlanApproval: false,
+      pendingInputState: {
+        requestId: "req-multi-question",
+        kind: "question",
+        promptText: [
+          "Question 1 - Environment",
+          "Which environment should I target?",
+          "Options:",
+          "  1. Staging - Use staging credentials.",
+          "  2. Production - Use production credentials.",
+          "",
+          "Question 2 - Scope",
+          "How broad should the rollout be?",
+          "Options:",
+          "  1. Canary - Start with a small cohort.",
+          "  2. Everyone - Roll out to all users.",
+          "",
+          "Reply with answers by question, for example: Q1: ..., Q2: ...",
+        ].join("\n"),
+        options: ["Staging", "Production", "Canary", "Everyone"],
+        questions: [{
+          id: "environment",
+          header: "Environment",
+          question: "Which environment should I target?",
+          options: [
+            { label: "Staging", description: "Use staging credentials." },
+            { label: "Production", description: "Use production credentials." },
+          ],
+        }, {
+          id: "scope",
+          header: "Scope",
+          question: "How broad should the rollout be?",
+          options: [
+            { label: "Canary", description: "Start with a small cohort." },
+            { label: "Everyone", description: "Roll out to all users." },
+          ],
+        }],
+      },
+    }));
+
+    assert.equal(questionButtonsCalled, false);
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0]?.buttons, undefined);
+    assert.match(String(requests[0]?.userMessage ?? ""), /Question 1 - Environment/);
+    assert.match(String(requests[0]?.userMessage ?? ""), /Question 2 - Scope/);
+    assert.match(String(requests[0]?.userMessage ?? ""), /Q1: \.\.\., Q2: \.\.\./);
+  });
 });
