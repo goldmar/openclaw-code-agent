@@ -56,7 +56,9 @@ export class SessionWorktreeStrategyService {
       getOutputPreview: (session: Session, maxChars?: number) => string;
       originThreadLine: (session: Session) => string;
       getWorktreeDecisionButtons: (sessionId: string) => NotificationButton[][] | undefined;
+      getPolicyAwareWorktreeDecisionButtons?: (sessionId: string, allowedActions: { merge: boolean; pr: boolean }) => NotificationButton[][] | undefined;
       makeOpenPrButton: (sessionId: string) => NotificationButton;
+      isPrAvailable?: (repoDir: string) => boolean;
       worktreeSummaryProvider?: WorktreeDecisionSummaryProvider;
       worktreeMessages: SessionWorktreeMessageService;
       enqueueMerge: (
@@ -81,6 +83,7 @@ export class SessionWorktreeStrategyService {
       isAlreadyMerged: deps.isAlreadyMerged,
       resolveWorktreeRepoDir: deps.resolveWorktreeRepoDir,
       getWorktreeCompletionState: deps.getWorktreeCompletionState,
+      isPrAvailable: deps.isPrAvailable ?? (() => true),
     });
   }
 
@@ -244,11 +247,21 @@ export class SessionWorktreeStrategyService {
       return { notificationSent: false, worktreeRemoved: removed };
     }
 
+    if (action.policyBlocked) {
+      this.markPendingDecision(session, { notes: action.policyReason ? [action.policyReason] : undefined });
+      this.deps.dispatchSessionNotification(session, {
+        label: "worktree-policy-blocked",
+        idempotencyKey: `worktree-policy-blocked:${session.id}:${action.branchName}:${action.baseBranch}`,
+        userMessage: `⚠️ [${session.name}] ${action.policyReason ?? "Repo policy blocked automatic follow-through."}`,
+        buttons: this.getPolicyAwareWorktreeDecisionButtons(session.id, action.allowedActions),
+      });
+      return { notificationSent: true, worktreeRemoved: false };
+    }
     if (action.strategy === "ask") {
-      return await this.handleAskStrategy(session, action.branchName, action.baseBranch, action.diffSummary);
+      return await this.handleAskStrategy(session, action.branchName, action.baseBranch, action.diffSummary, action.allowedActions, action.policyReason);
     }
     if (action.strategy === "delegate") {
-      return this.handleDelegateStrategy(session, action.branchName, action.baseBranch, action.diffSummary);
+      return this.handleDelegateStrategy(session, action.branchName, action.baseBranch, action.diffSummary, action.allowedActions, action.policyReason);
     }
     if (action.strategy === "auto-merge") {
       await this.handleAutoMergeStrategy(
@@ -325,6 +338,8 @@ export class SessionWorktreeStrategyService {
     branchName: string,
     baseBranch: string,
     diffSummary: DiffSummary,
+    allowedActions: { merge: boolean; pr: boolean },
+    policyReason?: string,
   ): Promise<WorktreeStrategyResult> {
     const summary = await buildWorktreeDecisionWorkSummary({
       sessionName: session.name,
@@ -339,7 +354,8 @@ export class SessionWorktreeStrategyService {
       baseBranch,
       diffSummary,
       summaryLines: summary.lines,
-      buttons: this.deps.getWorktreeDecisionButtons(session.id),
+      policyReason,
+      buttons: this.getPolicyAwareWorktreeDecisionButtons(session.id, allowedActions),
     }));
     this.markPendingDecision(session);
     return { notificationSent: true, worktreeRemoved: false };
@@ -350,16 +366,29 @@ export class SessionWorktreeStrategyService {
     branchName: string,
     baseBranch: string,
     diffSummary: DiffSummary,
+    allowedActions: { merge: boolean; pr: boolean },
+    policyReason?: string,
   ): WorktreeStrategyResult {
     this.deps.dispatchSessionNotification(session, this.deps.worktreeMessages.buildDelegateNotification({
       session,
       branchName,
       baseBranch,
       diffSummary,
+      policyReason,
+      allowedActions,
       originThreadLine: this.deps.originThreadLine(session),
     }));
     this.markPendingDecision(session);
     return { notificationSent: true, worktreeRemoved: false };
+  }
+
+  private getPolicyAwareWorktreeDecisionButtons(
+    sessionId: string,
+    allowedActions: { merge: boolean; pr: boolean },
+  ): NotificationButton[][] | undefined {
+    return this.deps.getPolicyAwareWorktreeDecisionButtons
+      ? this.deps.getPolicyAwareWorktreeDecisionButtons(sessionId, allowedActions)
+      : this.deps.getWorktreeDecisionButtons(sessionId);
   }
 
   private handleDirtyUncommittedCompletion(

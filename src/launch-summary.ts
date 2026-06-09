@@ -3,6 +3,8 @@ import type {
   PermissionMode,
   ReasoningEffort,
   WorktreeStrategy,
+  RepoIntegrationPolicy,
+  RepoProviderKind,
 } from "./types";
 
 export interface LaunchSummaryInput {
@@ -17,6 +19,8 @@ export interface LaunchSummaryInput {
   permissionMode: PermissionMode;
   planApproval: PlanApprovalMode;
   worktreeStrategy?: WorktreeStrategy;
+  repoIntegrationPolicy?: RepoIntegrationPolicy;
+  repoProvider?: RepoProviderKind;
   worktreePath?: string;
   originalWorkdir?: string;
   resumeSessionId?: string;
@@ -32,6 +36,8 @@ export interface LaunchSummarySessionLike {
   reasoningEffort?: ReasoningEffort;
   fastMode?: boolean;
   worktreeStrategy?: WorktreeStrategy;
+  repoIntegrationPolicy?: RepoIntegrationPolicy;
+  repoProvider?: RepoProviderKind;
   worktreePath?: string;
   originalWorkdir?: string;
 }
@@ -57,6 +63,7 @@ export function formatLaunchSummary(input: LaunchSummaryInput): string {
     `  Permission mode: ${input.permissionMode}`,
     `  Plan approval: ${input.planApproval}`,
     `  Worktree strategy: ${input.worktreeStrategy ?? "off"}`,
+    ...(input.repoIntegrationPolicy ? [`  Repo policy: ${input.repoIntegrationPolicy}${input.repoProvider ? ` (${input.repoProvider})` : ""}`] : []),
     `  Resolved workdir: ${formatResolvedWorkdir(input)}`,
     `  Model: ${input.model ?? "default"}`,
     `  Prompt: "${summarizePrompt(input.prompt)}"`,
@@ -82,7 +89,7 @@ export function formatLaunchSummary(input: LaunchSummaryInput): string {
 }
 
 export function formatLaunchSummaryFromSession(
-  input: Omit<LaunchSummaryInput, "sessionId" | "sessionName" | "model" | "reasoningEffort" | "fastMode" | "worktreeStrategy" | "worktreePath" | "originalWorkdir">,
+  input: Omit<LaunchSummaryInput, "sessionId" | "sessionName" | "model" | "reasoningEffort" | "fastMode" | "worktreeStrategy" | "repoIntegrationPolicy" | "repoProvider" | "worktreePath" | "originalWorkdir">,
   session: LaunchSummarySessionLike,
 ): string {
   return formatLaunchSummary({
@@ -93,6 +100,8 @@ export function formatLaunchSummaryFromSession(
     reasoningEffort: session.reasoningEffort,
     fastMode: session.fastMode,
     worktreeStrategy: session.worktreeStrategy ?? "off",
+    repoIntegrationPolicy: session.repoIntegrationPolicy,
+    repoProvider: session.repoProvider,
     worktreePath: session.worktreePath,
     originalWorkdir: session.originalWorkdir,
   });

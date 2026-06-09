@@ -76,6 +76,10 @@ export type PlanApprovalContext = "plan-mode";
 export const WORKTREE_STRATEGIES = ["off", "manual", "ask", "delegate", "auto-merge", "auto-pr"] as const;
 export type WorktreeStrategy = typeof WORKTREE_STRATEGIES[number];
 export const WORKTREE_STRATEGY_SET: ReadonlySet<WorktreeStrategy> = new Set(WORKTREE_STRATEGIES);
+export const REPO_INTEGRATION_POLICIES = ["pr-required", "pr-allowed", "never-pr", "manual"] as const;
+export type RepoIntegrationPolicy = typeof REPO_INTEGRATION_POLICIES[number];
+export const REPO_INTEGRATION_POLICY_SET: ReadonlySet<RepoIntegrationPolicy> = new Set(REPO_INTEGRATION_POLICIES);
+export type RepoProviderKind = "github" | "unsupported";
 /**
  * Codex App Server execution policy is fixed to `never`.
  * OpenClaw owns the plan-review and approval UX through `permissionMode`
@@ -312,6 +316,10 @@ export interface SessionConfig {
   harness?: string;
   /** Worktree merge-back strategy. undefined or "off" = no worktree. */
   worktreeStrategy?: WorktreeStrategy;
+  /** Repo-scoped integration policy resolved at launch time. */
+  repoIntegrationPolicy?: RepoIntegrationPolicy;
+  repoIntegrationPolicySource?: "stored" | "seeded" | "unknown";
+  repoProvider?: RepoProviderKind;
   /** Base branch for worktree merge/PR operations. */
   worktreeBaseBranch?: string;
   /** Target repository for cross-repo PRs (e.g. 'openai/codex' for fork-to-upstream workflow). */
@@ -447,6 +455,10 @@ export interface PersistedSessionInfo {
   worktreeBranch?: string;
   /** Worktree strategy used for this session. */
   worktreeStrategy?: WorktreeStrategy;
+  /** Repo-scoped integration policy snapshot used for this session. */
+  repoIntegrationPolicy?: RepoIntegrationPolicy;
+  repoIntegrationPolicySource?: "stored" | "seeded" | "unknown";
+  repoProvider?: RepoProviderKind;
   /** Whether the worktree was merged back to the base branch. */
   worktreeMerged?: boolean;
   /** Timestamp when the worktree was merged. */
@@ -479,6 +491,17 @@ export interface PersistedSessionInfo {
   worktreeDismissedAt?: string;
   worktreeLifecycle?: PersistedWorktreeLifecycle;
   resumable?: boolean;
+}
+
+export interface RepoPolicyRecord {
+  key: string;
+  policy: RepoIntegrationPolicy;
+  repoRoot: string;
+  remoteUrl?: string;
+  provider: RepoProviderKind;
+  createdAt: string;
+  updatedAt: string;
+  source: "stored" | "seeded";
 }
 
 /** In-memory usage metrics shown by `agent_stats`. */

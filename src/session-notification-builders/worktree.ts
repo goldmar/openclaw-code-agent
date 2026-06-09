@@ -16,6 +16,8 @@ export function buildDelegateWorktreeWakeMessage(args: {
     insertions: number;
     deletions: number;
   };
+  allowedActions?: { merge: boolean; pr: boolean };
+  policyReason?: string;
 }): string {
   const {
     sessionName,
@@ -27,6 +29,8 @@ export function buildDelegateWorktreeWakeMessage(args: {
     moreNote,
     originThreadLine,
     diffSummary,
+    allowedActions,
+    policyReason,
   } = args;
   const hasOriginRouteBlock = Boolean(originThreadLine?.trim());
 
@@ -44,9 +48,14 @@ export function buildDelegateWorktreeWakeMessage(args: {
     `Original task prompt (first 500 chars):`,
     promptSnippet,
     ``,
+    ...(policyReason ? [`Policy constraint: ${policyReason}`, ``] : []),
     `You own the next step for this worktree.`,
-    `- Merge immediately with agent_merge(session="${sessionName}", base_branch="${baseBranch}") if the changes are clearly in-scope and low-risk.`,
-    `- If a PR is safer or human choice is needed, call agent_request_worktree_decision(session="${sessionName}", summary="...") so the user gets the canonical Merge/Open PR/Later/Discard buttons.`,
+    ...(allowedActions?.merge === false
+      ? [`- Do not call agent_merge(); repo policy does not allow direct merge for this session.`]
+      : [`- Merge immediately with agent_merge(session="${sessionName}", base_branch="${baseBranch}") if the changes are clearly in-scope and low-risk.`]),
+    ...(allowedActions?.pr === false
+      ? [`- Do not call agent_pr(); PR creation is unavailable or forbidden by repo policy.`]
+      : [`- If a PR is safer or human choice is needed, call agent_request_worktree_decision(session="${sessionName}", summary="...") so the user gets the canonical Merge/Open PR/Later/Discard buttons.`]),
     `- If scope or risk is unclear, call agent_request_worktree_decision(session="${sessionName}", summary="...") with a concise risk summary instead of sending a plain-text-only question.`,
     `- Never call agent_pr() autonomously in delegate mode.`,
     `- After deciding, notify the user briefly with what you did and why.`,

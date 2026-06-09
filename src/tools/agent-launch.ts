@@ -222,6 +222,8 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
               reasoningEffort: session.reasoningEffort ?? resolveReasoningEffortForHarness(harness),
               fastMode: session.fastMode ?? fastMode,
               worktreeStrategy: session.worktreeStrategy ?? params.worktree_strategy ?? pluginConfig.defaultWorktreeStrategy ?? "off",
+              repoIntegrationPolicy: session.repoIntegrationPolicy,
+              repoProvider: session.repoProvider,
               worktreePath: session.worktreePath,
               originalWorkdir: session.originalWorkdir,
             });

@@ -85,36 +85,35 @@ export class SessionInteractionService {
   getWorktreeDecisionButtons(
     sessionId: string,
     session: Pick<PersistedSessionInfo, "worktreePrUrl"> | ButtonSource | undefined,
+    allowedActions: { merge: boolean; pr: boolean } = { merge: true, pr: true },
   ): NotificationButton[][] {
     if (!session) return [];
 
     const rows: NotificationButton[][] = [];
-    const primaryRow: NotificationButton[] = [
-      this.makeActionButton(sessionId, "worktree-merge", "Merge"),
-    ];
-    if (this.isGitHubCliAvailable()) {
+    const primaryRow: NotificationButton[] = [];
+    if (allowedActions.merge) {
+      primaryRow.push(this.makeActionButton(sessionId, "worktree-merge", "Merge"));
+    }
+    if (allowedActions.pr && this.isGitHubCliAvailable()) {
       if (session.worktreePrUrl) {
         primaryRow.push(this.makeActionButton(sessionId, "worktree-view-pr", "View PR", {
           targetUrl: session.worktreePrUrl,
         }));
-        rows.push(primaryRow);
+        if (primaryRow.length > 0) rows.push(primaryRow);
         rows.push([
           this.makeActionButton(sessionId, "worktree-update-pr", "Sync PR"),
           this.makeActionButton(sessionId, "worktree-decide-later", "Later"),
         ]);
       } else {
         primaryRow.push(this.makeActionButton(sessionId, "worktree-create-pr", "Open PR"));
-        rows.push(primaryRow);
+        if (primaryRow.length > 0) rows.push(primaryRow);
         rows.push([
           this.makeActionButton(sessionId, "worktree-decide-later", "Later"),
           this.makeActionButton(sessionId, "worktree-dismiss", "Discard"),
         ]);
       }
     } else {
-      rows.push([
-        ...primaryRow,
-        this.makeActionButton(sessionId, "worktree-decide-later", "Later"),
-      ]);
+      rows.push([...primaryRow, this.makeActionButton(sessionId, "worktree-decide-later", "Later")]);
       rows.push([this.makeActionButton(sessionId, "worktree-dismiss", "Discard")]);
       return rows;
     }

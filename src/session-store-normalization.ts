@@ -1,5 +1,5 @@
 import { canonicalizeSessionRoute } from "./session-route";
-import { REASONING_EFFORT_SET, WORKTREE_STRATEGY_SET } from "./types";
+import { REASONING_EFFORT_SET, REPO_INTEGRATION_POLICY_SET, WORKTREE_STRATEGY_SET } from "./types";
 import type {
   ManagedWorktreeLifecycleState,
   PersistedSessionInfo,
@@ -28,14 +28,18 @@ import type {
   SessionNotificationDedupeRecord,
   SessionNotificationDedupeStatus,
   WorktreeStrategy,
+  RepoIntegrationPolicy,
+  RepoPolicyRecord,
+  RepoProviderKind,
 } from "./types";
 
-export const STORE_SCHEMA_VERSION = 6;
+export const STORE_SCHEMA_VERSION = 7;
 
 export interface SessionStoreSchema {
   schemaVersion: number;
   sessions: PersistedSessionInfo[];
   actionTokens: SessionActionToken[];
+  repoPolicies: RepoPolicyRecord[];
 }
 
 const VALID_PERSISTED_STATUSES = new Set<SessionStatus>(["running", "completed", "failed", "killed"]);
@@ -93,6 +97,20 @@ function toOptionalWorktreeStrategy(value: unknown): WorktreeStrategy | undefine
   return typeof value === "string" && WORKTREE_STRATEGY_SET.has(value as WorktreeStrategy)
     ? value as WorktreeStrategy
     : undefined;
+}
+
+function toOptionalRepoIntegrationPolicy(value: unknown): RepoIntegrationPolicy | undefined {
+  return typeof value === "string" && REPO_INTEGRATION_POLICY_SET.has(value as RepoIntegrationPolicy)
+    ? value as RepoIntegrationPolicy
+    : undefined;
+}
+
+function toOptionalRepoProvider(value: unknown): RepoProviderKind | undefined {
+  return value === "github" || value === "unsupported" ? value : undefined;
+}
+
+function toOptionalRepoPolicySource(value: unknown): "stored" | "seeded" | "unknown" | undefined {
+  return value === "stored" || value === "seeded" || value === "unknown" ? value : undefined;
 }
 
 function toOptionalKillReason(value: unknown): KillReason | undefined {
@@ -507,6 +525,9 @@ export function normalizePersistedEntry(raw: unknown): PersistedSessionInfo | un
     worktreePath,
     worktreeBranch: persistedWorktreeBranch,
     worktreeStrategy: toOptionalWorktreeStrategy(raw.worktreeStrategy),
+    repoIntegrationPolicy: toOptionalRepoIntegrationPolicy(raw.repoIntegrationPolicy),
+    repoIntegrationPolicySource: toOptionalRepoPolicySource(raw.repoIntegrationPolicySource),
+    repoProvider: toOptionalRepoProvider(raw.repoProvider),
     worktreeMerged: typeof raw.worktreeMerged === "boolean" ? raw.worktreeMerged : undefined,
     worktreeMergedAt: toOptionalString(raw.worktreeMergedAt),
     worktreePrUrl: toOptionalString(raw.worktreePrUrl),
@@ -524,6 +545,29 @@ export function normalizePersistedEntry(raw: unknown): PersistedSessionInfo | un
     worktreeDismissedAt: toOptionalString(raw.worktreeDismissedAt),
     worktreeLifecycle,
     resumable: recoveredFromRunning ? true : raw.resumable === true,
+  };
+}
+
+export function normalizeRepoPolicyRecord(raw: unknown): RepoPolicyRecord | undefined {
+  if (!isRecord(raw)) return undefined;
+  const key = toOptionalString(raw.key);
+  const repoRoot = toOptionalString(raw.repoRoot);
+  const policy = toOptionalRepoIntegrationPolicy(raw.policy);
+  const provider = toOptionalRepoProvider(raw.provider) ?? "unsupported";
+  const createdAt = toOptionalString(raw.createdAt);
+  const updatedAt = toOptionalString(raw.updatedAt);
+  const source = raw.source === "seeded" ? "seeded" : "stored";
+  if (!key || !repoRoot || !policy || !createdAt || !updatedAt) return undefined;
+  if (!Number.isFinite(Date.parse(createdAt)) || !Number.isFinite(Date.parse(updatedAt))) return undefined;
+  return {
+    key,
+    policy,
+    repoRoot,
+    remoteUrl: toOptionalString(raw.remoteUrl),
+    provider,
+    createdAt,
+    updatedAt,
+    source,
   };
 }
 

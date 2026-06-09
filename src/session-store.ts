@@ -1,6 +1,8 @@
 import { existsSync, writeFileSync } from "fs";
 import type {
   PersistedSessionInfo,
+  RepoIntegrationPolicy,
+  RepoPolicyRecord,
   SessionStatus,
   SessionActionToken,
 } from "./types";
@@ -42,6 +44,7 @@ function errorMessage(err: unknown): string {
  */
 export class SessionStore {
   readonly persisted: Map<string, PersistedSessionInfo> = new Map();
+  readonly repoPolicies: Map<string, RepoPolicyRecord> = new Map();
   readonly idIndex: Map<string, string> = new Map();
   readonly nameIndex: Map<string, string> = new Map();
   readonly backendIdIndex: Map<string, string> = new Map();
@@ -73,6 +76,7 @@ export class SessionStore {
       indexPath: this.indexPath,
       clearAll: () => {
         this.persisted.clear();
+        this.repoPolicies.clear();
         this.idIndex.clear();
         this.nameIndex.clear();
         this.backendIdIndex.clear();
@@ -80,6 +84,7 @@ export class SessionStore {
       },
       indexPersistedEntry: (entry) => this.indexPersistedEntry(entry),
       setActionToken: (token) => { this.actionTokens.set(token.id, token); },
+      setRepoPolicy: (policy) => { this.repoPolicies.set(policy.key, policy); },
       purgeExpiredActionTokens: () => this.actionTokenStore.purgeExpiredActionTokens(),
       saveIndex: () => this.saveIndex(),
     });
@@ -90,6 +95,7 @@ export class SessionStore {
       this.indexPath,
       [...this.persisted.values()],
       this.actionTokenStore.listForPersistence(),
+      [...this.repoPolicies.values()],
     );
   }
 
@@ -163,10 +169,13 @@ export class SessionStore {
     return typeof session.worktreeSnapshot === "function"
       ? session.worktreeSnapshot()
       : {
-          worktreePath: session.worktreePath,
-          worktreeBranch: session.worktreeBranch,
-          worktreeStrategy: session.worktreeStrategy,
-          worktreeBaseBranch: session.worktreeBaseBranch,
+      worktreePath: session.worktreePath,
+      worktreeBranch: session.worktreeBranch,
+      worktreeStrategy: session.worktreeStrategy,
+      repoIntegrationPolicy: session.repoIntegrationPolicy,
+      repoIntegrationPolicySource: session.repoIntegrationPolicySource,
+      repoProvider: session.repoProvider,
+      worktreeBaseBranch: session.worktreeBaseBranch,
           worktreePrTargetRepo: session.worktreePrTargetRepo,
           autoMergeParentSessionId: session.autoMergeParentSessionId,
           autoMergeConflictResolutionAttemptCount: session.autoMergeConflictResolutionAttemptCount,
@@ -261,6 +270,9 @@ export class SessionStore {
       worktreePath: worktree.worktreePath,
       worktreeBranch: worktree.worktreeBranch,
       worktreeStrategy: worktree.worktreeStrategy,
+      repoIntegrationPolicy: worktree.repoIntegrationPolicy,
+      repoIntegrationPolicySource: worktree.repoIntegrationPolicySource,
+      repoProvider: worktree.repoProvider,
       worktreeBaseBranch: worktree.worktreeBaseBranch,
       worktreePrTargetRepo: worktree.worktreePrTargetRepo,
       autoMergeParentSessionId: worktree.autoMergeParentSessionId,
@@ -409,6 +421,40 @@ export class SessionStore {
   /** List persisted sessions sorted by completion time (newest first). */
   listPersistedSessions(): PersistedSessionInfo[] {
     return this.queries.listPersistedSessions();
+  }
+
+  getRepoPolicy(key: string): RepoPolicyRecord | undefined {
+    return this.repoPolicies.get(key);
+  }
+
+  listRepoPolicies(): RepoPolicyRecord[] {
+    return [...this.repoPolicies.values()]
+      .sort((a, b) => a.repoRoot.localeCompare(b.repoRoot) || a.key.localeCompare(b.key));
+  }
+
+  setRepoPolicy(record: RepoPolicyRecord): RepoPolicyRecord {
+    const existing = this.repoPolicies.get(record.key);
+    const next: RepoPolicyRecord = {
+      ...record,
+      createdAt: existing?.createdAt ?? record.createdAt,
+      updatedAt: new Date().toISOString(),
+      source: "stored",
+    };
+    this.repoPolicies.set(next.key, next);
+    this.saveIndex();
+    return next;
+  }
+
+  updateRepoPolicy(key: string, policy: RepoIntegrationPolicy): RepoPolicyRecord | undefined {
+    const existing = this.repoPolicies.get(key);
+    if (!existing) return undefined;
+    return this.setRepoPolicy({ ...existing, policy });
+  }
+
+  resetRepoPolicy(key: string): boolean {
+    const deleted = this.repoPolicies.delete(key);
+    if (deleted) this.saveIndex();
+    return deleted;
   }
 
   /** Best-effort cleanup for stale tmp output files written by persistTerminal. */

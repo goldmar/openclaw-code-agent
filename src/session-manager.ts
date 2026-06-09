@@ -23,6 +23,8 @@ import type {
   SessionRoute,
   GoalTaskState,
   WorktreeStrategy,
+  RepoIntegrationPolicy,
+  RepoPolicyRecord,
 } from "./types";
 import { SessionStore } from "./session-store";
 import type { SessionStoreOptions } from "./session-store";
@@ -62,6 +64,14 @@ import {
 import { KeyedOperationQueue } from "./keyed-operation-queue";
 import { SessionMaintenanceService } from "./session-maintenance-service";
 import { buildPendingDecisionPatch } from "./worktree-session-patches";
+import {
+  createRepoPolicyRecord,
+  formatUnknownRepoPolicyMessage,
+  isPrAvailableForResolution,
+  resolveRepoIdentity,
+  seededRepoPolicy,
+  type RepoPolicyResolution,
+} from "./repo-policy";
 
 
 const TERMINAL_STATUSES = new Set<SessionStatus>(["completed", "failed", "killed"]);
@@ -201,7 +211,9 @@ export class SessionManager {
       getOutputPreview: (session, maxChars) => manager.getOutputPreview(session, maxChars),
       originThreadLine: (session) => manager.originThreadLine(session),
       getWorktreeDecisionButtons: (sessionId) => manager.getWorktreeDecisionButtons(sessionId),
+      getPolicyAwareWorktreeDecisionButtons: (sessionId, allowedActions) => manager.getWorktreeDecisionButtons(sessionId, {}, allowedActions),
       makeOpenPrButton: (sessionId) => manager.makeActionButton(sessionId, "worktree-create-pr", "Open PR"),
+      isPrAvailable: (repoDir) => manager.resolveRepoPolicy(repoDir).prAvailable,
       worktreeSummaryProvider: options.worktreeSummaryProvider,
       worktreeMessages,
       enqueueMerge: (repoDir, fn, onQueued) => manager.enqueueMerge(repoDir, fn, onQueued),
@@ -404,6 +416,15 @@ export class SessionManager {
       throw new Error(`Cannot launch session "${name}": missing explicit route metadata.`);
     }
 
+    const launchPolicy = this.checkRepoPolicyForLaunch(config.workdir, config.worktreeStrategy);
+    if (!launchPolicy.ok) {
+      const blocked = launchPolicy as { ok: false; text: string };
+      throw new Error(blocked.text);
+    }
+    config.repoIntegrationPolicy = launchPolicy.resolution.policy;
+    config.repoIntegrationPolicySource = launchPolicy.resolution.source === "none" ? undefined : launchPolicy.resolution.source;
+    config.repoProvider = launchPolicy.resolution.provider;
+
     const preparedLaunch = this.restore.prepareSpawn(config, name);
 
     // Inject AskUserQuestion intercept for CC sessions. Codex App Server exposes
@@ -510,6 +531,74 @@ export class SessionManager {
     return true;
   }
 
+  resolveRepoPolicy(workdir: string): RepoPolicyResolution {
+    const identity = resolveRepoIdentity(workdir);
+    if (!identity) {
+      return { source: "none", provider: "unsupported", prAvailable: false };
+    }
+    const stored = this.store.getRepoPolicy(identity.key);
+    if (stored) {
+      const resolution = {
+        identity,
+        policy: stored.policy,
+        source: "stored" as const,
+        provider: identity.provider,
+        prAvailable: identity.provider === "github" && isGitHubCLIAvailable(),
+        record: stored,
+      };
+      return resolution;
+    }
+    const seeded = seededRepoPolicy(identity);
+    if (seeded) {
+      const record = createRepoPolicyRecord(identity, seeded, "seeded");
+      return {
+        identity,
+        policy: seeded,
+        source: "seeded",
+        provider: identity.provider,
+        prAvailable: isPrAvailableForResolution({ provider: identity.provider }),
+        record,
+      };
+    }
+    return {
+      identity,
+      source: "unknown",
+      provider: identity.provider,
+      prAvailable: isPrAvailableForResolution({ provider: identity.provider }),
+    };
+  }
+
+  checkRepoPolicyForLaunch(workdir: string, requestedStrategy?: WorktreeStrategy): { ok: true; resolution: RepoPolicyResolution } | { ok: false; text: string } {
+    const strategy = requestedStrategy ?? pluginConfig.defaultWorktreeStrategy ?? "off";
+    const resolution = this.resolveRepoPolicy(workdir);
+    if (strategy === "off") return { ok: true, resolution };
+    if (resolution.source === "none") return { ok: true, resolution };
+    if (resolution.source === "unknown" && resolution.identity) {
+      return { ok: false, text: formatUnknownRepoPolicyMessage(resolution.identity, strategy) };
+    }
+    return { ok: true, resolution };
+  }
+
+  getRepoPolicyRecordForWorkdir(workdir: string): RepoPolicyRecord | undefined {
+    const resolution = this.resolveRepoPolicy(workdir);
+    return resolution.record;
+  }
+
+  listRepoPolicies(): RepoPolicyRecord[] {
+    return this.store.listRepoPolicies();
+  }
+
+  setRepoPolicy(workdir: string, policy: RepoIntegrationPolicy): RepoPolicyRecord | undefined {
+    const identity = resolveRepoIdentity(workdir);
+    if (!identity) return undefined;
+    return this.store.setRepoPolicy(createRepoPolicyRecord(identity, policy, "stored"));
+  }
+
+  resetRepoPolicy(workdir: string): boolean {
+    const identity = resolveRepoIdentity(workdir);
+    return identity ? this.store.resetRepoPolicy(identity.key) : false;
+  }
+
   private makeActionButton(
     sessionId: string,
     kind: SessionActionKind,
@@ -588,10 +677,14 @@ export class SessionManager {
     });
   }
 
-  private getWorktreeDecisionButtons(sessionId: string, options: { allowDelegate?: boolean } = {}): NotificationButton[][] | undefined {
+  private getWorktreeDecisionButtons(
+    sessionId: string,
+    options: { allowDelegate?: boolean } = {},
+    allowedActions: { merge: boolean; pr: boolean } = { merge: true, pr: true },
+  ): NotificationButton[][] | undefined {
     const session = this.resolve(sessionId) ?? this.getPersistedSession(sessionId);
     if (!session || (session.worktreeStrategy === "delegate" && options.allowDelegate !== true)) return undefined;
-    return this.interactions.getWorktreeDecisionButtons(sessionId, session);
+    return this.interactions.getWorktreeDecisionButtons(sessionId, session, allowedActions);
   }
 
   private getWorktreeCompletionState(
@@ -779,7 +872,13 @@ export class SessionManager {
       return `Error: Could not compute worktree diff summary for session "${ref}".`;
     }
 
-    const buttons = this.getWorktreeDecisionButtons(sessionId, { allowDelegate: true });
+    const policyResolution = this.resolveRepoPolicy(repoDir);
+    const hasPolicySnapshot = Boolean(activeSession?.repoIntegrationPolicy ?? persistedSession?.repoIntegrationPolicy);
+    const allowedActions = {
+      merge: !hasPolicySnapshot || (policyResolution.policy !== "pr-required" && policyResolution.policy !== "manual"),
+      pr: !hasPolicySnapshot || (policyResolution.policy !== "never-pr" && policyResolution.policy !== "manual" && policyResolution.prAvailable),
+    };
+    const buttons = this.getWorktreeDecisionButtons(sessionId, { allowDelegate: true }, allowedActions);
     if (!buttons || buttons.length === 0) {
       return `Error: Could not create worktree decision buttons for session "${ref}".`;
     }

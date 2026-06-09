@@ -27,6 +27,8 @@ import type {
   SessionDeliveryState,
   SessionRoute,
   SessionBackendRef,
+  RepoIntegrationPolicy,
+  RepoProviderKind,
 } from "./types";
 import {
   getGlobalMcpServers,
@@ -98,6 +100,9 @@ export class Session extends EventEmitter {
   originalWorkdir?: string;
   worktreeBranch?: string; // Cached at creation to avoid live lookups after worktree removal.
   readonly worktreeStrategy?: WorktreeStrategy;
+  readonly repoIntegrationPolicy?: RepoIntegrationPolicy;
+  readonly repoIntegrationPolicySource?: "stored" | "seeded" | "unknown";
+  readonly repoProvider?: RepoProviderKind;
   readonly worktreeBaseBranch?: string;
   worktreePrTargetRepo?: string;
   autoMergeParentSessionId?: string;
@@ -224,6 +229,9 @@ export class Session extends EventEmitter {
     this.multiTurn = config.multiTurn ?? true;
     this.goalTaskId = config.goalTaskId;
     this.worktreeStrategy = config.worktreeStrategy;
+    this.repoIntegrationPolicy = config.repoIntegrationPolicy;
+    this.repoIntegrationPolicySource = config.repoIntegrationPolicySource;
+    this.repoProvider = config.repoProvider;
     this.worktreeBaseBranch = config.worktreeBaseBranch;
     if (config.worktreePrTargetRepo) {
       this.worktreePrTargetRepo = config.worktreePrTargetRepo;
@@ -445,6 +453,9 @@ export class Session extends EventEmitter {
     | "worktreePath"
     | "worktreeBranch"
     | "worktreeStrategy"
+    | "repoIntegrationPolicy"
+    | "repoIntegrationPolicySource"
+    | "repoProvider"
     | "worktreeBaseBranch"
     | "worktreePrTargetRepo"
     | "autoMergeParentSessionId"
@@ -456,6 +467,9 @@ export class Session extends EventEmitter {
       worktreePath: this.worktreePath,
       worktreeBranch: this.worktreeBranch,
       worktreeStrategy: this.worktreeStrategy,
+      repoIntegrationPolicy: this.repoIntegrationPolicy,
+      repoIntegrationPolicySource: this.repoIntegrationPolicySource,
+      repoProvider: this.repoProvider,
       worktreeBaseBranch: this.worktreeBaseBranch,
       worktreePrTargetRepo: this.worktreePrTargetRepo,
       autoMergeParentSessionId: this.autoMergeParentSessionId,
