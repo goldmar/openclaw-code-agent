@@ -407,9 +407,6 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
                 prNumber: newPrStatus.number,
                 targetRepo,
               }),
-
-              // Surface any warnings from createPR (e.g. fell back to non-draft)
-              warnings: prResult.warnings,
             },
           );
 
