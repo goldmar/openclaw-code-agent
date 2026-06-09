@@ -1,5 +1,5 @@
 ---
-name: Code Agent Orchestration
+name: Code Agent Orchestration (OCA)
 description: Skill for orchestrating coding agent sessions from OpenClaw, including OCA requests such as "let oca do...", "ask oca to...", or "have oca handle...". Covers launching, monitoring, plan approval, lifecycle management, and worktree decisions.
 metadata:
   openclaw:

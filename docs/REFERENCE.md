@@ -554,7 +554,6 @@ Have oca handle the failing dashboard smoke test.
 | Command | Purpose |
 | --- | --- |
 | `/agent` | Launch a session from chat |
-| `/oca` | Built-in alias for `/agent` |
 | `/agent_sessions` | List sessions |
 | `/agent_output` | Show recent output |
 | `/agent_respond` | Send a reply |

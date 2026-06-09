@@ -53,7 +53,6 @@
       "agent_respond",
       "agent_sessions",
       "agent_stats",
-      "oca",
       "goal",
       "goal_status",
       "goal_stop",

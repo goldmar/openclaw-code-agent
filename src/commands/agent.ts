@@ -57,10 +57,11 @@ function parseAgentCommandArgs(raw: string): { name?: string; prompt: string } {
   };
 }
 
-function registerAgentLaunchCommand(api: CommandApi, commandName: "agent" | "oca"): void {
+/** Register `/agent` chat command. */
+export function registerAgentCommand(api: CommandApi): void {
   api.registerCommand({
-    name: commandName,
-    description: `Launch a coding agent session. Usage: /${commandName} [--name <name>] <prompt>`,
+    name: "agent",
+    description: "Launch a coding agent session. Usage: /agent [--name <name>] <prompt>",
     acceptsArgs: true,
     requireAuth: true,
     handler: (ctx: AgentCommandContext) => {
@@ -69,10 +70,10 @@ function registerAgentLaunchCommand(api: CommandApi, commandName: "agent" | "oca
       }
 
       const raw = (ctx.args ?? "").trim();
-      if (!raw) return { text: `Usage: /${commandName} [--name <name>] <prompt>` };
+      if (!raw) return { text: "Usage: /agent [--name <name>] <prompt>" };
 
       const { name, prompt } = parseAgentCommandArgs(raw);
-      if (!prompt) return { text: `Usage: /${commandName} [--name <name>] <prompt>` };
+      if (!prompt) return { text: "Usage: /agent [--name <name>] <prompt>" };
 
       try {
         const resolution = resolveAgentLaunchRequest(
@@ -117,14 +118,4 @@ function registerAgentLaunchCommand(api: CommandApi, commandName: "agent" | "oca
       }
     },
   });
-}
-
-/** Register `/agent` chat command. */
-export function registerAgentCommand(api: CommandApi): void {
-  registerAgentLaunchCommand(api, "agent");
-}
-
-/** Register built-in `/oca` chat command alias for OpenClaw Code Agent launches. */
-export function registerOcaCommand(api: CommandApi): void {
-  registerAgentLaunchCommand(api, "oca");
 }

@@ -57,7 +57,7 @@ The overlap is substrate, not responsibility. Both the core bundled `codex` plug
 `index.ts` registers:
 
 - 15 tools
-- 10 chat commands
+- 9 chat commands
 - the shared interactive callback handlers for Telegram and Discord
 - the background session service
 
@@ -193,7 +193,7 @@ This keeps plan approval and worktree decisions inside the plugin instead of lea
 ### Launch
 
 ```text
-agent_launch / /agent / /oca
+agent_launch / /agent
   -> resolve model, harness, origin channel, origin thread
   -> resolve resume/fork metadata if present
   -> decide effective worktree strategy

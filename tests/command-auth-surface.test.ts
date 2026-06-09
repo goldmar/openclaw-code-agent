@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-import { registerAgentCommand, registerOcaCommand } from "../src/commands/agent";
+import { registerAgentCommand } from "../src/commands/agent";
 import { registerAgentKillCommand } from "../src/commands/agent-kill";
 import { registerAgentOutputCommand } from "../src/commands/agent-output";
 import { registerAgentRespondCommand } from "../src/commands/agent-respond";
@@ -34,7 +34,6 @@ describe("chat command auth surface", () => {
   it("keeps every registered chat command auth-required", () => {
     const commands = [
       captureCommand(registerAgentCommand),
-      captureCommand(registerOcaCommand),
       captureCommand(registerAgentKillCommand),
       captureCommand(registerAgentOutputCommand),
       captureCommand(registerAgentRespondCommand),
@@ -50,7 +49,6 @@ describe("chat command auth surface", () => {
       commands.map((command) => [command.name, command.requireAuth]),
       [
         ["agent", true],
-        ["oca", true],
         ["agent_kill", true],
         ["agent_output", true],
         ["agent_respond", true],

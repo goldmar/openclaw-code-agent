@@ -179,6 +179,7 @@ describe("plugin entry source", () => {
     const reference = readFileSync(join(rootDir, "docs", "REFERENCE.md"), "utf8");
     const frontmatter = skill.match(/^---\n([\s\S]*?)\n---\n/)?.[1] ?? "";
 
+    assert.match(frontmatter, /^name:\s+Code Agent Orchestration \(OCA\)$/m);
     assert.match(frontmatter, /orchestrating coding agent sessions from OpenClaw/);
     assert.match(frontmatter, /let oca do/);
     assert.match(frontmatter, /ask oca to/);
@@ -302,7 +303,6 @@ describe("plugin entry source", () => {
         "agent_respond",
         "agent_sessions",
         "agent_stats",
-        "oca",
         "goal",
         "goal_status",
         "goal_stop",
@@ -493,7 +493,6 @@ describe("plugin entry source", () => {
     assert.match(indexSource, /makeGoalStopTool/);
     assert.match(indexSource, /makeGoalEditTool/);
     assert.match(indexSource, /registerGoalCommand\(commandApi\)/);
-    assert.match(indexSource, /registerOcaCommand\(commandApi\)/);
     assert.match(indexSource, /registerGoalStatusCommand\(commandApi\)/);
     assert.match(indexSource, /registerGoalStopCommand\(commandApi\)/);
     assert.match(indexSource, /registerGoalEditCommand\(commandApi\)/);
