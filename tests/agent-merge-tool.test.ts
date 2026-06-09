@@ -127,6 +127,13 @@ function installPersistedSessionWithNotificationService(args: {
       return matchesRef(ref) ? persistedSession as any : undefined;
     },
     enqueueMerge: async (_repoDir: string, fn: () => Promise<void>) => { await fn(); },
+    resolveRepoPolicy: () => ({
+      policy: "pr-allowed",
+      source: "stored",
+      provider: "github",
+      prAvailable: true,
+      identity: { repoRoot: args.repoDir, remoteUrl: "https://github.com/example/repo", provider: "github" },
+    }),
     updatePersistedSession,
     notifyWorktreeOutcome(session: unknown, outcomeLine: string, options?: unknown) {
       notificationService.notifyWorktreeOutcome(session as any, outcomeLine, options as any);
@@ -164,6 +171,13 @@ function installPersistedSessionStub(
       return undefined;
     },
     enqueueMerge: async (_repoDir: string, fn: () => Promise<void>) => { await fn(); },
+    resolveRepoPolicy: () => ({
+      policy: "pr-allowed",
+      source: "stored",
+      provider: "github",
+      prAvailable: true,
+      identity: { repoRoot: repoDir, remoteUrl: "https://github.com/example/repo", provider: "github" },
+    }),
     updatePersistedSession(_id: string, patch: Record<string, unknown>) {
       Object.assign(persistedSession, patch);
     },

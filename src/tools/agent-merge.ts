@@ -106,9 +106,7 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
       const strategy = params.strategy ?? "merge";
       const shouldPush = params.push === true; // Default false
       const shouldCleanup = params.delete_branch !== false; // Default true
-      const repoPolicy = typeof sessionManager.resolveRepoPolicy === "function"
-        ? sessionManager.resolveRepoPolicy(effectiveWorkdir)
-        : undefined;
+      const repoPolicy = sessionManager.resolveRepoPolicy(effectiveWorkdir);
       if (repoPolicy?.policy === "pr-required") {
         return {
           content: [{

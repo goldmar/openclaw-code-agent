@@ -146,9 +146,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
       }
 
       const baseBranch = params.base_branch ?? detectDefaultBranch(originalWorkdir);
-      const repoPolicy = typeof sessionManager.resolveRepoPolicy === "function"
-        ? sessionManager.resolveRepoPolicy(originalWorkdir)
-        : undefined;
+      const repoPolicy = sessionManager.resolveRepoPolicy(originalWorkdir);
       if (repoPolicy?.policy === "never-pr") {
         return { content: [{ type: "text", text: `Error: Repo policy forbids PR creation for ${repoPolicy.identity?.repoRoot ?? originalWorkdir}.` }], meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
       }
