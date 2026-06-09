@@ -6,7 +6,7 @@
  * here just coordinates launch/resume/interrupt with the shared contract.
  */
 
-import type { PlanArtifact, PlanArtifactStep } from "../types";
+import type { PendingInputQuestion, PendingInputState, PlanArtifact, PlanArtifactStep } from "../types";
 import type {
   AgentHarness,
   HarnessLaunchOptions,
@@ -59,9 +59,10 @@ interface CodexHarnessDeps {
 type CodexPendingInput = {
   requestId: string;
   methodLower: string;
-  state: import("../types").PendingInputState;
+  state: PendingInputState;
   options: string[];
   actions: import("../types").PendingInputAction[];
+  answers: Record<string, { answers: string[] }>;
   resolveResponse: (payload: unknown) => void;
 };
 
@@ -82,6 +83,49 @@ function extractPromptText(message: unknown): string {
   if (typeof record.message?.content === "string") return record.message.content;
   if (typeof record.text === "string") return record.text;
   return String(message);
+}
+
+function formatCodexWizardQuestion(question: PendingInputQuestion, index: number, count: number): string {
+  const title = [
+    count > 1 ? `Question ${index + 1}` : undefined,
+    question.header,
+  ].filter(Boolean).join(" - ");
+  const lines = [
+    ...(title ? [title] : []),
+    question.question,
+  ];
+  if (question.options.length > 0) {
+    lines.push(
+      "Options:",
+      ...question.options.map((option, optionIndex) => {
+        const recommended = option.recommended && !/\brecommended\b/i.test(option.label) ? " (recommended)" : "";
+        const description = option.description ? ` - ${option.description}` : "";
+        const freeText = option.isOther ? " (free text)" : "";
+        return `  ${optionIndex + 1}. ${option.label}${recommended}${freeText}${description}`;
+      }),
+    );
+  }
+  if (question.allowsFreeText && !question.options.some((option) => option.isOther)) {
+    lines.push("Free-form answer is allowed.");
+  }
+  return lines.join("\n");
+}
+
+function updateCodexWizardState(
+  base: PendingInputState,
+  activeQuestionIndex: number,
+  answers: Record<string, { answers: string[] }>,
+): PendingInputState {
+  const questions = base.questions ?? [];
+  const activeQuestion = questions[activeQuestionIndex];
+  if (!activeQuestion) return base;
+  return {
+    ...base,
+    promptText: formatCodexWizardQuestion(activeQuestion, activeQuestionIndex, questions.length),
+    options: activeQuestion.options.map((option) => option.label),
+    activeQuestionIndex,
+    answers,
+  };
 }
 
 export class CodexHarness implements AgentHarness {
@@ -269,6 +313,7 @@ export class CodexHarness implements AgentHarness {
           state,
           options,
           actions,
+          answers: { ...(state.answers ?? {}) },
           resolveResponse: resolve,
         };
         queue.enqueue(createPendingInputEvent(state));
@@ -408,18 +453,44 @@ export class CodexHarness implements AgentHarness {
     };
 
     const submitPendingInputText = async (text: string): Promise<boolean> => {
-      if (!currentPendingInput) return false;
-      if (currentPendingInput.methodLower.includes("requestapproval")) {
-        currentPendingInput.resolveResponse({ decision: text.trim() || "decline" });
+      const pending = currentPendingInput;
+      if (!pending) return false;
+      const answer = text.trim();
+      if (pending.methodLower.includes("requestapproval")) {
+        pending.resolveResponse({ decision: answer || "decline" });
+        return true;
+      }
+      const questions = pending.state.questions ?? [];
+      if (questions.length > 0) {
+        if (!answer) return false;
+        const activeIndex = pending.state.activeQuestionIndex ?? 0;
+        const question = questions[activeIndex];
+        if (!question) return false;
+        pending.answers = {
+          ...pending.answers,
+          [question.id]: { answers: [answer] },
+        };
+        const nextIndex = activeIndex + 1;
+        if (nextIndex < questions.length) {
+          pending.state = updateCodexWizardState(pending.state, nextIndex, pending.answers);
+          pending.options = pending.state.options;
+          queue.enqueue(createPendingInputEvent(pending.state));
+          return true;
+        }
+        pending.resolveResponse({ answers: pending.answers });
       } else {
-        currentPendingInput.resolveResponse({ text: text.trim() });
+        pending.resolveResponse({ text: answer });
       }
       return true;
     };
 
-    const submitPendingInputOption = async (index: number): Promise<boolean> => {
+    const submitPendingInputOption = async (
+      index: number,
+      context: { requestId?: string; questionId?: string } = {},
+    ): Promise<boolean> => {
       const pending = currentPendingInput;
       if (!pending) return false;
+      if (context.requestId && context.requestId !== pending.state.requestId) return false;
       const action = pending.actions[index];
       if (action?.kind === "approval") {
         pending.resolveResponse({
@@ -430,18 +501,28 @@ export class CodexHarness implements AgentHarness {
         });
         return true;
       }
-      const structuredQuestion = pending.state.questions?.length === 1
-        ? pending.state.questions[0]
+      const questions = pending.state.questions ?? [];
+      const activeQuestionIndex = pending.state.activeQuestionIndex ?? 0;
+      const structuredQuestion = questions.length > 0
+        ? questions[activeQuestionIndex]
         : undefined;
+      if (context.questionId && context.questionId !== structuredQuestion?.id) return false;
       const structuredOption = structuredQuestion?.options[index];
       if (structuredQuestion && structuredOption) {
-        pending.resolveResponse({
-          answers: {
-            [structuredQuestion.id]: {
-              answers: [structuredOption.value ?? structuredOption.label],
-            },
+        pending.answers = {
+          ...pending.answers,
+          [structuredQuestion.id]: {
+            answers: [structuredOption.value ?? structuredOption.label],
           },
-        });
+        };
+        const nextIndex = activeQuestionIndex + 1;
+        if (nextIndex < questions.length) {
+          pending.state = updateCodexWizardState(pending.state, nextIndex, pending.answers);
+          pending.options = pending.state.options;
+          queue.enqueue(createPendingInputEvent(pending.state));
+          return true;
+        }
+        pending.resolveResponse({ answers: pending.answers });
         return true;
       }
       const option = pending.options[index];
@@ -493,8 +574,11 @@ export class CodexHarness implements AgentHarness {
         queue.enqueue(createSettingsChangedEvent(mode));
       },
 
-      async submitPendingInputOption(index: number): Promise<boolean> {
-        return submitPendingInputOption(index);
+      async submitPendingInputOption(
+        index: number,
+        context?: { requestId?: string; questionId?: string },
+      ): Promise<boolean> {
+        return submitPendingInputOption(index, context);
       },
 
       async submitPendingInputText(text: string): Promise<boolean> {

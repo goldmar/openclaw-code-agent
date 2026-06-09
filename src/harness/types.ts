@@ -88,7 +88,7 @@ export interface HarnessSession {
   streamInput?(input: AsyncIterable<unknown>): Promise<void>;
 
   /** Resolve an active structured pending-input request via option index. */
-  submitPendingInputOption?(index: number): Promise<boolean>;
+  submitPendingInputOption?(index: number, context?: { requestId?: string; questionId?: string }): Promise<boolean>;
 
   /** Resolve an active free-text pending-input request. */
   submitPendingInputText?(text: string): Promise<boolean>;

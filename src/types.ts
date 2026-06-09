@@ -156,6 +156,8 @@ export interface PendingInputState {
   promptText?: string;
   options: string[];
   questions?: PendingInputQuestion[];
+  activeQuestionIndex?: number;
+  answers?: Record<string, { answers: string[] }>;
   actions?: PendingInputAction[];
   allowsFreeText?: boolean;
   expiresAt?: number;
@@ -244,6 +246,8 @@ export interface SessionActionToken {
   expiresAt?: number;
   consumedAt?: number;
   optionIndex?: number;
+  pendingInputRequestId?: string;
+  pendingInputQuestionId?: string;
   label?: string;
   targetUrl?: string;
   route?: SessionRoute;

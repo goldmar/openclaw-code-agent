@@ -556,8 +556,13 @@ export function createCallbackHandler(channel: InteractiveChannel = "telegram") 
             await replyText(ctx, `⚠️ Invalid question-answer action.`);
             break;
           }
-          await sessionManager.resolvePendingInputOption(sessionId, token.optionIndex);
-          await replyText(ctx, `✅ Answer submitted.`);
+          const submitted = await sessionManager.resolvePendingInputOption(sessionId, token.optionIndex, {
+            requestId: token.pendingInputRequestId,
+            questionId: token.pendingInputQuestionId,
+          });
+          await replyText(ctx, submitted
+            ? `✅ Answer submitted.`
+            : `⚠️ That question button is no longer active. Use the latest question prompt.`);
           break;
         }
 

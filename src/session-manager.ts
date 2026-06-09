@@ -291,7 +291,7 @@ export class SessionManager {
       resolvePlanApprovalMode: (session) => manager.resolvePlanApprovalMode(session),
       getPlanApprovalButtons: (sessionId, session) => interactions.getPlanApprovalButtons(sessionId, session),
       getResumeButtons: (sessionId, session) => interactions.getResumeButtons(sessionId, session),
-      getQuestionButtons: (sessionId, questionOptions) => interactions.getQuestionButtons(sessionId, questionOptions),
+      getQuestionButtons: (sessionId, questionOptions, context) => interactions.getQuestionButtons(sessionId, questionOptions, context),
       extractLastOutputLine: (session) => manager.extractLastOutputLine(session),
       getOutputPreview: (session, maxChars) => manager.getOutputPreview(session, maxChars),
       originThreadLine: (session) => manager.originThreadLine(session),
@@ -1375,9 +1375,20 @@ export class SessionManager {
     this.questions.resolveAskUserQuestion(sessionId, optionIndex);
   }
 
-  async resolvePendingInputOption(sessionId: string, optionIndex: number): Promise<boolean> {
+  async resolvePendingInputOption(
+    sessionId: string,
+    optionIndex: number,
+    context: { requestId?: string; questionId?: string } = {},
+  ): Promise<boolean> {
     const session = this.sessions.get(sessionId);
-    if (session && await session.submitPendingInputOption(optionIndex)) {
+    if (session?.pendingInputState) {
+      if (await session.submitPendingInputOption(optionIndex, context)) {
+        this.lastWaitingEventTimestamps.delete(sessionId);
+        return true;
+      }
+      return false;
+    }
+    if (session && await session.submitPendingInputOption(optionIndex, context)) {
       this.lastWaitingEventTimestamps.delete(sessionId);
       return true;
     }

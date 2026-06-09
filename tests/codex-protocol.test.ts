@@ -227,7 +227,7 @@ describe("codex protocol turn payloads", () => {
     assert.match(state.promptText ?? "", /Free-form answer is allowed\./);
   });
 
-  it("formats multiple nested request_user_input questions without collapsing their options", () => {
+  it("starts multiple nested request_user_input questions at the first wizard step", () => {
     const state = buildPendingInputState("tool/requestUserInput", "req-multi", {
       questions: [{
         id: "environment",
@@ -248,10 +248,10 @@ describe("codex protocol turn payloads", () => {
       }],
     });
 
-    assert.deepEqual(state.options, ["Staging", "Production", "Canary", "Everyone"]);
+    assert.deepEqual(state.options, ["Staging", "Production"]);
     assert.equal(state.questions?.length, 2);
+    assert.equal(state.activeQuestionIndex, 0);
     assert.match(state.promptText ?? "", /Question 1 - Environment/);
-    assert.match(state.promptText ?? "", /Question 2 - Scope/);
-    assert.match(state.promptText ?? "", /Q1: \.\.\., Q2: \.\.\./);
+    assert.doesNotMatch(state.promptText ?? "", /Question 2 - Scope/);
   });
 });

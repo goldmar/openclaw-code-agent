@@ -425,9 +425,12 @@ describe("SessionLifecycleService", () => {
     assert.match(String(requests[0]?.userMessage ?? ""), /Fallback preview/);
   });
 
-  it("renders multi-question pending input as text fallback without ambiguous buttons", () => {
+  it("renders queued multi-question pending input one step at a time with buttons", () => {
     const requests: Array<Record<string, unknown>> = [];
-    let questionButtonsCalled = false;
+    const questionButtonCalls: Array<{
+      options: Array<{ label: string }>;
+      context?: { requestId?: string; questionId?: string };
+    }> = [];
 
     const service = new SessionLifecycleService({
       persistSession: () => {},
@@ -449,9 +452,9 @@ describe("SessionLifecycleService", () => {
       resolvePlanApprovalMode: () => "ask",
       getPlanApprovalButtons: () => [],
       getResumeButtons: () => [],
-      getQuestionButtons: () => {
-        questionButtonsCalled = true;
-        return [[{ label: "Unexpected", callbackData: "unexpected-token" }]];
+      getQuestionButtons: (_sessionId, options, context) => {
+        questionButtonCalls.push({ options, context });
+        return [options.map((option) => ({ label: option.label, callbackData: `token:${option.label}` }))];
       },
       extractLastOutputLine: () => undefined,
       getOutputPreview: () => "Fallback preview",
@@ -460,7 +463,7 @@ describe("SessionLifecycleService", () => {
       isAlreadyMerged: () => false,
     });
 
-    service.emitWaitingForInput(createStubSession({
+    const session = createStubSession({
       id: "session-multi-question",
       name: "multi-question",
       pendingPlanApproval: false,
@@ -473,16 +476,9 @@ describe("SessionLifecycleService", () => {
           "Options:",
           "  1. Staging - Use staging credentials.",
           "  2. Production - Use production credentials.",
-          "",
-          "Question 2 - Scope",
-          "How broad should the rollout be?",
-          "Options:",
-          "  1. Canary - Start with a small cohort.",
-          "  2. Everyone - Roll out to all users.",
-          "",
-          "Reply with answers by question, for example: Q1: ..., Q2: ...",
         ].join("\n"),
-        options: ["Staging", "Production", "Canary", "Everyone"],
+        options: ["Staging", "Production"],
+        activeQuestionIndex: 0,
         questions: [{
           id: "environment",
           header: "Environment",
@@ -501,13 +497,57 @@ describe("SessionLifecycleService", () => {
           ],
         }],
       },
-    }));
+    });
 
-    assert.equal(questionButtonsCalled, false);
+    service.emitWaitingForInput(session);
+
+    assert.equal(questionButtonCalls.length, 1);
+    assert.deepEqual(questionButtonCalls[0].options.map((option) => option.label), ["Staging", "Production"]);
+    assert.deepEqual(questionButtonCalls[0].context, {
+      requestId: "req-multi-question",
+      questionId: "environment",
+    });
     assert.equal(requests.length, 1);
-    assert.equal(requests[0]?.buttons, undefined);
+    assert.deepEqual(
+      (requests[0]?.buttons as Array<Array<{ label: string }>>).map((row) => row.map((button) => button.label)),
+      [["Staging", "Production"]],
+    );
     assert.match(String(requests[0]?.userMessage ?? ""), /Question 1 - Environment/);
-    assert.match(String(requests[0]?.userMessage ?? ""), /Question 2 - Scope/);
-    assert.match(String(requests[0]?.userMessage ?? ""), /Q1: \.\.\., Q2: \.\.\./);
+    assert.doesNotMatch(String(requests[0]?.userMessage ?? ""), /Question 2 - Scope/);
+    assert.doesNotMatch(String(requests[0]?.userMessage ?? ""), /Fallback preview/);
+    assert.doesNotMatch(String(requests[0]?.userMessage ?? ""), /Why this is asked:/);
+
+    session.pendingInputState = {
+      ...session.pendingInputState,
+      promptText: [
+        "Question 2 - Scope",
+        "How broad should the rollout be?",
+        "Options:",
+        "  1. Canary - Start with a small cohort.",
+        "  2. Everyone - Roll out to all users.",
+      ].join("\n"),
+      options: ["Canary", "Everyone"],
+      activeQuestionIndex: 1,
+      answers: {
+        environment: { answers: ["Production"] },
+      },
+    };
+
+    service.emitWaitingForInput(session);
+
+    assert.equal(questionButtonCalls.length, 2);
+    assert.deepEqual(questionButtonCalls[1].options.map((option) => option.label), ["Canary", "Everyone"]);
+    assert.deepEqual(questionButtonCalls[1].context, {
+      requestId: "req-multi-question",
+      questionId: "scope",
+    });
+    assert.equal(requests.length, 2);
+    assert.deepEqual(
+      (requests[1]?.buttons as Array<Array<{ label: string }>>).map((row) => row.map((button) => button.label)),
+      [["Canary", "Everyone"]],
+    );
+    assert.match(String(requests[1]?.userMessage ?? ""), /Question 2 - Scope/);
+    assert.doesNotMatch(String(requests[1]?.userMessage ?? ""), /Fallback preview/);
+    assert.doesNotMatch(String(requests[1]?.userMessage ?? ""), /Why this is asked:/);
   });
 });

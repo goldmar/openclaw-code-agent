@@ -15,7 +15,7 @@ type WaitingForInputPayload = {
   planReviewSummary?: string;
 };
 
-const QUESTION_CONTEXT_MAX_CHARS = 700;
+const QUESTION_CONTEXT_MAX_CHARS = 240;
 
 function normalizeQuestionText(text: string | undefined): string | undefined {
   const trimmed = text?.trim();
@@ -55,8 +55,12 @@ function buildQuestionUserMessage(args: {
   sessionName: string;
   questionText?: string;
   contextPreview?: string;
+  hasButtons?: boolean;
 }): string {
   const questionText = normalizeQuestionText(args.questionText) ?? "The session is waiting for your reply.";
+  if (args.hasButtons) {
+    return `❓ [${args.sessionName}] Question waiting for reply:\n\n${questionText}`;
+  }
   const contextPreview = stripQuestionEchoFromContext(questionText, args.contextPreview);
   if (!contextPreview) {
     return `❓ [${args.sessionName}] Question waiting for reply:\n\n${questionText}`;
@@ -68,7 +72,7 @@ function buildQuestionUserMessage(args: {
     `Question:`,
     questionText,
     ``,
-    `Recent context:`,
+    `Why this is asked:`,
     contextPreview,
   ].join("\n");
 }
@@ -151,6 +155,7 @@ export function buildWaitingForInputPayload(args: {
         sessionName: session.name,
         questionText: questionText ?? preview,
         contextPreview: questionContextPreview,
+        hasButtons: Boolean(questionButtons),
       });
   const userMessages = isPlanApproval
     ? (

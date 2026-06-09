@@ -2128,7 +2128,7 @@ describe("SessionManager turn-end wake", () => {
     assert.match(request.wakeMessageOnNotifyFailed, /allow read-only workspace inspection/);
   });
 
-  it("includes recent output context alongside forwarded pending-input questions", async () => {
+  it("keeps button-backed pending-input questions compact without recent output walls", async () => {
     const s = fakeSession({
       id: "s-pending-input-context",
       name: "pending-input-context-session",
@@ -2154,11 +2154,11 @@ describe("SessionManager turn-end wake", () => {
     const [_sessionArg, request] = calls[0];
     assert.equal(request.label, "waiting");
     assert.equal(request.idempotencyKey, "waiting:s-pending-input-context:req-context-1");
-    assert.match(request.userMessage, /Question:/);
     assert.match(request.userMessage, /What host-version policy should the plan target\?/);
-    assert.match(request.userMessage, /Recent context:/);
-    assert.match(request.userMessage, /two competing conventions/);
-    assert.match(request.userMessage, /exact image tags/);
+    assert.doesNotMatch(request.userMessage, /Why this is asked:/);
+    assert.doesNotMatch(request.userMessage, /Recent context:/);
+    assert.doesNotMatch(request.userMessage, /two competing conventions/);
+    assert.doesNotMatch(request.userMessage, /exact image tags/);
     assert.equal((request.userMessage.match(/What host-version policy should the plan target\?/g) ?? []).length, 1);
     assert.deepEqual(
       request.buttons.map((row: Array<{ label: string }>) => row.map((button) => button.label)),
@@ -2505,6 +2505,21 @@ describe("SessionManager restored button parity", () => {
 
     assert.deepEqual(buttonLabels(resumableButtons), [["Resume", "View output"]]);
     assert.deepEqual(buttonLabels(nonResumableButtons), [["View output"]]);
+  });
+
+  it("stores pending-input request and question ids on question button tokens", () => {
+    const buttons = (sm as any).interactions.getQuestionButtons(
+      "question-session",
+      [{ label: "Staging" }, { label: "Production" }],
+      { requestId: "req-1", questionId: "environment" },
+    );
+
+    assert.equal(buttons[0][0].label, "Staging");
+    const token = (sm as any).interactions.consumeActionToken(buttons[0][0].callbackData);
+    assert.equal(token.kind, "question-answer");
+    assert.equal(token.optionIndex, 0);
+    assert.equal(token.pendingInputRequestId, "req-1");
+    assert.equal(token.pendingInputQuestionId, "environment");
   });
 });
 

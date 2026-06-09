@@ -227,7 +227,7 @@ describe("session-notification-builder", () => {
     assert.doesNotMatch(summary, /Should I proceed\?/);
   });
 
-  it("includes concise recent context for forwarded user questions without echoing the question twice", () => {
+  it("includes concise why-context for forwarded user questions without echoing the question twice", () => {
     const payload = buildWaitingForInputPayload({
       session: {
         id: "session-question-context",
@@ -248,10 +248,41 @@ describe("session-notification-builder", () => {
     assert.equal(payload.label, "waiting");
     assert.match(payload.userMessage ?? "", /Question:/);
     assert.match(payload.userMessage ?? "", /What host-version policy should the plan target\?/);
-    assert.match(payload.userMessage ?? "", /Recent context:/);
+    assert.match(payload.userMessage ?? "", /Why this is asked:/);
     assert.match(payload.userMessage ?? "", /two competing conventions/);
-    assert.match(payload.userMessage ?? "", /deployment plan draft switched to exact image tags/);
     assert.equal((payload.userMessage ?? "").match(/What host-version policy should the plan target\?/g)?.length, 1);
+  });
+
+  it("omits recent context walls from button-backed question prompts", () => {
+    const payload = buildWaitingForInputPayload({
+      session: {
+        id: "session-question-buttons",
+        name: "question-buttons",
+        multiTurn: true,
+        pendingPlanApproval: false,
+      } as any,
+      preview: "Which environment should I target?",
+      questionText: "Question 1 - Environment\nWhich environment should I target?\nOptions:\n  1. Staging\n  2. Production",
+      questionContextPreview: [
+        "I traced deployment history across a long transcript.",
+        "This context line should not appear in the button-backed prompt.",
+        "Which environment should I target?",
+      ].join("\n"),
+      originThreadLine: "Origin thread: telegram topic 42",
+      questionButtons: [[
+        { label: "Staging", callbackData: "stage-token" },
+        { label: "Production", callbackData: "prod-token" },
+      ]],
+    });
+
+    assert.equal(payload.label, "waiting");
+    assert.match(payload.userMessage ?? "", /Question 1 - Environment/);
+    assert.match(payload.userMessage ?? "", /Which environment should I target\?/);
+    assert.match(payload.userMessage ?? "", /Options:/);
+    assert.doesNotMatch(payload.userMessage ?? "", /Why this is asked:/);
+    assert.doesNotMatch(payload.userMessage ?? "", /long transcript/);
+    assert.doesNotMatch(payload.userMessage ?? "", /This context line should not appear/);
+    assert.deepEqual(payload.buttons?.[0]?.map((button) => button.label), ["Staging", "Production"]);
   });
 
   it("keeps the newest complete lines when question context must be truncated", () => {

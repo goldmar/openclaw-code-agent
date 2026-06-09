@@ -77,6 +77,7 @@ export class SessionLifecycleService {
       getQuestionButtons: (
         sessionId: string,
         options: Array<{ label: string }>,
+        context?: { requestId?: string; questionId?: string },
       ) => NotificationButton[][] | undefined;
       extractLastOutputLine: (session: Session) => string | undefined;
       getOutputPreview: (session: Session, maxChars?: number) => string;
@@ -403,13 +404,16 @@ export class SessionLifecycleService {
               : undefined,
           );
     const pendingInputQuestions = session.pendingInputState?.questions;
+    const activePendingInputQuestion = pendingInputQuestions?.[
+      session.pendingInputState?.activeQuestionIndex ?? 0
+    ];
     const pendingInputButtonOptions = pendingInputQuestions
       ? (
-          pendingInputQuestions.length === 1
-            && pendingInputQuestions[0].options.length > 0
-            && pendingInputQuestions[0].options.length <= 6
-            && !pendingInputQuestions[0].options.some((option) => option.isOther)
-              ? pendingInputQuestions[0].options
+          activePendingInputQuestion
+            && activePendingInputQuestion.options.length > 0
+            && activePendingInputQuestion.options.length <= 6
+            && !activePendingInputQuestion.options.some((option) => option.isOther)
+              ? activePendingInputQuestion.options
               : []
         )
       : session.pendingInputState?.options.map((label) => ({ label })) ?? [];
@@ -423,6 +427,10 @@ export class SessionLifecycleService {
           ? this.deps.getQuestionButtons(
               session.id,
               pendingInputButtonOptions,
+              {
+                requestId: session.pendingInputState?.requestId,
+                questionId: activePendingInputQuestion?.id,
+              },
             )
         : undefined;
     const matchingPlanArtifact = resolvePlanArtifactForPrompt(session, planDecisionVersion);
@@ -513,9 +521,18 @@ export class SessionLifecycleService {
       return;
     }
 
+    const pendingInputNotificationKey = session.pendingInputState
+      ? [
+          session.pendingInputState.requestId,
+          activePendingInputQuestion?.id
+            ?? (session.pendingInputState.activeQuestionIndex != null
+              ? `q${session.pendingInputState.activeQuestionIndex}`
+              : undefined),
+        ].filter(Boolean).join(":")
+      : undefined;
     this.deps.dispatchSessionNotification(session, {
       label: payload.label,
-      idempotencyKey: `waiting:${session.id}:${session.pendingInputState?.requestId ?? `${payload.label}:${payload.userMessage}`}`,
+      idempotencyKey: `waiting:${session.id}:${pendingInputNotificationKey ?? `${payload.label}:${payload.userMessage}`}`,
       userMessage: payload.userMessage,
       notifyUser: "always",
       buttons: payload.buttons,

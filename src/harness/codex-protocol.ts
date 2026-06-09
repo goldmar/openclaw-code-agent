@@ -520,6 +520,10 @@ function formatPendingInputQuestions(questions: PendingInputQuestion[]): string 
   return lines.join("\n");
 }
 
+function formatPendingInputWizardQuestion(question: PendingInputQuestion, index: number, count: number): string {
+  return formatPendingInputQuestion(question, index, count).join("\n");
+}
+
 function normalizeApprovalDecision(value: string): string {
   const normalized = value.trim().toLowerCase();
   if (normalized.includes("session")) return "acceptForSession";
@@ -533,11 +537,15 @@ export function buildPendingInputState(method: string, requestId: string, reques
   const methodLower = method.trim().toLowerCase();
   const questions = extractQuestionList(requestParams);
   const topLevelOptions = extractTopLevelOptions(requestParams);
-  const structuredOptions = questions.flatMap((question) => question.options);
+  const activeQuestionIndex = questions.length > 0 ? 0 : undefined;
+  const activeQuestion = activeQuestionIndex != null ? questions[activeQuestionIndex] : undefined;
+  const structuredOptions = activeQuestion ? activeQuestion.options : [];
   const optionRecords = structuredOptions.length > 0 ? structuredOptions : topLevelOptions;
   const options = optionRecords.map((option) => option.label);
   const promptText =
-    formatPendingInputQuestions(questions) ??
+    (activeQuestion
+      ? formatPendingInputWizardQuestion(activeQuestion, activeQuestionIndex ?? 0, questions.length)
+      : formatPendingInputQuestions(questions)) ??
     firstNestedString(requestParams, ["question", "prompt", "message", "text", "summary", "reason"]) ??
     undefined;
   const isApproval = methodLower.includes("requestapproval");
@@ -560,6 +568,7 @@ export function buildPendingInputState(method: string, requestId: string, reques
     promptText,
     options,
     ...(questions.length > 0 ? { questions } : {}),
+    ...(activeQuestionIndex != null ? { activeQuestionIndex } : {}),
     actions,
     allowsFreeText: true,
   };

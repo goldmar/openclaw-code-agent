@@ -588,6 +588,8 @@ export function normalizeActionToken(raw: unknown): SessionActionToken | undefin
     expiresAt: toOptionalNumber(raw.expiresAt),
     consumedAt: toOptionalNumber(raw.consumedAt),
     optionIndex: toOptionalNumber(raw.optionIndex),
+    pendingInputRequestId: toOptionalString(raw.pendingInputRequestId),
+    pendingInputQuestionId: toOptionalString(raw.pendingInputQuestionId),
     label: toOptionalString(raw.label),
     targetUrl: toOptionalString(raw.targetUrl),
     route: normalizeRoute(raw.route),

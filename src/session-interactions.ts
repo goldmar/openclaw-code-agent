@@ -158,10 +158,15 @@ export class SessionInteractionService {
   getQuestionButtons(
     sessionId: string,
     options: Array<{ label: string }>,
+    context: { requestId?: string; questionId?: string } = {},
   ): NotificationButton[][] | undefined {
     if (options.length === 0) return undefined;
     return [options.map((option, index) => (
-      this.makeActionButton(sessionId, "question-answer", option.label, { optionIndex: index })
+      this.makeActionButton(sessionId, "question-answer", option.label, {
+        optionIndex: index,
+        pendingInputRequestId: context.requestId,
+        pendingInputQuestionId: context.questionId,
+      })
     ))];
   }
 
