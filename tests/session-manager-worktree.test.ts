@@ -51,6 +51,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       writeFileSync(join(repoDir, "README.md"), "hello\n", "utf-8");
       git(repoDir, "add", "README.md");
       git(repoDir, "commit", "-m", "init");
+      git(repoDir, "remote", "add", "origin", "https://github.com/example/repo.git");
 
       const worktreePath = createWorktree(repoDir, "no-change-cleanup");
       const branchName = getBranchName(worktreePath);
@@ -437,6 +438,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       const sm = created.sm;
       cleanup = created.cleanup;
       stubDispatch(sm);
+      sm.setRepoPolicy(repoDir, "pr-allowed");
       (sm as any).store.persisted.set("h-delegate", {
         harnessSessionId: "h-delegate",
         backendRef: { kind: "claude-code", conversationId: "h-delegate" },
@@ -539,6 +541,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       writeFileSync(join(repoDir, "notes.txt"), "base\n", "utf-8");
       git(repoDir, "add", "README.md", "notes.txt");
       git(repoDir, "commit", "-m", "init");
+      git(repoDir, "remote", "add", "origin", "https://github.com/example/repo.git");
 
       const worktreePath = createWorktree(repoDir, "ask-summary");
       const branchName = getBranchName(worktreePath);
@@ -568,6 +571,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       cleanup = created.cleanup;
       stubDispatch(sm);
       (sm as any).interactions.isGitHubCliAvailable = () => true;
+      sm.setRepoPolicy(repoDir, "pr-allowed");
       (sm as any).store.persisted.set("h-ask-summary", {
         harnessSessionId: "h-ask-summary",
         backendRef: { kind: "claude-code", conversationId: "h-ask-summary" },

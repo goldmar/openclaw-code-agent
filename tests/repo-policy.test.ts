@@ -130,6 +130,51 @@ describe("SessionWorktreeActionService repo policy planning", () => {
     }
   });
 
+  it("uses live repo policy when an in-flight session has no policy snapshot", async () => {
+    const { repoDir, worktreePath, branchName } = createRepoWithWorktree("live-policy-fallback");
+    try {
+      const service = new SessionWorktreeActionService({
+        shouldRunWorktreeStrategy: () => true,
+        isAlreadyMerged: () => false,
+        resolveWorktreeRepoDir: () => repoDir,
+        getWorktreeCompletionState: () => "has-commits",
+        isPrAvailable: () => false,
+        resolveRepoPolicy: () => ({
+          policy: "pr-required",
+          source: "stored",
+          provider: "github",
+          prAvailable: true,
+          identity: {
+            key: `${repoDir}|https://github.com/example/repo`,
+            repoRoot: repoDir,
+            remoteUrl: "https://github.com/example/repo",
+            provider: "github",
+          },
+        }),
+      });
+      const action = await service.plan({
+        id: "s-policy-live",
+        name: "policy-live",
+        status: "completed",
+        lifecycle: "active",
+        phase: "implementing",
+        worktreePath,
+        worktreeBranch: branchName,
+        worktreeStrategy: "auto-merge",
+        originalWorkdir: repoDir,
+        harnessSessionId: "h-policy-live",
+      } as any);
+      assert.equal(action.kind, "decision");
+      if (action.kind === "decision") {
+        assert.equal(action.strategy, "auto-pr");
+        assert.equal(action.allowedActions.merge, false);
+        assert.equal(action.allowedActions.pr, true);
+      }
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
   it("blocks auto-merge for PR-required repos when PRs are unavailable", async () => {
     const { repoDir, worktreePath, branchName } = createRepoWithWorktree("pr-unavailable");
     try {

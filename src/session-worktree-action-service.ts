@@ -3,6 +3,7 @@ import type { WorktreeCompletionState } from "./session-worktree-controller";
 import { getPrimarySessionLookupRef, usesNativeBackendWorktree } from "./session-backend-ref";
 import { detectDefaultBranch, getDiffSummary } from "./worktree";
 import { resolveWorktreePolicyDecision } from "./repo-policy";
+import type { RepoPolicyResolution } from "./repo-policy";
 
 type DiffSummary = NonNullable<ReturnType<typeof getDiffSummary>>;
 
@@ -70,6 +71,7 @@ export class SessionWorktreeActionService {
         baseBranch: string,
       ) => WorktreeCompletionState;
       isPrAvailable: (repoDir: string) => boolean;
+      resolveRepoPolicy?: (repoDir: string) => RepoPolicyResolution;
     },
   ) {}
 
@@ -162,10 +164,13 @@ export class SessionWorktreeActionService {
       return { kind: "skip", result: { notificationSent: false, worktreeRemoved: false } };
     }
 
+    const livePolicy = session.repoIntegrationPolicy ? undefined : this.deps.resolveRepoPolicy?.(repoDir);
     const policyDecision = resolveWorktreePolicyDecision({
       requestedStrategy: strategy,
-      policy: session.repoIntegrationPolicy ?? "pr-allowed",
-      prAvailable: session.repoIntegrationPolicy ? this.deps.isPrAvailable(repoDir) : true,
+      policy: session.repoIntegrationPolicy ?? livePolicy?.policy,
+      prAvailable: session.repoIntegrationPolicy
+        ? this.deps.isPrAvailable(repoDir)
+        : livePolicy?.prAvailable ?? this.deps.isPrAvailable(repoDir),
     });
 
     if (!policyDecision.strategy) {

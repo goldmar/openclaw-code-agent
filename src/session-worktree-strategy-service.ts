@@ -1,6 +1,7 @@
 import type { Session } from "./session";
 import type { NotificationButton } from "./session-interactions";
 import type { PersistedSessionInfo } from "./types";
+import type { RepoPolicyResolution } from "./repo-policy";
 import type { SessionNotificationRequest } from "./wake-dispatcher";
 import type { WorktreeCompletionState } from "./session-worktree-controller";
 import { SessionWorktreeMessageService } from "./session-worktree-message-service";
@@ -59,6 +60,7 @@ export class SessionWorktreeStrategyService {
       getPolicyAwareWorktreeDecisionButtons?: (sessionId: string, allowedActions: { merge: boolean; pr: boolean }) => NotificationButton[][] | undefined;
       makeOpenPrButton: (sessionId: string) => NotificationButton;
       isPrAvailable?: (repoDir: string) => boolean;
+      resolveRepoPolicy?: (repoDir: string) => RepoPolicyResolution;
       worktreeSummaryProvider?: WorktreeDecisionSummaryProvider;
       worktreeMessages: SessionWorktreeMessageService;
       enqueueMerge: (
@@ -84,6 +86,7 @@ export class SessionWorktreeStrategyService {
       resolveWorktreeRepoDir: deps.resolveWorktreeRepoDir,
       getWorktreeCompletionState: deps.getWorktreeCompletionState,
       isPrAvailable: deps.isPrAvailable ?? (() => true),
+      resolveRepoPolicy: deps.resolveRepoPolicy,
     });
   }
 

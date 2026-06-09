@@ -214,6 +214,7 @@ export class SessionManager {
       getPolicyAwareWorktreeDecisionButtons: (sessionId, allowedActions) => manager.getWorktreeDecisionButtons(sessionId, {}, allowedActions),
       makeOpenPrButton: (sessionId) => manager.makeActionButton(sessionId, "worktree-create-pr", "Open PR"),
       isPrAvailable: (repoDir) => manager.resolveRepoPolicy(repoDir).prAvailable,
+      resolveRepoPolicy: (repoDir) => manager.resolveRepoPolicy(repoDir),
       worktreeSummaryProvider: options.worktreeSummaryProvider,
       worktreeMessages,
       enqueueMerge: (repoDir, fn, onQueued) => manager.enqueueMerge(repoDir, fn, onQueued),
