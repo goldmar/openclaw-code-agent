@@ -288,8 +288,15 @@ function eventIndicatesSessionIdle(event: { type?: string; properties: Record<st
   return status === "idle";
 }
 
-// Serialize OpenCode server startup to prevent SQLite lock contention
-// on the shared global database at ~/.local/share/opencode/opencode.db
+// Serialize OpenCode server startup (spawn + readiness probe) to avoid
+// SQLite lock contention on the shared global DB at
+// ~/.local/share/opencode/opencode.db when multiple harness sessions
+// (different worktrees) start concurrently inside the same OpenClaw process.
+//
+// This is a per-process promise-chain mutex. It sequences *startup* only;
+// once a server is ready and the client/handle is obtained, sessions run
+// independently (multiple concurrent OpenCode servers are expected and desired).
+// A single global server would kill parallelism across worktrees.
 let openCodeStartupMutex: Promise<void> = Promise.resolve();
 
 function withOpenCodeStartupMutex<T>(fn: () => Promise<T>): Promise<T> {
