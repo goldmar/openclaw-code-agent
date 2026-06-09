@@ -43,6 +43,7 @@ export function createPR(
     return { success: false, error: "GitHub CLI (gh) is not available" };
   }
 
+  let args: string[] | undefined;
   try {
     let forkOwner: string | undefined;
     if (targetRepo) {
@@ -59,7 +60,7 @@ export function createPR(
       }
     }
 
-    const args = ["pr", "create", "--base", base];
+    args = ["pr", "create", "--base", base];
     if (options.draft ?? true) {
       args.push("--draft");
     }
@@ -90,7 +91,7 @@ export function createPR(
     // Recovery: if we requested draft and the error indicates drafts are not supported or enabled
     // on the target repo, retry once without --draft so that PR creation does not regress for repos
     // that previously accepted non-draft PRs.
-    if ((options.draft ?? true) && /draft/i.test(msg)) {
+    if ((options.draft ?? true) && args && /draft/i.test(msg)) {
       try {
         const retryArgs = args.filter((a) => a !== "--draft");
         const retryResult = execFileSync("gh", retryArgs, {
