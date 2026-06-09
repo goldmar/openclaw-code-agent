@@ -139,16 +139,18 @@ If you use experimental OpenCode, make sure local `opencode >= 1.16.2` is availa
 
 ## First Session
 
-In chat, ask OpenClaw to start work:
+In chat, ask OpenClaw to start work. The plugin ships with `oca` as a built-in short name, so no local alias config is needed for these launch phrases:
+
+```text
+Let oca do the auth middleware bug fix.
+Ask oca to add tests for the billing flow.
+Have oca handle the failing dashboard smoke test.
+```
+
+You can also ask without the short name:
 
 ```text
 Start a coding session named fix-auth to fix the auth middleware bug.
-```
-
-You can also use the built-in OCA short name in natural language:
-
-```text
-Ask oca to fix the auth middleware bug.
 ```
 
 When the plan arrives, respond in the same thread:
