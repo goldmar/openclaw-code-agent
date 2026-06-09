@@ -20,7 +20,7 @@ import { makeGoalStatusTool } from "./src/tools/goal-status";
 import { makeGoalStopTool } from "./src/tools/goal-stop";
 import { makeGoalEditTool } from "./src/tools/goal-edit";
 import { createCallbackHandler } from "./src/callback-handler";
-import { registerAgentCommand } from "./src/commands/agent";
+import { registerAgentCommand, registerOcaCommand } from "./src/commands/agent";
 import { registerAgentSessionsCommand } from "./src/commands/agent-sessions";
 import { registerAgentKillCommand } from "./src/commands/agent-kill";
 import { registerAgentRespondCommand } from "./src/commands/agent-respond";
@@ -230,6 +230,7 @@ export function register(api: OpenClawPluginApi): void {
 
   // Commands
   registerAgentCommand(commandApi);
+  registerOcaCommand(commandApi);
   registerAgentSessionsCommand(commandApi);
   registerAgentKillCommand(commandApi);
   registerAgentRespondCommand(commandApi);

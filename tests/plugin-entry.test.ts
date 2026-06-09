@@ -170,6 +170,20 @@ describe("plugin entry source", () => {
     assert.doesNotMatch(frontmatter, /,\s*[\]}]/);
   });
 
+  it("declares OCA as a built-in natural-language trigger while preserving the existing skill trigger", () => {
+    const skill = readFileSync(
+      join(rootDir, "skills", "code-agent-orchestration", "SKILL.md"),
+      "utf8",
+    );
+    const frontmatter = skill.match(/^---\n([\s\S]*?)\n---\n/)?.[1] ?? "";
+
+    assert.match(frontmatter, /orchestrating coding agent sessions from OpenClaw/);
+    assert.match(frontmatter, /let oca do/);
+    assert.match(frontmatter, /ask oca to/);
+    assert.match(frontmatter, /have oca handle/);
+    assert.match(skill, /built-in short name for OpenClaw Code Agent/);
+  });
+
   it("does not use the removed OpenClaw embedded-extension factory API", () => {
     const removedApi = ["register", "Embedded", "Extension", "Factory"].join("");
     const trackedFiles = execFileSync("git", ["ls-files"], {
@@ -280,6 +294,7 @@ describe("plugin entry source", () => {
         "agent_respond",
         "agent_sessions",
         "agent_stats",
+        "oca",
         "goal",
         "goal_status",
         "goal_stop",
@@ -470,6 +485,7 @@ describe("plugin entry source", () => {
     assert.match(indexSource, /makeGoalStopTool/);
     assert.match(indexSource, /makeGoalEditTool/);
     assert.match(indexSource, /registerGoalCommand\(commandApi\)/);
+    assert.match(indexSource, /registerOcaCommand\(commandApi\)/);
     assert.match(indexSource, /registerGoalStatusCommand\(commandApi\)/);
     assert.match(indexSource, /registerGoalStopCommand\(commandApi\)/);
     assert.match(indexSource, /registerGoalEditCommand\(commandApi\)/);

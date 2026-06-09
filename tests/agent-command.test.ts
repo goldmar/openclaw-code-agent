@@ -1,15 +1,15 @@
 import { beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-import { registerAgentCommand } from "../src/commands/agent";
+import { registerAgentCommand, registerOcaCommand } from "../src/commands/agent";
 import { setPluginConfig } from "../src/config";
 import { setSessionManager } from "../src/singletons";
 
 type AgentCommandHandler = (ctx: Record<string, unknown>) => { text: string };
 
-function captureAgentCommand(): AgentCommandHandler {
+function captureAgentCommand(registerCommand = registerAgentCommand): AgentCommandHandler {
   let handler: AgentCommandHandler | undefined;
-  registerAgentCommand({
+  registerCommand({
     registerCommand(command: { handler: AgentCommandHandler }) {
       handler = command.handler;
     },
@@ -63,6 +63,48 @@ describe("agent command", () => {
     assert.equal(spawnConfig?.planApproval, "delegate");
     assert.equal(spawnConfig?.originChannel, "telegram|bot1|-1003863755361");
     assert.equal(spawnConfig?.originThreadId, 13832);
+    assert.equal((spawnConfig?.route as { accountId?: string } | undefined)?.accountId, "bot1");
+  });
+
+  it("registers the built-in oca alias with the same launch routing behavior", () => {
+    let spawnConfig: Record<string, unknown> | undefined;
+    setSessionManager({
+      list: () => [],
+      listPersistedSessions: () => [],
+      spawn(config: Record<string, unknown>) {
+        spawnConfig = config;
+        return {
+          id: "sess-oca-command",
+          name: config.name,
+          model: config.model,
+          reasoningEffort: config.reasoningEffort,
+          worktreeStrategy: "delegate",
+        };
+      },
+      formatLaunchResult(config: Record<string, unknown>, session: Record<string, unknown>) {
+        return `launched ${session.name} with ${config.permissionMode}/${config.planApproval}`;
+      },
+    } as any);
+
+    const handler = captureAgentCommand(registerOcaCommand);
+    const result = handler({
+      args: '--name "oca command" Fix the routing bug',
+      workspaceDir: "/tmp",
+      sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+      deliveryContext: {
+        channel: "telegram",
+        to: "-1003863755361",
+        accountId: "bot1",
+        threadId: 13832,
+      },
+    });
+
+    assert.equal(result.text, "launched oca command with plan/delegate");
+    assert.ok(spawnConfig, "spawn should be called");
+    assert.equal(spawnConfig?.name, "oca command");
+    assert.equal(spawnConfig?.permissionMode, "plan");
+    assert.equal(spawnConfig?.planApproval, "delegate");
+    assert.equal(spawnConfig?.originChannel, "telegram|bot1|-1003863755361");
     assert.equal((spawnConfig?.route as { accountId?: string } | undefined)?.accountId, "bot1");
   });
 

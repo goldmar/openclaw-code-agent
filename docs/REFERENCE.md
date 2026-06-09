@@ -546,6 +546,7 @@ Successful cleanup clears the tracked branch/path and persists the resolved life
 | Command | Purpose |
 | --- | --- |
 | `/agent` | Launch a session from chat |
+| `/oca` | Built-in alias for `/agent` |
 | `/agent_sessions` | List sessions |
 | `/agent_output` | Show recent output |
 | `/agent_respond` | Send a reply |
