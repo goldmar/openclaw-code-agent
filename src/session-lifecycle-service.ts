@@ -495,6 +495,16 @@ export class SessionLifecycleService {
           optionDescriptions: optionDescriptionSummaries,
         })
       : pendingInputPromptText;
+    // Snapshot notification key before async gap to avoid race when user answers during summary generation.
+    const pendingInputNotificationKey = session.pendingInputState
+      ? [
+          session.pendingInputState.requestId,
+          activePendingInputQuestion?.id
+            ?? (session.pendingInputState.activeQuestionIndex != null
+              ? `q${session.pendingInputState.activeQuestionIndex}`
+              : undefined),
+        ].filter(Boolean).join(":")
+      : undefined;
     const questionContextSummary = !session.pendingPlanApproval && this.deps.questionContextSummaryProvider
       ? await buildQuestionContextMicroSummary({
           sessionName: session.name,
@@ -591,15 +601,6 @@ export class SessionLifecycleService {
       return;
     }
 
-    const pendingInputNotificationKey = session.pendingInputState
-      ? [
-          session.pendingInputState.requestId,
-          activePendingInputQuestion?.id
-            ?? (session.pendingInputState.activeQuestionIndex != null
-              ? `q${session.pendingInputState.activeQuestionIndex}`
-              : undefined),
-        ].filter(Boolean).join(":")
-      : undefined;
     this.deps.dispatchSessionNotification(session, {
       label: payload.label,
       idempotencyKey: `waiting:${session.id}:${pendingInputNotificationKey ?? `${payload.label}:${payload.userMessage}`}`,
