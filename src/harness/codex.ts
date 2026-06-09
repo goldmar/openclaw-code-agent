@@ -6,7 +6,7 @@
  * here just coordinates launch/resume/interrupt with the shared contract.
  */
 
-import type { PendingInputQuestion, PendingInputState, PlanArtifact, PlanArtifactStep } from "../types";
+import type { PendingInputState, PlanArtifact, PlanArtifactStep } from "../types";
 import type {
   AgentHarness,
   HarnessLaunchOptions,
@@ -25,6 +25,9 @@ import {
   createTextDeltaEvent,
   HarnessMessageQueue,
 } from "./harness-events";
+import {
+  formatPendingInputWizardQuestion,
+} from "../pending-input-normalization";
 import {
   buildPendingInputState,
   buildThreadResumePayloads,
@@ -85,32 +88,6 @@ function extractPromptText(message: unknown): string {
   return String(message);
 }
 
-function formatCodexWizardQuestion(question: PendingInputQuestion, index: number, count: number): string {
-  const title = [
-    count > 1 ? `Question ${index + 1}` : undefined,
-    question.header,
-  ].filter(Boolean).join(" - ");
-  const lines = [
-    ...(title ? [title] : []),
-    question.question,
-  ];
-  if (question.options.length > 0) {
-    lines.push(
-      "Options:",
-      ...question.options.map((option, optionIndex) => {
-        const recommended = option.recommended && !/\brecommended\b/i.test(option.label) ? " (recommended)" : "";
-        const description = option.description ? ` - ${option.description}` : "";
-        const freeText = option.isOther ? " (free text)" : "";
-        return `  ${optionIndex + 1}. ${option.label}${recommended}${freeText}${description}`;
-      }),
-    );
-  }
-  if (question.allowsFreeText && !question.options.some((option) => option.isOther)) {
-    lines.push("Free-form answer is allowed.");
-  }
-  return lines.join("\n");
-}
-
 function updateCodexWizardState(
   base: PendingInputState,
   activeQuestionIndex: number,
@@ -121,7 +98,7 @@ function updateCodexWizardState(
   if (!activeQuestion) return base;
   return {
     ...base,
-    promptText: formatCodexWizardQuestion(activeQuestion, activeQuestionIndex, questions.length),
+    promptText: formatPendingInputWizardQuestion(activeQuestion, activeQuestionIndex, questions.length),
     options: activeQuestion.options.map((option) => option.label),
     activeQuestionIndex,
     answers,

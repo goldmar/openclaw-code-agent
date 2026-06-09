@@ -26,6 +26,7 @@ export function pickString(
 export function optionLooksRecommended(label: string, record?: Record<string, unknown>): boolean {
   if (record && typeof record.recommended === "boolean") return record.recommended;
   if (record && typeof record.isRecommended === "boolean") return record.isRecommended;
+  if (/\b(?:not\s+(?:a\s+)?|non[-\s]?|un)recommended\b/i.test(label)) return false;
   return /\brecommended\b/i.test(label);
 }
 

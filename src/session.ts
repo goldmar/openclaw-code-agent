@@ -802,6 +802,10 @@ export class Session extends EventEmitter {
     return submitted;
   }
 
+  canSubmitPendingInputOption(): boolean {
+    return Boolean(this.pendingInputState && this.harnessHandle?.submitPendingInputOption);
+  }
+
   async submitPendingInputText(text: string): Promise<boolean> {
     if (!this.pendingInputState || !this.harnessHandle?.submitPendingInputText) {
       return false;

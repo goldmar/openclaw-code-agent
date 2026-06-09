@@ -1394,16 +1394,12 @@ export class SessionManager {
     context: { requestId?: string; questionId?: string } = {},
   ): Promise<boolean> {
     const session = this.sessions.get(sessionId);
-    if (session?.pendingInputState) {
+    if (session?.canSubmitPendingInputOption?.()) {
       if (await session.submitPendingInputOption(optionIndex, context)) {
         this.lastWaitingEventTimestamps.delete(sessionId);
         return true;
       }
       return false;
-    }
-    if (session && await session.submitPendingInputOption(optionIndex, context)) {
-      this.lastWaitingEventTimestamps.delete(sessionId);
-      return true;
     }
     this.questions.resolveAskUserQuestion(sessionId, optionIndex);
     return true;

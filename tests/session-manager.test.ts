@@ -2179,6 +2179,7 @@ describe("SessionManager turn-end wake", () => {
         promptText: "Choose the first environment",
         options: ["Staging", "Production"],
       },
+      canSubmitPendingInputOption: () => true,
       submitPendingInputOption: async (optionIndex: number) => optionIndex === 1,
       getOutput: () => [],
     });
@@ -3054,5 +3055,51 @@ describe("SessionManager.handleAskUserQuestion()", () => {
 
     sm.resolveAskUserQuestion(session.id, 0);
     await pending;
+  });
+
+  it("falls through to Claude AskUserQuestion resolution when pending input has no native option handler", async () => {
+    const session = fakeSession({
+      id: "s-cc-question-fallback",
+      name: "cc-question-fallback",
+      worktreeStrategy: "ask",
+      pendingInputState: {
+        requestId: "native-question-without-handler",
+        kind: "question",
+        promptText: "Which environment should I target?",
+        options: ["Staging", "Production"],
+        allowsFreeText: false,
+      },
+      canSubmitPendingInputOption: () => false,
+      submitPendingInputOption: async () => false,
+    });
+    (sm as any).sessions.set(session.id, session);
+
+    const pending = sm.handleAskUserQuestion(session.id, {
+      questions: [{
+        question: "Which environment should I target?",
+        options: [
+          { label: "Staging" },
+          { label: "Production" },
+        ],
+      }],
+    });
+
+    const resolved = await sm.resolvePendingInputOption(session.id, 1, {
+      requestId: "native-question-without-handler",
+    });
+    assert.equal(resolved, true);
+    assert.deepEqual(await pending, {
+      behavior: "allow",
+      updatedInput: {
+        questions: [{
+          question: "Which environment should I target?",
+          options: [
+            { label: "Staging" },
+            { label: "Production" },
+          ],
+        }],
+        answers: { "Which environment should I target?": "Production" },
+      },
+    });
   });
 });

@@ -233,6 +233,15 @@ describe("codex protocol turn payloads", () => {
       allowsFreeText: true,
     }]);
     assert.match(state.promptText ?? "", /Confirm/);
+    assert.equal(
+      buildPendingInputState("tool/requestUserInput", "req-negated", {
+        questions: [{
+          question: "Which path?",
+          options: ["Not Recommended", "Recommended"],
+        }],
+      }).questions?.[0]?.options[0]?.recommended,
+      false,
+    );
     assert.match(state.promptText ?? "", /Yes \(Recommended\) - Continue the current plan\./);
     assert.match(state.promptText ?? "", /Free-form answer is allowed\./);
   });

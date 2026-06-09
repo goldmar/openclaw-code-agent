@@ -498,6 +498,7 @@ describe("CodexHarness App Server mapping", () => {
             id: "scope",
             header: "Scope",
             question: "How broad should the rollout be?",
+            multiSelect: true,
             options: [
               { label: "Canary", description: "Start with a small cohort." },
               { label: "Everyone", description: "Roll out to all users." },
@@ -526,6 +527,7 @@ describe("CodexHarness App Server mapping", () => {
         assert.deepEqual(client.pendingInputResponses, []);
       } else if (next.value.type === "pending_input" && next.value.state.activeQuestionIndex === 1) {
         assert.deepEqual(next.value.state.options, ["Canary", "Everyone"]);
+        assert.match(next.value.state.promptText ?? "", /Reply with one or more option labels\./);
         assert.deepEqual(next.value.state.answers, {
           environment: { answers: ["Production"] },
         });
