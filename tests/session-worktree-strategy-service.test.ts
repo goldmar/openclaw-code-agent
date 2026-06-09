@@ -165,6 +165,70 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
     assert.equal(notifications.length, 0);
   });
 
+  it("allows delegate sessions to receive decision buttons when repo policy blocks follow-through", async () => {
+    const { repoDir, worktreePath, branchName } = createMergeableWorktree("delegate-policy-blocked");
+    const notifications: Array<Record<string, unknown>> = [];
+    const policyButtons = [[{ label: "Later", callbackData: "later" }]];
+    let policyButtonOptions: { allowDelegate?: boolean } | undefined;
+    let policyAllowedActions: { merge: boolean; pr: boolean } | undefined;
+    try {
+      const service = new SessionWorktreeStrategyService({
+        shouldRunWorktreeStrategy: () => true,
+        isAlreadyMerged: () => false,
+        resolveWorktreeRepoDir: (dir) => dir,
+        getWorktreeCompletionState: () => "has-commits",
+        updatePersistedSession: (_ref, patch) => {
+          Object.assign(session, patch);
+          return true;
+        },
+        dispatchSessionNotification: (_session, request) => {
+          notifications.push(request as Record<string, unknown>);
+        },
+        getOutputPreview: () => "",
+        originThreadLine: () => "thread",
+        getWorktreeDecisionButtons: () => undefined,
+        getPolicyAwareWorktreeDecisionButtons: (_sessionId, options, allowedActions) => {
+          policyButtonOptions = options;
+          policyAllowedActions = allowedActions;
+          return policyButtons;
+        },
+        makeOpenPrButton: () => ({ label: "Open PR", callbackData: "open-pr" }),
+        isPrAvailable: () => false,
+        worktreeMessages: new SessionWorktreeMessageService(),
+        enqueueMerge: async (_repoDir, fn) => { await fn(); },
+        mergeBranch,
+        spawnConflictResolver: async () => ({ id: "resolver-unused", name: "unused" }),
+        runAutoPr: async () => ({ success: true }),
+      });
+
+      const session: any = {
+        id: "s-delegate-policy-blocked",
+        name: "delegate-policy-blocked",
+        status: "completed",
+        phase: "implementing",
+        lifecycle: "terminal",
+        worktreeState: "active",
+        originalWorkdir: repoDir,
+        worktreePath,
+        worktreeBranch: branchName,
+        worktreeBaseBranch: "main",
+        worktreeStrategy: "delegate",
+        pendingPlanApproval: false,
+      };
+
+      const result = await service.handleWorktreeStrategy(session);
+
+      assert.deepEqual(result, { notificationSent: true, worktreeRemoved: false });
+      assert.equal(notifications.length, 1);
+      assert.equal(notifications[0].label, "worktree-policy-blocked");
+      assert.equal(notifications[0].buttons, policyButtons);
+      assert.deepEqual(policyButtonOptions, { allowDelegate: true });
+      assert.deepEqual(policyAllowedActions, { merge: false, pr: false });
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
   it("runs auto-pr follow-through for completed PR-open worktree follow-up sessions", async () => {
     const { repoDir, worktreePath, branchName } = createMergeableWorktree("pr-open-auto");
     const notifications: Array<Record<string, unknown>> = [];

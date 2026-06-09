@@ -57,7 +57,11 @@ export class SessionWorktreeStrategyService {
       getOutputPreview: (session: Session, maxChars?: number) => string;
       originThreadLine: (session: Session) => string;
       getWorktreeDecisionButtons: (sessionId: string) => NotificationButton[][] | undefined;
-      getPolicyAwareWorktreeDecisionButtons?: (sessionId: string, allowedActions: { merge: boolean; pr: boolean }) => NotificationButton[][] | undefined;
+      getPolicyAwareWorktreeDecisionButtons?: (
+        sessionId: string,
+        options: { allowDelegate?: boolean },
+        allowedActions: { merge: boolean; pr: boolean },
+      ) => NotificationButton[][] | undefined;
       makeOpenPrButton: (sessionId: string) => NotificationButton;
       isPrAvailable?: (repoDir: string) => boolean;
       resolveRepoPolicy?: (repoDir: string) => RepoPolicyResolution;
@@ -256,7 +260,7 @@ export class SessionWorktreeStrategyService {
         label: "worktree-policy-blocked",
         idempotencyKey: `worktree-policy-blocked:${session.id}:${action.branchName}:${action.baseBranch}`,
         userMessage: `⚠️ [${session.name}] ${action.policyReason ?? "Repo policy blocked automatic follow-through."}`,
-        buttons: this.getPolicyAwareWorktreeDecisionButtons(session.id, action.allowedActions),
+        buttons: this.getPolicyAwareWorktreeDecisionButtons(session.id, action.allowedActions, { allowDelegate: true }),
       });
       return { notificationSent: true, worktreeRemoved: false };
     }
@@ -388,9 +392,10 @@ export class SessionWorktreeStrategyService {
   private getPolicyAwareWorktreeDecisionButtons(
     sessionId: string,
     allowedActions: { merge: boolean; pr: boolean },
+    options: { allowDelegate?: boolean } = {},
   ): NotificationButton[][] | undefined {
     return this.deps.getPolicyAwareWorktreeDecisionButtons
-      ? this.deps.getPolicyAwareWorktreeDecisionButtons(sessionId, allowedActions)
+      ? this.deps.getPolicyAwareWorktreeDecisionButtons(sessionId, options, allowedActions)
       : this.deps.getWorktreeDecisionButtons(sessionId);
   }
 

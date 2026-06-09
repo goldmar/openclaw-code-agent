@@ -20,6 +20,7 @@ function writeStore(
   indexPath: string,
   sessions: Record<string, unknown>[],
   actionTokens: Record<string, unknown>[] = [],
+  repoPolicies: Record<string, unknown>[] = [],
 ): void {
   writeFileSync(indexPath, JSON.stringify({
     schemaVersion: STORE_SCHEMA_VERSION,
@@ -28,6 +29,7 @@ function writeStore(
       ...session,
     })),
     actionTokens,
+    repoPolicies,
   }), "utf-8");
 }
 
@@ -125,6 +127,61 @@ describe("SessionStore persisted compatibility", () => {
     assert.equal(policy?.policy, "pr-required");
     assert.equal(policy?.repoRoot, "/repo");
     assert.equal(policy?.provider, "github");
+  });
+
+  it("skips invalid repo policy records without clearing sessions or action tokens", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-store-invalid-policy-"));
+    const indexPath = join(dir, "sessions.json");
+    writeStore(
+      indexPath,
+      [{
+        sessionId: "policy-compat",
+        harnessSessionId: "h-policy-compat",
+        backendRef: { kind: "claude-code", conversationId: "thread-policy-compat" },
+        name: "policy-compat",
+        prompt: "p",
+        workdir: "/tmp",
+        status: "completed",
+        costUsd: 0,
+      }],
+      [{
+        id: "token-policy-compat",
+        sessionId: "policy-compat",
+        kind: "worktree-decide-later",
+        createdAt: 1700000000000,
+      }],
+      [
+        {
+          key: "/repo|https://github.com/example/good",
+          policy: "pr-required",
+          repoRoot: "/repo",
+          remoteUrl: "https://github.com/example/good",
+          provider: "github",
+          createdAt: "2026-06-01T00:00:00.000Z",
+          updatedAt: "2026-06-01T00:00:00.000Z",
+          source: "stored",
+        },
+        {
+          key: "/repo|bad",
+          policy: "not-a-policy",
+          repoRoot: "/repo",
+          createdAt: "2026-06-01T00:00:00.000Z",
+          updatedAt: "2026-06-01T00:00:00.000Z",
+        },
+      ],
+    );
+
+    const store = new SessionStore({
+      env: {
+        OPENCLAW_CODE_AGENT_SESSIONS_PATH: indexPath,
+      },
+    });
+
+    assert.equal(store.getPersistedSession("policy-compat")?.name, "policy-compat");
+    assert.equal(store.getActionToken("token-policy-compat")?.kind, "worktree-decide-later");
+    assert.equal(store.listRepoPolicies().length, 1);
+    assert.equal(store.listRepoPolicies()[0]?.policy, "pr-required");
+    assert.equal(readdirSync(dir).some((file) => file.includes(".legacy-")), false);
   });
 
   it("normalizes legacy direct-telegram approval prompt transport metadata on restore", () => {
