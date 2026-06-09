@@ -487,9 +487,8 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       assert.equal(calls.length, 1);
       const [_sessionArg, request] = calls[0];
       assert.equal(request.label, "worktree-delegate");
-      assert.equal(request.notifyUser, "always");
-      assert.match(request.userMessage, /Worktree decision pending for session `delegate-session`/);
-      assert.match(request.userMessage, /delegated reviewer is deciding/i);
+      assert.equal(request.notifyUser, "never");
+      assert.equal(request.userMessage, undefined);
       assert.equal(request.buttons, undefined);
       assert.match(request.wakeMessage, /DELEGATED WORKTREE DECISION/);
       assert.match(request.wakeMessage, /Session origin route \(authoritative for human follow-ups\):/);

@@ -811,6 +811,32 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
     assert.equal(wakeParams.message, "Delegated worktree decision wake");
   });
 
+  it("suppresses delegate pending user notifications while still sending the reviewer wake", async () => {
+    const dispatcher = createDispatcher();
+    const session: FakeSession = {
+      id: "session-delegate-pending",
+      route: buildRoute(),
+      originChannel: "telegram|bot|12345",
+      originThreadId: 11239,
+      originSessionKey: "agent:main:telegram:group:-1003863755361:topic:11239",
+      originAgentId: "main",
+    };
+
+    dispatcher.dispatchSessionNotification(session as any, {
+      label: "worktree-delegate",
+      wakeMessage: "Delegated worktree decision wake",
+      notifyUser: "never",
+    });
+    const calls = await waitForCalls(logPath, 1);
+
+    assert.equal(calls.length, 1);
+    assert.equal(calls.some((call) => call[0] === "message"), false);
+    const wakeCall = calls.find((call) => call[0] === "gateway");
+    assert.ok(wakeCall, "expected a chat.send wake call");
+    const wakeParams = parseChatSendParams(wakeCall);
+    assert.equal(wakeParams.message, "Delegated worktree decision wake");
+  });
+
   it("logs Telegram interactive delivery context when direct button sends fail", async () => {
     process.env.OPENCLAW_TEST_FAIL_ONCE_FOR = JSON.stringify({
       match: "--presentation",
