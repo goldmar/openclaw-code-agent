@@ -288,7 +288,19 @@ function eventIndicatesSessionIdle(event: { type?: string; properties: Record<st
   return status === "idle";
 }
 
+// Serialize OpenCode server startup to prevent SQLite lock contention
+// on the shared global database at ~/.local/share/opencode/opencode.db
+let openCodeStartupMutex: Promise<void> = Promise.resolve();
+
+function withOpenCodeStartupMutex<T>(fn: () => Promise<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const next = openCodeStartupMutex.then(() => fn().then(resolve, reject));
+    openCodeStartupMutex = next.catch(() => undefined);
+  });
+}
+
 async function startOpenCodeServerOnce(options: { cwd: string; signal?: AbortSignal; fetch?: FetchLike; requestTimeoutMs?: number; startupTimeoutMs?: number }): Promise<OpenCodeServerHandle> {
+  return withOpenCodeStartupMutex(async () => {
   const port = await getFreePort();
   const requestedCommand = process.env[OPENCODE_COMMAND_ENV]?.trim() || "opencode";
   const command = resolveCommandPath(requestedCommand);
@@ -386,6 +398,7 @@ async function startOpenCodeServerOnce(options: { cwd: string; signal?: AbortSig
   } finally {
     options.signal?.removeEventListener("abort", abortStartup);
   }
+  });
 }
 
 async function defaultCreateServer(options: { cwd: string; signal?: AbortSignal; fetch?: FetchLike; requestTimeoutMs?: number; startupTimeoutMs?: number }): Promise<OpenCodeServerHandle> {
