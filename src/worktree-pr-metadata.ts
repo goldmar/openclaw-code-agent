@@ -2,6 +2,7 @@ import type { DiffSummary } from "./worktree";
 
 export interface PrMetadataEvidence {
   sessionName: string;
+  branchName?: string;
   objective?: string;
   stats?: {
     commits: number;
@@ -119,6 +120,7 @@ function defaultNotes(): string[] {
 
 function buildPrMetadataEvidence(args: {
   sessionName: string;
+  branchName?: string;
   prompt?: string;
   diffSummary?: DiffSummary;
 }): PrMetadataEvidence {
@@ -126,6 +128,7 @@ function buildPrMetadataEvidence(args: {
   const diffSummary = args.diffSummary;
   return {
     sessionName: args.sessionName,
+    branchName: args.branchName,
     objective,
     stats: diffSummary
       ? {
@@ -265,11 +268,12 @@ function buildFallbackPrMetadata(evidence: PrMetadataEvidence, prompt: string | 
     redactSensitiveText(evidence.sessionName).replace(/[-_]+/g, " ").replace(/\s+/g, " ").trim() || "agent worktree",
     80,
   );
-  const title = truncateText(`OpenClaw agent changes: ${safeName}`, 90);
+  const branchPart = evidence.branchName ? ` (${evidence.branchName})` : "";
+  const title = truncateText(`OpenClaw agent changes${branchPart}: ${safeName}`, 90);
 
   const baseSummary = [
     "Deterministic fallback metadata generated because no LLM PR metadata provider is configured.",
-    `Session: ${safeName}.`,
+    `Session: ${safeName}${evidence.branchName ? ` (branch: ${evidence.branchName})` : ""}.`,
     ...(evidence.objective ? [`Objective: ${evidence.objective}`] : []),
     ...(evidence.stats
       ? [`Scope: ${evidence.stats.commits} commits, ${evidence.stats.filesChanged} files changed (+${evidence.stats.insertions} / -${evidence.stats.deletions}).`]
@@ -376,11 +380,12 @@ function buildFallbackPrMetadata(evidence: PrMetadataEvidence, prompt: string | 
 
 export async function buildPrMetadata(args: {
   sessionName: string;
+  branchName?: string;
   prompt?: string;
   diffSummary?: DiffSummary;
   provider?: PrMetadataProvider;
 }): Promise<PrMetadataResult> {
-  const evidence = buildPrMetadataEvidence(args);
+  const evidence = buildPrMetadataEvidence({ sessionName: args.sessionName, branchName: args.branchName, prompt: args.prompt, diffSummary: args.diffSummary });
   if (!args.provider) {
     const metadata = buildFallbackPrMetadata(evidence, args.prompt);
     return { ok: true, metadata, evidence };
