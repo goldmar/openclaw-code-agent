@@ -24,7 +24,6 @@ import type { SessionNotificationRequest } from "./wake-dispatcher";
 import { existsSync, readFileSync } from "fs";
 import {
   buildQuestionContextMicroSummary,
-  buildQuestionOptionDescriptionSummaries,
   type QuestionContextSummaryProvider,
 } from "./question-context-summary";
 
@@ -34,7 +33,7 @@ type WorktreeStrategyResult = {
 };
 
 type DispatchNotification = (session: Session, request: SessionNotificationRequest) => void;
-const OPTION_DESCRIPTION_MAX_CHARS = 96;
+const OPTION_DESCRIPTION_MAX_CHARS = 280;
 
 function resolvePlanArtifactForPrompt(
   session: Pick<Session, "latestPlanArtifactVersion" | "latestPlanArtifact" | "planFilePath">,
@@ -84,15 +83,9 @@ function buildInlineOptionDescriptions(question: PendingInputQuestion): Array<{ 
   return question.options
     .map((option) => ({
       label: option.label,
-      description: option.description?.replace(/\s+/g, " ").trim() ?? "",
+      description: option.description?.trim() ?? "",
     }))
     .filter((option) => option.description && option.description.length <= OPTION_DESCRIPTION_MAX_CHARS);
-}
-
-function hasVerboseOptionDescriptions(question: PendingInputQuestion): boolean {
-  return question.options.some((option) =>
-    (option.description?.replace(/\s+/g, " ").trim().length ?? 0) > OPTION_DESCRIPTION_MAX_CHARS,
-  );
 }
 
 export class SessionLifecycleService {
@@ -483,16 +476,7 @@ export class SessionLifecycleService {
         : undefined;
     const matchingPlanArtifact = resolvePlanArtifactForPrompt(session, planDecisionVersion);
     const optionDescriptionSummaries = activePendingInputQuestion
-      ? (
-          this.deps.questionContextSummaryProvider && hasVerboseOptionDescriptions(activePendingInputQuestion)
-            ? await buildQuestionOptionDescriptionSummaries({
-                sessionName: session.name,
-                question: activePendingInputQuestion.question,
-                options: activePendingInputQuestion.options,
-                provider: this.deps.questionContextSummaryProvider,
-              })
-            : buildInlineOptionDescriptions(activePendingInputQuestion)
-        )
+      ? buildInlineOptionDescriptions(activePendingInputQuestion)
       : [];
     const questionText = activePendingInputQuestion
       ? buildActiveQuestionPrompt({

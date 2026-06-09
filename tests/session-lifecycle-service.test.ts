@@ -40,7 +40,7 @@ describe("SessionLifecycleService", () => {
       getResumeButtons: () => [],
       getQuestionButtons: () => undefined,
       extractLastOutputLine: () => undefined,
-      getOutputPreview: () => "",
+      getOutputPreview: () => "Codex reached the policy selection step after reading the plugin configuration.",
       originThreadLine: () => "",
       debounceWaitingEvent: () => true,
       isAlreadyMerged: () => false,
@@ -555,12 +555,13 @@ describe("SessionLifecycleService", () => {
     assert.doesNotMatch(String(requests[1]?.userMessage ?? ""), /Why this is asked:/);
   });
 
-  it("compresses verbose option descriptions without changing button labels", async () => {
+  it("preserves provided option descriptions verbatim without calling the LLM", async () => {
     const requests: Array<Record<string, unknown>> = [];
-    const verboseDescription = [
+    const providedDescription = [
       "Use the plugin store as the canonical source because the shared policy is controlled by plugin configuration,",
       "is inherited by every launched agent session, and should not be overridden inside a single Codex answer.",
     ].join(" ");
+    let contextSummaryCalls = 0;
 
     const service = new SessionLifecycleService({
       persistSession: () => {},
@@ -586,23 +587,18 @@ describe("SessionLifecycleService", () => {
         options.map((option) => ({ label: option.label, callbackData: `token:${option.label}` })),
       ],
       extractLastOutputLine: () => undefined,
-      getOutputPreview: () => "",
+      getOutputPreview: () => "Codex reached the policy selection step after reading the plugin configuration.",
       originThreadLine: () => "Origin thread: telegram topic 42",
       debounceWaitingEvent: () => true,
       isAlreadyMerged: () => false,
       questionContextSummaryProvider: {
-        async generateQuestionContextSummary() {
-          return undefined;
+        async generateQuestionContextSummary(evidence) {
+          contextSummaryCalls += 1;
+          assert.match(evidence.question, /Which policy source should I use\?/);
+          return { summary: "Codex needs the policy source before it can continue." };
         },
-        async generateQuestionOptionDescriptions(evidence) {
-          assert.deepEqual(evidence.options.map((option) => option.label), ["Plugin store"]);
-          assert.match(evidence.options[0].description, /canonical source/);
-          return {
-            options: [{
-              label: "Plugin store",
-              description: "Shared policy controlled by plugin config.",
-            }],
-          };
+        async generateQuestionOptionDescriptions() {
+          throw new Error("option descriptions must not be sent to the LLM");
         },
       },
     });
@@ -621,7 +617,7 @@ describe("SessionLifecycleService", () => {
           id: "policy_source",
           question: "Which policy source should I use?",
           options: [
-            { label: "Plugin store", description: verboseDescription },
+            { label: "Plugin store", description: providedDescription },
             { label: "Local override" },
           ],
         }],
@@ -629,8 +625,9 @@ describe("SessionLifecycleService", () => {
     }));
 
     assert.equal(requests.length, 1);
-    assert.match(String(requests[0]?.userMessage ?? ""), /Plugin store - Shared policy controlled by plugin config\./);
-    assert.doesNotMatch(String(requests[0]?.userMessage ?? ""), /inherited by every launched agent session/);
+    assert.equal(contextSummaryCalls, 1);
+    assert.match(String(requests[0]?.userMessage ?? ""), new RegExp(`Plugin store - ${providedDescription.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+    assert.match(String(requests[0]?.userMessage ?? ""), /Why: Codex needs the policy source before it can continue\./);
     assert.doesNotMatch(String(requests[0]?.userMessage ?? ""), /Local override -/);
     assert.deepEqual(
       (requests[0]?.buttons as Array<Array<{ label: string }>>).map((row) => row.map((button) => button.label)),
@@ -638,8 +635,9 @@ describe("SessionLifecycleService", () => {
     );
   });
 
-  it("omits verbose option descriptions when compression fails", async () => {
+  it("omits oversized option descriptions without calling the LLM", async () => {
     const requests: Array<Record<string, unknown>> = [];
+    const oversizedDescription = `${"This long provided option description is intentionally repeated. ".repeat(8)}Do not rewrite it.`;
 
     const service = new SessionLifecycleService({
       persistSession: () => {},
@@ -674,12 +672,7 @@ describe("SessionLifecycleService", () => {
           return undefined;
         },
         async generateQuestionOptionDescriptions() {
-          return {
-            options: [{
-              label: "Changed label",
-              description: "Invalid because the label changed.",
-            }],
-          };
+          throw new Error("option descriptions must not be sent to the LLM");
         },
       },
     });
@@ -700,7 +693,7 @@ describe("SessionLifecycleService", () => {
           options: [
             {
               label: "Plugin store",
-              description: "This verbose description should disappear because the generated compact description failed validation and must not be shown raw in the compact question prompt.",
+              description: oversizedDescription,
             },
             { label: "Local override" },
           ],
@@ -711,7 +704,7 @@ describe("SessionLifecycleService", () => {
     assert.equal(requests.length, 1);
     assert.match(String(requests[0]?.userMessage ?? ""), /Which policy source should I use\?/);
     assert.doesNotMatch(String(requests[0]?.userMessage ?? ""), /Plugin store -/);
-    assert.doesNotMatch(String(requests[0]?.userMessage ?? ""), /verbose description/);
+    assert.doesNotMatch(String(requests[0]?.userMessage ?? ""), /Do not rewrite it/);
     assert.deepEqual(
       (requests[0]?.buttons as Array<Array<{ label: string }>>).map((row) => row.map((button) => button.label)),
       [["Plugin store", "Local override"]],
