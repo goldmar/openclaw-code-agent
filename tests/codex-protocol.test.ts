@@ -185,7 +185,24 @@ describe("codex protocol turn payloads", () => {
     );
   });
 
-  it("extracts nested request_user_input questions and option metadata", () => {
+  it("keeps legacy top-level request_user_input fields working for Codex compatibility", () => {
+    const state = buildPendingInputState("tool/requestUserInput", "req-legacy", {
+      question: "Choose an environment",
+      options: [{
+        label: "Staging",
+        description: "Use staging credentials.",
+      }, "Production"],
+    });
+
+    assert.equal(state.kind, "question");
+    assert.equal(state.promptText, "Choose an environment");
+    assert.deepEqual(state.options, ["Staging", "Production"]);
+    assert.equal(state.questions, undefined);
+    assert.deepEqual(state.actions?.map((action) => action.label), ["Staging", "Production"]);
+    assert.match(state.promptText ?? "", /Choose an environment/);
+  });
+
+  it("defensively extracts observed nested Codex request_user_input questions and option metadata", () => {
     const state = buildPendingInputState("tool/requestUserInput", "req-questions", {
       questions: [{
         id: "confirm_path",
@@ -227,7 +244,7 @@ describe("codex protocol turn payloads", () => {
     assert.match(state.promptText ?? "", /Free-form answer is allowed\./);
   });
 
-  it("starts multiple nested request_user_input questions at the first wizard step", () => {
+  it("starts multiple observed nested Codex request_user_input questions at the first wizard step", () => {
     const state = buildPendingInputState("tool/requestUserInput", "req-multi", {
       questions: [{
         id: "environment",
@@ -253,5 +270,24 @@ describe("codex protocol turn payloads", () => {
     assert.equal(state.activeQuestionIndex, 0);
     assert.match(state.promptText ?? "", /Question 1 - Environment/);
     assert.doesNotMatch(state.promptText ?? "", /Question 2 - Scope/);
+  });
+
+  it("tolerates sparse Codex nested question fields as the protocol evolves", () => {
+    const state = buildPendingInputState("tool/requestUserInput", "req-sparse", {
+      questions: [{
+        prompt: "Provide a branch name",
+        options: [
+          { label: "main" },
+          { text: "Other", isOther: true },
+        ],
+      }],
+    });
+
+    assert.equal(state.kind, "question");
+    assert.deepEqual(state.options, ["main", "Other"]);
+    assert.equal(state.questions?.[0]?.id, "question_1");
+    assert.equal(state.questions?.[0]?.question, "Provide a branch name");
+    assert.equal(state.questions?.[0]?.options[1]?.isOther, true);
+    assert.equal(state.questions?.[0]?.allowsFreeText, true);
   });
 });

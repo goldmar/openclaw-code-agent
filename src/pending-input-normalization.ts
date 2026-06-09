@@ -83,17 +83,19 @@ export function normalizePendingInputQuestion(value: unknown, index = 0): Pendin
   const options = rawOptions
     .map(normalizePendingInputOption)
     .filter((option): option is PendingInputOption => Boolean(option));
+  const multiSelect = questionRecord.multiSelect === true || questionRecord.multi_select === true;
   const allowsFreeText = questionRecord.isOther === true
     || questionRecord.is_other === true
     || questionRecord.allowFreeText === true
     || questionRecord.allowsFreeText === true
-    || questionRecord.multiSelect === true
+    || multiSelect
     || options.some((option) => option.isOther);
   return {
     id: id ?? `question_${index + 1}`,
     ...(header ? { header } : {}),
     question,
     options,
+    ...(multiSelect ? { multiSelect: true } : {}),
     ...(allowsFreeText ? { allowsFreeText: true } : {}),
     ...(questionRecord.isSecret === true || questionRecord.is_secret === true ? { isSecret: true } : {}),
   };
@@ -120,7 +122,7 @@ export function formatPendingInputQuestion(question: PendingInputQuestion, index
     );
   }
   if (question.allowsFreeText && !question.options.some((option) => option.isOther)) {
-    lines.push("Free-form answer is allowed.");
+    lines.push(question.multiSelect ? "Reply with one or more option labels." : "Free-form answer is allowed.");
   }
   return lines;
 }

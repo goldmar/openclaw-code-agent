@@ -146,6 +146,7 @@ export interface PendingInputQuestion {
   header?: string;
   question: string;
   options: PendingInputOption[];
+  multiSelect?: boolean;
   allowsFreeText?: boolean;
   isSecret?: boolean;
 }

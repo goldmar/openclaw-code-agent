@@ -50,7 +50,7 @@ async function collectMessages(
 }
 
 describe("ClaudeCodeHarness", () => {
-  it("emits normalized multi-question AskUserQuestion pending input with option descriptions", async () => {
+  it("treats Claude AskUserQuestion questions[] as a formal multi-question contract", async () => {
     const startupOptions = Promise.withResolvers<Record<string, unknown>>();
     const { handle } = createQueryHandle([
       { type: "result", subtype: "success", session_id: "claude-questions", duration_ms: 0, total_cost_usd: 0, num_turns: 1, result: "done" },
@@ -81,12 +81,13 @@ describe("ClaudeCodeHarness", () => {
             value: "plugin_store",
             description: "Shared policy controlled by plugin config.",
           },
-          { label: "Local override", description: "Only this session." },
+          { label: "Local override", preview: "Only this session." },
         ],
       }, {
         id: "scope",
         header: "Scope",
         question: "How broad should the rollout be?",
+        multiSelect: true,
         options: [
           { label: "Canary", description: "Start with a small cohort." },
           { label: "Everyone", description: "Roll out to all users." },
@@ -104,7 +105,10 @@ describe("ClaudeCodeHarness", () => {
     assert.equal(pending?.state.questions?.[0]?.id, "policy_source");
     assert.equal(pending?.state.questions?.[0]?.options[0]?.value, "plugin_store");
     assert.equal(pending?.state.questions?.[0]?.options[0]?.description, "Shared policy controlled by plugin config.");
+    assert.equal(pending?.state.questions?.[0]?.options[1]?.description, "Only this session.");
     assert.equal(pending?.state.questions?.[1]?.question, "How broad should the rollout be?");
+    assert.equal(pending?.state.questions?.[1]?.multiSelect, true);
+    assert.equal(pending?.state.questions?.[1]?.allowsFreeText, true);
     assert.match(pending?.state.promptText ?? "", /Question 1 - Policy/);
     assert.doesNotMatch(pending?.state.promptText ?? "", /Question 2 - Scope/);
   });

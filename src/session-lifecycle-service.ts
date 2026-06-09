@@ -454,6 +454,7 @@ export class SessionLifecycleService {
             && activePendingInputQuestion.options.length > 0
             && activePendingInputQuestion.options.length <= 6
             && !activePendingInputQuestion.options.some((option) => option.isOther)
+            && !activePendingInputQuestion.multiSelect
               ? activePendingInputQuestion.options
               : []
         )
