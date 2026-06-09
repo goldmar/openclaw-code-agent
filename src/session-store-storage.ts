@@ -207,16 +207,17 @@ export function loadSessionStoreIndex(args: LoadIndexArgs): void {
     }
 
     const policiesRaw = Array.isArray(parsed.repoPolicies) ? parsed.repoPolicies : [];
+    let skippedInvalidRepoPolicy = false;
     for (const candidate of policiesRaw) {
       const policy = normalizeRepoPolicyRecord(candidate);
       if (!policy) {
-        clearAll();
-        archiveLegacySessionIndex(indexPath, "invalid repo policy entry");
-        saveIndex();
-        return;
+        skippedInvalidRepoPolicy = true;
+        console.warn("[SessionStore] Skipping invalid repo policy entry while loading session store.");
+        continue;
       }
       setRepoPolicy(policy);
     }
+    if (skippedInvalidRepoPolicy) saveIndex();
 
     purgeExpiredActionTokens();
   } catch {

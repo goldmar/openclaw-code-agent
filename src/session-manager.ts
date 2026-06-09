@@ -211,7 +211,9 @@ export class SessionManager {
       getOutputPreview: (session, maxChars) => manager.getOutputPreview(session, maxChars),
       originThreadLine: (session) => manager.originThreadLine(session),
       getWorktreeDecisionButtons: (sessionId) => manager.getWorktreeDecisionButtons(sessionId),
-      getPolicyAwareWorktreeDecisionButtons: (sessionId, allowedActions) => manager.getWorktreeDecisionButtons(sessionId, {}, allowedActions),
+      getPolicyAwareWorktreeDecisionButtons: (sessionId, options, allowedActions) => (
+        manager.getWorktreeDecisionButtons(sessionId, options, allowedActions)
+      ),
       makeOpenPrButton: (sessionId) => manager.makeActionButton(sessionId, "worktree-create-pr", "Open PR"),
       isPrAvailable: (repoDir) => manager.resolveRepoPolicy(repoDir).prAvailable,
       resolveRepoPolicy: (repoDir) => manager.resolveRepoPolicy(repoDir),
