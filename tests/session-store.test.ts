@@ -104,6 +104,29 @@ describe("SessionStore getLatestPersistedByName", () => {
 });
 
 describe("SessionStore persisted compatibility", () => {
+  it("persists repo integration policies alongside session metadata", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-store-policy-"));
+    const indexPath = join(dir, "sessions.json");
+    const store = new SessionStore({ indexPath });
+    store.setRepoPolicy({
+      key: "/repo|https://github.com/example/repo",
+      policy: "pr-required",
+      repoRoot: "/repo",
+      remoteUrl: "https://github.com/example/repo",
+      provider: "github",
+      createdAt: "2026-06-01T00:00:00.000Z",
+      updatedAt: "2026-06-01T00:00:00.000Z",
+      source: "stored",
+    });
+
+    const restored = new SessionStore({ indexPath });
+    const [policy] = restored.listRepoPolicies();
+
+    assert.equal(policy?.policy, "pr-required");
+    assert.equal(policy?.repoRoot, "/repo");
+    assert.equal(policy?.provider, "github");
+  });
+
   it("normalizes legacy direct-telegram approval prompt transport metadata on restore", () => {
     const dir = mkdtempSync(join(tmpdir(), "openclaw-store-compat-"));
     const indexPath = join(dir, "sessions.json");

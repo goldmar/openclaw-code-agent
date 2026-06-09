@@ -88,8 +88,9 @@ export class SessionWorktreeMessageService {
     diffSummary: DiffSummary;
     buttons?: NotificationButton[][];
     summaryLines?: string[];
+    policyReason?: string;
   }): SessionNotificationRequest {
-    const { session, branchName, baseBranch, diffSummary, buttons, summaryLines = [] } = args;
+    const { session, branchName, baseBranch, diffSummary, buttons, summaryLines = [], policyReason } = args;
     const commitLines = diffSummary.commitMessages
       .slice(0, 5)
       .map((commit) => `• ${commit.hash} ${commit.message} (${commit.author})`);
@@ -117,6 +118,7 @@ export class SessionWorktreeMessageService {
         ...(summaryLines.length > 0
           ? ["Summary:", ...summaryLines.map((line) => `- ${line}`), ``]
           : []),
+        ...(policyReason ? [`Policy: ${policyReason}`, ``] : []),
         `Recent commits:`,
         ...commitLines,
         ...(moreNote ? [moreNote] : []),
@@ -145,9 +147,11 @@ export class SessionWorktreeMessageService {
     branchName: string;
     baseBranch: string;
     diffSummary: DiffSummary;
+    policyReason?: string;
+    allowedActions?: { merge: boolean; pr: boolean };
     originThreadLine?: string;
   }): SessionNotificationRequest {
-    const { session, branchName, baseBranch, diffSummary, originThreadLine } = args;
+    const { session, branchName, baseBranch, diffSummary, policyReason, allowedActions, originThreadLine } = args;
     const commitLines = diffSummary.commitMessages
       .slice(0, 5)
       .map((commit) => `• ${commit.hash} ${commit.message} (${commit.author})`);
@@ -174,6 +178,8 @@ export class SessionWorktreeMessageService {
         moreNote,
         originThreadLine,
         diffSummary,
+        allowedActions,
+        policyReason,
       }),
       notifyUser: "never",
     };

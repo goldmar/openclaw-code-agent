@@ -2,6 +2,8 @@ import type { Session } from "./session";
 import type { WorktreeCompletionState } from "./session-worktree-controller";
 import { getPrimarySessionLookupRef, usesNativeBackendWorktree } from "./session-backend-ref";
 import { detectDefaultBranch, getDiffSummary } from "./worktree";
+import { resolveWorktreePolicyDecision } from "./repo-policy";
+import type { RepoPolicyResolution } from "./repo-policy";
 
 type DiffSummary = NonNullable<ReturnType<typeof getDiffSummary>>;
 
@@ -38,6 +40,12 @@ export type PlannedWorktreeAction =
   | {
       kind: "decision";
       strategy: "ask" | "delegate" | "auto-merge" | "auto-pr";
+      policyReason?: string;
+      policyBlocked?: boolean;
+      allowedActions: {
+        merge: boolean;
+        pr: boolean;
+      };
       repoDir: string;
       worktreePath: string;
       branchName: string;
@@ -62,6 +70,8 @@ export class SessionWorktreeActionService {
         branchName: string,
         baseBranch: string,
       ) => WorktreeCompletionState;
+      isPrAvailable: (repoDir: string) => boolean;
+      resolveRepoPolicy?: (repoDir: string) => RepoPolicyResolution;
     },
   ) {}
 
@@ -154,9 +164,25 @@ export class SessionWorktreeActionService {
       return { kind: "skip", result: { notificationSent: false, worktreeRemoved: false } };
     }
 
+    const livePolicy = session.repoIntegrationPolicy ? undefined : this.deps.resolveRepoPolicy?.(repoDir);
+    const policyDecision = resolveWorktreePolicyDecision({
+      requestedStrategy: strategy,
+      policy: session.repoIntegrationPolicy ?? livePolicy?.policy,
+      prAvailable: session.repoIntegrationPolicy
+        ? this.deps.isPrAvailable(repoDir)
+        : livePolicy?.prAvailable ?? this.deps.isPrAvailable(repoDir),
+    });
+
+    if (!policyDecision.strategy) {
+      return { kind: "skip", result: { notificationSent: false, worktreeRemoved: false } };
+    }
+
     return {
       kind: "decision",
-      strategy,
+      strategy: policyDecision.strategy,
+      policyReason: policyDecision.reason,
+      policyBlocked: policyDecision.blocked,
+      allowedActions: policyDecision.allowedActions,
       repoDir,
       worktreePath,
       branchName,

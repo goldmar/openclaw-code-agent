@@ -214,6 +214,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         worktreeBranch: branchName,
         worktreeBaseBranch: "main",
         worktreeStrategy: "auto-pr",
+        repoIntegrationPolicy: "pr-allowed",
         pendingPlanApproval: false,
       };
 
@@ -301,6 +302,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         worktreeBranch: branchName,
         worktreeBaseBranch: "main",
         worktreeStrategy: "auto-pr",
+        repoIntegrationPolicy: "pr-allowed",
         pendingPlanApproval: false,
       };
 

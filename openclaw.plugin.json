@@ -14,6 +14,7 @@
       "agent_request_worktree_decision",
       "agent_send_plan_offer",
       "agent_stats",
+      "agent_repo_policy",
       "agent_merge",
       "agent_pr",
       "agent_worktree_cleanup",
@@ -53,6 +54,7 @@
       "agent_respond",
       "agent_sessions",
       "agent_stats",
+      "agent_policy",
       "goal",
       "goal_status",
       "goal_stop",
@@ -210,7 +212,7 @@
         "type": "string",
         "default": "delegate",
         "enum": ["off", "manual", "ask", "delegate", "auto-merge", "auto-pr"],
-        "description": "Default worktree strategy for all new sessions when agent_launch omits worktree_strategy. 'delegate' (default) creates an isolated worktree and wakes the orchestrator to decide follow-through autonomously. 'off' = no worktree. 'manual' = create worktree, no automatic action. 'ask' = push branch and notify the user with state-aware inline buttons such as Merge, Open PR, View PR, Sync PR, Later, and Discard. 'auto-merge' = auto-merge to base branch on completion. 'auto-pr' = auto-create or update a GitHub PR on completion. Merge/PR outcomes deliver a canonical status, then request an orchestrator-owned routed summary."
+        "description": "Default worktree strategy for all new sessions when agent_launch omits worktree_strategy. Repo integration policy still governs whether merge or PR follow-through is allowed. 'delegate' (default) creates an isolated worktree and wakes the orchestrator to decide follow-through autonomously. 'off' = no worktree. 'manual' = create worktree, no automatic action. 'ask' = notify the user with state-aware buttons such as Merge, Open PR, View PR, Sync PR, Later, and Discard when policy allows them. 'auto-merge' = request automatic merge to base branch on completion. 'auto-pr' = request automatic GitHub PR creation/update on completion."
       },
       "worktreeDir": {
         "type": "string",
@@ -274,7 +276,7 @@
     },
     "defaultWorktreeStrategy": {
       "label": "Default worktree strategy",
-      "help": "Applies to all sessions that don't specify worktree_strategy explicitly. 'delegate' (default) creates a worktree and wakes the orchestrator to decide follow-through. 'off' disables worktrees globally. 'ask' sends state-aware inline worktree buttons such as Merge, Open PR, View PR, Sync PR, Later, and Discard. Merge/PR outcomes send the canonical status first, then request an orchestrator-owned routed summary.",
+      "help": "Applies to all sessions that don't specify worktree_strategy explicitly. Repo policy can downgrade unsafe or impossible merge/PR follow-through. 'delegate' (default) creates a worktree and wakes the orchestrator to decide follow-through. 'off' disables worktrees globally. 'ask' sends state-aware inline worktree buttons such as Merge, Open PR, View PR, Sync PR, Later, and Discard when policy allows them.",
       "advanced": true
     }
   },

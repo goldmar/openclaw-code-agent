@@ -106,6 +106,15 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
       const strategy = params.strategy ?? "merge";
       const shouldPush = params.push === true; // Default false
       const shouldCleanup = params.delete_branch !== false; // Default true
+      const repoPolicy = sessionManager.resolveRepoPolicy(effectiveWorkdir);
+      if (repoPolicy?.policy === "pr-required") {
+        return {
+          content: [{
+            type: "text",
+            text: `❌ Merge blocked: repo policy requires a pull request for ${repoPolicy.identity?.repoRoot ?? effectiveWorkdir}. Use agent_pr if PR automation is available.`,
+          }],
+        };
+      }
 
       // Idempotency guard: if already merged, return early before touching the queue
       if (persistedSession?.worktreeLifecycle?.state === "merged" || persistedSession?.worktreeMerged) {

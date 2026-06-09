@@ -1,11 +1,12 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { dirname, join } from "path";
-import type { PersistedSessionInfo, SessionActionToken } from "./types";
+import type { PersistedSessionInfo, RepoPolicyRecord, SessionActionToken } from "./types";
 import { resolveOpenclawHomeDir } from "./openclaw-paths";
 import {
   normalizeActionToken,
   normalizePersistedEntry,
+  normalizeRepoPolicyRecord,
   STORE_SCHEMA_VERSION,
   type SessionStoreSchema,
 } from "./session-store-normalization";
@@ -28,6 +29,7 @@ export function saveSessionStoreIndex(
   indexPath: string,
   sessions: PersistedSessionInfo[],
   actionTokens: SessionActionToken[],
+  repoPolicies: RepoPolicyRecord[] = [],
 ): void {
   try {
     mkdirSync(dirname(indexPath), { recursive: true });
@@ -36,6 +38,7 @@ export function saveSessionStoreIndex(
       schemaVersion: STORE_SCHEMA_VERSION,
       sessions,
       actionTokens,
+      repoPolicies,
     };
     writeFileSync(tmp, JSON.stringify(payload, null, 2), "utf-8");
     renameSync(tmp, indexPath);
@@ -131,6 +134,7 @@ type LoadIndexArgs = {
   clearAll: () => void;
   indexPersistedEntry: (entry: PersistedSessionInfo) => void;
   setActionToken: (token: SessionActionToken) => void;
+  setRepoPolicy: (policy: RepoPolicyRecord) => void;
   purgeExpiredActionTokens: () => void;
   saveIndex: () => void;
 };
@@ -141,6 +145,7 @@ export function loadSessionStoreIndex(args: LoadIndexArgs): void {
     clearAll,
     indexPersistedEntry,
     setActionToken,
+    setRepoPolicy,
     purgeExpiredActionTokens,
     saveIndex,
   } = args;
@@ -155,7 +160,7 @@ export function loadSessionStoreIndex(args: LoadIndexArgs): void {
     }
     if (
       !isRecord(parsed) ||
-      (parsed.schemaVersion !== STORE_SCHEMA_VERSION && parsed.schemaVersion !== 4)
+      (parsed.schemaVersion !== STORE_SCHEMA_VERSION && parsed.schemaVersion !== 6 && parsed.schemaVersion !== 4)
     ) {
       archiveLegacySessionIndex(indexPath, `schema mismatch (expected v${STORE_SCHEMA_VERSION})`);
       saveIndex();
@@ -199,6 +204,18 @@ export function loadSessionStoreIndex(args: LoadIndexArgs): void {
         return;
       }
       setActionToken(token);
+    }
+
+    const policiesRaw = Array.isArray(parsed.repoPolicies) ? parsed.repoPolicies : [];
+    for (const candidate of policiesRaw) {
+      const policy = normalizeRepoPolicyRecord(candidate);
+      if (!policy) {
+        clearAll();
+        archiveLegacySessionIndex(indexPath, "invalid repo policy entry");
+        saveIndex();
+        return;
+      }
+      setRepoPolicy(policy);
     }
 
     purgeExpiredActionTokens();

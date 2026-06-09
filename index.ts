@@ -11,6 +11,7 @@ import { makeAgentRequestPlanApprovalTool } from "./src/tools/agent-request-plan
 import { makeAgentRequestWorktreeDecisionTool } from "./src/tools/agent-request-worktree-decision";
 import { makeAgentSendPlanOfferTool } from "./src/tools/agent-send-plan-offer";
 import { makeAgentStatsTool } from "./src/tools/agent-stats";
+import { makeAgentRepoPolicyTool } from "./src/tools/agent-repo-policy";
 import { makeAgentMergeTool } from "./src/tools/agent-merge";
 import { makeAgentPrTool } from "./src/tools/agent-pr";
 import { makeAgentWorktreeCleanupTool } from "./src/tools/agent-worktree-cleanup";
@@ -25,6 +26,7 @@ import { registerAgentSessionsCommand } from "./src/commands/agent-sessions";
 import { registerAgentKillCommand } from "./src/commands/agent-kill";
 import { registerAgentRespondCommand } from "./src/commands/agent-respond";
 import { registerAgentStatsCommand } from "./src/commands/agent-stats";
+import { registerAgentPolicyCommand } from "./src/commands/agent-policy";
 import { registerAgentOutputCommand } from "./src/commands/agent-output";
 import { registerGoalCommand } from "./src/commands/goal";
 import { registerGoalStatusCommand } from "./src/commands/goal-status";
@@ -215,6 +217,7 @@ export function register(api: OpenClawPluginApi): void {
   registerCodeAgentTool((ctx: OpenClawPluginToolContext) => makeAgentRequestWorktreeDecisionTool(ctx), { optional: false, name: "agent_request_worktree_decision" });
   registerCodeAgentTool((ctx: OpenClawPluginToolContext) => makeAgentSendPlanOfferTool(ctx), { optional: false, name: "agent_send_plan_offer" });
   registerCodeAgentTool((ctx: OpenClawPluginToolContext) => makeAgentStatsTool(ctx), { optional: false, name: "agent_stats" });
+  registerCodeAgentTool((ctx: OpenClawPluginToolContext) => makeAgentRepoPolicyTool(ctx), { optional: false, name: "agent_repo_policy" });
   registerCodeAgentTool((ctx: OpenClawPluginToolContext) => makeAgentMergeTool(ctx), { optional: false, name: "agent_merge" });
   registerCodeAgentTool((ctx: OpenClawPluginToolContext) => makeAgentPrTool(ctx), { optional: false, name: "agent_pr" });
   registerCodeAgentTool((ctx: OpenClawPluginToolContext) => makeAgentWorktreeCleanupTool(ctx), { optional: false, name: "agent_worktree_cleanup" });
@@ -234,6 +237,7 @@ export function register(api: OpenClawPluginApi): void {
   registerAgentKillCommand(commandApi);
   registerAgentRespondCommand(commandApi);
   registerAgentStatsCommand(commandApi);
+  registerAgentPolicyCommand(commandApi);
   registerAgentOutputCommand(commandApi);
   registerGoalCommand(commandApi);
   registerGoalStatusCommand(commandApi);

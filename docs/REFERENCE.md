@@ -299,6 +299,19 @@ Treat those fields as authoritative in orchestration logic:
 
 ## Worktree Strategies
 
+Worktree strategies now control isolation and the requested follow-through mode. The repository integration policy is the authority for whether direct merge or PR automation is allowed.
+
+On first worktree use in a git repo with no stored policy, `agent_launch` blocks and asks the operator to set one policy with `agent_repo_policy` or `/agent_policy`:
+
+| Repo policy | Meaning |
+| --- | --- |
+| `pr-required` | Direct merge is blocked; automatic merge requests are downgraded to PR when GitHub PR automation is available |
+| `pr-allowed` | Merge or PR follow-through may be used according to the requested worktree strategy |
+| `never-pr` | PR creation/update is hidden and blocked; use merge or manual handling |
+| `manual` | Automatic merge/PR follow-through is disabled; every changed worktree requires explicit follow-up |
+
+GitHub is the only PR provider supported in this release. Non-GitHub repos keep worktree isolation, but PR buttons/actions are disabled by policy resolution. The `goldmar/openclaw-code-agent` repository is treated as `pr-required`.
+
 | Strategy | Where It Is Set | Behavior |
 | --- | --- | --- |
 | `off` | Tool param or config | No worktree; session runs in the main checkout |
@@ -337,7 +350,7 @@ Notes:
 
 - `agent_launch` accepts `off`, `manual`, `ask`, `delegate`, `auto-merge`, and `auto-pr` as `worktree_strategy`.
 - `delegate` can also be configured at the plugin level with `defaultWorktreeStrategy`.
-- Explicit per-launch `worktree_strategy` wins over the plugin default.
+- Explicit per-launch `worktree_strategy` wins over the plugin default, but repo policy can downgrade unsafe or impossible follow-through.
 - Resumed sessions keep the worktree strategy they already had.
 - Worktrees are kept alive until explicitly resolved (merge/PR/dismiss) when using non-trivial strategies.
 - Stale-decision reminders fire every 3h; users can snooze per-session for 24h.
@@ -642,12 +655,29 @@ Prefer fully routable channel strings in `fallbackChannel` and `agentChannels`. 
 - Startup recovery may convert interrupted running sessions into resumable persisted entries so they can be continued intentionally.
 - Persisted session resolution accepts internal IDs, names, and harness session IDs.
 
+## Repo Policy Tool
+
+Inspect or update repo integration policy.
+
+| Parameter | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `workdir` | `string` | No | Repo directory; defaults to the current tool workspace |
+| `policy` | `pr-required \| pr-allowed \| never-pr \| manual` | No | Sets the policy for the repo |
+| `reset` | `boolean` | No | Removes a stored policy |
+| `list` | `boolean` | No | Lists stored repo policies |
+
+Examples:
+
+- `agent_repo_policy(workdir="/repo", policy="pr-required")`
+- `/agent_policy pr-allowed`
+- `/agent_policy list`
+
 ## Troubleshooting
 
 - No notifications: verify `fallbackChannel` or `agentChannels` use fully routable channel strings. If you changed plugin config on disk, reload or restart the gateway through your normal operator process.
 - Wrong chat receives the update: check `agentChannels` longest-prefix matches and remove ambiguous path entries.
 - Worktree was not created: confirm the workdir is a git repo and there is enough free space for the worktree.
-- Push or PR failed: `agent_pr` always needs a configured remote plus `gh` installed and authenticated. `agent_merge(push=true)` also needs a configured remote. `ask` and `delegate` keep branches local until one of those explicit push paths is chosen; `auto-pr` falls back into the same explicit pending-decision state when automatic PR creation fails.
+- Push or PR failed: `agent_pr` needs a GitHub remote plus `gh` installed and authenticated, and repo policy must allow PRs. `agent_merge(push=true)` also needs a configured remote. `ask` and `delegate` keep branches local until one of those explicit push paths is chosen; `auto-pr` falls back into the same explicit pending-decision state when automatic PR creation fails.
 - Model launch rejected: update `harnesses.<name>.allowedModels` or the harness default model so they agree.
 - Codex auth weirdness: prefer `forced_login_method = "chatgpt"` and relaunch.
 - Notification delivery failed or timed out: inspect direct-delivery diagnostics and routing metadata first. Do not treat missing interactive buttons as proof that the underlying plan, worktree decision, or runtime state changed.
