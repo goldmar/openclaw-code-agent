@@ -513,6 +513,8 @@ describe("SessionLifecycleService", () => {
       [["Staging", "Production"]],
     );
     assert.match(String(requests[0]?.userMessage ?? ""), /Question 1 - Environment/);
+    assert.match(String(requests[0]?.userMessage ?? ""), /Staging - Use staging credentials\./);
+    assert.match(String(requests[0]?.userMessage ?? ""), /Production - Use production credentials\./);
     assert.doesNotMatch(String(requests[0]?.userMessage ?? ""), /Question 2 - Scope/);
     assert.doesNotMatch(String(requests[0]?.userMessage ?? ""), /Fallback preview/);
     assert.doesNotMatch(String(requests[0]?.userMessage ?? ""), /Why this is asked:/);
@@ -547,8 +549,173 @@ describe("SessionLifecycleService", () => {
       [["Canary", "Everyone"]],
     );
     assert.match(String(requests[1]?.userMessage ?? ""), /Question 2 - Scope/);
+    assert.match(String(requests[1]?.userMessage ?? ""), /Canary - Start with a small cohort\./);
+    assert.match(String(requests[1]?.userMessage ?? ""), /Everyone - Roll out to all users\./);
     assert.doesNotMatch(String(requests[1]?.userMessage ?? ""), /Fallback preview/);
     assert.doesNotMatch(String(requests[1]?.userMessage ?? ""), /Why this is asked:/);
+  });
+
+  it("compresses verbose option descriptions without changing button labels", async () => {
+    const requests: Array<Record<string, unknown>> = [];
+    const verboseDescription = [
+      "Use the plugin store as the canonical source because the shared policy is controlled by plugin configuration,",
+      "is inherited by every launched agent session, and should not be overridden inside a single Codex answer.",
+    ].join(" ");
+
+    const service = new SessionLifecycleService({
+      persistSession: () => {},
+      clearWaitingTimestamp: () => {},
+      handleWorktreeStrategy: async () => ({
+        notificationSent: false,
+        worktreeRemoved: false,
+      }),
+      resolveWorktreeRepoDir: () => undefined,
+      updatePersistedSession: () => false,
+      dispatchSessionNotification: (_session, request) => {
+        requests.push(request as unknown as Record<string, unknown>);
+      },
+      notifySession: () => {},
+      clearRetryTimersForSession: () => {},
+      hasTurnCompleteWakeMarker: () => false,
+      shouldEmitTurnCompleteWake: () => true,
+      shouldEmitTerminalWake: () => true,
+      resolvePlanApprovalMode: () => "ask",
+      getPlanApprovalButtons: () => [],
+      getResumeButtons: () => [],
+      getQuestionButtons: (_sessionId, options) => [
+        options.map((option) => ({ label: option.label, callbackData: `token:${option.label}` })),
+      ],
+      extractLastOutputLine: () => undefined,
+      getOutputPreview: () => "",
+      originThreadLine: () => "Origin thread: telegram topic 42",
+      debounceWaitingEvent: () => true,
+      isAlreadyMerged: () => false,
+      questionContextSummaryProvider: {
+        async generateQuestionContextSummary() {
+          return undefined;
+        },
+        async generateQuestionOptionDescriptions(evidence) {
+          assert.deepEqual(evidence.options.map((option) => option.label), ["Plugin store"]);
+          assert.match(evidence.options[0].description, /canonical source/);
+          return {
+            options: [{
+              label: "Plugin store",
+              description: "Shared policy controlled by plugin config.",
+            }],
+          };
+        },
+      },
+    });
+
+    await service.emitWaitingForInput(createStubSession({
+      id: "session-described-options",
+      name: "described-options",
+      pendingPlanApproval: false,
+      pendingInputState: {
+        requestId: "req-described-options",
+        kind: "question",
+        promptText: "Which policy source should I use?",
+        options: ["Plugin store", "Local override"],
+        activeQuestionIndex: 0,
+        questions: [{
+          id: "policy_source",
+          question: "Which policy source should I use?",
+          options: [
+            { label: "Plugin store", description: verboseDescription },
+            { label: "Local override" },
+          ],
+        }],
+      },
+    }));
+
+    assert.equal(requests.length, 1);
+    assert.match(String(requests[0]?.userMessage ?? ""), /Plugin store - Shared policy controlled by plugin config\./);
+    assert.doesNotMatch(String(requests[0]?.userMessage ?? ""), /inherited by every launched agent session/);
+    assert.doesNotMatch(String(requests[0]?.userMessage ?? ""), /Local override -/);
+    assert.deepEqual(
+      (requests[0]?.buttons as Array<Array<{ label: string }>>).map((row) => row.map((button) => button.label)),
+      [["Plugin store", "Local override"]],
+    );
+  });
+
+  it("omits verbose option descriptions when compression fails", async () => {
+    const requests: Array<Record<string, unknown>> = [];
+
+    const service = new SessionLifecycleService({
+      persistSession: () => {},
+      clearWaitingTimestamp: () => {},
+      handleWorktreeStrategy: async () => ({
+        notificationSent: false,
+        worktreeRemoved: false,
+      }),
+      resolveWorktreeRepoDir: () => undefined,
+      updatePersistedSession: () => false,
+      dispatchSessionNotification: (_session, request) => {
+        requests.push(request as unknown as Record<string, unknown>);
+      },
+      notifySession: () => {},
+      clearRetryTimersForSession: () => {},
+      hasTurnCompleteWakeMarker: () => false,
+      shouldEmitTurnCompleteWake: () => true,
+      shouldEmitTerminalWake: () => true,
+      resolvePlanApprovalMode: () => "ask",
+      getPlanApprovalButtons: () => [],
+      getResumeButtons: () => [],
+      getQuestionButtons: (_sessionId, options) => [
+        options.map((option) => ({ label: option.label, callbackData: `token:${option.label}` })),
+      ],
+      extractLastOutputLine: () => undefined,
+      getOutputPreview: () => "",
+      originThreadLine: () => "Origin thread: telegram topic 42",
+      debounceWaitingEvent: () => true,
+      isAlreadyMerged: () => false,
+      questionContextSummaryProvider: {
+        async generateQuestionContextSummary() {
+          return undefined;
+        },
+        async generateQuestionOptionDescriptions() {
+          return {
+            options: [{
+              label: "Changed label",
+              description: "Invalid because the label changed.",
+            }],
+          };
+        },
+      },
+    });
+
+    await service.emitWaitingForInput(createStubSession({
+      id: "session-description-failure",
+      name: "description-failure",
+      pendingPlanApproval: false,
+      pendingInputState: {
+        requestId: "req-description-failure",
+        kind: "question",
+        promptText: "Which policy source should I use?",
+        options: ["Plugin store", "Local override"],
+        activeQuestionIndex: 0,
+        questions: [{
+          id: "policy_source",
+          question: "Which policy source should I use?",
+          options: [
+            {
+              label: "Plugin store",
+              description: "This verbose description should disappear because the generated compact description failed validation and must not be shown raw in the compact question prompt.",
+            },
+            { label: "Local override" },
+          ],
+        }],
+      },
+    }));
+
+    assert.equal(requests.length, 1);
+    assert.match(String(requests[0]?.userMessage ?? ""), /Which policy source should I use\?/);
+    assert.doesNotMatch(String(requests[0]?.userMessage ?? ""), /Plugin store -/);
+    assert.doesNotMatch(String(requests[0]?.userMessage ?? ""), /verbose description/);
+    assert.deepEqual(
+      (requests[0]?.buttons as Array<Array<{ label: string }>>).map((row) => row.map((button) => button.label)),
+      [["Plugin store", "Local override"]],
+    );
   });
 
   it("adds an LLM micro-summary to compact question prompts without changing options", async () => {
@@ -608,6 +775,8 @@ describe("SessionLifecycleService", () => {
     assert.equal(requests.length, 1);
     assert.match(String(requests[0]?.userMessage ?? ""), /Which environment should I target\?/);
     assert.match(String(requests[0]?.userMessage ?? ""), /Why: Codex needs the target environment before it can continue\./);
+    assert.doesNotMatch(String(requests[0]?.userMessage ?? ""), /Staging -/);
+    assert.doesNotMatch(String(requests[0]?.userMessage ?? ""), /Production -/);
     assert.doesNotMatch(String(requests[0]?.userMessage ?? ""), /long deployment transcript/);
     assert.deepEqual(
       (requests[0]?.buttons as Array<Array<{ label: string }>>).map((row) => row.map((button) => button.label)),

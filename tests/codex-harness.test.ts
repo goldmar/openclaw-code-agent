@@ -387,9 +387,11 @@ describe("CodexHarness App Server mapping", () => {
             question: "Proceed with the plan?",
             options: [{
               label: "Yes (Recommended)",
+              value: "yes",
               description: "Continue the current plan.",
             }, {
               label: "No",
+              value: "no",
               description: "Stop and revisit the approach.",
             }],
           }],
@@ -424,7 +426,7 @@ describe("CodexHarness App Server mapping", () => {
     assert.deepEqual(client.pendingInputResponses[0], {
       answers: {
         confirm_path: {
-          answers: ["Yes (Recommended)"],
+          answers: ["yes"],
         },
       },
     });

@@ -18,11 +18,13 @@ import {
 } from "./session-plan-approval-delivery";
 import type { Session } from "./session";
 import type { PersistedSessionInfo, PlanApprovalMode, PlanArtifact } from "./types";
+import type { PendingInputQuestion } from "./types";
 import type { NotificationButton } from "./session-interactions";
 import type { SessionNotificationRequest } from "./wake-dispatcher";
 import { existsSync, readFileSync } from "fs";
 import {
   buildQuestionContextMicroSummary,
+  buildQuestionOptionDescriptionSummaries,
   type QuestionContextSummaryProvider,
 } from "./question-context-summary";
 
@@ -32,6 +34,7 @@ type WorktreeStrategyResult = {
 };
 
 type DispatchNotification = (session: Session, request: SessionNotificationRequest) => void;
+const OPTION_DESCRIPTION_MAX_CHARS = 96;
 
 function resolvePlanArtifactForPrompt(
   session: Pick<Session, "latestPlanArtifactVersion" | "latestPlanArtifact" | "planFilePath">,
@@ -51,6 +54,45 @@ function resolvePlanArtifactForPrompt(
   } catch {
     return undefined;
   }
+}
+
+function buildActiveQuestionPrompt(args: {
+  question: PendingInputQuestion;
+  index: number;
+  total: number;
+  optionDescriptions: Array<{ label: string; description: string }>;
+}): string {
+  const title = [
+    args.total > 1 ? `Question ${args.index + 1}` : undefined,
+    args.question.header,
+  ].filter(Boolean).join(" - ");
+  const lines = [
+    ...(title ? [title] : []),
+    args.question.question,
+  ];
+  if (args.optionDescriptions.length > 0) {
+    lines.push(
+      "",
+      "Options:",
+      ...args.optionDescriptions.map((option) => `${option.label} - ${option.description}`),
+    );
+  }
+  return lines.join("\n");
+}
+
+function buildInlineOptionDescriptions(question: PendingInputQuestion): Array<{ label: string; description: string }> {
+  return question.options
+    .map((option) => ({
+      label: option.label,
+      description: option.description?.replace(/\s+/g, " ").trim() ?? "",
+    }))
+    .filter((option) => option.description && option.description.length <= OPTION_DESCRIPTION_MAX_CHARS);
+}
+
+function hasVerboseOptionDescriptions(question: PendingInputQuestion): boolean {
+  return question.options.some((option) =>
+    (option.description?.replace(/\s+/g, " ").trim().length ?? 0) > OPTION_DESCRIPTION_MAX_CHARS,
+  );
 }
 
 export class SessionLifecycleService {
@@ -440,10 +482,30 @@ export class SessionLifecycleService {
             )
         : undefined;
     const matchingPlanArtifact = resolvePlanArtifactForPrompt(session, planDecisionVersion);
+    const optionDescriptionSummaries = activePendingInputQuestion
+      ? (
+          this.deps.questionContextSummaryProvider && hasVerboseOptionDescriptions(activePendingInputQuestion)
+            ? await buildQuestionOptionDescriptionSummaries({
+                sessionName: session.name,
+                question: activePendingInputQuestion.question,
+                options: activePendingInputQuestion.options,
+                provider: this.deps.questionContextSummaryProvider,
+              })
+            : buildInlineOptionDescriptions(activePendingInputQuestion)
+        )
+      : [];
+    const questionText = activePendingInputQuestion
+      ? buildActiveQuestionPrompt({
+          question: activePendingInputQuestion,
+          index: session.pendingInputState?.activeQuestionIndex ?? 0,
+          total: pendingInputQuestions?.length ?? 1,
+          optionDescriptions: optionDescriptionSummaries,
+        })
+      : pendingInputPromptText;
     const questionContextSummary = !session.pendingPlanApproval && this.deps.questionContextSummaryProvider
       ? await buildQuestionContextMicroSummary({
           sessionName: session.name,
-          question: pendingInputPromptText ?? preview,
+          question: questionText ?? preview,
           context: questionContextPreview,
           provider: this.deps.questionContextSummaryProvider,
         })
@@ -451,7 +513,7 @@ export class SessionLifecycleService {
     const payload = buildWaitingForInputPayload({
       session,
       preview,
-      questionText: !session.pendingPlanApproval ? pendingInputPromptText : undefined,
+      questionText: !session.pendingPlanApproval ? questionText : undefined,
       questionContextPreview,
       questionContextSummary,
       planArtifact: matchingPlanArtifact,

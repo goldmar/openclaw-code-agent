@@ -8,11 +8,23 @@ export interface QuestionContextSummaryEvidence {
 
 export interface QuestionContextSummaryProvider {
   generateQuestionContextSummary(evidence: QuestionContextSummaryEvidence): Promise<unknown>;
+  generateQuestionOptionDescriptions?(evidence: QuestionOptionDescriptionEvidence): Promise<unknown>;
+}
+
+export interface QuestionOptionDescriptionEvidence {
+  sessionName: string;
+  question: string;
+  options: Array<{
+    label: string;
+    description: string;
+  }>;
 }
 
 type RuntimeQuestionSummaryCandidate = {
   generateQuestionContextSummary?: (evidence: QuestionContextSummaryEvidence) => Promise<unknown> | unknown;
   summarizeQuestionContext?: (evidence: QuestionContextSummaryEvidence) => Promise<unknown> | unknown;
+  generateQuestionOptionDescriptions?: (evidence: QuestionOptionDescriptionEvidence) => Promise<unknown> | unknown;
+  summarizeQuestionOptions?: (evidence: QuestionOptionDescriptionEvidence) => Promise<unknown> | unknown;
   generateObject?: (params: Record<string, unknown>) => Promise<unknown> | unknown;
   generateText?: (params: Record<string, unknown> | string) => Promise<unknown> | unknown;
   complete?: (params: Record<string, unknown> | string) => Promise<unknown> | unknown;
@@ -20,6 +32,7 @@ type RuntimeQuestionSummaryCandidate = {
 
 const MAX_CONTEXT_CHARS = 4_000;
 const MAX_SUMMARY_CHARS = 180;
+const MAX_OPTION_DESCRIPTION_CHARS = 96;
 const SUMMARY_TIMEOUT_MS = 300;
 
 export function createRuntimeQuestionContextSummaryProvider(): QuestionContextSummaryProvider | undefined {
@@ -47,6 +60,33 @@ export function createRuntimeQuestionContextSummaryProvider(): QuestionContextSu
       if (typeof candidate.generateText === "function") {
         return await candidate.generateText({
           task: "openclaw-code-agent.question-context-summary",
+          prompt,
+        });
+      }
+      if (typeof candidate.complete === "function") {
+        return await candidate.complete({ prompt });
+      }
+      return undefined;
+    },
+    async generateQuestionOptionDescriptions(evidence) {
+      if (typeof candidate.generateQuestionOptionDescriptions === "function") {
+        return await candidate.generateQuestionOptionDescriptions(evidence);
+      }
+      if (typeof candidate.summarizeQuestionOptions === "function") {
+        return await candidate.summarizeQuestionOptions(evidence);
+      }
+
+      const prompt = buildQuestionOptionDescriptionPrompt(evidence);
+      if (typeof candidate.generateObject === "function") {
+        return await candidate.generateObject({
+          task: "openclaw-code-agent.question-option-descriptions",
+          prompt,
+          input: evidence,
+        });
+      }
+      if (typeof candidate.generateText === "function") {
+        return await candidate.generateText({
+          task: "openclaw-code-agent.question-option-descriptions",
           prompt,
         });
       }
@@ -90,6 +130,63 @@ export async function buildQuestionContextMicroSummary(args: {
   }
 }
 
+export async function buildQuestionOptionDescriptionSummaries(args: {
+  sessionName: string;
+  question?: string;
+  options: Array<{ label: string; description?: string }>;
+  provider?: QuestionContextSummaryProvider;
+  timeoutMs?: number;
+}): Promise<Array<{ label: string; description: string }>> {
+  const describedOptions = args.options
+    .map((option) => ({
+      label: normalizeWhitespace(option.label),
+      description: normalizeWhitespace(option.description ?? ""),
+    }))
+    .filter((option) => option.label && option.description);
+  if (describedOptions.length === 0) return [];
+
+  const shortOptions = describedOptions
+    .filter((option) => option.description.length <= MAX_OPTION_DESCRIPTION_CHARS)
+    .map((option) => ({
+      label: option.label,
+      description: option.description,
+    }));
+  const verboseOptions = describedOptions
+    .filter((option) => option.description.length > MAX_OPTION_DESCRIPTION_CHARS);
+  if (verboseOptions.length === 0) return shortOptions;
+
+  if (!args.provider?.generateQuestionOptionDescriptions) {
+    return shortOptions;
+  }
+
+  const question = normalizeWhitespace(args.question ?? "");
+  const evidence: QuestionOptionDescriptionEvidence = {
+    sessionName: args.sessionName,
+    question,
+    options: verboseOptions.map((option) => ({
+      label: option.label,
+      description: truncateText(option.description, MAX_CONTEXT_CHARS),
+    })),
+  };
+
+  try {
+    const generated = await withTimeout(
+      args.provider.generateQuestionOptionDescriptions(evidence),
+      args.timeoutMs ?? SUMMARY_TIMEOUT_MS,
+    );
+    return [
+      ...shortOptions,
+      ...validateOptionDescriptionSummaries(generated, verboseOptions.map((option) => option.label)),
+    ];
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (message !== "question-context-summary timed out") {
+      console.warn(`[question_option_descriptions] LLM summary provider failed: ${message}`);
+    }
+    return shortOptions;
+  }
+}
+
 function validateQuestionContextSummary(generated: unknown): string | undefined {
   const raw = normalizeGeneratedSummaryPayload(generated);
   const value = typeof raw === "string"
@@ -103,6 +200,34 @@ function validateQuestionContextSummary(generated: unknown): string | undefined 
   if (!text || text.length > MAX_SUMMARY_CHARS) return undefined;
   if (text.split(/[.!?]+/).filter((part) => part.trim()).length > 1) return undefined;
   return text;
+}
+
+function validateOptionDescriptionSummaries(
+  generated: unknown,
+  allowedLabels: string[],
+): Array<{ label: string; description: string }> {
+  const raw = normalizeGeneratedSummaryPayload(generated);
+  const rawOptions = Array.isArray(raw)
+    ? raw
+    : raw && typeof raw === "object" && Array.isArray((raw as { options?: unknown }).options)
+      ? (raw as { options: unknown[] }).options
+      : undefined;
+  if (!rawOptions) return [];
+  const allowed = new Set(allowedLabels);
+  const seen = new Set<string>();
+  const summaries: Array<{ label: string; description: string }> = [];
+  for (const entry of rawOptions) {
+    if (!entry || typeof entry !== "object") return [];
+    const record = entry as Record<string, unknown>;
+    const label = normalizeWhitespace(typeof record.label === "string" ? record.label : "");
+    const description = normalizeWhitespace(typeof record.description === "string" ? record.description : "");
+    if (!allowed.has(label) || seen.has(label) || !description || description.length > MAX_OPTION_DESCRIPTION_CHARS) {
+      return [];
+    }
+    seen.add(label);
+    summaries.push({ label, description });
+  }
+  return summaries;
 }
 
 function normalizeGeneratedSummaryPayload(generated: unknown): unknown {
@@ -128,11 +253,26 @@ function findRuntimeQuestionSummaryCandidate(runtime: Record<string, unknown> | 
     Boolean(candidate && typeof candidate === "object" && (
       typeof (candidate as RuntimeQuestionSummaryCandidate).generateQuestionContextSummary === "function"
       || typeof (candidate as RuntimeQuestionSummaryCandidate).summarizeQuestionContext === "function"
+      || typeof (candidate as RuntimeQuestionSummaryCandidate).generateQuestionOptionDescriptions === "function"
+      || typeof (candidate as RuntimeQuestionSummaryCandidate).summarizeQuestionOptions === "function"
       || typeof (candidate as RuntimeQuestionSummaryCandidate).generateObject === "function"
       || typeof (candidate as RuntimeQuestionSummaryCandidate).generateText === "function"
       || typeof (candidate as RuntimeQuestionSummaryCandidate).complete === "function"
     )),
   );
+}
+
+function buildQuestionOptionDescriptionPrompt(evidence: QuestionOptionDescriptionEvidence): string {
+  return [
+    `Compress provided option descriptions for an OpenClaw Code Agent question.`,
+    `Return only JSON with shape {"options":[{"label":"...","description":"..."}]}.`,
+    `Preserve each label exactly. Do not add, remove, or rename options.`,
+    `Write each description under ${MAX_OPTION_DESCRIPTION_CHARS} characters.`,
+    `Use only the provided descriptions. Do not invent semantics or recommendations.`,
+    ``,
+    `Evidence:`,
+    JSON.stringify(evidence, null, 2),
+  ].join("\n");
 }
 
 function buildQuestionContextSummaryPrompt(evidence: QuestionContextSummaryEvidence): string {
