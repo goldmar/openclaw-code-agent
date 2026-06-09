@@ -555,6 +555,75 @@ describe("SessionLifecycleService", () => {
     assert.doesNotMatch(String(requests[1]?.userMessage ?? ""), /Why this is asked:/);
   });
 
+  it("renders fallback option buttons when a single structured question has no inline options", async () => {
+    const requests: Array<Record<string, unknown>> = [];
+    const questionButtonCalls: Array<{
+      options: Array<{ label: string }>;
+      context?: { requestId?: string; questionId?: string };
+    }> = [];
+
+    const service = new SessionLifecycleService({
+      persistSession: () => {},
+      clearWaitingTimestamp: () => {},
+      handleWorktreeStrategy: async () => ({
+        notificationSent: false,
+        worktreeRemoved: false,
+      }),
+      resolveWorktreeRepoDir: () => undefined,
+      updatePersistedSession: () => false,
+      dispatchSessionNotification: (_session, request) => {
+        requests.push(request as unknown as Record<string, unknown>);
+      },
+      notifySession: () => {},
+      clearRetryTimersForSession: () => {},
+      hasTurnCompleteWakeMarker: () => false,
+      shouldEmitTurnCompleteWake: () => true,
+      shouldEmitTerminalWake: () => true,
+      resolvePlanApprovalMode: () => "ask",
+      getPlanApprovalButtons: () => [],
+      getResumeButtons: () => [],
+      getQuestionButtons: (_sessionId, options, context) => {
+        questionButtonCalls.push({ options, context });
+        return [options.map((option) => ({ label: option.label, callbackData: `token:${option.label}` }))];
+      },
+      extractLastOutputLine: () => undefined,
+      getOutputPreview: () => "Fallback preview",
+      originThreadLine: () => "Origin thread: telegram topic 42",
+      debounceWaitingEvent: () => true,
+      isAlreadyMerged: () => false,
+    });
+
+    await service.emitWaitingForInput(createStubSession({
+      id: "session-structured-fallback-options",
+      name: "structured-fallback-options",
+      pendingPlanApproval: false,
+      pendingInputState: {
+        requestId: "req-structured-fallback-options",
+        kind: "question",
+        promptText: "Question 1 - Confirm\nYes or no?",
+        options: ["Yes", "No"],
+        activeQuestionIndex: 0,
+        questions: [{
+          id: "confirm",
+          question: "Yes or no?",
+          options: [],
+        }],
+      },
+    }));
+
+    assert.equal(questionButtonCalls.length, 1);
+    assert.deepEqual(questionButtonCalls[0].options.map((option) => option.label), ["Yes", "No"]);
+    assert.deepEqual(questionButtonCalls[0].context, {
+      requestId: "req-structured-fallback-options",
+      questionId: "confirm",
+    });
+    assert.equal(requests.length, 1);
+    assert.deepEqual(
+      (requests[0]?.buttons as Array<Array<{ label: string }>>).map((row) => row.map((button) => button.label)),
+      [["Yes", "No"]],
+    );
+  });
+
   it("preserves provided option descriptions verbatim without calling the LLM", async () => {
     const requests: Array<Record<string, unknown>> = [];
     const providedDescription = [

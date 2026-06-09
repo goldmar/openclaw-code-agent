@@ -1468,7 +1468,7 @@ describe("SessionManager turn-end wake", () => {
     stubDispatch(sm);
   });
 
-  it("fires wake deterministically on turn end", () => {
+  it("fires wake deterministically on turn end", async () => {
     const s = fakeSession({
       id: "s-turn",
       name: "deterministic",
@@ -1478,7 +1478,7 @@ describe("SessionManager turn-end wake", () => {
       getOutput: () => ["I completed the patch.", "Should I continue and apply tests?"],
     });
 
-    (sm as any).lifecycle.handleTurnEnd(s, false);
+    await (sm as any).lifecycle.handleTurnEnd(s, false);
 
     const calls = (sm as any).__dispatchCalls;
     assert.equal(calls.length, 1);
@@ -1501,7 +1501,7 @@ describe("SessionManager turn-end wake", () => {
       getOutput: () => ["Need your decision."],
     });
 
-    (sm as any).lifecycle.handleTurnEnd(s, true);
+    await (sm as any).lifecycle.handleTurnEnd(s, true);
 
     const calls = (sm as any).__dispatchCalls;
     assert.equal(calls.length, 1);
@@ -2089,7 +2089,7 @@ describe("SessionManager turn-end wake", () => {
       getOutput: () => ["Should I continue and apply the migration?"],
     });
 
-    (sm as any).lifecycle.handleTurnEnd(s, true);
+    await (sm as any).lifecycle.handleTurnEnd(s, true);
 
     const calls = (sm as any).__dispatchCalls;
     assert.equal(calls.length, 1);
@@ -2229,7 +2229,7 @@ describe("SessionManager turn-end wake", () => {
       getOutput: () => ["Plan preview"],
     });
 
-    (sm as any).lifecycle.handleTurnEnd(s, true);
+    await (sm as any).lifecycle.handleTurnEnd(s, true);
 
     const calls = (sm as any).__dispatchCalls;
     assert.equal(calls.length, 1);
@@ -2238,7 +2238,7 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(request.buttons[0][0].label, "Approve");
   });
 
-  it("de-dupes duplicate turn-end wake for the same turn marker", () => {
+  it("de-dupes duplicate turn-end wake for the same turn marker", async () => {
     const s = fakeSession({
       id: "s-dup-turn",
       name: "dup-turn",
@@ -2252,8 +2252,8 @@ describe("SessionManager turn-end wake", () => {
       getOutput: () => ["Turn output."],
     });
 
-    (sm as any).lifecycle.handleTurnEnd(s, false);
-    (sm as any).lifecycle.handleTurnEnd(s, false);
+    await (sm as any).lifecycle.handleTurnEnd(s, false);
+    await (sm as any).lifecycle.handleTurnEnd(s, false);
 
     const calls = (sm as any).__dispatchCalls;
     assert.equal(calls.length, 1);
@@ -2423,7 +2423,7 @@ describe("SessionManager turn-end wake", () => {
       },
       getOutput: () => ["Applied the completion fix and added tests."],
     });
-    (sm as any).lifecycle.handleTurnEnd(s, false);
+    await (sm as any).lifecycle.handleTurnEnd(s, false);
     await (sm as any).onSessionTerminal(s);
 
     const calls = (sm as any).__dispatchCalls;

@@ -206,7 +206,7 @@ export class SessionLifecycleService {
     return Boolean(resolveNotificationRoute(session));
   }
 
-  handleTurnEnd(session: Session, hadQuestion: boolean): void {
+  async handleTurnEnd(session: Session, hadQuestion: boolean): Promise<void> {
     if (session.status !== "running") {
       console.info(
         `[SessionManager] Suppressing turn-end wake for session ${session.id} ` +
@@ -220,7 +220,7 @@ export class SessionLifecycleService {
     }
 
     if (hadQuestion || session.pendingPlanApproval) {
-      this.emitWaitingForInput(session);
+      await this.emitWaitingForInput(session);
       return;
     }
 
@@ -448,6 +448,8 @@ export class SessionLifecycleService {
     const activePendingInputQuestion = pendingInputQuestions?.[
       session.pendingInputState?.activeQuestionIndex ?? 0
     ];
+    const fallbackPendingInputButtonOptions =
+      session.pendingInputState?.options.map((label) => ({ label })) ?? [];
     const pendingInputButtonOptions = pendingInputQuestions
       ? (
           activePendingInputQuestion
@@ -456,9 +458,15 @@ export class SessionLifecycleService {
             && !activePendingInputQuestion.options.some((option) => option.isOther)
             && !activePendingInputQuestion.multiSelect
               ? activePendingInputQuestion.options
-              : []
+              : (
+                  pendingInputQuestions.length === 1
+                    && activePendingInputQuestion
+                    && activePendingInputQuestion.options.length === 0
+                      ? fallbackPendingInputButtonOptions
+                      : []
+                )
         )
-      : session.pendingInputState?.options.map((label) => ({ label })) ?? [];
+      : fallbackPendingInputButtonOptions;
     const waitingButtons =
       session.pendingPlanApproval && planApprovalMode === "ask" && !promptAlreadyProven
         ? this.deps.getPlanApprovalButtons(session.id, {

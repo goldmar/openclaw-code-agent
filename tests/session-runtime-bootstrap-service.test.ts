@@ -10,7 +10,7 @@ describe("SessionRuntimeBootstrapService", () => {
       hydrateSpawnedSession: () => {},
       markRunning: () => {},
       handleTerminal: async () => {},
-      handleTurnEnd: () => {},
+      handleTurnEnd: async () => {},
       formatLaunchWorkdirLabel: () => "/repo/worktree (worktree of /repo)",
       notifySession: (_session, text) => { notifications.push(text); },
     });
