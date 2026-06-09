@@ -50,6 +50,65 @@ async function collectMessages(
 }
 
 describe("ClaudeCodeHarness", () => {
+  it("emits normalized multi-question AskUserQuestion pending input with option descriptions", async () => {
+    const startupOptions = Promise.withResolvers<Record<string, unknown>>();
+    const { handle } = createQueryHandle([
+      { type: "result", subtype: "success", session_id: "claude-questions", duration_ms: 0, total_cost_usd: 0, num_turns: 1, result: "done" },
+    ]);
+    const harness = new ClaudeCodeHarness({
+      startup: async ({ options } = {}) => {
+        startupOptions.resolve(options ?? {});
+        return { query: () => handle as any };
+      },
+    });
+
+    const session = harness.launch({
+      prompt: "ask",
+      cwd: "/tmp/project",
+      canUseTool: async () => ({ behavior: "allow" as const, updatedInput: {} }),
+    });
+    const options = await startupOptions.promise;
+    const canUseTool = options.canUseTool as ((toolName: string, input: Record<string, unknown>) => Promise<unknown>);
+
+    await canUseTool("AskUserQuestion", {
+      questions: [{
+        id: "policy_source",
+        header: "Policy",
+        question: "Which policy source should I use?",
+        options: [
+          {
+            label: "Plugin store",
+            value: "plugin_store",
+            description: "Shared policy controlled by plugin config.",
+          },
+          { label: "Local override", description: "Only this session." },
+        ],
+      }, {
+        id: "scope",
+        header: "Scope",
+        question: "How broad should the rollout be?",
+        options: [
+          { label: "Canary", description: "Start with a small cohort." },
+          { label: "Everyone", description: "Roll out to all users." },
+        ],
+      }],
+    });
+
+    const messages = await collectMessages(session);
+    const pending = messages.find((message) => message.type === "pending_input") as Extract<HarnessMessage, { type: "pending_input" }> | undefined;
+
+    assert.equal(pending?.state.kind, "question");
+    assert.equal(pending?.state.activeQuestionIndex, 0);
+    assert.deepEqual(pending?.state.options, ["Plugin store", "Local override"]);
+    assert.equal(pending?.state.questions?.length, 2);
+    assert.equal(pending?.state.questions?.[0]?.id, "policy_source");
+    assert.equal(pending?.state.questions?.[0]?.options[0]?.value, "plugin_store");
+    assert.equal(pending?.state.questions?.[0]?.options[0]?.description, "Shared policy controlled by plugin config.");
+    assert.equal(pending?.state.questions?.[1]?.question, "How broad should the rollout be?");
+    assert.match(pending?.state.promptText ?? "", /Question 1 - Policy/);
+    assert.doesNotMatch(pending?.state.promptText ?? "", /Question 2 - Scope/);
+  });
+
   it("pre-warms Claude Code with startup() before the first query", async () => {
     const calls: { startup: number; query: number } = { startup: 0, query: 0 };
     let promptSeen: string | AsyncIterable<SDKUserMessage> | undefined;
