@@ -92,6 +92,13 @@ export function createPR(
     // Recovery: if we requested draft and the error indicates drafts are not supported or enabled
     // on the target repo, retry once without --draft so that PR creation does not regress for repos
     // that previously accepted non-draft PRs.
+    //
+    // The /draft/i heuristic is intentionally broad (as noted in Greptile review) to catch common
+    // GitHub CLI messages about draft support ("draft PRs are not supported", "draft", etc.).
+    // Trade-off: if a non-draft-related error message happens to contain the substring "draft",
+    // we will still retry without the flag and surface an explicit warning to the caller.
+    // The caller (agent-pr.ts) always appends warnings to the final tool output text, so there is
+    // no silent fallback.
     if ((options.draft ?? true) && args && /draft/i.test(msg)) {
       try {
         const retryArgs = args.filter((a) => a !== "--draft");

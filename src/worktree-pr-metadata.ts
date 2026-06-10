@@ -385,6 +385,15 @@ function buildFallbackPrMetadata(evidence: PrMetadataEvidence, prompt: string | 
   return metadata;
 }
 
+// Note on the two-pass guard design in buildFallbackPrMetadata (addressing Greptile review feedback):
+// - First pass: per-field guard() applies prompt-leak redaction, unknown-file redaction, and sanitization.
+// - Second pass: after constructing metadata, we do a finalAll check across all fields.
+//   If anything still fails (e.g. after redaction produced empty fields or residual issues), we replace
+//   the entire metadata with a very conservative ultra-safe version.
+// - Branch name is appended *only after* both passes + hardening. This prevents a path-like branch name
+//   from ever participating in the safety checks that could cause title/summary/changes redaction.
+// The design is intentionally conservative for the no-provider fallback case.
+
 export async function buildPrMetadata(args: {
   sessionName: string;
   branchName?: string;
