@@ -37,8 +37,8 @@ importers:
         specifier: ^5.1.7
         version: 5.1.11
       openclaw:
-        specifier: 2026.6.1
-        version: 2026.6.1
+        specifier: 2026.6.5
+        version: 2026.6.5
       tsx:
         specifier: ^4.21.0
         version: 4.22.4
@@ -114,8 +114,8 @@ packages:
       zod:
         optional: true
 
-  '@babel/runtime@7.29.2':
-    resolution: {integrity: sha512-JiDShH45zKHWyGe4ZNVRrCjBz8Nh9TMmZG1kh4QTK8hCBTWBi8Da+i7s1fJw7/lYpM4ccepSNfqzZ/QvABBi5g==}
+  '@babel/runtime@7.29.7':
+    resolution: {integrity: sha512-Nq8OhGWiZIZGV6hLHoyAKLLcJihP/xFeBMGJoUrxTX2psI8dCifzLhZISFb+VWS3wFMRDmCGw5R+dOySCqPLhw==}
     engines: {node: '>=6.9.0'}
 
   '@borewit/text-codec@0.2.2':
@@ -396,17 +396,17 @@ packages:
   '@protobufjs/codegen@2.0.5':
     resolution: {integrity: sha512-zgXFLzW3Ap33e6d0Wlj4MGIm6Ce8O89n/apUaGNB/jx+hw+ruWEp7EwGUshdLKVRCxZW12fp9r40E1mQrf/34g==}
 
-  '@protobufjs/eventemitter@1.1.0':
-    resolution: {integrity: sha512-j9ednRT81vYJ9OfVuXG6ERSTdEL1xVsNgqpkxMsbIabzSo3goCjDIveeGv5d03om39ML71RdmrGNjG5SReBP/Q==}
+  '@protobufjs/eventemitter@1.1.1':
+    resolution: {integrity: sha512-vW1GmwMZNnL+gMRaovlh9yZX74kc+TTU3FObkkurpMaRtBfLP3ldjS9KQWlwZgraRE0+dheEEoAxdzcJQ8eXZg==}
 
-  '@protobufjs/fetch@1.1.0':
-    resolution: {integrity: sha512-lljVXpqXebpsijW71PZaCYeIcE5on1w5DlQy5WH6GLbFryLUrBD4932W/E2BSpfRJWseIL4v/KPgBFxDOIdKpQ==}
+  '@protobufjs/fetch@1.1.1':
+    resolution: {integrity: sha512-GpptLrs57adMSuHi3VNj0mAF8dwh36LMaYF6XyJ6JMWlVsc+t42tm1HSEDmOs3A8fC9yyeisgLhsTVQokOZ0zw==}
 
   '@protobufjs/float@1.0.2':
     resolution: {integrity: sha512-Ddb+kVXlXst9d+R9PfTIxh1EdNkgoRe5tOX6t01f1lYWOvJnSPDBlG241QLzcyPdoNTsblLUdujGSE4RzrTZGQ==}
 
-  '@protobufjs/inquire@1.1.1':
-    resolution: {integrity: sha512-mnzgDV26ueAvk7rsbt9L7bE0SuAoqyuys/sMMrmVcN5x9VsxpcG3rqAUSgDyLp0UZlmNfIbQ4fHfCtreVBk8Ew==}
+  '@protobufjs/inquire@1.1.2':
+    resolution: {integrity: sha512-pa0vFRuws4wkvaXKK1uXZMAwAX4/t8ANaJo45iw/oQHNQ9q5xUzwgFmVJGXiga2BeN+zpX7Vf9vmsiIa2J+MUw==}
 
   '@protobufjs/path@1.1.2':
     resolution: {integrity: sha512-6JOcJ5Tm08dOHAbdR3GrvP+yUUfkjG5ePsHYczMFLq3ZmMkAD98cDgcT2iA1lJ9NVwFd4tH/iSSoe44YWkltEA==}
@@ -493,8 +493,8 @@ packages:
   bottleneck@2.19.5:
     resolution: {integrity: sha512-VHiNCbI1lKdl44tGrhNfU3lup0Tj/ZBMJB5/2ZbNXRCPuRCO7ed2mgcK4r17y+KB2EfuYuRaVlwNbAeaWGSpbw==}
 
-  brace-expansion@5.0.5:
-    resolution: {integrity: sha512-VZznLgtwhn+Mact9tfiwx64fA9erHH/MCXEUfB/0bX/6Fz6ny5EGTXYltMocqg4xFAQZtnO3DHWWXi8RiuN7cQ==}
+  brace-expansion@5.0.6:
+    resolution: {integrity: sha512-kLpxurY4Z4r9sgMsyG0Z9uzsBlgiU/EFKhj/h91/8yHu0edo7XuixOIH3VcJ8kkxs6/jPzoI6U9Vj3WqbMQ94g==}
     engines: {node: 18 || 20 || >=22}
 
   buffer-equal-constant-time@1.0.1:
@@ -561,6 +561,10 @@ packages:
   content-type@1.0.5:
     resolution: {integrity: sha512-nTjqfcBFEipKdXCv4YDQWCfmcLZKm81ldF0pAopTvyrFGVbcR6P/VAAd5G7N+0tTr8QqiU0tFadD6FK4NtJwOA==}
     engines: {node: '>= 0.6'}
+
+  content-type@2.0.0:
+    resolution: {integrity: sha512-j/O/d7GcZCyNl7/hwZAb606rzqkyvaDctLmckbxLzHvFBzTJHuGEdodATcP3yIRoDrLHkIATJuvzbFlp/ki2cQ==}
+    engines: {node: '>=18'}
 
   cookie-signature@1.2.2:
     resolution: {integrity: sha512-D76uU73ulSXrD1UXF4KE2TMxVVwhsnCgfAyTg9k8P6KGZjlXKrOLe4dJQKI3Bxi5wjesZoFXJWElNWBjPZMbhg==}
@@ -673,8 +677,8 @@ packages:
     resolution: {integrity: sha512-Zf5H2Kxt2xjTvbJvP2ZWLEICxA6j+hAmMzIlypy4xcBg1vKVnx89Wy0GbS+kf5cwCVFFzdCFh2XSCFNULS6csw==}
     engines: {node: '>= 0.4'}
 
-  es-object-atoms@1.1.1:
-    resolution: {integrity: sha512-FGgH2h8zKNim9ljj7dankFPcICIK9Cp5bm+c2gQSYePhpaG5+esrLODihIorn+Pe6FGJzWhXQotPv73jTaldXA==}
+  es-object-atoms@1.1.2:
+    resolution: {integrity: sha512-HWcBoN6NileqtSydK2FqHbS/LoDd2pqrnQHLyJzBj4kOp/ky2MWMN694xOfkK8/SnUsW2DH7EfyVlydKCsm1Zw==}
     engines: {node: '>= 0.4'}
 
   esbuild@0.28.0:
@@ -697,16 +701,16 @@ packages:
     resolution: {integrity: sha512-i/2XbnSz/uxRCU6+NdVJgKWDTM427+MqYbkQzD321DuCQJUqOuJKIA0IM2+W2xtYHdKOmZ4dR6fExsd4SXL+WQ==}
     engines: {node: '>=6'}
 
-  eventsource-parser@3.0.8:
-    resolution: {integrity: sha512-70QWGkr4snxr0OXLRWsFLeRBIRPuQOvt4s8QYjmUlmlkyTZkRqS7EDVRZtzU3TiyDbXSzaOeF0XUKy8PchzukQ==}
+  eventsource-parser@3.1.0:
+    resolution: {integrity: sha512-kJezFj9YFAMLeORyi7aCLxLbD5/qWMQnoMVlVPyHIll7lgRJCc3JVln9Vgl9nwQi0YkMnhdGTMNn7CkRRAptMg==}
     engines: {node: '>=18.0.0'}
 
   eventsource@3.0.7:
     resolution: {integrity: sha512-CRT1WTyuQoD771GW56XEZFQ/ZoSfWid1alKGDYMmkt2yl8UXrVR4pspqWNEcqKvVIzg6PAltWjxcSSPrboA4iA==}
     engines: {node: '>=18.0.0'}
 
-  express-rate-limit@8.5.1:
-    resolution: {integrity: sha512-5O6KYmyJEpuPJV5hNTXKbAHWRqrzyu+OI3vUnSd2kXFubIVpG7ezpgxQy76Zo5GQZtrQBg86hF+CM/NX+cioiQ==}
+  express-rate-limit@8.5.2:
+    resolution: {integrity: sha512-5Kb34ipNX694DH48vN9irak1Qx30nb0PLYHXfJgw4YEjiC3ZEmZJhwOp+VfiCYwFzvFTdB9QkArYS5kXa2cx2A==}
     engines: {node: '>= 16'}
     peerDependencies:
       express: '>= 4.11'
@@ -733,8 +737,8 @@ packages:
   fast-uri@3.1.2:
     resolution: {integrity: sha512-rVjf7ArG3LTk+FS6Yw81V1DLuZl1bRbNrev6Tmd/9RaroeeRRJhAt7jg/6YFxbvAQXUCavSoZhPPj6oOx+5KjQ==}
 
-  fast-wrap-ansi@0.2.0:
-    resolution: {integrity: sha512-rLV8JHxTyhVmFYhBJuMujcrHqOT2cnO5Zxj37qROj23CP39GXubJRBUFF0z8KFK77Uc0SukZUf7JZhsVEQ6n8w==}
+  fast-wrap-ansi@0.2.2:
+    resolution: {integrity: sha512-7F2Fl+TjRSenLqlU3UjSH0iyqopqoZIu7eZVpEirP2g1GtWa2G/ecEmBdgz31+Mxr+ELclgg6sokpSFIQiZ02Q==}
 
   fetch-blob@3.2.0:
     resolution: {integrity: sha512-7yAQpD2UMJzLi1Dqv7qFYnPbaPx7ZfFK6PiIxQ4PfkGPyNyl2Ugx+a/umUonmKqjhM4DnfbMvdX6otXq83soQQ==}
@@ -772,8 +776,8 @@ packages:
   function-bind@1.1.2:
     resolution: {integrity: sha512-7XHNxH7qX9xG5mIwxkhumTox/MIRNcOgDrxWsMt2pAr23WHp6MrRlN7FBSFpCpr+oVO0F744iUgR82nJMfG2SA==}
 
-  gaxios@7.1.4:
-    resolution: {integrity: sha512-bTIgTsM2bWn3XklZISBTQX7ZSddGW+IO3bMdGaemHZ3tbqExMENHLx6kKZ/KlejgrMtj8q7wBItt51yegqalrA==}
+  gaxios@7.1.5:
+    resolution: {integrity: sha512-5FZy72Rh8LhtjmvDrKkI+lVhrsQrVKVsItxMoDm5mNQE+xR0WVIIs+jzPSJgBvKVsLi24fZhXJIsNI0bihDzFg==}
     engines: {node: '>=18'}
 
   gcp-metadata@8.1.2:
@@ -800,8 +804,8 @@ packages:
     resolution: {integrity: sha512-Wjlyrolmm8uDpm/ogGyXZXb1Z+Ca2B8NbJwqBVg0axK9GbBeoS7yGV6vjXnYdGm6X53iehEuxxbyiKp8QmN4Vw==}
     engines: {node: 18 || 20 || >=22}
 
-  google-auth-library@10.6.2:
-    resolution: {integrity: sha512-e27Z6EThmVNNvtYASwQxose/G57rkRuaRbQyxM2bvYLLX/GqWZ5chWq2EBoUchJbCc57eC9ArzO5wMsEmWftCw==}
+  google-auth-library@10.7.0:
+    resolution: {integrity: sha512-QpTAbNJ36TliZLx3TTtahR8HG0hN9RllL1e3FymOvQSIKK8JmgV58H924ub2wa2DsS3ANjjP1Aw1N+Ramc8hqQ==}
     engines: {node: '>=18'}
 
   google-logging-utils@1.1.3:
@@ -823,8 +827,8 @@ packages:
     resolution: {integrity: sha512-1cDNdwJ2Jaohmb3sg4OmKaMBwuC48sYni5HUw2DvsC8LjGTLK9h+eb1X6RyuOHe4hT0ULCW68iomhjUoKUqlPQ==}
     engines: {node: '>= 0.4'}
 
-  hasown@2.0.3:
-    resolution: {integrity: sha512-ej4AhfhfL2Q2zpMmLo7U1Uv9+PyhIZpgQLGT1F9miIGmiCJIoCgSmczFdrc97mWT4kVY72KA+WnnhJ5pghSvSg==}
+  hasown@2.0.4:
+    resolution: {integrity: sha512-T2UbfbBEF32wiepXIsMlTW9+dDYC6wMh/t/vYA4tuOMKqWz/n3vr1NFSxQiyP+zk2mXsoMA/i/7qV6LKut1t1A==}
     engines: {node: '>= 0.4'}
 
   highlight.js@11.11.1:
@@ -952,8 +956,8 @@ packages:
   long@5.3.2:
     resolution: {integrity: sha512-mNAgZ1GmyNhD7AuqnTG3/VQ26o760+ZYBPKjPvugO8+nLbYfX6TVpJPseBvopbdY+qpZ/lKUnmEc1LeZYS3QAA==}
 
-  lru-cache@11.3.5:
-    resolution: {integrity: sha512-NxVFwLAnrd9i7KUBxC4DrUhmgjzOs+1Qm50D3oF1/oL+r1NpZ4gA7xvG0/zJ8evR7zIKn4vLf7qTNduWFtCrRw==}
+  lru-cache@11.5.1:
+    resolution: {integrity: sha512-RPimw/7aMdv2oqRrxKwvZXcPfwBrn/JZ2xYcY9Hus/6LaS3VOAKVWKWgNLCFSiOm1ESXinjsDlidVU7JlnCN2A==}
     engines: {node: 20 || >=22}
 
   marked@15.0.12:
@@ -1011,8 +1015,8 @@ packages:
     resolution: {integrity: sha512-8Ofs/AUQh8MaEcrlq5xOX0CQ9ypTF5dl78mjlMNfOK08fzpgTHQRQPBxcPlEtIw0yRpws+Zo/3r+5WRby7u3Gg==}
     engines: {node: '>= 0.6'}
 
-  node-addon-api@8.7.0:
-    resolution: {integrity: sha512-9MdFxmkKaOYVTV+XVRG8ArDwwQ77XIgIPyKASB1k3JPq3M8fGQQQE3YpMOrKm6g//Ktx8ivZr8xo1Qmtqub+GA==}
+  node-addon-api@8.8.0:
+    resolution: {integrity: sha512-c5Ko1fZJIJmzhFIkhRN76WTq+fC6tWnGy9CXA0fA+XygsWZmEwG8vmbkNqxMyoaa0Tin4djul49NzdVcJJcjeA==}
     engines: {node: ^18 || ^20 || >= 21}
 
   node-domexception@1.0.0:
@@ -1071,8 +1075,8 @@ packages:
       zod:
         optional: true
 
-  openclaw@2026.6.1:
-    resolution: {integrity: sha512-rGSwhIo8N37cQQ5puG8vmWZESE8q/ych5VFpzOQNcf49TF/rvCYyxiNAyot11qbUZF5wfLh8bsvofapnOEh0BQ==}
+  openclaw@2026.6.5:
+    resolution: {integrity: sha512-sRgF0TexfRcJX8Eg0lcL6Jj0YdZbSxUbbp8EbG+qo3v6TtVayE6tKPEs3oCKD7YfYe2C/8Qg26HUxTnycd44ZQ==}
     engines: {node: '>=22.19.0'}
     hasBin: true
 
@@ -1244,8 +1248,8 @@ packages:
     resolution: {integrity: sha512-WPS/HvHQTYnHisLo9McqBHOJk2FkHO/tlpvldyrnem4aeQp4hai3gythswg6p01oSoTl58rcpiFAjF2br2Ak2A==}
     engines: {node: '>= 0.4'}
 
-  side-channel@1.1.0:
-    resolution: {integrity: sha512-ZX99e6tRweoUXqR+VBrslhda51Nh5MTQwou5tnUDgbtyM0dBgmhEDtWGP/xbKn6hqfPRHujUNwz5fy/wbbhnpw==}
+  side-channel@1.1.1:
+    resolution: {integrity: sha512-6x6dK6zJdpTzF4sQeNYxwtvBzf6Eg4GtlesS94HOvTudUeyK2WXAaIfmDgsyslYrRBeFIlsi54AYsFGUuhmvrQ==}
     engines: {node: '>= 0.4'}
 
   signal-exit@3.0.7:
@@ -1353,9 +1357,9 @@ packages:
     engines: {node: '>=18.0.0'}
     hasBin: true
 
-  type-is@2.0.1:
-    resolution: {integrity: sha512-OZs6gsjF4vMp32qrCbiVSkrFmXtG/AZhY3t0iAMrMBiAZyV9oALtXO8hsrHbMXF9x6L3grlFuwW2oAz7cav+Gw==}
-    engines: {node: '>= 0.6'}
+  type-is@2.1.0:
+    resolution: {integrity: sha512-faYHw0anBbc/kWF3zFTEnxSFOAGUX9GFbOBthvDdLsIlEoWOFOtS0zgCiQYwIskL9iGXZL3kAXD8OoZ4GmMATA==}
+    engines: {node: '>= 18'}
 
   typebox@1.1.39:
     resolution: {integrity: sha512-vj0afVtOfLQvv0GR0VxVagYxsXN64btL7Z9XoaG0ZggH3mruMMkOO6hXdgMsjCY3shZgEvooAWVeznQVs5c43w==}
@@ -1531,20 +1535,20 @@ snapshots:
     optionalDependencies:
       zod: 4.4.3
 
-  '@babel/runtime@7.29.2': {}
+  '@babel/runtime@7.29.7': {}
 
   '@borewit/text-codec@0.2.2': {}
 
   '@clack/core@1.3.1':
     dependencies:
-      fast-wrap-ansi: 0.2.0
+      fast-wrap-ansi: 0.2.2
       sisteransi: 1.0.5
 
   '@clack/prompts@1.4.0':
     dependencies:
       '@clack/core': 1.3.1
       fast-string-width: 3.0.2
-      fast-wrap-ansi: 0.2.0
+      fast-wrap-ansi: 0.2.2
       sisteransi: 1.0.5
 
   '@earendil-works/pi-tui@0.78.0':
@@ -1632,7 +1636,7 @@ snapshots:
 
   '@google/genai@2.7.0(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))':
     dependencies:
-      google-auth-library: 10.6.2
+      google-auth-library: 10.7.0
       p-retry: 4.6.2
       protobufjs: 7.5.6
       ws: 8.21.0
@@ -1717,9 +1721,9 @@ snapshots:
       cors: 2.8.6
       cross-spawn: 7.0.6
       eventsource: 3.0.7
-      eventsource-parser: 3.0.8
+      eventsource-parser: 3.1.0
       express: 5.2.1
-      express-rate-limit: 8.5.1(express@5.2.1)
+      express-rate-limit: 8.5.2(express@5.2.1)
       hono: 4.12.21
       jose: 6.2.3
       json-schema-typed: 8.0.2
@@ -1747,16 +1751,15 @@ snapshots:
 
   '@protobufjs/codegen@2.0.5': {}
 
-  '@protobufjs/eventemitter@1.1.0': {}
+  '@protobufjs/eventemitter@1.1.1': {}
 
-  '@protobufjs/fetch@1.1.0':
+  '@protobufjs/fetch@1.1.1':
     dependencies:
       '@protobufjs/aspromise': 1.1.2
-      '@protobufjs/inquire': 1.1.1
 
   '@protobufjs/float@1.0.2': {}
 
-  '@protobufjs/inquire@1.1.1': {}
+  '@protobufjs/inquire@1.1.2': {}
 
   '@protobufjs/path@1.1.2': {}
 
@@ -1836,7 +1839,7 @@ snapshots:
       on-finished: 2.4.1
       qs: 6.15.2
       raw-body: 3.0.2
-      type-is: 2.0.1
+      type-is: 2.1.0
     transitivePeerDependencies:
       - supports-color
 
@@ -1844,7 +1847,7 @@ snapshots:
 
   bottleneck@2.19.5: {}
 
-  brace-expansion@5.0.5:
+  brace-expansion@5.0.6:
     dependencies:
       balanced-match: 4.0.4
 
@@ -1899,6 +1902,8 @@ snapshots:
   content-disposition@1.1.0: {}
 
   content-type@1.0.5: {}
+
+  content-type@2.0.0: {}
 
   cookie-signature@1.2.2: {}
 
@@ -1989,7 +1994,7 @@ snapshots:
 
   es-errors@1.3.0: {}
 
-  es-object-atoms@1.1.1:
+  es-object-atoms@1.1.2:
     dependencies:
       es-errors: 1.3.0
 
@@ -2030,13 +2035,13 @@ snapshots:
 
   event-target-shim@5.0.1: {}
 
-  eventsource-parser@3.0.8: {}
+  eventsource-parser@3.1.0: {}
 
   eventsource@3.0.7:
     dependencies:
-      eventsource-parser: 3.0.8
+      eventsource-parser: 3.1.0
 
-  express-rate-limit@8.5.1(express@5.2.1):
+  express-rate-limit@8.5.2(express@5.2.1):
     dependencies:
       express: 5.2.1
       ip-address: 10.2.0
@@ -2069,7 +2074,7 @@ snapshots:
       send: 1.2.1
       serve-static: 2.2.1
       statuses: 2.0.2
-      type-is: 2.0.1
+      type-is: 2.1.0
       vary: 1.1.2
     transitivePeerDependencies:
       - supports-color
@@ -2088,7 +2093,7 @@ snapshots:
 
   fast-uri@3.1.2: {}
 
-  fast-wrap-ansi@0.2.0:
+  fast-wrap-ansi@0.2.2:
     dependencies:
       fast-string-width: 3.0.2
 
@@ -2135,7 +2140,7 @@ snapshots:
 
   function-bind@1.1.2: {}
 
-  gaxios@7.1.4:
+  gaxios@7.1.5:
     dependencies:
       extend: 3.0.2
       https-proxy-agent: 7.0.6
@@ -2145,7 +2150,7 @@ snapshots:
 
   gcp-metadata@8.1.2:
     dependencies:
-      gaxios: 7.1.4
+      gaxios: 7.1.5
       google-logging-utils: 1.1.3
       json-bigint: 1.0.0
     transitivePeerDependencies:
@@ -2160,18 +2165,18 @@ snapshots:
       call-bind-apply-helpers: 1.0.2
       es-define-property: 1.0.1
       es-errors: 1.3.0
-      es-object-atoms: 1.1.1
+      es-object-atoms: 1.1.2
       function-bind: 1.1.2
       get-proto: 1.0.1
       gopd: 1.2.0
       has-symbols: 1.1.0
-      hasown: 2.0.3
+      hasown: 2.0.4
       math-intrinsics: 1.1.0
 
   get-proto@1.0.1:
     dependencies:
       dunder-proto: 1.0.1
-      es-object-atoms: 1.1.1
+      es-object-atoms: 1.1.2
 
   glob@13.0.6:
     dependencies:
@@ -2179,11 +2184,11 @@ snapshots:
       minipass: 7.1.3
       path-scurry: 2.0.2
 
-  google-auth-library@10.6.2:
+  google-auth-library@10.7.0:
     dependencies:
       base64-js: 1.5.1
       ecdsa-sig-formatter: 1.0.11
-      gaxios: 7.1.4
+      gaxios: 7.1.5
       gcp-metadata: 8.1.2
       google-logging-utils: 1.1.3
       jws: 4.0.1
@@ -2208,7 +2213,7 @@ snapshots:
 
   has-symbols@1.1.0: {}
 
-  hasown@2.0.3:
+  hasown@2.0.4:
     dependencies:
       function-bind: 1.1.2
 
@@ -2218,7 +2223,7 @@ snapshots:
 
   hosted-git-info@10.1.1:
     dependencies:
-      lru-cache: 11.3.5
+      lru-cache: 11.5.1
 
   html-escaper@3.0.3: {}
 
@@ -2280,7 +2285,7 @@ snapshots:
 
   json-schema-to-ts@3.1.1:
     dependencies:
-      '@babel/runtime': 7.29.2
+      '@babel/runtime': 7.29.7
       ts-algebra: 2.0.0
 
   json-schema-traverse@1.0.0: {}
@@ -2327,7 +2332,7 @@ snapshots:
 
   long@5.3.2: {}
 
-  lru-cache@11.3.5: {}
+  lru-cache@11.5.1: {}
 
   marked@15.0.12: {}
 
@@ -2347,7 +2352,7 @@ snapshots:
 
   minimatch@10.2.5:
     dependencies:
-      brace-expansion: 5.0.5
+      brace-expansion: 5.0.6
 
   minimist@1.2.8: {}
 
@@ -2363,7 +2368,7 @@ snapshots:
 
   negotiator@1.0.0: {}
 
-  node-addon-api@8.7.0: {}
+  node-addon-api@8.8.0: {}
 
   node-domexception@1.0.0: {}
 
@@ -2410,7 +2415,7 @@ snapshots:
       ws: 8.21.0
       zod: 4.4.3
 
-  openclaw@2026.6.1:
+  openclaw@2026.6.5:
     dependencies:
       '@agentclientprotocol/sdk': 0.22.1(zod@4.4.3)
       '@anthropic-ai/sdk': 0.100.1(zod@4.4.3)
@@ -2505,7 +2510,7 @@ snapshots:
 
   path-scurry@2.0.2:
     dependencies:
-      lru-cache: 11.3.5
+      lru-cache: 11.5.1
       minipass: 7.1.3
 
   path-to-regexp@8.4.2: {}
@@ -2529,10 +2534,10 @@ snapshots:
       '@protobufjs/aspromise': 1.1.2
       '@protobufjs/base64': 1.1.2
       '@protobufjs/codegen': 2.0.5
-      '@protobufjs/eventemitter': 1.1.0
-      '@protobufjs/fetch': 1.1.0
+      '@protobufjs/eventemitter': 1.1.1
+      '@protobufjs/fetch': 1.1.1
       '@protobufjs/float': 1.0.2
-      '@protobufjs/inquire': 1.1.1
+      '@protobufjs/inquire': 1.1.2
       '@protobufjs/path': 1.1.2
       '@protobufjs/pool': 1.1.0
       '@protobufjs/utf8': 1.1.1
@@ -2552,7 +2557,7 @@ snapshots:
 
   qs@6.15.2:
     dependencies:
-      side-channel: 1.1.0
+      side-channel: 1.1.1
 
   quickjs-wasi@3.0.0: {}
 
@@ -2664,7 +2669,7 @@ snapshots:
       object-inspect: 1.13.4
       side-channel-map: 1.0.1
 
-  side-channel@1.1.0:
+  side-channel@1.1.1:
     dependencies:
       es-errors: 1.3.0
       object-inspect: 1.13.4
@@ -2761,7 +2766,7 @@ snapshots:
 
   tree-sitter-bash@0.25.1:
     dependencies:
-      node-addon-api: 8.7.0
+      node-addon-api: 8.8.0
       node-gyp-build: 4.8.4
 
   ts-algebra@2.0.0: {}
@@ -2776,9 +2781,9 @@ snapshots:
     optionalDependencies:
       fsevents: 2.3.3
 
-  type-is@2.0.1:
+  type-is@2.1.0:
     dependencies:
-      content-type: 1.0.5
+      content-type: 2.0.0
       media-typer: 1.1.0
       mime-types: 3.0.2
 
