@@ -1468,7 +1468,7 @@ describe("SessionManager turn-end wake", () => {
     stubDispatch(sm);
   });
 
-  it("fires wake deterministically on turn end", () => {
+  it("fires wake deterministically on turn end", async () => {
     const s = fakeSession({
       id: "s-turn",
       name: "deterministic",
@@ -1478,7 +1478,7 @@ describe("SessionManager turn-end wake", () => {
       getOutput: () => ["I completed the patch.", "Should I continue and apply tests?"],
     });
 
-    (sm as any).lifecycle.handleTurnEnd(s, false);
+    await (sm as any).lifecycle.handleTurnEnd(s, false);
 
     const calls = (sm as any).__dispatchCalls;
     assert.equal(calls.length, 1);
@@ -1501,7 +1501,7 @@ describe("SessionManager turn-end wake", () => {
       getOutput: () => ["Need your decision."],
     });
 
-    (sm as any).lifecycle.handleTurnEnd(s, true);
+    await (sm as any).lifecycle.handleTurnEnd(s, true);
 
     const calls = (sm as any).__dispatchCalls;
     assert.equal(calls.length, 1);
@@ -2089,7 +2089,7 @@ describe("SessionManager turn-end wake", () => {
       getOutput: () => ["Should I continue and apply the migration?"],
     });
 
-    (sm as any).lifecycle.handleTurnEnd(s, true);
+    await (sm as any).lifecycle.handleTurnEnd(s, true);
 
     const calls = (sm as any).__dispatchCalls;
     assert.equal(calls.length, 1);
@@ -2128,7 +2128,7 @@ describe("SessionManager turn-end wake", () => {
     assert.match(request.wakeMessageOnNotifyFailed, /allow read-only workspace inspection/);
   });
 
-  it("includes recent output context alongside forwarded pending-input questions", async () => {
+  it("keeps button-backed pending-input questions compact without recent output walls", async () => {
     const s = fakeSession({
       id: "s-pending-input-context",
       name: "pending-input-context-session",
@@ -2154,11 +2154,11 @@ describe("SessionManager turn-end wake", () => {
     const [_sessionArg, request] = calls[0];
     assert.equal(request.label, "waiting");
     assert.equal(request.idempotencyKey, "waiting:s-pending-input-context:req-context-1");
-    assert.match(request.userMessage, /Question:/);
     assert.match(request.userMessage, /What host-version policy should the plan target\?/);
-    assert.match(request.userMessage, /Recent context:/);
-    assert.match(request.userMessage, /two competing conventions/);
-    assert.match(request.userMessage, /exact image tags/);
+    assert.doesNotMatch(request.userMessage, /Why this is asked:/);
+    assert.doesNotMatch(request.userMessage, /Recent context:/);
+    assert.doesNotMatch(request.userMessage, /two competing conventions/);
+    assert.doesNotMatch(request.userMessage, /exact image tags/);
     assert.equal((request.userMessage.match(/What host-version policy should the plan target\?/g) ?? []).length, 1);
     assert.deepEqual(
       request.buttons.map((row: Array<{ label: string }>) => row.map((button) => button.label)),
@@ -2179,6 +2179,7 @@ describe("SessionManager turn-end wake", () => {
         promptText: "Choose the first environment",
         options: ["Staging", "Production"],
       },
+      canSubmitPendingInputOption: () => true,
       submitPendingInputOption: async (optionIndex: number) => optionIndex === 1,
       getOutput: () => [],
     });
@@ -2228,7 +2229,7 @@ describe("SessionManager turn-end wake", () => {
       getOutput: () => ["Plan preview"],
     });
 
-    (sm as any).lifecycle.handleTurnEnd(s, true);
+    await (sm as any).lifecycle.handleTurnEnd(s, true);
 
     const calls = (sm as any).__dispatchCalls;
     assert.equal(calls.length, 1);
@@ -2237,7 +2238,7 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(request.buttons[0][0].label, "Approve");
   });
 
-  it("de-dupes duplicate turn-end wake for the same turn marker", () => {
+  it("de-dupes duplicate turn-end wake for the same turn marker", async () => {
     const s = fakeSession({
       id: "s-dup-turn",
       name: "dup-turn",
@@ -2251,8 +2252,8 @@ describe("SessionManager turn-end wake", () => {
       getOutput: () => ["Turn output."],
     });
 
-    (sm as any).lifecycle.handleTurnEnd(s, false);
-    (sm as any).lifecycle.handleTurnEnd(s, false);
+    await (sm as any).lifecycle.handleTurnEnd(s, false);
+    await (sm as any).lifecycle.handleTurnEnd(s, false);
 
     const calls = (sm as any).__dispatchCalls;
     assert.equal(calls.length, 1);
@@ -2422,7 +2423,7 @@ describe("SessionManager turn-end wake", () => {
       },
       getOutput: () => ["Applied the completion fix and added tests."],
     });
-    (sm as any).lifecycle.handleTurnEnd(s, false);
+    await (sm as any).lifecycle.handleTurnEnd(s, false);
     await (sm as any).onSessionTerminal(s);
 
     const calls = (sm as any).__dispatchCalls;
@@ -2505,6 +2506,21 @@ describe("SessionManager restored button parity", () => {
 
     assert.deepEqual(buttonLabels(resumableButtons), [["Resume", "View output"]]);
     assert.deepEqual(buttonLabels(nonResumableButtons), [["View output"]]);
+  });
+
+  it("stores pending-input request and question ids on question button tokens", () => {
+    const buttons = (sm as any).interactions.getQuestionButtons(
+      "question-session",
+      [{ label: "Staging" }, { label: "Production" }],
+      { requestId: "req-1", questionId: "environment" },
+    );
+
+    assert.equal(buttons[0][0].label, "Staging");
+    const token = (sm as any).interactions.consumeActionToken(buttons[0][0].callbackData);
+    assert.equal(token.kind, "question-answer");
+    assert.equal(token.optionIndex, 0);
+    assert.equal(token.pendingInputRequestId, "req-1");
+    assert.equal(token.pendingInputQuestionId, "environment");
   });
 });
 
@@ -3039,5 +3055,51 @@ describe("SessionManager.handleAskUserQuestion()", () => {
 
     sm.resolveAskUserQuestion(session.id, 0);
     await pending;
+  });
+
+  it("falls through to Claude AskUserQuestion resolution when pending input has no native option handler", async () => {
+    const session = fakeSession({
+      id: "s-cc-question-fallback",
+      name: "cc-question-fallback",
+      worktreeStrategy: "ask",
+      pendingInputState: {
+        requestId: "native-question-without-handler",
+        kind: "question",
+        promptText: "Which environment should I target?",
+        options: ["Staging", "Production"],
+        allowsFreeText: false,
+      },
+      canSubmitPendingInputOption: () => false,
+      submitPendingInputOption: async () => false,
+    });
+    (sm as any).sessions.set(session.id, session);
+
+    const pending = sm.handleAskUserQuestion(session.id, {
+      questions: [{
+        question: "Which environment should I target?",
+        options: [
+          { label: "Staging" },
+          { label: "Production" },
+        ],
+      }],
+    });
+
+    const resolved = await sm.resolvePendingInputOption(session.id, 1, {
+      requestId: "native-question-without-handler",
+    });
+    assert.equal(resolved, true);
+    assert.deepEqual(await pending, {
+      behavior: "allow",
+      updatedInput: {
+        questions: [{
+          question: "Which environment should I target?",
+          options: [
+            { label: "Staging" },
+            { label: "Production" },
+          ],
+        }],
+        answers: { "Which environment should I target?": "Production" },
+      },
+    });
   });
 });

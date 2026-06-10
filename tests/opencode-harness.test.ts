@@ -805,6 +805,157 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     assert.equal(resolved[0]?.requestId, "q_echo");
   });
 
+  it("preserves object option descriptions and submits option values for questions", async () => {
+    const mock = new MockOpenCodeServer();
+    const waitForEventStream = new Promise<void>((resolve) => {
+      const originalFetch = mock.fetch;
+      mock.fetch = async (input, init) => {
+        const response = await originalFetch(input, init);
+        const url = new URL(typeof input === "string" ? input : input.url);
+        if (url.pathname === "/event") resolve();
+        return response;
+      };
+    });
+    const harness = new OpenCodeHarness({
+      createServer: async () => mock.handle(),
+      fetch: mock.fetch,
+    });
+
+    const session = harness.launch({ prompt: "needs answer", cwd: "/repo" });
+    await waitForEventStream;
+    mock.emit({
+      type: "question.asked",
+      properties: {
+        id: "q_described",
+        sessionID: "ses_test",
+        question: "Which policy source?",
+        options: [{
+          label: "Plugin store",
+          value: "plugin_store",
+          description: "Shared policy controlled by plugin config.",
+        }, {
+          label: "Local override",
+          value: "local_override",
+          description: "Only this session.",
+        }],
+      },
+    });
+
+    const seen: HarnessMessage[] = [];
+    const iterator = session.messages[Symbol.asyncIterator]();
+    while (true) {
+      const next = await iterator.next();
+      assert.equal(next.done, false);
+      seen.push(next.value);
+      if (next.value.type === "pending_input") {
+        assert.equal(next.value.state.activeQuestionIndex, 0);
+        assert.deepEqual(next.value.state.options, ["Plugin store", "Local override"]);
+        assert.equal(next.value.state.questions?.[0]?.options[0]?.value, "plugin_store");
+        assert.equal(next.value.state.questions?.[0]?.options[0]?.description, "Shared policy controlled by plugin config.");
+        assert.match(next.value.state.promptText ?? "", /Plugin store - Shared policy controlled by plugin config\./);
+        assert.equal(await session.submitPendingInputOption?.(0, {
+          requestId: "old_request",
+          questionId: "q_described",
+        }), false);
+        assert.equal(mock.requests.some((request) => request.path === "/question/q_described/reply"), false);
+        assert.equal(await session.submitPendingInputOption?.(0, {
+          requestId: "q_described",
+          questionId: "q_described",
+        }), true);
+      }
+      if (seen.filter((message) => message.type === "pending_input_resolved").length === 1) break;
+    }
+    mock.resolveWait();
+    for await (const message of iterator) {
+      seen.push(message);
+    }
+
+    const reply = mock.requests.find((request) => request.path === "/question/q_described/reply");
+    assert.deepEqual(reply?.body, { answers: [["plugin_store"]] });
+  });
+
+  it("advances OpenCode question arrays one step at a time and submits one combined answer", async () => {
+    const mock = new MockOpenCodeServer();
+    const waitForEventStream = new Promise<void>((resolve) => {
+      const originalFetch = mock.fetch;
+      mock.fetch = async (input, init) => {
+        const response = await originalFetch(input, init);
+        const url = new URL(typeof input === "string" ? input : input.url);
+        if (url.pathname === "/event") resolve();
+        return response;
+      };
+    });
+    const harness = new OpenCodeHarness({
+      createServer: async () => mock.handle(),
+      fetch: mock.fetch,
+    });
+
+    const session = harness.launch({ prompt: "needs answers", cwd: "/repo" });
+    await waitForEventStream;
+    mock.emit({
+      type: "question.asked",
+      properties: {
+        id: "q_multi",
+        sessionID: "ses_test",
+        questions: [{
+          id: "environment",
+          header: "Environment",
+          question: "Which environment?",
+          options: [
+            { label: "Staging", description: "Use staging credentials." },
+            { label: "Production", description: "Use production credentials." },
+          ],
+        }, {
+          id: "scope",
+          header: "Scope",
+          question: "How broad?",
+          options: [
+            { label: "Canary", description: "Start with a small cohort." },
+            { label: "Everyone", description: "Roll out to all users." },
+          ],
+        }],
+      },
+    });
+
+    const seen: HarnessMessage[] = [];
+    const iterator = session.messages[Symbol.asyncIterator]();
+    while (seen.filter((message) => message.type === "pending_input").length < 2) {
+      const next = await iterator.next();
+      assert.equal(next.done, false);
+      seen.push(next.value);
+      if (next.value.type === "pending_input" && next.value.state.activeQuestionIndex === 0) {
+        assert.deepEqual(next.value.state.options, ["Staging", "Production"]);
+        assert.equal(await session.submitPendingInputOption?.(1, {
+          requestId: "q_multi",
+          questionId: "environment",
+        }), true);
+      }
+    }
+
+    const second = seen.filter((message) => message.type === "pending_input").at(-1) as Extract<HarnessMessage, { type: "pending_input" }>;
+    assert.equal(second.state.activeQuestionIndex, 1);
+    assert.deepEqual(second.state.options, ["Canary", "Everyone"]);
+    assert.equal(await session.submitPendingInputText?.("Canary first, then expand"), true);
+
+    while (seen.filter((message) => message.type === "pending_input_resolved").length === 0) {
+      const next = await iterator.next();
+      assert.equal(next.done, false);
+      seen.push(next.value);
+    }
+    mock.resolveWait();
+    for await (const message of iterator) {
+      seen.push(message);
+    }
+
+    const replies = mock.requests.filter((request) => request.path === "/question/q_multi/reply");
+    assert.equal(replies.length, 1);
+    assert.deepEqual(replies[0]?.body, {
+      answers: [[
+        "Q1: Which environment?\nA1: Production\n\nQ2: How broad?\nA2: Canary first, then expand",
+      ]],
+    });
+  });
+
   it("emits failed completion when inline question reply fails after a completed turn", async () => {
     const mock = new MockOpenCodeServer();
     mock.failQuestionReplies = true;

@@ -40,7 +40,7 @@ describe("SessionLifecycleService", () => {
       getResumeButtons: () => [],
       getQuestionButtons: () => undefined,
       extractLastOutputLine: () => undefined,
-      getOutputPreview: () => "",
+      getOutputPreview: () => "Codex reached the policy selection step after reading the plugin configuration.",
       originThreadLine: () => "",
       debounceWaitingEvent: () => true,
       isAlreadyMerged: () => false,
@@ -423,5 +423,486 @@ describe("SessionLifecycleService", () => {
     assert.equal(previewCalls, 1);
     assert.equal(requests.length, 1);
     assert.match(String(requests[0]?.userMessage ?? ""), /Fallback preview/);
+  });
+
+  it("renders queued multi-question pending input one step at a time with buttons", () => {
+    const requests: Array<Record<string, unknown>> = [];
+    const questionButtonCalls: Array<{
+      options: Array<{ label: string }>;
+      context?: { requestId?: string; questionId?: string };
+    }> = [];
+
+    const service = new SessionLifecycleService({
+      persistSession: () => {},
+      clearWaitingTimestamp: () => {},
+      handleWorktreeStrategy: async () => ({
+        notificationSent: false,
+        worktreeRemoved: false,
+      }),
+      resolveWorktreeRepoDir: () => undefined,
+      updatePersistedSession: () => false,
+      dispatchSessionNotification: (_session, request) => {
+        requests.push(request as unknown as Record<string, unknown>);
+      },
+      notifySession: () => {},
+      clearRetryTimersForSession: () => {},
+      hasTurnCompleteWakeMarker: () => false,
+      shouldEmitTurnCompleteWake: () => true,
+      shouldEmitTerminalWake: () => true,
+      resolvePlanApprovalMode: () => "ask",
+      getPlanApprovalButtons: () => [],
+      getResumeButtons: () => [],
+      getQuestionButtons: (_sessionId, options, context) => {
+        questionButtonCalls.push({ options, context });
+        return [options.map((option) => ({ label: option.label, callbackData: `token:${option.label}` }))];
+      },
+      extractLastOutputLine: () => undefined,
+      getOutputPreview: () => "Fallback preview",
+      originThreadLine: () => "Origin thread: telegram topic 42",
+      debounceWaitingEvent: () => true,
+      isAlreadyMerged: () => false,
+    });
+
+    const session = createStubSession({
+      id: "session-multi-question",
+      name: "multi-question",
+      pendingPlanApproval: false,
+      pendingInputState: {
+        requestId: "req-multi-question",
+        kind: "question",
+        promptText: [
+          "Question 1 - Environment",
+          "Which environment should I target?",
+          "Options:",
+          "  1. Staging - Use staging credentials.",
+          "  2. Production - Use production credentials.",
+        ].join("\n"),
+        options: ["Staging", "Production"],
+        activeQuestionIndex: 0,
+        questions: [{
+          id: "environment",
+          header: "Environment",
+          question: "Which environment should I target?",
+          options: [
+            { label: "Staging", description: "Use staging credentials." },
+            { label: "Production", description: "Use production credentials." },
+          ],
+        }, {
+          id: "scope",
+          header: "Scope",
+          question: "How broad should the rollout be?",
+          options: [
+            { label: "Canary", description: "Start with a small cohort." },
+            { label: "Everyone", description: "Roll out to all users." },
+          ],
+        }],
+      },
+    });
+
+    service.emitWaitingForInput(session);
+
+    assert.equal(questionButtonCalls.length, 1);
+    assert.deepEqual(questionButtonCalls[0].options.map((option) => option.label), ["Staging", "Production"]);
+    assert.deepEqual(questionButtonCalls[0].context, {
+      requestId: "req-multi-question",
+      questionId: "environment",
+    });
+    assert.equal(requests.length, 1);
+    assert.deepEqual(
+      (requests[0]?.buttons as Array<Array<{ label: string }>>).map((row) => row.map((button) => button.label)),
+      [["Staging", "Production"]],
+    );
+    assert.match(String(requests[0]?.userMessage ?? ""), /Question 1 - Environment/);
+    assert.match(String(requests[0]?.userMessage ?? ""), /Staging - Use staging credentials\./);
+    assert.match(String(requests[0]?.userMessage ?? ""), /Production - Use production credentials\./);
+    assert.doesNotMatch(String(requests[0]?.userMessage ?? ""), /Question 2 - Scope/);
+    assert.doesNotMatch(String(requests[0]?.userMessage ?? ""), /Fallback preview/);
+    assert.doesNotMatch(String(requests[0]?.userMessage ?? ""), /Why this is asked:/);
+
+    session.pendingInputState = {
+      ...session.pendingInputState,
+      promptText: [
+        "Question 2 - Scope",
+        "How broad should the rollout be?",
+        "Options:",
+        "  1. Canary - Start with a small cohort.",
+        "  2. Everyone - Roll out to all users.",
+      ].join("\n"),
+      options: ["Canary", "Everyone"],
+      activeQuestionIndex: 1,
+      answers: {
+        environment: { answers: ["Production"] },
+      },
+    };
+
+    service.emitWaitingForInput(session);
+
+    assert.equal(questionButtonCalls.length, 2);
+    assert.deepEqual(questionButtonCalls[1].options.map((option) => option.label), ["Canary", "Everyone"]);
+    assert.deepEqual(questionButtonCalls[1].context, {
+      requestId: "req-multi-question",
+      questionId: "scope",
+    });
+    assert.equal(requests.length, 2);
+    assert.deepEqual(
+      (requests[1]?.buttons as Array<Array<{ label: string }>>).map((row) => row.map((button) => button.label)),
+      [["Canary", "Everyone"]],
+    );
+    assert.match(String(requests[1]?.userMessage ?? ""), /Question 2 - Scope/);
+    assert.match(String(requests[1]?.userMessage ?? ""), /Canary - Start with a small cohort\./);
+    assert.match(String(requests[1]?.userMessage ?? ""), /Everyone - Roll out to all users\./);
+    assert.doesNotMatch(String(requests[1]?.userMessage ?? ""), /Fallback preview/);
+    assert.doesNotMatch(String(requests[1]?.userMessage ?? ""), /Why this is asked:/);
+  });
+
+  it("renders fallback option buttons when a single structured question has no inline options", async () => {
+    const requests: Array<Record<string, unknown>> = [];
+    const questionButtonCalls: Array<{
+      options: Array<{ label: string }>;
+      context?: { requestId?: string; questionId?: string };
+    }> = [];
+
+    const service = new SessionLifecycleService({
+      persistSession: () => {},
+      clearWaitingTimestamp: () => {},
+      handleWorktreeStrategy: async () => ({
+        notificationSent: false,
+        worktreeRemoved: false,
+      }),
+      resolveWorktreeRepoDir: () => undefined,
+      updatePersistedSession: () => false,
+      dispatchSessionNotification: (_session, request) => {
+        requests.push(request as unknown as Record<string, unknown>);
+      },
+      notifySession: () => {},
+      clearRetryTimersForSession: () => {},
+      hasTurnCompleteWakeMarker: () => false,
+      shouldEmitTurnCompleteWake: () => true,
+      shouldEmitTerminalWake: () => true,
+      resolvePlanApprovalMode: () => "ask",
+      getPlanApprovalButtons: () => [],
+      getResumeButtons: () => [],
+      getQuestionButtons: (_sessionId, options, context) => {
+        questionButtonCalls.push({ options, context });
+        return [options.map((option) => ({ label: option.label, callbackData: `token:${option.label}` }))];
+      },
+      extractLastOutputLine: () => undefined,
+      getOutputPreview: () => "Fallback preview",
+      originThreadLine: () => "Origin thread: telegram topic 42",
+      debounceWaitingEvent: () => true,
+      isAlreadyMerged: () => false,
+    });
+
+    await service.emitWaitingForInput(createStubSession({
+      id: "session-structured-fallback-options",
+      name: "structured-fallback-options",
+      pendingPlanApproval: false,
+      pendingInputState: {
+        requestId: "req-structured-fallback-options",
+        kind: "question",
+        promptText: "Question 1 - Confirm\nYes or no?",
+        options: ["Yes", "No"],
+        activeQuestionIndex: 0,
+        questions: [{
+          id: "confirm",
+          question: "Yes or no?",
+          options: [],
+        }],
+      },
+    }));
+
+    assert.equal(questionButtonCalls.length, 1);
+    assert.deepEqual(questionButtonCalls[0].options.map((option) => option.label), ["Yes", "No"]);
+    assert.deepEqual(questionButtonCalls[0].context, {
+      requestId: "req-structured-fallback-options",
+      questionId: "confirm",
+    });
+    assert.equal(requests.length, 1);
+    assert.deepEqual(
+      (requests[0]?.buttons as Array<Array<{ label: string }>>).map((row) => row.map((button) => button.label)),
+      [["Yes", "No"]],
+    );
+  });
+
+  it("preserves provided option descriptions verbatim without calling the LLM", async () => {
+    const requests: Array<Record<string, unknown>> = [];
+    const providedDescription = [
+      "Use the plugin store as the canonical source because the shared policy is controlled by plugin configuration,",
+      "is inherited by every launched agent session, and should not be overridden inside a single Codex answer.",
+    ].join(" ");
+    let contextSummaryCalls = 0;
+
+    const service = new SessionLifecycleService({
+      persistSession: () => {},
+      clearWaitingTimestamp: () => {},
+      handleWorktreeStrategy: async () => ({
+        notificationSent: false,
+        worktreeRemoved: false,
+      }),
+      resolveWorktreeRepoDir: () => undefined,
+      updatePersistedSession: () => false,
+      dispatchSessionNotification: (_session, request) => {
+        requests.push(request as unknown as Record<string, unknown>);
+      },
+      notifySession: () => {},
+      clearRetryTimersForSession: () => {},
+      hasTurnCompleteWakeMarker: () => false,
+      shouldEmitTurnCompleteWake: () => true,
+      shouldEmitTerminalWake: () => true,
+      resolvePlanApprovalMode: () => "ask",
+      getPlanApprovalButtons: () => [],
+      getResumeButtons: () => [],
+      getQuestionButtons: (_sessionId, options) => [
+        options.map((option) => ({ label: option.label, callbackData: `token:${option.label}` })),
+      ],
+      extractLastOutputLine: () => undefined,
+      getOutputPreview: () => "Codex reached the policy selection step after reading the plugin configuration.",
+      originThreadLine: () => "Origin thread: telegram topic 42",
+      debounceWaitingEvent: () => true,
+      isAlreadyMerged: () => false,
+      questionContextSummaryProvider: {
+        async generateQuestionContextSummary(evidence) {
+          contextSummaryCalls += 1;
+          assert.match(evidence.question, /Which policy source should I use\?/);
+          return { summary: "Codex needs the policy source before it can continue." };
+        },
+        async generateQuestionOptionDescriptions() {
+          throw new Error("option descriptions must not be sent to the LLM");
+        },
+      },
+    });
+
+    await service.emitWaitingForInput(createStubSession({
+      id: "session-described-options",
+      name: "described-options",
+      pendingPlanApproval: false,
+      pendingInputState: {
+        requestId: "req-described-options",
+        kind: "question",
+        promptText: "Which policy source should I use?",
+        options: ["Plugin store", "Local override"],
+        activeQuestionIndex: 0,
+        questions: [{
+          id: "policy_source",
+          question: "Which policy source should I use?",
+          options: [
+            { label: "Plugin store", description: providedDescription },
+            { label: "Local override" },
+          ],
+        }],
+      },
+    }));
+
+    assert.equal(requests.length, 1);
+    assert.equal(contextSummaryCalls, 1);
+    assert.match(String(requests[0]?.userMessage ?? ""), new RegExp(`Plugin store - ${providedDescription.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+    assert.match(String(requests[0]?.userMessage ?? ""), /Why: Codex needs the policy source before it can continue\./);
+    assert.doesNotMatch(String(requests[0]?.userMessage ?? ""), /Local override -/);
+    assert.deepEqual(
+      (requests[0]?.buttons as Array<Array<{ label: string }>>).map((row) => row.map((button) => button.label)),
+      [["Plugin store", "Local override"]],
+    );
+  });
+
+  it("omits oversized option descriptions without calling the LLM", async () => {
+    const requests: Array<Record<string, unknown>> = [];
+    const oversizedDescription = `${"This long provided option description is intentionally repeated. ".repeat(8)}Do not rewrite it.`;
+
+    const service = new SessionLifecycleService({
+      persistSession: () => {},
+      clearWaitingTimestamp: () => {},
+      handleWorktreeStrategy: async () => ({
+        notificationSent: false,
+        worktreeRemoved: false,
+      }),
+      resolveWorktreeRepoDir: () => undefined,
+      updatePersistedSession: () => false,
+      dispatchSessionNotification: (_session, request) => {
+        requests.push(request as unknown as Record<string, unknown>);
+      },
+      notifySession: () => {},
+      clearRetryTimersForSession: () => {},
+      hasTurnCompleteWakeMarker: () => false,
+      shouldEmitTurnCompleteWake: () => true,
+      shouldEmitTerminalWake: () => true,
+      resolvePlanApprovalMode: () => "ask",
+      getPlanApprovalButtons: () => [],
+      getResumeButtons: () => [],
+      getQuestionButtons: (_sessionId, options) => [
+        options.map((option) => ({ label: option.label, callbackData: `token:${option.label}` })),
+      ],
+      extractLastOutputLine: () => undefined,
+      getOutputPreview: () => "",
+      originThreadLine: () => "Origin thread: telegram topic 42",
+      debounceWaitingEvent: () => true,
+      isAlreadyMerged: () => false,
+      questionContextSummaryProvider: {
+        async generateQuestionContextSummary() {
+          return undefined;
+        },
+        async generateQuestionOptionDescriptions() {
+          throw new Error("option descriptions must not be sent to the LLM");
+        },
+      },
+    });
+
+    await service.emitWaitingForInput(createStubSession({
+      id: "session-description-failure",
+      name: "description-failure",
+      pendingPlanApproval: false,
+      pendingInputState: {
+        requestId: "req-description-failure",
+        kind: "question",
+        promptText: "Which policy source should I use?",
+        options: ["Plugin store", "Local override"],
+        activeQuestionIndex: 0,
+        questions: [{
+          id: "policy_source",
+          question: "Which policy source should I use?",
+          options: [
+            {
+              label: "Plugin store",
+              description: oversizedDescription,
+            },
+            { label: "Local override" },
+          ],
+        }],
+      },
+    }));
+
+    assert.equal(requests.length, 1);
+    assert.match(String(requests[0]?.userMessage ?? ""), /Which policy source should I use\?/);
+    assert.doesNotMatch(String(requests[0]?.userMessage ?? ""), /Plugin store -/);
+    assert.doesNotMatch(String(requests[0]?.userMessage ?? ""), /Do not rewrite it/);
+    assert.deepEqual(
+      (requests[0]?.buttons as Array<Array<{ label: string }>>).map((row) => row.map((button) => button.label)),
+      [["Plugin store", "Local override"]],
+    );
+  });
+
+  it("adds an LLM micro-summary to compact question prompts without changing options", async () => {
+    const requests: Array<Record<string, unknown>> = [];
+
+    const service = new SessionLifecycleService({
+      persistSession: () => {},
+      clearWaitingTimestamp: () => {},
+      handleWorktreeStrategy: async () => ({
+        notificationSent: false,
+        worktreeRemoved: false,
+      }),
+      resolveWorktreeRepoDir: () => undefined,
+      updatePersistedSession: () => false,
+      dispatchSessionNotification: (_session, request) => {
+        requests.push(request as unknown as Record<string, unknown>);
+      },
+      notifySession: () => {},
+      clearRetryTimersForSession: () => {},
+      hasTurnCompleteWakeMarker: () => false,
+      shouldEmitTurnCompleteWake: () => true,
+      shouldEmitTerminalWake: () => true,
+      resolvePlanApprovalMode: () => "ask",
+      getPlanApprovalButtons: () => [],
+      getResumeButtons: () => [],
+      getQuestionButtons: (_sessionId, options) => [
+        options.map((option) => ({ label: option.label, callbackData: `token:${option.label}` })),
+      ],
+      extractLastOutputLine: () => undefined,
+      getOutputPreview: () => [
+        "The long deployment transcript should not be pasted into Telegram.",
+        "Codex needs the environment before it can continue.",
+      ].join("\n"),
+      originThreadLine: () => "Origin thread: telegram topic 42",
+      debounceWaitingEvent: () => true,
+      isAlreadyMerged: () => false,
+      questionContextSummaryProvider: {
+        async generateQuestionContextSummary(evidence) {
+          assert.match(evidence.context, /long deployment transcript/);
+          return { summary: "Codex needs the target environment before it can continue." };
+        },
+      },
+    });
+
+    await service.emitWaitingForInput(createStubSession({
+      id: "session-summary-question",
+      name: "summary-question",
+      pendingPlanApproval: false,
+      pendingInputState: {
+        requestId: "req-summary-question",
+        kind: "question",
+        promptText: "Which environment should I target?",
+        options: ["Staging", "Production"],
+      },
+    }));
+
+    assert.equal(requests.length, 1);
+    assert.match(String(requests[0]?.userMessage ?? ""), /Which environment should I target\?/);
+    assert.match(String(requests[0]?.userMessage ?? ""), /Why: Codex needs the target environment before it can continue\./);
+    assert.doesNotMatch(String(requests[0]?.userMessage ?? ""), /Staging -/);
+    assert.doesNotMatch(String(requests[0]?.userMessage ?? ""), /Production -/);
+    assert.doesNotMatch(String(requests[0]?.userMessage ?? ""), /long deployment transcript/);
+    assert.deepEqual(
+      (requests[0]?.buttons as Array<Array<{ label: string }>>).map((row) => row.map((button) => button.label)),
+      [["Staging", "Production"]],
+    );
+  });
+
+  it("omits question context when LLM micro-summary generation fails", async () => {
+    const requests: Array<Record<string, unknown>> = [];
+
+    const service = new SessionLifecycleService({
+      persistSession: () => {},
+      clearWaitingTimestamp: () => {},
+      handleWorktreeStrategy: async () => ({
+        notificationSent: false,
+        worktreeRemoved: false,
+      }),
+      resolveWorktreeRepoDir: () => undefined,
+      updatePersistedSession: () => false,
+      dispatchSessionNotification: (_session, request) => {
+        requests.push(request as unknown as Record<string, unknown>);
+      },
+      notifySession: () => {},
+      clearRetryTimersForSession: () => {},
+      hasTurnCompleteWakeMarker: () => false,
+      shouldEmitTurnCompleteWake: () => true,
+      shouldEmitTerminalWake: () => true,
+      resolvePlanApprovalMode: () => "ask",
+      getPlanApprovalButtons: () => [],
+      getResumeButtons: () => [],
+      getQuestionButtons: (_sessionId, options) => [
+        options.map((option) => ({ label: option.label, callbackData: `token:${option.label}` })),
+      ],
+      extractLastOutputLine: () => undefined,
+      getOutputPreview: () => "This raw context must not appear if summarization fails.",
+      originThreadLine: () => "Origin thread: telegram topic 42",
+      debounceWaitingEvent: () => true,
+      isAlreadyMerged: () => false,
+      questionContextSummaryProvider: {
+        async generateQuestionContextSummary() {
+          return { summary: "This invalid summary is intentionally far too long to fit inside the strict one-sentence micro-summary budget for question prompts, so it must be omitted from the user-facing notification instead of being truncated or shown." };
+        },
+      },
+    });
+
+    await service.emitWaitingForInput(createStubSession({
+      id: "session-summary-failure",
+      name: "summary-failure",
+      pendingPlanApproval: false,
+      pendingInputState: {
+        requestId: "req-summary-failure",
+        kind: "question",
+        promptText: "Which environment should I target?",
+        options: ["Staging", "Production"],
+      },
+    }));
+
+    assert.equal(requests.length, 1);
+    assert.match(String(requests[0]?.userMessage ?? ""), /Which environment should I target\?/);
+    assert.doesNotMatch(String(requests[0]?.userMessage ?? ""), /Why:/);
+    assert.doesNotMatch(String(requests[0]?.userMessage ?? ""), /raw context/);
+    assert.deepEqual(
+      (requests[0]?.buttons as Array<Array<{ label: string }>>).map((row) => row.map((button) => button.label)),
+      [["Staging", "Production"]],
+    );
   });
 });

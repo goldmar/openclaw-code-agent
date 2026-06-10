@@ -18,9 +18,14 @@ import {
 } from "./session-plan-approval-delivery";
 import type { Session } from "./session";
 import type { PersistedSessionInfo, PlanApprovalMode, PlanArtifact } from "./types";
+import type { PendingInputQuestion } from "./types";
 import type { NotificationButton } from "./session-interactions";
 import type { SessionNotificationRequest } from "./wake-dispatcher";
 import { existsSync, readFileSync } from "fs";
+import {
+  buildQuestionContextMicroSummary,
+  type QuestionContextSummaryProvider,
+} from "./question-context-summary";
 
 type WorktreeStrategyResult = {
   notificationSent: boolean;
@@ -28,6 +33,7 @@ type WorktreeStrategyResult = {
 };
 
 type DispatchNotification = (session: Session, request: SessionNotificationRequest) => void;
+const OPTION_DESCRIPTION_MAX_CHARS = 280;
 
 function resolvePlanArtifactForPrompt(
   session: Pick<Session, "latestPlanArtifactVersion" | "latestPlanArtifact" | "planFilePath">,
@@ -47,6 +53,39 @@ function resolvePlanArtifactForPrompt(
   } catch {
     return undefined;
   }
+}
+
+function buildActiveQuestionPrompt(args: {
+  question: PendingInputQuestion;
+  index: number;
+  total: number;
+  optionDescriptions: Array<{ label: string; description: string }>;
+}): string {
+  const title = [
+    args.total > 1 ? `Question ${args.index + 1}` : undefined,
+    args.question.header,
+  ].filter(Boolean).join(" - ");
+  const lines = [
+    ...(title ? [title] : []),
+    args.question.question,
+  ];
+  if (args.optionDescriptions.length > 0) {
+    lines.push(
+      "",
+      "Options:",
+      ...args.optionDescriptions.map((option) => `${option.label} - ${option.description}`),
+    );
+  }
+  return lines.join("\n");
+}
+
+function buildInlineOptionDescriptions(question: PendingInputQuestion): Array<{ label: string; description: string }> {
+  return question.options
+    .map((option) => ({
+      label: option.label,
+      description: option.description?.trim() ?? "",
+    }))
+    .filter((option) => option.description && option.description.length <= OPTION_DESCRIPTION_MAX_CHARS);
 }
 
 export class SessionLifecycleService {
@@ -77,12 +116,14 @@ export class SessionLifecycleService {
       getQuestionButtons: (
         sessionId: string,
         options: Array<{ label: string }>,
+        context?: { requestId?: string; questionId?: string },
       ) => NotificationButton[][] | undefined;
       extractLastOutputLine: (session: Session) => string | undefined;
       getOutputPreview: (session: Session, maxChars?: number) => string;
       originThreadLine: (session: Session) => string;
       debounceWaitingEvent: (sessionId: string) => boolean;
       isAlreadyMerged: (ref: string | undefined) => boolean;
+      questionContextSummaryProvider?: QuestionContextSummaryProvider;
     },
   ) {}
 
@@ -165,7 +206,7 @@ export class SessionLifecycleService {
     return Boolean(resolveNotificationRoute(session));
   }
 
-  handleTurnEnd(session: Session, hadQuestion: boolean): void {
+  async handleTurnEnd(session: Session, hadQuestion: boolean): Promise<void> {
     if (session.status !== "running") {
       console.info(
         `[SessionManager] Suppressing turn-end wake for session ${session.id} ` +
@@ -179,7 +220,7 @@ export class SessionLifecycleService {
     }
 
     if (hadQuestion || session.pendingPlanApproval) {
-      this.emitWaitingForInput(session);
+      await this.emitWaitingForInput(session);
       return;
     }
 
@@ -377,7 +418,7 @@ export class SessionLifecycleService {
     this.deps.clearRetryTimersForSession(session.id);
   }
 
-  emitWaitingForInput(session: Session): void {
+  async emitWaitingForInput(session: Session): Promise<void> {
     if (!this.deps.debounceWaitingEvent(session.id)) return;
 
     const planApprovalMode = session.pendingPlanApproval
@@ -388,38 +429,106 @@ export class SessionLifecycleService {
       session.pendingPlanApproval
       && planApprovalMode === "ask"
       && hasProvablePlanReviewPrompt(session, planDecisionVersion);
+    const pendingInputPromptText = session.pendingInputState?.promptText?.trim() || undefined;
     const questionContextPreview = !session.pendingPlanApproval
       ? this.deps.getOutputPreview(session)
       : undefined;
     const preview =
-      (!session.pendingPlanApproval && session.pendingInputState?.promptText)
-        ? session.pendingInputState.promptText
+      (!session.pendingPlanApproval && pendingInputPromptText)
+        ? pendingInputPromptText
         : (!session.pendingPlanApproval && questionContextPreview !== undefined)
           ? questionContextPreview
-        : this.deps.getOutputPreview(
+          : this.deps.getOutputPreview(
             session,
             session.pendingPlanApproval && planApprovalMode !== "delegate"
               ? Number.POSITIVE_INFINITY
               : undefined,
           );
+    const pendingInputQuestions = session.pendingInputState?.questions;
+    const activePendingInputQuestion = pendingInputQuestions?.[
+      session.pendingInputState?.activeQuestionIndex ?? 0
+    ];
+    const fallbackPendingInputButtonOptions =
+      session.pendingInputState?.options.map((label) => ({ label })) ?? [];
+
+    // Resolve which buttons (if any) to show for the current pending input.
+    // Structured multi-question wizard: show per-question options only for simple single-select,
+    // non-"Other", ≤6-option questions. Fall back to top-level options only for the classic
+    // single-question no-structured-options case. Everything else uses no buttons (free-text or complex).
+    const pendingInputButtonOptions: Array<{ label: string }> = (() => {
+      if (!pendingInputQuestions || pendingInputQuestions.length === 0) {
+        return fallbackPendingInputButtonOptions;
+      }
+      if (
+        activePendingInputQuestion &&
+        activePendingInputQuestion.options.length > 0 &&
+        activePendingInputQuestion.options.length <= 6 &&
+        !activePendingInputQuestion.options.some((o) => o.isOther) &&
+        !activePendingInputQuestion.multiSelect
+      ) {
+        return activePendingInputQuestion.options;
+      }
+      if (
+        pendingInputQuestions.length === 1 &&
+        activePendingInputQuestion &&
+        activePendingInputQuestion.options.length === 0
+      ) {
+        return fallbackPendingInputButtonOptions;
+      }
+      return [];
+    })();
     const waitingButtons =
       session.pendingPlanApproval && planApprovalMode === "ask" && !promptAlreadyProven
         ? this.deps.getPlanApprovalButtons(session.id, {
           ...session,
           planDecisionVersion,
         })
-        : (!session.pendingPlanApproval && session.pendingInputState?.options.length)
+        : (!session.pendingPlanApproval && pendingInputButtonOptions.length)
           ? this.deps.getQuestionButtons(
               session.id,
-              session.pendingInputState.options.map((label) => ({ label })),
+              pendingInputButtonOptions,
+              {
+                requestId: session.pendingInputState?.requestId,
+                questionId: activePendingInputQuestion?.id,
+              },
             )
         : undefined;
     const matchingPlanArtifact = resolvePlanArtifactForPrompt(session, planDecisionVersion);
+    const optionDescriptionSummaries = activePendingInputQuestion
+      ? buildInlineOptionDescriptions(activePendingInputQuestion)
+      : [];
+    const questionText = activePendingInputQuestion
+      ? buildActiveQuestionPrompt({
+          question: activePendingInputQuestion,
+          index: session.pendingInputState?.activeQuestionIndex ?? 0,
+          total: pendingInputQuestions?.length ?? 1,
+          optionDescriptions: optionDescriptionSummaries,
+        })
+      : pendingInputPromptText;
+    // Snapshot notification key before async gap to avoid race when user answers during summary generation.
+    const pendingInputNotificationKey = session.pendingInputState
+      ? [
+          session.pendingInputState.requestId,
+          activePendingInputQuestion?.id
+            ?? (session.pendingInputState.activeQuestionIndex != null
+              ? `q${session.pendingInputState.activeQuestionIndex}`
+              : undefined),
+        ].filter(Boolean).join(":")
+      : undefined;
+    const questionContextSummary = !session.pendingPlanApproval && this.deps.questionContextSummaryProvider
+      ? await buildQuestionContextMicroSummary({
+          sessionName: session.name,
+          question: questionText ?? preview,
+          context: questionContextPreview,
+          provider: this.deps.questionContextSummaryProvider,
+        })
+      : undefined;
     const payload = buildWaitingForInputPayload({
       session,
       preview,
-      questionText: !session.pendingPlanApproval ? session.pendingInputState?.promptText : undefined,
+      questionText: !session.pendingPlanApproval ? questionText : undefined,
       questionContextPreview,
+      questionContextSummary,
       planArtifact: matchingPlanArtifact,
       originThreadLine: this.deps.originThreadLine(session),
       planApprovalMode,
@@ -504,7 +613,7 @@ export class SessionLifecycleService {
 
     this.deps.dispatchSessionNotification(session, {
       label: payload.label,
-      idempotencyKey: `waiting:${session.id}:${session.pendingInputState?.requestId ?? `${payload.label}:${payload.userMessage}`}`,
+      idempotencyKey: `waiting:${session.id}:${pendingInputNotificationKey ?? `${payload.label}:${payload.userMessage}`}`,
       userMessage: payload.userMessage,
       notifyUser: "always",
       buttons: payload.buttons,

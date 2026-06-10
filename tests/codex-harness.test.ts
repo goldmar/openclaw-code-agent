@@ -329,7 +329,7 @@ describe("CodexHarness App Server mapping", () => {
     assert.equal(result?.data.result, undefined);
   });
 
-  it("emits structured pending input and resolves button selections", async () => {
+  it("emits nested structured pending input and resolves button selections", async () => {
     const client = new MockJsonRpcClient({
       pendingInput: {
         method: "turn/requestUserInput",
@@ -337,8 +337,11 @@ describe("CodexHarness App Server mapping", () => {
           threadId: "thread-123",
           turnId: "turn-1",
           requestId: "req-1",
-          question: "Choose an environment",
-          options: ["Staging", "Production"],
+          questions: [{
+            id: "environment",
+            question: "Choose an environment",
+            options: ["Staging", "Production"],
+          }],
         },
       },
     });
@@ -367,10 +370,306 @@ describe("CodexHarness App Server mapping", () => {
 
     const pending = seen.find((message) => message.type === "pending_input") as Extract<HarnessMessage, { type: "pending_input" }> | undefined;
     const resolved = seen.find((message) => message.type === "pending_input_resolved") as Extract<HarnessMessage, { type: "pending_input_resolved" }> | undefined;
-    assert.equal(pending?.state.promptText, "Choose an environment");
+    assert.match(pending?.state.promptText ?? "", /^Choose an environment/);
+    assert.match(pending?.state.promptText ?? "", /Options:/);
     assert.deepEqual(pending?.state.options, ["Staging", "Production"]);
+    assert.equal(pending?.state.questions?.[0]?.id, "environment");
     assert.equal(Boolean(resolved), true);
-    assert.deepEqual(client.pendingInputResponses[0], { option: "Production", index: 1 });
+    assert.deepEqual(client.pendingInputResponses[0], {
+      answers: {
+        environment: {
+          answers: ["Production"],
+        },
+      },
+    });
+  });
+
+  it("logs and rejects top-level-only Codex request_user_input payloads without pending input", async () => {
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]) => {
+      warnings.push(args.map(String).join(" "));
+    };
+    try {
+      const client = new MockJsonRpcClient({
+        pendingInput: {
+          method: "turn/requestUserInput",
+          params: {
+            threadId: "thread-123",
+            turnId: "turn-1",
+            requestId: "req-1",
+            question: "Choose an environment",
+            options: ["Staging", "Production"],
+          },
+        },
+      });
+      const harness = new CodexHarness({
+        createClient: () => client as any,
+      });
+
+      const messages = await collectMessages(harness.launch({ prompt: "deploy it", cwd: "/tmp" }));
+
+      assert.equal(messages.some((message) => message.type === "pending_input"), false);
+      assert.match(warnings.join("\n"), /Malformed Codex request_user_input payload for req-1: expected non-empty questions\[\]/);
+      assert.deepEqual(client.pendingInputResponses[0], {
+        error: "Malformed Codex request_user_input payload for req-1: expected non-empty questions[]",
+      });
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+
+  it("resolves nested Codex question options as request_user_input answers", async () => {
+    const client = new MockJsonRpcClient({
+      pendingInput: {
+        method: "tool/requestUserInput",
+        params: {
+          threadId: "thread-123",
+          turnId: "turn-1",
+          requestId: "req-1",
+          questions: [{
+            id: "confirm_path",
+            header: "Confirm",
+            question: "Proceed with the plan?",
+            options: [{
+              label: "Yes (Recommended)",
+              value: "yes",
+              description: "Continue the current plan.",
+            }, {
+              label: "No",
+              value: "no",
+              description: "Stop and revisit the approach.",
+            }],
+          }],
+        },
+      },
+    });
+    const harness = new CodexHarness({
+      createClient: () => client as any,
+    });
+    const session = harness.launch({ prompt: "confirm", cwd: "/tmp" });
+    const iter = session.messages[Symbol.asyncIterator]();
+
+    const seen: HarnessMessage[] = [];
+    for (let i = 0; i < 8; i += 1) {
+      const next = await iter.next();
+      if (next.done) break;
+      seen.push(next.value);
+      if (next.value.type === "pending_input") {
+        assert.deepEqual(next.value.state.options, ["Yes (Recommended)", "No"]);
+        assert.equal(next.value.state.questions?.[0]?.id, "confirm_path");
+        const submitted = await session.submitPendingInputOption?.(0);
+        assert.equal(submitted, true);
+      }
+      if (
+        next.value.type === "run_completed"
+        && seen.some((message) => message.type === "pending_input_resolved")
+      ) {
+        break;
+      }
+    }
+
+    assert.deepEqual(client.pendingInputResponses[0], {
+      answers: {
+        confirm_path: {
+          answers: ["yes"],
+        },
+      },
+    });
+  });
+
+  it("queues multiple Codex questions and submits combined answers after the final selection", async () => {
+    const client = new MockJsonRpcClient({
+      pendingInput: {
+        method: "tool/requestUserInput",
+        params: {
+          threadId: "thread-123",
+          turnId: "turn-1",
+          requestId: "req-1",
+          questions: [{
+            id: "environment",
+            header: "Environment",
+            question: "Which environment should I target?",
+            options: [
+              { label: "Staging", description: "Use staging credentials." },
+              { label: "Production", description: "Use production credentials." },
+            ],
+          }, {
+            id: "scope",
+            header: "Scope",
+            question: "How broad should the rollout be?",
+            multiSelect: true,
+            options: [
+              { label: "Canary", description: "Start with a small cohort." },
+              { label: "Everyone", description: "Roll out to all users." },
+            ],
+          }],
+        },
+      },
+    });
+    const harness = new CodexHarness({
+      createClient: () => client as any,
+    });
+    const session = harness.launch({ prompt: "deploy", cwd: "/tmp" });
+    const iter = session.messages[Symbol.asyncIterator]();
+
+    const seen: HarnessMessage[] = [];
+    for (let i = 0; i < 10; i += 1) {
+      const next = await iter.next();
+      if (next.done) break;
+      seen.push(next.value);
+      if (next.value.type === "pending_input" && next.value.state.activeQuestionIndex === 0) {
+        assert.deepEqual(next.value.state.options, ["Staging", "Production"]);
+        assert.equal(await session.submitPendingInputOption?.(1, {
+          requestId: "req-1",
+          questionId: "environment",
+        }), true);
+        assert.deepEqual(client.pendingInputResponses, []);
+      } else if (next.value.type === "pending_input" && next.value.state.activeQuestionIndex === 1) {
+        assert.deepEqual(next.value.state.options, ["Canary", "Everyone"]);
+        assert.match(next.value.state.promptText ?? "", /Reply with one or more option labels\./);
+        assert.deepEqual(next.value.state.answers, {
+          environment: { answers: ["Production"] },
+        });
+        assert.equal(await session.submitPendingInputOption?.(0, {
+          requestId: "req-1",
+          questionId: "scope",
+        }), true);
+      }
+      if (
+        next.value.type === "run_completed"
+        && seen.some((message) => message.type === "pending_input_resolved")
+      ) {
+        break;
+      }
+    }
+
+    assert.deepEqual(client.pendingInputResponses, [{
+      answers: {
+        environment: { answers: ["Production"] },
+        scope: { answers: ["Canary"] },
+      },
+    }]);
+  });
+
+  it("accepts free-text overrides during queued Codex questions without losing earlier answers", async () => {
+    const client = new MockJsonRpcClient({
+      pendingInput: {
+        method: "tool/requestUserInput",
+        params: {
+          threadId: "thread-123",
+          turnId: "turn-1",
+          requestId: "req-1",
+          questions: [{
+            id: "environment",
+            header: "Environment",
+            question: "Which environment should I target?",
+            options: [
+              { label: "Staging", description: "Use staging credentials." },
+              { label: "Production", description: "Use production credentials." },
+            ],
+          }, {
+            id: "scope",
+            header: "Scope",
+            question: "How broad should the rollout be?",
+            options: [
+              { label: "Canary", description: "Start with a small cohort." },
+              { label: "Everyone", description: "Roll out to all users." },
+            ],
+          }],
+        },
+      },
+    });
+    const harness = new CodexHarness({
+      createClient: () => client as any,
+    });
+    const session = harness.launch({ prompt: "deploy", cwd: "/tmp" });
+    const iter = session.messages[Symbol.asyncIterator]();
+
+    for (let i = 0; i < 10; i += 1) {
+      const next = await iter.next();
+      if (next.done) break;
+      if (next.value.type === "pending_input" && next.value.state.activeQuestionIndex === 0) {
+        assert.equal(await session.submitPendingInputOption?.(0, {
+          requestId: "req-1",
+          questionId: "environment",
+        }), true);
+      } else if (next.value.type === "pending_input" && next.value.state.activeQuestionIndex === 1) {
+        assert.equal(await session.submitPendingInputText?.("Canary first, then expand after metrics look clean"), true);
+      }
+      if (next.value.type === "run_completed") break;
+    }
+
+    assert.deepEqual(client.pendingInputResponses, [{
+      answers: {
+        environment: { answers: ["Staging"] },
+        scope: { answers: ["Canary first, then expand after metrics look clean"] },
+      },
+    }]);
+  });
+
+  it("rejects stale queued Codex question tokens without corrupting collected answers", async () => {
+    const client = new MockJsonRpcClient({
+      pendingInput: {
+        method: "tool/requestUserInput",
+        params: {
+          threadId: "thread-123",
+          turnId: "turn-1",
+          requestId: "req-1",
+          questions: [{
+            id: "environment",
+            header: "Environment",
+            question: "Which environment should I target?",
+            options: [
+              { label: "Staging", description: "Use staging credentials." },
+              { label: "Production", description: "Use production credentials." },
+            ],
+          }, {
+            id: "scope",
+            header: "Scope",
+            question: "How broad should the rollout be?",
+            options: [
+              { label: "Canary", description: "Start with a small cohort." },
+              { label: "Everyone", description: "Roll out to all users." },
+            ],
+          }],
+        },
+      },
+    });
+    const harness = new CodexHarness({
+      createClient: () => client as any,
+    });
+    const session = harness.launch({ prompt: "deploy", cwd: "/tmp" });
+    const iter = session.messages[Symbol.asyncIterator]();
+
+    for (let i = 0; i < 10; i += 1) {
+      const next = await iter.next();
+      if (next.done) break;
+      if (next.value.type === "pending_input" && next.value.state.activeQuestionIndex === 0) {
+        assert.equal(await session.submitPendingInputOption?.(1, {
+          requestId: "req-1",
+          questionId: "environment",
+        }), true);
+      } else if (next.value.type === "pending_input" && next.value.state.activeQuestionIndex === 1) {
+        assert.equal(await session.submitPendingInputOption?.(0, {
+          requestId: "req-1",
+          questionId: "environment",
+        }), false);
+        assert.deepEqual(client.pendingInputResponses, []);
+        assert.equal(await session.submitPendingInputOption?.(1, {
+          requestId: "req-1",
+          questionId: "scope",
+        }), true);
+      }
+      if (next.value.type === "run_completed") break;
+    }
+
+    assert.deepEqual(client.pendingInputResponses, [{
+      answers: {
+        environment: { answers: ["Production"] },
+        scope: { answers: ["Everyone"] },
+      },
+    }]);
   });
 
   it("submits free-text answers into a live pending-input request", async () => {
@@ -381,8 +680,11 @@ describe("CodexHarness App Server mapping", () => {
           threadId: "thread-123",
           turnId: "turn-1",
           requestId: "req-1",
-          question: "Need rationale",
-          options: ["Short", "Long"],
+          questions: [{
+            id: "rationale",
+            question: "Need rationale",
+            options: ["Short", "Long"],
+          }],
         },
       },
     });
@@ -410,8 +712,14 @@ describe("CodexHarness App Server mapping", () => {
     }
 
     const pending = seen.find((message) => message.type === "pending_input") as Extract<HarnessMessage, { type: "pending_input" }> | undefined;
-    assert.equal(pending?.state.promptText, "Need rationale");
-    assert.deepEqual(client.pendingInputResponses[0], { text: "Use explicit names" });
+    assert.match(pending?.state.promptText ?? "", /^Need rationale/);
+    assert.deepEqual(client.pendingInputResponses[0], {
+      answers: {
+        rationale: {
+          answers: ["Use explicit names"],
+        },
+      },
+    });
   });
 
   it("emits finalized plan artifacts from Codex plan notifications", async () => {

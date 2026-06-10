@@ -4,28 +4,16 @@ import type {
   PendingInputState,
   PlanArtifactStep,
 } from "../types";
+import {
+  asRecord,
+  extractPendingInputOptions,
+  extractPendingInputQuestions,
+  formatPendingInputQuestions,
+  formatPendingInputWizardQuestion,
+  pickString,
+} from "../pending-input-normalization";
 import type { HarnessResult } from "./types";
 import type { JsonRpcClient } from "./codex-rpc";
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function pickString(
-  record: Record<string, unknown> | null | undefined,
-  keys: readonly string[],
-  options?: { trim?: boolean },
-): string | undefined {
-  for (const key of keys) {
-    const value = record?.[key];
-    if (typeof value !== "string") continue;
-    const text = options?.trim === false ? value : value.trim();
-    if (text) return text;
-  }
-  return undefined;
-}
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -407,19 +395,6 @@ export function buildTurnInterruptPayloads(params: { threadId: string; turnId: s
   return [{ threadId: params.threadId, turnId: params.turnId }];
 }
 
-function extractOptionValues(value: unknown): string[] {
-  const record = asRecord(value);
-  if (!record) return [];
-  const rawOptions = record.options ?? record.choices ?? record.availableDecisions ?? record.decisions;
-  if (!Array.isArray(rawOptions)) return [];
-  return rawOptions
-    .map((entry) => {
-      if (typeof entry === "string") return entry.trim();
-      return pickString(asRecord(entry), ["label", "title", "text", "value", "name", "id"]) ?? "";
-    })
-    .filter(Boolean);
-}
-
 function normalizeApprovalDecision(value: string): string {
   const normalized = value.trim().toLowerCase();
   if (normalized.includes("session")) return "acceptForSession";
@@ -431,11 +406,26 @@ function normalizeApprovalDecision(value: string): string {
 
 export function buildPendingInputState(method: string, requestId: string, requestParams: unknown): PendingInputState {
   const methodLower = method.trim().toLowerCase();
-  const options = extractOptionValues(requestParams);
-  const promptText =
-    firstNestedString(requestParams, ["question", "prompt", "message", "text", "summary", "reason"]) ??
-    undefined;
   const isApproval = methodLower.includes("requestapproval");
+  const isUserInput = methodLower.includes("requestuserinput");
+  const questions = extractPendingInputQuestions(requestParams);
+  if (isUserInput && questions.length === 0) {
+    throw new Error(`Malformed Codex request_user_input payload for ${requestId}: expected non-empty questions[]`);
+  }
+  const topLevelOptions = isApproval ? extractPendingInputOptions(requestParams) : [];
+  const activeQuestionIndex = questions.length > 0 ? 0 : undefined;
+  const activeQuestion = activeQuestionIndex != null ? questions[activeQuestionIndex] : undefined;
+  const structuredOptions = activeQuestion ? activeQuestion.options : [];
+  const optionRecords = isApproval && structuredOptions.length === 0 ? topLevelOptions : structuredOptions;
+  const options = optionRecords.map((option) => option.label);
+  const promptText =
+    (activeQuestion
+      ? formatPendingInputWizardQuestion(activeQuestion, activeQuestionIndex ?? 0, questions.length)
+      : formatPendingInputQuestions(questions)) ??
+    (isApproval
+      ? firstNestedString(requestParams, ["question", "prompt", "message", "text", "summary", "reason"])
+      : undefined) ??
+    undefined;
   const actions: PendingInputAction[] = isApproval
     ? options.map((option) => ({
         kind: "approval" as const,
@@ -454,6 +444,8 @@ export function buildPendingInputState(method: string, requestId: string, reques
     kind: isApproval ? "approval" : "question",
     promptText,
     options,
+    ...(questions.length > 0 ? { questions } : {}),
+    ...(activeQuestionIndex != null ? { activeQuestionIndex } : {}),
     actions,
     allowsFreeText: true,
   };

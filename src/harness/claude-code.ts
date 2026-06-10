@@ -9,6 +9,11 @@ import type {
   PendingInputState,
   PlanArtifact,
 } from "../types";
+import {
+  extractPendingInputQuestions,
+  formatPendingInputQuestions,
+  formatPendingInputWizardQuestion,
+} from "../pending-input-normalization";
 import type {
   AgentHarness,
   HarnessLaunchOptions,
@@ -87,27 +92,22 @@ function buildPendingInputState(
   requestId: number,
   input: Record<string, unknown>,
 ): PendingInputState {
-  const questions = Array.isArray((input as { questions?: unknown[] }).questions)
-    ? (input as { questions: Array<Record<string, unknown>> }).questions
-    : [];
-  const first = questions[0] ?? {};
-  const promptText = typeof first.question === "string" ? first.question : undefined;
-  const options = Array.isArray(first.options)
-    ? first.options
-        .map((option) => {
-          if (!option || typeof option !== "object") return "";
-          const label = (option as { label?: unknown }).label;
-          return typeof label === "string" ? label : "";
-        })
-        .filter(Boolean)
-    : [];
+  const questions = extractPendingInputQuestions(input);
+  const activeQuestionIndex = questions.length > 0 ? 0 : undefined;
+  const activeQuestion = activeQuestionIndex != null ? questions[activeQuestionIndex] : undefined;
+  const options = activeQuestion?.options.map((option) => option.label) ?? [];
+  const promptText = activeQuestion
+    ? formatPendingInputWizardQuestion(activeQuestion, activeQuestionIndex, questions.length)
+    : formatPendingInputQuestions(questions);
 
   return {
     requestId: `${sessionId || "claude"}-ask-${requestId}`,
     kind: "question",
     promptText,
     options,
-    allowsFreeText: options.length === 0 || first.multiSelect === true,
+    ...(questions.length > 0 ? { questions } : {}),
+    ...(activeQuestionIndex != null ? { activeQuestionIndex } : {}),
+    allowsFreeText: activeQuestion?.allowsFreeText === true || options.length === 0,
   };
 }
 

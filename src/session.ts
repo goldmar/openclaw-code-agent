@@ -788,15 +788,22 @@ export class Session extends EventEmitter {
     return true;
   }
 
-  async submitPendingInputOption(optionIndex: number): Promise<boolean> {
+  async submitPendingInputOption(
+    optionIndex: number,
+    context?: { requestId?: string; questionId?: string },
+  ): Promise<boolean> {
     if (!this.pendingInputState || !this.harnessHandle?.submitPendingInputOption) {
       return false;
     }
-    const submitted = await this.harnessHandle.submitPendingInputOption(optionIndex);
+    const submitted = await this.harnessHandle.submitPendingInputOption(optionIndex, context);
     if (submitted) {
       this.waitingForInputFired = false;
     }
     return submitted;
+  }
+
+  canSubmitPendingInputOption(): boolean {
+    return Boolean(this.pendingInputState && this.harnessHandle?.submitPendingInputOption);
   }
 
   async submitPendingInputText(text: string): Promise<boolean> {

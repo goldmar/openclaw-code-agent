@@ -4,9 +4,15 @@ import { createServer } from "node:net";
 import { delimiter, dirname, join, sep } from "node:path";
 import type {
   PendingInputAction,
+  PendingInputQuestion,
   PendingInputState,
   PermissionMode,
 } from "../types";
+import {
+  extractPendingInputOptions,
+  extractPendingInputQuestions,
+  formatPendingInputWizardQuestion,
+} from "../pending-input-normalization";
 import type {
   AgentHarness,
   HarnessLaunchOptions,
@@ -50,6 +56,8 @@ type OpenCodePendingInput = {
   kind: "approval" | "question";
   options: string[];
   actions: PendingInputAction[];
+  state?: PendingInputState;
+  answers?: Record<string, { answers: string[] }>;
 };
 
 const OPENCODE_COMMAND_ENV = "OPENCLAW_OPENCODE_COMMAND";
@@ -648,22 +656,64 @@ function buildQuestionPendingInput(request: Record<string, unknown>): PendingInp
     : typeof request.prompt === "string"
       ? request.prompt
       : "OpenCode is asking for input.";
-  const options = Array.isArray(request.options)
-    ? request.options
-        .map((option) => {
-          if (typeof option === "string") return option;
-          if (isRecord(option) && typeof option.label === "string") return option.label;
-          return "";
-        })
-        .filter(Boolean)
-    : [];
+  const normalizedQuestions = extractPendingInputQuestions(request);
+  const topLevelOptions = extractPendingInputOptions(request);
+  const questions: PendingInputQuestion[] = normalizedQuestions.length > 0
+    ? normalizedQuestions
+    : [{
+        id: requestId,
+        question: promptText,
+        options: topLevelOptions,
+        allowsFreeText: true,
+      }];
+  const activeQuestionIndex = questions.length > 0 ? 0 : undefined;
+  const activeQuestion = activeQuestionIndex != null ? questions[activeQuestionIndex] : undefined;
+  const options = activeQuestion?.options.map((option) => option.label) ?? topLevelOptions.map((option) => option.label);
   return {
     requestId,
     kind: "question",
-    promptText,
+    promptText: activeQuestion
+      ? formatPendingInputWizardQuestion(activeQuestion, activeQuestionIndex ?? 0, questions.length)
+      : promptText,
     options,
+    ...(questions.length > 0 ? { questions } : {}),
+    ...(activeQuestionIndex != null ? { activeQuestionIndex } : {}),
     allowsFreeText: true,
   };
+}
+
+function updateOpenCodeWizardState(
+  base: PendingInputState,
+  activeQuestionIndex: number,
+  answers: Record<string, { answers: string[] }>,
+): PendingInputState {
+  const questions = base.questions ?? [];
+  const question = questions[activeQuestionIndex];
+  const options = question?.options.map((option) => option.label) ?? [];
+  return {
+    ...base,
+    promptText: question
+      ? formatPendingInputWizardQuestion(question, activeQuestionIndex, questions.length)
+      : base.promptText,
+    options,
+    activeQuestionIndex,
+    answers,
+  };
+}
+
+function formatOpenCodeCombinedAnswers(
+  questions: PendingInputQuestion[],
+  answers: Record<string, { answers: string[] }>,
+): string {
+  if (questions.length === 1) {
+    return answers[questions[0].id]?.answers.join(", ") ?? "";
+  }
+  return questions
+    .map((question, index) => {
+      const answer = answers[question.id]?.answers.join(", ") ?? "";
+      return `Q${index + 1}: ${question.question}\nA${index + 1}: ${answer}`;
+    })
+    .join("\n\n");
 }
 
 function extractAssistantResult(messages: unknown): string | undefined {
@@ -864,6 +914,7 @@ export class OpenCodeHarness implements AgentHarness {
           kind: "approval",
           options: state.options,
           actions: state.actions ?? [],
+          state,
         };
         queue.enqueue(createPendingInputEvent(state));
         return;
@@ -880,6 +931,7 @@ export class OpenCodeHarness implements AgentHarness {
           kind: "question",
           options: state.options,
           actions: [],
+          state,
         };
         queue.enqueue(createPendingInputEvent(state));
         return;
@@ -1053,6 +1105,43 @@ export class OpenCodeHarness implements AgentHarness {
       }
     };
 
+    const answerPendingQuestion = async (
+      answer: string,
+      context: { requestId?: string; questionId?: string } = {},
+    ): Promise<boolean> => {
+      const pending = currentPendingInput;
+      if (!pending || pending.kind !== "question") return false;
+      if (context.requestId && context.requestId !== pending.requestId) return false;
+      const trimmed = answer.trim();
+      if (!trimmed) return false;
+
+      const questions = pending.state?.questions ?? [];
+      if (questions.length > 0) {
+        const activeQuestionIndex = pending.state?.activeQuestionIndex ?? 0;
+        const question = questions[activeQuestionIndex];
+        if (!question) return false;
+        if (context.questionId && context.questionId !== question.id) return false;
+        pending.answers = {
+          ...pending.answers,
+          [question.id]: { answers: [trimmed] },
+        };
+        const nextIndex = activeQuestionIndex + 1;
+        if (nextIndex < questions.length) {
+          pending.state = updateOpenCodeWizardState(pending.state!, nextIndex, pending.answers);
+          pending.options = pending.state.options;
+          queue.enqueue(createPendingInputEvent(pending.state));
+          return true;
+        }
+        await replyQuestion(pending.requestId, formatOpenCodeCombinedAnswers(questions, pending.answers));
+        resolvePendingInput(pending.requestId);
+        return true;
+      }
+
+      await replyQuestion(pending.requestId, trimmed);
+      resolvePendingInput(pending.requestId);
+      return true;
+    };
+
     const promptIterable = typeof options.prompt === "string"
       ? (async function* (): AsyncGenerator<unknown> {
           yield { type: "user", text: options.prompt, session_id: options.resumeSessionId ?? "" };
@@ -1066,8 +1155,7 @@ export class OpenCodeHarness implements AgentHarness {
           const text = extractPromptText(rawMessage).trim();
           if (!text) continue;
           if (currentPendingInput?.kind === "question") {
-            await replyQuestion(currentPendingInput.requestId, text);
-            resolvePendingInput(currentPendingInput.requestId);
+            await answerPendingQuestion(text);
             continue;
           }
           await runTurn(text);
@@ -1099,9 +1187,13 @@ export class OpenCodeHarness implements AgentHarness {
         queue.enqueue(createSettingsChangedEvent(mode));
       },
 
-      async submitPendingInputOption(index: number): Promise<boolean> {
+      async submitPendingInputOption(
+        index: number,
+        context: { requestId?: string; questionId?: string } = {},
+      ): Promise<boolean> {
         const pending = currentPendingInput;
         if (!pending) return false;
+        if (context.requestId && context.requestId !== pending.requestId) return false;
         if (pending.kind === "approval") {
           const action = pending.actions[index];
           const response = action?.kind === "approval" ? action.responseDecision : undefined;
@@ -1110,19 +1202,17 @@ export class OpenCodeHarness implements AgentHarness {
           resolvePendingInput(pending.requestId);
           return true;
         }
-        const option = pending.options[index];
-        if (!option) return false;
-        await replyQuestion(pending.requestId, option);
-        resolvePendingInput(pending.requestId);
-        return true;
+        const questions = pending.state?.questions ?? [];
+        const activeQuestionIndex = pending.state?.activeQuestionIndex ?? 0;
+        const structuredQuestion = questions[activeQuestionIndex];
+        if (context.questionId && context.questionId !== structuredQuestion?.id) return false;
+        const structuredOption = structuredQuestion?.options[index];
+        const answer = structuredOption?.value ?? structuredOption?.label ?? pending.options[index];
+        return answer ? await answerPendingQuestion(answer, context) : false;
       },
 
       async submitPendingInputText(text: string): Promise<boolean> {
-        const pending = currentPendingInput;
-        if (!pending || pending.kind !== "question") return false;
-        await replyQuestion(pending.requestId, text);
-        resolvePendingInput(pending.requestId);
-        return true;
+        return await answerPendingQuestion(text);
       },
 
       async interrupt(): Promise<void> {

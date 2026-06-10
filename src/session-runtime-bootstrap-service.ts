@@ -17,7 +17,7 @@ export class SessionRuntimeBootstrapService {
       hydrateSpawnedSession: (session: Session, preparedLaunch: PreparedLaunch, config: SessionConfig) => void;
       markRunning: (session: Session) => void;
       handleTerminal: (session: Session) => Promise<void>;
-      handleTurnEnd: (session: Session, hadQuestion: boolean) => void;
+      handleTurnEnd: (session: Session, hadQuestion: boolean) => Promise<void>;
       formatLaunchWorkdirLabel: (session: Pick<Session, "workdir" | "worktreePath" | "originalWorkdir">) => string;
       notifySession: (session: Session, text: string, label?: string) => void;
     },
@@ -51,7 +51,9 @@ export class SessionRuntimeBootstrapService {
     });
 
     session.on("turnEnd", (_session: Session, hadQuestion: boolean) => {
-      this.deps.handleTurnEnd(session, hadQuestion);
+      void this.deps.handleTurnEnd(session, hadQuestion).catch((err) => {
+        console.error(`[SessionRuntimeBootstrap] handleTurnEnd threw for session ${session.id}:`, err);
+      });
     });
 
     session.start();

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   buildThreadStartPayloads,
   buildThreadResumePayloads,
+  buildPendingInputState,
   buildTurnStartPayloads,
   classifyTerminalOutcome,
   codexExecutionPolicyForMode,
@@ -182,5 +183,113 @@ describe("codex protocol turn payloads", () => {
       classifyTerminalOutcome("turn/cancelled", { turn: { status: "cancelled" } }),
       "interrupted",
     );
+  });
+
+  it("rejects top-level-only Codex request_user_input payloads with an explicit diagnostic", () => {
+    assert.throws(() => buildPendingInputState("tool/requestUserInput", "req-legacy", {
+      question: "Choose an environment",
+      options: [{
+        label: "Staging",
+        description: "Use staging credentials.",
+      }, "Production"],
+    }), /Malformed Codex request_user_input payload for req-legacy: expected non-empty questions\[\]/);
+  });
+
+  it("defensively extracts observed nested Codex request_user_input questions and option metadata", () => {
+    const state = buildPendingInputState("tool/requestUserInput", "req-questions", {
+      questions: [{
+        id: "confirm_path",
+        header: "Confirm",
+        question: "Proceed with the plan?",
+        isOther: true,
+        options: [{
+          label: "Yes (Recommended)",
+          description: "Continue the current plan.",
+        }, {
+          label: "No",
+          description: "Stop and revisit the approach.",
+        }],
+      }],
+    });
+
+    assert.equal(state.kind, "question");
+    assert.deepEqual(state.options, ["Yes (Recommended)", "No"]);
+    assert.deepEqual(state.questions, [{
+      id: "confirm_path",
+      header: "Confirm",
+      question: "Proceed with the plan?",
+      options: [
+        {
+          label: "Yes (Recommended)",
+          description: "Continue the current plan.",
+          recommended: true,
+        },
+        {
+          label: "No",
+          description: "Stop and revisit the approach.",
+          recommended: false,
+        },
+      ],
+      allowsFreeText: true,
+    }]);
+    assert.match(state.promptText ?? "", /Confirm/);
+    assert.equal(
+      buildPendingInputState("tool/requestUserInput", "req-negated", {
+        questions: [{
+          question: "Which path?",
+          options: ["Not Recommended", "Recommended"],
+        }],
+      }).questions?.[0]?.options[0]?.recommended,
+      false,
+    );
+    assert.match(state.promptText ?? "", /Yes \(Recommended\) - Continue the current plan\./);
+    assert.match(state.promptText ?? "", /Free-form answer is allowed\./);
+  });
+
+  it("starts multiple observed nested Codex request_user_input questions at the first wizard step", () => {
+    const state = buildPendingInputState("tool/requestUserInput", "req-multi", {
+      questions: [{
+        id: "environment",
+        header: "Environment",
+        question: "Which environment should I target?",
+        options: [
+          { label: "Staging", description: "Use staging credentials." },
+          { label: "Production", description: "Use production credentials." },
+        ],
+      }, {
+        id: "scope",
+        header: "Scope",
+        question: "How broad should the rollout be?",
+        options: [
+          { label: "Canary", description: "Start with a small cohort." },
+          { label: "Everyone", description: "Roll out to all users." },
+        ],
+      }],
+    });
+
+    assert.deepEqual(state.options, ["Staging", "Production"]);
+    assert.equal(state.questions?.length, 2);
+    assert.equal(state.activeQuestionIndex, 0);
+    assert.match(state.promptText ?? "", /Question 1 - Environment/);
+    assert.doesNotMatch(state.promptText ?? "", /Question 2 - Scope/);
+  });
+
+  it("tolerates sparse Codex nested question fields as the protocol evolves", () => {
+    const state = buildPendingInputState("tool/requestUserInput", "req-sparse", {
+      questions: [{
+        prompt: "Provide a branch name",
+        options: [
+          { label: "main" },
+          { text: "Other", isOther: true },
+        ],
+      }],
+    });
+
+    assert.equal(state.kind, "question");
+    assert.deepEqual(state.options, ["main", "Other"]);
+    assert.equal(state.questions?.[0]?.id, "question_1");
+    assert.equal(state.questions?.[0]?.question, "Provide a branch name");
+    assert.equal(state.questions?.[0]?.options[1]?.isOther, true);
+    assert.equal(state.questions?.[0]?.allowsFreeText, true);
   });
 });

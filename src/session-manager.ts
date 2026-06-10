@@ -43,6 +43,10 @@ import {
 } from "./session-notification-builder";
 import { SessionWorktreeDecisionService } from "./session-worktree-decision-service";
 import type { WorktreeDecisionSummaryProvider } from "./worktree-decision-summary";
+import {
+  createRuntimeQuestionContextSummaryProvider,
+  type QuestionContextSummaryProvider,
+} from "./question-context-summary";
 import { SessionRuntimeRegistry } from "./session-runtime-registry";
 import { SessionRuntimeBootstrapService } from "./session-runtime-bootstrap-service";
 import { SessionWorktreeMessageService } from "./session-worktree-message-service";
@@ -147,7 +151,11 @@ export class SessionManager {
   constructor(
     maxSessions: number = 20,
     maxPersistedSessions: number = 50,
-    options: { store?: SessionStoreOptions; worktreeSummaryProvider?: WorktreeDecisionSummaryProvider } = {},
+    options: {
+      store?: SessionStoreOptions;
+      worktreeSummaryProvider?: WorktreeDecisionSummaryProvider;
+      questionContextSummaryProvider?: QuestionContextSummaryProvider;
+    } = {},
   ) {
     this.maxSessions = maxSessions;
     this.maxPersistedSessions = maxPersistedSessions;
@@ -175,7 +183,11 @@ export class SessionManager {
 
   private static createServiceBundle(
     manager: SessionManager,
-    options: { store?: SessionStoreOptions; worktreeSummaryProvider?: WorktreeDecisionSummaryProvider },
+    options: {
+      store?: SessionStoreOptions;
+      worktreeSummaryProvider?: WorktreeDecisionSummaryProvider;
+      questionContextSummaryProvider?: QuestionContextSummaryProvider;
+    },
   ): SessionManagerServiceBundle {
     const registry = new SessionRuntimeRegistry();
     const sessions = registry.sessions;
@@ -293,12 +305,13 @@ export class SessionManager {
       resolvePlanApprovalMode: (session) => manager.resolvePlanApprovalMode(session),
       getPlanApprovalButtons: (sessionId, session) => interactions.getPlanApprovalButtons(sessionId, session),
       getResumeButtons: (sessionId, session) => interactions.getResumeButtons(sessionId, session),
-      getQuestionButtons: (sessionId, questionOptions) => interactions.getQuestionButtons(sessionId, questionOptions),
+      getQuestionButtons: (sessionId, questionOptions, context) => interactions.getQuestionButtons(sessionId, questionOptions, context),
       extractLastOutputLine: (session) => manager.extractLastOutputLine(session),
       getOutputPreview: (session, maxChars) => manager.getOutputPreview(session, maxChars),
       originThreadLine: (session) => manager.originThreadLine(session),
       debounceWaitingEvent: (sessionId) => manager.debounceWaitingEvent(sessionId),
       isAlreadyMerged: (ref) => manager.isAlreadyMerged(ref),
+      questionContextSummaryProvider: options.questionContextSummaryProvider ?? createRuntimeQuestionContextSummaryProvider(),
     });
     const worktreeDecisions = new SessionWorktreeDecisionService({
       getPersistedSession: (ref) => store.getPersistedSession(ref),
@@ -1377,11 +1390,18 @@ export class SessionManager {
     this.questions.resolveAskUserQuestion(sessionId, optionIndex);
   }
 
-  async resolvePendingInputOption(sessionId: string, optionIndex: number): Promise<boolean> {
+  async resolvePendingInputOption(
+    sessionId: string,
+    optionIndex: number,
+    context: { requestId?: string; questionId?: string } = {},
+  ): Promise<boolean> {
     const session = this.sessions.get(sessionId);
-    if (session && await session.submitPendingInputOption(optionIndex)) {
-      this.lastWaitingEventTimestamps.delete(sessionId);
-      return true;
+    if (session?.canSubmitPendingInputOption?.()) {
+      if (await session.submitPendingInputOption(optionIndex, context)) {
+        this.lastWaitingEventTimestamps.delete(sessionId);
+        return true;
+      }
+      return false;
     }
     this.questions.resolveAskUserQuestion(sessionId, optionIndex);
     return true;
