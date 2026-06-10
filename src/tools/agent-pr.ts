@@ -341,6 +341,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
         if (!params.title || !params.body) {
           const metadataResult = await buildPrMetadata({
             sessionName,
+            branchName,
             prompt: target.prompt,
             diffSummary,
             provider: options.metadataProvider,
@@ -366,7 +367,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
         }
 
         // Open the PR after title/body generation is complete.
-        const prResult = createPR(originalWorkdir, branchName, baseBranch, prTitle, prBody, targetRepo);
+        const prResult = createPR(originalWorkdir, branchName, baseBranch, prTitle, prBody, targetRepo, { draft: true });
 
         if (prResult.success && prResult.prUrl) {
           // Sync again to get PR number
@@ -409,7 +410,12 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
             },
           );
 
-          return { content: [{ type: "text", text: outcomeLine }], meta: { success: true, state: "created" } } satisfies AgentPrExecuteResult;
+          // If we had to fall back from draft, append a visible note
+          const finalText = prResult.warnings && prResult.warnings.length > 0
+            ? `${outcomeLine}\n\n\u26a0\ufe0f  ${prResult.warnings.join("; ")}`
+            : outcomeLine;
+
+          return { content: [{ type: "text", text: finalText }], meta: { success: true, state: "created" } } satisfies AgentPrExecuteResult;
         } else {
           return { content: [{ type: "text", text: `❌ Failed to create PR: ${prResult.error ?? "unknown error"}` }], meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
         }

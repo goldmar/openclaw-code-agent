@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert";
 import { execFileSync } from "child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync, mkdirSync } from "fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 
@@ -94,6 +94,104 @@ describe("formatWorktreeOutcomeLine", () => {
     });
     assert.ok(result.includes("PR updated"));
     assert.ok(result.includes("https://github.com/myorg/myrepo/pull/42"));
+  });
+});
+
+describe("createPR", () => {
+  function installMockGh(t: import("node:test").TestContext, options: { failOnDraft?: boolean } = {}) {
+    const tempDir = mkdtempSync(join(tmpdir(), "openclaw-gh-"));
+    const binDir = join(tempDir, "bin");
+    const logPath = join(tempDir, "gh-args.log");
+    mkdirSync(binDir);
+    const ghPath = join(binDir, "gh");
+    const failOnDraft = options.failOnDraft ? "1" : "0";
+    writeFileSync(ghPath, [
+      "#!/bin/sh",
+      "printf '%s\\n' \"$*\" >> \"$GH_ARGS_LOG\"",
+      "if [ \"$1\" = \"--version\" ]; then",
+      "  echo 'gh version 2.0.0'",
+      "  exit 0",
+      "fi",
+      "if [ \"$1\" = \"pr\" ] && [ \"$2\" = \"create\" ]; then",
+      "  if [ \"${FAIL_ON_DRAFT:-0}\" = \"1\" ] && echo \"$*\" | grep -q -- \"--draft\"; then",
+      "    echo 'error: draft PRs are not supported on this repository' >&2",
+      "    exit 1",
+      "  fi",
+      "  echo 'https://github.com/acme/repo/pull/1'",
+      "  exit 0",
+      "fi",
+      "exit 1",
+      "",
+    ].join("\n"));
+    chmodSync(ghPath, 0o755);
+
+    const originalPath = process.env.PATH;
+    const originalLog = process.env.GH_ARGS_LOG;
+    const originalFail = process.env.FAIL_ON_DRAFT;
+    process.env.PATH = `${binDir}:${process.env.PATH ?? ""}`;
+    process.env.GH_ARGS_LOG = logPath;
+    if (options.failOnDraft) {
+      process.env.FAIL_ON_DRAFT = "1";
+    }
+    t.after(() => {
+      process.env.PATH = originalPath;
+      if (originalLog === undefined) {
+        delete process.env.GH_ARGS_LOG;
+      } else {
+        process.env.GH_ARGS_LOG = originalLog;
+      }
+      if (originalFail === undefined) {
+        delete process.env.FAIL_ON_DRAFT;
+      } else {
+        process.env.FAIL_ON_DRAFT = originalFail;
+      }
+      rmSync(tempDir, { recursive: true, force: true });
+    });
+
+    return { logPath };
+  }
+
+  it("passes --draft for newly created PRs by default", async (t) => {
+    const { logPath } = installMockGh(t);
+    const { createPR } = await import("../src/worktree.js");
+
+    const result = createPR("/tmp", "agent/draft-default", "main", "Draft default", "Body");
+
+    assert.deepEqual(result, { success: true, prUrl: "https://github.com/acme/repo/pull/1" });
+    const calls = readFileSync(logPath, "utf-8").trim().split("\n");
+    assert.equal(calls.at(-1), "pr create --base main --draft --head agent/draft-default --title Draft default --body Body");
+  });
+
+  it("allows draft creation to be disabled explicitly", async (t) => {
+    const { logPath } = installMockGh(t);
+    const { createPR } = await import("../src/worktree.js");
+
+    const result = createPR("/tmp", "agent/ready-pr", "main", "Ready PR", "Body", undefined, { draft: false });
+
+    assert.deepEqual(result, { success: true, prUrl: "https://github.com/acme/repo/pull/1" });
+    const calls = readFileSync(logPath, "utf-8").trim().split("\n");
+    assert.equal(calls.at(-1), "pr create --base main --head agent/ready-pr --title Ready PR --body Body");
+  });
+
+  it("retries without --draft and returns warnings when target repo rejects drafts", async (t) => {
+    const { logPath } = installMockGh(t, { failOnDraft: true });
+    const { createPR } = await import("../src/worktree.js");
+
+    const result = createPR("/tmp", "agent/draft-retry", "main", "Draft PR", "Body");
+
+    assert.deepEqual(result, {
+      success: true,
+      prUrl: "https://github.com/acme/repo/pull/1",
+      warnings: ["Target repo does not support draft PRs; created as regular (non-draft) PR instead."],
+    });
+
+    const calls = readFileSync(logPath, "utf-8").trim().split("\n");
+    // First call should have had --draft
+    assert.ok(calls.some((c) => c.includes("--draft")), "first call should request draft");
+    // Second call (retry) should not have --draft
+    const lastCall = calls.at(-1)!;
+    assert.ok(!lastCall.includes("--draft"), "retry call must not include --draft");
+    assert.ok(lastCall.includes("pr create --base main --head agent/draft-retry"));
   });
 });
 

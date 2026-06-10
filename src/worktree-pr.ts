@@ -5,6 +5,7 @@ export interface PRResult {
   success: boolean;
   prUrl?: string;
   error?: string;
+  warnings?: string[];
 }
 
 export interface PRStatus {
@@ -13,6 +14,10 @@ export interface PRStatus {
   url?: string;
   number?: number;
   title?: string;
+}
+
+export interface CreatePROptions {
+  draft?: boolean;
 }
 
 export interface WorktreeOutcomeParams {
@@ -33,11 +38,13 @@ export function createPR(
   title: string,
   body: string,
   targetRepo?: string,
+  options: CreatePROptions = {},
 ): PRResult {
   if (!isGitHubCLIAvailable()) {
     return { success: false, error: "GitHub CLI (gh) is not available" };
   }
 
+  let args: string[] | undefined;
   try {
     let forkOwner: string | undefined;
     if (targetRepo) {
@@ -54,7 +61,10 @@ export function createPR(
       }
     }
 
-    const args = ["pr", "create", "--base", base];
+    args = ["pr", "create", "--base", base];
+    if (options.draft ?? true) {
+      args.push("--draft");
+    }
     if (targetRepo) {
       args.push("--repo", targetRepo);
     }
@@ -78,7 +88,34 @@ export function createPR(
     const prUrl = result.trim();
     return { success: true, prUrl };
   } catch (err) {
-    return { success: false, error: err instanceof Error ? err.message : String(err) };
+    const msg = err instanceof Error ? err.message : String(err);
+    // Recovery: if we requested draft and the error indicates drafts are not supported or enabled
+    // on the target repo, retry once without --draft so that PR creation does not regress for repos
+    // that previously accepted non-draft PRs.
+    //
+    // The /draft/i heuristic is intentionally broad (as noted in Greptile review) to catch common
+    // GitHub CLI messages about draft support ("draft PRs are not supported", "draft", etc.).
+    // Trade-off: if a non-draft-related error message happens to contain the substring "draft",
+    // we will still retry without the flag and surface an explicit warning to the caller.
+    // The caller (agent-pr.ts) always appends warnings to the final tool output text, so there is
+    // no silent fallback.
+    if ((options.draft ?? true) && args && /draft/i.test(msg)) {
+      try {
+        const retryArgs = args.filter((a) => a !== "--draft");
+        const retryResult = execFileSync("gh", retryArgs, {
+          cwd: repoDir,
+          timeout: 30_000,
+          encoding: "utf-8",
+          stdio: ["pipe", "pipe", "pipe"],
+        });
+        const retryUrl = retryResult.trim();
+        return { success: true, prUrl: retryUrl, warnings: ["Target repo does not support draft PRs; created as regular (non-draft) PR instead."] };
+      } catch (retryErr) {
+        const retryMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+        return { success: false, error: `Draft PR creation failed (${msg}); non-draft retry also failed: ${retryMsg}` };
+      }
+    }
+    return { success: false, error: msg };
   }
 }
 
