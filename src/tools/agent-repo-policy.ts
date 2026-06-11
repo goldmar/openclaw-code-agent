@@ -70,6 +70,50 @@ export function makeAgentRepoPolicyTool(ctx?: OpenClawPluginToolContext) {
         if (!record) {
           return { content: [{ type: "text", text: `Error: ${workdir} is not a git repository.` }] };
         }
+        let continuation: ReturnType<NonNullable<typeof sessionManager>["continueLaunchAfterManualRepoPolicy"]> | { kind: "none" };
+        try {
+          // Guard is intentional: tests and older plugin-injected managers may not have this newer method.
+          continuation = typeof sessionManager.continueLaunchAfterManualRepoPolicy === "function"
+            ? sessionManager.continueLaunchAfterManualRepoPolicy(record.repoRoot, input.policy)
+            : { kind: "none" as const };
+        } catch (err) {
+          const errText = err instanceof Error ? err.message : String(err);
+          return {
+            content: [{
+              type: "text",
+              text: [
+                formatPolicy(record),
+                ``,
+                `Repo policy saved, but the deferred launch failed: ${errText}`,
+                `The pending launch context was kept so you can retry the same agent_repo_policy call or run the intended launch again.`,
+              ].join("\n"),
+            }],
+          };
+        }
+        if (continuation.kind === "launched") {
+          return {
+            content: [{
+              type: "text",
+              text: [
+                formatPolicy(record),
+                ``,
+                continuation.text,
+              ].join("\n"),
+            }],
+          };
+        }
+        if (continuation.kind === "ambiguous") {
+          return {
+            content: [{
+              type: "text",
+              text: [
+                formatPolicy(record),
+                ``,
+                `Repo policy saved, but ${continuation.count} pending launches match this policy. Run the intended launch again to avoid starting the wrong session.`,
+              ].join("\n"),
+            }],
+          };
+        }
         return { content: [{ type: "text", text: formatPolicy(record) }] };
       }
 

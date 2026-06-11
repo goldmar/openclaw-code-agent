@@ -232,6 +232,138 @@ describe("repo policy resolution", () => {
     }
   });
 
+  it("continues a deferred launch after manually setting the matching repo policy", () => {
+    const repoDir = mkdtempSync(join(tmpdir(), "openclaw-policy-manual-continue-"));
+    const storeDir = mkdtempSync(join(tmpdir(), "openclaw-policy-manual-continue-store-"));
+    const dispatchCalls: any[] = [];
+    try {
+      git(repoDir, "init", "-b", "main");
+      const sm = new SessionManager(1, 10, { store: { indexPath: join(storeDir, "sessions.json") } });
+      (sm as any).notifications = {
+        dispatch: (...args: any[]) => { dispatchCalls.push(args); },
+        notifyWorktreeOutcome: () => {},
+        dispose: () => {},
+      };
+      let spawnConfig: Record<string, unknown> | undefined;
+      (sm as any).spawn = (config: Record<string, unknown>) => {
+        spawnConfig = config;
+        return {
+          id: "manual-policy-session",
+          name: "manual-policy-session",
+          model: config.model,
+          worktreeStrategy: config.worktreeStrategy,
+        };
+      };
+
+      sm.requestRepoPolicyForLaunch({
+        route: { provider: "telegram", target: "12345" },
+        prompt: "Continue after manual policy",
+        workdir: repoDir,
+        model: "gpt-5.5",
+        worktreeStrategy: "delegate",
+      });
+      const policyTokenId = dispatchCalls[0][1].buttons[0][0].callbackData;
+
+      sm.setRepoPolicy(repoDir, "pr-required");
+      const continuation = sm.continueLaunchAfterManualRepoPolicy(repoDir, "pr-required");
+
+      assert.equal(continuation.kind, "launched");
+      if (continuation.kind === "launched") {
+        assert.match(continuation.text, /Session launched successfully/);
+      }
+      assert.equal(spawnConfig?.prompt, "Continue after manual policy");
+      assert.equal(spawnConfig?.workdir, repoDir);
+      assert.equal(spawnConfig?.model, "gpt-5.5");
+      assert.equal(spawnConfig?.worktreeStrategy, "delegate");
+      assert.equal(sm.getActionToken(policyTokenId), undefined);
+      sm.dispose();
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+      rmSync(storeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the deferred launch token retryable when manual policy continuation fails", () => {
+    const repoDir = mkdtempSync(join(tmpdir(), "openclaw-policy-manual-failure-"));
+    const storeDir = mkdtempSync(join(tmpdir(), "openclaw-policy-manual-failure-store-"));
+    const dispatchCalls: any[] = [];
+    try {
+      git(repoDir, "init", "-b", "main");
+      const sm = new SessionManager(1, 10, { store: { indexPath: join(storeDir, "sessions.json") } });
+      (sm as any).notifications = {
+        dispatch: (...args: any[]) => { dispatchCalls.push(args); },
+        notifyWorktreeOutcome: () => {},
+        dispose: () => {},
+      };
+      (sm as any).spawn = () => {
+        throw new Error("launch capacity unavailable");
+      };
+
+      sm.requestRepoPolicyForLaunch({
+        route: { provider: "telegram", target: "12345" },
+        prompt: "Retry after manual policy",
+        workdir: repoDir,
+        worktreeStrategy: "delegate",
+      });
+      const policyTokenId = dispatchCalls[0][1].buttons[0][0].callbackData;
+
+      sm.setRepoPolicy(repoDir, "pr-required");
+      assert.throws(
+        () => sm.continueLaunchAfterManualRepoPolicy(repoDir, "pr-required"),
+        /launch capacity unavailable/,
+      );
+      assert.equal(sm.getActionToken(policyTokenId)?.id, policyTokenId);
+      sm.dispose();
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+      rmSync(storeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not guess which launch to continue when multiple manual policy matches exist", () => {
+    const repoDir = mkdtempSync(join(tmpdir(), "openclaw-policy-manual-ambiguous-"));
+    const storeDir = mkdtempSync(join(tmpdir(), "openclaw-policy-manual-ambiguous-store-"));
+    const dispatchCalls: any[] = [];
+    try {
+      git(repoDir, "init", "-b", "main");
+      const sm = new SessionManager(1, 10, { store: { indexPath: join(storeDir, "sessions.json") } });
+      (sm as any).notifications = {
+        dispatch: (...args: any[]) => { dispatchCalls.push(args); },
+        notifyWorktreeOutcome: () => {},
+        dispose: () => {},
+      };
+      let spawnCalled = false;
+      (sm as any).spawn = () => {
+        spawnCalled = true;
+        throw new Error("spawn should not run for ambiguous manual policy continuation");
+      };
+
+      sm.requestRepoPolicyForLaunch({
+        route: { provider: "telegram", target: "12345" },
+        prompt: "First pending launch",
+        workdir: repoDir,
+        worktreeStrategy: "delegate",
+      });
+      sm.requestRepoPolicyForLaunch({
+        route: { provider: "telegram", target: "12345" },
+        prompt: "Second pending launch",
+        workdir: repoDir,
+        worktreeStrategy: "delegate",
+      });
+
+      sm.setRepoPolicy(repoDir, "pr-required");
+      const continuation = sm.continueLaunchAfterManualRepoPolicy(repoDir, "pr-required");
+
+      assert.deepEqual(continuation, { kind: "ambiguous", count: 2 });
+      assert.equal(spawnCalled, false);
+      assert.equal(dispatchCalls.length, 2);
+      sm.dispose();
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+      rmSync(storeDir, { recursive: true, force: true });
+    }
+  });
+
   it("seeds openclaw-code-agent as PR-required", () => {
     const repoDir = mkdtempSync(join(tmpdir(), "openclaw-policy-seed-"));
     try {
