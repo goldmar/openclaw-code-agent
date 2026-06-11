@@ -177,7 +177,13 @@ export class SessionMaintenanceService {
   syncTmpOutputCleanupDeadline(now: number = Date.now()): void {
     this.cancel(TMP_OUTPUT_CLEANUP_KEY);
     const nextCleanupAt = this.deps.store.getNextTmpOutputCleanupAt(now);
-    if (nextCleanupAt == null) return;
+    if (nextCleanupAt == null) {
+      this.lastTmpOutputCleanupAttemptAt = undefined;
+      return;
+    }
+    if (nextCleanupAt > now) {
+      this.lastTmpOutputCleanupAttemptAt = undefined;
+    }
     this.schedule(TMP_OUTPUT_CLEANUP_KEY, this.getTmpOutputCleanupScheduleAt(nextCleanupAt, now), () => {
       const cleanupNow = Date.now();
       this.runTmpOutputCleanup(cleanupNow);
