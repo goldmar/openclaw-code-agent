@@ -1,8 +1,41 @@
-import { afterEach, describe, it } from "node:test";
+import { afterEach, describe, it, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { getSessionOutputText } from "../src/application/session-view";
 import { appendSessionOutput, getSessionOutputFilePath } from "../src/session-output";
+import { cleanupOrphanOutputFiles, cleanupTmpOutputFiles, getNextTmpOutputCleanupAt } from "../src/session-store-storage";
+
+const TEMP_ENV_KEYS = ["TMPDIR", "TEMP", "TMP"] as const;
+
+function redirectTmpDir(t: TestContext, dir: string): void {
+  const previousEnv = new Map(
+    TEMP_ENV_KEYS.map((key) => [key, process.env[key]]),
+  );
+  for (const key of TEMP_ENV_KEYS) {
+    process.env[key] = dir;
+  }
+  t.after(() => {
+    for (const key of TEMP_ENV_KEYS) {
+      const previous = previousEnv.get(key);
+      if (previous == null) {
+        delete process.env[key];
+      } else {
+        process.env[key] = previous;
+      }
+    }
+  });
+}
+
+function useIsolatedTmpDir(t: TestContext): string {
+  const dir = mkdtempSync(join(tmpdir(), "openclaw-output-cleanup-test-"));
+  redirectTmpDir(t, dir);
+  t.after(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+  return dir;
+}
 
 describe("session output buffering", () => {
   const sessionId = "session-output-test";
@@ -58,5 +91,48 @@ describe("session output buffering", () => {
     const text = getSessionOutputText(sm, "live-session");
     assert.match(text, /Investigating output formatting\./);
     assert.doesNotMatch(text, /Investigating\n output\n formatting\./);
+  });
+});
+
+describe("session output temp cleanup", () => {
+  it("discovers only temp output txt files for cleanup operations", (t) => {
+    const dir = useIsolatedTmpDir(t);
+    const referenced = join(dir, "openclaw-agent-referenced.txt");
+    const orphan = join(dir, "openclaw-agent-orphan.txt");
+    const ignoredPrefix = join(dir, "not-openclaw-agent-old.txt");
+    const ignoredSuffix = join(dir, "openclaw-agent-old.log");
+
+    for (const filePath of [referenced, orphan, ignoredPrefix, ignoredSuffix]) {
+      writeFileSync(filePath, "output\n", "utf-8");
+    }
+
+    const now = 100_000;
+    const maxAgeMs = 10_000;
+    utimesSync(referenced, new Date(95_000), new Date(95_000));
+    utimesSync(orphan, new Date(96_000), new Date(96_000));
+    utimesSync(ignoredPrefix, new Date(1_000), new Date(1_000));
+    utimesSync(ignoredSuffix, new Date(1_000), new Date(1_000));
+
+    assert.equal(getNextTmpOutputCleanupAt(now, maxAgeMs), statSync(referenced).mtimeMs + maxAgeMs);
+
+    cleanupOrphanOutputFiles([referenced]);
+    assert.equal(existsSync(referenced), true);
+    assert.equal(existsSync(orphan), false);
+    assert.equal(existsSync(ignoredPrefix), true);
+    assert.equal(existsSync(ignoredSuffix), true);
+
+    cleanupTmpOutputFiles(200_000, maxAgeMs);
+    assert.equal(existsSync(referenced), false);
+    assert.equal(existsSync(ignoredPrefix), true);
+    assert.equal(existsSync(ignoredSuffix), true);
+  });
+
+  it("keeps temp output discovery failures non-fatal", (t) => {
+    const missingTmpDir = join(tmpdir(), `openclaw-output-cleanup-missing-${process.pid}-${Date.now()}`);
+    redirectTmpDir(t, missingTmpDir);
+
+    assert.doesNotThrow(() => cleanupTmpOutputFiles(100_000, 10_000));
+    assert.equal(getNextTmpOutputCleanupAt(100_000, 10_000), undefined);
+    assert.doesNotThrow(() => cleanupOrphanOutputFiles([]));
   });
 });

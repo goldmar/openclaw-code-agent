@@ -19,6 +19,13 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+function getTmpOutputFilePaths(): string[] {
+  const tmpDir = tmpdir();
+  return readdirSync(tmpDir)
+    .filter((file) => file.startsWith("openclaw-agent-") && file.endsWith(".txt"))
+    .map((file) => join(tmpDir, file));
+}
+
 export function resolveSessionIndexPath(env: NodeJS.ProcessEnv): string {
   const explicit = env.OPENCLAW_CODE_AGENT_SESSIONS_PATH?.trim();
   if (explicit) return explicit;
@@ -71,11 +78,8 @@ export function archiveLegacyCodexEntries(indexPath: string, entries: unknown[])
 
 export function cleanupTmpOutputFiles(now: number, maxAgeMs: number): void {
   try {
-    const tmpDir = tmpdir();
-    const tmpFiles = readdirSync(tmpDir).filter((f) => f.startsWith("openclaw-agent-") && f.endsWith(".txt"));
-    for (const file of tmpFiles) {
+    for (const filePath of getTmpOutputFilePaths()) {
       try {
-        const filePath = join(tmpDir, file);
         const mtime = statSync(filePath).mtimeMs;
         if (now - mtime > maxAgeMs) {
           unlinkSync(filePath);
@@ -91,12 +95,9 @@ export function cleanupTmpOutputFiles(now: number, maxAgeMs: number): void {
 
 export function getNextTmpOutputCleanupAt(now: number, maxAgeMs: number): number | undefined {
   try {
-    const tmpDir = tmpdir();
-    const tmpFiles = readdirSync(tmpDir).filter((f) => f.startsWith("openclaw-agent-") && f.endsWith(".txt"));
     let nextCleanupAt: number | undefined;
-    for (const file of tmpFiles) {
+    for (const filePath of getTmpOutputFilePaths()) {
       try {
-        const filePath = join(tmpDir, file);
         const expiresAt = statSync(filePath).mtimeMs + maxAgeMs;
         if (expiresAt <= now) return now;
         nextCleanupAt = nextCleanupAt == null ? expiresAt : Math.min(nextCleanupAt, expiresAt);
@@ -113,10 +114,7 @@ export function getNextTmpOutputCleanupAt(now: number, maxAgeMs: number): number
 export function cleanupOrphanOutputFiles(referencedPaths: Iterable<string>): void {
   try {
     const referenced = new Set(referencedPaths);
-    const tmpDir = tmpdir();
-    const tmpFiles = readdirSync(tmpDir).filter((f) => f.startsWith("openclaw-agent-") && f.endsWith(".txt"));
-    for (const file of tmpFiles) {
-      const filePath = join(tmpDir, file);
+    for (const filePath of getTmpOutputFilePaths()) {
       if (referenced.has(filePath)) continue;
       try {
         unlinkSync(filePath);
