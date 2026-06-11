@@ -127,6 +127,27 @@ describe("session output temp cleanup", () => {
     assert.equal(existsSync(ignoredSuffix), true);
   });
 
+  it("does not age out temp output files still referenced by persisted sessions", (t) => {
+    const dir = useIsolatedTmpDir(t);
+    const referenced = join(dir, "openclaw-agent-referenced.txt");
+    const orphan = join(dir, "openclaw-agent-orphan.txt");
+
+    for (const filePath of [referenced, orphan]) {
+      writeFileSync(filePath, "output\n", "utf-8");
+      utimesSync(filePath, new Date(1_000), new Date(1_000));
+    }
+
+    const now = 100_000;
+    const maxAgeMs = 10_000;
+
+    assert.equal(getNextTmpOutputCleanupAt(now, maxAgeMs, [referenced]), now);
+    cleanupTmpOutputFiles(now, maxAgeMs, [referenced]);
+
+    assert.equal(existsSync(referenced), true);
+    assert.equal(existsSync(orphan), false);
+    assert.equal(getNextTmpOutputCleanupAt(now, maxAgeMs, [referenced]), undefined);
+  });
+
   it("keeps temp output discovery failures non-fatal", (t) => {
     const missingTmpDir = join(tmpdir(), `openclaw-output-cleanup-missing-${process.pid}-${Date.now()}`);
     redirectTmpDir(t, missingTmpDir);

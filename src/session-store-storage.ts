@@ -82,9 +82,11 @@ export function archiveLegacyCodexEntries(indexPath: string, entries: unknown[])
   }
 }
 
-export function cleanupTmpOutputFiles(now: number, maxAgeMs: number): void {
+export function cleanupTmpOutputFiles(now: number, maxAgeMs: number, referencedPaths: Iterable<string> = []): void {
   try {
+    const referenced = new Set(referencedPaths);
     for (const filePath of getTmpOutputFilePaths()) {
+      if (referenced.has(filePath)) continue;
       try {
         const mtime = statSync(filePath).mtimeMs;
         if (now - mtime > maxAgeMs) {
@@ -99,10 +101,12 @@ export function cleanupTmpOutputFiles(now: number, maxAgeMs: number): void {
   }
 }
 
-export function getNextTmpOutputCleanupAt(now: number, maxAgeMs: number): number | undefined {
+export function getNextTmpOutputCleanupAt(now: number, maxAgeMs: number, referencedPaths: Iterable<string> = []): number | undefined {
   try {
+    const referenced = new Set(referencedPaths);
     let nextCleanupAt: number | undefined;
     for (const filePath of getTmpOutputFilePaths()) {
+      if (referenced.has(filePath)) continue;
       try {
         const expiresAt = statSync(filePath).mtimeMs + maxAgeMs;
         if (expiresAt <= now) return now;
