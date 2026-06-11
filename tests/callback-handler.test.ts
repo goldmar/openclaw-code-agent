@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { createCallbackHandler } from "../src/callback-handler";
+import { SessionActionTokenStore } from "../src/session-action-token-store";
 import { setSessionManager } from "../src/singletons";
 import { createStubSession } from "./helpers";
 
@@ -1394,6 +1395,9 @@ describe("createCallbackHandler()", () => {
         calls.push(`set:${workdir}:${policy}`);
         return { policy };
       },
+      clearActionTokensForSession: (sessionId: string) => {
+        calls.push(`clear:${sessionId}`);
+      },
       launchAfterRepoPolicyChoice: (args: Record<string, unknown>) => {
         calls.push(`launch:${args.prompt}:${args.harness}`);
         assert.equal(args.prompt, "Ship isolated changes");
@@ -1423,12 +1427,90 @@ describe("createCallbackHandler()", () => {
     const result = await handler.handler(state.ctx as any);
 
     assert.deepEqual(result, { handled: true });
-    assert.deepEqual(calls, ["set:/repo:pr-required", "launch:Ship isolated changes:codex"]);
+    assert.deepEqual(calls, [
+      "set:/repo:pr-required",
+      "clear:repo-policy:/repo",
+      "launch:Ship isolated changes:codex",
+    ]);
     assert.equal(state.buttonMarkupEdits, 1);
     assert.equal(state.buttonsCleared, 1);
     assert.deepEqual(state.editedMessages, []);
     assert.match(state.replies[0], /Repo policy saved: Require PR/);
     assert.match(state.replies[0], /Session launched successfully/);
+  });
+
+  it("invalidates sibling repo policy tokens after one policy choice succeeds", async () => {
+    const store = new SessionActionTokenStore(() => {}, 100);
+    const route = {
+      provider: "telegram",
+      target: TELEGRAM_FORUM_TARGET,
+      threadId: TELEGRAM_FORUM_THREAD_ID,
+      sessionKey: TELEGRAM_FORUM_SESSION_KEY,
+    };
+    const baseTokenOptions = {
+      route,
+      repoPolicyWorkdir: "/repo",
+      launchPrompt: "Ship isolated changes",
+      launchWorkdir: "/repo",
+    };
+    const prRequiredToken = store.createActionToken("repo-policy:/repo", "repo-policy-set", {
+      ...baseTokenOptions,
+      repoPolicy: "pr-required",
+    });
+    const neverPrToken = store.createActionToken("repo-policy:/repo", "repo-policy-set", {
+      ...baseTokenOptions,
+      repoPolicy: "never-pr",
+    });
+
+    const calls: string[] = [];
+    setSessionManager({
+      getActionToken: (tokenId: string) => store.getActionToken(tokenId),
+      consumeActionToken: (tokenId: string) => store.consumeActionToken(tokenId),
+      clearActionTokensForSession: (sessionId: string) => {
+        calls.push(`clear:${sessionId}`);
+        store.deleteActionTokensForSession(sessionId);
+      },
+      resolve: () => undefined,
+      getPersistedSession: () => undefined,
+      setRepoPolicy: (workdir: string, policy: string) => {
+        calls.push(`set:${workdir}:${policy}`);
+        return { policy };
+      },
+      launchAfterRepoPolicyChoice: (args: Record<string, unknown>) => {
+        calls.push(`launch:${args.prompt}`);
+        return {
+          session: { id: "sess-1", name: "ship-isolated" },
+          text: "Session launched successfully\nID: sess-1",
+        };
+      },
+    } as any);
+
+    const handler = createCallbackHandler();
+    const firstState = createCtx(prRequiredToken.id, "telegram");
+    const firstResult = await handler.handler(firstState.ctx as any);
+
+    assert.deepEqual(firstResult, { handled: true });
+    assert.deepEqual(calls, [
+      "set:/repo:pr-required",
+      "clear:repo-policy:/repo",
+      "launch:Ship isolated changes",
+    ]);
+    assert.equal(firstState.buttonMarkupEdits, 1);
+    assert.equal(firstState.buttonsCleared, 1);
+    assert.match(firstState.replies[0], /Repo policy saved: Require PR/);
+
+    const secondState = createCtx(neverPrToken.id, "telegram");
+    const secondResult = await handler.handler(secondState.ctx as any);
+
+    assert.deepEqual(secondResult, { handled: true });
+    assert.deepEqual(calls, [
+      "set:/repo:pr-required",
+      "clear:repo-policy:/repo",
+      "launch:Ship isolated changes",
+    ]);
+    assert.equal(secondState.buttonMarkupEdits, 0);
+    assert.equal(secondState.buttonsCleared, 1);
+    assert.deepEqual(secondState.replies, []);
   });
 
   it("clears repo policy buttons when the repo cannot be resolved", async () => {
@@ -1491,6 +1573,7 @@ describe("createCallbackHandler()", () => {
       resolve: () => undefined,
       getPersistedSession: () => undefined,
       setRepoPolicy: () => ({ policy: "pr-required" }),
+      clearActionTokensForSession: () => {},
       launchAfterRepoPolicyChoice: () => {
         throw new Error("spawn unavailable");
       },

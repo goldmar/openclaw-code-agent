@@ -60,6 +60,10 @@ export class SessionInteractionService {
     return this.actionTokens.getActionToken(tokenId);
   }
 
+  clearActionTokensForSession(sessionId: string): void {
+    this.actionTokens.deleteActionTokensForSession(sessionId);
+  }
+
   clearPlanDecisionTokens(sessionId: string, keepVersion?: number): void {
     this.actionTokens.deletePlanDecisionTokensForSession(sessionId, keepVersion);
   }
