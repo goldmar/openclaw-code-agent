@@ -496,11 +496,11 @@ export class SessionStore {
   /** Best-effort cleanup for stale tmp output files written by persistTerminal. */
   cleanupTmpOutputFiles(now: number): void {
     this.actionTokenStore.purgeExpiredActionTokens(now);
-    cleanupTmpOutputFiles(now, TMP_OUTPUT_MAX_AGE_MS);
+    cleanupTmpOutputFiles(now, TMP_OUTPUT_MAX_AGE_MS, this.getReferencedOutputPaths());
   }
 
   getNextTmpOutputCleanupAt(now: number): number | undefined {
-    return getNextTmpOutputCleanupAt(now, TMP_OUTPUT_MAX_AGE_MS);
+    return getNextTmpOutputCleanupAt(now, TMP_OUTPUT_MAX_AGE_MS, this.getReferencedOutputPaths());
   }
 
   /** Enforce max persisted session retention by evicting oldest records and indexes. */
