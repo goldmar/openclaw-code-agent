@@ -22,6 +22,7 @@ type ButtonSource = {
   worktreePrUrl?: string;
   isExplicitlyResumable?: boolean;
   planDecisionVersion?: number;
+  actionablePlanDecisionVersion?: number;
 };
 
 const QUESTION_BUTTON_LABEL_MAX_LENGTH = 80;
@@ -142,20 +143,21 @@ export class SessionInteractionService {
   }
 
   getPlanApprovalButtons(sessionId: string, session?: ButtonSource): NotificationButton[][] {
+    const planDecisionVersion = session?.actionablePlanDecisionVersion ?? session?.planDecisionVersion;
     const buttons = [[
       this.makeActionButton(sessionId, "plan-approve", "Approve", {
-        planDecisionVersion: session?.planDecisionVersion,
+        planDecisionVersion,
       }),
       this.makeActionButton(sessionId, "plan-request-changes", "Revise", {
-        planDecisionVersion: session?.planDecisionVersion,
+        planDecisionVersion,
       }),
       this.makeActionButton(sessionId, "plan-reject", "Reject", {
-        planDecisionVersion: session?.planDecisionVersion,
+        planDecisionVersion,
       }),
     ]];
     logButtonDiagnostic("plan_approval_buttons_created", {
       sessionId,
-      planDecisionVersion: session?.planDecisionVersion,
+      planDecisionVersion,
       ...summarizeButtons(buttons),
     });
     return buttons;
