@@ -670,6 +670,10 @@ export class SessionManager {
     return this.store.listRepoPolicies();
   }
 
+  cleanupRepoPolicies(): RepoPolicyRecord[] {
+    return this.store.cleanupRepoPolicies();
+  }
+
   setRepoPolicy(workdir: string, policy: RepoIntegrationPolicy): RepoPolicyRecord | undefined {
     const identity = resolveRepoIdentity(workdir);
     if (!identity) return undefined;

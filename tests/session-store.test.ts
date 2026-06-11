@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { SessionStore } from "../src/session-store";
 import { getSessionOutputFilePath } from "../src/session";
 import { STORE_SCHEMA_VERSION } from "../src/session-store-normalization";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { execFileSync } from "child_process";
@@ -127,6 +127,57 @@ describe("SessionStore persisted compatibility", () => {
     assert.equal(policy?.policy, "pr-required");
     assert.equal(policy?.repoRoot, "/repo");
     assert.equal(policy?.provider, "github");
+  });
+
+  it("cleans up stored repo policies whose repo root no longer exists", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-store-policy-cleanup-"));
+    const existingRepo = mkdtempSync(join(tmpdir(), "openclaw-store-policy-existing-"));
+    try {
+      const missingRepo = join(dir, "missing-repo");
+      const fileRepo = join(dir, "repo-file");
+      writeFileSync(fileRepo, "not a directory\n", "utf-8");
+      const indexPath = join(dir, "sessions.json");
+      const store = new SessionStore({ indexPath });
+      store.setRepoPolicy({
+        key: `${existingRepo}|https://github.com/example/existing`,
+        policy: "pr-required",
+        repoRoot: existingRepo,
+        remoteUrl: "https://github.com/example/existing",
+        provider: "github",
+        createdAt: "2026-06-01T00:00:00.000Z",
+        updatedAt: "2026-06-01T00:00:00.000Z",
+        source: "stored",
+      });
+      store.setRepoPolicy({
+        key: `${missingRepo}|https://github.com/example/missing`,
+        policy: "never-pr",
+        repoRoot: missingRepo,
+        remoteUrl: "https://github.com/example/missing",
+        provider: "github",
+        createdAt: "2026-06-01T00:00:00.000Z",
+        updatedAt: "2026-06-01T00:00:00.000Z",
+        source: "stored",
+      });
+      store.setRepoPolicy({
+        key: `${fileRepo}|https://github.com/example/file`,
+        policy: "manual",
+        repoRoot: fileRepo,
+        remoteUrl: "https://github.com/example/file",
+        provider: "github",
+        createdAt: "2026-06-01T00:00:00.000Z",
+        updatedAt: "2026-06-01T00:00:00.000Z",
+        source: "stored",
+      });
+
+      const removed = store.cleanupRepoPolicies();
+      const restored = new SessionStore({ indexPath });
+
+      assert.deepEqual(removed.map((record) => record.repoRoot).sort(), [fileRepo, missingRepo].sort());
+      assert.deepEqual(restored.listRepoPolicies().map((record) => record.repoRoot), [existingRepo]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(existingRepo, { recursive: true, force: true });
+    }
   });
 
   it("skips invalid repo policy records without clearing sessions or action tokens", () => {

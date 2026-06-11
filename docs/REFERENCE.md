@@ -675,11 +675,14 @@ Inspect or update repo integration policy.
 | `policy` | `pr-required \| pr-allowed \| never-pr \| manual` | No | Sets the policy for the repo |
 | `reset` | `boolean` | No | Removes a stored policy |
 | `list` | `boolean` | No | Lists stored repo policies |
+| `cleanup` | `boolean` | No | Removes stored repo policies whose repo root no longer exists on disk |
 
 Examples:
 
 - `agent_repo_policy(workdir="/repo", policy="pr-required")`
+- `agent_repo_policy(cleanup=true)`
 - `/agent_policy pr-allowed`
+- `/agent_policy cleanup`
 - `/agent_policy list`
 
 ## Troubleshooting
