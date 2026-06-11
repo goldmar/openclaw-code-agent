@@ -2560,7 +2560,7 @@ describe("SessionManager restored button parity", () => {
       { requestId: "req-1", questionId: "environment" },
     );
 
-    assert.equal(buttons[0][0].label.length, 36);
+    assert.equal(Array.from(buttons[0][0].label).length, 36);
     assert.match(buttons[0][0].label, /\.\.\.$/);
     assert.match(buttons[0][0].callbackData, /^[0-9a-f-]{36}$/);
     assert.doesNotMatch(buttons[0][0].callbackData, new RegExp(longLabel));
