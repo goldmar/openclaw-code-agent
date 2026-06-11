@@ -3540,6 +3540,43 @@ describe("SessionManager.handleAskUserQuestion()", () => {
     });
   });
 
+  it("uses fresh notification idempotency keys for repeated identical legacy questions", async () => {
+    const session = fakeSession({
+      id: "s-legacy-repeat-question",
+      name: "legacy-repeat-question",
+      worktreeStrategy: "ask",
+    });
+    (sm as any).sessions.set(session.id, session);
+    const input = {
+      questions: [{
+        question: "Which environment should I target?",
+        options: [
+          { label: "Staging" },
+          { label: "Production" },
+        ],
+      }],
+    };
+
+    const firstPending = sm.handleAskUserQuestion(session.id, input);
+    const firstRequest = (sm as any).__dispatchCalls[0][1];
+    const firstToken = (sm as any).interactions.getActionToken(firstRequest.buttons[0][0].callbackData);
+
+    assert.equal(sm.resolveAskUserQuestion(session.id, 0), true);
+    await firstPending;
+
+    const secondPending = sm.handleAskUserQuestion(session.id, input);
+    const secondRequest = (sm as any).__dispatchCalls[1][1];
+    const secondToken = (sm as any).interactions.getActionToken(secondRequest.buttons[0][0].callbackData);
+
+    assert.notEqual(firstRequest.idempotencyKey, secondRequest.idempotencyKey);
+    assert.notEqual(firstToken.pendingInputRequestId, secondToken.pendingInputRequestId);
+    assert.equal(firstRequest.idempotencyKey, `ask-user-question:${session.id}:${firstToken.pendingInputRequestId}`);
+    assert.equal(secondRequest.idempotencyKey, `ask-user-question:${session.id}:${secondToken.pendingInputRequestId}`);
+
+    assert.equal(sm.resolveAskUserQuestion(session.id, 1), true);
+    await secondPending;
+  });
+
   it("does not let stale legacy question buttons answer a newer question", async () => {
     const session = fakeSession({
       id: "s-legacy-stale-question",
