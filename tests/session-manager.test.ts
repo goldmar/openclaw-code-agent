@@ -967,6 +967,41 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     }
   });
 
+  it("backs off tmp-output cleanup when an expired file remains after cleanup", () => {
+    const sm = new SessionManager(5, 5);
+    const originalDateNow = Date.now;
+    const now = 1_700_000_000_000;
+    const scheduled: Array<{ key: string; at: number; cb: () => void }> = [];
+    const cleanupTimes: number[] = [];
+
+    Date.now = () => now;
+
+    try {
+      (sm as any).store.getNextTmpOutputCleanupAt = () => now;
+      (sm as any).store.cleanupTmpOutputFiles = (cleanupNow: number) => {
+        cleanupTimes.push(cleanupNow);
+      };
+      (sm as any).maintenance.cancel = (() => {}) as any;
+      (sm as any).maintenance.schedule = ((key: string, at: number, cb: () => void) => {
+        scheduled.push({ key, at, cb });
+      }) as any;
+
+      (sm as any).syncTmpOutputCleanupDeadline(now);
+      assert.equal(scheduled.length, 1);
+      assert.equal(scheduled[0].key, "tmp-output:cleanup");
+      assert.equal(scheduled[0].at, now);
+
+      scheduled[0].cb();
+
+      assert.deepEqual(cleanupTimes, [now]);
+      assert.equal(scheduled.length, 2);
+      assert.equal(scheduled[1].key, "tmp-output:cleanup");
+      assert.equal(scheduled[1].at, now + 60_000);
+    } finally {
+      Date.now = originalDateNow;
+    }
+  });
+
   it("seeds retention for legacy merged sessions without worktreeLifecycle metadata", () => {
     const sm = new SessionManager(5, 5);
     const now = Date.now();
