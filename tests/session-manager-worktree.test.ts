@@ -925,6 +925,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       assert.equal(persisted.worktreePath, undefined);
       assert.equal(persisted.worktreeState, "none");
       assert.equal(persisted.worktreeLifecycle?.state, "dismissed");
+      assert.equal(persisted.worktreeLifecycle?.resolvedAt, dismissedAt);
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
       cleanup();
@@ -979,6 +980,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       assert.equal(persisted.worktreePath, undefined);
       assert.equal(persisted.worktreeState, "none");
       assert.equal(persisted.worktreeLifecycle?.state, "merged");
+      assert.equal(persisted.worktreeLifecycle?.resolvedAt, mergedAt);
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
       cleanup();
