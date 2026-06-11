@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { Session } from "./session";
 import type { NotificationButton } from "./session-interactions";
 import type { SessionNotificationRequest } from "./wake-dispatcher";
@@ -17,12 +18,26 @@ export interface PendingAskUserQuestion {
   reject: (err: Error) => void;
   questions: AskUserQuestionInput["questions"];
   timeoutHandle: ReturnType<typeof setTimeout>;
+  requestId: string;
+  questionId?: string;
 }
+
+export type AskUserQuestionResolutionContext = {
+  requestId?: string;
+  questionId?: string;
+};
 
 type DispatchQuestionNotification = (
   session: Session,
   request: SessionNotificationRequest,
 ) => void;
+
+function activePendingInputQuestionIdentity(session: Session): string | undefined {
+  const state = session.pendingInputState;
+  const activeQuestionIndex = state?.activeQuestionIndex ?? 0;
+  return state?.questions?.[activeQuestionIndex]?.id
+    ?? (state?.activeQuestionIndex != null ? `q${state.activeQuestionIndex}` : undefined);
+}
 
 export class SessionQuestionService {
   constructor(
@@ -32,6 +47,7 @@ export class SessionQuestionService {
     private readonly getQuestionButtons: (
       sessionId: string,
       options: Array<{ label: string }>,
+      context?: AskUserQuestionResolutionContext,
     ) => NotificationButton[][] | undefined,
   ) {}
 
@@ -48,10 +64,13 @@ export class SessionQuestionService {
 
     const firstQuestion = questions[0];
     const options = firstQuestion.options ?? [];
-    const buttons = this.getQuestionButtons(session.id, options);
     const userMessage = `❓ [${session.name}] ${firstQuestion.question}`;
     const questionKey = session.pendingInputState?.requestId
       ?? `${firstQuestion.question}:${options.map((option) => option.label).join("|")}`;
+    const questionId = activePendingInputQuestionIdentity(session);
+    const requestId = session.pendingInputState?.requestId
+      ?? `legacy:${randomUUID()}`;
+    const buttons = this.getQuestionButtons(session.id, options, { requestId, questionId });
     const fallbackWakeText = [
       `[ASK USER QUESTION] Session "${session.name}" has a question requiring user input.`,
       ``,
@@ -62,6 +81,12 @@ export class SessionQuestionService {
     ].join("\n");
 
     return new Promise((resolve, reject) => {
+      const existing = this.pendingQuestions.get(session.id);
+      if (existing) {
+        clearTimeout(existing.timeoutHandle);
+        existing.reject(new Error(`AskUserQuestion superseded by a newer question for session "${session.name}".`));
+      }
+
       const timeoutHandle = setTimeout(() => {
         this.pendingQuestions.delete(session.id);
         reject(new Error(`AskUserQuestion timed out after ${TIMEOUT_MS / 1000}s for session "${session.name}"`));
@@ -73,6 +98,8 @@ export class SessionQuestionService {
         reject,
         questions,
         timeoutHandle,
+        requestId,
+        questionId,
       });
 
       this.dispatchSessionNotification(session, {
@@ -92,10 +119,26 @@ export class SessionQuestionService {
     });
   }
 
-  resolveAskUserQuestion(sessionId: string, optionIndex: number): boolean {
+  resolveAskUserQuestion(
+    sessionId: string,
+    optionIndex: number,
+    context: AskUserQuestionResolutionContext = {},
+  ): boolean {
     const pending = this.pendingQuestions.get(sessionId);
     if (!pending) {
       console.warn(`[SessionQuestionService] resolveAskUserQuestion: no pending question for session "${sessionId}"`);
+      return false;
+    }
+    if (context.requestId && context.requestId !== pending.requestId) {
+      console.warn(
+        `[SessionQuestionService] resolveAskUserQuestion: stale requestId for session "${sessionId}" (expected "${pending.requestId}", got "${context.requestId}")`,
+      );
+      return false;
+    }
+    if (context.questionId && context.questionId !== pending.questionId) {
+      console.warn(
+        `[SessionQuestionService] resolveAskUserQuestion: stale questionId for session "${sessionId}" (expected "${pending.questionId ?? ""}", got "${context.questionId}")`,
+      );
       return false;
     }
     clearTimeout(pending.timeoutHandle);
