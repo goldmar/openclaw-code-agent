@@ -36,8 +36,8 @@
       "minGatewayVersion": "2026.4.21"
     },
     "build": {
-      "openclawVersion": "2026.6.1",
-      "pluginSdkVersion": "2026.6.1"
+      "openclawVersion": "2026.6.5",
+      "pluginSdkVersion": "2026.6.5"
     }
   },
   "files": [
@@ -54,7 +54,7 @@
     "@types/node": "^25.5.2",
     "esbuild": "^0.28.0",
     "nanoid": "^5.1.7",
-    "openclaw": "2026.6.1",
+    "openclaw": "2026.6.5",
     "tsx": "^4.21.0",
     "typescript": "^6.0.2"
   },
