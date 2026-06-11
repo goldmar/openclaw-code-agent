@@ -17,7 +17,7 @@ function createRepoWithRemote(prefix: string): { repoDir: string; remoteDir: str
   const repoDir = mkdtempSync(join(tmpdir(), `${prefix}-repo-`));
   const remoteDir = mkdtempSync(join(tmpdir(), `${prefix}-remote-`));
 
-  git(remoteDir, "init", "--bare");
+  git(remoteDir, "init", "--bare", "--initial-branch=main");
   git(repoDir, "init", "-b", "main");
   git(repoDir, "config", "user.name", "Test User");
   git(repoDir, "config", "user.email", "test@example.com");
