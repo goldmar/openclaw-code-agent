@@ -115,7 +115,7 @@ export class SessionActionTokenStore {
     if (changed) this.notifyChanged();
   }
 
-  purgeExpiredActionTokens(now: number = Date.now()): void {
+  purgeExpiredActionTokens(now: number = Date.now()): boolean {
     let changed = false;
     for (const [tokenId, token] of this.tokens) {
       const expired = token.expiresAt != null && token.expiresAt <= now;
@@ -126,6 +126,7 @@ export class SessionActionTokenStore {
       }
     }
     if (changed) this.notifyChanged();
+    return changed;
   }
 
   nextExpiryAt(): number | undefined {
