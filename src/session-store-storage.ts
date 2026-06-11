@@ -56,7 +56,7 @@ export function saveSessionStoreIndex(
 
 export function archiveLegacySessionIndex(indexPath: string, reason: string): boolean {
   try {
-    if (!existsSync(indexPath)) return true;
+    if (!existsSync(indexPath)) return false;
     const archivedPath = `${indexPath}.legacy-${Date.now()}.json`;
     renameSync(indexPath, archivedPath);
     console.warn(`[SessionStore] Breaking upgrade: archived ${reason} session store to ${archivedPath}. Legacy sessions are not loaded by this release.`);
@@ -66,6 +66,10 @@ export function archiveLegacySessionIndex(indexPath: string, reason: string): bo
     return false;
   }
 }
+
+export const sessionStoreStorageInternals = {
+  archiveLegacySessionIndex,
+};
 
 export function archiveLegacyCodexEntries(indexPath: string, entries: unknown[]): void {
   try {
@@ -151,7 +155,7 @@ export function loadSessionStoreIndex(args: LoadIndexArgs): void {
   } = args;
 
   const archiveAndReset = (reason: string): boolean => {
-    if (!archiveLegacySessionIndex(indexPath, reason)) return false;
+    if (!sessionStoreStorageInternals.archiveLegacySessionIndex(indexPath, reason)) return false;
     clearAll();
     return true;
   };
@@ -173,7 +177,17 @@ export function loadSessionStoreIndex(args: LoadIndexArgs): void {
       return;
     }
 
-    const sessionsRaw = Array.isArray(parsed.sessions) ? parsed.sessions : [];
+    const readCollection = (key: "sessions" | "actionTokens" | "repoPolicies", reason: string): unknown[] | undefined => {
+      if (!Object.prototype.hasOwnProperty.call(parsed, key)) return [];
+      const value = parsed[key];
+      if (Array.isArray(value)) return value;
+      if (!archiveAndReset(reason)) return undefined;
+      saveIndex();
+      return undefined;
+    };
+
+    const sessionsRaw = readCollection("sessions", "invalid sessions collection");
+    if (sessionsRaw === undefined) return;
     const archivedLegacyCodex: unknown[] = [];
     const entries: PersistedSessionInfo[] = [];
     for (const candidate of sessionsRaw) {
@@ -199,7 +213,8 @@ export function loadSessionStoreIndex(args: LoadIndexArgs): void {
       archiveLegacyCodexEntries(indexPath, archivedLegacyCodex);
     }
 
-    const tokensRaw = Array.isArray(parsed.actionTokens) ? parsed.actionTokens : [];
+    const tokensRaw = readCollection("actionTokens", "invalid action token collection");
+    if (tokensRaw === undefined) return;
     const tokens: SessionActionToken[] = [];
     for (const candidate of tokensRaw) {
       const token = normalizeActionToken(candidate);
@@ -211,7 +226,8 @@ export function loadSessionStoreIndex(args: LoadIndexArgs): void {
       tokens.push(token);
     }
 
-    const policiesRaw = Array.isArray(parsed.repoPolicies) ? parsed.repoPolicies : [];
+    const policiesRaw = readCollection("repoPolicies", "invalid repo policy collection");
+    if (policiesRaw === undefined) return;
     const policies: RepoPolicyRecord[] = [];
     let skippedInvalidRepoPolicy = false;
     for (const candidate of policiesRaw) {
