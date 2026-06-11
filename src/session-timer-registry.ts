@@ -7,7 +7,10 @@ export class SessionTimerRegistry {
 
   set(name: string, ms: number, cb: () => void): void {
     this.clear(name);
-    const timer = setTimeout(cb, ms);
+    const timer = setTimeout(() => {
+      if (this.timers.get(name) === timer) this.timers.delete(name);
+      cb();
+    }, ms);
     timer.unref?.();
     this.timers.set(name, timer);
   }
