@@ -283,6 +283,65 @@ describe("repo policy resolution", () => {
     }
   });
 
+  it("deduplicates repeated delivery tokens for the same deferred manual policy launch", () => {
+    const repoDir = mkdtempSync(join(tmpdir(), "openclaw-policy-manual-dedupe-"));
+    const storeDir = mkdtempSync(join(tmpdir(), "openclaw-policy-manual-dedupe-store-"));
+    const dispatchCalls: any[] = [];
+    try {
+      git(repoDir, "init", "-b", "main");
+      const sm = new SessionManager(1, 10, { store: { indexPath: join(storeDir, "sessions.json") } });
+      (sm as any).notifications = {
+        dispatch: (...args: any[]) => { dispatchCalls.push(args); },
+        notifyWorktreeOutcome: () => {},
+        dispose: () => {},
+      };
+      let spawnCount = 0;
+      let spawnConfig: Record<string, unknown> | undefined;
+      (sm as any).spawn = (config: Record<string, unknown>) => {
+        spawnCount++;
+        spawnConfig = config;
+        return {
+          id: "manual-policy-session",
+          name: "manual-policy-session",
+          model: config.model,
+          worktreeStrategy: config.worktreeStrategy,
+        };
+      };
+
+      const launch = {
+        route: { provider: "telegram" as const, target: "12345", threadId: "99" },
+        prompt: "Continue once after duplicate prompt delivery",
+        workdir: repoDir,
+        model: "gpt-5.5",
+        allowedTools: ["Shell(git status)", "Shell(pnpm test)"],
+        worktreeStrategy: "delegate" as const,
+      };
+
+      sm.requestRepoPolicyForLaunch(launch);
+      sm.requestRepoPolicyForLaunch({
+        ...launch,
+        allowedTools: ["Shell(pnpm test)", "Shell(git status)"],
+      });
+      const firstPolicyTokenId = dispatchCalls[0][1].buttons[0][0].callbackData;
+      const secondPolicyTokenId = dispatchCalls[1][1].buttons[0][0].callbackData;
+
+      sm.setRepoPolicy(repoDir, "pr-required");
+      const continuation = sm.continueLaunchAfterManualRepoPolicy(repoDir, "pr-required");
+
+      assert.equal(continuation.kind, "launched");
+      assert.equal(spawnCount, 1);
+      assert.equal(spawnConfig?.prompt, "Continue once after duplicate prompt delivery");
+      assert.equal(spawnConfig?.workdir, repoDir);
+      assert.equal(sm.getActionToken(firstPolicyTokenId), undefined);
+      assert.equal(sm.getActionToken(secondPolicyTokenId), undefined);
+      assert.equal(dispatchCalls.length, 2);
+      sm.dispose();
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+      rmSync(storeDir, { recursive: true, force: true });
+    }
+  });
+
   it("keeps the deferred launch token retryable when manual policy continuation fails", () => {
     const repoDir = mkdtempSync(join(tmpdir(), "openclaw-policy-manual-failure-"));
     const storeDir = mkdtempSync(join(tmpdir(), "openclaw-policy-manual-failure-store-"));
