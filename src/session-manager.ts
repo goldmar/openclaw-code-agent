@@ -1679,8 +1679,8 @@ export class SessionManager {
   /**
    * Resolve a pending AskUserQuestion by option index (from button callback).
    */
-  resolveAskUserQuestion(sessionId: string, optionIndex: number): void {
-    this.questions.resolveAskUserQuestion(sessionId, optionIndex);
+  resolveAskUserQuestion(sessionId: string, optionIndex: number): boolean {
+    return this.questions.resolveAskUserQuestion(sessionId, optionIndex);
   }
 
   async resolvePendingInputOption(
@@ -1696,8 +1696,7 @@ export class SessionManager {
       }
       return false;
     }
-    this.questions.resolveAskUserQuestion(sessionId, optionIndex);
-    return true;
+    return this.questions.resolveAskUserQuestion(sessionId, optionIndex);
   }
 
   dispose(): void {
