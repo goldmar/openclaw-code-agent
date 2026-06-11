@@ -234,6 +234,29 @@ describe("agent_merge push behavior", () => {
     }
   });
 
+  it("does not report dirty worktrees as no-commit branches when ahead detection fails", async () => {
+    const { repoDir, remoteDir } = createRepoWithRemote("agent-merge-dirty-unknown");
+    try {
+      const sessionName = "merge-dirty-unknown";
+      const worktreePath = createWorktree(repoDir, sessionName);
+      const branchName = getBranchName(worktreePath);
+      assert.ok(branchName, "worktree branch should exist");
+      writeFileSync(join(worktreePath, "feature.txt"), "not committed\n", "utf-8");
+      installPersistedSessionStub(sessionName, repoDir, worktreePath, "missing-branch");
+
+      const tool = makeAgentMergeTool();
+      const result = await tool.execute("tool-id", { session: sessionName });
+      const text = (result.content[0] as { text: string }).text;
+
+      assert.doesNotMatch(text, /has no commits ahead/i);
+      assert.match(text, /Merge failed|Merge blocked/i);
+      assert.equal(git(repoDir, "rev-parse", "main"), remoteHead(repoDir, "main"));
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+      rmSync(remoteDir, { recursive: true, force: true });
+    }
+  });
+
   it("returns already merged before dirty/no-commit merge blocking", async () => {
     const { repoDir, remoteDir } = createRepoWithRemote("agent-merge-already-dirty");
     try {

@@ -1,3 +1,4 @@
+import { existsSync } from "fs";
 import type { Session } from "./session";
 import type { WorktreeCompletionState } from "./session-worktree-controller";
 import { getPrimarySessionLookupRef, usesNativeBackendWorktree } from "./session-backend-ref";
@@ -122,6 +123,16 @@ export class SessionWorktreeActionService {
       };
     }
 
+    const nativeBackendWorktree = usesNativeBackendWorktree(session);
+    if (nativeBackendWorktree && !existsSync(worktreePath)) {
+      return {
+        kind: "no-change",
+        repoDir,
+        worktreePath,
+        nativeBackendWorktree,
+      };
+    }
+
     const baseBranch = session.worktreeBaseBranch ?? detectDefaultBranch(repoDir);
     const completionState = this.deps.getWorktreeCompletionState(repoDir, worktreePath, branchName, baseBranch);
 
@@ -130,7 +141,7 @@ export class SessionWorktreeActionService {
         kind: "no-change",
         repoDir,
         worktreePath,
-        nativeBackendWorktree: usesNativeBackendWorktree(session),
+        nativeBackendWorktree,
       };
     }
     if (completionState === "merged") {
@@ -139,7 +150,7 @@ export class SessionWorktreeActionService {
         repoDir,
         worktreePath,
         branchName,
-        nativeBackendWorktree: usesNativeBackendWorktree(session),
+        nativeBackendWorktree,
       };
     }
     if (completionState === "base-advanced") {

@@ -12,7 +12,7 @@ import {
   pruneWorktrees,
   getDiffSummary,
   formatWorktreeOutcomeLine,
-  hasCommitsAhead,
+  getCommitsAheadCount,
   hasDirtyWorktreeEntries,
 } from "../worktree";
 import { getPersistedTargetMutationRefs, resolveWorktreeToolTarget } from "./worktree-tool-context";
@@ -187,11 +187,10 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
         return { content: [{ type: "text", text: `ℹ️ Session "${params.session}" is already merged.` }] };
       }
 
-      if (
-        existsSync(worktreePath)
-        && !hasCommitsAhead(effectiveWorkdir, branchName, baseBranch)
-        && hasDirtyWorktreeEntries(worktreePath)
-      ) {
+      const branchAheadCount = existsSync(worktreePath)
+        ? getCommitsAheadCount(effectiveWorkdir, branchName, baseBranch)
+        : undefined;
+      if (branchAheadCount === 0 && hasDirtyWorktreeEntries(worktreePath)) {
         return {
           content: [{
             type: "text",

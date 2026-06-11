@@ -14,6 +14,7 @@ describe("worktree utilities", () => {
     assert.ok(typeof worktree.isGitAvailable === "function");
     assert.ok(typeof worktree.isGitHubCLIAvailable === "function");
     assert.ok(typeof worktree.getBranchName === "function");
+    assert.ok(typeof worktree.getCommitsAheadCount === "function");
     assert.ok(typeof worktree.hasCommitsAhead === "function");
     assert.ok(typeof worktree.getDiffSummary === "function");
     assert.ok(typeof worktree.pushBranch === "function");

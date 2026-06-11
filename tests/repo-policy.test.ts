@@ -558,6 +558,50 @@ describe("repo policy resolution", () => {
 });
 
 describe("SessionWorktreeActionService repo policy planning", () => {
+  it("releases absent native backend worktrees without inspecting completion topology", async () => {
+    const repoDir = mkdtempSync(join(tmpdir(), "openclaw-policy-native-absent-"));
+    const worktreePath = join(repoDir, ".worktrees", "native-absent");
+    try {
+      const service = new SessionWorktreeActionService({
+        shouldRunWorktreeStrategy: () => true,
+        isAlreadyMerged: () => false,
+        resolveWorktreeRepoDir: () => repoDir,
+        getWorktreeCompletionState: () => {
+          throw new Error("absent native backend worktrees should release before topology inspection");
+        },
+        isPrAvailable: () => true,
+      });
+
+      const action = await service.plan({
+        id: "s-native-absent",
+        name: "native-absent",
+        status: "completed",
+        lifecycle: "active",
+        phase: "implementing",
+        worktreePath,
+        worktreeBranch: "agent/native-absent",
+        worktreeStrategy: "ask",
+        originalWorkdir: repoDir,
+        harnessSessionId: "h-native-absent",
+        backendRef: {
+          kind: "codex-app-server",
+          conversationId: "codex-native-absent",
+          worktreeId: "wt-native-absent",
+          worktreePath,
+        },
+      } as any);
+
+      assert.deepEqual(action, {
+        kind: "no-change",
+        repoDir,
+        worktreePath,
+        nativeBackendWorktree: true,
+      });
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
   it("turns auto-merge into auto-pr for PR-required repos when PRs are available", async () => {
     const { repoDir, worktreePath, branchName } = createRepoWithWorktree("auto-pr-required");
     try {

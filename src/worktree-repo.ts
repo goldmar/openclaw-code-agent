@@ -191,7 +191,7 @@ export function getBranchName(worktreePath: string): string | undefined {
   }
 }
 
-export function hasCommitsAhead(repoDir: string, branch: string, base: string): boolean {
+export function getCommitsAheadCount(repoDir: string, branch: string, base: string): number | undefined {
   try {
     const result = execFileSync(
       "git",
@@ -199,10 +199,14 @@ export function hasCommitsAhead(repoDir: string, branch: string, base: string): 
       { timeout: 10_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
     );
     const count = parseInt(result.trim(), 10);
-    return count > 0;
+    return Number.isFinite(count) ? count : undefined;
   } catch {
-    return false;
+    return undefined;
   }
+}
+
+export function hasCommitsAhead(repoDir: string, branch: string, base: string): boolean {
+  return (getCommitsAheadCount(repoDir, branch, base) ?? 0) > 0;
 }
 
 export function getAheadBehindCounts(
