@@ -2522,6 +2522,68 @@ describe("SessionManager restored button parity", () => {
     assert.equal(token.pendingInputRequestId, "req-1");
     assert.equal(token.pendingInputQuestionId, "environment");
   });
+
+  it("shortens long question button labels while preserving token semantics", () => {
+    const longLabel = "Deploy to the production environment after completing every preflight validation step";
+    const buttons = (sm as any).interactions.getQuestionButtons(
+      "question-session",
+      [{ label: longLabel }],
+      { requestId: "req-1", questionId: "environment" },
+    );
+
+    assert.equal(buttons[0][0].label.length, 80);
+    assert.match(buttons[0][0].label, /\.\.\.$/);
+    assert.match(buttons[0][0].callbackData, /^[0-9a-f-]{36}$/);
+    assert.doesNotMatch(buttons[0][0].callbackData, new RegExp(longLabel));
+    const token = (sm as any).interactions.consumeActionToken(buttons[0][0].callbackData);
+    assert.equal(token.label, longLabel);
+    assert.equal(token.optionIndex, 0);
+  });
+
+  it("shortens question button labels without splitting emoji surrogate pairs", () => {
+    const longLabel = `${"a".repeat(76)}😀${"b".repeat(10)}`;
+    const buttons = (sm as any).interactions.getQuestionButtons(
+      "question-session",
+      [{ label: longLabel }],
+      { requestId: "req-1", questionId: "environment" },
+    );
+
+    assert.equal(Array.from(buttons[0][0].label).length, 80);
+    assert.equal(buttons[0][0].label, `${"a".repeat(76)}😀...`);
+    assert.doesNotMatch(buttons[0][0].label, /\uFFFD/);
+    const token = (sm as any).interactions.consumeActionToken(buttons[0][0].callbackData);
+    assert.equal(token.label, longLabel);
+    assert.equal(token.optionIndex, 0);
+  });
+
+  it("splits question buttons into Discord-safe rows while keeping option indexes", () => {
+    const buttons = (sm as any).interactions.getQuestionButtons(
+      "question-session",
+      Array.from({ length: 6 }, (_, index) => ({ label: `Option ${index + 1}` })),
+      { requestId: "req-1", questionId: "environment" },
+    );
+
+    assert.deepEqual(buttonLabels(buttons), [[
+      "Option 1",
+      "Option 2",
+      "Option 3",
+      "Option 4",
+      "Option 5",
+    ], ["Option 6"]]);
+
+    const tokens = buttons.flat().map((button: any) => (
+      (sm as any).interactions.consumeActionToken(button.callbackData)
+    ));
+    assert.deepEqual(tokens.map((token: any) => token.optionIndex), [0, 1, 2, 3, 4, 5]);
+    assert.deepEqual(tokens.map((token: any) => token.label), [
+      "Option 1",
+      "Option 2",
+      "Option 3",
+      "Option 4",
+      "Option 5",
+      "Option 6",
+    ]);
+  });
 });
 
 describe("SessionManager terminal wakes", () => {

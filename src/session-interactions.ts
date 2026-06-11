@@ -24,6 +24,16 @@ type ButtonSource = {
   planDecisionVersion?: number;
 };
 
+const QUESTION_BUTTON_LABEL_MAX_LENGTH = 80;
+const QUESTION_BUTTONS_PER_ROW = 5;
+const QUESTION_BUTTON_LABEL_ELLIPSIS = "...";
+
+function shortenQuestionButtonLabel(label: string): string {
+  const codePoints = Array.from(label);
+  if (codePoints.length <= QUESTION_BUTTON_LABEL_MAX_LENGTH) return label;
+  return `${codePoints.slice(0, QUESTION_BUTTON_LABEL_MAX_LENGTH - QUESTION_BUTTON_LABEL_ELLIPSIS.length).join("")}${QUESTION_BUTTON_LABEL_ELLIPSIS}`;
+}
+
 export class SessionInteractionService {
   constructor(
     private readonly actionTokens: SessionActionTokenStore,
@@ -166,13 +176,24 @@ export class SessionInteractionService {
     context: { requestId?: string; questionId?: string } = {},
   ): NotificationButton[][] | undefined {
     if (options.length === 0) return undefined;
-    return [options.map((option, index) => (
-      this.makeActionButton(sessionId, "question-answer", option.label, {
+    const buttons = options.map((option, index) => {
+      const token = this.createActionToken(sessionId, "question-answer", {
+        label: option.label,
         optionIndex: index,
         pendingInputRequestId: context.requestId,
         pendingInputQuestionId: context.questionId,
-      })
-    ))];
+      });
+      return {
+        label: shortenQuestionButtonLabel(option.label),
+        callbackData: token.id,
+        style: this.resolveButtonStyle("question-answer"),
+      };
+    });
+    const rows: NotificationButton[][] = [];
+    for (let index = 0; index < buttons.length; index += QUESTION_BUTTONS_PER_ROW) {
+      rows.push(buttons.slice(index, index + QUESTION_BUTTONS_PER_ROW));
+    }
+    return rows;
   }
 
   getPlanOfferButtons(args: {
