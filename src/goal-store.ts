@@ -58,7 +58,12 @@ function availableGoalTaskArchivePath(path: string): string | undefined {
 function archiveGoalTasksFile(path: string, reason: string): boolean {
   try {
     const archivedPath = availableGoalTaskArchivePath(path);
-    if (!archivedPath) return false;
+    if (!archivedPath) {
+      if (existsSync(path)) {
+        console.warn("[GoalTaskStore] Failed to archive goal task store: no available archive path");
+      }
+      return false;
+    }
     renameSync(path, archivedPath);
     console.warn(`[GoalTaskStore] Archived ${reason} goal task store to ${archivedPath}.`);
     return true;
