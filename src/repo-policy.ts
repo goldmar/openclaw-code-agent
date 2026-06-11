@@ -96,7 +96,7 @@ function runGit(cwd: string, args: string[]): string | undefined {
 
 export function normalizeRemoteUrl(url: string | undefined): string | undefined {
   if (!url) return undefined;
-  const trimmed = url.trim().replace(/\.git$/, "");
+  const trimmed = url.trim().replace(/\/+$/, "").replace(/\.git$/i, "");
   const ssh = trimmed.match(/^git@([^:]+):(.+)$/);
   if (ssh) return `https://${ssh[1].toLowerCase()}/${ssh[2].toLowerCase()}`;
   const https = trimmed.match(/^https?:\/\/([^/]+)\/(.+)$/i);

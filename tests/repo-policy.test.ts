@@ -45,6 +45,10 @@ function createRepoWithWorktree(name: string) {
 describe("repo policy resolution", () => {
   it("normalizes GitHub remotes and detects unsupported providers", () => {
     assert.equal(normalizeRemoteUrl("git@github.com:Goldmar/OpenClaw-Code-Agent.git"), "https://github.com/goldmar/openclaw-code-agent");
+    assert.equal(normalizeRemoteUrl("git@github.com:Goldmar/OpenClaw-Code-Agent.git/"), "https://github.com/goldmar/openclaw-code-agent");
+    assert.equal(normalizeRemoteUrl("git@github.com:Goldmar/OpenClaw-Code-Agent/"), "https://github.com/goldmar/openclaw-code-agent");
+    assert.equal(normalizeRemoteUrl("https://github.com/Goldmar/OpenClaw-Code-Agent.git/"), "https://github.com/goldmar/openclaw-code-agent");
+    assert.equal(normalizeRemoteUrl("https://github.com/Goldmar/OpenClaw-Code-Agent/"), "https://github.com/goldmar/openclaw-code-agent");
     assert.equal(detectRepoProvider("https://github.com/goldmar/openclaw-code-agent"), "github");
     assert.equal(detectRepoProvider("https://gitlab.com/example/repo"), "unsupported");
   });
@@ -528,9 +532,10 @@ describe("repo policy resolution", () => {
     const repoDir = mkdtempSync(join(tmpdir(), "openclaw-policy-seed-"));
     try {
       git(repoDir, "init", "-b", "main");
-      git(repoDir, "remote", "add", "origin", "https://github.com/goldmar/openclaw-code-agent.git");
+      git(repoDir, "remote", "add", "origin", "https://github.com/goldmar/openclaw-code-agent.git/");
       const identity = resolveRepoIdentity(repoDir);
       assert.ok(identity);
+      assert.equal(identity.remoteUrl, "https://github.com/goldmar/openclaw-code-agent");
       assert.equal(seededRepoPolicy(identity), "pr-required");
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
