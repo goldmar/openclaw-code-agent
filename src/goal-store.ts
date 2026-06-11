@@ -4,6 +4,15 @@ import { dirname, join } from "path";
 
 import type { GoalTaskState, SessionRoute } from "./types";
 
+const GOAL_TASK_STATUSES: ReadonlySet<GoalTaskState["status"]> = new Set([
+  "running",
+  "waiting_for_session",
+  "waiting_for_user",
+  "succeeded",
+  "failed",
+  "stopped",
+]);
+
 function resolveOpenclawHomeDir(env: NodeJS.ProcessEnv): string {
   const explicit = env.OPENCLAW_HOME?.trim();
   if (explicit) return explicit;
@@ -20,9 +29,30 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+function isRecord(raw: unknown): raw is Record<string, unknown> {
+  return Boolean(raw) && typeof raw === "object" && !Array.isArray(raw);
+}
+
+function archiveGoalTasksFile(path: string, reason: string): boolean {
+  try {
+    if (!existsSync(path)) return false;
+    const archivedPath = `${path}.invalid-${Date.now()}.json`;
+    renameSync(path, archivedPath);
+    console.warn(`[GoalTaskStore] Archived ${reason} goal task store to ${archivedPath}.`);
+    return true;
+  } catch (err: unknown) {
+    console.warn(`[GoalTaskStore] Failed to archive goal task store: ${errorMessage(err)}`);
+    return false;
+  }
+}
+
+export const goalStoreInternals = {
+  archiveGoalTasksFile,
+};
+
 function normalizeRoute(raw: unknown): SessionRoute | undefined {
-  if (!raw || typeof raw !== "object") return undefined;
-  const value = raw as Record<string, unknown>;
+  if (!isRecord(raw)) return undefined;
+  const value = raw;
   if (typeof value.provider !== "string" || typeof value.target !== "string") return undefined;
   return {
     provider: value.provider,
@@ -34,10 +64,11 @@ function normalizeRoute(raw: unknown): SessionRoute | undefined {
 }
 
 function normalizeTask(raw: unknown): GoalTaskState | undefined {
-  if (!raw || typeof raw !== "object") return undefined;
-  const value = raw as Record<string, unknown>;
+  if (!isRecord(raw)) return undefined;
+  const value = raw;
   if (typeof value.id !== "string" || typeof value.name !== "string" || typeof value.goal !== "string") return undefined;
   if (typeof value.workdir !== "string" || typeof value.status !== "string") return undefined;
+  if (!GOAL_TASK_STATUSES.has(value.status as GoalTaskState["status"])) return undefined;
 
   const status = value.status;
   const resumedStatus =
@@ -91,6 +122,18 @@ function normalizeTask(raw: unknown): GoalTaskState | undefined {
   };
 }
 
+function normalizeTaskStore(raw: unknown): GoalTaskState[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+
+  const tasks: GoalTaskState[] = [];
+  for (const item of raw) {
+    const task = normalizeTask(item);
+    if (!task) return undefined;
+    tasks.push(task);
+  }
+  return tasks;
+}
+
 export class GoalTaskStore {
   private readonly path: string;
   private readonly tasks: Map<string, GoalTaskState> = new Map();
@@ -105,17 +148,18 @@ export class GoalTaskStore {
       if (!existsSync(this.path)) return;
       const raw = readFileSync(this.path, "utf8");
       const parsed = JSON.parse(raw) as unknown;
-      if (!Array.isArray(parsed)) return;
-
-      for (const item of parsed) {
-        const task = normalizeTask(item);
-        if (task) {
-          this.tasks.set(task.id, task);
-        }
+      const tasks = normalizeTaskStore(parsed);
+      if (!tasks) {
+        if (archiveGoalTasksFile(this.path, "invalid")) this.save();
+        return;
       }
+
+      this.tasks.clear();
+      for (const task of tasks) this.tasks.set(task.id, task);
       this.save();
-    } catch {
-      // Start with an empty store if the file is unreadable.
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
+      if (archiveGoalTasksFile(this.path, "corrupt or unreadable")) this.save();
     }
   }
 
