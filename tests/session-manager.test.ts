@@ -2540,6 +2540,22 @@ describe("SessionManager restored button parity", () => {
     assert.equal(token.optionIndex, 0);
   });
 
+  it("shortens question button labels without splitting emoji surrogate pairs", () => {
+    const longLabel = `${"a".repeat(76)}😀${"b".repeat(10)}`;
+    const buttons = (sm as any).interactions.getQuestionButtons(
+      "question-session",
+      [{ label: longLabel }],
+      { requestId: "req-1", questionId: "environment" },
+    );
+
+    assert.equal(Array.from(buttons[0][0].label).length, 80);
+    assert.equal(buttons[0][0].label, `${"a".repeat(76)}😀...`);
+    assert.doesNotMatch(buttons[0][0].label, /\uFFFD/);
+    const token = (sm as any).interactions.consumeActionToken(buttons[0][0].callbackData);
+    assert.equal(token.label, longLabel);
+    assert.equal(token.optionIndex, 0);
+  });
+
   it("splits question buttons into Discord-safe rows while keeping option indexes", () => {
     const buttons = (sm as any).interactions.getQuestionButtons(
       "question-session",

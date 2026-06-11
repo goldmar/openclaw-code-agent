@@ -26,10 +26,12 @@ type ButtonSource = {
 
 const QUESTION_BUTTON_LABEL_MAX_LENGTH = 80;
 const QUESTION_BUTTONS_PER_ROW = 5;
+const QUESTION_BUTTON_LABEL_ELLIPSIS = "...";
 
 function shortenQuestionButtonLabel(label: string): string {
-  if (label.length <= QUESTION_BUTTON_LABEL_MAX_LENGTH) return label;
-  return `${label.slice(0, QUESTION_BUTTON_LABEL_MAX_LENGTH - 3)}...`;
+  const codePoints = Array.from(label);
+  if (codePoints.length <= QUESTION_BUTTON_LABEL_MAX_LENGTH) return label;
+  return `${codePoints.slice(0, QUESTION_BUTTON_LABEL_MAX_LENGTH - QUESTION_BUTTON_LABEL_ELLIPSIS.length).join("")}${QUESTION_BUTTON_LABEL_ELLIPSIS}`;
 }
 
 export class SessionInteractionService {
