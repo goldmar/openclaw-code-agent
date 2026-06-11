@@ -737,6 +737,70 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
     }
   });
 
+  it("falls back to merge buttons when PR-only fallback buttons are blocked", async () => {
+    const { repoDir, worktreePath, branchName } = createConflictedWorktree("resolver-spawn-merge-fallback");
+    try {
+      const notifications: Array<Record<string, unknown>> = [];
+      const service = new SessionWorktreeStrategyService({
+        shouldRunWorktreeStrategy: () => true,
+        isAlreadyMerged: () => false,
+        resolveWorktreeRepoDir: (dir) => dir,
+        getWorktreeCompletionState: () => "has-commits",
+        updatePersistedSession: (_ref, patch) => {
+          Object.assign(session, patch);
+          return true;
+        },
+        dispatchSessionNotification: (_session, request) => {
+          notifications.push(request as Record<string, unknown>);
+        },
+        getOutputPreview: () => "",
+        originThreadLine: () => "thread",
+        getWorktreeDecisionButtons: () => [[
+          { label: "Merge", callbackData: "merge" },
+          { label: "Later", callbackData: "later" },
+        ]],
+        makeOpenPrButton: () => ({ label: "Open PR", callbackData: "open-pr" }),
+        isPrAvailable: () => true,
+        worktreeMessages: new SessionWorktreeMessageService(),
+        enqueueMerge: async (_repoDir, fn) => { await fn(); },
+        mergeBranch,
+        spawnConflictResolver: async () => {
+          throw new Error("spawn failed");
+        },
+        runAutoPr: async () => ({ success: true }),
+      });
+
+      const session: any = {
+        id: "s-resolver-spawn-merge-fallback",
+        name: "resolver-spawn-merge-fallback",
+        harnessSessionId: "h-resolver-spawn-merge-fallback",
+        status: "completed",
+        phase: "implementing",
+        lifecycle: "terminal",
+        worktreeState: "active",
+        originalWorkdir: repoDir,
+        worktreePath,
+        worktreeBranch: branchName,
+        worktreeBaseBranch: "main",
+        worktreeStrategy: "auto-merge",
+        repoIntegrationPolicy: "never-pr",
+        pendingPlanApproval: false,
+        worktreePrTargetRepo: undefined,
+        worktreePushRemote: undefined,
+      };
+
+      await service.handleWorktreeStrategy(session);
+
+      assert.equal(notifications.length, 1);
+      assert.equal(notifications[0].label, "worktree-merge-conflict-spawn-failed");
+      assert.equal(buttonLabels(notifications[0].buttons).includes("Open PR"), false);
+      assert.equal(buttonLabels(notifications[0].buttons).includes("Merge"), true);
+      assert.equal(buttonLabels(notifications[0].buttons).includes("Later"), true);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
   it("escalates after the retry budget is exhausted instead of spawning another resolver", async () => {
     const { repoDir, worktreePath, branchName } = createConflictedWorktree("resolver-exhausted");
     try {

@@ -408,7 +408,7 @@ export class SessionWorktreeStrategyService {
       return this.deps.getPolicyAwareWorktreeDecisionButtons(sessionId, options, allowedActions);
     }
     if (fallbackButtons && allowedActions.pr) return fallbackButtons;
-    if (fallbackButtons && !allowedActions.pr) return undefined;
+    if (fallbackButtons && !allowedActions.pr && !allowedActions.merge) return undefined;
     return this.deps.getWorktreeDecisionButtons(sessionId);
   }
 
