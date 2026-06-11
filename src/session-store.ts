@@ -1,4 +1,4 @@
-import { existsSync, writeFileSync } from "fs";
+import { existsSync, statSync, writeFileSync } from "fs";
 import type {
   PersistedSessionInfo,
   RepoIntegrationPolicy,
@@ -37,6 +37,14 @@ export interface SessionStoreOptions {
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+function pathExistsAsDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -455,6 +463,17 @@ export class SessionStore {
     const deleted = this.repoPolicies.delete(key);
     if (deleted) this.saveIndex();
     return deleted;
+  }
+
+  cleanupRepoPolicies(): RepoPolicyRecord[] {
+    const removed: RepoPolicyRecord[] = [];
+    for (const [key, record] of this.repoPolicies) {
+      if (pathExistsAsDirectory(record.repoRoot)) continue;
+      this.repoPolicies.delete(key);
+      removed.push(record);
+    }
+    if (removed.length > 0) this.saveIndex();
+    return removed.sort((a, b) => a.repoRoot.localeCompare(b.repoRoot) || a.key.localeCompare(b.key));
   }
 
   /** Best-effort cleanup for stale tmp output files written by persistTerminal. */

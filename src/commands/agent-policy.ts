@@ -24,7 +24,7 @@ function isPolicy(value: string): value is RepoIntegrationPolicy {
 export function registerAgentPolicyCommand(api: CommandApi): void {
   api.registerCommand({
     name: "agent_policy",
-    description: "Inspect or set the current repo integration policy. Usage: /agent_policy [pr-required|pr-allowed|never-pr|manual|reset|list]",
+    description: "Inspect or set the current repo integration policy. Usage: /agent_policy [pr-required|pr-allowed|never-pr|manual|reset|list|cleanup]",
     acceptsArgs: true,
     requireAuth: true,
     handler: (ctx) => {
@@ -37,6 +37,17 @@ export function registerAgentPolicyCommand(api: CommandApi): void {
           text: records.length === 0
             ? "No stored repo policies."
             : records.map((record) => `${record.policy} | ${record.provider} | ${record.repoRoot}`).join("\n"),
+        };
+      }
+      if (action === "cleanup") {
+        const removed = sessionManager.cleanupRepoPolicies();
+        return {
+          text: removed.length === 0
+            ? "No stale repo policies found."
+            : [
+                `Removed ${removed.length} stale repo ${removed.length === 1 ? "policy" : "policies"}.`,
+                ...removed.map((record) => `${record.policy} | ${record.provider} | ${record.repoRoot}`),
+              ].join("\n"),
         };
       }
       const workdir = ctx.workspaceDir;

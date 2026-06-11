@@ -7,6 +7,7 @@ interface AgentRepoPolicyParams {
   policy?: RepoIntegrationPolicy;
   reset?: boolean;
   list?: boolean;
+  cleanup?: boolean;
 }
 
 function isPolicy(value: unknown): value is RepoIntegrationPolicy {
@@ -38,12 +39,23 @@ export function makeAgentRepoPolicyTool(ctx?: OpenClawPluginToolContext) {
       ], { description: "Policy to set for this repo." })),
       reset: Type.Optional(Type.Boolean({ description: "Remove the stored policy for this repo." })),
       list: Type.Optional(Type.Boolean({ description: "List all stored repo policies." })),
+      cleanup: Type.Optional(Type.Boolean({ description: "Remove stored repo policies whose repoRoot no longer exists on disk." })),
     }),
     async execute(_id: string, params: AgentRepoPolicyParams | unknown) {
       if (!sessionManager) {
         return { content: [{ type: "text", text: "Error: SessionManager not initialized. The code-agent service must be running." }] };
       }
       const input = params && typeof params === "object" ? params as AgentRepoPolicyParams : {};
+      if (input.cleanup === true) {
+        const removed = sessionManager.cleanupRepoPolicies();
+        const text = removed.length === 0
+          ? "No stale repo policies found."
+          : [
+              `Removed ${removed.length} stale repo ${removed.length === 1 ? "policy" : "policies"}.`,
+              ...removed.map((record) => `${record.policy} | ${record.provider} | ${record.repoRoot}`),
+            ].join("\n");
+        return { content: [{ type: "text", text }] };
+      }
       if (input.list === true) {
         const records = sessionManager.listRepoPolicies();
         const text = records.length === 0
