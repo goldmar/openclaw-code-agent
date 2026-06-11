@@ -24,7 +24,14 @@ type CallbackHandlerDependencies = {
 
 type PlanDecisionTarget = Pick<
   PersistedSessionInfo,
-  "approvalState" | "name" | "pendingPlanApproval" | "planDecisionVersion" | "actionablePlanDecisionVersion"
+  | "approvalState"
+  | "name"
+  | "pendingPlanApproval"
+  | "planDecisionVersion"
+  | "actionablePlanDecisionVersion"
+  | "approvalPromptRequiredVersion"
+  | "approvalPromptVersion"
+  | "canonicalPlanPromptVersion"
 >;
 
 type InteractiveResponder = {
@@ -110,6 +117,27 @@ function isPlanDecisionAction(kind: SessionActionKind): boolean {
   return kind === "plan-approve" || kind === "plan-request-changes" || kind === "plan-reject";
 }
 
+function latestDefinedVersion(...versions: Array<number | undefined>): number | undefined {
+  let latest: number | undefined;
+  for (const version of versions) {
+    if (version == null) continue;
+    latest = latest == null ? version : Math.max(latest, version);
+  }
+  return latest;
+}
+
+function resolveCurrentPlanDecisionVersion(session: PlanDecisionTarget): number | undefined {
+  if (session.actionablePlanDecisionVersion != null) return session.actionablePlanDecisionVersion;
+
+  const deliveryVersion = latestDefinedVersion(
+    session.approvalPromptRequiredVersion,
+    session.approvalPromptVersion,
+  );
+  if (deliveryVersion != null) return deliveryVersion;
+
+  return session.canonicalPlanPromptVersion ?? session.planDecisionVersion;
+}
+
 function validatePlanDecisionToken(
   token: SessionActionToken,
   session: PlanDecisionTarget | undefined,
@@ -117,10 +145,12 @@ function validatePlanDecisionToken(
   if (!isPlanDecisionAction(token.kind)) return undefined;
   if (!session) return "This plan decision is stale because the session is no longer available.";
 
+  const currentPlanDecisionVersion = resolveCurrentPlanDecisionVersion(session);
+
   if (
     token.planDecisionVersion != null &&
-    (session.actionablePlanDecisionVersion ?? session.planDecisionVersion) != null &&
-    token.planDecisionVersion !== (session.actionablePlanDecisionVersion ?? session.planDecisionVersion)
+    currentPlanDecisionVersion != null &&
+    token.planDecisionVersion !== currentPlanDecisionVersion
   ) {
     return "This plan decision is stale because a newer plan review state already exists.";
   }
