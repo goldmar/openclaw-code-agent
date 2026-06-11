@@ -547,6 +547,46 @@ describe("createCallbackHandler()", () => {
     });
   });
 
+  it("accepts delivered plan prompt tokens when the actionable version is missing from session state", async () => {
+    let killed: { id: string; reason: string } | undefined;
+    setSessionManager({
+      getActionToken: () => ({
+        sessionId: "test-id",
+        kind: "plan-reject",
+        planDecisionVersion: 4,
+      }),
+      consumeActionToken: () => ({
+        sessionId: "test-id",
+        kind: "plan-reject",
+        planDecisionVersion: 4,
+      }),
+      resolve: () => createStubSession({
+        id: "test-id",
+        name: "restored-plan",
+        pendingPlanApproval: true,
+        approvalState: "pending",
+        planDecisionVersion: 5,
+        approvalPromptRequiredVersion: 4,
+        approvalPromptVersion: 4,
+        canonicalPlanPromptVersion: 4,
+      }),
+      getPersistedSession: () => undefined,
+      clearPlanDecisionTokens: () => {},
+      kill: (id: string, reason: string) => {
+        killed = { id, reason };
+      },
+    } as any);
+
+    const handler = createCallbackHandler();
+    const state = createCtx("token-reject");
+    const result = await handler.handler(state.ctx as any);
+
+    assert.deepEqual(result, { handled: true });
+    assert.deepEqual(killed, { id: "test-id", reason: "user" });
+    assert.equal(state.buttonsCleared, 1);
+    assert.equal(state.replies[0], "❌ Plan rejected for [restored-plan]. Session stopped.");
+  });
+
   it("rejects stale plan approval callbacks from an older plan-decision version", async () => {
     setSessionManager({
       getActionToken: () => ({
@@ -572,6 +612,40 @@ describe("createCallbackHandler()", () => {
 
     const handler = createCallbackHandler();
     const state = createCtx("token-stale-approve");
+    const result = await handler.handler(state.ctx as any);
+
+    assert.deepEqual(result, { handled: true });
+    assert.equal(state.buttonsCleared, 1);
+    assert.match(state.replies[0], /stale/i);
+  });
+
+  it("rejects older plan callbacks when current delivery metadata supersedes prior canonical metadata", async () => {
+    setSessionManager({
+      getActionToken: () => ({
+        sessionId: "test-id",
+        kind: "plan-reject",
+        planDecisionVersion: 4,
+      }),
+      consumeActionToken: () => ({
+        sessionId: "test-id",
+        kind: "plan-reject",
+        planDecisionVersion: 4,
+      }),
+      resolve: () => createStubSession({
+        id: "test-id",
+        name: "planner",
+        pendingPlanApproval: true,
+        approvalState: "pending",
+        planDecisionVersion: 5,
+        approvalPromptRequiredVersion: 5,
+        approvalPromptVersion: 5,
+        canonicalPlanPromptVersion: 4,
+      }),
+      getPersistedSession: () => undefined,
+    } as any);
+
+    const handler = createCallbackHandler();
+    const state = createCtx("token-stale-reject");
     const result = await handler.handler(state.ctx as any);
 
     assert.deepEqual(result, { handled: true });
