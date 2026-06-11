@@ -158,10 +158,15 @@ describe("repo policy resolution", () => {
         model: "gpt-5.1",
         reasoningEffort: "medium" as const,
         worktreeStrategy: "delegate" as const,
+        allowedTools: ["Shell(git status)", "Shell(pnpm test)"],
       };
 
       sm.requestRepoPolicyForLaunch(baseLaunch);
       sm.requestRepoPolicyForLaunch(baseLaunch);
+      sm.requestRepoPolicyForLaunch({
+        ...baseLaunch,
+        allowedTools: ["Shell(pnpm test)", "Shell(git status)"],
+      });
       sm.requestRepoPolicyForLaunch({
         ...baseLaunch,
         prompt: "Implement launch B",
@@ -169,11 +174,13 @@ describe("repo policy resolution", () => {
         model: "gpt-5.2",
       });
 
-      assert.equal(dispatchCalls.length, 3);
+      assert.equal(dispatchCalls.length, 4);
       const firstKey = dispatchCalls[0][1].idempotencyKey;
       const retryKey = dispatchCalls[1][1].idempotencyKey;
-      const changedKey = dispatchCalls[2][1].idempotencyKey;
+      const reorderedToolsKey = dispatchCalls[2][1].idempotencyKey;
+      const changedKey = dispatchCalls[3][1].idempotencyKey;
       assert.equal(retryKey, firstKey);
+      assert.equal(reorderedToolsKey, firstKey);
       assert.notEqual(changedKey, firstKey);
       assert.match(firstKey, /^repo-policy-choice:.+:delegate:[0-9a-f]{16}$/);
       assert.match(changedKey, /^repo-policy-choice:.+:delegate:[0-9a-f]{16}$/);

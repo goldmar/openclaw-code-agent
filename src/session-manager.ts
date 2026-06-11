@@ -130,7 +130,7 @@ function digestRepoPolicyLaunchContext(args: RepoPolicyLaunchArgs, strategy: Wor
     reasoningEffort: args.reasoningEffort,
     fastMode: args.fastMode,
     systemPrompt: args.systemPrompt,
-    allowedTools: args.allowedTools,
+    allowedTools: args.allowedTools ? [...args.allowedTools].sort() : args.allowedTools,
     resumeSessionId: args.resumeSessionId,
     resumeWorktreeFrom: args.resumeWorktreeFrom,
     sessionIdOverride: args.sessionIdOverride,
