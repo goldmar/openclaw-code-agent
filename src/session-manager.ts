@@ -889,10 +889,12 @@ export class SessionManager {
     }
 
     const policyResolution = this.resolveRepoPolicy(repoDir);
-    const hasPolicySnapshot = Boolean(activeSession?.repoIntegrationPolicy ?? persistedSession?.repoIntegrationPolicy);
+    const snapshotPolicy = activeSession?.repoIntegrationPolicy ?? persistedSession?.repoIntegrationPolicy;
+    const effectivePolicy = snapshotPolicy ?? policyResolution.policy;
+    const hasEffectivePolicy = Boolean(effectivePolicy);
     const allowedActions = {
-      merge: !hasPolicySnapshot || (policyResolution.policy !== "pr-required" && policyResolution.policy !== "manual"),
-      pr: !hasPolicySnapshot || (policyResolution.policy !== "never-pr" && policyResolution.policy !== "manual" && policyResolution.prAvailable),
+      merge: !hasEffectivePolicy || (effectivePolicy !== "pr-required" && effectivePolicy !== "manual"),
+      pr: !hasEffectivePolicy || (effectivePolicy !== "never-pr" && effectivePolicy !== "manual" && policyResolution.prAvailable),
     };
     const buttons = this.getWorktreeDecisionButtons(sessionId, { allowDelegate: true }, allowedActions);
     if (!buttons || buttons.length === 0) {
