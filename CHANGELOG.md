@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed cross-repository PR head lookup and agent merge cleanup reporting.
 - Serialized OpenCode server startup to avoid shared SQLite lock failures.
 - Preserved deferred repo-policy worktree strategy, cleared stale manual repo-policy prompts, and rescheduled no-op action-token expiry purges so deferred button state cannot strand later token deadlines.
+- Sanitized rendered Telegram inline button callback payloads so invalid callback data cannot reach Telegram delivery.
+- Cleared consumed Start Plan buttons when plan-offer launch fails so the chat does not leave a stale retry action visible.
 
 ### Changed
 - Improved worktree decision summaries with concise implementation details and shorter button rows.
