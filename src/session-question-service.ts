@@ -141,16 +141,18 @@ export class SessionQuestionService {
       );
       return false;
     }
-    clearTimeout(pending.timeoutHandle);
-    this.pendingQuestions.delete(sessionId);
-
     const firstQuestion = pending.questions[0];
     const options = firstQuestion.options ?? [];
     const selectedOption = options[optionIndex];
     if (!selectedOption) {
-      pending.reject(new Error(`AskUserQuestion: invalid option index ${optionIndex} (${options.length} options available)`));
+      console.warn(
+        `[SessionQuestionService] resolveAskUserQuestion: invalid option index ${optionIndex} for session "${sessionId}" (${options.length} options available)`,
+      );
       return false;
     }
+
+    clearTimeout(pending.timeoutHandle);
+    this.pendingQuestions.delete(sessionId);
 
     this.clearWaitingTimestamp(sessionId);
     pending.resolve({
