@@ -633,7 +633,7 @@ describe("createCallbackHandler()", () => {
     assert.equal(state.replies[0], "✅ Answer submitted.");
   });
 
-  it("rewrites worktree decision prompts to a single snoozed confirmation", async () => {
+  it("clears worktree decision buttons while preserving the original prompt text", async () => {
     const snoozeCalls: Array<{ sessionId: string; notifyUser?: boolean }> = [];
     setSessionManager({
       getActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
@@ -652,10 +652,11 @@ describe("createCallbackHandler()", () => {
 
     assert.deepEqual(result, { handled: true });
     assert.deepEqual(snoozeCalls, [{ sessionId: "sess-42", notifyUser: false }]);
-    assert.deepEqual(state.editedMessages, ["⏭️ Snoozed 24h for [ux-fix]"]);
+    assert.deepEqual(state.editedMessages, []);
+    assert.equal(state.buttonMarkupEdits, 1);
     assert.equal(state.buttonsCleared, 1);
-    assert.deepEqual(state.replies, []);
-    assert.deepEqual(state.events, ["acknowledge", "editMessage", "clearButtons"]);
+    assert.deepEqual(state.replies, ["⏭️ Snoozed 24h for [ux-fix]"]);
+    assert.deepEqual(state.events, ["acknowledge", "editButtons", "clearButtons", "reply"]);
   });
 
   it("keeps Telegram worktree decision buttons when the action fails", async () => {
@@ -723,7 +724,8 @@ describe("createCallbackHandler()", () => {
     const successResult = await handler.handler(success.ctx as any);
 
     assert.deepEqual(successResult, { handled: true });
-    assert.deepEqual(success.editedMessages, ["🗑️ Discarded for [ux-fix]"]);
+    assert.deepEqual(success.editedMessages, []);
+    assert.equal(success.buttonMarkupEdits, 1);
     assert.equal(success.buttonsCleared, 1);
     assert.equal(success.replies[0], "✅ Discarded");
 
@@ -765,7 +767,7 @@ describe("createCallbackHandler()", () => {
     }
   });
 
-  it("resolves Discord worktree prompts via clearComponents text updates and replies ephemerally", async () => {
+  it("clears Discord worktree components without replacing the prompt text", async () => {
     setSessionManager({
       getActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
       consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
@@ -794,11 +796,11 @@ describe("createCallbackHandler()", () => {
     const result = await handler.handler(ctx as any);
 
     assert.deepEqual(result, { handled: true });
-    assert.deepEqual(clearedMessages, [{ text: "⏭️ Snoozed 24h for [ux-fix]" }]);
-    assert.deepEqual(replies, []);
+    assert.deepEqual(clearedMessages, [{ text: undefined }]);
+    assert.deepEqual(replies, [{ text: "⏭️ Snoozed 24h for [ux-fix]", ephemeral: true }]);
   });
 
-  it("falls back to clearing Telegram buttons when worktree prompt edit fails", async () => {
+  it("clears Telegram worktree buttons without editing prompt text when markup edit is unavailable", async () => {
     const warnings: string[] = [];
     const originalWarn = console.warn;
     console.warn = (message?: unknown) => { warnings.push(String(message)); };
@@ -833,16 +835,13 @@ describe("createCallbackHandler()", () => {
       assert.deepEqual(result, { handled: true });
       assert.equal(buttonsCleared, 1);
       assert.deepEqual(replies, ["⏭️ Snoozed 24h for [ux-fix]"]);
-      assert.match(
-        warnings[0],
-        /Failed to edit Telegram worktree prompt before clearing buttons: telegram edit failed/,
-      );
+      assert.deepEqual(warnings, []);
     } finally {
       console.warn = originalWarn;
     }
   });
 
-  it("updates Discord worktree prompts when only clearButtons is available", async () => {
+  it("clears Discord worktree buttons when only clearButtons is available", async () => {
     const warnings: string[] = [];
     const originalWarn = console.warn;
     console.warn = (message?: unknown) => { warnings.push(String(message)); };
@@ -874,9 +873,9 @@ describe("createCallbackHandler()", () => {
       const result = await handler.handler(ctx as any);
 
       assert.deepEqual(result, { handled: true });
-      assert.deepEqual(editedMessages, ["⏭️ Snoozed 24h for [ux-fix]"]);
+      assert.deepEqual(editedMessages, []);
       assert.equal(buttonsCleared, 1);
-      assert.deepEqual(replies, []);
+      assert.deepEqual(replies, ["⏭️ Snoozed 24h for [ux-fix]"]);
       assert.deepEqual(warnings, []);
     } finally {
       console.warn = originalWarn;
@@ -918,13 +917,13 @@ describe("createCallbackHandler()", () => {
       assert.deepEqual(result, { handled: true });
       assert.equal(buttonsCleared, 1);
       assert.deepEqual(replies, ["⏭️ Snoozed 24h for [ux-fix]"]);
-      assert.match(warnings[0], /clearComponents failed before text fallback: clearComponents failed/);
+      assert.match(warnings[0], /Failed to clear Discord worktree components: clearComponents failed/);
     } finally {
       console.warn = originalWarn;
     }
   });
 
-  it("clears Discord worktree prompts when editMessage reports message is not modified", async () => {
+  it("clears Discord worktree buttons without editMessage when clearButtons is available", async () => {
     const warnings: string[] = [];
     const originalWarn = console.warn;
     console.warn = (message?: unknown) => { warnings.push(String(message)); };
@@ -958,14 +957,14 @@ describe("createCallbackHandler()", () => {
 
       assert.deepEqual(result, { handled: true });
       assert.equal(buttonsCleared, 1);
-      assert.deepEqual(replies, []);
+      assert.deepEqual(replies, ["⏭️ Snoozed 24h for [ux-fix]"]);
       assert.deepEqual(warnings, []);
     } finally {
       console.warn = originalWarn;
     }
   });
 
-  it("clears Discord worktree prompts when editMessage throws before buttons are cleared", async () => {
+  it("ignores Discord editMessage failures because worktree cleanup does not edit message text", async () => {
     const warnings: string[] = [];
     const originalWarn = console.warn;
     console.warn = (message?: unknown) => { warnings.push(String(message)); };
@@ -1000,13 +999,13 @@ describe("createCallbackHandler()", () => {
       assert.deepEqual(result, { handled: true });
       assert.equal(buttonsCleared, 1);
       assert.deepEqual(replies, ["⏭️ Snoozed 24h for [ux-fix]"]);
-      assert.match(warnings[0], /Failed to edit worktree prompt before clearing interactive state: edit failed/);
+      assert.deepEqual(warnings, []);
     } finally {
       console.warn = originalWarn;
     }
   });
 
-  it("does not retry Discord worktree prompt cleanup after a post-edit clear failure", async () => {
+  it("does not edit Discord worktree prompt text when button clearing fails", async () => {
     const warnings: string[] = [];
     const originalWarn = console.warn;
     console.warn = (message?: unknown) => { warnings.push(String(message)); };
@@ -1041,10 +1040,10 @@ describe("createCallbackHandler()", () => {
       const result = await handler.handler(ctx as any);
 
       assert.deepEqual(result, { handled: true });
-      assert.deepEqual(editedMessages, ["⏭️ Snoozed 24h for [ux-fix]"]);
+      assert.deepEqual(editedMessages, []);
       assert.equal(clearAttempts, 1);
       assert.deepEqual(replies, ["⏭️ Snoozed 24h for [ux-fix]"]);
-      assert.match(warnings[0], /Failed to resolve worktree prompt: clear failed/);
+      assert.match(warnings[0], /Failed to clear Discord worktree buttons: clear failed/);
     } finally {
       console.warn = originalWarn;
     }
