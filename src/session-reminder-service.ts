@@ -27,7 +27,10 @@ export class SessionReminderService {
       ref: string,
       patch: Partial<PersistedSessionInfo>,
     ) => boolean,
-    private readonly getWorktreeDecisionButtons: (sessionId: string) => NotificationButton[][] | undefined,
+    private readonly getWorktreeDecisionButtons: (
+      sessionId: string,
+      session: PersistedSessionInfo,
+    ) => NotificationButton[][] | undefined,
   ) {}
 
   static readonly REMINDER_THRESHOLD_MS = 3 * 60 * 60 * 1000;
@@ -107,7 +110,10 @@ export class SessionReminderService {
       label: `worktree-stale-reminder-${session.name}`,
       userMessage: text,
       notifyUser: "always",
-      buttons: this.getWorktreeDecisionButtons(getPrimarySessionLookupRef(session) ?? session.harnessSessionId),
+      buttons: this.getWorktreeDecisionButtons(
+        getPrimarySessionLookupRef(session) ?? session.harnessSessionId,
+        session,
+      ),
     });
   }
 
