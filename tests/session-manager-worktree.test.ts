@@ -803,6 +803,9 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
         worktreeBranch: branchName,
         worktreeState: "merged",
         worktreeMergedAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString(),
+        pendingWorktreeDecisionSince: new Date(Date.now() - 9 * 24 * 60 * 60 * 1000).toISOString(),
+        lastWorktreeReminderAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString(),
+        worktreeDecisionSnoozedUntil: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(),
         worktreeLifecycle: {
           state: "pr_open",
           updatedAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString(),
@@ -815,6 +818,9 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       const persisted = (sm as any).store.persisted.get("h-resolved");
       assert.equal(persisted.worktreePath, undefined);
       assert.equal(persisted.worktreeState, "none");
+      assert.equal(persisted.pendingWorktreeDecisionSince, undefined);
+      assert.equal(persisted.lastWorktreeReminderAt, undefined);
+      assert.equal(persisted.worktreeDecisionSnoozedUntil, undefined);
       assert.equal(persisted.worktreeLifecycle?.state, "merged");
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
