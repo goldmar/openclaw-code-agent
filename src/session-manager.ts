@@ -892,6 +892,30 @@ export class SessionManager {
     return this.interactions.getWorktreeDecisionButtons(sessionId, session, allowedActions);
   }
 
+  private getPolicyAwareWorktreeDecisionButtons(
+    sessionId: string,
+    options: { allowDelegate?: boolean } = {},
+    session?: Session,
+    persistedSession?: PersistedSessionInfo,
+  ): NotificationButton[][] | undefined {
+    const activeSession = session ?? this.resolve(sessionId);
+    const persisted = persistedSession ?? this.getPersistedSession(sessionId);
+    const repoDir = this.resolveWorktreeRepoDir(
+      activeSession?.originalWorkdir ?? persisted?.workdir,
+      activeSession?.worktreePath ?? persisted?.worktreePath,
+    );
+    const policyResolution = repoDir ? this.resolveRepoPolicy(repoDir) : undefined;
+    const effectivePolicy = activeSession?.repoIntegrationPolicy
+      ?? persisted?.repoIntegrationPolicy
+      ?? policyResolution?.policy;
+    const hasEffectivePolicy = Boolean(effectivePolicy);
+    const allowedActions = {
+      merge: !hasEffectivePolicy || (effectivePolicy !== "pr-required" && effectivePolicy !== "manual"),
+      pr: !hasEffectivePolicy || (effectivePolicy !== "never-pr" && effectivePolicy !== "manual" && (policyResolution?.prAvailable ?? true)),
+    };
+    return this.getWorktreeDecisionButtons(sessionId, options, allowedActions);
+  }
+
   private getWorktreeCompletionState(
     repoDir: string,
     worktreePath: string,
@@ -1077,15 +1101,12 @@ export class SessionManager {
       return `Error: Could not compute worktree diff summary for session "${ref}".`;
     }
 
-    const policyResolution = this.resolveRepoPolicy(repoDir);
-    const snapshotPolicy = activeSession?.repoIntegrationPolicy ?? persistedSession?.repoIntegrationPolicy;
-    const effectivePolicy = snapshotPolicy ?? policyResolution.policy;
-    const hasEffectivePolicy = Boolean(effectivePolicy);
-    const allowedActions = {
-      merge: !hasEffectivePolicy || (effectivePolicy !== "pr-required" && effectivePolicy !== "manual"),
-      pr: !hasEffectivePolicy || (effectivePolicy !== "never-pr" && effectivePolicy !== "manual" && policyResolution.prAvailable),
-    };
-    const buttons = this.getWorktreeDecisionButtons(sessionId, { allowDelegate: true }, allowedActions);
+    const buttons = this.getPolicyAwareWorktreeDecisionButtons(
+      sessionId,
+      { allowDelegate: true },
+      activeSession,
+      persistedSession,
+    );
     if (!buttons || buttons.length === 0) {
       return `Error: Could not create worktree decision buttons for session "${ref}".`;
     }
@@ -1242,7 +1263,12 @@ export class SessionManager {
           ? `The resolver finished, but the original session could not be resumed for the merge retry.`
           : `Resolver session ${session.name} ended with status=${session.status}.`,
       ].join("\n"),
-      buttons: [[this.makeActionButton(parentRef, "worktree-create-pr", "Open PR")]],
+      buttons: this.getPolicyAwareWorktreeDecisionButtons(
+        parentRef,
+        { allowDelegate: true },
+        parentSession,
+        parentPersisted,
+      ),
     });
   }
 
