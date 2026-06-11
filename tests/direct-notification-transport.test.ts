@@ -508,6 +508,10 @@ describe("RuntimeDirectNotificationTransport", () => {
                       style: "success",
                     },
                     {
+                      text: "Tracked",
+                      analyticsId: "button-1",
+                    },
+                    {
                       text: "Open",
                       url: "https://example.test/open",
                       style: "primary",
@@ -539,6 +543,61 @@ describe("RuntimeDirectNotificationTransport", () => {
 
     assert.deepEqual(telegramButtons(payloads[0]), [[
       { text: "Open", url: "https://example.test/open", style: "primary" },
+    ]]);
+    assertNoInvalidTelegramStyle(payloads[0]);
+  });
+
+  it("rebuilds Telegram buttons from presentation when rendered buttons are all text-only", async () => {
+    const payloads: unknown[] = [];
+    setPluginRuntime({
+      channel: {
+        outbound: {
+          loadAdapter: async () => ({
+            renderPresentation: ({ payload }: { payload: unknown }) => ({
+              ...(payload as Record<string, unknown>),
+              channelData: {
+                telegram: {
+                  buttons: [[
+                    {
+                      text: "Plain",
+                    },
+                    {
+                      text: "Styled",
+                      style: "success",
+                    },
+                    {
+                      text: "Metadata",
+                      analyticsId: "metadata-only",
+                    },
+                  ]],
+                },
+              },
+            }),
+            sendPayload: async (ctx: { payload: unknown }) => {
+              payloads.push(ctx.payload);
+            },
+          }),
+        },
+      },
+    }, { channels: { telegram: { enabled: true } } });
+
+    await new RuntimeDirectNotificationTransport().send(
+      {
+        channel: "telegram",
+        accountId: "default",
+        target: "-1003863755361",
+        threadId: "28",
+      },
+      "Plan needs approval",
+      [[
+        { label: "Approve", callbackData: "approve-token", style: "success" },
+        { label: "Revise", callbackData: "revise-token", style: "secondary" },
+      ]],
+    );
+
+    assert.deepEqual(telegramButtons(payloads[0]), [[
+      { text: "Approve", callback_data: "code-agent:approve-token", style: "success" },
+      { text: "Revise", callback_data: "code-agent:revise-token" },
     ]]);
     assertNoInvalidTelegramStyle(payloads[0]);
   });
