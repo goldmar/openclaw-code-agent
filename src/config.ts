@@ -241,11 +241,15 @@ function getFallbackSenderId(ctx: OriginContextLike | undefined): string | undef
 }
 
 function shouldAvoidTelegramSenderFallback(
-  ctx: Pick<OriginContextLike, "deliveryContext" | "messageChannel" | "channel" | "sessionKey">,
+  ctx: Pick<OriginContextLike, "deliveryContext" | "messageChannel" | "channel" | "sessionKey" | "messageThreadId">,
 ): boolean {
   const provider = toOptionalText(ctx.deliveryContext?.channel) ?? ctx.messageChannel ?? ctx.channel;
   if (provider?.toLowerCase() !== "telegram") return false;
-  return Boolean(parseThreadIdFromRouteSessionKey(ctx.sessionKey));
+  return Boolean(
+    parseThreadIdFromRouteSessionKey(ctx.sessionKey)
+      || toOptionalText(ctx.messageThreadId)
+      || toOptionalText(ctx.deliveryContext?.threadId),
+  );
 }
 
 /**

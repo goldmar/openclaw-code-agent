@@ -105,6 +105,14 @@ describe("resolveOriginChannel", () => {
     assert.equal(resolveOriginChannel({ channel: "slack", senderId: "U1" }), "slack|U1");
   });
 
+  it("preserves non-Telegram sender fallback with thread metadata", () => {
+    assert.equal(resolveOriginChannel({ messageChannel: "slack", senderId: "U1", messageThreadId: "1718048480.000000" }), "slack|U1");
+  });
+
+  it("preserves Telegram sender fallback without topic metadata", () => {
+    assert.equal(resolveOriginChannel({ messageChannel: "telegram", senderId: "5551234" }), "telegram|5551234");
+  });
+
   it("uses telegram fallback for numeric ctx.id", () => {
     assert.equal(resolveOriginChannel({ id: "12345" }), "telegram|12345");
   });
@@ -137,6 +145,42 @@ describe("resolveOriginChannel", () => {
         messageChannel: "telegram",
         senderId: "5551234",
         sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+      }),
+      "unknown",
+    );
+  });
+
+  it("keeps Telegram message thread routes weak when only senderId is available", () => {
+    assert.equal(
+      resolveOriginChannel({
+        messageChannel: "telegram",
+        senderId: "5551234",
+        messageThreadId: 13832,
+      }),
+      "unknown",
+    );
+  });
+
+  it("keeps legacy Telegram channel thread routes weak when only senderId is available", () => {
+    assert.equal(
+      resolveOriginChannel({
+        channel: "telegram",
+        senderId: "5551234",
+        messageThreadId: 13832,
+      }),
+      "unknown",
+    );
+  });
+
+  it("keeps Telegram delivery thread routes weak when only senderId is available", () => {
+    assert.equal(
+      resolveOriginChannel({
+        deliveryContext: {
+          channel: "telegram",
+          threadId: 13832,
+        },
+        messageChannel: "telegram",
+        senderId: "5551234",
       }),
       "unknown",
     );
@@ -228,6 +272,70 @@ describe("resolveSessionRoute", () => {
     );
   });
 
+  it("preserves Telegram sender fallback without topic metadata in session routes", () => {
+    assert.deepEqual(
+      resolveSessionRoute({
+        messageChannel: "telegram",
+        senderId: "5551234",
+      }),
+      {
+        provider: "telegram",
+        accountId: undefined,
+        target: "5551234",
+        threadId: undefined,
+        sessionKey: undefined,
+      },
+    );
+  });
+
+  it("ignores Telegram senderId fallback when messageThreadId is available", () => {
+    assert.deepEqual(
+      resolveSessionRoute({
+        messageChannel: "telegram",
+        senderId: "5551234",
+        messageThreadId: 13832,
+      }),
+      {
+        provider: "system",
+        target: "system",
+        sessionKey: undefined,
+      },
+    );
+  });
+
+  it("ignores legacy Telegram senderId fallback when messageThreadId is available", () => {
+    assert.deepEqual(
+      resolveSessionRoute({
+        channel: "telegram",
+        senderId: "5551234",
+        messageThreadId: 13832,
+      }),
+      {
+        provider: "system",
+        target: "system",
+        sessionKey: undefined,
+      },
+    );
+  });
+
+  it("ignores Telegram senderId fallback when deliveryContext.threadId is available", () => {
+    assert.deepEqual(
+      resolveSessionRoute({
+        deliveryContext: {
+          channel: "telegram",
+          threadId: 13832,
+        },
+        messageChannel: "telegram",
+        senderId: "5551234",
+      }),
+      {
+        provider: "system",
+        target: "system",
+        sessionKey: undefined,
+      },
+    );
+  });
+
   it("falls back to an explicit system route when chat metadata is unavailable", () => {
     assert.deepEqual(resolveSessionRoute({}), {
       provider: "system",
@@ -284,6 +392,44 @@ describe("resolveToolChannel", () => {
       sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
     };
     assert.equal(resolveToolChannel(ctx), undefined);
+  });
+
+  it("does not derive Telegram message thread routes from senderId", () => {
+    const ctx = {
+      messageChannel: "telegram",
+      senderId: "5551234",
+      messageThreadId: 13832,
+    };
+    assert.equal(resolveToolChannel(ctx), undefined);
+  });
+
+  it("does not derive Telegram delivery thread routes from senderId", () => {
+    const ctx = {
+      deliveryContext: {
+        channel: "telegram",
+        threadId: 13832,
+      },
+      messageChannel: "telegram",
+      senderId: "5551234",
+    };
+    assert.equal(resolveToolChannel(ctx), undefined);
+  });
+
+  it("preserves Telegram sender fallback without topic metadata", () => {
+    const ctx = {
+      messageChannel: "telegram",
+      senderId: "5551234",
+    };
+    assert.equal(resolveToolChannel(ctx), "telegram|5551234");
+  });
+
+  it("preserves non-Telegram sender fallback with thread metadata", () => {
+    const ctx = {
+      messageChannel: "slack",
+      senderId: "U1",
+      messageThreadId: "1718048480.000000",
+    };
+    assert.equal(resolveToolChannel(ctx), "slack|U1");
   });
 
   it("returns undefined when nothing matches", () => {
