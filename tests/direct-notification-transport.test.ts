@@ -512,6 +512,14 @@ describe("RuntimeDirectNotificationTransport", () => {
                       analyticsId: "button-1",
                     },
                     {
+                      text: "Search",
+                      switch_inline_query: "",
+                    },
+                    {
+                      text: "Search Here",
+                      switch_inline_query_current_chat: "",
+                    },
+                    {
                       text: "Open",
                       url: "https://example.test/open",
                       style: "primary",
@@ -542,6 +550,8 @@ describe("RuntimeDirectNotificationTransport", () => {
     );
 
     assert.deepEqual(telegramButtons(payloads[0]), [[
+      { text: "Search", switch_inline_query: "" },
+      { text: "Search Here", switch_inline_query_current_chat: "" },
       { text: "Open", url: "https://example.test/open", style: "primary" },
     ]]);
     assertNoInvalidTelegramStyle(payloads[0]);

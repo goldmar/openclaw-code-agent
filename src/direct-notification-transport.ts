@@ -503,8 +503,8 @@ function hasTelegramButtonAction(button: Record<string, unknown>): boolean {
     || hasUrlObject(button.webApp)
     || hasUrlObject(button.login_url)
     || hasUrlObject(button.loginUrl)
-    || hasNonBlankString(button.switch_inline_query)
-    || hasNonBlankString(button.switch_inline_query_current_chat)
+    || typeof button.switch_inline_query === "string"
+    || typeof button.switch_inline_query_current_chat === "string"
     || toRecord(button.switch_inline_query_chosen_chat) !== undefined
     || toRecord(button.callback_game) !== undefined
     || button.pay === true
