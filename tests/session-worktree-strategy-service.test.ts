@@ -561,6 +561,10 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         fastForward: true,
         stashPopConflict: true,
         stashRef: "stash@{2}",
+        warnings: [
+          "Failed to determine auto-stash ref: list failed",
+          "Failed to pop auto-stash after merge: already covered",
+        ],
       }),
       spawnConflictResolver: async () => ({ id: "resolver-stash", name: "unused" }),
       runAutoPr: async () => ({ success: true }),
@@ -595,11 +599,80 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
 
       assert.equal(notifications.length, 1);
       assert.match(String(notifications[0].userMessage), /Pre-merge stash pop conflicted/);
+      assert.match(String(notifications[0].userMessage), /Recovery warning: Failed to determine auto-stash ref/);
+      assert.doesNotMatch(String(notifications[0].userMessage), /already covered/);
       assert.match(String(notifications[0].wakeMessageOnNotifySuccess), /Pre-merge stash pop conflicted/);
       assert.match(String(notifications[0].wakeMessageOnNotifySuccess), /stash@\{2\}/);
+      assert.match(String(notifications[0].wakeMessageOnNotifySuccess), /Recovery warning: Failed to determine auto-stash ref/);
+      assert.doesNotMatch(String(notifications[0].wakeMessageOnNotifySuccess), /already covered/);
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }
+  });
+
+  it("includes recovery warnings when auto-merge starts conflict resolution", async () => {
+    const notifications: Array<Record<string, unknown>> = [];
+    const spawnCalls: Array<Record<string, unknown>> = [];
+    const service = new SessionWorktreeStrategyService({
+      shouldRunWorktreeStrategy: () => true,
+      isAlreadyMerged: () => false,
+      resolveWorktreeRepoDir: (dir) => dir,
+      getWorktreeCompletionState: () => "has-commits",
+      updatePersistedSession: (_ref, patch) => {
+        Object.assign(session, patch);
+        return true;
+      },
+      dispatchSessionNotification: (_session, request) => {
+        notifications.push(request as Record<string, unknown>);
+      },
+      getOutputPreview: () => "",
+      originThreadLine: () => "thread",
+      getWorktreeDecisionButtons: () => undefined,
+      makeOpenPrButton: () => ({ label: "Open PR", callbackData: "open-pr" }),
+      worktreeMessages: new SessionWorktreeMessageService(),
+      enqueueMerge: async (_repoDir, fn) => { await fn(); },
+      mergeBranch: () => ({
+        success: false,
+        rebaseConflict: true,
+        error: "rebase conflict",
+        warnings: ["Failed to abort rebase during recovery: abort failed"],
+      }),
+      spawnConflictResolver: async (args) => {
+        spawnCalls.push(args as unknown as Record<string, unknown>);
+        return { id: "resolver-warning", name: "resolver-warning-session" };
+      },
+      runAutoPr: async () => ({ success: true }),
+    });
+
+    const session: any = {
+      id: "s-resolver-warning",
+      name: "resolver-warning",
+      harnessSessionId: "h-resolver-warning",
+      worktreePrTargetRepo: undefined,
+      worktreePushRemote: undefined,
+    };
+
+    await (service as any).handleAutoMergeStrategy(
+      session,
+      "/tmp/repo",
+      "/tmp/worktree",
+      "agent/resolver-warning",
+      "main",
+      {
+        commits: 1,
+        filesChanged: 1,
+        insertions: 1,
+        deletions: 0,
+        changedFiles: ["README.md"],
+        commitMessages: [],
+      },
+      session.id,
+    );
+
+    assert.equal(spawnCalls.length, 1);
+    assert.equal(notifications.length, 1);
+    assert.equal(notifications[0].label, "worktree-merge-conflict-resolving");
+    assert.match(String(notifications[0].userMessage), /Recovery warning: Failed to abort rebase during recovery/);
   });
 
   it("spawns a resolver session and marks the worktree as conflict-resolving on first rebase conflict", async () => {
@@ -830,7 +903,12 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         isPrAvailable: () => true,
         worktreeMessages: new SessionWorktreeMessageService(),
         enqueueMerge: async (_repoDir, fn) => { await fn(); },
-        mergeBranch,
+        mergeBranch: () => ({
+          success: false,
+          rebaseConflict: true,
+          error: "still conflicts",
+          warnings: ["Failed to abort rebase during recovery: abort failed"],
+        }),
         spawnConflictResolver: async () => {
           spawnCalled = true;
           return { id: "resolver-2", name: "resolver-exhausted-conflict-resolver" };
@@ -865,6 +943,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       assert.equal(session.worktreeLifecycle?.state, "pending_decision");
       assert.equal(notifications.length, 1);
       assert.equal(notifications[0].label, "worktree-merge-conflict-escalated");
+      assert.match(String(notifications[0].userMessage), /Recovery warning: Failed to abort rebase during recovery/);
       assert.deepEqual(policyAllowedActions, { merge: true, pr: false });
       assert.ok(Array.isArray(notifications[0].buttons));
       assert.equal(buttonLabels(notifications[0].buttons).includes("Open PR"), false);
@@ -970,7 +1049,11 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       makeOpenPrButton: () => ({ label: "Open PR", callbackData: "open-pr" }),
       worktreeMessages: new SessionWorktreeMessageService(),
       enqueueMerge: async (_repoDir, fn) => { await fn(); },
-      mergeBranch: () => ({ success: false, error: "ff-only merge failed" }),
+      mergeBranch: () => ({
+        success: false,
+        error: "ff-only merge failed",
+        warnings: ["Failed to check out main during recovery: checkout failed"],
+      }),
       spawnConflictResolver: async () => ({ id: "resolver-3", name: "unused" }),
       runAutoPr: async () => ({ success: true }),
     });
@@ -1012,6 +1095,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
     assert.equal(notifications.length, 1);
     assert.equal(notifications[0].label, "worktree-merge-error");
     assert.match(String(notifications[0].userMessage), /auto-merge retry did not complete/i);
+    assert.match(String(notifications[0].userMessage), /Recovery warning: Failed to check out main during recovery/);
     assert.deepEqual(policyAllowedActions, { merge: true, pr: false });
     assert.ok(Array.isArray(notifications[0].buttons));
     assert.equal(buttonLabels(notifications[0].buttons).includes("Open PR"), false);
