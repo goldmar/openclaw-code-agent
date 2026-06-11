@@ -116,8 +116,8 @@ describe("SessionManager auto-merge conflict resolver terminal handling", () => 
       assert.equal(notifications.length, 1);
       assert.equal(notifications[0].label, "worktree-merge-conflict-resolver-failed");
       const labels = buttonLabels(notifications[0].buttons);
-      assert.equal(labels.includes("Open PR"), false);
-      assert.equal(labels.includes("Merge"), true);
+      assert.ok(!labels.includes("Open PR"), "expected no Open PR button for never-pr policy");
+      assert.ok(labels.includes("Merge"), "expected Merge button for never-pr policy");
       assert.equal(persistedPatches.length, 1);
       assert.equal(persistedPatches[0].autoMergeResolverSessionId, undefined);
       assert.equal(persistedPatches[0].worktreeState, "pending_decision");

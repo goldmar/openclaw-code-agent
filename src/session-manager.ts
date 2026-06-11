@@ -911,7 +911,7 @@ export class SessionManager {
     const hasEffectivePolicy = Boolean(effectivePolicy);
     const allowedActions = {
       merge: !hasEffectivePolicy || (effectivePolicy !== "pr-required" && effectivePolicy !== "manual"),
-      pr: !hasEffectivePolicy || (effectivePolicy !== "never-pr" && effectivePolicy !== "manual" && (policyResolution?.prAvailable ?? true)),
+      pr: !hasEffectivePolicy || (effectivePolicy !== "never-pr" && effectivePolicy !== "manual" && (policyResolution?.prAvailable ?? false)),
     };
     return this.getWorktreeDecisionButtons(sessionId, options, allowedActions);
   }
