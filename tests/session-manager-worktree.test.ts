@@ -944,6 +944,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       git(worktreePath, "add", "branch-only.txt");
       git(worktreePath, "commit", "-m", "legacy merged branch work");
 
+      const mergedAt = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString();
       const created = createTestSessionManager(5);
       const sm = created.sm;
       cleanup = created.cleanup;
@@ -963,7 +964,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
         worktreePath,
         worktreeBranch: branchName,
         worktreeDisposition: "merged",
-        completedAt: Date.now() - 8 * 24 * 60 * 60 * 1000,
+        worktreeMergedAt: mergedAt,
       });
 
       (sm as any).maintenance.reconcileResolvedWorktreeRetention((sm as any).store.persisted.get("h-legacy-merged"), Date.now());
@@ -972,6 +973,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       const persisted = (sm as any).store.persisted.get("h-legacy-merged");
       assert.equal(persisted.worktreePath, undefined);
       assert.equal(persisted.worktreeState, "none");
+      assert.equal(persisted.worktreeLifecycle?.state, "merged");
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
       cleanup();
