@@ -17,6 +17,7 @@ import {
   buildMergeWarningLines,
   appendMergeWarnings,
 } from "../worktree";
+import { buildMergedPatch } from "../worktree-session-patches";
 import { getPersistedTargetMutationRefs, resolveWorktreeToolTarget } from "./worktree-tool-context";
 
 interface AgentMergeParams {
@@ -275,24 +276,23 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
 
           // Persist merge status if we have a persisted session
           if (freshPersisted) {
+            const mergedAt = new Date().toISOString();
             for (const mutationRef of getPersistedTargetMutationRefs({ ...target, persistedSession: freshPersisted })) {
               sessionManager.updatePersistedSession(mutationRef, {
-                worktreeMerged: true,
-                worktreeMergedAt: new Date().toISOString(),
-                pendingWorktreeDecisionSince: undefined,
-                lastWorktreeReminderAt: undefined,
-                lifecycle: "terminal",
-                worktreeState: "merged",
+                ...buildMergedPatch(
+                  {
+                    worktreeBaseBranch: resolvedBaseBranch,
+                    worktreePrTargetRepo: freshPersisted.worktreePrTargetRepo,
+                    worktreePushRemote: freshPersisted.worktreePushRemote,
+                  },
+                  {
+                    mergedAt,
+                    updatedAt: mergedAt,
+                    resolvedAt: mergedAt,
+                    resolutionSource: "agent_merge",
+                  },
+                ),
                 worktreeDisposition: "merged",
-                worktreeLifecycle: {
-                  state: "merged",
-                  updatedAt: new Date().toISOString(),
-                  resolvedAt: new Date().toISOString(),
-                  resolutionSource: "agent_merge",
-                  baseBranch: resolvedBaseBranch,
-                  targetRepo: freshPersisted.worktreePrTargetRepo,
-                  pushRemote: freshPersisted.worktreePushRemote,
-                },
               });
             }
           }

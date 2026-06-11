@@ -73,6 +73,9 @@ describe("worktree session patch helpers", () => {
     assert.equal(patch.worktreeMerged, true);
     assert.equal(patch.worktreeMergedAt, "2026-04-10T10:10:00.000Z");
     assert.equal(patch.autoMergeResolverSessionId, undefined);
+    assert.equal(patch.pendingWorktreeDecisionSince, undefined);
+    assert.equal(patch.lastWorktreeReminderAt, undefined);
+    assert.equal(patch.worktreeDecisionSnoozedUntil, undefined);
     assert.deepEqual(patch.worktreeLifecycle, {
       state: "merged",
       updatedAt: "2026-04-10T10:10:00.000Z",
