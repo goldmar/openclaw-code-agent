@@ -2747,6 +2747,28 @@ describe("SessionManager restored button parity", () => {
     }
   });
 
+  it("invalidates older plan approval tokens when newer plan buttons are created", () => {
+    const olderButtons = (sm as any).interactions.getPlanApprovalButtons("restored-plan", {
+      planDecisionVersion: 4,
+    });
+    const olderTokenIds = olderButtons[0].map((button) => button.callbackData);
+    for (const tokenId of olderTokenIds) {
+      assert.equal((sm as any).interactions.getActionToken(tokenId)?.planDecisionVersion, 4);
+    }
+
+    const newerButtons = (sm as any).interactions.getPlanApprovalButtons("restored-plan", {
+      planDecisionVersion: 5,
+    });
+    const newerTokenIds = newerButtons[0].map((button) => button.callbackData);
+
+    for (const tokenId of olderTokenIds) {
+      assert.equal((sm as any).interactions.getActionToken(tokenId), undefined);
+    }
+    for (const tokenId of newerTokenIds) {
+      assert.equal((sm as any).interactions.getActionToken(tokenId)?.planDecisionVersion, 5);
+    }
+  });
+
   it("uses the same resume action set for restored failed or suspended sessions", () => {
     const resumableButtons = (sm as any).interactions.getResumeButtons("restored-resume", {
       isExplicitlyResumable: true,
