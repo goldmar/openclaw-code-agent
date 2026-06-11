@@ -1,7 +1,7 @@
-import { describe, it } from "node:test";
+import { after, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { SessionManager } from "../src/session-manager";
@@ -11,6 +11,26 @@ import { createWorktree, getBranchName } from "../src/worktree";
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf-8" }).trim();
 }
+
+const mockGhDir = mkdtempSync(join(tmpdir(), "sm-worktree-gh-"));
+const mockGhBinDir = join(mockGhDir, "bin");
+mkdirSync(mockGhBinDir);
+writeFileSync(join(mockGhBinDir, "gh"), [
+  "#!/bin/sh",
+  "if [ \"$1\" = \"--version\" ]; then",
+  "  echo 'gh version 2.0.0'",
+  "  exit 0",
+  "fi",
+  "exit 1",
+  "",
+].join("\n"));
+chmodSync(join(mockGhBinDir, "gh"), 0o755);
+const originalPath = process.env.PATH;
+process.env.PATH = `${mockGhBinDir}:${process.env.PATH ?? ""}`;
+after(() => {
+  process.env.PATH = originalPath;
+  rmSync(mockGhDir, { recursive: true, force: true });
+});
 
 function createTestSessionManager(
   maxSessions = 5,
@@ -38,6 +58,66 @@ function stubDispatch(sm: SessionManager): void {
     dispose: () => {},
   };
   (sm as any).wakeDispatcher = { clearRetryTimersForSession: () => {}, dispose: () => {} };
+}
+
+function buttonLabels(rows: Array<Array<{ label: string }>> | undefined): string[][] {
+  return (rows ?? []).map((row) => row.map((button) => button.label));
+}
+
+function hasButton(rows: string[][], label: string): boolean {
+  return rows.some((row) => row.includes(label));
+}
+
+function createPendingDelegateDecisionFixture(policy: "pr-required" | "never-pr" | "manual"): {
+  sm: SessionManager;
+  cleanup: () => void;
+  dispatchCalls: () => any[];
+} {
+  const repoDir = mkdtempSync(join(tmpdir(), `sm-worktree-live-policy-${policy}-`));
+  git(repoDir, "init", "-b", "main");
+  git(repoDir, "config", "user.name", "Test User");
+  git(repoDir, "config", "user.email", "test@example.com");
+  writeFileSync(join(repoDir, "README.md"), "hello\n", "utf-8");
+  git(repoDir, "add", "README.md");
+  git(repoDir, "commit", "-m", "init");
+  git(repoDir, "remote", "add", "origin", "https://github.com/example/repo.git");
+
+  const worktreePath = createWorktree(repoDir, `live-policy-${policy}`);
+  const branchName = getBranchName(worktreePath);
+  assert.ok(branchName, "worktree branch should exist");
+
+  writeFileSync(join(worktreePath, "README.md"), `hello\n${policy}\n`, "utf-8");
+  git(worktreePath, "add", "README.md");
+  git(worktreePath, "commit", "-m", `update for ${policy}`);
+
+  const created = createTestSessionManager(5);
+  const sm = created.sm;
+  stubDispatch(sm);
+  (sm as any).interactions.isGitHubCliAvailable = () => true;
+  sm.setRepoPolicy(repoDir, policy);
+  (sm as any).sessions.set(`s-live-policy-${policy}`, {
+    id: `s-live-policy-${policy}`,
+    name: `live-policy-${policy}`,
+    status: "completed",
+    phase: "implementing",
+    prompt: "update the readme",
+    originalWorkdir: repoDir,
+    worktreePath,
+    worktreeBranch: branchName,
+    worktreeStrategy: "delegate",
+    worktreeBaseBranch: "main",
+    pendingWorktreeDecisionSince: new Date().toISOString(),
+    pendingPlanApproval: false,
+  });
+
+  return {
+    sm,
+    cleanup: () => {
+      rmSync(repoDir, { recursive: true, force: true });
+      created.cleanup();
+    },
+    dispatchCalls: () => (sm as any).__dispatchCalls ?? [],
+  };
 }
 
 describe("SessionManager.handleWorktreeStrategy()", () => {
@@ -425,6 +505,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       writeFileSync(join(repoDir, "README.md"), "hello\n", "utf-8");
       git(repoDir, "add", "README.md");
       git(repoDir, "commit", "-m", "init");
+      git(repoDir, "remote", "add", "origin", "https://github.com/example/repo.git");
 
       const worktreePath = createWorktree(repoDir, "delegate-buttons");
       const branchName = getBranchName(worktreePath);
@@ -529,6 +610,50 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       cleanup();
     }
   });
+
+  it("uses live pr-required policy for explicit pending worktree decision buttons without a session snapshot", () => {
+    const fixture = createPendingDelegateDecisionFixture("pr-required");
+    try {
+      const response = (fixture.sm as any).requestWorktreeDecisionFromUser(
+        "s-live-policy-pr-required",
+        "The branch is ready for a worktree decision.",
+      );
+
+      assert.match(response, /Canonical worktree decision prompt sent/);
+      const request = fixture.dispatchCalls().at(-1)?.[1];
+      assert.equal(request.label, "worktree-merge-ask");
+      const labels = buttonLabels(request.buttons);
+      assert.equal(hasButton(labels, "Merge"), false);
+      assert.equal(hasButton(labels, "Open PR"), true);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  for (const policy of ["never-pr", "manual"] as const) {
+    it(`uses live ${policy} policy for explicit pending worktree decision PR buttons without a session snapshot`, () => {
+      const fixture = createPendingDelegateDecisionFixture(policy);
+      try {
+        const response = (fixture.sm as any).requestWorktreeDecisionFromUser(
+          `s-live-policy-${policy}`,
+          "The branch is ready for a worktree decision.",
+        );
+
+        assert.match(response, /Canonical worktree decision prompt sent/);
+        const request = fixture.dispatchCalls().at(-1)?.[1];
+        assert.equal(request.label, "worktree-merge-ask");
+        const labels = buttonLabels(request.buttons);
+        assert.equal(hasButton(labels, "Open PR"), false);
+        assert.equal(hasButton(labels, "View PR"), false);
+        assert.equal(hasButton(labels, "Sync PR"), false);
+        if (policy === "manual") {
+          assert.equal(hasButton(labels, "Merge"), false);
+        }
+      } finally {
+        fixture.cleanup();
+      }
+    });
+  }
 
   it("adds a concise implementation summary and shorter button rows for ask-mode worktree prompts", async () => {
     const repoDir = mkdtempSync(join(tmpdir(), "sm-worktree-ask-summary-"));
