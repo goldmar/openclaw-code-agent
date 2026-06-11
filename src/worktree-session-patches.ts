@@ -92,6 +92,7 @@ export function buildMergedPatch(
     worktreeState: "merged",
     pendingWorktreeDecisionSince: undefined,
     lastWorktreeReminderAt: undefined,
+    worktreeDecisionSnoozedUntil: undefined,
     worktreeLifecycle: buildLifecycle(context, {
       state: "merged",
       updatedAt,

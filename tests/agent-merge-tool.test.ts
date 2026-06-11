@@ -82,6 +82,8 @@ function installPersistedSessionWithNotificationService(args: {
     worktreeBranch: args.branchName,
     worktreeState: "pending_decision",
     pendingWorktreeDecisionSince: "2026-06-01T22:51:00.000Z",
+    lastWorktreeReminderAt: "2026-06-01T23:51:00.000Z",
+    worktreeDecisionSnoozedUntil: "2026-06-02T22:51:00.000Z",
     status: "completed",
     costUsd: 0,
     route: {
@@ -374,6 +376,8 @@ describe("agent_merge push behavior", () => {
       assert.equal(persistedSession.worktreeMerged, true);
       assert.equal(persistedSession.worktreeState, "merged");
       assert.equal(persistedSession.pendingWorktreeDecisionSince, undefined);
+      assert.equal(persistedSession.lastWorktreeReminderAt, undefined);
+      assert.equal(persistedSession.worktreeDecisionSnoozedUntil, undefined);
       assert.equal(persistedSession.deliveryState, "idle");
       assert.equal(persistedSession.completionWakeSummaryRequired, undefined);
       assert.equal(typeof persistedSession.completionWakeIssuedAt, "string");
