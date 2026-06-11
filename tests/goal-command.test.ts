@@ -88,4 +88,53 @@ describe("goal command", () => {
     assert.match(result?.text ?? "", /Dir: \/tmp/);
     assert.match(result?.text ?? "", /Verifiers:/);
   });
+
+  it("uses agentChannels for the requested workdir when the context lacks a direct route", async () => {
+    let launchConfig: Record<string, unknown> | undefined;
+    const workdir = process.cwd();
+
+    setPluginConfig({
+      defaultHarness: "codex",
+      agentChannels: {
+        [workdir]: "telegram|bot1|-1003863755361",
+      },
+      harnesses: {
+        codex: {
+          defaultModel: "gpt-5.5",
+          allowedModels: ["gpt-5.5"],
+        },
+      },
+    });
+    setGoalController({
+      async launchTask(config: Record<string, unknown>) {
+        launchConfig = config;
+        return {
+          id: "goal-command-2",
+          name: "goal-command-agent-channel",
+          workdir: config.workdir,
+          sessionId: "sess-goal-command-2",
+          sessionName: "goal-command-agent-channel",
+          maxIterations: config.maxIterations ?? 8,
+          loopMode: config.loopMode,
+          completionPromise: config.completionPromise,
+        };
+      },
+    } as any);
+
+    let handler: ((ctx: any) => Promise<{ text: string }> | { text: string }) | undefined;
+    registerGoalCommand({
+      registerCommand(command: { handler: typeof handler }) {
+        handler = command.handler;
+      },
+    });
+
+    const result = await handler?.({
+      args: `--workdir ${workdir} keep routing stable`,
+    });
+
+    assert.ok(launchConfig, "launchTask should be called");
+    assert.equal(launchConfig?.originChannel, "telegram|bot1|-1003863755361");
+    assert.equal((launchConfig?.route as { accountId?: string } | undefined)?.accountId, "bot1");
+    assert.match(result?.text ?? "", /Goal task launched\./);
+  });
 });

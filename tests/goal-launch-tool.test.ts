@@ -125,6 +125,51 @@ describe("goal_launch tool", () => {
     assert.equal((launchConfig?.route as { accountId?: string } | undefined)?.accountId, "acct-1");
   });
 
+  it("uses agentChannels for the requested workdir when the context lacks a direct route", async () => {
+    let launchConfig: Record<string, unknown> | undefined;
+    const workdir = process.cwd();
+
+    setPluginConfig({
+      defaultHarness: "codex",
+      agentChannels: {
+        [workdir]: "discord|agent-1|target-1",
+      },
+      harnesses: {
+        codex: {
+          defaultModel: "gpt-5.5",
+          allowedModels: ["gpt-5.5"],
+        },
+      },
+    });
+
+    setGoalController({
+      async launchTask(config: Record<string, unknown>) {
+        launchConfig = config;
+        return {
+          id: "goal-4",
+          name: "goal-agent-channel",
+          workdir: config.workdir,
+          sessionId: "sess-4",
+          sessionName: "goal-agent-channel",
+          maxIterations: config.maxIterations ?? 8,
+          loopMode: config.loopMode ?? "ralph",
+          completionPromise: config.completionPromise,
+        };
+      },
+    } as any);
+
+    const tool = makeGoalLaunchTool({} as any);
+
+    await tool.execute("tool-id", {
+      goal: "Route through the workspace agent channel",
+      workdir,
+    });
+
+    assert.ok(launchConfig, "launchTask should be called");
+    assert.equal(launchConfig?.originChannel, "discord|agent-1|target-1");
+    assert.equal((launchConfig?.route as { accountId?: string } | undefined)?.accountId, "agent-1");
+  });
+
   it("allows experimental OpenCode goal tasks to use the OpenCode provider default model", async () => {
     let launchConfig: Record<string, unknown> | undefined;
 
