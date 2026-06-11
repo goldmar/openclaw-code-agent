@@ -246,6 +246,9 @@ describe("agent_worktree_cleanup", () => {
         worktreeBranch: released.branchName,
         worktreeBaseBranch: "main",
         worktreeState: "ready",
+        pendingWorktreeDecisionSince: new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString(),
+        lastWorktreeReminderAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+        worktreeDecisionSnoozedUntil: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
         worktreeLifecycle: {
           state: "released",
           updatedAt: new Date().toISOString(),
@@ -284,6 +287,9 @@ describe("agent_worktree_cleanup", () => {
       assert.equal(persisted.worktreePath, undefined);
       assert.equal(persisted.worktreeBranch, undefined);
       assert.equal(persisted.worktreeState, "none");
+      assert.equal(persisted.pendingWorktreeDecisionSince, undefined);
+      assert.equal(persisted.lastWorktreeReminderAt, undefined);
+      assert.equal(persisted.worktreeDecisionSnoozedUntil, undefined);
       assert.equal(persisted.worktreeLifecycle?.state, "released");
       assert.equal(typeof persisted.worktreeLifecycle?.resolvedAt, "string");
       assert.equal(persisted.worktreeLifecycle?.resolutionSource, "maintenance");

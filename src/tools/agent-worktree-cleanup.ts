@@ -124,6 +124,7 @@ export function makeAgentWorktreeCleanupTool(_ctx?: OpenClawPluginToolContext) {
               worktreeState: "none",
               pendingWorktreeDecisionSince: undefined,
               lastWorktreeReminderAt: undefined,
+              worktreeDecisionSnoozedUntil: undefined,
               worktreeMerged: nextLifecycleState === "merged" ? true : persisted.worktreeMerged,
               worktreeMergedAt: nextLifecycleState === "merged" ? (persisted.worktreeMergedAt ?? new Date().toISOString()) : persisted.worktreeMergedAt,
               worktreeLifecycle: {
