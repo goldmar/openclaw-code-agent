@@ -4,6 +4,7 @@ import {
   getDefaultHarnessName,
   pluginConfig,
   resolveAllowedModelsForHarness,
+  resolveAgentChannel,
   resolveDefaultModelForHarness,
   resolveFastModeForHarness,
   resolveOriginChannel,
@@ -110,7 +111,7 @@ export function resolveGoalLaunchRequest(
 
   const originSessionKey = ctx.sessionKey || undefined;
   const ctxChannel = resolveToolChannel(ctx);
-  const originChannel = resolveOriginChannel(ctx, ctxChannel);
+  const originChannel = resolveOriginChannel(ctx, ctxChannel || resolveAgentChannel(workdir));
   const route = resolveSessionRoute(ctx, originChannel, originSessionKey);
 
   return {
