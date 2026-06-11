@@ -1,3 +1,4 @@
+import { createHash } from "crypto";
 import { Session } from "./session";
 import { pluginConfig, getDefaultHarnessName } from "./config";
 import { generateSessionName } from "./format";
@@ -112,6 +113,40 @@ type RepoPolicyLaunchArgs = {
   worktreePrTargetRepo?: string;
   originAgentId?: string;
 };
+
+function digestRepoPolicyLaunchContext(args: RepoPolicyLaunchArgs, strategy: WorktreeStrategy): string {
+  return createHash("sha256").update(JSON.stringify({
+    route: args.route ? {
+      provider: args.route.provider,
+      target: args.route.target,
+      accountId: args.route.accountId,
+      threadId: args.route.threadId,
+      sessionKey: args.route.sessionKey,
+    } : undefined,
+    prompt: args.prompt,
+    workdir: args.workdir,
+    name: args.name,
+    model: args.model,
+    reasoningEffort: args.reasoningEffort,
+    fastMode: args.fastMode,
+    systemPrompt: args.systemPrompt,
+    allowedTools: args.allowedTools,
+    resumeSessionId: args.resumeSessionId,
+    resumeWorktreeFrom: args.resumeWorktreeFrom,
+    sessionIdOverride: args.sessionIdOverride,
+    clearedPersistedCodexResume: args.clearedPersistedCodexResume,
+    forkSession: args.forkSession,
+    forceNewSession: args.forceNewSession,
+    permissionMode: args.permissionMode,
+    planApproval: args.planApproval,
+    harness: args.harness,
+    worktreeStrategy: args.worktreeStrategy,
+    effectiveWorktreeStrategy: strategy,
+    worktreeBaseBranch: args.worktreeBaseBranch,
+    worktreePrTargetRepo: args.worktreePrTargetRepo,
+    originAgentId: args.originAgentId,
+  })).digest("hex").slice(0, 16);
+}
 
 type LaunchConfirmationSession = Pick<Session, "status" | "name" | "id" | "killReason" | "error" | "result"> & {
   on?: (event: string, listener: (...args: unknown[]) => void) => unknown;
@@ -679,6 +714,7 @@ export class SessionManager {
       launchWorktreePrTargetRepo: args.worktreePrTargetRepo,
       launchOriginAgentId: args.originAgentId,
     });
+    const launchContextDigest = digestRepoPolicyLaunchContext(args, strategy);
 
     this.notifications.dispatch(
       this.buildRoutingProxy({
@@ -688,7 +724,7 @@ export class SessionManager {
       }),
       {
         label: "repo-policy-choice",
-        idempotencyKey: `repo-policy-choice:${resolution.identity.key}:${strategy}`,
+        idempotencyKey: `repo-policy-choice:${resolution.identity.key}:${strategy}:${launchContextDigest}`,
         userMessage: [
           message,
           ``,
