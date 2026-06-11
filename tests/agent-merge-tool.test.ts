@@ -481,4 +481,44 @@ describe("agent_merge push behavior", () => {
       rmSync(remoteDir, { recursive: true, force: true });
     }
   });
+
+  it("surfaces recovery warnings when manual merge hits a rebase conflict", async () => {
+    const { repoDir, remoteDir } = createRepoWithRemote("agent-merge-rebase-warning");
+    try {
+      writeFileSync(join(repoDir, "local.txt"), "base\n", "utf-8");
+      git(repoDir, "add", "local.txt");
+      git(repoDir, "commit", "-m", "add local file");
+
+      const sessionName = "merge-rebase-warning";
+      const worktreePath = createWorktree(repoDir, sessionName);
+      const branchName = getBranchName(worktreePath);
+      assert.ok(branchName, "worktree branch should exist");
+
+      writeFileSync(join(worktreePath, "README.md"), "feature\n", "utf-8");
+      writeFileSync(join(worktreePath, "local.txt"), "feature\n", "utf-8");
+      git(worktreePath, "add", "README.md", "local.txt");
+      git(worktreePath, "commit", "-m", "feature change");
+
+      writeFileSync(join(repoDir, "README.md"), "main\n", "utf-8");
+      writeFileSync(join(repoDir, "local.txt"), "main\n", "utf-8");
+      git(repoDir, "add", "README.md", "local.txt");
+      git(repoDir, "commit", "-m", "main change");
+
+      git(repoDir, "worktree", "remove", worktreePath);
+      git(repoDir, "checkout", branchName);
+      writeFileSync(join(repoDir, "local.txt"), "local dirty change\n", "utf-8");
+
+      installPersistedSessionStub(sessionName, repoDir, worktreePath, branchName);
+
+      const tool = makeAgentMergeTool();
+      const result = await tool.execute("tool-id", { session: sessionName, delete_branch: false });
+      const text = (result.content[0] as { text: string }).text;
+
+      assert.match(text, /Rebase conflicts/i);
+      assert.match(text, /Recovery warning: Failed to pop auto-stash during recovery/);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+      rmSync(remoteDir, { recursive: true, force: true });
+    }
+  });
 });

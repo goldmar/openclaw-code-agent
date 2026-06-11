@@ -47,6 +47,18 @@ function buildStashOutcomeDetailLines(args: {
   return [];
 }
 
+function buildMergeWarningLines(mergeResult: ReturnType<typeof mergeBranch>): string[] {
+  return (mergeResult.warnings ?? [])
+    .filter((warning) => !(mergeResult.stashPopConflict && warning.startsWith("Failed to pop auto-stash after merge")))
+    .map((warning) => `Recovery warning: ${warning}`);
+}
+
+function appendMergeWarnings(text: string, mergeResult: ReturnType<typeof mergeBranch>): string {
+  const warningLines = buildMergeWarningLines(mergeResult);
+  if (warningLines.length === 0) return text;
+  return `${text}\n${warningLines.map((line) => `⚠️ ${line}`).join("\n")}`;
+}
+
 export function formatCleanupOutcome(args: {
   deleteBranchRequested: boolean;
   branchDeleted: boolean;
@@ -223,6 +235,7 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
 
         // Attempt merge — pass worktreePath so rebase runs there when the worktree still exists
         const mergeResult = mergeBranch(effectiveWorkdir, branchName, baseBranch, strategy, worktreePath);
+        const warningDetailLines = buildMergeWarningLines(mergeResult);
 
         if (mergeResult.success) {
           const stashDetailLines = buildStashOutcomeDetailLines({
@@ -244,10 +257,11 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
                     `Pushing ${baseBranch} failed; remote state may not include the merge.`,
                     `Cleanup was skipped so the branch/worktree remains available for follow-up.`,
                     ...stashDetailLines,
+                    ...warningDetailLines,
                   ],
                 },
               );
-              toolResult = { content: [{ type: "text", text: pushFailedText }] };
+              toolResult = { content: [{ type: "text", text: appendMergeWarnings(pushFailedText, mergeResult) }] };
               return;
             }
           }
@@ -311,6 +325,7 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
                 shouldPush ? `Pushed ${baseBranch}.` : `Did not push ${baseBranch}; push was not requested.`,
                 cleanupOutcome.detailLine,
                 ...stashDetailLines,
+                ...warningDetailLines,
               ],
             },
           );
@@ -323,10 +338,11 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
           } else if (mergeResult.stashed) {
             successText += `\n(Pre-existing changes on ${baseBranch} were auto-stashed and restored.)`;
           }
+          successText = appendMergeWarnings(successText, mergeResult);
           toolResult = { content: [{ type: "text", text: successText }] };
         } else if (mergeResult.rebaseConflict) {
           // Rebase conflicts require manual resolution — surface instructions to the user
-          toolResult = { content: [{ type: "text", text: `⚠️ Rebase conflicts — manual resolution required:\n\n${mergeResult.error}` }] };
+          toolResult = { content: [{ type: "text", text: appendMergeWarnings(`⚠️ Rebase conflicts — manual resolution required:\n\n${mergeResult.error}`, mergeResult) }] };
         } else if (mergeResult.conflictFiles && mergeResult.conflictFiles.length > 0) {
           // Squash-merge conflict path (should be rare after rebase) — spawn conflict resolver
           const conflictPrompt = [
@@ -352,15 +368,15 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
               originSessionKey: targetSession?.originSessionKey ?? persistedSession?.originSessionKey,
             });
 
-            toolResult = { content: [{ type: "text", text: `⚠️ Merge conflicts in ${mergeResult.conflictFiles.length} file(s) — spawned conflict resolver session: ${conflictSession.name}` }] };
+            toolResult = { content: [{ type: "text", text: appendMergeWarnings(`⚠️ Merge conflicts in ${mergeResult.conflictFiles.length} file(s) — spawned conflict resolver session: ${conflictSession.name}`, mergeResult) }] };
           } catch (err) {
-            toolResult = { content: [{ type: "text", text: `❌ Merge conflicts detected, but failed to spawn resolver: ${err instanceof Error ? err.message : String(err)}` }] };
+            toolResult = { content: [{ type: "text", text: appendMergeWarnings(`❌ Merge conflicts detected, but failed to spawn resolver: ${err instanceof Error ? err.message : String(err)}`, mergeResult) }] };
           }
         } else {
           const errorText = mergeResult.dirtyError
             ? `❌ Merge blocked: ${mergeResult.error}`
             : `❌ Merge failed: ${mergeResult.error ?? "unknown error"}`;
-          toolResult = { content: [{ type: "text", text: errorText }] };
+          toolResult = { content: [{ type: "text", text: appendMergeWarnings(errorText, mergeResult) }] };
         }
       });
 

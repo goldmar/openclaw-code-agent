@@ -37,6 +37,18 @@ type DiffSummary = NonNullable<ReturnType<typeof getDiffSummary>>;
 type SpawnedResolverSession = Pick<Session, "id" | "name">;
 type AllowedWorktreeActions = { merge: boolean; pr: boolean };
 
+function buildMergeWarningLines(mergeResult: ReturnType<typeof mergeBranch>): string[] {
+  return (mergeResult.warnings ?? [])
+    .filter((warning) => !(mergeResult.stashPopConflict && warning.startsWith("Failed to pop auto-stash after merge")))
+    .map((warning) => `Recovery warning: ${warning}`);
+}
+
+function appendMergeWarnings(text: string, mergeResult: ReturnType<typeof mergeBranch>): string {
+  const warningLines = buildMergeWarningLines(mergeResult);
+  if (warningLines.length === 0) return text;
+  return `${text}\n${warningLines.map((line) => `⚠️ ${line}`).join("\n")}`;
+}
+
 /**
  * Worktree decision/messaging orchestration layer.
  * Low-level git/worktree state checks stay in SessionWorktreeController.
@@ -133,6 +145,7 @@ export class SessionWorktreeStrategyService {
     branchName: string,
     reason: string,
     allowedActions: AllowedWorktreeActions,
+    warningLines: string[] = [],
   ): void {
     this.deps.dispatchSessionNotification(session, {
       label: "worktree-merge-conflict-escalated",
@@ -142,6 +155,7 @@ export class SessionWorktreeStrategyService {
         `Branch \`${branchName}\` was preserved for manual follow-up.`,
         ``,
         reason,
+        ...warningLines.map((line) => `⚠️ ${line}`),
       ].join("\n"),
       buttons: this.getPolicyAwareWorktreeDecisionButtons(
         session.id,
@@ -467,6 +481,8 @@ export class SessionWorktreeStrategyService {
     } else if (mergeResult.stashed) {
       successMsg += `\n(Pre-existing changes on ${baseBranch} were auto-stashed and restored.)`;
     }
+    successMsg = appendMergeWarnings(successMsg, mergeResult);
+    const warningDetailLines = buildMergeWarningLines(mergeResult);
     const outcomeDetailLines = [
       mergeResult.fastForward ? "Merge type: fast-forward." : "Merge type: merge commit.",
       `Auto-merge landed ${branchName} into ${baseBranch}.`,
@@ -477,6 +493,7 @@ export class SessionWorktreeStrategyService {
       ...(!mergeResult.stashPopConflict && mergeResult.stashed
         ? [`Pre-existing changes on ${baseBranch} were auto-stashed and restored.`]
         : []),
+      ...warningDetailLines,
     ];
 
     this.deps.dispatchSessionNotification(session, {
@@ -519,7 +536,9 @@ export class SessionWorktreeStrategyService {
     baseBranch: string,
     allowedActions: AllowedWorktreeActions,
     mergeError?: string,
+    mergeResult?: ReturnType<typeof mergeBranch>,
   ): Promise<void> {
+    const warningLines = mergeResult ? buildMergeWarningLines(mergeResult) : [];
     const attemptsUsed = session.autoMergeConflictResolutionAttemptCount ?? 0;
     if (attemptsUsed >= 1) {
       this.markPendingDecision(session, {
@@ -533,6 +552,7 @@ export class SessionWorktreeStrategyService {
           ? `The rebased branch still conflicts with \`${baseBranch}\`. Open a PR or resolve manually in ${worktreePath}.`
           : `The rebased branch still conflicts with \`${baseBranch}\`. Resolve manually in ${worktreePath}.`,
         allowedActions,
+        warningLines,
       );
       return;
     }
@@ -559,7 +579,10 @@ export class SessionWorktreeStrategyService {
       this.deps.dispatchSessionNotification(session, {
         label: "worktree-merge-conflict-resolving",
         idempotencyKey: `worktree-merge-conflict-resolving:${session.id}:${branchName}:${resolverSession.id}`,
-        userMessage: `⚠️ [${session.name}] Auto-merge hit a rebase conflict. Started resolver session ${resolverSession.name} and will retry automatically if it succeeds.`,
+        userMessage: [
+          `⚠️ [${session.name}] Auto-merge hit a rebase conflict. Started resolver session ${resolverSession.name} and will retry automatically if it succeeds.`,
+          ...warningLines.map((line) => `⚠️ ${line}`),
+        ].join("\n"),
       });
     } catch (err) {
       this.markPendingDecision(session, {
@@ -568,7 +591,10 @@ export class SessionWorktreeStrategyService {
       this.deps.dispatchSessionNotification(session, {
         label: "worktree-merge-conflict-spawn-failed",
         idempotencyKey: `worktree-merge-conflict-spawn-failed:${session.id}:${branchName}`,
-        userMessage: `❌ [${session.name}] Auto-merge hit a rebase conflict and failed to start the resolver: ${err instanceof Error ? err.message : String(err)}`,
+        userMessage: [
+          `❌ [${session.name}] Auto-merge hit a rebase conflict and failed to start the resolver: ${err instanceof Error ? err.message : String(err)}`,
+          ...warningLines.map((line) => `⚠️ ${line}`),
+        ].join("\n"),
         buttons: this.getPolicyAwareWorktreeDecisionButtons(
           session.id,
           allowedActions,
@@ -642,13 +668,14 @@ export class SessionWorktreeStrategyService {
             baseBranch,
             allowedActions,
             mergeResult.error,
+            mergeResult,
           );
           return;
         }
 
-        const errorMsg = mergeResult.dirtyError
+        const errorMsg = appendMergeWarnings(mergeResult.dirtyError
           ? `❌ [${session.name}] Merge blocked: ${mergeResult.error}`
-          : `❌ [${session.name}] Merge failed: ${mergeResult.error ?? "unknown error"}`;
+          : `❌ [${session.name}] Merge failed: ${mergeResult.error ?? "unknown error"}`, mergeResult);
         const retryFailedAfterConflictResolution =
           session.worktreeState === "merge_conflict_resolving"
           || session.worktreeLifecycle?.state === "merge_conflict_resolving";

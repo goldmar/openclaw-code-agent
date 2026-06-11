@@ -14,12 +14,17 @@ export interface MergeResult {
   success: boolean;
   conflictFiles?: string[];
   error?: string;
+  warnings?: string[];
   stashed?: boolean;
   stashRef?: string;
   stashPopConflict?: boolean;
   dirtyError?: boolean;
   fastForward?: boolean;
   rebaseConflict?: boolean;
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 export function getDiffSummary(repoDir: string, branch: string, base: string): DiffSummary | undefined {
@@ -122,13 +127,22 @@ export function mergeBranch(
 ): MergeResult {
   let stashed = false;
   let stashRef: string | undefined;
+  const warnings: string[] = [];
+
+  const withWarnings = <T extends MergeResult>(result: T): T => (
+    warnings.length > 0 ? { ...result, warnings: [...warnings] } : result
+  );
+
+  const warnRecovery = (message: string, err: unknown) => {
+    warnings.push(`${message}: ${errorMessage(err)}`);
+  };
 
   const tryPopStash = (dir: string) => {
     if (!stashed) return;
     try {
       execFileSync("git", ["-C", dir, "stash", "pop"], { timeout: 10_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
-    } catch {
-      // best effort
+    } catch (err) {
+      warnRecovery("Failed to pop auto-stash during recovery", err);
     }
   };
 
@@ -145,11 +159,11 @@ export function mergeBranch(
             { timeout: 10_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
           );
         } catch (stashErr) {
-          return {
+          return withWarnings({
             success: false,
             dirtyError: true,
-            error: `Auto-stash failed: ${stashErr instanceof Error ? stashErr.message : String(stashErr)}. Commit or stash changes manually, then retry.`,
-          };
+            error: `Auto-stash failed: ${errorMessage(stashErr)}. Commit or stash changes manually, then retry.`,
+          });
         }
         if (!stashOutput.includes("No local changes to save")) {
           stashed = true;
@@ -159,8 +173,8 @@ export function mergeBranch(
               encoding: "utf-8",
               stdio: ["pipe", "pipe", "pipe"],
             }).trim() || undefined;
-          } catch {
-            // best effort
+          } catch (err) {
+            warnRecovery("Failed to determine auto-stash ref", err);
           }
         }
       }
@@ -172,12 +186,13 @@ export function mergeBranch(
       if (stashed) {
         try {
           execFileSync("git", ["-C", repoDir, "stash", "pop"], { timeout: 10_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
-        } catch {
+        } catch (err) {
           stashPopConflict = true;
+          warnRecovery("Failed to pop auto-stash after merge", err);
         }
       }
 
-      return { success: true, stashed: stashed || undefined, stashRef, stashPopConflict: stashPopConflict || undefined };
+      return withWarnings({ success: true, stashed: stashed || undefined, stashRef, stashPopConflict: stashPopConflict || undefined });
     }
 
     const useWorktree = worktreePath && existsSync(worktreePath);
@@ -198,12 +213,14 @@ export function mergeBranch(
       } catch (stashErr) {
         try {
           execFileSync("git", ["-C", repoDir, "checkout", base], { timeout: 15_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
-        } catch {}
-        return {
+        } catch (err) {
+          warnRecovery(`Failed to check out ${base} after auto-stash failure`, err);
+        }
+        return withWarnings({
           success: false,
           dirtyError: true,
-          error: `Auto-stash failed: ${stashErr instanceof Error ? stashErr.message : String(stashErr)}. Commit or stash changes manually, then retry.`,
-        };
+          error: `Auto-stash failed: ${errorMessage(stashErr)}. Commit or stash changes manually, then retry.`,
+        });
       }
       if (!stashOutput.includes("No local changes to save")) {
         stashed = true;
@@ -213,8 +230,8 @@ export function mergeBranch(
             encoding: "utf-8",
             stdio: ["pipe", "pipe", "pipe"],
           }).trim() || undefined;
-        } catch {
-          // best effort
+        } catch (err) {
+          warnRecovery("Failed to determine auto-stash ref", err);
         }
       }
     }
@@ -224,12 +241,16 @@ export function mergeBranch(
     } catch {
       try {
         execFileSync("git", ["-C", rebaseDir, "rebase", "--abort"], { timeout: 15_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
-      } catch {}
+      } catch (err) {
+        warnRecovery("Failed to abort rebase during recovery", err);
+      }
       try {
         execFileSync("git", ["-C", repoDir, "checkout", base], { timeout: 15_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
-      } catch {}
+      } catch (err) {
+        warnRecovery(`Failed to check out ${base} during recovery`, err);
+      }
       tryPopStash(repoDir);
-      return {
+      return withWarnings({
         success: false,
         rebaseConflict: true,
         stashed: stashed || undefined,
@@ -244,7 +265,7 @@ export function mergeBranch(
           `  git rebase --continue`,
           `  # repeat until rebase finishes, then re-run agent_merge.`,
         ].join("\n"),
-      };
+      });
     }
 
     execFileSync("git", ["-C", repoDir, "checkout", base], { timeout: 15_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
@@ -254,28 +275,31 @@ export function mergeBranch(
     if (stashed) {
       try {
         execFileSync("git", ["-C", repoDir, "stash", "pop"], { timeout: 10_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
-      } catch {
+      } catch (err) {
         stashPopConflict = true;
+        warnRecovery("Failed to pop auto-stash after merge", err);
       }
     }
 
-    return {
+    return withWarnings({
       success: true,
       fastForward: true,
       stashed: stashed || undefined,
       stashRef,
       stashPopConflict: stashPopConflict || undefined,
-    };
+    });
   } catch (err) {
     try {
       execFileSync("git", ["-C", repoDir, "checkout", base], { timeout: 15_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
-    } catch {}
+    } catch (checkoutErr) {
+      warnRecovery(`Failed to check out ${base} during recovery`, checkoutErr);
+    }
     tryPopStash(repoDir);
-    return {
+    return withWarnings({
       success: false,
-      error: err instanceof Error ? err.message : String(err),
+      error: errorMessage(err),
       stashed: stashed || undefined,
       stashRef,
-    };
+    });
   }
 }
