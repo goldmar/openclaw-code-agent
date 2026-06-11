@@ -39,16 +39,17 @@ afterEach(() => {
 });
 
 describe("agent_worktree_status", () => {
-  it("treats missing params as listing all worktrees", async () => {
+  it("treats missing or null params as listing all worktrees", async () => {
     setSessionManager({
       list: () => [],
       listPersistedSessions: () => [],
     } as any);
 
     const tool = makeAgentWorktreeStatusTool();
-    const result = await tool.execute("tool-id", undefined);
-
-    assert.equal((result.content[0] as { text: string }).text, "No sessions with worktrees found.");
+    for (const params of [undefined, null] as const) {
+      const result = await tool.execute("tool-id", params);
+      assert.equal((result.content[0] as { text: string }).text, "No sessions with worktrees found.");
+    }
   });
 
   it("returns an error for malformed params without throwing", async () => {
@@ -58,7 +59,7 @@ describe("agent_worktree_status", () => {
     } as any);
 
     const tool = makeAgentWorktreeStatusTool();
-    for (const params of ["bad", { session: 42 }] as const) {
+    for (const params of ["bad", { session: 42 }, []] as const) {
       const result = await tool.execute("tool-id", params);
       assert.equal((result.content[0] as { text: string }).text, "Error: Invalid parameters. Expected { session? }.");
     }

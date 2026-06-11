@@ -15,6 +15,7 @@ interface AgentWorktreeStatusParams {
 
 function isAgentWorktreeStatusParams(value: unknown): value is AgentWorktreeStatusParams {
   if (value == null) return true;
+  if (Array.isArray(value)) return false;
   if (typeof value !== "object") return false;
   const session = (value as Record<string, unknown>).session;
   return session === undefined || typeof session === "string";
