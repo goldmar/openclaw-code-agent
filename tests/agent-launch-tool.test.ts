@@ -258,6 +258,54 @@ describe("agent_launch tool defaults", () => {
     assert.match((result.content[0] as { text: string }).text, /Session launched successfully/);
   });
 
+  it("asks for repo policy with buttons before launching worktree sessions for unknown repos", async () => {
+    const workdir = mkdtempSync(join(tmpdir(), "agent-launch-policy-"));
+    let spawnCalled = false;
+    let policyLaunchArgs: Record<string, unknown> | undefined;
+
+    try {
+      setSessionManager({
+        resolveHarnessSessionId: (id: string) => id,
+        checkRepoPolicyForLaunch: () => ({
+          ok: false,
+          text: "Repo integration policy is not set.",
+        }),
+        requestRepoPolicyForLaunch(args: Record<string, unknown>) {
+          policyLaunchArgs = args;
+          return `Repo policy choice prompt sent for ${workdir}.`;
+        },
+        spawn() {
+          spawnCalled = true;
+          throw new Error("spawn should not run before policy selection");
+        },
+      } as any);
+
+      const tool = makeAgentLaunchTool({
+        workspaceDir: workdir,
+        messageChannel: "telegram",
+        chatId: "12345",
+        agentId: "agent-main",
+      } as any);
+      const result = await tool.execute("tool-id", {
+        prompt: "Ship isolated changes",
+        worktree_strategy: "delegate",
+        harness: "codex",
+        model: "gpt-5.5",
+      });
+
+      assert.equal(spawnCalled, false);
+      assert.equal((result.content[0] as { text: string }).text, `Repo policy choice prompt sent for ${workdir}.`);
+      assert.equal(policyLaunchArgs?.prompt, "Ship isolated changes");
+      assert.equal(policyLaunchArgs?.workdir, workdir);
+      assert.equal(policyLaunchArgs?.worktreeStrategy, "delegate");
+      assert.equal(policyLaunchArgs?.harness, "codex");
+      assert.equal(policyLaunchArgs?.model, "gpt-5.5");
+      assert.equal(policyLaunchArgs?.originAgentId, "agent-main");
+    } finally {
+      rmSync(workdir, { recursive: true, force: true });
+    }
+  });
+
   it("clears persisted Codex resume state before spawn", async () => {
     let spawnConfig: Record<string, unknown> | undefined;
 

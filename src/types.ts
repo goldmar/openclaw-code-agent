@@ -219,6 +219,7 @@ export type SessionActionKind =
   | "plan-reject"
   | "plan-offer-start"
   | "plan-offer-dismiss"
+  | "repo-policy-set"
   | "worktree-merge"
   | "worktree-create-pr"
   | "worktree-update-pr"
@@ -255,7 +256,23 @@ export interface SessionActionToken {
   launchName?: string;
   launchPrompt?: string;
   launchWorkdir?: string;
+  launchModel?: string;
+  launchReasoningEffort?: ReasoningEffort;
+  launchFastMode?: boolean;
+  launchSystemPrompt?: string;
+  launchAllowedTools?: string[];
+  launchResumeSessionId?: string;
+  launchForkSession?: boolean;
+  launchForceNewSession?: boolean;
+  launchPermissionMode?: PermissionMode;
+  launchPlanApproval?: PlanApprovalMode;
+  launchHarness?: string;
   launchWorktreeStrategy?: WorktreeStrategy;
+  launchWorktreeBaseBranch?: string;
+  launchWorktreePrTargetRepo?: string;
+  launchOriginAgentId?: string;
+  repoPolicy?: RepoIntegrationPolicy;
+  repoPolicyWorkdir?: string;
 }
 
 export interface SessionNotificationDedupeRecord {

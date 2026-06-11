@@ -1,5 +1,8 @@
 import type {
   PersistedSessionInfo,
+  PermissionMode,
+  PlanApprovalMode,
+  ReasoningEffort,
   SessionRoute,
   SessionActionKind,
   SessionActionToken,
@@ -7,6 +10,7 @@ import type {
 } from "./types";
 import type { SessionActionTokenStore } from "./session-action-token-store";
 import { logButtonDiagnostic, summarizeButtons } from "./button-diagnostics";
+import { REPO_POLICY_OPTIONS } from "./repo-policy";
 
 export type NotificationButton = {
   label: string;
@@ -69,6 +73,7 @@ export class SessionInteractionService {
       case "worktree-create-pr":
       case "worktree-update-pr":
       case "plan-offer-start":
+      case "repo-policy-set":
         return "primary";
       case "worktree-merge":
       case "session-resume":
@@ -203,6 +208,71 @@ export class SessionInteractionService {
       ...summarizeButtons(buttons),
     });
     return buttons;
+  }
+
+  getRepoPolicyChoiceButtons(args: {
+    choiceId: string;
+    route: SessionRoute;
+    repoRoot: string;
+    launchPrompt: string;
+    launchWorkdir: string;
+    launchName?: string;
+    launchModel?: string;
+    launchReasoningEffort?: ReasoningEffort;
+    launchFastMode?: boolean;
+    launchSystemPrompt?: string;
+    launchAllowedTools?: string[];
+    launchResumeSessionId?: string;
+    launchForkSession?: boolean;
+    launchForceNewSession?: boolean;
+    launchPermissionMode?: PermissionMode;
+    launchPlanApproval?: PlanApprovalMode;
+    launchHarness?: string;
+    launchWorktreeStrategy?: WorktreeStrategy;
+    launchWorktreeBaseBranch?: string;
+    launchWorktreePrTargetRepo?: string;
+    launchOriginAgentId?: string;
+  }): NotificationButton[][] {
+    const rows = [
+      REPO_POLICY_OPTIONS.slice(0, 2),
+      REPO_POLICY_OPTIONS.slice(2),
+    ].map((options) => options.map((option) => (
+      this.makeActionButton(args.choiceId, "repo-policy-set", option.label, {
+        route: args.route,
+        repoPolicy: option.policy,
+        repoPolicyWorkdir: args.repoRoot,
+        launchName: args.launchName,
+        launchPrompt: args.launchPrompt,
+        launchWorkdir: args.launchWorkdir,
+        launchModel: args.launchModel,
+        launchReasoningEffort: args.launchReasoningEffort,
+        launchFastMode: args.launchFastMode,
+        launchSystemPrompt: args.launchSystemPrompt,
+        launchAllowedTools: args.launchAllowedTools,
+        launchResumeSessionId: args.launchResumeSessionId,
+        launchForkSession: args.launchForkSession,
+        launchForceNewSession: args.launchForceNewSession,
+        launchPermissionMode: args.launchPermissionMode,
+        launchPlanApproval: args.launchPlanApproval,
+        launchHarness: args.launchHarness,
+        launchWorktreeStrategy: args.launchWorktreeStrategy,
+        launchWorktreeBaseBranch: args.launchWorktreeBaseBranch,
+        launchWorktreePrTargetRepo: args.launchWorktreePrTargetRepo,
+        launchOriginAgentId: args.launchOriginAgentId,
+      })
+    )));
+    logButtonDiagnostic("repo_policy_choice_buttons_created", {
+      choiceId: args.choiceId,
+      repoRoot: args.repoRoot,
+      channel: args.route.provider,
+      target: args.route.target,
+      accountId: args.route.accountId,
+      threadId: args.route.threadId,
+      sessionKey: args.route.sessionKey,
+      labels: REPO_POLICY_OPTIONS.map((option) => option.label),
+      ...summarizeButtons(rows),
+    });
+    return rows;
   }
 
 }

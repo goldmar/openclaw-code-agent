@@ -14,6 +14,7 @@ import {
 import { SessionWorktreeActionService } from "../src/session-worktree-action-service";
 import { createWorktree, getBranchName } from "../src/worktree";
 import { SessionManager } from "../src/session-manager";
+import { CALLBACK_NAMESPACE } from "../src/interactive-constants";
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }).trim();
@@ -55,6 +56,68 @@ describe("repo policy resolution", () => {
         assert.match(result.text, /Repo integration policy is not set/);
         assert.match(result.text, /agent_repo_policy/);
       }
+      sm.dispose();
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+      rmSync(storeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("delivers short repo-policy buttons with opaque callback tokens before continuing launch", () => {
+    const repoDir = mkdtempSync(join(tmpdir(), "openclaw-policy-buttons-"));
+    const storeDir = mkdtempSync(join(tmpdir(), "openclaw-policy-buttons-store-"));
+    const dispatchCalls: any[] = [];
+    try {
+      git(repoDir, "init", "-b", "main");
+      const sm = new SessionManager(1, 10, { store: { indexPath: join(storeDir, "sessions.json") } });
+      (sm as any).notifications = {
+        dispatch: (...args: any[]) => { dispatchCalls.push(args); },
+        notifyWorktreeOutcome: () => {},
+        dispose: () => {},
+      };
+
+      const result = sm.requestRepoPolicyForLaunch({
+        route: {
+          provider: "telegram",
+          target: "12345",
+          threadId: "99",
+          sessionKey: "agent:main:telegram:group:12345:topic:99",
+        },
+        prompt: "Ship isolated changes",
+        workdir: repoDir,
+        harness: "codex",
+        model: "gpt-5.5",
+        reasoningEffort: "high",
+        fastMode: true,
+        worktreeStrategy: "delegate",
+      });
+
+      assert.match(result, /Repo policy choice prompt sent/);
+      assert.equal(dispatchCalls.length, 1);
+      const [, request] = dispatchCalls[0];
+      assert.match(request.userMessage, /continue this launch automatically/);
+      assert.deepEqual(
+        request.buttons.map((row: Array<{ label: string }>) => row.map((button) => button.label)),
+        [["Require PR", "Merge or PR"], ["No PR", "Manual"]],
+      );
+      for (const row of request.buttons as Array<Array<{ label: string; callbackData: string }>>) {
+        for (const button of row) {
+          assert.ok(button.label.length <= 11, `button label too long: ${button.label}`);
+          assert.equal(button.callbackData.includes("pr-required"), false);
+          assert.equal(button.callbackData.includes(repoDir), false);
+          assert.ok(Buffer.byteLength(`${CALLBACK_NAMESPACE}:${button.callbackData}`, "utf8") <= 64);
+        }
+      }
+
+      const tokenId = request.buttons[0][0].callbackData;
+      const token = sm.getActionToken(tokenId);
+      assert.equal(token?.kind, "repo-policy-set");
+      assert.equal(token?.repoPolicy, "pr-required");
+      assert.equal(token?.launchPrompt, "Ship isolated changes");
+      assert.equal(token?.launchWorkdir, repoDir);
+      assert.equal(token?.launchModel, "gpt-5.5");
+      assert.equal(token?.launchReasoningEffort, "high");
+      assert.equal(token?.launchFastMode, true);
       sm.dispose();
     } finally {
       rmSync(repoDir, { recursive: true, force: true });

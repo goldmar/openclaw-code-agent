@@ -47,6 +47,34 @@ function hasFormatLaunchResult(value: unknown): value is {
     && typeof (value as { formatLaunchResult?: unknown }).formatLaunchResult === "function";
 }
 
+function hasRequestRepoPolicyForLaunch(value: unknown): value is {
+  requestRepoPolicyForLaunch: (args: {
+    route?: Record<string, unknown>;
+    prompt: string;
+    workdir: string;
+    name?: string;
+    model?: string;
+    reasoningEffort?: string;
+    fastMode?: boolean;
+    systemPrompt?: string;
+    allowedTools?: string[];
+    resumeSessionId?: string;
+    forkSession?: boolean;
+    forceNewSession?: boolean;
+    permissionMode?: "default" | "plan" | "bypassPermissions";
+    planApproval?: "ask" | "delegate" | "approve";
+    harness?: string;
+    worktreeStrategy?: "off" | "manual" | "ask" | "delegate" | "auto-merge" | "auto-pr";
+    worktreeBaseBranch?: string;
+    worktreePrTargetRepo?: string;
+    originAgentId?: string;
+  }) => string;
+} {
+  return !!value
+    && typeof value === "object"
+    && typeof (value as { requestRepoPolicyForLaunch?: unknown }).requestRepoPolicyForLaunch === "function";
+}
+
 /** Register the `agent_launch` tool factory. */
 export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
   return {
@@ -156,6 +184,39 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
               text: `Resume unavailable for session ${resumeTarget!.name} [${resumeTargetRef(resumeTarget, params.resume_session_id)}] (${resumeAssessment.reason}). Use agent_launch(prompt='<new task>') for a fresh session or set fork_session=true to fork from prior context.`,
             }],
           };
+        }
+
+        const launchWorktreeStrategy = params.worktree_strategy ?? pluginConfig.defaultWorktreeStrategy ?? "off";
+        if (launchWorktreeStrategy !== "off" && hasRequestRepoPolicyForLaunch(sessionManager)) {
+          const policyCheck = sessionManager.checkRepoPolicyForLaunch?.(workdir, params.worktree_strategy);
+          if (policyCheck && policyCheck.ok === false) {
+            return {
+              content: [{
+                type: "text",
+                text: sessionManager.requestRepoPolicyForLaunch({
+                  route,
+                  prompt: params.prompt,
+                  workdir,
+                  name: params.name,
+                  model: resolvedModel,
+                  reasoningEffort,
+                  fastMode,
+                  systemPrompt: params.system_prompt,
+                  allowedTools: params.allowed_tools,
+                  resumeSessionId: resumeAssessment?.kind === "resume" ? resumeAssessment.resumeSessionId : resumeSessionId,
+                  forkSession: resumeSessionId ? params.fork_session : false,
+                  forceNewSession: params.force_new_session,
+                  permissionMode,
+                  planApproval,
+                  harness,
+                  worktreeStrategy: params.worktree_strategy,
+                  worktreeBaseBranch: params.worktree_base_branch,
+                  worktreePrTargetRepo: params.worktree_pr_target_repo,
+                  originAgentId: ctx.agentId || undefined,
+                }),
+              }],
+            };
+          }
         }
 
         const session = sessionManager.spawn({

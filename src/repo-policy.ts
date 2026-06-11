@@ -25,6 +25,51 @@ export interface RepoPolicyResolution {
 
 export type EffectiveWorktreeStrategy = "ask" | "delegate" | "auto-merge" | "auto-pr";
 
+export type RepoPolicyOption = {
+  policy: RepoIntegrationPolicy;
+  label: string;
+  title: string;
+  description: string;
+};
+
+export const REPO_POLICY_OPTIONS: readonly RepoPolicyOption[] = [
+  {
+    policy: "pr-required",
+    label: "Require PR",
+    title: "Require PR",
+    description: "Direct merge is disabled; follow-through must use a pull request.",
+  },
+  {
+    policy: "pr-allowed",
+    label: "Merge or PR",
+    title: "Merge or PR",
+    description: "Use the requested strategy; direct merge and pull requests are both allowed.",
+  },
+  {
+    policy: "never-pr",
+    label: "No PR",
+    title: "No PR",
+    description: "Do not create pull requests; keep follow-through local/direct.",
+  },
+  {
+    policy: "manual",
+    label: "Manual",
+    title: "Manual",
+    description: "Create isolated worktrees, but require an explicit human follow-up decision every time.",
+  },
+];
+
+const REPO_POLICY_OPTION_BY_POLICY = new Map(REPO_POLICY_OPTIONS.map((option) => [option.policy, option]));
+
+export function getRepoPolicyOption(policy: RepoIntegrationPolicy): RepoPolicyOption {
+  return REPO_POLICY_OPTION_BY_POLICY.get(policy) ?? {
+    policy,
+    label: policy,
+    title: policy,
+    description: "Custom repo integration policy.",
+  };
+}
+
 export interface WorktreePolicyDecision {
   strategy?: EffectiveWorktreeStrategy;
   blocked?: boolean;
@@ -175,14 +220,14 @@ export function formatUnknownRepoPolicyMessage(identity: RepoIdentity, requested
   return [
     `Repo integration policy is not set for ${identity.repoRoot}.`,
     ``,
-    `OCA will create isolated worktrees, but it needs a repo policy before follow-through can be automated.`,
+    `OCA will create isolated worktrees, but it needs one repo policy before merge or PR follow-through can run.`,
     `Requested worktree strategy: ${requestedStrategy}`,
     `Provider: ${identity.provider}${identity.provider === "github" ? "" : " (PR automation unavailable)"}`,
     ``,
-    `Set one policy, then launch again:`,
-    `- agent_repo_policy(workdir="${identity.repoRoot}", policy="pr-required") for repos that must use PRs`,
-    `- agent_repo_policy(workdir="${identity.repoRoot}", policy="pr-allowed") for repos where merge or PR are both acceptable`,
-    `- agent_repo_policy(workdir="${identity.repoRoot}", policy="never-pr") for private/local repos that should not open PRs`,
-    `- agent_repo_policy(workdir="${identity.repoRoot}", policy="manual") to require explicit follow-through every time`,
+    `Choose one policy:`,
+    ...REPO_POLICY_OPTIONS.map((option) => `- ${option.title}: ${option.description}`),
+    ``,
+    `If buttons are unavailable, set it manually and rerun the launch:`,
+    ...REPO_POLICY_OPTIONS.map((option) => `- agent_repo_policy(workdir="${identity.repoRoot}", policy="${option.policy}")`),
   ].join("\n");
 }

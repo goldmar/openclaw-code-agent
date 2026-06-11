@@ -264,6 +264,7 @@ function toOptionalActionKind(value: unknown): SessionActionKind | undefined {
     || value === "plan-reject"
     || value === "plan-offer-start"
     || value === "plan-offer-dismiss"
+    || value === "repo-policy-set"
     || value === "worktree-merge"
     || value === "worktree-create-pr"
     || value === "worktree-update-pr"
@@ -596,7 +597,25 @@ export function normalizeActionToken(raw: unknown): SessionActionToken | undefin
     launchName: toOptionalString(raw.launchName),
     launchPrompt: toOptionalString(raw.launchPrompt),
     launchWorkdir: toOptionalString(raw.launchWorkdir),
+    launchModel: toOptionalString(raw.launchModel),
+    launchReasoningEffort: toOptionalReasoningEffort(raw.launchReasoningEffort),
+    launchFastMode: raw.launchFastMode === true ? true : undefined,
+    launchSystemPrompt: toOptionalString(raw.launchSystemPrompt),
+    launchAllowedTools: Array.isArray(raw.launchAllowedTools)
+      ? raw.launchAllowedTools.filter((item): item is string => typeof item === "string")
+      : undefined,
+    launchResumeSessionId: toOptionalString(raw.launchResumeSessionId),
+    launchForkSession: typeof raw.launchForkSession === "boolean" ? raw.launchForkSession : undefined,
+    launchForceNewSession: typeof raw.launchForceNewSession === "boolean" ? raw.launchForceNewSession : undefined,
+    launchPermissionMode: toOptionalPermissionMode(raw.launchPermissionMode),
+    launchPlanApproval: toOptionalPlanApprovalMode(raw.launchPlanApproval),
+    launchHarness: toOptionalString(raw.launchHarness),
     launchWorktreeStrategy: toOptionalWorktreeStrategy(raw.launchWorktreeStrategy),
+    launchWorktreeBaseBranch: toOptionalString(raw.launchWorktreeBaseBranch),
+    launchWorktreePrTargetRepo: toOptionalString(raw.launchWorktreePrTargetRepo),
+    launchOriginAgentId: toOptionalString(raw.launchOriginAgentId),
+    repoPolicy: toOptionalRepoIntegrationPolicy(raw.repoPolicy),
+    repoPolicyWorkdir: toOptionalString(raw.repoPolicyWorkdir),
   };
 }
 
