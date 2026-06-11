@@ -141,6 +141,9 @@ export class SessionMaintenanceService {
           worktreePath: undefined,
           worktreeBranch: undefined,
           worktreeState: "none",
+          pendingWorktreeDecisionSince: undefined,
+          lastWorktreeReminderAt: undefined,
+          worktreeDecisionSnoozedUntil: undefined,
           worktreeLifecycle: {
             ...(session.worktreeLifecycle ?? resolved.lifecycle),
             state: resolved.derivedState,
