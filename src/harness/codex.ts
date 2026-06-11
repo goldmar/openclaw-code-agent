@@ -70,10 +70,20 @@ type CodexPendingInput = {
 };
 
 const DEFAULT_PROTOCOL_VERSION = "1.0";
-const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
+export const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
 const OPENCLAW_CODEX_APP_SERVER_COMMAND_ENV = "OPENCLAW_CODEX_APP_SERVER_COMMAND";
 const OPENCLAW_CODEX_APP_SERVER_ARGS_ENV = "OPENCLAW_CODEX_APP_SERVER_ARGS";
 const OPENCLAW_CODEX_APP_SERVER_TIMEOUT_MS_ENV = "OPENCLAW_CODEX_APP_SERVER_TIMEOUT_MS";
+
+function parseRequestTimeoutMs(value: string | undefined): number {
+  const trimmed = value?.trim();
+  if (!trimmed) return DEFAULT_REQUEST_TIMEOUT_MS;
+  if (!/^\d+$/.test(trimmed)) return DEFAULT_REQUEST_TIMEOUT_MS;
+  const parsed = Number(trimmed);
+  return Number.isSafeInteger(parsed) && parsed > 0
+    ? parsed
+    : DEFAULT_REQUEST_TIMEOUT_MS;
+}
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -125,9 +135,7 @@ export class CodexHarness implements AgentHarness {
     const clientSettings = {
       command: process.env[OPENCLAW_CODEX_APP_SERVER_COMMAND_ENV]?.trim() || "codex",
       args: parseCsvEnv(process.env[OPENCLAW_CODEX_APP_SERVER_ARGS_ENV]),
-      requestTimeoutMs:
-        Number.parseInt(process.env[OPENCLAW_CODEX_APP_SERVER_TIMEOUT_MS_ENV] ?? String(DEFAULT_REQUEST_TIMEOUT_MS), 10)
-        || DEFAULT_REQUEST_TIMEOUT_MS,
+      requestTimeoutMs: parseRequestTimeoutMs(process.env[OPENCLAW_CODEX_APP_SERVER_TIMEOUT_MS_ENV]),
     };
     const client = this.deps.createClient?.(clientSettings)
       ?? new StdioJsonRpcClient(
@@ -313,7 +321,7 @@ export class CodexHarness implements AgentHarness {
         protocolVersion: DEFAULT_PROTOCOL_VERSION,
         clientInfo: { name: "openclaw-code-agent", version: "3.1.0" },
         capabilities: { experimentalApi: true },
-      }, DEFAULT_REQUEST_TIMEOUT_MS);
+      }, clientSettings.requestTimeoutMs);
       await client.notify("initialized", {});
     };
 
@@ -334,7 +342,7 @@ export class CodexHarness implements AgentHarness {
             approvalPolicy: executionPolicy.approvalPolicy,
             sandbox: executionPolicy.sandbox,
           }),
-          timeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
+          timeoutMs: clientSettings.requestTimeoutMs,
         });
         const state = extractThreadState(resumed);
         threadId = state.threadId ?? threadId;
@@ -354,7 +362,7 @@ export class CodexHarness implements AgentHarness {
           approvalPolicy: executionPolicy.approvalPolicy,
           sandbox: executionPolicy.sandbox,
         }),
-        timeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
+        timeoutMs: clientSettings.requestTimeoutMs,
       });
       const state = extractThreadState(started);
       threadId = state.threadId;
@@ -401,7 +409,7 @@ export class CodexHarness implements AgentHarness {
             approvalPolicy: executionPolicy.approvalPolicy,
             sandbox: executionPolicy.sandbox,
           }),
-          timeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
+          timeoutMs: clientSettings.requestTimeoutMs,
         });
         const ids = extractIds(started);
         if (ids.runId) {
@@ -575,7 +583,7 @@ export class CodexHarness implements AgentHarness {
           client,
           methods: ["turn/interrupt"],
           payloads: buildTurnInterruptPayloads({ threadId, turnId }),
-          timeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
+          timeoutMs: clientSettings.requestTimeoutMs,
         }).catch((): undefined => undefined);
       },
     };
