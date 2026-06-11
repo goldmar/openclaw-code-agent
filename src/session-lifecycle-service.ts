@@ -126,6 +126,7 @@ export class SessionLifecycleService {
         worktreePrUrl?: string;
         isExplicitlyResumable?: boolean;
         planDecisionVersion?: number;
+        actionablePlanDecisionVersion?: number;
       }) => NotificationButton[][];
       getResumeButtons: (sessionId: string, session: {
         worktreePrUrl?: string;
