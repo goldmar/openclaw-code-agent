@@ -14,8 +14,11 @@ interface AgentWorktreeStatusParams {
 }
 
 function isAgentWorktreeStatusParams(value: unknown): value is AgentWorktreeStatusParams {
-  if (!value || typeof value !== "object") return true;
-  return true;
+  if (value == null) return true;
+  if (Array.isArray(value)) return false;
+  if (typeof value !== "object") return false;
+  const session = (value as Record<string, unknown>).session;
+  return session === undefined || typeof session === "string";
 }
 
 export function makeAgentWorktreeStatusTool(_ctx?: OpenClawPluginToolContext) {
@@ -33,7 +36,9 @@ export function makeAgentWorktreeStatusTool(_ctx?: OpenClawPluginToolContext) {
         return { content: [{ type: "text", text: "Error: Invalid parameters. Expected { session? }." }] };
       }
 
-      const targetSession = (params as AgentWorktreeStatusParams).session;
+      const targetSession = params && typeof params === "object"
+        ? (params as AgentWorktreeStatusParams).session
+        : undefined;
       let sessionsToShow = listWorktreeToolTargets(sessionManager);
       if (targetSession) {
         sessionsToShow = sessionsToShow.filter((session) => matchesWorktreeToolRef(session, targetSession));

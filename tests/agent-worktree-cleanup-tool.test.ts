@@ -39,6 +39,32 @@ afterEach(() => {
 });
 
 describe("agent_worktree_status", () => {
+  it("treats missing or null params as listing all worktrees", async () => {
+    setSessionManager({
+      list: () => [],
+      listPersistedSessions: () => [],
+    } as any);
+
+    const tool = makeAgentWorktreeStatusTool();
+    for (const params of [undefined, null] as const) {
+      const result = await tool.execute("tool-id", params);
+      assert.equal((result.content[0] as { text: string }).text, "No sessions with worktrees found.");
+    }
+  });
+
+  it("returns an error for malformed params without throwing", async () => {
+    setSessionManager({
+      list: () => [],
+      listPersistedSessions: () => [],
+    } as any);
+
+    const tool = makeAgentWorktreeStatusTool();
+    for (const params of ["bad", { session: 42 }, []] as const) {
+      const result = await tool.execute("tool-id", params);
+      assert.equal((result.content[0] as { text: string }).text, "Error: Invalid parameters. Expected { session? }.");
+    }
+  });
+
   it("renders derived released lifecycle details from repository evidence", async () => {
     const repoDir = initRepo("status-released-");
     try {
