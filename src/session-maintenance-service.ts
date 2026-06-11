@@ -162,7 +162,10 @@ export class SessionMaintenanceService {
     const nextExpiryAt = this.deps.store.getNextActionTokenExpiry();
     if (nextExpiryAt == null) return;
     this.schedule(key, nextExpiryAt, () => {
-      this.deps.store.purgeExpiredActionTokens(Date.now());
+      const changed = this.deps.store.purgeExpiredActionTokens(Date.now());
+      if (!changed) {
+        this.syncActionTokenExpiryDeadline();
+      }
     });
   }
 

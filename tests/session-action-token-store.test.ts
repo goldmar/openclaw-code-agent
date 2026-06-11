@@ -21,8 +21,9 @@ describe("SessionActionTokenStore", () => {
     assert.equal(consumed?.id, token.id);
     assert.ok(consumed?.consumedAt);
 
-    store.purgeExpiredActionTokens((consumed?.consumedAt ?? 0) + 200);
+    assert.equal(store.purgeExpiredActionTokens((consumed?.consumedAt ?? 0) + 200), true);
     assert.equal(store.listForPersistence().length, 0);
+    assert.equal(store.purgeExpiredActionTokens(Date.now()), false);
 
     const tokenA = store.createActionToken("session-2", "view-output");
     const tokenB = store.createActionToken("session-2", "session-resume");

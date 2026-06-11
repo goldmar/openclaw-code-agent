@@ -518,8 +518,8 @@ export class SessionStore {
     this.actionTokenStore.deleteActionTokensForSession(sessionId);
   }
 
-  purgeExpiredActionTokens(now: number = Date.now()): void {
-    this.actionTokenStore.purgeExpiredActionTokens(now);
+  purgeExpiredActionTokens(now: number = Date.now()): boolean {
+    return this.actionTokenStore.purgeExpiredActionTokens(now);
   }
 
   getNextActionTokenExpiry(): number | undefined {

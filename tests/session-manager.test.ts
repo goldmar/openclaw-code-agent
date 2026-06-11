@@ -1104,6 +1104,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     (sm as any).store.getNextActionTokenExpiry = () => Date.now() + 60_000;
     (sm as any).store.purgeExpiredActionTokens = () => {
       (sm as any).syncActionTokenExpiryDeadline();
+      return true;
     };
 
     (sm as any).syncActionTokenExpiryDeadline();
@@ -1111,6 +1112,29 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
 
     tokenExpiryCallback?.();
     assert.deepEqual(scheduledKeys, ["tokens:expiry", "tokens:expiry"]);
+  });
+
+  it("re-arms the token-expiry deadline after a no-op purge callback", () => {
+    const sm = new SessionManager(5, 5);
+    const scheduled: Array<{ key: string; at: number; cb: () => void }> = [];
+    const now = Date.now();
+    const nextExpiries = [now + 60_000, now + 120_000, undefined];
+
+    (sm as any).maintenance.schedule = ((key: string, at: number, cb: () => void) => {
+      scheduled.push({ key, at, cb });
+    }) as any;
+    (sm as any).store.getNextActionTokenExpiry = () => nextExpiries.shift();
+    (sm as any).store.purgeExpiredActionTokens = () => false;
+
+    (sm as any).syncActionTokenExpiryDeadline();
+    assert.equal(scheduled.length, 1);
+    assert.equal(scheduled[0].key, "tokens:expiry");
+    assert.equal(scheduled[0].at, now + 60_000);
+
+    scheduled[0].cb();
+    assert.equal(scheduled.length, 2);
+    assert.equal(scheduled[1].key, "tokens:expiry");
+    assert.equal(scheduled[1].at, now + 120_000);
   });
 
   it("backs off reminder retries after a delivery failure instead of rescheduling immediately", () => {
