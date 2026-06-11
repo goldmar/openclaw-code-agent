@@ -35,6 +35,7 @@ export type WorktreeStrategyResult = {
 
 type DiffSummary = NonNullable<ReturnType<typeof getDiffSummary>>;
 type SpawnedResolverSession = Pick<Session, "id" | "name">;
+type AllowedWorktreeActions = { merge: boolean; pr: boolean };
 
 /**
  * Worktree decision/messaging orchestration layer.
@@ -60,7 +61,7 @@ export class SessionWorktreeStrategyService {
       getPolicyAwareWorktreeDecisionButtons?: (
         sessionId: string,
         options: { allowDelegate?: boolean },
-        allowedActions: { merge: boolean; pr: boolean },
+        allowedActions: AllowedWorktreeActions,
       ) => NotificationButton[][] | undefined;
       makeOpenPrButton: (sessionId: string) => NotificationButton;
       isPrAvailable?: (repoDir: string) => boolean;
@@ -131,6 +132,7 @@ export class SessionWorktreeStrategyService {
     session: Session,
     branchName: string,
     reason: string,
+    allowedActions: AllowedWorktreeActions,
   ): void {
     this.deps.dispatchSessionNotification(session, {
       label: "worktree-merge-conflict-escalated",
@@ -141,7 +143,12 @@ export class SessionWorktreeStrategyService {
         ``,
         reason,
       ].join("\n"),
-      buttons: [[this.deps.makeOpenPrButton(session.id)]],
+      buttons: this.getPolicyAwareWorktreeDecisionButtons(
+        session.id,
+        allowedActions,
+        {},
+        [[this.deps.makeOpenPrButton(session.id)]],
+      ),
     });
   }
 
@@ -279,6 +286,7 @@ export class SessionWorktreeStrategyService {
         action.baseBranch,
         action.diffSummary,
         action.sessionRef,
+        action.allowedActions,
       );
       return { notificationSent: true, worktreeRemoved: false };
     }
@@ -289,6 +297,7 @@ export class SessionWorktreeStrategyService {
         action.worktreePath,
         action.branchName,
         action.baseBranch,
+        action.allowedActions,
       );
     }
     return { notificationSent: false, worktreeRemoved: false };
@@ -345,7 +354,7 @@ export class SessionWorktreeStrategyService {
     branchName: string,
     baseBranch: string,
     diffSummary: DiffSummary,
-    allowedActions: { merge: boolean; pr: boolean },
+    allowedActions: AllowedWorktreeActions,
     policyReason?: string,
   ): Promise<WorktreeStrategyResult> {
     const summary = await buildWorktreeDecisionWorkSummary({
@@ -373,7 +382,7 @@ export class SessionWorktreeStrategyService {
     branchName: string,
     baseBranch: string,
     diffSummary: DiffSummary,
-    allowedActions: { merge: boolean; pr: boolean },
+    allowedActions: AllowedWorktreeActions,
     policyReason?: string,
   ): WorktreeStrategyResult {
     this.deps.dispatchSessionNotification(session, this.deps.worktreeMessages.buildDelegateNotification({
@@ -391,12 +400,16 @@ export class SessionWorktreeStrategyService {
 
   private getPolicyAwareWorktreeDecisionButtons(
     sessionId: string,
-    allowedActions: { merge: boolean; pr: boolean },
+    allowedActions: AllowedWorktreeActions,
     options: { allowDelegate?: boolean } = {},
+    fallbackButtons?: NotificationButton[][],
   ): NotificationButton[][] | undefined {
-    return this.deps.getPolicyAwareWorktreeDecisionButtons
-      ? this.deps.getPolicyAwareWorktreeDecisionButtons(sessionId, options, allowedActions)
-      : this.deps.getWorktreeDecisionButtons(sessionId);
+    if (this.deps.getPolicyAwareWorktreeDecisionButtons) {
+      return this.deps.getPolicyAwareWorktreeDecisionButtons(sessionId, options, allowedActions);
+    }
+    if (fallbackButtons && allowedActions.pr) return fallbackButtons;
+    if (fallbackButtons && !allowedActions.pr && !allowedActions.merge) return undefined;
+    return this.deps.getWorktreeDecisionButtons(sessionId);
   }
 
   private handleDirtyUncommittedCompletion(
@@ -504,6 +517,7 @@ export class SessionWorktreeStrategyService {
     worktreePath: string,
     branchName: string,
     baseBranch: string,
+    allowedActions: AllowedWorktreeActions,
     mergeError?: string,
   ): Promise<void> {
     const attemptsUsed = session.autoMergeConflictResolutionAttemptCount ?? 0;
@@ -515,7 +529,10 @@ export class SessionWorktreeStrategyService {
       this.notifyAutoMergeConflictEscalation(
         session,
         branchName,
-        `The rebased branch still conflicts with \`${baseBranch}\`. Open a PR or resolve manually in ${worktreePath}.`,
+        allowedActions.pr
+          ? `The rebased branch still conflicts with \`${baseBranch}\`. Open a PR or resolve manually in ${worktreePath}.`
+          : `The rebased branch still conflicts with \`${baseBranch}\`. Resolve manually in ${worktreePath}.`,
+        allowedActions,
       );
       return;
     }
@@ -552,7 +569,12 @@ export class SessionWorktreeStrategyService {
         label: "worktree-merge-conflict-spawn-failed",
         idempotencyKey: `worktree-merge-conflict-spawn-failed:${session.id}:${branchName}`,
         userMessage: `❌ [${session.name}] Auto-merge hit a rebase conflict and failed to start the resolver: ${err instanceof Error ? err.message : String(err)}`,
-        buttons: [[this.deps.makeOpenPrButton(session.id)]],
+        buttons: this.getPolicyAwareWorktreeDecisionButtons(
+          session.id,
+          allowedActions,
+          {},
+          [[this.deps.makeOpenPrButton(session.id)]],
+        ),
       });
     }
   }
@@ -562,6 +584,7 @@ export class SessionWorktreeStrategyService {
     branchName: string,
     worktreePath: string,
     errorMsg: string,
+    allowedActions: AllowedWorktreeActions,
   ): void {
     this.markPendingDecision(session, {
       notes: ["auto_merge_conflict_retry_failed"],
@@ -576,7 +599,12 @@ export class SessionWorktreeStrategyService {
         `Auto-merge retry did not complete after conflict resolution.`,
         `Branch \`${branchName}\` was preserved for manual follow-up in ${worktreePath}.`,
       ].join("\n"),
-      buttons: [[this.deps.makeOpenPrButton(session.id)]],
+      buttons: this.getPolicyAwareWorktreeDecisionButtons(
+        session.id,
+        allowedActions,
+        {},
+        [[this.deps.makeOpenPrButton(session.id)]],
+      ),
     });
   }
 
@@ -588,6 +616,7 @@ export class SessionWorktreeStrategyService {
     baseBranch: string,
     diffSummary: DiffSummary,
     sessionRef = getPrimarySessionLookupRef(session) ?? session.harnessSessionId,
+    allowedActions: AllowedWorktreeActions = { merge: true, pr: true },
   ): Promise<void> {
     if (this.deps.isAlreadyMerged(sessionRef)) return;
     if (session.autoMergeResolverSessionId) return;
@@ -611,6 +640,7 @@ export class SessionWorktreeStrategyService {
             worktreePath,
             branchName,
             baseBranch,
+            allowedActions,
             mergeResult.error,
           );
           return;
@@ -623,7 +653,7 @@ export class SessionWorktreeStrategyService {
           session.worktreeState === "merge_conflict_resolving"
           || session.worktreeLifecycle?.state === "merge_conflict_resolving";
         if (retryFailedAfterConflictResolution) {
-          this.handleAutoMergeRetryFailure(session, branchName, worktreePath, errorMsg);
+          this.handleAutoMergeRetryFailure(session, branchName, worktreePath, errorMsg, allowedActions);
           return;
         }
         this.deps.dispatchSessionNotification(session, {
@@ -648,6 +678,7 @@ export class SessionWorktreeStrategyService {
     worktreePath: string,
     branchName: string,
     baseBranch: string,
+    allowedActions: AllowedWorktreeActions = { merge: true, pr: true },
   ): Promise<WorktreeStrategyResult> {
     this.updatePersistedSessionFor(session, {
       lifecycle: "terminal",
@@ -679,7 +710,7 @@ export class SessionWorktreeStrategyService {
         label: "worktree-auto-pr-failed",
         idempotencyKey: `worktree-auto-pr-failed:${session.id}:${baseBranch}`,
         userMessage: `⚠️ [${session.name}] Auto-PR did not complete. The worktree is preserved for an explicit merge or PR decision.`,
-        buttons: this.deps.getWorktreeDecisionButtons(session.id),
+        buttons: this.getPolicyAwareWorktreeDecisionButtons(session.id, allowedActions),
       });
     }
     return { notificationSent: true, worktreeRemoved: false };
