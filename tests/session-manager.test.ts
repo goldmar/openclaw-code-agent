@@ -2410,6 +2410,28 @@ describe("SessionManager turn-end wake", () => {
     );
   });
 
+  it("reports unresolved stale question buttons when no legacy AskUserQuestion is pending", async () => {
+    const s = fakeSession({
+      id: "s-stale-legacy-question",
+      name: "stale-legacy-question",
+      status: "running",
+      canSubmitPendingInputOption: () => false,
+      submitPendingInputOption: async () => false,
+      getOutput: () => [],
+    });
+    (sm as any).sessions.set(s.id, s);
+
+    const resolved = await sm.resolvePendingInputOption(s.id, 0);
+
+    assert.equal(resolved, false);
+  });
+
+  it("reports unresolved direct legacy AskUserQuestion resolution when no question is pending", () => {
+    const resolved = sm.resolveAskUserQuestion("missing-legacy-question", 0);
+
+    assert.equal(resolved, false);
+  });
+
   it("keeps plan approval routing ahead of worktree delegate suppression", async () => {
     const s = fakeSession({
       id: "s-plan-worktree",

@@ -641,6 +641,21 @@ describe("createCallbackHandler()", () => {
     assert.equal(state.replies[0], "✅ Answer submitted.");
   });
 
+  it("does not acknowledge stale question-answer callbacks as submitted", async () => {
+    setSessionManager({
+      getActionToken: () => ({ sessionId: "sess-42", kind: "question-answer", optionIndex: 1 }),
+      consumeActionToken: () => ({ sessionId: "sess-42", kind: "question-answer", optionIndex: 1 }),
+      resolvePendingInputOption: () => false,
+    } as any);
+
+    const handler = createCallbackHandler();
+    const state = createCtx("token-question-stale");
+    const result = await handler.handler(state.ctx as any);
+
+    assert.deepEqual(result, { handled: true });
+    assert.equal(state.replies[0], "⚠️ That question button is no longer active. Use the latest question prompt.");
+  });
+
   it("clears worktree merge buttons without replying when agent_merge succeeds", async () => {
     setSessionManager({
       getActionToken: () => ({ sessionId: "sess-42", kind: "worktree-merge" }),

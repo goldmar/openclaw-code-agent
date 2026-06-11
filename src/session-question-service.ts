@@ -92,11 +92,11 @@ export class SessionQuestionService {
     });
   }
 
-  resolveAskUserQuestion(sessionId: string, optionIndex: number): void {
+  resolveAskUserQuestion(sessionId: string, optionIndex: number): boolean {
     const pending = this.pendingQuestions.get(sessionId);
     if (!pending) {
       console.warn(`[SessionQuestionService] resolveAskUserQuestion: no pending question for session "${sessionId}"`);
-      return;
+      return false;
     }
     clearTimeout(pending.timeoutHandle);
     this.pendingQuestions.delete(sessionId);
@@ -106,7 +106,7 @@ export class SessionQuestionService {
     const selectedOption = options[optionIndex];
     if (!selectedOption) {
       pending.reject(new Error(`AskUserQuestion: invalid option index ${optionIndex} (${options.length} options available)`));
-      return;
+      return false;
     }
 
     this.clearWaitingTimestamp(sessionId);
@@ -117,6 +117,7 @@ export class SessionQuestionService {
         answers: { [firstQuestion.question]: selectedOption.label },
       },
     });
+    return true;
   }
 
   dispose(): void {
