@@ -126,7 +126,7 @@ export class SessionMaintenanceService {
     const resolvedAtIso = this.resolvedAtIso(session);
     const resolvedAt = resolvedAtIso ? new Date(resolvedAtIso).getTime() : 0;
     const legacyResolvedState = this.legacyResolvedWorktreeState(session);
-    if ((!resolved.cleanupSafe && !legacyResolvedState) || !resolvedAt || now - resolvedAt < RESOLVED_WORKTREE_RETENTION_MS) return;
+    if ((!resolved.cleanupSafe && !legacyResolvedState) || !resolvedAtIso || !Number.isFinite(resolvedAt) || now - resolvedAt < RESOLVED_WORKTREE_RETENTION_MS) return;
 
     try {
       if (!session.worktreePath && !usesNativeBackendWorktree(session)) return;
@@ -148,7 +148,7 @@ export class SessionMaintenanceService {
             ...(session.worktreeLifecycle ?? resolved.lifecycle),
             state: resolved.cleanupSafe ? resolved.derivedState : legacyResolvedState ?? resolved.derivedState,
             updatedAt: new Date(now).toISOString(),
-            resolvedAt: session.worktreeLifecycle?.resolvedAt ?? new Date(now).toISOString(),
+            resolvedAt: session.worktreeLifecycle?.resolvedAt ?? resolvedAtIso,
             resolutionSource: session.worktreeLifecycle?.resolutionSource ?? "maintenance",
             notes: resolved.reasons,
           },
