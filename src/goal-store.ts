@@ -33,10 +33,37 @@ function isRecord(raw: unknown): raw is Record<string, unknown> {
   return Boolean(raw) && typeof raw === "object" && !Array.isArray(raw);
 }
 
+const GOAL_TASK_ARCHIVE_COLLISION_SUFFIX_LIMIT = 100;
+
+function goalTaskArchivePath(path: string, now: number, suffix?: number): string {
+  const suffixSegment = suffix == null ? "" : `-${suffix}`;
+  return `${path}.invalid-${now}${suffixSegment}.json`;
+}
+
+function availableGoalTaskArchivePath(path: string): string | undefined {
+  if (!existsSync(path)) return undefined;
+
+  const now = Date.now();
+  const basePath = goalTaskArchivePath(path, now);
+  if (!existsSync(basePath)) return basePath;
+
+  for (let suffix = 1; suffix <= GOAL_TASK_ARCHIVE_COLLISION_SUFFIX_LIMIT; suffix += 1) {
+    const candidate = goalTaskArchivePath(path, now, suffix);
+    if (!existsSync(candidate)) return candidate;
+  }
+
+  return undefined;
+}
+
 function archiveGoalTasksFile(path: string, reason: string): boolean {
   try {
-    if (!existsSync(path)) return false;
-    const archivedPath = `${path}.invalid-${Date.now()}.json`;
+    const archivedPath = availableGoalTaskArchivePath(path);
+    if (!archivedPath) {
+      if (existsSync(path)) {
+        console.warn("[GoalTaskStore] Failed to archive goal task store: no available archive path");
+      }
+      return false;
+    }
     renameSync(path, archivedPath);
     console.warn(`[GoalTaskStore] Archived ${reason} goal task store to ${archivedPath}.`);
     return true;
@@ -48,6 +75,7 @@ function archiveGoalTasksFile(path: string, reason: string): boolean {
 
 export const goalStoreInternals = {
   archiveGoalTasksFile,
+  GOAL_TASK_ARCHIVE_COLLISION_SUFFIX_LIMIT,
 };
 
 function normalizeRoute(raw: unknown): SessionRoute | undefined {

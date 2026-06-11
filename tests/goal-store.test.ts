@@ -123,7 +123,7 @@ describe("GoalTaskStore", () => {
     assert.equal(readFileSync(join(dir, archived[0]!), "utf8"), invalidPayload);
   });
 
-  it("preserves an invalid file when archiving fails", (t) => {
+  it("uses a suffixed archive path after a timestamp collision", (t) => {
     const { dir, path } = createGoalTasksPath();
     const invalidPayload = JSON.stringify({ tasks: [validTask()] });
     const now = 1700000000000;
@@ -134,17 +134,44 @@ describe("GoalTaskStore", () => {
     const store = createStore(path);
 
     assert.deepEqual(store.list(), []);
-    assert.equal(readFileSync(path, "utf8"), invalidPayload);
+    assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), []);
+    assert.equal(readFileSync(`${path}.invalid-${now}-1.json`, "utf8"), invalidPayload);
 
     const archived = readdirSync(dir).filter((name) => name.startsWith("goal-tasks.json.invalid-"));
-    assert.equal(archived.length, 1);
+    assert.equal(archived.length, 2);
   });
 
-  it("does not treat a missing archive target as archived", () => {
+  it("does not treat a missing archive target as archived", (t) => {
     const { dir, path } = createGoalTasksPath();
+    const warn = t.mock.method(console, "warn", () => {});
 
     assert.equal(goalStoreInternals.archiveGoalTasksFile(path, "missing"), false);
     assert.equal(existsSync(path), false);
     assert.equal(readdirSync(dir).some((name) => name.startsWith("goal-tasks.json.invalid-")), false);
+    assert.equal(warn.mock.callCount(), 0);
+  });
+
+  it("preserves an invalid file when archive suffixes are exhausted", (t) => {
+    const { dir, path } = createGoalTasksPath();
+    const invalidPayload = JSON.stringify({ tasks: [validTask()] });
+    const now = 1700000000000;
+    t.mock.method(Date, "now", () => now);
+    const warn = t.mock.method(console, "warn", () => {});
+
+    mkdirSync(`${path}.invalid-${now}.json`);
+    for (let suffix = 1; suffix <= goalStoreInternals.GOAL_TASK_ARCHIVE_COLLISION_SUFFIX_LIMIT; suffix += 1) {
+      mkdirSync(`${path}.invalid-${now}-${suffix}.json`);
+    }
+    writeFileSync(path, invalidPayload, "utf8");
+
+    const store = createStore(path);
+
+    assert.deepEqual(store.list(), []);
+    assert.equal(readFileSync(path, "utf8"), invalidPayload);
+
+    const archived = readdirSync(dir).filter((name) => name.startsWith("goal-tasks.json.invalid-"));
+    assert.equal(archived.length, goalStoreInternals.GOAL_TASK_ARCHIVE_COLLISION_SUFFIX_LIMIT + 1);
+    assert.equal(warn.mock.callCount(), 1);
+    assert.match(String(warn.mock.calls[0]?.arguments[0]), /no available archive path/);
   });
 });
