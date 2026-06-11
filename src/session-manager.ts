@@ -708,7 +708,15 @@ export class SessionManager {
   }
 
   cleanupRepoPolicies(): RepoPolicyRecord[] {
-    return this.store.cleanupRepoPolicies();
+    const removed = [...this.store.cleanupRepoPolicies()];
+    const staleIdentityKeys: string[] = [];
+    for (const record of this.store.listRepoPolicies()) {
+      const currentIdentity = resolveRepoIdentity(record.repoRoot);
+      if (!currentIdentity || currentIdentity.key === record.key) continue;
+      staleIdentityKeys.push(record.key);
+    }
+    removed.push(...this.store.removeRepoPolicies(staleIdentityKeys));
+    return removed.sort((a, b) => a.repoRoot.localeCompare(b.repoRoot) || a.key.localeCompare(b.key));
   }
 
   setRepoPolicy(workdir: string, policy: RepoIntegrationPolicy): RepoPolicyRecord | undefined {

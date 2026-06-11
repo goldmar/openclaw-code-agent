@@ -537,6 +537,45 @@ describe("repo policy resolution", () => {
     }
   });
 
+  it("cleans up stored repo policies when the repo identity changes at the same path", () => {
+    const repoDir = mkdtempSync(join(tmpdir(), "openclaw-policy-identity-cleanup-"));
+    const secondRepoDir = mkdtempSync(join(tmpdir(), "openclaw-policy-identity-cleanup-second-"));
+    const storeDir = mkdtempSync(join(tmpdir(), "openclaw-policy-identity-cleanup-store-"));
+    let sm: SessionManager | undefined;
+    try {
+      git(repoDir, "init", "-b", "main");
+      git(repoDir, "remote", "add", "origin", "https://github.com/example/old.git");
+      git(secondRepoDir, "init", "-b", "main");
+      git(secondRepoDir, "remote", "add", "origin", "https://github.com/example/second-old.git");
+      sm = new SessionManager(1, 10, { store: { indexPath: join(storeDir, "sessions.json") } });
+
+      const oldRecord = sm.setRepoPolicy(repoDir, "pr-required");
+      const secondOldRecord = sm.setRepoPolicy(secondRepoDir, "never-pr");
+      assert.ok(oldRecord);
+      assert.ok(secondOldRecord);
+      const store = (sm as any).store as { saveIndex: () => void };
+      const originalSaveIndex = store.saveIndex.bind(store);
+      let cleanupSaveCount = 0;
+      store.saveIndex = () => {
+        cleanupSaveCount += 1;
+        originalSaveIndex();
+      };
+      git(repoDir, "remote", "set-url", "origin", "https://github.com/example/new.git");
+      git(secondRepoDir, "remote", "set-url", "origin", "https://github.com/example/second-new.git");
+
+      const removed = sm.cleanupRepoPolicies();
+
+      assert.deepEqual(removed.map((record) => record.key).sort(), [oldRecord.key, secondOldRecord.key].sort());
+      assert.equal(cleanupSaveCount, 1);
+      assert.deepEqual(sm.listRepoPolicies(), []);
+    } finally {
+      sm?.dispose();
+      rmSync(repoDir, { recursive: true, force: true });
+      rmSync(secondRepoDir, { recursive: true, force: true });
+      rmSync(storeDir, { recursive: true, force: true });
+    }
+  });
+
   it("downgrades or blocks requested strategies according to policy and PR capability", () => {
     assert.deepEqual(
       resolveWorktreePolicyDecision({ requestedStrategy: "auto-merge", policy: "pr-required", prAvailable: true }),
