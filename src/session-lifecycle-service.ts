@@ -18,7 +18,7 @@ import {
 } from "./session-plan-approval-delivery";
 import type { Session } from "./session";
 import type { PersistedSessionInfo, PlanApprovalMode, PlanArtifact } from "./types";
-import type { PendingInputQuestion } from "./types";
+import type { PendingInputQuestion, PendingInputState } from "./types";
 import type { NotificationButton } from "./session-interactions";
 import type { SessionNotificationRequest } from "./wake-dispatcher";
 import { existsSync, readFileSync } from "fs";
@@ -86,6 +86,25 @@ function buildInlineOptionDescriptions(question: PendingInputQuestion): Array<{ 
       description: option.description?.trim() ?? "",
     }))
     .filter((option) => option.description && option.description.length <= OPTION_DESCRIPTION_MAX_CHARS);
+}
+
+function activePendingInputQuestionIdentity(state: PendingInputState | undefined): string | undefined {
+  const activeQuestionIndex = state?.activeQuestionIndex ?? 0;
+  return state?.questions?.[activeQuestionIndex]?.id
+    ?? (state?.activeQuestionIndex != null ? `q${state.activeQuestionIndex}` : undefined);
+}
+
+function isCurrentPendingInputQuestion(
+  session: Session,
+  requestId: string,
+  activeQuestionIdentity: string | undefined,
+): boolean {
+  const state = session.pendingInputState;
+  return Boolean(
+    state
+    && state.requestId === requestId
+    && activePendingInputQuestionIdentity(state) === activeQuestionIdentity,
+  );
 }
 
 export class SessionLifecycleService {
@@ -505,14 +524,13 @@ export class SessionLifecycleService {
           optionDescriptions: optionDescriptionSummaries,
         })
       : pendingInputPromptText;
-    // Snapshot notification key before async gap to avoid race when user answers during summary generation.
-    const pendingInputNotificationKey = session.pendingInputState
+    // Snapshot pending input identity before async gap to avoid race when user answers during summary generation.
+    const pendingInputRequestId = session.pendingInputState?.requestId;
+    const pendingInputQuestionIdentity = activePendingInputQuestionIdentity(session.pendingInputState);
+    const pendingInputNotificationKey = pendingInputRequestId
       ? [
-          session.pendingInputState.requestId,
-          activePendingInputQuestion?.id
-            ?? (session.pendingInputState.activeQuestionIndex != null
-              ? `q${session.pendingInputState.activeQuestionIndex}`
-              : undefined),
+          pendingInputRequestId,
+          pendingInputQuestionIdentity,
         ].filter(Boolean).join(":")
       : undefined;
     const questionContextSummary = !session.pendingPlanApproval && this.deps.questionContextSummaryProvider
@@ -617,6 +635,9 @@ export class SessionLifecycleService {
       userMessage: payload.userMessage,
       notifyUser: "always",
       buttons: payload.buttons,
+      shouldDispatch: pendingInputRequestId
+        ? () => isCurrentPendingInputQuestion(session, pendingInputRequestId, pendingInputQuestionIdentity)
+        : undefined,
       wakeMessageOnNotifyFailed: payload.wakeMessage,
     });
   }
