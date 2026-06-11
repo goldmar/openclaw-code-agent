@@ -206,6 +206,10 @@ export class WakeDeliveryExecutor {
         }
 
         const stderrSuffix = stderr?.trim() ? ` | stderr: ${stderr.trim()}` : "";
+        if (opts.shouldContinue?.() === false) {
+          onSettled?.();
+          return;
+        }
         const ambiguousResult = opts.target === "message.send" && isExecFileTimeoutError(err);
         if (ambiguousResult) {
           this.log("error", "dispatch_failed", {
@@ -340,6 +344,10 @@ export class WakeDeliveryExecutor {
           return;
         }
         const elapsedMs = Date.now() - startedAt;
+        if (opts.shouldContinue?.() === false) {
+          onSettled?.();
+          return;
+        }
         if (attempt >= WAKE_MAX_ATTEMPTS || opts.terminalOnFailure === true) {
           this.log("error", "dispatch_failed", {
             label: opts.label,

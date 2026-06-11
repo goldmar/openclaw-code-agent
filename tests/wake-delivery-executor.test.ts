@@ -273,6 +273,118 @@ describe("WakeDeliveryExecutor", () => {
     assert.equal(secondDispatchRuns, 0);
   });
 
+  it("does not hold an ordered lane on retry when shouldContinue becomes false after failure", async (t) => {
+    const executor = new WakeDeliveryExecutor();
+    const retryDelays: number[] = [];
+    let shouldDeliverFirst = true;
+    let secondDispatchRuns = 0;
+
+    global.setTimeout = (((_fn: (...args: any[]) => void, delay?: number) => {
+      if ((delay ?? 0) < 30_000) retryDelays.push(delay ?? 0);
+      return { fake: true, unref() { return this; } } as any;
+    }) as typeof setTimeout);
+    global.clearTimeout = ((() => {}) as typeof clearTimeout);
+
+    t.mock.method(wakeDeliveryExecutorInternals, "execFile", ((_file, args, _options, callback) => {
+      if ((args as string[]).includes("first")) {
+        shouldDeliverFirst = false;
+        callback?.(new Error("stale delivery failed"), "", "stale delivery failed");
+        return {} as any;
+      }
+      secondDispatchRuns += 1;
+      callback?.(null, "", "");
+      return {} as any;
+    }) as typeof wakeDeliveryExecutorInternals.execFile);
+
+    executor.execute(
+      ["message", "send", "--message", "first"],
+      {
+        label: "first",
+        sessionId: "session-ordered-stale",
+        target: "message.send",
+        phase: "notify",
+        routeSummary: "discord|channel:123",
+        messageKind: "notify",
+        orderingKey: "notify:discord|channel:123",
+        shouldContinue: () => shouldDeliverFirst,
+      },
+    );
+
+    executor.execute(
+      ["message", "send", "--message", "second"],
+      {
+        label: "second",
+        sessionId: "session-ordered-stale",
+        target: "message.send",
+        phase: "notify",
+        routeSummary: "discord|channel:123",
+        messageKind: "notify",
+        orderingKey: "notify:discord|channel:123",
+      },
+    );
+
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(secondDispatchRuns, 1);
+    assert.equal(retryDelays.length, 0);
+  });
+
+  it("does not hold an ordered promise lane on retry when shouldContinue becomes false after failure", async () => {
+    const executor = new WakeDeliveryExecutor();
+    const retryDelays: number[] = [];
+    let shouldDeliverFirst = true;
+    let firstDispatchRuns = 0;
+    let secondDispatchRuns = 0;
+
+    global.setTimeout = (((_fn: (...args: any[]) => void, delay?: number) => {
+      if ((delay ?? 0) < 30_000) retryDelays.push(delay ?? 0);
+      return { fake: true, unref() { return this; } } as any;
+    }) as typeof setTimeout);
+    global.clearTimeout = ((() => {}) as typeof clearTimeout);
+
+    executor.executePromise(
+      () => {
+        firstDispatchRuns += 1;
+        shouldDeliverFirst = false;
+        return Promise.reject(new Error("stale promise delivery failed"));
+      },
+      {
+        label: "first",
+        sessionId: "session-ordered-promise-stale",
+        target: "message.send",
+        phase: "notify",
+        routeSummary: "discord|channel:123",
+        messageKind: "notify",
+        orderingKey: "notify:discord|channel:123",
+        shouldContinue: () => shouldDeliverFirst,
+      },
+    );
+
+    executor.executePromise(
+      () => {
+        secondDispatchRuns += 1;
+        return Promise.resolve();
+      },
+      {
+        label: "second",
+        sessionId: "session-ordered-promise-stale",
+        target: "message.send",
+        phase: "notify",
+        routeSummary: "discord|channel:123",
+        messageKind: "notify",
+        orderingKey: "notify:discord|channel:123",
+      },
+    );
+
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(firstDispatchRuns, 1);
+    assert.equal(secondDispatchRuns, 1);
+    assert.equal(retryDelays.length, 0);
+  });
+
   it("clears pending non-ordered retries without throwing during dispose", async () => {
     const executor = new WakeDeliveryExecutor();
     const scheduledTimers: Array<{ cleared: boolean; unref?: () => void }> = [];
