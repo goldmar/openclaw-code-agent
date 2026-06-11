@@ -36,9 +36,14 @@ function buildDefaultLifecycle(session: Pick<
 function getEffectiveBaseBranch(
   session: Pick<PersistedSessionInfo, "workdir" | "worktreeBaseBranch" | "worktreeLifecycle">,
 ): string | undefined {
+  const workdir = getSessionWorkdir(session);
   return session.worktreeLifecycle?.baseBranch
     ?? session.worktreeBaseBranch
-    ?? (existsSync(session.workdir) ? detectDefaultBranch(session.workdir) : undefined);
+    ?? (workdir && existsSync(workdir) ? detectDefaultBranch(workdir) : undefined);
+}
+
+function getSessionWorkdir(session: Pick<PersistedSessionInfo, "workdir">): string | undefined {
+  return typeof session.workdir === "string" && session.workdir.length > 0 ? session.workdir : undefined;
 }
 
 export function resolveWorktreeLifecycle(
@@ -62,7 +67,8 @@ export function resolveWorktreeLifecycle(
   const lifecycle = buildDefaultLifecycle(session);
   const checkedAt = isoNow();
   const reasons = new Set<string>();
-  const repoExists = existsSync(session.workdir);
+  const workdir = getSessionWorkdir(session);
+  const repoExists = Boolean(workdir && existsSync(workdir));
   const worktreeExists = Boolean(session.worktreePath && existsSync(session.worktreePath));
   const branchName = session.worktreeBranch;
   const baseBranch = getEffectiveBaseBranch(session);
@@ -96,8 +102,8 @@ export function resolveWorktreeLifecycle(
     reasons.add("merge_conflict_resolving");
   }
 
-  if (repoExists && branchName) {
-    branchPresent = branchExists(session.workdir, branchName);
+  if (repoExists && workdir && branchName) {
+    branchPresent = branchExists(workdir, branchName);
     if (!branchPresent) {
       reasons.add("branch_missing");
     }
@@ -108,15 +114,15 @@ export function resolveWorktreeLifecycle(
     if (dirtyWorktreeEntries) reasons.add("dirty_worktree_entries");
   }
 
-  if (repoExists && branchPresent && baseBranch) {
-    const counts = getAheadBehindCounts(session.workdir, branchName!, baseBranch);
+  if (repoExists && workdir && branchPresent && branchName && baseBranch) {
+    const counts = getAheadBehindCounts(workdir, branchName, baseBranch);
     branchAheadCount = counts?.ahead;
     baseAheadCount = counts?.behind;
-    topologyMerged = isBranchAncestorOfBase(session.workdir, branchName!, baseBranch);
+    topologyMerged = isBranchAncestorOfBase(workdir, branchName, baseBranch);
     if (topologyMerged) {
       reasons.add("topology_merged");
     } else {
-      releaseNoopMerge = wouldMergeBeNoop(session.workdir, branchName!, baseBranch);
+      releaseNoopMerge = wouldMergeBeNoop(workdir, branchName, baseBranch);
       if (releaseNoopMerge) reasons.add("merge_noop_content_already_on_base");
       if (!releaseNoopMerge && (branchAheadCount ?? 0) > 0) {
         reasons.add("unique_content");
@@ -126,8 +132,8 @@ export function resolveWorktreeLifecycle(
     reasons.add("base_branch_missing");
   }
 
-  if (options.includePrSync && repoExists && branchName) {
-    const prStatus = syncWorktreePR(session.workdir, branchName, session.worktreePrTargetRepo ?? lifecycle.targetRepo);
+  if (options.includePrSync && repoExists && workdir && branchName) {
+    const prStatus = syncWorktreePR(workdir, branchName, session.worktreePrTargetRepo ?? lifecycle.targetRepo);
     prState = prStatus.state;
     prUrl = prStatus.url ?? prUrl;
     prNumber = prStatus.number ?? prNumber;

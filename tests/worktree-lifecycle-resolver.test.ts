@@ -22,6 +22,22 @@ function initRepo(prefix: string): string {
 }
 
 describe("resolveWorktreeLifecycle", () => {
+  it("treats persisted sessions without a workdir as repo missing", () => {
+    const resolved = resolveWorktreeLifecycle({
+      workdir: undefined,
+      worktreeBranch: "agent/missing-workdir",
+      worktreeLifecycle: {
+        state: "pending_decision",
+        updatedAt: new Date().toISOString(),
+      },
+    } as any);
+
+    assert.equal(resolved.evidence.repoExists, false);
+    assert.equal(resolved.derivedState, "cleanup_failed");
+    assert.ok(resolved.reasons.includes("repo_missing"));
+    assert.ok(resolved.reasons.includes("base_branch_missing"));
+  });
+
   it("detects topology-merged branches as merged", () => {
     const repoDir = initRepo("resolver-merged-");
     try {
