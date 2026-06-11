@@ -1,7 +1,7 @@
 import { buildDelegateReminderWakeMessage } from "./session-notification-builder";
 import type { NotificationButton } from "./session-interactions";
 import type { SessionNotificationRequest } from "./wake-dispatcher";
-import type { PersistedSessionInfo } from "./types";
+import type { ManagedWorktreeLifecycleState, PersistedSessionInfo } from "./types";
 import type { Session } from "./session";
 import { getBackendConversationId, getPersistedMutationRefs, getPrimarySessionLookupRef } from "./session-backend-ref";
 import { resolveWorktreeLifecycle } from "./worktree-lifecycle-resolver";
@@ -15,6 +15,23 @@ type RoutingProxyBuilder = (session: {
 }) => Session;
 
 type WorktreeDecisionReminderStatus = "pending" | "resolved" | "inactive";
+
+const RESOLVED_WORKTREE_STATES = new Set([
+  "merged",
+  "released",
+  "dismissed",
+  "none",
+  "cleanup_failed",
+]);
+
+const RESOLVED_LIFECYCLE_STATES = new Set([
+  "merged",
+  "released",
+  "dismissed",
+  "no_change",
+  "none",
+  "cleanup_failed",
+]);
 
 export class SessionReminderService {
   constructor(
@@ -121,7 +138,7 @@ export class SessionReminderService {
     if (!session.pendingWorktreeDecisionSince && !session.lastWorktreeReminderAt && !session.worktreeDecisionSnoozedUntil) {
       return false;
     }
-    if (this.getWorktreeDecisionReminderStatus(session) !== "resolved") return false;
+    if (!this.isResolvedWorktreeDecision(session)) return false;
 
     let updated = false;
     for (const mutationRef of getPersistedMutationRefs(session)) {
@@ -138,31 +155,10 @@ export class SessionReminderService {
     session: PersistedSessionInfo,
     pendingSince?: number,
   ): WorktreeDecisionReminderStatus {
+    if (this.hasResolvedWorktreeDecisionMarker(session)) return "resolved";
     if (!session.pendingWorktreeDecisionSince) return "inactive";
     const parsedPendingSince = pendingSince ?? new Date(session.pendingWorktreeDecisionSince).getTime();
     if (!Number.isFinite(parsedPendingSince)) return "inactive";
-
-    if (session.worktreeMerged || session.worktreePrUrl) return "resolved";
-    if (session.lifecycle === "terminal") return "resolved";
-
-    const resolvedWorktreeStates = new Set([
-      "merged",
-      "released",
-      "dismissed",
-      "none",
-      "cleanup_failed",
-    ]);
-    if (session.worktreeState && resolvedWorktreeStates.has(session.worktreeState)) return "resolved";
-
-    const resolvedLifecycleStates = new Set([
-      "merged",
-      "released",
-      "dismissed",
-      "no_change",
-      "none",
-      "cleanup_failed",
-    ]);
-    if (session.worktreeLifecycle?.state && resolvedLifecycleStates.has(session.worktreeLifecycle.state)) return "resolved";
 
     const explicitlyPending =
       session.worktreeState === "pending_decision"
@@ -180,10 +176,28 @@ export class SessionReminderService {
       activeSession: false,
       includePrSync: false,
     });
-    return resolved.derivedState === "merged"
-      || resolved.derivedState === "released"
-      || resolved.derivedState === "cleanup_failed"
-      ? "resolved"
-      : "pending";
+    return this.isResolvedDerivedWorktreeState(resolved.derivedState) ? "resolved" : "pending";
+  }
+
+  private isResolvedWorktreeDecision(session: PersistedSessionInfo): boolean {
+    if (this.hasResolvedWorktreeDecisionMarker(session)) return true;
+
+    const resolved = resolveWorktreeLifecycle(session, {
+      activeSession: false,
+      includePrSync: false,
+    });
+    return this.isResolvedDerivedWorktreeState(resolved.derivedState);
+  }
+
+  private hasResolvedWorktreeDecisionMarker(session: PersistedSessionInfo): boolean {
+    if (session.worktreeMerged || session.worktreePrUrl) return true;
+    if (session.lifecycle === "terminal") return true;
+    if (session.worktreeState && RESOLVED_WORKTREE_STATES.has(session.worktreeState)) return true;
+    if (session.worktreeLifecycle?.state && RESOLVED_LIFECYCLE_STATES.has(session.worktreeLifecycle.state)) return true;
+    return false;
+  }
+
+  private isResolvedDerivedWorktreeState(state: ManagedWorktreeLifecycleState): boolean {
+    return state === "merged" || state === "released" || state === "cleanup_failed";
   }
 }
