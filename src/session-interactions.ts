@@ -24,8 +24,8 @@ type ButtonSource = {
   planDecisionVersion?: number;
 };
 
-const QUESTION_BUTTON_LABEL_MAX_LENGTH = 80;
-const QUESTION_BUTTONS_PER_ROW = 5;
+const QUESTION_BUTTON_LABEL_MAX_LENGTH = 36;
+const QUESTION_BUTTONS_PER_ROW = 2;
 const QUESTION_BUTTON_LABEL_ELLIPSIS = "...";
 
 function shortenQuestionButtonLabel(label: string): string {
