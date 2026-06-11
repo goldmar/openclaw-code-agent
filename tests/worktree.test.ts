@@ -277,6 +277,23 @@ describe("syncWorktreePR", () => {
       rmSync(repoDir, { recursive: true, force: true });
     }
   });
+
+  it("falls back to a branch-only --head for target repo lookup when origin is absent", async (t) => {
+    const { logPath } = installMockGh(t);
+    const { syncWorktreePR } = await import("../src/worktree.js");
+    const repoDir = mkdtempSync(join(tmpdir(), "openclaw-worktree-sync-pr-no-origin-"));
+
+    try {
+      execFileSync("git", ["init", "-b", "main"], { cwd: repoDir, stdio: "ignore" });
+
+      syncWorktreePR(repoDir, "agent/fix-lookup", "openai/codex");
+
+      const calls = readFileSync(logPath, "utf-8").trim().split("\n");
+      assert.equal(calls.at(-1), "pr list --head agent/fix-lookup --state all --json url,number,title,state --jq .[0] --repo openai/codex");
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("worktree base dir and PR target resolution", () => {
