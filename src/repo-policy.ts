@@ -227,7 +227,7 @@ export function formatUnknownRepoPolicyMessage(identity: RepoIdentity, requested
     `Choose one policy:`,
     ...REPO_POLICY_OPTIONS.map((option) => `- ${option.title}: ${option.description}`),
     ``,
-    `If buttons are unavailable, set it manually and rerun the launch:`,
+    `If buttons are unavailable, set it manually. OCA will continue the pending launch automatically when exactly one matching launch is waiting; otherwise run the intended launch again:`,
     ...REPO_POLICY_OPTIONS.map((option) => `- agent_repo_policy(workdir="${identity.repoRoot}", policy="${option.policy}")`),
   ].join("\n");
 }

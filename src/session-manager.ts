@@ -805,6 +805,59 @@ export class SessionManager {
     };
   }
 
+  continueLaunchAfterManualRepoPolicy(
+    workdir: string,
+    policy: RepoIntegrationPolicy,
+  ): { kind: "none" } | { kind: "ambiguous"; count: number } | { kind: "launched"; session: Session; text: string } {
+    const resolution = this.resolveRepoPolicy(workdir);
+    if (!resolution.identity) return { kind: "none" };
+
+    const candidates = this.interactions.listActiveActionTokens("repo-policy-set")
+      .filter((token) => (
+        token.repoPolicy === policy
+        && token.repoPolicyWorkdir === resolution.identity?.repoRoot
+        && Boolean(token.launchPrompt)
+        && Boolean(token.launchWorkdir)
+        && Boolean(token.route?.provider)
+        && Boolean(token.route?.target)
+      ));
+
+    if (candidates.length === 0) return { kind: "none" };
+    if (candidates.length > 1) return { kind: "ambiguous", count: candidates.length };
+
+    const token = candidates[0];
+    if (!token.launchPrompt || !token.launchWorkdir) return { kind: "none" };
+
+    const result = this.launchAfterRepoPolicyChoice({
+      route: token.route,
+      prompt: token.launchPrompt,
+      workdir: token.launchWorkdir,
+      name: token.launchName,
+      model: token.launchModel,
+      reasoningEffort: token.launchReasoningEffort,
+      fastMode: token.launchFastMode,
+      systemPrompt: token.launchSystemPrompt,
+      allowedTools: token.launchAllowedTools,
+      resumeSessionId: token.launchResumeSessionId,
+      resumeWorktreeFrom: token.launchResumeWorktreeFrom,
+      sessionIdOverride: token.launchSessionIdOverride,
+      clearedPersistedCodexResume: token.launchClearedPersistedCodexResume,
+      forkSession: token.launchForkSession,
+      forceNewSession: token.launchForceNewSession,
+      permissionMode: token.launchPermissionMode,
+      planApproval: token.launchPlanApproval,
+      harness: token.launchHarness,
+      worktreeStrategy: token.launchWorktreeStrategy,
+      worktreeBaseBranch: token.launchWorktreeBaseBranch,
+      worktreePrTargetRepo: token.launchWorktreePrTargetRepo,
+      originAgentId: token.launchOriginAgentId,
+    });
+
+    this.consumeActionToken(token.id);
+    this.clearRepoPolicyChoiceTokens(token.sessionId);
+    return { kind: "launched", ...result };
+  }
+
   private makeActionButton(
     sessionId: string,
     kind: SessionActionKind,

@@ -63,6 +63,17 @@ export class SessionActionTokenStore {
     return token;
   }
 
+  listActiveActionTokens(kind?: SessionActionKind): SessionActionToken[] {
+    const result: SessionActionToken[] = [];
+    for (const tokenId of [...this.tokens.keys()]) {
+      const token = this.getActionToken(tokenId);
+      if (!token || token.consumedAt != null) continue;
+      if (kind && token.kind !== kind) continue;
+      result.push(token);
+    }
+    return result;
+  }
+
   consumeActionToken(tokenId: string): SessionActionToken | undefined {
     const token = this.getActionToken(tokenId);
     if (!token || token.consumedAt != null) return undefined;

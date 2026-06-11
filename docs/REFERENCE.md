@@ -301,7 +301,7 @@ Treat those fields as authoritative in orchestration logic:
 
 Worktree strategies now control isolation and the requested follow-through mode. The repository integration policy is the authority for whether direct merge or PR automation is allowed.
 
-On first worktree use in a git repo with no stored policy, `agent_launch` blocks and asks the operator to set one policy with `agent_repo_policy` or `/agent_policy`:
+On first worktree use in a git repo with no stored policy, `agent_launch` blocks and asks the operator to set one policy with `agent_repo_policy` or `/agent_policy`. Inline policy buttons continue the deferred launch automatically. If buttons are unavailable, `agent_repo_policy(workdir="...", policy="...")` also continues automatically when exactly one matching pending launch is waiting.
 
 | Repo policy | Meaning |
 | --- | --- |
