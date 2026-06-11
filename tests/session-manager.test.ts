@@ -799,6 +799,35 @@ describe("SessionManager.debounceWaitingEvent()", () => {
     assert.equal((sm as any).debounceWaitingEvent("s1"), false);
   });
 
+  it("blocks repeated events for the same pending-input request and question", () => {
+    assert.equal((sm as any).debounceWaitingEvent("s1", "pending-input:req-1:environment"), true);
+    assert.equal((sm as any).debounceWaitingEvent("s1", "pending-input:req-1:environment"), false);
+  });
+
+  it("allows the next structured question in the same pending-input request", () => {
+    assert.equal((sm as any).debounceWaitingEvent("s1", "pending-input:req-1:environment"), true);
+    assert.equal((sm as any).debounceWaitingEvent("s1", "pending-input:req-1:scope"), true);
+  });
+
+  it("keeps generic waiting events debounced by session id", () => {
+    assert.equal((sm as any).debounceWaitingEvent("s1"), true);
+    assert.equal((sm as any).debounceWaitingEvent("s1"), false);
+  });
+
+  it("clears plain and compound debounce keys for a session", () => {
+    (sm as any).debounceWaitingEvent("s1");
+    (sm as any).debounceWaitingEvent("s1", "pending-input:req-1:environment");
+    (sm as any).debounceWaitingEvent("s1", "pending-input:req-1:scope");
+    (sm as any).debounceWaitingEvent("s2", "pending-input:req-2:environment");
+
+    (sm as any).clearWaitingTimestampsForSession("s1");
+
+    assert.equal((sm as any).lastWaitingEventTimestamps.has("s1"), false);
+    assert.equal((sm as any).lastWaitingEventTimestamps.has("s1:pending-input:req-1:environment"), false);
+    assert.equal((sm as any).lastWaitingEventTimestamps.has("s1:pending-input:req-1:scope"), false);
+    assert.equal((sm as any).lastWaitingEventTimestamps.has("s2:pending-input:req-2:environment"), true);
+  });
+
   it("allows event after debounce window", () => {
     // Manually set timestamp in the past
     (sm as any).lastWaitingEventTimestamps.set("s1", Date.now() - 10_000);

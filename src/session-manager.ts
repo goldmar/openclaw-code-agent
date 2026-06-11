@@ -291,7 +291,7 @@ export class SessionManager {
     const questions = new SessionQuestionService(
       manager.pendingAskUserQuestions,
       (session, request) => manager.dispatchSessionNotification(session, request),
-      (sessionId) => { manager.lastWaitingEventTimestamps.delete(sessionId); },
+      (sessionId) => { manager.clearWaitingTimestampsForSession(sessionId); },
       (sessionId, questionOptions) => interactions.getQuestionButtons(sessionId, questionOptions),
     );
     const reminders = new SessionReminderService(
@@ -307,7 +307,7 @@ export class SessionManager {
       removeRuntimeSession: (sessionId) => registry.remove(sessionId),
       persistSession: (session, persistOptions) => manager.persistSession(session, persistOptions),
       clearRuntimeSessionState: (sessionId) => {
-        manager.lastWaitingEventTimestamps.delete(sessionId);
+        manager.clearWaitingTimestampsForSession(sessionId);
         manager.lastTurnCompleteMarkers.delete(sessionId);
         manager.lastTerminalWakeMarkers.delete(sessionId);
       },
@@ -318,7 +318,7 @@ export class SessionManager {
     store.onActionTokensChanged(() => manager.syncActionTokenExpiryDeadline());
     const lifecycle = new SessionLifecycleService({
       persistSession: (session) => manager.persistSession(session),
-      clearWaitingTimestamp: (sessionId) => { manager.lastWaitingEventTimestamps.delete(sessionId); },
+      clearWaitingTimestamp: (sessionId) => { manager.clearWaitingTimestampsForSession(sessionId); },
       handleWorktreeStrategy: (session) => manager.handleWorktreeStrategy(session),
       resolveWorktreeRepoDir: (repoDir, worktreePath) => manager.resolveWorktreeRepoDir(repoDir, worktreePath),
       updatePersistedSession: (ref, patch) => manager.updatePersistedSession(ref, patch),
@@ -335,7 +335,7 @@ export class SessionManager {
       extractLastOutputLine: (session) => manager.extractLastOutputLine(session),
       getOutputPreview: (session, maxChars) => manager.getOutputPreview(session, maxChars),
       originThreadLine: (session) => manager.originThreadLine(session),
-      debounceWaitingEvent: (sessionId) => manager.debounceWaitingEvent(sessionId),
+      debounceWaitingEvent: (sessionId, identityKey) => manager.debounceWaitingEvent(sessionId, identityKey),
       isAlreadyMerged: (ref) => manager.isAlreadyMerged(ref),
       questionContextSummaryProvider: options.questionContextSummaryProvider ?? createRuntimeQuestionContextSummaryProvider(),
     });
@@ -442,7 +442,7 @@ export class SessionManager {
       if (existing) {
         this.registry.remove(existing.id);
       }
-      this.lastWaitingEventTimestamps.delete(config.sessionIdOverride);
+      this.clearWaitingTimestampsForSession(config.sessionIdOverride);
       this.lastTurnCompleteMarkers.delete(config.sessionIdOverride);
       this.lastTerminalWakeMarkers.delete(config.sessionIdOverride);
       this.maintenance.cancelRuntimeGc(config.sessionIdOverride);
@@ -1141,7 +1141,7 @@ export class SessionManager {
 
   private async handleAutoMergeResolverTerminal(session: Session): Promise<void> {
     this.persistSession(session);
-    this.lastWaitingEventTimestamps.delete(session.id);
+    this.clearWaitingTimestampsForSession(session.id);
     this.wakeDispatcher.clearRetryTimersForSession(session.id);
 
     const parentRef = session.autoMergeParentSessionId;
@@ -1354,12 +1354,23 @@ export class SessionManager {
 
 
   /** Returns true if the event should proceed; false if debounced. */
-  private debounceWaitingEvent(sessionId: string): boolean {
+  private debounceWaitingEvent(sessionId: string, identityKey?: string): boolean {
     const now = Date.now();
-    const lastTs = this.lastWaitingEventTimestamps.get(sessionId);
+    const debounceKey = identityKey ? `${sessionId}:${identityKey}` : sessionId;
+    const lastTs = this.lastWaitingEventTimestamps.get(debounceKey);
     if (lastTs && now - lastTs < WAITING_EVENT_DEBOUNCE_MS) return false;
-    this.lastWaitingEventTimestamps.set(sessionId, now);
+    this.lastWaitingEventTimestamps.set(debounceKey, now);
     return true;
+  }
+
+  private clearWaitingTimestampsForSession(sessionId: string): void {
+    this.lastWaitingEventTimestamps.delete(sessionId);
+    const sessionPrefix = `${sessionId}:`;
+    for (const key of this.lastWaitingEventTimestamps.keys()) {
+      if (key.startsWith(sessionPrefix)) {
+        this.lastWaitingEventTimestamps.delete(key);
+      }
+    }
   }
 
   private originThreadLine(session: Session): string {
@@ -1549,7 +1560,7 @@ export class SessionManager {
     const session = this.sessions.get(sessionId);
     if (session?.canSubmitPendingInputOption?.()) {
       if (await session.submitPendingInputOption(optionIndex, context)) {
-        this.lastWaitingEventTimestamps.delete(sessionId);
+        this.clearWaitingTimestampsForSession(sessionId);
         return true;
       }
       return false;
