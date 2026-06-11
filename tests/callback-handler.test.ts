@@ -92,6 +92,13 @@ function createCtx(
   };
 }
 
+function createToolResult(text: string, success: boolean) {
+  return {
+    content: [{ type: "text", text }],
+    meta: { success },
+  };
+}
+
 describe("createCallbackHandler()", () => {
   beforeEach(() => {
     setSessionManager(null);
@@ -631,6 +638,114 @@ describe("createCallbackHandler()", () => {
     assert.deepEqual(result, { handled: true });
     assert.deepEqual(resolved, [{ sessionId: "sess-42", optionIndex: 1 }]);
     assert.equal(state.replies[0], "✅ Answer submitted.");
+  });
+
+  it("clears worktree merge buttons without replying when agent_merge succeeds", async () => {
+    setSessionManager({
+      getActionToken: () => ({ sessionId: "sess-42", kind: "worktree-merge" }),
+      consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-merge" }),
+      resolve: () => undefined,
+      getPersistedSession: () => ({ name: "ux-fix" }),
+    } as any);
+
+    const handler = createCallbackHandler("telegram", {
+      makeAgentMergeTool: () => ({
+        execute: async (_id: string, params: unknown) => {
+          assert.deepEqual(params, { session: "sess-42" });
+          return createToolResult("✅ Merged branch agent/ux-fix into main.", true);
+        },
+      }) as any,
+    });
+    const state = createCtx("token-merge");
+    const result = await handler.handler(state.ctx as any);
+
+    assert.deepEqual(result, { handled: true });
+    assert.deepEqual(state.editedMessages, []);
+    assert.equal(state.buttonMarkupEdits, 1);
+    assert.equal(state.buttonsCleared, 1);
+    assert.deepEqual(state.replies, []);
+    assert.deepEqual(state.events, ["acknowledge", "editButtons", "clearButtons"]);
+  });
+
+  it("clears worktree PR buttons without replying when agent_pr succeeds", async () => {
+    for (const kind of ["worktree-create-pr", "worktree-update-pr"] as const) {
+      setSessionManager({
+        getActionToken: () => ({ sessionId: "sess-42", kind }),
+        consumeActionToken: () => ({ sessionId: "sess-42", kind }),
+        resolve: () => undefined,
+        getPersistedSession: () => ({ name: "ux-fix" }),
+      } as any);
+
+      const handler = createCallbackHandler("telegram", {
+        makeAgentPrTool: () => ({
+          execute: async (_id: string, params: unknown) => {
+            assert.deepEqual(params, { session: "sess-42" });
+            return createToolResult("✅ PR opened: https://github.com/example/repo/pull/42", true);
+          },
+        }) as any,
+      });
+      const state = createCtx(`token-${kind}`);
+      const result = await handler.handler(state.ctx as any);
+
+      assert.deepEqual(result, { handled: true }, kind);
+      assert.deepEqual(state.editedMessages, [], kind);
+      assert.equal(state.buttonMarkupEdits, 1, kind);
+      assert.equal(state.buttonsCleared, 1, kind);
+      assert.deepEqual(state.replies, [], kind);
+      assert.deepEqual(state.events, ["acknowledge", "editButtons", "clearButtons"], kind);
+    }
+  });
+
+  it("keeps worktree merge and PR buttons while replying when the tool fails", async () => {
+    const cases = [
+      {
+        kind: "worktree-merge" as const,
+        text: "❌ Merge failed.",
+        dependencies: {
+          makeAgentMergeTool: () => ({
+            execute: async () => createToolResult("❌ Merge failed.", false),
+          }) as any,
+        },
+      },
+      {
+        kind: "worktree-create-pr" as const,
+        text: "Error: GitHub CLI is not authenticated.",
+        dependencies: {
+          makeAgentPrTool: () => ({
+            execute: async () => createToolResult("Error: GitHub CLI is not authenticated.", false),
+          }) as any,
+        },
+      },
+      {
+        kind: "worktree-update-pr" as const,
+        text: "⚠️  A PR exists but was closed without merging.",
+        dependencies: {
+          makeAgentPrTool: () => ({
+            execute: async () => createToolResult("⚠️  A PR exists but was closed without merging.", false),
+          }) as any,
+        },
+      },
+    ];
+
+    for (const testCase of cases) {
+      setSessionManager({
+        getActionToken: () => ({ sessionId: "sess-42", kind: testCase.kind }),
+        consumeActionToken: () => ({ sessionId: "sess-42", kind: testCase.kind }),
+        resolve: () => undefined,
+        getPersistedSession: () => ({ name: "ux-fix" }),
+      } as any);
+
+      const handler = createCallbackHandler("telegram", testCase.dependencies);
+      const state = createCtx(`token-${testCase.kind}`);
+      const result = await handler.handler(state.ctx as any);
+
+      assert.deepEqual(result, { handled: true }, testCase.kind);
+      assert.deepEqual(state.editedMessages, [], testCase.kind);
+      assert.equal(state.buttonMarkupEdits, 0, testCase.kind);
+      assert.equal(state.buttonsCleared, 0, testCase.kind);
+      assert.deepEqual(state.replies, [testCase.text], testCase.kind);
+      assert.deepEqual(state.events, ["acknowledge", "reply"], testCase.kind);
+    }
   });
 
   it("clears worktree decision buttons while preserving the original prompt text", async () => {

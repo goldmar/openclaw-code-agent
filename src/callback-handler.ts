@@ -17,6 +17,10 @@ import { getRepoPolicyOption } from "./repo-policy";
 type InteractiveChannel = "telegram" | "discord";
 type InteractiveCallbackContext = PluginInteractiveTelegramHandlerContext | PluginInteractiveDiscordHandlerContext;
 type InteractiveHandlerResult = PluginInteractiveTelegramHandlerResult | PluginInteractiveDiscordHandlerResult;
+type CallbackHandlerDependencies = {
+  makeAgentMergeTool?: typeof makeAgentMergeTool;
+  makeAgentPrTool?: typeof makeAgentPrTool;
+};
 
 type PlanDecisionTarget = Pick<
   PersistedSessionInfo,
@@ -322,7 +326,12 @@ async function replyText(ctx: InteractiveCallbackContext, text: string): Promise
  *
  * Alice never sees raw callback_data strings.
  */
-export function createCallbackHandler(channel: InteractiveChannel = "telegram") {
+export function createCallbackHandler(
+  channel: InteractiveChannel = "telegram",
+  dependencies: CallbackHandlerDependencies = {},
+) {
+  const makeMergeTool = dependencies.makeAgentMergeTool ?? makeAgentMergeTool;
+  const makePrTool = dependencies.makeAgentPrTool ?? makeAgentPrTool;
   logButtonDiagnostic("callback_handler_registered", {
     channel,
     namespace: CALLBACK_NAMESPACE,
@@ -422,10 +431,11 @@ export function createCallbackHandler(channel: InteractiveChannel = "telegram") 
       // Route action
       switch (consumedToken.kind) {
         case "worktree-merge": {
-          const result = await makeAgentMergeTool().execute("callback", { session: sessionId });
+          const result = await makeMergeTool().execute("callback", { session: sessionId });
           const text = toolResultText(result);
           if (toolResultSucceeded(result)) {
             await clearWorktreeDecisionButtons(ctx, callbackAcknowledged);
+            break;
           }
           await replyText(ctx, text);
           break;
@@ -463,10 +473,11 @@ export function createCallbackHandler(channel: InteractiveChannel = "telegram") 
           // pendingWorktreeDecisionSince is set).  agent-pr.ts clears the flag itself
           // on success; if the PR creation fails the flag remains set so reminders
           // continue until the user tries again.
-          const result = await makeAgentPrTool().execute("callback", { session: sessionId });
+          const result = await makePrTool().execute("callback", { session: sessionId });
           const text = toolResultText(result);
           if (toolResultSucceeded(result)) {
             await clearWorktreeDecisionButtons(ctx, callbackAcknowledged);
+            break;
           }
           await replyText(ctx, text);
           break;
