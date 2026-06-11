@@ -2191,7 +2191,7 @@ describe("SessionManager turn-end wake", () => {
     assert.equal((request.userMessage.match(/What host-version policy should the plan target\?/g) ?? []).length, 1);
     assert.deepEqual(
       request.buttons.map((row: Array<{ label: string }>) => row.map((button) => button.label)),
-      [["Annual baseline", "Exact tag", "Custom"]],
+      [["Annual baseline", "Exact tag"], ["Custom"]],
     );
   });
 
@@ -2573,7 +2573,7 @@ describe("SessionManager restored button parity", () => {
       { requestId: "req-1", questionId: "environment" },
     );
 
-    assert.equal(buttons[0][0].label.length, 80);
+    assert.equal(Array.from(buttons[0][0].label).length, 36);
     assert.match(buttons[0][0].label, /\.\.\.$/);
     assert.match(buttons[0][0].callbackData, /^[0-9a-f-]{36}$/);
     assert.doesNotMatch(buttons[0][0].callbackData, new RegExp(longLabel));
@@ -2583,48 +2583,52 @@ describe("SessionManager restored button parity", () => {
   });
 
   it("shortens question button labels without splitting emoji surrogate pairs", () => {
-    const longLabel = `${"a".repeat(76)}😀${"b".repeat(10)}`;
+    const longLabel = `${"a".repeat(32)}😀${"b".repeat(10)}`;
     const buttons = (sm as any).interactions.getQuestionButtons(
       "question-session",
       [{ label: longLabel }],
       { requestId: "req-1", questionId: "environment" },
     );
 
-    assert.equal(Array.from(buttons[0][0].label).length, 80);
-    assert.equal(buttons[0][0].label, `${"a".repeat(76)}😀...`);
+    assert.equal(Array.from(buttons[0][0].label).length, 36);
+    assert.equal(buttons[0][0].label, `${"a".repeat(32)}😀...`);
     assert.doesNotMatch(buttons[0][0].label, /\uFFFD/);
     const token = (sm as any).interactions.consumeActionToken(buttons[0][0].callbackData);
     assert.equal(token.label, longLabel);
     assert.equal(token.optionIndex, 0);
   });
 
-  it("splits question buttons into Discord-safe rows while keeping option indexes", () => {
+  it("splits question buttons into readable rows while keeping full token labels and option indexes", () => {
+    const options = [
+      "Option 1 with a long enough label to truncate",
+      "Option 2",
+      "Option 3 with a long enough label to truncate",
+      "Option 4",
+      "Option 5",
+      "Option 6",
+    ];
     const buttons = (sm as any).interactions.getQuestionButtons(
       "question-session",
-      Array.from({ length: 6 }, (_, index) => ({ label: `Option ${index + 1}` })),
+      options.map((label) => ({ label })),
       { requestId: "req-1", questionId: "environment" },
     );
 
     assert.deepEqual(buttonLabels(buttons), [[
-      "Option 1",
+      "Option 1 with a long enough label...",
       "Option 2",
-      "Option 3",
+    ], [
+      "Option 3 with a long enough label...",
       "Option 4",
+    ], [
       "Option 5",
-    ], ["Option 6"]]);
+      "Option 6",
+    ]]);
 
     const tokens = buttons.flat().map((button: any) => (
       (sm as any).interactions.consumeActionToken(button.callbackData)
     ));
     assert.deepEqual(tokens.map((token: any) => token.optionIndex), [0, 1, 2, 3, 4, 5]);
-    assert.deepEqual(tokens.map((token: any) => token.label), [
-      "Option 1",
-      "Option 2",
-      "Option 3",
-      "Option 4",
-      "Option 5",
-      "Option 6",
-    ]);
+    assert.deepEqual(tokens.map((token: any) => token.label), options);
   });
 });
 
@@ -3110,9 +3114,11 @@ describe("SessionManager.handleAskUserQuestion()", () => {
     assert.equal((sm as any).__dispatchCalls.length, 1);
     const [_sessionArg, request] = (sm as any).__dispatchCalls[0];
     assert.equal(request.label, "ask-user-question");
-    assert.equal(request.buttons[0][0].label, "Merge");
-    assert.equal(request.buttons[0][1].label, "Open PR");
-    assert.equal(request.buttons[0][2].label, "Decide later");
+    assert.deepEqual(request.buttons.flat().map((button: any) => button.label), [
+      "Merge",
+      "Open PR",
+      "Decide later",
+    ]);
     assert.match(request.wakeMessageOnNotifySuccess, /Session: cc-worktree \| ID: s-cc-worktree/);
     assert.match(request.wakeMessageOnNotifySuccess, /Should I merge this branch or open a PR\?/);
 
