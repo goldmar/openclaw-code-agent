@@ -14,6 +14,8 @@ import {
   formatWorktreeOutcomeLine,
   getCommitsAheadCount,
   hasDirtyWorktreeEntries,
+  buildMergeWarningLines,
+  appendMergeWarnings,
 } from "../worktree";
 import { getPersistedTargetMutationRefs, resolveWorktreeToolTarget } from "./worktree-tool-context";
 
@@ -45,18 +47,6 @@ function buildStashOutcomeDetailLines(args: {
     return [`Pre-existing changes on ${args.baseBranch} were auto-stashed and restored.`];
   }
   return [];
-}
-
-function buildMergeWarningLines(mergeResult: ReturnType<typeof mergeBranch>): string[] {
-  return (mergeResult.warnings ?? [])
-    .filter((warning) => !(mergeResult.stashPopConflict && warning.startsWith("Failed to pop auto-stash after merge")))
-    .map((warning) => `Recovery warning: ${warning}`);
-}
-
-function appendMergeWarnings(text: string, mergeResult: ReturnType<typeof mergeBranch>): string {
-  const warningLines = buildMergeWarningLines(mergeResult);
-  if (warningLines.length === 0) return text;
-  return `${text}\n${warningLines.map((line) => `⚠️ ${line}`).join("\n")}`;
 }
 
 export function formatCleanupOutcome(args: {

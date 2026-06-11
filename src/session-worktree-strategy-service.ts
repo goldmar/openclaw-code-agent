@@ -26,6 +26,8 @@ import {
   mergeBranch,
   deleteBranch,
   formatWorktreeOutcomeLine,
+  buildMergeWarningLines,
+  appendMergeWarnings,
 } from "./worktree";
 
 export type WorktreeStrategyResult = {
@@ -36,18 +38,6 @@ export type WorktreeStrategyResult = {
 type DiffSummary = NonNullable<ReturnType<typeof getDiffSummary>>;
 type SpawnedResolverSession = Pick<Session, "id" | "name">;
 type AllowedWorktreeActions = { merge: boolean; pr: boolean };
-
-function buildMergeWarningLines(mergeResult: ReturnType<typeof mergeBranch>): string[] {
-  return (mergeResult.warnings ?? [])
-    .filter((warning) => !(mergeResult.stashPopConflict && warning.startsWith("Failed to pop auto-stash after merge")))
-    .map((warning) => `Recovery warning: ${warning}`);
-}
-
-function appendMergeWarnings(text: string, mergeResult: ReturnType<typeof mergeBranch>): string {
-  const warningLines = buildMergeWarningLines(mergeResult);
-  if (warningLines.length === 0) return text;
-  return `${text}\n${warningLines.map((line) => `⚠️ ${line}`).join("\n")}`;
-}
 
 /**
  * Worktree decision/messaging orchestration layer.
