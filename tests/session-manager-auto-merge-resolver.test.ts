@@ -27,6 +27,11 @@ function createSessionManager(): { sm: SessionManager; cleanup: () => void } {
   };
 }
 
+function buttonLabels(buttons: unknown): string[] {
+  assert.ok(Array.isArray(buttons));
+  return buttons.flat().map((button: any) => button.label);
+}
+
 describe("SessionManager auto-merge conflict resolver terminal handling", () => {
   it("retries the original auto-merge session when the resolver completes successfully", async () => {
     const { sm, cleanup } = createSessionManager();
@@ -66,7 +71,7 @@ describe("SessionManager auto-merge conflict resolver terminal handling", () => 
     }
   });
 
-  it("preserves the branch and notifies the user when the resolver fails", async () => {
+  it("preserves the branch and shows policy-aware buttons when the resolver fails", async () => {
     const { sm, cleanup } = createSessionManager();
     try {
       const persistedPatches: Array<Record<string, unknown>> = [];
@@ -88,6 +93,7 @@ describe("SessionManager auto-merge conflict resolver terminal handling", () => 
         worktreeBranch: "agent/parent-session",
         worktreePath: "/tmp/worktree",
         worktreeBaseBranch: "main",
+        repoIntegrationPolicy: "never-pr",
         route: ROUTE,
       };
       (sm as any).sessions.set(parent.id, parent);
@@ -109,11 +115,9 @@ describe("SessionManager auto-merge conflict resolver terminal handling", () => 
       assert.equal(parent.worktreeLifecycle?.state, "pending_decision");
       assert.equal(notifications.length, 1);
       assert.equal(notifications[0].label, "worktree-merge-conflict-resolver-failed");
-      assert.ok(Array.isArray(notifications[0].buttons));
-      assert.equal(
-        notifications[0].buttons[0][0].label,
-        "Open PR",
-      );
+      const labels = buttonLabels(notifications[0].buttons);
+      assert.ok(!labels.includes("Open PR"), "expected no Open PR button for never-pr policy");
+      assert.ok(labels.includes("Merge"), "expected Merge button for never-pr policy");
       assert.equal(persistedPatches.length, 1);
       assert.equal(persistedPatches[0].autoMergeResolverSessionId, undefined);
       assert.equal(persistedPatches[0].worktreeState, "pending_decision");
