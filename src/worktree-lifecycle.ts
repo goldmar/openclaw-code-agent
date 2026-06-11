@@ -206,8 +206,9 @@ export function pruneWorktrees(repoDir: string): void {
       ["-C", repoDir, "worktree", "prune"],
       { timeout: 10_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
     );
-  } catch {
-    // best-effort
+  } catch (err) {
+    const reason = err instanceof Error ? err.message.split(/\r?\n/, 1)[0] : String(err);
+    console.warn(`[worktree] git worktree prune failed for ${repoDir}: ${reason}`);
   }
 }
 

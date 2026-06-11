@@ -468,6 +468,26 @@ describe("removeWorktree", () => {
   });
 });
 
+describe("pruneWorktrees", () => {
+  it("warns when git worktree prune fails without throwing", async (t) => {
+    const { pruneWorktrees } = await import("../src/worktree.js");
+    const tempDir = mkdtempSync(join(tmpdir(), "openclaw-worktree-prune-fail-"));
+    const repoDir = join(tempDir, "missing-repo");
+    const warnings: string[] = [];
+    t.mock.method(console, "warn", (message?: unknown) => {
+      warnings.push(String(message));
+    });
+
+    try {
+      assert.doesNotThrow(() => pruneWorktrees(repoDir));
+      assert.equal(warnings.length, 1);
+      assert.equal(warnings[0].startsWith(`[worktree] git worktree prune failed for ${repoDir}: `), true);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("createWorktree branch selection", () => {
   it("creates a fresh suffixed branch when the default agent branch name already exists", async () => {
     const { createWorktree, getBranchName } = await import("../src/worktree.js");
