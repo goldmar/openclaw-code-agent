@@ -817,8 +817,8 @@ export class SessionManager {
     return this.interactions.getActionToken(tokenId);
   }
 
-  clearActionTokensForSession(sessionId: string): void {
-    this.interactions.clearActionTokensForSession(sessionId);
+  clearRepoPolicyChoiceTokens(sessionId: string): void {
+    this.interactions.clearRepoPolicyChoiceTokens(sessionId);
   }
 
   clearPlanDecisionTokens(sessionId: string, keepVersion?: number): void {

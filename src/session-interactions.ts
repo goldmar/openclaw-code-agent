@@ -60,8 +60,8 @@ export class SessionInteractionService {
     return this.actionTokens.getActionToken(tokenId);
   }
 
-  clearActionTokensForSession(sessionId: string): void {
-    this.actionTokens.deleteActionTokensForSession(sessionId);
+  clearRepoPolicyChoiceTokens(sessionId: string): void {
+    this.actionTokens.deleteActionTokensForSessionByKind(sessionId, "repo-policy-set");
   }
 
   clearPlanDecisionTokens(sessionId: string, keepVersion?: number): void {

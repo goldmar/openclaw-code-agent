@@ -1395,7 +1395,7 @@ describe("createCallbackHandler()", () => {
         calls.push(`set:${workdir}:${policy}`);
         return { policy };
       },
-      clearActionTokensForSession: (sessionId: string) => {
+      clearRepoPolicyChoiceTokens: (sessionId: string) => {
         calls.push(`clear:${sessionId}`);
       },
       launchAfterRepoPolicyChoice: (args: Record<string, unknown>) => {
@@ -1461,14 +1461,15 @@ describe("createCallbackHandler()", () => {
       ...baseTokenOptions,
       repoPolicy: "never-pr",
     });
+    const outputToken = store.createActionToken("repo-policy:/repo", "view-output");
 
     const calls: string[] = [];
     setSessionManager({
       getActionToken: (tokenId: string) => store.getActionToken(tokenId),
       consumeActionToken: (tokenId: string) => store.consumeActionToken(tokenId),
-      clearActionTokensForSession: (sessionId: string) => {
+      clearRepoPolicyChoiceTokens: (sessionId: string) => {
         calls.push(`clear:${sessionId}`);
-        store.deleteActionTokensForSession(sessionId);
+        store.deleteActionTokensForSessionByKind(sessionId, "repo-policy-set");
       },
       resolve: () => undefined,
       getPersistedSession: () => undefined,
@@ -1498,6 +1499,7 @@ describe("createCallbackHandler()", () => {
     assert.equal(firstState.buttonMarkupEdits, 1);
     assert.equal(firstState.buttonsCleared, 1);
     assert.match(firstState.replies[0], /Repo policy saved: Require PR/);
+    assert.equal(store.getActionToken(outputToken.id)?.id, outputToken.id);
 
     const secondState = createCtx(neverPrToken.id, "telegram");
     const secondResult = await handler.handler(secondState.ctx as any);
@@ -1573,7 +1575,7 @@ describe("createCallbackHandler()", () => {
       resolve: () => undefined,
       getPersistedSession: () => undefined,
       setRepoPolicy: () => ({ policy: "pr-required" }),
-      clearActionTokensForSession: () => {},
+      clearRepoPolicyChoiceTokens: () => {},
       launchAfterRepoPolicyChoice: () => {
         throw new Error("spawn unavailable");
       },
