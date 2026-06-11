@@ -817,6 +817,10 @@ export class SessionManager {
     return this.interactions.getActionToken(tokenId);
   }
 
+  clearRepoPolicyChoiceTokens(sessionId: string): void {
+    this.interactions.clearRepoPolicyChoiceTokens(sessionId);
+  }
+
   clearPlanDecisionTokens(sessionId: string, keepVersion?: number): void {
     this.interactions.clearPlanDecisionTokens(sessionId, keepVersion);
   }

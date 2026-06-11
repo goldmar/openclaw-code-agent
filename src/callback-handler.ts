@@ -586,6 +586,7 @@ export function createCallbackHandler(
             await replyText(ctx, `⚠️ Could not resolve a git repository for ${consumedToken.repoPolicyWorkdir}.`);
             break;
           }
+          sessionManager.clearRepoPolicyChoiceTokens(consumedToken.sessionId);
 
           let launchText: string;
           try {

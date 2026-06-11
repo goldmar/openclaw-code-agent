@@ -32,5 +32,15 @@ describe("SessionActionTokenStore", () => {
     assert.equal(store.getActionToken(tokenA.id), undefined);
     assert.equal(store.getActionToken(tokenB.id), undefined);
     assert.equal(store.listForPersistence().length, 0);
+
+    const policyToken = store.createActionToken("session-3", "repo-policy-set");
+    const outputToken = store.createActionToken("session-3", "view-output");
+    const otherPolicyToken = store.createActionToken("session-4", "repo-policy-set");
+
+    store.deleteActionTokensForSessionByKind("session-3", "repo-policy-set");
+
+    assert.equal(store.getActionToken(policyToken.id), undefined);
+    assert.equal(store.getActionToken(outputToken.id)?.id, outputToken.id);
+    assert.equal(store.getActionToken(otherPolicyToken.id)?.id, otherPolicyToken.id);
   });
 });
