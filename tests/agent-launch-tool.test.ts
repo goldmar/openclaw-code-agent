@@ -265,7 +265,10 @@ describe("agent_launch tool defaults", () => {
 
     try {
       setSessionManager({
+        resolve: () => undefined,
+        getPersistedSession: () => undefined,
         resolveHarnessSessionId: (id: string) => id,
+        resolveBackendConversationId: (id: string) => `resolved-${id}`,
         checkRepoPolicyForLaunch: () => ({
           ok: false,
           text: "Repo integration policy is not set.",
@@ -288,6 +291,7 @@ describe("agent_launch tool defaults", () => {
       } as any);
       const result = await tool.execute("tool-id", {
         prompt: "Ship isolated changes",
+        resume_session_id: "stable-session-1",
         worktree_strategy: "delegate",
         harness: "codex",
         model: "gpt-5.5",
@@ -300,6 +304,7 @@ describe("agent_launch tool defaults", () => {
       assert.equal(policyLaunchArgs?.worktreeStrategy, "delegate");
       assert.equal(policyLaunchArgs?.harness, "codex");
       assert.equal(policyLaunchArgs?.model, "gpt-5.5");
+      assert.equal(policyLaunchArgs?.resumeWorktreeFrom, "resolved-stable-session-1");
       assert.equal(policyLaunchArgs?.originAgentId, "agent-main");
     } finally {
       rmSync(workdir, { recursive: true, force: true });

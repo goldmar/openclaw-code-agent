@@ -99,6 +99,7 @@ type RepoPolicyLaunchArgs = {
   systemPrompt?: string;
   allowedTools?: string[];
   resumeSessionId?: string;
+  resumeWorktreeFrom?: string;
   forkSession?: boolean;
   forceNewSession?: boolean;
   permissionMode?: SessionConfig["permissionMode"];
@@ -663,6 +664,7 @@ export class SessionManager {
       launchSystemPrompt: args.systemPrompt,
       launchAllowedTools: args.allowedTools,
       launchResumeSessionId: args.resumeSessionId,
+      launchResumeWorktreeFrom: args.resumeWorktreeFrom,
       launchForkSession: args.forkSession,
       launchForceNewSession: args.forceNewSession,
       launchPermissionMode: args.permissionMode,
@@ -725,7 +727,7 @@ export class SessionManager {
       systemPrompt: args.systemPrompt,
       allowedTools: args.allowedTools,
       resumeSessionId: args.resumeSessionId,
-      resumeWorktreeFrom: args.resumeSessionId,
+      resumeWorktreeFrom: args.resumeWorktreeFrom,
       forkSession: args.resumeSessionId ? args.forkSession : false,
       multiTurn: true,
       permissionMode,

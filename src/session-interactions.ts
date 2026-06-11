@@ -223,6 +223,7 @@ export class SessionInteractionService {
     launchSystemPrompt?: string;
     launchAllowedTools?: string[];
     launchResumeSessionId?: string;
+    launchResumeWorktreeFrom?: string;
     launchForkSession?: boolean;
     launchForceNewSession?: boolean;
     launchPermissionMode?: PermissionMode;
@@ -250,6 +251,7 @@ export class SessionInteractionService {
         launchSystemPrompt: args.launchSystemPrompt,
         launchAllowedTools: args.launchAllowedTools,
         launchResumeSessionId: args.launchResumeSessionId,
+        launchResumeWorktreeFrom: args.launchResumeWorktreeFrom,
         launchForkSession: args.launchForkSession,
         launchForceNewSession: args.launchForceNewSession,
         launchPermissionMode: args.launchPermissionMode,

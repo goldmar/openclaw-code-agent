@@ -204,6 +204,7 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
                   systemPrompt: params.system_prompt,
                   allowedTools: params.allowed_tools,
                   resumeSessionId: resumeAssessment?.kind === "resume" ? resumeAssessment.resumeSessionId : resumeSessionId,
+                  resumeWorktreeFrom: resolvedResumeId,
                   forkSession: resumeSessionId ? params.fork_session : false,
                   forceNewSession: params.force_new_session,
                   permissionMode,

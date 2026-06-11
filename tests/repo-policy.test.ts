@@ -89,6 +89,7 @@ describe("repo policy resolution", () => {
         model: "gpt-5.5",
         reasoningEffort: "high",
         fastMode: true,
+        resumeWorktreeFrom: "stable-session-1",
         worktreeStrategy: "delegate",
       });
 
@@ -118,6 +119,7 @@ describe("repo policy resolution", () => {
       assert.equal(token?.launchModel, "gpt-5.5");
       assert.equal(token?.launchReasoningEffort, "high");
       assert.equal(token?.launchFastMode, true);
+      assert.equal(token?.launchResumeWorktreeFrom, "stable-session-1");
       sm.dispose();
     } finally {
       rmSync(repoDir, { recursive: true, force: true });

@@ -605,6 +605,7 @@ export function normalizeActionToken(raw: unknown): SessionActionToken | undefin
       ? raw.launchAllowedTools.filter((item): item is string => typeof item === "string")
       : undefined,
     launchResumeSessionId: toOptionalString(raw.launchResumeSessionId),
+    launchResumeWorktreeFrom: toOptionalString(raw.launchResumeWorktreeFrom),
     launchForkSession: typeof raw.launchForkSession === "boolean" ? raw.launchForkSession : undefined,
     launchForceNewSession: typeof raw.launchForceNewSession === "boolean" ? raw.launchForceNewSession : undefined,
     launchPermissionMode: toOptionalPermissionMode(raw.launchPermissionMode),

@@ -262,6 +262,7 @@ export interface SessionActionToken {
   launchSystemPrompt?: string;
   launchAllowedTools?: string[];
   launchResumeSessionId?: string;
+  launchResumeWorktreeFrom?: string;
   launchForkSession?: boolean;
   launchForceNewSession?: boolean;
   launchPermissionMode?: PermissionMode;

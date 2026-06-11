@@ -568,6 +568,10 @@ export function createCallbackHandler(channel: InteractiveChannel = "telegram") 
           }
           const record = sessionManager.setRepoPolicy(consumedToken.repoPolicyWorkdir, consumedToken.repoPolicy);
           if (!record) {
+            await clearInteractiveState(ctx, {
+              alreadyAcknowledged: callbackAcknowledged,
+              forceTelegramMarkupEdit: true,
+            });
             await replyText(ctx, `⚠️ Could not resolve a git repository for ${consumedToken.repoPolicyWorkdir}.`);
             break;
           }
@@ -585,6 +589,7 @@ export function createCallbackHandler(channel: InteractiveChannel = "telegram") 
               systemPrompt: consumedToken.launchSystemPrompt,
               allowedTools: consumedToken.launchAllowedTools,
               resumeSessionId: consumedToken.launchResumeSessionId,
+              resumeWorktreeFrom: consumedToken.launchResumeWorktreeFrom,
               forkSession: consumedToken.launchForkSession,
               forceNewSession: consumedToken.launchForceNewSession,
               permissionMode: consumedToken.launchPermissionMode,
@@ -598,6 +603,10 @@ export function createCallbackHandler(channel: InteractiveChannel = "telegram") 
             launchText = result.text;
           } catch (err) {
             const errText = err instanceof Error ? err.message : String(err);
+            await clearInteractiveState(ctx, {
+              alreadyAcknowledged: callbackAcknowledged,
+              forceTelegramMarkupEdit: true,
+            });
             await replyText(ctx, `⚠️ Repo policy saved, but launch failed: ${errText}`);
             break;
           }
