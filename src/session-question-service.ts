@@ -65,8 +65,6 @@ export class SessionQuestionService {
     const firstQuestion = questions[0];
     const options = firstQuestion.options ?? [];
     const userMessage = `❓ [${session.name}] ${firstQuestion.question}`;
-    const questionKey = session.pendingInputState?.requestId
-      ?? `${firstQuestion.question}:${options.map((option) => option.label).join("|")}`;
     const questionId = activePendingInputQuestionIdentity(session);
     const requestId = session.pendingInputState?.requestId
       ?? `legacy:${randomUUID()}`;
@@ -104,7 +102,7 @@ export class SessionQuestionService {
 
       this.dispatchSessionNotification(session, {
         label: "ask-user-question",
-        idempotencyKey: `ask-user-question:${session.id}:${questionKey}`,
+        idempotencyKey: `ask-user-question:${session.id}:${requestId}`,
         userMessage,
         notifyUser: "always",
         buttons,
