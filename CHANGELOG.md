@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Added repository integration policies for managed worktree sessions, including policy storage, chat/tool commands, policy-aware worktree buttons, and deferred launch continuation after the user chooses how OCA may integrate with a repository.
+- Added repo-policy choice buttons for unknown repositories and preserved the original launch context through manual or button-based policy selection.
+- Added the built-in `oca` natural-language alias for OpenClaw Code Agent sessions.
+- Added structured pending-input option handling so Codex and other harnesses can present compact question buttons while preserving full option semantics.
+
+### Fixed
+- Fixed worktree decision prompts so successful Merge/Open PR actions clear the original buttons without posting duplicate selection acknowledgements, while merge and PR outcome summaries remain authoritative.
+- Fixed stale plan, pending-input, legacy question, repo-policy, and manual policy continuation callbacks so old buttons cannot affect newer review state or duplicate launches.
+- Fixed repo-policy handling in resolver failures, reminders, fallback buttons, and restored sessions so live policy is respected consistently.
+- Fixed cross-repository PR head lookup and agent merge cleanup reporting.
+- Serialized OpenCode server startup to avoid shared SQLite lock failures.
+- Preserved deferred repo-policy worktree strategy, cleared stale manual repo-policy prompts, and rescheduled no-op action-token expiry purges so deferred button state cannot strand later token deadlines.
+
+### Changed
+- Improved worktree decision summaries with concise implementation details and shorter button rows.
+- Agent-created PRs now open as drafts by default.
+- Updated OpenClaw, Claude Agent SDK, and Node type dependencies.
+
 ## [4.4.2] - 2026-06-07
 
 ### Fixed
