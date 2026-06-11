@@ -35,7 +35,11 @@ import { WakeDispatcher, type SessionNotificationRequest } from "./wake-dispatch
 import { SessionInteractionService, type NotificationButton } from "./session-interactions";
 import { SessionNotificationService } from "./session-notifications";
 import { SessionWorktreeController, type WorktreeCompletionState } from "./session-worktree-controller";
-import { SessionQuestionService, type PendingAskUserQuestion } from "./session-question-service";
+import {
+  SessionQuestionService,
+  type AskUserQuestionResolutionContext,
+  type PendingAskUserQuestion,
+} from "./session-question-service";
 import { SessionReminderService } from "./session-reminder-service";
 import { SessionLifecycleService } from "./session-lifecycle-service";
 import {
@@ -360,7 +364,7 @@ export class SessionManager {
       manager.pendingAskUserQuestions,
       (session, request) => manager.dispatchSessionNotification(session, request),
       (sessionId) => { manager.clearWaitingTimestampsForSession(sessionId); },
-      (sessionId, questionOptions) => interactions.getQuestionButtons(sessionId, questionOptions),
+      (sessionId, questionOptions, context) => interactions.getQuestionButtons(sessionId, questionOptions, context),
     );
     const reminders = new SessionReminderService(
       (session) => manager.buildRoutingProxy(session),
@@ -1717,14 +1721,18 @@ export class SessionManager {
   /**
    * Resolve a pending AskUserQuestion by option index (from button callback).
    */
-  resolveAskUserQuestion(sessionId: string, optionIndex: number): boolean {
-    return this.questions.resolveAskUserQuestion(sessionId, optionIndex);
+  resolveAskUserQuestion(
+    sessionId: string,
+    optionIndex: number,
+    context: AskUserQuestionResolutionContext = {},
+  ): boolean {
+    return this.questions.resolveAskUserQuestion(sessionId, optionIndex, context);
   }
 
   async resolvePendingInputOption(
     sessionId: string,
     optionIndex: number,
-    context: { requestId?: string; questionId?: string } = {},
+    context: AskUserQuestionResolutionContext = {},
   ): Promise<boolean> {
     const session = this.sessions.get(sessionId);
     if (session?.canSubmitPendingInputOption?.()) {
@@ -1734,7 +1742,7 @@ export class SessionManager {
       }
       return false;
     }
-    return this.questions.resolveAskUserQuestion(sessionId, optionIndex);
+    return this.questions.resolveAskUserQuestion(sessionId, optionIndex, context);
   }
 
   dispose(): void {

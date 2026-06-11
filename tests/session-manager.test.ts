@@ -3345,6 +3345,9 @@ describe("SessionManager.handleAskUserQuestion()", () => {
     assert.equal(request.idempotencyKey, "ask-user-question:s-cc-question:native-question-1");
     assert.equal(request.buttons[0][0].label, "Staging");
     assert.equal(request.buttons[0][1].label, "Production");
+    const token = (sm as any).interactions.getActionToken(request.buttons[0][0].callbackData);
+    assert.equal(token.pendingInputRequestId, "native-question-1");
+    assert.equal(token.pendingInputQuestionId, undefined);
     assert.match(request.wakeMessageOnNotifySuccess, /Session: cc-question \| ID: s-cc-question/);
     assert.match(request.wakeMessageOnNotifySuccess, /Which environment should I target\?/);
 
@@ -3394,6 +3397,72 @@ describe("SessionManager.handleAskUserQuestion()", () => {
           ],
         }],
         answers: { "Which environment should I target?": "Production" },
+      },
+    });
+  });
+
+  it("does not let stale legacy question buttons answer a newer question", async () => {
+    const session = fakeSession({
+      id: "s-legacy-stale-question",
+      name: "legacy-stale-question",
+      worktreeStrategy: "ask",
+    });
+    (sm as any).sessions.set(session.id, session);
+
+    const firstPending = sm.handleAskUserQuestion(session.id, {
+      questions: [{
+        question: "First question?",
+        options: [
+          { label: "First A" },
+          { label: "First B" },
+        ],
+      }],
+    });
+    const firstRejected = firstPending.then(
+      () => undefined,
+      (error) => error,
+    );
+    const firstRequest = (sm as any).__dispatchCalls[0][1];
+    const firstToken = (sm as any).interactions.getActionToken(firstRequest.buttons[0][0].callbackData);
+
+    const secondPending = sm.handleAskUserQuestion(session.id, {
+      questions: [{
+        question: "Second question?",
+        options: [
+          { label: "Second A" },
+          { label: "Second B" },
+        ],
+      }],
+    });
+    const secondRequest = (sm as any).__dispatchCalls[1][1];
+    const secondToken = (sm as any).interactions.getActionToken(secondRequest.buttons[0][1].callbackData);
+
+    const firstError = await firstRejected;
+    assert.match(firstError.message, /superseded by a newer question/);
+    assert.notEqual(firstToken.pendingInputRequestId, secondToken.pendingInputRequestId);
+
+    const staleResolved = await sm.resolvePendingInputOption(session.id, firstToken.optionIndex, {
+      requestId: firstToken.pendingInputRequestId,
+      questionId: firstToken.pendingInputQuestionId,
+    });
+    assert.equal(staleResolved, false);
+
+    const currentResolved = await sm.resolvePendingInputOption(session.id, secondToken.optionIndex, {
+      requestId: secondToken.pendingInputRequestId,
+      questionId: secondToken.pendingInputQuestionId,
+    });
+    assert.equal(currentResolved, true);
+    assert.deepEqual(await secondPending, {
+      behavior: "allow",
+      updatedInput: {
+        questions: [{
+          question: "Second question?",
+          options: [
+            { label: "Second A" },
+            { label: "Second B" },
+          ],
+        }],
+        answers: { "Second question?": "Second B" },
       },
     });
   });
