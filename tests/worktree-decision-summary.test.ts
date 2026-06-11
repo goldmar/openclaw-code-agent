@@ -83,6 +83,28 @@ describe("worktree decision work summaries", () => {
     }
   });
 
+  it("uses useful completion output before deterministic file prose when no provider is available", async () => {
+    const result = await buildWorktreeDecisionWorkSummary({
+      sessionName: "fallback-from-output",
+      diffSummary,
+      outputPreview: [
+        "$ pnpm test:file tests/callback-handler.test.ts",
+        "Implemented markup-only cleanup for successful worktree decision callbacks.",
+        "Updated fallback summaries to reuse concise completion output when the model is unavailable.",
+        "Verified focused callback and worktree decision summary regression tests.",
+        "Implemented markup-only cleanup for successful worktree decision callbacks.",
+      ].join("\n"),
+    });
+
+    assert.equal(result.source, "fallback");
+    assert.deepEqual(result.lines, [
+      "Implemented markup-only cleanup for successful worktree decision callbacks.",
+      "Updated fallback summaries to reuse concise completion output when the model is unavailable.",
+      "Verified focused callback and worktree decision summary regression tests.",
+    ]);
+    assert.doesNotMatch(result.lines.join("\n"), /Touches `src\/session-worktree-message-service\.ts`/);
+  });
+
   it("adapts OpenClaw runtime summary hooks when available", async () => {
     try {
       setPluginRuntime({

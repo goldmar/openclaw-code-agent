@@ -35,19 +35,44 @@ function parsePayload(payload: string): string | null {
   return tokenId ? tokenId : null;
 }
 
-async function resolveWorktreePrompt(
+async function clearWorktreeDecisionButtons(
   ctx: InteractiveCallbackContext,
-  text: string,
   alreadyAcknowledged = false,
 ): Promise<boolean> {
-  try {
-    const result = await clearInteractiveState(ctx, { text, alreadyAcknowledged });
-    return result.textDelivered;
-  } catch (err) {
-    const errText = err instanceof Error ? err.message : String(err);
-    console.warn(`[callback-handler] Failed to resolve worktree prompt: ${errText}`);
-    return false;
+  if (ctx.channel === "telegram") {
+    try {
+      const result = await clearInteractiveState(ctx, { alreadyAcknowledged, forceTelegramMarkupEdit: true });
+      return result.textDelivered;
+    } catch (err) {
+      const errText = err instanceof Error ? err.message : String(err);
+      console.warn(`[callback-handler] Failed to clear Telegram worktree prompt buttons: ${errText}`);
+      return false;
+    }
   }
+
+  const responder = ctx.respond as InteractiveResponder;
+  if (typeof responder.clearComponents === "function") {
+    try {
+      await responder.clearComponents();
+      return false;
+    } catch (err) {
+      if (isMessageNotModifiedError(err)) return false;
+      const errText = err instanceof Error ? err.message : String(err);
+      console.warn(`[callback-handler] Failed to clear Discord worktree components: ${errText}`);
+    }
+  }
+
+  if (typeof responder.clearButtons === "function") {
+    try {
+      await responder.clearButtons();
+    } catch (err) {
+      const errText = err instanceof Error ? err.message : String(err);
+      console.warn(`[callback-handler] Failed to clear Discord worktree buttons: ${errText}`);
+    }
+  } else if (!alreadyAcknowledged && typeof responder.acknowledge === "function") {
+    await responder.acknowledge();
+  }
+  return false;
 }
 
 /** Extract text from a tool execute result content array. */
@@ -399,7 +424,7 @@ export function createCallbackHandler(channel: InteractiveChannel = "telegram") 
           const result = await makeAgentMergeTool().execute("callback", { session: sessionId });
           const text = toolResultText(result);
           if (toolResultSucceeded(result)) {
-            await resolveWorktreePrompt(ctx, `✅ Merge selected for [${actionSessionName}]`, callbackAcknowledged);
+            await clearWorktreeDecisionButtons(ctx, callbackAcknowledged);
           }
           await replyText(ctx, text);
           break;
@@ -410,10 +435,8 @@ export function createCallbackHandler(channel: InteractiveChannel = "telegram") 
           const succeeded = worktreeActionTextSucceeded(result);
           if (succeeded) {
             const confirmation = `⏭️ Snoozed 24h for [${actionSessionName}]`;
-            const resolved = await resolveWorktreePrompt(ctx, confirmation, callbackAcknowledged);
-            if (!resolved) {
-              await replyText(ctx, confirmation);
-            }
+            await clearWorktreeDecisionButtons(ctx, callbackAcknowledged);
+            await replyText(ctx, confirmation);
           } else {
             await replyText(ctx, result);
           }
@@ -424,7 +447,7 @@ export function createCallbackHandler(channel: InteractiveChannel = "telegram") 
           const result = await sessionManager.dismissWorktree(sessionId);
           const succeeded = worktreeActionTextSucceeded(result);
           if (succeeded) {
-            await resolveWorktreePrompt(ctx, `🗑️ Discarded for [${actionSessionName}]`, callbackAcknowledged);
+            await clearWorktreeDecisionButtons(ctx, callbackAcknowledged);
           }
           await replyText(ctx, succeeded ? "✅ Discarded" : result);
           break;
@@ -442,13 +465,7 @@ export function createCallbackHandler(channel: InteractiveChannel = "telegram") 
           const result = await makeAgentPrTool().execute("callback", { session: sessionId });
           const text = toolResultText(result);
           if (toolResultSucceeded(result)) {
-            await resolveWorktreePrompt(
-              ctx,
-              token.kind === "worktree-update-pr"
-                ? `📬 PR update selected for [${actionSessionName}]`
-                : `📬 PR selected for [${actionSessionName}]`,
-              callbackAcknowledged,
-            );
+            await clearWorktreeDecisionButtons(ctx, callbackAcknowledged);
           }
           await replyText(ctx, text);
           break;

@@ -77,7 +77,10 @@ export function createRuntimeWorktreeDecisionSummaryProvider(): WorktreeDecision
 export function buildFallbackWorktreeDecisionSummary(diffSummary: {
   changedFiles: string[];
   commitMessages: Array<{ message: string }>;
-}): string[] {
+}, outputPreview?: string): string[] {
+  const outputLines = buildOutputPreviewSummaryLines(outputPreview);
+  if (outputLines.length > 0) return outputLines;
+
   const summaryLines: string[] = [];
   const topFiles = diffSummary.changedFiles.slice(0, 3).map((file) => `\`${file}\``);
   if (topFiles.length > 0) {
@@ -112,7 +115,7 @@ export async function buildWorktreeDecisionWorkSummary(args: {
   const fallback = buildFallbackWorktreeDecisionSummary(args.diffSummary ?? {
     changedFiles: evidence.changedFiles,
     commitMessages: evidence.commitSubjects.map((message) => ({ message })),
-  });
+  }, args.outputPreview);
 
   if (!args.provider) {
     return { source: "fallback", lines: fallback, evidence, error: "LLM summary provider unavailable." };
@@ -231,6 +234,42 @@ function buildWorktreeDecisionSummaryPrompt(evidence: WorktreeDecisionSummaryEvi
     `Evidence:`,
     JSON.stringify(evidence, null, 2),
   ].join("\n");
+}
+
+function buildOutputPreviewSummaryLines(outputPreview: string | undefined): string[] {
+  const seen = new Set<string>();
+  const lines = redactSensitiveText(outputPreview ?? "")
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((line) => sanitizeSummaryText(line))
+    .map((line) => stripSummaryPrefix(line))
+    .filter(isUsefulOutputSummaryLine)
+    .map((line) => truncateText(line, MAX_SUMMARY_LINE_LENGTH))
+    .filter((line) => {
+      const key = line.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, MAX_SUMMARY_LINES);
+  return lines;
+}
+
+function stripSummaryPrefix(line: string): string {
+  return line
+    .replace(/^(?:summary|done|completed|changes|validation|verified)\s*:\s*/i, "")
+    .trim();
+}
+
+function isUsefulOutputSummaryLine(line: string): boolean {
+  if (line.length < 12 || line.length > MAX_SUMMARY_LINE_LENGTH) return false;
+  if (containsSensitiveText(line)) return false;
+  if (/^(```|>|command\b|exit code\b|\$|[a-z0-9_-]+@[a-z0-9_-]+:)/i.test(line)) return false;
+  if (/^(?:running|ran|pnpm|npm|node|git|tsc|vitest|jest)\b/i.test(line)) return false;
+  if (/^(?:pass|fail|ok|error)\b[:\s]/i.test(line)) return false;
+  if (/^(?:changed files?|files changed|recent commits?|commits?)\b/i.test(line)) return false;
+  return /^(?:implemented|updated|added|fixed|changed|removed|verified|covered|refactored|improved|created|documented|hardened|restored|simplified|renamed|moved|wired|handled|blocked|reduced|deduplicated|normalized|addressed|prevented)\b/i.test(line)
+    || /\b(?:now|so that|coverage|tests?|validation|regression|cleanup|summary|notification|callback|button|merge|worktree|policy|pr)\b/i.test(line);
 }
 
 function buildSafeObjective(prompt: string | undefined): string | undefined {
