@@ -75,12 +75,80 @@ describe("worktree decision work summaries", () => {
       });
 
       assert.equal(result.source, "fallback");
-      assert.match(result.lines.join("\n"), /Touches `src\/session-worktree-message-service\.ts`, `tests\/session-manager-worktree\.test\.ts`/);
-      assert.match(result.lines.join("\n"), /Recent work: Improve worktree decision summary/);
+      assert.deepEqual(result.lines, [
+        "Improves worktree decision summary across `src/session-worktree-message-service.ts`, `tests/session-manager-worktree.test.ts`.",
+      ]);
       assert.match(warnings[0], /LLM summary provider failed: model unavailable/);
     } finally {
       console.warn = originalWarn;
     }
+  });
+
+  it("turns conventional commit subjects into readable fallback bullets", async () => {
+    const result = await buildWorktreeDecisionWorkSummary({
+      sessionName: "rust-hello-small-change-opencode",
+      diffSummary: {
+        commits: 1,
+        filesChanged: 1,
+        insertions: 1,
+        deletions: 0,
+        changedFiles: ["src/main.rs"],
+        commitMessages: [
+          { hash: "468592f", message: "docs: add clarifying comment for multi-word name joining in parse_args", author: "Mark Goldenstein" },
+        ],
+      },
+    });
+
+    assert.equal(result.source, "fallback");
+    assert.deepEqual(result.lines, [
+      "Adds clarifying comment for multi-word name joining in parse_args in `src/main.rs`.",
+    ]);
+    assert.doesNotMatch(result.lines.join("\n"), /Recent work:/);
+    assert.doesNotMatch(result.lines.join("\n"), /Touches `src\/main\.rs`/);
+  });
+
+  it("omits aggregate file context from multi-commit fallback bullets", async () => {
+    const result = await buildWorktreeDecisionWorkSummary({
+      sessionName: "multi-commit-summary",
+      diffSummary: {
+        commits: 2,
+        filesChanged: 2,
+        insertions: 12,
+        deletions: 3,
+        changedFiles: ["src/Login.tsx", "src/Logout.tsx"],
+        commitMessages: [
+          { hash: "abc1234", message: "feat: add login form", author: "Codex" },
+          { hash: "def5678", message: "fix: fix logout overflow", author: "Codex" },
+        ],
+      },
+    });
+
+    assert.equal(result.source, "fallback");
+    assert.deepEqual(result.lines, [
+      "Adds login form.",
+      "Fixes logout overflow.",
+    ]);
+  });
+
+  it("capitalizes unknown commit verbs in fallback bullets", async () => {
+    const result = await buildWorktreeDecisionWorkSummary({
+      sessionName: "unknown-verb-summary",
+      diffSummary: {
+        commits: 1,
+        filesChanged: 1,
+        insertions: 4,
+        deletions: 1,
+        changedFiles: ["src/feature.ts"],
+        commitMessages: [
+          { hash: "abc1234", message: "teach summary builder new verbs", author: "Codex" },
+        ],
+      },
+    });
+
+    assert.equal(result.source, "fallback");
+    assert.deepEqual(result.lines, [
+      "Teach summary builder new verbs in `src/feature.ts`.",
+    ]);
   });
 
   it("uses useful completion output before deterministic file prose when no provider is available", async () => {

@@ -81,6 +81,9 @@ export function buildFallbackWorktreeDecisionSummary(diffSummary: {
   const outputLines = buildOutputPreviewSummaryLines(outputPreview);
   if (outputLines.length > 0) return outputLines;
 
+  const commitLines = buildCommitSubjectSummaryLines(diffSummary);
+  if (commitLines.length > 0) return commitLines;
+
   const summaryLines: string[] = [];
   const topFiles = diffSummary.changedFiles.slice(0, 3).map((file) => `\`${file}\``);
   if (topFiles.length > 0) {
@@ -102,6 +105,90 @@ export function buildFallbackWorktreeDecisionSummary(diffSummary: {
   }
 
   return summaryLines;
+}
+
+function buildCommitSubjectSummaryLines(diffSummary: {
+  changedFiles: string[];
+  commitMessages: Array<{ message: string }>;
+}): string[] {
+  const seen = new Set<string>();
+  const changedFiles = diffSummary.commitMessages.length === 1 ? diffSummary.changedFiles : [];
+  return diffSummary.commitMessages
+    .map((commit) => buildCommitSubjectSummaryLine(commit.message, changedFiles))
+    .filter((line): line is string => Boolean(line))
+    .filter((line) => {
+      const key = line.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, MAX_SUMMARY_LINES);
+}
+
+function buildCommitSubjectSummaryLine(message: string, changedFiles: string[]): string | undefined {
+  const subject = normalizeCommitSubject(message);
+  if (!subject) return undefined;
+
+  const fileContext = changedFiles.length === 1
+    ? ` in \`${changedFiles[0]}\``
+    : changedFiles.length > 1 && changedFiles.length <= 3
+      ? ` across ${changedFiles.map((file) => `\`${file}\``).join(", ")}`
+      : "";
+  return truncateText(`${subject}${fileContext}.`, MAX_SUMMARY_LINE_LENGTH);
+}
+
+function normalizeCommitSubject(message: string): string | undefined {
+  const stripped = sanitizeSummaryText(redactSensitiveText(message))
+    .replace(/^(?:feat|fix|docs|style|refactor|perf|test|tests|build|ci|chore|revert)(?:\([^)]+\))?!?:\s*/i, "")
+    .replace(/\.$/, "")
+    .trim();
+  if (!stripped || containsSensitiveText(stripped)) return undefined;
+
+  const imperative = stripped.match(/^([a-z]+)\b(.*)$/i);
+  if (!imperative) return stripped;
+
+  const verb = imperative[1].toLowerCase();
+  const rest = imperative[2] ?? "";
+  const thirdPerson = new Map<string, string>([
+    ["add", "Adds"],
+    ["address", "Addresses"],
+    ["block", "Blocks"],
+    ["change", "Changes"],
+    ["clarify", "Clarifies"],
+    ["clean", "Cleans"],
+    ["cover", "Covers"],
+    ["create", "Creates"],
+    ["deduplicate", "Deduplicates"],
+    ["delete", "Deletes"],
+    ["disable", "Disables"],
+    ["document", "Documents"],
+    ["enable", "Enables"],
+    ["extract", "Extracts"],
+    ["fix", "Fixes"],
+    ["guard", "Guards"],
+    ["harden", "Hardens"],
+    ["implement", "Implements"],
+    ["improve", "Improves"],
+    ["init", "Initializes"],
+    ["initialize", "Initializes"],
+    ["migrate", "Migrates"],
+    ["move", "Moves"],
+    ["normalize", "Normalizes"],
+    ["preserve", "Preserves"],
+    ["prevent", "Prevents"],
+    ["refactor", "Refactors"],
+    ["remove", "Removes"],
+    ["rename", "Renames"],
+    ["restore", "Restores"],
+    ["simplify", "Simplifies"],
+    ["tighten", "Tightens"],
+    ["update", "Updates"],
+    ["use", "Uses"],
+    ["wire", "Wires"],
+    ["wrap", "Wraps"],
+  ]);
+  const normalizedVerb = thirdPerson.get(verb);
+  return normalizedVerb ? `${normalizedVerb}${rest}` : `${verb[0].toUpperCase()}${verb.slice(1)}${rest}`;
 }
 
 export async function buildWorktreeDecisionWorkSummary(args: {
