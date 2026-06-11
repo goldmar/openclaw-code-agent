@@ -54,14 +54,16 @@ export function saveSessionStoreIndex(
   }
 }
 
-export function archiveLegacySessionIndex(indexPath: string, reason: string): void {
+export function archiveLegacySessionIndex(indexPath: string, reason: string): boolean {
   try {
-    if (!existsSync(indexPath)) return;
+    if (!existsSync(indexPath)) return true;
     const archivedPath = `${indexPath}.legacy-${Date.now()}.json`;
     renameSync(indexPath, archivedPath);
     console.warn(`[SessionStore] Breaking upgrade: archived ${reason} session store to ${archivedPath}. Legacy sessions are not loaded by this release.`);
+    return true;
   } catch (err: unknown) {
     console.warn(`[SessionStore] Failed to archive legacy session store: ${errorMessage(err)}`);
+    return false;
   }
 }
 
@@ -148,11 +150,17 @@ export function loadSessionStoreIndex(args: LoadIndexArgs): void {
     saveIndex,
   } = args;
 
+  const archiveAndReset = (reason: string): boolean => {
+    if (!archiveLegacySessionIndex(indexPath, reason)) return false;
+    clearAll();
+    return true;
+  };
+
   try {
     const raw = readFileSync(indexPath, "utf-8");
     const parsed: unknown = JSON.parse(raw);
     if (Array.isArray(parsed)) {
-      archiveLegacySessionIndex(indexPath, "legacy array store");
+      if (!archiveAndReset("legacy array store")) return;
       saveIndex();
       return;
     }
@@ -160,13 +168,14 @@ export function loadSessionStoreIndex(args: LoadIndexArgs): void {
       !isRecord(parsed) ||
       (parsed.schemaVersion !== STORE_SCHEMA_VERSION && parsed.schemaVersion !== 6 && parsed.schemaVersion !== 4)
     ) {
-      archiveLegacySessionIndex(indexPath, `schema mismatch (expected v${STORE_SCHEMA_VERSION})`);
+      if (!archiveAndReset(`schema mismatch (expected v${STORE_SCHEMA_VERSION})`)) return;
       saveIndex();
       return;
     }
 
     const sessionsRaw = Array.isArray(parsed.sessions) ? parsed.sessions : [];
     const archivedLegacyCodex: unknown[] = [];
+    const entries: PersistedSessionInfo[] = [];
     for (const candidate of sessionsRaw) {
       if (isRecord(candidate) && candidate.harness === "codex") {
         const backendRef = isRecord(candidate.backendRef) ? candidate.backendRef : undefined;
@@ -178,33 +187,32 @@ export function loadSessionStoreIndex(args: LoadIndexArgs): void {
       }
       const entry = normalizePersistedEntry(candidate);
       if (!entry) {
-        clearAll();
-        archiveLegacySessionIndex(indexPath, "invalid v4 session entry");
+        if (!archiveAndReset("invalid v4 session entry")) return;
         saveIndex();
         return;
       }
 
-      indexPersistedEntry(entry);
+      entries.push(entry);
     }
 
     if (archivedLegacyCodex.length > 0) {
       archiveLegacyCodexEntries(indexPath, archivedLegacyCodex);
-      saveIndex();
     }
 
     const tokensRaw = Array.isArray(parsed.actionTokens) ? parsed.actionTokens : [];
+    const tokens: SessionActionToken[] = [];
     for (const candidate of tokensRaw) {
       const token = normalizeActionToken(candidate);
       if (!token) {
-        clearAll();
-        archiveLegacySessionIndex(indexPath, "invalid v4 action token");
+        if (!archiveAndReset("invalid v4 action token")) return;
         saveIndex();
         return;
       }
-      setActionToken(token);
+      tokens.push(token);
     }
 
     const policiesRaw = Array.isArray(parsed.repoPolicies) ? parsed.repoPolicies : [];
+    const policies: RepoPolicyRecord[] = [];
     let skippedInvalidRepoPolicy = false;
     for (const candidate of policiesRaw) {
       const policy = normalizeRepoPolicyRecord(candidate);
@@ -213,12 +221,23 @@ export function loadSessionStoreIndex(args: LoadIndexArgs): void {
         console.warn("[SessionStore] Skipping invalid repo policy entry while loading session store.");
         continue;
       }
-      setRepoPolicy(policy);
+      policies.push(policy);
     }
+
+    for (const entry of entries) indexPersistedEntry(entry);
+    for (const token of tokens) setActionToken(token);
+    for (const policy of policies) setRepoPolicy(policy);
+
+    if (archivedLegacyCodex.length > 0) saveIndex();
     if (skippedInvalidRepoPolicy) saveIndex();
 
     purgeExpiredActionTokens();
-  } catch {
-    // File doesn't exist yet or is corrupt — start fresh
+  } catch (err: unknown) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      // File doesn't exist yet — start fresh without creating it.
+      return;
+    }
+    if (!archiveAndReset("corrupt or unreadable")) return;
+    saveIndex();
   }
 }
