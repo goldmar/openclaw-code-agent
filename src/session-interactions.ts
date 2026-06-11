@@ -152,6 +152,7 @@ export class SessionInteractionService {
 
   getPlanApprovalButtons(sessionId: string, session?: ButtonSource): NotificationButton[][] {
     const planDecisionVersion = session?.actionablePlanDecisionVersion ?? session?.planDecisionVersion;
+    this.clearPlanDecisionTokens(sessionId, planDecisionVersion);
     const buttons = [[
       this.makeActionButton(sessionId, "plan-approve", "Approve", {
         planDecisionVersion,
