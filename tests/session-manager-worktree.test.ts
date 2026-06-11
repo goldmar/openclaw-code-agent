@@ -60,6 +60,9 @@ function createPendingDelegateDecisionFixture(policy: "pr-required" | "never-pr"
   writeFileSync(join(repoDir, "README.md"), "hello\n", "utf-8");
   git(repoDir, "add", "README.md");
   git(repoDir, "commit", "-m", "init");
+  if (policy === "pr-required") {
+    git(repoDir, "remote", "add", "origin", "https://github.com/example/repo.git");
+  }
 
   const worktreePath = createWorktree(repoDir, `live-policy-${policy}`);
   const branchName = getBranchName(worktreePath);
@@ -603,6 +606,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       assert.equal(request.label, "worktree-merge-ask");
       const labels = buttonLabels(request.buttons);
       assert.equal(hasButton(labels, "Merge"), false);
+      assert.equal(hasButton(labels, "Open PR"), true);
     } finally {
       fixture.cleanup();
     }
