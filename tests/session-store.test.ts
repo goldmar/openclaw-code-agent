@@ -825,6 +825,7 @@ describe("SessionStore path resolution", () => {
     const saved = JSON.parse(readFileSync(indexPath, "utf-8"));
     assert.equal(saved.schemaVersion, STORE_SCHEMA_VERSION);
     assert.deepEqual(saved.sessions, []);
+    assert.deepEqual(saved.actionTokens, []);
     assert.equal(readFileSync(`${indexPath}.legacy-${now}-1.json`, "utf-8"), originalPayload);
   });
 
@@ -1161,6 +1162,7 @@ describe("SessionStore path resolution", () => {
     const saved = JSON.parse(readFileSync(indexPath, "utf-8"));
     assert.equal(saved.schemaVersion, STORE_SCHEMA_VERSION);
     assert.deepEqual(saved.sessions, []);
+    assert.deepEqual(saved.actionTokens, []);
     assert.equal(readFileSync(`${indexPath}.legacy-${now}-1.json`, "utf-8"), originalPayload);
   });
 
