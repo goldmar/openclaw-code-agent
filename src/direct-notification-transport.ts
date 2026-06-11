@@ -484,6 +484,7 @@ function sanitizeTelegramInlineButtons(buttons: unknown): TelegramInlineButtons 
           ) {
             return undefined;
           }
+          if (!hasTelegramButtonAction(rest)) return undefined;
           return {
             ...rest,
             ...telegramButtonStyle(rawStyle),
@@ -493,6 +494,36 @@ function sanitizeTelegramInlineButtons(buttons: unknown): TelegramInlineButtons 
     })
     .filter((row) => row.length > 0);
   return rows.length > 0 ? rows as TelegramInlineButtons : undefined;
+}
+
+function hasTelegramButtonAction(button: Record<string, unknown>): boolean {
+  return hasNonBlankString(button.callback_data)
+    || hasNonBlankString(button.url)
+    || hasUrlObject(button.web_app)
+    || hasUrlObject(button.webApp)
+    || hasUrlObject(button.login_url)
+    || hasUrlObject(button.loginUrl)
+    || typeof button.switch_inline_query === "string"
+    || typeof button.switch_inline_query_current_chat === "string"
+    || toRecord(button.switch_inline_query_chosen_chat) !== undefined
+    || toRecord(button.callback_game) !== undefined
+    || button.pay === true
+    || hasTextObject(button.copy_text)
+    || hasTextObject(button.copyText);
+}
+
+function hasNonBlankString(value: unknown): boolean {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function hasUrlObject(value: unknown): boolean {
+  const record = toRecord(value);
+  return hasNonBlankString(record?.url);
+}
+
+function hasTextObject(value: unknown): boolean {
+  const record = toRecord(value);
+  return hasNonBlankString(record?.text);
 }
 
 function telegramButtonStyle(style: unknown): { style: string } | Record<string, never> {
