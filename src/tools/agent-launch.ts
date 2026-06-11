@@ -48,6 +48,10 @@ function hasFormatLaunchResult(value: unknown): value is {
 }
 
 function hasRequestRepoPolicyForLaunch(value: unknown): value is {
+  checkRepoPolicyForLaunch: (
+    workdir: string,
+    requestedStrategy?: "off" | "manual" | "ask" | "delegate" | "auto-merge" | "auto-pr",
+  ) => { ok: true; resolution: unknown } | { ok: false; text: string };
   requestRepoPolicyForLaunch: (args: {
     route?: Record<string, unknown>;
     prompt: string;
@@ -75,6 +79,7 @@ function hasRequestRepoPolicyForLaunch(value: unknown): value is {
 } {
   return !!value
     && typeof value === "object"
+    && typeof (value as { checkRepoPolicyForLaunch?: unknown }).checkRepoPolicyForLaunch === "function"
     && typeof (value as { requestRepoPolicyForLaunch?: unknown }).requestRepoPolicyForLaunch === "function";
 }
 
@@ -196,8 +201,8 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
             : undefined)
           : undefined;
         if (launchWorktreeStrategy !== "off" && hasRequestRepoPolicyForLaunch(sessionManager)) {
-          const policyCheck = sessionManager.checkRepoPolicyForLaunch?.(workdir, params.worktree_strategy);
-          if (policyCheck && policyCheck.ok === false) {
+          const policyCheck = sessionManager.checkRepoPolicyForLaunch(workdir, params.worktree_strategy);
+          if (policyCheck.ok === false) {
             return {
               content: [{
                 type: "text",
