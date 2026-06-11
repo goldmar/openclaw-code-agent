@@ -25,6 +25,13 @@ describe("SessionActionTokenStore", () => {
     assert.equal(store.listForPersistence().length, 0);
     assert.equal(store.purgeExpiredActionTokens(Date.now()), false);
 
+    const boundaryToken = store.createActionToken("session-1", "view-output");
+    const consumedBoundary = store.consumeActionToken(boundaryToken.id);
+    assert.ok(consumedBoundary?.consumedAt);
+    assert.equal(store.nextExpiryAt(), consumedBoundary.consumedAt + 100);
+    assert.equal(store.purgeExpiredActionTokens(consumedBoundary.consumedAt + 100), true);
+    assert.equal(store.getActionToken(boundaryToken.id), undefined);
+
     const tokenA = store.createActionToken("session-2", "view-output");
     const tokenB = store.createActionToken("session-2", "session-resume");
     assert.equal(store.listForPersistence().length, 2);
