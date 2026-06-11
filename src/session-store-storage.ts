@@ -19,6 +19,16 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+function getAvailableArchivePath(indexPath: string, archivePrefix: string, now: number = Date.now()): string | undefined {
+  const basePath = `${indexPath}.${archivePrefix}-${now}`;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const suffix = attempt === 0 ? "" : `-${attempt}`;
+    const candidate = `${basePath}${suffix}.json`;
+    if (!existsSync(candidate)) return candidate;
+  }
+  return undefined;
+}
+
 function getTmpOutputFilePaths(): string[] {
   const tmpDir = tmpdir();
   return readdirSync(tmpDir)
@@ -57,7 +67,11 @@ export function saveSessionStoreIndex(
 export function archiveLegacySessionIndex(indexPath: string, reason: string): boolean {
   try {
     if (!existsSync(indexPath)) return false;
-    const archivedPath = `${indexPath}.legacy-${Date.now()}.json`;
+    const archivedPath = getAvailableArchivePath(indexPath, "legacy");
+    if (!archivedPath) {
+      console.warn("[SessionStore] Failed to archive legacy session store: no available archive path");
+      return false;
+    }
     renameSync(indexPath, archivedPath);
     console.warn(`[SessionStore] Breaking upgrade: archived ${reason} session store to ${archivedPath}. Legacy sessions are not loaded by this release.`);
     return true;
@@ -74,7 +88,11 @@ export const sessionStoreStorageInternals = {
 export function archiveLegacyCodexEntries(indexPath: string, entries: unknown[]): void {
   try {
     if (entries.length === 0) return;
-    const archivedPath = `${indexPath}.codex-sdk-legacy-${Date.now()}.json`;
+    const archivedPath = getAvailableArchivePath(indexPath, "codex-sdk-legacy");
+    if (!archivedPath) {
+      console.warn("[SessionStore] Failed to archive legacy Codex SDK sessions: no available archive path");
+      return;
+    }
     writeFileSync(archivedPath, JSON.stringify(entries, null, 2), "utf-8");
     console.warn(`[SessionStore] Breaking Codex transport upgrade: archived ${entries.length} legacy Codex SDK session(s) to ${archivedPath}. They are not loaded by the App Server backend.`);
   } catch (err: unknown) {

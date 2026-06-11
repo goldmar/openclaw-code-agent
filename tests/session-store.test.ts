@@ -799,8 +799,8 @@ describe("SessionStore path resolution", () => {
     assert.equal(archived.length, 1);
   });
 
-  it("does not replace legacy array stores when archiving fails", (t) => {
-    const dir = mkdtempSync(join(tmpdir(), "openclaw-store-legacy-archive-fail-"));
+  it("archives legacy array stores to a suffixed path when the timestamp target exists", (t) => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-store-legacy-archive-collision-"));
     const indexPath = join(dir, "sessions.json");
     const originalPayload = JSON.stringify([{
       sessionId: "legacy-session",
@@ -822,7 +822,11 @@ describe("SessionStore path resolution", () => {
     });
 
     assert.equal(store.listPersistedSessions().length, 0);
-    assert.equal(readFileSync(indexPath, "utf-8"), originalPayload);
+    const saved = JSON.parse(readFileSync(indexPath, "utf-8"));
+    assert.equal(saved.schemaVersion, STORE_SCHEMA_VERSION);
+    assert.deepEqual(saved.sessions, []);
+    assert.deepEqual(saved.actionTokens, []);
+    assert.equal(readFileSync(`${indexPath}.legacy-${now}-1.json`, "utf-8"), originalPayload);
   });
 
   it("archives corrupt JSON stores and writes a clean current-schema index", () => {
@@ -1026,6 +1030,37 @@ describe("SessionStore path resolution", () => {
     assert.equal(archivedPayload[0].harnessSessionId, "h-legacy-codex");
   });
 
+  it("archives legacy Codex SDK session rows to a suffixed path when the timestamp target exists", (t) => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-store-codex-upgrade-collision-"));
+    const indexPath = join(dir, "sessions.json");
+    const now = 1700000000000;
+    writeStore(indexPath, [
+      {
+        sessionId: "legacy-codex",
+        harnessSessionId: "h-legacy-codex",
+        name: "legacy-codex",
+        prompt: "p",
+        workdir: "/tmp",
+        status: "completed",
+        costUsd: 0,
+        harness: "codex",
+      },
+    ]);
+    writeFileSync(`${indexPath}.codex-sdk-legacy-${now}.json`, "existing", "utf-8");
+    t.mock.method(Date, "now", () => now);
+
+    const store = new SessionStore({
+      indexPath,
+      env: {},
+    });
+
+    assert.equal(store.getPersistedSession("legacy-codex"), undefined);
+    assert.equal(readFileSync(`${indexPath}.codex-sdk-legacy-${now}.json`, "utf-8"), "existing");
+    const archivedPayload = JSON.parse(readFileSync(`${indexPath}.codex-sdk-legacy-${now}-1.json`, "utf-8"));
+    assert.equal(Array.isArray(archivedPayload), true);
+    assert.equal(archivedPayload[0].harnessSessionId, "h-legacy-codex");
+  });
+
   it("normalizes and indexes OpenCode backend refs", () => {
     const dir = mkdtempSync(join(tmpdir(), "openclaw-store-opencode-"));
     const indexPath = join(dir, "sessions.json");
@@ -1084,8 +1119,8 @@ describe("SessionStore path resolution", () => {
     assert.equal(archived.length, 1);
   });
 
-  it("does not clear or replace invalid current-schema stores when archiving fails", (t) => {
-    const dir = mkdtempSync(join(tmpdir(), "openclaw-store-invalid-archive-fail-"));
+  it("archives invalid current-schema stores to a suffixed path when the timestamp target exists", (t) => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-store-invalid-archive-collision-"));
     const indexPath = join(dir, "sessions.json");
     const originalPayload = JSON.stringify({
       schemaVersion: STORE_SCHEMA_VERSION,
@@ -1124,11 +1159,15 @@ describe("SessionStore path resolution", () => {
     });
 
     assert.equal(store.listPersistedSessions().length, 0);
-    assert.equal(readFileSync(indexPath, "utf-8"), originalPayload);
+    const saved = JSON.parse(readFileSync(indexPath, "utf-8"));
+    assert.equal(saved.schemaVersion, STORE_SCHEMA_VERSION);
+    assert.deepEqual(saved.sessions, []);
+    assert.deepEqual(saved.actionTokens, []);
+    assert.equal(readFileSync(`${indexPath}.legacy-${now}-1.json`, "utf-8"), originalPayload);
   });
 
-  it("does not keep partial state from invalid current-schema stores when archiving fails", (t) => {
-    const dir = mkdtempSync(join(tmpdir(), "openclaw-store-invalid-token-archive-fail-"));
+  it("archives invalid action token stores to a suffixed path when the timestamp target exists", (t) => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-store-invalid-token-archive-collision-"));
     const indexPath = join(dir, "sessions.json");
     const originalPayload = JSON.stringify({
       schemaVersion: STORE_SCHEMA_VERSION,
@@ -1165,7 +1204,11 @@ describe("SessionStore path resolution", () => {
 
     assert.equal(store.listPersistedSessions().length, 0);
     assert.equal(store.getActionToken("invalid-token"), undefined);
-    assert.equal(readFileSync(indexPath, "utf-8"), originalPayload);
+    const saved = JSON.parse(readFileSync(indexPath, "utf-8"));
+    assert.equal(saved.schemaVersion, STORE_SCHEMA_VERSION);
+    assert.deepEqual(saved.sessions, []);
+    assert.deepEqual(saved.actionTokens, []);
+    assert.equal(readFileSync(`${indexPath}.legacy-${now}-1.json`, "utf-8"), originalPayload);
   });
 
   it("archives current-schema stores whose worktree sessions are missing worktreeBranch metadata", () => {
