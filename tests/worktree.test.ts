@@ -195,6 +195,107 @@ describe("createPR", () => {
   });
 });
 
+describe("syncWorktreePR", () => {
+  function installMockGh(t: import("node:test").TestContext) {
+    const tempDir = mkdtempSync(join(tmpdir(), "openclaw-gh-list-"));
+    const binDir = join(tempDir, "bin");
+    const logPath = join(tempDir, "gh-args.log");
+    mkdirSync(binDir);
+    const ghPath = join(binDir, "gh");
+    writeFileSync(ghPath, [
+      "#!/bin/sh",
+      "printf '%s\\n' \"$*\" >> \"$GH_ARGS_LOG\"",
+      "if [ \"$1\" = \"--version\" ]; then",
+      "  echo 'gh version 2.0.0'",
+      "  exit 0",
+      "fi",
+      "if [ \"$1\" = \"pr\" ] && [ \"$2\" = \"list\" ]; then",
+      "  echo '{\"url\":\"https://github.com/openai/codex/pull/12\",\"number\":12,\"title\":\"Fix PR lookup\",\"state\":\"OPEN\"}'",
+      "  exit 0",
+      "fi",
+      "exit 1",
+      "",
+    ].join("\n"));
+    chmodSync(ghPath, 0o755);
+
+    const originalPath = process.env.PATH;
+    const originalLog = process.env.GH_ARGS_LOG;
+    process.env.PATH = `${binDir}:${process.env.PATH ?? ""}`;
+    process.env.GH_ARGS_LOG = logPath;
+    t.after(() => {
+      process.env.PATH = originalPath;
+      if (originalLog === undefined) {
+        delete process.env.GH_ARGS_LOG;
+      } else {
+        process.env.GH_ARGS_LOG = originalLog;
+      }
+      rmSync(tempDir, { recursive: true, force: true });
+    });
+
+    return { logPath };
+  }
+
+  it("uses origin owner in --head when looking up a target repo PR", async (t) => {
+    const { logPath } = installMockGh(t);
+    const { syncWorktreePR } = await import("../src/worktree.js");
+    const repoDir = mkdtempSync(join(tmpdir(), "openclaw-worktree-sync-pr-fork-"));
+
+    try {
+      execFileSync("git", ["init", "-b", "main"], { cwd: repoDir, stdio: "ignore" });
+      execFileSync("git", ["remote", "add", "origin", "git@github.com:me/fork.git"], { cwd: repoDir, stdio: "ignore" });
+
+      const result = syncWorktreePR(repoDir, "agent/fix-lookup", "openai/codex");
+
+      assert.deepEqual(result, {
+        exists: true,
+        state: "open",
+        url: "https://github.com/openai/codex/pull/12",
+        number: 12,
+        title: "Fix PR lookup",
+      });
+      const calls = readFileSync(logPath, "utf-8").trim().split("\n");
+      assert.equal(calls.at(-1), "pr list --head me:agent/fix-lookup --state all --json url,number,title,state --jq .[0] --repo openai/codex");
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses a branch-only --head when no target repo is provided", async (t) => {
+    const { logPath } = installMockGh(t);
+    const { syncWorktreePR } = await import("../src/worktree.js");
+    const repoDir = mkdtempSync(join(tmpdir(), "openclaw-worktree-sync-pr-same-repo-"));
+
+    try {
+      execFileSync("git", ["init", "-b", "main"], { cwd: repoDir, stdio: "ignore" });
+      execFileSync("git", ["remote", "add", "origin", "git@github.com:me/repo.git"], { cwd: repoDir, stdio: "ignore" });
+
+      syncWorktreePR(repoDir, "agent/fix-lookup");
+
+      const calls = readFileSync(logPath, "utf-8").trim().split("\n");
+      assert.equal(calls.at(-1), "pr list --head agent/fix-lookup --state all --json url,number,title,state --jq .[0]");
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to a branch-only --head for target repo lookup when origin is absent", async (t) => {
+    const { logPath } = installMockGh(t);
+    const { syncWorktreePR } = await import("../src/worktree.js");
+    const repoDir = mkdtempSync(join(tmpdir(), "openclaw-worktree-sync-pr-no-origin-"));
+
+    try {
+      execFileSync("git", ["init", "-b", "main"], { cwd: repoDir, stdio: "ignore" });
+
+      syncWorktreePR(repoDir, "agent/fix-lookup", "openai/codex");
+
+      const calls = readFileSync(logPath, "utf-8").trim().split("\n");
+      assert.equal(calls.at(-1), "pr list --head agent/fix-lookup --state all --json url,number,title,state --jq .[0] --repo openai/codex");
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("worktree base dir and PR target resolution", () => {
   it("defaults the worktree base dir to <repo>/.worktrees", async () => {
     const { getWorktreeBaseDir } = await import("../src/worktree.js");
