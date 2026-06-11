@@ -58,7 +58,38 @@ export function registerAgentPolicyCommand(api: CommandApi): void {
       }
       if (action && isPolicy(action)) {
         const record = sessionManager.setRepoPolicy(workdir, action);
-        return { text: record ? `Repo policy set to ${record.policy} for ${record.repoRoot}.` : `Error: ${workdir} is not a git repository.` };
+        if (!record) return { text: `Error: ${workdir} is not a git repository.` };
+        const savedText = `Repo policy set to ${record.policy} for ${record.repoRoot}.`;
+        try {
+          // Guard is intentional: tests and older plugin-injected managers may not have this newer method.
+          if (typeof sessionManager.continueLaunchAfterManualRepoPolicy !== "function") {
+            return { text: savedText };
+          }
+          const continuation = sessionManager.continueLaunchAfterManualRepoPolicy(record.repoRoot, action);
+          if (continuation.kind === "launched") {
+            return { text: [savedText, "", continuation.text].join("\n") };
+          }
+          if (continuation.kind === "ambiguous") {
+            return {
+              text: [
+                savedText,
+                "",
+                `Repo policy saved, but ${continuation.count} pending launches match this policy. Run the intended launch again to avoid starting the wrong session.`,
+              ].join("\n"),
+            };
+          }
+        } catch (err) {
+          const errText = err instanceof Error ? err.message : String(err);
+          return {
+            text: [
+              savedText,
+              "",
+              `Repo policy saved, but the deferred launch failed: ${errText}`,
+              `The pending launch context was kept so you can retry the same /agent_policy command or run the intended launch again.`,
+            ].join("\n"),
+          };
+        }
+        return { text: savedText };
       }
       const resolution = sessionManager.resolveRepoPolicy(workdir);
       if (!resolution.identity) return { text: `No git repository found for ${workdir}.` };
