@@ -6,6 +6,7 @@ export class KeyedDeadlineScheduler {
   schedule(key: string, at: number, cb: () => void): void {
     if (this.disposed) return;
     this.cancel(key);
+    if (!Number.isFinite(at)) return;
 
     const delayMs = Math.max(0, at - Date.now());
     const timer = setTimeout(() => {

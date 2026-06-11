@@ -14,6 +14,72 @@ describe("KeyedDeadlineScheduler", () => {
     Date.now = originalDateNow;
   });
 
+  it("clears an existing timer and does not register a new one for NaN deadlines", () => {
+    const scheduled: Array<{ fn: () => void; delay: number; cleared: boolean; unref?: () => void }> = [];
+    let fired = 0;
+
+    global.setTimeout = (((fn: () => void, delay?: number) => {
+      const timer = {
+        fn,
+        delay: delay ?? 0,
+        cleared: false,
+        unref: () => timer,
+      };
+      scheduled.push(timer);
+      return timer as any;
+    }) as typeof setTimeout);
+    global.clearTimeout = (((timer: { cleared?: boolean }) => {
+      if (timer) timer.cleared = true;
+    }) as typeof clearTimeout);
+
+    const scheduler = new KeyedDeadlineScheduler();
+    scheduler.schedule("deadline", Date.now() + 1_000, () => {
+      fired += 1;
+    });
+    scheduler.schedule("deadline", Number.NaN, () => {
+      fired += 1;
+    });
+
+    assert.equal(scheduled.length, 1);
+    assert.equal(scheduled[0]?.cleared, true);
+    if (!scheduled[0]!.cleared) scheduled[0]!.fn();
+
+    assert.equal(fired, 0);
+  });
+
+  it("clears an existing timer and does not register a new one for infinite deadlines", () => {
+    const scheduled: Array<{ fn: () => void; delay: number; cleared: boolean; unref?: () => void }> = [];
+    let fired = 0;
+
+    global.setTimeout = (((fn: () => void, delay?: number) => {
+      const timer = {
+        fn,
+        delay: delay ?? 0,
+        cleared: false,
+        unref: () => timer,
+      };
+      scheduled.push(timer);
+      return timer as any;
+    }) as typeof setTimeout);
+    global.clearTimeout = (((timer: { cleared?: boolean }) => {
+      if (timer) timer.cleared = true;
+    }) as typeof clearTimeout);
+
+    const scheduler = new KeyedDeadlineScheduler();
+    scheduler.schedule("deadline", Date.now() + 1_000, () => {
+      fired += 1;
+    });
+    scheduler.schedule("deadline", Number.POSITIVE_INFINITY, () => {
+      fired += 1;
+    });
+
+    assert.equal(scheduled.length, 1);
+    assert.equal(scheduled[0]?.cleared, true);
+    if (!scheduled[0]!.cleared) scheduled[0]!.fn();
+
+    assert.equal(fired, 0);
+  });
+
   it("re-schedules long deadlines until the target time is actually reached", () => {
     const scheduled: Array<{ fn: () => void; delay: number; cleared: boolean; unref?: () => void }> = [];
     let now = 1_000;
