@@ -540,6 +540,10 @@ export function createCallbackHandler(
             });
           } catch (err) {
             const errText = err instanceof Error ? err.message : String(err);
+            await clearInteractiveState(ctx, {
+              alreadyAcknowledged: callbackAcknowledged,
+              forceTelegramMarkupEdit: true,
+            });
             await replyText(ctx, `⚠️ Failed to start planning session: ${errText}`);
             break;
           }

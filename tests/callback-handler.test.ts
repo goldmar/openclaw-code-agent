@@ -1675,7 +1675,7 @@ describe("createCallbackHandler()", () => {
     assert.deepEqual(events, ["acknowledge", "editMessage", "clearButtons", "reply"]);
   });
 
-  it("does not clear Start Plan buttons when the plan-offer launch truly fails", async () => {
+  it("clears Start Plan buttons when the plan-offer launch fails after consuming the token", async () => {
     setSessionManager({
       getActionToken: () => ({
         sessionId: "plugin-readiness-v2026.5.28",
@@ -1720,9 +1720,10 @@ describe("createCallbackHandler()", () => {
     const result = await handler.handler(state.ctx as any);
 
     assert.deepEqual(result, { handled: true });
-    assert.equal(state.buttonMarkupEdits, 0);
-    assert.equal(state.buttonsCleared, 0);
+    assert.equal(state.buttonMarkupEdits, 1);
+    assert.equal(state.buttonsCleared, 1);
     assert.equal(state.replies[0], "⚠️ Failed to start planning session: workdir is unavailable");
+    assert.deepEqual(state.events, ["acknowledge", "editButtons", "clearButtons", "reply"]);
   });
 
   it("clears Start Plan buttons when consumed plan-offer tokens are missing launch context", async () => {
