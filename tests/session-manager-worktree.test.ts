@@ -925,4 +925,58 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       cleanup();
     }
   });
+
+  it("retention cleanup removes legacy merged-disposition worktrees without lifecycle metadata", () => {
+    const repoDir = mkdtempSync(join(tmpdir(), "sm-worktree-legacy-merged-"));
+    let cleanup = () => {};
+    try {
+      git(repoDir, "init", "-b", "main");
+      git(repoDir, "config", "user.name", "Test User");
+      git(repoDir, "config", "user.email", "test@example.com");
+      writeFileSync(join(repoDir, "README.md"), "hello\n", "utf-8");
+      git(repoDir, "add", "README.md");
+      git(repoDir, "commit", "-m", "init");
+
+      const worktreePath = createWorktree(repoDir, "legacy-merged-cleanup");
+      const branchName = getBranchName(worktreePath);
+      assert.ok(branchName, "worktree branch should exist");
+      writeFileSync(join(worktreePath, "branch-only.txt"), "legacy merged work\n", "utf-8");
+      git(worktreePath, "add", "branch-only.txt");
+      git(worktreePath, "commit", "-m", "legacy merged branch work");
+
+      const mergedAt = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString();
+      const created = createTestSessionManager(5);
+      const sm = created.sm;
+      cleanup = created.cleanup;
+      (sm as any).store.persisted.set("h-legacy-merged", {
+        harnessSessionId: "h-legacy-merged",
+        backendRef: { kind: "claude-code", conversationId: "h-legacy-merged" },
+        name: "legacy-merged-cleanup",
+        prompt: "test",
+        workdir: repoDir,
+        route: {
+          provider: "telegram",
+          target: "12345",
+          sessionKey: "agent:main:telegram:group:12345",
+        },
+        status: "completed",
+        costUsd: 0,
+        worktreePath,
+        worktreeBranch: branchName,
+        worktreeDisposition: "merged",
+        worktreeMergedAt: mergedAt,
+      });
+
+      (sm as any).maintenance.reconcileResolvedWorktreeRetention((sm as any).store.persisted.get("h-legacy-merged"), Date.now());
+
+      assert.equal(existsSync(worktreePath), false);
+      const persisted = (sm as any).store.persisted.get("h-legacy-merged");
+      assert.equal(persisted.worktreePath, undefined);
+      assert.equal(persisted.worktreeState, "none");
+      assert.equal(persisted.worktreeLifecycle?.state, "merged");
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+      cleanup();
+    }
+  });
 });

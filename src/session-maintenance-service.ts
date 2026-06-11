@@ -125,8 +125,8 @@ export class SessionMaintenanceService {
     });
     const resolvedAtIso = this.resolvedAtIso(session);
     const resolvedAt = resolvedAtIso ? new Date(resolvedAtIso).getTime() : 0;
-    const legacyResolved = this.isLegacyResolvedWorktree(session);
-    if ((!resolved.cleanupSafe && !legacyResolved) || !resolvedAt || now - resolvedAt < RESOLVED_WORKTREE_RETENTION_MS) return;
+    const legacyResolvedState = this.legacyResolvedWorktreeState(session);
+    if ((!resolved.cleanupSafe && !legacyResolvedState) || !resolvedAt || now - resolvedAt < RESOLVED_WORKTREE_RETENTION_MS) return;
 
     try {
       if (!session.worktreePath && !usesNativeBackendWorktree(session)) return;
@@ -146,7 +146,7 @@ export class SessionMaintenanceService {
           worktreeDecisionSnoozedUntil: undefined,
           worktreeLifecycle: {
             ...(session.worktreeLifecycle ?? resolved.lifecycle),
-            state: resolved.derivedState,
+            state: resolved.cleanupSafe ? resolved.derivedState : legacyResolvedState ?? resolved.derivedState,
             updatedAt: new Date(now).toISOString(),
             resolvedAt: session.worktreeLifecycle?.resolvedAt ?? new Date(now).toISOString(),
             resolutionSource: session.worktreeLifecycle?.resolutionSource ?? "maintenance",
@@ -253,10 +253,22 @@ export class SessionMaintenanceService {
     PersistedSessionInfo,
     "worktreeMerged" | "worktreeDisposition" | "worktreeState"
   >): boolean {
-    return session.worktreeMerged === true
-      || session.worktreeDisposition === "dismissed"
-      || session.worktreeDisposition === "no-change-cleaned"
-      || session.worktreeState === "merged"
-      || session.worktreeState === "dismissed";
+    return this.legacyResolvedWorktreeState(session) != null;
+  }
+
+  private legacyResolvedWorktreeState(session: Pick<
+    PersistedSessionInfo,
+    "worktreeMerged" | "worktreeDisposition" | "worktreeState"
+  >): "merged" | "dismissed" | "no_change" | undefined {
+    if (session.worktreeMerged === true || session.worktreeDisposition === "merged" || session.worktreeState === "merged") {
+      return "merged";
+    }
+    if (session.worktreeDisposition === "dismissed" || session.worktreeState === "dismissed") {
+      return "dismissed";
+    }
+    if (session.worktreeDisposition === "no-change-cleaned") {
+      return "no_change";
+    }
+    return undefined;
   }
 }
