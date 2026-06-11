@@ -2,7 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert";
 import { execFileSync } from "child_process";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync, mkdirSync } from "fs";
-import { join } from "path";
+import { basename, join } from "path";
 import { tmpdir } from "os";
 
 // Mock execFileSync for testing
@@ -512,8 +512,38 @@ describe("createWorktree branch selection", () => {
 
       assert.ok(branchName);
       assert.notEqual(branchName, "agent/branch-collision");
-      assert.match(branchName, /^agent\/branch-collision-/);
+      assert.match(branchName, /^agent\/branch-collision-1-[0-9a-f]{16}$/);
+      assert.match(basename(worktreePath), /^openclaw-worktree-branch-collision-1-[0-9a-f]{16}$/);
       assert.equal(existsSync(join(worktreePath, "stale.txt")), false);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it("creates a fresh suffixed worktree when the default worktree path already exists", async () => {
+    const { createWorktree, getBranchName, getWorktreeBaseDir } = await import("../src/worktree.js");
+    const repoDir = mkdtempSync(join(tmpdir(), "openclaw-worktree-path-collision-"));
+
+    try {
+      execFileSync("git", ["init", "-b", "main"], { cwd: repoDir, stdio: "ignore" });
+      execFileSync("git", ["config", "user.name", "OpenClaw Tests"], { cwd: repoDir, stdio: "ignore" });
+      execFileSync("git", ["config", "user.email", "tests@example.com"], { cwd: repoDir, stdio: "ignore" });
+      writeFileSync(join(repoDir, "README.md"), "base\n");
+      execFileSync("git", ["add", "README.md"], { cwd: repoDir, stdio: "ignore" });
+      execFileSync("git", ["commit", "-m", "init"], { cwd: repoDir, stdio: "ignore" });
+
+      const blockedPath = join(getWorktreeBaseDir(repoDir), "openclaw-worktree-path-collision");
+      mkdirSync(blockedPath, { recursive: true });
+      writeFileSync(join(blockedPath, "leftover.txt"), "blocked default path\n");
+
+      const worktreePath = createWorktree(repoDir, "path-collision");
+      const branchName = getBranchName(worktreePath);
+
+      assert.notEqual(worktreePath, blockedPath);
+      assert.equal(existsSync(join(blockedPath, "leftover.txt")), true);
+      assert.equal(branchName?.startsWith("agent/path-collision-"), true);
+      assert.match(branchName ?? "", /^agent\/path-collision-1-[0-9a-f]{16}$/);
+      assert.match(basename(worktreePath), /^openclaw-worktree-path-collision-1-[0-9a-f]{16}$/);
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }

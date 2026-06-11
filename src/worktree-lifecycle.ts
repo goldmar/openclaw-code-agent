@@ -1,4 +1,5 @@
 import { execFileSync } from "child_process";
+import { randomBytes } from "crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync } from "fs";
 import { relative, sep } from "path";
 import { branchExists, getWorktreeBaseDir, sanitizeBranchName } from "./worktree-repo";
@@ -26,6 +27,11 @@ function getRepoRoot(repoDir: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+function createRetrySuffix(attempt: number): string {
+  if (attempt === 0) return "";
+  return `-${attempt}-${randomBytes(8).toString("hex")}`;
 }
 
 function ensureWorktreeBaseIgnored(repoDir: string, baseDir: string): void {
@@ -68,7 +74,7 @@ export function createWorktree(
   let cleanedStaleResumeDir = false;
 
   for (let attempt = 0; attempt < maxRetries; attempt++) {
-    const suffix = attempt === 0 ? "" : `-${Math.random().toString(16).slice(2, 6)}`;
+    const suffix = createRetrySuffix(attempt);
     const candidatePath = `${baseDir}/openclaw-worktree-${sanitized}${suffix}`;
     const candidateBranch = `agent/${sanitized}${suffix}`;
     if (!allowExistingBranch && branchExists(repoDir, candidateBranch)) {
