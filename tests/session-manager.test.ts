@@ -2751,16 +2751,22 @@ describe("SessionManager restored button parity", () => {
     const olderButtons = (sm as any).interactions.getPlanApprovalButtons("restored-plan", {
       planDecisionVersion: 4,
     });
-    const olderTokenId = olderButtons[0][2].callbackData;
-    assert.equal((sm as any).interactions.getActionToken(olderTokenId)?.planDecisionVersion, 4);
+    const olderTokenIds = olderButtons[0].map((button) => button.callbackData);
+    for (const tokenId of olderTokenIds) {
+      assert.equal((sm as any).interactions.getActionToken(tokenId)?.planDecisionVersion, 4);
+    }
 
     const newerButtons = (sm as any).interactions.getPlanApprovalButtons("restored-plan", {
       planDecisionVersion: 5,
     });
-    const newerTokenId = newerButtons[0][2].callbackData;
+    const newerTokenIds = newerButtons[0].map((button) => button.callbackData);
 
-    assert.equal((sm as any).interactions.getActionToken(olderTokenId), undefined);
-    assert.equal((sm as any).interactions.getActionToken(newerTokenId)?.planDecisionVersion, 5);
+    for (const tokenId of olderTokenIds) {
+      assert.equal((sm as any).interactions.getActionToken(tokenId), undefined);
+    }
+    for (const tokenId of newerTokenIds) {
+      assert.equal((sm as any).interactions.getActionToken(tokenId)?.planDecisionVersion, 5);
+    }
   });
 
   it("uses the same resume action set for restored failed or suspended sessions", () => {
