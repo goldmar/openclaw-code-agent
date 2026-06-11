@@ -940,6 +940,9 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       const worktreePath = createWorktree(repoDir, "legacy-merged-cleanup");
       const branchName = getBranchName(worktreePath);
       assert.ok(branchName, "worktree branch should exist");
+      writeFileSync(join(worktreePath, "branch-only.txt"), "legacy merged work\n", "utf-8");
+      git(worktreePath, "add", "branch-only.txt");
+      git(worktreePath, "commit", "-m", "legacy merged branch work");
 
       const created = createTestSessionManager(5);
       const sm = created.sm;
