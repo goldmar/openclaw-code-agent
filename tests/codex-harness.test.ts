@@ -1,14 +1,21 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { getHarness, listHarnesses } from "../src/harness/index";
-import { CodexHarness } from "../src/harness/codex";
+import { CodexHarness, DEFAULT_REQUEST_TIMEOUT_MS } from "../src/harness/codex";
 import type { HarnessMessage } from "../src/harness/types";
 
 type NotificationHandler = (method: string, params: unknown) => Promise<void> | void;
 type RequestHandler = (method: string, params: unknown) => Promise<unknown>;
+type ClientSettings = {
+  command: string;
+  args: string[];
+  requestTimeoutMs: number;
+};
+
+const CODEX_TIMEOUT_ENV = "OPENCLAW_CODEX_APP_SERVER_TIMEOUT_MS";
 
 class MockJsonRpcClient {
-  requests: Array<{ method: string; params: unknown }> = [];
+  requests: Array<{ method: string; params: unknown; timeoutMs: number | undefined }> = [];
   pendingInputResponses: unknown[] = [];
   private notificationHandler: NotificationHandler = () => undefined;
   private requestHandler: RequestHandler = async () => ({});
@@ -42,8 +49,8 @@ class MockJsonRpcClient {
   async close(): Promise<void> {}
   async notify(_method: string, _params?: unknown): Promise<void> {}
 
-  async request(method: string, params?: unknown): Promise<unknown> {
-    this.requests.push({ method, params });
+  async request(method: string, params?: unknown, timeoutMs?: number): Promise<unknown> {
+    this.requests.push({ method, params, timeoutMs });
 
     if (method === "initialize") return {};
     if (method === "thread/start" || method === "thread/new") {
@@ -119,6 +126,27 @@ class MockJsonRpcClient {
   }
 }
 
+async function withCodexTimeoutEnv<T>(
+  value: string | undefined,
+  run: () => Promise<T>,
+): Promise<T> {
+  const original = process.env[CODEX_TIMEOUT_ENV];
+  if (value === undefined) {
+    delete process.env[CODEX_TIMEOUT_ENV];
+  } else {
+    process.env[CODEX_TIMEOUT_ENV] = value;
+  }
+  try {
+    return await run();
+  } finally {
+    if (original === undefined) {
+      delete process.env[CODEX_TIMEOUT_ENV];
+    } else {
+      process.env[CODEX_TIMEOUT_ENV] = original;
+    }
+  }
+}
+
 async function collectMessages(
   session: { messages: AsyncIterable<HarnessMessage> },
   limit = 20,
@@ -174,6 +202,118 @@ describe("harness registry — codex registration", () => {
 });
 
 describe("CodexHarness App Server mapping", () => {
+  it("passes configured Codex request timeout to createClient, initialize, thread start, and turn start", async () => {
+    await withCodexTimeoutEnv("12345", async () => {
+      const client = new MockJsonRpcClient({ assistantText: "Done." });
+      const createdSettings: ClientSettings[] = [];
+      const harness = new CodexHarness({
+        createClient: (settings) => {
+          createdSettings.push(settings);
+          return client as any;
+        },
+      });
+
+      await collectMessages(harness.launch({ prompt: "ship it", cwd: "/tmp" }));
+
+      assert.equal(createdSettings[0]?.requestTimeoutMs, 12345);
+      assert.equal(client.requests.find((request) => request.method === "initialize")?.timeoutMs, 12345);
+      assert.equal(
+        client.requests.find((request) => request.method === "thread/start" || request.method === "thread/new")?.timeoutMs,
+        12345,
+      );
+      assert.equal(client.requests.find((request) => request.method === "turn/start")?.timeoutMs, 12345);
+    });
+  });
+
+  it("passes configured Codex request timeout to thread resume requests", async () => {
+    await withCodexTimeoutEnv("23456", async () => {
+      const client = new MockJsonRpcClient({ threadId: "thread-existing", assistantText: "Resumed." });
+      const createdSettings: ClientSettings[] = [];
+      const harness = new CodexHarness({
+        createClient: (settings) => {
+          createdSettings.push(settings);
+          return client as any;
+        },
+      });
+
+      await collectMessages(harness.launch({
+        prompt: "continue",
+        cwd: "/tmp",
+        resumeSessionId: "thread-existing",
+      }));
+
+      assert.equal(createdSettings[0]?.requestTimeoutMs, 23456);
+      assert.equal(client.requests.find((request) => request.method === "thread/resume")?.timeoutMs, 23456);
+      assert.equal(client.requests.find((request) => request.method === "turn/start")?.timeoutMs, 23456);
+    });
+  });
+
+  it("passes configured Codex request timeout to turn interrupt requests", async () => {
+    await withCodexTimeoutEnv("34567", async () => {
+      const client = new MockJsonRpcClient({
+        runId: "turn-pending",
+        pendingInput: {
+          method: "turn/requestUserInput",
+          params: {
+            threadId: "thread-123",
+            turnId: "turn-pending",
+            requestId: "req-1",
+            questions: [{
+              id: "confirm",
+              question: "Interrupt?",
+              options: ["Yes", "No"],
+            }],
+          },
+        },
+      });
+      const harness = new CodexHarness({
+        createClient: () => client as any,
+      });
+      const session = harness.launch({ prompt: "pause here", cwd: "/tmp" });
+      const iter = session.messages[Symbol.asyncIterator]();
+
+      let sawPendingInput = false;
+      for (let i = 0; i < 8; i += 1) {
+        const next = await iter.next();
+        if (next.done) break;
+        if (next.value.type === "pending_input") {
+          sawPendingInput = true;
+          await session.interrupt?.();
+          break;
+        }
+      }
+
+      assert.equal(sawPendingInput, true);
+      assert.equal(client.requests.find((request) => request.method === "turn/interrupt")?.timeoutMs, 34567);
+
+      assert.equal(await session.submitPendingInputOption?.(0), true);
+      for (let i = 0; i < 8; i += 1) {
+        const next = await iter.next();
+        if (next.done || next.value.type === "run_completed") break;
+      }
+    });
+  });
+
+  it("falls back to default Codex request timeout before creating clients for invalid env values", async () => {
+    for (const timeoutValue of ["invalid", "0", "-1"]) {
+      await withCodexTimeoutEnv(timeoutValue, async () => {
+        const client = new MockJsonRpcClient({ assistantText: "Done." });
+        const createdSettings: ClientSettings[] = [];
+        const harness = new CodexHarness({
+          createClient: (settings) => {
+            createdSettings.push(settings);
+            return client as any;
+          },
+        });
+
+        await collectMessages(harness.launch({ prompt: "ship it", cwd: "/tmp" }));
+
+        assert.equal(createdSettings[0]?.requestTimeoutMs, DEFAULT_REQUEST_TIMEOUT_MS);
+        assert.equal(client.requests.find((request) => request.method === "thread/start")?.timeoutMs, DEFAULT_REQUEST_TIMEOUT_MS);
+      });
+    }
+  });
+
   it("emits backend ref, assistant output, and a completed run", async () => {
     const client = new MockJsonRpcClient({ assistantText: "Done." });
     const harness = new CodexHarness({
