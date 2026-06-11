@@ -173,7 +173,7 @@ It dispatches:
 - retry/output shortcuts
 - worktree actions (`merge`, `pr`, `new-pr`)
 
-This keeps plan approval and worktree decisions inside the plugin instead of leaking semantic callback payloads into chat. Buttons carry opaque action tokens, not `verb:session` strings. When the transport cannot deliver or render buttons, the same review version can still be decided by plain text in the session thread.
+This keeps plan approval and worktree decisions inside the plugin instead of leaking semantic callback payloads into chat. Buttons carry opaque action tokens, not `verb:session` strings. When a newer review state supersedes an older one, the plugin invalidates older plan-decision tokens and clears the prompt controls on transports that support edits. If an already-visible old control still sends a callback, the handler may report it as stale. When the transport cannot deliver or render buttons, the same review version can still be decided by plain text in the session thread.
 
 ### Supporting Modules
 
@@ -216,7 +216,7 @@ Plan approval behavior depends on `planApproval`:
 - `delegate`: wake the orchestrator with the full plan and decision criteria; it must review the full plan before approving or escalating back to the user
 - `approve`: wake the orchestrator with an immediate approval instruction
 
-For `ask`, Telegram and Discord plan buttons share OpenClaw's direct-message presentation contract. Plain text `Approve`, `Revise`, and `Reject` is accepted only while the session is awaiting a plan decision; rejection or kill closes that review version so stale prompts are not treated as actionable.
+For `ask`, Telegram and Discord plan buttons share OpenClaw's direct-message presentation contract. Plain text `Approve`, `Revise`, and `Reject` is accepted only while the session is awaiting a plan decision; `Approve`, `Revise`, `Reject`, or kill closes that review version, invalidates its plan-decision tokens, and clears old controls where the transport allows it. Stale callbacks can still be acknowledged as stale if a client surfaces an old prompt.
 
 ### Worktree Completion
 
