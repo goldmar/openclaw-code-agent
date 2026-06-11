@@ -470,6 +470,18 @@ export class SessionStore {
     return deleted;
   }
 
+  removeRepoPolicies(keys: Iterable<string>): RepoPolicyRecord[] {
+    const removed: RepoPolicyRecord[] = [];
+    for (const key of keys) {
+      const record = this.repoPolicies.get(key);
+      if (!record) continue;
+      this.repoPolicies.delete(key);
+      removed.push(record);
+    }
+    if (removed.length > 0) this.saveIndex();
+    return removed.sort((a, b) => a.repoRoot.localeCompare(b.repoRoot) || a.key.localeCompare(b.key));
+  }
+
   cleanupRepoPolicies(): RepoPolicyRecord[] {
     const removed: RepoPolicyRecord[] = [];
     for (const [key, record] of this.repoPolicies) {
