@@ -1243,6 +1243,155 @@ describe("createCallbackHandler()", () => {
     assert.equal(state.replies[0], "✅ Dismissed.");
   });
 
+  it("saves repo policy, clears only button markup, and continues the stored launch", async () => {
+    const calls: string[] = [];
+    const token = {
+      sessionId: "repo-policy:/repo",
+      kind: "repo-policy-set" as const,
+      route: {
+        provider: "telegram",
+        target: TELEGRAM_FORUM_TARGET,
+        threadId: TELEGRAM_FORUM_THREAD_ID,
+        sessionKey: TELEGRAM_FORUM_SESSION_KEY,
+      },
+      repoPolicy: "pr-required" as const,
+      repoPolicyWorkdir: "/repo",
+      launchPrompt: "Ship isolated changes",
+      launchWorkdir: "/repo",
+      launchName: "ship-isolated",
+      launchModel: "gpt-5.5",
+      launchReasoningEffort: "high" as const,
+      launchFastMode: true,
+      launchHarness: "codex",
+      launchResumeWorktreeFrom: "stable-session-1",
+      launchSessionIdOverride: "stable-session-1",
+      launchClearedPersistedCodexResume: true,
+      launchWorktreeStrategy: "delegate" as const,
+      launchOriginAgentId: "agent-main",
+    };
+
+    setSessionManager({
+      getActionToken: () => token,
+      consumeActionToken: () => token,
+      resolve: () => undefined,
+      getPersistedSession: () => undefined,
+      setRepoPolicy: (workdir: string, policy: string) => {
+        calls.push(`set:${workdir}:${policy}`);
+        return { policy };
+      },
+      launchAfterRepoPolicyChoice: (args: Record<string, unknown>) => {
+        calls.push(`launch:${args.prompt}:${args.harness}`);
+        assert.equal(args.prompt, "Ship isolated changes");
+        assert.equal(args.workdir, "/repo");
+        assert.equal(args.model, "gpt-5.5");
+        assert.equal(args.reasoningEffort, "high");
+        assert.equal(args.fastMode, true);
+        assert.equal(args.harness, "codex");
+        assert.equal(args.resumeWorktreeFrom, "stable-session-1");
+        assert.equal(args.sessionIdOverride, "stable-session-1");
+        assert.equal(args.clearedPersistedCodexResume, true);
+        assert.equal(args.worktreeStrategy, "delegate");
+        assert.equal(args.originAgentId, "agent-main");
+        return {
+          session: { id: "sess-1", name: "ship-isolated" },
+          text: "Session launched successfully\nID: sess-1",
+        };
+      },
+    } as any);
+
+    const handler = createCallbackHandler();
+    const state = createCtx("token-policy", "telegram", {
+      telegramCallback: {
+        messageText: "Repo policy prompt with historical context",
+      },
+    });
+    const result = await handler.handler(state.ctx as any);
+
+    assert.deepEqual(result, { handled: true });
+    assert.deepEqual(calls, ["set:/repo:pr-required", "launch:Ship isolated changes:codex"]);
+    assert.equal(state.buttonMarkupEdits, 1);
+    assert.equal(state.buttonsCleared, 1);
+    assert.deepEqual(state.editedMessages, []);
+    assert.match(state.replies[0], /Repo policy saved: Require PR/);
+    assert.match(state.replies[0], /Session launched successfully/);
+  });
+
+  it("clears repo policy buttons when the repo cannot be resolved", async () => {
+    const token = {
+      sessionId: "repo-policy:/missing",
+      kind: "repo-policy-set" as const,
+      route: {
+        provider: "telegram",
+        target: TELEGRAM_FORUM_TARGET,
+        threadId: TELEGRAM_FORUM_THREAD_ID,
+        sessionKey: TELEGRAM_FORUM_SESSION_KEY,
+      },
+      repoPolicy: "pr-required" as const,
+      repoPolicyWorkdir: "/missing",
+      launchPrompt: "Ship isolated changes",
+      launchWorkdir: "/missing",
+    };
+
+    setSessionManager({
+      getActionToken: () => token,
+      consumeActionToken: () => token,
+      resolve: () => undefined,
+      getPersistedSession: () => undefined,
+      setRepoPolicy: () => undefined,
+      launchAfterRepoPolicyChoice: () => {
+        throw new Error("should not launch");
+      },
+    } as any);
+
+    const handler = createCallbackHandler();
+    const state = createCtx("token-policy-missing", "telegram");
+    const result = await handler.handler(state.ctx as any);
+
+    assert.deepEqual(result, { handled: true });
+    assert.equal(state.buttonMarkupEdits, 1);
+    assert.equal(state.buttonsCleared, 1);
+    assert.deepEqual(state.editedMessages, []);
+    assert.match(state.replies[0], /Could not resolve a git repository for \/missing/);
+  });
+
+  it("clears repo policy buttons when the deferred launch fails", async () => {
+    const token = {
+      sessionId: "repo-policy:/repo",
+      kind: "repo-policy-set" as const,
+      route: {
+        provider: "telegram",
+        target: TELEGRAM_FORUM_TARGET,
+        threadId: TELEGRAM_FORUM_THREAD_ID,
+        sessionKey: TELEGRAM_FORUM_SESSION_KEY,
+      },
+      repoPolicy: "pr-required" as const,
+      repoPolicyWorkdir: "/repo",
+      launchPrompt: "Ship isolated changes",
+      launchWorkdir: "/repo",
+    };
+
+    setSessionManager({
+      getActionToken: () => token,
+      consumeActionToken: () => token,
+      resolve: () => undefined,
+      getPersistedSession: () => undefined,
+      setRepoPolicy: () => ({ policy: "pr-required" }),
+      launchAfterRepoPolicyChoice: () => {
+        throw new Error("spawn unavailable");
+      },
+    } as any);
+
+    const handler = createCallbackHandler();
+    const state = createCtx("token-policy-launch-fails", "telegram");
+    const result = await handler.handler(state.ctx as any);
+
+    assert.deepEqual(result, { handled: true });
+    assert.equal(state.buttonMarkupEdits, 1);
+    assert.equal(state.buttonsCleared, 1);
+    assert.deepEqual(state.editedMessages, []);
+    assert.match(state.replies[0], /Repo policy saved, but launch failed: spawn unavailable/);
+  });
+
   it("edits Telegram message markup as a fallback when plan-offer editButtons is unavailable", async () => {
     const launches: Array<Record<string, unknown>> = [];
     setSessionManager({

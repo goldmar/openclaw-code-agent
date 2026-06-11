@@ -25,6 +25,7 @@ import type {
   WorktreeStrategy,
   RepoIntegrationPolicy,
   RepoPolicyRecord,
+  ReasoningEffort,
 } from "./types";
 import { SessionStore } from "./session-store";
 import type { SessionStoreOptions } from "./session-store";
@@ -85,6 +86,31 @@ const WAITING_EVENT_DEBOUNCE_MS = 5_000;
 
 type SpawnOptions = {
   notifyLaunch?: boolean;
+};
+
+type RepoPolicyLaunchArgs = {
+  route?: SessionRoute;
+  prompt: string;
+  workdir: string;
+  name?: string;
+  model?: string;
+  reasoningEffort?: ReasoningEffort;
+  fastMode?: boolean;
+  systemPrompt?: string;
+  allowedTools?: string[];
+  resumeSessionId?: string;
+  resumeWorktreeFrom?: string;
+  sessionIdOverride?: string;
+  clearedPersistedCodexResume?: boolean;
+  forkSession?: boolean;
+  forceNewSession?: boolean;
+  permissionMode?: SessionConfig["permissionMode"];
+  planApproval?: PlanApprovalMode;
+  harness?: string;
+  worktreeStrategy?: WorktreeStrategy;
+  worktreeBaseBranch?: string;
+  worktreePrTargetRepo?: string;
+  originAgentId?: string;
 };
 
 type LaunchConfirmationSession = Pick<Session, "status" | "name" | "id" | "killReason" | "error" | "result"> & {
@@ -613,6 +639,129 @@ export class SessionManager {
   resetRepoPolicy(workdir: string): boolean {
     const identity = resolveRepoIdentity(workdir);
     return identity ? this.store.resetRepoPolicy(identity.key) : false;
+  }
+
+  requestRepoPolicyForLaunch(args: RepoPolicyLaunchArgs): string {
+    const strategy = args.worktreeStrategy ?? pluginConfig.defaultWorktreeStrategy ?? "off";
+    const resolution = this.resolveRepoPolicy(args.workdir);
+    if (!resolution.identity) {
+      return `Error: ${args.workdir} is not a git repository.`;
+    }
+    const message = formatUnknownRepoPolicyMessage(resolution.identity, strategy);
+    if (!args.route?.provider || !args.route.target) {
+      return message;
+    }
+
+    const choiceId = `repo-policy:${resolution.identity.key}`;
+    const buttons = this.interactions.getRepoPolicyChoiceButtons({
+      choiceId,
+      route: args.route,
+      repoRoot: resolution.identity.repoRoot,
+      launchPrompt: args.prompt,
+      launchWorkdir: args.workdir,
+      launchName: args.name,
+      launchModel: args.model,
+      launchReasoningEffort: args.reasoningEffort,
+      launchFastMode: args.fastMode,
+      launchSystemPrompt: args.systemPrompt,
+      launchAllowedTools: args.allowedTools,
+      launchResumeSessionId: args.resumeSessionId,
+      launchResumeWorktreeFrom: args.resumeWorktreeFrom,
+      launchSessionIdOverride: args.sessionIdOverride,
+      launchClearedPersistedCodexResume: args.clearedPersistedCodexResume,
+      launchForkSession: args.forkSession,
+      launchForceNewSession: args.forceNewSession,
+      launchPermissionMode: args.permissionMode,
+      launchPlanApproval: args.planApproval,
+      launchHarness: args.harness,
+      launchWorktreeStrategy: args.worktreeStrategy,
+      launchWorktreeBaseBranch: args.worktreeBaseBranch,
+      launchWorktreePrTargetRepo: args.worktreePrTargetRepo,
+      launchOriginAgentId: args.originAgentId,
+    });
+
+    this.notifications.dispatch(
+      this.buildRoutingProxy({
+        id: choiceId,
+        name: "repo-policy",
+        route: args.route,
+      }),
+      {
+        label: "repo-policy-choice",
+        idempotencyKey: `repo-policy-choice:${resolution.identity.key}:${strategy}`,
+        userMessage: [
+          message,
+          ``,
+          `After you choose a policy, OCA will continue this launch automatically.`,
+        ].join("\n"),
+        notifyUser: "always",
+        requireDirectUserNotification: true,
+        buttons,
+        wakeMessageOnNotifySuccess: [
+          `Repo policy choice buttons delivered to the user.`,
+          `Repo: ${resolution.identity.repoRoot}`,
+          `Wait for their policy choice; do not set the policy or relaunch separately.`,
+        ].join("\n"),
+        wakeMessageOnNotifyFailed: message,
+      },
+    );
+
+    return [
+      `Repo policy choice prompt sent for ${resolution.identity.repoRoot}.`,
+      `Wait for the user's Require PR, Merge or PR, No PR, or Manual response.`,
+      `Do not send a separate plain-text policy question.`,
+    ].join(" ");
+  }
+
+  launchAfterRepoPolicyChoice(args: RepoPolicyLaunchArgs): { session: Session; text: string } {
+    const route = args.route;
+    if (!route?.provider || !route.target) {
+      throw new Error("missing route metadata for stored launch");
+    }
+    const harness = args.harness ?? getDefaultHarnessName();
+    const permissionMode = args.permissionMode ?? pluginConfig.permissionMode;
+    const planApproval = args.planApproval ?? pluginConfig.planApproval;
+    const session = this.spawn({
+      prompt: args.prompt,
+      workdir: args.workdir,
+      sessionIdOverride: args.sessionIdOverride,
+      name: args.name,
+      model: args.model,
+      reasoningEffort: args.reasoningEffort,
+      fastMode: args.fastMode,
+      systemPrompt: args.systemPrompt,
+      allowedTools: args.allowedTools,
+      resumeSessionId: args.resumeSessionId,
+      resumeWorktreeFrom: args.resumeWorktreeFrom,
+      forkSession: args.resumeSessionId ? args.forkSession : false,
+      multiTurn: true,
+      permissionMode,
+      planApproval,
+      codexApprovalPolicy: harness === "codex" ? "never" : undefined,
+      originChannel: this.originChannelFromRoute(route),
+      originThreadId: route.threadId,
+      originAgentId: args.originAgentId,
+      originSessionKey: route.sessionKey,
+      route,
+      harness,
+      worktreeStrategy: args.worktreeStrategy,
+      worktreeBaseBranch: args.worktreeBaseBranch,
+      worktreePrTargetRepo: args.worktreePrTargetRepo,
+    });
+    return {
+      session,
+      text: this.formatLaunchResult({
+        prompt: args.prompt,
+        workdir: args.workdir,
+        harness,
+        permissionMode,
+        planApproval,
+        forceNewSession: args.forceNewSession,
+        resumeSessionId: args.resumeSessionId,
+        forkSession: args.forkSession,
+        clearedPersistedCodexResume: args.clearedPersistedCodexResume,
+      }, session),
+    };
   }
 
   private makeActionButton(

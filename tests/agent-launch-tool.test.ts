@@ -258,6 +258,107 @@ describe("agent_launch tool defaults", () => {
     assert.match((result.content[0] as { text: string }).text, /Session launched successfully/);
   });
 
+  it("asks for repo policy with buttons before launching worktree sessions for unknown repos", async () => {
+    const workdir = mkdtempSync(join(tmpdir(), "agent-launch-policy-"));
+    let spawnCalled = false;
+    let policyLaunchArgs: Record<string, unknown> | undefined;
+
+    try {
+      setSessionManager({
+        resolve: () => undefined,
+        getPersistedSession: () => ({
+          sessionId: "stable-session-1",
+          harnessSessionId: "backend-session-1",
+          name: "stable-session",
+          status: "killed",
+          lifecycle: "terminal",
+          killReason: "shutdown",
+          backendRef: { kind: "codex-app-server", conversationId: "backend-session-1" },
+        }),
+        resolveHarnessSessionId: (id: string) => id,
+        resolveBackendConversationId: (id: string) => `resolved-${id}`,
+        checkRepoPolicyForLaunch: () => ({
+          ok: false,
+          text: "Repo integration policy is not set.",
+        }),
+        requestRepoPolicyForLaunch(args: Record<string, unknown>) {
+          policyLaunchArgs = args;
+          return `Repo policy choice prompt sent for ${workdir}.`;
+        },
+        spawn() {
+          spawnCalled = true;
+          throw new Error("spawn should not run before policy selection");
+        },
+      } as any);
+
+      const tool = makeAgentLaunchTool({
+        workspaceDir: workdir,
+        messageChannel: "telegram",
+        chatId: "12345",
+        agentId: "agent-main",
+      } as any);
+      const result = await tool.execute("tool-id", {
+        prompt: "Ship isolated changes",
+        resume_session_id: "stable-session-1",
+        worktree_strategy: "delegate",
+        harness: "codex",
+        model: "gpt-5.5",
+      });
+
+      assert.equal(spawnCalled, false);
+      assert.equal((result.content[0] as { text: string }).text, `Repo policy choice prompt sent for ${workdir}.`);
+      assert.equal(policyLaunchArgs?.prompt, "Ship isolated changes");
+      assert.equal(policyLaunchArgs?.workdir, workdir);
+      assert.equal(policyLaunchArgs?.worktreeStrategy, "delegate");
+      assert.equal(policyLaunchArgs?.harness, "codex");
+      assert.equal(policyLaunchArgs?.model, "gpt-5.5");
+      assert.equal(policyLaunchArgs?.sessionIdOverride, "stable-session-1");
+      assert.equal(policyLaunchArgs?.resumeWorktreeFrom, "resolved-stable-session-1");
+      assert.equal(policyLaunchArgs?.originAgentId, "agent-main");
+    } finally {
+      rmSync(workdir, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves cleared Codex resume state through the repo-policy prompt", async () => {
+    const workdir = mkdtempSync(join(tmpdir(), "agent-launch-policy-codex-resume-"));
+    let policyLaunchArgs: Record<string, unknown> | undefined;
+
+    try {
+      setSessionManager({
+        resolve: () => undefined,
+        getPersistedSession: () => ({ harness: "codex" }),
+        resolveHarnessSessionId: (id: string) => `resolved-${id}`,
+        checkRepoPolicyForLaunch: () => ({
+          ok: false,
+          text: "Repo integration policy is not set.",
+        }),
+        requestRepoPolicyForLaunch(args: Record<string, unknown>) {
+          policyLaunchArgs = args;
+          return `Repo policy choice prompt sent for ${workdir}.`;
+        },
+        spawn() {
+          throw new Error("spawn should not run before policy selection");
+        },
+      } as any);
+
+      const tool = makeAgentLaunchTool({ workspaceDir: workdir } as any);
+      const result = await tool.execute("tool-id", {
+        prompt: "Continue after restart",
+        resume_session_id: "old-thread",
+        fork_session: true,
+        worktree_strategy: "delegate",
+        harness: "codex",
+      });
+
+      assert.equal((result.content[0] as { text: string }).text, `Repo policy choice prompt sent for ${workdir}.`);
+      assert.equal(policyLaunchArgs?.clearedPersistedCodexResume, true);
+      assert.equal(policyLaunchArgs?.resumeSessionId, undefined);
+    } finally {
+      rmSync(workdir, { recursive: true, force: true });
+    }
+  });
+
   it("clears persisted Codex resume state before spawn", async () => {
     let spawnConfig: Record<string, unknown> | undefined;
 

@@ -12,6 +12,7 @@ import type {
   PluginInteractiveTelegramHandlerResult,
 } from "../api";
 import type { PersistedSessionInfo, SessionActionKind, SessionActionToken } from "./types";
+import { getRepoPolicyOption } from "./repo-policy";
 
 type InteractiveChannel = "telegram" | "discord";
 type InteractiveCallbackContext = PluginInteractiveTelegramHandlerContext | PluginInteractiveDiscordHandlerContext;
@@ -545,6 +546,82 @@ export function createCallbackHandler(channel: InteractiveChannel = "telegram") 
             forceTelegramMarkupEdit: true,
           });
           await replyText(ctx, `✅ Dismissed.`);
+          break;
+        }
+
+        case "repo-policy-set": {
+          if (!consumedToken.repoPolicy || !consumedToken.repoPolicyWorkdir) {
+            await clearInteractiveState(ctx, {
+              alreadyAcknowledged: callbackAcknowledged,
+              forceTelegramMarkupEdit: true,
+            });
+            await replyText(ctx, "⚠️ This action is missing the repo policy context.");
+            break;
+          }
+          if (!consumedToken.launchPrompt || !consumedToken.launchWorkdir) {
+            await clearInteractiveState(ctx, {
+              alreadyAcknowledged: callbackAcknowledged,
+              forceTelegramMarkupEdit: true,
+            });
+            await replyText(ctx, "⚠️ This action is missing the launch context.");
+            break;
+          }
+          const record = sessionManager.setRepoPolicy(consumedToken.repoPolicyWorkdir, consumedToken.repoPolicy);
+          if (!record) {
+            await clearInteractiveState(ctx, {
+              alreadyAcknowledged: callbackAcknowledged,
+              forceTelegramMarkupEdit: true,
+            });
+            await replyText(ctx, `⚠️ Could not resolve a git repository for ${consumedToken.repoPolicyWorkdir}.`);
+            break;
+          }
+
+          let launchText: string;
+          try {
+            const result = sessionManager.launchAfterRepoPolicyChoice({
+              route: consumedToken.route,
+              prompt: consumedToken.launchPrompt,
+              workdir: consumedToken.launchWorkdir,
+              name: consumedToken.launchName,
+              model: consumedToken.launchModel,
+              reasoningEffort: consumedToken.launchReasoningEffort,
+              fastMode: consumedToken.launchFastMode,
+              systemPrompt: consumedToken.launchSystemPrompt,
+              allowedTools: consumedToken.launchAllowedTools,
+              resumeSessionId: consumedToken.launchResumeSessionId,
+              resumeWorktreeFrom: consumedToken.launchResumeWorktreeFrom,
+              sessionIdOverride: consumedToken.launchSessionIdOverride,
+              clearedPersistedCodexResume: consumedToken.launchClearedPersistedCodexResume,
+              forkSession: consumedToken.launchForkSession,
+              forceNewSession: consumedToken.launchForceNewSession,
+              permissionMode: consumedToken.launchPermissionMode,
+              planApproval: consumedToken.launchPlanApproval,
+              harness: consumedToken.launchHarness,
+              worktreeStrategy: consumedToken.launchWorktreeStrategy,
+              worktreeBaseBranch: consumedToken.launchWorktreeBaseBranch,
+              worktreePrTargetRepo: consumedToken.launchWorktreePrTargetRepo,
+              originAgentId: consumedToken.launchOriginAgentId,
+            });
+            launchText = result.text;
+          } catch (err) {
+            const errText = err instanceof Error ? err.message : String(err);
+            await clearInteractiveState(ctx, {
+              alreadyAcknowledged: callbackAcknowledged,
+              forceTelegramMarkupEdit: true,
+            });
+            await replyText(ctx, `⚠️ Repo policy saved, but launch failed: ${errText}`);
+            break;
+          }
+
+          await clearInteractiveState(ctx, {
+            alreadyAcknowledged: callbackAcknowledged,
+            forceTelegramMarkupEdit: true,
+          });
+          await replyText(ctx, [
+            `✅ Repo policy saved: ${getRepoPolicyOption(record.policy).title}.`,
+            ``,
+            launchText,
+          ].join("\n"));
           break;
         }
 
