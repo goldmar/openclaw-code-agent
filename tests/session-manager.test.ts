@@ -3447,6 +3447,45 @@ describe("SessionManager.handleAskUserQuestion()", () => {
     });
   });
 
+  it("keeps legacy AskUserQuestion pending after an invalid option callback", async () => {
+    const session = fakeSession({
+      id: "s-legacy-invalid-option",
+      name: "legacy-invalid-option",
+      worktreeStrategy: "ask",
+    });
+    (sm as any).sessions.set(session.id, session);
+
+    const pending = sm.handleAskUserQuestion(session.id, {
+      questions: [{
+        question: "Which environment should I target?",
+        options: [
+          { label: "Staging" },
+          { label: "Production" },
+        ],
+      }],
+    });
+
+    const invalidResolved = sm.resolveAskUserQuestion(session.id, 9);
+    assert.equal(invalidResolved, false);
+    assert.equal((sm as any).pendingAskUserQuestions.has(session.id), true);
+
+    const validResolved = sm.resolveAskUserQuestion(session.id, 1);
+    assert.equal(validResolved, true);
+    assert.deepEqual(await pending, {
+      behavior: "allow",
+      updatedInput: {
+        questions: [{
+          question: "Which environment should I target?",
+          options: [
+            { label: "Staging" },
+            { label: "Production" },
+          ],
+        }],
+        answers: { "Which environment should I target?": "Production" },
+      },
+    });
+  });
+
   it("does not let stale legacy question buttons answer a newer question", async () => {
     const session = fakeSession({
       id: "s-legacy-stale-question",
