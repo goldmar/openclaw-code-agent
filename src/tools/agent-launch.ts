@@ -61,6 +61,7 @@ function hasRequestRepoPolicyForLaunch(value: unknown): value is {
     resumeSessionId?: string;
     resumeWorktreeFrom?: string;
     sessionIdOverride?: string;
+    clearedPersistedCodexResume?: boolean;
     forkSession?: boolean;
     forceNewSession?: boolean;
     permissionMode?: "default" | "plan" | "bypassPermissions";
@@ -213,6 +214,7 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
                   resumeSessionId: resumeAssessment?.kind === "resume" ? resumeAssessment.resumeSessionId : resumeSessionId,
                   resumeWorktreeFrom: resolvedResumeId,
                   sessionIdOverride: launchSessionIdOverride,
+                  clearedPersistedCodexResume,
                   forkSession: resumeSessionId ? params.fork_session : false,
                   forceNewSession: params.force_new_session,
                   permissionMode,

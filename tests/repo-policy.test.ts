@@ -91,6 +91,7 @@ describe("repo policy resolution", () => {
         fastMode: true,
         resumeWorktreeFrom: "stable-session-1",
         sessionIdOverride: "stable-session-1",
+        clearedPersistedCodexResume: true,
         worktreeStrategy: "delegate",
       });
 
@@ -122,6 +123,7 @@ describe("repo policy resolution", () => {
       assert.equal(token?.launchFastMode, true);
       assert.equal(token?.launchResumeWorktreeFrom, "stable-session-1");
       assert.equal(token?.launchSessionIdOverride, "stable-session-1");
+      assert.equal(token?.launchClearedPersistedCodexResume, true);
       sm.dispose();
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
@@ -152,6 +154,7 @@ describe("repo policy resolution", () => {
         resumeSessionId: "backend-session-1",
         resumeWorktreeFrom: "stable-session-1",
         sessionIdOverride: "stable-session-1",
+        clearedPersistedCodexResume: true,
         worktreeStrategy: "delegate",
       });
 
@@ -159,6 +162,7 @@ describe("repo policy resolution", () => {
       assert.equal(spawnConfig?.resumeSessionId, "backend-session-1");
       assert.equal(spawnConfig?.resumeWorktreeFrom, "stable-session-1");
       assert.match(result.text, /ID: stable-session-1/);
+      assert.match(result.text, /historical Codex state cleared/);
       sm.dispose();
     } finally {
       rmSync(storeDir, { recursive: true, force: true });

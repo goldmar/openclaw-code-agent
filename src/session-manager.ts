@@ -101,6 +101,7 @@ type RepoPolicyLaunchArgs = {
   resumeSessionId?: string;
   resumeWorktreeFrom?: string;
   sessionIdOverride?: string;
+  clearedPersistedCodexResume?: boolean;
   forkSession?: boolean;
   forceNewSession?: boolean;
   permissionMode?: SessionConfig["permissionMode"];
@@ -667,6 +668,7 @@ export class SessionManager {
       launchResumeSessionId: args.resumeSessionId,
       launchResumeWorktreeFrom: args.resumeWorktreeFrom,
       launchSessionIdOverride: args.sessionIdOverride,
+      launchClearedPersistedCodexResume: args.clearedPersistedCodexResume,
       launchForkSession: args.forkSession,
       launchForceNewSession: args.forceNewSession,
       launchPermissionMode: args.permissionMode,
@@ -757,6 +759,7 @@ export class SessionManager {
         forceNewSession: args.forceNewSession,
         resumeSessionId: args.resumeSessionId,
         forkSession: args.forkSession,
+        clearedPersistedCodexResume: args.clearedPersistedCodexResume,
       }, session),
     };
   }

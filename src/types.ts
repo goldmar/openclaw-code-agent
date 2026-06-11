@@ -264,6 +264,7 @@ export interface SessionActionToken {
   launchResumeSessionId?: string;
   launchResumeWorktreeFrom?: string;
   launchSessionIdOverride?: string;
+  launchClearedPersistedCodexResume?: boolean;
   launchForkSession?: boolean;
   launchForceNewSession?: boolean;
   launchPermissionMode?: PermissionMode;

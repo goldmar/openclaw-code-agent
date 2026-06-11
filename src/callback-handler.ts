@@ -591,6 +591,7 @@ export function createCallbackHandler(channel: InteractiveChannel = "telegram") 
               resumeSessionId: consumedToken.launchResumeSessionId,
               resumeWorktreeFrom: consumedToken.launchResumeWorktreeFrom,
               sessionIdOverride: consumedToken.launchSessionIdOverride,
+              clearedPersistedCodexResume: consumedToken.launchClearedPersistedCodexResume,
               forkSession: consumedToken.launchForkSession,
               forceNewSession: consumedToken.launchForceNewSession,
               permissionMode: consumedToken.launchPermissionMode,

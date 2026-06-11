@@ -320,6 +320,45 @@ describe("agent_launch tool defaults", () => {
     }
   });
 
+  it("preserves cleared Codex resume state through the repo-policy prompt", async () => {
+    const workdir = mkdtempSync(join(tmpdir(), "agent-launch-policy-codex-resume-"));
+    let policyLaunchArgs: Record<string, unknown> | undefined;
+
+    try {
+      setSessionManager({
+        resolve: () => undefined,
+        getPersistedSession: () => ({ harness: "codex" }),
+        resolveHarnessSessionId: (id: string) => `resolved-${id}`,
+        checkRepoPolicyForLaunch: () => ({
+          ok: false,
+          text: "Repo integration policy is not set.",
+        }),
+        requestRepoPolicyForLaunch(args: Record<string, unknown>) {
+          policyLaunchArgs = args;
+          return `Repo policy choice prompt sent for ${workdir}.`;
+        },
+        spawn() {
+          throw new Error("spawn should not run before policy selection");
+        },
+      } as any);
+
+      const tool = makeAgentLaunchTool({ workspaceDir: workdir } as any);
+      const result = await tool.execute("tool-id", {
+        prompt: "Continue after restart",
+        resume_session_id: "old-thread",
+        fork_session: true,
+        worktree_strategy: "delegate",
+        harness: "codex",
+      });
+
+      assert.equal((result.content[0] as { text: string }).text, `Repo policy choice prompt sent for ${workdir}.`);
+      assert.equal(policyLaunchArgs?.clearedPersistedCodexResume, true);
+      assert.equal(policyLaunchArgs?.resumeSessionId, undefined);
+    } finally {
+      rmSync(workdir, { recursive: true, force: true });
+    }
+  });
+
   it("clears persisted Codex resume state before spawn", async () => {
     let spawnConfig: Record<string, unknown> | undefined;
 
