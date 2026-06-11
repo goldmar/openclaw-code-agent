@@ -117,6 +117,10 @@ export function makeAgentWorktreeCleanupTool(_ctx?: OpenClawPluginToolContext) {
             const nextLifecycleState = resolved.derivedState === "merged" || resolved.derivedState === "released"
               ? resolved.derivedState
               : resolved.lifecycle.state;
+            const nowIso = new Date().toISOString();
+            const legacyResolvedAt = nextLifecycleState === "merged"
+              ? persisted.worktreeMergedAt
+              : (nextLifecycleState === "dismissed" ? persisted.worktreeDismissedAt : undefined);
             sessionManager.updatePersistedSession(target.id, {
               worktreePath: undefined,
               worktreeBranch: undefined,
@@ -126,12 +130,12 @@ export function makeAgentWorktreeCleanupTool(_ctx?: OpenClawPluginToolContext) {
               lastWorktreeReminderAt: undefined,
               worktreeDecisionSnoozedUntil: undefined,
               worktreeMerged: nextLifecycleState === "merged" ? true : persisted.worktreeMerged,
-              worktreeMergedAt: nextLifecycleState === "merged" ? (persisted.worktreeMergedAt ?? new Date().toISOString()) : persisted.worktreeMergedAt,
+              worktreeMergedAt: nextLifecycleState === "merged" ? (persisted.worktreeMergedAt ?? nowIso) : persisted.worktreeMergedAt,
               worktreeLifecycle: {
                 ...(persisted.worktreeLifecycle ?? resolved.lifecycle),
                 state: nextLifecycleState,
-                updatedAt: new Date().toISOString(),
-                resolvedAt: (persisted.worktreeLifecycle?.resolvedAt ?? new Date().toISOString()),
+                updatedAt: nowIso,
+                resolvedAt: (persisted.worktreeLifecycle?.resolvedAt ?? legacyResolvedAt ?? nowIso),
                 resolutionSource: persisted.worktreeLifecycle?.resolutionSource ?? "maintenance",
                 baseBranch: params.base_branch ?? resolved.lifecycle.baseBranch ?? persisted.worktreeBaseBranch,
                 targetRepo: persisted.worktreePrTargetRepo,

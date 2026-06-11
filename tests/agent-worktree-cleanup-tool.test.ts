@@ -249,8 +249,84 @@ describe("agent_worktree_cleanup", () => {
     }
   });
 
-  it("clean_safe removes released worktrees and clears persisted worktree metadata", async () => {
+  it("clean_safe removes merged worktrees and preserves legacy merged resolved timestamps", async () => {
     const repoDir = initRepo("cleanup-exec-");
+    try {
+      const merged = createCommittedWorktree(repoDir, "merged-clean", "feature.txt", "merged\n");
+      git(repoDir, "checkout", "main");
+      git(repoDir, "merge", "--ff-only", merged.branchName);
+      const legacyResolvedAt = "2024-02-03T04:05:06.000Z";
+
+      const persisted = {
+        sessionId: "s-clean",
+        harnessSessionId: "h-clean",
+        name: "merged-clean",
+        prompt: "merged",
+        workdir: repoDir,
+        status: "completed",
+        costUsd: 0,
+        worktreePath: merged.worktreePath,
+        worktreeBranch: merged.branchName,
+        worktreeBaseBranch: "main",
+        worktreeState: "ready",
+        worktreeMergedAt: legacyResolvedAt,
+        pendingWorktreeDecisionSince: new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString(),
+        lastWorktreeReminderAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+        worktreeDecisionSnoozedUntil: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+        worktreeLifecycle: {
+          state: "active",
+          updatedAt: new Date().toISOString(),
+          baseBranch: "main",
+        },
+      };
+
+      setSessionManager({
+        list: () => [],
+        resolve: () => undefined,
+        listPersistedSessions: () => [persisted] as any,
+        getPersistedSession(ref: string) {
+          return [persisted].find((session) =>
+            session.sessionId === ref || session.harnessSessionId === ref || session.name === ref
+          ) as any;
+        },
+        updatePersistedSession(ref: string, patch: Record<string, unknown>) {
+          if (ref === persisted.sessionId || ref === persisted.harnessSessionId || ref === persisted.name) {
+            Object.assign(persisted, patch);
+            return true;
+          }
+          return false;
+        },
+        dismissWorktree: async () => "dismissed",
+      } as any);
+
+      const tool = makeAgentWorktreeCleanupTool();
+      const result = await tool.execute("tool-id", { mode: "clean_safe" });
+      const text = (result.content[0] as { text: string }).text;
+
+      assert.match(text, /Clean all safe:/);
+      assert.match(text, /SAFE FOUND \(1\): merged-clean \(merged\)/);
+      assert.match(text, /CLEANED \(1\): merged-clean \(merged\)/);
+      assert.equal(existsSync(merged.worktreePath), false);
+      assert.throws(() => git(repoDir, "rev-parse", "--verify", merged.branchName), /fatal:/);
+      assert.equal(persisted.worktreePath, undefined);
+      assert.equal(persisted.worktreeBranch, undefined);
+      assert.equal(persisted.worktreeState, "none");
+      assert.equal(persisted.pendingWorktreeDecisionSince, undefined);
+      assert.equal(persisted.lastWorktreeReminderAt, undefined);
+      assert.equal(persisted.worktreeDecisionSnoozedUntil, undefined);
+      assert.equal(persisted.worktreeMerged, true);
+      assert.equal(persisted.worktreeMergedAt, legacyResolvedAt);
+      assert.equal(persisted.worktreeLifecycle?.state, "merged");
+      assert.equal(persisted.worktreeLifecycle?.resolvedAt, legacyResolvedAt);
+      assert.equal(persisted.worktreeLifecycle?.resolutionSource, "maintenance");
+      assert.ok((persisted.worktreeLifecycle?.notes ?? []).includes("topology_merged"));
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it("clean_safe removes released worktrees and clears persisted worktree metadata", async () => {
+    const repoDir = initRepo("cleanup-released-");
     try {
       const released = createCommittedWorktree(repoDir, "released-clean", "feature.txt", "released\n");
       const releasedCommit = git(released.worktreePath, "rev-parse", "HEAD");
@@ -261,8 +337,8 @@ describe("agent_worktree_cleanup", () => {
       git(repoDir, "cherry-pick", releasedCommit);
 
       const persisted = {
-        sessionId: "s-clean",
-        harnessSessionId: "h-clean",
+        sessionId: "s-released-clean",
+        harnessSessionId: "h-released-clean",
         name: "released-clean",
         prompt: "released",
         workdir: repoDir,
@@ -276,7 +352,7 @@ describe("agent_worktree_cleanup", () => {
         lastWorktreeReminderAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
         worktreeDecisionSnoozedUntil: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
         worktreeLifecycle: {
-          state: "released",
+          state: "active",
           updatedAt: new Date().toISOString(),
           baseBranch: "main",
         },
@@ -320,6 +396,74 @@ describe("agent_worktree_cleanup", () => {
       assert.equal(typeof persisted.worktreeLifecycle?.resolvedAt, "string");
       assert.equal(persisted.worktreeLifecycle?.resolutionSource, "maintenance");
       assert.ok((persisted.worktreeLifecycle?.notes ?? []).includes("merge_noop_content_already_on_base"));
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it("clean_safe preserves legacy dismissed timestamps only for dismissed cleanup", async () => {
+    const repoDir = initRepo("cleanup-dismissed-");
+    try {
+      const dismissed = createCommittedWorktree(repoDir, "dismissed-clean", "feature.txt", "dismissed\n");
+      const legacyMergedAt = "2024-01-02T03:04:05.000Z";
+      const legacyDismissedAt = "2024-02-03T04:05:06.000Z";
+
+      const persisted = {
+        sessionId: "s-dismissed-clean",
+        harnessSessionId: "h-dismissed-clean",
+        name: "dismissed-clean",
+        prompt: "dismissed",
+        workdir: repoDir,
+        status: "completed",
+        costUsd: 0,
+        worktreePath: dismissed.worktreePath,
+        worktreeBranch: dismissed.branchName,
+        worktreeBaseBranch: "main",
+        worktreeState: "ready",
+        worktreeMergedAt: legacyMergedAt,
+        worktreeDismissedAt: legacyDismissedAt,
+        worktreeLifecycle: {
+          state: "dismissed",
+          updatedAt: new Date().toISOString(),
+          baseBranch: "main",
+        },
+      };
+
+      setSessionManager({
+        list: () => [],
+        resolve: () => undefined,
+        listPersistedSessions: () => [persisted] as any,
+        getPersistedSession(ref: string) {
+          return [persisted].find((session) =>
+            session.sessionId === ref || session.harnessSessionId === ref || session.name === ref
+          ) as any;
+        },
+        updatePersistedSession(ref: string, patch: Record<string, unknown>) {
+          if (ref === persisted.sessionId || ref === persisted.harnessSessionId || ref === persisted.name) {
+            Object.assign(persisted, patch);
+            return true;
+          }
+          return false;
+        },
+        dismissWorktree: async () => "dismissed",
+      } as any);
+
+      const tool = makeAgentWorktreeCleanupTool();
+      const result = await tool.execute("tool-id", { mode: "clean_safe" });
+      const text = (result.content[0] as { text: string }).text;
+
+      assert.match(text, /Clean all safe:/);
+      assert.match(text, /SAFE FOUND \(1\): dismissed-clean \(dismissed\)/);
+      assert.match(text, /CLEANED \(1\): dismissed-clean \(dismissed\)/);
+      assert.equal(existsSync(dismissed.worktreePath), false);
+      assert.throws(() => git(repoDir, "rev-parse", "--verify", dismissed.branchName), /fatal:/);
+      assert.equal(persisted.worktreePath, undefined);
+      assert.equal(persisted.worktreeBranch, undefined);
+      assert.equal(persisted.worktreeState, "none");
+      assert.equal(persisted.worktreeLifecycle?.state, "dismissed");
+      assert.equal(persisted.worktreeLifecycle?.resolvedAt, legacyDismissedAt);
+      assert.notEqual(persisted.worktreeLifecycle?.resolvedAt, legacyMergedAt);
+      assert.equal(persisted.worktreeLifecycle?.resolutionSource, "maintenance");
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }
