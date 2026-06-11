@@ -244,7 +244,6 @@ function buildOutputPreviewSummaryLines(outputPreview: string | undefined): stri
     .map((line) => sanitizeSummaryText(line))
     .map((line) => stripSummaryPrefix(line))
     .filter(isUsefulOutputSummaryLine)
-    .map((line) => truncateText(line, MAX_SUMMARY_LINE_LENGTH))
     .filter((line) => {
       const key = line.toLowerCase();
       if (seen.has(key)) return false;
@@ -269,7 +268,10 @@ function isUsefulOutputSummaryLine(line: string): boolean {
   if (/^(?:pass|fail|ok|error)\b[:\s]/i.test(line)) return false;
   if (/^(?:changed files?|files changed|recent commits?|commits?)\b/i.test(line)) return false;
   return /^(?:implemented|updated|added|fixed|changed|removed|verified|covered|refactored|improved|created|documented|hardened|restored|simplified|renamed|moved|wired|handled|blocked|reduced|deduplicated|normalized|addressed|prevented)\b/i.test(line)
-    || /\b(?:now|so that|coverage|tests?|validation|regression|cleanup|summary|notification|callback|button|merge|worktree|policy|pr)\b/i.test(line);
+    || (
+      /\b(?:so that|coverage|validation|regression|cleanup|summary|notification|callback|button|merge|worktree|policy)\b/i.test(line)
+      && /\b(?:preserv(?:e|es|ed|ing)|clear(?:s|ed|ing)?|reuse(?:s|d|ing)?|cover(?:s|ed|ing)?|pass(?:es|ed|ing)?|fail(?:s|ed|ing)?|complete(?:s|d)?|fall(?:s|ing)? back)\b/i.test(line)
+    );
 }
 
 function buildSafeObjective(prompt: string | undefined): string | undefined {

@@ -105,6 +105,25 @@ describe("worktree decision work summaries", () => {
     assert.doesNotMatch(result.lines.join("\n"), /Touches `src\/session-worktree-message-service\.ts`/);
   });
 
+  it("ignores generic completion output lines while preserving concrete worktree summary lines", async () => {
+    const result = await buildWorktreeDecisionWorkSummary({
+      sessionName: "fallback-filters-noise",
+      diffSummary,
+      outputPreview: [
+        "Build is ready now",
+        "3 tests passed",
+        "The callback now preserves the original worktree decision prompt text.",
+        "Focused regression tests pass for worktree decision summaries.",
+      ].join("\n"),
+    });
+
+    assert.equal(result.source, "fallback");
+    assert.deepEqual(result.lines, [
+      "The callback now preserves the original worktree decision prompt text.",
+      "Focused regression tests pass for worktree decision summaries.",
+    ]);
+  });
+
   it("adapts OpenClaw runtime summary hooks when available", async () => {
     try {
       setPluginRuntime({
