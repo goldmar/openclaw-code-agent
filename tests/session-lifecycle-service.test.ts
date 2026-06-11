@@ -373,6 +373,151 @@ describe("SessionLifecycleService", () => {
     assert.equal(request.shouldDispatch?.(), false);
   });
 
+  it("adds a pending-input question delivery guard that closes when the request is cleared", async () => {
+    const requests: Array<Record<string, unknown>> = [];
+    const service = new SessionLifecycleService({
+      persistSession: () => {},
+      clearWaitingTimestamp: () => {},
+      handleWorktreeStrategy: async () => ({
+        notificationSent: false,
+        worktreeRemoved: false,
+      }),
+      resolveWorktreeRepoDir: () => undefined,
+      updatePersistedSession: () => false,
+      dispatchSessionNotification: (_session, request) => {
+        requests.push(request as unknown as Record<string, unknown>);
+      },
+      notifySession: () => {},
+      clearRetryTimersForSession: () => {},
+      hasTurnCompleteWakeMarker: () => false,
+      shouldEmitTurnCompleteWake: () => true,
+      shouldEmitTerminalWake: () => true,
+      resolvePlanApprovalMode: () => "ask",
+      getPlanApprovalButtons: () => [],
+      getResumeButtons: () => [],
+      getQuestionButtons: (_sessionId, options) => [
+        options.map((option) => ({ label: option.label, callbackData: `token:${option.label}` })),
+      ],
+      extractLastOutputLine: () => undefined,
+      getOutputPreview: () => "Codex needs one answer before it can continue.",
+      originThreadLine: () => "Origin thread: telegram topic 42",
+      debounceWaitingEvent: () => true,
+      isAlreadyMerged: () => false,
+    });
+    const session = createStubSession({
+      id: "session-question-guard",
+      name: "question-guard",
+      pendingPlanApproval: false,
+      pendingInputState: {
+        requestId: "req-question-guard",
+        kind: "question",
+        promptText: "Which environment should I target?",
+        options: ["Staging", "Production"],
+      },
+    });
+
+    await service.emitWaitingForInput(session);
+
+    assert.equal(requests.length, 1);
+    const request = requests[0] as { shouldDispatch?: () => boolean };
+    assert.equal(request.shouldDispatch?.(), true);
+
+    session.pendingInputState = undefined;
+
+    assert.equal(request.shouldDispatch?.(), false);
+  });
+
+  it("blocks stale structured question notifications when the active question changes before dispatch", async () => {
+    const requests: Array<Record<string, unknown>> = [];
+    let summaryStarted!: () => void;
+    let releaseSummary!: (value: { summary: string }) => void;
+    const summaryStartedPromise = new Promise<void>((resolve) => {
+      summaryStarted = resolve;
+    });
+    const summaryPromise = new Promise<{ summary: string }>((resolve) => {
+      releaseSummary = resolve;
+    });
+    const service = new SessionLifecycleService({
+      persistSession: () => {},
+      clearWaitingTimestamp: () => {},
+      handleWorktreeStrategy: async () => ({
+        notificationSent: false,
+        worktreeRemoved: false,
+      }),
+      resolveWorktreeRepoDir: () => undefined,
+      updatePersistedSession: () => false,
+      dispatchSessionNotification: (_session, request) => {
+        requests.push(request as unknown as Record<string, unknown>);
+      },
+      notifySession: () => {},
+      clearRetryTimersForSession: () => {},
+      hasTurnCompleteWakeMarker: () => false,
+      shouldEmitTurnCompleteWake: () => true,
+      shouldEmitTerminalWake: () => true,
+      resolvePlanApprovalMode: () => "ask",
+      getPlanApprovalButtons: () => [],
+      getResumeButtons: () => [],
+      getQuestionButtons: (_sessionId, options) => [
+        options.map((option) => ({ label: option.label, callbackData: `token:${option.label}` })),
+      ],
+      extractLastOutputLine: () => undefined,
+      getOutputPreview: () => "Codex is collecting deployment inputs.",
+      originThreadLine: () => "Origin thread: telegram topic 42",
+      debounceWaitingEvent: () => true,
+      isAlreadyMerged: () => false,
+      questionContextSummaryProvider: {
+        async generateQuestionContextSummary() {
+          summaryStarted();
+          return summaryPromise;
+        },
+      },
+    });
+    const session = createStubSession({
+      id: "session-stale-structured-question",
+      name: "stale-structured-question",
+      pendingPlanApproval: false,
+      pendingInputState: {
+        requestId: "req-stale-structured-question",
+        kind: "question",
+        promptText: "Answer the deployment questions.",
+        options: [],
+        activeQuestionIndex: 0,
+        questions: [
+          {
+            id: "environment",
+            question: "Which environment should I target?",
+            options: [
+              { label: "Staging" },
+              { label: "Production" },
+            ],
+          },
+          {
+            id: "scope",
+            question: "How broad should the rollout be?",
+            options: [
+              { label: "Canary" },
+              { label: "Everyone" },
+            ],
+          },
+        ],
+      },
+    });
+
+    const emitPromise = service.emitWaitingForInput(session);
+    await summaryStartedPromise;
+
+    session.pendingInputState = {
+      ...session.pendingInputState,
+      activeQuestionIndex: 1,
+    };
+    releaseSummary({ summary: "Codex needs the target environment before it can continue." });
+    await emitPromise;
+
+    assert.equal(requests.length, 1);
+    const request = requests[0] as { shouldDispatch?: () => boolean };
+    assert.equal(request.shouldDispatch?.(), false);
+  });
+
   it("reuses the question context preview when promptText is unavailable", () => {
     const requests: Array<Record<string, unknown>> = [];
     let previewCalls = 0;
