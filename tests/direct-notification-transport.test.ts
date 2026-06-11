@@ -420,6 +420,75 @@ describe("RuntimeDirectNotificationTransport", () => {
     assertNoInvalidTelegramStyle(payloads[0]);
   });
 
+  it("drops rendered Telegram buttons with invalid callback data", async () => {
+    const payloads: unknown[] = [];
+    const overlongCallbackData = `code-agent:${"x".repeat(70)}`;
+    setPluginRuntime({
+      channel: {
+        outbound: {
+          loadAdapter: async () => ({
+            renderPresentation: ({ payload }: { payload: unknown }) => ({
+              ...(payload as Record<string, unknown>),
+              channelData: {
+                telegram: {
+                  buttons: [[
+                    {
+                      text: "Approve",
+                      callback_data: "code-agent:approve-token",
+                      style: "success",
+                    },
+                    {
+                      text: "Too Long",
+                      callback_data: overlongCallbackData,
+                      style: "danger",
+                    },
+                    {
+                      text: "Blank",
+                      callback_data: "   ",
+                      style: "primary",
+                    },
+                    {
+                      text: "Wrong Type",
+                      callback_data: 42,
+                      style: "danger",
+                    },
+                    {
+                      text: "Open",
+                      url: "https://example.test/open",
+                      style: "primary",
+                    },
+                  ]],
+                },
+              },
+            }),
+            sendPayload: async (ctx: { payload: unknown }) => {
+              payloads.push(ctx.payload);
+            },
+          }),
+        },
+      },
+    }, { channels: { telegram: { enabled: true } } });
+
+    await new RuntimeDirectNotificationTransport().send(
+      {
+        channel: "telegram",
+        accountId: "default",
+        target: "-1003863755361",
+        threadId: "28",
+      },
+      "Plan needs approval",
+      [[
+        { label: "Approve", callbackData: "approve-token", style: "success" },
+      ]],
+    );
+
+    assert.deepEqual(telegramButtons(payloads[0]), [[
+      { text: "Approve", callback_data: "code-agent:approve-token", style: "success" },
+      { text: "Open", url: "https://example.test/open", style: "primary" },
+    ]]);
+    assertNoInvalidTelegramStyle(payloads[0]);
+  });
+
   it("does not sanitize shared presentation styles for non-Telegram transports", async () => {
     const payloads: unknown[] = [];
     setPluginRuntime({

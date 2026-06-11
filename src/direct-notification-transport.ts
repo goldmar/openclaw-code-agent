@@ -474,6 +474,16 @@ function sanitizeTelegramInlineButtons(buttons: unknown): TelegramInlineButtons 
           if (!button || typeof button !== "object" || Array.isArray(button)) return undefined;
           const { style: rawStyle, ...rest } = button as Record<string, unknown>;
           if (typeof rest.text !== "string" || rest.text.trim().length === 0) return undefined;
+          if (
+            rest.callback_data !== undefined &&
+            (
+              typeof rest.callback_data !== "string" ||
+              rest.callback_data.trim().length === 0 ||
+              Buffer.byteLength(rest.callback_data, "utf8") > TELEGRAM_CALLBACK_DATA_MAX_BYTES
+            )
+          ) {
+            return undefined;
+          }
           return {
             ...rest,
             ...telegramButtonStyle(rawStyle),
