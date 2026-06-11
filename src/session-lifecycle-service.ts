@@ -140,7 +140,7 @@ export class SessionLifecycleService {
       extractLastOutputLine: (session: Session) => string | undefined;
       getOutputPreview: (session: Session, maxChars?: number) => string;
       originThreadLine: (session: Session) => string;
-      debounceWaitingEvent: (sessionId: string) => boolean;
+      debounceWaitingEvent: (sessionId: string, identityKey?: string) => boolean;
       isAlreadyMerged: (ref: string | undefined) => boolean;
       questionContextSummaryProvider?: QuestionContextSummaryProvider;
     },
@@ -438,7 +438,24 @@ export class SessionLifecycleService {
   }
 
   async emitWaitingForInput(session: Session): Promise<void> {
-    if (!this.deps.debounceWaitingEvent(session.id)) return;
+    const pendingInputQuestions = session.pendingInputState?.questions;
+    const activePendingInputQuestion = pendingInputQuestions?.[
+      session.pendingInputState?.activeQuestionIndex ?? 0
+    ];
+    // Snapshot notification key before async gap to avoid race when user answers during summary generation.
+    const pendingInputRequestId = session.pendingInputState?.requestId;
+    const pendingInputQuestionIdentity = activePendingInputQuestionIdentity(session.pendingInputState);
+    const pendingInputNotificationKey = pendingInputRequestId
+      ? [
+          pendingInputRequestId,
+          pendingInputQuestionIdentity,
+        ].filter(Boolean).join(":")
+      : undefined;
+    const pendingInputDebounceKey = pendingInputNotificationKey
+      ? `pending-input:${pendingInputNotificationKey}`
+      : undefined;
+
+    if (!this.deps.debounceWaitingEvent(session.id, pendingInputDebounceKey)) return;
 
     const planApprovalMode = session.pendingPlanApproval
       ? this.deps.resolvePlanApprovalMode(session)
@@ -463,10 +480,6 @@ export class SessionLifecycleService {
               ? Number.POSITIVE_INFINITY
               : undefined,
           );
-    const pendingInputQuestions = session.pendingInputState?.questions;
-    const activePendingInputQuestion = pendingInputQuestions?.[
-      session.pendingInputState?.activeQuestionIndex ?? 0
-    ];
     const fallbackPendingInputButtonOptions =
       session.pendingInputState?.options.map((label) => ({ label })) ?? [];
 
@@ -524,15 +537,6 @@ export class SessionLifecycleService {
           optionDescriptions: optionDescriptionSummaries,
         })
       : pendingInputPromptText;
-    // Snapshot pending input identity before async gap to avoid race when user answers during summary generation.
-    const pendingInputRequestId = session.pendingInputState?.requestId;
-    const pendingInputQuestionIdentity = activePendingInputQuestionIdentity(session.pendingInputState);
-    const pendingInputNotificationKey = pendingInputRequestId
-      ? [
-          pendingInputRequestId,
-          pendingInputQuestionIdentity,
-        ].filter(Boolean).join(":")
-      : undefined;
     const questionContextSummary = !session.pendingPlanApproval && this.deps.questionContextSummaryProvider
       ? await buildQuestionContextMicroSummary({
           sessionName: session.name,

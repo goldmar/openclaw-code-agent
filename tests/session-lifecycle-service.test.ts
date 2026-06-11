@@ -570,12 +570,13 @@ describe("SessionLifecycleService", () => {
     assert.match(String(requests[0]?.userMessage ?? ""), /Fallback preview/);
   });
 
-  it("renders queued multi-question pending input one step at a time with buttons", () => {
+  it("renders queued multi-question pending input one step at a time with buttons", async () => {
     const requests: Array<Record<string, unknown>> = [];
     const questionButtonCalls: Array<{
       options: Array<{ label: string }>;
       context?: { requestId?: string; questionId?: string };
     }> = [];
+    const debounceCalls: Array<{ sessionId: string; identityKey?: string }> = [];
 
     const service = new SessionLifecycleService({
       persistSession: () => {},
@@ -604,7 +605,10 @@ describe("SessionLifecycleService", () => {
       extractLastOutputLine: () => undefined,
       getOutputPreview: () => "Fallback preview",
       originThreadLine: () => "Origin thread: telegram topic 42",
-      debounceWaitingEvent: () => true,
+      debounceWaitingEvent: (sessionId, identityKey) => {
+        debounceCalls.push({ sessionId, identityKey });
+        return true;
+      },
       isAlreadyMerged: () => false,
     });
 
@@ -644,8 +648,12 @@ describe("SessionLifecycleService", () => {
       },
     });
 
-    service.emitWaitingForInput(session);
+    await service.emitWaitingForInput(session);
 
+    assert.deepEqual(debounceCalls[0], {
+      sessionId: "session-multi-question",
+      identityKey: "pending-input:req-multi-question:environment",
+    });
     assert.equal(questionButtonCalls.length, 1);
     assert.deepEqual(questionButtonCalls[0].options.map((option) => option.label), ["Staging", "Production"]);
     assert.deepEqual(questionButtonCalls[0].context, {
@@ -680,8 +688,12 @@ describe("SessionLifecycleService", () => {
       },
     };
 
-    service.emitWaitingForInput(session);
+    await service.emitWaitingForInput(session);
 
+    assert.deepEqual(debounceCalls[1], {
+      sessionId: "session-multi-question",
+      identityKey: "pending-input:req-multi-question:scope",
+    });
     assert.equal(questionButtonCalls.length, 2);
     assert.deepEqual(questionButtonCalls[1].options.map((option) => option.label), ["Canary", "Everyone"]);
     assert.deepEqual(questionButtonCalls[1].context, {
