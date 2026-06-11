@@ -20,6 +20,10 @@ function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }).trim();
 }
 
+function repoPolicyButtonTokenIds(request: { buttons: Array<Array<{ callbackData: string }>> }): string[] {
+  return request.buttons.flatMap((row) => row.map((button) => button.callbackData));
+}
+
 function createRepoWithWorktree(name: string) {
   const repoDir = mkdtempSync(join(tmpdir(), `openclaw-policy-${name}-`));
   git(repoDir, "init", "-b", "main");
@@ -379,6 +383,49 @@ describe("repo policy resolution", () => {
     }
   });
 
+  it("clears stale manual policy prompt tokens when no matching deferred launch remains", () => {
+    const repoDir = mkdtempSync(join(tmpdir(), "openclaw-policy-manual-no-match-"));
+    const storeDir = mkdtempSync(join(tmpdir(), "openclaw-policy-manual-no-match-store-"));
+    const dispatchCalls: any[] = [];
+    try {
+      git(repoDir, "init", "-b", "main");
+      const sm = new SessionManager(1, 10, { store: { indexPath: join(storeDir, "sessions.json") } });
+      (sm as any).notifications = {
+        dispatch: (...args: any[]) => { dispatchCalls.push(args); },
+        notifyWorktreeOutcome: () => {},
+        dispose: () => {},
+      };
+      (sm as any).spawn = () => {
+        throw new Error("spawn should not run without a matching policy token");
+      };
+
+      sm.requestRepoPolicyForLaunch({
+        route: { provider: "telegram", target: "12345" },
+        prompt: "No matching policy token remains",
+        workdir: repoDir,
+        worktreeStrategy: "delegate",
+      });
+      const policyTokenIds = repoPolicyButtonTokenIds(dispatchCalls[0][1]);
+      const prRequiredTokenId = policyTokenIds.find((tokenId) => (
+        sm.getActionToken(tokenId)?.repoPolicy === "pr-required"
+      ));
+      assert.ok(prRequiredTokenId);
+      sm.consumeActionToken(prRequiredTokenId);
+
+      sm.setRepoPolicy(repoDir, "pr-required");
+      const continuation = sm.continueLaunchAfterManualRepoPolicy(repoDir, "pr-required");
+
+      assert.deepEqual(continuation, { kind: "none" });
+      for (const tokenId of policyTokenIds) {
+        assert.equal(sm.getActionToken(tokenId), undefined);
+      }
+      sm.dispose();
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+      rmSync(storeDir, { recursive: true, force: true });
+    }
+  });
+
   it("does not guess which launch to continue when multiple manual policy matches exist", () => {
     const repoDir = mkdtempSync(join(tmpdir(), "openclaw-policy-manual-ambiguous-"));
     const storeDir = mkdtempSync(join(tmpdir(), "openclaw-policy-manual-ambiguous-store-"));
@@ -409,6 +456,8 @@ describe("repo policy resolution", () => {
         workdir: repoDir,
         worktreeStrategy: "delegate",
       });
+      const firstPolicyTokenIds = repoPolicyButtonTokenIds(dispatchCalls[0][1]);
+      const secondPolicyTokenIds = repoPolicyButtonTokenIds(dispatchCalls[1][1]);
 
       sm.setRepoPolicy(repoDir, "pr-required");
       const continuation = sm.continueLaunchAfterManualRepoPolicy(repoDir, "pr-required");
@@ -416,6 +465,9 @@ describe("repo policy resolution", () => {
       assert.deepEqual(continuation, { kind: "ambiguous", count: 2 });
       assert.equal(spawnCalled, false);
       assert.equal(dispatchCalls.length, 2);
+      for (const tokenId of [...firstPolicyTokenIds, ...secondPolicyTokenIds]) {
+        assert.equal(sm.getActionToken(tokenId), undefined);
+      }
       sm.dispose();
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
