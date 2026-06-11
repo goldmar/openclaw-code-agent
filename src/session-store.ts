@@ -39,11 +39,16 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+export const sessionStoreInternals = {
+  statSync,
+};
+
 function pathExistsAsDirectory(path: string): boolean {
   try {
-    return statSync(path).isDirectory();
-  } catch {
-    return false;
+    return sessionStoreInternals.statSync(path).isDirectory();
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    return code !== "ENOENT" && code !== "ENOTDIR";
   }
 }
 
