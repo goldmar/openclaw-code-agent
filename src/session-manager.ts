@@ -148,6 +148,39 @@ function digestRepoPolicyLaunchContext(args: RepoPolicyLaunchArgs, strategy: Wor
   })).digest("hex").slice(0, 16);
 }
 
+function digestRepoPolicyTokenLaunchContext(token: SessionActionToken): string {
+  return createHash("sha256").update(JSON.stringify({
+    route: token.route ? {
+      provider: token.route.provider,
+      target: token.route.target,
+      accountId: token.route.accountId,
+      threadId: token.route.threadId,
+      sessionKey: token.route.sessionKey,
+    } : undefined,
+    prompt: token.launchPrompt,
+    workdir: token.launchWorkdir,
+    name: token.launchName,
+    model: token.launchModel,
+    reasoningEffort: token.launchReasoningEffort,
+    fastMode: token.launchFastMode,
+    systemPrompt: token.launchSystemPrompt,
+    allowedTools: token.launchAllowedTools ? [...token.launchAllowedTools].sort() : token.launchAllowedTools,
+    resumeSessionId: token.launchResumeSessionId,
+    resumeWorktreeFrom: token.launchResumeWorktreeFrom,
+    sessionIdOverride: token.launchSessionIdOverride,
+    clearedPersistedCodexResume: token.launchClearedPersistedCodexResume,
+    forkSession: token.launchForkSession,
+    forceNewSession: token.launchForceNewSession,
+    permissionMode: token.launchPermissionMode,
+    planApproval: token.launchPlanApproval,
+    harness: token.launchHarness,
+    worktreeStrategy: token.launchWorktreeStrategy,
+    worktreeBaseBranch: token.launchWorktreeBaseBranch,
+    worktreePrTargetRepo: token.launchWorktreePrTargetRepo,
+    originAgentId: token.launchOriginAgentId,
+  })).digest("hex").slice(0, 16);
+}
+
 type LaunchConfirmationSession = Pick<Session, "status" | "name" | "id" | "killReason" | "error" | "result"> & {
   on?: (event: string, listener: (...args: unknown[]) => void) => unknown;
   off?: (event: string, listener: (...args: unknown[]) => void) => unknown;
@@ -827,9 +860,14 @@ export class SessionManager {
       ));
 
     if (candidates.length === 0) return { kind: "none" };
-    if (candidates.length > 1) return { kind: "ambiguous", count: candidates.length };
+    const candidatesByLaunch = new Map<string, SessionActionToken>();
+    for (const candidate of candidates) {
+      const key = digestRepoPolicyTokenLaunchContext(candidate);
+      if (!candidatesByLaunch.has(key)) candidatesByLaunch.set(key, candidate);
+    }
+    if (candidatesByLaunch.size > 1) return { kind: "ambiguous", count: candidatesByLaunch.size };
 
-    const token = candidates[0];
+    const token = [...candidatesByLaunch.values()][0];
     if (!token.launchPrompt || !token.launchWorkdir) return { kind: "none" };
 
     const result = this.launchAfterRepoPolicyChoice({
