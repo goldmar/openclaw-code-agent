@@ -755,7 +755,7 @@ export class SessionManager {
       launchPermissionMode: args.permissionMode,
       launchPlanApproval: args.planApproval,
       launchHarness: args.harness,
-      launchWorktreeStrategy: args.worktreeStrategy,
+      launchWorktreeStrategy: strategy,
       launchWorktreeBaseBranch: args.worktreeBaseBranch,
       launchWorktreePrTargetRepo: args.worktreePrTargetRepo,
       launchOriginAgentId: args.originAgentId,

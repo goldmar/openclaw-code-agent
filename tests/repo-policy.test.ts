@@ -11,6 +11,7 @@ import {
   seededRepoPolicy,
   resolveRepoIdentity,
 } from "../src/repo-policy";
+import { setPluginConfig } from "../src/config";
 import { SessionWorktreeActionService } from "../src/session-worktree-action-service";
 import { createWorktree, getBranchName } from "../src/worktree";
 import { SessionManager } from "../src/session-manager";
@@ -282,6 +283,54 @@ describe("repo policy resolution", () => {
       assert.equal(sm.getActionToken(policyTokenId), undefined);
       sm.dispose();
     } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+      rmSync(storeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves config-derived worktree strategy across deferred repo-policy continuation", () => {
+    const repoDir = mkdtempSync(join(tmpdir(), "openclaw-policy-default-strategy-"));
+    const storeDir = mkdtempSync(join(tmpdir(), "openclaw-policy-default-strategy-store-"));
+    const dispatchCalls: any[] = [];
+    try {
+      setPluginConfig({ defaultWorktreeStrategy: "auto-merge" });
+      git(repoDir, "init", "-b", "main");
+      const sm = new SessionManager(1, 10, { store: { indexPath: join(storeDir, "sessions.json") } });
+      (sm as any).notifications = {
+        dispatch: (...args: any[]) => { dispatchCalls.push(args); },
+        notifyWorktreeOutcome: () => {},
+        dispose: () => {},
+      };
+      let spawnConfig: Record<string, unknown> | undefined;
+      (sm as any).spawn = (config: Record<string, unknown>) => {
+        spawnConfig = config;
+        return {
+          id: "manual-policy-default-strategy",
+          name: "manual-policy-default-strategy",
+          model: config.model,
+          worktreeStrategy: config.worktreeStrategy,
+        };
+      };
+
+      sm.requestRepoPolicyForLaunch({
+        route: { provider: "telegram", target: "12345" },
+        prompt: "Continue with original default strategy",
+        workdir: repoDir,
+        model: "gpt-5.5",
+      });
+      const policyTokenId = dispatchCalls[0][1].buttons[0][0].callbackData;
+      assert.equal(sm.getActionToken(policyTokenId)?.launchWorktreeStrategy, "auto-merge");
+
+      setPluginConfig({ defaultWorktreeStrategy: "off" });
+      sm.setRepoPolicy(repoDir, "pr-required");
+      const continuation = sm.continueLaunchAfterManualRepoPolicy(repoDir, "pr-required");
+
+      assert.equal(continuation.kind, "launched");
+      assert.equal(spawnConfig?.prompt, "Continue with original default strategy");
+      assert.equal(spawnConfig?.worktreeStrategy, "auto-merge");
+      sm.dispose();
+    } finally {
+      setPluginConfig({});
       rmSync(repoDir, { recursive: true, force: true });
       rmSync(storeDir, { recursive: true, force: true });
     }
