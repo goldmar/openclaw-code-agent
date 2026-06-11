@@ -26,6 +26,7 @@ describe("worktree session patch helpers", () => {
     assert.equal(patch.worktreeState, "pending_decision");
     assert.equal(patch.pendingWorktreeDecisionSince, "2026-04-10T10:00:00.000Z");
     assert.equal(patch.lastWorktreeReminderAt, undefined);
+    assert.equal(patch.worktreeDecisionSnoozedUntil, undefined);
     assert.equal(patch.autoMergeResolverSessionId, undefined);
     assert.deepEqual(patch.worktreeLifecycle, {
       state: "pending_decision",
@@ -50,6 +51,8 @@ describe("worktree session patch helpers", () => {
     assert.equal(patch.autoMergeResolverSessionId, "resolver-1");
     assert.equal(patch.autoMergeConflictResolutionAttemptCount, 1);
     assert.equal(patch.pendingWorktreeDecisionSince, undefined);
+    assert.equal(patch.lastWorktreeReminderAt, undefined);
+    assert.equal(patch.worktreeDecisionSnoozedUntil, undefined);
     assert.deepEqual(patch.worktreeLifecycle, {
       state: "merge_conflict_resolving",
       updatedAt: "2026-04-10T10:05:00.000Z",

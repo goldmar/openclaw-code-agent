@@ -34,6 +34,7 @@ export function buildPendingDecisionPatch(
   const patch: Partial<PersistedSessionInfo> = {
     pendingWorktreeDecisionSince: options.pendingSince ?? updatedAt,
     lastWorktreeReminderAt: undefined,
+    worktreeDecisionSnoozedUntil: undefined,
     lifecycle: "awaiting_worktree_decision",
     worktreeState: "pending_decision",
     worktreeLifecycle: buildLifecycle(context, {
@@ -63,6 +64,7 @@ export function buildMergeConflictResolvingPatch(
     autoMergeResolverSessionId: resolverSessionId,
     pendingWorktreeDecisionSince: undefined,
     lastWorktreeReminderAt: undefined,
+    worktreeDecisionSnoozedUntil: undefined,
     lifecycle: "terminal",
     worktreeState: "merge_conflict_resolving",
     worktreeLifecycle: buildLifecycle(context, {
