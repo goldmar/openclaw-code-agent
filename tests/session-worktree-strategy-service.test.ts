@@ -65,6 +65,22 @@ function createMergeableWorktree(name: string): {
   return { repoDir, worktreePath, branchName };
 }
 
+function buttonLabels(buttons: unknown): string[] {
+  return (Array.isArray(buttons) ? buttons : [])
+    .flat()
+    .map((button: any) => String(button.label ?? button.text ?? ""));
+}
+
+function policyAwareButtons(allowedActions: { merge: boolean; pr: boolean }) {
+  return [
+    [
+      ...(allowedActions.merge ? [{ label: "Merge", callbackData: "merge" }] : []),
+      ...(allowedActions.pr ? [{ label: "Open PR", callbackData: "open-pr" }] : []),
+    ],
+    [{ label: "Later", callbackData: "later" }],
+  ];
+}
+
 describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
   it("keys generic worktree notifications by terminal cycle and worktree identity", async () => {
     const notifications: Array<Record<string, unknown>> = [];
@@ -653,10 +669,79 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
     }
   });
 
+  it("renders policy-aware buttons when conflict resolver spawn fails", async () => {
+    const { repoDir, worktreePath, branchName } = createConflictedWorktree("resolver-spawn-policy");
+    try {
+      const notifications: Array<Record<string, unknown>> = [];
+      let policyAllowedActions: { merge: boolean; pr: boolean } | undefined;
+      const service = new SessionWorktreeStrategyService({
+        shouldRunWorktreeStrategy: () => true,
+        isAlreadyMerged: () => false,
+        resolveWorktreeRepoDir: (dir) => dir,
+        getWorktreeCompletionState: () => "has-commits",
+        updatePersistedSession: (_ref, patch) => {
+          Object.assign(session, patch);
+          return true;
+        },
+        dispatchSessionNotification: (_session, request) => {
+          notifications.push(request as Record<string, unknown>);
+        },
+        getOutputPreview: () => "",
+        originThreadLine: () => "thread",
+        getWorktreeDecisionButtons: () => undefined,
+        getPolicyAwareWorktreeDecisionButtons: (_sessionId, _options, allowedActions) => {
+          policyAllowedActions = allowedActions;
+          return policyAwareButtons(allowedActions);
+        },
+        makeOpenPrButton: () => ({ label: "Open PR", callbackData: "open-pr" }),
+        isPrAvailable: () => true,
+        worktreeMessages: new SessionWorktreeMessageService(),
+        enqueueMerge: async (_repoDir, fn) => { await fn(); },
+        mergeBranch,
+        spawnConflictResolver: async () => {
+          throw new Error("spawn failed");
+        },
+        runAutoPr: async () => ({ success: true }),
+      });
+
+      const session: any = {
+        id: "s-resolver-spawn-policy",
+        name: "resolver-spawn-policy",
+        harnessSessionId: "h-resolver-spawn-policy",
+        status: "completed",
+        phase: "implementing",
+        lifecycle: "terminal",
+        worktreeState: "active",
+        originalWorkdir: repoDir,
+        worktreePath,
+        worktreeBranch: branchName,
+        worktreeBaseBranch: "main",
+        worktreeStrategy: "auto-merge",
+        repoIntegrationPolicy: "never-pr",
+        pendingPlanApproval: false,
+        worktreePrTargetRepo: undefined,
+        worktreePushRemote: undefined,
+      };
+
+      await service.handleWorktreeStrategy(session);
+
+      assert.equal(session.worktreeState, "pending_decision");
+      assert.equal(session.worktreeLifecycle?.state, "pending_decision");
+      assert.equal(notifications.length, 1);
+      assert.equal(notifications[0].label, "worktree-merge-conflict-spawn-failed");
+      assert.deepEqual(policyAllowedActions, { merge: true, pr: false });
+      assert.equal(buttonLabels(notifications[0].buttons).includes("Open PR"), false);
+      assert.equal(buttonLabels(notifications[0].buttons).includes("Merge"), true);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
   it("escalates after the retry budget is exhausted instead of spawning another resolver", async () => {
     const { repoDir, worktreePath, branchName } = createConflictedWorktree("resolver-exhausted");
     try {
       const notifications: Array<Record<string, unknown>> = [];
+      let policyAllowedActions: { merge: boolean; pr: boolean } | undefined;
       let spawnCalled = false;
       const service = new SessionWorktreeStrategyService({
         shouldRunWorktreeStrategy: () => true,
@@ -673,7 +758,12 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         getOutputPreview: () => "",
         originThreadLine: () => "thread",
         getWorktreeDecisionButtons: () => undefined,
+        getPolicyAwareWorktreeDecisionButtons: (_sessionId, _options, allowedActions) => {
+          policyAllowedActions = allowedActions;
+          return policyAwareButtons(allowedActions);
+        },
         makeOpenPrButton: () => ({ label: "Open PR", callbackData: "open-pr" }),
+        isPrAvailable: () => true,
         worktreeMessages: new SessionWorktreeMessageService(),
         enqueueMerge: async (_repoDir, fn) => { await fn(); },
         mergeBranch,
@@ -691,82 +781,109 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         autoMergeConflictResolutionAttemptCount: 1,
         worktreePrTargetRepo: undefined,
         worktreePushRemote: undefined,
+        status: "completed",
+        phase: "implementing",
+        lifecycle: "terminal",
+        worktreeState: "active",
+        originalWorkdir: repoDir,
+        worktreePath,
+        worktreeBranch: branchName,
+        worktreeBaseBranch: "main",
+        worktreeStrategy: "auto-merge",
+        repoIntegrationPolicy: "never-pr",
+        pendingPlanApproval: false,
       };
 
-      const diffSummary = getDiffSummary(repoDir, branchName, "main");
-      assert.ok(diffSummary, "diff summary should be available");
-
-      await (service as any).handleAutoMergeStrategy(
-        session,
-        repoDir,
-        worktreePath,
-        branchName,
-        "main",
-        diffSummary,
-        session.id,
-      );
+      await service.handleWorktreeStrategy(session);
 
       assert.equal(spawnCalled, false);
       assert.equal(session.worktreeState, "pending_decision");
       assert.equal(session.worktreeLifecycle?.state, "pending_decision");
       assert.equal(notifications.length, 1);
       assert.equal(notifications[0].label, "worktree-merge-conflict-escalated");
+      assert.deepEqual(policyAllowedActions, { merge: true, pr: false });
       assert.ok(Array.isArray(notifications[0].buttons));
+      assert.equal(buttonLabels(notifications[0].buttons).includes("Open PR"), false);
+      assert.equal(buttonLabels(notifications[0].buttons).includes("Merge"), true);
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }
   });
 
-  it("falls back to an explicit pending decision notification when auto-pr fails", async () => {
+  it("renders policy-aware decision buttons when auto-pr fails", async () => {
+    const { repoDir, worktreePath, branchName } = createMergeableWorktree("auto-pr-failure-policy");
     const notifications: Array<Record<string, unknown>> = [];
     const patches: Array<Record<string, unknown>> = [];
-    const buttons = [{ text: "Create PR", callback_data: "pr" }];
-    const service = new SessionWorktreeStrategyService({
-      shouldRunWorktreeStrategy: () => true,
-      isAlreadyMerged: () => false,
-      resolveWorktreeRepoDir: (dir) => dir,
-      getWorktreeCompletionState: () => "has-commits",
-      updatePersistedSession: (_ref, patch) => {
-        patches.push(patch as Record<string, unknown>);
-        Object.assign(session, patch);
-        return true;
-      },
-      dispatchSessionNotification: (_session, request) => {
-        notifications.push(request as Record<string, unknown>);
-      },
-      getOutputPreview: () => "",
-      originThreadLine: () => "thread",
-      getWorktreeDecisionButtons: () => buttons as any,
-      makeOpenPrButton: () => ({ label: "Open PR", callbackData: "open-pr" }),
-      worktreeMessages: new SessionWorktreeMessageService(),
-      enqueueMerge: async (_repoDir, fn) => { await fn(); },
-      mergeBranch,
-      spawnConflictResolver: async () => ({ id: "resolver-auto-pr", name: "unused" }),
-      runAutoPr: async () => ({ success: false }),
-    });
+    let policyAllowedActions: { merge: boolean; pr: boolean } | undefined;
+    try {
+      const service = new SessionWorktreeStrategyService({
+        shouldRunWorktreeStrategy: () => true,
+        isAlreadyMerged: () => false,
+        resolveWorktreeRepoDir: (dir) => dir,
+        getWorktreeCompletionState: () => "has-commits",
+        updatePersistedSession: (_ref, patch) => {
+          patches.push(patch as Record<string, unknown>);
+          Object.assign(session, patch);
+          return true;
+        },
+        dispatchSessionNotification: (_session, request) => {
+          notifications.push(request as Record<string, unknown>);
+        },
+        getOutputPreview: () => "",
+        originThreadLine: () => "thread",
+        getWorktreeDecisionButtons: () => [[{ label: "Merge", callbackData: "merge" }, { label: "Open PR", callbackData: "open-pr" }]],
+        getPolicyAwareWorktreeDecisionButtons: (_sessionId, _options, allowedActions) => {
+          policyAllowedActions = allowedActions;
+          return policyAwareButtons(allowedActions);
+        },
+        makeOpenPrButton: () => ({ label: "Open PR", callbackData: "open-pr" }),
+        isPrAvailable: () => true,
+        worktreeMessages: new SessionWorktreeMessageService(),
+        enqueueMerge: async (_repoDir, fn) => { await fn(); },
+        mergeBranch,
+        spawnConflictResolver: async () => ({ id: "resolver-auto-pr", name: "unused" }),
+        runAutoPr: async () => ({ success: false }),
+      });
 
-    const session: any = {
-      id: "s-auto-pr-failure",
-      name: "auto-pr-failure",
-      harnessSessionId: "h-auto-pr-failure",
-      worktreePrTargetRepo: undefined,
-      worktreePushRemote: undefined,
-    };
+      const session: any = {
+        id: "s-auto-pr-failure",
+        name: "auto-pr-failure",
+        harnessSessionId: "h-auto-pr-failure",
+        status: "completed",
+        phase: "implementing",
+        lifecycle: "terminal",
+        worktreeState: "active",
+        originalWorkdir: repoDir,
+        worktreePath,
+        worktreeBranch: branchName,
+        worktreeBaseBranch: "main",
+        worktreeStrategy: "auto-pr",
+        repoIntegrationPolicy: "pr-required",
+        pendingPlanApproval: false,
+        worktreePrTargetRepo: undefined,
+        worktreePushRemote: undefined,
+      };
 
-    const result = await (service as any).handleAutoPrStrategy(session, "/tmp/repo", "/tmp/worktree", "agent/auto-pr-failure", "main");
+      const result = await service.handleWorktreeStrategy(session);
 
-    assert.deepEqual(result, { notificationSent: true, worktreeRemoved: false });
-    assert.equal(session.worktreeState, "pending_decision");
-    assert.equal(session.worktreeLifecycle?.state, "pending_decision");
-    assert.equal(patches.some((patch) => patch.worktreeState === "pr_in_progress"), true);
-    assert.equal(notifications.length, 1);
-    assert.equal(notifications[0].label, "worktree-auto-pr-failed");
-    assert.match(String(notifications[0].userMessage), /Auto-PR did not complete/i);
-    assert.equal(notifications[0].buttons, buttons);
+      assert.deepEqual(result, { notificationSent: true, worktreeRemoved: false });
+      assert.equal(session.worktreeState, "pending_decision");
+      assert.equal(session.worktreeLifecycle?.state, "pending_decision");
+      assert.equal(patches.some((patch) => patch.worktreeState === "pr_in_progress"), true);
+      assert.equal(notifications.length, 1);
+      assert.equal(notifications[0].label, "worktree-auto-pr-failed");
+      assert.match(String(notifications[0].userMessage), /Auto-PR did not complete/i);
+      assert.deepEqual(policyAllowedActions, { merge: false, pr: true });
+      assert.equal(buttonLabels(notifications[0].buttons).includes("Merge"), false);
+      assert.equal(buttonLabels(notifications[0].buttons).includes("Open PR"), true);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
   });
 
   it("resets conflict-resolving sessions to pending decision when the retry fails with a non-rebase error", async () => {
     const notifications: Array<Record<string, unknown>> = [];
+    let policyAllowedActions: { merge: boolean; pr: boolean } | undefined;
     const service = new SessionWorktreeStrategyService({
       shouldRunWorktreeStrategy: () => true,
       isAlreadyMerged: () => false,
@@ -782,6 +899,10 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       getOutputPreview: () => "",
       originThreadLine: () => "thread",
       getWorktreeDecisionButtons: () => undefined,
+      getPolicyAwareWorktreeDecisionButtons: (_sessionId, _options, allowedActions) => {
+        policyAllowedActions = allowedActions;
+        return policyAwareButtons(allowedActions);
+      },
       makeOpenPrButton: () => ({ label: "Open PR", callbackData: "open-pr" }),
       worktreeMessages: new SessionWorktreeMessageService(),
       enqueueMerge: async (_repoDir, fn) => { await fn(); },
@@ -819,6 +940,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         commitMessages: [],
       },
       session.id,
+      { merge: true, pr: false },
     );
 
     assert.equal(session.worktreeState, "pending_decision");
@@ -826,6 +948,9 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
     assert.equal(notifications.length, 1);
     assert.equal(notifications[0].label, "worktree-merge-error");
     assert.match(String(notifications[0].userMessage), /auto-merge retry did not complete/i);
+    assert.deepEqual(policyAllowedActions, { merge: true, pr: false });
     assert.ok(Array.isArray(notifications[0].buttons));
+    assert.equal(buttonLabels(notifications[0].buttons).includes("Open PR"), false);
+    assert.equal(buttonLabels(notifications[0].buttons).includes("Merge"), true);
   });
 });
