@@ -1,12 +1,12 @@
 import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { SessionStore, sessionStoreInternals } from "../src/session-store";
+import { archiveLegacySessionIndex, sessionStoreStorageInternals } from "../src/session-store-storage";
 import { getSessionOutputFilePath } from "../src/session";
 import { STORE_SCHEMA_VERSION } from "../src/session-store-normalization";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
-import { execFileSync } from "child_process";
 
 const DEFAULT_ROUTE = {
   provider: "telegram",
@@ -849,9 +849,10 @@ describe("SessionStore path resolution", () => {
     assert.equal(readFileSync(join(dir, archived[0]!), "utf-8"), corruptPayload);
   });
 
-  it("keeps missing session index first-run behavior quiet", () => {
+  it("keeps missing session index first-run behavior quiet", (t) => {
     const dir = mkdtempSync(join(tmpdir(), "openclaw-store-missing-"));
     const indexPath = join(dir, "sessions.json");
+    const warn = t.mock.method(console, "warn", () => {});
 
     const store = new SessionStore({
       indexPath,
@@ -861,6 +862,121 @@ describe("SessionStore path resolution", () => {
     assert.equal(store.listPersistedSessions().length, 0);
     assert.equal(existsSync(indexPath), false);
     assert.equal(readdirSync(dir).some((name) => name.startsWith("sessions.json.legacy-")), false);
+    assert.equal(warn.mock.callCount(), 0);
+  });
+
+  it("archiveLegacySessionIndex returns false when there is no file to archive", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-store-missing-archive-"));
+    const indexPath = join(dir, "sessions.json");
+
+    const archived = archiveLegacySessionIndex(indexPath, "missing test");
+
+    assert.equal(archived, false);
+    assert.equal(existsSync(indexPath), false);
+    assert.equal(readdirSync(dir).some((name) => name.startsWith("sessions.json.legacy-")), false);
+  });
+
+  it("does not write a replacement empty index when the archive target disappears during recovery", (t) => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-store-missing-during-archive-"));
+    const indexPath = join(dir, "sessions.json");
+    writeFileSync(indexPath, "{not-json", "utf-8");
+    const warn = t.mock.method(console, "warn", () => {});
+    t.mock.method(sessionStoreStorageInternals, "archiveLegacySessionIndex", (path: string, reason: string) => {
+      rmSync(path, { force: true });
+      return archiveLegacySessionIndex(path, reason);
+    });
+
+    const store = new SessionStore({
+      indexPath,
+      env: {},
+    });
+
+    assert.equal(store.listPersistedSessions().length, 0);
+    assert.equal(existsSync(indexPath), false);
+    assert.equal(readdirSync(dir).some((name) => name.startsWith("sessions.json.legacy-")), false);
+    assert.equal(warn.mock.callCount(), 0);
+  });
+
+  it("archives current-schema stores with a wrong-shaped sessions collection", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-store-wrong-sessions-"));
+    const indexPath = join(dir, "sessions.json");
+    const originalPayload = JSON.stringify({
+      schemaVersion: STORE_SCHEMA_VERSION,
+      sessions: {},
+      actionTokens: [],
+      repoPolicies: [],
+    });
+    writeFileSync(indexPath, originalPayload, "utf-8");
+
+    const store = new SessionStore({
+      indexPath,
+      env: {},
+    });
+
+    assert.equal(store.listPersistedSessions().length, 0);
+    const saved = JSON.parse(readFileSync(indexPath, "utf-8"));
+    assert.equal(saved.schemaVersion, STORE_SCHEMA_VERSION);
+    assert.deepEqual(saved.sessions, []);
+    assert.deepEqual(saved.actionTokens, []);
+    assert.deepEqual(saved.repoPolicies, []);
+    const archived = readdirSync(dir).filter((name) => name.startsWith("sessions.json.legacy-"));
+    assert.equal(archived.length, 1);
+    assert.equal(readFileSync(join(dir, archived[0]!), "utf-8"), originalPayload);
+  });
+
+  it("archives current-schema stores with a wrong-shaped actionTokens collection", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-store-wrong-action-tokens-"));
+    const indexPath = join(dir, "sessions.json");
+    const originalPayload = JSON.stringify({
+      schemaVersion: STORE_SCHEMA_VERSION,
+      sessions: [],
+      actionTokens: {},
+      repoPolicies: [],
+    });
+    writeFileSync(indexPath, originalPayload, "utf-8");
+
+    const store = new SessionStore({
+      indexPath,
+      env: {},
+    });
+
+    assert.equal(store.listPersistedSessions().length, 0);
+    const saved = JSON.parse(readFileSync(indexPath, "utf-8"));
+    assert.equal(saved.schemaVersion, STORE_SCHEMA_VERSION);
+    assert.deepEqual(saved.sessions, []);
+    assert.deepEqual(saved.actionTokens, []);
+    assert.deepEqual(saved.repoPolicies, []);
+    const archived = readdirSync(dir).filter((name) => name.startsWith("sessions.json.legacy-"));
+    assert.equal(archived.length, 1);
+    assert.equal(readFileSync(join(dir, archived[0]!), "utf-8"), originalPayload);
+  });
+
+  it("archives current-schema stores with a present wrong-shaped repoPolicies collection", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-store-wrong-repo-policies-"));
+    const indexPath = join(dir, "sessions.json");
+    const originalPayload = JSON.stringify({
+      schemaVersion: STORE_SCHEMA_VERSION,
+      sessions: [],
+      actionTokens: [],
+      repoPolicies: {},
+    });
+    writeFileSync(indexPath, originalPayload, "utf-8");
+
+    const store = new SessionStore({
+      indexPath,
+      env: {},
+    });
+
+    assert.equal(store.listPersistedSessions().length, 0);
+    assert.deepEqual(store.listRepoPolicies(), []);
+    const saved = JSON.parse(readFileSync(indexPath, "utf-8"));
+    assert.equal(saved.schemaVersion, STORE_SCHEMA_VERSION);
+    assert.deepEqual(saved.sessions, []);
+    assert.deepEqual(saved.actionTokens, []);
+    assert.deepEqual(saved.repoPolicies, []);
+    const archived = readdirSync(dir).filter((name) => name.startsWith("sessions.json.legacy-"));
+    assert.equal(archived.length, 1);
+    assert.equal(readFileSync(join(dir, archived[0]!), "utf-8"), originalPayload);
   });
 
   it("archives legacy Codex SDK session rows and keeps only App Server-backed sessions", () => {
