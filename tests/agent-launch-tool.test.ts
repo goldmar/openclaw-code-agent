@@ -266,7 +266,15 @@ describe("agent_launch tool defaults", () => {
     try {
       setSessionManager({
         resolve: () => undefined,
-        getPersistedSession: () => undefined,
+        getPersistedSession: () => ({
+          sessionId: "stable-session-1",
+          harnessSessionId: "backend-session-1",
+          name: "stable-session",
+          status: "killed",
+          lifecycle: "terminal",
+          killReason: "shutdown",
+          backendRef: { kind: "codex-app-server", conversationId: "backend-session-1" },
+        }),
         resolveHarnessSessionId: (id: string) => id,
         resolveBackendConversationId: (id: string) => `resolved-${id}`,
         checkRepoPolicyForLaunch: () => ({
@@ -304,6 +312,7 @@ describe("agent_launch tool defaults", () => {
       assert.equal(policyLaunchArgs?.worktreeStrategy, "delegate");
       assert.equal(policyLaunchArgs?.harness, "codex");
       assert.equal(policyLaunchArgs?.model, "gpt-5.5");
+      assert.equal(policyLaunchArgs?.sessionIdOverride, "stable-session-1");
       assert.equal(policyLaunchArgs?.resumeWorktreeFrom, "resolved-stable-session-1");
       assert.equal(policyLaunchArgs?.originAgentId, "agent-main");
     } finally {

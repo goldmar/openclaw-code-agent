@@ -1264,6 +1264,7 @@ describe("createCallbackHandler()", () => {
       launchFastMode: true,
       launchHarness: "codex",
       launchResumeWorktreeFrom: "stable-session-1",
+      launchSessionIdOverride: "stable-session-1",
       launchWorktreeStrategy: "delegate" as const,
       launchOriginAgentId: "agent-main",
     };
@@ -1286,6 +1287,7 @@ describe("createCallbackHandler()", () => {
         assert.equal(args.fastMode, true);
         assert.equal(args.harness, "codex");
         assert.equal(args.resumeWorktreeFrom, "stable-session-1");
+        assert.equal(args.sessionIdOverride, "stable-session-1");
         assert.equal(args.worktreeStrategy, "delegate");
         assert.equal(args.originAgentId, "agent-main");
         return {

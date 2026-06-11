@@ -59,6 +59,8 @@ function hasRequestRepoPolicyForLaunch(value: unknown): value is {
     systemPrompt?: string;
     allowedTools?: string[];
     resumeSessionId?: string;
+    resumeWorktreeFrom?: string;
+    sessionIdOverride?: string;
     forkSession?: boolean;
     forceNewSession?: boolean;
     permissionMode?: "default" | "plan" | "bypassPermissions";
@@ -187,6 +189,11 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
         }
 
         const launchWorktreeStrategy = params.worktree_strategy ?? pluginConfig.defaultWorktreeStrategy ?? "off";
+        const launchSessionIdOverride = !params.fork_session
+          ? (resumeAssessment?.kind === "resume" || resumeAssessment?.kind === "relaunch"
+            ? resumeAssessment.stableSessionId
+            : undefined)
+          : undefined;
         if (launchWorktreeStrategy !== "off" && hasRequestRepoPolicyForLaunch(sessionManager)) {
           const policyCheck = sessionManager.checkRepoPolicyForLaunch?.(workdir, params.worktree_strategy);
           if (policyCheck && policyCheck.ok === false) {
@@ -205,6 +212,7 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
                   allowedTools: params.allowed_tools,
                   resumeSessionId: resumeAssessment?.kind === "resume" ? resumeAssessment.resumeSessionId : resumeSessionId,
                   resumeWorktreeFrom: resolvedResumeId,
+                  sessionIdOverride: launchSessionIdOverride,
                   forkSession: resumeSessionId ? params.fork_session : false,
                   forceNewSession: params.force_new_session,
                   permissionMode,
@@ -222,11 +230,7 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
 
         const session = sessionManager.spawn({
           prompt: params.prompt,
-          sessionIdOverride: !params.fork_session
-            ? (resumeAssessment?.kind === "resume" || resumeAssessment?.kind === "relaunch"
-              ? resumeAssessment.stableSessionId
-              : undefined)
-            : undefined,
+          sessionIdOverride: launchSessionIdOverride,
           name: params.name,
           workdir,
           model: resolvedModel,

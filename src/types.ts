@@ -263,6 +263,7 @@ export interface SessionActionToken {
   launchAllowedTools?: string[];
   launchResumeSessionId?: string;
   launchResumeWorktreeFrom?: string;
+  launchSessionIdOverride?: string;
   launchForkSession?: boolean;
   launchForceNewSession?: boolean;
   launchPermissionMode?: PermissionMode;

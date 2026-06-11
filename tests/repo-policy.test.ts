@@ -90,6 +90,7 @@ describe("repo policy resolution", () => {
         reasoningEffort: "high",
         fastMode: true,
         resumeWorktreeFrom: "stable-session-1",
+        sessionIdOverride: "stable-session-1",
         worktreeStrategy: "delegate",
       });
 
@@ -120,9 +121,46 @@ describe("repo policy resolution", () => {
       assert.equal(token?.launchReasoningEffort, "high");
       assert.equal(token?.launchFastMode, true);
       assert.equal(token?.launchResumeWorktreeFrom, "stable-session-1");
+      assert.equal(token?.launchSessionIdOverride, "stable-session-1");
       sm.dispose();
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
+      rmSync(storeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("forwards stored session ID override when continuing after repo-policy choice", () => {
+    const storeDir = mkdtempSync(join(tmpdir(), "openclaw-policy-launch-store-"));
+    try {
+      const sm = new SessionManager(1, 10, { store: { indexPath: join(storeDir, "sessions.json") } });
+      let spawnConfig: Record<string, unknown> | undefined;
+      (sm as any).spawn = (config: Record<string, unknown>) => {
+        spawnConfig = config;
+        return {
+          id: "stable-session-1",
+          name: "ship-isolated",
+          model: config.model,
+          worktreeStrategy: config.worktreeStrategy,
+        };
+      };
+
+      const result = sm.launchAfterRepoPolicyChoice({
+        route: { provider: "telegram", target: "12345" },
+        prompt: "Ship isolated changes",
+        workdir: "/repo",
+        model: "gpt-5.5",
+        resumeSessionId: "backend-session-1",
+        resumeWorktreeFrom: "stable-session-1",
+        sessionIdOverride: "stable-session-1",
+        worktreeStrategy: "delegate",
+      });
+
+      assert.equal(spawnConfig?.sessionIdOverride, "stable-session-1");
+      assert.equal(spawnConfig?.resumeSessionId, "backend-session-1");
+      assert.equal(spawnConfig?.resumeWorktreeFrom, "stable-session-1");
+      assert.match(result.text, /ID: stable-session-1/);
+      sm.dispose();
+    } finally {
       rmSync(storeDir, { recursive: true, force: true });
     }
   });

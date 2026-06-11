@@ -100,6 +100,7 @@ type RepoPolicyLaunchArgs = {
   allowedTools?: string[];
   resumeSessionId?: string;
   resumeWorktreeFrom?: string;
+  sessionIdOverride?: string;
   forkSession?: boolean;
   forceNewSession?: boolean;
   permissionMode?: SessionConfig["permissionMode"];
@@ -665,6 +666,7 @@ export class SessionManager {
       launchAllowedTools: args.allowedTools,
       launchResumeSessionId: args.resumeSessionId,
       launchResumeWorktreeFrom: args.resumeWorktreeFrom,
+      launchSessionIdOverride: args.sessionIdOverride,
       launchForkSession: args.forkSession,
       launchForceNewSession: args.forceNewSession,
       launchPermissionMode: args.permissionMode,
@@ -720,6 +722,7 @@ export class SessionManager {
     const session = this.spawn({
       prompt: args.prompt,
       workdir: args.workdir,
+      sessionIdOverride: args.sessionIdOverride,
       name: args.name,
       model: args.model,
       reasoningEffort: args.reasoningEffort,
