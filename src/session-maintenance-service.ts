@@ -254,6 +254,7 @@ export class SessionMaintenanceService {
     "worktreeMerged" | "worktreeDisposition" | "worktreeState"
   >): boolean {
     return session.worktreeMerged === true
+      || session.worktreeDisposition === "merged"
       || session.worktreeDisposition === "dismissed"
       || session.worktreeDisposition === "no-change-cleaned"
       || session.worktreeState === "merged"

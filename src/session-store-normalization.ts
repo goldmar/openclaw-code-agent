@@ -353,7 +353,7 @@ function synthesizeLegacyWorktreeLifecycle(raw: Record<string, unknown>): Persis
     ?? toOptionalString(raw.pendingWorktreeDecisionSince)
     ?? nowIso;
 
-  if (raw.worktreeMerged === true) {
+  if (raw.worktreeMerged === true || raw.worktreeDisposition === "merged") {
     return {
       state: "merged",
       updatedAt,

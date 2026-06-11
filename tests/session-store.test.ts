@@ -1128,6 +1128,26 @@ describe("SessionStore new worktree lifecycle fields", () => {
     assert.equal(persisted?.worktreeLifecycle?.state, "pr_open");
   });
 
+  it("normalizes merged worktreeDisposition to a resolved lifecycle", () => {
+    writeStore(indexPath, [{
+      harnessSessionId: "h-merged-disp",
+      name: "merged-disp-session",
+      prompt: "p",
+      workdir: "/tmp",
+      status: "completed",
+      lifecycle: "terminal",
+      costUsd: 0,
+      worktreeDisposition: "merged",
+      worktreeMergedAt: "2026-04-10T10:10:00.000Z",
+    }]);
+
+    const store = new SessionStore({ indexPath, env: {} });
+    const persisted = store.getPersistedSession("h-merged-disp");
+    assert.equal(persisted?.worktreeDisposition, "merged");
+    assert.equal(persisted?.worktreeLifecycle?.state, "merged");
+    assert.equal(persisted?.worktreeLifecycle?.resolvedAt, "2026-04-10T10:10:00.000Z");
+  });
+
   it("normalizes persisted worktreeLifecycle objects", () => {
     const updatedAt = new Date().toISOString();
     writeStore(indexPath, [{
