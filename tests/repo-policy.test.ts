@@ -131,6 +131,69 @@ describe("repo policy resolution", () => {
     }
   });
 
+  it("scopes repo-policy prompt idempotency to the deferred launch context", () => {
+    const repoDir = mkdtempSync(join(tmpdir(), "openclaw-policy-idempotency-"));
+    const storeDir = mkdtempSync(join(tmpdir(), "openclaw-policy-idempotency-store-"));
+    const dispatchCalls: any[] = [];
+    try {
+      git(repoDir, "init", "-b", "main");
+      const sm = new SessionManager(1, 10, { store: { indexPath: join(storeDir, "sessions.json") } });
+      (sm as any).notifications = {
+        dispatch: (...args: any[]) => { dispatchCalls.push(args); },
+        notifyWorktreeOutcome: () => {},
+        dispose: () => {},
+      };
+
+      const baseLaunch = {
+        route: {
+          provider: "telegram" as const,
+          target: "12345",
+          threadId: "99",
+          sessionKey: "agent:main:telegram:group:12345:topic:99",
+        },
+        prompt: "Implement launch A",
+        workdir: repoDir,
+        name: "launch-a",
+        harness: "codex",
+        model: "gpt-5.1",
+        reasoningEffort: "medium" as const,
+        worktreeStrategy: "delegate" as const,
+        allowedTools: ["Shell(git status)", "Shell(pnpm test)"],
+      };
+
+      sm.requestRepoPolicyForLaunch(baseLaunch);
+      sm.requestRepoPolicyForLaunch(baseLaunch);
+      sm.requestRepoPolicyForLaunch({
+        ...baseLaunch,
+        allowedTools: ["Shell(pnpm test)", "Shell(git status)"],
+      });
+      sm.requestRepoPolicyForLaunch({
+        ...baseLaunch,
+        prompt: "Implement launch B",
+        name: "launch-b",
+        model: "gpt-5.2",
+      });
+
+      assert.equal(dispatchCalls.length, 4);
+      const firstKey = dispatchCalls[0][1].idempotencyKey;
+      const retryKey = dispatchCalls[1][1].idempotencyKey;
+      const reorderedToolsKey = dispatchCalls[2][1].idempotencyKey;
+      const changedKey = dispatchCalls[3][1].idempotencyKey;
+      assert.equal(retryKey, firstKey);
+      assert.equal(reorderedToolsKey, firstKey);
+      assert.notEqual(changedKey, firstKey);
+      assert.match(firstKey, /^repo-policy-choice:.+:delegate:[0-9a-f]{16}$/);
+      assert.match(changedKey, /^repo-policy-choice:.+:delegate:[0-9a-f]{16}$/);
+      assert.equal(firstKey.includes("Implement launch A"), false);
+      assert.equal(changedKey.includes("Implement launch B"), false);
+      assert.equal(changedKey.includes("gpt-5.2"), false);
+      sm.dispose();
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+      rmSync(storeDir, { recursive: true, force: true });
+    }
+  });
+
   it("forwards stored session ID override when continuing after repo-policy choice", () => {
     const storeDir = mkdtempSync(join(tmpdir(), "openclaw-policy-launch-store-"));
     try {
