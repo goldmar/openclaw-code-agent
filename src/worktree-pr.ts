@@ -31,6 +31,28 @@ export interface WorktreeOutcomeParams {
   prUrl?: string;
 }
 
+function inferOriginOwner(repoDir: string): string | undefined {
+  try {
+    const originUrl = execFileSync("git", ["-C", repoDir, "remote", "get-url", "origin"], {
+      timeout: 5_000,
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "pipe"],
+    }).trim();
+    const match = originUrl.match(/[:/]([^/]+)\/[^/]+(?:\.git)?$/);
+    return match?.[1];
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveGhHeadArg(repoDir: string, branch: string, targetRepo?: string): string {
+  if (!targetRepo) {
+    return branch;
+  }
+  const forkOwner = inferOriginOwner(repoDir);
+  return forkOwner ? `${forkOwner}:${branch}` : branch;
+}
+
 export function createPR(
   repoDir: string,
   branch: string,
@@ -46,21 +68,6 @@ export function createPR(
 
   let args: string[] | undefined;
   try {
-    let forkOwner: string | undefined;
-    if (targetRepo) {
-      try {
-        const originUrl = execFileSync("git", ["-C", repoDir, "remote", "get-url", "origin"], {
-          timeout: 5_000,
-          encoding: "utf-8",
-          stdio: ["pipe", "pipe", "pipe"],
-        }).trim();
-        const match = originUrl.match(/[:/]([^/]+)\/[^/]+(?:\.git)?$/);
-        if (match) forkOwner = match[1];
-      } catch {
-        // best effort
-      }
-    }
-
     args = ["pr", "create", "--base", base];
     if (options.draft ?? true) {
       args.push("--draft");
@@ -68,11 +75,7 @@ export function createPR(
     if (targetRepo) {
       args.push("--repo", targetRepo);
     }
-    if (forkOwner) {
-      args.push("--head", `${forkOwner}:${branch}`);
-    } else {
-      args.push("--head", branch);
-    }
+    args.push("--head", resolveGhHeadArg(repoDir, branch, targetRepo));
     if (title && body) {
       args.push("--title", title, "--body", body);
     } else {
@@ -125,7 +128,7 @@ export function syncWorktreePR(repoDir: string, branchName: string, targetRepo?:
   }
 
   try {
-    const ghArgs = ["pr", "list", "--head", branchName, "--state", "all", "--json", "url,number,title,state", "--jq", ".[0]"];
+    const ghArgs = ["pr", "list", "--head", resolveGhHeadArg(repoDir, branchName, targetRepo), "--state", "all", "--json", "url,number,title,state", "--jq", ".[0]"];
     if (targetRepo) {
       ghArgs.push("--repo", targetRepo);
     }
