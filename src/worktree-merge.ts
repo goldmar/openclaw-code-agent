@@ -23,6 +23,18 @@ export interface MergeResult {
   rebaseConflict?: boolean;
 }
 
+export function buildMergeWarningLines(mergeResult: MergeResult): string[] {
+  return (mergeResult.warnings ?? [])
+    .filter((warning) => !(mergeResult.stashPopConflict && warning.startsWith("Failed to pop auto-stash after merge")))
+    .map((warning) => `Recovery warning: ${warning}`);
+}
+
+export function appendMergeWarnings(text: string, mergeResult: MergeResult): string {
+  const warningLines = buildMergeWarningLines(mergeResult);
+  if (warningLines.length === 0) return text;
+  return `${text}\n${warningLines.map((line) => `⚠️ ${line}`).join("\n")}`;
+}
+
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
