@@ -891,7 +891,11 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       const worktreePath = createWorktree(repoDir, "legacy-dismissed-cleanup");
       const branchName = getBranchName(worktreePath);
       assert.ok(branchName, "worktree branch should exist");
+      writeFileSync(join(worktreePath, "branch-only.txt"), "legacy dismissed work\n", "utf-8");
+      git(worktreePath, "add", "branch-only.txt");
+      git(worktreePath, "commit", "-m", "legacy dismissed branch work");
 
+      const dismissedAt = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString();
       const created = createTestSessionManager(5);
       const sm = created.sm;
       cleanup = created.cleanup;
@@ -911,7 +915,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
         worktreePath,
         worktreeBranch: branchName,
         worktreeDisposition: "dismissed",
-        worktreeDismissedAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString(),
+        worktreeDismissedAt: dismissedAt,
       });
 
       (sm as any).maintenance.reconcileResolvedWorktreeRetention((sm as any).store.persisted.get("h-legacy-dismissed"), Date.now());
@@ -920,6 +924,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       const persisted = (sm as any).store.persisted.get("h-legacy-dismissed");
       assert.equal(persisted.worktreePath, undefined);
       assert.equal(persisted.worktreeState, "none");
+      assert.equal(persisted.worktreeLifecycle?.state, "dismissed");
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
       cleanup();
