@@ -1,7 +1,7 @@
-import { describe, it } from "node:test";
+import { after, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { SessionManager } from "../src/session-manager";
@@ -11,6 +11,26 @@ import { createWorktree, getBranchName } from "../src/worktree";
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf-8" }).trim();
 }
+
+const mockGhDir = mkdtempSync(join(tmpdir(), "sm-worktree-gh-"));
+const mockGhBinDir = join(mockGhDir, "bin");
+mkdirSync(mockGhBinDir);
+writeFileSync(join(mockGhBinDir, "gh"), [
+  "#!/bin/sh",
+  "if [ \"$1\" = \"--version\" ]; then",
+  "  echo 'gh version 2.0.0'",
+  "  exit 0",
+  "fi",
+  "exit 1",
+  "",
+].join("\n"));
+chmodSync(join(mockGhBinDir, "gh"), 0o755);
+const originalPath = process.env.PATH;
+process.env.PATH = `${mockGhBinDir}:${process.env.PATH ?? ""}`;
+after(() => {
+  process.env.PATH = originalPath;
+  rmSync(mockGhDir, { recursive: true, force: true });
+});
 
 function createTestSessionManager(
   maxSessions = 5,
