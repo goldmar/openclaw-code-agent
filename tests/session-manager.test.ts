@@ -1428,6 +1428,60 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     assert.equal(scheduled.some((entry) => entry.key.endsWith(":worktree-reminder")), false);
   });
 
+  it("clears orphaned resolved reminder fields without a valid pending timestamp", () => {
+    const sm = new SessionManager(5, 5);
+    const now = Date.now();
+    const scheduled: Array<{ key: string; at: number; cb: () => void }> = [];
+    const stale = {
+      sessionId: "stale-orphaned-reminder-session",
+      harnessSessionId: "stale-orphaned-reminder-thread",
+      backendRef: { kind: "claude-code", conversationId: "stale-orphaned-reminder-thread" },
+      name: "stale-orphaned-reminder-session",
+      prompt: "test",
+      workdir: "/tmp",
+      route: {
+        provider: "telegram",
+        accountId: "bot",
+        target: "12345",
+        threadId: "42",
+        sessionKey: "agent:main:telegram:group:12345:topic:42",
+      },
+      createdAt: now,
+      completedAt: now,
+      status: "completed",
+      lifecycle: "awaiting_worktree_decision",
+      approvalState: "not_required",
+      worktreeState: "pending_decision",
+      runtimeState: "stopped",
+      deliveryState: "idle",
+      costUsd: 0,
+      pendingWorktreeDecisionSince: "not-a-date",
+      lastWorktreeReminderAt: new Date(now - 60_000).toISOString(),
+      worktreeDecisionSnoozedUntil: new Date(now - 30_000).toISOString(),
+      worktreeLifecycle: {
+        state: "merged",
+        updatedAt: new Date(now).toISOString(),
+        resolvedAt: new Date(now).toISOString(),
+        resolutionSource: "agent_merge",
+      },
+    };
+
+    (sm as any).persisted.set(stale.harnessSessionId, stale);
+    (sm as any).idIndex.set(stale.sessionId, stale.harnessSessionId);
+    (sm as any).maintenance.cancel = (() => {}) as any;
+    (sm as any).maintenance.schedule = ((key: string, at: number, cb: () => void) => {
+      scheduled.push({ key, at, cb });
+    }) as any;
+
+    (sm as any).syncPersistedSessionMaintenance(stale);
+
+    const persisted = (sm as any).store.getPersistedSession(stale.sessionId);
+    assert.equal(persisted.pendingWorktreeDecisionSince, undefined);
+    assert.equal(persisted.lastWorktreeReminderAt, undefined);
+    assert.equal(persisted.worktreeDecisionSnoozedUntil, undefined);
+    assert.equal(scheduled.some((entry) => entry.key.endsWith(":worktree-reminder")), false);
+  });
+
   it("snoozes worktree decisions without dispatching a user notification when requested", () => {
     const originalDateNow = Date.now;
     const now = 1_700_000_000_000;
