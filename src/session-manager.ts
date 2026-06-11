@@ -853,23 +853,36 @@ export class SessionManager {
     const resolution = this.resolveRepoPolicy(workdir);
     if (!resolution.identity) return { kind: "none" };
 
-    const candidates = this.interactions.listActiveActionTokens("repo-policy-set")
+    const repoPolicyTokens = this.interactions.listActiveActionTokens("repo-policy-set")
       .filter((token) => (
-        token.repoPolicy === policy
-        && token.repoPolicyWorkdir === resolution.identity?.repoRoot
-        && Boolean(token.launchPrompt)
-        && Boolean(token.launchWorkdir)
-        && Boolean(token.route?.provider)
-        && Boolean(token.route?.target)
+        token.repoPolicyWorkdir === resolution.identity?.repoRoot
       ));
+    const clearRepoPolicyTokenSessions = (): void => {
+      for (const sessionId of new Set(repoPolicyTokens.map((token) => token.sessionId))) {
+        this.clearRepoPolicyChoiceTokens(sessionId);
+      }
+    };
+    const candidates = repoPolicyTokens.filter((token) => (
+      token.repoPolicy === policy
+      && Boolean(token.launchPrompt)
+      && Boolean(token.launchWorkdir)
+      && Boolean(token.route?.provider)
+      && Boolean(token.route?.target)
+    ));
 
-    if (candidates.length === 0) return { kind: "none" };
+    if (candidates.length === 0) {
+      clearRepoPolicyTokenSessions();
+      return { kind: "none" };
+    }
     const candidatesByLaunch = new Map<string, SessionActionToken>();
     for (const candidate of candidates) {
       const key = digestRepoPolicyTokenLaunchContext(candidate);
       if (!candidatesByLaunch.has(key)) candidatesByLaunch.set(key, candidate);
     }
-    if (candidatesByLaunch.size > 1) return { kind: "ambiguous", count: candidatesByLaunch.size };
+    if (candidatesByLaunch.size > 1) {
+      clearRepoPolicyTokenSessions();
+      return { kind: "ambiguous", count: candidatesByLaunch.size };
+    }
 
     const token = [...candidatesByLaunch.values()][0];
     if (!token.launchPrompt || !token.launchWorkdir) return { kind: "none" };
