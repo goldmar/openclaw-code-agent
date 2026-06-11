@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { SessionManager } from "../src/session-manager";
 import { setPluginConfig } from "../src/config";
 import { buildPresentation } from "../src/direct-notification-transport";
+import { SessionReminderService } from "../src/session-reminder-service";
 import { SessionNotificationService } from "../src/session-notifications";
 import { SessionWorktreeDecisionService } from "../src/session-worktree-decision-service";
 import { SessionMetricsRecorder } from "../src/session-metrics";
@@ -69,6 +70,14 @@ function stubDispatch(sm: SessionManager): void {
     clearRetryTimersForSession: () => {},
     dispose: () => {},
   };
+}
+
+function buttonLabels(rows: Array<Array<{ label: string }>> | undefined): string[][] {
+  return (rows ?? []).map((row) => row.map((button) => button.label));
+}
+
+function hasButton(rows: string[][], label: string): boolean {
+  return rows.some((row) => row.includes(label));
 }
 
 // =========================================================================
@@ -1149,6 +1158,160 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
       assert.equal(scheduled[1].at, now + 5 * 60 * 1000);
     } finally {
       Date.now = originalDateNow;
+    }
+  });
+
+  for (const testCase of [
+    {
+      policy: "pr-required",
+      expected: { merge: false, openPr: true, prFollowups: false },
+    },
+    {
+      policy: "never-pr",
+      expected: { merge: true, openPr: false, prFollowups: false },
+    },
+    {
+      policy: "manual",
+      expected: { merge: false, openPr: false, prFollowups: false },
+    },
+  ] as const) {
+    it(`renders ${testCase.policy} policy-aware buttons for pending worktree reminders`, () => {
+      const storeDir = mkdtempSync(join(tmpdir(), "sm-reminder-policy-store-"));
+      const sm = new SessionManager(5, 5, {
+        store: {
+          env: {},
+          indexPath: join(storeDir, "sessions.json"),
+        },
+      });
+      const now = 1_700_000_000_000;
+      const pending: any = {
+        sessionId: `pending-${testCase.policy}`,
+        harnessSessionId: `pending-${testCase.policy}-thread`,
+        backendRef: { kind: "claude-code", conversationId: `pending-${testCase.policy}-thread` },
+        name: `pending-${testCase.policy}`,
+        prompt: "test",
+        workdir: "/tmp/repo",
+        worktreePath: `/tmp/repo/.worktrees/pending-${testCase.policy}`,
+        worktreeBranch: `agent/pending-${testCase.policy}`,
+        worktreeStrategy: "ask",
+        createdAt: now,
+        completedAt: now,
+        status: "completed",
+        lifecycle: "awaiting_worktree_decision",
+        approvalState: "not_required",
+        worktreeState: "pending_decision",
+        runtimeState: "stopped",
+        deliveryState: "idle",
+        costUsd: 0,
+        repoIntegrationPolicy: testCase.policy,
+        pendingWorktreeDecisionSince: new Date(now - 4 * 60 * 60 * 1000).toISOString(),
+      };
+      const dispatchCalls: Array<{ request: any }> = [];
+
+      (sm as any).persisted.set(pending.harnessSessionId, pending);
+      (sm as any).idIndex.set(pending.sessionId, pending.harnessSessionId);
+      (sm as any).interactions.isGitHubCliAvailable = () => true;
+      (sm as any).resolveRepoPolicy = () => ({
+        source: "stored",
+        provider: "github",
+        prAvailable: true,
+        policy: testCase.policy,
+      });
+      const reminders = new SessionReminderService(
+        (session) => ({ id: session.id ?? pending.sessionId }) as any,
+        (_session, request) => { dispatchCalls.push({ request }); },
+        (_ref, patch) => {
+          Object.assign(pending, patch);
+          return true;
+        },
+        (sessionId, persistedSession) => (sm as any).getPolicyAwareWorktreeDecisionButtons(
+          sessionId,
+          {},
+          undefined,
+          persistedSession,
+        ),
+      );
+
+      try {
+        assert.equal(reminders.sendReminderIfDue(pending, now), true);
+
+        const labels = buttonLabels(dispatchCalls[0]?.request.buttons);
+        assert.equal(hasButton(labels, "Merge"), testCase.expected.merge);
+        assert.equal(hasButton(labels, "Open PR"), testCase.expected.openPr);
+        assert.equal(hasButton(labels, "View PR"), testCase.expected.prFollowups);
+        assert.equal(hasButton(labels, "Sync PR"), testCase.expected.prFollowups);
+        assert.equal(hasButton(labels, "Later"), true);
+        assert.equal(hasButton(labels, "Discard"), true);
+      } finally {
+        rmSync(storeDir, { recursive: true, force: true });
+      }
+    });
+  }
+
+  it("keeps Open PR available for pr-required pending worktree reminders when repo dir is unavailable", () => {
+    const storeDir = mkdtempSync(join(tmpdir(), "sm-reminder-policy-unresolved-store-"));
+    const sm = new SessionManager(5, 5, {
+      store: {
+        env: {},
+        indexPath: join(storeDir, "sessions.json"),
+      },
+    });
+    const now = 1_700_000_000_000;
+    const pending: any = {
+      sessionId: "pending-pr-required-unresolved",
+      harnessSessionId: "pending-pr-required-unresolved-thread",
+      backendRef: { kind: "claude-code", conversationId: "pending-pr-required-unresolved-thread" },
+      name: "pending-pr-required-unresolved",
+      prompt: "test",
+      workdir: undefined,
+      worktreePath: undefined,
+      worktreeBranch: "agent/pending-pr-required-unresolved",
+      worktreeStrategy: "ask",
+      createdAt: now,
+      completedAt: now,
+      status: "completed",
+      lifecycle: "awaiting_worktree_decision",
+      approvalState: "not_required",
+      worktreeState: "pending_decision",
+      runtimeState: "stopped",
+      deliveryState: "idle",
+      costUsd: 0,
+      repoIntegrationPolicy: "pr-required",
+      pendingWorktreeDecisionSince: new Date(now - 4 * 60 * 60 * 1000).toISOString(),
+    };
+    const dispatchCalls: Array<{ request: any }> = [];
+
+    (sm as any).persisted.set(pending.harnessSessionId, pending);
+    (sm as any).idIndex.set(pending.sessionId, pending.harnessSessionId);
+    (sm as any).resolveWorktreeRepoDir = () => undefined;
+    (sm as any).resolveRepoPolicy = () => {
+      throw new Error("resolveRepoPolicy should not run without a repo dir");
+    };
+    const reminders = new SessionReminderService(
+      (session) => ({ id: session.id ?? pending.sessionId }) as any,
+      (_session, request) => { dispatchCalls.push({ request }); },
+      (_ref, patch) => {
+        Object.assign(pending, patch);
+        return true;
+      },
+      (sessionId, persistedSession) => (sm as any).getPolicyAwareWorktreeDecisionButtons(
+        sessionId,
+        {},
+        undefined,
+        persistedSession,
+      ),
+    );
+
+    try {
+      assert.equal(reminders.sendReminderIfDue(pending, now), true);
+
+      const labels = buttonLabels(dispatchCalls[0]?.request.buttons);
+      assert.equal(hasButton(labels, "Merge"), false);
+      assert.equal(hasButton(labels, "Open PR"), true);
+      assert.equal(hasButton(labels, "Later"), true);
+      assert.equal(hasButton(labels, "Discard"), true);
+    } finally {
+      rmSync(storeDir, { recursive: true, force: true });
     }
   });
 

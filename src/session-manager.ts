@@ -333,7 +333,12 @@ export class SessionManager {
       (session) => manager.buildRoutingProxy(session),
       (session, request) => notifications.dispatch(session, request),
       (ref, patch) => manager.updatePersistedSession(ref, patch),
-      (sessionId) => manager.getWorktreeDecisionButtons(sessionId),
+      (sessionId, persistedSession) => manager.getPolicyAwareWorktreeDecisionButtons(
+        sessionId,
+        {},
+        undefined,
+        persistedSession,
+      ),
     );
     const maintenance = new SessionMaintenanceService({
       store,
@@ -905,13 +910,16 @@ export class SessionManager {
       activeSession?.worktreePath ?? persisted?.worktreePath,
     );
     const policyResolution = repoDir ? this.resolveRepoPolicy(repoDir) : undefined;
-    const effectivePolicy = activeSession?.repoIntegrationPolicy
-      ?? persisted?.repoIntegrationPolicy
+    const sessionPolicy = activeSession?.repoIntegrationPolicy
+      ?? persisted?.repoIntegrationPolicy;
+    const effectivePolicy = sessionPolicy
       ?? policyResolution?.policy;
     const hasEffectivePolicy = Boolean(effectivePolicy);
+    const prAvailable = policyResolution?.prAvailable
+      ?? Boolean(sessionPolicy && sessionPolicy !== "never-pr" && sessionPolicy !== "manual");
     const allowedActions = {
       merge: !hasEffectivePolicy || (effectivePolicy !== "pr-required" && effectivePolicy !== "manual"),
-      pr: !hasEffectivePolicy || (effectivePolicy !== "never-pr" && effectivePolicy !== "manual" && (policyResolution?.prAvailable ?? false)),
+      pr: !hasEffectivePolicy || (effectivePolicy !== "never-pr" && effectivePolicy !== "manual" && prAvailable),
     };
     return this.getWorktreeDecisionButtons(sessionId, options, allowedActions);
   }
