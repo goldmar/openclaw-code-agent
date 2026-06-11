@@ -489,6 +489,60 @@ describe("RuntimeDirectNotificationTransport", () => {
     assertNoInvalidTelegramStyle(payloads[0]);
   });
 
+  it("drops rendered Telegram buttons without an action field", async () => {
+    const payloads: unknown[] = [];
+    setPluginRuntime({
+      channel: {
+        outbound: {
+          loadAdapter: async () => ({
+            renderPresentation: ({ payload }: { payload: unknown }) => ({
+              ...(payload as Record<string, unknown>),
+              channelData: {
+                telegram: {
+                  buttons: [[
+                    {
+                      text: "Plain",
+                    },
+                    {
+                      text: "Styled",
+                      style: "success",
+                    },
+                    {
+                      text: "Open",
+                      url: "https://example.test/open",
+                      style: "primary",
+                    },
+                  ]],
+                },
+              },
+            }),
+            sendPayload: async (ctx: { payload: unknown }) => {
+              payloads.push(ctx.payload);
+            },
+          }),
+        },
+      },
+    }, { channels: { telegram: { enabled: true } } });
+
+    await new RuntimeDirectNotificationTransport().send(
+      {
+        channel: "telegram",
+        accountId: "default",
+        target: "-1003863755361",
+        threadId: "28",
+      },
+      "Plan needs approval",
+      [[
+        { label: "Approve", callbackData: "approve-token", style: "success" },
+      ]],
+    );
+
+    assert.deepEqual(telegramButtons(payloads[0]), [[
+      { text: "Open", url: "https://example.test/open", style: "primary" },
+    ]]);
+    assertNoInvalidTelegramStyle(payloads[0]);
+  });
+
   it("does not sanitize shared presentation styles for non-Telegram transports", async () => {
     const payloads: unknown[] = [];
     setPluginRuntime({

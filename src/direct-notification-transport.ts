@@ -484,6 +484,7 @@ function sanitizeTelegramInlineButtons(buttons: unknown): TelegramInlineButtons 
           ) {
             return undefined;
           }
+          if (!hasTelegramButtonAction(rest)) return undefined;
           return {
             ...rest,
             ...telegramButtonStyle(rawStyle),
@@ -493,6 +494,15 @@ function sanitizeTelegramInlineButtons(buttons: unknown): TelegramInlineButtons 
     })
     .filter((row) => row.length > 0);
   return rows.length > 0 ? rows as TelegramInlineButtons : undefined;
+}
+
+function hasTelegramButtonAction(button: Record<string, unknown>): boolean {
+  return Object.entries(button).some(([key, value]) => {
+    if (key === "text") return false;
+    if (value == null) return false;
+    if (typeof value === "string") return value.trim().length > 0;
+    return true;
+  });
 }
 
 function telegramButtonStyle(style: unknown): { style: string } | Record<string, never> {
