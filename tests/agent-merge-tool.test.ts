@@ -1,12 +1,12 @@
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { setSessionManager } from "../src/singletons";
 import { SessionNotificationService } from "../src/session-notifications";
-import { makeAgentMergeTool } from "../src/tools/agent-merge";
+import { formatCleanupOutcome, makeAgentMergeTool } from "../src/tools/agent-merge";
 import { createWorktree, getBranchName } from "../src/worktree";
 
 function git(cwd: string, ...args: string[]): string {
@@ -57,6 +57,10 @@ function createReadmeChangingWorktree(repoDir: string, name: string): { worktree
 function remoteHead(repoDir: string, branch: string): string {
   const output = git(repoDir, "ls-remote", "--heads", "origin", branch);
   return output.split(/\s+/)[0] ?? "";
+}
+
+function localBranchExists(repoDir: string, branch: string): boolean {
+  return git(repoDir, "branch", "--list", branch).length > 0;
 }
 
 function installPersistedSessionWithNotificationService(args: {
@@ -196,6 +200,18 @@ afterEach(() => {
 });
 
 describe("agent_merge push behavior", () => {
+  it("reports already-absent worktrees accurately when branch deletion fails", () => {
+    assert.deepEqual(formatCleanupOutcome({
+      deleteBranchRequested: true,
+      branchDeleted: false,
+      worktreeCleanedUp: true,
+      worktreeAlreadyAbsent: true,
+    }), {
+      detailLine: "Worktree was already absent; branch deletion failed.",
+      summaryFragment: " Worktree was already absent; branch deletion failed.",
+    });
+  });
+
   it("blocks dirty uncommitted worktrees that have no commits to merge", async () => {
     const { repoDir, remoteDir } = createRepoWithRemote("agent-merge-dirty");
     try {
@@ -252,9 +268,54 @@ describe("agent_merge push behavior", () => {
       const result = await tool.execute("tool-id", { session: sessionName, delete_branch: false });
 
       assert.match((result.content[0] as { text: string }).text, /Fast-forward|Merge commit/);
+      assert.match((result.content[0] as { text: string }).text, /Worktree cleaned up; branch kept/);
       assert.doesNotMatch((result.content[0] as { text: string }).text, /Pushed\./);
       assert.equal(remoteHead(repoDir, "main"), initialRemoteMain);
       assert.notEqual(git(repoDir, "rev-parse", "main"), initialRemoteMain);
+      assert.equal(existsSync(worktreePath), false);
+      assert.equal(localBranchExists(repoDir, branchName), true);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+      rmSync(remoteDir, { recursive: true, force: true });
+    }
+  });
+
+  it("cleans the linked worktree before deleting the merged branch by default", async () => {
+    const { repoDir, remoteDir } = createRepoWithRemote("agent-merge-cleanup-default");
+    try {
+      const sessionName = "merge-cleanup-default";
+      const { worktreePath, branchName } = createCommittedWorktree(repoDir, sessionName);
+      installPersistedSessionStub(sessionName, repoDir, worktreePath, branchName);
+
+      const tool = makeAgentMergeTool();
+      const result = await tool.execute("tool-id", { session: sessionName });
+
+      assert.match((result.content[0] as { text: string }).text, /Branch and worktree cleaned up/);
+      assert.equal(existsSync(worktreePath), false);
+      assert.equal(localBranchExists(repoDir, branchName), false);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+      rmSync(remoteDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports already-absent worktrees without claiming cleanup was skipped", async () => {
+    const { repoDir, remoteDir } = createRepoWithRemote("agent-merge-cleanup-missing-worktree");
+    try {
+      const sessionName = "merge-cleanup-missing-worktree";
+      const { worktreePath, branchName } = createCommittedWorktree(repoDir, sessionName);
+      const notifications: Array<{ session: unknown; outcomeLine: string; options?: any }> = [];
+      installPersistedSessionStub(sessionName, repoDir, worktreePath, branchName, notifications);
+      git(repoDir, "worktree", "remove", worktreePath);
+
+      const tool = makeAgentMergeTool();
+      const result = await tool.execute("tool-id", { session: sessionName });
+
+      assert.match((result.content[0] as { text: string }).text, /Branch deleted; worktree was already absent/);
+      assert.doesNotMatch((result.content[0] as { text: string }).text, /cleanup skipped/);
+      assert.equal(localBranchExists(repoDir, branchName), false);
+      assert.equal(notifications.length, 1);
+      assert.match(String(notifications[0].options?.detailLines?.join("\n")), /worktree was already absent/);
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
       rmSync(remoteDir, { recursive: true, force: true });

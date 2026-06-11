@@ -47,6 +47,72 @@ function buildStashOutcomeDetailLines(args: {
   return [];
 }
 
+export function formatCleanupOutcome(args: {
+  deleteBranchRequested: boolean;
+  branchDeleted: boolean;
+  worktreeCleanedUp: boolean;
+  worktreeAlreadyAbsent: boolean;
+}): { detailLine: string; summaryFragment: string } {
+  if (!args.deleteBranchRequested) {
+    if (args.worktreeCleanedUp && !args.worktreeAlreadyAbsent) {
+      return {
+        detailLine: "Worktree cleaned up; branch deletion was not requested.",
+        summaryFragment: " Worktree cleaned up; branch kept.",
+      };
+    }
+    if (args.worktreeAlreadyAbsent) {
+      return {
+        detailLine: "Worktree was already absent; branch deletion was not requested.",
+        summaryFragment: " Worktree was already absent; branch kept.",
+      };
+    }
+    return {
+      detailLine: "Worktree cleanup failed; branch deletion was not requested.",
+      summaryFragment: " Worktree cleanup failed; branch kept.",
+    };
+  }
+
+  if (args.branchDeleted && args.worktreeCleanedUp && !args.worktreeAlreadyAbsent) {
+    return {
+      detailLine: "Branch and worktree cleaned up.",
+      summaryFragment: " Branch and worktree cleaned up.",
+    };
+  }
+
+  if (args.branchDeleted && args.worktreeAlreadyAbsent) {
+    return {
+      detailLine: "Branch deleted; worktree was already absent.",
+      summaryFragment: " Branch deleted; worktree was already absent.",
+    };
+  }
+
+  if (args.branchDeleted) {
+    return {
+      detailLine: "Branch deleted; worktree cleanup failed.",
+      summaryFragment: " Branch deleted; worktree cleanup failed.",
+    };
+  }
+
+  if (args.worktreeAlreadyAbsent) {
+    return {
+      detailLine: "Worktree was already absent; branch deletion failed.",
+      summaryFragment: " Worktree was already absent; branch deletion failed.",
+    };
+  }
+
+  if (args.worktreeCleanedUp) {
+    return {
+      detailLine: "Worktree cleaned up; branch deletion failed.",
+      summaryFragment: " Worktree cleaned up; branch deletion failed.",
+    };
+  }
+
+  return {
+    detailLine: "Branch deletion and worktree cleanup failed.",
+    summaryFragment: " Branch deletion and worktree cleanup failed.",
+  };
+}
+
 /** Register the `agent_merge` tool factory. */
 export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
   return {
@@ -187,17 +253,22 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
             }
           }
 
-          // Cleanup branch if requested
-          if (shouldCleanup) {
-            deleteBranch(effectiveWorkdir, branchName);
-          }
-
-          // Remove worktree directory — it may have been kept alive pending user decision
+          let branchDeleted = false;
           let worktreeCleanedUp = false;
-          if (existsSync(worktreePath)) {
-            worktreeCleanedUp = removeWorktree(effectiveWorkdir, worktreePath);
-            pruneWorktrees(effectiveWorkdir);
+          const worktreeAlreadyAbsent = !existsSync(worktreePath);
+          worktreeCleanedUp = worktreeAlreadyAbsent
+            ? true
+            : removeWorktree(effectiveWorkdir, worktreePath);
+          pruneWorktrees(effectiveWorkdir);
+          if (shouldCleanup) {
+            branchDeleted = deleteBranch(effectiveWorkdir, branchName);
           }
+          const cleanupOutcome = formatCleanupOutcome({
+            deleteBranchRequested: shouldCleanup,
+            branchDeleted,
+            worktreeCleanedUp,
+            worktreeAlreadyAbsent,
+          });
 
           // Persist merge status if we have a persisted session
           if (freshPersisted) {
@@ -239,20 +310,15 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
               detailLines: [
                 mergeResult.fastForward ? "Merge type: fast-forward." : "Merge type: merge commit.",
                 shouldPush ? `Pushed ${baseBranch}.` : `Did not push ${baseBranch}; push was not requested.`,
-                shouldCleanup
-                  ? (worktreeCleanedUp ? "Branch and worktree cleaned up." : "Branch deleted; worktree cleanup skipped.")
-                  : "Branch/worktree cleanup was not requested.",
+                cleanupOutcome.detailLine,
                 ...stashDetailLines,
               ],
             },
           );
 
           const mergeTypeMsg = mergeResult.fastForward ? "⚡ Fast-forward" : "🔀 Merge commit";
-          const cleanupMsg = shouldCleanup
-            ? (worktreeCleanedUp ? " Branch and worktree cleaned up." : " Branch deleted; worktree cleanup skipped.")
-            : "";
           const pushMsg = shouldPush ? " Pushed." : "";
-          let successText = `✅ ${mergeTypeMsg}: ${branchName} → ${baseBranch}.${pushMsg}${cleanupMsg}`;
+          let successText = `✅ ${mergeTypeMsg}: ${branchName} → ${baseBranch}.${pushMsg}${cleanupOutcome.summaryFragment}`;
           if (mergeResult.stashPopConflict) {
             successText += `\n⚠️ Pre-merge stash pop conflicted — run \`git stash show ${mergeResult.stashRef ?? "stash@{0}"}\` in ${effectiveWorkdir} to review stashed changes.`;
           } else if (mergeResult.stashed) {
