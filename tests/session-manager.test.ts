@@ -967,6 +967,114 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     }
   });
 
+  it("backs off tmp-output cleanup when an expired file remains after cleanup", () => {
+    const sm = new SessionManager(5, 5);
+    const originalDateNow = Date.now;
+    const now = 1_700_000_000_000;
+    const scheduled: Array<{ key: string; at: number; cb: () => void }> = [];
+    const cleanupTimes: number[] = [];
+
+    Date.now = () => now;
+
+    try {
+      (sm as any).store.getNextTmpOutputCleanupAt = () => now;
+      (sm as any).store.cleanupTmpOutputFiles = (cleanupNow: number) => {
+        cleanupTimes.push(cleanupNow);
+      };
+      (sm as any).maintenance.cancel = (() => {}) as any;
+      (sm as any).maintenance.schedule = ((key: string, at: number, cb: () => void) => {
+        scheduled.push({ key, at, cb });
+      }) as any;
+
+      (sm as any).syncTmpOutputCleanupDeadline(now);
+      assert.equal(scheduled.length, 1);
+      assert.equal(scheduled[0].key, "tmp-output:cleanup");
+      assert.equal(scheduled[0].at, now);
+
+      scheduled[0].cb();
+
+      assert.deepEqual(cleanupTimes, [now]);
+      assert.equal(scheduled.length, 2);
+      assert.equal(scheduled[1].key, "tmp-output:cleanup");
+      assert.equal(scheduled[1].at, now + 60_000);
+    } finally {
+      Date.now = originalDateNow;
+    }
+  });
+
+  it("backs off tmp-output cleanup after bootstrap cleanup leaves an expired file", () => {
+    const sm = new SessionManager(5, 5);
+    const originalDateNow = Date.now;
+    const now = 1_700_000_000_000;
+    const scheduled: Array<{ key: string; at: number }> = [];
+    const cleanupTimes: number[] = [];
+
+    Date.now = () => now;
+
+    try {
+      (sm as any).store.cleanupOrphanOutputFiles = () => {};
+      (sm as any).store.getNextTmpOutputCleanupAt = () => now;
+      (sm as any).store.cleanupTmpOutputFiles = (cleanupNow: number) => {
+        cleanupTimes.push(cleanupNow);
+      };
+      (sm as any).maintenance.schedule = ((key: string, at: number) => {
+        scheduled.push({ key, at });
+      }) as any;
+
+      sm.bootstrapMaintenanceSchedules();
+
+      assert.deepEqual(cleanupTimes, [now]);
+      assert.ok(scheduled.some((entry) => entry.key === "tmp-output:cleanup" && entry.at === now + 60_000));
+    } finally {
+      Date.now = originalDateNow;
+    }
+  });
+
+  it("does not back off a new overdue temp-output cleanup after the previous cleanup caught up", () => {
+    const sm = new SessionManager(5, 5);
+    const originalDateNow = Date.now;
+    const now = 1_700_000_000_000;
+    let currentNow = now;
+    const scheduled: Array<{ key: string; at: number; cb: () => void }> = [];
+    const cleanupTimes: number[] = [];
+    const nextDeadlines: Array<number | undefined> = [
+      now,
+      undefined,
+      now + 30_000,
+    ];
+
+    Date.now = () => currentNow;
+
+    try {
+      (sm as any).store.getNextTmpOutputCleanupAt = () => nextDeadlines.shift();
+      (sm as any).store.cleanupTmpOutputFiles = (cleanupNow: number) => {
+        cleanupTimes.push(cleanupNow);
+      };
+      (sm as any).maintenance.cancel = (() => {}) as any;
+      (sm as any).maintenance.schedule = ((key: string, at: number, cb: () => void) => {
+        scheduled.push({ key, at, cb });
+      }) as any;
+
+      (sm as any).syncTmpOutputCleanupDeadline(now);
+      assert.equal(scheduled.length, 1);
+      assert.equal(scheduled[0].at, now);
+
+      scheduled[0].cb();
+
+      assert.deepEqual(cleanupTimes, [now]);
+      assert.equal(scheduled.length, 1);
+
+      currentNow = now + 30_000;
+      (sm as any).syncTmpOutputCleanupDeadline(currentNow);
+
+      assert.equal(scheduled.length, 2);
+      assert.equal(scheduled[1].key, "tmp-output:cleanup");
+      assert.equal(scheduled[1].at, currentNow);
+    } finally {
+      Date.now = originalDateNow;
+    }
+  });
+
   it("seeds retention for legacy merged sessions without worktreeLifecycle metadata", () => {
     const sm = new SessionManager(5, 5);
     const now = Date.now();

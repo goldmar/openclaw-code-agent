@@ -13,6 +13,7 @@ import { removeWorktree } from "./worktree";
 const RESOLVED_WORKTREE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const WORKTREE_REMINDER_RETRY_BACKOFF_MS = 5 * 60 * 1000;
 const TMP_OUTPUT_CLEANUP_KEY = "tmp-output:cleanup";
+const TMP_OUTPUT_CLEANUP_RETRY_BACKOFF_MS = 60 * 1000;
 
 interface SessionMaintenanceDeps {
   store: SessionStore;
@@ -32,6 +33,7 @@ function errorMessage(err: unknown): string {
 
 export class SessionMaintenanceService {
   private readonly scheduler = new KeyedDeadlineScheduler();
+  private lastTmpOutputCleanupAttemptAt: number | undefined;
 
   constructor(private readonly deps: SessionMaintenanceDeps) {}
 
@@ -49,7 +51,7 @@ export class SessionMaintenanceService {
 
   bootstrapMaintenanceSchedules(): void {
     const now = Date.now();
-    this.deps.store.cleanupTmpOutputFiles(now);
+    this.runTmpOutputCleanup(now);
     for (const session of this.deps.store.listPersistedSessions()) {
       this.syncPersistedSessionMaintenance(session);
     }
@@ -175,10 +177,16 @@ export class SessionMaintenanceService {
   syncTmpOutputCleanupDeadline(now: number = Date.now()): void {
     this.cancel(TMP_OUTPUT_CLEANUP_KEY);
     const nextCleanupAt = this.deps.store.getNextTmpOutputCleanupAt(now);
-    if (nextCleanupAt == null) return;
-    this.schedule(TMP_OUTPUT_CLEANUP_KEY, nextCleanupAt, () => {
+    if (nextCleanupAt == null) {
+      this.lastTmpOutputCleanupAttemptAt = undefined;
+      return;
+    }
+    if (nextCleanupAt > now) {
+      this.lastTmpOutputCleanupAttemptAt = undefined;
+    }
+    this.schedule(TMP_OUTPUT_CLEANUP_KEY, this.getTmpOutputCleanupScheduleAt(nextCleanupAt, now), () => {
       const cleanupNow = Date.now();
-      this.deps.store.cleanupTmpOutputFiles(cleanupNow);
+      this.runTmpOutputCleanup(cleanupNow);
       this.syncTmpOutputCleanupDeadline(cleanupNow);
     });
   }
@@ -214,6 +222,17 @@ export class SessionMaintenanceService {
 
   private runtimeGcMaxAgeMs(): number {
     return (pluginConfig.sessionGcAgeMinutes ?? 1440) * 60_000;
+  }
+
+  private runTmpOutputCleanup(now: number): void {
+    this.lastTmpOutputCleanupAttemptAt = now;
+    this.deps.store.cleanupTmpOutputFiles(now);
+  }
+
+  private getTmpOutputCleanupScheduleAt(nextCleanupAt: number, now: number): number {
+    if (nextCleanupAt > now || this.lastTmpOutputCleanupAttemptAt == null) return nextCleanupAt;
+    const retryAt = this.lastTmpOutputCleanupAttemptAt + TMP_OUTPUT_CLEANUP_RETRY_BACKOFF_MS;
+    return retryAt > now ? retryAt : nextCleanupAt;
   }
 
   private schedulePersistedWorktreeReminder(ref: string, at: number): void {
