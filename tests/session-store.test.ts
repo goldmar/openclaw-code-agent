@@ -1,6 +1,6 @@
 import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { SessionStore } from "../src/session-store";
+import { SessionStore, sessionStoreInternals } from "../src/session-store";
 import { getSessionOutputFilePath } from "../src/session";
 import { STORE_SCHEMA_VERSION } from "../src/session-store-normalization";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "fs";
@@ -177,6 +177,56 @@ describe("SessionStore persisted compatibility", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
       rmSync(existingRepo, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves repo policies when repo root existence cannot be confirmed", (t) => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-store-policy-stat-error-"));
+    try {
+      const inaccessibleRepo = join(dir, "inaccessible-repo");
+      const missingRepo = join(dir, "missing-repo");
+      const indexPath = join(dir, "sessions.json");
+      const originalStatSync = sessionStoreInternals.statSync;
+      t.mock.method(
+        sessionStoreInternals,
+        "statSync",
+        ((path: Parameters<typeof originalStatSync>[0], options?: Parameters<typeof originalStatSync>[1]) => {
+          if (path === inaccessibleRepo) {
+            throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+          }
+          return originalStatSync(path, options as never);
+        }) as typeof originalStatSync,
+      );
+
+      const store = new SessionStore({ indexPath });
+      store.setRepoPolicy({
+        key: `${inaccessibleRepo}|https://github.com/example/inaccessible`,
+        policy: "pr-required",
+        repoRoot: inaccessibleRepo,
+        remoteUrl: "https://github.com/example/inaccessible",
+        provider: "github",
+        createdAt: "2026-06-01T00:00:00.000Z",
+        updatedAt: "2026-06-01T00:00:00.000Z",
+        source: "stored",
+      });
+      store.setRepoPolicy({
+        key: `${missingRepo}|https://github.com/example/missing`,
+        policy: "never-pr",
+        repoRoot: missingRepo,
+        remoteUrl: "https://github.com/example/missing",
+        provider: "github",
+        createdAt: "2026-06-01T00:00:00.000Z",
+        updatedAt: "2026-06-01T00:00:00.000Z",
+        source: "stored",
+      });
+
+      const removed = store.cleanupRepoPolicies();
+      const restored = new SessionStore({ indexPath });
+
+      assert.deepEqual(removed.map((record) => record.repoRoot), [missingRepo]);
+      assert.deepEqual(restored.listRepoPolicies().map((record) => record.repoRoot), [inaccessibleRepo]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 
