@@ -119,7 +119,7 @@ export class SessionActionTokenStore {
     let changed = false;
     for (const [tokenId, token] of this.tokens) {
       const expired = token.expiresAt != null && token.expiresAt <= now;
-      const consumedTooOld = token.consumedAt != null && now - token.consumedAt > this.retentionMs;
+      const consumedTooOld = token.consumedAt != null && now - token.consumedAt >= this.retentionMs;
       if (expired || consumedTooOld) {
         this.tokens.delete(tokenId);
         changed = true;
