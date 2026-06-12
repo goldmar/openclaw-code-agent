@@ -4,11 +4,11 @@ import { tmpdir } from "os";
 import { join } from "path";
 
 const OUTPUT_BUFFER_MAX = 2000;
-const SAFE_SESSION_OUTPUT_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
+const SAFE_SESSION_OUTPUT_ID_PATTERN = /^[A-Za-z0-9_.-]+$/;
 
 function getPathSafeSessionOutputId(sessionId: string): string {
   if (SAFE_SESSION_OUTPUT_ID_PATTERN.test(sessionId)) return sessionId;
-  return `unsafe-${createHash("sha256").update(sessionId, "utf8").digest("hex")}`;
+  return `hashed+${createHash("sha256").update(sessionId, "utf8").digest("hex")}`;
 }
 
 export function getSessionOutputFilePath(sessionId: string): string {
