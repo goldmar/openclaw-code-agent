@@ -83,8 +83,16 @@ describe("parseThreadIdFromSessionKey", () => {
     assert.equal(parseThreadIdFromSessionKey("abc:topic:123"), 123);
   });
 
+  it("parses thread ID from key with mixed-case topic marker", () => {
+    assert.equal(parseThreadIdFromSessionKey("abc:Topic:123"), 123);
+  });
+
   it("returns undefined when no topic segment", () => {
     assert.equal(parseThreadIdFromSessionKey("abc:def"), undefined);
+  });
+
+  it("returns undefined when topic ID is not numeric", () => {
+    assert.equal(parseThreadIdFromSessionKey("abc:topic:not-a-number"), undefined);
   });
 
   it("returns undefined for undefined input", () => {
