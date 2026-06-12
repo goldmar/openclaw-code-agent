@@ -10,11 +10,6 @@ type WorktreeDecisionSession = Pick<
   "id" | "name" | "harnessSessionId" | "backendRef" | "route" | "worktreePath" | "worktreeBranch" | "originalWorkdir"
 >;
 
-type PersistedLike = Pick<
-  PersistedSessionInfo,
-  "sessionId" | "name" | "harnessSessionId" | "backendRef" | "route" | "worktreePath" | "worktreeBranch" | "workdir"
->;
-
 export class SessionWorktreeDecisionService {
   constructor(
     private readonly deps: {

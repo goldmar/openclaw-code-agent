@@ -13,8 +13,6 @@ import { SessionActionTokenStore } from "./session-action-token-store";
 import { getBackendConversationId, resolveHarnessName } from "./session-backend-ref";
 import { SessionStoreQueries } from "./session-store-queries";
 import {
-  archiveLegacyCodexEntries,
-  archiveLegacySessionIndex,
   cleanupOrphanOutputFiles,
   cleanupTmpOutputFiles,
   getNextTmpOutputCleanupAt,
@@ -24,7 +22,6 @@ import {
 } from "./session-store-storage";
 import {
   assertNewSchemaEntry,
-  STORE_SCHEMA_VERSION,
 } from "./session-store-normalization";
 
 const TERMINAL_STATUSES = new Set<SessionStatus>(["completed", "failed", "killed"]);

@@ -514,28 +514,12 @@ export class Session extends EventEmitter {
     this.turnRuntime.waitingForInputFired = value;
   }
 
-  private get lastTurnHadQuestion(): boolean {
-    return this.turnRuntime.lastTurnHadQuestion;
-  }
-
-  private set lastTurnHadQuestion(value: boolean) {
-    this.turnRuntime.lastTurnHadQuestion = value;
-  }
-
   private get turnInProgress(): boolean {
     return this.turnRuntime.turnInProgress;
   }
 
   private set turnInProgress(value: boolean) {
     this.turnRuntime.turnInProgress = value;
-  }
-
-  private get currentTurnText(): string {
-    return this.turnRuntime.currentTurnText;
-  }
-
-  private set currentTurnText(value: string) {
-    this.turnRuntime.currentTurnText = value;
   }
 
   private get currentTurnPlanArtifact(): PlanArtifact | undefined {

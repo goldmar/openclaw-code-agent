@@ -71,14 +71,6 @@ function normalizePlanReplyDecision(message: string): PlanReplyDecision | undefi
   return undefined;
 }
 
-/**
- * Returns true when a session was killed by a shutdown signal before the
- * harness ever initialised — i.e. it has no harness session ID to resume.
- */
-function isNeverStartedShutdown(session: ResumableSession): boolean {
-  return session.killReason === "shutdown" && !getBackendConversationId(session);
-}
-
 function formatResumeUnavailable(
   session: ResumableSession,
   reason: ResumeUnavailableReason,

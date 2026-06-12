@@ -46,7 +46,6 @@ import {
   extractTurnPlanUpdate,
   isInteractiveServerRequest,
   isNativeCodexWorktreePath,
-  normalizeTerminalStatus,
   parseCsvEnv,
   requestWithFallbacks,
 } from "./codex-protocol";

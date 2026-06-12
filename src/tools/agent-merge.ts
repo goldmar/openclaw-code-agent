@@ -211,8 +211,6 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
         content: [{ type: "text", text: "❌ Merge did not run (internal error)" }],
       };
 
-      const persistedRef = target.persistedRef;
-
       await sessionManager.enqueueMerge(effectiveWorkdir, async () => {
         // Re-check inside the queue slot — a concurrent auto-merge may have beaten us
         const freshPersisted = sessionManager.getPersistedSession(params.session);
