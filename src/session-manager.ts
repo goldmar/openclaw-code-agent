@@ -201,7 +201,6 @@ interface SessionManagerServiceBundle {
   notifications: SessionNotificationService;
   worktrees: SessionWorktreeController;
   questions: SessionQuestionService;
-  reminders: SessionReminderService;
   lifecycle: SessionLifecycleService;
   restore: SessionRestoreService;
   stateSync: SessionStateSyncService;
@@ -446,7 +445,6 @@ export class SessionManager {
       notifications,
       worktrees,
       questions,
-      reminders,
       lifecycle,
       restore,
       stateSync,
