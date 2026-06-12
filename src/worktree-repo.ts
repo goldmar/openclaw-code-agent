@@ -31,11 +31,14 @@ function getWorktreeBaseDir(repoDir?: string): string {
 }
 
 export function sanitizeBranchName(name: string): string {
-  return name
+  const sanitized = name
     .replace(/[^a-zA-Z0-9._-]/g, "-")
     .replace(/\.{2,}/g, "-")
     .replace(/^[-.]|[-.]$/g, "")
-    .slice(0, 100) || "session";
+    .slice(0, 100)
+    .replace(/[-.]+$/, "");
+
+  return sanitized || "session";
 }
 
 export function getPrimaryRepoRootFromWorktree(worktreePath: string): string | undefined {

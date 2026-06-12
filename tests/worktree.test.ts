@@ -32,6 +32,30 @@ describe("worktree utilities", () => {
   });
 });
 
+describe("sanitizeBranchName", () => {
+  it("does not leave a trailing hyphen when truncation cuts after an invalid character", async () => {
+    const { sanitizeBranchName } = await import("../src/worktree.js");
+    const result = sanitizeBranchName(`${"a".repeat(99)}!remaining`);
+
+    assert.equal(result, "a".repeat(99));
+    assert.doesNotMatch(result, /[-.]$/);
+  });
+
+  it("does not leave a trailing dot when truncation cuts after a dot", async () => {
+    const { sanitizeBranchName } = await import("../src/worktree.js");
+    const result = sanitizeBranchName(`${"a".repeat(99)}.remaining`);
+
+    assert.equal(result, "a".repeat(99));
+    assert.doesNotMatch(result, /[-.]$/);
+  });
+
+  it("preserves the session fallback for empty sanitized names", async () => {
+    const { sanitizeBranchName } = await import("../src/worktree.js");
+
+    assert.equal(sanitizeBranchName("..."), "session");
+  });
+});
+
 describe("formatWorktreeOutcomeLine", () => {
   it("formats merge outcome with stats", async () => {
     const { formatWorktreeOutcomeLine } = await import("../src/worktree.js");
