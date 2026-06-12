@@ -35,6 +35,24 @@ function isExistingPullRequestError(message: string): boolean {
   return /pull request already exists/i.test(message) || (/createPullRequest/i.test(message) && /already exists/i.test(message));
 }
 
+function recoverExistingPullRequest(repoDir: string, branch: string, targetRepo?: string): PRResult | undefined {
+  const existingPr = syncWorktreePR(repoDir, branch, targetRepo);
+  if (existingPr.exists && existingPr.state === "open" && existingPr.url) {
+    return {
+      success: true,
+      prUrl: existingPr.url,
+      warnings: ["A PR already exists for this branch; reused the existing open PR."],
+    };
+  }
+  if (existingPr.exists && existingPr.url) {
+    return {
+      success: false,
+      error: `A PR already exists for ${branch}, but it is ${existingPr.state}: ${existingPr.url}`,
+    };
+  }
+  return undefined;
+}
+
 function inferOriginOwner(repoDir: string): string | undefined {
   try {
     const originUrl = execFileSync("git", ["-C", repoDir, "remote", "get-url", "origin"], {
@@ -97,14 +115,7 @@ export function createPR(
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     if (isExistingPullRequestError(msg)) {
-      const existingPr = syncWorktreePR(repoDir, branch, targetRepo);
-      if (existingPr.exists && existingPr.state === "open" && existingPr.url) {
-        return {
-          success: true,
-          prUrl: existingPr.url,
-          warnings: ["A PR already exists for this branch; reused the existing open PR."],
-        };
-      }
+      return recoverExistingPullRequest(repoDir, branch, targetRepo) ?? { success: false, error: msg };
     }
     // Recovery: if we requested draft and the error indicates drafts are not supported or enabled
     // on the target repo, retry once without --draft so that PR creation does not regress for repos
@@ -130,14 +141,8 @@ export function createPR(
       } catch (retryErr) {
         const retryMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
         if (isExistingPullRequestError(retryMsg)) {
-          const existingPr = syncWorktreePR(repoDir, branch, targetRepo);
-          if (existingPr.exists && existingPr.state === "open" && existingPr.url) {
-            return {
-              success: true,
-              prUrl: existingPr.url,
-              warnings: ["A PR already exists for this branch; reused the existing open PR."],
-            };
-          }
+          return recoverExistingPullRequest(repoDir, branch, targetRepo)
+            ?? { success: false, error: `Draft PR creation failed (${msg}); non-draft retry also failed: ${retryMsg}` };
         }
         return { success: false, error: `Draft PR creation failed (${msg}); non-draft retry also failed: ${retryMsg}` };
       }
