@@ -218,7 +218,7 @@ function routeFromSessionKey(originSessionKey?: string): SessionRoute | undefine
 }
 
 export function parseThreadIdFromSessionKey(sessionKey?: string): number | undefined {
-  const match = sessionKey?.match(/:topic:(\d+)$/);
+  const match = sessionKey?.match(/:topic:(\d+)$/i);
   return match ? parseInt(match[1], 10) : undefined;
 }
 
