@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.5.1] - 2026-06-12
+
+### Changed
+- Retargeted the OpenClaw package and plugin SDK validation metadata to `2026.6.6` while keeping the compatible `>=2026.4.21` peer/API floor.
+- Refreshed OpenClaw `2026.6.6` compatibility guidance for wake routing, Telegram topic callbacks, cron/session delivery, runtime tool allowlists, bundled plugin boundaries, Codex/Claude harness model restrictions, and managed worktree follow-through.
+
 ## [4.5.0] - 2026-06-12
 
 ### Added
@@ -495,7 +501,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Default Codex approval policy to `on-request`.
 - Raised the default session limit.
 
-[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.5.0...HEAD
+[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.5.1...HEAD
+[4.5.1]: https://github.com/goldmar/openclaw-code-agent/compare/v4.5.0...v4.5.1
 [4.5.0]: https://github.com/goldmar/openclaw-code-agent/compare/v4.4.2...v4.5.0
 [4.4.2]: https://github.com/goldmar/openclaw-code-agent/compare/v4.4.1...v4.4.2
 [4.4.1]: https://github.com/goldmar/openclaw-code-agent/compare/v4.4.0...v4.4.1
