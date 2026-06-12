@@ -36,7 +36,7 @@ export function sanitizeBranchName(name: string): string {
     .replace(/\.{2,}/g, "-")
     .replace(/^[-.]|[-.]$/g, "")
     .slice(0, 100)
-    .replace(/[-.]+$/g, "");
+    .replace(/[-.]+$/, "");
 
   return sanitized || "session";
 }
