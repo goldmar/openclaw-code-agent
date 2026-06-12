@@ -2,7 +2,7 @@ import { afterEach, describe, it, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { getSessionOutputText } from "../src/application/session-view";
 import { appendSessionOutput, getSessionOutputFilePath } from "../src/session-output";
 import { cleanupOrphanOutputFiles, cleanupTmpOutputFiles, getNextTmpOutputCleanupAt } from "../src/session-store-storage";
@@ -36,6 +36,42 @@ function useIsolatedTmpDir(t: TestContext): string {
   });
   return dir;
 }
+
+describe("session output file paths", () => {
+  it("keeps nanoid-safe session IDs compatible with the existing filename format", () => {
+    const sessionId = "GccpSIqJ_-stable.123";
+
+    assert.equal(
+      getSessionOutputFilePath(sessionId),
+      join(tmpdir(), "openclaw-agent-GccpSIqJ_-stable.123.txt"),
+    );
+  });
+
+  it("maps unsafe path-like session IDs to a deterministic filename under tmpdir", (t) => {
+    const dir = useIsolatedTmpDir(t);
+    const sessionId = "../escape\\session:name*?";
+    const expectedFilename = "openclaw-agent-hashed+bcbf2e65c6cd70c9a169c787417be7aafd1644fe94a0776ebdc212404ed52d76.txt";
+    const outputPath = getSessionOutputFilePath(sessionId);
+
+    assert.equal(dirname(outputPath), dir);
+    assert.equal(basename(outputPath), expectedFilename);
+    assert.equal(outputPath, join(dir, expectedFilename));
+    assert.doesNotMatch(basename(outputPath), /[<>:"\/\\|?*\x00-\x1F]/u);
+  });
+
+  it("keeps old unsafe-hash-looking safe IDs distinct from unsafe hashed IDs", (t) => {
+    const dir = useIsolatedTmpDir(t);
+    const unsafeSessionId = "../escape\\session:name*?";
+    const digest = "bcbf2e65c6cd70c9a169c787417be7aafd1644fe94a0776ebdc212404ed52d76";
+    const rawSafeSessionId = `unsafe-${digest}`;
+    const rawSafeOutputPath = getSessionOutputFilePath(rawSafeSessionId);
+    const unsafeOutputPath = getSessionOutputFilePath(unsafeSessionId);
+
+    assert.equal(rawSafeOutputPath, join(dir, `openclaw-agent-${rawSafeSessionId}.txt`));
+    assert.equal(unsafeOutputPath, join(dir, `openclaw-agent-hashed+${digest}.txt`));
+    assert.notEqual(rawSafeOutputPath, unsafeOutputPath);
+  });
+});
 
 describe("session output buffering", () => {
   const sessionId = "session-output-test";

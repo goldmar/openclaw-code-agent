@@ -1,11 +1,18 @@
+import { createHash } from "crypto";
 import { appendFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
 const OUTPUT_BUFFER_MAX = 2000;
+const SAFE_SESSION_OUTPUT_ID_PATTERN = /^[A-Za-z0-9_.-]+$/;
+
+function getPathSafeSessionOutputId(sessionId: string): string {
+  if (SAFE_SESSION_OUTPUT_ID_PATTERN.test(sessionId)) return sessionId;
+  return `hashed+${createHash("sha256").update(sessionId, "utf8").digest("hex")}`;
+}
 
 export function getSessionOutputFilePath(sessionId: string): string {
-  return join(tmpdir(), `openclaw-agent-${sessionId}.txt`);
+  return join(tmpdir(), `openclaw-agent-${getPathSafeSessionOutputId(sessionId)}.txt`);
 }
 
 function appendTextToOutputBuffer(outputBuffer: string[], text: string): void {
