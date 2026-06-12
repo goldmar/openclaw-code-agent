@@ -1,6 +1,7 @@
 import { sessionManager } from "../singletons";
 import type { RepoIntegrationPolicy } from "../types";
 import { consumeFirstCommandArg } from "./args";
+import { getRepoPolicyOptionsForPrAvailability, validateRepoPolicyForPrAvailability } from "../repo-policy";
 
 interface AgentPolicyCommandContext {
   args?: string;
@@ -57,6 +58,13 @@ export function registerAgentPolicyCommand(api: CommandApi): void {
         return { text: ok ? `Repo policy reset for ${workdir}.` : `No stored repo policy found for ${workdir}.` };
       }
       if (action && isPolicy(action)) {
+        if (typeof sessionManager.resolveRepoPolicy === "function") {
+          const resolution = sessionManager.resolveRepoPolicy(workdir);
+          if (resolution.identity) {
+            const validationError = validateRepoPolicyForPrAvailability(action, resolution.prAvailable);
+            if (validationError) return { text: `Error: ${validationError}` };
+          }
+        }
         const record = sessionManager.setRepoPolicy(workdir, action);
         if (!record) return { text: `Error: ${workdir} is not a git repository.` };
         const savedText = `Repo policy set to ${record.policy} for ${record.repoRoot}.`;
@@ -93,6 +101,9 @@ export function registerAgentPolicyCommand(api: CommandApi): void {
       }
       const resolution = sessionManager.resolveRepoPolicy(workdir);
       if (!resolution.identity) return { text: `No git repository found for ${workdir}.` };
+      const policyOptions = getRepoPolicyOptionsForPrAvailability(resolution.prAvailable)
+        .map((option) => option.policy)
+        .join(", ");
       return {
         text: [
           `Repo policy: ${resolution.policy ?? "unknown"}`,
@@ -100,7 +111,7 @@ export function registerAgentPolicyCommand(api: CommandApi): void {
           `Provider: ${resolution.provider}${resolution.prAvailable ? "" : " (PR automation unavailable)"}`,
           ...(resolution.identity.remoteUrl ? [`Remote: ${resolution.identity.remoteUrl}`] : []),
           ``,
-          `Set with /agent_policy pr-required, pr-allowed, never-pr, or manual.`,
+          `Set with /agent_policy ${policyOptions}.`,
         ].join("\n"),
       };
     },

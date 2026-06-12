@@ -689,7 +689,7 @@ export class SessionManager {
     if (strategy === "off") return { ok: true, resolution };
     if (resolution.source === "none") return { ok: true, resolution };
     if (resolution.source === "unknown" && resolution.identity) {
-      return { ok: false, text: formatUnknownRepoPolicyMessage(resolution.identity, strategy) };
+      return { ok: false, text: formatUnknownRepoPolicyMessage(resolution.identity, strategy, resolution.prAvailable) };
     }
     return { ok: true, resolution };
   }
@@ -732,7 +732,7 @@ export class SessionManager {
     if (!resolution.identity) {
       return `Error: ${args.workdir} is not a git repository.`;
     }
-    const message = formatUnknownRepoPolicyMessage(resolution.identity, strategy);
+    const message = formatUnknownRepoPolicyMessage(resolution.identity, strategy, resolution.prAvailable);
     if (!args.route?.provider || !args.route.target) {
       return message;
     }
@@ -763,6 +763,7 @@ export class SessionManager {
       launchWorktreeBaseBranch: args.worktreeBaseBranch,
       launchWorktreePrTargetRepo: args.worktreePrTargetRepo,
       launchOriginAgentId: args.originAgentId,
+      prAvailable: resolution.prAvailable,
     });
     const launchContextDigest = digestRepoPolicyLaunchContext(args, strategy);
 
@@ -794,7 +795,9 @@ export class SessionManager {
 
     return [
       `Repo policy choice prompt sent for ${resolution.identity.repoRoot}.`,
-      `Wait for the user's Require PR, Merge or PR, No PR, or Manual response.`,
+      resolution.prAvailable
+        ? `Wait for the user's Require PR, Merge or PR, No PR, or Manual response.`
+        : `Wait for the user's No PR or Manual response.`,
       `Do not send a separate plain-text policy question.`,
     ].join(" ");
   }

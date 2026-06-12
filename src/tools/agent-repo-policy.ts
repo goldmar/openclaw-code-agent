@@ -1,6 +1,7 @@
 import { Type } from "../tool-schema";
 import { sessionManager } from "../singletons";
 import type { OpenClawPluginToolContext, RepoIntegrationPolicy, RepoPolicyRecord } from "../types";
+import { validateRepoPolicyForPrAvailability } from "../repo-policy";
 
 interface AgentRepoPolicyParams {
   workdir?: string;
@@ -77,6 +78,13 @@ export function makeAgentRepoPolicyTool(ctx?: OpenClawPluginToolContext) {
       if (input.policy !== undefined) {
         if (!isPolicy(input.policy)) {
           return { content: [{ type: "text", text: "Error: policy must be one of pr-required, pr-allowed, never-pr, manual." }] };
+        }
+        if (typeof sessionManager.resolveRepoPolicy === "function") {
+          const resolution = sessionManager.resolveRepoPolicy(workdir);
+          if (resolution.identity) {
+            const validationError = validateRepoPolicyForPrAvailability(input.policy, resolution.prAvailable);
+            if (validationError) return { content: [{ type: "text", text: `Error: ${validationError}` }] };
+          }
         }
         const record = sessionManager.setRepoPolicy(workdir, input.policy);
         if (!record) {

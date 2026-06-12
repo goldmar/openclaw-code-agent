@@ -123,13 +123,12 @@ describe("formatWorktreeOutcomeLine", () => {
 });
 
 describe("createPR", () => {
-  function installMockGh(t: import("node:test").TestContext, options: { failOnDraft?: boolean } = {}) {
+  function installMockGh(t: import("node:test").TestContext, options: { failOnDraft?: boolean; failExisting?: boolean; existingState?: "OPEN" | "CLOSED" | "MERGED" } = {}) {
     const tempDir = mkdtempSync(join(tmpdir(), "openclaw-gh-"));
     const binDir = join(tempDir, "bin");
     const logPath = join(tempDir, "gh-args.log");
     mkdirSync(binDir);
     const ghPath = join(binDir, "gh");
-    const failOnDraft = options.failOnDraft ? "1" : "0";
     writeFileSync(ghPath, [
       "#!/bin/sh",
       "printf '%s\\n' \"$*\" >> \"$GH_ARGS_LOG\"",
@@ -142,7 +141,20 @@ describe("createPR", () => {
       "    echo 'error: draft PRs are not supported on this repository' >&2",
       "    exit 1",
       "  fi",
+      "  if [ \"${FAIL_EXISTING:-0}\" = \"1\" ]; then",
+      "    echo 'pull request create failed: GraphQL: A pull request already exists for goldmar:agent/existing-pr. (createPullRequest)' >&2",
+      "    exit 1",
+      "  fi",
       "  echo 'https://github.com/acme/repo/pull/1'",
+      "  exit 0",
+      "fi",
+      "if [ \"$1\" = \"pr\" ] && [ \"$2\" = \"list\" ]; then",
+      "  if echo \"$*\" | grep -q -- '--head agent/existing-pr'; then",
+      "    existing_state=${EXISTING_STATE:-OPEN}",
+      "    printf '[%s,%s]\\n' \\",
+      "      '{\"url\":\"https://github.com/acme/repo/pull/8\",\"number\":8,\"title\":\"Wrong owner\",\"state\":\"OPEN\",\"headRepositoryOwner\":{\"login\":\"other\"},\"headRefName\":\"agent/existing-pr\"}' \\",
+      "      \"{\\\"url\\\":\\\"https://github.com/acme/repo/pull/9\\\",\\\"number\\\":9,\\\"title\\\":\\\"Existing PR\\\",\\\"state\\\":\\\"$existing_state\\\",\\\"headRepositoryOwner\\\":{\\\"login\\\":\\\"goldmar\\\"},\\\"headRefName\\\":\\\"agent/existing-pr\\\"}\"",
+      "  fi",
       "  exit 0",
       "fi",
       "exit 1",
@@ -153,10 +165,18 @@ describe("createPR", () => {
     const originalPath = process.env.PATH;
     const originalLog = process.env.GH_ARGS_LOG;
     const originalFail = process.env.FAIL_ON_DRAFT;
+    const originalExisting = process.env.FAIL_EXISTING;
+    const originalExistingState = process.env.EXISTING_STATE;
     process.env.PATH = `${binDir}:${process.env.PATH ?? ""}`;
     process.env.GH_ARGS_LOG = logPath;
     if (options.failOnDraft) {
       process.env.FAIL_ON_DRAFT = "1";
+    }
+    if (options.failExisting) {
+      process.env.FAIL_EXISTING = "1";
+    }
+    if (options.existingState) {
+      process.env.EXISTING_STATE = options.existingState;
     }
     t.after(() => {
       process.env.PATH = originalPath;
@@ -169,6 +189,16 @@ describe("createPR", () => {
         delete process.env.FAIL_ON_DRAFT;
       } else {
         process.env.FAIL_ON_DRAFT = originalFail;
+      }
+      if (originalExisting === undefined) {
+        delete process.env.FAIL_EXISTING;
+      } else {
+        process.env.FAIL_EXISTING = originalExisting;
+      }
+      if (originalExistingState === undefined) {
+        delete process.env.EXISTING_STATE;
+      } else {
+        process.env.EXISTING_STATE = originalExistingState;
       }
       rmSync(tempDir, { recursive: true, force: true });
     });
@@ -218,6 +248,53 @@ describe("createPR", () => {
     assert.ok(!lastCall.includes("--draft"), "retry call must not include --draft");
     assert.ok(lastCall.includes("pr create --base main --head agent/draft-retry"));
   });
+
+  it("reuses the existing open PR when create reports a duplicate", async (t) => {
+    const { logPath } = installMockGh(t, { failExisting: true });
+    const { createPR } = await import("../src/worktree.js");
+    const repoDir = mkdtempSync(join(tmpdir(), "openclaw-worktree-create-pr-existing-"));
+
+    try {
+      execFileSync("git", ["init", "-b", "main"], { cwd: repoDir, stdio: "ignore" });
+      execFileSync("git", ["remote", "add", "origin", "git@github.com:goldmar/repo.git"], { cwd: repoDir, stdio: "ignore" });
+
+      const result = createPR(repoDir, "agent/existing-pr", "main", "Existing PR", "Body", "goldmar/openclaw-code-agent");
+
+      assert.deepEqual(result, {
+        success: true,
+        prUrl: "https://github.com/acme/repo/pull/9",
+        warnings: ["A PR already exists for this branch; reused the existing open PR."],
+      });
+      const calls = readFileSync(logPath, "utf-8").trim().split("\n");
+      assert.equal(calls.filter((call) => call.startsWith("pr create ")).length, 1);
+      assert.ok(calls.includes("pr create --base main --draft --repo goldmar/openclaw-code-agent --head goldmar:agent/existing-pr --title Existing PR --body Body"));
+      assert.ok(calls.includes("pr list --head agent/existing-pr --state all --json url,number,title,state,headRepositoryOwner,headRefName --repo goldmar/openclaw-code-agent"));
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports duplicate PRs that are not open without retrying draft creation", async (t) => {
+    const { logPath } = installMockGh(t, { failExisting: true, existingState: "CLOSED" });
+    const { createPR } = await import("../src/worktree.js");
+    const repoDir = mkdtempSync(join(tmpdir(), "openclaw-worktree-create-pr-closed-"));
+
+    try {
+      execFileSync("git", ["init", "-b", "main"], { cwd: repoDir, stdio: "ignore" });
+      execFileSync("git", ["remote", "add", "origin", "git@github.com:goldmar/repo.git"], { cwd: repoDir, stdio: "ignore" });
+
+      const result = createPR(repoDir, "agent/existing-pr", "main", "Existing PR", "Body", "goldmar/openclaw-code-agent");
+
+      assert.deepEqual(result, {
+        success: false,
+        error: "A PR already exists for agent/existing-pr, but it is closed: https://github.com/acme/repo/pull/9",
+      });
+      const calls = readFileSync(logPath, "utf-8").trim().split("\n");
+      assert.equal(calls.filter((call) => call.startsWith("pr create ")).length, 1);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("syncWorktreePR", () => {
@@ -235,7 +312,7 @@ describe("syncWorktreePR", () => {
       "  exit 0",
       "fi",
       "if [ \"$1\" = \"pr\" ] && [ \"$2\" = \"list\" ]; then",
-      "  echo '{\"url\":\"https://github.com/openai/codex/pull/12\",\"number\":12,\"title\":\"Fix PR lookup\",\"state\":\"OPEN\"}'",
+      "  echo '[{\"url\":\"https://github.com/openai/codex/pull/10\",\"number\":10,\"title\":\"Other fork\",\"state\":\"OPEN\",\"headRepositoryOwner\":{\"login\":\"other\"},\"headRefName\":\"agent/fix-lookup\"},{\"url\":\"https://github.com/openai/codex/pull/12\",\"number\":12,\"title\":\"Fix PR lookup\",\"state\":\"OPEN\",\"headRepositoryOwner\":{\"login\":\"me\"},\"headRefName\":\"agent/fix-lookup\"}]'",
       "  exit 0",
       "fi",
       "exit 1",
@@ -260,7 +337,7 @@ describe("syncWorktreePR", () => {
     return { logPath };
   }
 
-  it("uses origin owner in --head when looking up a target repo PR", async (t) => {
+  it("filters target repo PR lookup by origin owner", async (t) => {
     const { logPath } = installMockGh(t);
     const { syncWorktreePR } = await import("../src/worktree.js");
     const repoDir = mkdtempSync(join(tmpdir(), "openclaw-worktree-sync-pr-fork-"));
@@ -279,7 +356,7 @@ describe("syncWorktreePR", () => {
         title: "Fix PR lookup",
       });
       const calls = readFileSync(logPath, "utf-8").trim().split("\n");
-      assert.equal(calls.at(-1), "pr list --head me:agent/fix-lookup --state all --json url,number,title,state --jq .[0] --repo openai/codex");
+      assert.equal(calls.at(-1), "pr list --head agent/fix-lookup --state all --json url,number,title,state,headRepositoryOwner,headRefName --repo openai/codex");
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }
@@ -297,7 +374,7 @@ describe("syncWorktreePR", () => {
       syncWorktreePR(repoDir, "agent/fix-lookup");
 
       const calls = readFileSync(logPath, "utf-8").trim().split("\n");
-      assert.equal(calls.at(-1), "pr list --head agent/fix-lookup --state all --json url,number,title,state --jq .[0]");
+      assert.equal(calls.at(-1), "pr list --head agent/fix-lookup --state all --json url,number,title,state,headRepositoryOwner,headRefName");
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }
@@ -314,7 +391,7 @@ describe("syncWorktreePR", () => {
       syncWorktreePR(repoDir, "agent/fix-lookup", "openai/codex");
 
       const calls = readFileSync(logPath, "utf-8").trim().split("\n");
-      assert.equal(calls.at(-1), "pr list --head agent/fix-lookup --state all --json url,number,title,state --jq .[0] --repo openai/codex");
+      assert.equal(calls.at(-1), "pr list --head agent/fix-lookup --state all --json url,number,title,state,headRepositoryOwner,headRefName --repo openai/codex");
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }

@@ -1676,6 +1676,60 @@ describe("createCallbackHandler()", () => {
     assert.deepEqual(secondState.replies, []);
   });
 
+  it("rejects stale repo policy callback tokens when PR automation is unavailable", async () => {
+    const calls: string[] = [];
+    const token = {
+      sessionId: "repo-policy:/repo",
+      kind: "repo-policy-set" as const,
+      route: {
+        provider: "telegram",
+        target: TELEGRAM_FORUM_TARGET,
+        threadId: TELEGRAM_FORUM_THREAD_ID,
+        sessionKey: TELEGRAM_FORUM_SESSION_KEY,
+      },
+      repoPolicy: "pr-required" as const,
+      repoPolicyWorkdir: "/repo",
+      launchPrompt: "Ship isolated changes",
+      launchWorkdir: "/repo",
+    };
+
+    setSessionManager({
+      getActionToken: () => token,
+      consumeActionToken: () => token,
+      resolve: () => undefined,
+      getPersistedSession: () => undefined,
+      resolveRepoPolicy: () => ({
+        identity: {
+          key: "/repo|https://gitlab.com/example/repo",
+          repoRoot: "/repo",
+          remoteUrl: "https://gitlab.com/example/repo",
+          provider: "unsupported",
+        },
+        source: "unknown",
+        provider: "unsupported",
+        prAvailable: false,
+      }),
+      setRepoPolicy: (workdir: string, policy: string) => {
+        calls.push(`set:${workdir}:${policy}`);
+        return { policy };
+      },
+      launchAfterRepoPolicyChoice: () => {
+        throw new Error("should not launch");
+      },
+    } as any);
+
+    const handler = createCallbackHandler();
+    const state = createCtx("token-policy-stale-pr", "telegram");
+    const result = await handler.handler(state.ctx as any);
+
+    assert.deepEqual(result, { handled: true });
+    assert.deepEqual(calls, []);
+    assert.equal(state.buttonMarkupEdits, 1);
+    assert.equal(state.buttonsCleared, 1);
+    assert.deepEqual(state.editedMessages, []);
+    assert.match(state.replies[0], /Policy pr-required requires PR automation/);
+  });
+
   it("clears repo policy buttons when the repo cannot be resolved", async () => {
     const token = {
       sessionId: "repo-policy:/missing",

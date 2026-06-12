@@ -63,4 +63,25 @@ describe("agent_repo_policy tool", () => {
     assert.match(text, /Repo policy saved, but the deferred launch failed: launch capacity unavailable/);
     assert.match(text, /pending launch context was kept/);
   });
+
+  it("rejects PR policies when PR automation is unavailable", async () => {
+    setSessionManager({
+      resolveRepoPolicy: () => ({
+        identity: { key: "/repo", repoRoot: "/repo", provider: "unsupported" },
+        source: "unknown",
+        provider: "unsupported",
+        prAvailable: false,
+      }),
+      setRepoPolicy: () => {
+        throw new Error("setRepoPolicy should not be called");
+      },
+    } as any);
+
+    const tool = makeAgentRepoPolicyTool({ workspaceDir: "/repo" } as any);
+    const result = await tool.execute("tool-id", { policy: "pr-required" });
+    const text = (result.content[0] as { text: string }).text;
+
+    assert.match(text, /Error: Policy pr-required requires PR automation/);
+    assert.match(text, /Choose never-pr or manual/);
+  });
 });

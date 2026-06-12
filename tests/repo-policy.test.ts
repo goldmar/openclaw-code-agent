@@ -72,6 +72,55 @@ describe("repo policy resolution", () => {
     }
   });
 
+  it("omits PR policy choices when PR automation is unavailable", () => {
+    const repoDir = mkdtempSync(join(tmpdir(), "openclaw-policy-unsupported-buttons-"));
+    const storeDir = mkdtempSync(join(tmpdir(), "openclaw-policy-unsupported-buttons-store-"));
+    const dispatchCalls: any[] = [];
+    try {
+      git(repoDir, "init", "-b", "main");
+      git(repoDir, "remote", "add", "origin", "https://gitlab.com/example/repo.git");
+      const sm = new SessionManager(1, 10, { store: { indexPath: join(storeDir, "sessions.json") } });
+      (sm as any).notifications = {
+        dispatch: (...args: any[]) => { dispatchCalls.push(args); },
+        notifyWorktreeOutcome: () => {},
+        dispose: () => {},
+      };
+
+      const result = sm.requestRepoPolicyForLaunch({
+        route: {
+          provider: "telegram",
+          target: "12345",
+          threadId: "99",
+          sessionKey: "agent:main:telegram:group:12345:topic:99",
+        },
+        prompt: "Ship isolated changes",
+        workdir: repoDir,
+        harness: "codex",
+        worktreeStrategy: "delegate",
+      });
+
+      assert.match(result, /No PR or Manual response/);
+      assert.equal(dispatchCalls.length, 1);
+      const [, request] = dispatchCalls[0];
+      assert.match(request.userMessage, /Provider: unsupported \(PR automation unavailable\)/);
+      assert.doesNotMatch(request.userMessage, /Require PR/);
+      assert.doesNotMatch(request.userMessage, /Merge or PR/);
+      assert.doesNotMatch(request.userMessage, /policy="pr-required"/);
+      assert.doesNotMatch(request.userMessage, /policy="pr-allowed"/);
+      assert.deepEqual(
+        request.buttons.map((row: Array<{ label: string }>) => row.map((button) => button.label)),
+        [["No PR", "Manual"]],
+      );
+      const tokenPolicies = repoPolicyButtonTokenIds(request)
+        .map((tokenId) => sm.getActionToken(tokenId)?.repoPolicy);
+      assert.deepEqual(tokenPolicies, ["never-pr", "manual"]);
+      sm.dispose();
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+      rmSync(storeDir, { recursive: true, force: true });
+    }
+  });
+
   it("delivers short repo-policy buttons with opaque callback tokens before continuing launch", () => {
     const repoDir = mkdtempSync(join(tmpdir(), "openclaw-policy-buttons-"));
     const storeDir = mkdtempSync(join(tmpdir(), "openclaw-policy-buttons-store-"));
@@ -110,7 +159,7 @@ describe("repo policy resolution", () => {
       assert.match(request.userMessage, /continue this launch automatically/);
       assert.deepEqual(
         request.buttons.map((row: Array<{ label: string }>) => row.map((button) => button.label)),
-        [["Require PR", "Merge or PR"], ["No PR", "Manual"]],
+        [["No PR", "Manual"]],
       );
       for (const row of request.buttons as Array<Array<{ label: string; callbackData: string }>>) {
         for (const button of row) {
@@ -124,7 +173,7 @@ describe("repo policy resolution", () => {
       const tokenId = request.buttons[0][0].callbackData;
       const token = sm.getActionToken(tokenId);
       assert.equal(token?.kind, "repo-policy-set");
-      assert.equal(token?.repoPolicy, "pr-required");
+      assert.equal(token?.repoPolicy, "never-pr");
       assert.equal(token?.launchPrompt, "Ship isolated changes");
       assert.equal(token?.launchWorkdir, repoDir);
       assert.equal(token?.launchModel, "gpt-5.5");
@@ -273,8 +322,8 @@ describe("repo policy resolution", () => {
       });
       const policyTokenId = dispatchCalls[0][1].buttons[0][0].callbackData;
 
-      sm.setRepoPolicy(repoDir, "pr-required");
-      const continuation = sm.continueLaunchAfterManualRepoPolicy(repoDir, "pr-required");
+      sm.setRepoPolicy(repoDir, "never-pr");
+      const continuation = sm.continueLaunchAfterManualRepoPolicy(repoDir, "never-pr");
 
       assert.equal(continuation.kind, "launched");
       if (continuation.kind === "launched") {
@@ -326,8 +375,8 @@ describe("repo policy resolution", () => {
       assert.equal(sm.getActionToken(policyTokenId)?.launchWorktreeStrategy, "auto-merge");
 
       setPluginConfig({ defaultWorktreeStrategy: "off" });
-      sm.setRepoPolicy(repoDir, "pr-required");
-      const continuation = sm.continueLaunchAfterManualRepoPolicy(repoDir, "pr-required");
+      sm.setRepoPolicy(repoDir, "never-pr");
+      const continuation = sm.continueLaunchAfterManualRepoPolicy(repoDir, "never-pr");
 
       assert.equal(continuation.kind, "launched");
       assert.equal(spawnConfig?.prompt, "Continue with original default strategy");
@@ -382,8 +431,8 @@ describe("repo policy resolution", () => {
       const firstPolicyTokenId = dispatchCalls[0][1].buttons[0][0].callbackData;
       const secondPolicyTokenId = dispatchCalls[1][1].buttons[0][0].callbackData;
 
-      sm.setRepoPolicy(repoDir, "pr-required");
-      const continuation = sm.continueLaunchAfterManualRepoPolicy(repoDir, "pr-required");
+      sm.setRepoPolicy(repoDir, "never-pr");
+      const continuation = sm.continueLaunchAfterManualRepoPolicy(repoDir, "never-pr");
 
       assert.equal(continuation.kind, "launched");
       assert.equal(spawnCount, 1);
@@ -423,9 +472,9 @@ describe("repo policy resolution", () => {
       });
       const policyTokenId = dispatchCalls[0][1].buttons[0][0].callbackData;
 
-      sm.setRepoPolicy(repoDir, "pr-required");
+      sm.setRepoPolicy(repoDir, "never-pr");
       assert.throws(
-        () => sm.continueLaunchAfterManualRepoPolicy(repoDir, "pr-required"),
+        () => sm.continueLaunchAfterManualRepoPolicy(repoDir, "never-pr"),
         /launch capacity unavailable/,
       );
       assert.equal(sm.getActionToken(policyTokenId)?.id, policyTokenId);
@@ -459,14 +508,14 @@ describe("repo policy resolution", () => {
         worktreeStrategy: "delegate",
       });
       const policyTokenIds = repoPolicyButtonTokenIds(dispatchCalls[0][1]);
-      const prRequiredTokenId = policyTokenIds.find((tokenId) => (
-        sm.getActionToken(tokenId)?.repoPolicy === "pr-required"
+      const neverPrTokenId = policyTokenIds.find((tokenId) => (
+        sm.getActionToken(tokenId)?.repoPolicy === "never-pr"
       ));
-      assert.ok(prRequiredTokenId);
-      sm.consumeActionToken(prRequiredTokenId);
+      assert.ok(neverPrTokenId);
+      sm.consumeActionToken(neverPrTokenId);
 
-      sm.setRepoPolicy(repoDir, "pr-required");
-      const continuation = sm.continueLaunchAfterManualRepoPolicy(repoDir, "pr-required");
+      sm.setRepoPolicy(repoDir, "never-pr");
+      const continuation = sm.continueLaunchAfterManualRepoPolicy(repoDir, "never-pr");
 
       assert.deepEqual(continuation, { kind: "none" });
       for (const tokenId of policyTokenIds) {
@@ -512,8 +561,8 @@ describe("repo policy resolution", () => {
       const firstPolicyTokenIds = repoPolicyButtonTokenIds(dispatchCalls[0][1]);
       const secondPolicyTokenIds = repoPolicyButtonTokenIds(dispatchCalls[1][1]);
 
-      sm.setRepoPolicy(repoDir, "pr-required");
-      const continuation = sm.continueLaunchAfterManualRepoPolicy(repoDir, "pr-required");
+      sm.setRepoPolicy(repoDir, "never-pr");
+      const continuation = sm.continueLaunchAfterManualRepoPolicy(repoDir, "never-pr");
 
       assert.deepEqual(continuation, { kind: "ambiguous", count: 2 });
       assert.equal(spawnCalled, false);
