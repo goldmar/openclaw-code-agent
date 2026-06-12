@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.5.0] - 2026-06-12
+
 ### Added
 - Added repository integration policies for managed worktree sessions, including policy storage, chat/tool commands, policy-aware worktree buttons, and deferred launch continuation after the user chooses how OCA may integrate with a repository.
 - Added repo-policy choice buttons for unknown repositories and preserved the original launch context through manual or button-based policy selection.
@@ -493,7 +495,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Default Codex approval policy to `on-request`.
 - Raised the default session limit.
 
-[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.4.2...HEAD
+[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.5.0...HEAD
+[4.5.0]: https://github.com/goldmar/openclaw-code-agent/compare/v4.4.2...v4.5.0
 [4.4.2]: https://github.com/goldmar/openclaw-code-agent/compare/v4.4.1...v4.4.2
 [4.4.1]: https://github.com/goldmar/openclaw-code-agent/compare/v4.4.0...v4.4.1
 [4.4.0]: https://github.com/goldmar/openclaw-code-agent/compare/v4.3.8...v4.4.0
