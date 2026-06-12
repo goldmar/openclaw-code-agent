@@ -105,4 +105,41 @@ describe("/agent_policy command", () => {
     assert.match(result.text, /Repo policy saved, but the deferred launch failed: launch capacity unavailable/);
     assert.match(result.text, /pending launch context was kept/);
   });
+
+  it("rejects PR policies when PR automation is unavailable", () => {
+    setSessionManager({
+      resolveRepoPolicy: () => ({
+        identity: { key: "/repo", repoRoot: "/repo", provider: "unsupported" },
+        source: "unknown",
+        provider: "unsupported",
+        prAvailable: false,
+      }),
+      setRepoPolicy: () => {
+        throw new Error("setRepoPolicy should not be called");
+      },
+    } as any);
+
+    const result = captureHandler()({ args: "pr-allowed", workspaceDir: "/repo" });
+
+    assert.match(result.text, /Error: Policy pr-allowed requires PR automation/);
+    assert.match(result.text, /Choose never-pr or manual/);
+  });
+
+  it("only advertises non-PR policies when PR automation is unavailable", () => {
+    setSessionManager({
+      resolveRepoPolicy: () => ({
+        identity: { key: "/repo", repoRoot: "/repo", provider: "unsupported" },
+        source: "unknown",
+        provider: "unsupported",
+        prAvailable: false,
+      }),
+    } as any);
+
+    const result = captureHandler()({ workspaceDir: "/repo" });
+
+    assert.match(result.text, /Provider: unsupported \(PR automation unavailable\)/);
+    assert.match(result.text, /Set with \/agent_policy never-pr, manual\./);
+    assert.doesNotMatch(result.text, /pr-required/);
+    assert.doesNotMatch(result.text, /pr-allowed/);
+  });
 });

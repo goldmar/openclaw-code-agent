@@ -61,6 +61,12 @@ export const REPO_POLICY_OPTIONS: readonly RepoPolicyOption[] = [
 
 const REPO_POLICY_OPTION_BY_POLICY = new Map(REPO_POLICY_OPTIONS.map((option) => [option.policy, option]));
 
+export function getRepoPolicyOptionsForPrAvailability(prAvailable: boolean): readonly RepoPolicyOption[] {
+  return prAvailable
+    ? REPO_POLICY_OPTIONS
+    : REPO_POLICY_OPTIONS.filter((option) => option.policy === "never-pr" || option.policy === "manual");
+}
+
 export function getRepoPolicyOption(policy: RepoIntegrationPolicy): RepoPolicyOption {
   return REPO_POLICY_OPTION_BY_POLICY.get(policy) ?? {
     policy,
@@ -68,6 +74,11 @@ export function getRepoPolicyOption(policy: RepoIntegrationPolicy): RepoPolicyOp
     title: policy,
     description: "Custom repo integration policy.",
   };
+}
+
+export function validateRepoPolicyForPrAvailability(policy: RepoIntegrationPolicy, prAvailable: boolean): string | undefined {
+  if (prAvailable || (policy !== "pr-required" && policy !== "pr-allowed")) return undefined;
+  return `Policy ${policy} requires PR automation, but no supported PR provider is available. Choose never-pr or manual.`;
 }
 
 export interface WorktreePolicyDecision {
@@ -216,18 +227,19 @@ export function resolveWorktreePolicyDecision(args: {
   return { strategy: requested, allowedActions };
 }
 
-export function formatUnknownRepoPolicyMessage(identity: RepoIdentity, requestedStrategy: WorktreeStrategy): string {
+export function formatUnknownRepoPolicyMessage(identity: RepoIdentity, requestedStrategy: WorktreeStrategy, prAvailable: boolean = identity.provider === "github"): string {
+  const options = getRepoPolicyOptionsForPrAvailability(prAvailable);
   return [
     `Repo integration policy is not set for ${identity.repoRoot}.`,
     ``,
-    `OCA will create isolated worktrees, but it needs one repo policy before merge or PR follow-through can run.`,
+    `OCA will create isolated worktrees, but it needs one repo policy before worktree follow-through can run.`,
     `Requested worktree strategy: ${requestedStrategy}`,
-    `Provider: ${identity.provider}${identity.provider === "github" ? "" : " (PR automation unavailable)"}`,
+    `Provider: ${identity.provider}${prAvailable ? "" : " (PR automation unavailable)"}`,
     ``,
-    `Choose one policy:`,
-    ...REPO_POLICY_OPTIONS.map((option) => `- ${option.title}: ${option.description}`),
+    `Choose one available policy:`,
+    ...options.map((option) => `- ${option.title}: ${option.description}`),
     ``,
     `If buttons are unavailable, set it manually. OCA will continue the pending launch automatically when exactly one matching launch is waiting; otherwise run the intended launch again:`,
-    ...REPO_POLICY_OPTIONS.map((option) => `- agent_repo_policy(workdir="${identity.repoRoot}", policy="${option.policy}")`),
+    ...options.map((option) => `- agent_repo_policy(workdir="${identity.repoRoot}", policy="${option.policy}")`),
   ].join("\n");
 }

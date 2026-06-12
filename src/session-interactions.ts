@@ -10,7 +10,7 @@ import type {
 } from "./types";
 import type { SessionActionTokenStore } from "./session-action-token-store";
 import { logButtonDiagnostic, summarizeButtons } from "./button-diagnostics";
-import { REPO_POLICY_OPTIONS } from "./repo-policy";
+import { getRepoPolicyOptionsForPrAvailability } from "./repo-policy";
 
 export type NotificationButton = {
   label: string;
@@ -267,11 +267,11 @@ export class SessionInteractionService {
     launchWorktreeBaseBranch?: string;
     launchWorktreePrTargetRepo?: string;
     launchOriginAgentId?: string;
+    prAvailable?: boolean;
   }): NotificationButton[][] {
-    const rows = [
-      REPO_POLICY_OPTIONS.slice(0, 2),
-      REPO_POLICY_OPTIONS.slice(2),
-    ].map((options) => options.map((option) => (
+    const options = getRepoPolicyOptionsForPrAvailability(args.prAvailable ?? true);
+    const rows = Array.from({ length: Math.ceil(options.length / 2) }, (_, index) => options.slice(index * 2, index * 2 + 2))
+      .map((rowOptions) => rowOptions.map((option) => (
       this.makeActionButton(args.choiceId, "repo-policy-set", option.label, {
         route: args.route,
         repoPolicy: option.policy,
@@ -307,7 +307,7 @@ export class SessionInteractionService {
       accountId: args.route.accountId,
       threadId: args.route.threadId,
       sessionKey: args.route.sessionKey,
-      labels: REPO_POLICY_OPTIONS.map((option) => option.label),
+      labels: options.map((option) => option.label),
       ...summarizeButtons(rows),
     });
     return rows;

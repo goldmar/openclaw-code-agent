@@ -12,7 +12,7 @@ import type {
   PluginInteractiveTelegramHandlerResult,
 } from "../api";
 import type { PersistedSessionInfo, SessionActionKind, SessionActionToken } from "./types";
-import { getRepoPolicyOption } from "./repo-policy";
+import { getRepoPolicyOption, validateRepoPolicyForPrAvailability } from "./repo-policy";
 
 type InteractiveChannel = "telegram" | "discord";
 type InteractiveCallbackContext = PluginInteractiveTelegramHandlerContext | PluginInteractiveDiscordHandlerContext;
@@ -610,6 +610,20 @@ export function createCallbackHandler(
             });
             await replyText(ctx, "⚠️ This action is missing the launch context.");
             break;
+          }
+          if (typeof sessionManager.resolveRepoPolicy === "function") {
+            const resolution = sessionManager.resolveRepoPolicy(consumedToken.repoPolicyWorkdir);
+            if (resolution.identity) {
+              const validationError = validateRepoPolicyForPrAvailability(consumedToken.repoPolicy, resolution.prAvailable);
+              if (validationError) {
+                await clearInteractiveState(ctx, {
+                  alreadyAcknowledged: callbackAcknowledged,
+                  forceTelegramMarkupEdit: true,
+                });
+                await replyText(ctx, `⚠️ ${validationError}`);
+                break;
+              }
+            }
           }
           const record = sessionManager.setRepoPolicy(consumedToken.repoPolicyWorkdir, consumedToken.repoPolicy);
           if (!record) {
