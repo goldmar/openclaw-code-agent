@@ -235,7 +235,6 @@ export class SessionManager {
   private readonly notifications: SessionNotificationService;
   private readonly worktrees: SessionWorktreeController;
   private readonly questions: SessionQuestionService;
-  private readonly reminders: SessionReminderService;
   private readonly lifecycle: SessionLifecycleService;
   private readonly restore: SessionRestoreService;
   private readonly stateSync: SessionStateSyncService;
@@ -267,7 +266,6 @@ export class SessionManager {
     this.notifications = services.notifications;
     this.worktrees = services.worktrees;
     this.questions = services.questions;
-    this.reminders = services.reminders;
     this.lifecycle = services.lifecycle;
     this.restore = services.restore;
     this.stateSync = services.stateSync;

@@ -526,7 +526,6 @@ export class WakeDispatcher {
       text: message.text.trim(),
       buttons: message.buttons,
     })).filter((message) => message.text.length > 0);
-    const userMessage = userMessages[0]?.text;
     const wakeMessage = request.wakeMessage?.trim();
     const shouldDispatch = request.shouldDispatch;
     const wakeSuccessValidator = request.completionWakeSummaryRequired === true

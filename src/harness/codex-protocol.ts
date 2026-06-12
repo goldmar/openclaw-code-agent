@@ -219,7 +219,7 @@ export function classifyTerminalOutcome(
   return "completed";
 }
 
-export function extractTerminalMessage(method: string, params: unknown): string | undefined {
+export function extractTerminalMessage(_method: string, params: unknown): string | undefined {
   const record = asRecord(params) ?? {};
   const turn = asRecord(record.turn) ?? record;
   const error = asRecord(turn.error) ?? asRecord(record.error);

@@ -6,7 +6,6 @@ import type {
   PendingInputAction,
   PendingInputQuestion,
   PendingInputState,
-  PermissionMode,
 } from "../types";
 import {
   extractPendingInputOptions,

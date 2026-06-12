@@ -1278,7 +1278,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
       (sm as any).maintenance.schedule = ((key: string, at: number, cb: () => void) => {
         scheduled.push({ key, at, cb });
       }) as any;
-      (sm as any).reminders.sendReminderIfDue = (() => false) as any;
+      (sm as any).maintenance.deps.reminders.sendReminderIfDue = (() => false) as any;
 
       (sm as any).maintenance.schedulePersistedWorktreeReminder(pending.sessionId, now);
       assert.equal(scheduled.filter((entry) => entry.key.endsWith(":worktree-reminder")).length, 1);
@@ -1462,7 +1462,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     ];
 
     for (const entry of cases) {
-      const nextReminderAt = (sm as any).reminders.getNextReminderAt({
+      const nextReminderAt = (sm as any).maintenance.deps.reminders.getNextReminderAt({
         sessionId: `stale-${entry.label}`,
         harnessSessionId: `thread-${entry.label}`,
         name: `stale-${entry.label}`,

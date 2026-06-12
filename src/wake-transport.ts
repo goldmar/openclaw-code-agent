@@ -6,9 +6,7 @@ import { buildPresentation } from "./direct-notification-transport";
 export interface WakeTransportOptions {}
 
 export class WakeTransport {
-  constructor(
-    private readonly options: WakeTransportOptions = {},
-  ) {}
+  constructor(_options: WakeTransportOptions = {}) {}
 
   buildChatSendArgs(
     sessionKey: string,
