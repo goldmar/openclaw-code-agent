@@ -54,7 +54,7 @@
     "@types/node": "^25.5.2",
     "esbuild": "^0.28.1",
     "nanoid": "^5.1.7",
-    "openclaw": "2026.6.6",
+    "openclaw": "2026.6.8",
     "tsx": "^4.21.0",
     "typescript": "^6.0.2"
   },
