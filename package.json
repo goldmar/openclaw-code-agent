@@ -1,6 +1,6 @@
 {
   "name": "openclaw-code-agent",
-  "version": "4.5.1",
+  "version": "4.5.2",
   "type": "module",
   "packageManager": "pnpm@10.30.0",
   "main": "dist/index.js",
@@ -36,8 +36,8 @@
       "minGatewayVersion": "2026.4.21"
     },
     "build": {
-      "openclawVersion": "2026.6.6",
-      "pluginSdkVersion": "2026.6.6"
+      "openclawVersion": "2026.6.8",
+      "pluginSdkVersion": "2026.6.8"
     }
   },
   "files": [
