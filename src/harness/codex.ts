@@ -69,7 +69,8 @@ type CodexPendingInput = {
 };
 
 const DEFAULT_PROTOCOL_VERSION = "1.0";
-export const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
+export const DEFAULT_REQUEST_TIMEOUT_MS = 120_000;
+export const DEFAULT_APP_SERVER_ARGS = ["--listen", "stdio://"];
 const OPENCLAW_CODEX_APP_SERVER_COMMAND_ENV = "OPENCLAW_CODEX_APP_SERVER_COMMAND";
 const OPENCLAW_CODEX_APP_SERVER_ARGS_ENV = "OPENCLAW_CODEX_APP_SERVER_ARGS";
 const OPENCLAW_CODEX_APP_SERVER_TIMEOUT_MS_ENV = "OPENCLAW_CODEX_APP_SERVER_TIMEOUT_MS";
@@ -145,7 +146,9 @@ export class CodexHarness implements AgentHarness {
   launch(options: HarnessLaunchOptions): HarnessSession {
     const clientSettings = {
       command: process.env[OPENCLAW_CODEX_APP_SERVER_COMMAND_ENV]?.trim() || "codex",
-      args: parseCsvEnv(process.env[OPENCLAW_CODEX_APP_SERVER_ARGS_ENV]),
+      args: process.env[OPENCLAW_CODEX_APP_SERVER_ARGS_ENV] === undefined
+        ? DEFAULT_APP_SERVER_ARGS
+        : parseCsvEnv(process.env[OPENCLAW_CODEX_APP_SERVER_ARGS_ENV]),
       requestTimeoutMs: parseRequestTimeoutMs(process.env[OPENCLAW_CODEX_APP_SERVER_TIMEOUT_MS_ENV]),
     };
     const client = this.deps.createClient?.(clientSettings)

@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { getHarness, listHarnesses } from "../src/harness/index";
-import { CodexHarness, DEFAULT_REQUEST_TIMEOUT_MS, isCodexAppServerSessionId } from "../src/harness/codex";
+import { CodexHarness, DEFAULT_APP_SERVER_ARGS, DEFAULT_REQUEST_TIMEOUT_MS, isCodexAppServerSessionId } from "../src/harness/codex";
 import type { HarnessMessage } from "../src/harness/types";
 
 type NotificationHandler = (method: string, params: unknown) => Promise<void> | void;
@@ -14,6 +14,7 @@ type ClientSettings = {
 
 const CODEX_TIMEOUT_ENV = "OPENCLAW_CODEX_APP_SERVER_TIMEOUT_MS";
 const VALID_THREAD_ID = "123e4567-e89b-12d3-a456-426614174000";
+const CODEX_ARGS_ENV = "OPENCLAW_CODEX_APP_SERVER_ARGS";
 
 class MockJsonRpcClient {
   requests: Array<{ method: string; params: unknown; timeoutMs: number | undefined }> = [];
@@ -144,6 +145,27 @@ async function withCodexTimeoutEnv<T>(
       delete process.env[CODEX_TIMEOUT_ENV];
     } else {
       process.env[CODEX_TIMEOUT_ENV] = original;
+    }
+  }
+}
+
+async function withCodexArgsEnv<T>(
+  value: string | undefined,
+  run: () => Promise<T>,
+): Promise<T> {
+  const original = process.env[CODEX_ARGS_ENV];
+  if (value === undefined) {
+    delete process.env[CODEX_ARGS_ENV];
+  } else {
+    process.env[CODEX_ARGS_ENV] = value;
+  }
+  try {
+    return await run();
+  } finally {
+    if (original === undefined) {
+      delete process.env[CODEX_ARGS_ENV];
+    } else {
+      process.env[CODEX_ARGS_ENV] = original;
     }
   }
 }
@@ -313,6 +335,40 @@ describe("CodexHarness App Server mapping", () => {
         assert.equal(client.requests.find((request) => request.method === "thread/start")?.timeoutMs, DEFAULT_REQUEST_TIMEOUT_MS);
       });
     }
+  });
+
+  it("uses stdio listener args by default for Codex app-server clients", async () => {
+    await withCodexArgsEnv(undefined, async () => {
+      const client = new MockJsonRpcClient({ assistantText: "Done." });
+      const createdSettings: ClientSettings[] = [];
+      const harness = new CodexHarness({
+        createClient: (settings) => {
+          createdSettings.push(settings);
+          return client as any;
+        },
+      });
+
+      await collectMessages(harness.launch({ prompt: "ship it", cwd: "/tmp" }));
+
+      assert.deepEqual(createdSettings[0]?.args, DEFAULT_APP_SERVER_ARGS);
+    });
+  });
+
+  it("lets explicit Codex app-server args override the stdio defaults", async () => {
+    await withCodexArgsEnv("--experimental-foo,--bar", async () => {
+      const client = new MockJsonRpcClient({ assistantText: "Done." });
+      const createdSettings: ClientSettings[] = [];
+      const harness = new CodexHarness({
+        createClient: (settings) => {
+          createdSettings.push(settings);
+          return client as any;
+        },
+      });
+
+      await collectMessages(harness.launch({ prompt: "ship it", cwd: "/tmp" }));
+
+      assert.deepEqual(createdSettings[0]?.args, ["--experimental-foo", "--bar"]);
+    });
   });
 
   it("emits backend ref, assistant output, and a completed run", async () => {
