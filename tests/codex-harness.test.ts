@@ -379,6 +379,7 @@ describe("CodexHarness App Server mapping", () => {
     client.stderrTail = [
       "api_key=sk-test-secret1234567890",
       "Authorization: Bearer ghp_abcdefghijklmnopqrstuvwxyz123456",
+      '{"password":"hunter2","secret":"quoted-private-value"}',
       "path /home/alice/projects/private-openclaw/session.log",
       "opaque abcdef1234567890abcdef1234567890",
     ].join("\n");
@@ -388,6 +389,8 @@ describe("CodexHarness App Server mapping", () => {
     assert.match(message, /recent stderr:/);
     assert.doesNotMatch(message, /sk-test-secret/);
     assert.doesNotMatch(message, /ghp_abcdefghijklmnopqrstuvwxyz/);
+    assert.doesNotMatch(message, /hunter2/);
+    assert.doesNotMatch(message, /quoted-private-value/);
     assert.doesNotMatch(message, /\/home\/alice/);
     assert.doesNotMatch(message, /abcdef1234567890abcdef1234567890/);
     assert.match(message, /\[redacted credential\]/);
