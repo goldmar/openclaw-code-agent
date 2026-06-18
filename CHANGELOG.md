@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.5.2] - 2026-06-18
+
+### Fixed
+- Guarded Codex App Server resume attempts so plugin-owned session IDs are not sent as backend thread IDs; invalid resume IDs now start a fresh Codex thread instead of failing the app-server resume path.
+- Hardened Codex App Server startup by defaulting launches to the stdio listener, extending request timeouts, and including redacted recent stderr in timeout diagnostics.
+- Kept pending worktree decision reminders policy-aware when repository policy state is unavailable, preserving Merge/Open PR/Later/Discard actions instead of hiding valid follow-through buttons.
+- Updated the Hono production audit override to `4.12.25` so the OpenClaw `2026.6.8` dependency tree stays clear under `pnpm audit --prod`.
+
+### Changed
+- Retargeted the OpenClaw package and plugin SDK validation metadata to `2026.6.8` while keeping the compatible `>=2026.4.21` peer/API floor.
+- Refreshed OpenClaw `2026.6.8` compatibility guidance for richer Telegram delivery, WhatsApp ACP bindings, Codex startup/resume hardening, worktree decision follow-through, agent/Gateway recovery, provider/model replay hardening, usage footer hooks, managed plugin update repair, and release/test reliability.
+
 ## [4.5.1] - 2026-06-12
 
 ### Changed
@@ -501,7 +513,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Default Codex approval policy to `on-request`.
 - Raised the default session limit.
 
-[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.5.1...HEAD
+[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.5.2...HEAD
+[4.5.2]: https://github.com/goldmar/openclaw-code-agent/compare/v4.5.1...v4.5.2
 [4.5.1]: https://github.com/goldmar/openclaw-code-agent/compare/v4.5.0...v4.5.1
 [4.5.0]: https://github.com/goldmar/openclaw-code-agent/compare/v4.4.2...v4.5.0
 [4.4.2]: https://github.com/goldmar/openclaw-code-agent/compare/v4.4.1...v4.4.2

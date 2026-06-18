@@ -68,8 +68,8 @@ describe("plugin entry source", () => {
     const { packageVersion, pluginVersion, openclawVersion, pluginSdkVersion, openclawInstall } =
       validateReleaseMetadata();
     assert.equal(packageVersion, pluginVersion);
-    assert.equal(openclawVersion, "2026.6.6");
-    assert.equal(pluginSdkVersion, "2026.6.6");
+    assert.equal(openclawVersion, "2026.6.8");
+    assert.equal(pluginSdkVersion, "2026.6.8");
     assert.equal(openclawInstall.npmSpec, "openclaw-code-agent");
     assert.equal(openclawInstall.defaultChoice, "npm");
     assert.equal(openclawInstall.minHostVersion, ">=2026.4.21");
@@ -104,7 +104,7 @@ describe("plugin entry source", () => {
     assert.doesNotMatch(activeWorkflowSources, /\bnpm audit\b/);
   });
 
-  it("declares the v2026.4.21 compatibility floor and v2026.6.6 SDK readiness target in package metadata", () => {
+  it("declares the v2026.4.21 compatibility floor and v2026.6.8 SDK readiness target in package metadata", () => {
     const packageJson = JSON.parse(readFileSync(join(rootDir, "package.json"), "utf8")) as {
       dependencies?: Record<string, string>;
       openclaw?: {
@@ -122,8 +122,8 @@ describe("plugin entry source", () => {
     assert.equal(packageJson.openclaw?.install?.minHostVersion, ">=2026.4.21");
     assert.equal(packageJson.openclaw?.compat?.pluginApi, ">=2026.4.21");
     assert.equal(packageJson.openclaw?.compat?.minGatewayVersion, "2026.4.21");
-    assert.equal(packageJson.openclaw?.build?.openclawVersion, "2026.6.6");
-    assert.equal(packageJson.openclaw?.build?.pluginSdkVersion, "2026.6.6");
+    assert.equal(packageJson.openclaw?.build?.openclawVersion, "2026.6.8");
+    assert.equal(packageJson.openclaw?.build?.pluginSdkVersion, "2026.6.8");
     assert.equal(packageJson.peerDependencies?.openclaw, ">=2026.4.21");
     assert.equal(packageJson.devDependencies?.openclaw, "2026.6.8");
     assert.doesNotMatch(readFileSync(join(rootDir, "pnpm-lock.yaml"), "utf8"), /uuid@9\.0\.1/);
@@ -425,11 +425,11 @@ describe("plugin entry source", () => {
     assert.doesNotMatch(apiSource, /openclaw\/plugin-sdk\/discord/);
   });
 
-  it("documents 2026.6.6 plugin allowlist and apply_patch policy boundaries", () => {
+  it("documents 2026.6.8 plugin allowlist and apply_patch policy boundaries", () => {
     const reference = readFileSync(join(rootDir, "docs", "REFERENCE.md"), "utf8");
 
-    assert.match(reference, /OpenClaw 2026\.6\.6 SDK Readiness/);
-    assert.match(reference, /package build metadata targets OpenClaw `2026\.6\.6` for both host and SDK readiness/);
+    assert.match(reference, /OpenClaw 2026\.6\.8 SDK Readiness/);
+    assert.match(reference, /package build metadata targets OpenClaw `2026\.6\.8` for both host and SDK readiness/);
     assert.doesNotMatch(reference, /2026\.5\.8/);
     assert.doesNotMatch(reference, /E404/);
     assert.match(reference, /plugins\.allow/);

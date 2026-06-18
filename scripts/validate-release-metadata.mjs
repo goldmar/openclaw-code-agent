@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 const scriptPath = fileURLToPath(import.meta.url);
 const rootDir = dirname(dirname(scriptPath));
-const defaultOpenClawTargetVersion = "2026.6.6";
+const defaultOpenClawTargetVersion = "2026.6.8";
 
 export function loadReleaseMetadata(baseDir = rootDir) {
   const packageJson = JSON.parse(readFileSync(join(baseDir, "package.json"), "utf8"));
