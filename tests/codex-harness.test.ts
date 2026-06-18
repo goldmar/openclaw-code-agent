@@ -2,6 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { getHarness, listHarnesses } from "../src/harness/index";
 import { CodexHarness, DEFAULT_APP_SERVER_ARGS, DEFAULT_REQUEST_TIMEOUT_MS, isCodexAppServerSessionId } from "../src/harness/codex";
+import { StdioJsonRpcClient } from "../src/harness/codex-rpc";
 import type { HarnessMessage } from "../src/harness/types";
 
 type NotificationHandler = (method: string, params: unknown) => Promise<void> | void;
@@ -338,20 +339,22 @@ describe("CodexHarness App Server mapping", () => {
   });
 
   it("uses stdio listener args by default for Codex app-server clients", async () => {
-    await withCodexArgsEnv(undefined, async () => {
-      const client = new MockJsonRpcClient({ assistantText: "Done." });
-      const createdSettings: ClientSettings[] = [];
-      const harness = new CodexHarness({
-        createClient: (settings) => {
-          createdSettings.push(settings);
-          return client as any;
-        },
+    for (const value of [undefined, "", "   "]) {
+      await withCodexArgsEnv(value, async () => {
+        const client = new MockJsonRpcClient({ assistantText: "Done." });
+        const createdSettings: ClientSettings[] = [];
+        const harness = new CodexHarness({
+          createClient: (settings) => {
+            createdSettings.push(settings);
+            return client as any;
+          },
+        });
+
+        await collectMessages(harness.launch({ prompt: "ship it", cwd: "/tmp" }));
+
+        assert.deepEqual(createdSettings[0]?.args, DEFAULT_APP_SERVER_ARGS);
       });
-
-      await collectMessages(harness.launch({ prompt: "ship it", cwd: "/tmp" }));
-
-      assert.deepEqual(createdSettings[0]?.args, DEFAULT_APP_SERVER_ARGS);
-    });
+    }
   });
 
   it("lets explicit Codex app-server args override the stdio defaults", async () => {
@@ -369,6 +372,27 @@ describe("CodexHarness App Server mapping", () => {
 
       assert.deepEqual(createdSettings[0]?.args, ["--experimental-foo", "--bar"]);
     });
+  });
+
+  it("redacts sensitive stderr details from Codex app-server timeout errors", () => {
+    const client = new StdioJsonRpcClient("codex", DEFAULT_APP_SERVER_ARGS, DEFAULT_REQUEST_TIMEOUT_MS) as any;
+    client.stderrTail = [
+      "api_key=sk-test-secret1234567890",
+      "Authorization: Bearer ghp_abcdefghijklmnopqrstuvwxyz123456",
+      "path /home/alice/projects/private-openclaw/session.log",
+      "opaque abcdef1234567890abcdef1234567890",
+    ].join("\n");
+
+    const message = client.buildTimeoutErrorMessage("initialize", 120000);
+
+    assert.match(message, /recent stderr:/);
+    assert.doesNotMatch(message, /sk-test-secret/);
+    assert.doesNotMatch(message, /ghp_abcdefghijklmnopqrstuvwxyz/);
+    assert.doesNotMatch(message, /\/home\/alice/);
+    assert.doesNotMatch(message, /abcdef1234567890abcdef1234567890/);
+    assert.match(message, /\[redacted credential\]/);
+    assert.match(message, /\[redacted path\]/);
+    assert.match(message, /\[redacted token\]/);
   });
 
   it("emits backend ref, assistant output, and a completed run", async () => {
