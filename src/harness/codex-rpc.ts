@@ -95,6 +95,7 @@ export async function dispatchJsonRpcEnvelope(
 export class StdioJsonRpcClient implements JsonRpcClient {
   private process: ChildProcessWithoutNullStreams | null = null;
   private readonly pending = new Map<string, PendingRequest>();
+  private stderrTail = "";
   private counter = 0;
   private onNotification: JsonRpcNotificationHandler = () => undefined;
   private onRequest: JsonRpcRequestHandler = async () => ({});
@@ -129,7 +130,9 @@ export class StdioJsonRpcClient implements JsonRpcClient {
     reader.on("line", (line) => {
       void this.handleLine(line);
     });
-    child.stderr.on("data", () => undefined);
+    child.stderr.on("data", (chunk: Buffer) => {
+      this.stderrTail = `${this.stderrTail}${chunk.toString("utf8")}`.slice(-4_000);
+    });
     child.on("close", () => {
       this.flushPending(new Error("codex app server stdio closed"));
       this.process = null;
@@ -151,10 +154,11 @@ export class StdioJsonRpcClient implements JsonRpcClient {
   async request(method: string, params?: unknown, timeoutMs?: number): Promise<unknown> {
     const id = `rpc-${++this.counter}`;
     const result = new Promise<unknown>((resolve, reject) => {
+      const effectiveTimeoutMs = Math.max(100, timeoutMs ?? this.requestTimeoutMs);
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(new Error(`codex app server timeout: ${method}`));
-      }, Math.max(100, timeoutMs ?? this.requestTimeoutMs));
+        reject(new Error(this.buildTimeoutErrorMessage(method, effectiveTimeoutMs)));
+      }, effectiveTimeoutMs);
       timer.unref?.();
       this.pending.set(id, { resolve, reject, timer });
     });
@@ -187,4 +191,25 @@ export class StdioJsonRpcClient implements JsonRpcClient {
       this.pending.delete(id);
     }
   }
+
+  private buildTimeoutErrorMessage(method: string, timeoutMs: number): string {
+    const stderr = this.stderrTail.trim();
+    const stderrSuffix = stderr
+      ? `; recent stderr: ${sanitizeTimeoutStderr(stderr)}`
+      : "";
+    return `codex app server timeout after ${timeoutMs}ms: ${method}${stderrSuffix}`;
+  }
+}
+
+function sanitizeTimeoutStderr(stderr: string): string {
+  return stderr
+    .replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/?#@]+@/gi, "$1[redacted credential]@")
+    .replace(/\b(authorization\s*[:=]\s*)[^\r\n,;}]+/gi, "$1[redacted credential]")
+    .replace(/\b(Bearer\s+)[^\s]+/gi, "$1[redacted credential]")
+    .replace(/(["'][A-Za-z0-9_.-]*(?:api[_-]?key|token|secret|password|authorization)[A-Za-z0-9_.-]*["']\s*:\s*["'])[^"']+(["'])/gi, "$1[redacted credential]$2")
+    .replace(/\b([A-Za-z0-9_.-]*(?:api[_-]?key|token|secret|password|authorization)[A-Za-z0-9_.-]*\s*[:=]\s*)[^\s,}]+/gi, "$1[redacted credential]")
+    .replace(/\b(?:sk-[A-Za-z0-9_-]{8,}|gh[opsru]_[A-Za-z0-9_]{8,}|[A-Za-z0-9_-]{32,})\b/g, "[redacted token]")
+    .replace(/(?:\/Users|\/home)\/[^\s]+/g, "[redacted path]")
+    .replace(/\s+/g, " ")
+    .slice(-1_000);
 }

@@ -69,7 +69,8 @@ type CodexPendingInput = {
 };
 
 const DEFAULT_PROTOCOL_VERSION = "1.0";
-export const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
+export const DEFAULT_REQUEST_TIMEOUT_MS = 120_000;
+export const DEFAULT_APP_SERVER_ARGS = ["--listen", "stdio://"];
 const OPENCLAW_CODEX_APP_SERVER_COMMAND_ENV = "OPENCLAW_CODEX_APP_SERVER_COMMAND";
 const OPENCLAW_CODEX_APP_SERVER_ARGS_ENV = "OPENCLAW_CODEX_APP_SERVER_ARGS";
 const OPENCLAW_CODEX_APP_SERVER_TIMEOUT_MS_ENV = "OPENCLAW_CODEX_APP_SERVER_TIMEOUT_MS";
@@ -145,7 +146,7 @@ export class CodexHarness implements AgentHarness {
   launch(options: HarnessLaunchOptions): HarnessSession {
     const clientSettings = {
       command: process.env[OPENCLAW_CODEX_APP_SERVER_COMMAND_ENV]?.trim() || "codex",
-      args: parseCsvEnv(process.env[OPENCLAW_CODEX_APP_SERVER_ARGS_ENV]),
+      args: resolveAppServerArgs(process.env[OPENCLAW_CODEX_APP_SERVER_ARGS_ENV]),
       requestTimeoutMs: parseRequestTimeoutMs(process.env[OPENCLAW_CODEX_APP_SERVER_TIMEOUT_MS_ENV]),
     };
     const client = this.deps.createClient?.(clientSettings)
@@ -606,4 +607,10 @@ export class CodexHarness implements AgentHarness {
   buildUserMessage(text: string, sessionId: string): unknown {
     return { type: "user", text, session_id: sessionId };
   }
+}
+
+function resolveAppServerArgs(value: string | undefined): string[] {
+  if (value === undefined) return DEFAULT_APP_SERVER_ARGS;
+  const parsed = parseCsvEnv(value);
+  return parsed.length > 0 ? parsed : DEFAULT_APP_SERVER_ARGS;
 }

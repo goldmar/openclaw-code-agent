@@ -1,7 +1,8 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { getHarness, listHarnesses } from "../src/harness/index";
-import { CodexHarness, DEFAULT_REQUEST_TIMEOUT_MS, isCodexAppServerSessionId } from "../src/harness/codex";
+import { CodexHarness, DEFAULT_APP_SERVER_ARGS, DEFAULT_REQUEST_TIMEOUT_MS, isCodexAppServerSessionId } from "../src/harness/codex";
+import { StdioJsonRpcClient } from "../src/harness/codex-rpc";
 import type { HarnessMessage } from "../src/harness/types";
 
 type NotificationHandler = (method: string, params: unknown) => Promise<void> | void;
@@ -14,6 +15,7 @@ type ClientSettings = {
 
 const CODEX_TIMEOUT_ENV = "OPENCLAW_CODEX_APP_SERVER_TIMEOUT_MS";
 const VALID_THREAD_ID = "123e4567-e89b-12d3-a456-426614174000";
+const CODEX_ARGS_ENV = "OPENCLAW_CODEX_APP_SERVER_ARGS";
 
 class MockJsonRpcClient {
   requests: Array<{ method: string; params: unknown; timeoutMs: number | undefined }> = [];
@@ -144,6 +146,27 @@ async function withCodexTimeoutEnv<T>(
       delete process.env[CODEX_TIMEOUT_ENV];
     } else {
       process.env[CODEX_TIMEOUT_ENV] = original;
+    }
+  }
+}
+
+async function withCodexArgsEnv<T>(
+  value: string | undefined,
+  run: () => Promise<T>,
+): Promise<T> {
+  const original = process.env[CODEX_ARGS_ENV];
+  if (value === undefined) {
+    delete process.env[CODEX_ARGS_ENV];
+  } else {
+    process.env[CODEX_ARGS_ENV] = value;
+  }
+  try {
+    return await run();
+  } finally {
+    if (original === undefined) {
+      delete process.env[CODEX_ARGS_ENV];
+    } else {
+      process.env[CODEX_ARGS_ENV] = original;
     }
   }
 }
@@ -313,6 +336,84 @@ describe("CodexHarness App Server mapping", () => {
         assert.equal(client.requests.find((request) => request.method === "thread/start")?.timeoutMs, DEFAULT_REQUEST_TIMEOUT_MS);
       });
     }
+  });
+
+  it("uses stdio listener args by default for Codex app-server clients", async () => {
+    for (const value of [undefined, "", "   "]) {
+      await withCodexArgsEnv(value, async () => {
+        const client = new MockJsonRpcClient({ assistantText: "Done." });
+        const createdSettings: ClientSettings[] = [];
+        const harness = new CodexHarness({
+          createClient: (settings) => {
+            createdSettings.push(settings);
+            return client as any;
+          },
+        });
+
+        await collectMessages(harness.launch({ prompt: "ship it", cwd: "/tmp" }));
+
+        assert.deepEqual(createdSettings[0]?.args, DEFAULT_APP_SERVER_ARGS);
+      });
+    }
+  });
+
+  it("lets explicit Codex app-server args override the stdio defaults", async () => {
+    await withCodexArgsEnv("--experimental-foo,--bar", async () => {
+      const client = new MockJsonRpcClient({ assistantText: "Done." });
+      const createdSettings: ClientSettings[] = [];
+      const harness = new CodexHarness({
+        createClient: (settings) => {
+          createdSettings.push(settings);
+          return client as any;
+        },
+      });
+
+      await collectMessages(harness.launch({ prompt: "ship it", cwd: "/tmp" }));
+
+      assert.deepEqual(createdSettings[0]?.args, ["--experimental-foo", "--bar"]);
+    });
+  });
+
+  it("redacts sensitive stderr details from Codex app-server timeout errors", () => {
+    const client = new StdioJsonRpcClient("codex", DEFAULT_APP_SERVER_ARGS, DEFAULT_REQUEST_TIMEOUT_MS) as any;
+    client.stderrTail = [
+      "api_key=sk-test-secret1234567890",
+      "Authorization: Bearer ghp_abcdefghijklmnopqrstuvwxyz123456",
+      "Authorization: Basic dXNlcjpwYXNz",
+      "authorization: ApiKey abc123",
+      "OPENAI_API_KEY=sk-prefixed-secret1234567890",
+      "GITHUB_TOKEN=ghp_prefixedabcdefghijklmnopqrstuvwxyz123456",
+      "ANTHROPIC_AUTH_TOKEN: anthropic-prefixed-secret-value",
+      '{"password":"hunter2","secret":"quoted-private-value"}',
+      '{"service_api_key":"quoted-prefixed-secret-value"}',
+      "database postgres://user:secret@db.example.com/openclaw",
+      "cache redis://:password@cache.example.com/0",
+      "callback https://alice:hunter2@example.com/path",
+      "path /home/alice/projects/private-openclaw/session.log",
+      "opaque abcdef1234567890abcdef1234567890",
+    ].join("\n");
+
+    const message = client.buildTimeoutErrorMessage("initialize", 120000);
+
+    assert.match(message, /recent stderr:/);
+    assert.doesNotMatch(message, /sk-test-secret/);
+    assert.doesNotMatch(message, /ghp_abcdefghijklmnopqrstuvwxyz/);
+    assert.doesNotMatch(message, /dXNlcjpwYXNz/);
+    assert.doesNotMatch(message, /abc123/);
+    assert.doesNotMatch(message, /sk-prefixed-secret/);
+    assert.doesNotMatch(message, /ghp_prefixed/);
+    assert.doesNotMatch(message, /anthropic-prefixed-secret-value/);
+    assert.doesNotMatch(message, /hunter2/);
+    assert.doesNotMatch(message, /quoted-private-value/);
+    assert.doesNotMatch(message, /quoted-prefixed-secret-value/);
+    assert.doesNotMatch(message, /postgres:\/\/user:secret/);
+    assert.doesNotMatch(message, /redis:\/\/:password/);
+    assert.doesNotMatch(message, /https:\/\/alice:hunter2/);
+    assert.doesNotMatch(message, /\/home\/alice/);
+    assert.doesNotMatch(message, /abcdef1234567890abcdef1234567890/);
+    assert.match(message, /\[redacted credential\]/);
+    assert.match(message, /\[redacted path\]/);
+    assert.match(message, /\[redacted token\]/);
   });
 
   it("emits backend ref, assistant output, and a completed run", async () => {
