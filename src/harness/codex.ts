@@ -75,9 +75,15 @@ const OPENCLAW_CODEX_APP_SERVER_ARGS_ENV = "OPENCLAW_CODEX_APP_SERVER_ARGS";
 const OPENCLAW_CODEX_APP_SERVER_TIMEOUT_MS_ENV = "OPENCLAW_CODEX_APP_SERVER_TIMEOUT_MS";
 const CODEX_APP_SERVER_SESSION_ID_RE = /^(?:urn:uuid:)?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
-export function isCodexAppServerSessionId(value: string | undefined): value is string {
+function normalizeCodexAppServerSessionId(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
-  return Boolean(trimmed && CODEX_APP_SERVER_SESSION_ID_RE.test(trimmed));
+  return trimmed && CODEX_APP_SERVER_SESSION_ID_RE.test(trimmed)
+    ? trimmed
+    : undefined;
+}
+
+export function isCodexAppServerSessionId(value: string | undefined): value is string {
+  return normalizeCodexAppServerSessionId(value) !== undefined;
 }
 
 function parseRequestTimeoutMs(value: string | undefined): number {
@@ -150,10 +156,9 @@ export class CodexHarness implements AgentHarness {
       );
 
     const queue = new HarnessMessageQueue();
-    let threadId = options.resumeSessionId;
-    if (threadId && !isCodexAppServerSessionId(threadId)) {
-      console.warn(`[CodexHarness] Ignoring invalid Codex App Server resume session id "${threadId}". Expected UUID or urn:uuid UUID.`);
-      threadId = undefined;
+    let threadId = normalizeCodexAppServerSessionId(options.resumeSessionId);
+    if (options.resumeSessionId && !threadId) {
+      console.warn(`[CodexHarness] Ignoring invalid Codex App Server resume session id "${options.resumeSessionId}". Expected UUID or urn:uuid UUID.`);
     }
     let turnId: string | undefined;
     let backendWorktreePath = options.backendRef?.worktreePath;

@@ -353,6 +353,23 @@ describe("CodexHarness App Server mapping", () => {
     assert.equal(ref?.ref.conversationId, VALID_THREAD_ID);
   });
 
+  it("normalizes accepted Codex App Server resume ids before resuming", async () => {
+    const client = new MockJsonRpcClient({ threadId: VALID_THREAD_ID, assistantText: "Resumed." });
+    const harness = new CodexHarness({
+      createClient: () => client as any,
+    });
+
+    await collectMessages(harness.launch({
+      prompt: "continue",
+      cwd: "/tmp",
+      resumeSessionId: `  ${VALID_THREAD_ID}\n`,
+    }));
+
+    assert.equal(isCodexAppServerSessionId(`  ${VALID_THREAD_ID}\n`), true);
+    const resumeRequest = client.requests.find((request) => request.method === "thread/resume");
+    assert.equal((resumeRequest?.params as { threadId?: string } | undefined)?.threadId, VALID_THREAD_ID);
+  });
+
   it("starts a fresh thread instead of sending non-UUID resume ids to Codex App Server", async () => {
     const client = new MockJsonRpcClient({ threadId: VALID_THREAD_ID, assistantText: "Fresh." });
     const harness = new CodexHarness({
