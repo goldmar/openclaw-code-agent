@@ -78,6 +78,7 @@ import {
   createRepoPolicyRecord,
   formatUnknownRepoPolicyMessage,
   isPrAvailableForResolution,
+  resolveAllowedWorktreeActions,
   resolveRepoIdentity,
   seededRepoPolicy,
   type RepoPolicyResolution,
@@ -1033,13 +1034,11 @@ export class SessionManager {
       ?? persisted?.repoIntegrationPolicy;
     const effectivePolicy = sessionPolicy
       ?? policyResolution?.policy;
-    const hasEffectivePolicy = Boolean(effectivePolicy);
     const prAvailable = policyResolution?.prAvailable
       ?? Boolean(sessionPolicy && sessionPolicy !== "never-pr" && sessionPolicy !== "manual");
-    const allowedActions = {
-      merge: !hasEffectivePolicy || (effectivePolicy !== "pr-required" && effectivePolicy !== "manual"),
-      pr: !hasEffectivePolicy || (effectivePolicy !== "never-pr" && effectivePolicy !== "manual" && prAvailable),
-    };
+    const allowedActions = effectivePolicy
+      ? resolveAllowedWorktreeActions({ policy: effectivePolicy, prAvailable })
+      : { merge: true, pr: true };
     return this.getWorktreeDecisionButtons(sessionId, options, allowedActions);
   }
 

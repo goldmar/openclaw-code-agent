@@ -1447,6 +1447,73 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     }
   });
 
+  it("preserves PR buttons for pending worktree reminders when policy state is unavailable", () => {
+    const storeDir = mkdtempSync(join(tmpdir(), "sm-reminder-policy-missing-store-"));
+    const sm = new SessionManager(5, 5, {
+      store: {
+        env: {},
+        indexPath: join(storeDir, "sessions.json"),
+      },
+    });
+    const now = 1_700_000_000_000;
+    const pending: any = {
+      sessionId: "pending-policy-missing",
+      harnessSessionId: "pending-policy-missing-thread",
+      backendRef: { kind: "claude-code", conversationId: "pending-policy-missing-thread" },
+      name: "pending-policy-missing",
+      prompt: "test",
+      workdir: undefined,
+      worktreePath: undefined,
+      worktreeBranch: "agent/pending-policy-missing",
+      worktreeStrategy: "ask",
+      createdAt: now,
+      completedAt: now,
+      status: "completed",
+      lifecycle: "awaiting_worktree_decision",
+      approvalState: "not_required",
+      worktreeState: "pending_decision",
+      runtimeState: "stopped",
+      deliveryState: "idle",
+      costUsd: 0,
+      pendingWorktreeDecisionSince: new Date(now - 4 * 60 * 60 * 1000).toISOString(),
+    };
+    const dispatchCalls: Array<{ request: any }> = [];
+
+    (sm as any).persisted.set(pending.harnessSessionId, pending);
+    (sm as any).idIndex.set(pending.sessionId, pending.harnessSessionId);
+    (sm as any).interactions.isGitHubCliAvailable = () => true;
+    (sm as any).resolveWorktreeRepoDir = () => undefined;
+    (sm as any).resolveRepoPolicy = () => {
+      throw new Error("resolveRepoPolicy should not run without a repo dir");
+    };
+    const reminders = new SessionReminderService(
+      (session) => ({ id: session.id ?? pending.sessionId }) as any,
+      (_session, request) => { dispatchCalls.push({ request }); },
+      (_ref, patch) => {
+        Object.assign(pending, patch);
+        return true;
+      },
+      (sessionId, persistedSession) => (sm as any).getPolicyAwareWorktreeDecisionButtons(
+        sessionId,
+        {},
+        undefined,
+        persistedSession,
+      ),
+    );
+
+    try {
+      assert.equal(reminders.sendReminderIfDue(pending, now), true);
+
+      const labels = buttonLabels(dispatchCalls[0]?.request.buttons);
+      assert.equal(hasButton(labels, "Merge"), true);
+      assert.equal(hasButton(labels, "Open PR"), true);
+      assert.equal(hasButton(labels, "Later"), true);
+      assert.equal(hasButton(labels, "Discard"), true);
+    } finally {
+      rmSync(storeDir, { recursive: true, force: true });
+    }
+  });
+
   it("does not schedule reminders when stale pending fields conflict with resolved lifecycle state", () => {
     const sm = new SessionManager(5, 5);
     const now = Date.now();
