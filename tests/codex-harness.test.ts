@@ -379,6 +379,8 @@ describe("CodexHarness App Server mapping", () => {
     client.stderrTail = [
       "api_key=sk-test-secret1234567890",
       "Authorization: Bearer ghp_abcdefghijklmnopqrstuvwxyz123456",
+      "Authorization: Basic dXNlcjpwYXNz",
+      "authorization: ApiKey abc123",
       "OPENAI_API_KEY=sk-prefixed-secret1234567890",
       "GITHUB_TOKEN=ghp_prefixedabcdefghijklmnopqrstuvwxyz123456",
       "ANTHROPIC_AUTH_TOKEN: anthropic-prefixed-secret-value",
@@ -393,6 +395,8 @@ describe("CodexHarness App Server mapping", () => {
     assert.match(message, /recent stderr:/);
     assert.doesNotMatch(message, /sk-test-secret/);
     assert.doesNotMatch(message, /ghp_abcdefghijklmnopqrstuvwxyz/);
+    assert.doesNotMatch(message, /dXNlcjpwYXNz/);
+    assert.doesNotMatch(message, /abc123/);
     assert.doesNotMatch(message, /sk-prefixed-secret/);
     assert.doesNotMatch(message, /ghp_prefixed/);
     assert.doesNotMatch(message, /anthropic-prefixed-secret-value/);
