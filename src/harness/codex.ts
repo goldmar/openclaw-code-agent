@@ -134,9 +134,7 @@ export class CodexHarness implements AgentHarness {
   launch(options: HarnessLaunchOptions): HarnessSession {
     const clientSettings = {
       command: process.env[OPENCLAW_CODEX_APP_SERVER_COMMAND_ENV]?.trim() || "codex",
-      args: process.env[OPENCLAW_CODEX_APP_SERVER_ARGS_ENV] === undefined
-        ? DEFAULT_APP_SERVER_ARGS
-        : parseCsvEnv(process.env[OPENCLAW_CODEX_APP_SERVER_ARGS_ENV]),
+      args: resolveAppServerArgs(process.env[OPENCLAW_CODEX_APP_SERVER_ARGS_ENV]),
       requestTimeoutMs: parseRequestTimeoutMs(process.env[OPENCLAW_CODEX_APP_SERVER_TIMEOUT_MS_ENV]),
     };
     const client = this.deps.createClient?.(clientSettings)
@@ -594,4 +592,10 @@ export class CodexHarness implements AgentHarness {
   buildUserMessage(text: string, sessionId: string): unknown {
     return { type: "user", text, session_id: sessionId };
   }
+}
+
+function resolveAppServerArgs(value: string | undefined): string[] {
+  if (value === undefined) return DEFAULT_APP_SERVER_ARGS;
+  const parsed = parseCsvEnv(value);
+  return parsed.length > 0 ? parsed : DEFAULT_APP_SERVER_ARGS;
 }

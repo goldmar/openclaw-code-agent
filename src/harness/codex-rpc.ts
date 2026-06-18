@@ -195,8 +195,18 @@ export class StdioJsonRpcClient implements JsonRpcClient {
   private buildTimeoutErrorMessage(method: string, timeoutMs: number): string {
     const stderr = this.stderrTail.trim();
     const stderrSuffix = stderr
-      ? `; recent stderr: ${stderr.replace(/\s+/g, " ").slice(-1_000)}`
+      ? `; recent stderr: ${sanitizeTimeoutStderr(stderr)}`
       : "";
     return `codex app server timeout after ${timeoutMs}ms: ${method}${stderrSuffix}`;
   }
+}
+
+function sanitizeTimeoutStderr(stderr: string): string {
+  return stderr
+    .replace(/\s+/g, " ")
+    .replace(/\b(Bearer\s+)[^\s]+/gi, "$1[redacted credential]")
+    .replace(/\b((?:api[_-]?key|token|secret|password|authorization)\s*[:=]\s*)[^\s]+/gi, "$1[redacted credential]")
+    .replace(/\b(?:sk-[A-Za-z0-9_-]{8,}|gh[opsru]_[A-Za-z0-9_]{8,}|[A-Za-z0-9_-]{32,})\b/g, "[redacted token]")
+    .replace(/(?:\/Users|\/home)\/[^\s]+/g, "[redacted path]")
+    .slice(-1_000);
 }
