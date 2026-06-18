@@ -646,9 +646,9 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
         assert.equal(hasButton(labels, "Open PR"), false);
         assert.equal(hasButton(labels, "View PR"), false);
         assert.equal(hasButton(labels, "Sync PR"), false);
-        if (policy === "manual") {
-          assert.equal(hasButton(labels, "Merge"), false);
-        }
+        assert.equal(hasButton(labels, "Merge"), policy === "never-pr");
+        assert.equal(hasButton(labels, "Later"), true);
+        assert.equal(hasButton(labels, "Discard"), true);
       } finally {
         fixture.cleanup();
       }

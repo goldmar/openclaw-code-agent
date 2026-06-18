@@ -91,6 +91,17 @@ export interface WorktreePolicyDecision {
   };
 }
 
+export function resolveAllowedWorktreeActions(args: {
+  policy: RepoIntegrationPolicy | undefined;
+  prAvailable: boolean;
+}): WorktreePolicyDecision["allowedActions"] {
+  const { policy, prAvailable } = args;
+  return {
+    merge: policy !== "pr-required" && policy !== "manual",
+    pr: policy !== "never-pr" && policy !== "manual" && prAvailable,
+  };
+}
+
 function runGit(cwd: string, args: string[]): string | undefined {
   try {
     const result = execFileSync("git", args, {
@@ -171,10 +182,7 @@ export function resolveWorktreePolicyDecision(args: {
   prAvailable: boolean;
 }): WorktreePolicyDecision {
   const requested = args.requestedStrategy;
-  const allowedActions = {
-    merge: args.policy !== "pr-required",
-    pr: args.policy !== "never-pr" && args.prAvailable,
-  };
+  const allowedActions = resolveAllowedWorktreeActions(args);
 
   if (!requested || requested === "off" || requested === "manual") {
     return { allowedActions };

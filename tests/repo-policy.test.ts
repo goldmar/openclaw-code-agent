@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import {
   detectRepoProvider,
   normalizeRemoteUrl,
+  resolveAllowedWorktreeActions,
   resolveWorktreePolicyDecision,
   seededRepoPolicy,
   resolveRepoIdentity,
@@ -631,6 +632,14 @@ describe("repo policy resolution", () => {
   });
 
   it("downgrades or blocks requested strategies according to policy and PR capability", () => {
+    assert.deepEqual(
+      resolveAllowedWorktreeActions({ policy: "never-pr", prAvailable: true }),
+      { merge: true, pr: false },
+    );
+    assert.deepEqual(
+      resolveAllowedWorktreeActions({ policy: "manual", prAvailable: true }),
+      { merge: false, pr: false },
+    );
     assert.deepEqual(
       resolveWorktreePolicyDecision({ requestedStrategy: "auto-merge", policy: "pr-required", prAvailable: true }),
       {
