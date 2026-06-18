@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { getHarness, listHarnesses } from "../src/harness/index";
-import { CodexHarness, DEFAULT_APP_SERVER_ARGS, DEFAULT_REQUEST_TIMEOUT_MS } from "../src/harness/codex";
+import { CodexHarness, DEFAULT_APP_SERVER_ARGS, DEFAULT_REQUEST_TIMEOUT_MS, isCodexAppServerSessionId } from "../src/harness/codex";
 import { StdioJsonRpcClient } from "../src/harness/codex-rpc";
 import type { HarnessMessage } from "../src/harness/types";
 
@@ -15,6 +15,7 @@ type ClientSettings = {
 
 const CODEX_TIMEOUT_ENV = "OPENCLAW_CODEX_APP_SERVER_TIMEOUT_MS";
 const CODEX_ARGS_ENV = "OPENCLAW_CODEX_APP_SERVER_ARGS";
+const VALID_THREAD_ID = "123e4567-e89b-12d3-a456-426614174000";
 
 class MockJsonRpcClient {
   requests: Array<{ method: string; params: unknown; timeoutMs: number | undefined }> = [];
@@ -250,7 +251,7 @@ describe("CodexHarness App Server mapping", () => {
 
   it("passes configured Codex request timeout to thread resume requests", async () => {
     await withCodexTimeoutEnv("23456", async () => {
-      const client = new MockJsonRpcClient({ threadId: "thread-existing", assistantText: "Resumed." });
+      const client = new MockJsonRpcClient({ threadId: VALID_THREAD_ID, assistantText: "Resumed." });
       const createdSettings: ClientSettings[] = [];
       const harness = new CodexHarness({
         createClient: (settings) => {
@@ -262,7 +263,7 @@ describe("CodexHarness App Server mapping", () => {
       await collectMessages(harness.launch({
         prompt: "continue",
         cwd: "/tmp",
-        resumeSessionId: "thread-existing",
+        resumeSessionId: VALID_THREAD_ID,
       }));
 
       assert.equal(createdSettings[0]?.requestTimeoutMs, 23456);
@@ -425,7 +426,7 @@ describe("CodexHarness App Server mapping", () => {
   });
 
   it("resumes an existing thread when resumeSessionId is provided", async () => {
-    const client = new MockJsonRpcClient({ threadId: "thread-existing", assistantText: "Resumed." });
+    const client = new MockJsonRpcClient({ threadId: VALID_THREAD_ID, assistantText: "Resumed." });
     const harness = new CodexHarness({
       createClient: () => client as any,
     });
@@ -433,14 +434,50 @@ describe("CodexHarness App Server mapping", () => {
     const messages = await collectMessages(harness.launch({
       prompt: "continue",
       cwd: "/tmp",
-      resumeSessionId: "thread-existing",
+      resumeSessionId: VALID_THREAD_ID,
     }));
 
     assert.equal(client.requests.some((request) => request.method === "thread/resume"), true);
     const resumeRequest = client.requests.find((request) => request.method === "thread/resume");
     assert.equal(Object.hasOwn((resumeRequest?.params as Record<string, unknown>) ?? {}, "cwd"), false);
     const ref = messages.find((message) => message.type === "backend_ref") as Extract<HarnessMessage, { type: "backend_ref" }> | undefined;
-    assert.equal(ref?.ref.conversationId, "thread-existing");
+    assert.equal(ref?.ref.conversationId, VALID_THREAD_ID);
+  });
+
+  it("normalizes accepted Codex App Server resume ids before resuming", async () => {
+    const client = new MockJsonRpcClient({ threadId: VALID_THREAD_ID, assistantText: "Resumed." });
+    const harness = new CodexHarness({
+      createClient: () => client as any,
+    });
+
+    await collectMessages(harness.launch({
+      prompt: "continue",
+      cwd: "/tmp",
+      resumeSessionId: `  ${VALID_THREAD_ID}\n`,
+    }));
+
+    assert.equal(isCodexAppServerSessionId(`  ${VALID_THREAD_ID}\n`), true);
+    const resumeRequest = client.requests.find((request) => request.method === "thread/resume");
+    assert.equal((resumeRequest?.params as { threadId?: string } | undefined)?.threadId, VALID_THREAD_ID);
+  });
+
+  it("starts a fresh thread instead of sending non-UUID resume ids to Codex App Server", async () => {
+    const client = new MockJsonRpcClient({ threadId: VALID_THREAD_ID, assistantText: "Fresh." });
+    const harness = new CodexHarness({
+      createClient: () => client as any,
+    });
+
+    const messages = await collectMessages(harness.launch({
+      prompt: "continue",
+      cwd: "/tmp",
+      resumeSessionId: "ses_plugin_owned_thread",
+    }));
+
+    assert.equal(isCodexAppServerSessionId("ses_plugin_owned_thread"), false);
+    assert.equal(client.requests.some((request) => request.method === "thread/resume"), false);
+    assert.equal(client.requests.some((request) => request.method === "thread/start" || request.method === "thread/new"), true);
+    const ref = messages.find((message) => message.type === "backend_ref") as Extract<HarnessMessage, { type: "backend_ref" }> | undefined;
+    assert.equal(ref?.ref.conversationId, VALID_THREAD_ID);
   });
 
   it("passes full-permission Codex execution policy on fresh thread start", async () => {
