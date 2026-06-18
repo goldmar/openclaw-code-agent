@@ -379,7 +379,11 @@ describe("CodexHarness App Server mapping", () => {
     client.stderrTail = [
       "api_key=sk-test-secret1234567890",
       "Authorization: Bearer ghp_abcdefghijklmnopqrstuvwxyz123456",
+      "OPENAI_API_KEY=sk-prefixed-secret1234567890",
+      "GITHUB_TOKEN=ghp_prefixedabcdefghijklmnopqrstuvwxyz123456",
+      "ANTHROPIC_AUTH_TOKEN: anthropic-prefixed-secret-value",
       '{"password":"hunter2","secret":"quoted-private-value"}',
+      '{"service_api_key":"quoted-prefixed-secret-value"}',
       "path /home/alice/projects/private-openclaw/session.log",
       "opaque abcdef1234567890abcdef1234567890",
     ].join("\n");
@@ -389,8 +393,12 @@ describe("CodexHarness App Server mapping", () => {
     assert.match(message, /recent stderr:/);
     assert.doesNotMatch(message, /sk-test-secret/);
     assert.doesNotMatch(message, /ghp_abcdefghijklmnopqrstuvwxyz/);
+    assert.doesNotMatch(message, /sk-prefixed-secret/);
+    assert.doesNotMatch(message, /ghp_prefixed/);
+    assert.doesNotMatch(message, /anthropic-prefixed-secret-value/);
     assert.doesNotMatch(message, /hunter2/);
     assert.doesNotMatch(message, /quoted-private-value/);
+    assert.doesNotMatch(message, /quoted-prefixed-secret-value/);
     assert.doesNotMatch(message, /\/home\/alice/);
     assert.doesNotMatch(message, /abcdef1234567890abcdef1234567890/);
     assert.match(message, /\[redacted credential\]/);

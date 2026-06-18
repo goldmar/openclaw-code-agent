@@ -205,8 +205,8 @@ function sanitizeTimeoutStderr(stderr: string): string {
   return stderr
     .replace(/\s+/g, " ")
     .replace(/\b(Bearer\s+)[^\s]+/gi, "$1[redacted credential]")
-    .replace(/(["'](?:api[_-]?key|token|secret|password|authorization)["']\s*:\s*["'])[^"']+(["'])/gi, "$1[redacted credential]$2")
-    .replace(/\b((?:api[_-]?key|token|secret|password|authorization)\s*[:=]\s*)[^\s]+/gi, "$1[redacted credential]")
+    .replace(/(["'][A-Za-z0-9_.-]*(?:api[_-]?key|token|secret|password|authorization)[A-Za-z0-9_.-]*["']\s*:\s*["'])[^"']+(["'])/gi, "$1[redacted credential]$2")
+    .replace(/\b([A-Za-z0-9_.-]*(?:api[_-]?key|token|secret|password|authorization)[A-Za-z0-9_.-]*\s*[:=]\s*)[^\s,}]+/gi, "$1[redacted credential]")
     .replace(/\b(?:sk-[A-Za-z0-9_-]{8,}|gh[opsru]_[A-Za-z0-9_]{8,}|[A-Za-z0-9_-]{32,})\b/g, "[redacted token]")
     .replace(/(?:\/Users|\/home)\/[^\s]+/g, "[redacted path]")
     .slice(-1_000);
