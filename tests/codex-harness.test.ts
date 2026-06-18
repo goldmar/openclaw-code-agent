@@ -386,6 +386,9 @@ describe("CodexHarness App Server mapping", () => {
       "ANTHROPIC_AUTH_TOKEN: anthropic-prefixed-secret-value",
       '{"password":"hunter2","secret":"quoted-private-value"}',
       '{"service_api_key":"quoted-prefixed-secret-value"}',
+      "database postgres://user:secret@db.example.com/openclaw",
+      "cache redis://:password@cache.example.com/0",
+      "callback https://alice:hunter2@example.com/path",
       "path /home/alice/projects/private-openclaw/session.log",
       "opaque abcdef1234567890abcdef1234567890",
     ].join("\n");
@@ -403,6 +406,9 @@ describe("CodexHarness App Server mapping", () => {
     assert.doesNotMatch(message, /hunter2/);
     assert.doesNotMatch(message, /quoted-private-value/);
     assert.doesNotMatch(message, /quoted-prefixed-secret-value/);
+    assert.doesNotMatch(message, /postgres:\/\/user:secret/);
+    assert.doesNotMatch(message, /redis:\/\/:password/);
+    assert.doesNotMatch(message, /https:\/\/alice:hunter2/);
     assert.doesNotMatch(message, /\/home\/alice/);
     assert.doesNotMatch(message, /abcdef1234567890abcdef1234567890/);
     assert.match(message, /\[redacted credential\]/);

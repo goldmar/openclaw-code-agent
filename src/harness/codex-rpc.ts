@@ -203,6 +203,7 @@ export class StdioJsonRpcClient implements JsonRpcClient {
 
 function sanitizeTimeoutStderr(stderr: string): string {
   return stderr
+    .replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/?#@]+@/gi, "$1[redacted credential]@")
     .replace(/\b(authorization\s*[:=]\s*)[^\r\n,;}]+/gi, "$1[redacted credential]")
     .replace(/\b(Bearer\s+)[^\s]+/gi, "$1[redacted credential]")
     .replace(/(["'][A-Za-z0-9_.-]*(?:api[_-]?key|token|secret|password|authorization)[A-Za-z0-9_.-]*["']\s*:\s*["'])[^"']+(["'])/gi, "$1[redacted credential]$2")
