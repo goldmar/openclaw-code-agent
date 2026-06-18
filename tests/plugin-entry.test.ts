@@ -125,7 +125,7 @@ describe("plugin entry source", () => {
     assert.equal(packageJson.openclaw?.build?.openclawVersion, "2026.6.6");
     assert.equal(packageJson.openclaw?.build?.pluginSdkVersion, "2026.6.6");
     assert.equal(packageJson.peerDependencies?.openclaw, ">=2026.4.21");
-    assert.equal(packageJson.devDependencies?.openclaw, "2026.6.6");
+    assert.equal(packageJson.devDependencies?.openclaw, "2026.6.8");
     assert.doesNotMatch(readFileSync(join(rootDir, "pnpm-lock.yaml"), "utf8"), /uuid@9\.0\.1/);
   });
 
