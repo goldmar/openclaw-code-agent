@@ -102,6 +102,110 @@ describe("resolveAgentLaunchRequest", () => {
     }
   });
 
+  it("uses the bare built-in Codex default model", () => {
+    setPluginConfig({ defaultHarness: "codex" });
+
+    const result = resolveAgentLaunchRequest(
+      {
+        prompt: "Use the configured Codex default",
+      },
+      { workspaceDir: "/tmp" } as any,
+      {},
+    );
+
+    assert.equal(result.kind, "resolved");
+    if (result.kind === "resolved") {
+      assert.equal(result.harness, "codex");
+      assert.equal(result.resolvedModel, "gpt-5.5");
+    }
+  });
+
+  it("normalizes provider-prefixed Codex model ids before allowlist validation", () => {
+    const result = resolveAgentLaunchRequest(
+      {
+        prompt: "Use the OpenAI-qualified Codex model",
+        harness: "codex",
+        model: "openai/gpt-5.5",
+      },
+      { workspaceDir: "/tmp" } as any,
+      {},
+    );
+
+    assert.equal(result.kind, "resolved");
+    if (result.kind === "resolved") {
+      assert.equal(result.resolvedModel, "gpt-5.5");
+    }
+  });
+
+  it("normalizes provider-prefixed Codex defaults before allowlist validation", () => {
+    setPluginConfig({
+      harnesses: {
+        codex: {
+          defaultModel: "openai/gpt-5.5",
+          allowedModels: ["gpt-5.5"],
+        },
+      },
+    });
+
+    const result = resolveAgentLaunchRequest(
+      {
+        prompt: "Use the configured Codex default",
+        harness: "codex",
+      },
+      { workspaceDir: "/tmp" } as any,
+      {},
+    );
+
+    assert.equal(result.kind, "resolved");
+    if (result.kind === "resolved") {
+      assert.equal(result.resolvedModel, "gpt-5.5");
+    }
+  });
+
+  it("does not allow provider-qualified Codex ids via substring allowlist matches", () => {
+    const result = resolveAgentLaunchRequest(
+      {
+        prompt: "Use an unsupported provider-qualified model",
+        harness: "codex",
+        model: "anthropic/gpt-5.5",
+      },
+      { workspaceDir: "/tmp" } as any,
+      {},
+    );
+
+    assert.equal(result.kind, "error");
+    if (result.kind === "error") {
+      assert.match(result.text, /Model "anthropic\/gpt-5\.5" is not supported for harness "codex"/);
+      assert.match(result.text, /bare Codex model id/);
+    }
+  });
+
+  it("rejects non-OpenAI provider-prefixed Codex ids even without a configured allowlist", () => {
+    setPluginConfig({
+      harnesses: {
+        codex: {
+          defaultModel: "gpt-5.5",
+          allowedModels: [],
+        },
+      },
+    });
+
+    const result = resolveAgentLaunchRequest(
+      {
+        prompt: "Use an unsupported provider-qualified model",
+        harness: "codex",
+        model: "anthropic/gpt-5.5",
+      },
+      { workspaceDir: "/tmp" } as any,
+      {},
+    );
+
+    assert.equal(result.kind, "error");
+    if (result.kind === "error") {
+      assert.match(result.text, /Model "anthropic\/gpt-5\.5" is not supported for harness "codex"/);
+    }
+  });
+
   it("allows experimental OpenCode to use its configured provider default when no model is set", () => {
     const result = resolveAgentLaunchRequest(
       {

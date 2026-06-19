@@ -28,6 +28,7 @@ import {
 import {
   formatPendingInputWizardQuestion,
 } from "../pending-input-normalization";
+import { canonicalizeModelForHarness, isModelFormatSupportedForHarness } from "../harness-models";
 import {
   buildPendingInputState,
   buildThreadResumePayloads,
@@ -165,6 +166,10 @@ export class CodexHarness implements AgentHarness {
     let backendWorktreePath = options.backendRef?.worktreePath;
     let backendWorktreeId = options.backendRef?.worktreeId;
     let currentPermissionMode = options.permissionMode ?? "default";
+    const runtimeModel = canonicalizeModelForHarness(this.name, options.model);
+    if (!isModelFormatSupportedForHarness(this.name, runtimeModel)) {
+      throw new Error(`Codex model "${options.model}" is not supported. Use a bare Codex model id such as "gpt-5.5".`);
+    }
     let currentPendingInput: CodexPendingInput | undefined;
     let runCounter = 0;
     let planExplanation = "";
@@ -351,7 +356,7 @@ export class CodexHarness implements AgentHarness {
           methods: ["thread/resume"],
           payloads: buildThreadResumePayloads({
             threadId,
-            model: options.model,
+            model: runtimeModel,
             reasoningEffort: options.reasoningEffort,
             fastMode: options.fastMode,
             approvalPolicy: executionPolicy.approvalPolicy,
@@ -371,7 +376,7 @@ export class CodexHarness implements AgentHarness {
         methods: ["thread/start", "thread/new"],
         payloads: buildThreadStartPayloads({
           cwd: options.cwd,
-          model: options.model,
+          model: runtimeModel,
           reasoningEffort: options.reasoningEffort,
           fastMode: options.fastMode,
           approvalPolicy: executionPolicy.approvalPolicy,
@@ -416,7 +421,7 @@ export class CodexHarness implements AgentHarness {
           payloads: buildTurnStartPayloads({
             threadId: threadId!,
             prompt,
-            model: options.model,
+            model: runtimeModel,
             reasoningEffort: options.reasoningEffort,
             fastMode: options.fastMode,
             systemPrompt: options.systemPrompt,

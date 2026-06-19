@@ -530,6 +530,44 @@ describe("CodexHarness App Server mapping", () => {
     });
   });
 
+  it("sends bare Codex runtime model ids in App Server launch payloads", async () => {
+    const client = new MockJsonRpcClient({ assistantText: "Inspecting." });
+    const harness = new CodexHarness({
+      createClient: () => client as any,
+    });
+
+    await collectMessages(harness.launch({
+      prompt: "investigate",
+      cwd: "/tmp",
+      model: "openai/gpt-5.5",
+      permissionMode: "plan",
+    }));
+
+    const startRequest = client.requests.find((request) => request.method === "thread/start" || request.method === "thread/new");
+    const turnStartRequest = client.requests.find((request) => request.method === "turn/start");
+    assert.equal((startRequest?.params as { model?: string } | undefined)?.model, "gpt-5.5");
+    assert.equal((turnStartRequest?.params as { model?: string } | undefined)?.model, "gpt-5.5");
+    assert.equal((turnStartRequest?.params as any)?.collaborationMode?.settings?.model, "gpt-5.5");
+    assert.doesNotMatch(JSON.stringify([startRequest?.params, turnStartRequest?.params]), /openai\/gpt-5\.5/);
+  });
+
+  it("rejects unsupported provider-prefixed Codex model ids before App Server launch", () => {
+    const client = new MockJsonRpcClient({ assistantText: "Inspecting." });
+    const harness = new CodexHarness({
+      createClient: () => client as any,
+    });
+
+    assert.throws(
+      () => harness.launch({
+        prompt: "investigate",
+        cwd: "/tmp",
+        model: "anthropic/gpt-5.5",
+      }),
+      /Codex model "anthropic\/gpt-5\.5" is not supported/,
+    );
+    assert.equal(client.requests.length, 0);
+  });
+
   it("defaults fresh Codex sessions to never approval without falling back to on-request prompts", async () => {
     const client = new MockJsonRpcClient({ assistantText: "Inspecting." });
     const harness = new CodexHarness({
