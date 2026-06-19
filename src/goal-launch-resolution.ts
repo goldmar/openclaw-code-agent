@@ -12,7 +12,12 @@ import {
   resolveSessionRoute,
   resolveToolChannel,
 } from "./config";
-import { isModelAllowed } from "./model-allowlist";
+import {
+  canonicalAllowedModelForHarness,
+  canonicalizeModelForHarness,
+  isModelAllowedForHarness,
+  isModelFormatSupportedForHarness,
+} from "./harness-models";
 import type {
   GoalLoopMode,
   GoalTaskState,
@@ -93,21 +98,30 @@ export function resolveGoalLaunchRequest(
   }
 
   const harness = request.harness ?? getDefaultHarnessName();
-  const model = request.model ?? resolveDefaultModelForHarness(harness);
+  const rawModel = request.model ?? resolveDefaultModelForHarness(harness);
+  const canonicalModel = canonicalizeModelForHarness(harness, rawModel);
   const allowedModels = resolveAllowedModelsForHarness(harness);
-  if (!model && (harness !== "opencode" || (allowedModels && allowedModels.length > 0))) {
+  if (!canonicalModel && (harness !== "opencode" || (allowedModels && allowedModels.length > 0))) {
     return {
       kind: "error",
       text: `Error: No default model configured for harness "${harness}". Set plugins.entries["openclaw-code-agent"].config.harnesses.${harness}.defaultModel or pass model explicitly.`,
     };
   }
 
-  if (model && !isModelAllowed(model, allowedModels)) {
+  if (canonicalModel && !isModelFormatSupportedForHarness(harness, canonicalModel)) {
     return {
       kind: "error",
-      text: `Error: Model "${model}" is not allowed. Permitted models: ${allowedModels?.join(", ")}`,
+      text: `Error: Model "${rawModel}" is not supported for harness "${harness}". Use a bare Codex model id such as "gpt-5.5".`,
     };
   }
+
+  if (canonicalModel && !isModelAllowedForHarness(harness, canonicalModel, allowedModels)) {
+    return {
+      kind: "error",
+      text: `Error: Model "${rawModel}" is not allowed. Permitted models: ${allowedModels?.join(", ")}`,
+    };
+  }
+  const model = canonicalAllowedModelForHarness(harness, canonicalModel, allowedModels);
 
   const originSessionKey = ctx.sessionKey || undefined;
   const ctxChannel = resolveToolChannel(ctx);

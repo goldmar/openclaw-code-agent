@@ -838,13 +838,13 @@ describe("agent_launch allowedModels validation", () => {
     assert.equal(spawnConfig.model, "anthropic/claude-sonnet-4-7");
   });
 
-  it("handles codex harness model resolution with allowedModels", async () => {
+  it("normalizes provider-prefixed Codex model ids before spawn", async () => {
     let spawnConfig: Record<string, unknown> | undefined;
     setPluginConfig({
       harnesses: {
         codex: {
-          defaultModel: "anthropic/claude-opus-4-6",
-          allowedModels: ["opus"],
+          defaultModel: "gpt-5.5",
+          allowedModels: ["gpt-5.5"],
         },
       },
     });
@@ -857,12 +857,12 @@ describe("agent_launch allowedModels validation", () => {
     } as any);
 
     const tool = makeAgentLaunchTool({ workspaceDir: "/tmp" });
-    const result = await tool.execute("tool-id", { prompt: "test", harness: "codex" });
+    const result = await tool.execute("tool-id", { prompt: "test", harness: "codex", model: "openai/gpt-5.5" });
 
     const text = (result.content[0] as { text: string }).text;
     assert.match(text, /Session launched successfully/);
     assert.ok(spawnConfig, "spawn should be called");
-    assert.equal(spawnConfig.model, "anthropic/claude-opus-4-6");
+    assert.equal(spawnConfig.model, "gpt-5.5");
   });
 
   it("blocks codex harness model when not allowed", async () => {
@@ -882,7 +882,8 @@ describe("agent_launch allowedModels validation", () => {
     const result = await tool.execute("tool-id", { prompt: "test", harness: "codex" });
 
     const text = (result.content[0] as { text: string }).text;
-    assert.match(text, /Error: Default model "anthropic\/claude-opus-4-6" is not in allowedModels \(haiku\)\. Update your plugin config to set a compatible defaultModel\./);
+    assert.match(text, /Error: Model "anthropic\/claude-opus-4-6" is not supported for harness "codex"/);
+    assert.match(text, /bare Codex model id/);
   });
 
   it("blocks undefined default model with allowedModels", async () => {

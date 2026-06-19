@@ -13,7 +13,12 @@ import {
   resolveSessionRoute,
   resolveToolChannel,
 } from "../config";
-import { isModelAllowed } from "../model-allowlist";
+import {
+  canonicalAllowedModelForHarness,
+  canonicalizeModelForHarness,
+  isModelAllowedForHarness,
+  isModelFormatSupportedForHarness,
+} from "../harness-models";
 import { decideResumeSessionId } from "../resume-policy";
 import { getBackendConversationId, getPrimarySessionLookupRef } from "../session-backend-ref";
 import type { OpenClawPluginToolContext, PersistedSessionInfo } from "../types";
@@ -222,24 +227,38 @@ export function resolveAgentLaunchRequest(
 
   const harness = params.harness ?? getDefaultHarnessName();
   const defaultModel = resolveDefaultModelForHarness(harness);
-  const resolvedModel = params.model ?? defaultModel;
+  const rawResolvedModel = params.model ?? defaultModel;
+  const canonicalResolvedModel = canonicalizeModelForHarness(harness, rawResolvedModel);
   const wasExplicitModel = params.model !== undefined;
   const allowedModels = resolveAllowedModelsForHarness(harness);
-  if (!resolvedModel && (harness !== "opencode" || (allowedModels && allowedModels.length > 0))) {
+  if (!canonicalResolvedModel && (harness !== "opencode" || (allowedModels && allowedModels.length > 0))) {
     return {
       kind: "error",
       text: `Error: No default model configured for harness "${harness}". Set plugins.entries["openclaw-code-agent"].config.harnesses.${harness}.defaultModel or pass model explicitly.`,
     };
   }
 
-  if (resolvedModel && allowedModels && allowedModels.length > 0 && !isModelAllowed(resolvedModel, allowedModels)) {
+  if (canonicalResolvedModel && !isModelFormatSupportedForHarness(harness, canonicalResolvedModel)) {
+    return {
+      kind: "error",
+      text: `Error: Model "${rawResolvedModel}" is not supported for harness "${harness}". Use a bare Codex model id such as "gpt-5.5".`,
+    };
+  }
+
+  if (
+    canonicalResolvedModel
+    && allowedModels
+    && allowedModels.length > 0
+    && !isModelAllowedForHarness(harness, canonicalResolvedModel, allowedModels)
+  ) {
     return {
       kind: "error",
       text: wasExplicitModel
-        ? `Error: Model "${resolvedModel}" is not allowed. Permitted models: ${allowedModels.join(", ")}`
-        : `Error: Default model "${resolvedModel || "undefined"}" is not in allowedModels (${allowedModels.join(", ")}). Update your plugin config to set a compatible defaultModel.`,
+        ? `Error: Model "${rawResolvedModel}" is not allowed. Permitted models: ${allowedModels.join(", ")}`
+        : `Error: Default model "${rawResolvedModel || "undefined"}" is not in allowedModels (${allowedModels.join(", ")}). Update your plugin config to set a compatible defaultModel.`,
     };
   }
+  const resolvedModel = canonicalAllowedModelForHarness(harness, canonicalResolvedModel, allowedModels);
 
   const ctxChannel = resolveToolChannel(ctx);
   const originChannel = resolveOriginChannel(ctx, ctxChannel || resolveAgentChannel(workdir));

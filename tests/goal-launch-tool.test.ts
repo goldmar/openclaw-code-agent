@@ -125,6 +125,47 @@ describe("goal_launch tool", () => {
     assert.equal((launchConfig?.route as { accountId?: string } | undefined)?.accountId, "acct-1");
   });
 
+  it("normalizes provider-prefixed Codex model ids before launching a goal task", async () => {
+    let launchConfig: Record<string, unknown> | undefined;
+
+    setPluginConfig({
+      defaultHarness: "codex",
+      harnesses: {
+        codex: {
+          defaultModel: "gpt-5.5",
+          allowedModels: ["gpt-5.5"],
+        },
+      },
+    });
+
+    setGoalController({
+      async launchTask(config: Record<string, unknown>) {
+        launchConfig = config;
+        return {
+          id: "goal-codex-model",
+          name: "goal-codex-model",
+          workdir: config.workdir,
+          sessionId: "sess-codex-model",
+          sessionName: "goal-codex-model",
+          maxIterations: config.maxIterations ?? 8,
+          loopMode: config.loopMode ?? "ralph",
+          completionPromise: config.completionPromise,
+        };
+      },
+    } as any);
+
+    const tool = makeGoalLaunchTool({ workspaceDir: "/tmp" } as any);
+
+    const result = await tool.execute("tool-id", {
+      goal: "Keep Codex model ids canonical",
+      model: "openai/gpt-5.5",
+    });
+
+    assert.ok(launchConfig, "launchTask should be called");
+    assert.equal(launchConfig?.model, "gpt-5.5");
+    assert.match((result.content[0] as { text: string }).text, /Model: gpt-5\.5/);
+  });
+
   it("uses agentChannels for the requested workdir when the context lacks a direct route", async () => {
     let launchConfig: Record<string, unknown> | undefined;
     const workdir = process.cwd();
