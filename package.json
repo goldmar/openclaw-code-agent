@@ -108,6 +108,7 @@
       "fast-xml-builder@<1.1.7": "1.1.7",
       "follow-redirects@<1.16.0": "1.16.0",
       "protobufjs@>=7 <7.5.6": "7.5.6",
+      "tar@<7.5.16": "7.5.16",
       "@protobufjs/utf8@<1.1.1": "1.1.1",
       "brace-expansion@>=4.0.0 <5.0.5": ">=5.0.5",
       "path-to-regexp@>=8.0.0 <8.4.0": ">=8.4.0",
