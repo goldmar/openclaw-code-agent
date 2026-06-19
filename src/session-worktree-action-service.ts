@@ -39,6 +39,14 @@ export type PlannedWorktreeAction =
       nativeBackendWorktree: boolean;
     }
   | {
+      kind: "released";
+      repoDir: string;
+      worktreePath: string;
+      branchName: string;
+      nativeBackendWorktree: boolean;
+      reasons: string[];
+    }
+  | {
       kind: "decision";
       strategy: "ask" | "delegate" | "auto-merge" | "auto-pr";
       policyReason?: string;
@@ -151,6 +159,16 @@ export class SessionWorktreeActionService {
         worktreePath,
         branchName,
         nativeBackendWorktree,
+      };
+    }
+    if (completionState === "released") {
+      return {
+        kind: "released",
+        repoDir,
+        worktreePath,
+        branchName,
+        nativeBackendWorktree,
+        reasons: ["merge_noop_content_already_on_base"],
       };
     }
     if (completionState === "base-advanced") {

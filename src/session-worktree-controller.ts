@@ -1,12 +1,13 @@
 import { existsSync } from "fs";
 import type { PersistedSessionInfo } from "./types";
-import { getCommitsAheadCount, hasDirtyWorktreeEntries, isBranchAncestorOfBase } from "./worktree";
+import { getCommitsAheadCount, hasDirtyWorktreeEntries, isBranchAncestorOfBase, wouldMergeBeNoop } from "./worktree";
 
 export type WorktreeCompletionState =
   | "no-change"
   | "dirty-uncommitted"
   | "base-advanced"
   | "merged"
+  | "released"
   | "has-commits";
 
 export class SessionWorktreeController {
@@ -28,6 +29,8 @@ export class SessionWorktreeController {
       if (hasDirtyWorktreeEntries(worktreePath)) return "dirty-uncommitted";
       return "no-change";
     }
+    if (hasDirtyWorktreeEntries(worktreePath)) return "dirty-uncommitted";
+    if (wouldMergeBeNoop(repoDir, branchName, baseBranch)) return "released";
     return "has-commits";
   }
 

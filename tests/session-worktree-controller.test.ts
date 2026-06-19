@@ -1,9 +1,14 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { SessionWorktreeController } from "../src/session-worktree-controller";
+
+function git(cwd: string, ...args: string[]): string {
+  return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }).trim();
+}
 
 function installFakeGit(t: import("node:test").TestContext, scriptLines: string[]): string {
   const tempDir = mkdtempSync(join(tmpdir(), "session-worktree-controller-git-"));
@@ -28,6 +33,137 @@ function installFakeGit(t: import("node:test").TestContext, scriptLines: string[
 }
 
 describe("SessionWorktreeController.getCompletionState()", () => {
+  it("classifies ahead branches with content already on base as released", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "session-worktree-controller-released-"));
+    const repoDir = join(tempDir, "repo");
+    const worktreePath = join(tempDir, "worktree");
+    try {
+      mkdirSync(repoDir);
+      git(repoDir, "init", "-b", "main");
+      git(repoDir, "config", "user.name", "Test User");
+      git(repoDir, "config", "user.email", "test@example.com");
+      writeFileSync(join(repoDir, "README.md"), "base\n", "utf-8");
+      git(repoDir, "add", "README.md");
+      git(repoDir, "commit", "-m", "init");
+      git(repoDir, "checkout", "-b", "agent/duplicate");
+      writeFileSync(join(repoDir, "feature.txt"), "released\n", "utf-8");
+      git(repoDir, "add", "feature.txt");
+      git(repoDir, "commit", "-m", "feature");
+      git(repoDir, "checkout", "main");
+      git(repoDir, "merge", "--squash", "agent/duplicate");
+      git(repoDir, "commit", "-m", "squash feature");
+      git(repoDir, "worktree", "add", worktreePath, "agent/duplicate");
+
+      const controller = new SessionWorktreeController();
+
+      assert.equal(
+        controller.getCompletionState(repoDir, worktreePath, "agent/duplicate", "main"),
+        "released",
+      );
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves content-equivalent branches when the worktree has dirty entries", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "session-worktree-controller-released-dirty-"));
+    const repoDir = join(tempDir, "repo");
+    const worktreePath = join(tempDir, "worktree");
+    try {
+      mkdirSync(repoDir);
+      git(repoDir, "init", "-b", "main");
+      git(repoDir, "config", "user.name", "Test User");
+      git(repoDir, "config", "user.email", "test@example.com");
+      writeFileSync(join(repoDir, "README.md"), "base\n", "utf-8");
+      git(repoDir, "add", "README.md");
+      git(repoDir, "commit", "-m", "init");
+      git(repoDir, "checkout", "-b", "agent/dirty-duplicate");
+      writeFileSync(join(repoDir, "feature.txt"), "released\n", "utf-8");
+      git(repoDir, "add", "feature.txt");
+      git(repoDir, "commit", "-m", "feature");
+      git(repoDir, "checkout", "main");
+      git(repoDir, "merge", "--squash", "agent/dirty-duplicate");
+      git(repoDir, "commit", "-m", "squash feature");
+      git(repoDir, "worktree", "add", worktreePath, "agent/dirty-duplicate");
+      writeFileSync(join(worktreePath, "dirty.txt"), "uncommitted\n", "utf-8");
+
+      const controller = new SessionWorktreeController();
+
+      assert.equal(
+        controller.getCompletionState(repoDir, worktreePath, "agent/dirty-duplicate", "main"),
+        "dirty-uncommitted",
+      );
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps merged classification when a topology-merged worktree has dirty entries", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "session-worktree-controller-merged-dirty-"));
+    const repoDir = join(tempDir, "repo");
+    const worktreePath = join(tempDir, "worktree");
+    try {
+      mkdirSync(repoDir);
+      git(repoDir, "init", "-b", "main");
+      git(repoDir, "config", "user.name", "Test User");
+      git(repoDir, "config", "user.email", "test@example.com");
+      writeFileSync(join(repoDir, "README.md"), "base\n", "utf-8");
+      git(repoDir, "add", "README.md");
+      git(repoDir, "commit", "-m", "init");
+      git(repoDir, "checkout", "-b", "agent/merged-dirty");
+      writeFileSync(join(repoDir, "feature.txt"), "merged\n", "utf-8");
+      git(repoDir, "add", "feature.txt");
+      git(repoDir, "commit", "-m", "feature");
+      git(repoDir, "checkout", "main");
+      git(repoDir, "merge", "--no-ff", "agent/merged-dirty", "-m", "merge feature");
+      git(repoDir, "worktree", "add", worktreePath, "agent/merged-dirty");
+      writeFileSync(join(worktreePath, "dirty.txt"), "uncommitted\n", "utf-8");
+
+      const controller = new SessionWorktreeController();
+
+      assert.equal(
+        controller.getCompletionState(repoDir, worktreePath, "agent/merged-dirty", "main"),
+        "merged",
+      );
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps base-advanced classification when the worktree has dirty entries", (t) => {
+    const worktreePath = installFakeGit(t, [
+      "count_file=\"__TEMP_DIR__/rev-list-count\"",
+      "if [ \"$3\" = \"rev-list\" ]; then",
+      "  count=0",
+      "  if [ -f \"$count_file\" ]; then",
+      "    count=$(cat \"$count_file\")",
+      "  fi",
+      "  count=$((count + 1))",
+      "  printf '%s' \"$count\" > \"$count_file\"",
+      "  if [ \"$count\" -eq 1 ]; then",
+      "    echo 0",
+      "    exit 0",
+      "  fi",
+      "  echo 1",
+      "  exit 0",
+      "fi",
+      "if [ \"$3\" = \"merge-base\" ]; then",
+      "  exit 1",
+      "fi",
+      "if [ \"$3\" = \"status\" ]; then",
+      "  echo '?? dirty.txt'",
+      "  exit 0",
+      "fi",
+    ]);
+
+    const controller = new SessionWorktreeController();
+
+    assert.equal(
+      controller.getCompletionState("/repo", worktreePath, "feature", "main"),
+      "base-advanced",
+    );
+  });
+
   it("keeps the worktree pending when a missing branch makes ahead detection fail", (t) => {
     const worktreePath = installFakeGit(t, [
       "if [ \"$3\" = \"rev-list\" ]; then",

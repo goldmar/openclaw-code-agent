@@ -265,6 +265,15 @@ export class SessionWorktreeStrategyService {
       return { notificationSent: false, worktreeRemoved: removed };
     }
 
+    if (action.kind === "released") {
+      const removed = action.nativeBackendWorktree
+        ? true
+        : removeWorktree(action.repoDir, action.worktreePath);
+      deleteBranch(action.repoDir, action.branchName);
+      this.markReleased(session, action.reasons);
+      return { notificationSent: false, worktreeRemoved: removed };
+    }
+
     if (action.policyBlocked) {
       this.markPendingDecision(session, { notes: action.policyReason ? [action.policyReason] : undefined });
       this.deps.dispatchSessionNotification(session, {

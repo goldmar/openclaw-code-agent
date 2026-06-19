@@ -200,6 +200,103 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
     }
   });
 
+  it("releases duplicate branches whose content already landed and suppresses stale reminders", async () => {
+    const repoDir = mkdtempSync(join(tmpdir(), "sm-worktree-released-duplicate-"));
+    let cleanup = () => {};
+    try {
+      git(repoDir, "init", "-b", "main");
+      git(repoDir, "config", "user.name", "Test User");
+      git(repoDir, "config", "user.email", "test@example.com");
+      writeFileSync(join(repoDir, "README.md"), "hello\n", "utf-8");
+      git(repoDir, "add", "README.md");
+      git(repoDir, "commit", "-m", "init");
+      git(repoDir, "remote", "add", "origin", "https://github.com/example/repo.git");
+
+      const worktreePath = createWorktree(repoDir, "released-duplicate");
+      const branchName = getBranchName(worktreePath);
+      assert.ok(branchName, "worktree branch should exist");
+
+      writeFileSync(join(worktreePath, "feature.txt"), "already landed\n", "utf-8");
+      git(worktreePath, "add", "feature.txt");
+      git(worktreePath, "commit", "-m", "feature change");
+      git(repoDir, "merge", "--squash", branchName);
+      git(repoDir, "commit", "-m", "squash feature change");
+
+      const created = createTestSessionManager(5);
+      const sm = created.sm;
+      cleanup = created.cleanup;
+      stubDispatch(sm);
+      const now = Date.now();
+      (sm as any).store.persisted.set("h-released-duplicate", {
+        sessionId: "s-released-duplicate",
+        harnessSessionId: "h-released-duplicate",
+        backendRef: { kind: "claude-code", conversationId: "h-released-duplicate" },
+        name: "released-duplicate",
+        prompt: "make the duplicate change",
+        workdir: repoDir,
+        route: {
+          provider: "telegram",
+          target: "12345",
+          sessionKey: "agent:main:telegram:group:12345",
+        },
+        status: "completed",
+        costUsd: 0,
+        lifecycle: "awaiting_worktree_decision",
+        worktreeState: "pending_decision",
+        worktreePath,
+        worktreeBranch: branchName,
+        worktreeStrategy: "ask",
+        worktreeBaseBranch: "main",
+        pendingWorktreeDecisionSince: new Date(now - 4 * 60 * 60 * 1000).toISOString(),
+        worktreeLifecycle: {
+          state: "pending_decision",
+          updatedAt: new Date(now - 4 * 60 * 60 * 1000).toISOString(),
+          baseBranch: "main",
+        },
+      });
+      (sm as any).store.idIndex.set("s-released-duplicate", "h-released-duplicate");
+      const persistedBefore = (sm as any).store.getPersistedSession("s-released-duplicate");
+      assert.ok(persistedBefore);
+
+      assert.equal(
+        (sm as any).maintenance.deps.reminders.sendReminderIfDue(persistedBefore, now),
+        false,
+      );
+      assert.equal(((sm as any).__dispatchCalls ?? []).length, 0);
+      const persistedAfterReminder = (sm as any).store.getPersistedSession("s-released-duplicate");
+      assert.equal(persistedAfterReminder?.pendingWorktreeDecisionSince, undefined);
+
+      const session = {
+        id: "s-released-duplicate",
+        name: "released-duplicate",
+        status: "completed",
+        phase: "implementing",
+        harnessSessionId: "h-released-duplicate",
+        prompt: "make the duplicate change",
+        originalWorkdir: repoDir,
+        worktreePath,
+        worktreeBranch: branchName,
+        worktreeStrategy: "ask",
+        worktreeBaseBranch: "main",
+        pendingPlanApproval: false,
+        getOutput: () => ["Implemented the requested feature change."],
+      };
+
+      const result = await (sm as any).handleWorktreeStrategy(session);
+
+      assert.deepEqual(result, { notificationSent: false, worktreeRemoved: true });
+      assert.equal(((sm as any).__dispatchCalls ?? []).length, 0);
+      assert.equal(existsSync(worktreePath), false);
+      const persisted = (sm as any).store.getPersistedSession("s-released-duplicate");
+      assert.equal(persisted?.worktreeState, "released");
+      assert.equal(persisted?.worktreeLifecycle?.state, "released");
+      assert.equal(persisted?.pendingWorktreeDecisionSince, undefined);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+      cleanup();
+    }
+  });
+
   it("uses the generic cleanup message for no-change plan sessions", async () => {
     const repoDir = mkdtempSync(join(tmpdir(), "sm-worktree-plan-report-"));
     let cleanup = () => {};

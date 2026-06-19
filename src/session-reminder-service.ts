@@ -198,6 +198,6 @@ export class SessionReminderService {
   }
 
   private isResolvedDerivedWorktreeState(state: ManagedWorktreeLifecycleState): boolean {
-    return state === "merged" || state === "released" || state === "cleanup_failed";
+    return state === "merged" || state === "released" || state === "no_change" || state === "cleanup_failed";
   }
 }
