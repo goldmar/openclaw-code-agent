@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.5.3] - 2026-06-19
+
+### Fixed
+- Normalized Codex model aliases before launch validation so configured defaults, launch requests, and Codex app-server model arguments resolve consistently.
+- Preserved stale released worktree reminders when released evidence exists but cleanup still needs a user decision, keeping follow-up actions visible for old completed sessions.
+
+### Changed
+- Pinned vulnerable transitive `tar` ranges to `7.5.16` through pnpm overrides so production audits use the patched release.
+
 ## [4.5.2] - 2026-06-18
 
 ### Fixed
@@ -513,7 +522,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Default Codex approval policy to `on-request`.
 - Raised the default session limit.
 
-[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.5.2...HEAD
+[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.5.3...HEAD
+[4.5.3]: https://github.com/goldmar/openclaw-code-agent/compare/v4.5.2...v4.5.3
 [4.5.2]: https://github.com/goldmar/openclaw-code-agent/compare/v4.5.1...v4.5.2
 [4.5.1]: https://github.com/goldmar/openclaw-code-agent/compare/v4.5.0...v4.5.1
 [4.5.0]: https://github.com/goldmar/openclaw-code-agent/compare/v4.4.2...v4.5.0
