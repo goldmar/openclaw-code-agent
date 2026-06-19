@@ -879,12 +879,12 @@ describe("agent_launch allowedModels validation", () => {
     } as any);
 
     const tool = makeAgentLaunchTool({ workspaceDir: "/tmp" });
-  const result = await tool.execute("tool-id", { prompt: "test", harness: "codex" });
+    const result = await tool.execute("tool-id", { prompt: "test", harness: "codex" });
 
-  const text = (result.content[0] as { text: string }).text;
-  assert.match(text, /Error: Model "anthropic\/claude-opus-4-6" is not supported for harness "codex"/);
-  assert.match(text, /bare Codex model id/);
-});
+    const text = (result.content[0] as { text: string }).text;
+    assert.match(text, /Error: Model "anthropic\/claude-opus-4-6" is not supported for harness "codex"/);
+    assert.match(text, /bare Codex model id/);
+  });
 
   it("blocks undefined default model with allowedModels", async () => {
     setPluginConfig({
