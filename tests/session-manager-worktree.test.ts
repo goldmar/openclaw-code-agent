@@ -263,7 +263,8 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
         false,
       );
       assert.equal(((sm as any).__dispatchCalls ?? []).length, 0);
-      assert.equal(persistedBefore.pendingWorktreeDecisionSince, undefined);
+      const persistedAfterReminder = (sm as any).store.getPersistedSession("s-released-duplicate");
+      assert.equal(persistedAfterReminder?.pendingWorktreeDecisionSince, undefined);
 
       const session = {
         id: "s-released-duplicate",

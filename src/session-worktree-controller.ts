@@ -19,7 +19,6 @@ export class SessionWorktreeController {
   ): WorktreeCompletionState {
     const branchAheadCount = getCommitsAheadCount(repoDir, branchName, baseBranch);
     if (branchAheadCount === undefined) return "has-commits";
-    if (hasDirtyWorktreeEntries(worktreePath)) return "dirty-uncommitted";
     if (branchAheadCount === 0) {
       const baseAheadCount = getCommitsAheadCount(repoDir, baseBranch, branchName);
       if (baseAheadCount === undefined) return "has-commits";
@@ -27,8 +26,10 @@ export class SessionWorktreeController {
         if (isBranchAncestorOfBase(repoDir, branchName, baseBranch)) return "merged";
         return "base-advanced";
       }
+      if (hasDirtyWorktreeEntries(worktreePath)) return "dirty-uncommitted";
       return "no-change";
     }
+    if (hasDirtyWorktreeEntries(worktreePath)) return "dirty-uncommitted";
     if (wouldMergeBeNoop(repoDir, branchName, baseBranch)) return "released";
     return "has-commits";
   }
