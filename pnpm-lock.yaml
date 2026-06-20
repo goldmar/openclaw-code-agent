@@ -9,7 +9,7 @@ overrides:
   axios@<1.15.0: '>=1.15.0'
   fast-xml-builder@<1.1.7: 1.1.7
   follow-redirects@<1.16.0: 1.16.0
-  protobufjs@>=7 <7.5.6: 7.5.6
+  protobufjs@>=7 <7.6.3: 7.6.3
   tar@<7.5.16: 7.5.16
   '@protobufjs/utf8@<1.1.1': 1.1.1
   brace-expansion@>=4.0.0 <5.0.5: '>=5.0.5'
@@ -19,6 +19,7 @@ overrides:
   fast-uri@<=3.1.1: 3.1.2
   qs@<6.15.2: 6.15.2
   hono@<4.12.25: 4.12.25
+  undici@>=8.0.0 <8.5.0: 8.5.0
 
 importers:
 
@@ -386,7 +387,7 @@ packages:
     resolution: {integrity: sha512-sftHnW69NHQqLjCxBTvQ8f/eQl+peZ5pHCBQtuTWBbeuYRHZ0/GXVTmw/O/YKsShMbqPWhJB0UYtPPdvCUSS8w==}
     engines: {node: '>=22.19.0'}
     peerDependencies:
-      undici: '>=8.3.0 <9'
+      undici: 8.5.0
 
   '@protobufjs/aspromise@1.1.2':
     resolution: {integrity: sha512-j+gKExEuLmKwvz3OgROXtrJ2UG2x8Ch2YZUxahh+s1F2HZ+wAceUNLkvy6zKCPVRkU++ZWQrdxsUeQXmcg4uoQ==}
@@ -1141,8 +1142,8 @@ packages:
   proper-lockfile@4.1.2:
     resolution: {integrity: sha512-TjNPblN4BwAWMXU8s9AEz4JmQxnD1NNL7bNOY/AKUzyamc379FWASUhc/K1pL2noVb+XmZKLL68cjzLsiOAMaA==}
 
-  protobufjs@7.5.6:
-    resolution: {integrity: sha512-M71sTMB146U3u0di3yup8iM+zv8yPRNQVr1KK4tyBitl3qFvEGucq/rGDRShD2rsJhtN02RJaJ7j5X5hmy8SJg==}
+  protobufjs@7.6.3:
+    resolution: {integrity: sha512-+k0vdJKNdW+Vu+dYe8tZA/VvQb6XKNWexC6URwBFXxNnjLJz9nQJCemGyNgRAWD+B7+nGNc9qMPGwcD7s4nzUw==}
     engines: {node: '>=12.0.0'}
 
   proxy-addr@2.0.7:
@@ -1376,8 +1377,8 @@ packages:
   undici-types@7.24.6:
     resolution: {integrity: sha512-WRNW+sJgj5OBN4/0JpHFqtqzhpbnV0GuB+OozA9gCL7a993SmU+1JBZCzLNxYsbMfIeDL+lTsphD5jN5N+n0zg==}
 
-  undici@8.3.0:
-    resolution: {integrity: sha512-TkUDgb6tl7KOGZ+7e8E3d2FYgUQgF6z5YypqjWmixVQSQERFcVrVg0ySADm2LVLRh5ljAaHTCR5Fmz3Q34rB7Q==}
+  undici@8.5.0:
+    resolution: {integrity: sha512-xamtWoB1EshgjpmlXd7GGm2VfdDtw1+rD8uhry8pSNW3If6S8E0m2T2+orSKeZXEn/aPJMviCpDBA65WJt8zhg==}
     engines: {node: '>=22.19.0'}
 
   unpipe@1.0.0:
@@ -1635,7 +1636,7 @@ snapshots:
     dependencies:
       google-auth-library: 10.7.0
       p-retry: 4.6.2
-      protobufjs: 7.5.6
+      protobufjs: 7.6.3
       ws: 8.21.0
     optionalDependencies:
       '@modelcontextprotocol/sdk': 1.29.0(zod@4.4.3)
@@ -1738,9 +1739,9 @@ snapshots:
       jszip: 3.10.1
       tar: 7.5.16
 
-  '@openclaw/proxyline@0.3.3(undici@8.3.0)':
+  '@openclaw/proxyline@0.3.3(undici@8.5.0)':
     dependencies:
-      undici: 8.3.0
+      undici: 8.5.0
 
   '@protobufjs/aspromise@1.1.2': {}
 
@@ -2428,7 +2429,7 @@ snapshots:
       '@modelcontextprotocol/sdk': 1.29.0(zod@4.4.3)
       '@mozilla/readability': 0.6.0
       '@openclaw/fs-safe': 0.3.0
-      '@openclaw/proxyline': 0.3.3(undici@8.3.0)
+      '@openclaw/proxyline': 0.3.3(undici@8.5.0)
       chalk: 5.6.2
       chokidar: 5.0.0
       clawpdf: 0.3.0
@@ -2463,7 +2464,7 @@ snapshots:
       tslog: 4.10.2
       typebox: 1.1.39
       typescript: 6.0.3
-      undici: 8.3.0
+      undici: 8.5.0
       web-push: 3.6.7
       web-tree-sitter: 0.26.9
       ws: 8.21.0
@@ -2526,7 +2527,7 @@ snapshots:
       retry: 0.12.0
       signal-exit: 3.0.7
 
-  protobufjs@7.5.6:
+  protobufjs@7.6.3:
     dependencies:
       '@protobufjs/aspromise': 1.1.2
       '@protobufjs/base64': 1.1.2
@@ -2785,7 +2786,7 @@ snapshots:
 
   undici-types@7.24.6: {}
 
-  undici@8.3.0: {}
+  undici@8.5.0: {}
 
   unpipe@1.0.0: {}
 
