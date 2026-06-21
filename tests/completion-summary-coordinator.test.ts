@@ -315,6 +315,69 @@ describe("CompletionSummaryCoordinator", () => {
     assert.equal(staleDraftOpened.allowed, false);
   });
 
+  it("retains PR update aliases under a tiny persisted completion ledger", () => {
+    const coordinator = new CompletionSummaryCoordinator({ maxCompletedKeys: 1 });
+    const session = {
+      id: "pr-185-session",
+      route: {
+        provider: "telegram",
+        target: "topic-fixture",
+        threadId: "13832",
+      },
+    };
+    const updateFact = {
+      required: true,
+      producer: "worktree-pr" as const,
+      outcomeKey: "worktree-pr:updated:goldmar/openclaw-code-agent:#185:agent/format-launch-notification-model-separator:d10aac0",
+    };
+
+    const updated = coordinator.recordVisibleDelivery(session, updateFact);
+    const staleOpened = new CompletionSummaryCoordinator({ maxCompletedKeys: 1 }).decide(
+      { ...session, id: "pr-185-stale-opened" },
+      {
+        required: true,
+        producer: "worktree-pr",
+        outcomeKey: "worktree-pr:opened:goldmar/openclaw-code-agent:#185:agent/format-launch-notification-model-separator:created",
+      },
+      updated.records,
+    );
+
+    assert.equal(updated.allowed, true);
+    assert.equal(updated.records?.length, 1);
+    assert.equal(staleOpened.allowed, false);
+    assert.equal(staleOpened.skipReason, PRIOR_VISIBLE_SUMMARY_SKIP_REASON);
+  });
+
+  it("retains PR update aliases under a tiny in-memory completion ledger", () => {
+    const coordinator = new CompletionSummaryCoordinator({ maxCompletedKeys: 1 });
+    const session = {
+      id: "pr-185-session",
+      route: {
+        provider: "telegram",
+        target: "topic-fixture",
+        threadId: "13832",
+      },
+    };
+    const updated = coordinator.decide(session, {
+      required: true,
+      producer: "worktree-pr",
+      outcomeKey: "worktree-pr:updated:goldmar/openclaw-code-agent:#185:agent/format-launch-notification-model-separator:d10aac0",
+    });
+    coordinator.finish(updated.key, true);
+
+    const staleOpened = coordinator.decide(
+      { ...session, id: "pr-185-stale-opened" },
+      {
+        required: true,
+        producer: "worktree-pr",
+        outcomeKey: "worktree-pr:opened:goldmar/openclaw-code-agent:#185:agent/format-launch-notification-model-separator:created",
+      },
+    );
+
+    assert.equal(updated.allowed, true);
+    assert.equal(staleOpened.allowed, false);
+  });
+
   it("allows resumed auto-pr update summaries after persisted PR-open completion records", () => {
     const coordinator = new CompletionSummaryCoordinator();
     const session = {

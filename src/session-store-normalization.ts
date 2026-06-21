@@ -237,8 +237,12 @@ function normalizeCompletionSummaryRecords(value: unknown): SessionCompletionSum
       const key = toOptionalString(raw.key);
       const recordedAt = toOptionalString(raw.recordedAt);
       if (!key || !recordedAt || !Number.isFinite(Date.parse(recordedAt))) return undefined;
+      const linkedKeys = Array.isArray(raw.linkedKeys)
+        ? [...new Set(raw.linkedKeys.map(toOptionalString).filter((value): value is string => Boolean(value && value !== key)))]
+        : undefined;
       return {
         key,
+        linkedKeys: linkedKeys && linkedKeys.length > 0 ? linkedKeys : undefined,
         recordedAt,
         label: toOptionalString(raw.label),
         skipReason: toOptionalString(raw.skipReason),

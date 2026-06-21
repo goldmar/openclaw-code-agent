@@ -1373,6 +1373,7 @@ describe("SessionStore new worktree lifecycle fields", () => {
       completionSummaryDedupe: [
         {
           key: "route:key:outcome",
+          linkedKeys: ["route:key:alias", "", "route:key:outcome", "route:key:alias"],
           recordedAt,
           label: "worktree-outcome",
           skipReason: "prior human-visible summary already delivered",
@@ -1388,6 +1389,7 @@ describe("SessionStore new worktree lifecycle fields", () => {
     const persisted = store.getPersistedSession("h-completion-summary-dedupe");
     assert.deepEqual(persisted?.completionSummaryDedupe, [{
       key: "route:key:outcome",
+      linkedKeys: ["route:key:alias"],
       recordedAt,
       label: "worktree-outcome",
       skipReason: "prior human-visible summary already delivered",
