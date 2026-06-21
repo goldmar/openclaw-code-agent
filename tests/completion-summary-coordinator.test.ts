@@ -226,7 +226,7 @@ describe("CompletionSummaryCoordinator", () => {
     assert.equal(routedFollowup.skipReason, PRIOR_VISIBLE_SUMMARY_SKIP_REASON);
   });
 
-  it("normalizes opened, updated, and draft-opened PR outcomes to one follow-up identity", () => {
+  it("lets material PR updates produce a follow-up after a prior PR-open summary", () => {
     const coordinator = new CompletionSummaryCoordinator();
     const session = {
       id: "pr-185-session",
@@ -237,19 +237,26 @@ describe("CompletionSummaryCoordinator", () => {
       },
     };
 
-    const updated = coordinator.decide(session, {
+    const opened = coordinator.decide(session, {
+      required: true,
+      producer: "worktree-pr",
+      outcomeKey: "worktree-pr:opened:goldmar/openclaw-code-agent:#185:agent/format-launch-notification-model-separator:created",
+    });
+    coordinator.finish(opened.key, true);
+
+    const updated = coordinator.decide({ ...session, id: "pr-185-updated" }, {
       required: true,
       producer: "worktree-pr",
       outcomeKey: "worktree-pr:updated:goldmar/openclaw-code-agent:#185:agent/format-launch-notification-model-separator:d10aac0",
     });
     coordinator.finish(updated.key, true);
 
-    const staleOpened = coordinator.decide(
-      { ...session, id: "pr-185-stale-opened" },
+    const duplicateUpdate = coordinator.decide(
+      { ...session, id: "pr-185-duplicate-update" },
       {
         required: true,
         producer: "worktree-pr",
-        outcomeKey: "worktree-pr:opened:goldmar/openclaw-code-agent:#185:agent/format-launch-notification-model-separator:created",
+        outcomeKey: "worktree-pr:updated:goldmar/openclaw-code-agent:#185:agent/format-launch-notification-model-separator:d10aac0",
       },
     );
     const staleDraftOpened = coordinator.decide(
@@ -261,9 +268,49 @@ describe("CompletionSummaryCoordinator", () => {
       },
     );
 
+    assert.equal(opened.allowed, true);
     assert.equal(updated.allowed, true);
-    assert.equal(staleOpened.allowed, false);
+    assert.equal(duplicateUpdate.allowed, false);
     assert.equal(staleDraftOpened.allowed, false);
+  });
+
+  it("allows resumed auto-pr update summaries after persisted PR-open completion records", () => {
+    const coordinator = new CompletionSummaryCoordinator();
+    const session = {
+      id: "k7rM7W1J",
+      name: "rebase-pr-301-docs-refresh",
+      harnessSessionId: "019ee845-e811-7a60-9631-3429c022d138",
+      route: {
+        provider: "telegram",
+        accountId: "default",
+        target: "-1003863755361",
+        threadId: "13832",
+        sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+      },
+    };
+    const opened = coordinator.decide(session, {
+      required: true,
+      producer: "worktree-pr",
+      outcomeKey: "worktree-pr:opened:goldmar/openclaw-code-agent:#301:agent/plan-oca-v2026-6-9-compat:created",
+    });
+    const persistedRecords = coordinator.completionRecordsAfterDelivery(
+      opened.key,
+      undefined,
+      "worktree-outcome",
+    );
+
+    const updated = new CompletionSummaryCoordinator().decide(
+      session,
+      {
+        required: true,
+        producer: "worktree-pr",
+        outcomeKey: "worktree-pr:updated:goldmar/openclaw-code-agent:#301:agent/plan-oca-v2026-6-9-compat:abc1234",
+      },
+      persistedRecords,
+    );
+
+    assert.equal(opened.allowed, true);
+    assert.equal(updated.allowed, true);
   });
 
   it("keeps normalized PR follow-up identities independent by route", () => {
@@ -472,6 +519,8 @@ describe("CompletionSummaryCoordinator", () => {
 
     const visibleClaim = coordinator.recordVisibleDelivery(session, fact);
     assert.ok(visibleClaim.records?.length);
+    const primaryRecord = visibleClaim.records.find((record) => record.key === visibleClaim.key);
+    assert.ok(primaryRecord);
 
     const duplicate = new CompletionSummaryCoordinator({ maxCompletedKeys: 2 }).decide(
       { ...session, id: "raw-persisted-record-session-duplicate" },
@@ -479,7 +528,7 @@ describe("CompletionSummaryCoordinator", () => {
       [
         { key: "", recordedAt: new Date().toISOString() },
         { key: "invalid-date-key", recordedAt: "not-a-date" },
-        visibleClaim.records[0],
+        primaryRecord,
       ],
     );
 

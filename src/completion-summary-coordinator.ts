@@ -63,6 +63,12 @@ interface CompletionSummaryKeySet {
   decisionKeys: string[];
 }
 
+interface NormalizedWorktreePrOutcome {
+  primary: string;
+  aliases: string[];
+  blocksAliases: boolean;
+}
+
 export interface CompletionSummaryCoordinatorOptions {
   maxCompletedKeys?: number;
 }
@@ -252,16 +258,22 @@ export class CompletionSummaryCoordinator {
       const visibleSessionKeys = this.buildSessionAliasKeys(deliveryRef, session, "visible-summary");
       const goalSessionKeys = this.buildSessionAliasKeys(deliveryRef, session, "goal-summary");
       const terminalLike = this.isTerminalLike(fact, outcomeKey);
+      const prOutcome = this.normalizeWorktreePrOutcome(fact.outcomeKey?.trim());
+      const prAliasKeys = prOutcome?.aliases.map((alias) =>
+        `${this.buildVisibleScope(deliveryRef, session)}:outcome:${this.digest(alias)}`
+      ) ?? [];
       return {
         primary,
         explicit: true,
         claimKeys: [
-          primary,
           ...visibleSessionKeys,
           ...(goalLike ? goalSessionKeys : []),
+          ...prAliasKeys,
+          primary,
         ],
         decisionKeys: [
           primary,
+          ...(prOutcome?.blocksAliases ? prAliasKeys : []),
           ...(goalLike || terminalLike ? visibleSessionKeys : []),
           ...goalSessionKeys,
         ],
@@ -297,12 +309,12 @@ export class CompletionSummaryCoordinator {
   ): string | undefined {
     const goalTaskId = session.goalTaskId?.trim();
     if (goalTaskId) return `goal:${goalTaskId}`;
-    const prOutcomeKey = this.normalizeWorktreePrOutcomeKey(outcomeKey);
-    if (prOutcomeKey) return prOutcomeKey;
+    const prOutcome = this.normalizeWorktreePrOutcome(outcomeKey);
+    if (prOutcome) return prOutcome.primary;
     return outcomeKey;
   }
 
-  private normalizeWorktreePrOutcomeKey(outcomeKey: string | undefined): string | undefined {
+  private normalizeWorktreePrOutcome(outcomeKey: string | undefined): NormalizedWorktreePrOutcome | undefined {
     if (!outcomeKey) return undefined;
     const parts = outcomeKey.split(":");
     if (parts[0] !== "worktree-pr" || parts.length < 5) return undefined;
@@ -317,7 +329,25 @@ export class CompletionSummaryCoordinator {
     const branch = parts[4]?.trim();
     if (!prIdentity || !branch) return undefined;
 
-    return ["worktree-pr", repo.toLowerCase(), prIdentity, branch].join(":");
+    const base = ["worktree-pr", repo.toLowerCase(), prIdentity, branch].join(":");
+    const createdAlias = `${base}:created`;
+    if (action === "updated") {
+      const materialChange = parts.slice(5).join(":").trim();
+      const primary = materialChange
+        ? `${base}:updated:${materialChange}`
+        : `${base}:updated`;
+      return {
+        primary,
+        aliases: [createdAlias],
+        blocksAliases: false,
+      };
+    }
+
+    return {
+      primary: createdAlias,
+      aliases: [],
+      blocksAliases: true,
+    };
   }
 
   private normalizePrIdentity(value: string): string | undefined {
