@@ -685,6 +685,48 @@ describe("createCallbackHandler()", () => {
     assert.equal(second.replies[0], "⚠️ This plan is no longer awaiting approval.");
   });
 
+  it("clears Telegram plan approval buttons when the token is missing after successful approval", async () => {
+    let sendCount = 0;
+    const token = {
+      sessionId: "test-id",
+      kind: "plan-approve" as const,
+      planDecisionVersion: 1,
+    };
+    const session = createStubSession({
+      pendingPlanApproval: true,
+      approvalState: "pending",
+      planDecisionVersion: 1,
+      actionablePlanDecisionVersion: 1,
+      sendMessage: async () => {
+        sendCount++;
+        session.pendingPlanApproval = false;
+        session.approvalState = "approved";
+        session.actionablePlanDecisionVersion = undefined;
+      },
+      switchPermissionMode: (mode: string) => {
+        session.currentPermissionMode = mode;
+      },
+    });
+
+    setSessionManager({
+      getActionToken: () => token,
+      consumeActionToken: () => undefined,
+      resolve: () => session,
+      getPersistedSession: () => undefined,
+      notifySession: () => {},
+      clearPlanDecisionTokens: () => {},
+    } as any);
+
+    const handler = createCallbackHandler();
+    const state = createCtx("token-approve");
+    const result = await handler.handler(state.ctx as any);
+
+    assert.deepEqual(result, { handled: true });
+    assert.equal(sendCount, 1);
+    assert.equal(state.buttonsCleared, 1);
+    assert.deepEqual(state.replies, []);
+  });
+
   it("serializes concurrent plan approval clicks so approval is sent once", async () => {
     let consumed = false;
     let sendCount = 0;

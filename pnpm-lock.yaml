@@ -39,8 +39,8 @@ importers:
         specifier: ^5.1.7
         version: 5.1.11
       openclaw:
-        specifier: 2026.6.8
-        version: 2026.6.8
+        specifier: 2026.6.9
+        version: 2026.6.9
       tsx:
         specifier: ^4.21.0
         version: 4.22.4
@@ -1077,8 +1077,8 @@ packages:
       zod:
         optional: true
 
-  openclaw@2026.6.8:
-    resolution: {integrity: sha512-iziR8fi69+ojrtX7FYYvTpkGcVnmyLpIhvchgt5LFkkdHVWw973XAAekKVZ3/xQJ5FG4NwgHkXL0LLTrgsNOSQ==}
+  openclaw@2026.6.9:
+    resolution: {integrity: sha512-y0PGUdE87S8QtQXABPDL0CjNKhH3q/R1h9/WiRQkhVCGSBVhs63/M1iZn2DYVyJCAbDyMz3KNyAE0WzSQIWCRg==}
     engines: {node: '>=22.19.0'}
     hasBin: true
 
@@ -2413,7 +2413,7 @@ snapshots:
       ws: 8.21.0
       zod: 4.4.3
 
-  openclaw@2026.6.8:
+  openclaw@2026.6.9:
     dependencies:
       '@agentclientprotocol/sdk': 0.22.1(zod@4.4.3)
       '@anthropic-ai/sdk': 0.100.1(zod@4.4.3)
@@ -2435,7 +2435,6 @@ snapshots:
       clawpdf: 0.3.0
       commander: 14.0.3
       croner: 10.0.1
-      cross-spawn: 7.0.6
       diff: 9.0.0
       dotenv: 17.4.2
       express: 5.2.1

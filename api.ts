@@ -28,6 +28,7 @@ export type PluginInteractiveTelegramHandlerContext = {
   callback?: {
     data?: string;
     callback_data?: string;
+    callbackData?: string;
     namespace?: string;
     payload?: string;
     messageId?: number;
@@ -48,7 +49,7 @@ export type PluginInteractiveDiscordHandlerContext = {
   channel: "discord";
   auth: { isAuthorizedSender: boolean };
   interaction?: { payload?: string; data?: string; callback_data?: string; callbackData?: string };
-  callback?: { data?: string; callback_data?: string; namespace?: string; payload?: string };
+  callback?: { data?: string; callback_data?: string; callbackData?: string; namespace?: string; payload?: string };
   respond: {
     acknowledge?: () => Promise<void>;
     reply: (params: { text: string; ephemeral?: boolean }) => Promise<void>;
