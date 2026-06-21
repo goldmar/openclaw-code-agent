@@ -229,14 +229,12 @@ function getPayload(ctx: InteractiveCallbackContext): string {
     ? firstNamespacedString(
         ctx.callback?.data,
         ctx.callback?.callback_data,
-        (ctx.callback as { callbackData?: unknown } | undefined)?.callbackData,
+        ctx.callback?.callbackData,
       )
     : undefined;
   if (callbackNativePayload) return callbackNativePayload;
 
-  const interaction = "interaction" in ctx
-    ? ctx.interaction as { payload?: unknown; data?: unknown; callback_data?: unknown; callbackData?: unknown } | undefined
-    : undefined;
+  const interaction = "interaction" in ctx ? ctx.interaction : undefined;
   const interactionNativePayload = firstNamespacedString(
     interaction?.data,
     interaction?.callback_data,
@@ -256,7 +254,7 @@ function getPayload(ctx: InteractiveCallbackContext): string {
     ? firstNonBlankString(
         ctx.callback?.data,
         ctx.callback?.callback_data,
-        (ctx.callback as { callbackData?: unknown } | undefined)?.callbackData,
+        ctx.callback?.callbackData,
       )
     : undefined;
   return callbackNativeFallback ?? firstNonBlankString(
@@ -666,6 +664,14 @@ export function createCallbackHandler(
           sessionId: consumedToken?.sessionId ?? planToken.sessionId,
           planDecisionVersion: consumedToken?.planDecisionVersion,
         });
+        if (!consumedToken) {
+          await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
+          if (ctx.channel !== "telegram") {
+            await replyText(ctx, "⚠️ This action is stale or has already been used.");
+          }
+          return { handled: true };
+        }
+
         await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
         return { handled: true };
       }
