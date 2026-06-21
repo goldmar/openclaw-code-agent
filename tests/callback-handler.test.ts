@@ -303,6 +303,58 @@ describe("createCallbackHandler()", () => {
     assert.deepEqual(state.replies, []);
   });
 
+  it("prefers namespaced Telegram callback data over conflicting payload text", async () => {
+    let switchedTo: string | undefined;
+    let consumed = 0;
+    const session = createStubSession({
+      pendingPlanApproval: true,
+      approvalState: "pending",
+      planDecisionVersion: 7,
+      actionablePlanDecisionVersion: 7,
+      sendMessage: async () => {},
+      switchPermissionMode: (mode: string) => { switchedTo = mode; },
+    });
+
+    setSessionManager({
+      getActionToken: (tokenId: string) => {
+        assert.equal(tokenId, "native-token");
+        return {
+          sessionId: "test-id",
+          kind: "plan-approve",
+          planDecisionVersion: 7,
+        };
+      },
+      consumeActionToken: (tokenId: string) => {
+        consumed++;
+        assert.equal(tokenId, "native-token");
+        return {
+          sessionId: "test-id",
+          kind: "plan-approve",
+          planDecisionVersion: 7,
+        };
+      },
+      resolve: () => session,
+      getPersistedSession: () => undefined,
+      notifySession: () => {},
+      clearPlanDecisionTokens: () => {},
+    } as any);
+
+    const handler = createCallbackHandler();
+    const state = createCtx("derived-stale-token", "telegram", {
+      telegramCallback: {
+        data: "code-agent:native-token",
+        payload: "derived-stale-token",
+      },
+    });
+    const result = await handler.handler(state.ctx as any);
+
+    assert.deepEqual(result, { handled: true });
+    assert.equal(consumed, 1);
+    assert.equal(switchedTo, "bypassPermissions");
+    assert.equal(state.buttonsCleared, 1);
+    assert.deepEqual(state.replies, []);
+  });
+
   it("accepts Discord callbacks that provide payload via callback and only expose clearButtons", async () => {
     let switchedTo: string | undefined;
     const session = createStubSession({
@@ -769,9 +821,13 @@ describe("createCallbackHandler()", () => {
 
   it("resolves question-answer callbacks by session and option index", async () => {
     const resolved: Array<{ sessionId: string; optionIndex: number }> = [];
+    let consumed = 0;
     setSessionManager({
       getActionToken: () => ({ sessionId: "sess-42", kind: "question-answer", optionIndex: 1 }),
-      consumeActionToken: () => ({ sessionId: "sess-42", kind: "question-answer", optionIndex: 1 }),
+      consumeActionToken: () => {
+        consumed++;
+        return { sessionId: "sess-42", kind: "question-answer", optionIndex: 1 };
+      },
       resolvePendingInputOption: (sessionId: string, optionIndex: number) => {
         resolved.push({ sessionId, optionIndex });
         return true;
@@ -784,13 +840,19 @@ describe("createCallbackHandler()", () => {
 
     assert.deepEqual(result, { handled: true });
     assert.deepEqual(resolved, [{ sessionId: "sess-42", optionIndex: 1 }]);
+    assert.equal(consumed, 1);
+    assert.equal(state.buttonsCleared, 1);
     assert.equal(state.replies[0], "✅ Answer submitted.");
   });
 
-  it("does not acknowledge stale question-answer callbacks as submitted", async () => {
+  it("does not consume or clear active question buttons when answer submission fails", async () => {
+    let consumed = 0;
     setSessionManager({
       getActionToken: () => ({ sessionId: "sess-42", kind: "question-answer", optionIndex: 1 }),
-      consumeActionToken: () => ({ sessionId: "sess-42", kind: "question-answer", optionIndex: 1 }),
+      consumeActionToken: () => {
+        consumed++;
+        return { sessionId: "sess-42", kind: "question-answer", optionIndex: 1 };
+      },
       resolvePendingInputOption: () => false,
     } as any);
 
@@ -799,7 +861,43 @@ describe("createCallbackHandler()", () => {
     const result = await handler.handler(state.ctx as any);
 
     assert.deepEqual(result, { handled: true });
-    assert.equal(state.replies[0], "⚠️ That question button is no longer active. Use the latest question prompt.");
+    assert.equal(consumed, 0);
+    assert.equal(state.buttonsCleared, 0);
+    assert.equal(state.replies[0], "⚠️ Could not submit that answer. The question prompt is still active; try again or reply with the answer.");
+  });
+
+  it("reports duplicate question-answer callbacks as stale after a successful answer", async () => {
+    const token = {
+      sessionId: "sess-42",
+      kind: "question-answer",
+      optionIndex: 1,
+    };
+    let submitted = false;
+    let consumed = false;
+    setSessionManager({
+      getActionToken: () => consumed ? { ...token, consumedAt: 123 } : token,
+      consumeActionToken: () => {
+        consumed = true;
+        return token;
+      },
+      resolvePendingInputOption: () => {
+        assert.equal(submitted, false);
+        submitted = true;
+        return true;
+      },
+    } as any);
+
+    const handler = createCallbackHandler();
+    const firstState = createCtx("token-question-duplicate");
+    const firstResult = await handler.handler(firstState.ctx as any);
+    const secondState = createCtx("token-question-duplicate");
+    const secondResult = await handler.handler(secondState.ctx as any);
+
+    assert.deepEqual(firstResult, { handled: true });
+    assert.deepEqual(secondResult, { handled: true });
+    assert.equal(submitted, true);
+    assert.equal(firstState.replies[0], "✅ Answer submitted.");
+    assert.equal(secondState.replies[0], "⚠️ That question button is no longer active. Use the latest question prompt.");
   });
 
   it("clears worktree merge buttons without replying when agent_merge succeeds", async () => {

@@ -431,6 +431,12 @@ export function createCallbackHandler(
         return { handled: true };
       }
 
+      if (token.kind === "question-answer" && token.consumedAt != null) {
+        await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
+        await replyText(ctx, "⚠️ That question button is no longer active. Use the latest question prompt.");
+        return { handled: true };
+      }
+
       const sessionId = token.sessionId;
       const actionSession = sessionManager.resolve?.(sessionId) ?? sessionManager.getPersistedSession?.(sessionId);
       const actionSessionName = actionSession?.name ?? sessionId;
@@ -449,6 +455,45 @@ export function createCallbackHandler(
       if (invalidPlanDecision) {
         await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
         await replyText(ctx, `⚠️ ${invalidPlanDecision}`);
+        return { handled: true };
+      }
+
+      if (token.kind === "question-answer") {
+        if (token.optionIndex == null) {
+          await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
+          await replyText(ctx, `⚠️ Invalid question-answer action.`);
+          return { handled: true };
+        }
+
+        const submitted = await sessionManager.resolvePendingInputOption(sessionId, token.optionIndex, {
+          requestId: token.pendingInputRequestId,
+          questionId: token.pendingInputQuestionId,
+        });
+        if (!submitted) {
+          await replyText(ctx, `⚠️ Could not submit that answer. The question prompt is still active; try again or reply with the answer.`);
+          return { handled: true };
+        }
+
+        const consumedToken = sessionManager.consumeActionToken(tokenId);
+        logButtonDiagnostic("callback_token_consume_completed", {
+          channel: ctx.channel,
+          namespace: CALLBACK_NAMESPACE,
+          tokenHash: hashDiagnosticToken(tokenId),
+          consumed: Boolean(consumedToken),
+          actionKind: consumedToken?.kind,
+          sessionId: consumedToken?.sessionId,
+          planDecisionVersion: consumedToken?.planDecisionVersion,
+        });
+        if (!consumedToken) {
+          await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
+          if (ctx.channel !== "telegram") {
+            await replyText(ctx, "⚠️ This action is stale or has already been used.");
+          }
+          return { handled: true };
+        }
+
+        await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
+        await replyText(ctx, `✅ Answer submitted.`);
         return { handled: true };
       }
 
@@ -716,22 +761,6 @@ export function createCallbackHandler(
           await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
           const result = await makeAgentOutputTool().execute("callback", { session: sessionId, lines: 50 });
           await replyText(ctx, toolResultText(result));
-          break;
-        }
-
-        case "question-answer": {
-          await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
-          if (token.optionIndex == null) {
-            await replyText(ctx, `⚠️ Invalid question-answer action.`);
-            break;
-          }
-          const submitted = await sessionManager.resolvePendingInputOption(sessionId, token.optionIndex, {
-            requestId: token.pendingInputRequestId,
-            questionId: token.pendingInputQuestionId,
-          });
-          await replyText(ctx, submitted
-            ? `✅ Answer submitted.`
-            : `⚠️ That question button is no longer active. Use the latest question prompt.`);
           break;
         }
 
