@@ -42,6 +42,10 @@ type InteractiveResponder = {
   acknowledge?: () => Promise<void>;
 };
 
+const inFlightQuestionAnswerTokens = new Set<string>();
+const retryableQuestionAnswerFailureMessage =
+  "⚠️ Could not submit that answer. The question prompt is still active; try again or reply with the answer.";
+
 function parsePayload(payload: string): string | null {
   const tokenId = payload.trim().replace(new RegExp(`^${CALLBACK_NAMESPACE}:`), "");
   return tokenId ? tokenId : null;
@@ -465,12 +469,29 @@ export function createCallbackHandler(
           return { handled: true };
         }
 
-        const submitted = await sessionManager.resolvePendingInputOption(sessionId, token.optionIndex, {
-          requestId: token.pendingInputRequestId,
-          questionId: token.pendingInputQuestionId,
-        });
+        if (inFlightQuestionAnswerTokens.has(tokenId)) {
+          await replyText(ctx, "⚠️ That answer is already being submitted. If the question remains active, try again.");
+          return { handled: true };
+        }
+
+        inFlightQuestionAnswerTokens.add(tokenId);
+        let submitted = false;
+        try {
+          submitted = await sessionManager.resolvePendingInputOption(sessionId, token.optionIndex, {
+            requestId: token.pendingInputRequestId,
+            questionId: token.pendingInputQuestionId,
+          });
+        } catch (err) {
+          const errText = err instanceof Error ? err.message : String(err);
+          console.warn(`[callback-handler] Failed to submit question-answer callback: ${errText}`);
+          await replyText(ctx, retryableQuestionAnswerFailureMessage);
+          return { handled: true };
+        } finally {
+          inFlightQuestionAnswerTokens.delete(tokenId);
+        }
+
         if (!submitted) {
-          await replyText(ctx, `⚠️ Could not submit that answer. The question prompt is still active; try again or reply with the answer.`);
+          await replyText(ctx, retryableQuestionAnswerFailureMessage);
           return { handled: true };
         }
 

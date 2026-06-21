@@ -866,6 +866,73 @@ describe("createCallbackHandler()", () => {
     assert.equal(state.replies[0], "⚠️ Could not submit that answer. The question prompt is still active; try again or reply with the answer.");
   });
 
+  it("does not consume or clear active question buttons when answer submission throws", async (t) => {
+    let consumed = 0;
+    const warnings: string[] = [];
+    t.mock.method(console, "warn", ((message?: unknown) => {
+      warnings.push(String(message));
+    }) as typeof console.warn);
+
+    setSessionManager({
+      getActionToken: () => ({ sessionId: "sess-42", kind: "question-answer", optionIndex: 1 }),
+      consumeActionToken: () => {
+        consumed++;
+        return { sessionId: "sess-42", kind: "question-answer", optionIndex: 1 };
+      },
+      resolvePendingInputOption: async () => {
+        throw new Error("backend submit failed");
+      },
+    } as any);
+
+    const handler = createCallbackHandler();
+    const state = createCtx("token-question-throws");
+    const result = await handler.handler(state.ctx as any);
+
+    assert.deepEqual(result, { handled: true });
+    assert.equal(consumed, 0);
+    assert.equal(state.buttonsCleared, 0);
+    assert.equal(state.replies[0], "⚠️ Could not submit that answer. The question prompt is still active; try again or reply with the answer.");
+    assert.match(warnings[0], /backend submit failed/);
+  });
+
+  it("does not submit duplicate in-flight question-answer callbacks", async () => {
+    let resolveSubmit!: (value: boolean) => void;
+    let submitCalls = 0;
+    let consumeCalls = 0;
+    setSessionManager({
+      getActionToken: () => ({ sessionId: "sess-42", kind: "question-answer", optionIndex: 1 }),
+      consumeActionToken: () => {
+        consumeCalls++;
+        return { sessionId: "sess-42", kind: "question-answer", optionIndex: 1 };
+      },
+      resolvePendingInputOption: () => {
+        submitCalls++;
+        return new Promise<boolean>((resolve) => {
+          resolveSubmit = resolve;
+        });
+      },
+    } as any);
+
+    const handler = createCallbackHandler();
+    const firstState = createCtx("token-question-race");
+    const firstResult = handler.handler(firstState.ctx as any);
+    const secondState = createCtx("token-question-race");
+    const secondResult = await handler.handler(secondState.ctx as any);
+
+    assert.deepEqual(secondResult, { handled: true });
+    assert.equal(submitCalls, 1);
+    assert.equal(consumeCalls, 0);
+    assert.equal(secondState.buttonsCleared, 0);
+    assert.equal(secondState.replies[0], "⚠️ That answer is already being submitted. If the question remains active, try again.");
+
+    resolveSubmit(true);
+    assert.deepEqual(await firstResult, { handled: true });
+    assert.equal(submitCalls, 1);
+    assert.equal(consumeCalls, 1);
+    assert.equal(firstState.buttonsCleared, 1);
+    assert.equal(firstState.replies[0], "✅ Answer submitted.");
+  });
+
   it("reports duplicate question-answer callbacks as stale after a successful answer", async () => {
     const token = {
       sessionId: "sess-42",
