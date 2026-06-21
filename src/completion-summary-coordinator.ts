@@ -344,14 +344,14 @@ export class CompletionSummaryCoordinator {
         : `${base}:updated`;
       return {
         primary,
-        aliases: [createdAlias],
+        aliases: [createdAlias, base],
         blocksAliases: false,
       };
     }
 
     return {
       primary: createdAlias,
-      aliases: [],
+      aliases: [base],
       blocksAliases: true,
     };
   }

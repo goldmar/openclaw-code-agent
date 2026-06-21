@@ -1,9 +1,26 @@
+import { createHash } from "crypto";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   CompletionSummaryCoordinator,
   PRIOR_VISIBLE_SUMMARY_SKIP_REASON,
 } from "../src/completion-summary-coordinator";
+
+function digest(value: string): string {
+  return createHash("sha256").update(value).digest("hex").slice(0, 16);
+}
+
+function routeOutcomeKey(
+  route: { provider: string; accountId?: string; target: string; threadId?: string },
+  outcomeKey: string,
+): string {
+  return `route:${digest(JSON.stringify({
+    provider: route.provider,
+    accountId: route.accountId,
+    target: route.target,
+    threadId: route.threadId,
+  }))}:outcome:${digest(outcomeKey)}`;
+}
 
 describe("CompletionSummaryCoordinator", () => {
   it("allows one visible follow-up for goal-owned terminal, goal, and worktree facts", () => {
@@ -313,6 +330,41 @@ describe("CompletionSummaryCoordinator", () => {
     assert.equal(duplicateUpdate.allowed, false);
     assert.equal(draftUpdate.allowed, true);
     assert.equal(staleDraftOpened.allowed, false);
+  });
+
+  it("honors legacy bare PR-open records without blocking material updates", () => {
+    const coordinator = new CompletionSummaryCoordinator();
+    const route = {
+      provider: "telegram",
+      target: "topic-fixture",
+      threadId: "13832",
+    };
+    const session = {
+      id: "pr-185-session",
+      route,
+    };
+    const legacyBase = "worktree-pr:goldmar/openclaw-code-agent:#185:agent/format-launch-notification-model-separator";
+    const legacyRecords = [{
+      key: routeOutcomeKey(route, legacyBase),
+      recordedAt: new Date().toISOString(),
+      label: "worktree-outcome",
+      skipReason: PRIOR_VISIBLE_SUMMARY_SKIP_REASON,
+    }];
+
+    const staleOpened = coordinator.decide(session, {
+      required: true,
+      producer: "worktree-pr",
+      outcomeKey: "worktree-pr:opened:goldmar/openclaw-code-agent:#185:agent/format-launch-notification-model-separator:created",
+    }, legacyRecords);
+    const materialUpdate = coordinator.decide({ ...session, id: "pr-185-update" }, {
+      required: true,
+      producer: "worktree-pr",
+      outcomeKey: "worktree-pr:updated:goldmar/openclaw-code-agent:#185:agent/format-launch-notification-model-separator:d10aac0",
+    }, legacyRecords);
+
+    assert.equal(staleOpened.allowed, false);
+    assert.equal(staleOpened.skipReason, PRIOR_VISIBLE_SUMMARY_SKIP_REASON);
+    assert.equal(materialUpdate.allowed, true);
   });
 
   it("retains PR update aliases under a tiny persisted completion ledger", () => {
