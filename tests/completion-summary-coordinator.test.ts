@@ -43,6 +43,38 @@ describe("CompletionSummaryCoordinator", () => {
     assert.equal(terminalDecision.skipReason, "duplicate completion follow-up wake already handled");
   });
 
+  it("does not let goal-owned PR summaries claim PR outcome aliases", () => {
+    const coordinator = new CompletionSummaryCoordinator();
+    const route = {
+      provider: "telegram",
+      target: "group-fixture",
+      threadId: "13832",
+    };
+    const goalSession = {
+      id: "goal-owned-pr-session",
+      goalTaskId: "goal-pr-302",
+      route,
+    };
+    const ordinaryPrSession = {
+      id: "ordinary-pr-session",
+      route,
+    };
+
+    const goalOwnedPr = coordinator.recordVisibleDelivery(goalSession, {
+      required: true,
+      producer: "worktree-pr",
+      outcomeKey: "worktree-pr:opened:goldmar/openclaw-code-agent:#302:agent/fix-pr-update-summary-wake-missing:created",
+    });
+    const ordinaryPr = coordinator.decide(ordinaryPrSession, {
+      required: true,
+      producer: "worktree-pr",
+      outcomeKey: "worktree-pr:opened:goldmar/openclaw-code-agent:#302:agent/fix-pr-update-summary-wake-missing:created",
+    }, goalOwnedPr.records);
+
+    assert.equal(goalOwnedPr.allowed, true);
+    assert.equal(ordinaryPr.allowed, true);
+  });
+
   it("allows retry after a claimed completion summary wake fails", () => {
     const coordinator = new CompletionSummaryCoordinator();
     const session = { id: "retry-session" };

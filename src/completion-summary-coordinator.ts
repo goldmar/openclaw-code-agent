@@ -258,7 +258,9 @@ export class CompletionSummaryCoordinator {
       const visibleSessionKeys = this.buildSessionAliasKeys(deliveryRef, session, "visible-summary");
       const goalSessionKeys = this.buildSessionAliasKeys(deliveryRef, session, "goal-summary");
       const terminalLike = this.isTerminalLike(fact, outcomeKey);
-      const prOutcome = this.normalizeWorktreePrOutcome(fact.outcomeKey?.trim());
+      const prOutcome = outcomeKey.startsWith("worktree-pr:")
+        ? this.normalizeWorktreePrOutcome(fact.outcomeKey?.trim())
+        : undefined;
       const prAliasKeys = prOutcome?.aliases.map((alias) =>
         `${this.buildVisibleScope(deliveryRef, session)}:outcome:${this.digest(alias)}`
       ) ?? [];
