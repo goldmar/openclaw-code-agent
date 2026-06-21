@@ -800,23 +800,35 @@ describe("createCallbackHandler()", () => {
   });
 
   it("does not echo raw malformed Telegram callback text", async () => {
+    let lookups = 0;
+    let consumes = 0;
     setSessionManager({
-      getActionToken: () => undefined,
+      getActionToken: () => {
+        lookups++;
+        return { sessionId: "stale-session", kind: "view-output" };
+      },
+      consumeActionToken: () => {
+        consumes++;
+        return { sessionId: "stale-session", kind: "view-output" };
+      },
     } as any);
 
     const handler = createCallbackHandler();
     const state = createCtx("ignored", "telegram", {
       telegramCallback: {
         data: "code-agent:",
-        payload: "",
+        payload: "stale-payload-token",
       },
     });
     const result = await handler.handler(state.ctx as any);
 
     assert.deepEqual(result, { handled: true });
     assert.equal(state.callbacksAcknowledged, 1);
+    assert.equal(lookups, 0);
+    assert.equal(consumes, 0);
     assert.deepEqual(state.replies, ["⚠️ Unrecognized callback payload."]);
     assert.doesNotMatch(state.replies.join("\n"), /code-agent:/);
+    assert.doesNotMatch(state.replies.join("\n"), /stale-payload-token/);
   });
 
   it("resolves question-answer callbacks by session and option index", async () => {

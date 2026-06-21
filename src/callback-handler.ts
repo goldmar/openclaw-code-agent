@@ -180,7 +180,7 @@ function validatePlanDecisionToken(
 
 function getPayload(ctx: InteractiveCallbackContext): string {
   const callbackData = "callback" in ctx ? ctx.callback?.data : undefined;
-  if (typeof callbackData === "string" && isNamespacedPayload(callbackData) && parsePayload(callbackData)) {
+  if (typeof callbackData === "string" && isNamespacedPayload(callbackData)) {
     return callbackData;
   }
 
