@@ -42,6 +42,10 @@ type InteractiveResponder = {
   acknowledge?: () => Promise<void>;
 };
 
+const inFlightQuestionAnswerTokens = new Set<string>();
+const retryableQuestionAnswerFailureMessage =
+  "⚠️ Could not submit that answer. The question prompt is still active; try again or reply with the answer.";
+
 function parsePayload(payload: string): string | null {
   const tokenId = payload.trim().replace(new RegExp(`^${CALLBACK_NAMESPACE}:`), "");
   return tokenId ? tokenId : null;
@@ -176,7 +180,7 @@ function validatePlanDecisionToken(
 
 function getPayload(ctx: InteractiveCallbackContext): string {
   const callbackData = "callback" in ctx ? ctx.callback?.data : undefined;
-  if (typeof callbackData === "string" && isNamespacedPayload(callbackData) && parsePayload(callbackData)) {
+  if (typeof callbackData === "string" && isNamespacedPayload(callbackData)) {
     return callbackData;
   }
 
@@ -431,6 +435,12 @@ export function createCallbackHandler(
         return { handled: true };
       }
 
+      if (token.kind === "question-answer" && token.consumedAt != null) {
+        await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
+        await replyText(ctx, "⚠️ That question button is no longer active. Use the latest question prompt.");
+        return { handled: true };
+      }
+
       const sessionId = token.sessionId;
       const actionSession = sessionManager.resolve?.(sessionId) ?? sessionManager.getPersistedSession?.(sessionId);
       const actionSessionName = actionSession?.name ?? sessionId;
@@ -449,6 +459,60 @@ export function createCallbackHandler(
       if (invalidPlanDecision) {
         await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
         await replyText(ctx, `⚠️ ${invalidPlanDecision}`);
+        return { handled: true };
+      }
+
+      if (token.kind === "question-answer") {
+        if (token.optionIndex == null) {
+          await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
+          await replyText(ctx, `⚠️ Invalid question-answer action.`);
+          return { handled: true };
+        }
+
+        if (inFlightQuestionAnswerTokens.has(tokenId)) {
+          await replyText(ctx, "⚠️ That answer is already being submitted. If the question remains active, try again.");
+          return { handled: true };
+        }
+
+        inFlightQuestionAnswerTokens.add(tokenId);
+        let submitted = false;
+        try {
+          submitted = await sessionManager.resolvePendingInputOption(sessionId, token.optionIndex, {
+            requestId: token.pendingInputRequestId,
+            questionId: token.pendingInputQuestionId,
+          });
+        } catch (err) {
+          const errText = err instanceof Error ? err.message : String(err);
+          console.warn(`[callback-handler] Failed to submit question-answer callback: ${errText}`);
+          await replyText(ctx, retryableQuestionAnswerFailureMessage);
+          return { handled: true };
+        } finally {
+          inFlightQuestionAnswerTokens.delete(tokenId);
+        }
+
+        if (!submitted) {
+          await replyText(ctx, retryableQuestionAnswerFailureMessage);
+          return { handled: true };
+        }
+
+        const consumedToken = sessionManager.consumeActionToken(tokenId);
+        logButtonDiagnostic("callback_token_consume_completed", {
+          channel: ctx.channel,
+          namespace: CALLBACK_NAMESPACE,
+          tokenHash: hashDiagnosticToken(tokenId),
+          consumed: Boolean(consumedToken),
+          actionKind: consumedToken?.kind,
+          sessionId: consumedToken?.sessionId,
+          planDecisionVersion: consumedToken?.planDecisionVersion,
+        });
+        if (!consumedToken) {
+          await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
+          await replyText(ctx, `✅ Answer submitted.`);
+          return { handled: true };
+        }
+
+        await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
+        await replyText(ctx, `✅ Answer submitted.`);
         return { handled: true };
       }
 
@@ -716,22 +780,6 @@ export function createCallbackHandler(
           await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
           const result = await makeAgentOutputTool().execute("callback", { session: sessionId, lines: 50 });
           await replyText(ctx, toolResultText(result));
-          break;
-        }
-
-        case "question-answer": {
-          await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
-          if (token.optionIndex == null) {
-            await replyText(ctx, `⚠️ Invalid question-answer action.`);
-            break;
-          }
-          const submitted = await sessionManager.resolvePendingInputOption(sessionId, token.optionIndex, {
-            requestId: token.pendingInputRequestId,
-            questionId: token.pendingInputQuestionId,
-          });
-          await replyText(ctx, submitted
-            ? `✅ Answer submitted.`
-            : `⚠️ That question button is no longer active. Use the latest question prompt.`);
           break;
         }
 
