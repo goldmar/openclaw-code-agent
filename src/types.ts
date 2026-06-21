@@ -287,6 +287,7 @@ export interface SessionNotificationDedupeRecord {
 
 export interface SessionCompletionSummaryRecord {
   key: string;
+  linkedKeys?: string[];
   recordedAt: string;
   label?: string;
   skipReason?: string;

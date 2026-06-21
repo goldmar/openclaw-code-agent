@@ -1,9 +1,26 @@
+import { createHash } from "crypto";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   CompletionSummaryCoordinator,
   PRIOR_VISIBLE_SUMMARY_SKIP_REASON,
 } from "../src/completion-summary-coordinator";
+
+function digest(value: string): string {
+  return createHash("sha256").update(value).digest("hex").slice(0, 16);
+}
+
+function routeOutcomeKey(
+  route: { provider: string; accountId?: string; target: string; threadId?: string },
+  outcomeKey: string,
+): string {
+  return `route:${digest(JSON.stringify({
+    provider: route.provider,
+    accountId: route.accountId,
+    target: route.target,
+    threadId: route.threadId,
+  }))}:outcome:${digest(outcomeKey)}`;
+}
 
 describe("CompletionSummaryCoordinator", () => {
   it("allows one visible follow-up for goal-owned terminal, goal, and worktree facts", () => {
@@ -41,6 +58,38 @@ describe("CompletionSummaryCoordinator", () => {
     assert.equal(terminalDecision.allowed, false);
     assert.equal(worktreeDecision.allowed, false);
     assert.equal(terminalDecision.skipReason, "duplicate completion follow-up wake already handled");
+  });
+
+  it("does not let goal-owned PR summaries claim PR outcome aliases", () => {
+    const coordinator = new CompletionSummaryCoordinator();
+    const route = {
+      provider: "telegram",
+      target: "group-fixture",
+      threadId: "13832",
+    };
+    const goalSession = {
+      id: "goal-owned-pr-session",
+      goalTaskId: "goal-pr-302",
+      route,
+    };
+    const ordinaryPrSession = {
+      id: "ordinary-pr-session",
+      route,
+    };
+
+    const goalOwnedPr = coordinator.recordVisibleDelivery(goalSession, {
+      required: true,
+      producer: "worktree-pr",
+      outcomeKey: "worktree-pr:opened:goldmar/openclaw-code-agent:#302:agent/fix-pr-update-summary-wake-missing:created",
+    });
+    const ordinaryPr = coordinator.decide(ordinaryPrSession, {
+      required: true,
+      producer: "worktree-pr",
+      outcomeKey: "worktree-pr:opened:goldmar/openclaw-code-agent:#302:agent/fix-pr-update-summary-wake-missing:created",
+    }, goalOwnedPr.records);
+
+    assert.equal(goalOwnedPr.allowed, true);
+    assert.equal(ordinaryPr.allowed, true);
   });
 
   it("allows retry after a claimed completion summary wake fails", () => {
@@ -226,7 +275,7 @@ describe("CompletionSummaryCoordinator", () => {
     assert.equal(routedFollowup.skipReason, PRIOR_VISIBLE_SUMMARY_SKIP_REASON);
   });
 
-  it("normalizes opened, updated, and draft-opened PR outcomes to one follow-up identity", () => {
+  it("lets material PR updates produce a follow-up after a prior PR-open summary", () => {
     const coordinator = new CompletionSummaryCoordinator();
     const session = {
       id: "pr-185-session",
@@ -237,6 +286,130 @@ describe("CompletionSummaryCoordinator", () => {
       },
     };
 
+    const opened = coordinator.decide(session, {
+      required: true,
+      producer: "worktree-pr",
+      outcomeKey: "worktree-pr:opened:goldmar/openclaw-code-agent:#185:agent/format-launch-notification-model-separator:created",
+    });
+    coordinator.finish(opened.key, true);
+
+    const updated = coordinator.decide({ ...session, id: "pr-185-updated" }, {
+      required: true,
+      producer: "worktree-pr",
+      outcomeKey: "worktree-pr:updated:goldmar/openclaw-code-agent:#185:agent/format-launch-notification-model-separator:d10aac0",
+    });
+    coordinator.finish(updated.key, true);
+
+    const duplicateUpdate = coordinator.decide(
+      { ...session, id: "pr-185-duplicate-update" },
+      {
+        required: true,
+        producer: "worktree-pr",
+        outcomeKey: "worktree-pr:updated:goldmar/openclaw-code-agent:#185:agent/format-launch-notification-model-separator:d10aac0",
+      },
+    );
+    const draftUpdate = coordinator.decide(
+      { ...session, id: "pr-185-draft-update" },
+      {
+        required: true,
+        producer: "worktree-pr",
+        outcomeKey: "worktree-pr:draft-updated:goldmar/openclaw-code-agent:#185:agent/format-launch-notification-model-separator:ef56789",
+      },
+    );
+    const staleDraftOpened = coordinator.decide(
+      { ...session, id: "pr-185-stale-draft-opened" },
+      {
+        required: true,
+        producer: "worktree-pr",
+        outcomeKey: "worktree-pr:draft-opened:goldmar/openclaw-code-agent:#185:agent/format-launch-notification-model-separator:created",
+      },
+    );
+
+    assert.equal(opened.allowed, true);
+    assert.equal(updated.allowed, true);
+    assert.equal(duplicateUpdate.allowed, false);
+    assert.equal(draftUpdate.allowed, true);
+    assert.equal(staleDraftOpened.allowed, false);
+  });
+
+  it("honors legacy bare PR-open records without blocking material updates", () => {
+    const coordinator = new CompletionSummaryCoordinator();
+    const route = {
+      provider: "telegram",
+      target: "topic-fixture",
+      threadId: "13832",
+    };
+    const session = {
+      id: "pr-185-session",
+      route,
+    };
+    const legacyBase = "worktree-pr:goldmar/openclaw-code-agent:#185:agent/format-launch-notification-model-separator";
+    const legacyRecords = [{
+      key: routeOutcomeKey(route, legacyBase),
+      recordedAt: new Date().toISOString(),
+      label: "worktree-outcome",
+      skipReason: PRIOR_VISIBLE_SUMMARY_SKIP_REASON,
+    }];
+
+    const staleOpened = coordinator.decide(session, {
+      required: true,
+      producer: "worktree-pr",
+      outcomeKey: "worktree-pr:opened:goldmar/openclaw-code-agent:#185:agent/format-launch-notification-model-separator:created",
+    }, legacyRecords);
+    const materialUpdate = coordinator.decide({ ...session, id: "pr-185-update" }, {
+      required: true,
+      producer: "worktree-pr",
+      outcomeKey: "worktree-pr:updated:goldmar/openclaw-code-agent:#185:agent/format-launch-notification-model-separator:d10aac0",
+    }, legacyRecords);
+
+    assert.equal(staleOpened.allowed, false);
+    assert.equal(staleOpened.skipReason, PRIOR_VISIBLE_SUMMARY_SKIP_REASON);
+    assert.equal(materialUpdate.allowed, true);
+  });
+
+  it("retains PR update aliases under a tiny persisted completion ledger", () => {
+    const coordinator = new CompletionSummaryCoordinator({ maxCompletedKeys: 1 });
+    const session = {
+      id: "pr-185-session",
+      route: {
+        provider: "telegram",
+        target: "topic-fixture",
+        threadId: "13832",
+      },
+    };
+    const updateFact = {
+      required: true,
+      producer: "worktree-pr" as const,
+      outcomeKey: "worktree-pr:updated:goldmar/openclaw-code-agent:#185:agent/format-launch-notification-model-separator:d10aac0",
+    };
+
+    const updated = coordinator.recordVisibleDelivery(session, updateFact);
+    const staleOpened = new CompletionSummaryCoordinator({ maxCompletedKeys: 1 }).decide(
+      { ...session, id: "pr-185-stale-opened" },
+      {
+        required: true,
+        producer: "worktree-pr",
+        outcomeKey: "worktree-pr:opened:goldmar/openclaw-code-agent:#185:agent/format-launch-notification-model-separator:created",
+      },
+      updated.records,
+    );
+
+    assert.equal(updated.allowed, true);
+    assert.equal(updated.records?.length, 1);
+    assert.equal(staleOpened.allowed, false);
+    assert.equal(staleOpened.skipReason, PRIOR_VISIBLE_SUMMARY_SKIP_REASON);
+  });
+
+  it("retains PR update aliases under a tiny in-memory completion ledger", () => {
+    const coordinator = new CompletionSummaryCoordinator({ maxCompletedKeys: 1 });
+    const session = {
+      id: "pr-185-session",
+      route: {
+        provider: "telegram",
+        target: "topic-fixture",
+        threadId: "13832",
+      },
+    };
     const updated = coordinator.decide(session, {
       required: true,
       producer: "worktree-pr",
@@ -252,18 +425,48 @@ describe("CompletionSummaryCoordinator", () => {
         outcomeKey: "worktree-pr:opened:goldmar/openclaw-code-agent:#185:agent/format-launch-notification-model-separator:created",
       },
     );
-    const staleDraftOpened = coordinator.decide(
-      { ...session, id: "pr-185-stale-draft-opened" },
-      {
-        required: true,
-        producer: "worktree-pr",
-        outcomeKey: "worktree-pr:draft-opened:goldmar/openclaw-code-agent:#185:agent/format-launch-notification-model-separator:created",
-      },
-    );
 
     assert.equal(updated.allowed, true);
     assert.equal(staleOpened.allowed, false);
-    assert.equal(staleDraftOpened.allowed, false);
+  });
+
+  it("allows resumed auto-pr update summaries after persisted PR-open completion records", () => {
+    const coordinator = new CompletionSummaryCoordinator();
+    const session = {
+      id: "k7rM7W1J",
+      name: "rebase-pr-301-docs-refresh",
+      harnessSessionId: "019ee845-e811-7a60-9631-3429c022d138",
+      route: {
+        provider: "telegram",
+        accountId: "default",
+        target: "-1003863755361",
+        threadId: "13832",
+        sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+      },
+    };
+    const opened = coordinator.decide(session, {
+      required: true,
+      producer: "worktree-pr",
+      outcomeKey: "worktree-pr:opened:goldmar/openclaw-code-agent:#301:agent/plan-oca-v2026-6-9-compat:created",
+    });
+    const persistedRecords = coordinator.completionRecordsAfterDelivery(
+      opened.key,
+      undefined,
+      "worktree-outcome",
+    );
+
+    const updated = new CompletionSummaryCoordinator().decide(
+      session,
+      {
+        required: true,
+        producer: "worktree-pr",
+        outcomeKey: "worktree-pr:updated:goldmar/openclaw-code-agent:#301:agent/plan-oca-v2026-6-9-compat:abc1234",
+      },
+      persistedRecords,
+    );
+
+    assert.equal(opened.allowed, true);
+    assert.equal(updated.allowed, true);
   });
 
   it("keeps normalized PR follow-up identities independent by route", () => {
@@ -472,6 +675,8 @@ describe("CompletionSummaryCoordinator", () => {
 
     const visibleClaim = coordinator.recordVisibleDelivery(session, fact);
     assert.ok(visibleClaim.records?.length);
+    const primaryRecord = visibleClaim.records.find((record) => record.key === visibleClaim.key);
+    assert.ok(primaryRecord);
 
     const duplicate = new CompletionSummaryCoordinator({ maxCompletedKeys: 2 }).decide(
       { ...session, id: "raw-persisted-record-session-duplicate" },
@@ -479,7 +684,7 @@ describe("CompletionSummaryCoordinator", () => {
       [
         { key: "", recordedAt: new Date().toISOString() },
         { key: "invalid-date-key", recordedAt: "not-a-date" },
-        visibleClaim.records[0],
+        primaryRecord,
       ],
     );
 

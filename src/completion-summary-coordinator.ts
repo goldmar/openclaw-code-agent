@@ -54,6 +54,7 @@ export interface CompletionSummaryDecision {
 
 interface CompletedSummaryRecord {
   skipReason: string;
+  linkedKeys?: string[];
 }
 
 interface CompletionSummaryKeySet {
@@ -61,6 +62,12 @@ interface CompletionSummaryKeySet {
   explicit: boolean;
   claimKeys: string[];
   decisionKeys: string[];
+}
+
+interface NormalizedWorktreePrOutcome {
+  primary: string;
+  aliases: string[];
+  blocksAliases: boolean;
 }
 
 export interface CompletionSummaryCoordinatorOptions {
@@ -100,11 +107,11 @@ export class CompletionSummaryCoordinator {
     }
 
     const normalizedRecords = this.normalizeRecords(persistedRecords);
-    const persistedKeys = new Map(normalizedRecords.map((record) => [record.key, record]));
+    const persistedKeys = this.buildPersistedKeyMap(normalizedRecords);
     const blockingKey = keys.decisionKeys.find((candidate) =>
-      this.inFlight.has(candidate) || this.completed.has(candidate) || persistedKeys.has(candidate)
+      this.inFlight.has(candidate) || Boolean(this.getCompletedRecord(candidate)) || persistedKeys.has(candidate)
     );
-    const completedRecord = blockingKey ? this.completed.get(blockingKey) : undefined;
+    const completedRecord = blockingKey ? this.getCompletedRecord(blockingKey) : undefined;
     const persistedRecord = blockingKey ? persistedKeys.get(blockingKey) : undefined;
     if (blockingKey) {
       return {
@@ -141,9 +148,9 @@ export class CompletionSummaryCoordinator {
     }
 
     const normalizedRecords = this.normalizeRecords(persistedRecords);
-    const persistedKeys = new Map(normalizedRecords.map((record) => [record.key, record]));
-    const completedKey = keys.decisionKeys.find((candidate) => this.completed.has(candidate) || persistedKeys.has(candidate));
-    const completedRecord = completedKey ? this.completed.get(completedKey) : undefined;
+    const persistedKeys = this.buildPersistedKeyMap(normalizedRecords);
+    const completedKey = keys.decisionKeys.find((candidate) => Boolean(this.getCompletedRecord(candidate)) || persistedKeys.has(candidate));
+    const completedRecord = completedKey ? this.getCompletedRecord(completedKey) : undefined;
     const persistedRecord = completedKey ? persistedKeys.get(completedKey) : undefined;
     if (completedRecord || persistedRecord) {
       return {
@@ -228,7 +235,10 @@ export class CompletionSummaryCoordinator {
       }
 
       this.completed.delete(key);
-      this.completed.set(key, { skipReason });
+      this.completed.set(key, {
+        skipReason,
+        linkedKeys: keys.filter((candidate) => candidate !== key),
+      });
     }
 
     while (this.completed.size > this.maxCompletedKeys) {
@@ -252,16 +262,24 @@ export class CompletionSummaryCoordinator {
       const visibleSessionKeys = this.buildSessionAliasKeys(deliveryRef, session, "visible-summary");
       const goalSessionKeys = this.buildSessionAliasKeys(deliveryRef, session, "goal-summary");
       const terminalLike = this.isTerminalLike(fact, outcomeKey);
+      const prOutcome = outcomeKey.startsWith("worktree-pr:")
+        ? this.normalizeWorktreePrOutcome(fact.outcomeKey?.trim())
+        : undefined;
+      const prAliasKeys = prOutcome?.aliases.map((alias) =>
+        `${this.buildVisibleScope(deliveryRef, session)}:outcome:${this.digest(alias)}`
+      ) ?? [];
       return {
         primary,
         explicit: true,
         claimKeys: [
-          primary,
           ...visibleSessionKeys,
           ...(goalLike ? goalSessionKeys : []),
+          ...prAliasKeys,
+          primary,
         ],
         decisionKeys: [
           primary,
+          ...(prOutcome?.blocksAliases ? prAliasKeys : []),
           ...(goalLike || terminalLike ? visibleSessionKeys : []),
           ...goalSessionKeys,
         ],
@@ -297,12 +315,12 @@ export class CompletionSummaryCoordinator {
   ): string | undefined {
     const goalTaskId = session.goalTaskId?.trim();
     if (goalTaskId) return `goal:${goalTaskId}`;
-    const prOutcomeKey = this.normalizeWorktreePrOutcomeKey(outcomeKey);
-    if (prOutcomeKey) return prOutcomeKey;
+    const prOutcome = this.normalizeWorktreePrOutcome(outcomeKey);
+    if (prOutcome) return prOutcome.primary;
     return outcomeKey;
   }
 
-  private normalizeWorktreePrOutcomeKey(outcomeKey: string | undefined): string | undefined {
+  private normalizeWorktreePrOutcome(outcomeKey: string | undefined): NormalizedWorktreePrOutcome | undefined {
     if (!outcomeKey) return undefined;
     const parts = outcomeKey.split(":");
     if (parts[0] !== "worktree-pr" || parts.length < 5) return undefined;
@@ -317,7 +335,25 @@ export class CompletionSummaryCoordinator {
     const branch = parts[4]?.trim();
     if (!prIdentity || !branch) return undefined;
 
-    return ["worktree-pr", repo.toLowerCase(), prIdentity, branch].join(":");
+    const base = ["worktree-pr", repo.toLowerCase(), prIdentity, branch].join(":");
+    const createdAlias = `${base}:created`;
+    if (action.endsWith("updated")) {
+      const materialChange = parts.slice(5).join(":").trim();
+      const primary = materialChange
+        ? `${base}:updated:${materialChange}`
+        : `${base}:updated`;
+      return {
+        primary,
+        aliases: [createdAlias, base],
+        blocksAliases: false,
+      };
+    }
+
+    return {
+      primary: createdAlias,
+      aliases: [base],
+      blocksAliases: true,
+    };
   }
 
   private normalizePrIdentity(value: string): string | undefined {
@@ -378,6 +414,28 @@ export class CompletionSummaryCoordinator {
       .slice(-this.maxCompletedKeys);
   }
 
+  private buildPersistedKeyMap(
+    records: SessionCompletionSummaryRecord[],
+  ): Map<string, SessionCompletionSummaryRecord> {
+    const persistedKeys = new Map<string, SessionCompletionSummaryRecord>();
+    for (const record of records) {
+      persistedKeys.set(record.key, record);
+      for (const linkedKey of record.linkedKeys ?? []) {
+        if (linkedKey.trim()) persistedKeys.set(linkedKey, record);
+      }
+    }
+    return persistedKeys;
+  }
+
+  private getCompletedRecord(key: string): CompletedSummaryRecord | undefined {
+    const direct = this.completed.get(key);
+    if (direct) return direct;
+    for (const record of this.completed.values()) {
+      if (record.linkedKeys?.includes(key)) return record;
+    }
+    return undefined;
+  }
+
   private deliveredRecords(
     keys: string[],
     persistedRecords: SessionCompletionSummaryRecord[] | undefined,
@@ -386,15 +444,22 @@ export class CompletionSummaryCoordinator {
   ): SessionCompletionSummaryRecord[] {
     const now = new Date().toISOString();
     const normalizedRecords = this.normalizeRecords(persistedRecords);
-    const withoutKeys = normalizedRecords.filter((record) => !keys.includes(record.key));
+    const keySet = new Set(keys);
+    const withoutKeys = normalizedRecords.filter((record) =>
+      !keySet.has(record.key) && !(record.linkedKeys ?? []).some((linkedKey) => keySet.has(linkedKey))
+    );
     const nextRecords = [
       ...withoutKeys,
-      ...keys.map((key) => ({
-        key,
-        recordedAt: now,
-        label,
-        skipReason,
-      })),
+      ...keys.map((key) => {
+        const linkedKeys = keys.filter((candidate) => candidate !== key);
+        return {
+          key,
+          linkedKeys: linkedKeys.length > 0 ? linkedKeys : undefined,
+          recordedAt: now,
+          label,
+          skipReason,
+        };
+      }),
     ];
     return nextRecords.slice(Math.max(0, nextRecords.length - this.maxCompletedKeys));
   }

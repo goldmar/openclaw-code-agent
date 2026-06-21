@@ -1666,6 +1666,125 @@ describe("SessionNotificationService", () => {
     assert.match(requests[0]?.wakeMessageOnNotifySuccess as string, /PR #185/);
   });
 
+  it("dispatches a PR-updated completion wake after a resumed auto-pr session with a prior PR-open summary", () => {
+    const persisted = { completionSummaryDedupe: undefined, notificationDedupe: undefined } as any;
+    const requests: Array<Record<string, unknown>> = [];
+    const fakeDispatcher = {
+      dispatchSessionNotification: (_session: unknown, request: Record<string, unknown> & { hooks?: Record<string, () => void> }) => {
+        requests.push(request);
+        request.hooks?.onNotifyStarted?.();
+        request.hooks?.onNotifySucceeded?.();
+        if (request.wakeMessage || request.wakeMessageOnNotifySuccess || request.wakeMessageOnNotifyFailed) {
+          request.hooks?.onWakeStarted?.();
+          request.hooks?.onWakeSucceeded?.();
+        }
+      },
+      dispose: () => {},
+    };
+    const route = {
+      provider: "telegram",
+      accountId: "default",
+      target: "-1003863755361",
+      threadId: "13832",
+      sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+    };
+    const session = {
+      id: "k7rM7W1J",
+      harnessSessionId: "019ee845-e811-7a60-9631-3429c022d138",
+      name: "rebase-pr-301-docs-refresh",
+      route,
+    } as any;
+    const createService = () => new SessionNotificationService(
+      fakeDispatcher as any,
+      (_ref, patch) => Object.assign(persisted, patch),
+      { getPersistedSession: () => persisted },
+    );
+
+    createService().notifyWorktreeOutcome(
+      session,
+      "✅ PR opened: https://github.com/goldmar/openclaw-code-agent/pull/301",
+      {
+        completionWakeOutcomeKey: "worktree-pr:opened:goldmar/openclaw-code-agent:#301:agent/plan-oca-v2026-6-9-compat:created",
+        detailLines: [
+          "Opened PR for branch agent/plan-oca-v2026-6-9-compat into main.",
+          "PR number: #301.",
+        ],
+      },
+    );
+    createService().notifyWorktreeOutcome(
+      session,
+      "✅ PR updated: https://github.com/goldmar/openclaw-code-agent/pull/301",
+      {
+        completionWakeOutcomeKey: "worktree-pr:updated:goldmar/openclaw-code-agent:#301:agent/plan-oca-v2026-6-9-compat:def5678",
+        detailLines: [
+          "Updated PR for branch agent/plan-oca-v2026-6-9-compat into main.",
+          "PR number: #301.",
+          "Pushed 1 new commit (+12/-4).",
+        ],
+      },
+    );
+
+    assert.equal(requests.length, 2);
+    assert.equal(requests[0]?.completionWakeSummaryRequired, true);
+    assert.equal(requests[1]?.completionWakeSummaryRequired, true);
+    assert.equal(typeof requests[1]?.wakeMessageOnNotifySuccess, "string");
+    assert.match(requests[1]?.wakeMessageOnNotifySuccess as string, /agent_output\(session='k7rM7W1J', full=true\)/);
+    assert.ok(persisted.completionSummaryDedupe?.length > 0);
+  });
+
+  it("dispatches a draft PR-updated completion wake after a prior PR-open summary", () => {
+    const persisted = { completionSummaryDedupe: undefined, notificationDedupe: undefined } as any;
+    const requests: Array<Record<string, unknown>> = [];
+    const fakeDispatcher = {
+      dispatchSessionNotification: (_session: unknown, request: Record<string, unknown> & { hooks?: Record<string, () => void> }) => {
+        requests.push(request);
+        request.hooks?.onNotifyStarted?.();
+        request.hooks?.onNotifySucceeded?.();
+        if (request.wakeMessage || request.wakeMessageOnNotifySuccess || request.wakeMessageOnNotifyFailed) {
+          request.hooks?.onWakeStarted?.();
+          request.hooks?.onWakeSucceeded?.();
+        }
+      },
+      dispose: () => {},
+    };
+    const session = {
+      id: "draft-pr-update-session",
+      harnessSessionId: "h-draft-pr-update-session",
+      route: {
+        provider: "telegram",
+        target: "-100123",
+        threadId: "13832",
+      },
+    } as any;
+    const createService = () => new SessionNotificationService(
+      fakeDispatcher as any,
+      (_ref, patch) => Object.assign(persisted, patch),
+      { getPersistedSession: () => persisted },
+    );
+
+    createService().notifyWorktreeOutcome(
+      session,
+      "✅ PR opened: https://github.example.test/repo/pull/203",
+      {
+        completionWakeOutcomeKey: "worktree-pr:draft-opened:goldmar/openclaw-code-agent:#203:agent/example:created",
+        detailLines: ["PR number: #203."],
+      },
+    );
+    createService().notifyWorktreeOutcome(
+      session,
+      "✅ PR updated: https://github.example.test/repo/pull/203",
+      {
+        completionWakeOutcomeKey: "worktree-pr:draft-updated:goldmar/openclaw-code-agent:#203:agent/example:def5678",
+        detailLines: ["PR number: #203.", "Pushed 1 new commit (+3/-0)."],
+      },
+    );
+
+    assert.equal(requests.length, 2);
+    assert.equal(requests[0]?.completionWakeSummaryRequired, true);
+    assert.equal(requests[1]?.completionWakeSummaryRequired, true);
+    assert.equal(typeof requests[1]?.wakeMessageOnNotifySuccess, "string");
+  });
+
   it("deduplicates PR follow-through summaries independently in the reported Telegram topics", () => {
     const requests: Array<Record<string, unknown>> = [];
     let wakeAttempts = 0;
@@ -2226,7 +2345,7 @@ describe("SessionNotificationService", () => {
     }
   });
 
-  it("keeps repeated PR update statuses visible while stripping duplicate follow-up summaries", () => {
+  it("keeps material PR update statuses visible with their own follow-up summaries", () => {
     const requests: Array<Record<string, unknown>> = [];
     const fakeDispatcher = {
       dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, (reason?: string) => void> }) => {
@@ -2273,10 +2392,10 @@ describe("SessionNotificationService", () => {
     assert.equal(requests.length, 2);
     assert.deepEqual(
       requests.map((request) => request.completionWakeSummaryRequired),
-      [true, false],
+      [true, true],
     );
     assert.equal(typeof requests[0]?.wakeMessageOnNotifySuccess, "string");
-    assert.equal(requests[1]?.wakeMessageOnNotifySuccess, undefined);
+    assert.equal(typeof requests[1]?.wakeMessageOnNotifySuccess, "string");
   });
 
   it("bounds completed completion wake keys while retaining recent duplicate suppression", () => {
