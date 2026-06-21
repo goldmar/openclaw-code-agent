@@ -331,7 +331,7 @@ export class CompletionSummaryCoordinator {
 
     const base = ["worktree-pr", repo.toLowerCase(), prIdentity, branch].join(":");
     const createdAlias = `${base}:created`;
-    if (action === "updated") {
+    if (action.endsWith("updated")) {
       const materialChange = parts.slice(5).join(":").trim();
       const primary = materialChange
         ? `${base}:updated:${materialChange}`

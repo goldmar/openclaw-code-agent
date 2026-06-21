@@ -259,6 +259,14 @@ describe("CompletionSummaryCoordinator", () => {
         outcomeKey: "worktree-pr:updated:goldmar/openclaw-code-agent:#185:agent/format-launch-notification-model-separator:d10aac0",
       },
     );
+    const draftUpdate = coordinator.decide(
+      { ...session, id: "pr-185-draft-update" },
+      {
+        required: true,
+        producer: "worktree-pr",
+        outcomeKey: "worktree-pr:draft-updated:goldmar/openclaw-code-agent:#185:agent/format-launch-notification-model-separator:ef56789",
+      },
+    );
     const staleDraftOpened = coordinator.decide(
       { ...session, id: "pr-185-stale-draft-opened" },
       {
@@ -271,6 +279,7 @@ describe("CompletionSummaryCoordinator", () => {
     assert.equal(opened.allowed, true);
     assert.equal(updated.allowed, true);
     assert.equal(duplicateUpdate.allowed, false);
+    assert.equal(draftUpdate.allowed, true);
     assert.equal(staleDraftOpened.allowed, false);
   });
 

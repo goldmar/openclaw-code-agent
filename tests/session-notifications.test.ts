@@ -1732,6 +1732,59 @@ describe("SessionNotificationService", () => {
     assert.ok(persisted.completionSummaryDedupe?.length > 0);
   });
 
+  it("dispatches a draft PR-updated completion wake after a prior PR-open summary", () => {
+    const persisted = { completionSummaryDedupe: undefined, notificationDedupe: undefined } as any;
+    const requests: Array<Record<string, unknown>> = [];
+    const fakeDispatcher = {
+      dispatchSessionNotification: (_session: unknown, request: Record<string, unknown> & { hooks?: Record<string, () => void> }) => {
+        requests.push(request);
+        request.hooks?.onNotifyStarted?.();
+        request.hooks?.onNotifySucceeded?.();
+        if (request.wakeMessage || request.wakeMessageOnNotifySuccess || request.wakeMessageOnNotifyFailed) {
+          request.hooks?.onWakeStarted?.();
+          request.hooks?.onWakeSucceeded?.();
+        }
+      },
+      dispose: () => {},
+    };
+    const session = {
+      id: "draft-pr-update-session",
+      harnessSessionId: "h-draft-pr-update-session",
+      route: {
+        provider: "telegram",
+        target: "-100123",
+        threadId: "13832",
+      },
+    } as any;
+    const createService = () => new SessionNotificationService(
+      fakeDispatcher as any,
+      (_ref, patch) => Object.assign(persisted, patch),
+      { getPersistedSession: () => persisted },
+    );
+
+    createService().notifyWorktreeOutcome(
+      session,
+      "✅ PR opened: https://github.example.test/repo/pull/203",
+      {
+        completionWakeOutcomeKey: "worktree-pr:draft-opened:goldmar/openclaw-code-agent:#203:agent/example:created",
+        detailLines: ["PR number: #203."],
+      },
+    );
+    createService().notifyWorktreeOutcome(
+      session,
+      "✅ PR updated: https://github.example.test/repo/pull/203",
+      {
+        completionWakeOutcomeKey: "worktree-pr:draft-updated:goldmar/openclaw-code-agent:#203:agent/example:def5678",
+        detailLines: ["PR number: #203.", "Pushed 1 new commit (+3/-0)."],
+      },
+    );
+
+    assert.equal(requests.length, 2);
+    assert.equal(requests[0]?.completionWakeSummaryRequired, true);
+    assert.equal(requests[1]?.completionWakeSummaryRequired, true);
+    assert.equal(typeof requests[1]?.wakeMessageOnNotifySuccess, "string");
+  });
+
   it("deduplicates PR follow-through summaries independently in the reported Telegram topics", () => {
     const requests: Array<Record<string, unknown>> = [];
     let wakeAttempts = 0;
