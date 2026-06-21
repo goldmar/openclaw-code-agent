@@ -1470,6 +1470,135 @@ describe("createCallbackHandler()", () => {
     assert.doesNotMatch(state.replies.join("\n"), /code-agent:2d1bab1c/);
   });
 
+  it("prefers native Telegram callback_data for Start Plan when payload is not the action token", async () => {
+    const rawCallback = "code-agent:2d1bab1c-ce69-4bdb-ae5c-782504ec686e";
+    const launches: Array<Record<string, unknown>> = [];
+    const lookups: string[] = [];
+    setSessionManager({
+      getActionToken: (tokenId: string) => {
+        lookups.push(tokenId);
+        if (tokenId !== "2d1bab1c-ce69-4bdb-ae5c-782504ec686e") return undefined;
+        return {
+          sessionId: "plugin-readiness-v2026.6.9",
+          kind: "plan-offer-start",
+          route: {
+            provider: "telegram",
+            accountId: "default",
+            target: TELEGRAM_FORUM_TARGET,
+            threadId: TELEGRAM_FORUM_THREAD_ID,
+            sessionKey: TELEGRAM_FORUM_SESSION_KEY,
+          },
+          launchName: "plugin-readiness-v2026.6.9",
+          launchPrompt: "Plan the required follow-up.",
+          launchWorkdir: "/home/openclaw/workspace/openclaw-code-agent",
+          launchWorktreeStrategy: "auto-pr",
+        };
+      },
+      consumeActionToken: (tokenId: string) => {
+        assert.equal(tokenId, "2d1bab1c-ce69-4bdb-ae5c-782504ec686e");
+        return {
+          sessionId: "plugin-readiness-v2026.6.9",
+          kind: "plan-offer-start",
+          route: {
+            provider: "telegram",
+            accountId: "default",
+            target: TELEGRAM_FORUM_TARGET,
+            threadId: TELEGRAM_FORUM_THREAD_ID,
+            sessionKey: TELEGRAM_FORUM_SESSION_KEY,
+          },
+          launchName: "plugin-readiness-v2026.6.9",
+          launchPrompt: "Plan the required follow-up.",
+          launchWorkdir: "/home/openclaw/workspace/openclaw-code-agent",
+          launchWorktreeStrategy: "auto-pr",
+        };
+      },
+      launchPlanOffer: (args: Record<string, unknown>) => {
+        launches.push(args);
+        return { id: "sess-plan-669", name: "plugin-readiness-v2026.6.9" };
+      },
+    } as any);
+
+    const handler = createCallbackHandler();
+    const state = createCtx("ignored", "telegram", {
+      telegramCallback: {
+        data: rawCallback,
+        payload: "Start Plan",
+      },
+    });
+    const result = await handler.handler(state.ctx as any);
+
+    assert.deepEqual(result, { handled: true });
+    assert.deepEqual(lookups, ["2d1bab1c-ce69-4bdb-ae5c-782504ec686e"]);
+    assert.equal(state.buttonMarkupEdits, 1);
+    assert.equal(state.buttonsCleared, 1);
+    assert.equal((launches[0]?.route as { threadId?: string })?.threadId, TELEGRAM_FORUM_THREAD_ID);
+    assert.equal((launches[0]?.route as { sessionKey?: string })?.sessionKey, TELEGRAM_FORUM_SESSION_KEY);
+    assert.equal(launches[0]?.worktreeStrategy, "auto-pr");
+    assert.match(state.replies[0], /Planning session started: plugin-readiness-v2026\.6\.9 \[sess-plan-669\]/);
+    assert.doesNotMatch(state.replies.join("\n"), /code-agent:2d1bab1c/);
+  });
+
+  it("keeps using Telegram payload tokens when callback data is a non-namespaced label", async () => {
+    const launches: Array<Record<string, unknown>> = [];
+    const lookups: string[] = [];
+    setSessionManager({
+      getActionToken: (tokenId: string) => {
+        lookups.push(tokenId);
+        return {
+          sessionId: "plugin-readiness-v2026.6.9",
+          kind: "plan-offer-start",
+          route: {
+            provider: "telegram",
+            accountId: "default",
+            target: TELEGRAM_FORUM_TARGET,
+            threadId: TELEGRAM_FORUM_THREAD_ID,
+            sessionKey: TELEGRAM_FORUM_SESSION_KEY,
+          },
+          launchName: "plugin-readiness-v2026.6.9",
+          launchPrompt: "Plan the required follow-up.",
+          launchWorkdir: "/home/openclaw/workspace/openclaw-code-agent",
+          launchWorktreeStrategy: "auto-pr",
+        };
+      },
+      consumeActionToken: (tokenId: string) => {
+        assert.equal(tokenId, "payload-token");
+        return {
+          sessionId: "plugin-readiness-v2026.6.9",
+          kind: "plan-offer-start",
+          route: {
+            provider: "telegram",
+            accountId: "default",
+            target: TELEGRAM_FORUM_TARGET,
+            threadId: TELEGRAM_FORUM_THREAD_ID,
+            sessionKey: TELEGRAM_FORUM_SESSION_KEY,
+          },
+          launchName: "plugin-readiness-v2026.6.9",
+          launchPrompt: "Plan the required follow-up.",
+          launchWorkdir: "/home/openclaw/workspace/openclaw-code-agent",
+          launchWorktreeStrategy: "auto-pr",
+        };
+      },
+      launchPlanOffer: (args: Record<string, unknown>) => {
+        launches.push(args);
+        return { id: "sess-plan-payload", name: "plugin-readiness-v2026.6.9" };
+      },
+    } as any);
+
+    const handler = createCallbackHandler();
+    const state = createCtx("ignored", "telegram", {
+      telegramCallback: {
+        data: "Start Plan",
+        payload: "payload-token",
+      },
+    });
+    const result = await handler.handler(state.ctx as any);
+
+    assert.deepEqual(result, { handled: true });
+    assert.deepEqual(lookups, ["payload-token"]);
+    assert.equal(launches.length, 1);
+    assert.match(state.replies[0], /Planning session started: plugin-readiness-v2026\.6\.9 \[sess-plan-payload\]/);
+  });
+
   it("consumes Telegram forum-topic Dismiss callbacks without launching a plan", async () => {
     let consumed = 0;
     let launchCount = 0;

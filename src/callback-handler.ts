@@ -47,6 +47,10 @@ function parsePayload(payload: string): string | null {
   return tokenId ? tokenId : null;
 }
 
+function isNamespacedPayload(payload: string): boolean {
+  return payload.trim().startsWith(`${CALLBACK_NAMESPACE}:`);
+}
+
 async function clearWorktreeDecisionButtons(
   ctx: InteractiveCallbackContext,
   alreadyAcknowledged = false,
@@ -171,11 +175,22 @@ function validatePlanDecisionToken(
 }
 
 function getPayload(ctx: InteractiveCallbackContext): string {
-  const callbackPayload = "callback" in ctx
-    ? (ctx.callback?.payload ?? ctx.callback?.data)
-    : undefined;
+  const callbackData = "callback" in ctx ? ctx.callback?.data : undefined;
+  if (typeof callbackData === "string" && isNamespacedPayload(callbackData) && parsePayload(callbackData)) {
+    return callbackData;
+  }
+
+  const callbackPayload = "callback" in ctx ? ctx.callback?.payload : undefined;
+  if (typeof callbackPayload === "string" && callbackPayload.trim().length > 0) {
+    return callbackPayload;
+  }
+
   const interactionPayload = "interaction" in ctx ? ctx.interaction?.payload : undefined;
-  return callbackPayload ?? interactionPayload ?? "";
+  if (typeof interactionPayload === "string" && interactionPayload.trim().length > 0) {
+    return interactionPayload;
+  }
+
+  return callbackData ?? "";
 }
 
 function isMessageNotModifiedError(err: unknown): boolean {
