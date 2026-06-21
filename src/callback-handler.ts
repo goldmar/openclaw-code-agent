@@ -45,6 +45,30 @@ type InteractiveResponder = {
 const inFlightQuestionAnswerTokens = new Set<string>();
 const retryableQuestionAnswerFailureMessage =
   "⚠️ Could not submit that answer. The question prompt is still active; try again or reply with the answer.";
+const planDecisionInFlight = new Map<string, Promise<unknown>>();
+
+async function withPlanDecisionLock<T>(
+  key: string | undefined,
+  action: () => Promise<T> | T,
+): Promise<T> {
+  if (!key) return action();
+
+  while (true) {
+    const inFlight = planDecisionInFlight.get(key);
+    if (!inFlight) break;
+    await inFlight;
+  }
+
+  const operation = Promise.resolve().then(action);
+  planDecisionInFlight.set(key, operation);
+  try {
+    return await operation;
+  } finally {
+    if (planDecisionInFlight.get(key) === operation) {
+      planDecisionInFlight.delete(key);
+    }
+  }
+}
 
 function parsePayload(payload: string): string | null {
   const tokenId = payload.trim().replace(new RegExp(`^${CALLBACK_NAMESPACE}:`), "");
@@ -125,6 +149,16 @@ function isPlanDecisionAction(kind: SessionActionKind): boolean {
   return kind === "plan-approve" || kind === "plan-request-changes" || kind === "plan-reject";
 }
 
+function planDecisionLockKey(token: SessionActionToken): string | undefined {
+  if (!isPlanDecisionAction(token.kind)) return undefined;
+  return `${token.sessionId}:v${token.planDecisionVersion ?? "unknown"}`;
+}
+
+function planApprovalWasApplied(session: PlanDecisionTarget | undefined): boolean {
+  if (!session) return false;
+  return session.approvalState === "approved" || !session.pendingPlanApproval;
+}
+
 function latestDefinedVersion(...versions: Array<number | undefined>): number | undefined {
   let latest: number | undefined;
   for (const version of versions) {
@@ -178,23 +212,58 @@ function validatePlanDecisionToken(
   return undefined;
 }
 
+function firstMatchingString(predicate: (value: string) => boolean, ...values: unknown[]): string | undefined {
+  return values.find((value): value is string => typeof value === "string" && predicate(value));
+}
+
+function firstNonBlankString(...values: unknown[]): string | undefined {
+  return firstMatchingString((value) => value.trim().length > 0, ...values);
+}
+
+function firstNamespacedString(...values: unknown[]): string | undefined {
+  return firstMatchingString(isNamespacedPayload, ...values);
+}
+
 function getPayload(ctx: InteractiveCallbackContext): string {
-  const callbackData = "callback" in ctx ? ctx.callback?.data : undefined;
-  if (typeof callbackData === "string" && isNamespacedPayload(callbackData)) {
-    return callbackData;
-  }
+  const callbackNativePayload = "callback" in ctx
+    ? firstNamespacedString(
+        ctx.callback?.data,
+        ctx.callback?.callback_data,
+        (ctx.callback as { callbackData?: unknown } | undefined)?.callbackData,
+      )
+    : undefined;
+  if (callbackNativePayload) return callbackNativePayload;
 
-  const callbackPayload = "callback" in ctx ? ctx.callback?.payload : undefined;
-  if (typeof callbackPayload === "string" && callbackPayload.trim().length > 0) {
-    return callbackPayload;
-  }
+  const interaction = "interaction" in ctx
+    ? ctx.interaction as { payload?: unknown; data?: unknown; callback_data?: unknown; callbackData?: unknown } | undefined
+    : undefined;
+  const interactionNativePayload = firstNamespacedString(
+    interaction?.data,
+    interaction?.callback_data,
+    interaction?.callbackData,
+  );
+  if (interactionNativePayload) return interactionNativePayload;
 
-  const interactionPayload = "interaction" in ctx ? ctx.interaction?.payload : undefined;
-  if (typeof interactionPayload === "string" && interactionPayload.trim().length > 0) {
-    return interactionPayload;
-  }
+  const callbackPayload = "callback" in ctx
+    ? firstNonBlankString(ctx.callback?.payload)
+    : undefined;
+  if (callbackPayload) return callbackPayload;
 
-  return callbackData ?? "";
+  const interactionPayload = firstNonBlankString(interaction?.payload);
+  if (interactionPayload) return interactionPayload;
+
+  const callbackNativeFallback = "callback" in ctx
+    ? firstNonBlankString(
+        ctx.callback?.data,
+        ctx.callback?.callback_data,
+        (ctx.callback as { callbackData?: unknown } | undefined)?.callbackData,
+      )
+    : undefined;
+  return callbackNativeFallback ?? firstNonBlankString(
+    interaction?.data,
+    interaction?.callback_data,
+    interaction?.callbackData,
+  ) ?? "";
 }
 
 function isMessageNotModifiedError(err: unknown): boolean {
@@ -417,7 +486,7 @@ export function createCallbackHandler(
         return { handled: true };
       }
 
-      const token = sessionManager.getActionToken(tokenId);
+      let token = sessionManager.getActionToken(tokenId);
       logButtonDiagnostic("callback_token_lookup_completed", {
         channel: ctx.channel,
         namespace: CALLBACK_NAMESPACE,
@@ -441,10 +510,10 @@ export function createCallbackHandler(
         return { handled: true };
       }
 
-      const sessionId = token.sessionId;
-      const actionSession = sessionManager.resolve?.(sessionId) ?? sessionManager.getPersistedSession?.(sessionId);
-      const actionSessionName = actionSession?.name ?? sessionId;
-      const invalidPlanDecision = validatePlanDecisionToken(token, actionSession);
+      let sessionId = token.sessionId;
+      let actionSession = sessionManager.resolve?.(sessionId) ?? sessionManager.getPersistedSession?.(sessionId);
+      let actionSessionName = actionSession?.name ?? sessionId;
+      let invalidPlanDecision = validatePlanDecisionToken(token, actionSession);
       logButtonDiagnostic("callback_plan_validation_completed", {
         channel: ctx.channel,
         namespace: CALLBACK_NAMESPACE,
@@ -514,6 +583,154 @@ export function createCallbackHandler(
         await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
         await replyText(ctx, `✅ Answer submitted.`);
         return { handled: true };
+      }
+
+      const decisionLockKey = planDecisionLockKey(token);
+      if (decisionLockKey) {
+        while (true) {
+          const inFlight = planDecisionInFlight.get(decisionLockKey);
+          if (!inFlight) break;
+
+          await inFlight;
+          const latestToken = sessionManager.getActionToken(tokenId);
+          if (!latestToken) {
+            await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
+            if (ctx.channel !== "telegram") {
+              await replyText(ctx, "⚠️ This action is stale or has already been used.");
+            }
+            return { handled: true };
+          }
+
+          sessionId = latestToken.sessionId;
+          actionSession = sessionManager.resolve?.(sessionId) ?? sessionManager.getPersistedSession?.(sessionId);
+          actionSessionName = actionSession?.name ?? sessionId;
+          invalidPlanDecision = validatePlanDecisionToken(latestToken, actionSession);
+          logButtonDiagnostic("callback_plan_validation_completed", {
+            channel: ctx.channel,
+            namespace: CALLBACK_NAMESPACE,
+            tokenHash: hashDiagnosticToken(tokenId),
+            actionKind: latestToken.kind,
+            sessionId,
+            sessionName: actionSessionName,
+            planDecisionVersion: latestToken.planDecisionVersion,
+            valid: !invalidPlanDecision,
+            afterPlanDecisionLock: true,
+          });
+
+          if (invalidPlanDecision) {
+            await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
+            await replyText(ctx, `⚠️ ${invalidPlanDecision}`);
+            return { handled: true };
+          }
+
+          token = latestToken;
+        }
+      }
+
+      if (token.kind === "plan-approve") {
+        const planToken = token;
+        const result = await withPlanDecisionLock(decisionLockKey, () => executeRespond(sessionManager, {
+          session: planToken.sessionId,
+          message: "Approved. Go ahead.",
+          approve: true,
+          userInitiated: true,
+        }));
+        if (result.isError) {
+          const latestSession = sessionManager.resolve?.(planToken.sessionId)
+            ?? sessionManager.getPersistedSession?.(planToken.sessionId);
+          if (planApprovalWasApplied(latestSession)) {
+            const consumedToken = sessionManager.consumeActionToken(tokenId);
+            logButtonDiagnostic("callback_token_consume_completed", {
+              channel: ctx.channel,
+              namespace: CALLBACK_NAMESPACE,
+              tokenHash: hashDiagnosticToken(tokenId),
+              consumed: Boolean(consumedToken),
+              actionKind: consumedToken?.kind,
+              sessionId: consumedToken?.sessionId ?? planToken.sessionId,
+              planDecisionVersion: consumedToken?.planDecisionVersion,
+              approvalAppliedAfterError: true,
+            });
+            await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
+          }
+          await replyText(ctx, `⚠️ ${result.text}`);
+          return { handled: true };
+        }
+
+        const consumedToken = sessionManager.consumeActionToken(tokenId);
+        logButtonDiagnostic("callback_token_consume_completed", {
+          channel: ctx.channel,
+          namespace: CALLBACK_NAMESPACE,
+          tokenHash: hashDiagnosticToken(tokenId),
+          consumed: Boolean(consumedToken),
+          actionKind: consumedToken?.kind,
+          sessionId: consumedToken?.sessionId ?? planToken.sessionId,
+          planDecisionVersion: consumedToken?.planDecisionVersion,
+        });
+        await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
+        return { handled: true };
+      }
+
+      if (token.kind === "plan-reject" || token.kind === "plan-request-changes") {
+        return await withPlanDecisionLock(decisionLockKey, async () => {
+          const latestToken = sessionManager.getActionToken(tokenId);
+          if (!latestToken) {
+            await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
+            if (ctx.channel !== "telegram") {
+              await replyText(ctx, "⚠️ This action is stale or has already been used.");
+            }
+            return { handled: true };
+          }
+
+          sessionId = latestToken.sessionId;
+          actionSession = sessionManager.resolve?.(sessionId) ?? sessionManager.getPersistedSession?.(sessionId);
+          actionSessionName = actionSession?.name ?? sessionId;
+          const latestInvalidPlanDecision = validatePlanDecisionToken(latestToken, actionSession);
+          logButtonDiagnostic("callback_plan_validation_completed", {
+            channel: ctx.channel,
+            namespace: CALLBACK_NAMESPACE,
+            tokenHash: hashDiagnosticToken(tokenId),
+            actionKind: latestToken.kind,
+            sessionId,
+            sessionName: actionSessionName,
+            planDecisionVersion: latestToken.planDecisionVersion,
+            valid: !latestInvalidPlanDecision,
+            afterPlanDecisionLock: true,
+          });
+
+          if (latestInvalidPlanDecision) {
+            await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
+            await replyText(ctx, `⚠️ ${latestInvalidPlanDecision}`);
+            return { handled: true };
+          }
+
+          const consumedToken = sessionManager.consumeActionToken(tokenId);
+          logButtonDiagnostic("callback_token_consume_completed", {
+            channel: ctx.channel,
+            namespace: CALLBACK_NAMESPACE,
+            tokenHash: hashDiagnosticToken(tokenId),
+            consumed: Boolean(consumedToken),
+            actionKind: consumedToken?.kind,
+            sessionId: consumedToken?.sessionId,
+            planDecisionVersion: consumedToken?.planDecisionVersion,
+          });
+          if (!consumedToken) {
+            await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
+            if (ctx.channel !== "telegram") {
+              await replyText(ctx, "⚠️ This action is stale or has already been used.");
+            }
+            return { handled: true };
+          }
+
+          await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
+          if (consumedToken.kind === "plan-reject") {
+            const result = rejectPlanDecision(sessionManager, sessionId);
+            await replyText(ctx, `❌ ${result.text}`);
+          } else {
+            const result = requestPlanDecisionChanges(sessionManager, sessionId);
+            await replyText(ctx, `✏️ ${result.text}`);
+          }
+          return { handled: true };
+        });
       }
 
       const consumedToken = sessionManager.consumeActionToken(tokenId);
@@ -597,35 +814,6 @@ export function createCallbackHandler(
           const persisted = sessionManager.getPersistedSession?.(sessionId);
           const url = token.targetUrl ?? persisted?.worktreePrUrl;
           await replyText(ctx, url ? `PR: ${url}` : "⚠️ PR URL is no longer available.");
-          break;
-        }
-
-        case "plan-approve": {
-          await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
-          sessionManager.clearPlanDecisionTokens(sessionId);
-          const result = await executeRespond(sessionManager, {
-            session: sessionId,
-            message: "Approved. Go ahead.",
-            approve: true,
-            userInitiated: true,
-          });
-          if (result.isError) {
-            await replyText(ctx, `⚠️ ${result.text}`);
-          }
-          break;
-        }
-
-        case "plan-reject": {
-          await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
-          const result = rejectPlanDecision(sessionManager, sessionId);
-          await replyText(ctx, `❌ ${result.text}`);
-          break;
-        }
-
-        case "plan-request-changes": {
-          await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
-          const result = requestPlanDecisionChanges(sessionManager, sessionId);
-          await replyText(ctx, `✏️ ${result.text}`);
           break;
         }
 
