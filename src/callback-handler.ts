@@ -507,9 +507,7 @@ export function createCallbackHandler(
         });
         if (!consumedToken) {
           await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
-          if (ctx.channel !== "telegram") {
-            await replyText(ctx, "⚠️ This action is stale or has already been used.");
-          }
+          await replyText(ctx, `✅ Answer submitted.`);
           return { handled: true };
         }
 

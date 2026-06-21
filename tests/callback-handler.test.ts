@@ -979,6 +979,32 @@ describe("createCallbackHandler()", () => {
     assert.equal(secondState.replies[0], "⚠️ That question button is no longer active. Use the latest question prompt.");
   });
 
+  it("reports success when question-answer submission succeeds but token consumption misses", async () => {
+    let submitted = false;
+    let consumes = 0;
+    setSessionManager({
+      getActionToken: () => ({ sessionId: "sess-42", kind: "question-answer", optionIndex: 1 }),
+      consumeActionToken: () => {
+        consumes++;
+        return undefined;
+      },
+      resolvePendingInputOption: () => {
+        submitted = true;
+        return true;
+      },
+    } as any);
+
+    const handler = createCallbackHandler("discord");
+    const state = createCtx("token-question-consume-miss", "discord");
+    const result = await handler.handler(state.ctx as any);
+
+    assert.deepEqual(result, { handled: true });
+    assert.equal(submitted, true);
+    assert.equal(consumes, 1);
+    assert.equal(state.componentsCleared, 1);
+    assert.equal(state.replies[0], "✅ Answer submitted.");
+  });
+
   it("clears worktree merge buttons without replying when agent_merge succeeds", async () => {
     setSessionManager({
       getActionToken: () => ({ sessionId: "sess-42", kind: "worktree-merge" }),
