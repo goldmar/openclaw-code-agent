@@ -96,28 +96,5 @@
     "basic-ftp": "5.3.1",
     "fast-xml-builder@<1.1.7": "1.1.7",
     "ip-address@<10.1.1": "10.1.1"
-  },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "esbuild",
-      "protobufjs"
-    ],
-    "overrides": {
-      "basic-ftp": "5.3.1",
-      "axios@<1.15.0": ">=1.15.0",
-      "fast-xml-builder@<1.1.7": "1.1.7",
-      "follow-redirects@<1.16.0": "1.16.0",
-      "protobufjs@>=7 <7.6.3": "7.6.3",
-      "tar@<7.5.16": "7.5.16",
-      "@protobufjs/utf8@<1.1.1": "1.1.1",
-      "brace-expansion@>=4.0.0 <5.0.5": ">=5.0.5",
-      "path-to-regexp@>=8.0.0 <8.4.0": ">=8.4.0",
-      "@anthropic-ai/sdk@<0.93.0": "0.93.0",
-      "ip-address@<10.1.1": "10.1.1",
-      "fast-uri@<=3.1.1": "3.1.2",
-      "qs@<6.15.2": "6.15.2",
-      "hono@<4.12.25": "4.12.25",
-      "undici@>=8.0.0 <8.5.0": "8.5.0"
-    }
   }
 }

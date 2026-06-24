@@ -500,7 +500,7 @@ function planDecisionRetryButtons(
       label: typeof candidate.label === "string" && candidate.label.trim()
         ? candidate.label
         : planDecisionButtonLabel(candidate.kind),
-      callbackData: candidate.id,
+      callbackData: `${CALLBACK_NAMESPACE}:${candidate.id}`,
       style: planDecisionButtonStyle(candidate.kind),
     }));
 

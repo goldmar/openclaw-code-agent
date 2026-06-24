@@ -662,10 +662,66 @@ describe("createCallbackHandler()", () => {
     assert.match(state.replies[0], /backend unavailable/);
     assert.match(state.replies[0], /Approval is still pending/);
     assert.deepEqual(state.replyButtons[0], [[
-      { label: "Approve", callbackData: "approve-token", style: "primary" },
-      { label: "Revise", callbackData: "revise-token", style: "secondary" },
-      { label: "Reject", callbackData: "reject-token", style: "danger" },
+      { label: "Approve", callbackData: "code-agent:approve-token", style: "primary" },
+      { label: "Revise", callbackData: "code-agent:revise-token", style: "secondary" },
+      { label: "Reject", callbackData: "code-agent:reject-token", style: "danger" },
     ]]);
+  });
+
+  it("uses namespaced retry callback_data when the retry label is present as payload", async () => {
+    const session = createStubSession({
+      pendingPlanApproval: true,
+      approvalState: "pending",
+      planDecisionVersion: 1,
+      actionablePlanDecisionVersion: 1,
+      sendMessage: async (message: string) => {
+        session.approvalState = "approved";
+        session.pendingPlanApproval = false;
+        session.actionablePlanDecisionVersion = undefined;
+        assert.equal(message, "Approved. Go ahead.");
+      },
+      switchPermissionMode: (mode: string) => {
+        session.currentPermissionMode = mode;
+      },
+    });
+    const token = {
+      id: "approve-token",
+      sessionId: "test-id",
+      kind: "plan-approve" as const,
+      label: "Approve",
+      planDecisionVersion: 1,
+      createdAt: Date.now(),
+    };
+    let consumed = 0;
+
+    setSessionManager({
+      getActionToken: (tokenId: string) => tokenId === token.id ? token : undefined,
+      consumeActionToken: (tokenId: string) => {
+        assert.equal(tokenId, token.id);
+        consumed++;
+        return token;
+      },
+      resolve: () => session,
+      getPersistedSession: () => undefined,
+      notifySession: () => {},
+      clearPlanDecisionTokens: () => {},
+    } as any);
+
+    const handler = createCallbackHandler();
+    const state = createCtx("Approve", "telegram", {
+      telegramCallback: {
+        data: "code-agent:approve-token",
+        callback_data: "code-agent:approve-token",
+        payload: "Approve",
+      },
+    });
+    const result = await handler.handler(state.ctx as any);
+
+    assert.deepEqual(result, { handled: true });
+    assert.equal(consumed, 1);
+    assert.equal(state.buttonMarkupEdits, 1);
+    assert.equal(state.buttonsCleared, 1);
+    assert.deepEqual(state.replies, []);
   });
 
   it("consumes and clears plan approval tokens when an approval error follows applied state", async () => {
