@@ -1020,6 +1020,84 @@ describe("createCallbackHandler()", () => {
     assert.equal(reject.replies[0], "⚠️ This plan is no longer awaiting approval.");
   });
 
+  it("revalidates sibling plan decision callbacks after a failed in-flight approval", async () => {
+    let rejectConsumed = 0;
+    let sendCount = 0;
+    let killCount = 0;
+    let releaseSend: (() => void) | undefined;
+    const sendMayFinish = new Promise<void>((resolve) => { releaseSend = resolve; });
+    let sendStarted: (() => void) | undefined;
+    const sendHasStarted = new Promise<void>((resolve) => { sendStarted = resolve; });
+    const approveToken = {
+      sessionId: "test-id",
+      kind: "plan-approve" as const,
+      planDecisionVersion: 1,
+    };
+    const rejectToken = {
+      sessionId: "test-id",
+      kind: "plan-reject" as const,
+      planDecisionVersion: 1,
+    };
+    const session = createStubSession({
+      pendingPlanApproval: true,
+      approvalState: "pending",
+      planDecisionVersion: 1,
+      actionablePlanDecisionVersion: 1,
+      sendMessage: async () => {
+        sendCount++;
+        sendStarted?.();
+        await sendMayFinish;
+        throw new Error("button cleanup failed");
+      },
+      switchPermissionMode: (mode: string) => {
+        session.currentPermissionMode = mode;
+      },
+    });
+
+    setSessionManager({
+      getActionToken: (tokenId: string) => {
+        if (tokenId === "token-approve") return approveToken;
+        if (tokenId === "token-reject") return rejectToken;
+        return undefined;
+      },
+      consumeActionToken: (tokenId: string) => {
+        if (tokenId === "token-reject") {
+          rejectConsumed++;
+          return rejectToken;
+        }
+        return undefined;
+      },
+      resolve: () => session,
+      getPersistedSession: () => undefined,
+      notifySession: () => {},
+      clearPlanDecisionTokens: () => {},
+      kill: () => { killCount++; },
+    } as any);
+
+    const handler = createCallbackHandler();
+    const approve = createCtx("token-approve");
+    const approveResultPromise = handler.handler(approve.ctx as any);
+    await sendHasStarted;
+
+    const reject = createCtx("token-reject");
+    const rejectResultPromise = handler.handler(reject.ctx as any);
+    releaseSend?.();
+
+    const [approveResult, rejectResult] = await Promise.all([approveResultPromise, rejectResultPromise]);
+
+    assert.deepEqual(approveResult, { handled: true });
+    assert.deepEqual(rejectResult, { handled: true });
+    assert.equal(sendCount, 1);
+    assert.equal(rejectConsumed, 1);
+    assert.equal(killCount, 1);
+    assert.equal(approve.buttonMarkupEdits, 1);
+    assert.equal(approve.buttonsCleared, 1);
+    assert.match(approve.replies[0], /button cleanup failed/);
+    assert.equal(reject.buttonMarkupEdits, 1);
+    assert.equal(reject.buttonsCleared, 1);
+    assert.equal(reject.replies[0], "❌ Plan rejected for [test-session]. Session stopped.");
+  });
+
   it("serializes concurrent revise and reject plan decision callbacks", async () => {
     let reviseConsumed = 0;
     let rejectConsumed = 0;

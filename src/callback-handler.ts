@@ -47,6 +47,15 @@ const retryableQuestionAnswerFailureMessage =
   "⚠️ Could not submit that answer. The question prompt is still active; try again or reply with the answer.";
 const planDecisionInFlight = new Map<string, { operation: Promise<unknown>; tokenId?: string }>();
 
+async function waitForPlanDecisionOperation(operation: Promise<unknown>): Promise<void> {
+  try {
+    await operation;
+  } catch (err) {
+    const errText = err instanceof Error ? err.message : String(err);
+    console.warn(`[callback-handler] Prior plan decision callback failed while another callback was waiting: ${errText}`);
+  }
+}
+
 async function withPlanDecisionLock<T>(
   key: string | undefined,
   tokenId: string | undefined,
@@ -57,7 +66,7 @@ async function withPlanDecisionLock<T>(
   while (true) {
     const inFlight = planDecisionInFlight.get(key)?.operation;
     if (!inFlight) break;
-    await inFlight;
+    await waitForPlanDecisionOperation(inFlight);
   }
 
   const operation = Promise.resolve().then(action);
@@ -698,7 +707,7 @@ export function createCallbackHandler(
             return { handled: true };
           }
 
-          await inFlight.operation;
+          await waitForPlanDecisionOperation(inFlight.operation);
           const latestToken = sessionManager.getActionToken(tokenId);
           if (!latestToken) {
             await clearPlanDecisionButtons(ctx, callbackAcknowledged);
