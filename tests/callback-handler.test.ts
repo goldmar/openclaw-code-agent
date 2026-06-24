@@ -204,7 +204,7 @@ describe("createCallbackHandler()", () => {
     assert.deepEqual(state.replies, []);
   });
 
-  it("acknowledges Telegram callbacks before terminal cleanup and agent work", async () => {
+  it("acknowledges and clears Telegram plan approval buttons before agent work", async () => {
     const events: string[] = [];
     const session = createStubSession({
       pendingPlanApproval: true,
@@ -245,10 +245,58 @@ describe("createCallbackHandler()", () => {
 
     assert.deepEqual(result, { handled: true });
     assert.deepEqual(events.slice(0, 2), ["acknowledge", "getActionToken"]);
-    assert.ok(events.indexOf("acknowledge") < events.indexOf("sendMessage"));
+    assert.ok(events.indexOf("clearButtons") < events.indexOf("switchPermissionMode"));
+    assert.ok(events.indexOf("clearButtons") < events.indexOf("sendMessage"));
     assert.ok(events.indexOf("sendMessage") < events.indexOf("consumeActionToken"));
-    assert.ok(events.indexOf("consumeActionToken") < events.indexOf("clearButtons"));
     assert.deepEqual(replies, []);
+  });
+
+  it("markup-clears Telegram plan approval buttons before blocking approval work finishes", async () => {
+    let releaseSend: (() => void) | undefined;
+    const sendMayFinish = new Promise<void>((resolve) => { releaseSend = resolve; });
+    let sendStarted: (() => void) | undefined;
+    const sendHasStarted = new Promise<void>((resolve) => { sendStarted = resolve; });
+    const session = createStubSession({
+      pendingPlanApproval: true,
+      approvalState: "pending",
+      planDecisionVersion: 1,
+      actionablePlanDecisionVersion: 1,
+      sendMessage: async () => {
+        sendStarted?.();
+        await sendMayFinish;
+      },
+      switchPermissionMode: () => {},
+    });
+
+    setSessionManager({
+      getActionToken: () => ({
+        sessionId: "test-id",
+        kind: "plan-approve",
+        planDecisionVersion: 1,
+      }),
+      consumeActionToken: () => ({
+        sessionId: "test-id",
+        kind: "plan-approve",
+        planDecisionVersion: 1,
+      }),
+      resolve: () => session,
+      getPersistedSession: () => undefined,
+      notifySession: () => {},
+      clearPlanDecisionTokens: () => {},
+    } as any);
+
+    const handler = createCallbackHandler();
+    const state = createCtx("token-approve");
+    const resultPromise = handler.handler(state.ctx as any);
+    await sendHasStarted;
+
+    assert.deepEqual(state.events.slice(0, 3), ["acknowledge", "editButtons", "clearButtons"]);
+    assert.equal(state.buttonMarkupEdits, 1);
+    assert.equal(state.buttonsCleared, 1);
+    assert.deepEqual(state.replies, []);
+
+    releaseSend?.();
+    assert.deepEqual(await resultPromise, { handled: true });
   });
 
   it("consumes v2026.5.28 Telegram callback data when payload is absent", async () => {
@@ -584,7 +632,8 @@ describe("createCallbackHandler()", () => {
 
     assert.deepEqual(result, { handled: true });
     assert.equal(consumed, 0);
-    assert.equal(state.buttonsCleared, 0);
+    assert.equal(state.buttonMarkupEdits, 1);
+    assert.equal(state.buttonsCleared, 1);
     assert.match(state.replies[0], /backend unavailable/);
   });
 

@@ -648,12 +648,21 @@ export function createCallbackHandler(
 
       if (token.kind === "plan-approve") {
         const planToken = token;
-        const result = await withPlanDecisionLock(decisionLockKey, tokenId, () => executeRespond(sessionManager, {
-          session: planToken.sessionId,
-          message: "Approved. Go ahead.",
-          approve: true,
-          userInitiated: true,
-        }));
+        let promptCleared = false;
+        const clearApprovalPrompt = async () => {
+          if (promptCleared) return;
+          await clearPlanDecisionButtons(ctx, callbackAcknowledged);
+          promptCleared = true;
+        };
+        const result = await withPlanDecisionLock(decisionLockKey, tokenId, async () => {
+          await clearApprovalPrompt();
+          return executeRespond(sessionManager, {
+            session: planToken.sessionId,
+            message: "Approved. Go ahead.",
+            approve: true,
+            userInitiated: true,
+          });
+        });
         if (result.isError) {
           const latestSession = sessionManager.resolve?.(planToken.sessionId)
             ?? sessionManager.getPersistedSession?.(planToken.sessionId);
@@ -669,7 +678,6 @@ export function createCallbackHandler(
               planDecisionVersion: consumedToken?.planDecisionVersion,
               approvalAppliedAfterError: true,
             });
-            await clearPlanDecisionButtons(ctx, callbackAcknowledged);
           }
           await replyText(ctx, `⚠️ ${result.text}`);
           return { handled: true };
@@ -686,14 +694,14 @@ export function createCallbackHandler(
           planDecisionVersion: consumedToken?.planDecisionVersion,
         });
         if (!consumedToken) {
-          await clearPlanDecisionButtons(ctx, callbackAcknowledged);
+          await clearApprovalPrompt();
           if (ctx.channel !== "telegram") {
             await replyText(ctx, "⚠️ This action is stale or has already been used.");
           }
           return { handled: true };
         }
 
-        await clearPlanDecisionButtons(ctx, callbackAcknowledged);
+        await clearApprovalPrompt();
         return { handled: true };
       }
 
