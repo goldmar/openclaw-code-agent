@@ -39,8 +39,8 @@ importers:
         specifier: ^5.1.7
         version: 5.1.11
       openclaw:
-        specifier: 2026.6.9
-        version: 2026.6.9
+        specifier: 2026.6.10
+        version: 2026.6.10
       tsx:
         specifier: ^4.21.0
         version: 4.22.4
@@ -1077,8 +1077,8 @@ packages:
       zod:
         optional: true
 
-  openclaw@2026.6.9:
-    resolution: {integrity: sha512-y0PGUdE87S8QtQXABPDL0CjNKhH3q/R1h9/WiRQkhVCGSBVhs63/M1iZn2DYVyJCAbDyMz3KNyAE0WzSQIWCRg==}
+  openclaw@2026.6.10:
+    resolution: {integrity: sha512-LcooND2tBQw8A+kc1Ujltu3lg30bJ0w7XaeRy7eYzobb8BBdcW6DOGbwJL4vpj1vl9+gjRceOtlh5nh9OARcug==}
     engines: {node: '>=22.19.0'}
     hasBin: true
 
@@ -2413,7 +2413,7 @@ snapshots:
       ws: 8.21.0
       zod: 4.4.3
 
-  openclaw@2026.6.9:
+  openclaw@2026.6.10:
     dependencies:
       '@agentclientprotocol/sdk': 0.22.1(zod@4.4.3)
       '@anthropic-ai/sdk': 0.100.1(zod@4.4.3)
