@@ -432,7 +432,8 @@ describe("plugin entry source", () => {
     assert.match(reference, /OpenClaw 2026\.6\.10 SDK Readiness/);
     assert.match(reference, /package build metadata targets OpenClaw `2026\.6\.10` for both host and SDK readiness/);
     assert.match(readme, /openclaw@2026\.6\.10/);
-    assert.match(readme, /routed follow-ups/);
+    assert.match(readme, /retryable stale plan approval buttons/);
+    assert.match(reference, /pnpm-workspace\.yaml/);
     assert.doesNotMatch(reference, /2026\.5\.8/);
     assert.doesNotMatch(readme, /openclaw@2026\.6\.8/);
     assert.doesNotMatch(reference, /E404/);

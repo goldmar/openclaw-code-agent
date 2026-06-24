@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Retargeted the OpenClaw package and plugin SDK validation metadata to `2026.6.10` while keeping the compatible `>=2026.4.21` peer/API floor.
-- Refreshed OpenClaw `2026.6.10` compatibility guidance for fast-talk state persistence, session/channel routing, cron delivery awareness, trusted hook policies, provider model routing, setup registry refresh, Codex/Claude harness model restrictions, plugin tool allowlists, disabled bundled plugin behavior, and OCA-owned plan, callback, wake, completion, and worktree follow-through flows.
+- Refreshed OpenClaw `2026.6.10` compatibility guidance for fast-talk state persistence, session/channel routing, cron delivery awareness, trusted hook policies, provider model routing, setup registry refresh, Codex/Claude harness model restrictions, plugin tool allowlists, disabled bundled plugin behavior, pnpm workspace metadata, and OCA-owned plan, callback, wake, completion, and worktree follow-through flows, including the latest stale plan approval retry-button and serialized callback fixes.
 
 ## [4.5.4] - 2026-06-21
 
