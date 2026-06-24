@@ -439,6 +439,94 @@ async function replyText(ctx: InteractiveCallbackContext, text: string): Promise
   await ctx.respond.reply({ text, ephemeral: true });
 }
 
+const planDecisionKindOrder: SessionActionKind[] = ["plan-approve", "plan-request-changes", "plan-reject"];
+
+type ActionTokenLister = {
+  listActiveActionTokens?: (kind?: SessionActionKind) => SessionActionToken[];
+};
+
+function planDecisionButtonLabel(kind: SessionActionKind): string {
+  switch (kind) {
+    case "plan-approve":
+      return "Approve";
+    case "plan-request-changes":
+      return "Revise";
+    case "plan-reject":
+      return "Reject";
+    default:
+      return "Continue";
+  }
+}
+
+function planDecisionButtonStyle(kind: SessionActionKind): "primary" | "secondary" | "danger" {
+  switch (kind) {
+    case "plan-approve":
+      return "primary";
+    case "plan-reject":
+      return "danger";
+    default:
+      return "secondary";
+  }
+}
+
+function planDecisionRetryButtons(
+  manager: typeof sessionManager,
+  currentToken: SessionActionToken,
+): Array<Array<{ label: string; callbackData: string; style: "primary" | "secondary" | "danger" }>> | undefined {
+  const tokenLister = manager as ActionTokenLister | null;
+  const activeTokens = typeof tokenLister?.listActiveActionTokens === "function"
+    ? planDecisionKindOrder.flatMap((kind) => tokenLister.listActiveActionTokens?.(kind) ?? [])
+    : [currentToken];
+  const matchingTokens = activeTokens
+    .filter((candidate) =>
+      isPlanDecisionAction(candidate.kind) &&
+      candidate.sessionId === currentToken.sessionId &&
+      (
+        currentToken.planDecisionVersion == null ||
+        candidate.planDecisionVersion == null ||
+        candidate.planDecisionVersion === currentToken.planDecisionVersion
+      )
+    )
+    .sort((a, b) => planDecisionKindOrder.indexOf(a.kind) - planDecisionKindOrder.indexOf(b.kind));
+
+  const seenKinds = new Set<SessionActionKind>();
+  const buttons = matchingTokens
+    .filter((candidate) => {
+      if (seenKinds.has(candidate.kind)) return false;
+      seenKinds.add(candidate.kind);
+      return true;
+    })
+    .map((candidate) => ({
+      label: typeof candidate.label === "string" && candidate.label.trim()
+        ? candidate.label
+        : planDecisionButtonLabel(candidate.kind),
+      callbackData: candidate.id,
+      style: planDecisionButtonStyle(candidate.kind),
+    }));
+
+  return buttons.length > 0 ? [buttons] : undefined;
+}
+
+async function replyPlanApprovalRetry(
+  ctx: InteractiveCallbackContext,
+  text: string,
+  manager: typeof sessionManager,
+  token: SessionActionToken,
+): Promise<void> {
+  if (ctx.channel !== "telegram") {
+    await replyText(ctx, text);
+    return;
+  }
+
+  const buttons = planDecisionRetryButtons(manager, token);
+  await ctx.respond.reply({
+    text: buttons
+      ? `${text}\n\nApproval is still pending. Try again below.`
+      : text,
+    ...(buttons ? { buttons } : {}),
+  });
+}
+
 /**
  * Create the Telegram interactive handler registration for button callbacks.
  *
@@ -649,8 +737,9 @@ export function createCallbackHandler(
       if (token.kind === "plan-approve") {
         const planToken = token;
         let promptCleared = false;
-        const clearApprovalPrompt = async () => {
+        const clearApprovalPrompt = async (force = false) => {
           if (promptCleared) return;
+          if (!force && ctx.channel !== "telegram") return;
           await clearPlanDecisionButtons(ctx, callbackAcknowledged);
           promptCleared = true;
         };
@@ -666,7 +755,8 @@ export function createCallbackHandler(
         if (result.isError) {
           const latestSession = sessionManager.resolve?.(planToken.sessionId)
             ?? sessionManager.getPersistedSession?.(planToken.sessionId);
-          if (planApprovalWasApplied(latestSession)) {
+          const approvalApplied = planApprovalWasApplied(latestSession);
+          if (approvalApplied) {
             const consumedToken = sessionManager.consumeActionToken(tokenId);
             logButtonDiagnostic("callback_token_consume_completed", {
               channel: ctx.channel,
@@ -678,8 +768,13 @@ export function createCallbackHandler(
               planDecisionVersion: consumedToken?.planDecisionVersion,
               approvalAppliedAfterError: true,
             });
+            await clearApprovalPrompt(true);
           }
-          await replyText(ctx, `⚠️ ${result.text}`);
+          if (approvalApplied) {
+            await replyText(ctx, `⚠️ ${result.text}`);
+          } else {
+            await replyPlanApprovalRetry(ctx, `⚠️ ${result.text}`, sessionManager, planToken);
+          }
           return { handled: true };
         }
 
@@ -694,14 +789,14 @@ export function createCallbackHandler(
           planDecisionVersion: consumedToken?.planDecisionVersion,
         });
         if (!consumedToken) {
-          await clearApprovalPrompt();
+          await clearApprovalPrompt(true);
           if (ctx.channel !== "telegram") {
             await replyText(ctx, "⚠️ This action is stale or has already been used.");
           }
           return { handled: true };
         }
 
-        await clearApprovalPrompt();
+        await clearApprovalPrompt(true);
         return { handled: true };
       }
 

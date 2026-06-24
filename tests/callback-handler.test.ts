@@ -18,6 +18,7 @@ function createCtx(
   } = {},
 ) {
   const replies: string[] = [];
+  const replyButtons: unknown[] = [];
   const editedMessages: string[] = [];
   const events: string[] = [];
   let callbacksAcknowledged = 0;
@@ -48,7 +49,11 @@ function createCtx(
         },
         respond: {
           acknowledge: async () => { callbacksAcknowledged++; events.push("acknowledge"); },
-          reply: async ({ text }: { text: string }) => { replies.push(text); events.push("reply"); },
+          reply: async ({ text, buttons }: { text: string; buttons?: unknown[] }) => {
+            replies.push(text);
+            if (buttons) replyButtons.push(buttons);
+            events.push("reply");
+          },
           clearButtons: async () => { buttonsCleared++; events.push("clearButtons"); },
           editButtons: async () => { buttonMarkupEdits++; events.push("editButtons"); },
           editMessage: async ({ text }: { text: string }) => { editedMessages.push(text); events.push("editMessage"); },
@@ -76,6 +81,7 @@ function createCtx(
   return {
     ctx,
     replies,
+    replyButtons,
     editedMessages,
     get buttonsCleared() {
       return buttonsCleared;
@@ -595,6 +601,32 @@ describe("createCallbackHandler()", () => {
 
   it("does not consume plan approval tokens when approval fails before applying", async () => {
     let consumed = 0;
+    const tokens = [
+      {
+        id: "approve-token",
+        sessionId: "test-id",
+        kind: "plan-approve" as const,
+        label: "Approve",
+        planDecisionVersion: 1,
+        createdAt: Date.now(),
+      },
+      {
+        id: "revise-token",
+        sessionId: "test-id",
+        kind: "plan-request-changes" as const,
+        label: "Revise",
+        planDecisionVersion: 1,
+        createdAt: Date.now(),
+      },
+      {
+        id: "reject-token",
+        sessionId: "test-id",
+        kind: "plan-reject" as const,
+        label: "Reject",
+        planDecisionVersion: 1,
+        createdAt: Date.now(),
+      },
+    ];
     const session = createStubSession({
       pendingPlanApproval: true,
       approvalState: "pending",
@@ -607,19 +639,12 @@ describe("createCallbackHandler()", () => {
     });
 
     setSessionManager({
-      getActionToken: () => ({
-        sessionId: "test-id",
-        kind: "plan-approve",
-        planDecisionVersion: 1,
-      }),
+      getActionToken: () => tokens[0],
       consumeActionToken: () => {
         consumed++;
-        return {
-          sessionId: "test-id",
-          kind: "plan-approve",
-          planDecisionVersion: 1,
-        };
+        return tokens[0];
       },
+      listActiveActionTokens: (kind: string) => tokens.filter((token) => token.kind === kind),
       resolve: () => session,
       getPersistedSession: () => undefined,
       notifySession: () => {},
@@ -635,6 +660,12 @@ describe("createCallbackHandler()", () => {
     assert.equal(state.buttonMarkupEdits, 1);
     assert.equal(state.buttonsCleared, 1);
     assert.match(state.replies[0], /backend unavailable/);
+    assert.match(state.replies[0], /Approval is still pending/);
+    assert.deepEqual(state.replyButtons[0], [[
+      { label: "Approve", callbackData: "approve-token", style: "primary" },
+      { label: "Revise", callbackData: "revise-token", style: "secondary" },
+      { label: "Reject", callbackData: "reject-token", style: "danger" },
+    ]]);
   });
 
   it("consumes and clears plan approval tokens when an approval error follows applied state", async () => {
