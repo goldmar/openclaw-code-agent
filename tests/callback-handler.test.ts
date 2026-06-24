@@ -199,7 +199,7 @@ describe("createCallbackHandler()", () => {
 
     assert.deepEqual(result, { handled: true });
     assert.equal(state.callbacksAcknowledged, 1);
-    assert.deepEqual(state.events.slice(0, 2), ["acknowledge", "clearButtons"]);
+    assert.deepEqual(state.events.slice(0, 3), ["acknowledge", "editButtons", "clearButtons"]);
     assert.equal(switchedTo, "bypassPermissions");
     assert.deepEqual(state.replies, []);
   });
@@ -681,6 +681,8 @@ describe("createCallbackHandler()", () => {
     assert.deepEqual(secondResult, { handled: true });
     assert.equal(first.buttonsCleared, 1);
     assert.equal(second.buttonsCleared, 1);
+    assert.equal(first.buttonMarkupEdits, 1);
+    assert.equal(second.buttonMarkupEdits, 1);
     assert.deepEqual(first.replies, []);
     assert.equal(second.replies[0], "⚠️ This plan is no longer awaiting approval.");
   });
@@ -724,6 +726,7 @@ describe("createCallbackHandler()", () => {
     assert.deepEqual(result, { handled: true });
     assert.equal(sendCount, 1);
     assert.equal(state.buttonsCleared, 1);
+    assert.equal(state.buttonMarkupEdits, 1);
     assert.deepEqual(state.replies, []);
   });
 
@@ -780,6 +783,8 @@ describe("createCallbackHandler()", () => {
 
     const second = createCtx("token-approve");
     const secondResultPromise = handler.handler(second.ctx as any);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(second.replies[0], "⚠️ This plan decision is already being processed.");
     releaseSend?.();
 
     const [firstResult, secondResult] = await Promise.all([firstResultPromise, secondResultPromise]);
@@ -791,8 +796,10 @@ describe("createCallbackHandler()", () => {
     assert.equal(notifyCount, 1);
     assert.equal(first.buttonsCleared, 1);
     assert.equal(second.buttonsCleared, 1);
+    assert.equal(first.buttonMarkupEdits, 1);
+    assert.equal(second.buttonMarkupEdits, 1);
     assert.deepEqual(first.replies, []);
-    assert.equal(second.replies[0], "⚠️ This plan is no longer awaiting approval.");
+    assert.equal(second.replies[0], "⚠️ This plan decision is already being processed.");
   });
 
   it("serializes sibling plan decision callbacks while approval is in flight", async () => {
