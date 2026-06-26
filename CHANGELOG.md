@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Treated Telegram `message is not modified` reply-markup cleanup responses as idempotent during plan approval callbacks so already-cleared buttons do not block approval execution from resuming.
+
 ## [4.5.5] - 2026-06-24
 
 ### Changed

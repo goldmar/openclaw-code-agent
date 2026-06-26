@@ -305,6 +305,75 @@ describe("createCallbackHandler()", () => {
     assert.deepEqual(await resultPromise, { handled: true });
   });
 
+  it("continues Telegram plan approval when markup cleanup is already applied", async () => {
+    const events: string[] = [];
+    const session = createStubSession({
+      pendingPlanApproval: true,
+      approvalState: "pending",
+      planDecisionVersion: 1,
+      actionablePlanDecisionVersion: 1,
+      sendMessage: async () => { events.push("sendMessage"); },
+      switchPermissionMode: () => { events.push("switchPermissionMode"); },
+    });
+
+    setSessionManager({
+      getActionToken: () => {
+        events.push("getActionToken");
+        return {
+          sessionId: "test-id",
+          kind: "plan-approve",
+          planDecisionVersion: 1,
+        };
+      },
+      consumeActionToken: () => {
+        events.push("consumeActionToken");
+        return {
+          sessionId: "test-id",
+          kind: "plan-approve",
+          planDecisionVersion: 1,
+        };
+      },
+      resolve: () => session,
+      getPersistedSession: () => undefined,
+      notifySession: () => { events.push("notifySession"); },
+      clearPlanDecisionTokens: () => { events.push("clearPlanDecisionTokens"); },
+    } as any);
+
+    const replies: string[] = [];
+    const ctx = {
+      channel: "telegram" as const,
+      auth: { isAuthorizedSender: true },
+      callback: {
+        data: "code-agent:token-approve",
+        namespace: "code-agent",
+        payload: "token-approve",
+        messageText: "Plan approval prompt",
+      },
+      respond: {
+        acknowledge: async () => { events.push("acknowledge"); },
+        editButtons: async () => {
+          events.push("editButtons");
+          throw new Error("GrammyError: 400 Bad Request: message is not modified");
+        },
+        clearButtons: async () => {
+          events.push("clearButtons");
+          throw new Error("GrammyError: 400 Bad Request: message is not modified");
+        },
+        reply: async ({ text }: { text: string }) => { replies.push(text); events.push("reply"); },
+      },
+    };
+
+    const handler = createCallbackHandler();
+    const result = await handler.handler(ctx as any);
+
+    assert.deepEqual(result, { handled: true });
+    assert.deepEqual(replies, []);
+    assert.ok(events.indexOf("editButtons") < events.indexOf("switchPermissionMode"));
+    assert.ok(events.indexOf("clearButtons") < events.indexOf("switchPermissionMode"));
+    assert.ok(events.indexOf("switchPermissionMode") < events.indexOf("sendMessage"));
+    assert.ok(events.indexOf("sendMessage") < events.indexOf("consumeActionToken"));
+  });
+
   it("consumes v2026.5.28 Telegram callback data when payload is absent", async () => {
     let switchedTo: string | undefined;
     let consumed = 0;
