@@ -294,6 +294,16 @@ function isDiscordEmptyMessageError(err: unknown): boolean {
   return /empty message/i.test(errText);
 }
 
+async function clearTelegramButtons(responder: InteractiveResponder): Promise<void> {
+  if (typeof responder.clearButtons !== "function") return;
+  try {
+    await responder.clearButtons();
+  } catch (err) {
+    if (isMessageNotModifiedError(err)) return;
+    throw err;
+  }
+}
+
 async function clearInteractiveState(
   ctx: InteractiveCallbackContext,
   options: { text?: string; alreadyAcknowledged?: boolean; forceTelegramMarkupEdit?: boolean } = {},
@@ -305,15 +315,11 @@ async function clearInteractiveState(
     if (typeof text === "string" && typeof responder.editMessage === "function") {
       try {
         await responder.editMessage({ text, buttons: [] });
-        if (typeof responder.clearButtons === "function") {
-          await responder.clearButtons();
-        }
+        await clearTelegramButtons(responder);
         return { textDelivered: true };
       } catch (err) {
         if (isMessageNotModifiedError(err)) {
-          if (typeof responder.clearButtons === "function") {
-            await responder.clearButtons();
-          }
+          await clearTelegramButtons(responder);
           return { textDelivered: true };
         }
         const errText = err instanceof Error ? err.message : String(err);
@@ -323,15 +329,11 @@ async function clearInteractiveState(
     if (forceTelegramMarkupEdit && typeof responder.editButtons === "function") {
       try {
         await responder.editButtons({ buttons: [] });
-        if (typeof responder.clearButtons === "function") {
-          await responder.clearButtons();
-        }
+        await clearTelegramButtons(responder);
         return { textDelivered: false };
       } catch (err) {
         if (isMessageNotModifiedError(err)) {
-          if (typeof responder.clearButtons === "function") {
-            await responder.clearButtons();
-          }
+          await clearTelegramButtons(responder);
           return { textDelivered: false };
         }
         const errText = err instanceof Error ? err.message : String(err);
@@ -348,24 +350,18 @@ async function clearInteractiveState(
     ) {
       try {
         await responder.editMessage({ text: callbackMessageText, buttons: [] });
-        if (typeof responder.clearButtons === "function") {
-          await responder.clearButtons();
-        }
+        await clearTelegramButtons(responder);
         return { textDelivered: false };
       } catch (err) {
         if (isMessageNotModifiedError(err)) {
-          if (typeof responder.clearButtons === "function") {
-            await responder.clearButtons();
-          }
+          await clearTelegramButtons(responder);
           return { textDelivered: false };
         }
         const errText = err instanceof Error ? err.message : String(err);
         console.warn(`[callback-handler] Failed to edit Telegram message markup before clearing buttons: ${errText}`);
       }
     }
-    if (typeof responder.clearButtons === "function") {
-      await responder.clearButtons();
-    }
+    await clearTelegramButtons(responder);
     return { textDelivered: false };
   }
 
