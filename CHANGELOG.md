@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.5.6] - 2026-06-26
+
 ### Fixed
 - Treated Telegram `message is not modified` reply-markup cleanup responses as idempotent during plan approval callbacks so already-cleared buttons do not block approval execution from resuming.
 
@@ -537,7 +539,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Default Codex approval policy to `on-request`.
 - Raised the default session limit.
 
-[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.5.5...HEAD
+[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.5.6...HEAD
+[4.5.6]: https://github.com/goldmar/openclaw-code-agent/compare/v4.5.5...v4.5.6
 [4.5.5]: https://github.com/goldmar/openclaw-code-agent/compare/v4.5.4...v4.5.5
 [4.5.4]: https://github.com/goldmar/openclaw-code-agent/compare/v4.5.3...v4.5.4
 [4.5.3]: https://github.com/goldmar/openclaw-code-agent/compare/v4.5.2...v4.5.3
