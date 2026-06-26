@@ -284,9 +284,35 @@ function getPayload(ctx: InteractiveCallbackContext): string {
   ) ?? "";
 }
 
+function collectErrorText(err: unknown, seen = new Set<unknown>()): string {
+  if (err == null) return "";
+  if (typeof err === "string") return err;
+  if (typeof err === "number" || typeof err === "boolean" || typeof err === "bigint") return String(err);
+  if (err instanceof Error) {
+    return [
+      err.name,
+      err.message,
+      collectErrorText((err as Error & { cause?: unknown }).cause, seen),
+    ].filter(Boolean).join(" ");
+  }
+  if (typeof err !== "object") return String(err);
+  if (seen.has(err)) return "";
+  seen.add(err);
+
+  const record = err as Record<string, unknown>;
+  return [
+    record.message,
+    record.description,
+    record.error,
+    record.error_description,
+    collectErrorText(record.cause, seen),
+    collectErrorText(record.response, seen),
+    collectErrorText(record.payload, seen),
+  ].filter(Boolean).join(" ");
+}
+
 function isMessageNotModifiedError(err: unknown): boolean {
-  const errText = err instanceof Error ? err.message : String(err);
-  return /message is not modified/i.test(errText);
+  return /message is not modified/i.test(collectErrorText(err));
 }
 
 function isDiscordEmptyMessageError(err: unknown): boolean {
