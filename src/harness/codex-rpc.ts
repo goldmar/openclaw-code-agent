@@ -46,6 +46,14 @@ function logCodexRpcDiagnostic(event: string, fields: Record<string, unknown>): 
   }));
 }
 
+function processLaunchDiagnosticFields(command: string, args: readonly string[]): Record<string, unknown> {
+  return {
+    commandKind: command === "codex" ? "codex" : "custom",
+    appServerSubcommand: true,
+    configuredArgCount: args.length,
+  };
+}
+
 export function parseJsonRpc(raw: string): JsonRpcEnvelope | null {
   try {
     const payload = JSON.parse(raw) as unknown;
@@ -132,8 +140,7 @@ export class StdioJsonRpcClient implements JsonRpcClient {
       env: process.env,
     });
     logCodexRpcDiagnostic("process.spawn", {
-      command: this.command,
-      args: ["app-server", ...this.args],
+      ...processLaunchDiagnosticFields(this.command, this.args),
       pid: child.pid,
       requestTimeoutMs: this.requestTimeoutMs,
     });

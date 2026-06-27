@@ -69,6 +69,17 @@ function logSessionDiagnostic(event: string, fields: Record<string, unknown>): v
   }));
 }
 
+function backendRefDiagnosticFields(backendRef: SessionBackendRef | undefined): Record<string, unknown> {
+  if (!backendRef) return {};
+  return {
+    backendRefKind: backendRef.kind,
+    hasBackendConversationId: Boolean(backendRef.conversationId),
+    hasBackendRunId: Boolean(backendRef.runId),
+    hasBackendWorktreeId: Boolean(backendRef.worktreeId),
+    hasBackendWorktreePath: Boolean(backendRef.worktreePath),
+  };
+}
+
 /**
  * Runtime session wrapper around a single harness lifecycle.
  *
@@ -640,11 +651,11 @@ export class Session extends EventEmitter {
   /** Launch the configured harness and start consuming harness messages. */
   async start(): Promise<void> {
     this.logDiagnostic("harness.launch.start", {
-      workdir: this.workdir,
       model: this.model,
-      resumeSessionId: this.resumeSessionId,
-      forkSession: this.forkSession,
-      backendRef: this.backendRef,
+      hasWorkdir: Boolean(this.workdir),
+      hasResumeSessionId: Boolean(this.resumeSessionId),
+      forkSessionRequested: this.forkSession === true,
+      hasBackendRef: Boolean(this.backendRef),
     });
     try {
       let prompt: string | AsyncIterable<unknown>;
@@ -1011,6 +1022,7 @@ export class Session extends EventEmitter {
   }
 
   private logDiagnostic(event: string, fields: Record<string, unknown> = {}): void {
+    const { backendRef: _backendRef, harnessSessionId: _harnessSessionId, ...safeFields } = fields;
     logSessionDiagnostic(event, {
       sessionId: this.id,
       name: this.name,
@@ -1018,9 +1030,9 @@ export class Session extends EventEmitter {
       lifecycle: this.lifecycle,
       runtimeState: this.runtimeState,
       harness: this.harnessName,
-      harnessSessionId: this.harnessSessionId,
-      backendRef: this.backendRef,
-      ...fields,
+      hasHarnessSessionId: Boolean(this.harnessSessionId),
+      ...backendRefDiagnosticFields(this.backendRef),
+      ...safeFields,
     });
   }
 }

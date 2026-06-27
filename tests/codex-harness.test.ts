@@ -225,6 +225,39 @@ describe("harness registry — codex registration", () => {
   });
 });
 
+describe("Codex App Server RPC diagnostics", () => {
+  it("redacts raw process command arguments from spawn diagnostics", async () => {
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]) => {
+      warnings.push(args.map(String).join(" "));
+    };
+    try {
+      const client = new StdioJsonRpcClient("true", ["--token", "secret-token"], 1234);
+      await client.connect();
+      await new Promise<void>((resolve) => { setTimeout(resolve, 20); });
+      await client.close();
+
+      const joined = warnings.join("\n");
+      assert.doesNotMatch(joined, /secret-token/);
+      assert.doesNotMatch(joined, /--token/);
+      assert.doesNotMatch(joined, /"args"/);
+      assert.doesNotMatch(joined, /"command"/);
+
+      const spawn = warnings
+        .map((warning) => JSON.parse(warning) as Record<string, unknown>)
+        .find((entry) => entry.event === "process.spawn");
+      assert.equal(spawn?.component, "CodexAppServerRpc");
+      assert.equal(spawn?.commandKind, "custom");
+      assert.equal(spawn?.appServerSubcommand, true);
+      assert.equal(spawn?.configuredArgCount, 2);
+      assert.equal(spawn?.requestTimeoutMs, 1234);
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+});
+
 describe("CodexHarness App Server mapping", () => {
   it("passes configured Codex request timeout to createClient, initialize, thread start, and turn start", async () => {
     await withCodexTimeoutEnv("12345", async () => {
