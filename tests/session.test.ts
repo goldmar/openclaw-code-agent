@@ -1,6 +1,8 @@
 import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { Session } from "../src/session";
+import { registerHarness } from "../src/harness/index";
+import { createFakeHarness } from "./helpers";
 import type { SessionConfig } from "../src/types";
 
 const BASE_CONFIG: SessionConfig = {
@@ -184,6 +186,57 @@ describe("Session event emission", () => {
       { next: "active", previous: "starting" },
       { next: "awaiting_user_input", previous: "active" },
     ]);
+  });
+});
+
+describe("Session diagnostics", () => {
+  it("redacts launch metadata that can identify private workspace or backend sessions", async () => {
+    const harness = createFakeHarness("session-diagnostics-redaction");
+    registerHarness(harness);
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]) => {
+      warnings.push(args.map(String).join(" "));
+    };
+    try {
+      const session = new Session({
+        ...BASE_CONFIG,
+        harness: harness.name,
+        workdir: "/private/repo/path",
+        resumeSessionId: "thread-secret-123",
+        forkSession: true,
+        backendRef: {
+          kind: "codex-app-server",
+          conversationId: "conversation-secret-456",
+          worktreePath: "/private/backend/worktree",
+        },
+      }, "diagnostic-test");
+
+      await session.start();
+      session.kill("user");
+      harness.endMessages();
+
+      const joined = warnings.join("\n");
+      assert.doesNotMatch(joined, /private\/repo\/path/);
+      assert.doesNotMatch(joined, /thread-secret-123/);
+      assert.doesNotMatch(joined, /conversation-secret-456/);
+      assert.doesNotMatch(joined, /private\/backend\/worktree/);
+
+      const launchStart = warnings
+        .map((warning) => JSON.parse(warning) as Record<string, unknown>)
+        .find((entry) => entry.event === "harness.launch.start");
+      assert.equal(launchStart?.hasWorkdir, true);
+      assert.equal(launchStart?.hasResumeSessionId, true);
+      assert.equal(launchStart?.forkSessionRequested, true);
+      assert.equal(launchStart?.hasBackendRef, true);
+      assert.equal(launchStart?.backendRefKind, "codex-app-server");
+      assert.equal(launchStart?.hasBackendConversationId, true);
+      assert.equal(launchStart?.hasBackendWorktreePath, true);
+      assert.equal(Object.hasOwn(launchStart ?? {}, "backendRef"), false);
+      assert.equal(Object.hasOwn(launchStart ?? {}, "harnessSessionId"), false);
+    } finally {
+      console.warn = originalWarn;
+    }
   });
 });
 

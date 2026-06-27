@@ -13,6 +13,7 @@ import type {
   PersistedWorktreeLifecycle,
   SessionBackendRef,
   SessionMetrics,
+  SessionRuntimeRecoveryDiagnostics,
   SessionWorktreeState,
 } from "./types";
 import { getBackendConversationId } from "./session-backend-ref";
@@ -49,6 +50,7 @@ export interface SessionListRenderable {
   worktreeMergedAt?: string;
   worktreePrUrl?: string;
   recovered?: boolean;
+  runtimeRecovery?: SessionRuntimeRecoveryDiagnostics;
 }
 
 /** Format a duration in milliseconds as `MmSs` or `Ss`. */
@@ -154,8 +156,21 @@ export function formatSessionListing(session: SessionListRenderable): string {
   if (session.resumable) {
     lines.push(`   ↩️  Resumable: yes`);
   }
-  if (session.recovered) {
-    lines.push(`   ♻️  Recovered: persisted metadata only; no live process to kill`);
+  if (session.recovered && session.runtimeRecovery) {
+    const reason = session.runtimeRecovery?.reason
+      ? ` (${session.runtimeRecovery.reason})`
+      : "";
+    lines.push(`   ♻️  Recovered: persisted metadata only; no live process to kill${reason}`);
+    lines.push(
+      `   🩺 Recovery: raw=${session.runtimeRecovery.rawStatus ?? "unknown"}` +
+      `/${session.runtimeRecovery.rawLifecycle ?? "unknown"}` +
+      `/${session.runtimeRecovery.rawRuntimeState ?? "unknown"}` +
+      ` → normalized=${session.runtimeRecovery.normalizedStatus}` +
+      `/${session.runtimeRecovery.normalizedLifecycle ?? "unknown"}` +
+      `/${session.runtimeRecovery.normalizedRuntimeState ?? "unknown"}`,
+    );
+  } else if (session.recovered) {
+    lines.push(`   💾 Persisted: no live runtime process in this Gateway`);
   }
 
   if (session.harness) {

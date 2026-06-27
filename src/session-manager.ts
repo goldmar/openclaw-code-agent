@@ -379,7 +379,7 @@ export class SessionManager {
       store,
       sessions,
       reminders,
-      removeRuntimeSession: (sessionId) => registry.remove(sessionId),
+      removeRuntimeSession: (sessionId, reason) => registry.remove(sessionId, reason),
       persistSession: (session, persistOptions) => manager.persistSession(session, persistOptions),
       clearRuntimeSessionState: (sessionId) => {
         manager.clearWaitingTimestampsForSession(sessionId);
@@ -514,7 +514,7 @@ export class SessionManager {
         throw new Error(`Cannot reuse session ID ${config.sessionIdOverride}: that session is still ${existing.status}.`);
       }
       if (existing) {
-        this.registry.remove(existing.id);
+        this.registry.remove(existing.id, "session-id-override-replacement");
       }
       this.clearWaitingTimestampsForSession(config.sessionIdOverride);
       this.lastTurnCompleteMarkers.delete(config.sessionIdOverride);

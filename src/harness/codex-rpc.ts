@@ -37,6 +37,23 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function logCodexRpcDiagnostic(event: string, fields: Record<string, unknown>): void {
+  console.warn(JSON.stringify({
+    component: "CodexAppServerRpc",
+    event,
+    at: new Date().toISOString(),
+    ...fields,
+  }));
+}
+
+function processLaunchDiagnosticFields(command: string, args: readonly string[]): Record<string, unknown> {
+  return {
+    commandKind: command === "codex" ? "codex" : "custom",
+    appServerSubcommand: true,
+    configuredArgCount: args.length,
+  };
+}
+
 export function parseJsonRpc(raw: string): JsonRpcEnvelope | null {
   try {
     const payload = JSON.parse(raw) as unknown;
@@ -122,6 +139,11 @@ export class StdioJsonRpcClient implements JsonRpcClient {
       stdio: ["pipe", "pipe", "pipe"],
       env: process.env,
     });
+    logCodexRpcDiagnostic("process.spawn", {
+      ...processLaunchDiagnosticFields(this.command, this.args),
+      pid: child.pid,
+      requestTimeoutMs: this.requestTimeoutMs,
+    });
     if (!child.stdin || !child.stdout || !child.stderr) {
       throw new Error("codex app server stdio pipes unavailable");
     }
@@ -133,13 +155,30 @@ export class StdioJsonRpcClient implements JsonRpcClient {
     child.stderr.on("data", (chunk: Buffer) => {
       this.stderrTail = `${this.stderrTail}${chunk.toString("utf8")}`.slice(-4_000);
     });
-    child.on("close", () => {
+    child.on("error", (error) => {
+      logCodexRpcDiagnostic("process.error", {
+        pid: child.pid,
+        error: errorMessage(error),
+      });
+    });
+    child.on("close", (code, signal) => {
+      logCodexRpcDiagnostic("process.close", {
+        pid: child.pid,
+        code,
+        signal,
+        pendingRequests: this.pending.size,
+        recentStderr: sanitizeTimeoutStderr(this.stderrTail.trim()),
+      });
       this.flushPending(new Error("codex app server stdio closed"));
       this.process = null;
     });
   }
 
   async close(): Promise<void> {
+    logCodexRpcDiagnostic("client.close", {
+      pid: this.process?.pid,
+      pendingRequests: this.pending.size,
+    });
     this.flushPending(new Error("codex app server stdio closed"));
     const child = this.process;
     this.process = null;
@@ -157,6 +196,13 @@ export class StdioJsonRpcClient implements JsonRpcClient {
       const effectiveTimeoutMs = Math.max(100, timeoutMs ?? this.requestTimeoutMs);
       const timer = setTimeout(() => {
         this.pending.delete(id);
+        logCodexRpcDiagnostic("request.timeout", {
+          id,
+          method,
+          timeoutMs: effectiveTimeoutMs,
+          pid: this.process?.pid,
+          recentStderr: sanitizeTimeoutStderr(this.stderrTail.trim()),
+        });
         reject(new Error(this.buildTimeoutErrorMessage(method, effectiveTimeoutMs)));
       }, effectiveTimeoutMs);
       timer.unref?.();
@@ -185,6 +231,13 @@ export class StdioJsonRpcClient implements JsonRpcClient {
   }
 
   private flushPending(error: Error): void {
+    if (this.pending.size > 0) {
+      logCodexRpcDiagnostic("pending.flush", {
+        pendingRequests: this.pending.size,
+        error: error.message,
+        pid: this.process?.pid,
+      });
+    }
     for (const [id, pending] of this.pending) {
       clearTimeout(pending.timer);
       pending.reject(error);

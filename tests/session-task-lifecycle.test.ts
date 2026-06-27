@@ -244,7 +244,7 @@ describe("session task lifecycle phase-1 adapter", () => {
       sink.finalize(session);
 
       assert.deepEqual(calls.map((call) => call.method), ["createManaged", "finish"]);
-      assert.deepEqual(warnings, [
+      assert.deepEqual(warnings.filter((warning) => warning.startsWith("[SessionTaskLifecycle]")), [
         "[SessionTaskLifecycle] finalize mutation was not applied (revision_conflict)",
       ]);
     } finally {

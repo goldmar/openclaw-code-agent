@@ -60,6 +60,26 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+function logSessionDiagnostic(event: string, fields: Record<string, unknown>): void {
+  console.warn(JSON.stringify({
+    component: "Session",
+    event,
+    at: new Date().toISOString(),
+    ...fields,
+  }));
+}
+
+function backendRefDiagnosticFields(backendRef: SessionBackendRef | undefined): Record<string, unknown> {
+  if (!backendRef) return {};
+  return {
+    backendRefKind: backendRef.kind,
+    hasBackendConversationId: Boolean(backendRef.conversationId),
+    hasBackendRunId: Boolean(backendRef.runId),
+    hasBackendWorktreeId: Boolean(backendRef.worktreeId),
+    hasBackendWorktreePath: Boolean(backendRef.worktreePath),
+  };
+}
+
 /**
  * Runtime session wrapper around a single harness lifecycle.
  *
@@ -630,6 +650,13 @@ export class Session extends EventEmitter {
 
   /** Launch the configured harness and start consuming harness messages. */
   async start(): Promise<void> {
+    this.logDiagnostic("harness.launch.start", {
+      model: this.model,
+      hasWorkdir: Boolean(this.workdir),
+      hasResumeSessionId: Boolean(this.resumeSessionId),
+      forkSessionRequested: this.forkSession === true,
+      hasBackendRef: Boolean(this.backendRef),
+    });
     try {
       let prompt: string | AsyncIterable<unknown>;
       if (this.multiTurn) {
@@ -662,11 +689,17 @@ export class Session extends EventEmitter {
         canUseTool: this.canUseTool,
       });
       this.harnessHandle = handle;
+      this.logDiagnostic("harness.launch.created", {
+        hasStreamInput: Boolean(handle.streamInput),
+        hasInterrupt: Boolean(handle.interrupt),
+        hasPermissionModeSwitch: Boolean(handle.setPermissionMode),
+      });
       this.setTimer("startup", STARTUP_TIMEOUT_MS, () => {
         if (this._status === "starting") this.kill("startup-timeout");
       });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
+      this.logDiagnostic("harness.launch.error", { error: message });
       this.transitionToTerminal("failed", { error: message });
       return;
     }
@@ -674,6 +707,7 @@ export class Session extends EventEmitter {
     this.consumeMessages(this.harnessHandle!.messages).catch((err: unknown) => {
       const message = err instanceof Error ? err.message : String(err);
       const stack = err instanceof Error ? err.stack : undefined;
+      this.logDiagnostic("harness.stream.error", { error: message });
       console.error(`[Session ${this.id}] consumeMessages error: ${message}`, stack);
       if (this.isActive) {
         this.transitionToTerminal("failed", { error: message });
@@ -836,6 +870,9 @@ export class Session extends EventEmitter {
     const idleTimeoutMs = (pluginConfig.idleTimeoutMinutes ?? 15) * 60 * 1000;
     this.setTimer("idle", idleTimeoutMs, () => {
       if (this._status === "running") {
+        this.logDiagnostic("idle_timeout.fire", {
+          idleTimeoutMinutes: pluginConfig.idleTimeoutMinutes ?? 15,
+        });
         this.applyControlEvent({ type: "terminal.entered", suspended: true });
         this.kill("idle-timeout");
       }
@@ -866,6 +903,14 @@ export class Session extends EventEmitter {
     options: { reason?: KillReason; error?: string } = {},
   ): void {
     if (!this.isActive) return;
+    this.logDiagnostic("terminal.transition", {
+      nextStatus: status,
+      reason: options.reason,
+      error: options.error,
+      currentStatus: this._status,
+      lifecycle: this.lifecycle,
+      runtimeState: this.runtimeState,
+    });
     this.turnInProgress = false;
     if (options.reason) this.killReason = options.reason;
     if (options.error !== undefined) this.error = options.error;
@@ -879,6 +924,7 @@ export class Session extends EventEmitter {
   }
 
   private async consumeMessages(messages: AsyncIterable<HarnessMessage>): Promise<void> {
+    let count = 0;
     for await (const msg of messages) {
       // After terminal transition we intentionally ignore late harness events.
       // This avoids spurious turnEnd/output processing from in-flight subprocess
@@ -888,6 +934,7 @@ export class Session extends EventEmitter {
       }
 
       this.resetIdleTimer();
+      count += 1;
       this.harnessEvents.applyMessage(msg, {
         pendingPlanApproval: this.pendingPlanApproval,
         currentPermissionMode: this.currentPermissionMode,
@@ -896,6 +943,13 @@ export class Session extends EventEmitter {
         pendingInputState: this.pendingInputState,
       });
     }
+    this.logDiagnostic("harness.stream.end", {
+      messageCount: count,
+      activeAtEnd: this.isActive,
+      status: this._status,
+      lifecycle: this.lifecycle,
+      runtimeState: this.runtimeState,
+    });
   }
 
   controlStateSnapshot(): SessionControlState {
@@ -965,5 +1019,20 @@ export class Session extends EventEmitter {
     if (previousLifecycle !== this.lifecycle) {
       this.emit("lifecycleChange", this, this.lifecycle, previousLifecycle);
     }
+  }
+
+  private logDiagnostic(event: string, fields: Record<string, unknown> = {}): void {
+    const { backendRef: _backendRef, harnessSessionId: _harnessSessionId, ...safeFields } = fields;
+    logSessionDiagnostic(event, {
+      sessionId: this.id,
+      name: this.name,
+      status: this._status,
+      lifecycle: this.lifecycle,
+      runtimeState: this.runtimeState,
+      harness: this.harnessName,
+      hasHarnessSessionId: Boolean(this.harnessSessionId),
+      ...backendRefDiagnosticFields(this.backendRef),
+      ...safeFields,
+    });
   }
 }

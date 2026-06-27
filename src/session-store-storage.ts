@@ -19,6 +19,26 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+function logSessionStoreDiagnostic(event: string, fields: Record<string, unknown>): void {
+  console.warn(JSON.stringify({
+    component: "SessionStore",
+    event,
+    at: new Date().toISOString(),
+    ...fields,
+  }));
+}
+
+function backendRefDiagnosticFields(raw: unknown): Record<string, unknown> {
+  if (!isRecord(raw)) return {};
+  return {
+    backendRefKind: typeof raw.kind === "string" ? raw.kind : undefined,
+    hasBackendConversationId: typeof raw.conversationId === "string" && raw.conversationId.length > 0,
+    hasBackendRunId: typeof raw.runId === "string" && raw.runId.length > 0,
+    hasBackendWorktreeId: typeof raw.worktreeId === "string" && raw.worktreeId.length > 0,
+    hasBackendWorktreePath: typeof raw.worktreePath === "string" && raw.worktreePath.length > 0,
+  };
+}
+
 function getAvailableArchivePath(indexPath: string, archivePrefix: string, now: number = Date.now()): string | undefined {
   const basePath = `${indexPath}.${archivePrefix}-${now}`;
   for (let attempt = 0; attempt < 100; attempt += 1) {
@@ -212,6 +232,7 @@ export function loadSessionStoreIndex(args: LoadIndexArgs): void {
     if (sessionsRaw === undefined) return;
     const archivedLegacyCodex: unknown[] = [];
     const entries: PersistedSessionInfo[] = [];
+    let recoveredRunningSession = false;
     for (const candidate of sessionsRaw) {
       if (isRecord(candidate) && candidate.harness === "codex") {
         const backendRef = isRecord(candidate.backendRef) ? candidate.backendRef : undefined;
@@ -226,6 +247,21 @@ export function loadSessionStoreIndex(args: LoadIndexArgs): void {
         if (!archiveAndReset("invalid v4 session entry")) return;
         saveIndex();
         return;
+      }
+      if (isRecord(candidate) && candidate.status === "running") {
+        recoveredRunningSession = true;
+        logSessionStoreDiagnostic("session.recovered_from_running_persisted_row", {
+          sessionId: typeof candidate.sessionId === "string" ? candidate.sessionId : undefined,
+          hasHarnessSessionId: typeof candidate.harnessSessionId === "string" && candidate.harnessSessionId.length > 0,
+          ...backendRefDiagnosticFields(candidate.backendRef),
+          rawStatus: candidate.status,
+          rawLifecycle: candidate.lifecycle,
+          rawRuntimeState: candidate.runtimeState,
+          normalizedStatus: entry.status,
+          normalizedLifecycle: entry.lifecycle,
+          normalizedRuntimeState: entry.runtimeState,
+          reason: entry.runtimeRecovery?.reason,
+        });
       }
 
       entries.push(entry);
@@ -266,7 +302,7 @@ export function loadSessionStoreIndex(args: LoadIndexArgs): void {
     for (const token of tokens) setActionToken(token);
     for (const policy of policies) setRepoPolicy(policy);
 
-    if (archivedLegacyCodex.length > 0) saveIndex();
+    if (archivedLegacyCodex.length > 0 || recoveredRunningSession) saveIndex();
     if (skippedInvalidRepoPolicy) saveIndex();
 
     purgeExpiredActionTokens();

@@ -225,6 +225,39 @@ describe("harness registry — codex registration", () => {
   });
 });
 
+describe("Codex App Server RPC diagnostics", () => {
+  it("redacts raw process command arguments from spawn diagnostics", async () => {
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]) => {
+      warnings.push(args.map(String).join(" "));
+    };
+    try {
+      const client = new StdioJsonRpcClient("true", ["--token", "secret-token"], 1234);
+      await client.connect();
+      await new Promise<void>((resolve) => { setTimeout(resolve, 20); });
+      await client.close();
+
+      const joined = warnings.join("\n");
+      assert.doesNotMatch(joined, /secret-token/);
+      assert.doesNotMatch(joined, /--token/);
+      assert.doesNotMatch(joined, /"args"/);
+      assert.doesNotMatch(joined, /"command"/);
+
+      const spawn = warnings
+        .map((warning) => JSON.parse(warning) as Record<string, unknown>)
+        .find((entry) => entry.event === "process.spawn");
+      assert.equal(spawn?.component, "CodexAppServerRpc");
+      assert.equal(spawn?.commandKind, "custom");
+      assert.equal(spawn?.appServerSubcommand, true);
+      assert.equal(spawn?.configuredArgCount, 2);
+      assert.equal(spawn?.requestTimeoutMs, 1234);
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+});
+
 describe("CodexHarness App Server mapping", () => {
   it("passes configured Codex request timeout to createClient, initialize, thread start, and turn start", async () => {
     await withCodexTimeoutEnv("12345", async () => {
@@ -372,6 +405,51 @@ describe("CodexHarness App Server mapping", () => {
 
       assert.deepEqual(createdSettings[0]?.args, ["--experimental-foo", "--bar"]);
     });
+  });
+
+  it("redacts raw client args, cwd, and backend worktree metadata from diagnostics", async () => {
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]) => {
+      warnings.push(args.map(String).join(" "));
+    };
+    try {
+      await withCodexArgsEnv("--token,FAKE_TOKEN_DO_NOT_USE_123,--path,/private/client/path", async () => {
+        const client = new MockJsonRpcClient({
+          assistantText: "Done.",
+          threadId: "thread-secret-123",
+          threadCwd: "/private/backend/worktree",
+        });
+        const harness = new CodexHarness({
+          createClient: () => client as any,
+        });
+
+        await collectMessages(harness.launch({ prompt: "inspect", cwd: "/private/repo/path" }));
+      });
+
+      const joined = warnings.join("\n");
+      assert.doesNotMatch(joined, /FAKE_TOKEN_DO_NOT_USE_123/);
+      assert.doesNotMatch(joined, /private\/client\/path/);
+      assert.doesNotMatch(joined, /private\/repo\/path/);
+      assert.doesNotMatch(joined, /private\/backend\/worktree/);
+      assert.doesNotMatch(joined, /thread-secret-123/);
+      assert.doesNotMatch(joined, /"args"/);
+      assert.doesNotMatch(joined, /"cwd"/);
+      assert.doesNotMatch(joined, /"backendWorktreePath"/);
+      assert.doesNotMatch(joined, /"backendWorktreeId"/);
+
+      const entries = warnings.map((warning) => JSON.parse(warning) as Record<string, unknown>);
+      const initializeStart = entries.find((entry) => entry.event === "client.initialize.start");
+      assert.equal(initializeStart?.commandKind, "codex");
+      assert.equal(initializeStart?.configuredArgCount, 4);
+
+      const threadStartDone = entries.find((entry) => entry.event === "thread.start.done");
+      assert.equal(threadStartDone?.hasThreadId, true);
+      assert.equal(Object.hasOwn(threadStartDone ?? {}, "backendWorktreePath"), false);
+      assert.equal(Object.hasOwn(threadStartDone ?? {}, "backendWorktreeId"), false);
+    } finally {
+      console.warn = originalWarn;
+    }
   });
 
   it("redacts sensitive stderr details from Codex app-server timeout errors", () => {
