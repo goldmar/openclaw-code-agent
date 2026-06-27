@@ -505,6 +505,7 @@ describe("SessionStore path resolution", () => {
     assert.equal(persisted?.status, "killed");
     assert.equal(persisted?.lifecycle, "suspended");
     assert.equal(persisted?.runtimeState, "stopped");
+    assert.equal(persisted?.runtimeRecovery?.reason, "persisted-running-without-runtime");
     assert.equal(persisted?.outputPath, getSessionOutputFilePath("GccpSIqJ"));
   });
 
@@ -537,6 +538,20 @@ describe("SessionStore path resolution", () => {
     assert.equal(persisted?.lifecycle, "suspended");
     assert.equal(persisted?.runtimeState, "stopped");
     assert.equal(persisted?.resumable, true);
+    assert.equal(persisted?.runtimeRecovery?.reason, "persisted-running-without-runtime");
+    assert.equal(persisted?.runtimeRecovery?.rawStatus, "running");
+    assert.equal(persisted?.runtimeRecovery?.rawLifecycle, "active");
+    assert.equal(persisted?.runtimeRecovery?.rawRuntimeState, "live");
+    assert.equal(persisted?.runtimeRecovery?.normalizedStatus, "killed");
+    assert.equal(persisted?.runtimeRecovery?.normalizedLifecycle, "suspended");
+    assert.equal(persisted?.runtimeRecovery?.normalizedRuntimeState, "stopped");
+
+    const saved = JSON.parse(readFileSync(indexPath, "utf-8"));
+    assert.equal(saved.sessions[0].status, "killed");
+    assert.equal(saved.sessions[0].lifecycle, "suspended");
+    assert.equal(saved.sessions[0].runtimeState, "stopped");
+    assert.equal(saved.sessions[0].runtimeRecovery.reason, "persisted-running-without-runtime");
+    assert.equal(saved.sessions[0].runtimeRecovery.rawStatus, "running");
   });
 
   it("resolves persisted sessions by backend conversation id before legacy harness id", () => {

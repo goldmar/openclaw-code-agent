@@ -50,6 +50,7 @@ export type WorktreeLifecycleResolutionSource =
   | "dismiss"
   | "maintenance";
 export type SessionRuntimeState = "live" | "stopped";
+export type SessionRuntimeRecoveryReason = "persisted-running-without-runtime";
 export type SessionDeliveryState = "idle" | "notifying" | "wake_pending" | "failed";
 export type SessionApprovalPromptStatus = "not_sent" | "sending" | "delivered" | "fallback_delivered" | "failed";
 export type SessionApprovalPromptTransport = "none" | "direct-message" | "wake-only";
@@ -98,6 +99,20 @@ export interface SessionBackendRef {
   runId?: string;
   worktreeId?: string;
   worktreePath?: string;
+}
+
+export interface SessionRuntimeRecoveryDiagnostics {
+  reason: SessionRuntimeRecoveryReason;
+  recoveredAt: string;
+  rawStatus?: string;
+  rawLifecycle?: string;
+  rawRuntimeState?: string;
+  rawResumable?: boolean;
+  rawCompletedAt?: number;
+  rawOutputPath?: string;
+  normalizedStatus: SessionStatus;
+  normalizedLifecycle?: SessionLifecycle;
+  normalizedRuntimeState?: SessionRuntimeState;
 }
 
 export interface BackendCapabilityFlags {
@@ -452,6 +467,7 @@ export interface PersistedSessionInfo {
   approvalState?: SessionApprovalState;
   worktreeState?: SessionWorktreeState;
   runtimeState?: SessionRuntimeState;
+  runtimeRecovery?: SessionRuntimeRecoveryDiagnostics;
   deliveryState?: SessionDeliveryState;
   notificationDedupe?: SessionNotificationDedupeRecord[];
   completionSummaryDedupe?: SessionCompletionSummaryRecord[];

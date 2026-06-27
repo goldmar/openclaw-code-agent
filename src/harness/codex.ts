@@ -102,6 +102,15 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function logCodexHarnessDiagnostic(event: string, fields: Record<string, unknown>): void {
+  console.warn(JSON.stringify({
+    component: "CodexHarness",
+    event,
+    at: new Date().toISOString(),
+    ...fields,
+  }));
+}
+
 function extractPromptText(message: unknown): string {
   if (typeof message === "string") return message;
   if (!message || typeof message !== "object") return String(message);
@@ -336,6 +345,12 @@ export class CodexHarness implements AgentHarness {
     });
 
     const initialize = async (): Promise<void> => {
+      logCodexHarnessDiagnostic("client.initialize.start", {
+        command: clientSettings.command,
+        args: clientSettings.args,
+        requestTimeoutMs: clientSettings.requestTimeoutMs,
+        resumeSessionId: options.resumeSessionId,
+      });
       await client.connect();
       await client.request("initialize", {
         protocolVersion: DEFAULT_PROTOCOL_VERSION,
@@ -343,6 +358,9 @@ export class CodexHarness implements AgentHarness {
         capabilities: { experimentalApi: true },
       }, clientSettings.requestTimeoutMs);
       await client.notify("initialized", {});
+      logCodexHarnessDiagnostic("client.initialize.done", {
+        resumeSessionId: options.resumeSessionId,
+      });
     };
 
     const ensureThread = async (): Promise<void> => {
@@ -351,6 +369,7 @@ export class CodexHarness implements AgentHarness {
         options.codexApprovalPolicy,
       );
       if (threadId) {
+        logCodexHarnessDiagnostic("thread.resume.start", { threadId });
         const resumed = await requestWithFallbacks({
           client,
           methods: ["thread/resume"],
@@ -368,9 +387,15 @@ export class CodexHarness implements AgentHarness {
         threadId = state.threadId ?? threadId;
         updateBackendWorktree(state.cwd);
         emitBackendRef();
+        logCodexHarnessDiagnostic("thread.resume.done", {
+          threadId,
+          backendWorktreePath,
+          backendWorktreeId,
+        });
         return;
       }
 
+      logCodexHarnessDiagnostic("thread.start.start", { cwd: options.cwd });
       const started = await requestWithFallbacks({
         client,
         methods: ["thread/start", "thread/new"],
@@ -391,10 +416,21 @@ export class CodexHarness implements AgentHarness {
       }
       updateBackendWorktree(state.cwd);
       emitBackendRef();
+      logCodexHarnessDiagnostic("thread.start.done", {
+        threadId,
+        backendWorktreePath,
+        backendWorktreeId,
+      });
     };
 
     const runTurn = async (prompt: string): Promise<void> => {
       await ensureThread();
+      logCodexHarnessDiagnostic("turn.start", {
+        threadId,
+        runCounter: runCounter + 1,
+        promptChars: prompt.length,
+        permissionMode: currentPermissionMode,
+      });
       queue.enqueue(createRunStartedEvent());
       runCounter += 1;
       planExplanation = "";
@@ -441,6 +477,12 @@ export class CodexHarness implements AgentHarness {
         terminalMethod = activeTurnCompletion?.method ?? "turn/failed";
         terminalParams = activeTurnCompletion?.params;
         const outcome = classifyTerminalOutcome(terminalMethod, terminalParams);
+        logCodexHarnessDiagnostic("turn.terminal", {
+          threadId,
+          turnId,
+          terminalMethod,
+          outcome,
+        });
         queue.enqueue(createRunCompletedEvent({
           success: outcome === "completed",
           outcome,
@@ -451,6 +493,11 @@ export class CodexHarness implements AgentHarness {
           session_id: threadId!,
         }));
       } catch (error) {
+        logCodexHarnessDiagnostic("turn.error", {
+          threadId,
+          turnId,
+          error: errorMessage(error),
+        });
         queue.enqueue(createRunCompletedEvent({
           success: false,
           duration_ms: 0,
@@ -564,6 +611,11 @@ export class CodexHarness implements AgentHarness {
           await runTurn(text);
         }
       } catch (error) {
+        logCodexHarnessDiagnostic("session.error", {
+          threadId,
+          turnId,
+          error: errorMessage(error),
+        });
         queue.enqueue(createRunCompletedEvent({
           success: false,
           duration_ms: 0,
@@ -573,7 +625,9 @@ export class CodexHarness implements AgentHarness {
           session_id: threadId ?? options.resumeSessionId ?? "",
         }));
       } finally {
+        logCodexHarnessDiagnostic("client.close.start", { threadId, turnId });
         await client.close().catch((): undefined => undefined);
+        logCodexHarnessDiagnostic("client.close.done", { threadId, turnId });
         queue.close();
       }
     })();

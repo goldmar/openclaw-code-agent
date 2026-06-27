@@ -18,6 +18,7 @@ import type {
   SessionApprovalState,
   SessionWorktreeState,
   SessionRuntimeState,
+  SessionRuntimeRecoveryDiagnostics,
   SessionDeliveryState,
   ApprovalExecutionState,
   SessionActionToken,
@@ -174,6 +175,44 @@ function toOptionalManagedWorktreeLifecycleState(value: unknown): ManagedWorktre
 
 function toOptionalRuntimeState(value: unknown): SessionRuntimeState | undefined {
   return value === "live" || value === "stopped" ? value : undefined;
+}
+
+function normalizeRuntimeRecovery(raw: unknown): SessionRuntimeRecoveryDiagnostics | undefined {
+  if (!isRecord(raw)) return undefined;
+  if (raw.reason !== "persisted-running-without-runtime") return undefined;
+  const recoveredAt = toOptionalString(raw.recoveredAt);
+  if (!recoveredAt || !Number.isFinite(Date.parse(recoveredAt))) return undefined;
+  const normalizedStatus = raw.normalizedStatus === "killed" ? "killed" : undefined;
+  if (!normalizedStatus) return undefined;
+  return {
+    reason: "persisted-running-without-runtime",
+    recoveredAt,
+    rawStatus: toOptionalString(raw.rawStatus),
+    rawLifecycle: toOptionalString(raw.rawLifecycle),
+    rawRuntimeState: toOptionalString(raw.rawRuntimeState),
+    rawResumable: typeof raw.rawResumable === "boolean" ? raw.rawResumable : undefined,
+    rawCompletedAt: toOptionalNumber(raw.rawCompletedAt),
+    rawOutputPath: toOptionalString(raw.rawOutputPath),
+    normalizedStatus,
+    normalizedLifecycle: toOptionalLifecycle(raw.normalizedLifecycle),
+    normalizedRuntimeState: toOptionalRuntimeState(raw.normalizedRuntimeState),
+  };
+}
+
+function buildRuntimeRecoveryDiagnostics(raw: Record<string, unknown>): SessionRuntimeRecoveryDiagnostics {
+  return {
+    reason: "persisted-running-without-runtime",
+    recoveredAt: new Date().toISOString(),
+    rawStatus: toOptionalString(raw.status),
+    rawLifecycle: toOptionalString(raw.lifecycle),
+    rawRuntimeState: toOptionalString(raw.runtimeState),
+    rawResumable: typeof raw.resumable === "boolean" ? raw.resumable : undefined,
+    rawCompletedAt: toOptionalNumber(raw.completedAt),
+    rawOutputPath: toOptionalString(raw.outputPath),
+    normalizedStatus: "killed",
+    normalizedLifecycle: "suspended",
+    normalizedRuntimeState: "stopped",
+  };
 }
 
 function toOptionalApprovalPromptStatus(value: unknown): SessionApprovalPromptStatus | undefined {
@@ -488,6 +527,9 @@ export function normalizePersistedEntry(raw: unknown): PersistedSessionInfo | un
     approvalState: toOptionalApprovalState(raw.approvalState),
     worktreeState: toOptionalWorktreeState(raw.worktreeState),
     runtimeState: recoveredFromRunning ? "stopped" : toOptionalRuntimeState(raw.runtimeState),
+    runtimeRecovery: recoveredFromRunning
+      ? buildRuntimeRecoveryDiagnostics(raw)
+      : normalizeRuntimeRecovery(raw.runtimeRecovery),
     deliveryState: toOptionalDeliveryState(raw.deliveryState),
     notificationDedupe: normalizeNotificationDedupeRecords(raw.notificationDedupe),
     completionSummaryDedupe: normalizeCompletionSummaryRecords(raw.completionSummaryDedupe),

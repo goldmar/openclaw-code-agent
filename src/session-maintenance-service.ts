@@ -19,7 +19,7 @@ interface SessionMaintenanceDeps {
   store: SessionStore;
   sessions: Map<string, Session>;
   reminders: SessionReminderService;
-  removeRuntimeSession: (sessionId: string) => void;
+  removeRuntimeSession: (sessionId: string, reason?: string) => void;
   persistSession: (session: Session, options?: { scheduleRuntimeGc?: boolean }) => void;
   clearRuntimeSessionState: (sessionId: string) => void;
   resolveWorktreeRepoDir: (repoDir: string | undefined, worktreePath?: string) => string | undefined;
@@ -71,7 +71,7 @@ export class SessionMaintenanceService {
         this.syncRuntimeGcDeadline(active);
         return;
       }
-      this.deps.removeRuntimeSession(session.id);
+      this.deps.removeRuntimeSession(session.id, "runtime-gc");
       this.deps.persistSession(active, { scheduleRuntimeGc: false });
       this.deps.clearRuntimeSessionState(session.id);
     });

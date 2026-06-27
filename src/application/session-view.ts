@@ -8,6 +8,7 @@ import type {
   PermissionMode,
   PersistedSessionInfo,
   PersistedWorktreeLifecycle,
+  SessionRuntimeRecoveryDiagnostics,
   SessionStatus,
   SessionWorktreeState,
 } from "../types";
@@ -72,6 +73,7 @@ interface SessionListingItem {
   worktreeMergedAt?: string;
   worktreePrUrl?: string;
   recovered?: boolean;
+  runtimeRecovery?: SessionRuntimeRecoveryDiagnostics;
 }
 
 export interface SessionListingOptions {
@@ -332,6 +334,7 @@ function mergeActiveAndPersistedSessions(active: Session[], persisted: Persisted
       worktreeMergedAt: p.worktreeMergedAt,
       worktreePrUrl: p.worktreePrUrl,
       recovered: true,
+      runtimeRecovery: p.runtimeRecovery,
     });
   }
 

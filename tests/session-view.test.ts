@@ -147,7 +147,43 @@ describe("session-view app layer", () => {
     };
     const text = getSessionsListingText(sm, "completed");
     assert.match(text, /✅ done-job \[s-persisted\]/);
-    assert.match(text, /Recovered: persisted metadata only; no live process to kill/);
+    assert.match(text, /Persisted: no live runtime process in this Gateway/);
+  });
+
+  it("shows runtime recovery diagnostics for persisted rows recovered from running state", () => {
+    const sm: any = {
+      list: () => [],
+      listPersistedSessions: () => [
+        {
+          sessionId: "s-recovered",
+          harnessSessionId: "h-recovered",
+          name: "recovered-job",
+          status: "killed",
+          lifecycle: "suspended",
+          runtimeState: "stopped",
+          prompt: "build",
+          workdir: "/tmp",
+          createdAt: 1000,
+          completedAt: 3000,
+          costUsd: 0,
+          runtimeRecovery: {
+            reason: "persisted-running-without-runtime",
+            recoveredAt: "2026-06-27T04:12:00.000Z",
+            rawStatus: "running",
+            rawLifecycle: "active",
+            rawRuntimeState: "live",
+            rawResumable: false,
+            normalizedStatus: "killed",
+            normalizedLifecycle: "suspended",
+            normalizedRuntimeState: "stopped",
+          },
+        },
+      ],
+    };
+
+    const text = getSessionsListingText(sm, "killed");
+    assert.match(text, /Recovered: persisted metadata only; no live process to kill \(persisted-running-without-runtime\)/);
+    assert.match(text, /Recovery: raw=running\/active\/live → normalized=killed\/suspended\/stopped/);
   });
 
   it("does not crash when persisted rows are missing prompt/workdir fields", () => {
