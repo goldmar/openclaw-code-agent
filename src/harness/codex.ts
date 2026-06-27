@@ -111,6 +111,28 @@ function logCodexHarnessDiagnostic(event: string, fields: Record<string, unknown
   }));
 }
 
+function clientSettingsDiagnosticFields(settings: { command: string; args: readonly string[]; requestTimeoutMs: number }): Record<string, unknown> {
+  return {
+    commandKind: settings.command === "codex" ? "codex" : "custom",
+    configuredArgCount: settings.args.length,
+    requestTimeoutMs: settings.requestTimeoutMs,
+  };
+}
+
+function threadDiagnosticFields(args: {
+  threadId?: string;
+  turnId?: string;
+  backendWorktreePath?: string;
+  backendWorktreeId?: string;
+}): Record<string, unknown> {
+  return {
+    hasThreadId: Boolean(args.threadId),
+    hasTurnId: Boolean(args.turnId),
+    hasBackendWorktreePath: Boolean(args.backendWorktreePath),
+    hasBackendWorktreeId: Boolean(args.backendWorktreeId),
+  };
+}
+
 function extractPromptText(message: unknown): string {
   if (typeof message === "string") return message;
   if (!message || typeof message !== "object") return String(message);
@@ -169,7 +191,7 @@ export class CodexHarness implements AgentHarness {
     const queue = new HarnessMessageQueue();
     let threadId = normalizeCodexAppServerSessionId(options.resumeSessionId);
     if (options.resumeSessionId && !threadId) {
-      console.warn(`[CodexHarness] Ignoring invalid Codex App Server resume session id "${options.resumeSessionId}". Expected UUID or urn:uuid UUID.`);
+      console.warn("[CodexHarness] Ignoring invalid Codex App Server resume session id. Expected UUID or urn:uuid UUID.");
     }
     let turnId: string | undefined;
     let backendWorktreePath = options.backendRef?.worktreePath;
@@ -346,10 +368,8 @@ export class CodexHarness implements AgentHarness {
 
     const initialize = async (): Promise<void> => {
       logCodexHarnessDiagnostic("client.initialize.start", {
-        command: clientSettings.command,
-        args: clientSettings.args,
-        requestTimeoutMs: clientSettings.requestTimeoutMs,
-        resumeSessionId: options.resumeSessionId,
+        ...clientSettingsDiagnosticFields(clientSettings),
+        hasResumeSessionId: Boolean(options.resumeSessionId),
       });
       await client.connect();
       await client.request("initialize", {
@@ -359,7 +379,7 @@ export class CodexHarness implements AgentHarness {
       }, clientSettings.requestTimeoutMs);
       await client.notify("initialized", {});
       logCodexHarnessDiagnostic("client.initialize.done", {
-        resumeSessionId: options.resumeSessionId,
+        hasResumeSessionId: Boolean(options.resumeSessionId),
       });
     };
 
@@ -369,7 +389,7 @@ export class CodexHarness implements AgentHarness {
         options.codexApprovalPolicy,
       );
       if (threadId) {
-        logCodexHarnessDiagnostic("thread.resume.start", { threadId });
+        logCodexHarnessDiagnostic("thread.resume.start", threadDiagnosticFields({ threadId }));
         const resumed = await requestWithFallbacks({
           client,
           methods: ["thread/resume"],
@@ -388,14 +408,12 @@ export class CodexHarness implements AgentHarness {
         updateBackendWorktree(state.cwd);
         emitBackendRef();
         logCodexHarnessDiagnostic("thread.resume.done", {
-          threadId,
-          backendWorktreePath,
-          backendWorktreeId,
+          ...threadDiagnosticFields({ threadId, backendWorktreePath, backendWorktreeId }),
         });
         return;
       }
 
-      logCodexHarnessDiagnostic("thread.start.start", { cwd: options.cwd });
+      logCodexHarnessDiagnostic("thread.start.start", { hasCwd: Boolean(options.cwd) });
       const started = await requestWithFallbacks({
         client,
         methods: ["thread/start", "thread/new"],
@@ -417,16 +435,14 @@ export class CodexHarness implements AgentHarness {
       updateBackendWorktree(state.cwd);
       emitBackendRef();
       logCodexHarnessDiagnostic("thread.start.done", {
-        threadId,
-        backendWorktreePath,
-        backendWorktreeId,
+        ...threadDiagnosticFields({ threadId, backendWorktreePath, backendWorktreeId }),
       });
     };
 
     const runTurn = async (prompt: string): Promise<void> => {
       await ensureThread();
       logCodexHarnessDiagnostic("turn.start", {
-        threadId,
+        ...threadDiagnosticFields({ threadId }),
         runCounter: runCounter + 1,
         promptChars: prompt.length,
         permissionMode: currentPermissionMode,
@@ -478,8 +494,7 @@ export class CodexHarness implements AgentHarness {
         terminalParams = activeTurnCompletion?.params;
         const outcome = classifyTerminalOutcome(terminalMethod, terminalParams);
         logCodexHarnessDiagnostic("turn.terminal", {
-          threadId,
-          turnId,
+          ...threadDiagnosticFields({ threadId, turnId }),
           terminalMethod,
           outcome,
         });
@@ -494,8 +509,7 @@ export class CodexHarness implements AgentHarness {
         }));
       } catch (error) {
         logCodexHarnessDiagnostic("turn.error", {
-          threadId,
-          turnId,
+          ...threadDiagnosticFields({ threadId, turnId }),
           error: errorMessage(error),
         });
         queue.enqueue(createRunCompletedEvent({
@@ -612,8 +626,7 @@ export class CodexHarness implements AgentHarness {
         }
       } catch (error) {
         logCodexHarnessDiagnostic("session.error", {
-          threadId,
-          turnId,
+          ...threadDiagnosticFields({ threadId, turnId }),
           error: errorMessage(error),
         });
         queue.enqueue(createRunCompletedEvent({
@@ -625,9 +638,9 @@ export class CodexHarness implements AgentHarness {
           session_id: threadId ?? options.resumeSessionId ?? "",
         }));
       } finally {
-        logCodexHarnessDiagnostic("client.close.start", { threadId, turnId });
+        logCodexHarnessDiagnostic("client.close.start", threadDiagnosticFields({ threadId, turnId }));
         await client.close().catch((): undefined => undefined);
-        logCodexHarnessDiagnostic("client.close.done", { threadId, turnId });
+        logCodexHarnessDiagnostic("client.close.done", threadDiagnosticFields({ threadId, turnId }));
         queue.close();
       }
     })();

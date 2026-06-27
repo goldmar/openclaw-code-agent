@@ -554,6 +554,59 @@ describe("SessionStore path resolution", () => {
     assert.equal(saved.sessions[0].runtimeRecovery.rawStatus, "running");
   });
 
+  it("redacts backend identifiers from recovered running-row diagnostics", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-store-running-redaction-"));
+    const indexPath = join(dir, "sessions.json");
+    writeStore(indexPath, [{
+      sessionId: "recovered-secret",
+      harnessSessionId: "harness-session-secret-123",
+      backendRef: {
+        kind: "codex-app-server",
+        conversationId: "conv-secret-456",
+        worktreeId: "worktree-secret-789",
+        worktreePath: "/private/backend/worktree",
+      },
+      name: "recovered-secret",
+      prompt: "p",
+      workdir: "/tmp",
+      status: "running",
+      lifecycle: "active",
+      runtimeState: "live",
+      costUsd: 0,
+    }]);
+
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]) => {
+      warnings.push(args.map(String).join(" "));
+    };
+    try {
+      new SessionStore({
+        indexPath,
+        env: {},
+      });
+    } finally {
+      console.warn = originalWarn;
+    }
+
+    const joined = warnings.join("\n");
+    assert.doesNotMatch(joined, /harness-session-secret-123/);
+    assert.doesNotMatch(joined, /conv-secret-456/);
+    assert.doesNotMatch(joined, /worktree-secret-789/);
+    assert.doesNotMatch(joined, /private\/backend\/worktree/);
+    assert.doesNotMatch(joined, /"backendRef"/);
+    assert.doesNotMatch(joined, /"harnessSessionId"/);
+
+    const recovered = warnings
+      .map((warning) => JSON.parse(warning) as Record<string, unknown>)
+      .find((entry) => entry.event === "session.recovered_from_running_persisted_row");
+    assert.equal(recovered?.hasHarnessSessionId, true);
+    assert.equal(recovered?.backendRefKind, "codex-app-server");
+    assert.equal(recovered?.hasBackendConversationId, true);
+    assert.equal(recovered?.hasBackendWorktreeId, true);
+    assert.equal(recovered?.hasBackendWorktreePath, true);
+  });
+
   it("resolves persisted sessions by backend conversation id before legacy harness id", () => {
     const dir = mkdtempSync(join(tmpdir(), "openclaw-store-backend-ref-"));
     const indexPath = join(dir, "sessions.json");

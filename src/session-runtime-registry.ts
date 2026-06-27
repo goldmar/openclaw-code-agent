@@ -20,8 +20,12 @@ function sessionFields(session: Session): Record<string, unknown> {
     lifecycle: session.lifecycle,
     runtimeState: session.runtimeState,
     harness: session.harnessName,
-    harnessSessionId: session.harnessSessionId,
-    backendRef: session.backendRef,
+    hasHarnessSessionId: Boolean(session.harnessSessionId),
+    backendRefKind: session.backendRef?.kind,
+    hasBackendConversationId: Boolean(session.backendRef?.conversationId),
+    hasBackendRunId: Boolean(session.backendRef?.runId),
+    hasBackendWorktreeId: Boolean(session.backendRef?.worktreeId),
+    hasBackendWorktreePath: Boolean(session.backendRef?.worktreePath),
   };
 }
 

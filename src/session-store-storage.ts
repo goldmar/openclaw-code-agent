@@ -28,6 +28,17 @@ function logSessionStoreDiagnostic(event: string, fields: Record<string, unknown
   }));
 }
 
+function backendRefDiagnosticFields(raw: unknown): Record<string, unknown> {
+  if (!isRecord(raw)) return {};
+  return {
+    backendRefKind: typeof raw.kind === "string" ? raw.kind : undefined,
+    hasBackendConversationId: typeof raw.conversationId === "string" && raw.conversationId.length > 0,
+    hasBackendRunId: typeof raw.runId === "string" && raw.runId.length > 0,
+    hasBackendWorktreeId: typeof raw.worktreeId === "string" && raw.worktreeId.length > 0,
+    hasBackendWorktreePath: typeof raw.worktreePath === "string" && raw.worktreePath.length > 0,
+  };
+}
+
 function getAvailableArchivePath(indexPath: string, archivePrefix: string, now: number = Date.now()): string | undefined {
   const basePath = `${indexPath}.${archivePrefix}-${now}`;
   for (let attempt = 0; attempt < 100; attempt += 1) {
@@ -241,8 +252,8 @@ export function loadSessionStoreIndex(args: LoadIndexArgs): void {
         recoveredRunningSession = true;
         logSessionStoreDiagnostic("session.recovered_from_running_persisted_row", {
           sessionId: typeof candidate.sessionId === "string" ? candidate.sessionId : undefined,
-          harnessSessionId: typeof candidate.harnessSessionId === "string" ? candidate.harnessSessionId : undefined,
-          backendRef: isRecord(candidate.backendRef) ? candidate.backendRef : undefined,
+          hasHarnessSessionId: typeof candidate.harnessSessionId === "string" && candidate.harnessSessionId.length > 0,
+          ...backendRefDiagnosticFields(candidate.backendRef),
           rawStatus: candidate.status,
           rawLifecycle: candidate.lifecycle,
           rawRuntimeState: candidate.runtimeState,
