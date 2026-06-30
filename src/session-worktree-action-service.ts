@@ -199,10 +199,11 @@ export class SessionWorktreeActionService {
     const prAvailable = session.repoIntegrationPolicy
       ? this.deps.isPrAvailable(repoDir)
       : livePolicy?.prAvailable ?? this.deps.isPrAvailable(repoDir);
+    const hasPersistedOpenPr = session.worktreeLifecycle?.state === "pr_open";
     const existingOpenPr = strategy === "auto-pr"
       && effectivePolicy === "never-pr"
       && prAvailable
-      && (Boolean(session.worktreePrUrl) || this.deps.hasOpenPrForBranch?.(repoDir, branchName, session.worktreePrTargetRepo) === true);
+      && (hasPersistedOpenPr || this.deps.hasOpenPrForBranch?.(repoDir, branchName, session.worktreePrTargetRepo) === true);
     const policyDecision = resolveWorktreePolicyDecision({
       requestedStrategy: strategy,
       policy: effectivePolicy,

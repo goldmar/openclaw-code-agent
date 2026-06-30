@@ -829,4 +829,91 @@ describe("SessionWorktreeActionService repo policy planning", () => {
       rmSync(repoDir, { recursive: true, force: true });
     }
   });
+
+  it("does not treat a stale persisted PR URL as an existing open PR", async () => {
+    const { repoDir, worktreePath, branchName } = createRepoWithWorktree("stale-pr-url");
+    let lookedUpBranch = false;
+    try {
+      const service = new SessionWorktreeActionService({
+        shouldRunWorktreeStrategy: () => true,
+        isAlreadyMerged: () => false,
+        resolveWorktreeRepoDir: () => repoDir,
+        getWorktreeCompletionState: () => "has-commits",
+        isPrAvailable: () => true,
+        hasOpenPrForBranch: () => {
+          lookedUpBranch = true;
+          return false;
+        },
+      });
+      const action = await service.plan({
+        id: "s-stale-pr-url",
+        name: "stale-pr-url",
+        status: "completed",
+        lifecycle: "active",
+        phase: "implementing",
+        worktreePath,
+        worktreeBranch: branchName,
+        worktreeStrategy: "auto-pr",
+        repoIntegrationPolicy: "never-pr",
+        worktreePrUrl: "https://github.com/example/repo/pull/1",
+        originalWorkdir: repoDir,
+        harnessSessionId: "h-stale-pr-url",
+      } as any);
+
+      assert.equal(lookedUpBranch, true);
+      assert.equal(action.kind, "decision");
+      if (action.kind === "decision") {
+        assert.equal(action.strategy, "ask");
+        assert.equal(action.allowedActions.merge, true);
+        assert.equal(action.allowedActions.pr, false);
+      }
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it("allows auto-pr updates for lifecycle-confirmed open PRs under never-pr without live branch lookup", async () => {
+    const { repoDir, worktreePath, branchName } = createRepoWithWorktree("lifecycle-open-pr");
+    try {
+      const service = new SessionWorktreeActionService({
+        shouldRunWorktreeStrategy: () => true,
+        isAlreadyMerged: () => false,
+        resolveWorktreeRepoDir: () => repoDir,
+        getWorktreeCompletionState: () => "has-commits",
+        isPrAvailable: () => true,
+        hasOpenPrForBranch: () => {
+          throw new Error("lifecycle-confirmed open PRs should not run a live branch lookup");
+        },
+      });
+      const action = await service.plan({
+        id: "s-lifecycle-open-pr",
+        name: "lifecycle-open-pr",
+        status: "completed",
+        lifecycle: "terminal",
+        phase: "implementing",
+        worktreeState: "pr_open",
+        worktreeLifecycle: {
+          state: "pr_open",
+          updatedAt: "2026-06-30T12:00:00.000Z",
+          resolutionSource: "agent_pr",
+        },
+        worktreePath,
+        worktreeBranch: branchName,
+        worktreeStrategy: "auto-pr",
+        repoIntegrationPolicy: "never-pr",
+        worktreePrUrl: "https://github.com/example/repo/pull/2",
+        originalWorkdir: repoDir,
+        harnessSessionId: "h-lifecycle-open-pr",
+      } as any);
+
+      assert.equal(action.kind, "decision");
+      if (action.kind === "decision") {
+        assert.equal(action.strategy, "auto-pr");
+        assert.equal(action.allowedActions.merge, true);
+        assert.equal(action.allowedActions.pr, false);
+      }
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
 });
