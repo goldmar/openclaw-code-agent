@@ -30,6 +30,7 @@ export type PlannedWorktreeAction =
       repoDir: string;
       worktreePath: string;
       nativeBackendWorktree: boolean;
+      preserveOpenPrWorktree?: boolean;
     }
   | {
       kind: "merged";
@@ -146,11 +147,15 @@ export class SessionWorktreeActionService {
     const completionState = this.deps.getWorktreeCompletionState(repoDir, worktreePath, branchName, baseBranch);
 
     if (completionState === "no-change") {
+      const preserveOpenPrWorktree = session.worktreeState === "pr_open"
+        || session.worktreeLifecycle?.state === "pr_open"
+        || Boolean(session.worktreePrUrl);
       return {
         kind: "no-change",
         repoDir,
         worktreePath,
         nativeBackendWorktree,
+        preserveOpenPrWorktree,
       };
     }
     if (completionState === "merged") {

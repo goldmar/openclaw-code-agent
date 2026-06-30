@@ -255,6 +255,7 @@ export class SessionWorktreeStrategyService {
         action.repoDir,
         action.worktreePath,
         action.nativeBackendWorktree,
+        action.preserveOpenPrWorktree,
       );
     }
 
@@ -323,7 +324,38 @@ export class SessionWorktreeStrategyService {
     repoDir: string,
     worktreePath: string,
     nativeBackendWorktree: boolean = usesNativeBackendWorktree(session),
+    preserveOpenPrWorktree: boolean = false,
   ): Promise<WorktreeStrategyResult> {
+    if (preserveOpenPrWorktree) {
+      const updatedAt = new Date().toISOString();
+      this.updatePersistedSessionFor(session, {
+        lifecycle: "terminal",
+        worktreeState: "pr_open",
+        pendingWorktreeDecisionSince: undefined,
+        lastWorktreeReminderAt: undefined,
+        worktreeDecisionSnoozedUntil: undefined,
+        worktreeLifecycle: {
+          state: "pr_open",
+          updatedAt,
+          resolutionSource: session.worktreeLifecycle?.resolutionSource ?? "agent_pr",
+          baseBranch: session.worktreeBaseBranch,
+          targetRepo: session.worktreePrTargetRepo,
+          pushRemote: session.worktreePushRemote,
+          notes: ["no_new_worktree_commits_preserved_open_pr"],
+        },
+      });
+      this.deps.dispatchSessionNotification(session, this.deps.worktreeMessages.buildNoChangeNotification({
+        session,
+        nativeBackendWorktree,
+        cleanupSucceeded: true,
+        worktreePath,
+        preview: this.deps.getOutputPreview(session),
+        originThreadLine: this.deps.originThreadLine(session),
+        preservedSummary: "existing PR worktree preserved until merge",
+      }));
+      return { notificationSent: true, worktreeRemoved: false };
+    }
+
     const removed = nativeBackendWorktree
       ? true
       : removeWorktree(repoDir, worktreePath);

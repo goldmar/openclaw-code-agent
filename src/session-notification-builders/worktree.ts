@@ -120,7 +120,7 @@ export function buildNoChangeWakeMessage(args: {
   const hasOriginRouteBlock = Boolean(originThreadLine?.trim());
 
   return [
-    `Coding agent session completed with no repository changes.`,
+    `Coding agent session completed with no worktree changes to merge.`,
     `Name: ${sessionName} | ID: ${sessionId}`,
     `Worktree outcome: ${cleanupSummary}`,
     ...(hasOriginRouteBlock ? [originThreadLine] : []),
@@ -138,7 +138,7 @@ export function buildNoChangeWakeMessage(args: {
     ``,
     ...buildCompletionFollowupInstructionLines({
       sessionId,
-      canonicalStatusDetail: "The plugin already sent the canonical completion status to the user, including that no repo changes were kept.",
+      canonicalStatusDetail: "The plugin already sent the canonical completion status to the user, including the no-worktree-changes outcome.",
       hasOriginRouteBlock,
     }),
   ].join("\n");
