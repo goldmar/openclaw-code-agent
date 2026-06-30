@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { SessionNotificationService } from "../src/session-notifications";
+import { SessionWorktreeMessageService } from "../src/session-worktree-message-service";
 
 describe("SessionNotificationService", () => {
   it("marks notify-only deliveries as notifying then idle on success", () => {
@@ -116,6 +117,86 @@ describe("SessionNotificationService", () => {
     requests[0]?.hooks?.onNotifySucceeded?.();
 
     assert.equal(persisted.notificationDedupe?.[0]?.status, "delivered");
+  });
+
+  it("dedupes one no-change terminal cycle but allows a later resumed cycle for the same session id", () => {
+    const persisted = { notificationDedupe: undefined } as any;
+    const requests: Array<Record<string, unknown>> = [];
+    const wakeStarted: string[] = [];
+    const wakeSucceeded: string[] = [];
+    const fakeDispatcher = {
+      dispatchSessionNotification: (_session: unknown, request: { label: string; hooks?: Record<string, (reason?: string) => void> }) => {
+        requests.push(request as Record<string, unknown>);
+        request.hooks?.onNotifyStarted?.();
+        request.hooks?.onNotifySucceeded?.();
+        request.hooks?.onWakeStarted?.();
+        wakeStarted.push(request.label);
+        request.hooks?.onWakeSucceeded?.();
+        wakeSucceeded.push(request.label);
+      },
+      dispose: () => {},
+    };
+    const service = new SessionNotificationService(
+      fakeDispatcher as any,
+      (_ref, patch) => Object.assign(persisted, patch),
+      { getPersistedSession: () => persisted },
+    );
+    const worktreeMessages = new SessionWorktreeMessageService();
+    const session = {
+      id: "D9SBMnGU",
+      name: "pr-311-cleanup",
+      harnessSessionId: "D9SBMnGU",
+      completedAt: 1_780_000_001_000,
+      route: {
+        provider: "telegram",
+        target: "topic",
+        threadId: "13832",
+        sessionKey: "agent:x:telegram:channel:topic:topic:13832",
+      },
+    } as any;
+    const firstCycleRequest = worktreeMessages.buildNoChangeNotification({
+      session,
+      nativeBackendWorktree: false,
+      cleanupSucceeded: true,
+      worktreePath: "/tmp/oca/pr-311-cleanup-a",
+      worktreeBranch: "agent/pr-311-cleanup-a",
+      preview: "No code changes were needed.",
+      originThreadLine: "Origin route: telegram topic 13832",
+    });
+
+    service.dispatch(session, firstCycleRequest);
+    service.dispatch(session, firstCycleRequest);
+
+    const resumedSession = {
+      ...session,
+      name: "pr-311-final-thread-cleanup",
+      completedAt: 1_780_000_002_000,
+    } as any;
+    const laterCycleRequest = worktreeMessages.buildNoChangeNotification({
+      session: resumedSession,
+      nativeBackendWorktree: false,
+      cleanupSucceeded: true,
+      worktreePath: "/tmp/oca/pr-311-cleanup-b",
+      worktreeBranch: "agent/pr-311-cleanup-b",
+      preview: "Final outdated thread resolved with no code changes.",
+      originThreadLine: "Origin route: telegram topic 13832",
+    });
+
+    service.dispatch(resumedSession, laterCycleRequest);
+
+    assert.equal(requests.length, 2);
+    assert.notEqual(firstCycleRequest.idempotencyKey, laterCycleRequest.idempotencyKey);
+    assert.match(firstCycleRequest.idempotencyKey ?? "", /^worktree-no-change:D9SBMnGU:cleaned:agent\/pr-311-cleanup-a:/);
+    assert.match(laterCycleRequest.idempotencyKey ?? "", /^worktree-no-change:D9SBMnGU:cleaned:agent\/pr-311-cleanup-b:/);
+    assert.deepEqual(requests.map((request) => request.label), ["worktree-no-changes", "worktree-no-changes"]);
+    assert.equal(typeof requests[0]?.wakeMessage, "string");
+    assert.equal(typeof requests[1]?.wakeMessage, "string");
+    assert.equal(requests[0]?.completionWakeSummaryRequired, undefined);
+    assert.equal(requests[1]?.completionWakeSummaryRequired, undefined);
+    assert.deepEqual(wakeStarted, ["worktree-no-changes", "worktree-no-changes"]);
+    assert.deepEqual(wakeSucceeded, ["worktree-no-changes", "worktree-no-changes"]);
+    assert.equal(persisted.notificationDedupe?.length, 2);
+    assert.equal(persisted.notificationDedupe?.every((record: { status?: string }) => record.status === "delivered"), true);
   });
 
   it("allows the same semantic notification key on different delivery routes", () => {

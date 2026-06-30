@@ -358,6 +358,7 @@ export class SessionWorktreeStrategyService {
         nativeBackendWorktree,
         cleanupSucceeded: true,
         worktreePath,
+        worktreeBranch: branchName,
         preview: this.deps.getOutputPreview(session),
         originThreadLine: this.deps.originThreadLine(session),
         preservedSummary: "existing PR worktree preserved until merge",
@@ -389,6 +390,7 @@ export class SessionWorktreeStrategyService {
         nativeBackendWorktree,
         cleanupSucceeded: true,
         worktreePath,
+        worktreeBranch: branchName,
         preview: this.deps.getOutputPreview(session),
         originThreadLine: this.deps.originThreadLine(session),
       }));
@@ -398,6 +400,7 @@ export class SessionWorktreeStrategyService {
         nativeBackendWorktree,
         cleanupSucceeded: false,
         worktreePath,
+        worktreeBranch: branchName,
         preview: this.deps.getOutputPreview(session),
         originThreadLine: this.deps.originThreadLine(session),
       }));
