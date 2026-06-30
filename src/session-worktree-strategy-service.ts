@@ -94,7 +94,6 @@ export class SessionWorktreeStrategyService {
       resolveWorktreeRepoDir: deps.resolveWorktreeRepoDir,
       getWorktreeCompletionState: deps.getWorktreeCompletionState,
       isPrAvailable: deps.isPrAvailable ?? (() => true),
-      hasOpenPrForBranch: deps.hasOpenPrForBranch,
       resolveRepoPolicy: deps.resolveRepoPolicy,
     });
   }
@@ -254,8 +253,8 @@ export class SessionWorktreeStrategyService {
         session,
         action.repoDir,
         action.worktreePath,
+        action.branchName,
         action.nativeBackendWorktree,
-        action.preserveOpenPrWorktree,
       );
     }
 
@@ -288,6 +287,16 @@ export class SessionWorktreeStrategyService {
       return { notificationSent: true, worktreeRemoved: false };
     }
     if (action.strategy === "ask") {
+      if (this.shouldUpdateExistingOpenPr(session, action.repoDir, action.branchName, action.policy, action.allowedActions)) {
+        return this.handleAutoPrStrategy(
+          session,
+          action.repoDir,
+          action.worktreePath,
+          action.branchName,
+          action.baseBranch,
+          action.allowedActions,
+        );
+      }
       return await this.handleAskStrategy(session, action.branchName, action.baseBranch, action.diffSummary, action.allowedActions, action.policyReason);
     }
     if (action.strategy === "delegate") {
@@ -323,10 +332,10 @@ export class SessionWorktreeStrategyService {
     session: Session,
     repoDir: string,
     worktreePath: string,
+    branchName: string,
     nativeBackendWorktree: boolean = usesNativeBackendWorktree(session),
-    preserveOpenPrWorktree: boolean = false,
   ): Promise<WorktreeStrategyResult> {
-    if (preserveOpenPrWorktree) {
+    if (this.hasCurrentlyOpenPrForBranch(session, repoDir, branchName)) {
       const updatedAt = new Date().toISOString();
       this.updatePersistedSessionFor(session, {
         lifecycle: "terminal",
@@ -394,6 +403,23 @@ export class SessionWorktreeStrategyService {
       }));
     }
     return { notificationSent: true, worktreeRemoved: removed };
+  }
+
+  private hasCurrentlyOpenPrForBranch(session: Session, repoDir: string, branchName: string): boolean {
+    return this.deps.hasOpenPrForBranch?.(repoDir, branchName, session.worktreePrTargetRepo) === true;
+  }
+
+  private shouldUpdateExistingOpenPr(
+    session: Session,
+    repoDir: string,
+    branchName: string,
+    policy: RepoPolicyResolution["policy"] | undefined,
+    allowedActions: AllowedWorktreeActions,
+  ): boolean {
+    return session.worktreeStrategy === "auto-pr"
+      && policy === "never-pr"
+      && allowedActions.pr === false
+      && this.hasCurrentlyOpenPrForBranch(session, repoDir, branchName);
   }
 
   private async handleAskStrategy(

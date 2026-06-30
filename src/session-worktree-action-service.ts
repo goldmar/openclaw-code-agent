@@ -5,6 +5,7 @@ import { getPrimarySessionLookupRef, usesNativeBackendWorktree } from "./session
 import { detectDefaultBranch, getDiffSummary } from "./worktree";
 import { resolveWorktreePolicyDecision } from "./repo-policy";
 import type { RepoPolicyResolution } from "./repo-policy";
+import type { RepoIntegrationPolicy } from "./types";
 
 type DiffSummary = NonNullable<ReturnType<typeof getDiffSummary>>;
 
@@ -29,8 +30,8 @@ export type PlannedWorktreeAction =
       kind: "no-change";
       repoDir: string;
       worktreePath: string;
+      branchName: string;
       nativeBackendWorktree: boolean;
-      preserveOpenPrWorktree?: boolean;
     }
   | {
       kind: "merged";
@@ -50,6 +51,7 @@ export type PlannedWorktreeAction =
   | {
       kind: "decision";
       strategy: "ask" | "delegate" | "auto-merge" | "auto-pr";
+      policy?: RepoIntegrationPolicy;
       policyReason?: string;
       policyBlocked?: boolean;
       allowedActions: {
@@ -81,7 +83,6 @@ export class SessionWorktreeActionService {
         baseBranch: string,
       ) => WorktreeCompletionState;
       isPrAvailable: (repoDir: string) => boolean;
-      hasOpenPrForBranch?: (repoDir: string, branchName: string, targetRepo?: string) => boolean;
       resolveRepoPolicy?: (repoDir: string) => RepoPolicyResolution;
     },
   ) {}
@@ -139,6 +140,7 @@ export class SessionWorktreeActionService {
         kind: "no-change",
         repoDir,
         worktreePath,
+        branchName,
         nativeBackendWorktree,
       };
     }
@@ -147,15 +149,12 @@ export class SessionWorktreeActionService {
     const completionState = this.deps.getWorktreeCompletionState(repoDir, worktreePath, branchName, baseBranch);
 
     if (completionState === "no-change") {
-      const preserveOpenPrWorktree = session.worktreeState === "pr_open"
-        || session.worktreeLifecycle?.state === "pr_open"
-        || Boolean(session.worktreePrUrl);
       return {
         kind: "no-change",
         repoDir,
         worktreePath,
+        branchName,
         nativeBackendWorktree,
-        preserveOpenPrWorktree,
       };
     }
     if (completionState === "merged") {
@@ -204,16 +203,11 @@ export class SessionWorktreeActionService {
     const prAvailable = session.repoIntegrationPolicy
       ? this.deps.isPrAvailable(repoDir)
       : livePolicy?.prAvailable ?? this.deps.isPrAvailable(repoDir);
-    const hasPersistedOpenPr = session.worktreeLifecycle?.state === "pr_open";
-    const existingOpenPr = strategy === "auto-pr"
-      && effectivePolicy === "never-pr"
-      && prAvailable
-      && (hasPersistedOpenPr || this.deps.hasOpenPrForBranch?.(repoDir, branchName, session.worktreePrTargetRepo) === true);
     const policyDecision = resolveWorktreePolicyDecision({
       requestedStrategy: strategy,
       policy: effectivePolicy,
       prAvailable,
-      existingOpenPr,
+      existingOpenPr: false,
     });
 
     if (!policyDecision.strategy) {
@@ -223,6 +217,7 @@ export class SessionWorktreeActionService {
     return {
       kind: "decision",
       strategy: policyDecision.strategy,
+      policy: effectivePolicy,
       policyReason: policyDecision.reason,
       policyBlocked: policyDecision.blocked,
       allowedActions: policyDecision.allowedActions,

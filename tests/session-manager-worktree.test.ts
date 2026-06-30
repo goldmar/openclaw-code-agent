@@ -200,7 +200,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
     }
   });
 
-  it("preserves no-change worktrees while an existing PR is still open", async () => {
+  it("cleans up no-change worktrees when persisted PR-open state is stale", async () => {
     const repoDir = mkdtempSync(join(tmpdir(), "sm-worktree-pr-open-no-change-"));
     let cleanup = () => {};
     try {
@@ -275,22 +275,22 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
 
       const result = await (sm as any).handleWorktreeStrategy(session);
 
-      assert.deepEqual(result, { notificationSent: true, worktreeRemoved: false });
-      assert.equal(existsSync(worktreePath), true);
-      assert.equal(session.worktreePath, worktreePath);
+      assert.deepEqual(result, { notificationSent: true, worktreeRemoved: true });
+      assert.equal(existsSync(worktreePath), false);
+      assert.equal(session.worktreePath, undefined);
       const calls = (sm as any).__dispatchCalls;
       assert.equal(calls.length, 1);
       const [_sessionArg, request] = calls[0];
-      assert.equal(request.label, "worktree-no-changes-preserved");
+      assert.equal(request.label, "worktree-no-changes");
       assert.match(request.userMessage, /no worktree changes to merge/);
-      assert.match(request.userMessage, /existing PR worktree preserved until merge/);
+      assert.match(request.userMessage, /worktree cleaned up/);
       assert.match(request.wakeMessage, /completed with no worktree changes to merge/);
       assert.doesNotMatch(request.wakeMessage, /completed with no repository changes/);
       const persisted = (sm as any).store.persisted.get("h-pr-open-no-change");
-      assert.equal(persisted.worktreePath, worktreePath);
-      assert.equal(persisted.worktreeState, "pr_open");
-      assert.equal(persisted.worktreeLifecycle?.state, "pr_open");
-      assert.deepEqual(persisted.worktreeLifecycle?.notes, ["no_new_worktree_commits_preserved_open_pr"]);
+      assert.equal(persisted.worktreePath, undefined);
+      assert.equal(persisted.worktreeState, "none");
+      assert.equal(persisted.worktreeDisposition, "no-change-cleaned");
+      assert.equal(persisted.worktreeLifecycle?.state, "no_change");
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
       cleanup();

@@ -70,6 +70,7 @@ import {
   getPrimaryRepoRootFromWorktree,
   isGitHubCLIAvailable,
   mergeBranch,
+  syncWorktreePR,
 } from "./worktree";
 import { KeyedOperationQueue } from "./keyed-operation-queue";
 import { SessionMaintenanceService } from "./session-maintenance-service";
@@ -324,6 +325,10 @@ export class SessionManager {
       ),
       makeOpenPrButton: (sessionId) => manager.makeActionButton(sessionId, "worktree-create-pr", "Open PR"),
       isPrAvailable: (repoDir) => manager.resolveRepoPolicy(repoDir).prAvailable,
+      hasOpenPrForBranch: (repoDir, branchName, targetRepo) => {
+        const status = syncWorktreePR(repoDir, branchName, targetRepo);
+        return status.exists && status.state === "open";
+      },
       resolveRepoPolicy: (repoDir) => manager.resolveRepoPolicy(repoDir),
       worktreeSummaryProvider: options.worktreeSummaryProvider,
       worktreeMessages,

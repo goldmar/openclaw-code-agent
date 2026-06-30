@@ -710,6 +710,7 @@ describe("SessionWorktreeActionService repo policy planning", () => {
         kind: "no-change",
         repoDir,
         worktreePath,
+        branchName: "agent/native-absent",
         nativeBackendWorktree: true,
       });
     } finally {
@@ -832,7 +833,6 @@ describe("SessionWorktreeActionService repo policy planning", () => {
 
   it("does not treat a stale persisted PR URL as an existing open PR", async () => {
     const { repoDir, worktreePath, branchName } = createRepoWithWorktree("stale-pr-url");
-    let lookedUpBranch = false;
     try {
       const service = new SessionWorktreeActionService({
         shouldRunWorktreeStrategy: () => true,
@@ -840,10 +840,6 @@ describe("SessionWorktreeActionService repo policy planning", () => {
         resolveWorktreeRepoDir: () => repoDir,
         getWorktreeCompletionState: () => "has-commits",
         isPrAvailable: () => true,
-        hasOpenPrForBranch: () => {
-          lookedUpBranch = true;
-          return false;
-        },
       });
       const action = await service.plan({
         id: "s-stale-pr-url",
@@ -860,7 +856,6 @@ describe("SessionWorktreeActionService repo policy planning", () => {
         harnessSessionId: "h-stale-pr-url",
       } as any);
 
-      assert.equal(lookedUpBranch, true);
       assert.equal(action.kind, "decision");
       if (action.kind === "decision") {
         assert.equal(action.strategy, "ask");
@@ -872,8 +867,8 @@ describe("SessionWorktreeActionService repo policy planning", () => {
     }
   });
 
-  it("allows auto-pr updates for lifecycle-confirmed open PRs under never-pr without live branch lookup", async () => {
-    const { repoDir, worktreePath, branchName } = createRepoWithWorktree("lifecycle-open-pr");
+  it("does not treat stale pr-open lifecycle as an existing open PR while planning", async () => {
+    const { repoDir, worktreePath, branchName } = createRepoWithWorktree("stale-lifecycle-open-pr");
     try {
       const service = new SessionWorktreeActionService({
         shouldRunWorktreeStrategy: () => true,
@@ -881,13 +876,10 @@ describe("SessionWorktreeActionService repo policy planning", () => {
         resolveWorktreeRepoDir: () => repoDir,
         getWorktreeCompletionState: () => "has-commits",
         isPrAvailable: () => true,
-        hasOpenPrForBranch: () => {
-          throw new Error("lifecycle-confirmed open PRs should not run a live branch lookup");
-        },
       });
       const action = await service.plan({
-        id: "s-lifecycle-open-pr",
-        name: "lifecycle-open-pr",
+        id: "s-stale-lifecycle-open-pr",
+        name: "stale-lifecycle-open-pr",
         status: "completed",
         lifecycle: "terminal",
         phase: "implementing",
@@ -903,12 +895,12 @@ describe("SessionWorktreeActionService repo policy planning", () => {
         repoIntegrationPolicy: "never-pr",
         worktreePrUrl: "https://github.com/example/repo/pull/2",
         originalWorkdir: repoDir,
-        harnessSessionId: "h-lifecycle-open-pr",
+        harnessSessionId: "h-stale-lifecycle-open-pr",
       } as any);
 
       assert.equal(action.kind, "decision");
       if (action.kind === "decision") {
-        assert.equal(action.strategy, "auto-pr");
+        assert.equal(action.strategy, "ask");
         assert.equal(action.allowedActions.merge, true);
         assert.equal(action.allowedActions.pr, false);
       }
