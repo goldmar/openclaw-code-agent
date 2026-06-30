@@ -181,6 +181,84 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
     assert.equal(notifications.length, 0);
   });
 
+  it("preserves no-change worktrees only after verifying the branch still has an open PR", async () => {
+    const repoDir = mkdtempSync(join(tmpdir(), "openclaw-no-change-open-pr-"));
+    const notifications: Array<Record<string, unknown>> = [];
+    const patches: Array<Record<string, unknown>> = [];
+    let openPrLookup: { repoDir: string; branchName: string; targetRepo?: string } | undefined;
+    try {
+      git(repoDir, "init", "-b", "main");
+      git(repoDir, "config", "user.name", "Test User");
+      git(repoDir, "config", "user.email", "test@example.com");
+      writeFileSync(join(repoDir, "README.md"), "base\n", "utf-8");
+      git(repoDir, "add", "README.md");
+      git(repoDir, "commit", "-m", "init");
+      const worktreePath = createWorktree(repoDir, "verified-open-pr-no-change");
+      const branchName = getBranchName(worktreePath);
+      assert.ok(branchName, "worktree branch should exist");
+
+      const service = new SessionWorktreeStrategyService({
+        shouldRunWorktreeStrategy: () => true,
+        isAlreadyMerged: () => false,
+        resolveWorktreeRepoDir: (dir) => dir,
+        getWorktreeCompletionState: () => "no-change",
+        updatePersistedSession: (_ref, patch) => {
+          patches.push(patch as Record<string, unknown>);
+          Object.assign(session, patch);
+          return true;
+        },
+        dispatchSessionNotification: (_session, request) => {
+          notifications.push(request as Record<string, unknown>);
+        },
+        getOutputPreview: () => "",
+        originThreadLine: () => "thread",
+        getWorktreeDecisionButtons: () => [[{ label: "Merge", callbackData: "merge" }]],
+        makeOpenPrButton: () => ({ label: "Open PR", callbackData: "open-pr" }),
+        hasOpenPrForBranch: (lookupRepoDir, lookupBranchName, targetRepo) => {
+          openPrLookup = { repoDir: lookupRepoDir, branchName: lookupBranchName, targetRepo };
+          return true;
+        },
+        worktreeMessages: new SessionWorktreeMessageService(),
+        enqueueMerge: async (_repoDir, fn) => { await fn(); },
+        mergeBranch,
+        spawnConflictResolver: async () => ({ id: "resolver-unused", name: "unused" }),
+        runAutoPr: async () => {
+          throw new Error("no-change open PR preservation should not run auto-pr");
+        },
+      });
+
+      const session: any = {
+        id: "s-verified-open-pr-no-change",
+        name: "verified-open-pr-no-change",
+        status: "completed",
+        phase: "implementing",
+        lifecycle: "terminal",
+        worktreeState: "pr_open",
+        originalWorkdir: repoDir,
+        worktreePath,
+        worktreeBranch: branchName,
+        worktreeBaseBranch: "main",
+        worktreeStrategy: "auto-pr",
+        repoIntegrationPolicy: "never-pr",
+        worktreePrUrl: "https://github.com/example/repo/pull/310",
+        pendingPlanApproval: false,
+        getOutput: () => ["Existing PR remains open."],
+      };
+
+      const result = await service.handleWorktreeStrategy(session);
+
+      assert.deepEqual(result, { notificationSent: true, worktreeRemoved: false });
+      assert.deepEqual(openPrLookup, { repoDir, branchName, targetRepo: undefined });
+      assert.equal(notifications.length, 1);
+      assert.equal(notifications[0]?.label, "worktree-no-changes-preserved");
+      assert.equal(session.worktreeState, "pr_open");
+      assert.equal(session.worktreeLifecycle?.state, "pr_open");
+      assert.equal(patches.some((patch) => (patch as any).worktreeLifecycle?.state === "pr_open"), true);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
   it("allows delegate sessions to receive decision buttons when repo policy blocks follow-through", async () => {
     const { repoDir, worktreePath, branchName } = createMergeableWorktree("delegate-policy-blocked");
     const notifications: Array<Record<string, unknown>> = [];
@@ -303,6 +381,169 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       assert.deepEqual(result, { notificationSent: true, worktreeRemoved: false });
       assert.equal(autoPrCalled, true);
       assert.equal(notifications.length, 0);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it("updates an existing open PR branch under never-pr policy without prompting for a worktree decision", async () => {
+    const { repoDir, worktreePath, branchName } = createMergeableWorktree("existing-pr-never-pr");
+    const notifications: Array<Record<string, unknown>> = [];
+    const patches: Array<Record<string, unknown>> = [];
+    let autoPrCalled = false;
+    let openPrLookup: { repoDir: string; branchName: string; targetRepo?: string } | undefined;
+    try {
+      const service = new SessionWorktreeStrategyService({
+        shouldRunWorktreeStrategy: () => true,
+        isAlreadyMerged: () => false,
+        resolveWorktreeRepoDir: (dir) => dir,
+        getWorktreeCompletionState: () => "has-commits",
+        updatePersistedSession: (_ref, patch) => {
+          patches.push(patch as Record<string, unknown>);
+          Object.assign(session, patch);
+          return true;
+        },
+        dispatchSessionNotification: (_session, request) => {
+          notifications.push(request as Record<string, unknown>);
+        },
+        getOutputPreview: () => "",
+        originThreadLine: () => "thread",
+        getPolicyAwareWorktreeDecisionButtons: () => {
+          throw new Error("existing PR updates must not request manual decision buttons");
+        },
+        getWorktreeDecisionButtons: () => [[{ label: "Merge", callbackData: "merge" }]],
+        makeOpenPrButton: () => ({ label: "Open PR", callbackData: "open-pr" }),
+        isPrAvailable: () => true,
+        hasOpenPrForBranch: (lookupRepoDir, lookupBranchName, targetRepo) => {
+          openPrLookup = { repoDir: lookupRepoDir, branchName: lookupBranchName, targetRepo };
+          return true;
+        },
+        worktreeMessages: new SessionWorktreeMessageService(),
+        enqueueMerge: async (_repoDir, fn) => { await fn(); },
+        mergeBranch,
+        spawnConflictResolver: async () => ({ id: "resolver-unused", name: "unused" }),
+        runAutoPr: async (_session, baseBranch) => {
+          autoPrCalled = true;
+          assert.equal(baseBranch, "main");
+          Object.assign(session, {
+            lifecycle: "terminal",
+            worktreeState: "pr_open",
+            pendingWorktreeDecisionSince: undefined,
+            worktreeLifecycle: {
+              state: "pr_open",
+              updatedAt: "2026-06-30T12:00:00.000Z",
+              resolutionSource: "agent_pr",
+            },
+            worktreePrUrl: "https://github.com/example/repo/pull/310",
+          });
+          return { success: true };
+        },
+      });
+
+      const session: any = {
+        id: "s-existing-pr-never-pr",
+        name: "existing-pr-never-pr",
+        status: "completed",
+        phase: "implementing",
+        lifecycle: "terminal",
+        worktreeState: "active",
+        originalWorkdir: repoDir,
+        worktreePath,
+        worktreeBranch: branchName,
+        worktreeBaseBranch: "main",
+        worktreeStrategy: "auto-pr",
+        repoIntegrationPolicy: "never-pr",
+        pendingPlanApproval: false,
+      };
+
+      const result = await service.handleWorktreeStrategy(session);
+
+      assert.deepEqual(result, { notificationSent: true, worktreeRemoved: false });
+      assert.equal(autoPrCalled, true);
+      assert.deepEqual(openPrLookup, { repoDir, branchName, targetRepo: undefined });
+      assert.equal(notifications.length, 0);
+      assert.equal(session.lifecycle, "terminal");
+      assert.equal(session.worktreeState, "pr_open");
+      assert.equal(session.worktreeLifecycle?.state, "pr_open");
+      assert.equal(session.pendingWorktreeDecisionSince, undefined);
+      assert.equal(
+        patches.some((patch) => patch.lifecycle === "awaiting_worktree_decision" || patch.worktreeState === "pending_decision"),
+        false,
+      );
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it("downgrades stale pr-open lifecycle under never-pr before starting auto-pr", async () => {
+    const { repoDir, worktreePath, branchName } = createMergeableWorktree("stale-pr-open-never-pr");
+    const notifications: Array<Record<string, unknown>> = [];
+    let autoPrCalled = false;
+    let openPrLookupCount = 0;
+    try {
+      const service = new SessionWorktreeStrategyService({
+        shouldRunWorktreeStrategy: () => true,
+        isAlreadyMerged: () => false,
+        resolveWorktreeRepoDir: (dir) => dir,
+        getWorktreeCompletionState: () => "has-commits",
+        updatePersistedSession: (_ref, patch) => {
+          Object.assign(session, patch);
+          return true;
+        },
+        dispatchSessionNotification: (_session, request) => {
+          notifications.push(request as Record<string, unknown>);
+        },
+        getOutputPreview: () => "",
+        originThreadLine: () => "thread",
+        getPolicyAwareWorktreeDecisionButtons: (_sessionId, _options, allowedActions) => policyAwareButtons(allowedActions),
+        getWorktreeDecisionButtons: () => [[{ label: "Merge", callbackData: "merge" }]],
+        makeOpenPrButton: () => ({ label: "Open PR", callbackData: "open-pr" }),
+        isPrAvailable: () => true,
+        hasOpenPrForBranch: () => {
+          openPrLookupCount += 1;
+          return false;
+        },
+        worktreeMessages: new SessionWorktreeMessageService(),
+        enqueueMerge: async (_repoDir, fn) => { await fn(); },
+        mergeBranch,
+        spawnConflictResolver: async () => ({ id: "resolver-unused", name: "unused" }),
+        runAutoPr: async () => {
+          autoPrCalled = true;
+          return { success: true };
+        },
+      });
+
+      const session: any = {
+        id: "s-stale-pr-open-never-pr",
+        name: "stale-pr-open-never-pr",
+        status: "completed",
+        phase: "implementing",
+        lifecycle: "terminal",
+        worktreeState: "pr_open",
+        worktreeLifecycle: {
+          state: "pr_open",
+          updatedAt: "2026-06-30T12:00:00.000Z",
+          resolutionSource: "agent_pr",
+        },
+        worktreePrUrl: "https://github.com/example/repo/pull/310",
+        originalWorkdir: repoDir,
+        worktreePath,
+        worktreeBranch: branchName,
+        worktreeBaseBranch: "main",
+        worktreeStrategy: "auto-pr",
+        repoIntegrationPolicy: "never-pr",
+        pendingPlanApproval: false,
+      };
+
+      const result = await service.handleWorktreeStrategy(session);
+
+      assert.deepEqual(result, { notificationSent: true, worktreeRemoved: false });
+      assert.equal(autoPrCalled, false);
+      assert.equal(openPrLookupCount, 1);
+      assert.equal(notifications.length, 1);
+      assert.equal(notifications[0]?.label, "worktree-merge-ask");
+      assert.equal(session.lifecycle, "awaiting_worktree_decision");
+      assert.equal(session.worktreeState, "pending_decision");
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }

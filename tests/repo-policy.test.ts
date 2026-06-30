@@ -656,6 +656,19 @@ describe("repo policy resolution", () => {
       resolveWorktreePolicyDecision({ requestedStrategy: "auto-pr", policy: "never-pr", prAvailable: true }).strategy,
       "ask",
     );
+    assert.deepEqual(
+      resolveWorktreePolicyDecision({
+        requestedStrategy: "auto-pr",
+        policy: "never-pr",
+        prAvailable: true,
+        existingOpenPr: true,
+      }),
+      {
+        strategy: "auto-pr",
+        reason: "Repo policy forbids new PR creation; updating the existing open PR is allowed.",
+        allowedActions: { merge: true, pr: false },
+      },
+    );
   });
 });
 
@@ -697,6 +710,7 @@ describe("SessionWorktreeActionService repo policy planning", () => {
         kind: "no-change",
         repoDir,
         worktreePath,
+        branchName: "agent/native-absent",
         nativeBackendWorktree: true,
       });
     } finally {
@@ -810,6 +824,84 @@ describe("SessionWorktreeActionService repo policy planning", () => {
       if (action.kind === "decision") {
         assert.equal(action.policyBlocked, true);
         assert.equal(action.allowedActions.merge, false);
+        assert.equal(action.allowedActions.pr, false);
+      }
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not treat a stale persisted PR URL as an existing open PR", async () => {
+    const { repoDir, worktreePath, branchName } = createRepoWithWorktree("stale-pr-url");
+    try {
+      const service = new SessionWorktreeActionService({
+        shouldRunWorktreeStrategy: () => true,
+        isAlreadyMerged: () => false,
+        resolveWorktreeRepoDir: () => repoDir,
+        getWorktreeCompletionState: () => "has-commits",
+        isPrAvailable: () => true,
+      });
+      const action = await service.plan({
+        id: "s-stale-pr-url",
+        name: "stale-pr-url",
+        status: "completed",
+        lifecycle: "active",
+        phase: "implementing",
+        worktreePath,
+        worktreeBranch: branchName,
+        worktreeStrategy: "auto-pr",
+        repoIntegrationPolicy: "never-pr",
+        worktreePrUrl: "https://github.com/example/repo/pull/1",
+        originalWorkdir: repoDir,
+        harnessSessionId: "h-stale-pr-url",
+      } as any);
+
+      assert.equal(action.kind, "decision");
+      if (action.kind === "decision") {
+        assert.equal(action.strategy, "ask");
+        assert.equal(action.allowedActions.merge, true);
+        assert.equal(action.allowedActions.pr, false);
+      }
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not treat stale pr-open lifecycle as an existing open PR while planning", async () => {
+    const { repoDir, worktreePath, branchName } = createRepoWithWorktree("stale-lifecycle-open-pr");
+    try {
+      const service = new SessionWorktreeActionService({
+        shouldRunWorktreeStrategy: () => true,
+        isAlreadyMerged: () => false,
+        resolveWorktreeRepoDir: () => repoDir,
+        getWorktreeCompletionState: () => "has-commits",
+        isPrAvailable: () => true,
+      });
+      const action = await service.plan({
+        id: "s-stale-lifecycle-open-pr",
+        name: "stale-lifecycle-open-pr",
+        status: "completed",
+        lifecycle: "terminal",
+        phase: "implementing",
+        worktreeState: "pr_open",
+        worktreeLifecycle: {
+          state: "pr_open",
+          updatedAt: "2026-06-30T12:00:00.000Z",
+          resolutionSource: "agent_pr",
+        },
+        worktreePath,
+        worktreeBranch: branchName,
+        worktreeStrategy: "auto-pr",
+        repoIntegrationPolicy: "never-pr",
+        worktreePrUrl: "https://github.com/example/repo/pull/2",
+        originalWorkdir: repoDir,
+        harnessSessionId: "h-stale-lifecycle-open-pr",
+      } as any);
+
+      assert.equal(action.kind, "decision");
+      if (action.kind === "decision") {
+        assert.equal(action.strategy, "ask");
+        assert.equal(action.allowedActions.merge, true);
         assert.equal(action.allowedActions.pr, false);
       }
     } finally {

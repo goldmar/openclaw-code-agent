@@ -39,6 +39,7 @@ export class SessionWorktreeMessageService {
     worktreePath: string;
     preview: string;
     originThreadLine?: string;
+    preservedSummary?: string;
   }): SessionNotificationRequest {
     const {
       session,
@@ -47,21 +48,26 @@ export class SessionWorktreeMessageService {
       worktreePath,
       preview,
       originThreadLine,
+      preservedSummary,
     } = args;
-    const cleanupSummary = cleanupSucceeded
+    const cleanupSummary = preservedSummary ?? (cleanupSucceeded
       ? nativeBackendWorktree
         ? "native backend worktree released for backend cleanup"
         : "worktree cleaned up"
-      : `cleanup failed; worktree still exists at ${worktreePath}`;
+      : `cleanup failed; worktree still exists at ${worktreePath}`);
 
     return {
-      label: cleanupSucceeded ? "worktree-no-changes" : "worktree-no-changes-cleanup-failed",
-      idempotencyKey: `worktree-no-change:${session.id}:${cleanupSucceeded ? "cleaned" : "cleanup-failed"}`,
-      userMessage: cleanupSucceeded
+      label: preservedSummary
+        ? "worktree-no-changes-preserved"
+        : cleanupSucceeded ? "worktree-no-changes" : "worktree-no-changes-cleanup-failed",
+      idempotencyKey: `worktree-no-change:${session.id}:${preservedSummary ? "preserved" : cleanupSucceeded ? "cleaned" : "cleanup-failed"}`,
+      userMessage: preservedSummary
+        ? `ℹ️ [${session.name}] Session completed with no worktree changes to merge — ${preservedSummary}`
+        : cleanupSucceeded
         ? nativeBackendWorktree
-          ? `ℹ️ [${session.name}] Session completed with no changes — native backend worktree released for backend cleanup`
-          : `ℹ️ [${session.name}] Session completed with no changes — worktree cleaned up`
-        : `⚠️ [${session.name}] Session completed with no changes, but worktree cleanup failed. Worktree still exists at ${worktreePath}`,
+          ? `ℹ️ [${session.name}] Session completed with no worktree changes to merge — native backend worktree released for backend cleanup`
+          : `ℹ️ [${session.name}] Session completed with no worktree changes to merge — worktree cleaned up`
+        : `⚠️ [${session.name}] Session completed with no worktree changes to merge, but worktree cleanup failed. Worktree still exists at ${worktreePath}`,
       wakeMessage: buildNoChangeWakeMessage({
         sessionName: session.name,
         sessionId: session.id,

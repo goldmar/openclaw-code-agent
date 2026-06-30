@@ -189,11 +189,108 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       assert.equal(request.label, "worktree-no-changes");
       assert.match(request.userMessage, /worktree cleaned up/);
       assert.equal(request.notifyUser, "always");
-      assert.match(request.wakeMessage, /completed with no repository changes/);
+      assert.match(request.wakeMessage, /completed with no worktree changes to merge/);
       assert.match(request.wakeMessage, /Built rust-hello-world and verified the binary output/);
       const persisted = (sm as any).store.persisted.get("h-no-change");
       assert.equal(persisted.worktreePath, undefined);
       assert.equal(persisted.worktreeDisposition, "no-change-cleaned");
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+      cleanup();
+    }
+  });
+
+  it("cleans up no-change worktrees when persisted PR-open state is stale", async () => {
+    const repoDir = mkdtempSync(join(tmpdir(), "sm-worktree-pr-open-no-change-"));
+    let cleanup = () => {};
+    try {
+      git(repoDir, "init", "-b", "main");
+      git(repoDir, "config", "user.name", "Test User");
+      git(repoDir, "config", "user.email", "test@example.com");
+      writeFileSync(join(repoDir, "README.md"), "hello\n", "utf-8");
+      git(repoDir, "add", "README.md");
+      git(repoDir, "commit", "-m", "init");
+
+      const worktreePath = createWorktree(repoDir, "pr-open-no-change");
+      const branchName = getBranchName(worktreePath);
+      assert.ok(branchName, "worktree branch should exist");
+
+      const created = createTestSessionManager(5);
+      const sm = created.sm;
+      cleanup = created.cleanup;
+      stubDispatch(sm);
+      (sm as any).store.persisted.set("h-pr-open-no-change", {
+        harnessSessionId: "h-pr-open-no-change",
+        backendRef: { kind: "claude-code", conversationId: "h-pr-open-no-change" },
+        name: "pr-open-no-change",
+        prompt: "address comments on the existing PR",
+        workdir: repoDir,
+        route: {
+          provider: "telegram",
+          target: "12345",
+          sessionKey: "agent:main:telegram:group:12345",
+        },
+        status: "completed",
+        costUsd: 0,
+        worktreePath,
+        worktreeBranch: branchName,
+        worktreeStrategy: "auto-pr",
+        worktreeBaseBranch: "main",
+        worktreeState: "pr_open",
+        worktreePrUrl: "https://github.com/example/repo/pull/7",
+        worktreePrNumber: 7,
+        worktreeLifecycle: {
+          state: "pr_open",
+          updatedAt: new Date().toISOString(),
+          resolutionSource: "agent_pr",
+        },
+      });
+
+      const session = {
+        id: "s-pr-open-no-change",
+        name: "pr-open-no-change",
+        status: "completed",
+        phase: "implementing",
+        harnessSessionId: "h-pr-open-no-change",
+        prompt: "address comments on the existing PR",
+        originalWorkdir: repoDir,
+        worktreePath,
+        worktreeBranch: branchName,
+        worktreeStrategy: "auto-pr",
+        worktreeBaseBranch: "main",
+        worktreeState: "pr_open",
+        worktreePrUrl: "https://github.com/example/repo/pull/7",
+        worktreePrNumber: 7,
+        worktreeLifecycle: {
+          state: "pr_open",
+          updatedAt: new Date().toISOString(),
+          resolutionSource: "agent_pr",
+        },
+        pendingPlanApproval: false,
+        getOutput: () => [
+          "Reviewed PR comments and found no additional code changes needed.",
+          "Existing PR remains open.",
+        ],
+      };
+
+      const result = await (sm as any).handleWorktreeStrategy(session);
+
+      assert.deepEqual(result, { notificationSent: true, worktreeRemoved: true });
+      assert.equal(existsSync(worktreePath), false);
+      assert.equal(session.worktreePath, undefined);
+      const calls = (sm as any).__dispatchCalls;
+      assert.equal(calls.length, 1);
+      const [_sessionArg, request] = calls[0];
+      assert.equal(request.label, "worktree-no-changes");
+      assert.match(request.userMessage, /no worktree changes to merge/);
+      assert.match(request.userMessage, /worktree cleaned up/);
+      assert.match(request.wakeMessage, /completed with no worktree changes to merge/);
+      assert.doesNotMatch(request.wakeMessage, /completed with no repository changes/);
+      const persisted = (sm as any).store.persisted.get("h-pr-open-no-change");
+      assert.equal(persisted.worktreePath, undefined);
+      assert.equal(persisted.worktreeState, "none");
+      assert.equal(persisted.worktreeDisposition, "no-change-cleaned");
+      assert.equal(persisted.worktreeLifecycle?.state, "no_change");
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
       cleanup();
@@ -363,7 +460,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       assert.equal(calls.length, 1);
       const [_sessionArg, request] = calls[0];
       assert.equal(request.label, "worktree-no-changes");
-      assert.equal(request.userMessage, "ℹ️ [plan-report] Session completed with no changes — worktree cleaned up");
+      assert.equal(request.userMessage, "ℹ️ [plan-report] Session completed with no worktree changes to merge — worktree cleaned up");
       assert.match(request.wakeMessage, /plugin already sent the canonical completion status/i);
       assert.match(request.wakeMessage, /send the user one short factual completion summary/i);
       assert.match(request.wakeMessage, /Do this even when agent_output already contains a good final summary/);
@@ -424,7 +521,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       assert.equal(calls.length, 1);
       const [_sessionArg, request] = calls[0];
       assert.equal(request.label, "worktree-no-changes");
-      assert.equal(request.userMessage, "ℹ️ [investigation-report] Session completed with no changes — worktree cleaned up");
+      assert.equal(request.userMessage, "ℹ️ [investigation-report] Session completed with no worktree changes to merge — worktree cleaned up");
       assert.match(request.wakeMessage, /plugin already sent the canonical completion status/i);
       assert.match(request.wakeMessage, /send the user one short factual completion summary/i);
       assert.match(request.wakeMessage, /Do this even when agent_output already contains a good final summary/);

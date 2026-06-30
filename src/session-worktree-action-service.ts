@@ -5,6 +5,7 @@ import { getPrimarySessionLookupRef, usesNativeBackendWorktree } from "./session
 import { detectDefaultBranch, getDiffSummary } from "./worktree";
 import { resolveWorktreePolicyDecision } from "./repo-policy";
 import type { RepoPolicyResolution } from "./repo-policy";
+import type { RepoIntegrationPolicy } from "./types";
 
 type DiffSummary = NonNullable<ReturnType<typeof getDiffSummary>>;
 
@@ -29,6 +30,7 @@ export type PlannedWorktreeAction =
       kind: "no-change";
       repoDir: string;
       worktreePath: string;
+      branchName: string;
       nativeBackendWorktree: boolean;
     }
   | {
@@ -49,6 +51,7 @@ export type PlannedWorktreeAction =
   | {
       kind: "decision";
       strategy: "ask" | "delegate" | "auto-merge" | "auto-pr";
+      policy?: RepoIntegrationPolicy;
       policyReason?: string;
       policyBlocked?: boolean;
       allowedActions: {
@@ -137,6 +140,7 @@ export class SessionWorktreeActionService {
         kind: "no-change",
         repoDir,
         worktreePath,
+        branchName,
         nativeBackendWorktree,
       };
     }
@@ -149,6 +153,7 @@ export class SessionWorktreeActionService {
         kind: "no-change",
         repoDir,
         worktreePath,
+        branchName,
         nativeBackendWorktree,
       };
     }
@@ -194,12 +199,15 @@ export class SessionWorktreeActionService {
     }
 
     const livePolicy = session.repoIntegrationPolicy ? undefined : this.deps.resolveRepoPolicy?.(repoDir);
+    const effectivePolicy = session.repoIntegrationPolicy ?? livePolicy?.policy;
+    const prAvailable = session.repoIntegrationPolicy
+      ? this.deps.isPrAvailable(repoDir)
+      : livePolicy?.prAvailable ?? this.deps.isPrAvailable(repoDir);
     const policyDecision = resolveWorktreePolicyDecision({
       requestedStrategy: strategy,
-      policy: session.repoIntegrationPolicy ?? livePolicy?.policy,
-      prAvailable: session.repoIntegrationPolicy
-        ? this.deps.isPrAvailable(repoDir)
-        : livePolicy?.prAvailable ?? this.deps.isPrAvailable(repoDir),
+      policy: effectivePolicy,
+      prAvailable,
+      existingOpenPr: false,
     });
 
     if (!policyDecision.strategy) {
@@ -209,6 +217,7 @@ export class SessionWorktreeActionService {
     return {
       kind: "decision",
       strategy: policyDecision.strategy,
+      policy: effectivePolicy,
       policyReason: policyDecision.reason,
       policyBlocked: policyDecision.blocked,
       allowedActions: policyDecision.allowedActions,

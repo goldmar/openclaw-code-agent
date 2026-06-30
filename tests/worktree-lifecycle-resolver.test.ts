@@ -230,7 +230,7 @@ describe("resolveWorktreeLifecycle", () => {
     }
   });
 
-  it("preserves open PR lifecycle even when local release evidence exists", () => {
+  it("does not preserve stale PR state without current open PR evidence", () => {
     const repoDir = initRepo("resolver-pr-open-");
     try {
       git(repoDir, "checkout", "-b", "agent/pr-open");
@@ -256,9 +256,10 @@ describe("resolveWorktreeLifecycle", () => {
       });
 
       assert.equal(resolved.derivedState, "released");
-      assert.equal(resolved.preserve, true);
-      assert.equal(resolved.cleanupSafe, false);
-      assert.ok(resolved.reasons.includes("pr_open"));
+      assert.equal(resolved.preserve, false);
+      assert.equal(resolved.cleanupSafe, true);
+      assert.equal(resolved.evidence.prState, "none");
+      assert.equal(resolved.reasons.includes("pr_open"), false);
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }

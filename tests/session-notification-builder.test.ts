@@ -701,7 +701,7 @@ describe("session-notification-builder", () => {
       approvalExecutionState: "approved_then_implemented",
     });
 
-    assert.match(message, /completed with no repository changes/);
+    assert.match(message, /completed with no worktree changes to merge/);
     assert.match(message, /Worktree outcome: worktree cleaned up/);
     assert.match(message, /Requested permission mode: plan/);
     assert.match(message, /Deterministic approval\/execution state: approved_then_implemented/);
@@ -724,7 +724,7 @@ describe("session-notification-builder", () => {
       preview: "Built the project and verified the binary prints hello world.",
     });
 
-    assert.match(message, /completed with no repository changes/);
+    assert.match(message, /completed with no worktree changes to merge/);
     assert.match(message, /send the user one short factual completion summary/i);
     assert.match(message, /Do this even when agent_output already contains a good final summary/);
     assert.doesNotMatch(message, /already summarized by completed session/);

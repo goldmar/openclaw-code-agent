@@ -180,6 +180,7 @@ export function resolveWorktreePolicyDecision(args: {
   requestedStrategy: WorktreeStrategy | undefined;
   policy: RepoIntegrationPolicy | undefined;
   prAvailable: boolean;
+  existingOpenPr?: boolean;
 }): WorktreePolicyDecision {
   const requested = args.requestedStrategy;
   const allowedActions = resolveAllowedWorktreeActions(args);
@@ -217,6 +218,13 @@ export function resolveWorktreePolicyDecision(args: {
   }
   if (args.policy === "never-pr") {
     if (requested === "auto-pr") {
+      if (args.existingOpenPr && args.prAvailable) {
+        return {
+          strategy: "auto-pr",
+          reason: "Repo policy forbids new PR creation; updating the existing open PR is allowed.",
+          allowedActions,
+        };
+      }
       return {
         strategy: "ask",
         reason: "Repo policy forbids PR creation; auto-pr was downgraded to an explicit worktree decision.",

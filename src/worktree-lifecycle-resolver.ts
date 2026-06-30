@@ -79,7 +79,7 @@ export function resolveWorktreeLifecycle(
   let releaseNoopMerge = false;
   let branchAheadCount: number | undefined;
   let baseAheadCount: number | undefined;
-  let prState: WorktreeRepositoryEvidence["prState"] = session.worktreePrUrl ? "open" : "none";
+  let prState: WorktreeRepositoryEvidence["prState"] = "none";
   let prUrl = session.worktreePrUrl;
   let prNumber = session.worktreePrNumber;
 
@@ -162,7 +162,6 @@ export function resolveWorktreeLifecycle(
     || dirtyWorktreeEntries
     || (!resolvedByRepositoryEvidence && lifecycle.state === "pending_decision")
     || lifecycle.state === "merge_conflict_resolving"
-    || lifecycle.state === "pr_open"
     || prState === "open"
     || reasons.has("pr_merged_not_reflected_locally");
   const cleanupSafe = !preserve && (

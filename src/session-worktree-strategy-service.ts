@@ -67,6 +67,7 @@ export class SessionWorktreeStrategyService {
       ) => NotificationButton[][] | undefined;
       makeOpenPrButton: (sessionId: string) => NotificationButton;
       isPrAvailable?: (repoDir: string) => boolean;
+      hasOpenPrForBranch?: (repoDir: string, branchName: string, targetRepo?: string) => boolean;
       resolveRepoPolicy?: (repoDir: string) => RepoPolicyResolution;
       worktreeSummaryProvider?: WorktreeDecisionSummaryProvider;
       worktreeMessages: SessionWorktreeMessageService;
@@ -252,6 +253,7 @@ export class SessionWorktreeStrategyService {
         session,
         action.repoDir,
         action.worktreePath,
+        action.branchName,
         action.nativeBackendWorktree,
       );
     }
@@ -285,6 +287,16 @@ export class SessionWorktreeStrategyService {
       return { notificationSent: true, worktreeRemoved: false };
     }
     if (action.strategy === "ask") {
+      if (this.shouldUpdateExistingOpenPr(session, action.repoDir, action.branchName, action.policy, action.allowedActions)) {
+        return this.handleAutoPrStrategy(
+          session,
+          action.repoDir,
+          action.worktreePath,
+          action.branchName,
+          action.baseBranch,
+          action.allowedActions,
+        );
+      }
       return await this.handleAskStrategy(session, action.branchName, action.baseBranch, action.diffSummary, action.allowedActions, action.policyReason);
     }
     if (action.strategy === "delegate") {
@@ -320,8 +332,39 @@ export class SessionWorktreeStrategyService {
     session: Session,
     repoDir: string,
     worktreePath: string,
+    branchName: string,
     nativeBackendWorktree: boolean = usesNativeBackendWorktree(session),
   ): Promise<WorktreeStrategyResult> {
+    if (this.hasCurrentlyOpenPrForBranch(session, repoDir, branchName)) {
+      const updatedAt = new Date().toISOString();
+      this.updatePersistedSessionFor(session, {
+        lifecycle: "terminal",
+        worktreeState: "pr_open",
+        pendingWorktreeDecisionSince: undefined,
+        lastWorktreeReminderAt: undefined,
+        worktreeDecisionSnoozedUntil: undefined,
+        worktreeLifecycle: {
+          state: "pr_open",
+          updatedAt,
+          resolutionSource: session.worktreeLifecycle?.resolutionSource ?? "agent_pr",
+          baseBranch: session.worktreeBaseBranch,
+          targetRepo: session.worktreePrTargetRepo,
+          pushRemote: session.worktreePushRemote,
+          notes: ["no_new_worktree_commits_preserved_open_pr"],
+        },
+      });
+      this.deps.dispatchSessionNotification(session, this.deps.worktreeMessages.buildNoChangeNotification({
+        session,
+        nativeBackendWorktree,
+        cleanupSucceeded: true,
+        worktreePath,
+        preview: this.deps.getOutputPreview(session),
+        originThreadLine: this.deps.originThreadLine(session),
+        preservedSummary: "existing PR worktree preserved until merge",
+      }));
+      return { notificationSent: true, worktreeRemoved: false };
+    }
+
     const removed = nativeBackendWorktree
       ? true
       : removeWorktree(repoDir, worktreePath);
@@ -360,6 +403,23 @@ export class SessionWorktreeStrategyService {
       }));
     }
     return { notificationSent: true, worktreeRemoved: removed };
+  }
+
+  private hasCurrentlyOpenPrForBranch(session: Session, repoDir: string, branchName: string): boolean {
+    return this.deps.hasOpenPrForBranch?.(repoDir, branchName, session.worktreePrTargetRepo) === true;
+  }
+
+  private shouldUpdateExistingOpenPr(
+    session: Session,
+    repoDir: string,
+    branchName: string,
+    policy: RepoPolicyResolution["policy"] | undefined,
+    allowedActions: AllowedWorktreeActions,
+  ): boolean {
+    return session.worktreeStrategy === "auto-pr"
+      && policy === "never-pr"
+      && allowedActions.pr === false
+      && this.hasCurrentlyOpenPrForBranch(session, repoDir, branchName);
   }
 
   private async handleAskStrategy(
