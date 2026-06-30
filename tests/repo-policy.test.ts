@@ -656,6 +656,19 @@ describe("repo policy resolution", () => {
       resolveWorktreePolicyDecision({ requestedStrategy: "auto-pr", policy: "never-pr", prAvailable: true }).strategy,
       "ask",
     );
+    assert.deepEqual(
+      resolveWorktreePolicyDecision({
+        requestedStrategy: "auto-pr",
+        policy: "never-pr",
+        prAvailable: true,
+        existingOpenPr: true,
+      }),
+      {
+        strategy: "auto-pr",
+        reason: "Repo policy forbids new PR creation; updating the existing open PR is allowed.",
+        allowedActions: { merge: true, pr: false },
+      },
+    );
   });
 });
 

@@ -146,13 +146,6 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
       }
 
       const baseBranch = params.base_branch ?? detectDefaultBranch(originalWorkdir);
-      const repoPolicy = sessionManager.resolveRepoPolicy(originalWorkdir);
-      if (repoPolicy?.policy === "never-pr") {
-        return { content: [{ type: "text", text: `Error: Repo policy forbids PR creation for ${repoPolicy.identity?.repoRoot ?? originalWorkdir}.` }], meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
-      }
-      if (repoPolicy && !repoPolicy.prAvailable) {
-        return { content: [{ type: "text", text: `Error: PR automation is unavailable for ${repoPolicy.identity?.repoRoot ?? originalWorkdir}. Provider: ${repoPolicy.provider}.` }], meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
-      }
       const persistPrOpen = (args: {
         prUrl: string;
         prNumber?: number;
@@ -180,6 +173,15 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
 
       // Resolve target repository for cross-repo PRs
       const targetRepo = resolveTargetRepo(originalWorkdir, params.target_repo ?? persistedSession?.worktreePrTargetRepo);
+      const repoPolicy = sessionManager.resolveRepoPolicy(originalWorkdir);
+      const existingPrBeforePush = syncWorktreePR(originalWorkdir, branchName, targetRepo);
+      const updatingExistingOpenPr = existingPrBeforePush.exists && existingPrBeforePush.state === "open";
+      if (repoPolicy?.policy === "never-pr" && !updatingExistingOpenPr) {
+        return { content: [{ type: "text", text: `Error: Repo policy forbids PR creation for ${repoPolicy.identity?.repoRoot ?? originalWorkdir}.` }], meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
+      }
+      if (repoPolicy && !repoPolicy.prAvailable) {
+        return { content: [{ type: "text", text: `Error: PR automation is unavailable for ${repoPolicy.identity?.repoRoot ?? originalWorkdir}. Provider: ${repoPolicy.provider}.` }], meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
+      }
 
       // Push branch first (required for PR operations)
       if (!pushBranch(originalWorkdir, branchName)) {
@@ -334,6 +336,9 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
         } satisfies AgentPrExecuteResult;
       } else {
         // Case: No PR exists — create new PR
+        if (repoPolicy?.policy === "never-pr") {
+          return { content: [{ type: "text", text: `Error: Repo policy forbids PR creation for ${repoPolicy.identity?.repoRoot ?? originalWorkdir}.` }], meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
+        }
         const diffSummary = (!params.title || !params.body)
           ? getDiffSummary(originalWorkdir, branchName, baseBranch)
           : undefined;

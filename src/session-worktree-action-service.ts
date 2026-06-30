@@ -80,6 +80,7 @@ export class SessionWorktreeActionService {
         baseBranch: string,
       ) => WorktreeCompletionState;
       isPrAvailable: (repoDir: string) => boolean;
+      hasOpenPrForBranch?: (repoDir: string, branchName: string, targetRepo?: string) => boolean;
       resolveRepoPolicy?: (repoDir: string) => RepoPolicyResolution;
     },
   ) {}
@@ -194,12 +195,19 @@ export class SessionWorktreeActionService {
     }
 
     const livePolicy = session.repoIntegrationPolicy ? undefined : this.deps.resolveRepoPolicy?.(repoDir);
+    const effectivePolicy = session.repoIntegrationPolicy ?? livePolicy?.policy;
+    const prAvailable = session.repoIntegrationPolicy
+      ? this.deps.isPrAvailable(repoDir)
+      : livePolicy?.prAvailable ?? this.deps.isPrAvailable(repoDir);
+    const existingOpenPr = strategy === "auto-pr"
+      && effectivePolicy === "never-pr"
+      && prAvailable
+      && (Boolean(session.worktreePrUrl) || this.deps.hasOpenPrForBranch?.(repoDir, branchName, session.worktreePrTargetRepo) === true);
     const policyDecision = resolveWorktreePolicyDecision({
       requestedStrategy: strategy,
-      policy: session.repoIntegrationPolicy ?? livePolicy?.policy,
-      prAvailable: session.repoIntegrationPolicy
-        ? this.deps.isPrAvailable(repoDir)
-        : livePolicy?.prAvailable ?? this.deps.isPrAvailable(repoDir),
+      policy: effectivePolicy,
+      prAvailable,
+      existingOpenPr,
     });
 
     if (!policyDecision.strategy) {

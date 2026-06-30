@@ -67,6 +67,7 @@ export class SessionWorktreeStrategyService {
       ) => NotificationButton[][] | undefined;
       makeOpenPrButton: (sessionId: string) => NotificationButton;
       isPrAvailable?: (repoDir: string) => boolean;
+      hasOpenPrForBranch?: (repoDir: string, branchName: string, targetRepo?: string) => boolean;
       resolveRepoPolicy?: (repoDir: string) => RepoPolicyResolution;
       worktreeSummaryProvider?: WorktreeDecisionSummaryProvider;
       worktreeMessages: SessionWorktreeMessageService;
@@ -93,6 +94,7 @@ export class SessionWorktreeStrategyService {
       resolveWorktreeRepoDir: deps.resolveWorktreeRepoDir,
       getWorktreeCompletionState: deps.getWorktreeCompletionState,
       isPrAvailable: deps.isPrAvailable ?? (() => true),
+      hasOpenPrForBranch: deps.hasOpenPrForBranch,
       resolveRepoPolicy: deps.resolveRepoPolicy,
     });
   }

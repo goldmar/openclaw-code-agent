@@ -308,6 +308,95 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
     }
   });
 
+  it("updates an existing open PR branch under never-pr policy without prompting for a worktree decision", async () => {
+    const { repoDir, worktreePath, branchName } = createMergeableWorktree("existing-pr-never-pr");
+    const notifications: Array<Record<string, unknown>> = [];
+    const patches: Array<Record<string, unknown>> = [];
+    let autoPrCalled = false;
+    let openPrLookup: { repoDir: string; branchName: string; targetRepo?: string } | undefined;
+    try {
+      const service = new SessionWorktreeStrategyService({
+        shouldRunWorktreeStrategy: () => true,
+        isAlreadyMerged: () => false,
+        resolveWorktreeRepoDir: (dir) => dir,
+        getWorktreeCompletionState: () => "has-commits",
+        updatePersistedSession: (_ref, patch) => {
+          patches.push(patch as Record<string, unknown>);
+          Object.assign(session, patch);
+          return true;
+        },
+        dispatchSessionNotification: (_session, request) => {
+          notifications.push(request as Record<string, unknown>);
+        },
+        getOutputPreview: () => "",
+        originThreadLine: () => "thread",
+        getPolicyAwareWorktreeDecisionButtons: () => {
+          throw new Error("existing PR updates must not request manual decision buttons");
+        },
+        getWorktreeDecisionButtons: () => [[{ label: "Merge", callbackData: "merge" }]],
+        makeOpenPrButton: () => ({ label: "Open PR", callbackData: "open-pr" }),
+        isPrAvailable: () => true,
+        hasOpenPrForBranch: (lookupRepoDir, lookupBranchName, targetRepo) => {
+          openPrLookup = { repoDir: lookupRepoDir, branchName: lookupBranchName, targetRepo };
+          return true;
+        },
+        worktreeMessages: new SessionWorktreeMessageService(),
+        enqueueMerge: async (_repoDir, fn) => { await fn(); },
+        mergeBranch,
+        spawnConflictResolver: async () => ({ id: "resolver-unused", name: "unused" }),
+        runAutoPr: async (_session, baseBranch) => {
+          autoPrCalled = true;
+          assert.equal(baseBranch, "main");
+          Object.assign(session, {
+            lifecycle: "terminal",
+            worktreeState: "pr_open",
+            pendingWorktreeDecisionSince: undefined,
+            worktreeLifecycle: {
+              state: "pr_open",
+              updatedAt: "2026-06-30T12:00:00.000Z",
+              resolutionSource: "agent_pr",
+            },
+            worktreePrUrl: "https://github.com/example/repo/pull/310",
+          });
+          return { success: true };
+        },
+      });
+
+      const session: any = {
+        id: "s-existing-pr-never-pr",
+        name: "existing-pr-never-pr",
+        status: "completed",
+        phase: "implementing",
+        lifecycle: "terminal",
+        worktreeState: "active",
+        originalWorkdir: repoDir,
+        worktreePath,
+        worktreeBranch: branchName,
+        worktreeBaseBranch: "main",
+        worktreeStrategy: "auto-pr",
+        repoIntegrationPolicy: "never-pr",
+        pendingPlanApproval: false,
+      };
+
+      const result = await service.handleWorktreeStrategy(session);
+
+      assert.deepEqual(result, { notificationSent: true, worktreeRemoved: false });
+      assert.equal(autoPrCalled, true);
+      assert.deepEqual(openPrLookup, { repoDir, branchName, targetRepo: undefined });
+      assert.equal(notifications.length, 0);
+      assert.equal(session.lifecycle, "terminal");
+      assert.equal(session.worktreeState, "pr_open");
+      assert.equal(session.worktreeLifecycle?.state, "pr_open");
+      assert.equal(session.pendingWorktreeDecisionSince, undefined);
+      assert.equal(
+        patches.some((patch) => patch.lifecycle === "awaiting_worktree_decision" || patch.worktreeState === "pending_decision"),
+        false,
+      );
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
   it("releases an auto-pr worktree without suppressing the generic terminal wake", async () => {
     const repoDir = mkdtempSync(join(tmpdir(), "openclaw-auto-pr-existing-head-"));
     try {
