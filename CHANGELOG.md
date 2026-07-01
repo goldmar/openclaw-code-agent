@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.5.9] - 2026-07-01
+
+### Added
+- Added guarded Codex-only Telegram proof orchestration with explicit live gates, credential lease handling, deterministic dry-run planning, public artifact staging, and redaction so release proof paths can be validated without sending Telegram messages, acquiring real credentials, restarting Gateway, or driving Desktop automation by default.
+
+### Fixed
+- Fixed `agent_pr` follow-up sessions that already reference an existing target PR so safe helper-branch updates fast-forward the original PR branch instead of opening a sibling PR, while divergent helper branches are rejected.
+- Fixed TaskFlow mirror reconciliation so terminal task state is normalized, restored, and cleared consistently across session storage, active session sync, lifecycle transitions, and manager summaries.
+
 ## [4.5.8] - 2026-07-01
 
 ### Fixed
@@ -555,7 +564,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Default Codex approval policy to `on-request`.
 - Raised the default session limit.
 
-[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.5.7...HEAD
+[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.5.9...HEAD
+[4.5.9]: https://github.com/goldmar/openclaw-code-agent/compare/v4.5.8...v4.5.9
+[4.5.8]: https://github.com/goldmar/openclaw-code-agent/compare/v4.5.7...v4.5.8
 [4.5.7]: https://github.com/goldmar/openclaw-code-agent/compare/v4.5.6...v4.5.7
 [4.5.6]: https://github.com/goldmar/openclaw-code-agent/compare/v4.5.5...v4.5.6
 [4.5.5]: https://github.com/goldmar/openclaw-code-agent/compare/v4.5.4...v4.5.5
