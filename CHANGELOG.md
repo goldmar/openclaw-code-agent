@@ -7,8 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.5.8] - 2026-07-01
+
 ### Fixed
+- Prevented duplicate helper PR follow-through by resolving existing PR state before offering or creating another PR, preserving correct worktree lifecycle cleanup for branch content that already has an associated PR.
 - Sent resumed `agent_launch` sessions as distinct `▶️ [name] Resumed` notifications and made resumed launch, auto-resume, terminal completion, and terminal worktree notification idempotency cycle-aware so later legitimate lifecycle events are not suppressed as duplicates.
+
+### Changed
+- Isolated test runs from the live OpenClaw Code Agent session store by default so local verification cannot mutate operator session state.
+- Refreshed lockfile resolutions for `@types/node`, `@anthropic-ai/claude-agent-sdk`, and `nanoid`.
 
 ## [4.5.7] - 2026-06-30
 
