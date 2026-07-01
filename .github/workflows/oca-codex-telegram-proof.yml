@@ -1,0 +1,142 @@
+name: OCA Codex Telegram Proof
+
+on:
+  workflow_dispatch:
+    inputs:
+      scenario:
+        description: Codex proof scenario to run
+        required: false
+        default: basic
+        type: choice
+        options:
+          - basic
+          - plan
+          - pending-question
+          - approval
+          - worktree
+          - fail
+          - interrupted
+      candidate_ref:
+        description: Candidate ref to check out
+        required: false
+        default: ""
+        type: string
+      crabbox_provider:
+        description: Crabbox provider reserved for native Telegram Desktop capture
+        required: false
+        default: local-container
+        type: choice
+        options:
+          - local-container
+          - aws
+          - hetzner
+      crabbox_lease_id:
+        description: Optional existing Crabbox desktop lease id or slug
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NODE_VERSION: "22"
+  OCA_CODEX_PROOF_OUTPUT_DIR: .artifacts/qa-e2e/oca-codex-telegram
+
+jobs:
+  codex_telegram_proof:
+    name: Codex harness Telegram proof
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: qa-live-shared
+    steps:
+      - name: Wait for older OCA Telegram proof run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          current_created="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" --jq .created_at)"
+          stale_before="$(date -u -d '8 hours ago' +%Y-%m-%dT%H:%M:%SZ)"
+          while true; do
+            blockers="$(
+              for status in queued in_progress waiting pending requested; do
+                gh run list --repo "$GITHUB_REPOSITORY" --workflow oca-codex-telegram-proof.yml --status "$status" --limit 100 --json databaseId,status,createdAt,url \
+                  | jq -r \
+                    --argjson current_id "$GITHUB_RUN_ID" \
+                    --arg current_created "$current_created" \
+                    --arg stale_before "$stale_before" \
+                    '.[] | select(.databaseId != $current_id) | select(.createdAt >= $stale_before) | select(.createdAt < $current_created or (.createdAt == $current_created and .databaseId < $current_id)) | "\(.createdAt)\t#\(.databaseId)\t\(.status)\t\(.url)"'
+              done | sort -u
+            )"
+            if [[ -z "$blockers" ]]; then
+              break
+            fi
+            echo "Waiting for older OCA Telegram proof run:"
+            printf '%s\n' "$blockers" | head -n 10
+            sleep 60
+          done
+
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.candidate_ref || github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.30.0
+
+      - name: Prefer configured pnpm binary
+        run: echo "$PNPM_HOME/bin" >> "$GITHUB_PATH"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify proof scaffolding
+        run: pnpm run verify
+
+      - name: Run local Codex proof smoke
+        env:
+          OPENCLAW_TELEGRAM_USER_CRABBOX_PROVIDER: ${{ inputs.crabbox_provider }}
+          CRABBOX_LEASE_ID: ${{ inputs.crabbox_lease_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm proof:codex-local \
+            --scenario "${{ inputs.scenario }}" \
+            --output-dir "${OCA_CODEX_PROOF_OUTPUT_DIR}/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+
+      - name: Release leaked Telegram proof leases
+        if: ${{ always() }}
+        env:
+          OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
+          OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! -d .artifacts/qa-e2e ]]; then
+            exit 0
+          fi
+          echo "No native Telegram lease is acquired by the phase-1 local proof smoke."
+          find .artifacts/qa-e2e -path '*/.session/lease.json' -type f -print
+
+      - name: Upload OCA Codex proof artifacts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: oca-codex-telegram-proof-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.OCA_CODEX_PROOF_OUTPUT_DIR }}/${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: error
