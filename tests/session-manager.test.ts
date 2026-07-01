@@ -1930,6 +1930,7 @@ describe("SessionManager turn-end wake", () => {
     const [sessionArg, request] = calls[0];
     assert.equal(sessionArg.id, "s-turn");
     assert.equal(request.label, "turn-complete");
+    assert.equal(request.idempotencyKey, "turn-complete:s-turn:unknown-backend-session:0:0");
     assert.equal(request.notifyUser, "always");
     assert.match(request.wakeMessage, /Name: deterministic/);
     assert.match(request.wakeMessage, /Status: running/);
@@ -3114,6 +3115,8 @@ describe("SessionManager terminal wakes", () => {
     assert.equal((sm as any).__dispatchCalls.length, 1);
     const [_sessionArg, request] = (sm as any).__dispatchCalls[0];
     assert.equal(request.label, "completed");
+    assert.match(request.idempotencyKey, /^terminal-completed:s-complete:completed:/);
+    assert.match(request.completionWakeOutcomeKey, /^terminal:s-complete:completed:/);
     assert.equal(request.notifyUser, "always");
     assert.match(request.userMessage, /✅ \[done\] Completed/);
     assert.match(request.wakeMessageOnNotifySuccess, /Coding agent session completed/);

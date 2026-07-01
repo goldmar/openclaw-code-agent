@@ -107,6 +107,26 @@ function isCurrentPendingInputQuestion(
   );
 }
 
+function buildTurnCycleKey(session: Pick<Session, "result">): string {
+  return [
+    session.result?.session_id ?? "unknown-backend-session",
+    session.result?.num_turns ?? 0,
+    session.result?.duration_ms ?? 0,
+  ].join(":");
+}
+
+function buildTerminalCycleKey(
+  session: Pick<Session, "status" | "completedAt" | "startedAt" | "result" | "killReason">,
+): string {
+  return [
+    session.status,
+    session.completedAt ?? session.startedAt ?? "unknown-time",
+    session.result?.session_id ?? "unknown-backend-session",
+    session.result?.num_turns ?? 0,
+    session.killReason ?? "unknown",
+  ].join(":");
+}
+
 export class SessionLifecycleService {
   constructor(
     private readonly deps: {
@@ -116,7 +136,7 @@ export class SessionLifecycleService {
       resolveWorktreeRepoDir: (repoDir: string | undefined, worktreePath?: string) => string | undefined;
       updatePersistedSession: (ref: string, patch: Partial<PersistedSessionInfo>) => boolean;
       dispatchSessionNotification: DispatchNotification;
-      notifySession: (session: Session, text: string, label?: string) => void;
+      notifySession: (session: Session, text: string, label?: string, idempotencyKey?: string) => void;
       clearRetryTimersForSession: (sessionId: string) => void;
       hasTurnCompleteWakeMarker: (sessionId: string) => boolean;
       shouldEmitTurnCompleteWake: (session: Session) => boolean;
@@ -660,7 +680,7 @@ export class SessionLifecycleService {
 
     this.deps.dispatchSessionNotification(session, {
       label: "turn-complete",
-      idempotencyKey: `turn-complete:${session.id}:${session.result?.num_turns ?? 0}`,
+      idempotencyKey: `turn-complete:${session.id}:${buildTurnCycleKey(session)}`,
       userMessage: payload.userMessage,
       wakeMessage: payload.wakeMessage,
       notifyUser: "always",
@@ -682,19 +702,21 @@ export class SessionLifecycleService {
       originThreadLine: this.deps.originThreadLine(session),
       preview,
     });
+    const terminalCycleKey = buildTerminalCycleKey(session);
+    const terminalOutcomeKey = `terminal:${session.id}:${terminalCycleKey}`;
     let canonicalStatusDelivered: boolean | undefined;
     this.deps.dispatchSessionNotification(session, {
       label: "completed",
-      idempotencyKey: `terminal-completed:${session.id}`,
+      idempotencyKey: `terminal-completed:${session.id}:${terminalCycleKey}`,
       userMessage: payload.userMessage,
       notifyUser: "always",
       completionSummary: {
         required: followupSummaryRequired,
         producer: "terminal",
-        outcomeKey: `terminal:${session.id}`,
+        outcomeKey: terminalOutcomeKey,
       },
       completionWakeSummaryRequired: followupSummaryRequired,
-      completionWakeOutcomeKey: `terminal:${session.id}`,
+      completionWakeOutcomeKey: terminalOutcomeKey,
       requireDirectUserNotification: true,
       wakeMessageOnNotifySuccess: followupSummaryRequired ? payload.wakeMessageOnNotifySuccess : undefined,
       wakeMessageOnNotifyFailed: followupSummaryRequired ? payload.wakeMessageOnNotifyFailed : undefined,
@@ -740,7 +762,7 @@ export class SessionLifecycleService {
     });
     this.deps.dispatchSessionNotification(session, {
       label: "failed",
-      idempotencyKey: `terminal-failed:${session.id}:${errorSummary}`,
+      idempotencyKey: `terminal-failed:${session.id}:${buildTerminalCycleKey(session)}:${errorSummary}`,
       userMessage: payload.userMessage,
       wakeMessage: payload.wakeMessage,
       notifyUser: "always",

@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Sent resumed `agent_launch` sessions as distinct `▶️ [name] Resumed` notifications and made resumed launch, auto-resume, terminal completion, and terminal worktree notification idempotency cycle-aware so later legitimate lifecycle events are not suppressed as duplicates.
+
 ## [4.5.7] - 2026-06-30
 
 ### Changed
