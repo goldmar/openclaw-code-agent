@@ -4,10 +4,11 @@ import { Session } from "../src/session";
 import {
   buildSessionTaskTitle,
   mapSessionTaskTerminalStatus,
+  reconcilePersistedSessionTaskMirror,
   resolveSessionTaskLifecycle,
 } from "../src/session-task-lifecycle";
 import { setPluginRuntime } from "../src/runtime-store";
-import type { SessionConfig } from "../src/types";
+import type { PersistedSessionInfo, SessionConfig } from "../src/types";
 
 const BASE_CONFIG: SessionConfig = {
   prompt: "Implement task lifecycle integration",
@@ -78,12 +79,14 @@ describe("session task lifecycle phase-1 adapter", () => {
     const session = createSession();
     session.startedAt = 100;
     sink.create(session);
+    assert.deepEqual(session.taskFlowMirror, { flowId: "flow-1", revision: 1 });
     session.transition("running");
     sink.progress(session);
     session.markAwaitingUserInput();
     sink.progress(session);
     session.complete("done");
     sink.finalize(session);
+    assert.deepEqual(session.taskFlowMirror, { flowId: "flow-1", revision: 4 });
 
     assert.equal(receivedCtx, ctx);
     assert.deepEqual(calls.map((call) => call.method), [
@@ -358,5 +361,115 @@ describe("session task lifecycle phase-1 adapter", () => {
     assert.ok(
       buildSessionTaskTitle({ prompt: "x".repeat(400), name: "fallback" } as Session).length <= 160,
     );
+  });
+
+  it("reconciles terminal persisted sessions to terminal managed TaskFlow mirrors", () => {
+    const { calls, taskFlow } = createTaskFlowRecorder();
+    setPluginRuntime({
+      taskFlow: {
+        fromToolContext() {
+          return taskFlow;
+        },
+      },
+    });
+    const session = {
+      sessionId: "session-terminal",
+      harnessSessionId: "h-terminal",
+      backendRef: { kind: "codex-app-server", conversationId: "h-terminal" },
+      name: "terminal",
+      prompt: "p",
+      workdir: "/tmp",
+      status: "completed",
+      lifecycle: "terminal",
+      killReason: "done",
+      costUsd: 0,
+      route: { provider: "telegram", target: "123", sessionKey: "agent:main:telegram:group:123" },
+      taskFlowMirror: { flowId: "flow-1", revision: 7, status: "running" },
+    } satisfies PersistedSessionInfo;
+
+    const reconciled = reconcilePersistedSessionTaskMirror(session);
+
+    assert.equal(reconciled?.revision, 2);
+    assert.deepEqual(calls.map((call) => call.method), ["finish"]);
+    assert.equal(calls[0].params.flowId, "flow-1");
+    assert.equal(calls[0].params.expectedRevision, 7);
+    assert.equal((calls[0].params.stateJson as Record<string, unknown>).terminalStatus, "succeeded");
+  });
+
+  it("fails recovered non-live persisted mirrors with no actionable wait state", () => {
+    const { calls, taskFlow } = createTaskFlowRecorder();
+    setPluginRuntime({
+      taskFlow: {
+        fromToolContext() {
+          return taskFlow;
+        },
+      },
+    });
+    const session = {
+      sessionId: "session-lost",
+      harnessSessionId: "h-lost",
+      backendRef: { kind: "codex-app-server", conversationId: "h-lost" },
+      name: "lost",
+      prompt: "p",
+      workdir: "/tmp",
+      status: "killed",
+      lifecycle: "terminal",
+      killReason: "unknown",
+      runtimeState: "stopped",
+      runtimeRecovery: {
+        recoveredAt: "2026-07-01T00:00:00.000Z",
+        reason: "persisted-running-without-runtime",
+        rawStatus: "running",
+        normalizedStatus: "killed",
+        normalizedLifecycle: "suspended",
+        normalizedRuntimeState: "stopped",
+      },
+      costUsd: 0,
+      route: { provider: "telegram", target: "123", sessionKey: "agent:main:telegram:group:123" },
+      taskFlowMirror: { flowId: "flow-1", revision: 3, status: "running" },
+    } satisfies PersistedSessionInfo;
+
+    reconcilePersistedSessionTaskMirror(session);
+
+    assert.deepEqual(calls.map((call) => call.method), ["fail"]);
+    assert.equal(calls[0].params.expectedRevision, 3);
+    assert.equal(calls[0].params.blockedSummary, "Lost after OCA restart without live process");
+    assert.equal((calls[0].params.stateJson as Record<string, unknown>).terminalStatus, "lost");
+  });
+
+  it("keeps legitimate waiting persisted mirrors waiting during reconciliation", () => {
+    const { calls, taskFlow } = createTaskFlowRecorder();
+    setPluginRuntime({
+      taskFlow: {
+        fromToolContext() {
+          return taskFlow;
+        },
+      },
+    });
+    const session = {
+      sessionId: "session-waiting",
+      harnessSessionId: "h-waiting",
+      backendRef: { kind: "codex-app-server", conversationId: "h-waiting" },
+      name: "waiting",
+      prompt: "p",
+      workdir: "/tmp",
+      status: "killed",
+      lifecycle: "awaiting_plan_decision",
+      runtimeState: "stopped",
+      pendingPlanApproval: true,
+      costUsd: 0,
+      route: { provider: "telegram", target: "123", sessionKey: "agent:main:telegram:group:123" },
+      taskFlowMirror: { flowId: "flow-1", revision: 5, status: "running" },
+    } satisfies PersistedSessionInfo;
+
+    reconcilePersistedSessionTaskMirror(session);
+
+    assert.deepEqual(calls.map((call) => call.method), ["setWaiting"]);
+    assert.equal(calls[0].params.expectedRevision, 5);
+    assert.equal(calls[0].params.currentStep, "Waiting for plan approval");
+    assert.deepEqual(calls[0].params.waitJson, {
+      reason: "Waiting for plan approval",
+      sessionId: "session-waiting",
+    });
   });
 });

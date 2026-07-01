@@ -29,6 +29,7 @@ import type {
   SessionBackendRef,
   RepoIntegrationPolicy,
   RepoProviderKind,
+  PersistedTaskFlowMirror,
 } from "./types";
 import {
   getGlobalMcpServers,
@@ -203,6 +204,7 @@ export class Session extends EventEmitter {
   latestPlanArtifact?: PlanArtifact;
   latestPlanArtifactVersion?: number;
   runtimeState: SessionRuntimeState = "live";
+  taskFlowMirror?: PersistedTaskFlowMirror;
   deliveryState: SessionDeliveryState = "idle";
 
   // AskUserQuestion intercept

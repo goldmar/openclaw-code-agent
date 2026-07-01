@@ -1,15 +1,21 @@
-import { describe, it, beforeEach } from "node:test";
+import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { SessionManager } from "../src/session-manager";
 import { setPluginConfig } from "../src/config";
+import { setPluginRuntime } from "../src/runtime-store";
+import { STORE_SCHEMA_VERSION } from "../src/session-store-normalization";
 import { buildPresentation } from "../src/direct-notification-transport";
 import { SessionReminderService } from "../src/session-reminder-service";
 import { SessionNotificationService } from "../src/session-notifications";
 import { SessionWorktreeDecisionService } from "../src/session-worktree-decision-service";
 import { SessionMetricsRecorder } from "../src/session-metrics";
+
+afterEach(() => {
+  setPluginRuntime(undefined);
+});
 
 // ---------------------------------------------------------------------------
 // Helper to create a fake session-like object for injection
@@ -79,6 +85,137 @@ function buttonLabels(rows: Array<Array<{ label: string }>> | undefined): string
 function hasButton(rows: string[][], label: string): boolean {
   return rows.some((row) => row.includes(label));
 }
+
+function writeManagerStore(indexPath: string, sessions: Record<string, unknown>[]): void {
+  writeFileSync(indexPath, JSON.stringify({
+    schemaVersion: STORE_SCHEMA_VERSION,
+    sessions: sessions.map((session) => ({
+      route: {
+        provider: "telegram",
+        accountId: "bot",
+        target: "12345",
+        threadId: "42",
+        sessionKey: "agent:main:telegram:group:12345:topic:42",
+      },
+      costUsd: 0,
+      ...session,
+    })),
+    actionTokens: [],
+    repoPolicies: [],
+  }), "utf-8");
+}
+
+describe("SessionManager TaskFlow mirror reconciliation", () => {
+  it("fails recovered non-live running mirrors on load when there is no actionable wait", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-manager-taskflow-lost-"));
+    try {
+      const indexPath = join(dir, "sessions.json");
+      writeManagerStore(indexPath, [{
+        sessionId: "lost-session",
+        harnessSessionId: "h-lost-session",
+        backendRef: { kind: "codex-app-server", conversationId: "h-lost-session" },
+        name: "lost-session",
+        prompt: "p",
+        workdir: "/tmp",
+        status: "running",
+        lifecycle: "active",
+        runtimeState: "live",
+        taskFlowMirror: { flowId: "flow-lost", revision: 3, status: "running" },
+      }]);
+
+      const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
+      setPluginRuntime({
+        taskFlow: {
+          fromToolContext() {
+            return {
+              setWaiting(params: Record<string, unknown>) {
+                calls.push({ method: "setWaiting", params });
+                return { applied: true, flow: { flowId: "flow-lost", revision: 4, status: "waiting" } };
+              },
+              finish(params: Record<string, unknown>) {
+                calls.push({ method: "finish", params });
+                return { applied: true, flow: { flowId: "flow-lost", revision: 4, status: "succeeded" } };
+              },
+              fail(params: Record<string, unknown>) {
+                calls.push({ method: "fail", params });
+                return { applied: true, flow: { flowId: "flow-lost", revision: 4, status: "failed" } };
+              },
+            };
+          },
+        },
+      });
+
+      new SessionManager(5, 50, { store: { indexPath, env: {} } });
+
+      assert.deepEqual(calls.map((call) => call.method), ["fail"]);
+      assert.equal(calls[0].params.flowId, "flow-lost");
+      assert.equal((calls[0].params.stateJson as Record<string, unknown>).terminalStatus, "lost");
+      const saved = JSON.parse(readFileSync(indexPath, "utf-8"));
+      assert.deepEqual(saved.sessions[0].taskFlowMirror, {
+        flowId: "flow-lost",
+        revision: 4,
+        status: "failed",
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps plan-approval mirrors waiting on load", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-manager-taskflow-wait-"));
+    try {
+      const indexPath = join(dir, "sessions.json");
+      writeManagerStore(indexPath, [{
+        sessionId: "waiting-session",
+        harnessSessionId: "h-waiting-session",
+        backendRef: { kind: "codex-app-server", conversationId: "h-waiting-session" },
+        name: "waiting-session",
+        prompt: "p",
+        workdir: "/tmp",
+        status: "running",
+        lifecycle: "awaiting_plan_decision",
+        runtimeState: "live",
+        pendingPlanApproval: true,
+        taskFlowMirror: { flowId: "flow-waiting", revision: 8, status: "running" },
+      }]);
+
+      const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
+      setPluginRuntime({
+        taskFlow: {
+          fromToolContext() {
+            return {
+              setWaiting(params: Record<string, unknown>) {
+                calls.push({ method: "setWaiting", params });
+                return { applied: true, flow: { flowId: "flow-waiting", revision: 9, status: "waiting" } };
+              },
+              finish(params: Record<string, unknown>) {
+                calls.push({ method: "finish", params });
+                return { applied: true, flow: { flowId: "flow-waiting", revision: 9, status: "succeeded" } };
+              },
+              fail(params: Record<string, unknown>) {
+                calls.push({ method: "fail", params });
+                return { applied: true, flow: { flowId: "flow-waiting", revision: 9, status: "failed" } };
+              },
+            };
+          },
+        },
+      });
+
+      new SessionManager(5, 50, { store: { indexPath, env: {} } });
+
+      assert.deepEqual(calls.map((call) => call.method), ["setWaiting"]);
+      assert.equal(calls[0].params.currentStep, "Waiting for plan approval");
+      const saved = JSON.parse(readFileSync(indexPath, "utf-8"));
+      assert.deepEqual(saved.sessions[0].taskFlowMirror, {
+        flowId: "flow-waiting",
+        revision: 9,
+        status: "waiting",
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
 
 // =========================================================================
 // uniqueName

@@ -469,6 +469,7 @@ export interface PersistedSessionInfo {
   worktreeState?: SessionWorktreeState;
   runtimeState?: SessionRuntimeState;
   runtimeRecovery?: SessionRuntimeRecoveryDiagnostics;
+  taskFlowMirror?: PersistedTaskFlowMirror;
   deliveryState?: SessionDeliveryState;
   notificationDedupe?: SessionNotificationDedupeRecord[];
   completionSummaryDedupe?: SessionCompletionSummaryRecord[];
@@ -552,6 +553,12 @@ export interface PersistedSessionInfo {
   worktreeDismissedAt?: string;
   worktreeLifecycle?: PersistedWorktreeLifecycle;
   resumable?: boolean;
+}
+
+export interface PersistedTaskFlowMirror {
+  flowId: string;
+  revision: number;
+  status?: "queued" | "running" | "waiting" | "blocked" | "succeeded" | "failed" | "cancelled" | "lost";
 }
 
 export interface RepoPolicyRecord {
