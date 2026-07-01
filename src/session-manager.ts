@@ -1589,7 +1589,7 @@ export class SessionManager {
   }
 
   private shouldEmitTurnCompleteWake(session: Session): boolean {
-    const marker = `${session.result?.session_id ?? ""}|${session.result?.num_turns ?? 0}|${session.result?.duration_ms ?? 0}`;
+    const marker = `${session.startedAt ?? 0}|${session.result?.session_id ?? ""}|${session.result?.num_turns ?? 0}`;
     const prev = this.lastTurnCompleteMarkers.get(session.id);
     if (prev === marker) {
       console.info(
@@ -1603,7 +1603,7 @@ export class SessionManager {
   }
 
   private shouldEmitTerminalWake(session: Session): boolean {
-    const marker = `${session.status}|${session.completedAt ?? 0}|${session.result?.session_id ?? ""}|${session.result?.num_turns ?? 0}|${session.killReason}`;
+    const marker = `${session.status}|${session.startedAt ?? 0}|${session.result?.session_id ?? ""}|${session.result?.num_turns ?? 0}|${session.killReason}`;
     const prev = this.lastTerminalWakeMarkers.get(session.id);
     if (prev === marker) return false;
     this.lastTerminalWakeMarkers.set(session.id, marker);

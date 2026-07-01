@@ -107,20 +107,20 @@ function isCurrentPendingInputQuestion(
   );
 }
 
-function buildTurnCycleKey(session: Pick<Session, "result">): string {
+function buildTurnCycleKey(session: Pick<Session, "startedAt" | "result">): string {
   return [
+    session.startedAt ?? "unknown-started-at",
     session.result?.session_id ?? "unknown-backend-session",
     session.result?.num_turns ?? 0,
-    session.result?.duration_ms ?? 0,
   ].join(":");
 }
 
 function buildTerminalCycleKey(
-  session: Pick<Session, "status" | "completedAt" | "startedAt" | "result" | "killReason">,
+  session: Pick<Session, "status" | "startedAt" | "result" | "killReason">,
 ): string {
   return [
     session.status,
-    session.completedAt ?? session.startedAt ?? "unknown-time",
+    session.startedAt ?? "unknown-started-at",
     session.result?.session_id ?? "unknown-backend-session",
     session.result?.num_turns ?? 0,
     session.killReason ?? "unknown",
