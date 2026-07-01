@@ -357,14 +357,14 @@ describe("executeRespond", () => {
     } as any);
     sm.idIndex.set("dead-plan-shutdown", "harness-plan-shutdown");
 
-    const notifications: Array<{ text: string; label?: string }> = [];
+    const notifications: Array<{ text: string; label?: string; idempotencyKey?: string }> = [];
     let capturedConfig: any;
     sm.spawn = (config: any) => {
       capturedConfig = config;
-      return createStubSession({ name: "plan-session-shutdown", id: "dead-plan-shutdown" });
+      return createStubSession({ name: "plan-session-shutdown", id: "dead-plan-shutdown", startedAt: 1_780_000_003_000 });
     };
-    (sm as any).notifySession = (_session: any, text: string, label?: string) => {
-      notifications.push({ text, label });
+    (sm as any).notifySession = (_session: any, text: string, label?: string, idempotencyKey?: string) => {
+      notifications.push({ text, label, idempotencyKey });
     };
 
     const result = await executeRespond(sm, {
@@ -383,6 +383,10 @@ describe("executeRespond", () => {
     assert.equal(notifications.length, 1);
     assert.equal(notifications[0].label, "plan-approved");
     assert.equal(notifications[0].text, "👍 [plan-session-shutdown] Plan approved (resumed)");
+    assert.equal(
+      notifications[0].idempotencyKey,
+      "agent-respond-plan-approved-resumed:dead-plan-shutdown:1780000003000:harness-plan-shutdown:vunknown",
+    );
   });
 
   it("auto-resumes a shutdown-killed pending-plan session for revision feedback too", async () => {
@@ -860,6 +864,7 @@ describe("executeRespond", () => {
     assert.equal((sm as any).__dispatchCalls.length, 1);
     const [_resumedSession, request] = (sm as any).__dispatchCalls[0];
     assert.equal(request.label, "notification");
+    assert.match(request.idempotencyKey, /^agent-respond-auto-resumed:suspended-id:\d+:harness-resume-only$/);
     assert.match(request.userMessage, /▶️ \[resume-only\] Auto-resumed/);
     assert.doesNotMatch(request.userMessage, /Launched/);
   });

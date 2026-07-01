@@ -41,6 +41,14 @@ type DiffSummary = NonNullable<ReturnType<typeof getDiffSummary>>;
 type SpawnedResolverSession = Pick<Session, "id" | "name">;
 type AllowedWorktreeActions = { merge: boolean; pr: boolean };
 
+function buildWorktreeCycleKey(session: Pick<Session, "startedAt" | "worktreeBranch" | "worktreePath">): string {
+  return [
+    session.startedAt,
+    session.worktreeBranch ?? "unknown-branch",
+    session.worktreePath ?? "unknown-worktree",
+  ].join(":");
+}
+
 /**
  * Worktree decision/messaging orchestration layer.
  * Low-level git/worktree state checks stay in SessionWorktreeController.
@@ -143,7 +151,7 @@ export class SessionWorktreeStrategyService {
   ): void {
     this.deps.dispatchSessionNotification(session, {
       label: "worktree-merge-conflict-escalated",
-      idempotencyKey: `worktree-merge-conflict-escalated:${session.id}:${branchName}`,
+      idempotencyKey: `worktree-merge-conflict-escalated:${session.id}:${branchName}:${buildWorktreeCycleKey(session)}`,
       userMessage: [
         `⚠️ [${session.name}] Auto-merge could not finish after one conflict-resolution attempt.`,
         `Branch \`${branchName}\` was preserved for manual follow-up.`,
@@ -233,7 +241,7 @@ export class SessionWorktreeStrategyService {
           "worktree-action",
           session.id,
           action.label,
-          session.completedAt ?? "unknown",
+          session.startedAt,
           session.worktreeBranch ?? "unknown",
           session.worktreePath ?? "unknown",
         ].join(":"),
@@ -283,7 +291,7 @@ export class SessionWorktreeStrategyService {
       this.markPendingDecision(session, { notes: action.policyReason ? [action.policyReason] : undefined });
       this.deps.dispatchSessionNotification(session, {
         label: "worktree-policy-blocked",
-        idempotencyKey: `worktree-policy-blocked:${session.id}:${action.branchName}:${action.baseBranch}`,
+        idempotencyKey: `worktree-policy-blocked:${session.id}:${action.branchName}:${action.baseBranch}:${buildWorktreeCycleKey(session)}`,
         userMessage: `⚠️ [${session.name}] ${action.policyReason ?? "Repo policy blocked automatic follow-through."}`,
         buttons: this.getPolicyAwareWorktreeDecisionButtons(session.id, action.allowedActions, { allowDelegate: true }),
       });
@@ -505,7 +513,7 @@ export class SessionWorktreeStrategyService {
     const moreLine = dirtyEntries.length > 20 ? [`- ...and ${dirtyEntries.length - 20} more`] : [];
     this.deps.dispatchSessionNotification(session, {
       label: "worktree-dirty-uncommitted",
-      idempotencyKey: `worktree-dirty-uncommitted:${session.id}:${branchName}:${baseBranch}`,
+      idempotencyKey: `worktree-dirty-uncommitted:${session.id}:${branchName}:${baseBranch}:${buildWorktreeCycleKey(session)}`,
       userMessage: [
         `⚠️ [${session.name}] Session completed with uncommitted worktree changes.`,
         ``,
@@ -563,16 +571,16 @@ export class SessionWorktreeStrategyService {
 
     this.deps.dispatchSessionNotification(session, {
       label: "worktree-merge-success",
-      idempotencyKey: `worktree-merge-success:${session.id}:${branchName}:${baseBranch}`,
+      idempotencyKey: `worktree-merge-success:${session.id}:${branchName}:${baseBranch}:${buildWorktreeCycleKey(session)}`,
       userMessage: successMsg,
       notifyUser: "always",
       completionSummary: {
         required: true,
         producer: "worktree",
-        outcomeKey: `terminal:${session.id}`,
+        outcomeKey: `worktree-merge:${session.id}:${branchName}:${baseBranch}:${buildWorktreeCycleKey(session)}`,
       },
       completionWakeSummaryRequired: true,
-      completionWakeOutcomeKey: `terminal:${session.id}`,
+      completionWakeOutcomeKey: `worktree-merge:${session.id}:${branchName}:${baseBranch}:${buildWorktreeCycleKey(session)}`,
       deferConditionalWakeUntilNextTick: true,
       wakeMessageOnNotifySuccess: buildWorktreeOutcomeFollowupWake({
         sessionId: session.id,
@@ -655,7 +663,7 @@ export class SessionWorktreeStrategyService {
       });
       this.deps.dispatchSessionNotification(session, {
         label: "worktree-merge-conflict-spawn-failed",
-        idempotencyKey: `worktree-merge-conflict-spawn-failed:${session.id}:${branchName}`,
+        idempotencyKey: `worktree-merge-conflict-spawn-failed:${session.id}:${branchName}:${buildWorktreeCycleKey(session)}`,
         userMessage: [
           `❌ [${session.name}] Auto-merge hit a rebase conflict and failed to start the resolver: ${err instanceof Error ? err.message : String(err)}`,
           ...warningLines.map((line) => `⚠️ ${line}`),
@@ -683,7 +691,7 @@ export class SessionWorktreeStrategyService {
     });
     this.deps.dispatchSessionNotification(session, {
       label: "worktree-merge-error",
-      idempotencyKey: `worktree-merge-error:${session.id}:${branchName}`,
+      idempotencyKey: `worktree-merge-error:${session.id}:${branchName}:${buildWorktreeCycleKey(session)}`,
       userMessage: [
         errorMsg,
         "",
@@ -750,14 +758,14 @@ export class SessionWorktreeStrategyService {
         }
         this.deps.dispatchSessionNotification(session, {
           label: "worktree-merge-error",
-          idempotencyKey: `worktree-merge-error:${session.id}:${branchName}`,
+          idempotencyKey: `worktree-merge-error:${session.id}:${branchName}:${buildWorktreeCycleKey(session)}`,
           userMessage: errorMsg,
         });
       },
       () => {
         this.deps.dispatchSessionNotification(session, {
           label: "worktree-merge-queued",
-          idempotencyKey: `worktree-merge-queued:${session.id}:${branchName}`,
+          idempotencyKey: `worktree-merge-queued:${session.id}:${branchName}:${buildWorktreeCycleKey(session)}`,
           userMessage: `🕐 [${session.name}] Merge queued — another merge for this repo is in progress. Will notify when complete.`,
         });
       },
@@ -786,7 +794,7 @@ export class SessionWorktreeStrategyService {
       this.markPendingDecision(session);
       this.deps.dispatchSessionNotification(session, {
         label: "worktree-auto-pr-failed",
-        idempotencyKey: `worktree-auto-pr-failed:${session.id}:${baseBranch}`,
+        idempotencyKey: `worktree-auto-pr-failed:${session.id}:${baseBranch}:${buildWorktreeCycleKey(session)}`,
         userMessage: `⚠️ [${session.name}] Auto-PR did not complete. The worktree is preserved for an explicit merge or PR decision.`,
         buttons: this.getPolicyAwareWorktreeDecisionButtons(session.id, allowedActions),
       });

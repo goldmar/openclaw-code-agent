@@ -7,6 +7,10 @@ type SpawnOptions = {
 };
 
 type PreparedLaunch = ReturnType<import("./session-restore-service").SessionRestoreService["prepareSpawn"]>;
+type LaunchNotificationSession = Pick<
+  Session,
+  "id" | "name" | "workdir" | "worktreePath" | "originalWorkdir" | "harnessName" | "model" | "startedAt" | "resumeSessionId"
+>;
 
 /**
  * Owns runtime session hydration, listener wiring, startup, and launch notification.
@@ -19,7 +23,7 @@ export class SessionRuntimeBootstrapService {
       handleTerminal: (session: Session) => Promise<void>;
       handleTurnEnd: (session: Session, hadQuestion: boolean) => Promise<void>;
       formatLaunchWorkdirLabel: (session: Pick<Session, "workdir" | "worktreePath" | "originalWorkdir">) => string;
-      notifySession: (session: Session, text: string, label?: string) => void;
+      notifySession: (session: Session, text: string, label?: string, idempotencyKey?: string) => void;
     },
   ) {}
 
@@ -59,14 +63,33 @@ export class SessionRuntimeBootstrapService {
     session.start();
 
     if (options.notifyLaunch !== false) {
-      const workdirLabel = this.deps.formatLaunchWorkdirLabel(session);
-      const launchText = `🚀 [${session.name}] Launched | ${workdirLabel} | ${formatHarnessModelLabel({
-        harness: session.harnessName,
-        model: session.model,
-      }) ?? "default"}`;
-      this.deps.notifySession(session, launchText, "launch");
+      const notification = this.buildLaunchNotification(session);
+      this.deps.notifySession(session, notification.text, notification.label, notification.idempotencyKey);
     }
 
     return session;
+  }
+
+  private buildLaunchNotification(session: LaunchNotificationSession): {
+    text: string;
+    label: string;
+    idempotencyKey?: string;
+  } {
+    const workdirLabel = this.deps.formatLaunchWorkdirLabel(session);
+    const harnessLabel = formatHarnessModelLabel({
+      harness: session.harnessName,
+      model: session.model,
+    }) ?? "default";
+    if (session.resumeSessionId) {
+      return {
+        text: `▶️ [${session.name}] Resumed | ${workdirLabel} | ${harnessLabel}`,
+        label: "resumed-launch",
+        idempotencyKey: `resumed-launch:${session.id}:${session.startedAt}:${session.resumeSessionId}`,
+      };
+    }
+    return {
+      text: `🚀 [${session.name}] Launched | ${workdirLabel} | ${harnessLabel}`,
+      label: "launch",
+    };
   }
 }

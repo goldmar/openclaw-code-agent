@@ -1918,6 +1918,7 @@ describe("SessionManager turn-end wake", () => {
       id: "s-turn",
       name: "deterministic",
       status: "running",
+      startedAt: 1700000000000,
       originChannel: "telegram|bot|123",
       originThreadId: 26,
       getOutput: () => ["I completed the patch.", "Should I continue and apply tests?"],
@@ -1930,6 +1931,7 @@ describe("SessionManager turn-end wake", () => {
     const [sessionArg, request] = calls[0];
     assert.equal(sessionArg.id, "s-turn");
     assert.equal(request.label, "turn-complete");
+    assert.equal(request.idempotencyKey, "turn-complete:s-turn:1700000000000:unknown-backend-session:0");
     assert.equal(request.notifyUser, "always");
     assert.match(request.wakeMessage, /Name: deterministic/);
     assert.match(request.wakeMessage, /Status: running/);
@@ -2710,6 +2712,7 @@ describe("SessionManager turn-end wake", () => {
       id: "s-dup-turn",
       name: "dup-turn",
       status: "running",
+      startedAt: 1700000001000,
       originChannel: "telegram|bot|123",
       result: {
         session_id: "thread-1",
@@ -2726,6 +2729,32 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(calls.length, 1);
     const [_sessionArg, request] = calls[0];
     assert.equal(request.label, "turn-complete");
+  });
+
+  it("de-dupes duplicate turn-end wake when only duration metadata changes", async () => {
+    const s = fakeSession({
+      id: "s-duration-turn",
+      name: "duration-turn",
+      status: "running",
+      startedAt: 1700000002000,
+      originChannel: "telegram|bot|123",
+      result: {
+        session_id: "thread-duration",
+        num_turns: 7,
+        duration_ms: 1200,
+      },
+      getOutput: () => ["Turn output."],
+    });
+
+    await (sm as any).lifecycle.handleTurnEnd(s, false);
+    s.result.duration_ms = 2400;
+    await (sm as any).lifecycle.handleTurnEnd(s, false);
+
+    const calls = (sm as any).__dispatchCalls;
+    assert.equal(calls.length, 1);
+    const [_sessionArg, request] = calls[0];
+    assert.equal(request.label, "turn-complete");
+    assert.equal(request.idempotencyKey, "turn-complete:s-duration-turn:1700000002000:thread-duration:7");
   });
 
   it("preserves plan approvals as normal ask-mode buttons", async () => {
@@ -3106,7 +3135,7 @@ describe("SessionManager terminal wakes", () => {
       name: "done",
       status: "completed",
       costUsd: 1.23,
-      startedAt: Date.now() - 1_500,
+      startedAt: 1700000003000,
     });
 
     (sm as any).lifecycle.emitCompleted(s);
@@ -3114,10 +3143,40 @@ describe("SessionManager terminal wakes", () => {
     assert.equal((sm as any).__dispatchCalls.length, 1);
     const [_sessionArg, request] = (sm as any).__dispatchCalls[0];
     assert.equal(request.label, "completed");
+    assert.match(request.idempotencyKey, /^terminal-completed:s-complete:completed:/);
+    assert.match(request.completionWakeOutcomeKey, /^terminal:s-complete:completed:/);
     assert.equal(request.notifyUser, "always");
     assert.match(request.userMessage, /✅ \[done\] Completed/);
     assert.match(request.wakeMessageOnNotifySuccess, /Coding agent session completed/);
     assert.match(request.wakeMessageOnNotifyFailed, /Coding agent session completed/);
+  });
+
+  it("de-dupes duplicate terminal handling when completedAt is populated after the first pass", async () => {
+    const s = fakeSession({
+      id: "s-terminal-completed-at",
+      name: "completed-at",
+      status: "completed",
+      startedAt: 1700000004000,
+      completedAt: undefined,
+      result: {
+        session_id: "thread-terminal",
+        num_turns: 2,
+      },
+      getOutput: () => ["done"],
+    });
+
+    await (sm as any).onSessionTerminal(s);
+    s.completedAt = 1700000009000;
+    await (sm as any).onSessionTerminal(s);
+
+    const calls = (sm as any).__dispatchCalls;
+    assert.equal(calls.length, 1);
+    const [_sessionArg, request] = calls[0];
+    assert.equal(request.label, "completed");
+    assert.equal(
+      request.idempotencyKey,
+      "terminal-completed:s-terminal-completed-at:completed:1700000004000:thread-terminal:2:unknown",
+    );
   });
 });
 

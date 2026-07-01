@@ -119,6 +119,104 @@ describe("SessionNotificationService", () => {
     assert.equal(persisted.notificationDedupe?.[0]?.status, "delivered");
   });
 
+  it("dedupes one resumed launch notification but allows a later resumed launch cycle", () => {
+    const persisted = { notificationDedupe: undefined } as any;
+    const requests: Array<Record<string, unknown>> = [];
+    const fakeDispatcher = {
+      dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, () => void> }) => {
+        requests.push(request as Record<string, unknown>);
+        request.hooks?.onNotifyStarted?.();
+        request.hooks?.onNotifySucceeded?.();
+      },
+      dispose: () => {},
+    };
+    const service = new SessionNotificationService(
+      fakeDispatcher as any,
+      (_ref, patch) => Object.assign(persisted, patch),
+      { getPersistedSession: () => persisted },
+    );
+    const session = {
+      id: "stable-resume-session",
+      route: { provider: "telegram", target: "topic", threadId: "13832", sessionKey: "session:resume" },
+    } as any;
+    const firstCycleRequest = {
+      label: "resumed-launch",
+      idempotencyKey: "resumed-launch:stable-resume-session:1780000001000:backend-thread",
+      userMessage: "▶️ [stable-resume] Resumed | /repo | codex | gpt-5.5",
+      notifyUser: "always" as const,
+    };
+    const laterCycleRequest = {
+      ...firstCycleRequest,
+      idempotencyKey: "resumed-launch:stable-resume-session:1780000002000:backend-thread",
+    };
+
+    service.dispatch(session, firstCycleRequest);
+    service.dispatch(session, firstCycleRequest);
+    service.dispatch(session, laterCycleRequest);
+
+    assert.equal(requests.length, 2);
+    assert.notEqual(requests[0]?.idempotencyKey, requests[1]?.idempotencyKey);
+    assert.equal(persisted.notificationDedupe?.length, 2);
+    assert.equal(persisted.notificationDedupe?.every((record: { status?: string }) => record.status === "delivered"), true);
+  });
+
+  it("dedupes one terminal completion notification but allows a later terminal cycle for the same session id", () => {
+    const persisted = { notificationDedupe: undefined } as any;
+    const requests: Array<Record<string, unknown>> = [];
+    const fakeDispatcher = {
+      dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, () => void> }) => {
+        requests.push(request as Record<string, unknown>);
+        request.hooks?.onNotifyStarted?.();
+        request.hooks?.onNotifySucceeded?.();
+        request.hooks?.onWakeStarted?.();
+        request.hooks?.onWakeSucceeded?.();
+      },
+      dispose: () => {},
+    };
+    const service = new SessionNotificationService(
+      fakeDispatcher as any,
+      (_ref, patch) => Object.assign(persisted, patch),
+      { getPersistedSession: () => persisted },
+    );
+    const session = {
+      id: "stable-terminal-session",
+      route: { provider: "telegram", target: "topic", threadId: "13832", sessionKey: "session:terminal" },
+    } as any;
+    const firstCycleRequest = {
+      label: "completed",
+      idempotencyKey: "terminal-completed:stable-terminal-session:completed:1780000001000:backend-thread:4:unknown",
+      userMessage: "✅ [stable-terminal] Completed",
+      notifyUser: "always" as const,
+      completionSummary: {
+        required: true,
+        producer: "terminal" as const,
+        outcomeKey: "terminal:stable-terminal-session:completed:1780000001000:backend-thread:4:unknown",
+      },
+      completionWakeSummaryRequired: true,
+      completionWakeOutcomeKey: "terminal:stable-terminal-session:completed:1780000001000:backend-thread:4:unknown",
+      wakeMessageOnNotifySuccess: "terminal follow-up wake",
+    };
+    const laterCycleRequest = {
+      ...firstCycleRequest,
+      idempotencyKey: "terminal-completed:stable-terminal-session:completed:1780000002000:backend-thread:5:unknown",
+      completionSummary: {
+        required: true,
+        producer: "terminal" as const,
+        outcomeKey: "terminal:stable-terminal-session:completed:1780000002000:backend-thread:5:unknown",
+      },
+      completionWakeOutcomeKey: "terminal:stable-terminal-session:completed:1780000002000:backend-thread:5:unknown",
+    };
+
+    service.dispatch(session, firstCycleRequest);
+    service.dispatch(session, firstCycleRequest);
+    service.dispatch(session, laterCycleRequest);
+
+    assert.equal(requests.length, 2);
+    assert.deepEqual(requests.map((request) => request.label), ["completed", "completed"]);
+    assert.notEqual(requests[0]?.idempotencyKey, requests[1]?.idempotencyKey);
+    assert.equal(persisted.notificationDedupe?.length, 2);
+  });
+
   it("dedupes one no-change terminal cycle but allows a later resumed cycle for the same session id", () => {
     const persisted = { notificationDedupe: undefined } as any;
     const requests: Array<Record<string, unknown>> = [];
@@ -146,6 +244,7 @@ describe("SessionNotificationService", () => {
       id: "D9SBMnGU",
       name: "pr-311-cleanup",
       harnessSessionId: "D9SBMnGU",
+      startedAt: 1_780_000_000_500,
       completedAt: 1_780_000_001_000,
       route: {
         provider: "telegram",
@@ -170,6 +269,7 @@ describe("SessionNotificationService", () => {
     const resumedSession = {
       ...session,
       name: "pr-311-final-thread-cleanup",
+      startedAt: 1_780_000_001_500,
       completedAt: 1_780_000_002_000,
     } as any;
     const laterCycleRequest = worktreeMessages.buildNoChangeNotification({
@@ -197,6 +297,73 @@ describe("SessionNotificationService", () => {
     assert.deepEqual(wakeSucceeded, ["worktree-no-changes", "worktree-no-changes"]);
     assert.equal(persisted.notificationDedupe?.length, 2);
     assert.equal(persisted.notificationDedupe?.every((record: { status?: string }) => record.status === "delivered"), true);
+  });
+
+  it("dedupes a no-change worktree retry when only completedAt changes", () => {
+    const persisted = { notificationDedupe: undefined } as any;
+    const requests: Array<Record<string, unknown>> = [];
+    const wakeStarted: string[] = [];
+    const fakeDispatcher = {
+      dispatchSessionNotification: (_session: unknown, request: { label: string; hooks?: Record<string, () => void> }) => {
+        requests.push(request as Record<string, unknown>);
+        request.hooks?.onNotifyStarted?.();
+        request.hooks?.onNotifySucceeded?.();
+        request.hooks?.onWakeStarted?.();
+        wakeStarted.push(request.label);
+        request.hooks?.onWakeSucceeded?.();
+      },
+      dispose: () => {},
+    };
+    const service = new SessionNotificationService(
+      fakeDispatcher as any,
+      (_ref, patch) => Object.assign(persisted, patch),
+      { getPersistedSession: () => persisted },
+    );
+    const worktreeMessages = new SessionWorktreeMessageService();
+    const session = {
+      id: "D9SBMnGU",
+      name: "pr-311-cleanup",
+      harnessSessionId: "D9SBMnGU",
+      startedAt: 1_780_000_003_000,
+      completedAt: undefined,
+      route: {
+        provider: "telegram",
+        target: "topic",
+        threadId: "13832",
+        sessionKey: "agent:x:telegram:channel:topic:topic:13832",
+      },
+    } as any;
+    const firstRequest = worktreeMessages.buildNoChangeNotification({
+      session,
+      nativeBackendWorktree: false,
+      cleanupSucceeded: true,
+      worktreePath: "/tmp/oca/pr-311-cleanup",
+      worktreeBranch: "agent/pr-311-cleanup",
+      preview: "No code changes were needed.",
+      originThreadLine: "Origin route: telegram topic 13832",
+    });
+
+    service.dispatch(session, firstRequest);
+    session.completedAt = 1_780_000_004_000;
+    const retryRequest = worktreeMessages.buildNoChangeNotification({
+      session,
+      nativeBackendWorktree: false,
+      cleanupSucceeded: true,
+      worktreePath: "/tmp/oca/pr-311-cleanup",
+      worktreeBranch: "agent/pr-311-cleanup",
+      preview: "No code changes were needed.",
+      originThreadLine: "Origin route: telegram topic 13832",
+    });
+    service.dispatch(session, retryRequest);
+
+    assert.equal(firstRequest.idempotencyKey, retryRequest.idempotencyKey);
+    assert.equal(
+      firstRequest.idempotencyKey,
+      "worktree-no-change:D9SBMnGU:cleaned:agent/pr-311-cleanup:/tmp/oca/pr-311-cleanup:1780000003000",
+    );
+    assert.equal(requests.length, 1);
+    assert.deepEqual(wakeStarted, ["worktree-no-changes"]);
+    assert.equal(persisted.notificationDedupe?.length, 1);
   });
 
   it("allows the same semantic notification key on different delivery routes", () => {

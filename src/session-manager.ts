@@ -405,7 +405,7 @@ export class SessionManager {
       resolveWorktreeRepoDir: (repoDir, worktreePath) => manager.resolveWorktreeRepoDir(repoDir, worktreePath),
       updatePersistedSession: (ref, patch) => manager.updatePersistedSession(ref, patch),
       dispatchSessionNotification: (session, request) => manager.dispatchSessionNotification(session, request),
-      notifySession: (session, text, label) => manager.notifySession(session, text, label),
+      notifySession: (session, text, label, idempotencyKey) => manager.notifySession(session, text, label, idempotencyKey),
       clearRetryTimersForSession: (sessionId) => wakeDispatcher.clearRetryTimersForSession(sessionId),
       hasTurnCompleteWakeMarker: (sessionId) => manager.lastTurnCompleteMarkers.has(sessionId),
       shouldEmitTurnCompleteWake: (session) => manager.shouldEmitTurnCompleteWake(session),
@@ -440,7 +440,7 @@ export class SessionManager {
       handleTerminal: async (session) => manager.onSessionTerminal(session),
       handleTurnEnd: (session, hadQuestion) => lifecycle.handleTurnEnd(session, hadQuestion),
       formatLaunchWorkdirLabel: (session) => manager.formatLaunchWorkdirLabel(session),
-      notifySession: (session, text, label) => manager.notifySession(session, text, label),
+      notifySession: (session, text, label, idempotencyKey) => manager.notifySession(session, text, label, idempotencyKey),
     });
 
     return {
@@ -1425,10 +1425,10 @@ export class SessionManager {
 
   // -- Wake / notification delivery --
 
-  notifySession(session: Session, text: string, label: string = "notification"): void {
+  notifySession(session: Session, text: string, label: string = "notification", idempotencyKey?: string): void {
     this.dispatchSessionNotification(session, {
       label,
-      idempotencyKey: label === "agent-respond" ? undefined : `notify:${session.id}:${label}:${text}`,
+      idempotencyKey: label === "agent-respond" ? undefined : idempotencyKey ?? `notify:${session.id}:${label}:${text}`,
       userMessage: text,
       notifyUser: "always",
     });
@@ -1591,7 +1591,7 @@ export class SessionManager {
   }
 
   private shouldEmitTurnCompleteWake(session: Session): boolean {
-    const marker = `${session.result?.session_id ?? ""}|${session.result?.num_turns ?? 0}|${session.result?.duration_ms ?? 0}`;
+    const marker = `${session.startedAt ?? 0}|${session.result?.session_id ?? ""}|${session.result?.num_turns ?? 0}`;
     const prev = this.lastTurnCompleteMarkers.get(session.id);
     if (prev === marker) {
       console.info(
@@ -1605,7 +1605,7 @@ export class SessionManager {
   }
 
   private shouldEmitTerminalWake(session: Session): boolean {
-    const marker = `${session.status}|${session.completedAt ?? 0}|${session.result?.session_id ?? ""}|${session.result?.num_turns ?? 0}|${session.killReason}`;
+    const marker = `${session.status}|${session.startedAt ?? 0}|${session.result?.session_id ?? ""}|${session.result?.num_turns ?? 0}|${session.killReason}`;
     const prev = this.lastTerminalWakeMarkers.get(session.id);
     if (prev === marker) return false;
     this.lastTerminalWakeMarkers.set(session.id, marker);

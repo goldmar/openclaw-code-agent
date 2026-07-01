@@ -118,7 +118,12 @@ async function spawnFreshRelaunch(
       harness: "harnessName" in session ? session.harnessName : session.harness,
     };
     const relaunched = await sm.spawnAndAwaitRunning(freshConfig, { notifyLaunch: false });
-    sm.notifySession(relaunched, `▶️ [${relaunched.name}] Relaunched fresh`);
+    sm.notifySession(
+      relaunched,
+      `▶️ [${relaunched.name}] Relaunched fresh`,
+      "notification",
+      `agent-respond-relaunched:${relaunched.id}:${relaunched.startedAt}`,
+    );
     return {
       text: `Session ${session.name} was relaunched fresh — it was killed during startup before the harness initialized. New session: ${relaunched.name} [${relaunched.id}].`,
     };
@@ -347,12 +352,22 @@ async function tryAutoResume(
     };
     const resumed = await sm.spawnAndAwaitRunning(resumeConfig, { notifyLaunch: false });
     if (isPlanApproval) {
-      sm.notifySession(resumed, `👍 [${resumed.name}] Plan approved (resumed)`, "plan-approved");
+      sm.notifySession(
+        resumed,
+        `👍 [${resumed.name}] Plan approved (resumed)`,
+        "plan-approved",
+        `agent-respond-plan-approved-resumed:${resumed.id}:${resumed.startedAt}:${assessment.resumeSessionId}:v${session.planDecisionVersion ?? "unknown"}`,
+      );
       return {
         text: `Plan approved for session ${resumed.name} [${resumed.id}]. Session resumed in bypassPermissions mode. Use agent_output to see the response.`,
       };
     } else {
-      sm.notifySession(resumed, `▶️ [${resumed.name}] Auto-resumed`);
+      sm.notifySession(
+        resumed,
+        `▶️ [${resumed.name}] Auto-resumed`,
+        "notification",
+        `agent-respond-auto-resumed:${resumed.id}:${resumed.startedAt}:${assessment.resumeSessionId}`,
+      );
     }
     return { text: `Auto-resumed session ${resumed.name} [${resumed.id}]. Use agent_output to see the response.` };
   } catch (err: unknown) {

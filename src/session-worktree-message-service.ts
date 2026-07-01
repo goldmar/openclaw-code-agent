@@ -33,7 +33,7 @@ export class SessionWorktreeMessageService {
       | "approvalPromptStatus"
       | "approvalPromptMessageKind"
       | "approvalPromptDeliveredAt"
-      | "completedAt"
+      | "startedAt"
     >;
     nativeBackendWorktree: boolean;
     cleanupSucceeded: boolean;
@@ -57,7 +57,7 @@ export class SessionWorktreeMessageService {
     const terminalCycleKey = [
       worktreeBranch?.trim() || "unknown-branch",
       worktreePath.trim() || "unknown-worktree",
-      session.completedAt ?? "unknown-completed-at",
+      session.startedAt,
     ].join(":");
     const cleanupSummary = preservedSummary ?? (cleanupSucceeded
       ? nativeBackendWorktree
