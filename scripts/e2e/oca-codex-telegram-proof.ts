@@ -3,7 +3,6 @@ import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
   chmodSync,
-  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -373,6 +372,8 @@ function writeJson(file: string, value: unknown): void {
 function redactProofText(value: string): string {
   return String(redactProofValue(value))
     .replace(/"((?:sut|tester)?Username|groupId|testerUserId|credentialId|ownerId)"\s*:\s*"[^"]*"/giu, '"$1": "[redacted id]"')
+    .replace(/\bauthorization\b(\s*[:=]\s*)(?:Bearer\s+)?[A-Za-z0-9._~+/-]+=*/giu, "authorization$1[redacted credential]")
+    .replace(/\b(secret|password|api[-_ ]?key|credential|token)\b(\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;)}\]]+)/giu, "$1$2[redacted credential]")
     .replace(/(?:\/private\/tmp|\/var\/folders|\/tmp)\/[^\s"'<>),\]]+/gu, "[redacted path]")
     .replace(/\b\d{7,}:[A-Za-z0-9_-]{20,}\b/gu, "[redacted credential]")
     .replace(/\b\d{6,}\b/gu, "[redacted id]")
@@ -543,7 +544,7 @@ export async function runNativeProof(
         cleanupErrors.push(error instanceof Error ? error.message : String(error));
       }
     }
-    const publicArtifacts = artifacts.filter((artifact) => artifact.public);
+    const publicArtifacts = artifacts.filter((artifact) => artifact.public && isStageablePublicArtifact(artifact.path));
     const cleanupOk = cleanupErrors.length === 0;
     result = {
       ...result,
@@ -578,6 +579,26 @@ export async function runNativeProof(
     }
   }
   return result;
+}
+
+const STAGED_PUBLIC_TEXT_ARTIFACTS = new Set([
+  "codex-app-server-requests.redacted.jsonl",
+  "harness-messages.redacted.json",
+  "mantis-evidence.json",
+  "oca-codex-telegram-proof.md",
+  "summary.json",
+  "telegram-desktop.log",
+]);
+
+const PRIVATE_VISUAL_ARTIFACTS = new Set([
+  "telegram-desktop-motion.gif",
+  "telegram-desktop-motion.mp4",
+  "telegram-desktop.mp4",
+  "telegram-desktop.png",
+]);
+
+function isStageablePublicArtifact(file: string): boolean {
+  return STAGED_PUBLIC_TEXT_ARTIFACTS.has(path.basename(file));
 }
 
 async function collectUntilCompleted(session: HarnessSession, timeoutMs: number): Promise<HarnessMessage[]> {
@@ -698,27 +719,25 @@ export function stagePublicArtifacts(outputDir: string): string {
   const staged = path.join(resolved, "public-artifacts");
   rmSync(staged, { recursive: true, force: true });
   mkdirSync(staged, { recursive: true });
-  const allowed = new Set([
-    "codex-app-server-requests.redacted.jsonl",
-    "harness-messages.redacted.json",
-    "mantis-evidence.json",
-    "oca-codex-telegram-proof.md",
-    "summary.json",
-    "telegram-desktop.log",
-    "telegram-desktop-motion.gif",
-    "telegram-desktop-motion.mp4",
-    "telegram-desktop.mp4",
-    "telegram-desktop.png",
-  ]);
+  const omittedPrivateArtifacts: string[] = [];
   for (const name of existsSync(resolved) ? readdirSync(resolved) : []) {
     const source = path.join(resolved, name);
-    if (!allowed.has(name) || !statSync(source).isFile()) continue;
-    const target = path.join(staged, name);
-    if (/\.(json|jsonl|log|md)$/u.test(name)) {
-      writeRedactedText(target, readFileSync(source, "utf8"));
-    } else {
-      cpSync(source, target);
+    if (!statSync(source).isFile()) continue;
+    if (PRIVATE_VISUAL_ARTIFACTS.has(name)) {
+      omittedPrivateArtifacts.push(name);
+      continue;
     }
+    if (!STAGED_PUBLIC_TEXT_ARTIFACTS.has(name)) continue;
+    const target = path.join(staged, name);
+    writeRedactedText(target, readFileSync(source, "utf8"));
+  }
+  if (omittedPrivateArtifacts.length > 0) {
+    writeJson(path.join(staged, "omitted-private-artifacts.json"), {
+      omitted: omittedPrivateArtifacts.sort().map((name) => ({
+        name,
+        reason: "visual Telegram proof artifacts are retained privately because rendered UI can contain identifiers",
+      })),
+    });
   }
   return staged;
 }
