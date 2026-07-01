@@ -549,7 +549,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
     }
   });
 
-  it("releases an auto-pr worktree without suppressing the generic terminal wake", async () => {
+  it("releases an auto-pr worktree represented by the current branch before opening a PR", async () => {
     const repoDir = mkdtempSync(join(tmpdir(), "openclaw-auto-pr-existing-head-"));
     try {
       git(repoDir, "init", "-b", "main");
@@ -604,10 +604,9 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         enqueueMerge: async (_repoDir, fn) => { await fn(); },
         mergeBranch,
         spawnConflictResolver: async () => ({ id: "resolver-existing-head", name: "unused" }),
-        runAutoPr: async (_session, baseBranch) => {
+        runAutoPr: async () => {
           autoPrCalled = true;
-          assert.equal(baseBranch, "main");
-          return { success: false };
+          throw new Error("represented helper worktree should not create a PR");
         },
       });
 
@@ -630,13 +629,103 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       const result = await service.handleWorktreeStrategy(session);
 
       assert.deepEqual(result, { notificationSent: false, worktreeRemoved: true });
-      assert.equal(autoPrCalled, true);
+      assert.equal(autoPrCalled, false);
       assert.equal(notifications.length, 0);
       assert.equal(session.worktreePath, undefined);
       assert.equal(session.worktreeState, "released");
       assert.equal(session.worktreeLifecycle?.state, "released");
       assert.deepEqual(session.worktreeLifecycle?.notes, ["released_by_branch:agent/fix-oca-441-regression"]);
       assert.throws(() => git(repoDir, "rev-parse", "--verify", branchName));
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it("suppresses helper-branch auto-pr when the existing PR branch already contains the helper work", async () => {
+    const repoDir = mkdtempSync(join(tmpdir(), "openclaw-pr-314-helper-"));
+    try {
+      git(repoDir, "init", "-b", "main");
+      git(repoDir, "config", "user.name", "Test User");
+      git(repoDir, "config", "user.email", "test@example.com");
+      writeFileSync(join(repoDir, "README.md"), "base\n", "utf-8");
+      git(repoDir, "add", "README.md");
+      git(repoDir, "commit", "-m", "init");
+
+      git(repoDir, "checkout", "-b", "fix-test-session-store-isolation");
+      writeFileSync(join(repoDir, "session-store.txt"), "pr 314\n", "utf-8");
+      git(repoDir, "add", "session-store.txt");
+      git(repoDir, "commit", "-m", "Fix test session store isolation");
+
+      const worktreePath = createWorktree(repoDir, "pr-314-comments-cleanup");
+      const branchName = getBranchName(worktreePath);
+      assert.ok(branchName, "worktree branch should exist");
+      assert.equal(branchName, "agent/pr-314-comments-cleanup");
+
+      writeFileSync(join(worktreePath, "cleanup.txt"), "commit 7f50458\n", "utf-8");
+      git(worktreePath, "add", "cleanup.txt");
+      git(worktreePath, "commit", "-m", "Address PR 314 review feedback");
+      const helperCommit = git(worktreePath, "rev-parse", "HEAD");
+
+      git(repoDir, "checkout", "fix-test-session-store-isolation");
+      git(repoDir, "cherry-pick", helperCommit);
+      git(repoDir, "merge-base", "--is-ancestor", branchName, "fix-test-session-store-isolation");
+
+      const notifications: Array<Record<string, unknown>> = [];
+      let autoPrCalled = false;
+      const service = new SessionWorktreeStrategyService({
+        shouldRunWorktreeStrategy: () => true,
+        isAlreadyMerged: () => false,
+        resolveWorktreeRepoDir: (dir) => dir,
+        getWorktreeCompletionState: (repo, worktree, branch, base) => (
+          new SessionWorktreeController().getCompletionState(repo, worktree, branch, base)
+        ),
+        updatePersistedSession: (_ref, patch) => {
+          Object.assign(session, patch);
+          return true;
+        },
+        dispatchSessionNotification: (_session, request) => {
+          notifications.push(request as Record<string, unknown>);
+        },
+        getOutputPreview: () => "",
+        originThreadLine: () => "thread",
+        getWorktreeDecisionButtons: () => [[{ label: "Open PR", callbackData: "open-pr" }]],
+        makeOpenPrButton: () => ({ label: "Open PR", callbackData: "open-pr" }),
+        worktreeMessages: new SessionWorktreeMessageService(),
+        enqueueMerge: async (_repoDir, fn) => { await fn(); },
+        mergeBranch,
+        spawnConflictResolver: async () => ({ id: "resolver-unused", name: "unused" }),
+        runAutoPr: async () => {
+          autoPrCalled = true;
+          throw new Error("helper branch PR creation must be suppressed");
+        },
+      });
+
+      const session: any = {
+        id: "s-pr-314-comments-cleanup",
+        name: "pr-314-comments-cleanup",
+        status: "completed",
+        phase: "implementing",
+        lifecycle: "active",
+        worktreeState: "provisioned",
+        originalWorkdir: repoDir,
+        worktreePath,
+        worktreeBranch: branchName,
+        worktreeBaseBranch: "main",
+        worktreeStrategy: "auto-pr",
+        repoIntegrationPolicy: "pr-allowed",
+        pendingPlanApproval: false,
+      };
+
+      const result = await service.handleWorktreeStrategy(session);
+
+      assert.deepEqual(result, { notificationSent: false, worktreeRemoved: true });
+      assert.equal(autoPrCalled, false);
+      assert.equal(notifications.length, 0);
+      assert.equal(session.worktreePath, undefined);
+      assert.equal(session.worktreeState, "released");
+      assert.equal(session.worktreeLifecycle?.state, "released");
+      assert.deepEqual(session.worktreeLifecycle?.notes, ["released_by_branch:fix-test-session-store-isolation"]);
+      assert.throws(() => git(repoDir, "rev-parse", "--verify", branchName), /fatal:/);
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }

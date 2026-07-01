@@ -53,6 +53,11 @@ export function makeAgentWorktreeStatusTool(_ctx?: OpenClawPluginToolContext) {
       const lines: string[] = [];
       for (const target of sessionsToShow) {
         const { persistedSession: persisted, resolvedLifecycle: resolved } = resolveWorktreeToolLifecycle(sessionManager, target);
+        const lifecycleState = resolved.lifecycle.state === "pr_open"
+          && resolved.evidence.prState
+          && resolved.evidence.prState !== "open"
+          ? resolved.derivedState
+          : resolved.lifecycle.state;
 
         const cleanup = resolved.cleanupSafe
           ? "safe now"
@@ -61,8 +66,8 @@ export function makeAgentWorktreeStatusTool(_ctx?: OpenClawPluginToolContext) {
         lines.push(`Session: ${target.name} [${target.id}]`);
         lines.push(`  Branch:   ${target.worktreeBranch ?? "(unknown)"} → ${resolved.lifecycle.baseBranch ?? persisted?.worktreeBaseBranch ?? "main"}`);
         lines.push(`  Repo:     ${target.workdir}`);
-        lines.push(`  Lifecycle:${formatWorktreeLifecycleState(resolved.lifecycle.state)}`);
-        if (resolved.derivedState !== resolved.lifecycle.state) {
+        lines.push(`  Lifecycle:${formatWorktreeLifecycleState(lifecycleState)}`);
+        if (resolved.derivedState !== lifecycleState) {
           lines.push(`  Derived:  ${formatWorktreeLifecycleState(resolved.derivedState)}`);
         }
         lines.push(`  Cleanup:  ${cleanup}`);

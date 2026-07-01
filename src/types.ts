@@ -200,6 +200,7 @@ export interface WorktreeRepositoryEvidence {
   dirtyTracked: boolean;
   topologyMerged: boolean;
   releaseNoopMerge: boolean;
+  representedByCurrentBranch?: boolean;
   branchAheadCount?: number;
   baseAheadCount?: number;
   prState?: "open" | "merged" | "closed" | "none";

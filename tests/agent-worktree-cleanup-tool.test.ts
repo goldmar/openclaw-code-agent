@@ -1,7 +1,7 @@
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { setSessionManager } from "../src/singletons";
@@ -32,6 +32,25 @@ function createCommittedWorktree(repoDir: string, name: string, fileName = "feat
   git(worktreePath, "add", fileName);
   git(worktreePath, "commit", "-m", `feat: ${name}`);
   return { worktreePath, branchName };
+}
+
+function installFakeGh(dir: string, prsJson: string): string {
+  const ghPath = join(dir, "gh");
+  writeFileSync(ghPath, [
+    "#!/usr/bin/env sh",
+    "if [ \"$1\" = \"--version\" ]; then echo 'gh version 2.0.0'; exit 0; fi",
+    "if [ \"$1\" = \"pr\" ] && [ \"$2\" = \"list\" ]; then",
+    `  printf '%s\\n' '${prsJson.replaceAll("'", "'\\''")}'`,
+    "  exit 0",
+    "fi",
+    "echo unexpected gh invocation >&2",
+    "exit 1",
+    "",
+  ].join("\n"), "utf-8");
+  chmodSync(ghPath, 0o755);
+  const previousPath = process.env.PATH ?? "";
+  process.env.PATH = `${dir}:${previousPath}`;
+  return previousPath;
 }
 
 afterEach(() => {
@@ -162,6 +181,100 @@ describe("agent_worktree_status", () => {
       assert.match(text, /Cleanup:\s*preserve/);
       assert.match(text, /Reasons:\s*conflict resolving, still has unique content/);
     } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it("refreshes closed helper PR state and marks represented helper branches safe for cleanup", async () => {
+    const repoDir = initRepo("status-closed-helper-pr-");
+    const fakeGhDir = mkdtempSync(join(tmpdir(), "fake-gh-"));
+    const previousPath = installFakeGh(fakeGhDir, JSON.stringify([{
+      url: "https://github.com/goldmar/openclaw-code-agent/pull/315",
+      number: 315,
+      title: "Address PR 314 review feedback",
+      state: "CLOSED",
+      headRepositoryOwner: { login: "goldmar" },
+      headRefName: "agent/pr-314-comments-cleanup",
+    }]));
+    try {
+      git(repoDir, "remote", "add", "origin", "https://github.com/goldmar/openclaw-code-agent.git");
+      git(repoDir, "checkout", "-b", "fix-test-session-store-isolation");
+      writeFileSync(join(repoDir, "session-store.txt"), "pr 314\n", "utf-8");
+      git(repoDir, "add", "session-store.txt");
+      git(repoDir, "commit", "-m", "Fix test session store isolation");
+
+      const helper = createCommittedWorktree(repoDir, "pr-314-comments-cleanup", "cleanup.txt", "commit 7f50458\n");
+      const helperCommit = git(helper.worktreePath, "rev-parse", "HEAD");
+      git(repoDir, "checkout", "fix-test-session-store-isolation");
+      git(repoDir, "cherry-pick", helperCommit);
+
+      const persisted = {
+        sessionId: "s-pr-314-comments-cleanup",
+        harnessSessionId: "h-pr-314-comments-cleanup",
+        name: "pr-314-comments-cleanup",
+        prompt: "address PR 314 review feedback",
+        workdir: repoDir,
+        status: "completed",
+        costUsd: 0,
+        worktreePath: helper.worktreePath,
+        worktreeBranch: helper.branchName,
+        worktreeBaseBranch: "main",
+        worktreeState: "pr_open",
+        worktreePrUrl: "https://github.com/goldmar/openclaw-code-agent/pull/315",
+        worktreePrNumber: 315,
+        worktreeLifecycle: {
+          state: "pr_open",
+          updatedAt: new Date().toISOString(),
+          baseBranch: "main",
+          targetRepo: "goldmar/openclaw-code-agent",
+        },
+      };
+
+      setSessionManager({
+        list: () => [],
+        resolve: () => undefined,
+        listPersistedSessions: () => [persisted] as any,
+        getPersistedSession(ref: string) {
+          return [persisted].find((session) =>
+            session.sessionId === ref || session.harnessSessionId === ref || session.name === ref
+          ) as any;
+        },
+        updatePersistedSession(ref: string, patch: Record<string, unknown>) {
+          if (ref === persisted.sessionId || ref === persisted.harnessSessionId || ref === persisted.name) {
+            Object.assign(persisted, patch);
+            return true;
+          }
+          return false;
+        },
+        dismissWorktree: async () => "dismissed",
+      } as any);
+
+      const statusTool = makeAgentWorktreeStatusTool();
+      const statusResult = await statusTool.execute("tool-id", { session: "pr-314-comments-cleanup" });
+      const statusText = (statusResult.content[0] as { text: string }).text;
+
+      assert.match(statusText, /Lifecycle:\s*released/);
+      assert.doesNotMatch(statusText, /Lifecycle:\s*pr open/);
+      assert.match(statusText, /Cleanup:\s*safe now/);
+      assert.match(statusText, /PR:\s*https:\/\/github\.com\/goldmar\/openclaw-code-agent\/pull\/315 \(closed\)/);
+      assert.match(statusText, /Reasons:\s*represented by fix-test-session-store-isolation, stale PR-open metadata/);
+
+      const cleanupTool = makeAgentWorktreeCleanupTool();
+      const cleanupResult = await cleanupTool.execute("tool-id", { mode: "clean_safe", session: "pr-314-comments-cleanup" });
+      const cleanupText = (cleanupResult.content[0] as { text: string }).text;
+
+      assert.match(cleanupText, /SAFE FOUND \(1\): pr-314-comments-cleanup \(released\)/);
+      assert.match(cleanupText, /CLEANED \(1\): pr-314-comments-cleanup \(released\)/);
+      assert.equal(existsSync(helper.worktreePath), false);
+      assert.throws(() => git(repoDir, "rev-parse", "--verify", helper.branchName), /fatal:/);
+      assert.equal(persisted.worktreePath, undefined);
+      assert.equal(persisted.worktreeBranch, undefined);
+      assert.equal(persisted.worktreeState, "none");
+      assert.equal(persisted.worktreeLifecycle?.state, "released");
+      assert.ok((persisted.worktreeLifecycle?.notes ?? []).includes("released_by_branch:fix-test-session-store-isolation"));
+    } finally {
+      process.env.PATH = previousPath;
+      rmSync(fakeGhDir, { recursive: true, force: true });
       rmSync(repoDir, { recursive: true, force: true });
     }
   });

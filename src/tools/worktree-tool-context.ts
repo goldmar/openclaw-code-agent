@@ -244,6 +244,8 @@ export function formatWorktreePreserveReason(reason: string): string {
       return "PR open";
     case "pr_merged_not_reflected_locally":
       return "merged PR not reflected locally";
+    case "stale_pr_open":
+      return "stale PR-open metadata";
     case "repo_missing":
       return "repo missing";
     case "branch_missing":
@@ -253,6 +255,9 @@ export function formatWorktreePreserveReason(reason: string): string {
     case "base_branch_missing":
       return "base branch missing";
     default:
+      if (reason.startsWith("released_by_branch:")) {
+        return `represented by ${reason.slice("released_by_branch:".length)}`;
+      }
       return reason.replaceAll("_", " ");
   }
 }

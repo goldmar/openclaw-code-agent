@@ -769,31 +769,17 @@ export class SessionWorktreeStrategyService {
     baseBranch: string,
     allowedActions: AllowedWorktreeActions = { merge: true, pr: true },
   ): Promise<WorktreeStrategyResult> {
+    const representedRelease = this.releaseIfRepresentedByCurrentBranch(session, repoDir, worktreePath, branchName);
+    if (representedRelease) return representedRelease;
+
     this.updatePersistedSessionFor(session, {
       lifecycle: "terminal",
       worktreeState: "pr_in_progress",
     });
     const result = await this.deps.runAutoPr(session, baseBranch);
     if (!result.success) {
-      const currentRepoBranch = getBranchName(repoDir);
-      const releasedByCurrentBranch = Boolean(
-        currentRepoBranch
-        && currentRepoBranch !== branchName
-        && isBranchAncestorOfBase(repoDir, branchName, currentRepoBranch)
-        && listDirtyWorktreeEntries(worktreePath).length === 0,
-      );
-      if (releasedByCurrentBranch) {
-        const removed = usesNativeBackendWorktree(session)
-          ? true
-          : removeWorktree(repoDir, worktreePath);
-        if (removed) {
-          session.worktreePath = undefined;
-          this.updatePersistedSessionFor(session, { worktreePath: undefined });
-        }
-        deleteBranch(repoDir, branchName);
-        this.markReleased(session, [`released_by_branch:${currentRepoBranch}`]);
-        return { notificationSent: false, worktreeRemoved: removed };
-      }
+      const releasedAfterFailure = this.releaseIfRepresentedByCurrentBranch(session, repoDir, worktreePath, branchName);
+      if (releasedAfterFailure) return releasedAfterFailure;
       this.markPendingDecision(session);
       this.deps.dispatchSessionNotification(session, {
         label: "worktree-auto-pr-failed",
@@ -803,5 +789,32 @@ export class SessionWorktreeStrategyService {
       });
     }
     return { notificationSent: true, worktreeRemoved: false };
+  }
+
+  private releaseIfRepresentedByCurrentBranch(
+    session: Session,
+    repoDir: string,
+    worktreePath: string,
+    branchName: string,
+  ): WorktreeStrategyResult | undefined {
+    const currentRepoBranch = getBranchName(repoDir);
+    const releasedByCurrentBranch = Boolean(
+      currentRepoBranch
+      && currentRepoBranch !== branchName
+      && isBranchAncestorOfBase(repoDir, branchName, currentRepoBranch)
+      && listDirtyWorktreeEntries(worktreePath).length === 0,
+    );
+    if (!releasedByCurrentBranch || !currentRepoBranch) return undefined;
+
+    const removed = usesNativeBackendWorktree(session)
+      ? true
+      : removeWorktree(repoDir, worktreePath);
+    if (removed) {
+      session.worktreePath = undefined;
+      this.updatePersistedSessionFor(session, { worktreePath: undefined });
+    }
+    deleteBranch(repoDir, branchName);
+    this.markReleased(session, [`released_by_branch:${currentRepoBranch}`]);
+    return { notificationSent: false, worktreeRemoved: removed };
   }
 }
