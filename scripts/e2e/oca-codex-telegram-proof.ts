@@ -437,6 +437,19 @@ function proofManifest(plan: ProofPlan): Record<string, unknown> {
   };
 }
 
+export function writeGuardedRunScaffold(opts: Options): Record<string, unknown> {
+  const outputDir = resolveProofOutputDir(opts.outputDir);
+  const plan = buildProofPlan(opts);
+  mkdirSync(outputDir, { recursive: true });
+  writeJson(path.join(outputDir, "summary.json"), {
+    ok: true,
+    plan,
+    note: "Native Telegram Desktop capture is guarded behind the Telegram/Crabbox proof implementation path.",
+  });
+  writeJson(path.join(outputDir, "mantis-evidence.json"), proofManifest(plan));
+  return { ok: true, outputDir: opts.outputDir, staged: stagePublicArtifacts(opts.outputDir) };
+}
+
 function printDoctor(opts: Options): void {
   const checks = collectDoctorChecks(opts);
   const ok = checks.every((check) => check.ok || check.name === "private Convex env fallback");
@@ -462,14 +475,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  mkdirSync(path.resolve(REPO_ROOT, opts.outputDir), { recursive: true });
-  writeJson(path.join(path.resolve(REPO_ROOT, opts.outputDir), "summary.json"), {
-    ok: true,
-    plan,
-    note: "Native Telegram Desktop capture is guarded behind the Telegram/Crabbox proof implementation path.",
-  });
-  writeJson(path.join(path.resolve(REPO_ROOT, opts.outputDir), "mantis-evidence.json"), proofManifest(plan));
-  console.log(JSON.stringify({ ok: true, outputDir: opts.outputDir, staged: stagePublicArtifacts(opts.outputDir) }, null, 2));
+  console.log(JSON.stringify(writeGuardedRunScaffold(opts), null, 2));
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

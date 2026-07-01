@@ -10,6 +10,7 @@ import {
   resolveProofOutputDir,
   runLocalSmoke,
   stagePublicArtifacts,
+  writeGuardedRunScaffold,
 } from "../scripts/e2e/oca-codex-telegram-proof";
 
 const repoRoot = join(import.meta.dirname, "..");
@@ -162,6 +163,23 @@ describe("OCA Codex Telegram proof runner", () => {
 
       assert.throws(() => stagePublicArtifacts(temp), /--output-dir must resolve inside/);
       assert.equal(readFileSync(marker, "utf8"), "keep");
+    } finally {
+      rmSync(temp, { recursive: true, force: true });
+    }
+  });
+
+  it("validates run output before writing guarded native proof artifacts", () => {
+    const temp = mkdtempSync(join(tmpdir(), "oca-codex-proof-run-outside-test-"));
+    try {
+      assert.throws(() => writeGuardedRunScaffold(parseArgs([
+        "run",
+        "--output-dir",
+        temp,
+      ])), /--output-dir must resolve inside/);
+
+      assert.equal(existsSync(join(temp, "summary.json")), false);
+      assert.equal(existsSync(join(temp, "mantis-evidence.json")), false);
+      assert.equal(existsSync(join(temp, "public-artifacts")), false);
     } finally {
       rmSync(temp, { recursive: true, force: true });
     }
