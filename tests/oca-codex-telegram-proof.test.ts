@@ -1,12 +1,13 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { join } from "node:path";
 import {
   buildProofPlan,
   collectDoctorChecks,
   parseArgs,
+  resolveProofOutputDir,
   runLocalSmoke,
   stagePublicArtifacts,
 } from "../scripts/e2e/oca-codex-telegram-proof";
@@ -20,7 +21,7 @@ describe("OCA Codex Telegram proof runner", () => {
       "--scenario",
       "plan",
       "--output-dir",
-      ".artifacts/custom-proof",
+      ".artifacts/qa-e2e/oca-codex-telegram/custom-proof",
       "--gateway-port",
       "39001",
       "--record-seconds",
@@ -32,7 +33,7 @@ describe("OCA Codex Telegram proof runner", () => {
 
     assert.equal(opts.command, "local-smoke");
     assert.equal(opts.scenario, "plan");
-    assert.equal(opts.outputDir, ".artifacts/custom-proof");
+    assert.equal(opts.outputDir, ".artifacts/qa-e2e/oca-codex-telegram/custom-proof");
     assert.equal(opts.gatewayPort, 39001);
     assert.equal(opts.recordSeconds, 12);
     assert.equal(opts.keepBox, true);
@@ -40,6 +41,16 @@ describe("OCA Codex Telegram proof runner", () => {
     assert.throws(() => parseArgs(["--output-dir", "one", "--output-dir", "two"]), /--output-dir was provided more than once/);
     assert.throws(() => parseArgs(["--gateway-port", "65536"]), /TCP port/);
     assert.throws(() => parseArgs(["--record-seconds", "1e3"]), /positive integer/);
+  });
+
+  it("rejects output directories outside the proof artifact root", () => {
+    const outside = mkdtempSync(join(tmpdir(), "oca-codex-proof-outside-test-"));
+    try {
+      assert.throws(() => resolveProofOutputDir(outside), /--output-dir must resolve inside/);
+      assert.throws(() => resolveProofOutputDir("../../tmp/oca-codex-proof-outside"), /--output-dir must resolve inside/);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
   });
 
   it("prints a redacted proof plan without exposing Convex secret values", () => {
@@ -72,7 +83,7 @@ describe("OCA Codex Telegram proof runner", () => {
 
   it("runs a deterministic local Codex proof smoke and writes redacted artifacts", async () => {
     const temp = mkdtempSync(join(tmpdir(), "oca-codex-proof-local-smoke-test-"));
-    const outputDir = relative(repoRoot, join(temp, "artifacts"));
+    const outputDir = join(".artifacts", "qa-e2e", "oca-codex-telegram", `local-smoke-${Date.now()}`);
     try {
       const summary = await runLocalSmoke(parseArgs([
         "local-smoke",
@@ -92,21 +103,42 @@ describe("OCA Codex Telegram proof runner", () => {
       assert.equal(existsSync(summaryPath), true);
       const summaryText = readFileSync(summaryPath, "utf8");
       assert.match(summaryText, /worktree/);
-      assert.doesNotMatch(summaryText, /\/home\/[^"]+/);
+      assert.doesNotMatch(summaryText, /\/(?:home|tmp)\/[^"]+/);
     } finally {
       rmSync(temp, { recursive: true, force: true });
+      rmSync(join(repoRoot, outputDir), { recursive: true, force: true });
+    }
+  });
+
+  it("treats the interrupted scenario as an expected local proof outcome", async () => {
+    const outputDir = join(".artifacts", "qa-e2e", "oca-codex-telegram", `interrupted-${Date.now()}`);
+    try {
+      const summary = await runLocalSmoke(parseArgs([
+        "local-smoke",
+        "--scenario",
+        "interrupted",
+        "--output-dir",
+        outputDir,
+      ]));
+
+      assert.equal(summary.ok, true);
+      assert.equal((summary.terminal as { outcome?: string } | undefined)?.outcome, "interrupted");
+    } finally {
+      rmSync(join(repoRoot, outputDir), { recursive: true, force: true });
     }
   });
 
   it("stages only public proof artifacts and excludes session controls", () => {
     const temp = mkdtempSync(join(tmpdir(), "oca-codex-proof-stage-test-"));
-    const outputDir = relative(repoRoot, temp);
+    const outputDir = join(".artifacts", "qa-e2e", "oca-codex-telegram", `stage-${Date.now()}`);
+    const artifactDir = join(repoRoot, outputDir);
     try {
-      writeFileSync(join(temp, "summary.json"), "{}");
-      writeFileSync(join(temp, "harness-messages.redacted.json"), "[]");
-      writeFileSync(join(temp, "session.json"), '{"secret":"x"}');
-      writeFileSync(join(temp, "lease.json"), '{"secret":"x"}');
-      writeFileSync(join(temp, "telegram-user-payload.json"), '{"secret":"x"}');
+      mkdirSync(artifactDir, { recursive: true });
+      writeFileSync(join(artifactDir, "summary.json"), "{}");
+      writeFileSync(join(artifactDir, "harness-messages.redacted.json"), "[]");
+      writeFileSync(join(artifactDir, "session.json"), '{"secret":"x"}');
+      writeFileSync(join(artifactDir, "lease.json"), '{"secret":"x"}');
+      writeFileSync(join(artifactDir, "telegram-user-payload.json"), '{"secret":"x"}');
 
       const staged = stagePublicArtifacts(outputDir);
 
@@ -115,6 +147,21 @@ describe("OCA Codex Telegram proof runner", () => {
       assert.equal(existsSync(join(staged, "session.json")), false);
       assert.equal(existsSync(join(staged, "lease.json")), false);
       assert.equal(existsSync(join(staged, "telegram-user-payload.json")), false);
+    } finally {
+      rmSync(temp, { recursive: true, force: true });
+      rmSync(artifactDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not delete public artifacts for an unsafe output path", () => {
+    const temp = mkdtempSync(join(tmpdir(), "oca-codex-proof-stage-outside-test-"));
+    const marker = join(temp, "public-artifacts", "keep.txt");
+    try {
+      mkdirSync(join(temp, "public-artifacts"), { recursive: true });
+      writeFileSync(marker, "keep");
+
+      assert.throws(() => stagePublicArtifacts(temp), /--output-dir must resolve inside/);
+      assert.equal(readFileSync(marker, "utf8"), "keep");
     } finally {
       rmSync(temp, { recursive: true, force: true });
     }

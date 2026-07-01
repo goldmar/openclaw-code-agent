@@ -16,7 +16,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { getHarness } from "../../src/harness/index";
-import type { HarnessMessage } from "../../src/harness/types";
+import type { HarnessMessage, HarnessResult, HarnessSession } from "../../src/harness/types";
 import { redactProofValue } from "./oca-codex-proof-app-server";
 
 type Command = "doctor" | "local-smoke" | "run";
@@ -67,6 +67,7 @@ type ProofPlan = {
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(SCRIPT_DIR, "..", "..");
 const DEFAULT_OUTPUT_ROOT = ".artifacts/qa-e2e/oca-codex-telegram";
+const DEFAULT_OUTPUT_ROOT_ABS = path.resolve(REPO_ROOT, DEFAULT_OUTPUT_ROOT);
 const FAKE_CODEX_SERVER = path.join(SCRIPT_DIR, "oca-codex-proof-app-server.ts");
 const TELEGRAM_USER_DRIVER = path.join(SCRIPT_DIR, "telegram-user-driver.py");
 const TELEGRAM_USER_CREDENTIAL = path.join(SCRIPT_DIR, "telegram-user-credential.ts");
@@ -82,7 +83,7 @@ export function usageText(): string {
     "",
     "Options:",
     "  --scenario <name>             basic, plan, pending-question, approval, worktree, fail, interrupted.",
-    "  --output-dir <path>           Artifact directory. Default: .artifacts/qa-e2e/oca-codex-telegram/<timestamp>.",
+    "  --output-dir <path>           Artifact directory under .artifacts/qa-e2e/oca-codex-telegram.",
     "  --crabbox-bin <path>          Crabbox binary. Default: OPENCLAW_TELEGRAM_USER_CRABBOX_BIN or crabbox.",
     "  --provider <name>             Crabbox provider. Default: OPENCLAW_TELEGRAM_USER_CRABBOX_PROVIDER or local-container.",
     "  --desktop-chat-title <title>  Telegram Desktop chat title for native proof capture.",
@@ -227,6 +228,19 @@ export function buildProofPlan(opts: Options): ProofPlan {
   };
 }
 
+function isPathInside(parent: string, child: string): boolean {
+  const relativePath = path.relative(parent, child);
+  return relativePath === "" || (!!relativePath && !relativePath.startsWith("..") && !path.isAbsolute(relativePath));
+}
+
+export function resolveProofOutputDir(outputDir: string): string {
+  const resolved = path.resolve(REPO_ROOT, outputDir);
+  if (!isPathInside(DEFAULT_OUTPUT_ROOT_ABS, resolved)) {
+    throw new Error(`--output-dir must resolve inside ${DEFAULT_OUTPUT_ROOT}`);
+  }
+  return resolved;
+}
+
 function commandExists(command: string): boolean {
   if (command.includes("/") || command.includes("\\")) return existsSync(expandHome(command));
   const result = spawnSync("sh", ["-c", `command -v "$1" >/dev/null 2>&1`, "sh", command], {
@@ -269,9 +283,9 @@ function writeJson(file: string, value: unknown): void {
   writeFileSync(file, `${JSON.stringify(redactProofValue(value), null, 2)}\n`);
 }
 
-async function collectUntilCompleted(messages: AsyncIterable<HarnessMessage>, timeoutMs: number): Promise<HarnessMessage[]> {
+async function collectUntilCompleted(session: HarnessSession, timeoutMs: number): Promise<HarnessMessage[]> {
   const seen: HarnessMessage[] = [];
-  const iterator = messages[Symbol.asyncIterator]();
+  const iterator = session.messages[Symbol.asyncIterator]();
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const remaining = Math.max(1, deadline - Date.now());
@@ -284,9 +298,18 @@ async function collectUntilCompleted(messages: AsyncIterable<HarnessMessage>, ti
     ]);
     if (next.done) break;
     seen.push(next.value);
+    if (next.value.type === "pending_input" && next.value.state.options.length > 0) {
+      await session.submitPendingInputOption?.(0, { requestId: next.value.state.requestId });
+    }
     if (next.value.type === "run_completed") break;
   }
   return seen;
+}
+
+function expectedTerminalSuccess(scenario: string, terminal: HarnessResult | undefined): boolean {
+  if (!terminal) return false;
+  if (terminal.success === true) return true;
+  return scenario === "interrupted" && terminal.outcome === "interrupted";
 }
 
 function createCodexWrapper(tempRoot: string): string {
@@ -308,7 +331,7 @@ function createCodexWrapper(tempRoot: string): string {
 }
 
 export async function runLocalSmoke(opts: Options): Promise<Record<string, unknown>> {
-  const outputDir = path.resolve(REPO_ROOT, opts.outputDir);
+  const outputDir = resolveProofOutputDir(opts.outputDir);
   mkdirSync(outputDir, { recursive: true });
   const tempRoot = mkdtempSync(path.join(os.tmpdir(), "oca-codex-proof-"));
   const requestLog = path.join(outputDir, "codex-app-server-requests.redacted.jsonl");
@@ -332,12 +355,12 @@ export async function runLocalSmoke(opts: Options): Promise<Record<string, unkno
       worktreeStrategy: opts.scenario === "worktree" ? "ask" : "off",
       originalWorkdir: REPO_ROOT,
     });
-    const messages = await collectUntilCompleted(launched.messages, opts.timeoutMs);
+    const messages = await collectUntilCompleted(launched, opts.timeoutMs);
     const terminal = messages.find((message): message is Extract<HarnessMessage, { type: "run_completed" }> => (
       message.type === "run_completed"
     ));
     const summary = {
-      ok: terminal?.data.success === true,
+      ok: expectedTerminalSuccess(opts.scenario, terminal?.data),
       scenario: opts.scenario,
       outputDir,
       messageTypes: messages.map((message) => message.type),
@@ -373,7 +396,7 @@ export async function runLocalSmoke(opts: Options): Promise<Record<string, unkno
 }
 
 export function stagePublicArtifacts(outputDir: string): string {
-  const resolved = path.resolve(REPO_ROOT, outputDir);
+  const resolved = resolveProofOutputDir(outputDir);
   const staged = path.join(resolved, "public-artifacts");
   rmSync(staged, { recursive: true, force: true });
   mkdirSync(staged, { recursive: true });

@@ -118,16 +118,49 @@ describe("OCA Codex proof fake App Server", () => {
     });
   });
 
+  it("exposes approval actions as selectable Codex harness options", async () => {
+    await withScenario("approval", async () => {
+      const temp = mkdtempSync(join(tmpdir(), "oca-codex-proof-wrapper-test-"));
+      try {
+        const session = harnessForProofServer(createServerWrapper(temp)).launch({
+          cwd: repoRoot,
+          prompt: "Approve.",
+        });
+        const messages: HarnessMessage[] = [];
+        for await (const message of session.messages) {
+          messages.push(message);
+          if (message.type === "pending_input") {
+            assert.deepEqual(message.state.options, ["Approve", "Decline"]);
+            await session.submitPendingInputOption?.(0, { requestId: message.state.requestId });
+          }
+          if (message.type === "run_completed") break;
+        }
+        assert.ok(messages.some((message) => message.type === "pending_input_resolved"));
+        const terminal = messages.find((message): message is Extract<HarnessMessage, { type: "run_completed" }> => (
+          message.type === "run_completed"
+        ));
+        assert.equal(terminal?.data.success, true);
+      } finally {
+        rmSync(temp, { recursive: true, force: true });
+      }
+    });
+  });
+
   it("redacts obvious credentials and private paths in proof logs", () => {
     const redacted = JSON.stringify(redactProofValue({
       token: "sk-secret-token",
       nested: {
         url: "https://alice:hunter2@example.test/path",
         path: "/home/alice/private/worktree",
+        cwd: "/tmp/trex-codex-proof/head",
+        outputDir: "/tmp/trex-codex-proof/head-out/proof",
+        worktreePath: "/tmp/oca-proof/worktrees/native-codex/openclaw-code-agent",
       },
     }));
     assert.doesNotMatch(redacted, /sk-secret-token/);
     assert.doesNotMatch(redacted, /home\/alice/);
+    assert.doesNotMatch(redacted, /trex-codex-proof/);
+    assert.doesNotMatch(redacted, /oca-proof/);
     assert.match(redacted, /redacted/);
   });
 });

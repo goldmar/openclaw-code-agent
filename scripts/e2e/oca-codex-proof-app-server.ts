@@ -55,6 +55,7 @@ export function scenarioByName(name: string | undefined): Scenario {
           params: {
             requestId: "req-approval",
             question: "Allow command?",
+            availableDecisions: ["Approve", "Decline"],
             actions: [
               {
                 kind: "approval",
@@ -146,7 +147,7 @@ export function redactProofValue(value: unknown): unknown {
     return value
       .replace(/\b(Bearer\s+)[^\s]+/gi, "$1[redacted credential]")
       .replace(/\b(sk-[A-Za-z0-9_-]{8,}|gh[opsru]_[A-Za-z0-9_]{8,}|[A-Za-z0-9_-]{32,})\b/g, "[redacted token]")
-      .replace(/(?:\/Users|\/home)\/[^\s]+/g, "[redacted path]");
+      .replace(/\/(?:Users|home|tmp|private\/tmp|var\/folders|workspace|run\/user)\/[^\s"',}\]]+/g, "[redacted path]");
   }
   if (Array.isArray(value)) return value.map((entry) => redactProofValue(entry));
   if (!value || typeof value !== "object") return value;
@@ -154,6 +155,10 @@ export function redactProofValue(value: unknown): unknown {
   for (const [key, entry] of Object.entries(value)) {
     if (/(api[_-]?key|token|secret|password|authorization)/iu.test(key)) {
       output[key] = "[redacted credential]";
+      continue;
+    }
+    if (/(^|[_-])(cwd|path|dir|directory|worktree|output)([_-]|$)/iu.test(key) && typeof entry === "string" && path.isAbsolute(entry)) {
+      output[key] = "[redacted path]";
       continue;
     }
     output[key] = redactProofValue(entry);
