@@ -33,10 +33,12 @@ export class SessionWorktreeMessageService {
       | "approvalPromptStatus"
       | "approvalPromptMessageKind"
       | "approvalPromptDeliveredAt"
+      | "completedAt"
     >;
     nativeBackendWorktree: boolean;
     cleanupSucceeded: boolean;
     worktreePath: string;
+    worktreeBranch?: string;
     preview: string;
     originThreadLine?: string;
     preservedSummary?: string;
@@ -46,10 +48,17 @@ export class SessionWorktreeMessageService {
       nativeBackendWorktree,
       cleanupSucceeded,
       worktreePath,
+      worktreeBranch,
       preview,
       originThreadLine,
       preservedSummary,
     } = args;
+    const cleanupState = preservedSummary ? "preserved" : cleanupSucceeded ? "cleaned" : "cleanup-failed";
+    const terminalCycleKey = [
+      worktreeBranch?.trim() || "unknown-branch",
+      worktreePath.trim() || "unknown-worktree",
+      session.completedAt ?? "unknown-completed-at",
+    ].join(":");
     const cleanupSummary = preservedSummary ?? (cleanupSucceeded
       ? nativeBackendWorktree
         ? "native backend worktree released for backend cleanup"
@@ -60,7 +69,7 @@ export class SessionWorktreeMessageService {
       label: preservedSummary
         ? "worktree-no-changes-preserved"
         : cleanupSucceeded ? "worktree-no-changes" : "worktree-no-changes-cleanup-failed",
-      idempotencyKey: `worktree-no-change:${session.id}:${preservedSummary ? "preserved" : cleanupSucceeded ? "cleaned" : "cleanup-failed"}`,
+      idempotencyKey: `worktree-no-change:${session.id}:${cleanupState}:${terminalCycleKey}`,
       userMessage: preservedSummary
         ? `ℹ️ [${session.name}] Session completed with no worktree changes to merge — ${preservedSummary}`
         : cleanupSucceeded
