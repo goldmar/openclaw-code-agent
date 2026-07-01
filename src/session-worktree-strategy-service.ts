@@ -39,9 +39,9 @@ type DiffSummary = NonNullable<ReturnType<typeof getDiffSummary>>;
 type SpawnedResolverSession = Pick<Session, "id" | "name">;
 type AllowedWorktreeActions = { merge: boolean; pr: boolean };
 
-function buildWorktreeCycleKey(session: Pick<Session, "completedAt" | "worktreeBranch" | "worktreePath">): string {
+function buildWorktreeCycleKey(session: Pick<Session, "startedAt" | "worktreeBranch" | "worktreePath">): string {
   return [
-    session.completedAt ?? "unknown-completed-at",
+    session.startedAt,
     session.worktreeBranch ?? "unknown-branch",
     session.worktreePath ?? "unknown-worktree",
   ].join(":");
@@ -148,7 +148,7 @@ export class SessionWorktreeStrategyService {
   ): void {
     this.deps.dispatchSessionNotification(session, {
       label: "worktree-merge-conflict-escalated",
-      idempotencyKey: `worktree-merge-conflict-escalated:${session.id}:${branchName}`,
+      idempotencyKey: `worktree-merge-conflict-escalated:${session.id}:${branchName}:${buildWorktreeCycleKey(session)}`,
       userMessage: [
         `⚠️ [${session.name}] Auto-merge could not finish after one conflict-resolution attempt.`,
         `Branch \`${branchName}\` was preserved for manual follow-up.`,
@@ -238,7 +238,7 @@ export class SessionWorktreeStrategyService {
           "worktree-action",
           session.id,
           action.label,
-          session.completedAt ?? "unknown",
+          session.startedAt,
           session.worktreeBranch ?? "unknown",
           session.worktreePath ?? "unknown",
         ].join(":"),

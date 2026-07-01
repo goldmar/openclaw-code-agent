@@ -113,6 +113,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       phase: "implementing",
       lifecycle: "active",
       worktreeState: "active",
+      startedAt: 1700000003000,
       worktreePath: "/tmp/repo/.worktrees/generic",
       worktreeBranch: "agent/generic",
       worktreeStrategy: "ask",
@@ -125,7 +126,59 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
     assert.equal(notifications.length, 1);
     assert.equal(
       notifications[0]?.idempotencyKey,
-      "worktree-action:s-worktree-generic:worktree-missing-repo-dir:1700000004000:agent/generic:/tmp/repo/.worktrees/generic",
+      "worktree-action:s-worktree-generic:worktree-missing-repo-dir:1700000003000:agent/generic:/tmp/repo/.worktrees/generic",
+    );
+  });
+
+  it("keeps generic worktree notification keys stable when completedAt is populated later", async () => {
+    const notifications: Array<Record<string, unknown>> = [];
+    const service = new SessionWorktreeStrategyService({
+      shouldRunWorktreeStrategy: () => true,
+      isAlreadyMerged: () => false,
+      resolveWorktreeRepoDir: () => undefined,
+      getWorktreeCompletionState: () => {
+        throw new Error("missing repo notifications should not inspect completion state");
+      },
+      updatePersistedSession: () => true,
+      dispatchSessionNotification: (_session, request) => {
+        notifications.push(request as Record<string, unknown>);
+      },
+      getOutputPreview: () => "",
+      originThreadLine: () => "thread",
+      getWorktreeDecisionButtons: () => undefined,
+      makeOpenPrButton: () => ({ label: "Open PR", callbackData: "open-pr" }),
+      worktreeMessages: new SessionWorktreeMessageService(),
+      enqueueMerge: async (_repoDir, fn) => { await fn(); },
+      mergeBranch,
+      spawnConflictResolver: async () => ({ id: "resolver-unused", name: "unused" }),
+      runAutoPr: async () => ({ success: true }),
+    });
+    const session: any = {
+      id: "s-worktree-generic-retry",
+      name: "generic-worktree-retry",
+      status: "completed",
+      phase: "implementing",
+      lifecycle: "active",
+      worktreeState: "active",
+      startedAt: 1700000005000,
+      worktreePath: "/tmp/repo/.worktrees/generic-retry",
+      worktreeBranch: "agent/generic-retry",
+      worktreeStrategy: "ask",
+      completedAt: undefined,
+      originalWorkdir: "/tmp/repo",
+      harnessSessionId: "h-worktree-generic-retry",
+      getOutput: () => [],
+    };
+
+    await service.handleWorktreeStrategy(session);
+    session.completedAt = 1700000009000;
+    await service.handleWorktreeStrategy(session);
+
+    assert.equal(notifications.length, 2);
+    assert.equal(notifications[0]?.idempotencyKey, notifications[1]?.idempotencyKey);
+    assert.equal(
+      notifications[0]?.idempotencyKey,
+      "worktree-action:s-worktree-generic-retry:worktree-missing-repo-dir:1700000005000:agent/generic-retry:/tmp/repo/.worktrees/generic-retry",
     );
   });
 
@@ -302,6 +355,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         phase: "implementing",
         lifecycle: "terminal",
         worktreeState: "active",
+        startedAt: 1700000010000,
         originalWorkdir: repoDir,
         worktreePath,
         worktreeBranch: branchName,
@@ -318,6 +372,64 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       assert.equal(notifications[0].buttons, policyButtons);
       assert.deepEqual(policyButtonOptions, { allowDelegate: true });
       assert.deepEqual(policyAllowedActions, { merge: false, pr: false });
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps policy-blocked worktree keys stable when completedAt is populated later", async () => {
+    const { repoDir, worktreePath, branchName } = createMergeableWorktree("policy-blocked-completed-at");
+    const notifications: Array<Record<string, unknown>> = [];
+    try {
+      const service = new SessionWorktreeStrategyService({
+        shouldRunWorktreeStrategy: () => true,
+        isAlreadyMerged: () => false,
+        resolveWorktreeRepoDir: (dir) => dir,
+        getWorktreeCompletionState: () => "has-commits",
+        updatePersistedSession: () => true,
+        dispatchSessionNotification: (_session, request) => {
+          notifications.push(request as Record<string, unknown>);
+        },
+        getOutputPreview: () => "",
+        originThreadLine: () => "thread",
+        getWorktreeDecisionButtons: () => undefined,
+        getPolicyAwareWorktreeDecisionButtons: () => [[{ label: "Later", callbackData: "later" }]],
+        makeOpenPrButton: () => ({ label: "Open PR", callbackData: "open-pr" }),
+        isPrAvailable: () => false,
+        worktreeMessages: new SessionWorktreeMessageService(),
+        enqueueMerge: async (_repoDir, fn) => { await fn(); },
+        mergeBranch,
+        spawnConflictResolver: async () => ({ id: "resolver-unused", name: "unused" }),
+        runAutoPr: async () => ({ success: true }),
+      });
+      const session: any = {
+        id: "s-policy-blocked-completed-at",
+        name: "policy-blocked-completed-at",
+        status: "completed",
+        phase: "implementing",
+        lifecycle: "terminal",
+        worktreeState: "active",
+        startedAt: 1700000015000,
+        originalWorkdir: repoDir,
+        worktreePath,
+        worktreeBranch: branchName,
+        worktreeBaseBranch: "main",
+        worktreeStrategy: "delegate",
+        pendingPlanApproval: false,
+      };
+
+      await service.handleWorktreeStrategy(session);
+      session.completedAt = 1700000019000;
+      await service.handleWorktreeStrategy(session);
+
+      assert.equal(notifications.length, 2);
+      assert.equal(notifications[0]?.label, "worktree-policy-blocked");
+      assert.equal(notifications[1]?.label, "worktree-policy-blocked");
+      assert.equal(notifications[0]?.idempotencyKey, notifications[1]?.idempotencyKey);
+      assert.match(
+        String(notifications[0]?.idempotencyKey),
+        new RegExp(`^worktree-policy-blocked:s-policy-blocked-completed-at:${branchName}:main:1700000015000:`),
+      );
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }
