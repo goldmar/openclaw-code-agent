@@ -53,6 +53,7 @@ import { SessionTimerRegistry } from "./session-timer-registry";
 import { SessionTurnRuntime } from "./session-turn-runtime";
 import { SessionHarnessEventApplier } from "./session-harness-event-applier";
 import { getBranchName, listDirtyWorktreeEntries } from "./worktree";
+import { isHarnessStartupFailureOutput, summarizeHarnessStartupFailure } from "./harness-startup-failure";
 
 const STARTUP_TIMEOUT_MS = 2 * 60 * 1000; // 2 minutes
 export { getSessionOutputFilePath } from "./session-output";
@@ -330,13 +331,23 @@ export class Session extends EventEmitter {
         this.applyControlEvent({ type: "permission.mode_changed", currentPermissionMode: mode });
       },
       handleRunCompleted: (data) => {
-        const outcome = data.outcome ?? (data.success ? "completed" : "failed");
+        const reportedOutcome = data.outcome ?? (data.success ? "completed" : "failed");
+        const startupFailureText = [
+          data.result,
+          ...this.outputBuffer,
+        ].filter((line): line is string => typeof line === "string").join("\n");
+        const forcedStartupFailure = reportedOutcome === "completed"
+          && isHarnessStartupFailureOutput(startupFailureText);
+        const outcome = forcedStartupFailure ? "failed" : reportedOutcome;
+        const resultText = forcedStartupFailure
+          ? (summarizeHarnessStartupFailure(startupFailureText) ?? data.result)
+          : data.result;
         this.result = {
-          subtype: outcome === "interrupted" ? "interrupted" : (data.success ? "success" : "error"),
+          subtype: outcome === "interrupted" ? "interrupted" : (outcome === "completed" ? "success" : "error"),
           duration_ms: data.duration_ms,
           total_cost_usd: data.total_cost_usd,
           num_turns: data.num_turns,
-          result: data.result,
+          result: resultText,
           is_error: outcome === "failed",
           session_id: data.session_id,
         };
@@ -360,7 +371,9 @@ export class Session extends EventEmitter {
           });
         } else {
           this.turnRuntime.finishTerminalTurn();
-          this.transitionToTerminal(outcome === "completed" ? "completed" : "failed");
+          this.transitionToTerminal(outcome === "completed" ? "completed" : "failed", {
+            ...(outcome === "failed" && resultText ? { error: resultText } : {}),
+          });
         }
         this.turnRuntime.resetAfterRun();
         this.pendingInputState = undefined;

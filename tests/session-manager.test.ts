@@ -3448,6 +3448,40 @@ describe("SessionManager terminal wake behavior", () => {
     assert.match(request.userMessage, /❌ \[broken-launch\] Failed/);
   });
 
+  it("renders auth startup failures as failed canonical notifications", async () => {
+    const authFailure = "Failed to authenticate. API Error: 401 Invalid bearer token";
+    const s = fakeSession({
+      id: "s-auth-failed",
+      name: "review-smart-replies-missing",
+      status: "failed",
+      completedAt: 1700000001000,
+      duration: 5_000,
+      error: authFailure,
+      result: {
+        subtype: "error",
+        session_id: "",
+        num_turns: 0,
+        result: authFailure,
+        is_error: true,
+      },
+      harnessName: "claude-code",
+      model: "anthropic/claude-sonnet-4-7",
+      getOutput: () => [authFailure],
+    });
+
+    await (sm as any).onSessionTerminal(s);
+
+    const calls = (sm as any).__dispatchCalls;
+    assert.equal(calls.length, 1);
+    const [_sessionArg, request] = calls[0];
+    assert.equal(request.label, "failed");
+    assert.match(request.userMessage, /❌ \[review-smart-replies-missing\] Failed/);
+    assert.match(request.userMessage, /Failed to authenticate\. API Error: 401 Invalid bearer token/);
+    assert.doesNotMatch(request.userMessage, /✅/);
+    assert.doesNotMatch(request.userMessage, /Completed/);
+    assert.match(request.wakeMessage, /Coding agent session failed/);
+  });
+
   it("uses the final substantive block for terminal completion wake previews", async () => {
     const prefix = "Plan:\n" + "review requirements\n".repeat(120);
     const suffix = [
