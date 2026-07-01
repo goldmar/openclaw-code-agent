@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-import { readdirSync, statSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 
@@ -37,11 +38,23 @@ if (files.length === 0) {
 const failures = [];
 for (const file of files) {
   console.log(`\n==> ${file}`);
-  const result = spawnSync(process.execPath, ["--import", "tsx", "--test", file], {
-    cwd,
-    stdio: "inherit",
-    env: process.env,
-  });
+  const testHome = mkdtempSync(join(tmpdir(), "openclaw-code-agent-test-home-"));
+  const env = {
+    ...process.env,
+    OPENCLAW_HOME: testHome,
+    OPENCLAW_CODE_AGENT_SESSIONS_PATH: join(testHome, "code-agent-sessions.json"),
+  };
+
+  let result;
+  try {
+    result = spawnSync(process.execPath, ["--import", "tsx", "--test", file], {
+      cwd,
+      stdio: "inherit",
+      env,
+    });
+  } finally {
+    rmSync(testHome, { recursive: true, force: true });
+  }
 
   if (result.status !== 0) {
     failures.push({ file, status: result.status ?? 1 });
