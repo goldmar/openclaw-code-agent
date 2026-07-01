@@ -374,6 +374,7 @@ function redactProofText(value: string): string {
     .replace(/"((?:sut|tester)?Username|groupId|testerUserId|credentialId|ownerId)"\s*:\s*"[^"]*"/giu, '"$1": "[redacted id]"')
     .replace(/\bauthorization\b(?:(\s*[:=]\s*)|\s+)(?:"(?:Bearer\s+)?[^"]+"|'(?:Bearer\s+)?[^']+'|(?:Bearer\s+)?[A-Za-z0-9._~+/-]+=*)/giu, "authorization$1[redacted credential]")
     .replace(/\b(secret|password|api[-_ ]?key|credential|token)\b(?:(\s*[:=]\s*)|\s+)(?:"[^"]*"|'[^']*'|[^\s,;)}\]]+)/giu, "$1$2[redacted credential]")
+    .replace(/\/(?:Users|home|tmp|private\/tmp|var\/folders|workspace|run\/user)\/[^\s"'<>),\]]+/gu, "[redacted path]")
     .replace(/(?:\/private\/tmp|\/var\/folders|\/tmp)\/[^\s"'<>),\]]+/gu, "[redacted path]")
     .replace(/\b\d{7,}:[A-Za-z0-9_-]{20,}\b/gu, "[redacted credential]")
     .replace(/\b\d{6,}\b/gu, "[redacted id]")

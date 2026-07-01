@@ -179,7 +179,7 @@ describe("OCA Codex Telegram proof runner", () => {
       writeFileSync(join(artifactDir, "oca-codex-telegram-proof.md"), 'secret=super-secret password hunter2 apiKey abc123 credential lease-secret authorization: "Bearer abc123"');
       writeFileSync(
         join(artifactDir, "telegram-desktop.log"),
-        "token 123456789:abcdefghijklmnopqrstuvwxyzABCDE user @qa_secret_user group -1003863755361 file /tmp/oca-proof/session.log home /home/runner/work/openclaw-code-agent/proof.log token=log-secret password hunter2 apiKey abc123 credential lease-secret",
+        "token 123456789:abcdefghijklmnopqrstuvwxyzABCDE user @qa_secret_user group -1003863755361 file /tmp/oca-proof/session.log home /home/runner/work/openclaw-code-agent/proof.log mac /Users/runner/work/proof.log workspace /workspace/openclaw/proof.log runtime /run/user/1001/proof.log token=log-secret password hunter2 apiKey abc123 credential lease-secret",
       );
       writeFileSync(join(artifactDir, "telegram-desktop.png"), "fake rendered @qa_secret_user");
       writeFileSync(join(artifactDir, "session.json"), '{"secret":"x"}');
@@ -203,6 +203,9 @@ describe("OCA Codex Telegram proof runner", () => {
       assert.doesNotMatch(stagedLog, /-1003863755361/);
       assert.doesNotMatch(stagedLog, /\/tmp\/oca-proof/);
       assert.doesNotMatch(stagedLog, /\/home\/runner\/work/);
+      assert.doesNotMatch(stagedLog, /\/Users\/runner\/work/);
+      assert.doesNotMatch(stagedLog, /\/workspace\/openclaw/);
+      assert.doesNotMatch(stagedLog, /\/run\/user\/1001/);
       assert.doesNotMatch(stagedLog, /log-secret|hunter2|abc123|lease-secret/);
       const stagedMarkdown = readFileSync(join(staged, "oca-codex-telegram-proof.md"), "utf8");
       assert.doesNotMatch(stagedMarkdown, /super-secret|hunter2|abc123/);
