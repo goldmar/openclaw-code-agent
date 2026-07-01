@@ -145,8 +145,8 @@ export function scenarioByName(name: string | undefined): Scenario {
 export function redactProofValue(value: unknown): unknown {
   if (typeof value === "string") {
     return value
-      .replace(/\bauthorization\b(\s*[:=]\s*)(?:"(?:Bearer\s+)?[^"]+"|'(?:Bearer\s+)?[^']+'|(?:Bearer\s+)?[A-Za-z0-9._~+/-]+=*)/giu, "authorization$1[redacted credential]")
-      .replace(/\b(secret|password|api[-_ ]?key|credential|token)\b(\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;)}\]]+)/giu, "$1$2[redacted credential]")
+      .replace(/\bauthorization\b(?:(\s*[:=]\s*)|\s+)(?:"(?:Bearer\s+)?[^"]+"|'(?:Bearer\s+)?[^']+'|(?:Bearer\s+)?[A-Za-z0-9._~+/-]+=*)/giu, "authorization$1[redacted credential]")
+      .replace(/\b(secret|password|api[-_ ]?key|credential|token)\b(?:(\s*[:=]\s*)|\s+)(?:"[^"]*"|'[^']*'|[^\s,;)}\]]+)/giu, "$1$2[redacted credential]")
       .replace(/\b(Bearer\s+)[^\s]+/gi, "$1[redacted credential]")
       .replace(/\b\d{7,}:[A-Za-z0-9_-]{20,}\b/gu, "[redacted credential]")
       .replace(/\b\d{6,}\b/gu, "[redacted id]")

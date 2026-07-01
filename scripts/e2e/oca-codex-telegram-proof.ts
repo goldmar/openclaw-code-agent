@@ -372,8 +372,8 @@ function writeJson(file: string, value: unknown): void {
 function redactProofText(value: string): string {
   return String(redactProofValue(value))
     .replace(/"((?:sut|tester)?Username|groupId|testerUserId|credentialId|ownerId)"\s*:\s*"[^"]*"/giu, '"$1": "[redacted id]"')
-    .replace(/\bauthorization\b(\s*[:=]\s*)(?:"(?:Bearer\s+)?[^"]+"|'(?:Bearer\s+)?[^']+'|(?:Bearer\s+)?[A-Za-z0-9._~+/-]+=*)/giu, "authorization$1[redacted credential]")
-    .replace(/\b(secret|password|api[-_ ]?key|credential|token)\b(\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;)}\]]+)/giu, "$1$2[redacted credential]")
+    .replace(/\bauthorization\b(?:(\s*[:=]\s*)|\s+)(?:"(?:Bearer\s+)?[^"]+"|'(?:Bearer\s+)?[^']+'|(?:Bearer\s+)?[A-Za-z0-9._~+/-]+=*)/giu, "authorization$1[redacted credential]")
+    .replace(/\b(secret|password|api[-_ ]?key|credential|token)\b(?:(\s*[:=]\s*)|\s+)(?:"[^"]*"|'[^']*'|[^\s,;)}\]]+)/giu, "$1$2[redacted credential]")
     .replace(/(?:\/private\/tmp|\/var\/folders|\/tmp)\/[^\s"'<>),\]]+/gu, "[redacted path]")
     .replace(/\b\d{7,}:[A-Za-z0-9_-]{20,}\b/gu, "[redacted credential]")
     .replace(/\b\d{6,}\b/gu, "[redacted id]")
@@ -573,6 +573,7 @@ export async function runNativeProof(
       ok: result.ok && cleanupOk,
       cleanupErrors,
     };
+    const stagedPublicArtifacts = path.join(outputDir, "public-artifacts");
     const summary = {
       ok: result.ok,
       cleanupErrors,
@@ -582,6 +583,7 @@ export async function runNativeProof(
       session,
       artifacts: publicArtifacts.map((artifact) => ({ ...artifact, path: relativeArtifact(artifact.path) })),
       privateArtifactCount: artifacts.length - publicArtifacts.length,
+      stagedPublicArtifacts: relativeArtifact(stagedPublicArtifacts),
     };
     writeJson(path.join(outputDir, "summary.json"), summary);
     writeJson(path.join(outputDir, "mantis-evidence.json"), proofManifest(plan, publicArtifacts, result.ok));
@@ -596,6 +598,10 @@ export async function runNativeProof(
         "",
       ].join("\n"),
     );
+    result = {
+      ...result,
+      staged: relativeArtifact(stagePublicArtifacts(opts.outputDir)),
+    };
     if (cleanupErrors.length === 0) {
       rmSync(sessionDir, { recursive: true, force: true });
     }
