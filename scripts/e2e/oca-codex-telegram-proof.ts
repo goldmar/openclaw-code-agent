@@ -8,6 +8,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readdirSync,
+  readFileSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -21,10 +22,12 @@ import { redactProofValue } from "./oca-codex-proof-app-server";
 
 type Command = "doctor" | "local-smoke" | "run";
 type Options = {
+  allowLive: boolean;
   command: Command;
   crabboxBin: string;
   crabboxProvider: string;
   desktopChatTitle: string;
+  envFile?: string;
   dryRun: boolean;
   gatewayPort: number;
   keepBox: boolean;
@@ -42,6 +45,11 @@ type DoctorCheck = {
 
 type ProofPlan = {
   command: Command;
+  liveExecution: {
+    allowFlag: boolean;
+    env: "missing" | "set";
+    enabled: boolean;
+  };
   crabbox: {
     bin: string;
     keepBox: boolean;
@@ -56,12 +64,74 @@ type ProofPlan = {
   secrets: {
     convexSiteUrl: "missing" | "set";
     convexCiSecret: "missing" | "set";
+    envFile: "default" | "provided";
   };
   telegram: {
     credentialKind: "telegram-user";
     desktopChatTitle: string;
     recordSeconds: number;
   };
+};
+
+type CredentialLease = {
+  credentialId: string;
+  desktopWorkdir: string;
+  groupId: string;
+  leaseFile: string;
+  ownerId: string;
+  sutUsername?: string;
+  testerUserId: string;
+  testerUsername: string;
+  userDriverDir: string;
+};
+
+type CrabboxDesktop = {
+  createdLease: boolean;
+  id: string;
+  provider: string;
+  target: "linux";
+};
+
+type LocalProofSut = {
+  gatewayPort: number;
+  isolatedHome: string;
+  requestLog?: string;
+};
+
+type EvidenceArtifact = {
+  kind: "json" | "log" | "markdown" | "screenshot" | "video";
+  path: string;
+  public: boolean;
+};
+
+type NativeProofSession = {
+  command: "oca-codex-telegram-native-session";
+  createdAt: string;
+  crabbox?: CrabboxDesktop;
+  credential?: CredentialLease;
+  localSut?: LocalProofSut;
+  outputDir: string;
+  scenario: string;
+};
+
+type NativeProofDeps = {
+  acquireCredentialLease: (opts: Options, sessionDir: string) => Promise<CredentialLease>;
+  captureEvidence: (params: {
+    crabbox: CrabboxDesktop;
+    credential: CredentialLease;
+    localSut: LocalProofSut;
+    opts: Options;
+    outputDir: string;
+  }) => Promise<EvidenceArtifact[]>;
+  releaseCredentialLease: (lease: CredentialLease, opts: Options) => Promise<void>;
+  startCrabboxDesktop: (opts: Options) => Promise<CrabboxDesktop>;
+  startLocalSut: (params: { credential: CredentialLease; opts: Options; sessionDir: string }) => Promise<LocalProofSut>;
+  stopCrabboxDesktop: (desktop: CrabboxDesktop, opts: Options) => Promise<void>;
+  stopLocalSut: (sut: LocalProofSut, opts: Options) => Promise<void>;
+};
+
+type NativeProofResult = Record<string, unknown> & {
+  ok: boolean;
 };
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -87,10 +157,12 @@ export function usageText(): string {
     "  --crabbox-bin <path>          Crabbox binary. Default: OPENCLAW_TELEGRAM_USER_CRABBOX_BIN or crabbox.",
     "  --provider <name>             Crabbox provider. Default: OPENCLAW_TELEGRAM_USER_CRABBOX_PROVIDER or local-container.",
     "  --desktop-chat-title <title>  Telegram Desktop chat title for native proof capture.",
+    "  --env-file <path>             Convex env file for live proof release/acquire helpers.",
     "  --gateway-port <port>         Disposable gateway port. Default: 38975.",
     "  --record-seconds <seconds>    Native desktop recording duration. Default: 35.",
     "  --keep-box                    Keep Crabbox lease for VNC/debugging.",
     "  --dry-run                     Print the resolved proof plan without leasing credentials.",
+    "  --allow-live                  Permit native orchestration when OPENCLAW_RUN_LIVE_TELEGRAM_PROOF=1.",
   ].join("\n");
 }
 
@@ -138,6 +210,7 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): Options {
   const args = command === first ? argv.slice(1) : argv;
   const seen = new Set<string>();
   const opts: Options = {
+    allowLive: false,
     command,
     crabboxBin: process.env.OPENCLAW_TELEGRAM_USER_CRABBOX_BIN?.trim() || "crabbox",
     crabboxProvider: process.env.OPENCLAW_TELEGRAM_USER_CRABBOX_PROVIDER?.trim() || "local-container",
@@ -165,6 +238,10 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): Options {
       opts.keepBox = true;
       continue;
     }
+    if (key === "--allow-live") {
+      opts.allowLive = true;
+      continue;
+    }
     if (!key.startsWith("--")) usage();
     if (seen.has(key)) throw new Error(`${key} was provided more than once`);
     seen.add(key);
@@ -176,6 +253,9 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): Options {
         break;
       case "--desktop-chat-title":
         opts.desktopChatTitle = value;
+        break;
+      case "--env-file":
+        opts.envFile = value;
         break;
       case "--gateway-port":
         opts.gatewayPort = parsePort(value, key);
@@ -203,8 +283,14 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): Options {
 }
 
 export function buildProofPlan(opts: Options): ProofPlan {
+  const liveEnvSet = process.env.OPENCLAW_RUN_LIVE_TELEGRAM_PROOF === "1";
   return {
     command: opts.command,
+    liveExecution: {
+      allowFlag: opts.allowLive,
+      env: liveEnvSet ? "set" : "missing",
+      enabled: opts.allowLive && liveEnvSet,
+    },
     crabbox: {
       bin: opts.crabboxBin,
       keepBox: opts.keepBox,
@@ -219,6 +305,7 @@ export function buildProofPlan(opts: Options): ProofPlan {
     secrets: {
       convexCiSecret: process.env.OPENCLAW_QA_CONVEX_SECRET_CI ? "set" : "missing",
       convexSiteUrl: process.env.OPENCLAW_QA_CONVEX_SITE_URL ? "set" : "missing",
+      envFile: opts.envFile ? "provided" : "default",
     },
     telegram: {
       credentialKind: "telegram-user",
@@ -280,7 +367,211 @@ export function collectDoctorChecks(opts: Options): DoctorCheck[] {
 
 function writeJson(file: string, value: unknown): void {
   mkdirSync(path.dirname(file), { recursive: true });
-  writeFileSync(file, `${JSON.stringify(redactProofValue(value), null, 2)}\n`);
+  writeFileSync(file, redactProofText(`${JSON.stringify(redactProofValue(value), null, 2)}\n`));
+}
+
+function redactProofText(value: string): string {
+  return String(redactProofValue(value))
+    .replace(/"((?:sut|tester)?Username|groupId|testerUserId|credentialId|ownerId)"\s*:\s*"[^"]*"/giu, '"$1": "[redacted id]"')
+    .replace(/\b\d{7,}:[A-Za-z0-9_-]{20,}\b/gu, "[redacted credential]")
+    .replace(/\b\d{6,}\b/gu, "[redacted id]")
+    .replace(/@[A-Za-z][A-Za-z0-9_]{4,}\b/gu, "@[redacted username]")
+    .replace(/\+?\d[\d .().-]{7,}\d/gu, "[redacted phone]");
+}
+
+function writeRedactedText(file: string, value: string): void {
+  mkdirSync(path.dirname(file), { recursive: true });
+  writeFileSync(file, redactProofText(value));
+}
+
+function relativeArtifact(file: string): string {
+  const relative = path.relative(REPO_ROOT, file);
+  return relative && !relative.startsWith("..") && !path.isAbsolute(relative) ? relative : path.basename(file);
+}
+
+function assertNativeProofEnabled(opts: Options): void {
+  if (!opts.allowLive || process.env.OPENCLAW_RUN_LIVE_TELEGRAM_PROOF !== "1") {
+    throw new Error(
+      [
+        "Native Telegram Desktop proof is disabled by default.",
+        "Run with --dry-run for a safe plan, or set OPENCLAW_RUN_LIVE_TELEGRAM_PROOF=1 and pass --allow-live to use live Telegram/Crabbox infrastructure.",
+      ].join(" "),
+    );
+  }
+}
+
+function liveCommandArgs(opts: Options, command: "lease-restore" | "release", extra: string[] = []): string[] {
+  const args = ["--import", "tsx", TELEGRAM_USER_CREDENTIAL, command, ...extra];
+  if (opts.envFile) args.push("--env-file", opts.envFile);
+  return args;
+}
+
+async function defaultLiveDeps(): Promise<NativeProofDeps> {
+  return {
+    async acquireCredentialLease(opts, sessionDir) {
+      assertNativeProofEnabled(opts);
+      const userDriverDir = path.join(sessionDir, "user-driver");
+      const desktopWorkdir = path.join(sessionDir, "desktop");
+      const leaseFile = path.join(sessionDir, "lease.json");
+      const payloadFile = path.join(sessionDir, "telegram-user-payload.json");
+      const result = spawnSync(process.execPath, liveCommandArgs(opts, "lease-restore", [
+        "--user-driver-dir",
+        userDriverDir,
+        "--desktop-workdir",
+        desktopWorkdir,
+        "--lease-file",
+        leaseFile,
+        "--payload-output",
+        payloadFile,
+      ]), { cwd: REPO_ROOT, encoding: "utf8" });
+      if (result.status !== 0) {
+        throw new Error(`telegram-user lease-restore failed\n${redactProofText(result.stderr || result.stdout)}`);
+      }
+      const acquired = JSON.parse(result.stdout || "{}") as Record<string, unknown>;
+      const payload = JSON.parse(readFileSync(payloadFile, "utf8")) as Record<string, unknown>;
+      return {
+        credentialId: String(acquired.credentialId || "telegram-user"),
+        desktopWorkdir,
+        groupId: String(payload.groupId || ""),
+        leaseFile,
+        ownerId: String(acquired.ownerId || ""),
+        testerUserId: String(payload.testerUserId || ""),
+        testerUsername: String(payload.testerUsername || ""),
+        userDriverDir,
+      };
+    },
+    async captureEvidence({ opts }) {
+      assertNativeProofEnabled(opts);
+      throw new Error("Native Telegram Desktop capture is intentionally not implemented without the OpenClaw proof runner bridge.");
+    },
+    async releaseCredentialLease(lease, opts) {
+      if (!existsSync(lease.leaseFile)) return;
+      const result = spawnSync(process.execPath, liveCommandArgs(opts, "release", ["--lease-file", lease.leaseFile]), {
+        cwd: REPO_ROOT,
+        encoding: "utf8",
+      });
+      if (result.status !== 0) {
+        throw new Error(`telegram-user release failed\n${redactProofText(result.stderr || result.stdout)}`);
+      }
+    },
+    async startCrabboxDesktop(opts) {
+      assertNativeProofEnabled(opts);
+      throw new Error("Native Crabbox start requires the full Telegram Desktop proof bridge.");
+    },
+    async startLocalSut(params) {
+      assertNativeProofEnabled(params.opts);
+      throw new Error("Native local SUT start requires the full Telegram Desktop proof bridge.");
+    },
+    async stopCrabboxDesktop() {},
+    async stopLocalSut() {},
+  };
+}
+
+export async function runNativeProof(
+  opts: Options,
+  deps?: NativeProofDeps,
+): Promise<NativeProofResult> {
+  assertNativeProofEnabled(opts);
+  const outputDir = resolveProofOutputDir(opts.outputDir);
+  const sessionDir = path.join(outputDir, ".session");
+  rmSync(sessionDir, { recursive: true, force: true });
+  mkdirSync(sessionDir, { mode: 0o700, recursive: true });
+
+  const plan = buildProofPlan(opts);
+  const session: NativeProofSession = {
+    command: "oca-codex-telegram-native-session",
+    createdAt: new Date().toISOString(),
+    outputDir,
+    scenario: opts.scenario,
+  };
+  const cleanup: Array<() => Promise<void>> = [];
+  const cleanupErrors: string[] = [];
+  const orchestrator = deps ?? await defaultLiveDeps();
+  const artifacts: EvidenceArtifact[] = [];
+  let result: NativeProofResult = {
+    ok: false,
+    plan,
+    session,
+    artifacts: [],
+  };
+
+  try {
+    session.credential = await orchestrator.acquireCredentialLease(opts, sessionDir);
+    cleanup.push(async () => {
+      await orchestrator.releaseCredentialLease(session.credential!, opts);
+    });
+    session.localSut = await orchestrator.startLocalSut({ credential: session.credential, opts, sessionDir });
+    cleanup.push(async () => {
+      await orchestrator.stopLocalSut(session.localSut!, opts);
+    });
+    session.crabbox = await orchestrator.startCrabboxDesktop(opts);
+    if (session.crabbox.createdLease && !opts.keepBox) {
+      cleanup.push(async () => {
+        await orchestrator.stopCrabboxDesktop(session.crabbox!, opts);
+      });
+    }
+    artifacts.push(...await orchestrator.captureEvidence({
+      crabbox: session.crabbox,
+      credential: session.credential,
+      localSut: session.localSut,
+      opts,
+      outputDir,
+    }));
+    result = {
+      ok: true,
+      plan,
+      session,
+      artifacts: artifacts.map((artifact) => ({ ...artifact, path: relativeArtifact(artifact.path) })),
+    };
+  } catch (error) {
+    result = {
+      ok: false,
+      plan,
+      session,
+      artifacts: artifacts.map((artifact) => ({ ...artifact, path: relativeArtifact(artifact.path) })),
+      error: error instanceof Error ? error.message : String(error),
+    };
+  } finally {
+    while (cleanup.length) {
+      const fn = cleanup.pop()!;
+      try {
+        await fn();
+      } catch (error) {
+        cleanupErrors.push(error instanceof Error ? error.message : String(error));
+      }
+    }
+    const publicArtifacts = artifacts.filter((artifact) => artifact.public);
+    const cleanupOk = cleanupErrors.length === 0;
+    result = {
+      ...result,
+      ok: result.ok && cleanupOk,
+      cleanupErrors,
+    };
+    const summary = {
+      ok: result.ok,
+      cleanupErrors,
+      error: result.error,
+      plan,
+      session,
+      artifacts: publicArtifacts.map((artifact) => ({ ...artifact, path: relativeArtifact(artifact.path) })),
+      privateArtifactCount: artifacts.length - publicArtifacts.length,
+    };
+    writeJson(path.join(outputDir, "summary.json"), summary);
+    writeJson(path.join(outputDir, "mantis-evidence.json"), proofManifest(plan, publicArtifacts));
+    writeRedactedText(
+      path.join(outputDir, "oca-codex-telegram-proof.md"),
+      [
+        "# OCA Codex Telegram Proof",
+        "",
+        `Scenario: ${opts.scenario}`,
+        `Status: ${summary.ok ? "PASS" : "FAIL"}`,
+        `Credential kind: ${plan.telegram.credentialKind}`,
+        "",
+      ].join("\n"),
+    );
+    rmSync(sessionDir, { recursive: true, force: true });
+  }
+  return result;
 }
 
 async function collectUntilCompleted(session: HarnessSession, timeoutMs: number): Promise<HarnessMessage[]> {
@@ -406,6 +697,7 @@ export function stagePublicArtifacts(outputDir: string): string {
     "mantis-evidence.json",
     "oca-codex-telegram-proof.md",
     "summary.json",
+    "telegram-desktop.log",
     "telegram-desktop-motion.gif",
     "telegram-desktop-motion.mp4",
     "telegram-desktop.mp4",
@@ -414,17 +706,24 @@ export function stagePublicArtifacts(outputDir: string): string {
   for (const name of existsSync(resolved) ? readdirSync(resolved) : []) {
     const source = path.join(resolved, name);
     if (!allowed.has(name) || !statSync(source).isFile()) continue;
-    cpSync(source, path.join(staged, name));
+    const target = path.join(staged, name);
+    if (/\.(json|jsonl|log|md)$/u.test(name)) {
+      writeRedactedText(target, readFileSync(source, "utf8"));
+    } else {
+      cpSync(source, target);
+    }
   }
   return staged;
 }
 
-function proofManifest(plan: ProofPlan): Record<string, unknown> {
+function proofManifest(plan: ProofPlan, artifacts: EvidenceArtifact[] = []): Record<string, unknown> {
   return {
     schemaVersion: 1,
     id: "oca-codex-telegram-proof",
     title: "OCA Codex Telegram Proof",
-    summary: "OCA Codex proof scaffolding resolved without starting native Telegram Desktop capture.",
+    summary: plan.liveExecution.enabled
+      ? "OCA Codex native Telegram Desktop proof orchestration completed."
+      : "OCA Codex proof scaffolding resolved without starting native Telegram Desktop capture.",
     scenario: plan.scenario,
     comparison: {
       candidate: {
@@ -433,7 +732,10 @@ function proofManifest(plan: ProofPlan): Record<string, unknown> {
       },
       pass: true,
     },
-    artifacts: [],
+    artifacts: artifacts.map((artifact) => ({
+      kind: artifact.kind,
+      path: relativeArtifact(artifact.path),
+    })),
   };
 }
 
@@ -475,7 +777,9 @@ async function main(): Promise<void> {
     return;
   }
 
-  console.log(JSON.stringify(writeGuardedRunScaffold(opts), null, 2));
+  const result = await runNativeProof(opts);
+  console.log(JSON.stringify({ ...result, staged: stagePublicArtifacts(opts.outputDir) }, null, 2));
+  if ((result as { ok?: boolean }).ok !== true) process.exit(1);
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

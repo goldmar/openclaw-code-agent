@@ -44,6 +44,7 @@ describe("OCA Codex Telegram proof workflow", () => {
       "node --import tsx scripts/e2e/oca-codex-telegram-proof.ts run",
     );
     assert.match(workflow, /pnpm proof:codex-local/);
+    assert.match(workflow, /pnpm proof:codex-telegram --dry-run/);
     assert.match(workflow, /--scenario "\$\{\{ inputs\.scenario \}\}"/);
     assert.match(workflow, /Upload OCA Codex proof artifacts/);
   });

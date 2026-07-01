@@ -8,6 +8,7 @@ import {
   collectDoctorChecks,
   parseArgs,
   resolveProofOutputDir,
+  runNativeProof,
   runLocalSmoke,
   stagePublicArtifacts,
   writeGuardedRunScaffold,
@@ -29,6 +30,9 @@ describe("OCA Codex Telegram proof runner", () => {
       "12",
       "--provider",
       "local-container",
+      "--env-file",
+      ".private/convex.env",
+      "--allow-live",
       "--keep-box",
     ]);
 
@@ -38,6 +42,8 @@ describe("OCA Codex Telegram proof runner", () => {
     assert.equal(opts.gatewayPort, 39001);
     assert.equal(opts.recordSeconds, 12);
     assert.equal(opts.keepBox, true);
+    assert.equal(opts.envFile, ".private/convex.env");
+    assert.equal(opts.allowLive, true);
 
     assert.throws(() => parseArgs(["--output-dir", "one", "--output-dir", "two"]), /--output-dir was provided more than once/);
     assert.throws(() => parseArgs(["--gateway-port", "65536"]), /TCP port/);
@@ -64,6 +70,7 @@ describe("OCA Codex Telegram proof runner", () => {
 
       assert.equal(plan.secrets.convexCiSecret, "set");
       assert.equal(plan.secrets.convexSiteUrl, "set");
+      assert.equal(plan.liveExecution.enabled, false);
       assert.equal(JSON.stringify(plan).includes("super-secret-value"), false);
       assert.equal(plan.telegram.credentialKind, "telegram-user");
       assert.equal(plan.gateway.isolatedHome, true);
@@ -72,6 +79,26 @@ describe("OCA Codex Telegram proof runner", () => {
       else process.env.OPENCLAW_QA_CONVEX_SECRET_CI = originalSecret;
       if (originalSite === undefined) delete process.env.OPENCLAW_QA_CONVEX_SITE_URL;
       else process.env.OPENCLAW_QA_CONVEX_SITE_URL = originalSite;
+    }
+  });
+
+  it("refuses native Telegram proof unless both the env gate and live flag are present", async () => {
+    const original = process.env.OPENCLAW_RUN_LIVE_TELEGRAM_PROOF;
+    try {
+      delete process.env.OPENCLAW_RUN_LIVE_TELEGRAM_PROOF;
+      await assert.rejects(
+        runNativeProof(parseArgs(["run", "--allow-live"])),
+        /Native Telegram Desktop proof is disabled by default/,
+      );
+
+      process.env.OPENCLAW_RUN_LIVE_TELEGRAM_PROOF = "1";
+      await assert.rejects(
+        runNativeProof(parseArgs(["run"])),
+        /Native Telegram Desktop proof is disabled by default/,
+      );
+    } finally {
+      if (original === undefined) delete process.env.OPENCLAW_RUN_LIVE_TELEGRAM_PROOF;
+      else process.env.OPENCLAW_RUN_LIVE_TELEGRAM_PROOF = original;
     }
   });
 
@@ -182,6 +209,147 @@ describe("OCA Codex Telegram proof runner", () => {
       assert.equal(existsSync(join(temp, "public-artifacts")), false);
     } finally {
       rmSync(temp, { recursive: true, force: true });
+    }
+  });
+
+  it("runs native proof orchestration with local fakes and redacts public evidence", async () => {
+    const original = process.env.OPENCLAW_RUN_LIVE_TELEGRAM_PROOF;
+    const outputDir = join(".artifacts", "qa-e2e", "oca-codex-telegram", `native-fake-${Date.now()}`);
+    const artifactDir = join(repoRoot, outputDir);
+    const events: string[] = [];
+    try {
+      process.env.OPENCLAW_RUN_LIVE_TELEGRAM_PROOF = "1";
+      const result = await runNativeProof(parseArgs([
+        "run",
+        "--allow-live",
+        "--output-dir",
+        outputDir,
+      ]), {
+        async acquireCredentialLease(_opts, sessionDir) {
+          events.push("acquire");
+          const leaseFile = join(sessionDir, "lease.json");
+          writeFileSync(leaseFile, '{"leaseToken":"123456789:abcdefghijklmnopqrstuvwxyzABCDE"}');
+          return {
+            credentialId: "credential-123456789",
+            desktopWorkdir: join(sessionDir, "desktop"),
+            groupId: "-1003863755361",
+            leaseFile,
+            ownerId: "telegram-user-owner",
+            sutUsername: "sut_bot_secret",
+            testerUserId: "9988776655",
+            testerUsername: "qa_secret_user",
+            userDriverDir: join(sessionDir, "user-driver"),
+          };
+        },
+        async startLocalSut() {
+          events.push("start-sut");
+          return { gatewayPort: 38975, isolatedHome: "/home/openclaw/private-proof-home" };
+        },
+        async startCrabboxDesktop() {
+          events.push("start-crabbox");
+          return { createdLease: true, id: "cbx-secret-123456789", provider: "local-container", target: "linux" };
+        },
+        async captureEvidence({ outputDir: absoluteOutputDir }) {
+          events.push("capture");
+          const publicLog = join(absoluteOutputDir, "telegram-desktop.log");
+          const publicPng = join(absoluteOutputDir, "telegram-desktop.png");
+          const privateSession = join(absoluteOutputDir, "session.json");
+          writeFileSync(publicLog, "token 123456789:abcdefghijklmnopqrstuvwxyzABCDE user @qa_secret_user group -1003863755361");
+          writeFileSync(publicPng, "fake png");
+          writeFileSync(privateSession, '{"botToken":"123456789:abcdefghijklmnopqrstuvwxyzABCDE"}');
+          return [
+            { kind: "log", path: publicLog, public: true },
+            { kind: "screenshot", path: publicPng, public: true },
+            { kind: "json", path: privateSession, public: false },
+          ];
+        },
+        async stopCrabboxDesktop() {
+          events.push("stop-crabbox");
+        },
+        async stopLocalSut() {
+          events.push("stop-sut");
+        },
+        async releaseCredentialLease() {
+          events.push("release");
+        },
+      });
+
+      assert.equal(result.ok, true);
+      assert.deepEqual(events, ["acquire", "start-sut", "start-crabbox", "capture", "stop-crabbox", "stop-sut", "release"]);
+      assert.equal(existsSync(join(repoRoot, outputDir, ".session")), false);
+
+      const summaryText = readFileSync(join(repoRoot, outputDir, "summary.json"), "utf8");
+      assert.doesNotMatch(summaryText, /123456789:abcdefghijklmnopqrstuvwxyzABCDE/);
+      assert.doesNotMatch(summaryText, /qa_secret_user/);
+      assert.doesNotMatch(summaryText, /-1003863755361/);
+
+      const staged = stagePublicArtifacts(outputDir);
+      assert.equal(existsSync(join(staged, "telegram-desktop.png")), true);
+      assert.equal(existsSync(join(staged, "session.json")), false);
+    } finally {
+      if (original === undefined) delete process.env.OPENCLAW_RUN_LIVE_TELEGRAM_PROOF;
+      else process.env.OPENCLAW_RUN_LIVE_TELEGRAM_PROOF = original;
+      rmSync(artifactDir, { recursive: true, force: true });
+    }
+  });
+
+  it("releases credential and stops local SUT when Crabbox startup fails", async () => {
+    const original = process.env.OPENCLAW_RUN_LIVE_TELEGRAM_PROOF;
+    const outputDir = join(".artifacts", "qa-e2e", "oca-codex-telegram", `native-failure-${Date.now()}`);
+    const artifactDir = join(repoRoot, outputDir);
+    const events: string[] = [];
+    try {
+      process.env.OPENCLAW_RUN_LIVE_TELEGRAM_PROOF = "1";
+      const result = await runNativeProof(parseArgs([
+        "run",
+        "--allow-live",
+        "--output-dir",
+        outputDir,
+      ]), {
+        async acquireCredentialLease(_opts, sessionDir) {
+          events.push("acquire");
+          return {
+            credentialId: "credential-1",
+            desktopWorkdir: join(sessionDir, "desktop"),
+            groupId: "-1001234567890",
+            leaseFile: join(sessionDir, "lease.json"),
+            ownerId: "owner",
+            testerUserId: "123456789",
+            testerUsername: "tester",
+            userDriverDir: join(sessionDir, "user-driver"),
+          };
+        },
+        async startLocalSut() {
+          events.push("start-sut");
+          return { gatewayPort: 38975, isolatedHome: "/tmp/openclaw-proof-home" };
+        },
+        async startCrabboxDesktop() {
+          events.push("start-crabbox");
+          throw new Error("crabbox unavailable");
+        },
+        async captureEvidence() {
+          events.push("capture");
+          return [];
+        },
+        async stopCrabboxDesktop() {
+          events.push("stop-crabbox");
+        },
+        async stopLocalSut() {
+          events.push("stop-sut");
+        },
+        async releaseCredentialLease() {
+          events.push("release");
+        },
+      });
+
+      assert.equal(result.ok, false);
+      assert.match(String(result.error), /crabbox unavailable/);
+      assert.deepEqual(events, ["acquire", "start-sut", "start-crabbox", "stop-sut", "release"]);
+      assert.equal(existsSync(join(repoRoot, outputDir, ".session")), false);
+    } finally {
+      if (original === undefined) delete process.env.OPENCLAW_RUN_LIVE_TELEGRAM_PROOF;
+      else process.env.OPENCLAW_RUN_LIVE_TELEGRAM_PROOF = original;
+      rmSync(artifactDir, { recursive: true, force: true });
     }
   });
 });

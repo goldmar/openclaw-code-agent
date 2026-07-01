@@ -104,8 +104,19 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Verify proof scaffolding
+      - name: Verify proof runner
         run: pnpm run verify
+
+      - name: Check guarded native proof plan
+        env:
+          OPENCLAW_TELEGRAM_USER_CRABBOX_PROVIDER: ${{ inputs.crabbox_provider }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm proof:codex-telegram --dry-run \
+            --scenario "${{ inputs.scenario }}" \
+            --provider "${{ inputs.crabbox_provider }}" \
+            --output-dir "${OCA_CODEX_PROOF_OUTPUT_DIR}/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
 
       - name: Run local Codex proof smoke
         env:
@@ -129,7 +140,7 @@ jobs:
           if [[ ! -d .artifacts/qa-e2e ]]; then
             exit 0
           fi
-          echo "No native Telegram lease is acquired by the phase-1 local proof smoke."
+          echo "Native Telegram leases are only acquired by an explicit live proof run."
           find .artifacts/qa-e2e -path '*/.session/lease.json' -type f -print
 
       - name: Upload OCA Codex proof artifacts
