@@ -45,6 +45,8 @@ describe("OCA Codex Telegram proof workflow", () => {
     );
     assert.match(workflow, /pnpm proof:codex-local/);
     assert.match(workflow, /pnpm proof:codex-telegram --dry-run/);
+    assert.match(workflow, /\$\{GITHUB_RUN_ID\}-\$\{GITHUB_RUN_ATTEMPT\}-dry-run/);
+    assert.match(workflow, /rm -rf "\$proof_run_dir"/);
     assert.match(workflow, /--scenario "\$\{\{ inputs\.scenario \}\}"/);
     assert.match(workflow, /Upload OCA Codex proof artifacts/);
     assert.match(workflow, /public-artifacts/);
