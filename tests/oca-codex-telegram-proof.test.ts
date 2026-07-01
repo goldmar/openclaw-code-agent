@@ -166,7 +166,7 @@ describe("OCA Codex Telegram proof runner", () => {
       writeFileSync(join(artifactDir, "summary.json"), "{}");
       writeFileSync(join(artifactDir, "harness-messages.redacted.json"), "[]");
       writeFileSync(join(artifactDir, "mantis-evidence.json"), '{"note":"apiKey=abc123 credential=lease-secret"}');
-      writeFileSync(join(artifactDir, "oca-codex-telegram-proof.md"), "secret=super-secret password: hunter2 authorization: Bearer abc123");
+      writeFileSync(join(artifactDir, "oca-codex-telegram-proof.md"), 'secret=super-secret password: hunter2 authorization: "Bearer abc123"');
       writeFileSync(
         join(artifactDir, "telegram-desktop.log"),
         "token 123456789:abcdefghijklmnopqrstuvwxyzABCDE user @qa_secret_user group -1003863755361 file /tmp/oca-proof/session.log home /home/runner/work/openclaw-code-agent/proof.log token=log-secret",
