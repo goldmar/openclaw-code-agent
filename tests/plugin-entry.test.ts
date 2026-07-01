@@ -428,10 +428,13 @@ describe("plugin entry source", () => {
   it("documents 2026.6.11 plugin allowlist and apply_patch policy boundaries", () => {
     const reference = readFileSync(join(rootDir, "docs", "REFERENCE.md"), "utf8");
     const readme = readFileSync(join(rootDir, "README.md"), "utf8");
+    const changelog = readFileSync(join(rootDir, "CHANGELOG.md"), "utf8");
 
     assert.match(reference, /OpenClaw 2026\.6\.11 SDK Readiness/);
     assert.match(reference, /package build metadata targets OpenClaw `2026\.6\.11` for both host and SDK readiness/);
     assert.match(readme, /openclaw@2026\.6\.11/);
+    assert.match(changelog, /Retargeted the OpenClaw package and plugin SDK validation metadata to `2026\.6\.11`/);
+    assert.match(changelog, /new `openclaw\/plugin-sdk\/agent-harness-tool-runtime` export boundary/);
     assert.match(readme, /retryable stale plan approval buttons/);
     assert.match(reference, /pnpm-workspace\.yaml/);
     assert.doesNotMatch(reference, /2026\.5\.8/);

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Retargeted the OpenClaw package and plugin SDK validation metadata to `2026.6.11` while keeping the compatible `>=2026.4.21` peer/API floor.
+- Refreshed OpenClaw `2026.6.11` compatibility guidance for the updated SDK API baseline, new `openclaw/plugin-sdk/agent-harness-tool-runtime` export boundary, current callback/completion behavior, cron/session delivery behavior, yielded output/media preservation, plugin tool allowlists, and OCA-owned plan, wake, Codex harness, and worktree follow-through flows.
+
 ## [4.5.6] - 2026-06-26
 
 ### Fixed
