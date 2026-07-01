@@ -29,7 +29,6 @@ import {
   formatWorktreeOutcomeLine,
   buildMergeWarningLines,
   appendMergeWarnings,
-  syncWorktreePR,
   syncWorktreePRByUrl,
 } from "./worktree";
 
@@ -71,7 +70,6 @@ export class SessionWorktreeStrategyService {
       makeOpenPrButton: (sessionId: string) => NotificationButton;
       isPrAvailable?: (repoDir: string) => boolean;
       hasOpenPrForBranch?: (repoDir: string, branchName: string, targetRepo?: string) => boolean;
-      getPrStatusForBranch?: (repoDir: string, branchName: string, targetRepo?: string) => PRStatus;
       getPrStatusForUrl?: (repoDir: string, prUrl: string, targetRepo?: string) => PRStatus;
       resolveRepoPolicy?: (repoDir: string) => RepoPolicyResolution;
       worktreeSummaryProvider?: WorktreeDecisionSummaryProvider;
@@ -794,11 +792,6 @@ export class SessionWorktreeStrategyService {
       });
     }
     return { notificationSent: true, worktreeRemoved: false };
-  }
-
-  private getPrStatusForBranch(repoDir: string, branchName: string, targetRepo?: string): PRStatus {
-    return this.deps.getPrStatusForBranch?.(repoDir, branchName, targetRepo)
-      ?? syncWorktreePR(repoDir, branchName, targetRepo);
   }
 
   private getPrStatusForUrl(repoDir: string, prUrl: string, targetRepo?: string): PRStatus {

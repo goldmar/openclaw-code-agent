@@ -797,16 +797,6 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         originThreadLine: () => "thread",
         getWorktreeDecisionButtons: () => [[{ label: "Open PR", callbackData: "open-pr" }]],
         makeOpenPrButton: () => ({ label: "Open PR", callbackData: "open-pr" }),
-        getPrStatusForBranch: (_repo, lookupBranch) => lookupBranch === "staging"
-          ? {
-              exists: true,
-              state: "open",
-              url: "https://github.com/example/repo/pull/999",
-              number: 999,
-              headRefName: "staging",
-              baseRefName: "main",
-            }
-          : { exists: false, state: "none" },
         getPrStatusForUrl: (_repo, prUrl) => prUrl === "https://github.com/example/repo/pull/314"
           ? {
               exists: true,
