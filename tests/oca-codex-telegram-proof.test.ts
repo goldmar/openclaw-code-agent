@@ -512,13 +512,14 @@ describe("OCA Codex Telegram proof runner", () => {
         async stopLocalSut() {
           events.push("stop-sut");
         },
-        async releaseCredentialLease() {
+        async releaseCredentialLease(lease) {
+          assert.match(lease.leaseFile, /lease\.json$/);
           events.push("release");
         },
       });
 
       assert.equal(result.ok, false);
-      assert.deepEqual(events, ["acquire"]);
+      assert.deepEqual(events, ["acquire", "release"]);
       assert.equal(existsSync(join(artifactDir, ".session", "lease.json")), true);
       assert.equal(existsSync(join(artifactDir, ".session", "telegram-user-payload.json")), true);
       assert.equal(existsSync(join(artifactDir, "public-artifacts", "summary.json")), true);

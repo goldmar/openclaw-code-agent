@@ -523,7 +523,17 @@ export async function runNativeProof(
   };
 
   try {
-    session.credential = await orchestrator.acquireCredentialLease(opts, sessionDir);
+    try {
+      session.credential = await orchestrator.acquireCredentialLease(opts, sessionDir);
+    } catch (error) {
+      const partialLeaseFile = path.join(sessionDir, "lease.json");
+      if (existsSync(partialLeaseFile)) {
+        cleanup.push(async () => {
+          await orchestrator.releaseCredentialLease(partialCredentialLease(sessionDir, partialLeaseFile), opts);
+        });
+      }
+      throw error;
+    }
     cleanup.push(async () => {
       await orchestrator.releaseCredentialLease(session.credential!, opts);
     });
@@ -629,6 +639,19 @@ const PRIVATE_VISUAL_ARTIFACTS = new Set([
 
 function isStageablePublicArtifact(file: string): boolean {
   return STAGED_PUBLIC_TEXT_ARTIFACTS.has(path.basename(file));
+}
+
+function partialCredentialLease(sessionDir: string, leaseFile: string): CredentialLease {
+  return {
+    credentialId: "partial-acquire-failure",
+    desktopWorkdir: path.join(sessionDir, "desktop"),
+    groupId: "",
+    leaseFile,
+    ownerId: "",
+    testerUserId: "",
+    testerUsername: "",
+    userDriverDir: path.join(sessionDir, "user-driver"),
+  };
 }
 
 function sessionDirHasRecoveryArtifacts(sessionDir: string): boolean {
