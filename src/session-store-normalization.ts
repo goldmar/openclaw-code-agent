@@ -3,6 +3,7 @@ import { REASONING_EFFORT_SET, REPO_INTEGRATION_POLICY_SET, WORKTREE_STRATEGY_SE
 import type {
   ManagedWorktreeLifecycleState,
   PersistedSessionInfo,
+  PersistedTaskFlowMirror,
   PersistedWorktreeLifecycle,
   SessionApprovalPromptMessageKind,
   SessionApprovalPromptStatus,
@@ -44,6 +45,16 @@ export interface SessionStoreSchema {
 }
 
 const VALID_PERSISTED_STATUSES = new Set<SessionStatus>(["running", "completed", "failed", "killed"]);
+const VALID_TASK_FLOW_MIRROR_STATUSES = new Set<PersistedTaskFlowMirror["status"]>([
+  "queued",
+  "running",
+  "waiting",
+  "blocked",
+  "succeeded",
+  "failed",
+  "cancelled",
+  "lost",
+]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object";
@@ -59,6 +70,17 @@ function toOptionalString(value: unknown): string | undefined {
 
 function toOptionalNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function toOptionalTaskFlowMirror(value: unknown): PersistedTaskFlowMirror | undefined {
+  if (!isRecord(value)) return undefined;
+  const flowId = toOptionalString(value.flowId);
+  const revision = toOptionalNumber(value.revision);
+  if (!flowId || revision === undefined) return undefined;
+  const status = typeof value.status === "string" && VALID_TASK_FLOW_MIRROR_STATUSES.has(value.status as PersistedTaskFlowMirror["status"])
+    ? value.status as PersistedTaskFlowMirror["status"]
+    : undefined;
+  return { flowId, revision, ...(status ? { status } : {}) };
 }
 
 function toOptionalReasoningEffort(value: unknown): ReasoningEffort | undefined {
@@ -530,6 +552,7 @@ export function normalizePersistedEntry(raw: unknown): PersistedSessionInfo | un
     runtimeRecovery: recoveredFromRunning
       ? buildRuntimeRecoveryDiagnostics(raw)
       : normalizeRuntimeRecovery(raw.runtimeRecovery),
+    taskFlowMirror: toOptionalTaskFlowMirror(raw.taskFlowMirror),
     deliveryState: toOptionalDeliveryState(raw.deliveryState),
     notificationDedupe: normalizeNotificationDedupeRecords(raw.notificationDedupe),
     completionSummaryDedupe: normalizeCompletionSummaryRecords(raw.completionSummaryDedupe),

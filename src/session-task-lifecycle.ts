@@ -1,7 +1,7 @@
 import { truncateText } from "./format";
 import { getManagedTaskFlowRuntime } from "./runtime-store";
 import type { Session } from "./session";
-import type { KillReason, SessionStatus } from "./types";
+import type { KillReason, PersistedSessionInfo, SessionLifecycle, SessionStatus } from "./types";
 
 const CONTROLLER_ID = "openclaw-code-agent";
 const TITLE_MAX_LENGTH = 160;
@@ -147,10 +147,36 @@ function terminalSummary(status: SessionStatus, killReason: KillReason): string 
 }
 
 function isWaitingLifecycle(session: Pick<Session, "lifecycle">): boolean {
-  return session.lifecycle === "awaiting_plan_decision"
-    || session.lifecycle === "awaiting_user_input"
-    || session.lifecycle === "awaiting_worktree_decision"
-    || session.lifecycle === "suspended";
+  return isActionableWaitLifecycle(session.lifecycle);
+}
+
+function isActionableWaitLifecycle(lifecycle: SessionLifecycle | undefined): boolean {
+  return lifecycle === "awaiting_plan_decision"
+    || lifecycle === "awaiting_user_input"
+    || lifecycle === "awaiting_worktree_decision"
+    || lifecycle === "suspended";
+}
+
+function hasActionableWaitState(
+  session: Pick<PersistedSessionInfo, "lifecycle" | "pendingPlanApproval" | "pendingWorktreeDecisionSince" | "resumable" | "runtimeRecovery">,
+): boolean {
+  if (session.pendingPlanApproval) return true;
+  if (session.pendingWorktreeDecisionSince) return true;
+  if (session.runtimeRecovery?.reason === "persisted-running-without-runtime") {
+    const rawLifecycle = session.runtimeRecovery.rawLifecycle as SessionLifecycle | undefined;
+    if (rawLifecycle === "suspended") return session.runtimeRecovery.rawResumable === true || session.resumable === true;
+    return isActionableWaitLifecycle(rawLifecycle);
+  }
+  if (session.lifecycle === "suspended") return session.resumable === true;
+  return isActionableWaitLifecycle(session.lifecycle);
+}
+
+function persistedWaitLifecycle(session: PersistedSessionInfo): SessionLifecycle | undefined {
+  if (session.runtimeRecovery?.reason === "persisted-running-without-runtime") {
+    const rawLifecycle = session.runtimeRecovery.rawLifecycle as SessionLifecycle | undefined;
+    if (isActionableWaitLifecycle(rawLifecycle)) return rawLifecycle;
+  }
+  return session.lifecycle;
 }
 
 function buildStateJson(session: Session, phase: "created" | "progress" | "terminal", summary: string): Record<string, unknown> {
@@ -207,6 +233,7 @@ class ManagedTaskFlowSessionTaskLifecycleSink implements SessionTaskLifecycleSin
         createdAt: session.startedAt,
         updatedAt: now,
       });
+      session.taskFlowMirror = this.flow;
       this.lastProgressKey = this.progressKey(session, summary);
     } catch (err) {
       warnLifecycleError("create", err);
@@ -243,6 +270,7 @@ class ManagedTaskFlowSessionTaskLifecycleSink implements SessionTaskLifecycleSin
             updatedAt,
           });
       this.flow = applyMutation(this.flow, mutation);
+      if (this.flow) session.taskFlowMirror = this.flow;
       this.lastProgressKey = key;
     } catch (err) {
       warnLifecycleError("progress", err);
@@ -284,6 +312,7 @@ class ManagedTaskFlowSessionTaskLifecycleSink implements SessionTaskLifecycleSin
           });
       warnLifecycleMutationSkipped("finalize", mutation);
       this.flow = applyMutation(this.flow, mutation);
+      if (this.flow) session.taskFlowMirror = this.flow;
       this.finalized = true;
     } catch (err) {
       warnLifecycleError("finalize", err);
@@ -293,6 +322,121 @@ class ManagedTaskFlowSessionTaskLifecycleSink implements SessionTaskLifecycleSin
   private progressKey(session: Pick<Session, "status" | "lifecycle">, summary: string): string {
     return `${session.status}:${session.lifecycle}:${summary}`;
   }
+}
+
+function isTerminalMirrorStatus(status: ManagedTaskFlowStatus | undefined): boolean {
+  return status === "succeeded" || status === "failed" || status === "cancelled" || status === "lost";
+}
+
+function bindTaskFlowRuntimeForSessionKey(
+  sessionKey: string | undefined,
+): Required<Pick<BoundTaskFlowRuntime, "setWaiting" | "finish" | "fail">> | undefined {
+  if (!sessionKey?.trim()) return undefined;
+  const fromToolContext = getManagedTaskFlowRuntime()?.fromToolContext;
+  if (typeof fromToolContext !== "function") return undefined;
+  const value = fromToolContext({ sessionKey });
+  if (!value || typeof value !== "object") return undefined;
+  const runtime = value as BoundTaskFlowRuntime;
+  if (
+    typeof runtime.setWaiting !== "function"
+    || typeof runtime.finish !== "function"
+    || typeof runtime.fail !== "function"
+  ) {
+    return undefined;
+  }
+  return {
+    setWaiting: runtime.setWaiting,
+    finish: runtime.finish,
+    fail: runtime.fail,
+  };
+}
+
+function persistedSessionKey(session: Pick<PersistedSessionInfo, "originSessionKey" | "route">): string | undefined {
+  return session.originSessionKey ?? session.route?.sessionKey;
+}
+
+function persistedTerminalSummary(session: Pick<PersistedSessionInfo, "status" | "killReason" | "runtimeRecovery">): string {
+  if (session.runtimeRecovery?.reason === "persisted-running-without-runtime") {
+    return "Lost after OCA restart without live process";
+  }
+  return terminalSummary(session.status, session.killReason ?? "unknown");
+}
+
+export function reconcilePersistedSessionTaskMirror(
+  session: PersistedSessionInfo,
+): ManagedTaskFlowRecord | undefined {
+  const flow = session.taskFlowMirror ? { ...session.taskFlowMirror } : undefined;
+  if (!flow || isTerminalMirrorStatus(flow.status)) return undefined;
+  const taskFlow = bindTaskFlowRuntimeForSessionKey(persistedSessionKey(session));
+  if (!taskFlow) return undefined;
+
+  const now = Date.now();
+  if (hasActionableWaitState(session)) {
+    const summary = mapSessionLifecycleProgress({
+      status: session.status,
+      lifecycle: persistedWaitLifecycle(session) ?? "suspended",
+    }) ?? "Waiting";
+    const mutation = taskFlow.setWaiting({
+      flowId: flow.flowId,
+      expectedRevision: flow.revision,
+      currentStep: summary,
+      stateJson: {
+        phase: "progress",
+        integration: "phase-1-managed-task-flow",
+        sessionId: session.sessionId,
+        sessionName: session.name,
+        sessionStatus: session.status,
+        sessionLifecycle: session.lifecycle,
+        summary,
+        reconciled: true,
+      },
+      waitJson: { reason: summary, sessionId: session.sessionId },
+      blockedSummary: summary,
+      updatedAt: now,
+    });
+    warnLifecycleMutationSkipped("reconcile-waiting", mutation);
+    return applyMutation(flow, mutation);
+  }
+
+  const terminalStatus = mapSessionTaskTerminalStatus({
+    status: session.status,
+    killReason: session.killReason ?? "unknown",
+  }) ?? "failed";
+  const summary = persistedTerminalSummary(session);
+  const endedAt = session.completedAt ?? now;
+  const stateJson = {
+    phase: "terminal",
+    integration: "phase-1-managed-task-flow",
+    sessionId: session.sessionId,
+    sessionName: session.name,
+    sessionStatus: session.status,
+    sessionLifecycle: session.lifecycle,
+    summary,
+    terminalStatus: session.runtimeRecovery?.reason === "persisted-running-without-runtime"
+      ? "lost"
+      : terminalStatus,
+    terminalSummary: summary,
+    reconciled: true,
+    runtimeRecovery: session.runtimeRecovery,
+  };
+  const mutation = terminalStatus === "succeeded"
+    ? taskFlow.finish({
+        flowId: flow.flowId,
+        expectedRevision: flow.revision,
+        stateJson,
+        updatedAt: endedAt,
+        endedAt,
+      })
+    : taskFlow.fail({
+        flowId: flow.flowId,
+        expectedRevision: flow.revision,
+        stateJson,
+        blockedSummary: summary,
+        updatedAt: endedAt,
+        endedAt,
+      });
+  warnLifecycleMutationSkipped("reconcile-terminal", mutation);
+  return applyMutation(flow, mutation);
 }
 
 export function resolveSessionTaskLifecycle(ctx: ToolContextLike): SessionTaskLifecycleSink {

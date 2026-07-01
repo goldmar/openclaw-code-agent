@@ -75,6 +75,7 @@ import {
 } from "./worktree";
 import { KeyedOperationQueue } from "./keyed-operation-queue";
 import { SessionMaintenanceService } from "./session-maintenance-service";
+import { reconcilePersistedSessionTaskMirror } from "./session-task-lifecycle";
 import { buildPendingDecisionPatch } from "./worktree-session-patches";
 import {
   createRepoPolicyRecord,
@@ -277,6 +278,7 @@ export class SessionManager {
     this.runtimeBootstrap = services.runtimeBootstrap;
     this.worktreeMessages = services.worktreeMessages;
     this.maintenance = services.maintenance;
+    this.reconcilePersistedTaskFlowMirrors();
   }
 
   private static createServiceBundle(
@@ -1419,6 +1421,19 @@ export class SessionManager {
     }
     this.onPersistedSessionChanged(this.store.getPersistedSession(session.id));
     this.syncTmpOutputCleanupDeadline();
+  }
+
+  private reconcilePersistedTaskFlowMirrors(): void {
+    let changed = false;
+    for (const session of this.store.listPersistedSessions()) {
+      const reconciled = reconcilePersistedSessionTaskMirror(session);
+      if (!reconciled) continue;
+      session.taskFlowMirror = reconciled;
+      changed = true;
+    }
+    if (changed) {
+      this.store.saveIndex();
+    }
   }
 
   getMetrics(): SessionMetrics { return this.metrics.getMetrics(); }

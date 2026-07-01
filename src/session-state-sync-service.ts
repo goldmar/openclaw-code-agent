@@ -147,6 +147,7 @@ export class SessionStateSyncService {
 
   private applySessionMetadataPatch(session: Session, patch: Partial<PersistedSessionInfo>): void {
     this.assignIfDefined(session, "approvalRationale", patch.approvalRationale);
+    this.assignIfDefined(session, "taskFlowMirror", patch.taskFlowMirror);
   }
 
   private applyWorktreeMetadataPatch(session: Session, patch: Partial<PersistedSessionInfo>): void {

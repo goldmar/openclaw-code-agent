@@ -525,6 +525,7 @@ describe("SessionStore path resolution", () => {
       status: "running",
       lifecycle: "active",
       runtimeState: "live",
+      taskFlowMirror: { flowId: "flow-recovered-active", revision: 4, status: "running" },
       costUsd: 0,
     }]);
 
@@ -545,6 +546,11 @@ describe("SessionStore path resolution", () => {
     assert.equal(persisted?.runtimeRecovery?.normalizedStatus, "killed");
     assert.equal(persisted?.runtimeRecovery?.normalizedLifecycle, "suspended");
     assert.equal(persisted?.runtimeRecovery?.normalizedRuntimeState, "stopped");
+    assert.deepEqual(persisted?.taskFlowMirror, {
+      flowId: "flow-recovered-active",
+      revision: 4,
+      status: "running",
+    });
 
     const saved = JSON.parse(readFileSync(indexPath, "utf-8"));
     assert.equal(saved.sessions[0].status, "killed");
@@ -552,6 +558,11 @@ describe("SessionStore path resolution", () => {
     assert.equal(saved.sessions[0].runtimeState, "stopped");
     assert.equal(saved.sessions[0].runtimeRecovery.reason, "persisted-running-without-runtime");
     assert.equal(saved.sessions[0].runtimeRecovery.rawStatus, "running");
+    assert.deepEqual(saved.sessions[0].taskFlowMirror, {
+      flowId: "flow-recovered-active",
+      revision: 4,
+      status: "running",
+    });
   });
 
   it("redacts backend identifiers from recovered running-row diagnostics", () => {
