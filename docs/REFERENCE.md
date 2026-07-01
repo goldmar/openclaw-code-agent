@@ -511,7 +511,7 @@ Create or update a GitHub PR for a worktree branch.
 | `base_branch` | `string` | No | Defaults to detected base branch |
 | `force_new` | `boolean` | No | Reject instead of updating an existing PR |
 
-The PR path pushes the worktree branch on demand, then handles open, merged, and closed PR states instead of blindly creating duplicates. Newly created agent-authored worktree PRs are opened as GitHub draft PRs by default so a human can review before marking them ready. Existing open PR updates preserve the PR's current draft/ready state.
+The PR path pushes the worktree branch on demand, then handles open, merged, and closed PR states instead of blindly creating duplicates. When session metadata already points at an open PR, `agent_pr` treats that PR's head branch as authoritative; a follow-up/helper worktree branch is fast-forwarded into the original PR branch when safe, and divergent branches are rejected instead of creating a sibling PR. Newly created agent-authored worktree PRs are opened as GitHub draft PRs by default so a human can review before marking them ready. Existing open PR updates preserve the PR's current draft/ready state.
 
 When `title` or `body` is omitted, `agent_pr` prefers configured LLM-generated PR metadata. If no metadata provider is configured, it falls back to deterministic conservative metadata derived from the session name, branch, prompt snippet, and diff summary so explicit PR creation flows can still complete.
 

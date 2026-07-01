@@ -1,6 +1,28 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { buildPrCompletionWakeOutcomeKey, buildPrMetadata, buildPrOutcomeDetailLines, formatPrBody } from "../src/tools/agent-pr";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { buildPrCompletionWakeOutcomeKey, buildPrMetadata, buildPrOutcomeDetailLines, formatPrBody, resolveExistingTargetPrUpdateBranch } from "../src/tools/agent-pr";
+
+function git(cwd: string, ...args: string[]): string {
+  return execFileSync("git", ["-C", cwd, ...args], {
+    encoding: "utf-8",
+    stdio: ["pipe", "pipe", "pipe"],
+  }).trim();
+}
+
+function initRepo(prefix: string): string {
+  const repoDir = mkdtempSync(join(tmpdir(), prefix));
+  git(repoDir, "init", "-b", "main");
+  git(repoDir, "config", "user.name", "OpenClaw Tests");
+  git(repoDir, "config", "user.email", "tests@example.com");
+  writeFileSync(join(repoDir, "README.md"), "base\n", "utf-8");
+  git(repoDir, "add", "README.md");
+  git(repoDir, "commit", "-m", "init");
+  return repoDir;
+}
 
 describe("agent_pr outcome detail lines", () => {
   it("builds factual PR opened details for summary wakes", () => {
@@ -88,6 +110,88 @@ describe("agent_pr outcome detail lines", () => {
 
     assert.equal(firstKey, duplicateKey);
     assert.notEqual(firstKey, laterKey);
+  });
+});
+
+describe("agent_pr existing target PR branch resolution", () => {
+  it("fast-forwards the original PR branch from a follow-up helper branch", () => {
+    const repoDir = initRepo("openclaw-agent-pr-target-");
+    try {
+      git(repoDir, "checkout", "-b", "agent/codex-telegram-proof-tests");
+      writeFileSync(join(repoDir, "proof.txt"), "original\n", "utf-8");
+      git(repoDir, "add", "proof.txt");
+      git(repoDir, "commit", "-m", "Original proof work");
+
+      git(repoDir, "checkout", "-b", "agent/fix-pr-322-feedback");
+      writeFileSync(join(repoDir, "feedback.txt"), "review fix\n", "utf-8");
+      git(repoDir, "add", "feedback.txt");
+      git(repoDir, "commit", "-m", "Address PR feedback");
+      const helperHead = git(repoDir, "rev-parse", "agent/fix-pr-322-feedback");
+      git(repoDir, "checkout", "agent/codex-telegram-proof-tests");
+
+      const result = resolveExistingTargetPrUpdateBranch({
+        repoDir,
+        sourceBranch: "agent/fix-pr-322-feedback",
+        targetPrStatus: {
+          exists: true,
+          state: "open",
+          url: "https://github.com/goldmar/openclaw-code-agent/pull/322",
+          number: 322,
+          headRefName: "agent/codex-telegram-proof-tests",
+          baseRefName: "main",
+        },
+      });
+
+      assert.deepEqual(result, {
+        success: true,
+        branchName: "agent/codex-telegram-proof-tests",
+        alreadyRepresented: false,
+      });
+      assert.equal(git(repoDir, "rev-parse", "agent/codex-telegram-proof-tests"), helperHead);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses the original PR branch when it already contains follow-up helper work", () => {
+    const repoDir = initRepo("openclaw-agent-pr-represented-");
+    try {
+      git(repoDir, "checkout", "-b", "agent/codex-telegram-proof-tests");
+      writeFileSync(join(repoDir, "proof.txt"), "original\n", "utf-8");
+      git(repoDir, "add", "proof.txt");
+      git(repoDir, "commit", "-m", "Original proof work");
+
+      git(repoDir, "checkout", "-b", "agent/fix-pr-322-feedback");
+      writeFileSync(join(repoDir, "feedback.txt"), "review fix\n", "utf-8");
+      git(repoDir, "add", "feedback.txt");
+      git(repoDir, "commit", "-m", "Address PR feedback");
+      const helperHead = git(repoDir, "rev-parse", "agent/fix-pr-322-feedback");
+
+      git(repoDir, "checkout", "agent/codex-telegram-proof-tests");
+      git(repoDir, "merge", "--ff-only", "agent/fix-pr-322-feedback");
+
+      const result = resolveExistingTargetPrUpdateBranch({
+        repoDir,
+        sourceBranch: "agent/fix-pr-322-feedback",
+        targetPrStatus: {
+          exists: true,
+          state: "open",
+          url: "https://github.com/goldmar/openclaw-code-agent/pull/322",
+          number: 322,
+          headRefName: "agent/codex-telegram-proof-tests",
+          baseRefName: "main",
+        },
+      });
+
+      assert.deepEqual(result, {
+        success: true,
+        branchName: "agent/codex-telegram-proof-tests",
+        alreadyRepresented: true,
+      });
+      assert.equal(git(repoDir, "rev-parse", "agent/codex-telegram-proof-tests"), helperHead);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
   });
 });
 
