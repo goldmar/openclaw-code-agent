@@ -1,10 +1,10 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildPrCompletionWakeOutcomeKey, buildPrMetadata, buildPrOutcomeDetailLines, formatPrBody, resolveExistingTargetPrUpdateBranch } from "../src/tools/agent-pr";
+import { buildPrCompletionWakeOutcomeKey, buildPrMetadata, buildPrOutcomeDetailLines, formatPrBody, resolveExistingTargetPrUpdateBranch, shouldIgnoreClosedTargetPrForForceNew } from "../src/tools/agent-pr";
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", ["-C", cwd, ...args], {
@@ -22,6 +22,23 @@ function initRepo(prefix: string): string {
   git(repoDir, "add", "README.md");
   git(repoDir, "commit", "-m", "init");
   return repoDir;
+}
+
+function initRepoWithOrigin(prefix: string): { repoDir: string; remoteDir: string } {
+  const rootDir = mkdtempSync(join(tmpdir(), prefix));
+  const remoteDir = join(rootDir, "remote.git");
+  const repoDir = join(rootDir, "repo");
+  mkdirSync(repoDir);
+  execFileSync("git", ["init", "--bare", remoteDir], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
+  git(repoDir, "init", "-b", "main");
+  git(repoDir, "config", "user.name", "OpenClaw Tests");
+  git(repoDir, "config", "user.email", "tests@example.com");
+  git(repoDir, "remote", "add", "origin", remoteDir);
+  writeFileSync(join(repoDir, "README.md"), "base\n", "utf-8");
+  git(repoDir, "add", "README.md");
+  git(repoDir, "commit", "-m", "init");
+  git(repoDir, "push", "-u", "origin", "main");
+  return { repoDir, remoteDir };
 }
 
 describe("agent_pr outcome detail lines", () => {
@@ -192,6 +209,133 @@ describe("agent_pr existing target PR branch resolution", () => {
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }
+  });
+
+  it("fast-forwards a target PR branch that is checked out in another linked worktree", () => {
+    const repoDir = initRepo("openclaw-agent-pr-linked-worktree-");
+    const linkedWorktreePath = `${repoDir}-target-worktree`;
+    try {
+      git(repoDir, "checkout", "-b", "agent/codex-telegram-proof-tests");
+      writeFileSync(join(repoDir, "proof.txt"), "original\n", "utf-8");
+      git(repoDir, "add", "proof.txt");
+      git(repoDir, "commit", "-m", "Original proof work");
+      git(repoDir, "checkout", "main");
+      git(repoDir, "worktree", "add", linkedWorktreePath, "agent/codex-telegram-proof-tests");
+
+      git(repoDir, "checkout", "-b", "agent/fix-pr-322-feedback", "agent/codex-telegram-proof-tests");
+      writeFileSync(join(repoDir, "feedback.txt"), "review fix\n", "utf-8");
+      git(repoDir, "add", "feedback.txt");
+      git(repoDir, "commit", "-m", "Address PR feedback");
+      const helperHead = git(repoDir, "rev-parse", "agent/fix-pr-322-feedback");
+
+      const result = resolveExistingTargetPrUpdateBranch({
+        repoDir,
+        sourceBranch: "agent/fix-pr-322-feedback",
+        targetPrStatus: {
+          exists: true,
+          state: "open",
+          url: "https://github.com/goldmar/openclaw-code-agent/pull/322",
+          number: 322,
+          headRefName: "agent/codex-telegram-proof-tests",
+          baseRefName: "main",
+        },
+      });
+
+      assert.deepEqual(result, {
+        success: true,
+        branchName: "agent/codex-telegram-proof-tests",
+        alreadyRepresented: false,
+      });
+      assert.equal(git(linkedWorktreePath, "rev-parse", "HEAD"), helperHead);
+      assert.equal(git(repoDir, "rev-parse", "agent/codex-telegram-proof-tests"), helperHead);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+      rmSync(linkedWorktreePath, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects helper updates that omit commits from the remote PR branch", () => {
+    const { repoDir, remoteDir } = initRepoWithOrigin("openclaw-agent-pr-stale-remote-");
+    const rootDir = join(repoDir, "..");
+    const cloneDir = join(rootDir, "remote-update");
+    try {
+      git(repoDir, "checkout", "-b", "agent/codex-telegram-proof-tests");
+      writeFileSync(join(repoDir, "proof.txt"), "original\n", "utf-8");
+      git(repoDir, "add", "proof.txt");
+      git(repoDir, "commit", "-m", "Original proof work");
+      git(repoDir, "push", "-u", "origin", "agent/codex-telegram-proof-tests");
+
+      git(repoDir, "checkout", "-b", "agent/fix-pr-322-feedback");
+      writeFileSync(join(repoDir, "feedback.txt"), "review fix\n", "utf-8");
+      git(repoDir, "add", "feedback.txt");
+      git(repoDir, "commit", "-m", "Address PR feedback");
+
+      execFileSync("git", ["clone", remoteDir, cloneDir], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
+      git(cloneDir, "config", "user.name", "OpenClaw Tests");
+      git(cloneDir, "config", "user.email", "tests@example.com");
+      git(cloneDir, "checkout", "agent/codex-telegram-proof-tests");
+      writeFileSync(join(cloneDir, "remote-only.txt"), "remote update\n", "utf-8");
+      git(cloneDir, "add", "remote-only.txt");
+      git(cloneDir, "commit", "-m", "Remote PR branch update");
+      git(cloneDir, "push", "origin", "agent/codex-telegram-proof-tests");
+
+      const result = resolveExistingTargetPrUpdateBranch({
+        repoDir,
+        sourceBranch: "agent/fix-pr-322-feedback",
+        targetPrStatus: {
+          exists: true,
+          state: "open",
+          url: "https://github.com/goldmar/openclaw-code-agent/pull/322",
+          number: 322,
+          headRefName: "agent/codex-telegram-proof-tests",
+          baseRefName: "main",
+        },
+      });
+
+      assert.equal(result.success, false);
+      assert.match("error" in result ? result.error : "", /diverged/);
+      assert.notEqual(
+        git(repoDir, "rev-parse", "agent/codex-telegram-proof-tests"),
+        git(repoDir, "rev-parse", "agent/fix-pr-322-feedback"),
+      );
+    } finally {
+      rmSync(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores closed or merged persisted target PR metadata only for force_new", () => {
+    assert.equal(
+      shouldIgnoreClosedTargetPrForForceNew(true, {
+        exists: true,
+        state: "closed",
+        url: "https://github.com/goldmar/openclaw-code-agent/pull/322",
+      }),
+      true,
+    );
+    assert.equal(
+      shouldIgnoreClosedTargetPrForForceNew(true, {
+        exists: true,
+        state: "merged",
+        url: "https://github.com/goldmar/openclaw-code-agent/pull/322",
+      }),
+      true,
+    );
+    assert.equal(
+      shouldIgnoreClosedTargetPrForForceNew(true, {
+        exists: true,
+        state: "open",
+        url: "https://github.com/goldmar/openclaw-code-agent/pull/322",
+      }),
+      false,
+    );
+    assert.equal(
+      shouldIgnoreClosedTargetPrForForceNew(false, {
+        exists: true,
+        state: "closed",
+        url: "https://github.com/goldmar/openclaw-code-agent/pull/322",
+      }),
+      false,
+    );
   });
 });
 
