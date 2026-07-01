@@ -600,12 +600,13 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         originThreadLine: () => "thread",
         getWorktreeDecisionButtons: () => [[{ label: "Open PR", callbackData: "open-pr" }]],
         makeOpenPrButton: () => ({ label: "Open PR", callbackData: "open-pr" }),
-        getPrStatusForBranch: (_repo, lookupBranch) => lookupBranch === "agent/fix-oca-441-regression"
+        getPrStatusForUrl: (_repo, prUrl) => prUrl === "https://github.com/example/repo/pull/194"
           ? {
               exists: true,
               state: "open",
               url: "https://github.com/example/repo/pull/194",
               number: 194,
+              headRefName: "agent/fix-oca-441-regression",
               baseRefName: "main",
             }
           : { exists: false, state: "none" },
@@ -632,6 +633,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         worktreeBaseBranch: "main",
         worktreeStrategy: "auto-pr",
         repoIntegrationPolicy: "pr-allowed",
+        worktreePrUrl: "https://github.com/example/repo/pull/194",
         pendingPlanApproval: false,
       };
 
@@ -699,12 +701,13 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         originThreadLine: () => "thread",
         getWorktreeDecisionButtons: () => [[{ label: "Open PR", callbackData: "open-pr" }]],
         makeOpenPrButton: () => ({ label: "Open PR", callbackData: "open-pr" }),
-        getPrStatusForBranch: (_repo, lookupBranch) => lookupBranch === "fix-test-session-store-isolation"
+        getPrStatusForUrl: (_repo, prUrl) => prUrl === "https://github.com/goldmar/openclaw-code-agent/pull/314"
           ? {
               exists: true,
               state: "open",
               url: "https://github.com/goldmar/openclaw-code-agent/pull/314",
               number: 314,
+              headRefName: "fix-test-session-store-isolation",
               baseRefName: "main",
             }
           : { exists: false, state: "none" },
@@ -731,6 +734,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         worktreeBaseBranch: "main",
         worktreeStrategy: "auto-pr",
         repoIntegrationPolicy: "pr-allowed",
+        worktreePrUrl: "https://github.com/goldmar/openclaw-code-agent/pull/314",
         pendingPlanApproval: false,
       };
 
@@ -793,12 +797,23 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         originThreadLine: () => "thread",
         getWorktreeDecisionButtons: () => [[{ label: "Open PR", callbackData: "open-pr" }]],
         makeOpenPrButton: () => ({ label: "Open PR", callbackData: "open-pr" }),
-        getPrStatusForBranch: (_repo, lookupBranch) => lookupBranch === "intended-pr"
+        getPrStatusForBranch: (_repo, lookupBranch) => lookupBranch === "staging"
+          ? {
+              exists: true,
+              state: "open",
+              url: "https://github.com/example/repo/pull/999",
+              number: 999,
+              headRefName: "staging",
+              baseRefName: "main",
+            }
+          : { exists: false, state: "none" },
+        getPrStatusForUrl: (_repo, prUrl) => prUrl === "https://github.com/example/repo/pull/314"
           ? {
               exists: true,
               state: "open",
               url: "https://github.com/example/repo/pull/314",
               number: 314,
+              headRefName: "intended-pr",
               baseRefName: "main",
             }
           : { exists: false, state: "none" },
@@ -826,6 +841,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         worktreeBaseBranch: "main",
         worktreeStrategy: "auto-pr",
         repoIntegrationPolicy: "pr-allowed",
+        worktreePrUrl: "https://github.com/example/repo/pull/314",
         pendingPlanApproval: false,
       };
 
@@ -883,8 +899,8 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         originThreadLine: () => "thread",
         getWorktreeDecisionButtons: () => [[{ label: "Open PR", callbackData: "open-pr" }]],
         makeOpenPrButton: () => ({ label: "Open PR", callbackData: "open-pr" }),
-        getPrStatusForBranch: (_repo, lookupBranch) => {
-          if (lookupBranch !== "intended-pr") return { exists: false, state: "none" };
+        getPrStatusForUrl: (_repo, prUrl) => {
+          if (prUrl !== "https://github.com/example/repo/pull/314") return { exists: false, state: "none" };
           if (!injectedDirtyEntry) {
             injectedDirtyEntry = true;
             writeFileSync(join(worktreePath, "late-dirty.txt"), "dirty after representation check\n", "utf-8");
@@ -894,6 +910,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
             state: "open",
             url: "https://github.com/example/repo/pull/314",
             number: 314,
+            headRefName: "intended-pr",
             baseRefName: "main",
           };
         },
@@ -919,6 +936,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         worktreeBaseBranch: "main",
         worktreeStrategy: "auto-pr",
         repoIntegrationPolicy: "pr-allowed",
+        worktreePrUrl: "https://github.com/example/repo/pull/314",
         pendingPlanApproval: false,
       };
 

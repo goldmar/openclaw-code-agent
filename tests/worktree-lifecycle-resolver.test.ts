@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { resolveWorktreeLifecycle } from "../src/worktree-lifecycle-resolver";
@@ -19,6 +19,29 @@ function initRepo(prefix: string): string {
   git(repoDir, "add", "README.md");
   git(repoDir, "commit", "-m", "init");
   return repoDir;
+}
+
+function installFakeGh(dir: string, prsJson: string): string {
+  const ghPath = join(dir, "gh");
+  writeFileSync(ghPath, [
+    "#!/usr/bin/env sh",
+    "if [ \"$1\" = \"--version\" ]; then echo 'gh version 2.0.0'; exit 0; fi",
+    "if [ \"$1\" = \"pr\" ] && [ \"$2\" = \"list\" ]; then",
+    `  printf '%s\\n' '${prsJson.replaceAll("'", "'\\''")}'`,
+    "  exit 0",
+    "fi",
+    "if [ \"$1\" = \"pr\" ] && [ \"$2\" = \"view\" ]; then",
+    `  printf '%s\\n' '${prsJson.replaceAll("'", "'\\''")}' | node -e 'const fs=require("fs"); const prs=JSON.parse(fs.readFileSync(0,"utf8")); const url=process.argv[1]; const pr=prs.find((p)=>p.url===url); if (!pr) process.exit(1); console.log(JSON.stringify(pr));' "$3"`,
+    "  exit 0",
+    "fi",
+    "echo unexpected gh invocation >&2",
+    "exit 1",
+    "",
+  ].join("\n"), "utf-8");
+  chmodSync(ghPath, 0o755);
+  const previousPath = process.env.PATH ?? "";
+  process.env.PATH = `${dir}:${previousPath}`;
+  return previousPath;
 }
 
 describe("resolveWorktreeLifecycle", () => {
@@ -232,7 +255,29 @@ describe("resolveWorktreeLifecycle", () => {
 
   it("does not derive released from a side branch that contains helper work while base does not", () => {
     const repoDir = initRepo("resolver-side-branch-");
+    const fakeGhDir = mkdtempSync(join(tmpdir(), "resolver-side-branch-gh-"));
+    const previousPath = installFakeGh(fakeGhDir, JSON.stringify([
+      {
+        url: "https://github.com/example/repo/pull/314",
+        number: 314,
+        title: "Intended PR",
+        state: "OPEN",
+        headRepositoryOwner: { login: "example" },
+        headRefName: "intended-pr",
+        baseRefName: "main",
+      },
+      {
+        url: "https://github.com/example/repo/pull/999",
+        number: 999,
+        title: "Staging PR",
+        state: "OPEN",
+        headRepositoryOwner: { login: "example" },
+        headRefName: "staging",
+        baseRefName: "main",
+      },
+    ]));
     try {
+      git(repoDir, "remote", "add", "origin", "https://github.com/example/repo.git");
       git(repoDir, "checkout", "-b", "intended-pr");
       writeFileSync(join(repoDir, "intended.txt"), "intended\n", "utf-8");
       git(repoDir, "add", "intended.txt");
@@ -253,7 +298,8 @@ describe("resolveWorktreeLifecycle", () => {
         workdir: repoDir,
         worktreeBranch: "agent/helper",
         worktreeBaseBranch: "main",
-      });
+        worktreePrUrl: "https://github.com/example/repo/pull/314",
+      }, { includePrSync: true });
 
       assert.equal(resolved.derivedState, "provisioned");
       assert.equal(resolved.cleanupSafe, false);
@@ -261,6 +307,8 @@ describe("resolveWorktreeLifecycle", () => {
       assert.ok(resolved.reasons.includes("unique_content"));
       assert.equal(resolved.reasons.some((reason) => reason.startsWith("released_by_branch:")), false);
     } finally {
+      process.env.PATH = previousPath;
+      rmSync(fakeGhDir, { recursive: true, force: true });
       rmSync(repoDir, { recursive: true, force: true });
     }
   });

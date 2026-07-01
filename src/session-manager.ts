@@ -71,6 +71,7 @@ import {
   isGitHubCLIAvailable,
   mergeBranch,
   syncWorktreePR,
+  syncWorktreePRByUrl,
 } from "./worktree";
 import { KeyedOperationQueue } from "./keyed-operation-queue";
 import { SessionMaintenanceService } from "./session-maintenance-service";
@@ -330,6 +331,7 @@ export class SessionManager {
         return status.exists && status.state === "open";
       },
       getPrStatusForBranch: (repoDir, branchName, targetRepo) => syncWorktreePR(repoDir, branchName, targetRepo),
+      getPrStatusForUrl: (repoDir, prUrl, targetRepo) => syncWorktreePRByUrl(repoDir, prUrl, targetRepo),
       resolveRepoPolicy: (repoDir) => manager.resolveRepoPolicy(repoDir),
       worktreeSummaryProvider: options.worktreeSummaryProvider,
       worktreeMessages,

@@ -14,7 +14,7 @@ import {
   isBranchAncestorOfBase,
   wouldMergeBeNoop,
 } from "./worktree-repo";
-import { syncWorktreePR } from "./worktree-pr";
+import { syncWorktreePR, syncWorktreePRByUrl } from "./worktree-pr";
 import { hasDirtyWorktreeEntries } from "./worktree-lifecycle";
 
 function isoNow(): string {
@@ -131,10 +131,11 @@ export function resolveWorktreeLifecycle(
       }
     }
     const currentRepoBranch = getBranchName(workdir);
-    if (options.includePrSync && currentRepoBranch && currentRepoBranch !== branchName && currentRepoBranch !== baseBranch) {
-      const currentPrStatus = syncWorktreePR(workdir, currentRepoBranch, session.worktreePrTargetRepo ?? lifecycle.targetRepo);
+    if (options.includePrSync && session.worktreePrUrl && currentRepoBranch && currentRepoBranch !== branchName && currentRepoBranch !== baseBranch) {
+      const currentPrStatus = syncWorktreePRByUrl(workdir, session.worktreePrUrl, session.worktreePrTargetRepo ?? lifecycle.targetRepo);
       representedByTargetPrBranch = Boolean(
         (currentPrStatus.state === "open" || currentPrStatus.state === "merged")
+        && currentPrStatus.headRefName === currentRepoBranch
         && currentPrStatus.baseRefName === baseBranch
         && isBranchAncestorOfBase(workdir, branchName, currentRepoBranch)
       );

@@ -30,6 +30,7 @@ import {
   buildMergeWarningLines,
   appendMergeWarnings,
   syncWorktreePR,
+  syncWorktreePRByUrl,
 } from "./worktree";
 
 export type WorktreeStrategyResult = {
@@ -71,6 +72,7 @@ export class SessionWorktreeStrategyService {
       isPrAvailable?: (repoDir: string) => boolean;
       hasOpenPrForBranch?: (repoDir: string, branchName: string, targetRepo?: string) => boolean;
       getPrStatusForBranch?: (repoDir: string, branchName: string, targetRepo?: string) => PRStatus;
+      getPrStatusForUrl?: (repoDir: string, prUrl: string, targetRepo?: string) => PRStatus;
       resolveRepoPolicy?: (repoDir: string) => RepoPolicyResolution;
       worktreeSummaryProvider?: WorktreeDecisionSummaryProvider;
       worktreeMessages: SessionWorktreeMessageService;
@@ -799,6 +801,11 @@ export class SessionWorktreeStrategyService {
       ?? syncWorktreePR(repoDir, branchName, targetRepo);
   }
 
+  private getPrStatusForUrl(repoDir: string, prUrl: string, targetRepo?: string): PRStatus {
+    return this.deps.getPrStatusForUrl?.(repoDir, prUrl, targetRepo)
+      ?? syncWorktreePRByUrl(repoDir, prUrl, targetRepo);
+  }
+
   private releaseIfRepresentedByTargetPrBranch(
     session: Session,
     repoDir: string,
@@ -809,13 +816,13 @@ export class SessionWorktreeStrategyService {
     if (listDirtyWorktreeEntries(worktreePath).length > 0) return undefined;
 
     const targetBranch = getBranchName(repoDir);
-    if (!targetBranch || targetBranch === branchName || targetBranch === baseBranch) return undefined;
+    const targetPrUrl = session.worktreePrUrl;
+    if (!targetBranch || !targetPrUrl || targetBranch === branchName || targetBranch === baseBranch) return undefined;
 
-    const targetPrStatus = targetBranch
-      ? this.getPrStatusForBranch(repoDir, targetBranch, session.worktreePrTargetRepo)
-      : undefined;
+    const targetPrStatus = this.getPrStatusForUrl(repoDir, targetPrUrl, session.worktreePrTargetRepo);
     const representedByTargetPrBranch = Boolean(
       (targetPrStatus?.state === "open" || targetPrStatus?.state === "merged")
+      && targetPrStatus?.headRefName === targetBranch
       && targetPrStatus?.baseRefName === baseBranch
       && isBranchAncestorOfBase(repoDir, branchName, targetBranch)
     );

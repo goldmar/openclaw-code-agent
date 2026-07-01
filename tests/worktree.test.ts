@@ -354,6 +354,7 @@ describe("syncWorktreePR", () => {
         url: "https://github.com/openai/codex/pull/12",
         number: 12,
         title: "Fix PR lookup",
+        headRefName: "agent/fix-lookup",
       });
       const calls = readFileSync(logPath, "utf-8").trim().split("\n");
       assert.equal(calls.at(-1), "pr list --head agent/fix-lookup --state all --json url,number,title,state,headRepositoryOwner,headRefName,baseRefName --repo openai/codex");
@@ -371,10 +372,26 @@ describe("syncWorktreePR", () => {
       execFileSync("git", ["init", "-b", "main"], { cwd: repoDir, stdio: "ignore" });
       execFileSync("git", ["remote", "add", "origin", "git@github.com:me/repo.git"], { cwd: repoDir, stdio: "ignore" });
 
-      syncWorktreePR(repoDir, "agent/fix-lookup");
+      const result = syncWorktreePR(repoDir, "agent/fix-lookup");
 
       const calls = readFileSync(logPath, "utf-8").trim().split("\n");
       assert.equal(calls.at(-1), "pr list --head agent/fix-lookup --state all --json url,number,title,state,headRepositoryOwner,headRefName,baseRefName");
+      assert.equal(result.headRefName, "agent/fix-lookup");
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores PR list entries whose head ref does not match the requested branch", async (t) => {
+    installMockGh(t);
+    const { syncWorktreePR } = await import("../src/worktree.js");
+    const repoDir = mkdtempSync(join(tmpdir(), "openclaw-worktree-sync-pr-no-head-match-"));
+
+    try {
+      execFileSync("git", ["init", "-b", "main"], { cwd: repoDir, stdio: "ignore" });
+      execFileSync("git", ["remote", "add", "origin", "git@github.com:me/repo.git"], { cwd: repoDir, stdio: "ignore" });
+
+      assert.deepEqual(syncWorktreePR(repoDir, "agent/missing"), { exists: false, state: "none" });
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }
