@@ -332,10 +332,12 @@ export class Session extends EventEmitter {
       },
       handleRunCompleted: (data) => {
         const reportedOutcome = data.outcome ?? (data.success ? "completed" : "failed");
-        const startupFailureText = [
-          data.result,
-          ...this.outputBuffer,
-        ].filter((line): line is string => typeof line === "string").join("\n");
+        const startupFailureText = data.num_turns === 0
+          ? [
+              data.result,
+              ...this.outputBuffer.slice(-5),
+            ].filter((line): line is string => typeof line === "string").join("\n")
+          : "";
         const forcedStartupFailure = reportedOutcome === "completed"
           && isHarnessStartupFailureOutput(startupFailureText);
         const outcome = forcedStartupFailure ? "failed" : reportedOutcome;

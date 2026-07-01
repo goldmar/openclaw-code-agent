@@ -195,7 +195,6 @@ describe("Session consumeMessages — result message (single-turn)", () => {
         duration_ms: 5_000,
         total_cost_usd: 0,
         num_turns: 0,
-        result: authFailure,
         session_id: session.harnessSessionId!,
       },
     });
@@ -207,6 +206,34 @@ describe("Session consumeMessages — result message (single-turn)", () => {
     assert.equal(session.error, authFailure);
     assert.equal(mapSessionTaskTerminalStatus(session), "failed");
     // No kill needed — failed already cleans up
+  });
+
+  it("does not classify successful task output mentioning auth phrases as startup failure", async () => {
+    const session = await startSession({ multiTurn: false });
+
+    fakeHarness.pushMessage({
+      type: "text",
+      text: "Documented how to handle an invalid API key during setup.",
+    });
+    fakeHarness.pushMessage({
+      type: "result",
+      data: {
+        success: true,
+        outcome: "completed",
+        duration_ms: 5_000,
+        total_cost_usd: 0,
+        num_turns: 1,
+        result: "Documentation update complete: invalid API key handling is covered.",
+        session_id: session.harnessSessionId!,
+      },
+    });
+    await tick(50);
+
+    assert.equal(session.status, "completed");
+    assert.equal(session.result?.subtype, "success");
+    assert.equal(session.result?.is_error, false);
+    assert.equal(mapSessionTaskTerminalStatus(session), "succeeded");
+    // No kill needed — completed already cleans up
   });
 });
 
