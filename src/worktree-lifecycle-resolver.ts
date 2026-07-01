@@ -10,10 +10,11 @@ import {
   branchExists,
   detectDefaultBranch,
   getAheadBehindCounts,
+  getBranchName,
   isBranchAncestorOfBase,
   wouldMergeBeNoop,
 } from "./worktree-repo";
-import { syncWorktreePR } from "./worktree-pr";
+import { syncWorktreePR, syncWorktreePRByUrl } from "./worktree-pr";
 import { hasDirtyWorktreeEntries } from "./worktree-lifecycle";
 
 function isoNow(): string {
@@ -77,6 +78,7 @@ export function resolveWorktreeLifecycle(
   let dirtyWorktreeEntries = false;
   let topologyMerged = false;
   let releaseNoopMerge = false;
+  let representedByTargetPrBranch = false;
   let branchAheadCount: number | undefined;
   let baseAheadCount: number | undefined;
   let prState: WorktreeRepositoryEvidence["prState"] = "none";
@@ -128,6 +130,20 @@ export function resolveWorktreeLifecycle(
         reasons.add("unique_content");
       }
     }
+    const currentRepoBranch = getBranchName(workdir);
+    if (options.includePrSync && session.worktreePrUrl && currentRepoBranch && currentRepoBranch !== branchName && currentRepoBranch !== baseBranch) {
+      const currentPrStatus = syncWorktreePRByUrl(workdir, session.worktreePrUrl, session.worktreePrTargetRepo ?? lifecycle.targetRepo);
+      representedByTargetPrBranch = Boolean(
+        (currentPrStatus.state === "open" || currentPrStatus.state === "merged")
+        && currentPrStatus.headRefName === currentRepoBranch
+        && currentPrStatus.baseRefName === baseBranch
+        && isBranchAncestorOfBase(workdir, branchName, currentRepoBranch)
+      );
+      if (representedByTargetPrBranch) {
+        reasons.delete("unique_content");
+        reasons.add(`released_by_branch:${currentRepoBranch}`);
+      }
+    }
   } else if (!baseBranch) {
     reasons.add("base_branch_missing");
   }
@@ -141,11 +157,13 @@ export function resolveWorktreeLifecycle(
 
   if (prState === "open") reasons.add("pr_open");
   if (prState === "merged" && !topologyMerged && !releaseNoopMerge) reasons.add("pr_merged_not_reflected_locally");
+  const stalePrOpenLifecycle = options.includePrSync && lifecycle.state === "pr_open" && prState !== "open";
+  if (stalePrOpenLifecycle) reasons.add("stale_pr_open");
 
   let repositoryDerivedState: ManagedWorktreeLifecycleState | undefined;
   if (topologyMerged) {
     repositoryDerivedState = "merged";
-  } else if (releaseNoopMerge) {
+  } else if (releaseNoopMerge || representedByTargetPrBranch) {
     repositoryDerivedState = "released";
   }
 
@@ -153,6 +171,8 @@ export function resolveWorktreeLifecycle(
   let derivedState: ManagedWorktreeLifecycleState = lifecycle.state;
   if (!resolutionBlocked && repositoryDerivedState) {
     derivedState = repositoryDerivedState;
+  } else if (stalePrOpenLifecycle) {
+    derivedState = "pending_decision";
   } else if (!branchPresent && lifecycle.state === "pending_decision") {
     derivedState = "cleanup_failed";
   }
@@ -180,6 +200,7 @@ export function resolveWorktreeLifecycle(
     dirtyTracked: dirtyWorktreeEntries,
     topologyMerged,
     releaseNoopMerge,
+    representedByTargetPrBranch,
     branchAheadCount,
     baseAheadCount,
     prState,

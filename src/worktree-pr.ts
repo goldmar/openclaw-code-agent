@@ -14,6 +14,19 @@ export interface PRStatus {
   url?: string;
   number?: number;
   title?: string;
+  headRefName?: string;
+  baseRefName?: string;
+}
+
+function normalizePrState(state: string): PRStatus["state"] {
+  const ghState = state.toLowerCase();
+  return ghState === "open"
+    ? "open"
+    : ghState === "merged"
+      ? "merged"
+      : ghState === "closed"
+        ? "closed"
+        : "none";
 }
 
 export interface CreatePROptions {
@@ -157,7 +170,7 @@ export function syncWorktreePR(repoDir: string, branchName: string, targetRepo?:
   }
 
   try {
-    const ghArgs = ["pr", "list", "--head", branchName, "--state", "all", "--json", "url,number,title,state,headRepositoryOwner,headRefName"];
+    const ghArgs = ["pr", "list", "--head", branchName, "--state", "all", "--json", "url,number,title,state,headRepositoryOwner,headRefName,baseRefName"];
     if (targetRepo) {
       ghArgs.push("--repo", targetRepo);
     }
@@ -180,36 +193,78 @@ export function syncWorktreePR(repoDir: string, branchName: string, targetRepo?:
       state: string;
       headRepositoryOwner?: { login?: string };
       headRefName?: string;
+      baseRefName?: string;
     }>;
     const expectedOwner = targetRepo ? inferOriginOwner(repoDir)?.toLowerCase() : undefined;
-    const pr = expectedOwner
-      ? prs.find((candidate) => (
-        candidate.headRefName === branchName
-        && candidate.headRepositoryOwner?.login?.toLowerCase() === expectedOwner
-      ))
-      : prs[0];
+    const pr = prs.find((candidate) => (
+      candidate.headRefName === branchName
+      && (!expectedOwner || candidate.headRepositoryOwner?.login?.toLowerCase() === expectedOwner)
+    ));
     if (!pr) {
       return { exists: false, state: "none" };
     }
-    const ghState = pr.state.toLowerCase();
-    const state =
-      ghState === "open"
-        ? "open"
-        : ghState === "merged"
-          ? "merged"
-          : ghState === "closed"
-            ? "closed"
-            : "none";
+    const state = normalizePrState(pr.state);
 
-    return {
+    const status: PRStatus = {
       exists: true,
       state,
       url: pr.url,
       number: pr.number,
       title: pr.title,
     };
+    if (pr.headRefName !== undefined) {
+      status.headRefName = pr.headRefName;
+    }
+    if (pr.baseRefName !== undefined) {
+      status.baseRefName = pr.baseRefName;
+    }
+    return status;
   } catch (err) {
     console.warn(`[worktree] Failed to sync PR status for ${branchName}: ${err instanceof Error ? err.message : String(err)}`);
+    return { exists: false, state: "none" };
+  }
+}
+
+export function syncWorktreePRByUrl(repoDir: string, prUrl: string, targetRepo?: string): PRStatus {
+  if (!isGitHubCLIAvailable()) {
+    return { exists: false, state: "none" };
+  }
+
+  try {
+    const ghArgs = ["pr", "view", prUrl, "--json", "url,number,title,state,headRefName,baseRefName"];
+    if (targetRepo) {
+      ghArgs.push("--repo", targetRepo);
+    }
+    const result = execFileSync("gh", ghArgs, {
+      cwd: repoDir,
+      timeout: 10_000,
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    const pr = JSON.parse(result.trim()) as {
+      url: string;
+      number: number;
+      title: string;
+      state: string;
+      headRefName?: string;
+      baseRefName?: string;
+    };
+    const status: PRStatus = {
+      exists: true,
+      state: normalizePrState(pr.state),
+      url: pr.url,
+      number: pr.number,
+      title: pr.title,
+    };
+    if (pr.headRefName !== undefined) {
+      status.headRefName = pr.headRefName;
+    }
+    if (pr.baseRefName !== undefined) {
+      status.baseRefName = pr.baseRefName;
+    }
+    return status;
+  } catch (err) {
+    console.warn(`[worktree] Failed to sync PR status for ${prUrl}: ${err instanceof Error ? err.message : String(err)}`);
     return { exists: false, state: "none" };
   }
 }
