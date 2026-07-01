@@ -573,12 +573,13 @@ export async function runNativeProof(
       ok: result.ok && cleanupOk,
       cleanupErrors,
     };
+    const retainSessionForCleanup = cleanupErrors.length > 0 || (!session.credential && sessionDirHasRecoveryArtifacts(sessionDir));
     const stagedPublicArtifacts = path.join(outputDir, "public-artifacts");
     const summary = {
       ok: result.ok,
       cleanupErrors,
       error: result.error,
-      sessionRetainedForCleanup: cleanupErrors.length > 0,
+      sessionRetainedForCleanup: retainSessionForCleanup,
       plan,
       session,
       artifacts: publicArtifacts.map((artifact) => ({ ...artifact, path: relativeArtifact(artifact.path) })),
@@ -602,7 +603,7 @@ export async function runNativeProof(
       ...result,
       staged: relativeArtifact(stagePublicArtifacts(opts.outputDir)),
     };
-    if (cleanupErrors.length === 0) {
+    if (!retainSessionForCleanup) {
       rmSync(sessionDir, { recursive: true, force: true });
     }
   }
@@ -627,6 +628,10 @@ const PRIVATE_VISUAL_ARTIFACTS = new Set([
 
 function isStageablePublicArtifact(file: string): boolean {
   return STAGED_PUBLIC_TEXT_ARTIFACTS.has(path.basename(file));
+}
+
+function sessionDirHasRecoveryArtifacts(sessionDir: string): boolean {
+  return existsSync(sessionDir) && readdirSync(sessionDir).length > 0;
 }
 
 async function collectUntilCompleted(session: HarnessSession, timeoutMs: number): Promise<HarnessMessage[]> {

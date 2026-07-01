@@ -472,6 +472,64 @@ describe("OCA Codex Telegram proof runner", () => {
     }
   });
 
+  it("preserves acquisition recovery artifacts when credential acquisition fails", async () => {
+    const original = process.env.OPENCLAW_RUN_LIVE_TELEGRAM_PROOF;
+    const outputDir = join(".artifacts", "qa-e2e", "oca-codex-telegram", `acquire-failure-${Date.now()}`);
+    const artifactDir = join(repoRoot, outputDir);
+    const events: string[] = [];
+    try {
+      process.env.OPENCLAW_RUN_LIVE_TELEGRAM_PROOF = "1";
+      const result = await runNativeProof(parseArgs([
+        "run",
+        "--allow-live",
+        "--output-dir",
+        outputDir,
+      ]), {
+        async acquireCredentialLease(_opts, sessionDir) {
+          events.push("acquire");
+          writeFileSync(join(sessionDir, "lease.json"), '{"credential":"lease-secret"}');
+          writeFileSync(join(sessionDir, "telegram-user-payload.json"), '{"password":"hunter2"}');
+          throw new Error("credential helper failed after lease restore");
+        },
+        async startLocalSut() {
+          events.push("start-sut");
+          throw new Error("unexpected start");
+        },
+        async startCrabboxDesktop() {
+          events.push("start-crabbox");
+          throw new Error("unexpected desktop");
+        },
+        async captureEvidence() {
+          events.push("capture");
+          return [];
+        },
+        async stopCrabboxDesktop() {
+          events.push("stop-crabbox");
+        },
+        async stopLocalSut() {
+          events.push("stop-sut");
+        },
+        async releaseCredentialLease() {
+          events.push("release");
+        },
+      });
+
+      assert.equal(result.ok, false);
+      assert.deepEqual(events, ["acquire"]);
+      assert.equal(existsSync(join(artifactDir, ".session", "lease.json")), true);
+      assert.equal(existsSync(join(artifactDir, ".session", "telegram-user-payload.json")), true);
+      assert.equal(existsSync(join(artifactDir, "public-artifacts", "summary.json")), true);
+      const summary = JSON.parse(readFileSync(join(artifactDir, "summary.json"), "utf8")) as {
+        sessionRetainedForCleanup?: boolean;
+      };
+      assert.equal(summary.sessionRetainedForCleanup, true);
+    } finally {
+      if (original === undefined) delete process.env.OPENCLAW_RUN_LIVE_TELEGRAM_PROOF;
+      else process.env.OPENCLAW_RUN_LIVE_TELEGRAM_PROOF = original;
+      rmSync(artifactDir, { recursive: true, force: true });
+    }
+  });
+
   it("stops a started reusable desktop unless keep-box is requested", async () => {
     const original = process.env.OPENCLAW_RUN_LIVE_TELEGRAM_PROOF;
     const outputDir = join(".artifacts", "qa-e2e", "oca-codex-telegram", `reusable-desktop-${Date.now()}`);
