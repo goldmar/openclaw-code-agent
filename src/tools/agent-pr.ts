@@ -57,6 +57,26 @@ export function shouldIgnoreClosedTargetPrForForceNew(forceNew: boolean | undefi
   return forceNew === true && prStatus?.exists === true && prStatus.state !== "open";
 }
 
+export function normalizeForceNewReplacementPrStatus(
+  prStatus: PRStatus,
+  ignoredTargetPrStatus: PRStatus | undefined,
+  options: { forceNewIgnoresClosedTargetPr: boolean },
+): PRStatus {
+  if (
+    options.forceNewIgnoresClosedTargetPr
+    && prStatus.exists
+    && prStatus.state !== "open"
+    && ignoredTargetPrStatus?.exists === true
+    && (
+      (prStatus.url !== undefined && prStatus.url === ignoredTargetPrStatus.url)
+      || (prStatus.number !== undefined && prStatus.number === ignoredTargetPrStatus.number)
+    )
+  ) {
+    return { exists: false, state: "none" };
+  }
+  return prStatus;
+}
+
 function fetchRemoteBranch(repoDir: string, branch: string, remote = "origin"): string | undefined {
   const remoteRef = `refs/remotes/${remote}/${branch}`;
   try {
@@ -337,9 +357,13 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
         branchName = branchResolution.branchName;
       }
       const repoPolicy = sessionManager.resolveRepoPolicy(originalWorkdir);
-      const existingPrBeforePush = effectiveTargetPrStatus?.exists
-        ? effectiveTargetPrStatus
-        : syncWorktreePR(originalWorkdir, branchName, targetRepo);
+      const existingPrBeforePush = normalizeForceNewReplacementPrStatus(
+        effectiveTargetPrStatus?.exists
+          ? effectiveTargetPrStatus
+          : syncWorktreePR(originalWorkdir, branchName, targetRepo),
+        explicitTargetPrStatus,
+        { forceNewIgnoresClosedTargetPr },
+      );
       const updatingExistingOpenPr = existingPrBeforePush.exists && existingPrBeforePush.state === "open";
       if (repoPolicy?.policy === "never-pr" && !updatingExistingOpenPr) {
         return { content: [{ type: "text", text: `Error: Repo policy forbids PR creation for ${repoPolicy.identity?.repoRoot ?? originalWorkdir}.` }], meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
@@ -355,9 +379,13 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
       }
 
       // Sync PR state from GitHub
-      const prStatus = effectiveTargetPrUrl
-        ? syncWorktreePRByUrl(originalWorkdir, effectiveTargetPrUrl, targetRepo)
-        : syncWorktreePR(originalWorkdir, branchName, targetRepo);
+      const prStatus = normalizeForceNewReplacementPrStatus(
+        effectiveTargetPrUrl
+          ? syncWorktreePRByUrl(originalWorkdir, effectiveTargetPrUrl, targetRepo)
+          : syncWorktreePR(originalWorkdir, branchName, targetRepo),
+        explicitTargetPrStatus,
+        { forceNewIgnoresClosedTargetPr },
+      );
 
       // Handle force_new parameter
       if (params.force_new && prStatus.exists) {

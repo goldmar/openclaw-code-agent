@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildPrCompletionWakeOutcomeKey, buildPrMetadata, buildPrOutcomeDetailLines, formatPrBody, resolveExistingTargetPrUpdateBranch, shouldIgnoreClosedTargetPrForForceNew } from "../src/tools/agent-pr";
+import { buildPrCompletionWakeOutcomeKey, buildPrMetadata, buildPrOutcomeDetailLines, formatPrBody, normalizeForceNewReplacementPrStatus, resolveExistingTargetPrUpdateBranch, shouldIgnoreClosedTargetPrForForceNew } from "../src/tools/agent-pr";
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", ["-C", cwd, ...args], {
@@ -335,6 +335,54 @@ describe("agent_pr existing target PR branch resolution", () => {
         url: "https://github.com/goldmar/openclaw-code-agent/pull/322",
       }),
       false,
+    );
+  });
+
+  it("keeps the ignored closed target PR ignored when branch lookup finds it again", () => {
+    const ignoredClosedPr = {
+      exists: true,
+      state: "closed" as const,
+      url: "https://github.com/goldmar/openclaw-code-agent/pull/322",
+      number: 322,
+      headRefName: "agent/fix-pr-322-feedback",
+      baseRefName: "main",
+    };
+
+    assert.deepEqual(
+      normalizeForceNewReplacementPrStatus(
+        { ...ignoredClosedPr },
+        ignoredClosedPr,
+        { forceNewIgnoresClosedTargetPr: true },
+      ),
+      { exists: false, state: "none" },
+    );
+
+    assert.deepEqual(
+      normalizeForceNewReplacementPrStatus(
+        {
+          exists: true,
+          state: "closed",
+          url: "https://github.com/goldmar/openclaw-code-agent/pull/999",
+          number: 999,
+        },
+        ignoredClosedPr,
+        { forceNewIgnoresClosedTargetPr: true },
+      ),
+      {
+        exists: true,
+        state: "closed",
+        url: "https://github.com/goldmar/openclaw-code-agent/pull/999",
+        number: 999,
+      },
+    );
+
+    assert.deepEqual(
+      normalizeForceNewReplacementPrStatus(
+        { ...ignoredClosedPr },
+        ignoredClosedPr,
+        { forceNewIgnoresClosedTargetPr: false },
+      ),
+      ignoredClosedPr,
     );
   });
 });
