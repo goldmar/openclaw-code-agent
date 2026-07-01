@@ -188,14 +188,26 @@ describe("agent_worktree_status", () => {
   it("refreshes closed helper PR state and marks represented helper branches safe for cleanup", async () => {
     const repoDir = initRepo("status-closed-helper-pr-");
     const fakeGhDir = mkdtempSync(join(tmpdir(), "fake-gh-"));
-    const previousPath = installFakeGh(fakeGhDir, JSON.stringify([{
-      url: "https://github.com/goldmar/openclaw-code-agent/pull/315",
-      number: 315,
-      title: "Address PR 314 review feedback",
-      state: "CLOSED",
-      headRepositoryOwner: { login: "goldmar" },
-      headRefName: "agent/pr-314-comments-cleanup",
-    }]));
+    const previousPath = installFakeGh(fakeGhDir, JSON.stringify([
+      {
+        url: "https://github.com/goldmar/openclaw-code-agent/pull/315",
+        number: 315,
+        title: "Address PR 314 review feedback",
+        state: "CLOSED",
+        headRepositoryOwner: { login: "goldmar" },
+        headRefName: "agent/pr-314-comments-cleanup",
+        baseRefName: "main",
+      },
+      {
+        url: "https://github.com/goldmar/openclaw-code-agent/pull/314",
+        number: 314,
+        title: "Fix test session store isolation",
+        state: "OPEN",
+        headRepositoryOwner: { login: "goldmar" },
+        headRefName: "fix-test-session-store-isolation",
+        baseRefName: "main",
+      },
+    ]));
     try {
       git(repoDir, "remote", "add", "origin", "https://github.com/goldmar/openclaw-code-agent.git");
       git(repoDir, "checkout", "-b", "fix-test-session-store-isolation");
@@ -253,8 +265,8 @@ describe("agent_worktree_status", () => {
       const statusResult = await statusTool.execute("tool-id", { session: "pr-314-comments-cleanup" });
       const statusText = (statusResult.content[0] as { text: string }).text;
 
-      assert.match(statusText, /Lifecycle:\s*released/);
-      assert.doesNotMatch(statusText, /Lifecycle:\s*pr open/);
+      assert.match(statusText, /Lifecycle:\s*pr open/);
+      assert.match(statusText, /Derived:\s*released/);
       assert.match(statusText, /Cleanup:\s*safe now/);
       assert.match(statusText, /PR:\s*https:\/\/github\.com\/goldmar\/openclaw-code-agent\/pull\/315 \(closed\)/);
       assert.match(statusText, /Reasons:\s*represented by fix-test-session-store-isolation, stale PR-open metadata/);

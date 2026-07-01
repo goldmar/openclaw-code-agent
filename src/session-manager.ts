@@ -329,6 +329,7 @@ export class SessionManager {
         const status = syncWorktreePR(repoDir, branchName, targetRepo);
         return status.exists && status.state === "open";
       },
+      getPrStatusForBranch: (repoDir, branchName, targetRepo) => syncWorktreePR(repoDir, branchName, targetRepo),
       resolveRepoPolicy: (repoDir) => manager.resolveRepoPolicy(repoDir),
       worktreeSummaryProvider: options.worktreeSummaryProvider,
       worktreeMessages,

@@ -230,6 +230,41 @@ describe("resolveWorktreeLifecycle", () => {
     }
   });
 
+  it("does not derive released from a side branch that contains helper work while base does not", () => {
+    const repoDir = initRepo("resolver-side-branch-");
+    try {
+      git(repoDir, "checkout", "-b", "intended-pr");
+      writeFileSync(join(repoDir, "intended.txt"), "intended\n", "utf-8");
+      git(repoDir, "add", "intended.txt");
+      git(repoDir, "commit", "-m", "intended PR work");
+
+      git(repoDir, "checkout", "-b", "agent/helper");
+      writeFileSync(join(repoDir, "helper.txt"), "helper\n", "utf-8");
+      git(repoDir, "add", "helper.txt");
+      git(repoDir, "commit", "-m", "helper work");
+      const helperCommit = git(repoDir, "rev-parse", "HEAD");
+
+      git(repoDir, "checkout", "-b", "staging", "intended-pr");
+      git(repoDir, "cherry-pick", helperCommit);
+      git(repoDir, "merge-base", "--is-ancestor", "agent/helper", "staging");
+      assert.throws(() => git(repoDir, "merge-base", "--is-ancestor", "agent/helper", "main"), /Command failed/);
+
+      const resolved = resolveWorktreeLifecycle({
+        workdir: repoDir,
+        worktreeBranch: "agent/helper",
+        worktreeBaseBranch: "main",
+      });
+
+      assert.equal(resolved.derivedState, "provisioned");
+      assert.equal(resolved.cleanupSafe, false);
+      assert.equal(resolved.preserve, false);
+      assert.ok(resolved.reasons.includes("unique_content"));
+      assert.equal(resolved.reasons.some((reason) => reason.startsWith("released_by_branch:")), false);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
   it("does not preserve stale PR state without current open PR evidence", () => {
     const repoDir = initRepo("resolver-pr-open-");
     try {

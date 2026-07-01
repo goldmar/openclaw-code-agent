@@ -268,7 +268,7 @@ describe("createPR", () => {
       const calls = readFileSync(logPath, "utf-8").trim().split("\n");
       assert.equal(calls.filter((call) => call.startsWith("pr create ")).length, 1);
       assert.ok(calls.includes("pr create --base main --draft --repo goldmar/openclaw-code-agent --head goldmar:agent/existing-pr --title Existing PR --body Body"));
-      assert.ok(calls.includes("pr list --head agent/existing-pr --state all --json url,number,title,state,headRepositoryOwner,headRefName --repo goldmar/openclaw-code-agent"));
+      assert.ok(calls.includes("pr list --head agent/existing-pr --state all --json url,number,title,state,headRepositoryOwner,headRefName,baseRefName --repo goldmar/openclaw-code-agent"));
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }
@@ -356,7 +356,7 @@ describe("syncWorktreePR", () => {
         title: "Fix PR lookup",
       });
       const calls = readFileSync(logPath, "utf-8").trim().split("\n");
-      assert.equal(calls.at(-1), "pr list --head agent/fix-lookup --state all --json url,number,title,state,headRepositoryOwner,headRefName --repo openai/codex");
+      assert.equal(calls.at(-1), "pr list --head agent/fix-lookup --state all --json url,number,title,state,headRepositoryOwner,headRefName,baseRefName --repo openai/codex");
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }
@@ -374,7 +374,7 @@ describe("syncWorktreePR", () => {
       syncWorktreePR(repoDir, "agent/fix-lookup");
 
       const calls = readFileSync(logPath, "utf-8").trim().split("\n");
-      assert.equal(calls.at(-1), "pr list --head agent/fix-lookup --state all --json url,number,title,state,headRepositoryOwner,headRefName");
+      assert.equal(calls.at(-1), "pr list --head agent/fix-lookup --state all --json url,number,title,state,headRepositoryOwner,headRefName,baseRefName");
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }
@@ -391,7 +391,7 @@ describe("syncWorktreePR", () => {
       syncWorktreePR(repoDir, "agent/fix-lookup", "openai/codex");
 
       const calls = readFileSync(logPath, "utf-8").trim().split("\n");
-      assert.equal(calls.at(-1), "pr list --head agent/fix-lookup --state all --json url,number,title,state,headRepositoryOwner,headRefName --repo openai/codex");
+      assert.equal(calls.at(-1), "pr list --head agent/fix-lookup --state all --json url,number,title,state,headRepositoryOwner,headRefName,baseRefName --repo openai/codex");
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }

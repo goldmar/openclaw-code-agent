@@ -14,6 +14,7 @@ export interface PRStatus {
   url?: string;
   number?: number;
   title?: string;
+  baseRefName?: string;
 }
 
 export interface CreatePROptions {
@@ -157,7 +158,7 @@ export function syncWorktreePR(repoDir: string, branchName: string, targetRepo?:
   }
 
   try {
-    const ghArgs = ["pr", "list", "--head", branchName, "--state", "all", "--json", "url,number,title,state,headRepositoryOwner,headRefName"];
+    const ghArgs = ["pr", "list", "--head", branchName, "--state", "all", "--json", "url,number,title,state,headRepositoryOwner,headRefName,baseRefName"];
     if (targetRepo) {
       ghArgs.push("--repo", targetRepo);
     }
@@ -180,6 +181,7 @@ export function syncWorktreePR(repoDir: string, branchName: string, targetRepo?:
       state: string;
       headRepositoryOwner?: { login?: string };
       headRefName?: string;
+      baseRefName?: string;
     }>;
     const expectedOwner = targetRepo ? inferOriginOwner(repoDir)?.toLowerCase() : undefined;
     const pr = expectedOwner
@@ -201,13 +203,17 @@ export function syncWorktreePR(repoDir: string, branchName: string, targetRepo?:
             ? "closed"
             : "none";
 
-    return {
+    const status: PRStatus = {
       exists: true,
       state,
       url: pr.url,
       number: pr.number,
       title: pr.title,
     };
+    if (pr.baseRefName !== undefined) {
+      status.baseRefName = pr.baseRefName;
+    }
+    return status;
   } catch (err) {
     console.warn(`[worktree] Failed to sync PR status for ${branchName}: ${err instanceof Error ? err.message : String(err)}`);
     return { exists: false, state: "none" };

@@ -258,6 +258,9 @@ export function formatWorktreePreserveReason(reason: string): string {
       if (reason.startsWith("released_by_branch:")) {
         return `represented by ${reason.slice("released_by_branch:".length)}`;
       }
+      if (reason.startsWith("represented_by_branch:")) {
+        return `represented by ${reason.slice("represented_by_branch:".length)}`;
+      }
       return reason.replaceAll("_", " ");
   }
 }

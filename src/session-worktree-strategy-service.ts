@@ -3,6 +3,7 @@ import type { NotificationButton } from "./session-interactions";
 import type { PersistedSessionInfo } from "./types";
 import type { RepoPolicyResolution } from "./repo-policy";
 import type { SessionNotificationRequest } from "./wake-dispatcher";
+import type { PRStatus } from "./worktree-pr";
 import type { WorktreeCompletionState } from "./session-worktree-controller";
 import { SessionWorktreeMessageService } from "./session-worktree-message-service";
 import { getPersistedMutationRefs, getPrimarySessionLookupRef, usesNativeBackendWorktree } from "./session-backend-ref";
@@ -28,6 +29,7 @@ import {
   formatWorktreeOutcomeLine,
   buildMergeWarningLines,
   appendMergeWarnings,
+  syncWorktreePR,
 } from "./worktree";
 
 export type WorktreeStrategyResult = {
@@ -68,6 +70,7 @@ export class SessionWorktreeStrategyService {
       makeOpenPrButton: (sessionId: string) => NotificationButton;
       isPrAvailable?: (repoDir: string) => boolean;
       hasOpenPrForBranch?: (repoDir: string, branchName: string, targetRepo?: string) => boolean;
+      getPrStatusForBranch?: (repoDir: string, branchName: string, targetRepo?: string) => PRStatus;
       resolveRepoPolicy?: (repoDir: string) => RepoPolicyResolution;
       worktreeSummaryProvider?: WorktreeDecisionSummaryProvider;
       worktreeMessages: SessionWorktreeMessageService;
@@ -769,7 +772,7 @@ export class SessionWorktreeStrategyService {
     baseBranch: string,
     allowedActions: AllowedWorktreeActions = { merge: true, pr: true },
   ): Promise<WorktreeStrategyResult> {
-    const representedRelease = this.releaseIfRepresentedByCurrentBranch(session, repoDir, worktreePath, branchName);
+    const representedRelease = this.releaseIfRepresentedByTargetPrBranch(session, repoDir, worktreePath, branchName, baseBranch);
     if (representedRelease) return representedRelease;
 
     this.updatePersistedSessionFor(session, {
@@ -778,7 +781,7 @@ export class SessionWorktreeStrategyService {
     });
     const result = await this.deps.runAutoPr(session, baseBranch);
     if (!result.success) {
-      const releasedAfterFailure = this.releaseIfRepresentedByCurrentBranch(session, repoDir, worktreePath, branchName);
+      const releasedAfterFailure = this.releaseIfRepresentedByTargetPrBranch(session, repoDir, worktreePath, branchName, baseBranch);
       if (releasedAfterFailure) return releasedAfterFailure;
       this.markPendingDecision(session);
       this.deps.dispatchSessionNotification(session, {
@@ -791,30 +794,47 @@ export class SessionWorktreeStrategyService {
     return { notificationSent: true, worktreeRemoved: false };
   }
 
-  private releaseIfRepresentedByCurrentBranch(
+  private getPrStatusForBranch(repoDir: string, branchName: string, targetRepo?: string): PRStatus {
+    return this.deps.getPrStatusForBranch?.(repoDir, branchName, targetRepo)
+      ?? syncWorktreePR(repoDir, branchName, targetRepo);
+  }
+
+  private releaseIfRepresentedByTargetPrBranch(
     session: Session,
     repoDir: string,
     worktreePath: string,
     branchName: string,
+    baseBranch: string,
   ): WorktreeStrategyResult | undefined {
-    const currentRepoBranch = getBranchName(repoDir);
-    const releasedByCurrentBranch = Boolean(
-      currentRepoBranch
-      && currentRepoBranch !== branchName
-      && isBranchAncestorOfBase(repoDir, branchName, currentRepoBranch)
-      && listDirtyWorktreeEntries(worktreePath).length === 0,
+    if (listDirtyWorktreeEntries(worktreePath).length > 0) return undefined;
+
+    const targetBranch = getBranchName(repoDir);
+    if (!targetBranch || targetBranch === branchName || targetBranch === baseBranch) return undefined;
+
+    const targetPrStatus = targetBranch
+      ? this.getPrStatusForBranch(repoDir, targetBranch, session.worktreePrTargetRepo)
+      : undefined;
+    const representedByTargetPrBranch = Boolean(
+      (targetPrStatus?.state === "open" || targetPrStatus?.state === "merged")
+      && targetPrStatus?.baseRefName === baseBranch
+      && isBranchAncestorOfBase(repoDir, branchName, targetBranch)
     );
-    if (!releasedByCurrentBranch || !currentRepoBranch) return undefined;
+    if (!representedByTargetPrBranch) return undefined;
 
     const removed = usesNativeBackendWorktree(session)
       ? true
       : removeWorktree(repoDir, worktreePath);
-    if (removed) {
-      session.worktreePath = undefined;
-      this.updatePersistedSessionFor(session, { worktreePath: undefined });
+    if (!removed) {
+      this.markPendingDecision(session, {
+        notes: [`represented_by_branch:${targetBranch}`, "represented_worktree_cleanup_failed"],
+      });
+      return { notificationSent: false, worktreeRemoved: false };
     }
+
+    session.worktreePath = undefined;
+    this.updatePersistedSessionFor(session, { worktreePath: undefined });
     deleteBranch(repoDir, branchName);
-    this.markReleased(session, [`released_by_branch:${currentRepoBranch}`]);
+    this.markReleased(session, [`released_by_branch:${targetBranch}`]);
     return { notificationSent: false, worktreeRemoved: removed };
   }
 }

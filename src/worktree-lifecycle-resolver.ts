@@ -78,7 +78,7 @@ export function resolveWorktreeLifecycle(
   let dirtyWorktreeEntries = false;
   let topologyMerged = false;
   let releaseNoopMerge = false;
-  let representedByCurrentBranch = false;
+  let representedByTargetPrBranch = false;
   let branchAheadCount: number | undefined;
   let baseAheadCount: number | undefined;
   let prState: WorktreeRepositoryEvidence["prState"] = "none";
@@ -131,14 +131,17 @@ export function resolveWorktreeLifecycle(
       }
     }
     const currentRepoBranch = getBranchName(workdir);
-    representedByCurrentBranch = Boolean(
-      currentRepoBranch
-      && currentRepoBranch !== branchName
-      && isBranchAncestorOfBase(workdir, branchName, currentRepoBranch)
-    );
-    if (representedByCurrentBranch) {
-      reasons.delete("unique_content");
-      reasons.add(`released_by_branch:${currentRepoBranch}`);
+    if (options.includePrSync && currentRepoBranch && currentRepoBranch !== branchName && currentRepoBranch !== baseBranch) {
+      const currentPrStatus = syncWorktreePR(workdir, currentRepoBranch, session.worktreePrTargetRepo ?? lifecycle.targetRepo);
+      representedByTargetPrBranch = Boolean(
+        (currentPrStatus.state === "open" || currentPrStatus.state === "merged")
+        && currentPrStatus.baseRefName === baseBranch
+        && isBranchAncestorOfBase(workdir, branchName, currentRepoBranch)
+      );
+      if (representedByTargetPrBranch) {
+        reasons.delete("unique_content");
+        reasons.add(`released_by_branch:${currentRepoBranch}`);
+      }
     }
   } else if (!baseBranch) {
     reasons.add("base_branch_missing");
@@ -159,7 +162,7 @@ export function resolveWorktreeLifecycle(
   let repositoryDerivedState: ManagedWorktreeLifecycleState | undefined;
   if (topologyMerged) {
     repositoryDerivedState = "merged";
-  } else if (releaseNoopMerge || representedByCurrentBranch) {
+  } else if (releaseNoopMerge || representedByTargetPrBranch) {
     repositoryDerivedState = "released";
   }
 
@@ -196,7 +199,7 @@ export function resolveWorktreeLifecycle(
     dirtyTracked: dirtyWorktreeEntries,
     topologyMerged,
     releaseNoopMerge,
-    representedByCurrentBranch,
+    representedByTargetPrBranch,
     branchAheadCount,
     baseAheadCount,
     prState,
