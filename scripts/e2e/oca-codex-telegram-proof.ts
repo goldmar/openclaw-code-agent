@@ -366,7 +366,7 @@ export function collectDoctorChecks(opts: Options): DoctorCheck[] {
 
 function writeJson(file: string, value: unknown): void {
   mkdirSync(path.dirname(file), { recursive: true });
-  writeFileSync(file, redactProofText(`${JSON.stringify(redactProofValue(value), null, 2)}\n`));
+  writeFileSync(file, `${JSON.stringify(redactProofValue(value), null, 2)}\n`);
 }
 
 function redactProofText(value: string): string {
@@ -384,6 +384,28 @@ function redactProofText(value: string): string {
 function writeRedactedText(file: string, value: string): void {
   mkdirSync(path.dirname(file), { recursive: true });
   writeFileSync(file, redactProofText(value));
+}
+
+function writeRedactedJsonText(file: string, value: string): void {
+  try {
+    writeJson(file, JSON.parse(value));
+  } catch {
+    writeRedactedText(file, value);
+  }
+}
+
+function writeRedactedJsonLines(file: string, value: string): void {
+  mkdirSync(path.dirname(file), { recursive: true });
+  const lines = value.split(/\r?\n/u);
+  const redacted = lines.map((line) => {
+    if (!line.trim()) return line;
+    try {
+      return JSON.stringify(redactProofValue(JSON.parse(line)));
+    } catch {
+      return redactProofText(line);
+    }
+  });
+  writeFileSync(file, redacted.join("\n"));
 }
 
 function relativeArtifact(file: string): string {
@@ -729,7 +751,10 @@ export function stagePublicArtifacts(outputDir: string): string {
     }
     if (!STAGED_PUBLIC_TEXT_ARTIFACTS.has(name)) continue;
     const target = path.join(staged, name);
-    writeRedactedText(target, readFileSync(source, "utf8"));
+    const text = readFileSync(source, "utf8");
+    if (name.endsWith(".json")) writeRedactedJsonText(target, text);
+    else if (name.endsWith(".jsonl")) writeRedactedJsonLines(target, text);
+    else writeRedactedText(target, text);
   }
   if (omittedPrivateArtifacts.length > 0) {
     writeJson(path.join(staged, "omitted-private-artifacts.json"), {

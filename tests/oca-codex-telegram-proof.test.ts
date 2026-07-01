@@ -163,7 +163,16 @@ describe("OCA Codex Telegram proof runner", () => {
     const artifactDir = join(repoRoot, outputDir);
     try {
       mkdirSync(artifactDir, { recursive: true });
-      writeFileSync(join(artifactDir, "summary.json"), "{}");
+      writeFileSync(
+        join(artifactDir, "summary.json"),
+        JSON.stringify({
+          secret: "super-secret",
+          password: "hunter2",
+          apiKey: "abc123",
+          credential: "lease-secret",
+          error: "forced failure token=inline-secret",
+        }),
+      );
       writeFileSync(join(artifactDir, "harness-messages.redacted.json"), "[]");
       writeFileSync(join(artifactDir, "mantis-evidence.json"), '{"note":"apiKey=abc123 credential=lease-secret"}');
       writeFileSync(join(artifactDir, "oca-codex-telegram-proof.md"), 'secret=super-secret password: hunter2 authorization: "Bearer abc123"');
@@ -183,6 +192,9 @@ describe("OCA Codex Telegram proof runner", () => {
       assert.equal(existsSync(join(staged, "mantis-evidence.json")), true);
       assert.equal(existsSync(join(staged, "oca-codex-telegram-proof.md")), true);
       assert.equal(existsSync(join(staged, "telegram-desktop.log")), true);
+      const stagedSummary = readFileSync(join(staged, "summary.json"), "utf8");
+      assert.doesNotThrow(() => JSON.parse(stagedSummary));
+      assert.doesNotMatch(stagedSummary, /super-secret|hunter2|abc123|lease-secret|inline-secret/);
       const stagedLog = readFileSync(join(staged, "telegram-desktop.log"), "utf8");
       assert.doesNotMatch(stagedLog, /123456789:abcdefghijklmnopqrstuvwxyzABCDE/);
       assert.doesNotMatch(stagedLog, /qa_secret_user/);
@@ -357,7 +369,7 @@ describe("OCA Codex Telegram proof runner", () => {
         },
         async startCrabboxDesktop() {
           events.push("start-crabbox");
-          throw new Error("crabbox unavailable");
+          throw new Error("crabbox unavailable token=inline-secret");
         },
         async captureEvidence() {
           events.push("capture");
@@ -378,6 +390,9 @@ describe("OCA Codex Telegram proof runner", () => {
       assert.match(String(result.error), /crabbox unavailable/);
       assert.deepEqual(events, ["acquire", "start-sut", "start-crabbox", "stop-sut", "release"]);
       assert.equal(existsSync(join(repoRoot, outputDir, ".session")), false);
+      const summaryText = readFileSync(join(artifactDir, "summary.json"), "utf8");
+      assert.doesNotThrow(() => JSON.parse(summaryText));
+      assert.doesNotMatch(summaryText, /inline-secret/);
       const manifest = JSON.parse(readFileSync(join(artifactDir, "mantis-evidence.json"), "utf8")) as {
         comparison?: { pass?: boolean; candidate?: { status?: string } };
       };
