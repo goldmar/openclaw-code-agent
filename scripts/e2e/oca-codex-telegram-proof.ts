@@ -373,6 +373,7 @@ function writeJson(file: string, value: unknown): void {
 function redactProofText(value: string): string {
   return String(redactProofValue(value))
     .replace(/"((?:sut|tester)?Username|groupId|testerUserId|credentialId|ownerId)"\s*:\s*"[^"]*"/giu, '"$1": "[redacted id]"')
+    .replace(/(?:\/private\/tmp|\/var\/folders|\/tmp)\/[^\s"'<>),\]]+/gu, "[redacted path]")
     .replace(/\b\d{7,}:[A-Za-z0-9_-]{20,}\b/gu, "[redacted credential]")
     .replace(/\b\d{6,}\b/gu, "[redacted id]")
     .replace(/@[A-Za-z][A-Za-z0-9_]{4,}\b/gu, "@[redacted username]")

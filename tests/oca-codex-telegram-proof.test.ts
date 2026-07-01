@@ -165,7 +165,10 @@ describe("OCA Codex Telegram proof runner", () => {
       mkdirSync(artifactDir, { recursive: true });
       writeFileSync(join(artifactDir, "summary.json"), "{}");
       writeFileSync(join(artifactDir, "harness-messages.redacted.json"), "[]");
-      writeFileSync(join(artifactDir, "telegram-desktop.log"), "token 123456789:abcdefghijklmnopqrstuvwxyzABCDE user @qa_secret_user group -1003863755361");
+      writeFileSync(
+        join(artifactDir, "telegram-desktop.log"),
+        "token 123456789:abcdefghijklmnopqrstuvwxyzABCDE user @qa_secret_user group -1003863755361 file /tmp/oca-proof/session.log home /home/runner/work/openclaw-code-agent/proof.log",
+      );
       writeFileSync(join(artifactDir, "session.json"), '{"secret":"x"}');
       writeFileSync(join(artifactDir, "lease.json"), '{"secret":"x"}');
       writeFileSync(join(artifactDir, "telegram-user-payload.json"), '{"secret":"x"}');
@@ -179,6 +182,8 @@ describe("OCA Codex Telegram proof runner", () => {
       assert.doesNotMatch(stagedLog, /123456789:abcdefghijklmnopqrstuvwxyzABCDE/);
       assert.doesNotMatch(stagedLog, /qa_secret_user/);
       assert.doesNotMatch(stagedLog, /-1003863755361/);
+      assert.doesNotMatch(stagedLog, /\/tmp\/oca-proof/);
+      assert.doesNotMatch(stagedLog, /\/home\/runner\/work/);
       assert.equal(existsSync(join(staged, "session.json")), false);
       assert.equal(existsSync(join(staged, "lease.json")), false);
       assert.equal(existsSync(join(staged, "telegram-user-payload.json")), false);
@@ -261,7 +266,7 @@ describe("OCA Codex Telegram proof runner", () => {
           const publicLog = join(absoluteOutputDir, "telegram-desktop.log");
           const publicPng = join(absoluteOutputDir, "telegram-desktop.png");
           const privateSession = join(absoluteOutputDir, "session.json");
-          writeFileSync(publicLog, "token 123456789:abcdefghijklmnopqrstuvwxyzABCDE user @qa_secret_user group -1003863755361");
+          writeFileSync(publicLog, "token 123456789:abcdefghijklmnopqrstuvwxyzABCDE user @qa_secret_user group -1003863755361 path /tmp/openclaw-proof/desktop.log");
           writeFileSync(publicPng, "fake png");
           writeFileSync(privateSession, '{"botToken":"123456789:abcdefghijklmnopqrstuvwxyzABCDE"}');
           return [
@@ -297,6 +302,7 @@ describe("OCA Codex Telegram proof runner", () => {
       assert.doesNotMatch(stagedLog, /123456789:abcdefghijklmnopqrstuvwxyzABCDE/);
       assert.doesNotMatch(stagedLog, /qa_secret_user/);
       assert.doesNotMatch(stagedLog, /-1003863755361/);
+      assert.doesNotMatch(stagedLog, /\/tmp\/openclaw-proof/);
     } finally {
       if (original === undefined) delete process.env.OPENCLAW_RUN_LIVE_TELEGRAM_PROOF;
       else process.env.OPENCLAW_RUN_LIVE_TELEGRAM_PROOF = original;
