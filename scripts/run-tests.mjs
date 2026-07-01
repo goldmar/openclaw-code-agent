@@ -45,12 +45,16 @@ for (const file of files) {
     OPENCLAW_CODE_AGENT_SESSIONS_PATH: join(testHome, "code-agent-sessions.json"),
   };
 
-  const result = spawnSync(process.execPath, ["--import", "tsx", "--test", file], {
-    cwd,
-    stdio: "inherit",
-    env,
-  });
-  rmSync(testHome, { recursive: true, force: true });
+  let result;
+  try {
+    result = spawnSync(process.execPath, ["--import", "tsx", "--test", file], {
+      cwd,
+      stdio: "inherit",
+      env,
+    });
+  } finally {
+    rmSync(testHome, { recursive: true, force: true });
+  }
 
   if (result.status !== 0) {
     failures.push({ file, status: result.status ?? 1 });
