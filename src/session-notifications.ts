@@ -5,6 +5,7 @@ import type { Session } from "./session";
 import { getBackendConversationId, getPrimarySessionLookupRef } from "./session-backend-ref";
 import { formatOriginRouteWakeBlock } from "./session-route";
 import { buildWorktreeOutcomeFollowupWake } from "./session-notification-builder";
+import { formatSessionStatsSuffix, type SessionNotificationStats } from "./session-notification-stats";
 import { NotificationDedupeCoordinator } from "./notification-dedupe";
 import { resolveNotificationRoute } from "./session-route";
 import { areButtonDiagnosticsEnabled } from "./button-diagnostics";
@@ -15,7 +16,17 @@ import {
 
 type RoutableSession = Pick<
   Session,
-  "id" | "harnessSessionId" | "backendRef" | "route" | "originChannel" | "originThreadId" | "originSessionKey"
+  | "id"
+  | "harnessSessionId"
+  | "backendRef"
+  | "route"
+  | "originChannel"
+  | "originThreadId"
+  | "originSessionKey"
+  | "costUsd"
+  | "duration"
+  | "harnessName"
+  | "model"
 > & {
   name?: string;
   goalTaskId?: string;
@@ -32,8 +43,13 @@ type PersistedRoutingSession = Pick<
   | "originThreadId"
   | "originSessionKey"
   | "goalTaskId"
+  | "costUsd"
+  | "createdAt"
+  | "completedAt"
+  | "model"
 > & {
   id?: string;
+  harnessName?: string;
 };
 
 export interface WorktreeOutcomeNotificationOptions {
@@ -291,10 +307,11 @@ export class SessionNotificationService {
     options: WorktreeOutcomeNotificationOptions = {},
   ): void {
     const sessionId = this.getDeliveryRef(session);
+    const outcomeUserMessage = appendSessionStatsSuffix(outcomeLine, session);
     const buildWakeMessage = (canonicalStatusDelivered: boolean): string => buildWorktreeOutcomeFollowupWake({
       sessionId,
       sessionName: session.name,
-      outcomeLine,
+      outcomeLine: outcomeUserMessage,
       originThreadLine: formatOriginRouteWakeBlock(session),
       detailLines: options.detailLines,
       canonicalStatusDelivered,
@@ -320,7 +337,7 @@ export class SessionNotificationService {
     }
     this.dispatch(session, {
       label: "worktree-outcome",
-      userMessage: outcomeLine,
+      userMessage: outcomeUserMessage,
       notifyUser: "always",
       requireDirectUserNotification: true,
       completionSummary: {
@@ -552,4 +569,9 @@ export class SessionNotificationService {
   private digest(value: string): string {
     return createHash("sha256").update(value).digest("hex").slice(0, 16);
   }
+}
+
+function appendSessionStatsSuffix(line: string, stats: SessionNotificationStats): string {
+  const suffix = formatSessionStatsSuffix(stats);
+  return suffix ? `${line}${suffix}` : line;
 }

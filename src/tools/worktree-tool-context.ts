@@ -24,6 +24,11 @@ export interface ResolvedWorktreeToolTarget {
     originThreadId?: string | number;
     originSessionKey?: string;
     goalTaskId?: string;
+    costUsd?: number;
+    createdAt?: number;
+    completedAt?: number;
+    harnessName?: string;
+    model?: string;
   };
 }
 
@@ -54,6 +59,11 @@ export function resolveWorktreeToolTarget(sessionManager: SessionManager, ref: s
           originThreadId: persistedSession.originThreadId,
           originSessionKey: persistedSession.originSessionKey,
           goalTaskId: persistedSession.goalTaskId,
+          costUsd: persistedSession.costUsd,
+          createdAt: persistedSession.createdAt,
+          completedAt: persistedSession.completedAt,
+          harnessName: persistedSession.harness,
+          model: persistedSession.model,
         }
       : undefined),
   };

@@ -4,6 +4,78 @@ import { SessionNotificationService } from "../src/session-notifications";
 import { SessionWorktreeMessageService } from "../src/session-worktree-message-service";
 
 describe("SessionNotificationService", () => {
+  it("appends session stats to PR opened and updated worktree notifications while preserving raw URLs", () => {
+    const requests: Array<Record<string, unknown>> = [];
+    const fakeDispatcher = {
+      dispatchSessionNotification: (_session: unknown, request: Record<string, unknown>) => {
+        requests.push(request);
+      },
+      dispose: () => {},
+    };
+    const service = new SessionNotificationService(fakeDispatcher as any, () => {});
+    const session = {
+      id: "session-pr-stats",
+      name: "pr-stats",
+      harnessSessionId: "h-pr-stats",
+      costUsd: 0,
+      duration: 1_440_000,
+      harnessName: "codex",
+      model: "gpt-5.5",
+    } as any;
+
+    service.notifyWorktreeOutcome(
+      session,
+      "✅ PR opened: https://github.com/goldmar/openclaw-code-agent/pull/325",
+      { completionWakeOutcomeKey: "worktree-pr:opened:325" },
+    );
+    service.notifyWorktreeOutcome(
+      session,
+      "✅ PR updated: https://github.com/goldmar/openclaw-code-agent/pull/325",
+      { completionWakeOutcomeKey: "worktree-pr:updated:325" },
+    );
+
+    assert.equal(
+      requests[0]?.userMessage,
+      "✅ PR opened: https://github.com/goldmar/openclaw-code-agent/pull/325 | $0.00 | 24m0s | codex | gpt-5.5",
+    );
+    assert.equal(
+      requests[1]?.userMessage,
+      "✅ PR updated: https://github.com/goldmar/openclaw-code-agent/pull/325 | $0.00 | 24m0s | codex | gpt-5.5",
+    );
+    assert.doesNotMatch(String(requests[0]?.wakeMessageOnNotifySuccess), /https:\/\/github\.com\/goldmar\/openclaw-code-agent\/pull\/325/);
+    assert.match(String(requests[0]?.wakeMessageOnNotifySuccess), /PR #325 \| \$0\.00 \| 24m0s \| codex \| gpt-5\.5/);
+  });
+
+  it("appends session stats to merge worktree notifications", () => {
+    const requests: Array<Record<string, unknown>> = [];
+    const fakeDispatcher = {
+      dispatchSessionNotification: (_session: unknown, request: Record<string, unknown>) => {
+        requests.push(request);
+      },
+      dispose: () => {},
+    };
+    const service = new SessionNotificationService(fakeDispatcher as any, () => {});
+
+    service.notifyWorktreeOutcome(
+      {
+        id: "session-merge-stats",
+        name: "merge-stats",
+        harnessSessionId: "h-merge-stats",
+        costUsd: 1.5,
+        createdAt: 1_780_000_000_000,
+        completedAt: 1_780_000_061_000,
+        harnessName: "codex",
+        model: "gpt-5.5",
+      } as any,
+      "✅ Merged: agent/example → main (7 files, +792/-100)",
+    );
+
+    assert.equal(
+      requests[0]?.userMessage,
+      "✅ Merged: agent/example → main (7 files, +792/-100) | $1.50 | 1m1s | codex | gpt-5.5",
+    );
+  });
+
   it("marks notify-only deliveries as notifying then idle on success", () => {
     const patches: Array<{ ref: string; deliveryState?: string }> = [];
     const fakeDispatcher = {
@@ -297,6 +369,31 @@ describe("SessionNotificationService", () => {
     assert.deepEqual(wakeSucceeded, ["worktree-no-changes", "worktree-no-changes"]);
     assert.equal(persisted.notificationDedupe?.length, 2);
     assert.equal(persisted.notificationDedupe?.every((record: { status?: string }) => record.status === "delivered"), true);
+  });
+
+  it("appends session stats to no-change worktree terminal notifications", () => {
+    const worktreeMessages = new SessionWorktreeMessageService();
+    const request = worktreeMessages.buildNoChangeNotification({
+      session: {
+        id: "session-no-change-stats",
+        name: "no-change-stats",
+        startedAt: 1_780_000_000_000,
+        completedAt: 1_780_000_061_000,
+        costUsd: 0.25,
+        harnessName: "codex",
+        model: "gpt-5.5",
+      } as any,
+      nativeBackendWorktree: false,
+      cleanupSucceeded: true,
+      worktreePath: "/tmp/oca/no-change-stats",
+      worktreeBranch: "agent/no-change-stats",
+      preview: "Nothing changed.",
+    });
+
+    assert.equal(
+      request.userMessage,
+      "ℹ️ [no-change-stats] Session completed with no worktree changes to merge — worktree cleaned up | $0.25 | 1m1s | codex | gpt-5.5",
+    );
   });
 
   it("dedupes a no-change worktree retry when only completedAt changes", () => {

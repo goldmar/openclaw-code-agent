@@ -5,6 +5,7 @@ import {
   buildDelegateWorktreeWakeMessage,
   buildNoChangeWakeMessage,
 } from "./session-notification-builder";
+import { formatSessionStatsSuffix } from "./session-notification-stats";
 
 type DiffSummary = {
   commits: number;
@@ -34,6 +35,10 @@ export class SessionWorktreeMessageService {
       | "approvalPromptMessageKind"
       | "approvalPromptDeliveredAt"
       | "startedAt"
+      | "completedAt"
+      | "costUsd"
+      | "harnessName"
+      | "model"
     >;
     nativeBackendWorktree: boolean;
     cleanupSucceeded: boolean;
@@ -64,6 +69,12 @@ export class SessionWorktreeMessageService {
         ? "native backend worktree released for backend cleanup"
         : "worktree cleaned up"
       : `cleanup failed; worktree still exists at ${worktreePath}`);
+    const statSuffix = formatSessionStatsSuffix({
+      costUsd: session.costUsd,
+      duration: typeof session.completedAt === "number" ? session.completedAt - session.startedAt : undefined,
+      harnessName: session.harnessName,
+      model: session.model,
+    });
 
     return {
       label: preservedSummary
@@ -71,12 +82,12 @@ export class SessionWorktreeMessageService {
         : cleanupSucceeded ? "worktree-no-changes" : "worktree-no-changes-cleanup-failed",
       idempotencyKey: `worktree-no-change:${session.id}:${cleanupState}:${terminalCycleKey}`,
       userMessage: preservedSummary
-        ? `ℹ️ [${session.name}] Session completed with no worktree changes to merge — ${preservedSummary}`
+        ? `ℹ️ [${session.name}] Session completed with no worktree changes to merge — ${preservedSummary}${statSuffix}`
         : cleanupSucceeded
         ? nativeBackendWorktree
-          ? `ℹ️ [${session.name}] Session completed with no worktree changes to merge — native backend worktree released for backend cleanup`
-          : `ℹ️ [${session.name}] Session completed with no worktree changes to merge — worktree cleaned up`
-        : `⚠️ [${session.name}] Session completed with no worktree changes to merge, but worktree cleanup failed. Worktree still exists at ${worktreePath}`,
+          ? `ℹ️ [${session.name}] Session completed with no worktree changes to merge — native backend worktree released for backend cleanup${statSuffix}`
+          : `ℹ️ [${session.name}] Session completed with no worktree changes to merge — worktree cleaned up${statSuffix}`
+        : `⚠️ [${session.name}] Session completed with no worktree changes to merge, but worktree cleanup failed. Worktree still exists at ${worktreePath}${statSuffix}`,
       wakeMessage: buildNoChangeWakeMessage({
         sessionName: session.name,
         sessionId: session.id,
