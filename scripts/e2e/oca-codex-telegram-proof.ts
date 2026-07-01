@@ -445,7 +445,9 @@ async function defaultLiveDeps(): Promise<NativeProofDeps> {
       throw new Error("Native Telegram Desktop capture is intentionally not implemented without the OpenClaw proof runner bridge.");
     },
     async releaseCredentialLease(lease, opts) {
-      if (!existsSync(lease.leaseFile)) return;
+      if (!existsSync(lease.leaseFile)) {
+        throw new Error(`telegram-user lease file is missing; cannot safely release credential: ${lease.leaseFile}`);
+      }
       const result = spawnSync(process.execPath, liveCommandArgs(opts, "release", ["--lease-file", lease.leaseFile]), {
         cwd: REPO_ROOT,
         encoding: "utf8",
@@ -505,7 +507,7 @@ export async function runNativeProof(
       await orchestrator.stopLocalSut(session.localSut!, opts);
     });
     session.crabbox = await orchestrator.startCrabboxDesktop(opts);
-    if (session.crabbox.createdLease && !opts.keepBox) {
+    if (!opts.keepBox) {
       cleanup.push(async () => {
         await orchestrator.stopCrabboxDesktop(session.crabbox!, opts);
       });
@@ -551,13 +553,14 @@ export async function runNativeProof(
       ok: result.ok,
       cleanupErrors,
       error: result.error,
+      sessionRetainedForCleanup: cleanupErrors.length > 0,
       plan,
       session,
       artifacts: publicArtifacts.map((artifact) => ({ ...artifact, path: relativeArtifact(artifact.path) })),
       privateArtifactCount: artifacts.length - publicArtifacts.length,
     };
     writeJson(path.join(outputDir, "summary.json"), summary);
-    writeJson(path.join(outputDir, "mantis-evidence.json"), proofManifest(plan, publicArtifacts));
+    writeJson(path.join(outputDir, "mantis-evidence.json"), proofManifest(plan, publicArtifacts, result.ok));
     writeRedactedText(
       path.join(outputDir, "oca-codex-telegram-proof.md"),
       [
@@ -569,7 +572,9 @@ export async function runNativeProof(
         "",
       ].join("\n"),
     );
-    rmSync(sessionDir, { recursive: true, force: true });
+    if (cleanupErrors.length === 0) {
+      rmSync(sessionDir, { recursive: true, force: true });
+    }
   }
   return result;
 }
@@ -672,6 +677,7 @@ export async function runLocalSmoke(opts: Options): Promise<Record<string, unkno
         "",
       ].join("\n"),
     );
+    stagePublicArtifacts(opts.outputDir);
     return summary;
   } finally {
     if (originalEnv.command === undefined) delete process.env.OPENCLAW_CODEX_APP_SERVER_COMMAND;
@@ -716,7 +722,7 @@ export function stagePublicArtifacts(outputDir: string): string {
   return staged;
 }
 
-function proofManifest(plan: ProofPlan, artifacts: EvidenceArtifact[] = []): Record<string, unknown> {
+function proofManifest(plan: ProofPlan, artifacts: EvidenceArtifact[] = [], pass = true): Record<string, unknown> {
   return {
     schemaVersion: 1,
     id: "oca-codex-telegram-proof",
@@ -728,9 +734,9 @@ function proofManifest(plan: ProofPlan, artifacts: EvidenceArtifact[] = []): Rec
     comparison: {
       candidate: {
         expected: "Codex harness proof command surface is ready",
-        status: "skipped",
+        status: pass ? "pass" : "fail",
       },
-      pass: true,
+      pass,
     },
     artifacts: artifacts.map((artifact) => ({
       kind: artifact.kind,

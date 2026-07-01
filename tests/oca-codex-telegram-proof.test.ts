@@ -129,6 +129,7 @@ describe("OCA Codex Telegram proof runner", () => {
       assert.equal(messageTypes.at(-1), "run_completed");
       const summaryPath = join(repoRoot, outputDir, "summary.json");
       assert.equal(existsSync(summaryPath), true);
+      assert.equal(existsSync(join(repoRoot, outputDir, "public-artifacts", "summary.json")), true);
       const summaryText = readFileSync(summaryPath, "utf8");
       assert.match(summaryText, /worktree/);
       assert.doesNotMatch(summaryText, /\/(?:home|tmp)\/[^"]+/);
@@ -164,6 +165,7 @@ describe("OCA Codex Telegram proof runner", () => {
       mkdirSync(artifactDir, { recursive: true });
       writeFileSync(join(artifactDir, "summary.json"), "{}");
       writeFileSync(join(artifactDir, "harness-messages.redacted.json"), "[]");
+      writeFileSync(join(artifactDir, "telegram-desktop.log"), "token 123456789:abcdefghijklmnopqrstuvwxyzABCDE user @qa_secret_user group -1003863755361");
       writeFileSync(join(artifactDir, "session.json"), '{"secret":"x"}');
       writeFileSync(join(artifactDir, "lease.json"), '{"secret":"x"}');
       writeFileSync(join(artifactDir, "telegram-user-payload.json"), '{"secret":"x"}');
@@ -172,6 +174,11 @@ describe("OCA Codex Telegram proof runner", () => {
 
       assert.equal(existsSync(join(staged, "summary.json")), true);
       assert.equal(existsSync(join(staged, "harness-messages.redacted.json")), true);
+      assert.equal(existsSync(join(staged, "telegram-desktop.log")), true);
+      const stagedLog = readFileSync(join(staged, "telegram-desktop.log"), "utf8");
+      assert.doesNotMatch(stagedLog, /123456789:abcdefghijklmnopqrstuvwxyzABCDE/);
+      assert.doesNotMatch(stagedLog, /qa_secret_user/);
+      assert.doesNotMatch(stagedLog, /-1003863755361/);
       assert.equal(existsSync(join(staged, "session.json")), false);
       assert.equal(existsSync(join(staged, "lease.json")), false);
       assert.equal(existsSync(join(staged, "telegram-user-payload.json")), false);
@@ -286,6 +293,10 @@ describe("OCA Codex Telegram proof runner", () => {
       const staged = stagePublicArtifacts(outputDir);
       assert.equal(existsSync(join(staged, "telegram-desktop.png")), true);
       assert.equal(existsSync(join(staged, "session.json")), false);
+      const stagedLog = readFileSync(join(staged, "telegram-desktop.log"), "utf8");
+      assert.doesNotMatch(stagedLog, /123456789:abcdefghijklmnopqrstuvwxyzABCDE/);
+      assert.doesNotMatch(stagedLog, /qa_secret_user/);
+      assert.doesNotMatch(stagedLog, /-1003863755361/);
     } finally {
       if (original === undefined) delete process.env.OPENCLAW_RUN_LIVE_TELEGRAM_PROOF;
       else process.env.OPENCLAW_RUN_LIVE_TELEGRAM_PROOF = original;
@@ -346,6 +357,131 @@ describe("OCA Codex Telegram proof runner", () => {
       assert.match(String(result.error), /crabbox unavailable/);
       assert.deepEqual(events, ["acquire", "start-sut", "start-crabbox", "stop-sut", "release"]);
       assert.equal(existsSync(join(repoRoot, outputDir, ".session")), false);
+      const manifest = JSON.parse(readFileSync(join(artifactDir, "mantis-evidence.json"), "utf8")) as {
+        comparison?: { pass?: boolean; candidate?: { status?: string } };
+      };
+      assert.equal(manifest.comparison?.pass, false);
+      assert.equal(manifest.comparison?.candidate?.status, "fail");
+    } finally {
+      if (original === undefined) delete process.env.OPENCLAW_RUN_LIVE_TELEGRAM_PROOF;
+      else process.env.OPENCLAW_RUN_LIVE_TELEGRAM_PROOF = original;
+      rmSync(artifactDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports missing lease files as cleanup failures and preserves the session directory", async () => {
+    const original = process.env.OPENCLAW_RUN_LIVE_TELEGRAM_PROOF;
+    const outputDir = join(".artifacts", "qa-e2e", "oca-codex-telegram", `missing-lease-${Date.now()}`);
+    const artifactDir = join(repoRoot, outputDir);
+    try {
+      process.env.OPENCLAW_RUN_LIVE_TELEGRAM_PROOF = "1";
+      const result = await runNativeProof(parseArgs([
+        "run",
+        "--allow-live",
+        "--output-dir",
+        outputDir,
+      ]), {
+        async acquireCredentialLease(_opts, sessionDir) {
+          return {
+            credentialId: "credential-1",
+            desktopWorkdir: join(sessionDir, "desktop"),
+            groupId: "-1001234567890",
+            leaseFile: join(sessionDir, "missing-lease.json"),
+            ownerId: "owner",
+            testerUserId: "123456789",
+            testerUsername: "tester",
+            userDriverDir: join(sessionDir, "user-driver"),
+          };
+        },
+        async startLocalSut() {
+          return { gatewayPort: 38975, isolatedHome: "/tmp/openclaw-proof-home" };
+        },
+        async startCrabboxDesktop() {
+          return { createdLease: true, id: "cbx-secret-123456789", provider: "local-container", target: "linux" };
+        },
+        async captureEvidence() {
+          return [];
+        },
+        async stopCrabboxDesktop() {},
+        async stopLocalSut() {},
+        async releaseCredentialLease(lease) {
+          if (!existsSync(lease.leaseFile)) {
+            throw new Error("telegram-user lease file is missing; cannot safely release credential");
+          }
+        },
+      });
+
+      assert.equal(result.ok, false);
+      const summary = JSON.parse(readFileSync(join(artifactDir, "summary.json"), "utf8")) as {
+        cleanupErrors?: string[];
+        sessionRetainedForCleanup?: boolean;
+      };
+      assert.equal(summary.sessionRetainedForCleanup, true);
+      assert.match(String(summary.cleanupErrors?.[0]), /lease file is missing/);
+      assert.equal(existsSync(join(artifactDir, ".session")), true);
+      const manifest = JSON.parse(readFileSync(join(artifactDir, "mantis-evidence.json"), "utf8")) as {
+        comparison?: { pass?: boolean };
+      };
+      assert.equal(manifest.comparison?.pass, false);
+    } finally {
+      if (original === undefined) delete process.env.OPENCLAW_RUN_LIVE_TELEGRAM_PROOF;
+      else process.env.OPENCLAW_RUN_LIVE_TELEGRAM_PROOF = original;
+      rmSync(artifactDir, { recursive: true, force: true });
+    }
+  });
+
+  it("stops a started reusable desktop unless keep-box is requested", async () => {
+    const original = process.env.OPENCLAW_RUN_LIVE_TELEGRAM_PROOF;
+    const outputDir = join(".artifacts", "qa-e2e", "oca-codex-telegram", `reusable-desktop-${Date.now()}`);
+    const artifactDir = join(repoRoot, outputDir);
+    const events: string[] = [];
+    try {
+      process.env.OPENCLAW_RUN_LIVE_TELEGRAM_PROOF = "1";
+      const result = await runNativeProof(parseArgs([
+        "run",
+        "--allow-live",
+        "--output-dir",
+        outputDir,
+      ]), {
+        async acquireCredentialLease(_opts, sessionDir) {
+          const leaseFile = join(sessionDir, "lease.json");
+          writeFileSync(leaseFile, "{}");
+          return {
+            credentialId: "credential-1",
+            desktopWorkdir: join(sessionDir, "desktop"),
+            groupId: "-1001234567890",
+            leaseFile,
+            ownerId: "owner",
+            testerUserId: "123456789",
+            testerUsername: "tester",
+            userDriverDir: join(sessionDir, "user-driver"),
+          };
+        },
+        async startLocalSut() {
+          events.push("start-sut");
+          return { gatewayPort: 38975, isolatedHome: "/tmp/openclaw-proof-home" };
+        },
+        async startCrabboxDesktop() {
+          events.push("start-crabbox");
+          return { createdLease: false, id: "reused-desktop", provider: "local-container", target: "linux" };
+        },
+        async captureEvidence() {
+          events.push("capture");
+          return [];
+        },
+        async stopCrabboxDesktop() {
+          events.push("stop-crabbox");
+        },
+        async stopLocalSut() {
+          events.push("stop-sut");
+        },
+        async releaseCredentialLease() {
+          events.push("release");
+        },
+      });
+
+      assert.equal(result.ok, true);
+      assert.deepEqual(events, ["start-sut", "start-crabbox", "capture", "stop-crabbox", "stop-sut", "release"]);
     } finally {
       if (original === undefined) delete process.env.OPENCLAW_RUN_LIVE_TELEGRAM_PROOF;
       else process.env.OPENCLAW_RUN_LIVE_TELEGRAM_PROOF = original;

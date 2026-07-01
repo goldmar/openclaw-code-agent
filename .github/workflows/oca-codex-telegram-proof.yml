@@ -148,6 +148,6 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: oca-codex-telegram-proof-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ env.OCA_CODEX_PROOF_OUTPUT_DIR }}/${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.OCA_CODEX_PROOF_OUTPUT_DIR }}/${{ github.run_id }}-${{ github.run_attempt }}/public-artifacts
           retention-days: 14
           if-no-files-found: error
