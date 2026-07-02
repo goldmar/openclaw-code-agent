@@ -1,5 +1,4 @@
-import { formatDuration } from "../format";
-import { formatHarnessModelSuffix } from "../session-display";
+import { formatSessionStatsSuffix } from "../session-notification-stats";
 import type { NotificationButton } from "../session-interactions";
 import type { ApprovalExecutionState, KillReason, PermissionMode } from "../types";
 import type { Session } from "../session";
@@ -199,8 +198,6 @@ export function buildCompletedPayload(args: {
 } {
   const { session, originThreadLine, preview } = args;
   const hasOriginRouteBlock = Boolean(originThreadLine.trim());
-  const costStr = `$${(session.costUsd ?? 0).toFixed(2)}`;
-  const duration = formatDuration(session.duration);
   const followupContract = buildCompletionFollowupContract();
   const buildWakeMessage = (canonicalStatusDelivered: boolean): string => [
     `Coding agent session completed.`,
@@ -222,10 +219,7 @@ export function buildCompletedPayload(args: {
   ].join("\n");
 
   return {
-    userMessage: `✅ [${session.name}] Completed | ${costStr} | ${duration}${formatHarnessModelSuffix({
-      harness: session.harnessName,
-      model: session.model,
-    })}`,
+    userMessage: `✅ [${session.name}] Completed${formatSessionStatsSuffix(session)}`,
     wakeMessageOnNotifySuccess: buildWakeMessage(true),
     wakeMessageOnNotifyFailed: buildWakeMessage(false),
     followupContract,
@@ -350,15 +344,9 @@ export function buildFailedPayload(args: {
   const worktreeCleanupNote = worktreeAutoCleaned
     ? [``, `Note: Worktree and branch were auto-removed (zero cost, startup failure).`]
     : [];
-  const costStr = `$${(session.costUsd ?? 0).toFixed(2)}`;
-  const duration = formatDuration(session.duration);
-
   return {
     userMessage: [
-      `❌ [${session.name}] Failed | ${costStr} | ${duration}${formatHarnessModelSuffix({
-        harness: session.harnessName,
-        model: session.model,
-      })}`,
+      `❌ [${session.name}] Failed${formatSessionStatsSuffix(session)}`,
       `   ⚠️ ${errorSummary}`,
     ].join("\n"),
     wakeMessage: [
@@ -391,12 +379,8 @@ export function buildTurnCompletePayload(args: {
   preview: string;
 }): { userMessage: string; wakeMessage: string } {
   const { session, originThreadLine, preview } = args;
-  const costStr = `$${(session.costUsd ?? 0).toFixed(2)}`;
   return {
-    userMessage: `⏸️ [${session.name}] Turn completed | ${costStr}${formatHarnessModelSuffix({
-      harness: session.harnessName,
-      model: session.model,
-    })}`,
+    userMessage: `⏸️ [${session.name}] Turn completed${formatSessionStatsSuffix(session)}`,
     wakeMessage: [
       `Coding agent session turn ended.`,
       `Name: ${session.name}`,

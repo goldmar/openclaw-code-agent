@@ -1065,6 +1065,11 @@ export class SessionManager {
       id: string;
       harnessSessionId?: string;
       route?: PersistedSessionInfo["route"];
+      costUsd?: number;
+      createdAt?: number;
+      completedAt?: number;
+      harnessName?: string;
+      model?: string;
     },
     outcomeLine: string,
     options?: {
