@@ -3,6 +3,7 @@ import { Session } from "./session";
 import { pluginConfig, getDefaultHarnessName } from "./config";
 import { generateSessionName } from "./format";
 import { formatLaunchSummaryFromSession } from "./launch-summary";
+import { formatHarnessModelLabel } from "./session-display";
 import { pathsReferToSameLocation } from "./path-utils";
 import {
   getBackendConversationId,
@@ -1452,6 +1453,21 @@ export class SessionManager {
       userMessage: text,
       notifyUser: "always",
     });
+  }
+
+  notifyResumedLaunch(session: Session): void {
+    if (!session.resumeSessionId) return;
+    const workdirLabel = this.formatLaunchWorkdirLabel(session);
+    const harnessLabel = formatHarnessModelLabel({
+      harness: session.harnessName,
+      model: session.model,
+    }) ?? "default";
+    this.notifySession(
+      session,
+      `▶️ [${session.name}] Resumed | ${workdirLabel} | ${harnessLabel}`,
+      "resumed-launch",
+      `resumed-launch:${session.id}:${session.startedAt}:${session.resumeSessionId}`,
+    );
   }
 
   sendPlanOffer(args: {

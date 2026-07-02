@@ -869,4 +869,59 @@ describe("executeRespond", () => {
     assert.doesNotMatch(request.userMessage, /Auto-resumed/);
     assert.doesNotMatch(request.userMessage, /Launched/);
   });
+
+  it("does not emit a lifecycle resume notification when auto-resume startup fails", async () => {
+    const harness = createFakeHarness("respond-resume-failure-harness");
+    registerHarness(harness);
+
+    const session = createStubSession({
+      id: "resume-failure-id",
+      status: "killed",
+      lifecycle: "suspended",
+      runtimeState: "stopped",
+      isExplicitlyResumable: true,
+      killReason: "idle-timeout",
+      harnessSessionId: "harness-resume-failure",
+      harnessName: "respond-resume-failure-harness",
+      name: "resume-failure",
+      workdir: "/tmp/repo",
+      worktreeStrategy: "off",
+      model: "test-model",
+    });
+    const sm = new SessionManager(5);
+    (sm as any).notifications = {
+      dispatch: (...args: any[]) => { ((sm as any).__dispatchCalls ??= []).push(args); },
+      notifyWorktreeOutcome: (...args: any[]) => { ((sm as any).__dispatchCalls ??= []).push(args); },
+      dispose: () => {},
+    };
+    (sm as any).wakeDispatcher = { clearRetryTimersForSession: () => {}, dispose: () => {} };
+    (sm as any).__dispatchCalls = [];
+    (sm as any).sessions.set(session.id, session);
+
+    const pending = executeRespond(sm, { session: session.id, message: "continue" });
+    setTimeout(() => {
+      harness.pushMessage({
+        type: "result",
+        data: {
+          success: false,
+          duration_ms: 5,
+          total_cost_usd: 0,
+          num_turns: 0,
+          session_id: "harness-resume-failure",
+          result: "backend resume failed before running",
+          is_error: true,
+        },
+      });
+      harness.endMessages();
+    }, 5);
+
+    const result = await pending;
+
+    assert.equal(result.isError, true);
+    assert.match(result.text, /Resume unavailable/);
+    assert.match(result.text, /backend resume failed before running/);
+    const requests = ((sm as any).__dispatchCalls as any[]).map(([_session, request]) => request);
+    assert.equal(requests.some((request) => request.label === "resumed-launch"), false);
+    assert.equal(requests.some((request) => /Resumed/.test(request.userMessage ?? "")), false);
+  });
 });
