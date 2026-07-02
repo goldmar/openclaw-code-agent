@@ -19,6 +19,57 @@ describe("prepareSessionBootstrap()", () => {
     setPluginConfig({});
   });
 
+  it("preserves the original direct route for resumed sessions when launch routing is system-only", () => {
+    const config: SessionConfig = {
+      prompt: "Compare the completed implementation against another hook layer.",
+      workdir: "/tmp",
+      resumeSessionId: "7dkMOGyB",
+      worktreeStrategy: "off",
+      multiTurn: true,
+      route: {
+        provider: "system",
+        target: "system",
+      },
+    };
+
+    const bootstrap = prepareSessionBootstrap(
+      config,
+      "compare-pr-98922-hook-layer",
+      (ref): PersistedSessionInfo | undefined => {
+        if (ref !== "7dkMOGyB") return undefined;
+        return {
+          sessionId: "fix-pr-98922-quality-codex",
+          harnessSessionId: "7dkMOGyB",
+          backendRef: { kind: "codex-app-server", conversationId: "7dkMOGyB" },
+          name: "fix-pr-98922-quality-codex",
+          prompt: "Fix PR quality.",
+          workdir: "/tmp",
+          status: "completed",
+          costUsd: 0,
+          originChannel: "telegram|bot|-1003863755361",
+          originThreadId: "26",
+          originSessionKey: "agent:main:telegram:group:-1003863755361:topic:26",
+          route: {
+            provider: "telegram",
+            accountId: "bot",
+            target: "-1003863755361",
+            threadId: "26",
+            sessionKey: "agent:main:telegram:group:-1003863755361:topic:26",
+          },
+        };
+      },
+    );
+
+    assert.equal(bootstrap.actualWorkdir, "/tmp");
+    assert.equal(config.route?.provider, "telegram");
+    assert.equal(config.route?.target, "-1003863755361");
+    assert.equal(config.route?.threadId, "26");
+    assert.equal(config.route?.sessionKey, "agent:main:telegram:group:-1003863755361:topic:26");
+    assert.equal(config.originChannel, "telegram|bot|-1003863755361");
+    assert.equal(config.originThreadId, "26");
+    assert.equal(config.originSessionKey, "agent:main:telegram:group:-1003863755361:topic:26");
+  });
+
   it("recovers the original repo dir for resumed worktree sessions with legacy self-referential metadata", () => {
     const repoDir = mkdtempSync(join(tmpdir(), "session-bootstrap-"));
     try {
