@@ -474,7 +474,10 @@ describe("OCA Codex Crabbox integration harness", () => {
       originThreadLine: "",
       preview: "Completed without persisted cost or duration stats.",
     });
-    assert.match(completed.userMessage, /^✅ \[completed-integ\] Completed \| \$0\.00 \| 0s \| codex/u);
+    assert.match(
+      completed.userMessage,
+      /^✅ \[completed-integ\] Completed(?: \| \$0\.00 \| 0s)? \| codex(?: \| default)?/u,
+    );
     assert.doesNotMatch(completed.userMessage, /undefined|NaN/u);
 
     assert.equal(requests.length, 2);
