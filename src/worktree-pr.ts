@@ -44,6 +44,12 @@ export interface WorktreeOutcomeParams {
   prUrl?: string;
 }
 
+function formatOutcomeStats(params: Pick<WorktreeOutcomeParams, "filesChanged" | "insertions" | "deletions">): string {
+  return params.filesChanged !== undefined
+    ? ` (${params.filesChanged} files, +${params.insertions ?? 0}/-${params.deletions ?? 0})`
+    : "";
+}
+
 function isExistingPullRequestError(message: string): boolean {
   return /pull request already exists/i.test(message) || (/createPullRequest/i.test(message) && /already exists/i.test(message));
 }
@@ -293,17 +299,15 @@ export function commentOnPR(repoDir: string, prNumber: number, body: string, tar
 }
 
 export function formatWorktreeOutcomeLine(params: WorktreeOutcomeParams): string {
+  const stats = formatOutcomeStats(params);
   if (params.kind === "merge") {
-    const stats = (params.filesChanged !== undefined)
-      ? ` (${params.filesChanged} files, +${params.insertions ?? 0}/-${params.deletions ?? 0})`
-      : "";
     return `✅ Merged: ${params.branch} → ${params.base ?? "main"}${stats}`;
   }
   if (params.kind === "pr-updated") {
-    return `✅ PR updated: ${params.prUrl ?? ""}`;
+    return `✅ PR updated: ${params.prUrl ?? ""}${stats}`;
   }
   if (params.targetRepo) {
-    return `✅ PR opened against ${params.targetRepo}: ${params.prUrl ?? ""}`;
+    return `✅ PR opened against ${params.targetRepo}: ${params.prUrl ?? ""}${stats}`;
   }
-  return `✅ PR opened: ${params.prUrl ?? ""}`;
+  return `✅ PR opened: ${params.prUrl ?? ""}${stats}`;
 }

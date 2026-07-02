@@ -434,6 +434,9 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
               kind: "pr-updated",
               branch: branchName,
               prUrl: prStatus.url,
+              filesChanged: diffSummary.filesChanged,
+              insertions: diffSummary.insertions,
+              deletions: diffSummary.deletions,
             });
             sessionManager.notifyWorktreeOutcome(
               target.notificationTarget!,

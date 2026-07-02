@@ -92,9 +92,14 @@ describe("formatWorktreeOutcomeLine", () => {
       kind: "pr-opened",
       branch: "agent/fix-auth",
       prUrl: "https://github.com/myorg/myrepo/pull/42",
+      filesChanged: 1,
+      insertions: 2,
+      deletions: 0,
     });
     assert.ok(result.includes("PR opened"));
     assert.ok(result.includes("https://github.com/myorg/myrepo/pull/42"));
+    assert.ok(result.includes("1 files"));
+    assert.ok(result.includes("+2/-0"));
     assert.ok(!result.includes("against"));
   });
 
@@ -116,9 +121,24 @@ describe("formatWorktreeOutcomeLine", () => {
       kind: "pr-updated",
       branch: "agent/fix-auth",
       prUrl: "https://github.com/myorg/myrepo/pull/42",
+      filesChanged: 4,
+      insertions: 8,
+      deletions: 3,
     });
     assert.ok(result.includes("PR updated"));
     assert.ok(result.includes("https://github.com/myorg/myrepo/pull/42"));
+    assert.ok(result.includes("4 files"));
+    assert.ok(result.includes("+8/-3"));
+  });
+
+  it("formats pr-updated outcome without dangling stats when stats are missing", async () => {
+    const { formatWorktreeOutcomeLine } = await import("../src/worktree.js");
+    const result = formatWorktreeOutcomeLine({
+      kind: "pr-updated",
+      branch: "agent/fix-auth",
+      prUrl: "https://github.com/myorg/myrepo/pull/42",
+    });
+    assert.equal(result, "✅ PR updated: https://github.com/myorg/myrepo/pull/42");
   });
 });
 

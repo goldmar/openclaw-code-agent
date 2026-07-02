@@ -425,7 +425,7 @@ function assertNativeProofEnabled(opts: Options): void {
   }
 }
 
-function liveCommandArgs(opts: Options, command: "lease-restore" | "release", extra: string[] = []): string[] {
+export function buildTelegramCredentialCommandArgs(opts: Options, command: "lease-restore" | "release", extra: string[] = []): string[] {
   const args = ["--import", "tsx", TELEGRAM_USER_CREDENTIAL, command, ...extra];
   if (opts.envFile) args.push("--env-file", opts.envFile);
   return args;
@@ -439,7 +439,7 @@ async function defaultLiveDeps(): Promise<NativeProofDeps> {
       const desktopWorkdir = path.join(sessionDir, "desktop");
       const leaseFile = path.join(sessionDir, "lease.json");
       const payloadFile = path.join(sessionDir, "telegram-user-payload.json");
-      const result = spawnSync(process.execPath, liveCommandArgs(opts, "lease-restore", [
+      const result = spawnSync(process.execPath, buildTelegramCredentialCommandArgs(opts, "lease-restore", [
         "--user-driver-dir",
         userDriverDir,
         "--desktop-workdir",
@@ -473,7 +473,7 @@ async function defaultLiveDeps(): Promise<NativeProofDeps> {
       if (!existsSync(lease.leaseFile)) {
         throw new Error(`telegram-user lease file is missing; cannot safely release credential: ${lease.leaseFile}`);
       }
-      const result = spawnSync(process.execPath, liveCommandArgs(opts, "release", ["--lease-file", lease.leaseFile]), {
+      const result = spawnSync(process.execPath, buildTelegramCredentialCommandArgs(opts, "release", ["--lease-file", lease.leaseFile]), {
         cwd: REPO_ROOT,
         encoding: "utf8",
       });
