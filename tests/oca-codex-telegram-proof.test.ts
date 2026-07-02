@@ -176,6 +176,9 @@ describe("OCA Codex Telegram proof runner", () => {
       writeFileSync(join(artifactDir, "harness-messages.redacted.json"), "[]");
       writeFileSync(join(artifactDir, "codex-app-server-requests.redacted.jsonl"), "not json password hunter2 apiKey abc123 credential lease-secret\n");
       writeFileSync(join(artifactDir, "mantis-evidence.json"), '{"note":"apiKey abc123 credential lease-secret"}');
+      writeFileSync(join(artifactDir, "telegram-transcript.redacted.json"), '{"messages":[{"text":"token=abc123 user @qa_secret_user"}]}');
+      writeFileSync(join(artifactDir, "telegram-callback.redacted.json"), '{"button":{"data":"secret-callback-token"},"messageId":"9988776655"}');
+      writeFileSync(join(artifactDir, "telegram-callback-answer.redacted.json"), '{"answered":true,"updatesSeen":1}');
       writeFileSync(join(artifactDir, "oca-codex-telegram-proof.md"), 'secret=super-secret password hunter2 apiKey abc123 credential lease-secret authorization: "Bearer abc123"');
       writeFileSync(
         join(artifactDir, "telegram-desktop.log"),
@@ -192,6 +195,9 @@ describe("OCA Codex Telegram proof runner", () => {
       assert.equal(existsSync(join(staged, "harness-messages.redacted.json")), true);
       assert.equal(existsSync(join(staged, "codex-app-server-requests.redacted.jsonl")), true);
       assert.equal(existsSync(join(staged, "mantis-evidence.json")), true);
+      assert.equal(existsSync(join(staged, "telegram-transcript.redacted.json")), true);
+      assert.equal(existsSync(join(staged, "telegram-callback.redacted.json")), true);
+      assert.equal(existsSync(join(staged, "telegram-callback-answer.redacted.json")), true);
       assert.equal(existsSync(join(staged, "oca-codex-telegram-proof.md")), true);
       assert.equal(existsSync(join(staged, "telegram-desktop.log")), true);
       const stagedSummary = readFileSync(join(staged, "summary.json"), "utf8");
@@ -213,6 +219,10 @@ describe("OCA Codex Telegram proof runner", () => {
       assert.doesNotMatch(stagedEvidence, /abc123|lease-secret/);
       const stagedJsonl = readFileSync(join(staged, "codex-app-server-requests.redacted.jsonl"), "utf8");
       assert.doesNotMatch(stagedJsonl, /hunter2|abc123|lease-secret/);
+      const stagedTranscript = readFileSync(join(staged, "telegram-transcript.redacted.json"), "utf8");
+      assert.doesNotMatch(stagedTranscript, /abc123|qa_secret_user/);
+      const stagedCallback = readFileSync(join(staged, "telegram-callback.redacted.json"), "utf8");
+      assert.doesNotMatch(stagedCallback, /secret-callback-token|9988776655/);
       assert.equal(existsSync(join(staged, "telegram-desktop.png")), false);
       assert.match(readFileSync(join(staged, "omitted-private-artifacts.json"), "utf8"), /telegram-desktop\.png/);
       assert.equal(existsSync(join(staged, "session.json")), false);

@@ -139,6 +139,13 @@ describe("OCA Codex Crabbox integration harness", () => {
     assert.doesNotMatch(JSON.stringify({ leaseArgs, releaseArgs }), /OPENCLAW_QA_CONVEX_SECRET_CI|hunter2|bot-token/u);
   });
 
+  it("uses the private Convex env file by default for live credential commands", () => {
+    const opts = parseArgs(["run"]);
+    const leaseArgs = buildTelegramCredentialCommandArgs(opts, "lease-restore", ["--lease-file", "/tmp/lease.json"]);
+
+    assert.deepEqual(leaseArgs.slice(-2), ["--env-file", "~/.codex/skills/custom/telegram-e2e-bot-to-bot/convex.local.env"]);
+  });
+
   it("runs the native Crabbox orchestration path with fakes, redacts artifacts, and cleans session state", async () => {
     const outputDir = join(".artifacts", "qa-e2e", "oca-codex-telegram", `integ-native-${Date.now()}`);
     const artifactDir = join(repoRoot, outputDir);
