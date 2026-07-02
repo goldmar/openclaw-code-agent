@@ -361,15 +361,9 @@ async function tryAutoResume(
       return {
         text: `Plan approved for session ${resumed.name} [${resumed.id}]. Session resumed in bypassPermissions mode. Use agent_output to see the response.`,
       };
-    } else {
-      sm.notifySession(
-        resumed,
-        `▶️ [${resumed.name}] Auto-resumed`,
-        "notification",
-        `agent-respond-auto-resumed:${resumed.id}:${resumed.startedAt}:${assessment.resumeSessionId}`,
-      );
     }
-    return { text: `Auto-resumed session ${resumed.name} [${resumed.id}]. Use agent_output to see the response.` };
+    sm.notifyResumedLaunch(resumed);
+    return { text: `Resume started for session ${resumed.name} [${resumed.id}]. Use agent_output to see the response.` };
   } catch (err: unknown) {
     return formatResumeUnavailable(session, "missing_backend_state", `Backend resume failed: ${errorMessage(err)}`);
   }
