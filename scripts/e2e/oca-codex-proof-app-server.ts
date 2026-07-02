@@ -159,7 +159,7 @@ export function redactProofValue(value: unknown): unknown {
   if (!value || typeof value !== "object") return value;
   const output: Record<string, unknown> = {};
   for (const [key, entry] of Object.entries(value)) {
-    if (/(api[_-]?key|token|secret|password|authorization|credential|groupId|testerUserId|ownerId|username)/iu.test(key)) {
+    if (/(api[_-]?key|token|secret|password|authorization|credential|groupId|testerUserId|ownerId|username|messageId|callback.*data|^data$)/iu.test(key)) {
       output[key] = "[redacted credential]";
       continue;
     }

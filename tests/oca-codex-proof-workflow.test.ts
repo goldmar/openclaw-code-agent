@@ -41,7 +41,7 @@ describe("OCA Codex Telegram proof workflow", () => {
     );
     assert.equal(
       packageJson.scripts?.["proof:codex-telegram"],
-      "node --import tsx scripts/e2e/oca-codex-telegram-proof.ts run",
+      "node scripts/e2e/run-oca-codex-telegram-proof.mjs",
     );
     assert.equal(
       packageJson.scripts?.["test:integ:crabbox"],

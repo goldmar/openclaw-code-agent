@@ -1,8 +1,9 @@
 #!/usr/bin/env -S node --import tsx
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
   chmodSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -19,7 +20,7 @@ import { getHarness } from "../../src/harness/index";
 import type { HarnessMessage, HarnessResult, HarnessSession } from "../../src/harness/types";
 import { redactProofValue } from "./oca-codex-proof-app-server";
 
-type Command = "doctor" | "local-smoke" | "run";
+type Command = "doctor" | "local-smoke" | "preflight" | "run";
 type Options = {
   allowLive: boolean;
   command: Command;
@@ -32,7 +33,10 @@ type Options = {
   keepBox: boolean;
   outputDir: string;
   recordSeconds: number;
+  recoverTelegramSession: boolean;
   scenario: string;
+  tdlibArchive?: string;
+  tdlibSha256?: string;
   timeoutMs: number;
 };
 
@@ -69,6 +73,9 @@ type ProofPlan = {
     credentialKind: "telegram-user";
     desktopChatTitle: string;
     recordSeconds: number;
+    recoveryMode: "disabled" | "enabled";
+    tdlibArchive: "missing" | "provided";
+    tdlibSha256: "missing" | "provided";
   };
 };
 
@@ -78,6 +85,7 @@ type CredentialLease = {
   groupId: string;
   leaseFile: string;
   ownerId: string;
+  sutToken?: string;
   sutUsername?: string;
   testerUserId: string;
   testerUsername: string;
@@ -87,6 +95,7 @@ type CredentialLease = {
 type CrabboxDesktop = {
   createdLease: boolean;
   id: string;
+  inspect?: CrabboxInspect;
   provider: string;
   target: "linux";
 };
@@ -94,8 +103,21 @@ type CrabboxDesktop = {
 type LocalProofSut = {
   gatewayPort: number;
   isolatedHome: string;
+  localSmoke?: Record<string, unknown>;
   requestLog?: string;
 };
+
+type CrabboxInspect = {
+  host?: string;
+  id?: string;
+  slug?: string;
+  sshKey?: string;
+  sshPort?: string;
+  sshUser?: string;
+  state?: string;
+};
+
+type TelegramBotResult = Record<string, unknown>;
 
 type EvidenceArtifact = {
   kind: "json" | "log" | "markdown" | "screenshot" | "video";
@@ -122,11 +144,18 @@ type NativeProofDeps = {
     opts: Options;
     outputDir: string;
   }) => Promise<EvidenceArtifact[]>;
+  preflightCredentialLease?: (lease: CredentialLease, opts: Options) => Promise<TelegramSessionPreflight>;
   releaseCredentialLease: (lease: CredentialLease, opts: Options) => Promise<void>;
   startCrabboxDesktop: (opts: Options) => Promise<CrabboxDesktop>;
   startLocalSut: (params: { credential: CredentialLease; opts: Options; sessionDir: string }) => Promise<LocalProofSut>;
   stopCrabboxDesktop: (desktop: CrabboxDesktop, opts: Options) => Promise<void>;
   stopLocalSut: (sut: LocalProofSut, opts: Options) => Promise<void>;
+};
+
+type TelegramSessionPreflight = {
+  groupWarmup: "ok" | "skipped";
+  ok: true;
+  status: Record<string, unknown>;
 };
 
 type NativeProofResult = Record<string, unknown> & {
@@ -141,13 +170,21 @@ const FAKE_CODEX_SERVER = path.join(SCRIPT_DIR, "oca-codex-proof-app-server.ts")
 const TELEGRAM_USER_DRIVER = path.join(SCRIPT_DIR, "telegram-user-driver.py");
 const TELEGRAM_USER_CREDENTIAL = path.join(SCRIPT_DIR, "telegram-user-credential.ts");
 const PRIVATE_CONVEX_ENV = "~/.codex/skills/custom/telegram-e2e-bot-to-bot/convex.local.env";
+const TELEGRAM_CODE_ENV = "OPENCLAW_QA_TELEGRAM_LOGIN_CODE";
+const TELEGRAM_PASSWORD_ENV = "OPENCLAW_QA_TELEGRAM_USER_PASSWORD";
+const STORED_TELEGRAM_SESSION_EXPIRED =
+  "stored Telegram session expired; refresh/export/seed broker payload";
 const TCP_PORT_RE = /^[1-9]\d*$/u;
+const COMMAND_TIMEOUT_MS = 30 * 60 * 1000;
+const REMOTE_SETUP_COMMAND_TIMEOUT_MS = 90 * 60 * 1000;
+const REMOTE_ROOT = "/tmp/openclaw-oca-codex-telegram-proof";
 
 export function usageText(): string {
   return [
     "Usage:",
     "  node --import tsx scripts/e2e/oca-codex-telegram-proof.ts doctor",
     "  node --import tsx scripts/e2e/oca-codex-telegram-proof.ts local-smoke [--scenario basic]",
+    "  node --import tsx scripts/e2e/oca-codex-telegram-proof.ts preflight --allow-live",
     "  node --import tsx scripts/e2e/oca-codex-telegram-proof.ts run [--dry-run]",
     "",
     "Options:",
@@ -156,10 +193,14 @@ export function usageText(): string {
     "  --crabbox-bin <path>          Crabbox binary. Default: OPENCLAW_TELEGRAM_USER_CRABBOX_BIN or crabbox.",
     "  --provider <name>             Crabbox provider. Default: OPENCLAW_TELEGRAM_USER_CRABBOX_PROVIDER or local-container.",
     "  --desktop-chat-title <title>  Telegram Desktop chat title for native proof capture.",
-    "  --env-file <path>             Convex env file for live proof release/acquire helpers.",
+    "  --convex-env-file <path>      Convex env file for live proof release/acquire helpers.",
+    "  --env-file <path>             Alias for --convex-env-file.",
     "  --gateway-port <port>         Disposable gateway port. Default: 38975.",
     "  --record-seconds <seconds>    Native desktop recording duration. Default: 35.",
+    "  --tdlib-archive <path>        Prebuilt TDLib tarball with lib/libtdjson.so for Crabbox setup.",
+    "  --tdlib-sha256 <sha256>       Expected SHA-256 for --tdlib-archive.",
     "  --keep-box                    Keep Crabbox lease for VNC/debugging.",
+    "  --recover-telegram-session    Maintenance only: permit login/QR recovery credentials.",
     "  --dry-run                     Print the resolved proof plan without leasing credentials.",
     "  --allow-live                  Permit native orchestration when OPENCLAW_RUN_LIVE_TELEGRAM_PROOF=1.",
   ].join("\n");
@@ -203,10 +244,11 @@ function takeValue(args: string[], index: number, label: string): string {
 
 export function parseArgs(argv: string[] = process.argv.slice(2)): Options {
   const first = argv[0];
-  const command: Command = first === "doctor" || first === "local-smoke" || first === "run"
+  const command: Command = first === "doctor" || first === "local-smoke" || first === "preflight" || first === "run"
     ? first
     : "run";
-  const args = command === first ? argv.slice(1) : argv;
+  const rawArgs = command === first ? argv.slice(1) : argv;
+  const args = rawArgs[0] === "--" ? rawArgs.slice(1) : rawArgs;
   const seen = new Set<string>();
   const opts: Options = {
     allowLive: false,
@@ -219,7 +261,10 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): Options {
     keepBox: false,
     outputDir: path.join(DEFAULT_OUTPUT_ROOT, `${timestamp()}-${randomUUID().slice(0, 8)}`),
     recordSeconds: 35,
+    recoverTelegramSession: false,
     scenario: "basic",
+    tdlibArchive: process.env.OPENCLAW_TDLIB_ARCHIVE?.trim() || undefined,
+    tdlibSha256: process.env.OPENCLAW_TDLIB_SHA256?.trim() || undefined,
     timeoutMs: 120_000,
   };
 
@@ -241,6 +286,10 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): Options {
       opts.allowLive = true;
       continue;
     }
+    if (key === "--recover-telegram-session") {
+      opts.recoverTelegramSession = true;
+      continue;
+    }
     if (!key.startsWith("--")) usage();
     if (seen.has(key)) throw new Error(`${key} was provided more than once`);
     seen.add(key);
@@ -253,6 +302,7 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): Options {
       case "--desktop-chat-title":
         opts.desktopChatTitle = value;
         break;
+      case "--convex-env-file":
       case "--env-file":
         opts.envFile = value;
         break;
@@ -270,6 +320,12 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): Options {
         break;
       case "--scenario":
         opts.scenario = value;
+        break;
+      case "--tdlib-archive":
+        opts.tdlibArchive = value;
+        break;
+      case "--tdlib-sha256":
+        opts.tdlibSha256 = value;
         break;
       case "--timeout-ms":
         opts.timeoutMs = parsePositiveInteger(value, key);
@@ -310,6 +366,9 @@ export function buildProofPlan(opts: Options): ProofPlan {
       credentialKind: "telegram-user",
       desktopChatTitle: opts.desktopChatTitle,
       recordSeconds: opts.recordSeconds,
+      recoveryMode: opts.recoverTelegramSession ? "enabled" : "disabled",
+      tdlibArchive: opts.tdlibArchive ? "provided" : "missing",
+      tdlibSha256: opts.tdlibSha256 ? "provided" : "missing",
     },
   };
 }
@@ -333,6 +392,284 @@ function commandExists(command: string): boolean {
     stdio: "ignore",
   });
   return result.status === 0;
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function runCommandSync(params: {
+  args: string[];
+  command: string;
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  input?: string;
+  timeoutMs?: number;
+}): string {
+  const result = spawnSync(params.command, params.args, {
+    cwd: params.cwd ?? REPO_ROOT,
+    encoding: "utf8",
+    env: params.env,
+    input: params.input,
+    maxBuffer: 32 * 1024 * 1024,
+    timeout: params.timeoutMs ?? COMMAND_TIMEOUT_MS,
+  });
+  if (result.status !== 0 || result.error) {
+    const detail = result.error instanceof Error ? result.error.message : result.stderr || result.stdout;
+    throw new Error(`${params.command} ${params.args.join(" ")} failed\n${redactProofText(detail || "")}`);
+  }
+  return result.stdout;
+}
+
+function sshArgs(inspect: CrabboxInspect): { base: string[]; scpBase: string[]; target: string } {
+  if (!inspect.host || !inspect.sshKey || !inspect.sshUser) {
+    throw new Error("Crabbox inspect output is missing SSH details.");
+  }
+  return {
+    base: [
+      "-i",
+      inspect.sshKey,
+      "-p",
+      inspect.sshPort ?? "22",
+      "-o",
+      "IdentitiesOnly=yes",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=no",
+      "-o",
+      "UserKnownHostsFile=/dev/null",
+      "-o",
+      "LogLevel=ERROR",
+      "-o",
+      "ConnectTimeout=15",
+    ],
+    scpBase: [
+      "-i",
+      inspect.sshKey,
+      "-P",
+      inspect.sshPort ?? "22",
+      "-o",
+      "IdentitiesOnly=yes",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=no",
+      "-o",
+      "UserKnownHostsFile=/dev/null",
+      "-o",
+      "LogLevel=ERROR",
+      "-o",
+      "ConnectTimeout=15",
+    ],
+    target: `${inspect.sshUser}@${inspect.host}`,
+  };
+}
+
+function scpToRemote(inspect: CrabboxInspect, local: string, remote: string): void {
+  const ssh = sshArgs(inspect);
+  runCommandSync({ command: "scp", args: [...ssh.scpBase, local, `${ssh.target}:${remote}`] });
+}
+
+function scpFromRemote(inspect: CrabboxInspect, remote: string, local: string): void {
+  const ssh = sshArgs(inspect);
+  mkdirSync(path.dirname(local), { recursive: true });
+  runCommandSync({ command: "scp", args: [...ssh.scpBase, `${ssh.target}:${remote}`, local] });
+}
+
+function sshRun(inspect: CrabboxInspect, command: string, timeoutMs = COMMAND_TIMEOUT_MS): string {
+  const ssh = sshArgs(inspect);
+  return runCommandSync({
+    command: "ssh",
+    args: [...ssh.base, ssh.target, command],
+    timeoutMs,
+  });
+}
+
+function extractCrabboxLeaseId(output: string): string {
+  const leaseId = output.match(/\b(?:cbx_[a-f0-9]+|tbx_[A-Za-z0-9_-]+)\b/u)?.[0];
+  if (!leaseId) throw new Error("Crabbox warmup did not print a lease id.");
+  return leaseId;
+}
+
+export function renderRemoteSetup(opts: Options): string {
+  const tdlibSha256 = opts.tdlibSha256 ?? "";
+  const recoveryBlock = opts.recoverTelegramSession
+    ? `
+telegram_code="$(python3 - "$root/telegram-user-code" <<'PY'
+import pathlib
+import sys
+
+try:
+    print(pathlib.Path(sys.argv[1]).read_text().strip())
+except FileNotFoundError:
+    pass
+PY
+)"
+telegram_password="$(python3 - "$root/telegram-user-payload.json" "$root/telegram-user-password" <<'PY'
+import json
+import pathlib
+import sys
+
+payload_path = pathlib.Path(sys.argv[1])
+password_path = pathlib.Path(sys.argv[2])
+try:
+    payload = json.loads(payload_path.read_text())
+except FileNotFoundError:
+    payload = {}
+
+for key in ("credential", "telegramPassword", "telegram2faPassword", "password"):
+    value = payload.get(key)
+    if isinstance(value, str) and value.strip():
+        print(value.strip())
+        raise SystemExit(0)
+
+try:
+    print(password_path.read_text().strip())
+except FileNotFoundError:
+    pass
+PY
+)"
+if [ -n "$telegram_password" ]; then
+  echo "Telegram session recovery mode enabled; attempting maintenance login." >&2
+  TELEGRAM_USER_DRIVER_STATE_DIR="$root/user-driver" TELEGRAM_USER_DRIVER_CODE="$telegram_code" TELEGRAM_USER_DRIVER_PASSWORD="$telegram_password" python3 "$root/user-driver.py" login --json --timeout-ms 60000 >"$root/login.json"
+fi
+`
+    : "";
+  return `#!/usr/bin/env bash
+set -euo pipefail
+export PATH="/usr/local/sbin:/usr/sbin:/sbin:$PATH"
+root=${REMOTE_ROOT}
+tdlib_expected_sha=${JSON.stringify(tdlibSha256)}
+setup_step_timeout_kill_after="\${OPENCLAW_TELEGRAM_USER_SETUP_KILL_AFTER_SECONDS:-30}s"
+apt_timeout="\${OPENCLAW_TELEGRAM_USER_APT_TIMEOUT_SECONDS:-900}s"
+run_setup_step() {
+  local label="$1"
+  local timeout_value="$2"
+  shift 2
+  echo "==> $label" >&2
+  timeout --kill-after="$setup_step_timeout_kill_after" "$timeout_value" "$@"
+}
+mkdir -p "$root"
+tar -xzf "$root/state.tgz" -C "$root"
+run_setup_step "apt-get update" "$apt_timeout" sudo apt-get update -y
+run_setup_step "apt-get install" "$apt_timeout" sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y curl cmake g++ git gperf make zlib1g-dev libssl-dev python3 ffmpeg scrot xz-utils tar wmctrl xdotool x11-utils zbar-tools libopengl0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xfixes0 libxcb-xinerama0 libxkbcommon-x11-0 >/tmp/openclaw-oca-telegram-apt.log
+if [ ! -x "$root/Telegram/Telegram" ]; then
+  curl -fL --retry 3 --retry-delay 5 --retry-all-errors -o "$root/telegram.tar.xz" https://telegram.org/dl/desktop/linux
+  tar -xJf "$root/telegram.tar.xz" -C "$root"
+fi
+if ! ldconfig -p | grep -q libtdjson.so && [ -f "$root/tdlib.tgz" ]; then
+  if [ -n "$tdlib_expected_sha" ]; then
+    printf '%s  %s\\n' "$tdlib_expected_sha" "$root/tdlib.tgz" | sha256sum -c -
+  fi
+  rm -rf "$root/tdlib-prebuilt"
+  mkdir -p "$root/tdlib-prebuilt"
+  tar -xzf "$root/tdlib.tgz" -C "$root/tdlib-prebuilt"
+  tdjson_lib="$(find "$root/tdlib-prebuilt" \\( -name 'libtdjson.so' -o -name 'libtdjson.so.*' \\) -type f | sort | head -n 1)"
+  if [ -z "$tdjson_lib" ]; then
+    echo "tdlib archive did not contain libtdjson.so" >&2
+    exit 1
+  fi
+  run_setup_step "tdlib install from archive" "$apt_timeout" sudo install -m 0755 "$tdjson_lib" /usr/local/lib/libtdjson.so
+  sudo ldconfig
+fi
+if ! ldconfig -p | grep -q libtdjson.so; then
+  rm -rf "$root/td" "$root/td-build"
+  run_setup_step "tdlib clone" 600s git clone --depth 1 --branch v1.8.0 https://github.com/tdlib/td.git "$root/td"
+  run_setup_step "tdlib configure" 1800s cmake -S "$root/td" -B "$root/td-build" -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DTD_ENABLE_JNI=OFF
+  run_setup_step "tdlib build" 1800s cmake --build "$root/td-build" --target tdjson -j "$(nproc)"
+  tdjson_lib="$(find "$root/td-build" -name 'libtdjson.so*' -type f | sort | head -n 1)"
+  if [ -z "$tdjson_lib" ]; then
+    echo "tdlib build did not produce libtdjson.so" >&2
+    exit 1
+  fi
+  run_setup_step "tdlib install" "$apt_timeout" sudo install -m 0755 "$tdjson_lib" /usr/local/lib/libtdjson.so
+  sudo ldconfig
+fi
+${recoveryBlock}if ! TELEGRAM_USER_DRIVER_STATE_DIR="$root/user-driver" python3 "$root/user-driver.py" status --json --timeout-ms 60000 >"$root/status.json"; then
+  echo "${STORED_TELEGRAM_SESSION_EXPIRED}. Recovery login is disabled for normal proof runs; rerun with --recover-telegram-session only for maintenance." >&2
+  exit 1
+fi
+TELEGRAM_USER_DRIVER_STATE_DIR="$root/user-driver" python3 "$root/user-driver.py" terminate-desktop-sessions --json --timeout-ms 60000 --output "$root/desktop-sessions-cleanup.json"
+`;
+}
+
+function renderLaunchDesktop(): string {
+  return `#!/usr/bin/env bash
+set -euo pipefail
+root=${REMOTE_ROOT}
+export DISPLAY="\${DISPLAY:-:99}"
+pkill -f "$root/Telegram/Telegram" >/dev/null 2>&1 || true
+nohup "$root/Telegram/Telegram" -workdir "$root/desktop" >"$root/telegram-desktop.log" 2>&1 &
+pid=$!
+sleep 8
+kill -0 "$pid"
+wmctrl -l | grep -i telegram >/dev/null
+`;
+}
+
+export function renderAuthorizeDesktop(opts: Options): string {
+  const qrBlock = opts.recoverTelegramSession
+    ? `TELEGRAM_USER_DRIVER_STATE_DIR="$root/user-driver" python3 "$root/user-driver.py" confirm-qr --link "$link" --json --output "$root/desktop-session.json"`
+    : `echo "stored Telegram Desktop tdata expired; refresh/export/seed broker payload. QR recovery is disabled for normal proof runs; rerun with --recover-telegram-session only for maintenance." >&2
+  exit 1`;
+  return `#!/usr/bin/env bash
+set -euo pipefail
+root=${REMOTE_ROOT}
+export DISPLAY="\${DISPLAY:-:99}"
+win="$(wmctrl -l | awk 'tolower($0) ~ /telegram/ {print $1; exit}')"
+test -n "$win"
+xdotool windowactivate "$win"
+sleep 2
+click_window_ratio() {
+  eval "$(xdotool getwindowgeometry --shell "$win")"
+  xdotool windowactivate "$win"
+  sleep 0.2
+  xdotool mousemove "$((X + WIDTH / 2))" "$((Y + HEIGHT * $1 / 100))"
+  sleep 0.2
+  xdotool click 1
+  sleep 1
+}
+read_qr_link() {
+  scrot "$root/telegram-login-qr.png"
+  { zbarimg --raw "$root/telegram-login-qr.png" 2>/dev/null || true; } | awk 'index($0, "tg://login?token=") == 1 {print; exit}'
+}
+click_window_ratio 69
+sleep 3
+click_window_ratio 80
+link=""
+for _ in $(seq 1 25); do
+  link="$(read_qr_link)"
+  [ -n "$link" ] && break
+  sleep 1
+done
+if [ -n "$link" ]; then
+  ${qrBlock}
+fi
+sleep 6
+`;
+}
+
+function renderSelectDesktopChat(chatTitle: string): string {
+  return `#!/usr/bin/env bash
+set -euo pipefail
+chat_title=${shellQuote(chatTitle)}
+export DISPLAY="\${DISPLAY:-:99}"
+win="$(wmctrl -l | awk 'tolower($0) ~ /telegram/ {print $1; exit}')"
+test -n "$win"
+left=520
+top=170
+xdotool windowactivate --sync "$win"
+xdotool windowsize "$win" 980 720
+xdotool windowmove "$win" "$left" "$top"
+sleep 1
+xdotool mousemove "$((left + 180))" "$((top + 50))" click 1
+xdotool key ctrl+a BackSpace
+xdotool type --delay 5 -- "$chat_title"
+sleep 2
+xdotool mousemove "$((left + 150))" "$((top + 120))" click 1
+sleep 1
+`;
 }
 
 function checkNodeScript(name: string, file: string): DoctorCheck {
@@ -427,8 +764,228 @@ function assertNativeProofEnabled(opts: Options): void {
 
 export function buildTelegramCredentialCommandArgs(opts: Options, command: "lease-restore" | "release", extra: string[] = []): string[] {
   const args = ["--import", "tsx", TELEGRAM_USER_CREDENTIAL, command, ...extra];
-  if (opts.envFile) args.push("--env-file", opts.envFile);
+  args.push("--env-file", expandHome(opts.envFile ?? PRIVATE_CONVEX_ENV));
   return args;
+}
+
+export function requireAnsweredTelegramCallback(callbackAnswer: { answered: boolean; updatesSeen: number }): void {
+  if (callbackAnswer.answered !== true) {
+    throw new Error(
+      `Telegram callback was clicked but answerCallbackQuery was not observed after ${callbackAnswer.updatesSeen} callback updates.`,
+    );
+  }
+}
+
+async function telegramBotApi(token: string, method: string, body: Record<string, unknown> = {}): Promise<TelegramBotResult> {
+  const response = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const payload = await response.json() as Record<string, unknown>;
+  if (!response.ok || payload.ok !== true) {
+    throw new Error(`${method} failed: ${redactProofText(JSON.stringify(payload))}`);
+  }
+  return payload.result && typeof payload.result === "object" ? payload.result as TelegramBotResult : { value: payload.result };
+}
+
+function messageIdFromBotResult(value: TelegramBotResult): string {
+  const messageId = value.message_id ?? value.messageId ?? value.id;
+  if (typeof messageId === "number" || typeof messageId === "string") return String(messageId);
+  throw new Error("Telegram sendMessage did not return a message id.");
+}
+
+function callbackQueryIdFromUpdate(update: Record<string, unknown>, expectedData: string): string | undefined {
+  const query = update.callback_query;
+  if (!query || typeof query !== "object" || Array.isArray(query)) return undefined;
+  const record = query as Record<string, unknown>;
+  if (record.data !== expectedData) return undefined;
+  const id = record.id;
+  return typeof id === "string" && id ? id : undefined;
+}
+
+async function answerExpectedCallback(params: {
+  callbackData: string;
+  stopWhen: () => boolean;
+  token: string;
+  timeoutMs: number;
+}): Promise<{ answered: boolean; updatesSeen: number }> {
+  let offset = 0;
+  let updatesSeen = 0;
+  const deadline = Date.now() + params.timeoutMs;
+  while (Date.now() < deadline && !params.stopWhen()) {
+    const result = await telegramBotApi(params.token, "getUpdates", {
+      allowed_updates: ["callback_query"],
+      offset,
+      timeout: 2,
+    });
+    const updates = Array.isArray(result) ? result : [];
+    for (const update of updates) {
+      if (!update || typeof update !== "object" || Array.isArray(update)) continue;
+      const record = update as Record<string, unknown>;
+      if (typeof record.update_id === "number") offset = Math.max(offset, record.update_id + 1);
+      updatesSeen += 1;
+      const callbackQueryId = callbackQueryIdFromUpdate(record, params.callbackData);
+      if (!callbackQueryId) continue;
+      await telegramBotApi(params.token, "answerCallbackQuery", {
+        callback_query_id: callbackQueryId,
+        text: "OCA Codex proof callback acknowledged",
+        show_alert: false,
+      });
+      return { answered: true, updatesSeen };
+    }
+  }
+  return { answered: false, updatesSeen };
+}
+
+async function clickCallbackWithBotAnswer(params: {
+  callbackData: string;
+  credential: CredentialLease;
+  messageId: string;
+  outputDir: string;
+  token: string;
+  timeoutMs: number;
+}): Promise<{ callback: Record<string, unknown>; callbackAnswer: { answered: boolean; updatesSeen: number } }> {
+  const callbackPath = path.join(params.outputDir, "telegram-callback.redacted.json");
+  let clickDone = false;
+  const child = spawn("python3", [
+    TELEGRAM_USER_DRIVER,
+    "click-callback",
+    "--chat",
+    params.credential.groupId,
+    "--message-id",
+    params.messageId,
+    "--button-text",
+    "Acknowledge",
+    "--json",
+    "--output",
+    callbackPath,
+    "--timeout-ms",
+    String(params.timeoutMs),
+  ], {
+    cwd: REPO_ROOT,
+    env: {
+      ...process.env,
+      TELEGRAM_USER_DRIVER_STATE_DIR: params.credential.userDriverDir,
+      TELEGRAM_USER_DRIVER_SUT_USERNAME: params.credential.sutUsername ?? "",
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stderr = "";
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk) => {
+    stderr = `${stderr}${chunk}`.slice(-12000);
+  });
+  const waitForClick = new Promise<void>((resolve, reject) => {
+    child.on("error", reject);
+    child.on("close", (code) => {
+      clickDone = true;
+      if (code === 0) resolve();
+      else reject(new Error(`telegram-user click-callback failed with exit code ${code ?? "unknown"}\n${redactProofText(stderr)}`));
+    });
+  });
+  const callbackAnswer = await answerExpectedCallback({
+    callbackData: params.callbackData,
+    stopWhen: () => clickDone,
+    token: params.token,
+    timeoutMs: params.timeoutMs,
+  });
+  await waitForClick;
+  return {
+    callback: JSON.parse(readFileSync(callbackPath, "utf8")) as Record<string, unknown>,
+    callbackAnswer,
+  };
+}
+
+function runTelegramUserDriverJson(args: string[], timeoutMs: number, env: NodeJS.ProcessEnv = process.env): Record<string, unknown> {
+  const output = runCommandSync({
+    command: "python3",
+    args: [TELEGRAM_USER_DRIVER, ...args, "--json"],
+    cwd: REPO_ROOT,
+    env,
+    timeoutMs,
+  });
+  return JSON.parse(output) as Record<string, unknown>;
+}
+
+function isTelegramStatusAuthorized(status: Record<string, unknown>): boolean {
+  if (status.ok === false) return false;
+  if (status.authorized === false || status.isAuthorized === false) return false;
+  if (status.authorizationState === "authorizationStateReady" || status.authorizationState === "ready") return true;
+  if (status.status === "ready" || status.status === "authorized") return true;
+  return status.authorized === true || status.isAuthorized === true || status.ok === true;
+}
+
+function storedTelegramSessionExpiredError(error: unknown): Error {
+  const detail = error instanceof Error ? error.message : String(error);
+  return new Error(`${STORED_TELEGRAM_SESSION_EXPIRED}. Recovery/login is disabled for normal proof runs.\n${redactProofText(detail)}`);
+}
+
+export async function assertRestoredTelegramSessionAuthorized(
+  credential: CredentialLease,
+  opts: Options,
+): Promise<TelegramSessionPreflight> {
+  try {
+    const env = {
+      ...process.env,
+      TELEGRAM_USER_DRIVER_STATE_DIR: credential.userDriverDir,
+    };
+    const status = runTelegramUserDriverJson(["status", "--timeout-ms", "60000"], Math.min(opts.timeoutMs, 60_000), env);
+    if (!isTelegramStatusAuthorized(status)) {
+      throw new Error(`telegram-user-driver.py status did not report an authorized session: ${JSON.stringify(status)}`);
+    }
+    let groupWarmup: TelegramSessionPreflight["groupWarmup"] = "skipped";
+    if (credential.groupId) {
+      runTelegramUserDriverJson([
+        "transcript",
+        "--chat",
+        credential.groupId,
+        "--limit",
+        "1",
+        "--timeout-ms",
+        "60000",
+      ], Math.min(opts.timeoutMs, 60_000), env);
+      groupWarmup = "ok";
+    }
+    return { groupWarmup, ok: true, status };
+  } catch (error) {
+    throw storedTelegramSessionExpiredError(error);
+  }
+}
+
+async function resolveTdlibMessageIdByTranscript(params: {
+  credential: CredentialLease;
+  marker: string;
+  timeoutMs: number;
+}): Promise<string> {
+  const deadline = Date.now() + params.timeoutMs;
+  let lastObserved = 0;
+  while (Date.now() < deadline) {
+    const transcript = runTelegramUserDriverJson([
+      "transcript",
+      "--chat",
+      params.credential.groupId,
+      "--limit",
+      "30",
+    ], Math.min(params.timeoutMs, 30_000), {
+      ...process.env,
+      TELEGRAM_USER_DRIVER_STATE_DIR: params.credential.userDriverDir,
+    });
+    const messages = Array.isArray(transcript.messages) ? transcript.messages : [];
+    lastObserved = Math.max(lastObserved, messages.length);
+    for (const message of messages) {
+      if (!message || typeof message !== "object" || Array.isArray(message)) continue;
+      const record = message as Record<string, unknown>;
+      const text = typeof record.text === "string" ? record.text : "";
+      const messageId = record.messageId;
+      if (!text.includes(params.marker)) continue;
+      if (typeof messageId === "number" || typeof messageId === "string") return String(messageId);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+  throw new Error(
+    `Timed out resolving Telegram proof message via TDLib transcript; marker=${params.marker}, observed=${lastObserved}`,
+  );
 }
 
 async function defaultLiveDeps(): Promise<NativeProofDeps> {
@@ -460,14 +1017,195 @@ async function defaultLiveDeps(): Promise<NativeProofDeps> {
         groupId: String(payload.groupId || ""),
         leaseFile,
         ownerId: String(acquired.ownerId || ""),
+        sutToken: String(payload.sutToken || ""),
         testerUserId: String(payload.testerUserId || ""),
         testerUsername: String(payload.testerUsername || ""),
         userDriverDir,
       };
     },
-    async captureEvidence({ opts }) {
+    async captureEvidence({ crabbox, credential, localSut, opts, outputDir }) {
       assertNativeProofEnabled(opts);
-      throw new Error("Native Telegram Desktop capture is intentionally not implemented without the OpenClaw proof runner bridge.");
+      if (!credential.sutToken) throw new Error("telegram-user payload is missing sutToken.");
+      if (!crabbox.inspect) throw new Error("Crabbox inspect output is missing; cannot capture native proof evidence.");
+
+      const runId = randomUUID().slice(0, 8);
+      const callbackData = `oca-proof:${runId}`;
+      const proofText = [
+        `OCA Codex Telegram proof ${runId}`,
+        `Scenario: ${opts.scenario}`,
+        "Harness: Codex App Server local smoke",
+        "Marker: OPENCLAW_OCA_CODEX_BASIC_OK",
+        "Action: press Acknowledge to verify callback routing.",
+      ].join("\n");
+
+      const videoPath = path.join(outputDir, "telegram-desktop.mp4");
+      const motionVideoPath = path.join(outputDir, "telegram-desktop-motion.mp4");
+      const motionGifPath = path.join(outputDir, "telegram-desktop-motion.gif");
+      const screenshotPath = path.join(outputDir, "telegram-desktop.png");
+      const transcriptPath = path.join(outputDir, "telegram-transcript.redacted.json");
+      const callbackPath = path.join(outputDir, "telegram-callback.redacted.json");
+      const callbackAnswerPath = path.join(outputDir, "telegram-callback-answer.redacted.json");
+      const desktopLogPath = path.join(outputDir, "telegram-desktop.log");
+      const sessionDir = localSut.isolatedHome;
+      const setupScript = path.join(sessionDir, "remote-setup.sh");
+      const launchScript = path.join(sessionDir, "launch-desktop.sh");
+      const authorizeScript = path.join(sessionDir, "authorize-desktop.sh");
+      const selectChatScript = path.join(sessionDir, "select-desktop-chat.sh");
+      writeFileSync(setupScript, renderRemoteSetup(opts));
+      writeFileSync(launchScript, renderLaunchDesktop());
+      writeFileSync(authorizeScript, renderAuthorizeDesktop(opts));
+      writeFileSync(selectChatScript, renderSelectDesktopChat(opts.desktopChatTitle));
+      for (const script of [setupScript, launchScript, authorizeScript, selectChatScript]) chmodSync(script, 0o700);
+
+      sshRun(crabbox.inspect, `rm -rf ${REMOTE_ROOT} && mkdir -p ${REMOTE_ROOT}`);
+      scpToRemote(crabbox.inspect, path.join(sessionDir, "remote-state.tgz"), `${REMOTE_ROOT}/state.tgz`);
+      if (opts.tdlibArchive) {
+        const tdlibArchive = expandHome(opts.tdlibArchive);
+        if (!existsSync(tdlibArchive)) throw new Error(`TDLib archive does not exist: ${tdlibArchive}`);
+        scpToRemote(crabbox.inspect, tdlibArchive, `${REMOTE_ROOT}/tdlib.tgz`);
+      }
+      scpToRemote(crabbox.inspect, setupScript, `${REMOTE_ROOT}/remote-setup.sh`);
+      scpToRemote(crabbox.inspect, launchScript, `${REMOTE_ROOT}/launch-desktop.sh`);
+      scpToRemote(crabbox.inspect, authorizeScript, `${REMOTE_ROOT}/authorize-desktop.sh`);
+      scpToRemote(crabbox.inspect, selectChatScript, `${REMOTE_ROOT}/select-desktop-chat.sh`);
+      sshRun(crabbox.inspect, `bash ${REMOTE_ROOT}/remote-setup.sh`, REMOTE_SETUP_COMMAND_TIMEOUT_MS);
+      sshRun(crabbox.inspect, `bash ${REMOTE_ROOT}/launch-desktop.sh`);
+      sshRun(crabbox.inspect, `bash ${REMOTE_ROOT}/authorize-desktop.sh`);
+      sshRun(crabbox.inspect, `bash ${REMOTE_ROOT}/select-desktop-chat.sh`);
+
+      const sent = await telegramBotApi(credential.sutToken, "sendMessage", {
+        chat_id: credential.groupId,
+        disable_notification: true,
+        reply_markup: {
+          inline_keyboard: [[{ text: "Acknowledge", callback_data: callbackData }]],
+        },
+        text: proofText,
+      });
+      const messageId = messageIdFromBotResult(sent);
+      const tdlibMessageId = await resolveTdlibMessageIdByTranscript({
+        credential,
+        marker: runId,
+        timeoutMs: Math.min(opts.timeoutMs, 60_000),
+      });
+
+      const record = spawn(opts.crabboxBin, [
+        "artifacts",
+        "video",
+        "--provider",
+        opts.crabboxProvider,
+        "--target",
+        "linux",
+        "--id",
+        crabbox.id,
+        "--duration",
+        `${opts.recordSeconds}s`,
+        "--output",
+        videoPath,
+      ], { cwd: REPO_ROOT, stdio: "ignore" });
+
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+      const clicked = await clickCallbackWithBotAnswer({
+        callbackData,
+        credential,
+        messageId: tdlibMessageId,
+        outputDir,
+        token: credential.sutToken,
+        timeoutMs: Math.min(opts.timeoutMs, 60_000),
+      });
+      requireAnsweredTelegramCallback(clicked.callbackAnswer);
+      writeJson(callbackAnswerPath, clicked.callbackAnswer);
+      writeJson(callbackPath, clicked.callback);
+
+      const recordExit = await new Promise<number | null>((resolve) => {
+        record.once("close", resolve);
+      });
+      if (recordExit !== 0) {
+        throw new Error(`Crabbox video recording failed with exit code ${recordExit ?? "unknown"}.`);
+      }
+
+      runCommandSync({
+        command: opts.crabboxBin,
+        args: [
+          "screenshot",
+          "--provider",
+          opts.crabboxProvider,
+          "--target",
+          "linux",
+          "--id",
+          crabbox.id,
+          "--output",
+          screenshotPath,
+        ],
+      });
+      scpFromRemote(crabbox.inspect, `${REMOTE_ROOT}/telegram-desktop.log`, desktopLogPath);
+      runCommandSync({
+        command: opts.crabboxBin,
+        args: [
+          "media",
+          "preview",
+          "--input",
+          videoPath,
+          "--output",
+          motionGifPath,
+          "--fps",
+          "12",
+          "--width",
+          "1280",
+          "--trimmed-video-output",
+          motionVideoPath,
+          "--json",
+        ],
+      });
+      const transcript = runCommandSync({
+        command: "python3",
+        args: [
+          TELEGRAM_USER_DRIVER,
+          "transcript",
+          "--chat",
+          credential.groupId,
+          "--limit",
+          "20",
+          "--json",
+        ],
+        cwd: REPO_ROOT,
+        env: {
+          ...process.env,
+          TELEGRAM_USER_DRIVER_STATE_DIR: credential.userDriverDir,
+        },
+        timeoutMs: Math.min(opts.timeoutMs, 60_000),
+      });
+      writeRedactedJsonText(transcriptPath, transcript);
+
+      writeRedactedText(
+        path.join(outputDir, "oca-codex-telegram-proof.md"),
+        [
+          "# OCA Codex Telegram Proof",
+          "",
+          `Scenario: ${opts.scenario}`,
+          "Status: PASS",
+          `Telegram Bot API message id: ${messageId}`,
+          `Telegram TDLib message id: ${tdlibMessageId}`,
+          `Local smoke: ${(localSut.localSmoke as { ok?: boolean } | undefined)?.ok === true ? "PASS" : "UNKNOWN"}`,
+          "Callback: Acknowledge button clicked and answered through Telegram.",
+          "",
+        ].join("\n"),
+      );
+
+      return [
+        { kind: "markdown", path: path.join(outputDir, "oca-codex-telegram-proof.md"), public: true },
+        { kind: "json", path: transcriptPath, public: true },
+        { kind: "json", path: callbackPath, public: true },
+        { kind: "json", path: callbackAnswerPath, public: true },
+        { kind: "log", path: desktopLogPath, public: true },
+        { kind: "screenshot", path: screenshotPath, public: false },
+        { kind: "video", path: videoPath, public: false },
+        { kind: "video", path: motionVideoPath, public: false },
+        { kind: "video", path: motionGifPath, public: false },
+      ];
+    },
+    async preflightCredentialLease(lease, opts) {
+      assertNativeProofEnabled(opts);
+      return assertRestoredTelegramSessionAuthorized(lease, opts);
     },
     async releaseCredentialLease(lease, opts) {
       if (!existsSync(lease.leaseFile)) {
@@ -483,13 +1221,88 @@ async function defaultLiveDeps(): Promise<NativeProofDeps> {
     },
     async startCrabboxDesktop(opts) {
       assertNativeProofEnabled(opts);
-      throw new Error("Native Crabbox start requires the full Telegram Desktop proof bridge.");
+      const leaseOutput = runCommandSync({
+        command: opts.crabboxBin,
+        args: [
+          "warmup",
+          "--provider",
+          opts.crabboxProvider,
+          "--target",
+          "linux",
+          "--desktop",
+          "--idle-timeout",
+          "60m",
+          "--ttl",
+          "120m",
+        ],
+      });
+      const id = extractCrabboxLeaseId(leaseOutput);
+      const inspect = JSON.parse(runCommandSync({
+        command: opts.crabboxBin,
+        args: ["inspect", "--provider", opts.crabboxProvider, "--target", "linux", "--id", id, "--json"],
+      })) as CrabboxInspect;
+      return { createdLease: true, id, inspect, provider: opts.crabboxProvider, target: "linux" };
     },
-    async startLocalSut(params) {
-      assertNativeProofEnabled(params.opts);
-      throw new Error("Native local SUT start requires the full Telegram Desktop proof bridge.");
+    async startLocalSut({ opts, sessionDir }) {
+      assertNativeProofEnabled(opts);
+      const smokeOutputDir = path.join(opts.outputDir, "local-smoke");
+      const smoke = await runLocalSmoke(parseArgs([
+        "local-smoke",
+        "--scenario",
+        opts.scenario,
+        "--output-dir",
+        smokeOutputDir,
+        "--timeout-ms",
+        String(opts.timeoutMs),
+      ]));
+      const remoteStateRoot = path.join(sessionDir, "remote-state");
+      mkdirSync(remoteStateRoot, { recursive: true });
+      copyFileSync(TELEGRAM_USER_DRIVER, path.join(remoteStateRoot, "user-driver.py"));
+      const injectedCode = process.env[TELEGRAM_CODE_ENV]?.trim();
+      const injectedPassword = process.env[TELEGRAM_PASSWORD_ENV]?.trim();
+      if (!opts.recoverTelegramSession && (injectedCode || injectedPassword)) {
+        throw new Error(
+          `Telegram recovery credentials (${TELEGRAM_CODE_ENV}/${TELEGRAM_PASSWORD_ENV}) require --recover-telegram-session; normal live proof runs must use the brokered stored session.`,
+        );
+      }
+      if (injectedCode) {
+        writeFileSync(path.join(sessionDir, "telegram-user-code"), injectedCode, { mode: 0o600 });
+      }
+      if (injectedPassword) {
+        writeFileSync(path.join(sessionDir, "telegram-user-password"), injectedPassword, { mode: 0o600 });
+      }
+      runCommandSync({
+        command: "tar",
+        args: [
+          "-C",
+          sessionDir,
+          "-czf",
+          path.join(sessionDir, "remote-state.tgz"),
+          "user-driver",
+          "desktop",
+          ...(opts.recoverTelegramSession ? ["telegram-user-payload.json"] : []),
+          ...(injectedCode ? ["telegram-user-code"] : []),
+          ...(injectedPassword ? ["telegram-user-password"] : []),
+          "-C",
+          remoteStateRoot,
+          "user-driver.py",
+        ],
+      });
+      return {
+        gatewayPort: opts.gatewayPort,
+        isolatedHome: sessionDir,
+        localSmoke: smoke,
+        requestLog: path.join(REPO_ROOT, smokeOutputDir, "codex-app-server-requests.redacted.jsonl"),
+      };
     },
-    async stopCrabboxDesktop() {},
+    async stopCrabboxDesktop(desktop, opts) {
+      if (desktop.createdLease) {
+        runCommandSync({
+          command: opts.crabboxBin,
+          args: ["stop", "--provider", opts.crabboxProvider, desktop.id],
+        });
+      }
+    },
     async stopLocalSut() {},
   };
 }
@@ -537,6 +1350,9 @@ export async function runNativeProof(
     cleanup.push(async () => {
       await orchestrator.releaseCredentialLease(session.credential!, opts);
     });
+    if (orchestrator.preflightCredentialLease) {
+      await orchestrator.preflightCredentialLease(session.credential, opts);
+    }
     session.localSut = await orchestrator.startLocalSut({ credential: session.credential, opts, sessionDir });
     cleanup.push(async () => {
       await orchestrator.stopLocalSut(session.localSut!, opts);
@@ -621,13 +1437,60 @@ export async function runNativeProof(
   return result;
 }
 
+export async function runLiveSessionPreflight(
+  opts: Options,
+  deps?: Pick<NativeProofDeps, "acquireCredentialLease" | "preflightCredentialLease" | "releaseCredentialLease">,
+): Promise<Record<string, unknown>> {
+  assertNativeProofEnabled(opts);
+  const outputDir = resolveProofOutputDir(opts.outputDir);
+  const sessionDir = path.join(outputDir, ".session-preflight");
+  rmSync(sessionDir, { recursive: true, force: true });
+  mkdirSync(sessionDir, { mode: 0o700, recursive: true });
+  const orchestrator = deps ?? await defaultLiveDeps();
+  let credential: CredentialLease | undefined;
+  const cleanupErrors: string[] = [];
+  let result: Record<string, unknown> | undefined;
+  try {
+    credential = await orchestrator.acquireCredentialLease(opts, sessionDir);
+    const preflight = orchestrator.preflightCredentialLease
+      ? await orchestrator.preflightCredentialLease(credential, opts)
+      : await assertRestoredTelegramSessionAuthorized(credential, opts);
+    result = {
+      ok: true,
+      credentialId: credential.credentialId,
+      groupWarmup: preflight.groupWarmup,
+      sessionState: "authorized",
+    };
+  } finally {
+    if (credential) {
+      try {
+        await orchestrator.releaseCredentialLease(credential, opts);
+      } catch (error) {
+        cleanupErrors.push(error instanceof Error ? error.message : String(error));
+      }
+    }
+    if (cleanupErrors.length > 0) {
+      writeJson(path.join(outputDir, "preflight-cleanup-errors.json"), { cleanupErrors });
+    } else {
+      rmSync(sessionDir, { recursive: true, force: true });
+    }
+  }
+  if (cleanupErrors.length > 0) {
+    throw new Error(`telegram-user preflight cleanup failed\n${redactProofText(cleanupErrors.join("\n"))}`);
+  }
+  return result ?? { ok: false };
+}
+
 const STAGED_PUBLIC_TEXT_ARTIFACTS = new Set([
   "codex-app-server-requests.redacted.jsonl",
   "harness-messages.redacted.json",
   "mantis-evidence.json",
   "oca-codex-telegram-proof.md",
   "summary.json",
+  "telegram-callback-answer.redacted.json",
+  "telegram-callback.redacted.json",
   "telegram-desktop.log",
+  "telegram-transcript.redacted.json",
 ]);
 
 const PRIVATE_VISUAL_ARTIFACTS = new Set([
@@ -862,9 +1725,15 @@ async function main(): Promise<void> {
     if ((summary as { ok?: boolean }).ok !== true) process.exit(1);
     return;
   }
+  if (opts.command === "preflight") {
+    const summary = await runLiveSessionPreflight(opts);
+    console.log(JSON.stringify(redactProofValue(summary), null, 2));
+    if ((summary as { ok?: boolean }).ok !== true) process.exit(1);
+    return;
+  }
 
   const result = await runNativeProof(opts);
-  console.log(JSON.stringify({ ...result, staged: stagePublicArtifacts(opts.outputDir) }, null, 2));
+  console.log(JSON.stringify(redactProofValue({ ...result, staged: stagePublicArtifacts(opts.outputDir) }), null, 2));
   if ((result as { ok?: boolean }).ok !== true) process.exit(1);
 }
 

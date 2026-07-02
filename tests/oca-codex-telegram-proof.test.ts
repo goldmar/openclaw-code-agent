@@ -1,5 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,7 +8,11 @@ import {
   buildProofPlan,
   collectDoctorChecks,
   parseArgs,
+  renderAuthorizeDesktop,
+  renderRemoteSetup,
+  requireAnsweredTelegramCallback,
   resolveProofOutputDir,
+  runLiveSessionPreflight,
   runNativeProof,
   runLocalSmoke,
   stagePublicArtifacts,
@@ -30,9 +35,14 @@ describe("OCA Codex Telegram proof runner", () => {
       "12",
       "--provider",
       "local-container",
-      "--env-file",
+      "--convex-env-file",
       ".private/convex.env",
+      "--tdlib-archive",
+      "/tmp/tdlib.tgz",
+      "--tdlib-sha256",
+      "943518ad39f67e20f843713ba5c88fedbd06111fbc314c61bfb2fc3f1a45743e",
       "--allow-live",
+      "--recover-telegram-session",
       "--keep-box",
     ]);
 
@@ -43,11 +53,43 @@ describe("OCA Codex Telegram proof runner", () => {
     assert.equal(opts.recordSeconds, 12);
     assert.equal(opts.keepBox, true);
     assert.equal(opts.envFile, ".private/convex.env");
+    assert.equal(opts.tdlibArchive, "/tmp/tdlib.tgz");
+    assert.equal(opts.tdlibSha256, "943518ad39f67e20f843713ba5c88fedbd06111fbc314c61bfb2fc3f1a45743e");
     assert.equal(opts.allowLive, true);
+    assert.equal(opts.recoverTelegramSession, true);
 
     assert.throws(() => parseArgs(["--output-dir", "one", "--output-dir", "two"]), /--output-dir was provided more than once/);
     assert.throws(() => parseArgs(["--gateway-port", "65536"]), /TCP port/);
     assert.throws(() => parseArgs(["--record-seconds", "1e3"]), /positive integer/);
+  });
+
+  it("accepts preflight and the env-file compatibility alias", () => {
+    const opts = parseArgs(["preflight", "--allow-live", "--env-file", ".private/convex.env"]);
+
+    assert.equal(opts.command, "preflight");
+    assert.equal(opts.allowLive, true);
+    assert.equal(opts.envFile, ".private/convex.env");
+  });
+
+  it("accepts env file flags through package-script launchers", () => {
+    const runDryPlan = (args: string[]) => execFileSync("pnpm", [
+      "proof:codex-telegram",
+      "--dry-run",
+      ...args,
+      ".private/convex.env",
+      "--output-dir",
+      `.artifacts/qa-e2e/oca-codex-telegram/package-script-${args.at(-2)?.replace(/^--/u, "") ?? "env-file"}`,
+    ], {
+      cwd: repoRoot,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const parsePlan = (output: string) => JSON.parse(output.slice(output.indexOf("{"))) as {
+      secrets?: { envFile?: string };
+    };
+
+    assert.equal(parsePlan(runDryPlan(["--convex-env-file"])).secrets?.envFile, "provided");
+    assert.equal(parsePlan(runDryPlan(["--", "--env-file"])).secrets?.envFile, "provided");
   });
 
   it("rejects output directories outside the proof artifact root", () => {
@@ -74,12 +116,61 @@ describe("OCA Codex Telegram proof runner", () => {
       assert.equal(JSON.stringify(plan).includes("super-secret-value"), false);
       assert.equal(plan.telegram.credentialKind, "telegram-user");
       assert.equal(plan.gateway.isolatedHome, true);
+      assert.equal(plan.telegram.tdlibArchive, "missing");
+      assert.equal(plan.telegram.tdlibSha256, "missing");
+      assert.equal(plan.telegram.recoveryMode, "disabled");
     } finally {
       if (originalSecret === undefined) delete process.env.OPENCLAW_QA_CONVEX_SECRET_CI;
       else process.env.OPENCLAW_QA_CONVEX_SECRET_CI = originalSecret;
       if (originalSite === undefined) delete process.env.OPENCLAW_QA_CONVEX_SITE_URL;
       else process.env.OPENCLAW_QA_CONVEX_SITE_URL = originalSite;
     }
+  });
+
+  it("requires restored Telegram sessions during normal remote setup", () => {
+    const script = renderRemoteSetup(parseArgs(["run"]));
+    const statusIndex = script.indexOf('python3 "$root/user-driver.py" status');
+
+    assert.ok(statusIndex > 0);
+    assert.doesNotMatch(script, /python3 "\$root\/user-driver\.py" login/);
+    assert.doesNotMatch(script, /TELEGRAM_USER_DRIVER_CODE="\$telegram_code"/);
+    assert.doesNotMatch(script, /TELEGRAM_USER_DRIVER_PASSWORD="\$telegram_password"/);
+    assert.doesNotMatch(script, /login --password/);
+    assert.doesNotMatch(script, /login --code/);
+    assert.doesNotMatch(script, /telegram-user-payload\.json/);
+    assert.doesNotMatch(script, /telegram-user-code/);
+    assert.doesNotMatch(script, /telegram-user-password/);
+    assert.match(script, /stored Telegram session expired; refresh\/export\/seed broker payload/);
+  });
+
+  it("gates Telegram login and QR recovery behind explicit recovery mode", () => {
+    const setup = renderRemoteSetup(parseArgs(["run", "--recover-telegram-session"]));
+    const loginIndex = setup.indexOf('python3 "$root/user-driver.py" login');
+    const statusIndex = setup.indexOf('python3 "$root/user-driver.py" status');
+
+    assert.ok(loginIndex > 0);
+    assert.ok(statusIndex > loginIndex);
+    assert.match(setup, /Telegram session recovery mode enabled/);
+    assert.match(setup, /TELEGRAM_USER_DRIVER_CODE="\$telegram_code"/);
+    assert.match(setup, /TELEGRAM_USER_DRIVER_PASSWORD="\$telegram_password"/);
+    assert.match(setup, /telegram-user-payload\.json/);
+    assert.doesNotMatch(setup, /login --password/);
+    assert.doesNotMatch(setup, /login --code/);
+
+    const normalDesktopAuth = renderAuthorizeDesktop(parseArgs(["run"]));
+    assert.doesNotMatch(normalDesktopAuth, /confirm-qr/);
+    assert.match(normalDesktopAuth, /stored Telegram Desktop tdata expired; refresh\/export\/seed broker payload/);
+
+    const recoveryDesktopAuth = renderAuthorizeDesktop(parseArgs(["run", "--recover-telegram-session"]));
+    assert.match(recoveryDesktopAuth, /confirm-qr --link "\$link"/);
+  });
+
+  it("fails the live proof when Telegram callback acknowledgement is missing", () => {
+    assert.doesNotThrow(() => requireAnsweredTelegramCallback({ answered: true, updatesSeen: 1 }));
+    assert.throws(
+      () => requireAnsweredTelegramCallback({ answered: false, updatesSeen: 3 }),
+      /answerCallbackQuery was not observed after 3 callback updates/,
+    );
   });
 
   it("refuses native Telegram proof unless both the env gate and live flag are present", async () => {
@@ -176,6 +267,9 @@ describe("OCA Codex Telegram proof runner", () => {
       writeFileSync(join(artifactDir, "harness-messages.redacted.json"), "[]");
       writeFileSync(join(artifactDir, "codex-app-server-requests.redacted.jsonl"), "not json password hunter2 apiKey abc123 credential lease-secret\n");
       writeFileSync(join(artifactDir, "mantis-evidence.json"), '{"note":"apiKey abc123 credential lease-secret"}');
+      writeFileSync(join(artifactDir, "telegram-transcript.redacted.json"), '{"messages":[{"text":"token=abc123 user @qa_secret_user"}]}');
+      writeFileSync(join(artifactDir, "telegram-callback.redacted.json"), '{"button":{"data":"secret-callback-token"},"messageId":"9988776655"}');
+      writeFileSync(join(artifactDir, "telegram-callback-answer.redacted.json"), '{"answered":true,"updatesSeen":1}');
       writeFileSync(join(artifactDir, "oca-codex-telegram-proof.md"), 'secret=super-secret password hunter2 apiKey abc123 credential lease-secret authorization: "Bearer abc123"');
       writeFileSync(
         join(artifactDir, "telegram-desktop.log"),
@@ -192,6 +286,9 @@ describe("OCA Codex Telegram proof runner", () => {
       assert.equal(existsSync(join(staged, "harness-messages.redacted.json")), true);
       assert.equal(existsSync(join(staged, "codex-app-server-requests.redacted.jsonl")), true);
       assert.equal(existsSync(join(staged, "mantis-evidence.json")), true);
+      assert.equal(existsSync(join(staged, "telegram-transcript.redacted.json")), true);
+      assert.equal(existsSync(join(staged, "telegram-callback.redacted.json")), true);
+      assert.equal(existsSync(join(staged, "telegram-callback-answer.redacted.json")), true);
       assert.equal(existsSync(join(staged, "oca-codex-telegram-proof.md")), true);
       assert.equal(existsSync(join(staged, "telegram-desktop.log")), true);
       const stagedSummary = readFileSync(join(staged, "summary.json"), "utf8");
@@ -213,6 +310,10 @@ describe("OCA Codex Telegram proof runner", () => {
       assert.doesNotMatch(stagedEvidence, /abc123|lease-secret/);
       const stagedJsonl = readFileSync(join(staged, "codex-app-server-requests.redacted.jsonl"), "utf8");
       assert.doesNotMatch(stagedJsonl, /hunter2|abc123|lease-secret/);
+      const stagedTranscript = readFileSync(join(staged, "telegram-transcript.redacted.json"), "utf8");
+      assert.doesNotMatch(stagedTranscript, /abc123|qa_secret_user/);
+      const stagedCallback = readFileSync(join(staged, "telegram-callback.redacted.json"), "utf8");
+      assert.doesNotMatch(stagedCallback, /secret-callback-token|9988776655/);
       assert.equal(existsSync(join(staged, "telegram-desktop.png")), false);
       assert.match(readFileSync(join(staged, "omitted-private-artifacts.json"), "utf8"), /telegram-desktop\.png/);
       assert.equal(existsSync(join(staged, "session.json")), false);
@@ -284,6 +385,10 @@ describe("OCA Codex Telegram proof runner", () => {
             userDriverDir: join(sessionDir, "user-driver"),
           };
         },
+        async preflightCredentialLease() {
+          events.push("preflight");
+          return { groupWarmup: "ok", ok: true, status: { authorized: true } };
+        },
         async startLocalSut() {
           events.push("start-sut");
           return { gatewayPort: 38975, isolatedHome: "/home/openclaw/private-proof-home" };
@@ -318,7 +423,7 @@ describe("OCA Codex Telegram proof runner", () => {
       });
 
       assert.equal(result.ok, true);
-      assert.deepEqual(events, ["acquire", "start-sut", "start-crabbox", "capture", "stop-crabbox", "stop-sut", "release"]);
+      assert.deepEqual(events, ["acquire", "preflight", "start-sut", "start-crabbox", "capture", "stop-crabbox", "stop-sut", "release"]);
       assert.equal(existsSync(join(repoRoot, outputDir, ".session")), false);
 
       const summaryText = readFileSync(join(repoRoot, outputDir, "summary.json"), "utf8");
@@ -339,6 +444,121 @@ describe("OCA Codex Telegram proof runner", () => {
       assert.doesNotMatch(stagedLog, /-1003863755361/);
       assert.doesNotMatch(stagedLog, /\/tmp\/openclaw-proof/);
       assert.doesNotMatch(stagedLog, /hunter2/);
+    } finally {
+      if (original === undefined) delete process.env.OPENCLAW_RUN_LIVE_TELEGRAM_PROOF;
+      else process.env.OPENCLAW_RUN_LIVE_TELEGRAM_PROOF = original;
+      rmSync(artifactDir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails fast and releases the lease when restored Telegram session preflight fails", async () => {
+    const original = process.env.OPENCLAW_RUN_LIVE_TELEGRAM_PROOF;
+    const outputDir = join(".artifacts", "qa-e2e", "oca-codex-telegram", `preflight-failure-${Date.now()}`);
+    const artifactDir = join(repoRoot, outputDir);
+    const events: string[] = [];
+    try {
+      process.env.OPENCLAW_RUN_LIVE_TELEGRAM_PROOF = "1";
+      const result = await runNativeProof(parseArgs([
+        "run",
+        "--allow-live",
+        "--output-dir",
+        outputDir,
+      ]), {
+        async acquireCredentialLease(_opts, sessionDir) {
+          events.push("acquire");
+          const leaseFile = join(sessionDir, "lease.json");
+          writeFileSync(leaseFile, "{}");
+          return {
+            credentialId: "credential-1",
+            desktopWorkdir: join(sessionDir, "desktop"),
+            groupId: "-1001234567890",
+            leaseFile,
+            ownerId: "owner",
+            testerUserId: "123456789",
+            testerUsername: "tester",
+            userDriverDir: join(sessionDir, "user-driver"),
+          };
+        },
+        async preflightCredentialLease() {
+          events.push("preflight");
+          throw new Error("stored Telegram session expired; refresh/export/seed broker payload");
+        },
+        async startLocalSut() {
+          events.push("start-sut");
+          throw new Error("unexpected local SUT start");
+        },
+        async startCrabboxDesktop() {
+          events.push("start-crabbox");
+          throw new Error("unexpected Crabbox start");
+        },
+        async captureEvidence() {
+          events.push("capture");
+          return [];
+        },
+        async stopCrabboxDesktop() {
+          events.push("stop-crabbox");
+        },
+        async stopLocalSut() {
+          events.push("stop-sut");
+        },
+        async releaseCredentialLease() {
+          events.push("release");
+        },
+      });
+
+      assert.equal(result.ok, false);
+      assert.match(String(result.error), /stored Telegram session expired; refresh\/export\/seed broker payload/);
+      assert.deepEqual(events, ["acquire", "preflight", "release"]);
+      assert.equal(existsSync(join(artifactDir, ".session")), false);
+    } finally {
+      if (original === undefined) delete process.env.OPENCLAW_RUN_LIVE_TELEGRAM_PROOF;
+      else process.env.OPENCLAW_RUN_LIVE_TELEGRAM_PROOF = original;
+      rmSync(artifactDir, { recursive: true, force: true });
+    }
+  });
+
+  it("runs standalone live-session preflight without starting SUT or Crabbox", async () => {
+    const original = process.env.OPENCLAW_RUN_LIVE_TELEGRAM_PROOF;
+    const outputDir = join(".artifacts", "qa-e2e", "oca-codex-telegram", `session-preflight-${Date.now()}`);
+    const artifactDir = join(repoRoot, outputDir);
+    const events: string[] = [];
+    try {
+      process.env.OPENCLAW_RUN_LIVE_TELEGRAM_PROOF = "1";
+      const result = await runLiveSessionPreflight(parseArgs([
+        "preflight",
+        "--allow-live",
+        "--output-dir",
+        outputDir,
+      ]), {
+        async acquireCredentialLease(_opts, sessionDir) {
+          events.push("acquire");
+          const leaseFile = join(sessionDir, "lease.json");
+          writeFileSync(leaseFile, "{}");
+          return {
+            credentialId: "credential-1",
+            desktopWorkdir: join(sessionDir, "desktop"),
+            groupId: "-1001234567890",
+            leaseFile,
+            ownerId: "owner",
+            testerUserId: "123456789",
+            testerUsername: "tester",
+            userDriverDir: join(sessionDir, "user-driver"),
+          };
+        },
+        async preflightCredentialLease() {
+          events.push("preflight");
+          return { groupWarmup: "ok", ok: true, status: { authorized: true } };
+        },
+        async releaseCredentialLease() {
+          events.push("release");
+        },
+      });
+
+      assert.equal(result.ok, true);
+      assert.equal(result.sessionState, "authorized");
+      assert.equal(result.groupWarmup, "ok");
+      assert.deepEqual(events, ["acquire", "preflight", "release"]);
+      assert.equal(existsSync(join(artifactDir, ".session-preflight")), false);
     } finally {
       if (original === undefined) delete process.env.OPENCLAW_RUN_LIVE_TELEGRAM_PROOF;
       else process.env.OPENCLAW_RUN_LIVE_TELEGRAM_PROOF = original;
