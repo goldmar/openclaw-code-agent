@@ -380,12 +380,14 @@ function runCommandSync(params: {
   args: string[];
   command: string;
   cwd?: string;
+  env?: NodeJS.ProcessEnv;
   input?: string;
   timeoutMs?: number;
 }): string {
   const result = spawnSync(params.command, params.args, {
     cwd: params.cwd ?? REPO_ROOT,
     encoding: "utf8",
+    env: params.env,
     input: params.input,
     maxBuffer: 32 * 1024 * 1024,
     timeout: params.timeoutMs ?? COMMAND_TIMEOUT_MS,
@@ -853,11 +855,12 @@ async function clickCallbackWithBotAnswer(params: {
   };
 }
 
-function runTelegramUserDriverJson(args: string[], timeoutMs: number): Record<string, unknown> {
+function runTelegramUserDriverJson(args: string[], timeoutMs: number, env: NodeJS.ProcessEnv = process.env): Record<string, unknown> {
   const output = runCommandSync({
     command: "python3",
     args: [TELEGRAM_USER_DRIVER, ...args, "--json"],
     cwd: REPO_ROOT,
+    env,
     timeoutMs,
   });
   return JSON.parse(output) as Record<string, unknown>;
@@ -877,7 +880,10 @@ async function resolveTdlibMessageIdByTranscript(params: {
       params.credential.groupId,
       "--limit",
       "30",
-    ], Math.min(params.timeoutMs, 30_000));
+    ], Math.min(params.timeoutMs, 30_000), {
+      ...process.env,
+      TELEGRAM_USER_DRIVER_STATE_DIR: params.credential.userDriverDir,
+    });
     const messages = Array.isArray(transcript.messages) ? transcript.messages : [];
     lastObserved = Math.max(lastObserved, messages.length);
     for (const message of messages) {
@@ -1074,6 +1080,10 @@ async function defaultLiveDeps(): Promise<NativeProofDeps> {
           "--json",
         ],
         cwd: REPO_ROOT,
+        env: {
+          ...process.env,
+          TELEGRAM_USER_DRIVER_STATE_DIR: credential.userDriverDir,
+        },
         timeoutMs: Math.min(opts.timeoutMs, 60_000),
       });
       writeRedactedJsonText(transcriptPath, transcript);
