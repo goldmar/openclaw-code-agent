@@ -181,7 +181,7 @@ export function usageText(): string {
     "  --crabbox-bin <path>          Crabbox binary. Default: OPENCLAW_TELEGRAM_USER_CRABBOX_BIN or crabbox.",
     "  --provider <name>             Crabbox provider. Default: OPENCLAW_TELEGRAM_USER_CRABBOX_PROVIDER or local-container.",
     "  --desktop-chat-title <title>  Telegram Desktop chat title for native proof capture.",
-    "  --env-file <path>             Convex env file for live proof release/acquire helpers.",
+    "  --convex-env-file <path>      Convex env file for live proof release/acquire helpers.",
     "  --gateway-port <port>         Disposable gateway port. Default: 38975.",
     "  --record-seconds <seconds>    Native desktop recording duration. Default: 35.",
     "  --tdlib-archive <path>        Prebuilt TDLib tarball with lib/libtdjson.so for Crabbox setup.",
@@ -282,7 +282,7 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): Options {
       case "--desktop-chat-title":
         opts.desktopChatTitle = value;
         break;
-      case "--env-file":
+      case "--convex-env-file":
         opts.envFile = value;
         break;
       case "--gateway-port":
@@ -734,6 +734,14 @@ export function buildTelegramCredentialCommandArgs(opts: Options, command: "leas
   return args;
 }
 
+export function requireAnsweredTelegramCallback(callbackAnswer: { answered: boolean; updatesSeen: number }): void {
+  if (callbackAnswer.answered !== true) {
+    throw new Error(
+      `Telegram callback was clicked but answerCallbackQuery was not observed after ${callbackAnswer.updatesSeen} callback updates.`,
+    );
+  }
+}
+
 async function telegramBotApi(token: string, method: string, body: Record<string, unknown> = {}): Promise<TelegramBotResult> {
   const response = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
     method: "POST",
@@ -1025,6 +1033,7 @@ async function defaultLiveDeps(): Promise<NativeProofDeps> {
         token: credential.sutToken,
         timeoutMs: Math.min(opts.timeoutMs, 60_000),
       });
+      requireAnsweredTelegramCallback(clicked.callbackAnswer);
       writeJson(callbackAnswerPath, clicked.callbackAnswer);
       writeJson(callbackPath, clicked.callback);
 

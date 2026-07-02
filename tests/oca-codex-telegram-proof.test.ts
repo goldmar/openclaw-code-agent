@@ -1,5 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,6 +9,7 @@ import {
   collectDoctorChecks,
   parseArgs,
   renderRemoteSetup,
+  requireAnsweredTelegramCallback,
   resolveProofOutputDir,
   runNativeProof,
   runLocalSmoke,
@@ -31,7 +33,7 @@ describe("OCA Codex Telegram proof runner", () => {
       "12",
       "--provider",
       "local-container",
-      "--env-file",
+      "--convex-env-file",
       ".private/convex.env",
       "--tdlib-archive",
       "/tmp/tdlib.tgz",
@@ -55,6 +57,26 @@ describe("OCA Codex Telegram proof runner", () => {
     assert.throws(() => parseArgs(["--output-dir", "one", "--output-dir", "two"]), /--output-dir was provided more than once/);
     assert.throws(() => parseArgs(["--gateway-port", "65536"]), /TCP port/);
     assert.throws(() => parseArgs(["--record-seconds", "1e3"]), /positive integer/);
+  });
+
+  it("accepts the Convex env file flag through the package-script style launcher", () => {
+    const output = execFileSync("pnpm", [
+      "proof:codex-telegram",
+      "--dry-run",
+      "--convex-env-file",
+      ".private/convex.env",
+      "--output-dir",
+      ".artifacts/qa-e2e/oca-codex-telegram/package-script-env-file",
+    ], {
+      cwd: repoRoot,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const plan = JSON.parse(output.slice(output.indexOf("{"))) as {
+      secrets?: { envFile?: string };
+    };
+
+    assert.equal(plan.secrets?.envFile, "provided");
   });
 
   it("rejects output directories outside the proof artifact root", () => {
@@ -105,6 +127,14 @@ describe("OCA Codex Telegram proof runner", () => {
     assert.match(script, /telegram-user-payload\.json/);
     assert.match(script, /telegram-user-code/);
     assert.match(script, /telegram-user-password/);
+  });
+
+  it("fails the live proof when Telegram callback acknowledgement is missing", () => {
+    assert.doesNotThrow(() => requireAnsweredTelegramCallback({ answered: true, updatesSeen: 1 }));
+    assert.throws(
+      () => requireAnsweredTelegramCallback({ answered: false, updatesSeen: 3 }),
+      /answerCallbackQuery was not observed after 3 callback updates/,
+    );
   });
 
   it("refuses native Telegram proof unless both the env gate and live flag are present", async () => {

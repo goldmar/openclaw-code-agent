@@ -118,7 +118,7 @@ describe("OCA Codex Crabbox integration harness", () => {
   it("builds credential helper commands with explicit env-file placement and no secret values", () => {
     const opts = parseArgs([
       "run",
-      "--env-file",
+      "--convex-env-file",
       ".private/convex.local.env",
       "--output-dir",
       ".artifacts/qa-e2e/oca-codex-telegram/command-shape",
@@ -137,6 +137,22 @@ describe("OCA Codex Crabbox integration harness", () => {
     assert.deepEqual(leaseArgs.slice(-2), ["--env-file", ".private/convex.local.env"]);
     assert.deepEqual(releaseArgs.slice(-2), ["--env-file", ".private/convex.local.env"]);
     assert.doesNotMatch(JSON.stringify({ leaseArgs, releaseArgs }), /OPENCLAW_QA_CONVEX_SECRET_CI|hunter2|bot-token/u);
+  });
+
+  it("loads the telegram-user credential helper CLI support modules", () => {
+    const help = execFileSync("node", [
+      "--import",
+      "tsx",
+      "scripts/e2e/telegram-user-credential.ts",
+      "--help",
+    ], {
+      cwd: repoRoot,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    assert.match(help, /lease-restore/);
+    assert.match(help, /release --lease-file/);
   });
 
   it("uses the private Convex env file by default for live credential commands", () => {
