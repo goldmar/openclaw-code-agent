@@ -20,7 +20,7 @@ import { getHarness } from "../../src/harness/index";
 import type { HarnessMessage, HarnessResult, HarnessSession } from "../../src/harness/types";
 import { redactProofValue } from "./oca-codex-proof-app-server";
 
-type Command = "doctor" | "local-smoke" | "run";
+type Command = "doctor" | "local-smoke" | "preflight" | "run";
 type Options = {
   allowLive: boolean;
   command: Command;
@@ -33,6 +33,7 @@ type Options = {
   keepBox: boolean;
   outputDir: string;
   recordSeconds: number;
+  recoverTelegramSession: boolean;
   scenario: string;
   tdlibArchive?: string;
   tdlibSha256?: string;
@@ -72,6 +73,7 @@ type ProofPlan = {
     credentialKind: "telegram-user";
     desktopChatTitle: string;
     recordSeconds: number;
+    recoveryMode: "disabled" | "enabled";
     tdlibArchive: "missing" | "provided";
     tdlibSha256: "missing" | "provided";
   };
@@ -142,11 +144,18 @@ type NativeProofDeps = {
     opts: Options;
     outputDir: string;
   }) => Promise<EvidenceArtifact[]>;
+  preflightCredentialLease?: (lease: CredentialLease, opts: Options) => Promise<TelegramSessionPreflight>;
   releaseCredentialLease: (lease: CredentialLease, opts: Options) => Promise<void>;
   startCrabboxDesktop: (opts: Options) => Promise<CrabboxDesktop>;
   startLocalSut: (params: { credential: CredentialLease; opts: Options; sessionDir: string }) => Promise<LocalProofSut>;
   stopCrabboxDesktop: (desktop: CrabboxDesktop, opts: Options) => Promise<void>;
   stopLocalSut: (sut: LocalProofSut, opts: Options) => Promise<void>;
+};
+
+type TelegramSessionPreflight = {
+  groupWarmup: "ok" | "skipped";
+  ok: true;
+  status: Record<string, unknown>;
 };
 
 type NativeProofResult = Record<string, unknown> & {
@@ -163,6 +172,8 @@ const TELEGRAM_USER_CREDENTIAL = path.join(SCRIPT_DIR, "telegram-user-credential
 const PRIVATE_CONVEX_ENV = "~/.codex/skills/custom/telegram-e2e-bot-to-bot/convex.local.env";
 const TELEGRAM_CODE_ENV = "OPENCLAW_QA_TELEGRAM_LOGIN_CODE";
 const TELEGRAM_PASSWORD_ENV = "OPENCLAW_QA_TELEGRAM_USER_PASSWORD";
+const STORED_TELEGRAM_SESSION_EXPIRED =
+  "stored Telegram session expired; refresh/export/seed broker payload";
 const TCP_PORT_RE = /^[1-9]\d*$/u;
 const COMMAND_TIMEOUT_MS = 30 * 60 * 1000;
 const REMOTE_SETUP_COMMAND_TIMEOUT_MS = 90 * 60 * 1000;
@@ -173,6 +184,7 @@ export function usageText(): string {
     "Usage:",
     "  node --import tsx scripts/e2e/oca-codex-telegram-proof.ts doctor",
     "  node --import tsx scripts/e2e/oca-codex-telegram-proof.ts local-smoke [--scenario basic]",
+    "  node --import tsx scripts/e2e/oca-codex-telegram-proof.ts preflight --allow-live",
     "  node --import tsx scripts/e2e/oca-codex-telegram-proof.ts run [--dry-run]",
     "",
     "Options:",
@@ -182,11 +194,13 @@ export function usageText(): string {
     "  --provider <name>             Crabbox provider. Default: OPENCLAW_TELEGRAM_USER_CRABBOX_PROVIDER or local-container.",
     "  --desktop-chat-title <title>  Telegram Desktop chat title for native proof capture.",
     "  --convex-env-file <path>      Convex env file for live proof release/acquire helpers.",
+    "  --env-file <path>             Alias for --convex-env-file.",
     "  --gateway-port <port>         Disposable gateway port. Default: 38975.",
     "  --record-seconds <seconds>    Native desktop recording duration. Default: 35.",
     "  --tdlib-archive <path>        Prebuilt TDLib tarball with lib/libtdjson.so for Crabbox setup.",
     "  --tdlib-sha256 <sha256>       Expected SHA-256 for --tdlib-archive.",
     "  --keep-box                    Keep Crabbox lease for VNC/debugging.",
+    "  --recover-telegram-session    Maintenance only: permit login/QR recovery credentials.",
     "  --dry-run                     Print the resolved proof plan without leasing credentials.",
     "  --allow-live                  Permit native orchestration when OPENCLAW_RUN_LIVE_TELEGRAM_PROOF=1.",
   ].join("\n");
@@ -230,10 +244,11 @@ function takeValue(args: string[], index: number, label: string): string {
 
 export function parseArgs(argv: string[] = process.argv.slice(2)): Options {
   const first = argv[0];
-  const command: Command = first === "doctor" || first === "local-smoke" || first === "run"
+  const command: Command = first === "doctor" || first === "local-smoke" || first === "preflight" || first === "run"
     ? first
     : "run";
-  const args = command === first ? argv.slice(1) : argv;
+  const rawArgs = command === first ? argv.slice(1) : argv;
+  const args = rawArgs[0] === "--" ? rawArgs.slice(1) : rawArgs;
   const seen = new Set<string>();
   const opts: Options = {
     allowLive: false,
@@ -246,6 +261,7 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): Options {
     keepBox: false,
     outputDir: path.join(DEFAULT_OUTPUT_ROOT, `${timestamp()}-${randomUUID().slice(0, 8)}`),
     recordSeconds: 35,
+    recoverTelegramSession: false,
     scenario: "basic",
     tdlibArchive: process.env.OPENCLAW_TDLIB_ARCHIVE?.trim() || undefined,
     tdlibSha256: process.env.OPENCLAW_TDLIB_SHA256?.trim() || undefined,
@@ -270,6 +286,10 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): Options {
       opts.allowLive = true;
       continue;
     }
+    if (key === "--recover-telegram-session") {
+      opts.recoverTelegramSession = true;
+      continue;
+    }
     if (!key.startsWith("--")) usage();
     if (seen.has(key)) throw new Error(`${key} was provided more than once`);
     seen.add(key);
@@ -283,6 +303,7 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): Options {
         opts.desktopChatTitle = value;
         break;
       case "--convex-env-file":
+      case "--env-file":
         opts.envFile = value;
         break;
       case "--gateway-port":
@@ -345,6 +366,7 @@ export function buildProofPlan(opts: Options): ProofPlan {
       credentialKind: "telegram-user",
       desktopChatTitle: opts.desktopChatTitle,
       recordSeconds: opts.recordSeconds,
+      recoveryMode: opts.recoverTelegramSession ? "enabled" : "disabled",
       tdlibArchive: opts.tdlibArchive ? "provided" : "missing",
       tdlibSha256: opts.tdlibSha256 ? "provided" : "missing",
     },
@@ -472,6 +494,48 @@ function extractCrabboxLeaseId(output: string): string {
 
 export function renderRemoteSetup(opts: Options): string {
   const tdlibSha256 = opts.tdlibSha256 ?? "";
+  const recoveryBlock = opts.recoverTelegramSession
+    ? `
+telegram_code="$(python3 - "$root/telegram-user-code" <<'PY'
+import pathlib
+import sys
+
+try:
+    print(pathlib.Path(sys.argv[1]).read_text().strip())
+except FileNotFoundError:
+    pass
+PY
+)"
+telegram_password="$(python3 - "$root/telegram-user-payload.json" "$root/telegram-user-password" <<'PY'
+import json
+import pathlib
+import sys
+
+payload_path = pathlib.Path(sys.argv[1])
+password_path = pathlib.Path(sys.argv[2])
+try:
+    payload = json.loads(payload_path.read_text())
+except FileNotFoundError:
+    payload = {}
+
+for key in ("credential", "telegramPassword", "telegram2faPassword", "password"):
+    value = payload.get(key)
+    if isinstance(value, str) and value.strip():
+        print(value.strip())
+        raise SystemExit(0)
+
+try:
+    print(password_path.read_text().strip())
+except FileNotFoundError:
+    pass
+PY
+)"
+if [ -n "$telegram_password" ]; then
+  echo "Telegram session recovery mode enabled; attempting maintenance login." >&2
+  TELEGRAM_USER_DRIVER_STATE_DIR="$root/user-driver" TELEGRAM_USER_DRIVER_CODE="$telegram_code" TELEGRAM_USER_DRIVER_PASSWORD="$telegram_password" python3 "$root/user-driver.py" login --json --timeout-ms 60000 >"$root/login.json"
+fi
+`
+    : "";
   return `#!/usr/bin/env bash
 set -euo pipefail
 export PATH="/usr/local/sbin:/usr/sbin:/sbin:$PATH"
@@ -522,44 +586,10 @@ if ! ldconfig -p | grep -q libtdjson.so; then
   run_setup_step "tdlib install" "$apt_timeout" sudo install -m 0755 "$tdjson_lib" /usr/local/lib/libtdjson.so
   sudo ldconfig
 fi
-telegram_code="$(python3 - "$root/telegram-user-code" <<'PY'
-import pathlib
-import sys
-
-try:
-    print(pathlib.Path(sys.argv[1]).read_text().strip())
-except FileNotFoundError:
-    pass
-PY
-)"
-telegram_password="$(python3 - "$root/telegram-user-payload.json" "$root/telegram-user-password" <<'PY'
-import json
-import pathlib
-import sys
-
-payload_path = pathlib.Path(sys.argv[1])
-password_path = pathlib.Path(sys.argv[2])
-try:
-    payload = json.loads(payload_path.read_text())
-except FileNotFoundError:
-    payload = {}
-
-for key in ("credential", "telegramPassword", "telegram2faPassword", "password"):
-    value = payload.get(key)
-    if isinstance(value, str) and value.strip():
-        print(value.strip())
-        raise SystemExit(0)
-
-try:
-    print(password_path.read_text().strip())
-except FileNotFoundError:
-    pass
-PY
-)"
-if [ -n "$telegram_password" ]; then
-  TELEGRAM_USER_DRIVER_STATE_DIR="$root/user-driver" TELEGRAM_USER_DRIVER_CODE="$telegram_code" TELEGRAM_USER_DRIVER_PASSWORD="$telegram_password" python3 "$root/user-driver.py" login --json --timeout-ms 60000 >"$root/login.json"
+${recoveryBlock}if ! TELEGRAM_USER_DRIVER_STATE_DIR="$root/user-driver" python3 "$root/user-driver.py" status --json --timeout-ms 60000 >"$root/status.json"; then
+  echo "${STORED_TELEGRAM_SESSION_EXPIRED}. Recovery login is disabled for normal proof runs; rerun with --recover-telegram-session only for maintenance." >&2
+  exit 1
 fi
-TELEGRAM_USER_DRIVER_STATE_DIR="$root/user-driver" python3 "$root/user-driver.py" status --json --timeout-ms 60000 >"$root/status.json"
 TELEGRAM_USER_DRIVER_STATE_DIR="$root/user-driver" python3 "$root/user-driver.py" terminate-desktop-sessions --json --timeout-ms 60000 --output "$root/desktop-sessions-cleanup.json"
 `;
 }
@@ -578,7 +608,11 @@ wmctrl -l | grep -i telegram >/dev/null
 `;
 }
 
-function renderAuthorizeDesktop(): string {
+export function renderAuthorizeDesktop(opts: Options): string {
+  const qrBlock = opts.recoverTelegramSession
+    ? `TELEGRAM_USER_DRIVER_STATE_DIR="$root/user-driver" python3 "$root/user-driver.py" confirm-qr --link "$link" --json --output "$root/desktop-session.json"`
+    : `echo "stored Telegram Desktop tdata expired; refresh/export/seed broker payload. QR recovery is disabled for normal proof runs; rerun with --recover-telegram-session only for maintenance." >&2
+  exit 1`;
   return `#!/usr/bin/env bash
 set -euo pipefail
 root=${REMOTE_ROOT}
@@ -610,7 +644,7 @@ for _ in $(seq 1 25); do
   sleep 1
 done
 if [ -n "$link" ]; then
-  TELEGRAM_USER_DRIVER_STATE_DIR="$root/user-driver" python3 "$root/user-driver.py" confirm-qr --link "$link" --json --output "$root/desktop-session.json"
+  ${qrBlock}
 fi
 sleep 6
 `;
@@ -874,6 +908,51 @@ function runTelegramUserDriverJson(args: string[], timeoutMs: number, env: NodeJ
   return JSON.parse(output) as Record<string, unknown>;
 }
 
+function isTelegramStatusAuthorized(status: Record<string, unknown>): boolean {
+  if (status.ok === false) return false;
+  if (status.authorized === false || status.isAuthorized === false) return false;
+  if (status.authorizationState === "authorizationStateReady" || status.authorizationState === "ready") return true;
+  if (status.status === "ready" || status.status === "authorized") return true;
+  return status.authorized === true || status.isAuthorized === true || status.ok === true;
+}
+
+function storedTelegramSessionExpiredError(error: unknown): Error {
+  const detail = error instanceof Error ? error.message : String(error);
+  return new Error(`${STORED_TELEGRAM_SESSION_EXPIRED}. Recovery/login is disabled for normal proof runs.\n${redactProofText(detail)}`);
+}
+
+export async function assertRestoredTelegramSessionAuthorized(
+  credential: CredentialLease,
+  opts: Options,
+): Promise<TelegramSessionPreflight> {
+  try {
+    const env = {
+      ...process.env,
+      TELEGRAM_USER_DRIVER_STATE_DIR: credential.userDriverDir,
+    };
+    const status = runTelegramUserDriverJson(["status", "--timeout-ms", "60000"], Math.min(opts.timeoutMs, 60_000), env);
+    if (!isTelegramStatusAuthorized(status)) {
+      throw new Error(`telegram-user-driver.py status did not report an authorized session: ${JSON.stringify(status)}`);
+    }
+    let groupWarmup: TelegramSessionPreflight["groupWarmup"] = "skipped";
+    if (credential.groupId) {
+      runTelegramUserDriverJson([
+        "transcript",
+        "--chat",
+        credential.groupId,
+        "--limit",
+        "1",
+        "--timeout-ms",
+        "60000",
+      ], Math.min(opts.timeoutMs, 60_000), env);
+      groupWarmup = "ok";
+    }
+    return { groupWarmup, ok: true, status };
+  } catch (error) {
+    throw storedTelegramSessionExpiredError(error);
+  }
+}
+
 async function resolveTdlibMessageIdByTranscript(params: {
   credential: CredentialLease;
   marker: string;
@@ -974,7 +1053,7 @@ async function defaultLiveDeps(): Promise<NativeProofDeps> {
       const selectChatScript = path.join(sessionDir, "select-desktop-chat.sh");
       writeFileSync(setupScript, renderRemoteSetup(opts));
       writeFileSync(launchScript, renderLaunchDesktop());
-      writeFileSync(authorizeScript, renderAuthorizeDesktop());
+      writeFileSync(authorizeScript, renderAuthorizeDesktop(opts));
       writeFileSync(selectChatScript, renderSelectDesktopChat(opts.desktopChatTitle));
       for (const script of [setupScript, launchScript, authorizeScript, selectChatScript]) chmodSync(script, 0o700);
 
@@ -1124,6 +1203,10 @@ async function defaultLiveDeps(): Promise<NativeProofDeps> {
         { kind: "video", path: motionGifPath, public: false },
       ];
     },
+    async preflightCredentialLease(lease, opts) {
+      assertNativeProofEnabled(opts);
+      return assertRestoredTelegramSessionAuthorized(lease, opts);
+    },
     async releaseCredentialLease(lease, opts) {
       if (!existsSync(lease.leaseFile)) {
         throw new Error(`telegram-user lease file is missing; cannot safely release credential: ${lease.leaseFile}`);
@@ -1176,10 +1259,15 @@ async function defaultLiveDeps(): Promise<NativeProofDeps> {
       mkdirSync(remoteStateRoot, { recursive: true });
       copyFileSync(TELEGRAM_USER_DRIVER, path.join(remoteStateRoot, "user-driver.py"));
       const injectedCode = process.env[TELEGRAM_CODE_ENV]?.trim();
+      const injectedPassword = process.env[TELEGRAM_PASSWORD_ENV]?.trim();
+      if (!opts.recoverTelegramSession && (injectedCode || injectedPassword)) {
+        throw new Error(
+          `Telegram recovery credentials (${TELEGRAM_CODE_ENV}/${TELEGRAM_PASSWORD_ENV}) require --recover-telegram-session; normal live proof runs must use the brokered stored session.`,
+        );
+      }
       if (injectedCode) {
         writeFileSync(path.join(sessionDir, "telegram-user-code"), injectedCode, { mode: 0o600 });
       }
-      const injectedPassword = process.env[TELEGRAM_PASSWORD_ENV]?.trim();
       if (injectedPassword) {
         writeFileSync(path.join(sessionDir, "telegram-user-password"), injectedPassword, { mode: 0o600 });
       }
@@ -1192,7 +1280,7 @@ async function defaultLiveDeps(): Promise<NativeProofDeps> {
           path.join(sessionDir, "remote-state.tgz"),
           "user-driver",
           "desktop",
-          "telegram-user-payload.json",
+          ...(opts.recoverTelegramSession ? ["telegram-user-payload.json"] : []),
           ...(injectedCode ? ["telegram-user-code"] : []),
           ...(injectedPassword ? ["telegram-user-password"] : []),
           "-C",
@@ -1262,6 +1350,9 @@ export async function runNativeProof(
     cleanup.push(async () => {
       await orchestrator.releaseCredentialLease(session.credential!, opts);
     });
+    if (orchestrator.preflightCredentialLease) {
+      await orchestrator.preflightCredentialLease(session.credential, opts);
+    }
     session.localSut = await orchestrator.startLocalSut({ credential: session.credential, opts, sessionDir });
     cleanup.push(async () => {
       await orchestrator.stopLocalSut(session.localSut!, opts);
@@ -1344,6 +1435,50 @@ export async function runNativeProof(
     }
   }
   return result;
+}
+
+export async function runLiveSessionPreflight(
+  opts: Options,
+  deps?: Pick<NativeProofDeps, "acquireCredentialLease" | "preflightCredentialLease" | "releaseCredentialLease">,
+): Promise<Record<string, unknown>> {
+  assertNativeProofEnabled(opts);
+  const outputDir = resolveProofOutputDir(opts.outputDir);
+  const sessionDir = path.join(outputDir, ".session-preflight");
+  rmSync(sessionDir, { recursive: true, force: true });
+  mkdirSync(sessionDir, { mode: 0o700, recursive: true });
+  const orchestrator = deps ?? await defaultLiveDeps();
+  let credential: CredentialLease | undefined;
+  const cleanupErrors: string[] = [];
+  let result: Record<string, unknown> | undefined;
+  try {
+    credential = await orchestrator.acquireCredentialLease(opts, sessionDir);
+    const preflight = orchestrator.preflightCredentialLease
+      ? await orchestrator.preflightCredentialLease(credential, opts)
+      : await assertRestoredTelegramSessionAuthorized(credential, opts);
+    result = {
+      ok: true,
+      credentialId: credential.credentialId,
+      groupWarmup: preflight.groupWarmup,
+      sessionState: "authorized",
+    };
+  } finally {
+    if (credential) {
+      try {
+        await orchestrator.releaseCredentialLease(credential, opts);
+      } catch (error) {
+        cleanupErrors.push(error instanceof Error ? error.message : String(error));
+      }
+    }
+    if (cleanupErrors.length > 0) {
+      writeJson(path.join(outputDir, "preflight-cleanup-errors.json"), { cleanupErrors });
+    } else {
+      rmSync(sessionDir, { recursive: true, force: true });
+    }
+  }
+  if (cleanupErrors.length > 0) {
+    throw new Error(`telegram-user preflight cleanup failed\n${redactProofText(cleanupErrors.join("\n"))}`);
+  }
+  return result ?? { ok: false };
 }
 
 const STAGED_PUBLIC_TEXT_ARTIFACTS = new Set([
@@ -1587,6 +1722,12 @@ async function main(): Promise<void> {
   if (opts.command === "local-smoke") {
     const summary = await runLocalSmoke(opts);
     console.log(JSON.stringify(summary, null, 2));
+    if ((summary as { ok?: boolean }).ok !== true) process.exit(1);
+    return;
+  }
+  if (opts.command === "preflight") {
+    const summary = await runLiveSessionPreflight(opts);
+    console.log(JSON.stringify(redactProofValue(summary), null, 2));
     if ((summary as { ok?: boolean }).ok !== true) process.exit(1);
     return;
   }
