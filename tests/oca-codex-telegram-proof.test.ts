@@ -98,9 +98,12 @@ describe("OCA Codex Telegram proof runner", () => {
 
     assert.ok(loginIndex > 0);
     assert.ok(statusIndex > loginIndex);
+    assert.match(script, /TELEGRAM_USER_DRIVER_CODE="\$telegram_code"/);
     assert.match(script, /TELEGRAM_USER_DRIVER_PASSWORD="\$telegram_password"/);
     assert.doesNotMatch(script, /login --password/);
+    assert.doesNotMatch(script, /login --code/);
     assert.match(script, /telegram-user-payload\.json/);
+    assert.match(script, /telegram-user-code/);
     assert.match(script, /telegram-user-password/);
   });
 

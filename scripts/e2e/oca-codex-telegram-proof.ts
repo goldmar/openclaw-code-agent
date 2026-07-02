@@ -161,6 +161,7 @@ const FAKE_CODEX_SERVER = path.join(SCRIPT_DIR, "oca-codex-proof-app-server.ts")
 const TELEGRAM_USER_DRIVER = path.join(SCRIPT_DIR, "telegram-user-driver.py");
 const TELEGRAM_USER_CREDENTIAL = path.join(SCRIPT_DIR, "telegram-user-credential.ts");
 const PRIVATE_CONVEX_ENV = "~/.codex/skills/custom/telegram-e2e-bot-to-bot/convex.local.env";
+const TELEGRAM_CODE_ENV = "OPENCLAW_QA_TELEGRAM_LOGIN_CODE";
 const TELEGRAM_PASSWORD_ENV = "OPENCLAW_QA_TELEGRAM_USER_PASSWORD";
 const TCP_PORT_RE = /^[1-9]\d*$/u;
 const COMMAND_TIMEOUT_MS = 30 * 60 * 1000;
@@ -519,6 +520,16 @@ if ! ldconfig -p | grep -q libtdjson.so; then
   run_setup_step "tdlib install" "$apt_timeout" sudo install -m 0755 "$tdjson_lib" /usr/local/lib/libtdjson.so
   sudo ldconfig
 fi
+telegram_code="$(python3 - "$root/telegram-user-code" <<'PY'
+import pathlib
+import sys
+
+try:
+    print(pathlib.Path(sys.argv[1]).read_text().strip())
+except FileNotFoundError:
+    pass
+PY
+)"
 telegram_password="$(python3 - "$root/telegram-user-payload.json" "$root/telegram-user-password" <<'PY'
 import json
 import pathlib
@@ -544,7 +555,7 @@ except FileNotFoundError:
 PY
 )"
 if [ -n "$telegram_password" ]; then
-  TELEGRAM_USER_DRIVER_STATE_DIR="$root/user-driver" TELEGRAM_USER_DRIVER_PASSWORD="$telegram_password" python3 "$root/user-driver.py" login --json --timeout-ms 60000 >"$root/login.json"
+  TELEGRAM_USER_DRIVER_STATE_DIR="$root/user-driver" TELEGRAM_USER_DRIVER_CODE="$telegram_code" TELEGRAM_USER_DRIVER_PASSWORD="$telegram_password" python3 "$root/user-driver.py" login --json --timeout-ms 60000 >"$root/login.json"
 fi
 TELEGRAM_USER_DRIVER_STATE_DIR="$root/user-driver" python3 "$root/user-driver.py" status --json --timeout-ms 60000 >"$root/status.json"
 TELEGRAM_USER_DRIVER_STATE_DIR="$root/user-driver" python3 "$root/user-driver.py" terminate-desktop-sessions --json --timeout-ms 60000 --output "$root/desktop-sessions-cleanup.json"
@@ -1145,6 +1156,10 @@ async function defaultLiveDeps(): Promise<NativeProofDeps> {
       const remoteStateRoot = path.join(sessionDir, "remote-state");
       mkdirSync(remoteStateRoot, { recursive: true });
       copyFileSync(TELEGRAM_USER_DRIVER, path.join(remoteStateRoot, "user-driver.py"));
+      const injectedCode = process.env[TELEGRAM_CODE_ENV]?.trim();
+      if (injectedCode) {
+        writeFileSync(path.join(sessionDir, "telegram-user-code"), injectedCode, { mode: 0o600 });
+      }
       const injectedPassword = process.env[TELEGRAM_PASSWORD_ENV]?.trim();
       if (injectedPassword) {
         writeFileSync(path.join(sessionDir, "telegram-user-password"), injectedPassword, { mode: 0o600 });
@@ -1159,6 +1174,7 @@ async function defaultLiveDeps(): Promise<NativeProofDeps> {
           "user-driver",
           "desktop",
           "telegram-user-payload.json",
+          ...(injectedCode ? ["telegram-user-code"] : []),
           ...(injectedPassword ? ["telegram-user-password"] : []),
           "-C",
           remoteStateRoot,

@@ -313,7 +313,11 @@ class UserDriver:
                 elif state == "authorizationStateWaitOtherDeviceConfirmation":
                     self.show_qr_link(self.auth_state["link"])
                 elif state == "authorizationStateWaitCode":
-                    code = getattr(args, "code", "") or prompt_secret("Telegram login code: ")
+                    code = (
+                        getattr(args, "code", "")
+                        or os.environ.get("TELEGRAM_USER_DRIVER_CODE", "")
+                        or prompt_secret("Telegram login code: ")
+                    )
                     self.client.send({"@type": "checkAuthenticationCode", "code": code})
                 elif state == "authorizationStateWaitPassword":
                     if not need_ready:
