@@ -385,6 +385,16 @@ class UserDriver:
         try:
             return self.client.request({"@type": "getChat", "chat_id": int(chat)}, timeout=10)["id"]
         except DriverError as error:
+            try:
+                chats = self.client.request(
+                    {"@type": "getChats", "chat_list": {"@type": "chatListMain"}, "limit": 100},
+                    timeout=20,
+                )
+                wanted = int(chat)
+                if wanted in [int(chat_id) for chat_id in chats.get("chat_ids", [])]:
+                    return self.client.request({"@type": "getChat", "chat_id": wanted}, timeout=10)["id"]
+            except DriverError:
+                pass
             raise DriverError(
                 f"Chat not found for tester account: {chat}. Add the QA user to the group, or configure the TDLib chat id from `user-driver.py chats --json`."
             ) from error
