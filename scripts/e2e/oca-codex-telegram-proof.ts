@@ -814,6 +814,48 @@ async function clickCallbackWithBotAnswer(params: {
   };
 }
 
+function runTelegramUserDriverJson(args: string[], timeoutMs: number): Record<string, unknown> {
+  const output = runCommandSync({
+    command: "python3",
+    args: [TELEGRAM_USER_DRIVER, ...args, "--json"],
+    cwd: REPO_ROOT,
+    timeoutMs,
+  });
+  return JSON.parse(output) as Record<string, unknown>;
+}
+
+async function resolveTdlibMessageIdByTranscript(params: {
+  credential: CredentialLease;
+  marker: string;
+  timeoutMs: number;
+}): Promise<string> {
+  const deadline = Date.now() + params.timeoutMs;
+  let lastObserved = 0;
+  while (Date.now() < deadline) {
+    const transcript = runTelegramUserDriverJson([
+      "transcript",
+      "--chat",
+      params.credential.groupId,
+      "--limit",
+      "30",
+    ], Math.min(params.timeoutMs, 30_000));
+    const messages = Array.isArray(transcript.messages) ? transcript.messages : [];
+    lastObserved = Math.max(lastObserved, messages.length);
+    for (const message of messages) {
+      if (!message || typeof message !== "object" || Array.isArray(message)) continue;
+      const record = message as Record<string, unknown>;
+      const text = typeof record.text === "string" ? record.text : "";
+      const messageId = record.messageId;
+      if (!text.includes(params.marker)) continue;
+      if (typeof messageId === "number" || typeof messageId === "string") return String(messageId);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+  throw new Error(
+    `Timed out resolving Telegram proof message via TDLib transcript; marker=${params.marker}, observed=${lastObserved}`,
+  );
+}
+
 async function defaultLiveDeps(): Promise<NativeProofDeps> {
   return {
     async acquireCredentialLease(opts, sessionDir) {
@@ -908,6 +950,11 @@ async function defaultLiveDeps(): Promise<NativeProofDeps> {
         text: proofText,
       });
       const messageId = messageIdFromBotResult(sent);
+      const tdlibMessageId = await resolveTdlibMessageIdByTranscript({
+        credential,
+        marker: runId,
+        timeoutMs: Math.min(opts.timeoutMs, 60_000),
+      });
 
       const record = spawn(opts.crabboxBin, [
         "artifacts",
@@ -928,7 +975,7 @@ async function defaultLiveDeps(): Promise<NativeProofDeps> {
       const clicked = await clickCallbackWithBotAnswer({
         callbackData,
         credential,
-        messageId,
+        messageId: tdlibMessageId,
         outputDir,
         token: credential.sutToken,
         timeoutMs: Math.min(opts.timeoutMs, 60_000),
@@ -999,7 +1046,8 @@ async function defaultLiveDeps(): Promise<NativeProofDeps> {
           "",
           `Scenario: ${opts.scenario}`,
           "Status: PASS",
-          `Telegram message id: ${messageId}`,
+          `Telegram Bot API message id: ${messageId}`,
+          `Telegram TDLib message id: ${tdlibMessageId}`,
           `Local smoke: ${(localSut.localSmoke as { ok?: boolean } | undefined)?.ok === true ? "PASS" : "UNKNOWN"}`,
           "Callback: Acknowledge button clicked and answered through Telegram.",
           "",
