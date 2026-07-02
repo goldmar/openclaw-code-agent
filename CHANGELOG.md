@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.6.0] - 2026-07-02
+
+### Added
+- Added deterministic Codex-first integration coverage for the Crabbox proof path and plugin workflow handoffs, including no-live-credential guards, fake native orchestration, artifact redaction/staging/cleanup, existing-PR branch reuse, sibling PR rejection, TaskFlow mirror reconciliation, and release metadata drift checks.
+- Added the `pnpm test:integ:crabbox` validation target for the Codex proof, Crabbox, Telegram proof, app-server, and plugin workflow integration suites.
+
+### Fixed
+- Classified harness startup authentication and credential failures as failed sessions even when a backend reports a nominal completion, preserving the failure line in session state and user-facing completion output.
+- Normalized terminal, merge, PR opened/updated, and no-change notification stats so known cost, duration, harness, and model details render consistently across worktree follow-through outcomes without leaking unsanitized PR wake data.
+
 ## [4.5.9] - 2026-07-01
 
 ### Added
@@ -564,7 +574,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Default Codex approval policy to `on-request`.
 - Raised the default session limit.
 
-[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.5.9...HEAD
+[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.6.0...HEAD
+[4.6.0]: https://github.com/goldmar/openclaw-code-agent/compare/v4.5.9...v4.6.0
 [4.5.9]: https://github.com/goldmar/openclaw-code-agent/compare/v4.5.8...v4.5.9
 [4.5.8]: https://github.com/goldmar/openclaw-code-agent/compare/v4.5.7...v4.5.8
 [4.5.7]: https://github.com/goldmar/openclaw-code-agent/compare/v4.5.6...v4.5.7
