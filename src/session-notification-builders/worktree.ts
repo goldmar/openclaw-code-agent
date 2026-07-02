@@ -50,6 +50,7 @@ export function buildDelegateWorktreeWakeMessage(args: {
     ``,
     ...(policyReason ? [`Policy constraint: ${policyReason}`, ``] : []),
     `You own the next step for this worktree.`,
+    `- First call agent_output(session='${sessionId}', full=true) to inspect the full session output and use it as source material for your decision.`,
     ...(allowedActions?.merge === false
       ? [`- Do not call agent_merge(); repo policy does not allow direct merge for this session.`]
       : [`- Merge immediately with agent_merge(session="${sessionName}", base_branch="${baseBranch}") if the changes are clearly in-scope and low-risk.`]),

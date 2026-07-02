@@ -43,6 +43,10 @@ describe("OCA Codex Telegram proof workflow", () => {
       packageJson.scripts?.["proof:codex-telegram"],
       "node --import tsx scripts/e2e/oca-codex-telegram-proof.ts run",
     );
+    assert.equal(
+      packageJson.scripts?.["test:integ:crabbox"],
+      "node scripts/run-tests.mjs tests/oca-codex-crabbox-integ.test.ts tests/oca-plugin-workflows-integ.test.ts tests/oca-codex-telegram-proof.test.ts tests/oca-codex-proof-app-server.test.ts tests/oca-codex-proof-workflow.test.ts",
+    );
     assert.match(workflow, /pnpm proof:codex-local/);
     assert.match(workflow, /pnpm proof:codex-telegram --dry-run/);
     assert.match(workflow, /\$\{GITHUB_RUN_ID\}-\$\{GITHUB_RUN_ATTEMPT\}-dry-run/);

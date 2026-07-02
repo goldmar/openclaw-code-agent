@@ -55,6 +55,7 @@ export interface SessionListRenderable {
 
 /** Format a duration in milliseconds as `MmSs` or `Ss`. */
 export function formatDuration(ms: number): string {
+  if (!Number.isFinite(ms)) return "0s";
   const seconds = Math.floor(ms / 1000);
   const minutes = Math.floor(seconds / 60);
   const secs = seconds % 60;
