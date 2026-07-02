@@ -11,6 +11,7 @@ import type { FakeHarness } from "./helpers";
 import type { AgentHarness, HarnessLaunchOptions, HarnessSession } from "../src/harness/types";
 import { setPluginConfig } from "../src/config";
 import { createWorktree, getBranchName } from "../src/worktree";
+import { mapSessionTaskTerminalStatus } from "../src/session-task-lifecycle";
 
 // ---------------------------------------------------------------------------
 // Register fake harness once (before any tests)
@@ -179,6 +180,60 @@ describe("Session consumeMessages — result message (single-turn)", () => {
 
     assert.equal(session.status, "failed");
     // No kill needed — failed already cleans up
+  });
+
+  it("classifies nominal auth completions as failed lifecycle", async () => {
+    const session = await startSession({ multiTurn: false });
+    const authFailure = "Failed to authenticate. API Error: 401 Invalid bearer token";
+
+    fakeHarness.pushMessage({ type: "text", text: authFailure });
+    fakeHarness.pushMessage({
+      type: "result",
+      data: {
+        success: true,
+        outcome: "completed",
+        duration_ms: 5_000,
+        total_cost_usd: 0,
+        num_turns: 0,
+        session_id: session.harnessSessionId!,
+      },
+    });
+    await tick(50);
+
+    assert.equal(session.status, "failed");
+    assert.equal(session.result?.subtype, "error");
+    assert.equal(session.result?.is_error, true);
+    assert.equal(session.error, authFailure);
+    assert.equal(mapSessionTaskTerminalStatus(session), "failed");
+    // No kill needed — failed already cleans up
+  });
+
+  it("does not classify successful task output mentioning auth phrases as startup failure", async () => {
+    const session = await startSession({ multiTurn: false });
+
+    fakeHarness.pushMessage({
+      type: "text",
+      text: "Documented how to handle an invalid API key during setup.",
+    });
+    fakeHarness.pushMessage({
+      type: "result",
+      data: {
+        success: true,
+        outcome: "completed",
+        duration_ms: 5_000,
+        total_cost_usd: 0,
+        num_turns: 1,
+        result: "Documentation update complete: invalid API key handling is covered.",
+        session_id: session.harnessSessionId!,
+      },
+    });
+    await tick(50);
+
+    assert.equal(session.status, "completed");
+    assert.equal(session.result?.subtype, "success");
+    assert.equal(session.result?.is_error, false);
+    assert.equal(mapSessionTaskTerminalStatus(session), "succeeded");
+    // No kill needed — completed already cleans up
   });
 });
 
