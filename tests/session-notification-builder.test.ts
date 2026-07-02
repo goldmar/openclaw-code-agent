@@ -664,6 +664,7 @@ describe("session-notification-builder", () => {
     });
 
     assert.match(message, /Branch: agent\/feature-session → main/);
+    assert.match(message, /agent_output\(session='session-3', full=true\)/);
     assert.match(message, /Never call agent_pr\(\) autonomously in delegate mode/);
     assert.doesNotMatch(message, /Session origin route above/);
   });

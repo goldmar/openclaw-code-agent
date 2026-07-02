@@ -45,7 +45,7 @@ describe("OCA Codex Telegram proof workflow", () => {
     );
     assert.equal(
       packageJson.scripts?.["test:integ:crabbox"],
-      "node scripts/run-tests.mjs tests/oca-codex-crabbox-integ.test.ts tests/oca-codex-telegram-proof.test.ts tests/oca-codex-proof-app-server.test.ts tests/oca-codex-proof-workflow.test.ts",
+      "node scripts/run-tests.mjs tests/oca-codex-crabbox-integ.test.ts tests/oca-plugin-workflows-integ.test.ts tests/oca-codex-telegram-proof.test.ts tests/oca-codex-proof-app-server.test.ts tests/oca-codex-proof-workflow.test.ts",
     );
     assert.match(workflow, /pnpm proof:codex-local/);
     assert.match(workflow, /pnpm proof:codex-telegram --dry-run/);

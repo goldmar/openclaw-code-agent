@@ -10,7 +10,7 @@
     "check-static-guardrails": "node scripts/check-static-guardrails.mjs",
     "check-plugin-security": "node scripts/check-plugin-security.mjs",
     "test": "node scripts/run-tests.mjs",
-    "test:integ:crabbox": "node scripts/run-tests.mjs tests/oca-codex-crabbox-integ.test.ts tests/oca-codex-telegram-proof.test.ts tests/oca-codex-proof-app-server.test.ts tests/oca-codex-proof-workflow.test.ts",
+    "test:integ:crabbox": "node scripts/run-tests.mjs tests/oca-codex-crabbox-integ.test.ts tests/oca-plugin-workflows-integ.test.ts tests/oca-codex-telegram-proof.test.ts tests/oca-codex-proof-app-server.test.ts tests/oca-codex-proof-workflow.test.ts",
     "test:serial": "node scripts/run-tests.mjs",
     "test:file": "node scripts/run-tests.mjs",
     "smoke:backend": "node scripts/run-tests.mjs tests/codex-harness.test.ts tests/plan-mode-e2e.test.ts tests/session-restore-service.test.ts",
