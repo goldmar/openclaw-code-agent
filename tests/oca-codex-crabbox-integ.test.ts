@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -12,9 +12,14 @@ import {
 } from "../scripts/e2e/oca-codex-telegram-proof";
 import { validateReleaseMetadata } from "../scripts/validate-release-metadata.mjs";
 import { resolveExistingTargetPrUpdateBranch } from "../src/tools/agent-pr";
-import { formatWorktreeOutcomeLine } from "../src/worktree";
+import { createPR, formatWorktreeOutcomeLine } from "../src/worktree";
 import { reconcilePersistedSessionTaskMirror } from "../src/session-task-lifecycle";
 import { setPluginRuntime } from "../src/runtime-store";
+import { SessionNotificationService } from "../src/session-notifications";
+import { SessionWorktreeMessageService } from "../src/session-worktree-message-service";
+import { buildCompletedPayload } from "../src/session-notification-builder";
+import { SessionManager } from "../src/session-manager";
+import { STORE_SCHEMA_VERSION } from "../src/session-store-normalization";
 import type { PersistedSessionInfo } from "../src/types";
 
 const repoRoot = join(import.meta.dirname, "..");
@@ -35,6 +40,36 @@ function initRepo(prefix: string): string {
   git(repoDir, "add", "README.md");
   git(repoDir, "commit", "-m", "init");
   return repoDir;
+}
+
+function withMockGh(scriptLines: string[], run: (logPath: string) => void): void {
+  const tempDir = mkdtempSync(join(tmpdir(), "oca-crabbox-gh-"));
+  const binDir = join(tempDir, "bin");
+  const logPath = join(tempDir, "gh-args.log");
+  const originalPath = process.env.PATH;
+  try {
+    mkdirSync(binDir);
+    const ghPath = join(binDir, "gh");
+    writeFileSync(ghPath, [
+      "#!/bin/sh",
+      "printf '%s\\n' \"$*\" >> \"$GH_ARGS_LOG\"",
+      "if [ \"$1\" = \"--version\" ]; then",
+      "  echo 'gh version 2.0.0'",
+      "  exit 0",
+      "fi",
+      ...scriptLines,
+      "exit 1",
+      "",
+    ].join("\n"));
+    chmodSync(ghPath, 0o755);
+    process.env.PATH = `${binDir}:${process.env.PATH ?? ""}`;
+    process.env.GH_ARGS_LOG = logPath;
+    run(logPath);
+  } finally {
+    process.env.PATH = originalPath;
+    delete process.env.GH_ARGS_LOG;
+    rmSync(tempDir, { recursive: true, force: true });
+  }
 }
 
 function withLiveProofEnv<T>(run: () => Promise<T>): Promise<T> {
@@ -258,6 +293,45 @@ describe("OCA Codex Crabbox integration harness", () => {
     }
   });
 
+  it("reuses an existing open PR when GitHub rejects duplicate creation", () => {
+    withMockGh([
+      "if [ \"$1\" = \"pr\" ] && [ \"$2\" = \"create\" ]; then",
+      "  echo 'GraphQL: A pull request already exists for goldmar:agent/existing-pr. (createPullRequest)' >&2",
+      "  exit 1",
+      "fi",
+      "if [ \"$1\" = \"pr\" ] && [ \"$2\" = \"list\" ]; then",
+      "  printf '%s\\n' '[{\"url\":\"https://github.com/goldmar/openclaw-code-agent/pull/331\",\"number\":331,\"title\":\"Existing\",\"state\":\"OPEN\",\"headRepositoryOwner\":{\"login\":\"goldmar\"},\"headRefName\":\"agent/existing-pr\",\"baseRefName\":\"main\"}]'",
+      "  exit 0",
+      "fi",
+    ], (logPath) => {
+      const repoDir = mkdtempSync(join(tmpdir(), "oca-crabbox-create-pr-existing-"));
+      try {
+        git(repoDir, "init", "-b", "main");
+        git(repoDir, "remote", "add", "origin", "https://github.com/goldmar/openclaw-code-agent.git");
+
+        const result = createPR(
+          repoDir,
+          "agent/existing-pr",
+          "main",
+          "Existing PR",
+          "Body",
+          "goldmar/openclaw-code-agent",
+        );
+
+        assert.deepEqual(result, {
+          success: true,
+          prUrl: "https://github.com/goldmar/openclaw-code-agent/pull/331",
+          warnings: ["A PR already exists for this branch; reused the existing open PR."],
+        });
+        const calls = readFileSync(logPath, "utf8").trim().split("\n");
+        assert.equal(calls.filter((call) => call.startsWith("pr create ")).length, 1);
+        assert.ok(calls.some((call) => call.startsWith("pr list --head agent/existing-pr ")));
+      } finally {
+        rmSync(repoDir, { recursive: true, force: true });
+      }
+    });
+  });
+
   it("shares terminal stat formatting and omits missing values cleanly", () => {
     assert.equal(
       formatWorktreeOutcomeLine({
@@ -289,6 +363,129 @@ describe("OCA Codex Crabbox integration harness", () => {
       }),
       "✅ PR updated: https://github.com/goldmar/openclaw-code-agent/pull/328",
     );
+  });
+
+  it("formats notification payloads consistently across PR, merge, no-change, and completed paths", () => {
+    const requests: Array<Record<string, unknown>> = [];
+    const patches: Array<{ ref: string; patch: Record<string, unknown> }> = [];
+    const dispatcher = {
+      dispatchSessionNotification(_session: unknown, request: Record<string, unknown> & { hooks?: Record<string, () => void> }) {
+        requests.push(request);
+        request.hooks?.onNotifyStarted?.();
+        request.hooks?.onNotifySucceeded?.();
+        if (request.wakeMessage || request.wakeMessageOnNotifySuccess || request.wakeMessageOnNotifyFailed) {
+          request.hooks?.onWakeStarted?.();
+          request.hooks?.onWakeSucceeded?.();
+        }
+      },
+      dispose() {},
+    };
+    const service = new SessionNotificationService(
+      dispatcher as any,
+      (ref, patch) => patches.push({ ref, patch: patch as Record<string, unknown> }),
+    );
+    const session = {
+      id: "session-notify-integ",
+      harnessSessionId: "h-notify-integ",
+      name: "notify-integ",
+      route: {
+        provider: "telegram",
+        accountId: "bot",
+        target: "-100123",
+        threadId: "32947",
+        sessionKey: "agent:main:telegram:group:-100123:topic:32947",
+      },
+    } as any;
+
+    service.notifyWorktreeOutcome(
+      session,
+      formatWorktreeOutcomeLine({
+        kind: "pr-updated",
+        branch: "agent/notify-integ",
+        prUrl: "https://github.com/goldmar/openclaw-code-agent/pull/331",
+        filesChanged: 3,
+        insertions: 14,
+        deletions: 2,
+      }),
+      {
+        completionWakeOutcomeKey: "worktree-pr:updated:goldmar/openclaw-code-agent:#331:agent/notify-integ:abc1234",
+        detailLines: [
+          "Updated PR for branch agent/notify-integ into main.",
+          "PR URL: https://github.com/goldmar/openclaw-code-agent/pull/331.",
+          "Pushed 2 new commits (+14/-2).",
+        ],
+      },
+    );
+    service.notifyWorktreeOutcome(
+      { ...session, id: "session-merge-integ" },
+      formatWorktreeOutcomeLine({
+        kind: "merge",
+        branch: "agent/notify-integ",
+        base: "main",
+        filesChanged: 3,
+        insertions: 14,
+        deletions: 2,
+      }),
+      { completionWakeOutcomeKey: "worktree-merge:session-merge-integ:agent/notify-integ:main" },
+    );
+
+    const noChange = new SessionWorktreeMessageService().buildNoChangeNotification({
+      session: {
+        id: "session-no-change-integ",
+        name: "no-change-integ",
+        requestedPermissionMode: "plan",
+        currentPermissionMode: "plan",
+        approvalExecutionState: "awaiting_plan_output",
+        approvalState: "not_required",
+        planApproval: "ask",
+        approvalPromptStatus: "not_sent",
+        approvalPromptMessageKind: "none",
+        approvalPromptDeliveredAt: undefined,
+        startedAt: 1780000000000,
+      } as any,
+      nativeBackendWorktree: false,
+      cleanupSucceeded: true,
+      worktreePath: "/tmp/oca-no-change",
+      worktreeBranch: "agent/no-change",
+      preview: "",
+    });
+    assert.match(noChange.userMessage, /no worktree changes to merge .* worktree cleaned up/u);
+    assert.doesNotMatch(noChange.userMessage, /undefined|NaN|\(\d+ files/u);
+    assert.doesNotMatch(noChange.wakeMessage ?? "", /undefined|NaN/u);
+
+    const completed = buildCompletedPayload({
+      session: {
+        id: "session-completed-integ",
+        name: "completed-integ",
+        status: "completed",
+        costUsd: undefined,
+        duration: undefined,
+        requestedPermissionMode: "default",
+        currentPermissionMode: "default",
+        approvalExecutionState: "not_required",
+        approvalState: "not_required",
+        planApproval: "ask",
+        approvalPromptStatus: "not_sent",
+        approvalPromptMessageKind: "none",
+        approvalPromptDeliveredAt: undefined,
+        harnessName: "codex",
+        model: undefined,
+      } as any,
+      originThreadLine: "",
+      preview: "Completed without persisted cost or duration stats.",
+    });
+    assert.match(completed.userMessage, /^✅ \[completed-integ\] Completed \| \$0\.00 \| 0s \| codex/u);
+    assert.doesNotMatch(completed.userMessage, /undefined|NaN/u);
+
+    assert.equal(requests.length, 2);
+    assert.equal(
+      requests[0]?.userMessage,
+      "✅ PR updated: https://github.com/goldmar/openclaw-code-agent/pull/331 (3 files, +14/-2)",
+    );
+    assert.match(String(requests[0]?.wakeMessageOnNotifySuccess), /Canonical outcome status:\n✅ PR updated: .* \(3 files, \+14\/-2\)/u);
+    assert.doesNotMatch(String(requests[0]?.wakeMessageOnNotifySuccess), /https:\/\/github\.com\/goldmar\/openclaw-code-agent\/pull\/331\./u);
+    assert.equal(requests[1]?.userMessage, "✅ Merged: agent/notify-integ → main (3 files, +14/-2)");
+    assert.equal(patches.some(({ patch }) => patch.completionWakeSummaryRequired === true), true);
   });
 
   it("reconciles orphan running TaskFlow mirrors after runtime recovery", () => {
@@ -347,6 +544,74 @@ describe("OCA Codex Crabbox integration harness", () => {
       assert.equal(reconciled?.revision, 8);
     } finally {
       setPluginRuntime(undefined);
+    }
+  });
+
+  it("reconciles persisted running TaskFlow mirrors through SessionManager after a restart", () => {
+    const dir = mkdtempSync(join(tmpdir(), "oca-crabbox-manager-restart-"));
+    const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
+    try {
+      const indexPath = join(dir, "sessions.json");
+      writeFileSync(indexPath, JSON.stringify({
+        schemaVersion: STORE_SCHEMA_VERSION,
+        sessions: [{
+          sessionId: "session-restart-orphan",
+          harnessSessionId: "h-restart-orphan",
+          backendRef: { kind: "codex-app-server", conversationId: "thread-restart-orphan" },
+          name: "restart-orphan",
+          prompt: "p",
+          workdir: "/tmp",
+          status: "running",
+          lifecycle: "active",
+          runtimeState: "live",
+          costUsd: 0,
+          route: {
+            provider: "telegram",
+            target: "123",
+            sessionKey: "agent:main:telegram:group:123",
+          },
+          taskFlowMirror: { flowId: "flow-restart", revision: 4, status: "running" },
+        }],
+        actionTokens: [],
+        repoPolicies: [],
+      }));
+      setPluginRuntime({
+        taskFlow: {
+          fromToolContext() {
+            return {
+              setWaiting(params: Record<string, unknown>) {
+                calls.push({ method: "setWaiting", params });
+                return { applied: true, flow: { flowId: "flow-restart", revision: 5 } };
+              },
+              finish(params: Record<string, unknown>) {
+                calls.push({ method: "finish", params });
+                return { applied: true, flow: { flowId: "flow-restart", revision: 5 } };
+              },
+              fail(params: Record<string, unknown>) {
+                calls.push({ method: "fail", params });
+                return { applied: true, flow: { flowId: "flow-restart", revision: 5 } };
+              },
+            };
+          },
+        },
+      });
+
+      const manager = new SessionManager(5, 50, { store: { indexPath, env: {} } });
+      try {
+        const persisted = manager.getPersistedSession("session-restart-orphan");
+        assert.equal(persisted?.status, "killed");
+        assert.equal(persisted?.runtimeState, "stopped");
+        assert.equal(persisted?.runtimeRecovery?.reason, "persisted-running-without-runtime");
+        assert.equal(persisted?.taskFlowMirror?.revision, 5);
+        assert.deepEqual(calls.map((call) => call.method), ["fail"]);
+        assert.equal(calls[0].params.flowId, "flow-restart");
+        assert.equal(calls[0].params.expectedRevision, 4);
+      } finally {
+        manager.dispose();
+      }
+    } finally {
+      setPluginRuntime(undefined);
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 
