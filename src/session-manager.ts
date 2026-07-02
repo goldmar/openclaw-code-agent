@@ -538,10 +538,6 @@ export class SessionManager {
       console.warn(`[SessionManager] Name conflict: "${baseName}" → "${name}" (active session with same name exists)`);
     }
 
-    if (!config.route?.provider || !config.route.target) {
-      throw new Error(`Cannot launch session "${name}": missing explicit route metadata.`);
-    }
-
     const launchPolicy = this.checkRepoPolicyForLaunch(config.workdir, config.worktreeStrategy);
     if (!launchPolicy.ok) {
       const blocked = launchPolicy as { ok: false; text: string };
@@ -552,6 +548,10 @@ export class SessionManager {
     config.repoProvider = launchPolicy.resolution.provider;
 
     const preparedLaunch = this.restore.prepareSpawn(config, name);
+
+    if (!config.route?.provider || !config.route.target) {
+      throw new Error(`Cannot launch session "${name}": missing explicit route metadata.`);
+    }
 
     // Inject AskUserQuestion intercept for CC sessions. Codex App Server exposes
     // structured pending input natively, so only Claude needs the tool intercept.

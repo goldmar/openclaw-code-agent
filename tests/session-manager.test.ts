@@ -12,6 +12,8 @@ import { SessionReminderService } from "../src/session-reminder-service";
 import { SessionNotificationService } from "../src/session-notifications";
 import { SessionWorktreeDecisionService } from "../src/session-worktree-decision-service";
 import { SessionMetricsRecorder } from "../src/session-metrics";
+import { registerHarness } from "../src/harness";
+import { createFakeHarness } from "./helpers";
 
 afterEach(() => {
   setPluginRuntime(undefined);
@@ -1987,6 +1989,68 @@ describe("SessionManager.notifySession()", () => {
       [["Start Plan", "Dismiss"]],
     );
     assert.match(presentation?.blocks[0]?.buttons[0]?.value ?? "", /^code-agent:/);
+  });
+});
+
+// =========================================================================
+// resumed launch routing
+// =========================================================================
+
+describe("SessionManager resumed launch routing", () => {
+  it("inherits the persisted origin route before starting a resumed system-routed launch", () => {
+    const harness = createFakeHarness("resume-route-fake-harness");
+    registerHarness(harness);
+    setPluginConfig({});
+    const sm = new SessionManager(5);
+    const route = {
+      provider: "telegram",
+      accountId: "bot",
+      target: "-1003863755361",
+      threadId: "26",
+      sessionKey: "agent:main:telegram:group:-1003863755361:topic:26",
+    };
+    (sm as any).persisted.set("7dkMOGyB", {
+      sessionId: "fix-pr-98922-quality-codex",
+      harnessSessionId: "7dkMOGyB",
+      backendRef: { kind: "codex-app-server", conversationId: "7dkMOGyB" },
+      name: "fix-pr-98922-quality-codex",
+      prompt: "Fix PR quality.",
+      workdir: "/tmp",
+      status: "completed",
+      costUsd: 0,
+      originChannel: "telegram|bot|-1003863755361",
+      originThreadId: "26",
+      originSessionKey: route.sessionKey,
+      route,
+    });
+
+    const session = sm.spawn({
+      prompt: "Compare message_sending vs reply_payload_sending.",
+      workdir: "/tmp",
+      name: "compare-pr-98922-hook-layer",
+      harness: harness.name,
+      resumeSessionId: "7dkMOGyB",
+      worktreeStrategy: "off",
+      route: {
+        provider: "system",
+        target: "system",
+      },
+    }, { notifyLaunch: false });
+
+    try {
+      assert.equal(session.resumeSessionId, "7dkMOGyB");
+      assert.equal(harness.lastLaunchOptions?.resumeSessionId, "7dkMOGyB");
+      assert.equal(session.route?.provider, "telegram");
+      assert.equal(session.route?.target, "-1003863755361");
+      assert.equal(session.route?.threadId, "26");
+      assert.equal(session.route?.sessionKey, route.sessionKey);
+      assert.equal(session.originChannel, "telegram|bot|-1003863755361");
+      assert.equal(session.originThreadId, "26");
+      assert.equal(session.originSessionKey, route.sessionKey);
+    } finally {
+      harness.endMessages();
+      sm.dispose();
+    }
   });
 });
 

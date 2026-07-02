@@ -1,6 +1,7 @@
 import { existsSync } from "fs";
 import { getDefaultHarnessName, pluginConfig } from "./config";
 import { pathsReferToSameLocation } from "./path-utils";
+import { canonicalizeSessionRoute, isDirectSessionRoute } from "./session-route";
 import {
   getBackendWorktreeCapability,
   supportsNativeBackendWorktreeExecution,
@@ -27,6 +28,50 @@ type Preparation = {
   restoredMissingNativeBackendWorktree?: boolean;
   failedResumeWorktreeRestore?: boolean;
 };
+
+function originChannelFromRoute(route: NonNullable<SessionConfig["route"]>): string | undefined {
+  if (!route.provider || !route.target) return undefined;
+  return route.accountId
+    ? `${route.provider}|${route.accountId}|${route.target}`
+    : `${route.provider}|${route.target}`;
+}
+
+function hasDirectLaunchRoute(config: SessionConfig): boolean {
+  return isDirectSessionRoute(canonicalizeSessionRoute({
+    route: config.route,
+    originChannel: config.originChannel,
+    originThreadId: config.originThreadId,
+    originSessionKey: config.originSessionKey,
+  }));
+}
+
+export function preserveResumeRoutingContext(
+  config: SessionConfig,
+  getPersistedSession: (ref: string) => PersistedSessionInfo | undefined,
+): void {
+  if (hasDirectLaunchRoute(config)) return;
+
+  const resumeRefs = [config.resumeSessionId, config.resumeWorktreeFrom]
+    .filter((ref): ref is string => Boolean(ref?.trim()));
+  for (const ref of resumeRefs) {
+    const persisted = getPersistedSession(ref);
+    if (!persisted) continue;
+    const route = canonicalizeSessionRoute({
+      route: persisted.route,
+      originChannel: persisted.originChannel,
+      originThreadId: persisted.originThreadId,
+      originSessionKey: persisted.originSessionKey,
+    });
+    if (!isDirectSessionRoute(route)) continue;
+
+    config.route = { ...route };
+    config.originChannel = persisted.originChannel ?? originChannelFromRoute(route);
+    config.originThreadId = persisted.originThreadId ?? route.threadId;
+    config.originSessionKey = persisted.originSessionKey ?? route.sessionKey;
+    config.originAgentId ??= persisted.originAgentId;
+    return;
+  }
+}
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -206,6 +251,8 @@ export function prepareSessionBootstrap(
   name: string,
   getPersistedSession: (ref: string) => PersistedSessionInfo | undefined,
 ): Preparation {
+  preserveResumeRoutingContext(config, getPersistedSession);
+
   let {
     actualWorkdir,
     originalWorkdir,
