@@ -34,6 +34,8 @@ type Options = {
   outputDir: string;
   recordSeconds: number;
   scenario: string;
+  tdlibArchive?: string;
+  tdlibSha256?: string;
   timeoutMs: number;
 };
 
@@ -70,6 +72,8 @@ type ProofPlan = {
     credentialKind: "telegram-user";
     desktopChatTitle: string;
     recordSeconds: number;
+    tdlibArchive: "missing" | "provided";
+    tdlibSha256: "missing" | "provided";
   };
 };
 
@@ -178,6 +182,8 @@ export function usageText(): string {
     "  --env-file <path>             Convex env file for live proof release/acquire helpers.",
     "  --gateway-port <port>         Disposable gateway port. Default: 38975.",
     "  --record-seconds <seconds>    Native desktop recording duration. Default: 35.",
+    "  --tdlib-archive <path>        Prebuilt TDLib tarball with lib/libtdjson.so for Crabbox setup.",
+    "  --tdlib-sha256 <sha256>       Expected SHA-256 for --tdlib-archive.",
     "  --keep-box                    Keep Crabbox lease for VNC/debugging.",
     "  --dry-run                     Print the resolved proof plan without leasing credentials.",
     "  --allow-live                  Permit native orchestration when OPENCLAW_RUN_LIVE_TELEGRAM_PROOF=1.",
@@ -239,6 +245,8 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): Options {
     outputDir: path.join(DEFAULT_OUTPUT_ROOT, `${timestamp()}-${randomUUID().slice(0, 8)}`),
     recordSeconds: 35,
     scenario: "basic",
+    tdlibArchive: process.env.OPENCLAW_TDLIB_ARCHIVE?.trim() || undefined,
+    tdlibSha256: process.env.OPENCLAW_TDLIB_SHA256?.trim() || undefined,
     timeoutMs: 120_000,
   };
 
@@ -290,6 +298,12 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): Options {
       case "--scenario":
         opts.scenario = value;
         break;
+      case "--tdlib-archive":
+        opts.tdlibArchive = value;
+        break;
+      case "--tdlib-sha256":
+        opts.tdlibSha256 = value;
+        break;
       case "--timeout-ms":
         opts.timeoutMs = parsePositiveInteger(value, key);
         break;
@@ -329,6 +343,8 @@ export function buildProofPlan(opts: Options): ProofPlan {
       credentialKind: "telegram-user",
       desktopChatTitle: opts.desktopChatTitle,
       recordSeconds: opts.recordSeconds,
+      tdlibArchive: opts.tdlibArchive ? "provided" : "missing",
+      tdlibSha256: opts.tdlibSha256 ? "provided" : "missing",
     },
   };
 }
@@ -394,7 +410,11 @@ function sshArgs(inspect: CrabboxInspect): { base: string[]; scpBase: string[]; 
       "-o",
       "BatchMode=yes",
       "-o",
-      "StrictHostKeyChecking=accept-new",
+      "StrictHostKeyChecking=no",
+      "-o",
+      "UserKnownHostsFile=/dev/null",
+      "-o",
+      "LogLevel=ERROR",
       "-o",
       "ConnectTimeout=15",
     ],
@@ -408,7 +428,11 @@ function sshArgs(inspect: CrabboxInspect): { base: string[]; scpBase: string[]; 
       "-o",
       "BatchMode=yes",
       "-o",
-      "StrictHostKeyChecking=accept-new",
+      "StrictHostKeyChecking=no",
+      "-o",
+      "UserKnownHostsFile=/dev/null",
+      "-o",
+      "LogLevel=ERROR",
       "-o",
       "ConnectTimeout=15",
     ],
@@ -442,11 +466,13 @@ function extractCrabboxLeaseId(output: string): string {
   return leaseId;
 }
 
-function renderRemoteSetup(): string {
+function renderRemoteSetup(opts: Options): string {
+  const tdlibSha256 = opts.tdlibSha256 ?? "";
   return `#!/usr/bin/env bash
 set -euo pipefail
 export PATH="/usr/local/sbin:/usr/sbin:/sbin:$PATH"
 root=${REMOTE_ROOT}
+tdlib_expected_sha=${JSON.stringify(tdlibSha256)}
 setup_step_timeout_kill_after="\${OPENCLAW_TELEGRAM_USER_SETUP_KILL_AFTER_SECONDS:-30}s"
 apt_timeout="\${OPENCLAW_TELEGRAM_USER_APT_TIMEOUT_SECONDS:-900}s"
 run_setup_step() {
@@ -459,17 +485,37 @@ run_setup_step() {
 mkdir -p "$root"
 tar -xzf "$root/state.tgz" -C "$root"
 run_setup_step "apt-get update" "$apt_timeout" sudo apt-get update -y
-run_setup_step "apt-get install" "$apt_timeout" sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y curl cmake g++ git make zlib1g-dev libssl-dev python3 ffmpeg scrot xz-utils tar wmctrl xdotool x11-utils zbar-tools libopengl0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xfixes0 libxcb-xinerama0 libxkbcommon-x11-0 >/tmp/openclaw-oca-telegram-apt.log
+run_setup_step "apt-get install" "$apt_timeout" sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y curl cmake g++ git gperf make zlib1g-dev libssl-dev python3 ffmpeg scrot xz-utils tar wmctrl xdotool x11-utils zbar-tools libopengl0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xfixes0 libxcb-xinerama0 libxkbcommon-x11-0 >/tmp/openclaw-oca-telegram-apt.log
 if [ ! -x "$root/Telegram/Telegram" ]; then
   curl -fL --retry 3 --retry-delay 5 --retry-all-errors -o "$root/telegram.tar.xz" https://telegram.org/dl/desktop/linux
   tar -xJf "$root/telegram.tar.xz" -C "$root"
 fi
+if ! ldconfig -p | grep -q libtdjson.so && [ -f "$root/tdlib.tgz" ]; then
+  if [ -n "$tdlib_expected_sha" ]; then
+    printf '%s  %s\\n' "$tdlib_expected_sha" "$root/tdlib.tgz" | sha256sum -c -
+  fi
+  rm -rf "$root/tdlib-prebuilt"
+  mkdir -p "$root/tdlib-prebuilt"
+  tar -xzf "$root/tdlib.tgz" -C "$root/tdlib-prebuilt"
+  tdjson_lib="$(find "$root/tdlib-prebuilt" \\( -name 'libtdjson.so' -o -name 'libtdjson.so.*' \\) -type f | sort | head -n 1)"
+  if [ -z "$tdjson_lib" ]; then
+    echo "tdlib archive did not contain libtdjson.so" >&2
+    exit 1
+  fi
+  run_setup_step "tdlib install from archive" "$apt_timeout" sudo install -m 0755 "$tdjson_lib" /usr/local/lib/libtdjson.so
+  sudo ldconfig
+fi
 if ! ldconfig -p | grep -q libtdjson.so; then
   rm -rf "$root/td" "$root/td-build"
   run_setup_step "tdlib clone" 600s git clone --depth 1 --branch v1.8.0 https://github.com/tdlib/td.git "$root/td"
-  run_setup_step "tdlib configure" 1800s cmake -S "$root/td" -B "$root/td-build" -DCMAKE_BUILD_TYPE=Release -DTD_ENABLE_JNI=OFF
+  run_setup_step "tdlib configure" 1800s cmake -S "$root/td" -B "$root/td-build" -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DTD_ENABLE_JNI=OFF
   run_setup_step "tdlib build" 1800s cmake --build "$root/td-build" --target tdjson -j "$(nproc)"
-  run_setup_step "tdlib install" "$apt_timeout" sudo cmake --install "$root/td-build"
+  tdjson_lib="$(find "$root/td-build" -name 'libtdjson.so*' -type f | sort | head -n 1)"
+  if [ -z "$tdjson_lib" ]; then
+    echo "tdlib build did not produce libtdjson.so" >&2
+    exit 1
+  fi
+  run_setup_step "tdlib install" "$apt_timeout" sudo install -m 0755 "$tdjson_lib" /usr/local/lib/libtdjson.so
   sudo ldconfig
 fi
 TELEGRAM_USER_DRIVER_STATE_DIR="$root/user-driver" python3 "$root/user-driver.py" status --json --timeout-ms 60000 >"$root/status.json"
@@ -643,7 +689,7 @@ function assertNativeProofEnabled(opts: Options): void {
 
 export function buildTelegramCredentialCommandArgs(opts: Options, command: "lease-restore" | "release", extra: string[] = []): string[] {
   const args = ["--import", "tsx", TELEGRAM_USER_CREDENTIAL, command, ...extra];
-  args.push("--env-file", opts.envFile ?? PRIVATE_CONVEX_ENV);
+  args.push("--env-file", expandHome(opts.envFile ?? PRIVATE_CONVEX_ENV));
   return args;
 }
 
@@ -831,7 +877,7 @@ async function defaultLiveDeps(): Promise<NativeProofDeps> {
       const launchScript = path.join(sessionDir, "launch-desktop.sh");
       const authorizeScript = path.join(sessionDir, "authorize-desktop.sh");
       const selectChatScript = path.join(sessionDir, "select-desktop-chat.sh");
-      writeFileSync(setupScript, renderRemoteSetup());
+      writeFileSync(setupScript, renderRemoteSetup(opts));
       writeFileSync(launchScript, renderLaunchDesktop());
       writeFileSync(authorizeScript, renderAuthorizeDesktop());
       writeFileSync(selectChatScript, renderSelectDesktopChat(opts.desktopChatTitle));
@@ -839,6 +885,11 @@ async function defaultLiveDeps(): Promise<NativeProofDeps> {
 
       sshRun(crabbox.inspect, `rm -rf ${REMOTE_ROOT} && mkdir -p ${REMOTE_ROOT}`);
       scpToRemote(crabbox.inspect, path.join(sessionDir, "remote-state.tgz"), `${REMOTE_ROOT}/state.tgz`);
+      if (opts.tdlibArchive) {
+        const tdlibArchive = expandHome(opts.tdlibArchive);
+        if (!existsSync(tdlibArchive)) throw new Error(`TDLib archive does not exist: ${tdlibArchive}`);
+        scpToRemote(crabbox.inspect, tdlibArchive, `${REMOTE_ROOT}/tdlib.tgz`);
+      }
       scpToRemote(crabbox.inspect, setupScript, `${REMOTE_ROOT}/remote-setup.sh`);
       scpToRemote(crabbox.inspect, launchScript, `${REMOTE_ROOT}/launch-desktop.sh`);
       scpToRemote(crabbox.inspect, authorizeScript, `${REMOTE_ROOT}/authorize-desktop.sh`);
@@ -990,7 +1041,6 @@ async function defaultLiveDeps(): Promise<NativeProofDeps> {
           "--target",
           "linux",
           "--desktop",
-          "--browser",
           "--idle-timeout",
           "60m",
           "--ttl",
@@ -1425,7 +1475,7 @@ async function main(): Promise<void> {
   }
 
   const result = await runNativeProof(opts);
-  console.log(JSON.stringify({ ...result, staged: stagePublicArtifacts(opts.outputDir) }, null, 2));
+  console.log(JSON.stringify(redactProofValue({ ...result, staged: stagePublicArtifacts(opts.outputDir) }), null, 2));
   if ((result as { ok?: boolean }).ok !== true) process.exit(1);
 }
 

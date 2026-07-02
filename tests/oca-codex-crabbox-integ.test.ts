@@ -2,7 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   buildTelegramCredentialCommandArgs,
@@ -143,7 +143,10 @@ describe("OCA Codex Crabbox integration harness", () => {
     const opts = parseArgs(["run"]);
     const leaseArgs = buildTelegramCredentialCommandArgs(opts, "lease-restore", ["--lease-file", "/tmp/lease.json"]);
 
-    assert.deepEqual(leaseArgs.slice(-2), ["--env-file", "~/.codex/skills/custom/telegram-e2e-bot-to-bot/convex.local.env"]);
+    assert.deepEqual(leaseArgs.slice(-2), [
+      "--env-file",
+      join(homedir(), ".codex", "skills", "custom", "telegram-e2e-bot-to-bot", "convex.local.env"),
+    ]);
   });
 
   it("runs the native Crabbox orchestration path with fakes, redacts artifacts, and cleans session state", async () => {

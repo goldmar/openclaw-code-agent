@@ -32,6 +32,10 @@ describe("OCA Codex Telegram proof runner", () => {
       "local-container",
       "--env-file",
       ".private/convex.env",
+      "--tdlib-archive",
+      "/tmp/tdlib.tgz",
+      "--tdlib-sha256",
+      "943518ad39f67e20f843713ba5c88fedbd06111fbc314c61bfb2fc3f1a45743e",
       "--allow-live",
       "--keep-box",
     ]);
@@ -43,6 +47,8 @@ describe("OCA Codex Telegram proof runner", () => {
     assert.equal(opts.recordSeconds, 12);
     assert.equal(opts.keepBox, true);
     assert.equal(opts.envFile, ".private/convex.env");
+    assert.equal(opts.tdlibArchive, "/tmp/tdlib.tgz");
+    assert.equal(opts.tdlibSha256, "943518ad39f67e20f843713ba5c88fedbd06111fbc314c61bfb2fc3f1a45743e");
     assert.equal(opts.allowLive, true);
 
     assert.throws(() => parseArgs(["--output-dir", "one", "--output-dir", "two"]), /--output-dir was provided more than once/);
@@ -74,6 +80,8 @@ describe("OCA Codex Telegram proof runner", () => {
       assert.equal(JSON.stringify(plan).includes("super-secret-value"), false);
       assert.equal(plan.telegram.credentialKind, "telegram-user");
       assert.equal(plan.gateway.isolatedHome, true);
+      assert.equal(plan.telegram.tdlibArchive, "missing");
+      assert.equal(plan.telegram.tdlibSha256, "missing");
     } finally {
       if (originalSecret === undefined) delete process.env.OPENCLAW_QA_CONVEX_SECRET_CI;
       else process.env.OPENCLAW_QA_CONVEX_SECRET_CI = originalSecret;

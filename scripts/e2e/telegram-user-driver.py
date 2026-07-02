@@ -316,6 +316,8 @@ class UserDriver:
                     code = getattr(args, "code", "") or prompt_secret("Telegram login code: ")
                     self.client.send({"@type": "checkAuthenticationCode", "code": code})
                 elif state == "authorizationStateWaitPassword":
+                    if not need_ready:
+                        raise DriverError("Telegram user credential requires manual 2FA password re-login.")
                     password = getattr(args, "password", "") or prompt_secret("Telegram 2FA password: ")
                     self.client.send({"@type": "checkAuthenticationPassword", "password": password})
                 elif state == "authorizationStateReady":
@@ -324,6 +326,8 @@ class UserDriver:
                     raise DriverError(f"TDLib auth state is {state}")
             elif item.get("@type") == "error":
                 message = item.get("message") or "TDLib error"
+                if not need_ready and message == "Wrong password":
+                    raise DriverError("Telegram user credential requires manual 2FA password re-login.")
                 if not retried_current_params and "Valid api_id must be provided" in message:
                     retried_current_params = True
                     self.client.send(
