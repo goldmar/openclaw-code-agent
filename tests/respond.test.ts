@@ -58,7 +58,7 @@ describe("executeRespond", () => {
     };
 
     const result = await executeRespond(sm, { session: "test-id", message: "wake up" });
-    assert.equal(result.text, "Auto-resumed session suspended-session [test-id]. Use agent_output to see the response.");
+    assert.equal(result.text, "Resume started for session suspended-session [test-id]. Use agent_output to see the response.");
     assert.equal(capturedConfig.resumeSessionId, "harness-idle");
     assert.equal(capturedConfig.sessionIdOverride, "test-id");
   });
@@ -89,7 +89,7 @@ describe("executeRespond", () => {
     };
 
     const result = await executeRespond(sm, { session: "test-id", message: "continue" });
-    assert.match(result.text, /Auto-resumed session/);
+    assert.match(result.text, /Resume started for session/);
     assert.equal(capturedConfig.harness, "codex");
     assert.equal(capturedConfig.originSessionKey, "agent:main:telegram:group:123:topic:42");
     assert.equal(capturedConfig.originChannel, "telegram|bot|123");
@@ -135,7 +135,7 @@ describe("executeRespond", () => {
     };
 
     const result = await executeRespond(sm, { session: "test-id", message: "continue implementation" });
-    assert.match(result.text, /Auto-resumed session/);
+    assert.match(result.text, /Resume started for session/);
     assert.equal(capturedConfig.resumeSessionId, "thread-codex-complete");
     assert.equal(capturedConfig.sessionIdOverride, "test-id");
   });
@@ -419,7 +419,7 @@ describe("executeRespond", () => {
       message: "Please revise the plan to avoid touching migrations.",
     });
 
-    assert.ok(result.text.includes("Auto-resumed"));
+    assert.ok(result.text.includes("Resume started"));
     assert.equal(capturedConfig.resumeSessionId, "harness-plan-revise");
     assert.equal(capturedConfig.permissionMode, "plan");
     assert.doesNotMatch(capturedConfig.prompt, /The user has approved your plan/i);
@@ -812,7 +812,7 @@ describe("executeRespond", () => {
     assert.match(result.text, /missing_backend_state/);
   });
 
-  it("emits only the auto-resume notification when resuming a suspended session", async () => {
+  it("emits one lifecycle resume notification when auto-resuming a suspended session", async () => {
     const harness = createFakeHarness("respond-resume-harness");
     registerHarness(harness);
 
@@ -860,12 +860,13 @@ describe("executeRespond", () => {
 
     const result = await pending;
 
-    assert.ok(result.text.includes("Auto-resumed"));
+    assert.ok(result.text.includes("Resume started"));
     assert.equal((sm as any).__dispatchCalls.length, 1);
     const [_resumedSession, request] = (sm as any).__dispatchCalls[0];
-    assert.equal(request.label, "notification");
-    assert.match(request.idempotencyKey, /^agent-respond-auto-resumed:suspended-id:\d+:harness-resume-only$/);
-    assert.match(request.userMessage, /▶️ \[resume-only\] Auto-resumed/);
+    assert.equal(request.label, "resumed-launch");
+    assert.match(request.idempotencyKey, /^resumed-launch:suspended-id:\d+:harness-resume-only$/);
+    assert.match(request.userMessage, /▶️ \[resume-only\] Resumed \| \/tmp\/repo \| respond-resume-harness \| test-model/);
+    assert.doesNotMatch(request.userMessage, /Auto-resumed/);
     assert.doesNotMatch(request.userMessage, /Launched/);
   });
 });
