@@ -161,6 +161,7 @@ const FAKE_CODEX_SERVER = path.join(SCRIPT_DIR, "oca-codex-proof-app-server.ts")
 const TELEGRAM_USER_DRIVER = path.join(SCRIPT_DIR, "telegram-user-driver.py");
 const TELEGRAM_USER_CREDENTIAL = path.join(SCRIPT_DIR, "telegram-user-credential.ts");
 const PRIVATE_CONVEX_ENV = "~/.codex/skills/custom/telegram-e2e-bot-to-bot/convex.local.env";
+const TELEGRAM_PASSWORD_ENV = "OPENCLAW_QA_TELEGRAM_USER_PASSWORD";
 const TCP_PORT_RE = /^[1-9]\d*$/u;
 const COMMAND_TIMEOUT_MS = 30 * 60 * 1000;
 const REMOTE_SETUP_COMMAND_TIMEOUT_MS = 90 * 60 * 1000;
@@ -466,7 +467,7 @@ function extractCrabboxLeaseId(output: string): string {
   return leaseId;
 }
 
-function renderRemoteSetup(opts: Options): string {
+export function renderRemoteSetup(opts: Options): string {
   const tdlibSha256 = opts.tdlibSha256 ?? "";
   return `#!/usr/bin/env bash
 set -euo pipefail
@@ -517,6 +518,33 @@ if ! ldconfig -p | grep -q libtdjson.so; then
   fi
   run_setup_step "tdlib install" "$apt_timeout" sudo install -m 0755 "$tdjson_lib" /usr/local/lib/libtdjson.so
   sudo ldconfig
+fi
+telegram_password="$(python3 - "$root/telegram-user-payload.json" "$root/telegram-user-password" <<'PY'
+import json
+import pathlib
+import sys
+
+payload_path = pathlib.Path(sys.argv[1])
+password_path = pathlib.Path(sys.argv[2])
+try:
+    payload = json.loads(payload_path.read_text())
+except FileNotFoundError:
+    payload = {}
+
+for key in ("credential", "telegramPassword", "telegram2faPassword", "password"):
+    value = payload.get(key)
+    if isinstance(value, str) and value.strip():
+        print(value.strip())
+        raise SystemExit(0)
+
+try:
+    print(password_path.read_text().strip())
+except FileNotFoundError:
+    pass
+PY
+)"
+if [ -n "$telegram_password" ]; then
+  TELEGRAM_USER_DRIVER_STATE_DIR="$root/user-driver" TELEGRAM_USER_DRIVER_PASSWORD="$telegram_password" python3 "$root/user-driver.py" login --json --timeout-ms 60000 >"$root/login.json"
 fi
 TELEGRAM_USER_DRIVER_STATE_DIR="$root/user-driver" python3 "$root/user-driver.py" status --json --timeout-ms 60000 >"$root/status.json"
 TELEGRAM_USER_DRIVER_STATE_DIR="$root/user-driver" python3 "$root/user-driver.py" terminate-desktop-sessions --json --timeout-ms 60000 --output "$root/desktop-sessions-cleanup.json"
@@ -1117,6 +1145,10 @@ async function defaultLiveDeps(): Promise<NativeProofDeps> {
       const remoteStateRoot = path.join(sessionDir, "remote-state");
       mkdirSync(remoteStateRoot, { recursive: true });
       copyFileSync(TELEGRAM_USER_DRIVER, path.join(remoteStateRoot, "user-driver.py"));
+      const injectedPassword = process.env[TELEGRAM_PASSWORD_ENV]?.trim();
+      if (injectedPassword) {
+        writeFileSync(path.join(sessionDir, "telegram-user-password"), injectedPassword, { mode: 0o600 });
+      }
       runCommandSync({
         command: "tar",
         args: [
@@ -1126,6 +1158,8 @@ async function defaultLiveDeps(): Promise<NativeProofDeps> {
           path.join(sessionDir, "remote-state.tgz"),
           "user-driver",
           "desktop",
+          "telegram-user-payload.json",
+          ...(injectedPassword ? ["telegram-user-password"] : []),
           "-C",
           remoteStateRoot,
           "user-driver.py",

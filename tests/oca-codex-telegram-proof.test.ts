@@ -7,6 +7,7 @@ import {
   buildProofPlan,
   collectDoctorChecks,
   parseArgs,
+  renderRemoteSetup,
   resolveProofOutputDir,
   runNativeProof,
   runLocalSmoke,
@@ -88,6 +89,19 @@ describe("OCA Codex Telegram proof runner", () => {
       if (originalSite === undefined) delete process.env.OPENCLAW_QA_CONVEX_SITE_URL;
       else process.env.OPENCLAW_QA_CONVEX_SITE_URL = originalSite;
     }
+  });
+
+  it("runs password login before remote status without exposing the password in argv", () => {
+    const script = renderRemoteSetup(parseArgs(["run"]));
+    const loginIndex = script.indexOf('python3 "$root/user-driver.py" login');
+    const statusIndex = script.indexOf('python3 "$root/user-driver.py" status');
+
+    assert.ok(loginIndex > 0);
+    assert.ok(statusIndex > loginIndex);
+    assert.match(script, /TELEGRAM_USER_DRIVER_PASSWORD="\$telegram_password"/);
+    assert.doesNotMatch(script, /login --password/);
+    assert.match(script, /telegram-user-payload\.json/);
+    assert.match(script, /telegram-user-password/);
   });
 
   it("refuses native Telegram proof unless both the env gate and live flag are present", async () => {

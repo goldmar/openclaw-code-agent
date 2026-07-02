@@ -318,7 +318,11 @@ class UserDriver:
                 elif state == "authorizationStateWaitPassword":
                     if not need_ready:
                         raise DriverError("Telegram user credential requires manual 2FA password re-login.")
-                    password = getattr(args, "password", "") or prompt_secret("Telegram 2FA password: ")
+                    password = (
+                        getattr(args, "password", "")
+                        or os.environ.get("TELEGRAM_USER_DRIVER_PASSWORD", "")
+                        or prompt_secret("Telegram 2FA password: ")
+                    )
                     self.client.send({"@type": "checkAuthenticationPassword", "password": password})
                 elif state == "authorizationStateReady":
                     return True

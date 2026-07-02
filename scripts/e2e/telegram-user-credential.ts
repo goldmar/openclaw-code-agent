@@ -162,6 +162,13 @@ function optionalString(source: JsonObject, key: string) {
   return undefined;
 }
 
+function optionalCredentialString(source: JsonObject) {
+  return optionalString(source, "credential")
+    ?? optionalString(source, "telegramPassword")
+    ?? optionalString(source, "telegram2faPassword")
+    ?? optionalString(source, "password");
+}
+
 function optionalPositiveInteger(value: string | undefined, fallback: number, label = "value") {
   const text = value?.trim();
   if (!text) {
@@ -235,6 +242,7 @@ function parseTelegramUserQaCredentialPayload(payload: Record<string, unknown>):
     );
   }
 
+  const credential = optionalCredentialString(payload);
   return {
     groupId,
     sutToken: requireTelegramUserPayloadString(payload, "sutToken"),
@@ -253,6 +261,7 @@ function parseTelegramUserQaCredentialPayload(payload: Record<string, unknown>):
       "desktopTdataArchiveBase64",
     ),
     desktopTdataArchiveSha256,
+    ...(credential ? { credential } : {}),
   };
 }
 
