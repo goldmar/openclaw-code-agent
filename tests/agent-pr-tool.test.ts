@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildPrCompletionWakeOutcomeKey, buildPrMetadata, buildPrOutcomeDetailLines, formatPrBody, normalizeForceNewReplacementPrStatus, resolveExistingTargetPrUpdateBranch, shouldIgnoreClosedTargetPrForForceNew } from "../src/tools/agent-pr";
+import { buildPrCompletionWakeOutcomeKey, buildPrMetadata, buildPrOutcomeDetailLines, formatPrBody, normalizeForceNewReplacementPrStatus, resolveExistingTargetPrUpdateBranch, resolveExistingTargetPrUpdateSourceBranch, shouldIgnoreClosedTargetPrForForceNew } from "../src/tools/agent-pr";
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", ["-C", cwd, ...args], {
@@ -206,6 +206,52 @@ describe("agent_pr existing target PR branch resolution", () => {
         alreadyRepresented: true,
       });
       assert.equal(git(repoDir, "rev-parse", "agent/codex-telegram-proof-tests"), helperHead);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it("prefers the checked-out PR head over a stale internal worktree branch", () => {
+    const repoDir = initRepo("openclaw-agent-pr-current-head-");
+    try {
+      git(repoDir, "checkout", "-b", "agent/task-flow-lifecycle-hooks");
+      writeFileSync(join(repoDir, "real.txt"), "real PR update\n", "utf-8");
+      git(repoDir, "add", "real.txt");
+      git(repoDir, "commit", "-m", "Update existing PR branch");
+
+      git(repoDir, "checkout", "main");
+      git(repoDir, "checkout", "-b", "agent/pr-98910-taskflow-ci-codex");
+      writeFileSync(join(repoDir, "internal.txt"), "stale helper work\n", "utf-8");
+      git(repoDir, "add", "internal.txt");
+      git(repoDir, "commit", "-m", "Stale internal helper branch");
+
+      git(repoDir, "checkout", "agent/task-flow-lifecycle-hooks");
+
+      const targetPrStatus = {
+        exists: true,
+        state: "open" as const,
+        url: "https://github.com/openclaw/openclaw/pull/98910",
+        number: 98910,
+        headRefName: "agent/task-flow-lifecycle-hooks",
+        baseRefName: "main",
+      };
+      const sourceBranch = resolveExistingTargetPrUpdateSourceBranch({
+        repoDir,
+        fallbackBranch: "agent/pr-98910-taskflow-ci-codex",
+        targetPrStatus,
+      });
+      const result = resolveExistingTargetPrUpdateBranch({
+        repoDir,
+        sourceBranch,
+        targetPrStatus,
+      });
+
+      assert.equal(sourceBranch, "agent/task-flow-lifecycle-hooks");
+      assert.deepEqual(result, {
+        success: true,
+        branchName: "agent/task-flow-lifecycle-hooks",
+        alreadyRepresented: false,
+      });
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }

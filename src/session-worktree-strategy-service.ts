@@ -288,6 +288,16 @@ export class SessionWorktreeStrategyService {
     }
 
     if (action.policyBlocked) {
+      if (this.shouldUpdateExistingOpenPr(session, action.repoDir, action.branchName, action.baseBranch)) {
+        return this.handleAutoPrStrategy(
+          session,
+          action.repoDir,
+          action.worktreePath,
+          action.branchName,
+          action.baseBranch,
+          { merge: false, pr: true },
+        );
+      }
       this.markPendingDecision(session, { notes: action.policyReason ? [action.policyReason] : undefined });
       this.deps.dispatchSessionNotification(session, {
         label: "worktree-policy-blocked",
@@ -298,7 +308,7 @@ export class SessionWorktreeStrategyService {
       return { notificationSent: true, worktreeRemoved: false };
     }
     if (action.strategy === "ask") {
-      if (this.shouldUpdateExistingOpenPr(session, action.repoDir, action.branchName, action.policy, action.allowedActions)) {
+      if (this.shouldUpdateExistingOpenPr(session, action.repoDir, action.branchName, action.baseBranch)) {
         return this.handleAutoPrStrategy(
           session,
           action.repoDir,
@@ -423,17 +433,24 @@ export class SessionWorktreeStrategyService {
     return this.deps.hasOpenPrForBranch?.(repoDir, branchName, session.worktreePrTargetRepo) === true;
   }
 
+  private hasRecordedOpenTargetPr(session: Session, repoDir: string, baseBranch?: string): boolean {
+    if (!session.worktreePrUrl) return false;
+    const prStatus = this.getPrStatusForUrl(repoDir, session.worktreePrUrl, session.worktreePrTargetRepo);
+    return prStatus.state === "open"
+      && (!baseBranch || !prStatus.baseRefName || prStatus.baseRefName === baseBranch);
+  }
+
   private shouldUpdateExistingOpenPr(
     session: Session,
     repoDir: string,
     branchName: string,
-    policy: RepoPolicyResolution["policy"] | undefined,
-    allowedActions: AllowedWorktreeActions,
+    baseBranch: string,
   ): boolean {
     return session.worktreeStrategy === "auto-pr"
-      && policy === "never-pr"
-      && allowedActions.pr === false
-      && this.hasCurrentlyOpenPrForBranch(session, repoDir, branchName);
+      && (
+        this.hasCurrentlyOpenPrForBranch(session, repoDir, branchName)
+        || this.hasRecordedOpenTargetPr(session, repoDir, baseBranch)
+      );
   }
 
   private async handleAskStrategy(

@@ -193,6 +193,24 @@ export function resolveExistingTargetPrUpdateBranch(args: {
   return moveBranchFastForward(repoDir, targetBranch, sourceBranch);
 }
 
+export function resolveExistingTargetPrUpdateSourceBranch(args: {
+  repoDir: string;
+  fallbackBranch: string;
+  targetPrStatus: PRStatus;
+}): string {
+  const targetBranch = args.targetPrStatus.headRefName;
+  if (!targetBranch || targetBranch === args.fallbackBranch) {
+    return args.fallbackBranch;
+  }
+
+  const currentBranch = getBranchName(args.repoDir);
+  if (currentBranch === targetBranch) {
+    return currentBranch;
+  }
+
+  return args.fallbackBranch;
+}
+
 export function buildPrOutcomeDetailLines(args: {
   branchName: string;
   baseBranch: string;
@@ -343,9 +361,14 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
       const effectiveTargetPrUrl = forceNewIgnoresClosedTargetPr ? undefined : explicitTargetPrUrl;
       const effectiveTargetPrStatus = forceNewIgnoresClosedTargetPr ? undefined : explicitTargetPrStatus;
       if (effectiveTargetPrStatus?.exists && effectiveTargetPrStatus.state === "open") {
+        const sourceBranch = resolveExistingTargetPrUpdateSourceBranch({
+          repoDir: originalWorkdir,
+          fallbackBranch: branchName,
+          targetPrStatus: effectiveTargetPrStatus,
+        });
         const branchResolution = resolveExistingTargetPrUpdateBranch({
           repoDir: originalWorkdir,
-          sourceBranch: branchName,
+          sourceBranch,
           targetPrStatus: effectiveTargetPrStatus,
         });
         if ("error" in branchResolution) {
