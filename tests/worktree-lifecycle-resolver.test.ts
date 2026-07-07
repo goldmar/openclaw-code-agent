@@ -291,7 +291,9 @@ describe("resolveWorktreeLifecycle", () => {
 
       git(repoDir, "checkout", "-b", "staging", "intended-pr");
       git(repoDir, "cherry-pick", helperCommit);
-      git(repoDir, "merge-base", "--is-ancestor", "agent/helper", "staging");
+      git(repoDir, "diff", "--quiet", "agent/helper", "staging");
+      assert.equal(git(repoDir, "show", "staging:helper.txt"), "helper");
+      assert.throws(() => git(repoDir, "show", "main:helper.txt"), /Command failed/);
       assert.throws(() => git(repoDir, "merge-base", "--is-ancestor", "agent/helper", "main"), /Command failed/);
 
       const resolved = resolveWorktreeLifecycle({
