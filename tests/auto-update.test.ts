@@ -186,6 +186,33 @@ describe("AutoUpdateService", () => {
     assert.equal(harness.sends.length, 0);
   });
 
+  it("prompts from cached latest version when a routed retry follows a route-less daily check", async () => {
+    setPluginConfig({});
+    const now = Date.parse("2026-07-08T12:00:00.000Z");
+    const stateDir = tempStateDir();
+    const harness = createService({
+      stateDir,
+      latestVersion: "4.6.1",
+      now: () => now,
+    });
+
+    harness.service.maybeCheckForUpdate();
+    await harness.service.waitForIdle();
+
+    assert.equal(harness.fetchCount, 1);
+    assert.equal(harness.sends.length, 0);
+    assert.equal(readState(stateDir).latestVersion, "4.6.1");
+    assert.equal(readState(stateDir).lastCheckedAt, new Date(now).toISOString());
+
+    harness.service.maybeCheckForUpdate({ route: ROUTE });
+    await harness.service.waitForIdle();
+
+    assert.equal(harness.fetchCount, 1);
+    assert.equal(harness.sends.length, 1);
+    assert.equal(readState(stateDir).promptedVersion, "4.6.1");
+    assert.equal(readState(stateDir).lastPromptedAt, new Date(now).toISOString());
+  });
+
   it("re-prompts a dismissed release only after the weekly reminder window", async () => {
     setPluginConfig({});
     let now = Date.parse("2026-07-15T12:00:00.000Z");

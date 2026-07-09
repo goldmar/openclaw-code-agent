@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { validateReleaseMetadata } from "../scripts/validate-release-metadata.mjs";
-import { register } from "../index";
+import { register, routeFromInteractiveContext } from "../index";
 import { goalController, sessionManager, setGoalController, setSessionManager } from "../src/singletons";
 
 const rootDir = join(import.meta.dirname, "..");
@@ -499,6 +499,24 @@ describe("plugin entry source", () => {
     assert.match(indexSource, /registerCodeAgentInteractiveHandler\("discord"\)/);
     assert.match(indexSource, /createCallbackHandler\(channel\)/);
     assert.doesNotMatch(indexSource, /registerHttpRoute\(/);
+  });
+
+  it("derives direct routes from non-Telegram interactive contexts", () => {
+    const route = routeFromInteractiveContext({
+      channel: "discord",
+      accountId: "bot1",
+      conversationId: "987654321",
+      threadId: "112233",
+      sessionKey: "agent:main:discord:channel:987654321",
+    });
+
+    assert.deepEqual(route, {
+      provider: "discord",
+      accountId: "bot1",
+      target: "channel:987654321",
+      threadId: "112233",
+      sessionKey: "agent:main:discord:channel:987654321",
+    });
   });
 
   it("registers goal tools, commands, and controller startup", () => {

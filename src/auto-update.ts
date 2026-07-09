@@ -252,7 +252,10 @@ export class AutoUpdateService {
   private async checkForUpdate(context: AutoUpdateCheckContext): Promise<void> {
     const state = this.readState();
     const checkedAtMs = state.lastCheckedAt ? Date.parse(state.lastCheckedAt) : Number.NaN;
-    if (Number.isFinite(checkedAtMs) && this.now() - checkedAtMs < DAY_MS) return;
+    if (Number.isFinite(checkedAtMs) && this.now() - checkedAtMs < DAY_MS) {
+      await this.promptFromState(state, context);
+      return;
+    }
 
     const checkedAt = new Date(this.now()).toISOString();
     const checkedState: AutoUpdateState = { ...state, lastCheckedAt: checkedAt };
@@ -269,19 +272,7 @@ export class AutoUpdateService {
       delete nextState.lastError;
       this.writeState(nextState);
 
-      if (!isNewerStableVersion(latestVersion, this.options.currentVersion)) return;
-      if (!this.shouldPromptForVersion(nextState, latestVersion)) return;
-
-      const route = routeToNotificationRoute(context.route ?? fallbackRoute());
-      if (!route) return;
-
-      await this.sendUpdatePrompt(route, latestVersion);
-      this.writeState({
-        ...this.readState(),
-        latestVersion,
-        promptedVersion: latestVersion,
-        lastPromptedAt: new Date(this.now()).toISOString(),
-      });
+      await this.promptFromState(nextState, context);
     } catch (error) {
       this.writeState({
         ...this.readState(),
@@ -289,6 +280,23 @@ export class AutoUpdateService {
       });
       throw error;
     }
+  }
+
+  private async promptFromState(state: AutoUpdateState, context: AutoUpdateCheckContext): Promise<void> {
+    const latestVersion = normalizeVersion(state.latestVersion);
+    if (!isNewerStableVersion(latestVersion, this.options.currentVersion)) return;
+    if (!this.shouldPromptForVersion(state, latestVersion)) return;
+
+    const route = routeToNotificationRoute(context.route ?? fallbackRoute());
+    if (!route) return;
+
+    await this.sendUpdatePrompt(route, latestVersion);
+    this.writeState({
+      ...this.readState(),
+      latestVersion,
+      promptedVersion: latestVersion,
+      lastPromptedAt: new Date(this.now()).toISOString(),
+    });
   }
 
   private async sendUpdatePrompt(route: NotificationRoute, latestVersion: string): Promise<void> {

@@ -121,6 +121,30 @@ function cleanupOrphanedWorktrees(sm: SessionManager): void {
   }
 }
 
+export function routeFromInteractiveContext(ctx: unknown): SessionRoute | undefined {
+  if (!ctx || typeof ctx !== "object") return undefined;
+  const record = ctx as {
+    channel?: string;
+    accountId?: string;
+    conversationId?: string;
+    parentConversationId?: string;
+    threadId?: string | number;
+    sessionKey?: string;
+    callback?: { chatId?: string };
+  };
+  const channel = record.channel?.trim().toLowerCase();
+  if (!channel) return undefined;
+  const target = channel === "telegram"
+    ? record.callback?.chatId ?? record.parentConversationId ?? record.conversationId
+    : record.parentConversationId ?? record.conversationId ?? record.callback?.chatId;
+  if (!target) return undefined;
+  return routeFromOriginMetadata(
+    record.accountId ? `${channel}|${record.accountId}|${target}` : `${channel}|${target}`,
+    record.threadId,
+    record.sessionKey,
+  );
+}
+
 /** Register plugin tools, commands, and the background session service. */
 export function register(api: OpenClawPluginApi): void {
   let sm: SessionManager | null = null;
@@ -146,27 +170,6 @@ export function register(api: OpenClawPluginApi): void {
       );
     }
     return routeFromOriginMetadata(ctx.messageChannel, undefined, ctx.sessionKey);
-  };
-
-  const routeFromInteractiveContext = (ctx: unknown): SessionRoute | undefined => {
-    if (!ctx || typeof ctx !== "object") return undefined;
-    const record = ctx as {
-      channel?: string;
-      accountId?: string;
-      conversationId?: string;
-      parentConversationId?: string;
-      threadId?: string | number;
-      callback?: { chatId?: string };
-    };
-    if (record.channel === "telegram") {
-      const target = record.callback?.chatId ?? record.parentConversationId ?? record.conversationId;
-      if (!target) return undefined;
-      return routeFromOriginMetadata(
-        record.accountId ? `telegram|${record.accountId}|${target}` : `telegram|${target}`,
-        record.threadId,
-      );
-    }
-    return undefined;
   };
 
   const maybeCheckForAutoUpdate = (route?: SessionRoute): void => {
