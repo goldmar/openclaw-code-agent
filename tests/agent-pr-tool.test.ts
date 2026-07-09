@@ -4,7 +4,8 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildPrCompletionWakeOutcomeKey, buildPrMetadata, buildPrOutcomeDetailLines, formatPrBody, normalizeForceNewReplacementPrStatus, resolveExistingTargetPrUpdateBranch, resolveExistingTargetPrUpdateSourceBranch, shouldIgnoreClosedTargetPrForForceNew } from "../src/tools/agent-pr";
+import { buildPrCompletionWakeOutcomeKey, buildPrMetadata, buildPrOutcomeDetailLines, createRuntimePrMetadataProvider, formatPrBody, isOcaGeneratedPrBody, normalizeForceNewReplacementPrStatus, resolveExistingTargetPrUpdateBranch, resolveExistingTargetPrUpdateSourceBranch, shouldIgnoreClosedTargetPrForForceNew } from "../src/tools/agent-pr";
+import { setPluginRuntime } from "../src/runtime-store";
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", ["-C", cwd, ...args], {
@@ -434,6 +435,103 @@ describe("agent_pr existing target PR branch resolution", () => {
 });
 
 describe("agent_pr generated PR metadata", () => {
+  it("uses runtime PR metadata providers when agent_pr does not inject a test provider", async () => {
+    setPluginRuntime({
+      prMetadata: {
+        async generatePrMetadata() {
+          return {
+            title: "Refresh generated PR body",
+            summary: ["Refreshes generated PR descriptions from runtime metadata."],
+            changes: ["`src/tools/agent-pr.ts`", "`src/worktree-pr-metadata.ts`", "`tests/agent-pr-tool.test.ts`"],
+            validation: ["pnpm test:file tests/agent-pr-tool.test.ts"],
+            notes: ["Does not expose raw prompts or private paths."],
+          };
+        },
+      },
+    });
+    try {
+      const provider = createRuntimePrMetadataProvider();
+      assert.ok(provider);
+
+      const result = await buildPrMetadata({
+        sessionName: "runtime-pr-metadata",
+        prompt: "Fix PR metadata generation. Do not leak /home/openclaw/private/path or SECRET_TOKEN=ghp_1234567890abcdefghijklmnopqrstuvwxyz.",
+        diffSummary: {
+          commits: 1,
+          filesChanged: 3,
+          insertions: 20,
+          deletions: 4,
+          changedFiles: ["src/tools/agent-pr.ts", "src/worktree-pr-metadata.ts", "tests/agent-pr-tool.test.ts"],
+          commitMessages: [{ hash: "abc1234", message: "Wire runtime PR metadata", author: "Codex" }],
+        },
+        provider,
+      });
+
+      assert.equal(result.ok, true);
+      assert.equal(result.ok && result.metadata.title, "Refresh generated PR body");
+    } finally {
+      setPluginRuntime(undefined);
+    }
+  });
+
+  it("accepts JSON text from generic runtime metadata providers", async () => {
+    setPluginRuntime({
+      llm: {
+        async generateText() {
+          return JSON.stringify({
+            title: "Use generic runtime metadata",
+            summary: ["Parses JSON returned by a generic runtime text provider."],
+            changes: ["`src/worktree-pr-metadata.ts`", "`tests/agent-pr-tool.test.ts`"],
+            validation: ["pnpm test:file tests/agent-pr-tool.test.ts"],
+            notes: ["Keeps provider output behind metadata validation."],
+          });
+        },
+      },
+    });
+    try {
+      const provider = createRuntimePrMetadataProvider();
+      assert.ok(provider);
+      const result = await buildPrMetadata({
+        sessionName: "runtime-generic-provider",
+        prompt: "Summarize runtime provider support.",
+        diffSummary: {
+          commits: 1,
+          filesChanged: 2,
+          insertions: 12,
+          deletions: 1,
+          changedFiles: ["src/worktree-pr-metadata.ts", "tests/agent-pr-tool.test.ts"],
+          commitMessages: [{ hash: "abc1234", message: "Parse generic provider JSON", author: "Codex" }],
+        },
+        provider,
+      });
+
+      assert.equal(result.ok, true);
+      assert.equal(result.ok && result.metadata.title, "Use generic runtime metadata");
+    } finally {
+      setPluginRuntime(undefined);
+    }
+  });
+
+  it("marks only OpenClaw-generated or fallback PR bodies as replaceable by default", () => {
+    const generated = formatPrBody({
+      sessionName: "replaceable",
+      metadata: {
+        title: "Generated metadata",
+        summary: ["Generated summary."],
+        changes: ["`src/tools/agent-pr.ts`"],
+        validation: ["Review CI checks before merging."],
+        notes: ["Generated notes."],
+      },
+    });
+
+    assert.equal(isOcaGeneratedPrBody(generated), true);
+    assert.equal(
+      isOcaGeneratedPrBody("## Summary\n- Deterministic fallback metadata generated because no LLM PR metadata provider is configured."),
+      true,
+    );
+    assert.equal(isOcaGeneratedPrBody("Human-written description with project context and review notes."), false);
+  });
+
   it("uses valid LLM metadata for generated worktree PR content", async () => {
     const diffSummary = {
       commits: 2,
