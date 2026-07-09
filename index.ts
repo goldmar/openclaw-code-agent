@@ -1,7 +1,9 @@
 import { readdirSync, statSync, rmSync } from "fs";
 import { execFileSync } from "child_process";
 import { join } from "path";
+import packageJson from "./package.json";
 
+import { AutoUpdateService } from "./src/auto-update";
 import { makeAgentLaunchTool } from "./src/tools/agent-launch";
 import { makeAgentSessionsTool } from "./src/tools/agent-sessions";
 import { makeAgentKillTool } from "./src/tools/agent-kill";
@@ -34,10 +36,13 @@ import { registerGoalStopCommand } from "./src/commands/goal-stop";
 import { registerGoalEditCommand } from "./src/commands/goal-edit";
 import { GoalController } from "./src/goal-controller";
 import { SessionManager } from "./src/session-manager";
-import { setGoalController, setSessionManager } from "./src/singletons";
+import { setAutoUpdateService, setGoalController, setSessionManager } from "./src/singletons";
 import { setPluginRuntime } from "./src/runtime-store";
 import { createRuntimeWorktreeDecisionSummaryProvider } from "./src/worktree-decision-summary";
 import { setPluginConfig, pluginConfig } from "./src/config";
+import { resolveOpenclawHomeDir } from "./src/openclaw-paths";
+import { routeFromOriginMetadata } from "./src/session-route";
+import type { SessionRoute } from "./src/types";
 import { definePluginEntry, type OpenClawPluginApi, type OpenClawPluginServiceContext, type OpenClawPluginToolContext } from "./api";
 
 /**
@@ -120,6 +125,7 @@ function cleanupOrphanedWorktrees(sm: SessionManager): void {
 export function register(api: OpenClawPluginApi): void {
   let sm: SessionManager | null = null;
   let gc: GoalController | null = null;
+  let autoUpdate: AutoUpdateService | null = null;
   let started = false;
   let startedWithServiceContext = false;
   const registerTool = api.registerTool as (
@@ -127,6 +133,45 @@ export function register(api: OpenClawPluginApi): void {
     options?: { optional?: boolean; name?: string },
   ) => void;
   setPluginRuntime(api.runtime);
+
+  const defaultStateDir = (): string => join(resolveOpenclawHomeDir(process.env), "plugin-state", "openclaw-code-agent");
+
+  const routeFromToolContext = (ctx: OpenClawPluginToolContext): SessionRoute | undefined => {
+    const delivery = ctx.deliveryContext;
+    if (delivery?.channel && delivery.to) {
+      return routeFromOriginMetadata(
+        delivery.accountId ? `${delivery.channel}|${delivery.accountId}|${delivery.to}` : `${delivery.channel}|${delivery.to}`,
+        delivery.threadId,
+        ctx.sessionKey,
+      );
+    }
+    return routeFromOriginMetadata(ctx.messageChannel, undefined, ctx.sessionKey);
+  };
+
+  const routeFromInteractiveContext = (ctx: unknown): SessionRoute | undefined => {
+    if (!ctx || typeof ctx !== "object") return undefined;
+    const record = ctx as {
+      channel?: string;
+      accountId?: string;
+      conversationId?: string;
+      parentConversationId?: string;
+      threadId?: string | number;
+      callback?: { chatId?: string };
+    };
+    if (record.channel === "telegram") {
+      const target = record.callback?.chatId ?? record.parentConversationId ?? record.conversationId;
+      if (!target) return undefined;
+      return routeFromOriginMetadata(
+        record.accountId ? `telegram|${record.accountId}|${target}` : `telegram|${target}`,
+        record.threadId,
+      );
+    }
+    return undefined;
+  };
+
+  const maybeCheckForAutoUpdate = (route?: SessionRoute): void => {
+    autoUpdate?.maybeCheckForUpdate({ route });
+  };
 
   const startCodeAgentService = (ctx?: OpenClawPluginServiceContext): void => {
     if (started) {
@@ -151,13 +196,21 @@ export function register(api: OpenClawPluginApi): void {
       worktreeSummaryProvider: createRuntimeWorktreeDecisionSummaryProvider(),
     });
     gc = new GoalController(sm);
+    autoUpdate = new AutoUpdateService({
+      stateDir: ctx?.stateDir ?? defaultStateDir(),
+      currentVersion: api.version ?? (packageJson as { version?: string }).version ?? "0.0.0",
+      actionButtonFactory: (sessionId, kind, label, options) =>
+        sm!.makePluginActionButton(sessionId, kind, label, options),
+    });
     setSessionManager(sm);
     setGoalController(gc);
+    setAutoUpdateService(autoUpdate);
     gc.start();
 
     cleanupOrphanedWorktrees(sm);
     sm.bootstrapMaintenanceSchedules();
     started = true;
+    maybeCheckForAutoUpdate();
   };
 
   const stopCodeAgentService = (): void => {
@@ -166,11 +219,13 @@ export function register(api: OpenClawPluginApi): void {
     if (sm) sm.dispose();
     gc = null;
     sm = null;
+    autoUpdate = null;
     started = false;
     startedWithServiceContext = false;
     setPluginRuntime(undefined);
     setGoalController(null);
     setSessionManager(null);
+    setAutoUpdateService(null);
   };
 
   const registerCodeAgentTool = (
@@ -179,6 +234,7 @@ export function register(api: OpenClawPluginApi): void {
   ): void => {
     registerTool((ctx: OpenClawPluginToolContext) => {
       startCodeAgentService();
+      maybeCheckForAutoUpdate(routeFromToolContext(ctx));
       return tool(ctx);
     }, options);
   };
@@ -190,6 +246,7 @@ export function register(api: OpenClawPluginApi): void {
         ...command,
         handler: (ctx: Parameters<typeof command.handler>[0]) => {
           startCodeAgentService();
+          maybeCheckForAutoUpdate(routeFromToolContext(ctx as unknown as OpenClawPluginToolContext));
           return command.handler(ctx);
         },
       });
@@ -202,6 +259,7 @@ export function register(api: OpenClawPluginApi): void {
       ...registration,
       handler: async (ctx: Parameters<typeof registration.handler>[0]) => {
         startCodeAgentService();
+        maybeCheckForAutoUpdate(routeFromInteractiveContext(ctx));
         return registration.handler(ctx);
       },
     });

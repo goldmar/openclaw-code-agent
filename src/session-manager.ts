@@ -944,6 +944,18 @@ export class SessionManager {
     return this.interactions.makeActionButton(sessionId, kind, label, options);
   }
 
+  makePluginActionButton(
+    sessionId: string,
+    kind: Extract<
+      SessionActionKind,
+      "plugin-update-install" | "plugin-update-remind-later" | "plugin-update-dismiss" | "plugin-update-restart"
+    >,
+    label: string,
+    options: Partial<Omit<SessionActionToken, "id" | "sessionId" | "kind" | "createdAt">> = {},
+  ): NotificationButton {
+    return this.makeActionButton(sessionId, kind, label, options);
+  }
+
   consumeActionToken(tokenId: string): SessionActionToken | undefined {
     return this.interactions.consumeActionToken(tokenId);
   }
