@@ -85,7 +85,7 @@ describe("AutoUpdateService", () => {
     assert.equal(isNewerStableVersion("4.7.0-beta.1", "4.6.0"), false);
   });
 
-  it("checks npm at most once per day", async () => {
+  it("checks ClawHub at most once per day", async () => {
     setPluginConfig({});
     let now = Date.parse("2026-07-08T12:00:00.000Z");
     const stateDir = tempStateDir();
@@ -125,11 +125,55 @@ describe("AutoUpdateService", () => {
     await harness.service.waitForIdle();
 
     assert.equal(harness.sends.length, 1);
+    assert.match(harness.sends[0]?.text ?? "", /OpenClaw plugin catalog/);
     assert.match(harness.sends[0]?.text ?? "", /4\.6\.0 -> 4\.6\.1/);
     assert.deepEqual(harness.sends[0]?.labels, ["Update now", "Remind later", "Dismiss"]);
     assert.equal(readState(stateDir).promptedVersion, "4.6.1");
     assert.equal(readState(stateDir).lastPromptedAt, new Date(now).toISOString());
     assert.deepEqual(harness.commands, []);
+  });
+
+  it("uses ClawHub package metadata as the default release source", async () => {
+    setPluginConfig({});
+    const originalFetch = globalThis.fetch;
+    const stateDir = tempStateDir();
+    let requestedUrl = "";
+    globalThis.fetch = async (input) => {
+      requestedUrl = String(input);
+      return new Response(JSON.stringify({ package: { latestVersion: "4.6.1" } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+    try {
+      const sends: Array<{ route: NotificationRoute; text: string; labels: string[] }> = [];
+      const service = new AutoUpdateService({
+        stateDir,
+        currentVersion: "4.6.0",
+        actionButtonFactory: (_sessionId, kind, label, actionOptions) => ({
+          label,
+          callbackData: `${kind}:${actionOptions?.pluginUpdateVersion ?? ""}`,
+        }),
+        notifier: {
+          send: async (route, text, buttons) => {
+            sends.push({
+              route,
+              text,
+              labels: (buttons ?? []).flat().map((button) => button.label),
+            });
+          },
+        },
+      });
+
+      service.maybeCheckForUpdate({ route: ROUTE });
+      await service.waitForIdle();
+
+      assert.equal(requestedUrl, autoUpdateInternals.CLAWHUB_PACKAGE_URL);
+      assert.equal(readState(stateDir).latestVersion, "4.6.1");
+      assert.equal(sends.length, 1);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it("does not prompt without a direct route or fallback channel", async () => {
