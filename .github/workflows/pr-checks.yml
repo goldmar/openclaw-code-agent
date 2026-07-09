@@ -59,7 +59,7 @@ jobs:
             const fs = require('fs');
 
             const distFile = 'dist/index.js';
-            const maxSizeBytes = 500 * 1024; // 500 KB
+            const maxSizeBytes = 550 * 1024; // 550 KB
 
             if (!fs.existsSync(distFile)) {
               core.setFailed(`Build artifact not found: ${distFile}`);
@@ -76,11 +76,11 @@ jobs:
               '',
               '| File | Size | Limit | Status |',
               '|------|------|-------|--------|',
-              `| \`dist/index.js\` | ${sizeKb} KB | 500 KB | ${status} |`,
+              `| \`dist/index.js\` | ${sizeKb} KB | 550 KB | ${status} |`,
               '',
               overLimit
-                ? '> ⚠️ **Bundle exceeds the 500 KB limit.** Please reduce bundle size before merging.'
-                : '> Bundle is within the 500 KB limit.',
+                ? '> ⚠️ **Bundle exceeds the 550 KB limit.** Please reduce bundle size before merging.'
+                : '> Bundle is within the 550 KB limit.',
             ].join('\n');
 
             core.setOutput('body', body);
@@ -131,7 +131,7 @@ jobs:
       - name: Fail if bundle exceeds limit
         if: steps.bundle-size.outputs.over_limit == 'true'
         run: |
-          echo "Bundle size ${{ steps.bundle-size.outputs.size_kb }} KB exceeds the 500 KB limit."
+          echo "Bundle size ${{ steps.bundle-size.outputs.size_kb }} KB exceeds the 550 KB limit."
           exit 1
 
   lockfile-check:

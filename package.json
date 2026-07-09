@@ -6,7 +6,7 @@
   "main": "dist/index.js",
   "scripts": {
     "audit:prod": "pnpm audit --prod",
-    "build": "esbuild index.ts --bundle --platform=node --target=node22 --format=esm --outdir=dist --splitting --minify --charset=utf8 --pure:console.log --pure:console.warn --pure:console.info --pure:console.debug --external:@anthropic-ai/claude-agent-sdk --external:openclaw/plugin-sdk/plugin-entry",
+    "build": "esbuild index.ts --bundle --platform=node --target=node22 --format=esm --outfile=dist/index.js --minify --charset=utf8 --pure:console.log --pure:console.warn --pure:console.info --pure:console.debug --external:@anthropic-ai/claude-agent-sdk --external:openclaw/plugin-sdk/plugin-entry",
     "check-static-guardrails": "node scripts/check-static-guardrails.mjs",
     "check-plugin-security": "node scripts/check-plugin-security.mjs",
     "test": "node scripts/run-tests.mjs",
