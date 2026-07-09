@@ -38,6 +38,7 @@ function hasFormatLaunchResult(value: unknown): value is {
     planApproval: "ask" | "delegate" | "approve";
     forceNewSession?: boolean;
     resumeSessionId?: string;
+    resumeSessionName?: string;
     forkSession?: boolean;
     clearedPersistedCodexResume?: boolean;
   }, session: LaunchSummarySessionLike) => string;
@@ -63,6 +64,7 @@ function hasRequestRepoPolicyForLaunch(value: unknown): value is {
     systemPrompt?: string;
     allowedTools?: string[];
     resumeSessionId?: string;
+    resumedFromSessionName?: string;
     resumeWorktreeFrom?: string;
     sessionIdOverride?: string;
     clearedPersistedCodexResume?: boolean;
@@ -194,6 +196,12 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
           };
         }
 
+        const resumedFromSessionName = resumeAssessment?.kind === "resume" && !params.fork_session
+          ? resumeTarget?.name
+          : undefined;
+        const launchName = resumedFromSessionName && !params.name
+          ? resumedFromSessionName
+          : params.name;
         const launchWorktreeStrategy = params.worktree_strategy ?? pluginConfig.defaultWorktreeStrategy ?? "off";
         const launchSessionIdOverride = !params.fork_session
           ? (resumeAssessment?.kind === "resume" || resumeAssessment?.kind === "relaunch"
@@ -210,13 +218,14 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
                   route,
                   prompt: params.prompt,
                   workdir,
-                  name: params.name,
+                  name: launchName,
                   model: resolvedModel,
                   reasoningEffort,
                   fastMode,
                   systemPrompt: params.system_prompt,
                   allowedTools: params.allowed_tools,
                   resumeSessionId: resumeAssessment?.kind === "resume" ? resumeAssessment.resumeSessionId : resumeSessionId,
+                  resumedFromSessionName,
                   resumeWorktreeFrom: resolvedResumeId,
                   sessionIdOverride: launchSessionIdOverride,
                   clearedPersistedCodexResume,
@@ -238,7 +247,7 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
         const session = sessionManager.spawn({
           prompt: params.prompt,
           sessionIdOverride: launchSessionIdOverride,
-          name: params.name,
+          name: launchName,
           workdir,
           model: resolvedModel,
           reasoningEffort,
@@ -246,6 +255,7 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
           systemPrompt: params.system_prompt,
           allowedTools: params.allowed_tools,
           resumeSessionId: resumeAssessment?.kind === "resume" ? resumeAssessment.resumeSessionId : resumeSessionId,
+          resumedFromSessionName,
           // Worktree inheritance needs the original resolved session ref even when
           // backend resume state is intentionally cleared for a fresh launch.
           resumeWorktreeFrom: resolvedResumeId,
@@ -275,6 +285,7 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
               planApproval,
               forceNewSession: params.force_new_session,
               resumeSessionId: params.resume_session_id,
+              resumeSessionName: resumedFromSessionName,
               forkSession: params.fork_session,
               clearedPersistedCodexResume,
             }, session)
@@ -285,6 +296,7 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
               permissionMode: permissionMode ?? pluginConfig.permissionMode,
               planApproval,
               resumeSessionId: params.resume_session_id,
+              resumeSessionName: resumedFromSessionName,
               forkSession: params.fork_session,
               forceNewSession: params.force_new_session,
               clearedPersistedCodexResume,

@@ -2,7 +2,7 @@ import { createHash } from "crypto";
 import { Session } from "./session";
 import { pluginConfig, getDefaultHarnessName } from "./config";
 import { generateSessionName } from "./format";
-import { formatLaunchSummaryFromSession } from "./launch-summary";
+import { formatLaunchSummaryFromSession, formatResumedLaunchMessage } from "./launch-summary";
 import { formatHarnessModelLabel } from "./session-display";
 import { pathsReferToSameLocation } from "./path-utils";
 import {
@@ -109,6 +109,7 @@ type RepoPolicyLaunchArgs = {
   systemPrompt?: string;
   allowedTools?: string[];
   resumeSessionId?: string;
+  resumedFromSessionName?: string;
   resumeWorktreeFrom?: string;
   sessionIdOverride?: string;
   clearedPersistedCodexResume?: boolean;
@@ -141,6 +142,7 @@ function digestRepoPolicyLaunchContext(args: RepoPolicyLaunchArgs, strategy: Wor
     systemPrompt: args.systemPrompt,
     allowedTools: args.allowedTools ? [...args.allowedTools].sort() : args.allowedTools,
     resumeSessionId: args.resumeSessionId,
+    resumedFromSessionName: args.resumedFromSessionName,
     resumeWorktreeFrom: args.resumeWorktreeFrom,
     sessionIdOverride: args.sessionIdOverride,
     clearedPersistedCodexResume: args.clearedPersistedCodexResume,
@@ -175,6 +177,7 @@ function digestRepoPolicyTokenLaunchContext(token: SessionActionToken): string {
     systemPrompt: token.launchSystemPrompt,
     allowedTools: token.launchAllowedTools ? [...token.launchAllowedTools].sort() : token.launchAllowedTools,
     resumeSessionId: token.launchResumeSessionId,
+    resumedFromSessionName: token.launchResumedFromSessionName,
     resumeWorktreeFrom: token.launchResumeWorktreeFrom,
     sessionIdOverride: token.launchSessionIdOverride,
     clearedPersistedCodexResume: token.launchClearedPersistedCodexResume,
@@ -634,6 +637,7 @@ export class SessionManager {
     planApproval: PlanApprovalMode;
     forceNewSession?: boolean;
     resumeSessionId?: string;
+    resumeSessionName?: string;
     forkSession?: boolean;
     clearedPersistedCodexResume?: boolean;
   }, session: Session): string {
@@ -644,6 +648,7 @@ export class SessionManager {
       permissionMode: config.permissionMode ?? pluginConfig.permissionMode,
       planApproval: config.planApproval,
       resumeSessionId: config.resumeSessionId,
+      resumeSessionName: config.resumeSessionName,
       forkSession: config.forkSession,
       forceNewSession: config.forceNewSession,
       clearedPersistedCodexResume: config.clearedPersistedCodexResume,
@@ -762,6 +767,7 @@ export class SessionManager {
       launchSystemPrompt: args.systemPrompt,
       launchAllowedTools: args.allowedTools,
       launchResumeSessionId: args.resumeSessionId,
+      launchResumedFromSessionName: args.resumedFromSessionName,
       launchResumeWorktreeFrom: args.resumeWorktreeFrom,
       launchSessionIdOverride: args.sessionIdOverride,
       launchClearedPersistedCodexResume: args.clearedPersistedCodexResume,
@@ -832,6 +838,7 @@ export class SessionManager {
       systemPrompt: args.systemPrompt,
       allowedTools: args.allowedTools,
       resumeSessionId: args.resumeSessionId,
+      resumedFromSessionName: args.resumedFromSessionName,
       resumeWorktreeFrom: args.resumeWorktreeFrom,
       forkSession: args.resumeSessionId ? args.forkSession : false,
       multiTurn: true,
@@ -858,6 +865,7 @@ export class SessionManager {
         planApproval,
         forceNewSession: args.forceNewSession,
         resumeSessionId: args.resumeSessionId,
+        resumeSessionName: args.resumedFromSessionName,
         forkSession: args.forkSession,
         clearedPersistedCodexResume: args.clearedPersistedCodexResume,
       }, session),
@@ -916,6 +924,7 @@ export class SessionManager {
       systemPrompt: token.launchSystemPrompt,
       allowedTools: token.launchAllowedTools,
       resumeSessionId: token.launchResumeSessionId,
+      resumedFromSessionName: token.launchResumedFromSessionName,
       resumeWorktreeFrom: token.launchResumeWorktreeFrom,
       sessionIdOverride: token.launchSessionIdOverride,
       clearedPersistedCodexResume: token.launchClearedPersistedCodexResume,
@@ -1464,7 +1473,12 @@ export class SessionManager {
     }) ?? "default";
     this.notifySession(
       session,
-      `▶️ [${session.name}] Resumed | ${workdirLabel} | ${harnessLabel}`,
+      formatResumedLaunchMessage({
+        sessionName: session.name,
+        resumedFromSessionName: session.resumedFromSessionName,
+        workdirLabel,
+        harnessLabel,
+      }),
       "resumed-launch",
       `resumed-launch:${session.id}:${session.startedAt}:${session.resumeSessionId}`,
     );

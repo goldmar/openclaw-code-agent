@@ -24,6 +24,7 @@ export interface LaunchSummaryInput {
   worktreePath?: string;
   originalWorkdir?: string;
   resumeSessionId?: string;
+  resumeSessionName?: string;
   forkSession?: boolean;
   forceNewSession?: boolean;
   clearedPersistedCodexResume?: boolean;
@@ -40,6 +41,7 @@ export interface LaunchSummarySessionLike {
   repoProvider?: RepoProviderKind;
   worktreePath?: string;
   originalWorkdir?: string;
+  resumedFromSessionName?: string;
 }
 
 function summarizePrompt(prompt: string): string {
@@ -76,7 +78,13 @@ export function formatLaunchSummary(input: LaunchSummaryInput): string {
     details.push("  Fast mode: enabled");
   }
   if (input.resumeSessionId) {
-    details.push(`  Resume: ${input.resumeSessionId}${input.forkSession ? " (forked)" : ""}`);
+    const resumeLabel = input.resumeSessionName
+      ? `${input.resumeSessionName} [${input.resumeSessionId}]`
+      : input.resumeSessionId;
+    details.push(`  Resume: ${resumeLabel}${input.forkSession ? " (forked)" : ""}`);
+    if (!input.forkSession && input.resumeSessionName && input.sessionName !== input.resumeSessionName) {
+      details.push(`  Follow-up label: ${input.sessionName}`);
+    }
   } else if (input.forceNewSession) {
     details.push("  Force new session: true");
   }
@@ -104,5 +112,19 @@ export function formatLaunchSummaryFromSession(
     repoProvider: session.repoProvider,
     worktreePath: session.worktreePath,
     originalWorkdir: session.originalWorkdir,
+    resumeSessionName: session.resumedFromSessionName ?? input.resumeSessionName,
   });
+}
+
+export function formatResumedLaunchMessage(input: {
+  sessionName: string;
+  resumedFromSessionName?: string;
+  workdirLabel: string;
+  harnessLabel: string;
+}): string {
+  const identity = input.resumedFromSessionName || input.sessionName;
+  const labelSuffix = input.resumedFromSessionName && input.sessionName !== input.resumedFromSessionName
+    ? ` | Follow-up label: ${input.sessionName}`
+    : "";
+  return `▶️ [${identity}] Resumed${labelSuffix} | ${input.workdirLabel} | ${input.harnessLabel}`;
 }

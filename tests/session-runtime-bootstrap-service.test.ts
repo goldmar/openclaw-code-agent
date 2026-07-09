@@ -69,4 +69,39 @@ describe("SessionRuntimeBootstrapService", () => {
       },
     ]);
   });
+
+  it("shows the original session name and explicit follow-up label in resumed launch notifications", () => {
+    const notifications: Array<{ text: string; label?: string; idempotencyKey?: string }> = [];
+    const service = new SessionRuntimeBootstrapService({
+      hydrateSpawnedSession: () => {},
+      markRunning: () => {},
+      handleTerminal: async () => {},
+      handleTurnEnd: async () => {},
+      formatLaunchWorkdirLabel: () => "/repo",
+      notifySession: (_session, text, label, idempotencyKey) => {
+        notifications.push({ text, label, idempotencyKey });
+      },
+    });
+
+    const session = Object.assign(new EventEmitter(), {
+      id: "_QDNlLZr",
+      name: "oca-pr-341-bundle-size-fix",
+      resumedFromSessionName: "oca-auto-update-feature",
+      model: "gpt-5.5",
+      harnessName: "codex",
+      startedAt: 1_780_000_001_000,
+      resumeSessionId: "thread-auto-update-feature",
+      start: () => {},
+    });
+
+    service.initializeSession(session as any, {} as any, { resumeSessionId: "thread-auto-update-feature" } as any);
+
+    assert.deepEqual(notifications, [
+      {
+        text: "▶️ [oca-auto-update-feature] Resumed | Follow-up label: oca-pr-341-bundle-size-fix | /repo | codex | gpt-5.5",
+        label: "resumed-launch",
+        idempotencyKey: "resumed-launch:_QDNlLZr:1780000001000:thread-auto-update-feature",
+      },
+    ]);
+  });
 });

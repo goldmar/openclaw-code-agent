@@ -1,5 +1,6 @@
 import type { Session } from "./session";
 import { formatHarnessModelLabel } from "./session-display";
+import { formatResumedLaunchMessage } from "./launch-summary";
 import type { SessionConfig, SessionLifecycle, SessionStatus } from "./types";
 
 type SpawnOptions = {
@@ -9,7 +10,7 @@ type SpawnOptions = {
 type PreparedLaunch = ReturnType<import("./session-restore-service").SessionRestoreService["prepareSpawn"]>;
 type LaunchNotificationSession = Pick<
   Session,
-  "id" | "name" | "workdir" | "worktreePath" | "originalWorkdir" | "harnessName" | "model" | "startedAt" | "resumeSessionId"
+  "id" | "name" | "workdir" | "worktreePath" | "originalWorkdir" | "harnessName" | "model" | "startedAt" | "resumeSessionId" | "resumedFromSessionName"
 >;
 
 /**
@@ -82,7 +83,12 @@ export class SessionRuntimeBootstrapService {
     }) ?? "default";
     if (session.resumeSessionId) {
       return {
-        text: `▶️ [${session.name}] Resumed | ${workdirLabel} | ${harnessLabel}`,
+        text: formatResumedLaunchMessage({
+          sessionName: session.name,
+          resumedFromSessionName: session.resumedFromSessionName,
+          workdirLabel,
+          harnessLabel,
+        }),
         label: "resumed-launch",
         idempotencyKey: `resumed-launch:${session.id}:${session.startedAt}:${session.resumeSessionId}`,
       };

@@ -674,6 +674,7 @@ export function normalizeActionToken(raw: unknown): SessionActionToken | undefin
       ? raw.launchAllowedTools.filter((item): item is string => typeof item === "string")
       : undefined,
     launchResumeSessionId: toOptionalString(raw.launchResumeSessionId),
+    launchResumedFromSessionName: toOptionalString(raw.launchResumedFromSessionName),
     launchResumeWorktreeFrom: toOptionalString(raw.launchResumeWorktreeFrom),
     launchSessionIdOverride: toOptionalString(raw.launchSessionIdOverride),
     launchClearedPersistedCodexResume: raw.launchClearedPersistedCodexResume === true ? true : undefined,
