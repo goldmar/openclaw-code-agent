@@ -244,6 +244,10 @@ export type SessionActionKind =
   | "worktree-dismiss"
   | "session-resume"
   | "session-restart"
+  | "plugin-update-install"
+  | "plugin-update-remind-later"
+  | "plugin-update-dismiss"
+  | "plugin-update-restart"
   | "view-output"
   | "question-answer";
 
@@ -292,6 +296,7 @@ export interface SessionActionToken {
   launchOriginAgentId?: string;
   repoPolicy?: RepoIntegrationPolicy;
   repoPolicyWorkdir?: string;
+  pluginUpdateVersion?: string;
 }
 
 export interface SessionNotificationDedupeRecord {

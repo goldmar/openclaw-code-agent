@@ -97,9 +97,14 @@ export class SessionInteractionService {
       case "worktree-merge":
       case "session-resume":
       case "session-restart":
+      case "plugin-update-install":
+      case "plugin-update-restart":
         return "success";
+      case "plugin-update-remind-later":
+        return "secondary";
       case "plan-reject":
       case "worktree-dismiss":
+      case "plugin-update-dismiss":
         return "danger";
       default:
         return "secondary";

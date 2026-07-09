@@ -55,7 +55,7 @@ Every PR must pass `pnpm verify` locally and in CI. The current automated checks
 | Check | Command | Notes |
 |-------|---------|-------|
 | Verify | `pnpm verify` | Canonical typecheck + build + test gate on Node 22 |
-| Bundle size | — | `dist/index.js` must be < 500 KB |
+| Bundle size | — | `dist/index.js` must be < 600 KB |
 | Lockfile integrity | — | `pnpm-lock.yaml` must be in sync with `package.json` |
 
 If the lockfile check fails, regenerate it locally:

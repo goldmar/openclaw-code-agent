@@ -1,4 +1,4 @@
-import { sessionManager } from "./singletons";
+import { autoUpdateService, sessionManager } from "./singletons";
 import { executeRespond, rejectPlanDecision, requestPlanDecisionChanges } from "./actions/respond";
 import { makeAgentMergeTool } from "./tools/agent-merge";
 import { makeAgentPrTool } from "./tools/agent-pr";
@@ -917,6 +917,56 @@ export function createCallbackHandler(
 
       // Route action
       switch (consumedToken.kind) {
+        case "plugin-update-install": {
+          await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged, forceTelegramMarkupEdit: true });
+          if (!autoUpdateService) {
+            await replyText(ctx, "⚠️ OCA update service is not running.");
+            break;
+          }
+          try {
+            const text = await autoUpdateService.installConfirmed(consumedToken.pluginUpdateVersion, {
+              route: consumedToken.route,
+            });
+            await replyText(ctx, `✅ ${text}`);
+          } catch (err) {
+            await replyText(ctx, `⚠️ OCA update failed: ${err instanceof Error ? err.message : String(err)}`);
+          }
+          break;
+        }
+
+        case "plugin-update-restart": {
+          await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged, forceTelegramMarkupEdit: true });
+          if (!autoUpdateService) {
+            await replyText(ctx, "⚠️ OCA update service is not running.");
+            break;
+          }
+          try {
+            const text = await autoUpdateService.restartConfirmed(consumedToken.pluginUpdateVersion);
+            await replyText(ctx, `▶️ ${text}`);
+          } catch (err) {
+            await replyText(ctx, `⚠️ Gateway restart failed: ${err instanceof Error ? err.message : String(err)}`);
+          }
+          break;
+        }
+
+        case "plugin-update-dismiss": {
+          await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged, forceTelegramMarkupEdit: true });
+          const text = autoUpdateService
+            ? autoUpdateService.dismiss(consumedToken.pluginUpdateVersion)
+            : "Dismissed OCA update reminder.";
+          await replyText(ctx, `✅ ${text}`);
+          break;
+        }
+
+        case "plugin-update-remind-later": {
+          await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged, forceTelegramMarkupEdit: true });
+          const text = autoUpdateService
+            ? autoUpdateService.remindLater(consumedToken.pluginUpdateVersion)
+            : "Will remind later about OCA update reminder.";
+          await replyText(ctx, `✅ ${text}`);
+          break;
+        }
+
         case "worktree-merge": {
           const result = await makeMergeTool().execute("callback", { session: sessionId });
           const text = toolResultText(result);

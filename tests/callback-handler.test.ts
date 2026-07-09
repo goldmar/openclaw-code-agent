@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { createCallbackHandler } from "../src/callback-handler";
 import { SessionActionTokenStore } from "../src/session-action-token-store";
-import { setSessionManager } from "../src/singletons";
+import { setAutoUpdateService, setSessionManager } from "../src/singletons";
 import { createStubSession } from "./helpers";
 
 const TELEGRAM_FORUM_TARGET = "-1001234567890";
@@ -109,10 +109,127 @@ function createToolResult(text: string, success: boolean) {
 describe("createCallbackHandler()", () => {
   beforeEach(() => {
     setSessionManager(null);
+    setAutoUpdateService(null);
   });
 
   afterEach(() => {
     delete process.env.OPENCLAW_CODE_AGENT_BUTTON_DIAGNOSTICS;
+    setAutoUpdateService(null);
+  });
+
+  it("runs plugin update confirmation without restarting the Gateway", async () => {
+    const calls: string[] = [];
+    setAutoUpdateService({
+      installConfirmed: async () => {
+        calls.push("install");
+        return "updated; restart prompt sent";
+      },
+      restartConfirmed: async () => {
+        calls.push("restart");
+        return "restarted";
+      },
+      dismiss: () => "dismissed",
+    } as any);
+    setSessionManager({
+      getActionToken: () => ({
+        sessionId: "plugin:auto-update",
+        kind: "plugin-update-install",
+        pluginUpdateVersion: "4.6.1",
+      }),
+      consumeActionToken: () => ({
+        sessionId: "plugin:auto-update",
+        kind: "plugin-update-install",
+        pluginUpdateVersion: "4.6.1",
+      }),
+      resolve: () => undefined,
+      getPersistedSession: () => undefined,
+    } as any);
+
+    const handler = createCallbackHandler();
+    const state = createCtx("token-update");
+    const result = await handler.handler(state.ctx as any);
+
+    assert.deepEqual(result, { handled: true });
+    assert.deepEqual(calls, ["install"]);
+    assert.match(state.replies[0] ?? "", /restart prompt sent/);
+  });
+
+  it("restarts the Gateway only from explicit plugin restart confirmation", async () => {
+    const calls: string[] = [];
+    setAutoUpdateService({
+      installConfirmed: async () => {
+        calls.push("install");
+        return "updated";
+      },
+      restartConfirmed: async () => {
+        calls.push("restart");
+        return "Gateway restart requested for OCA 4.6.1.";
+      },
+      dismiss: () => "dismissed",
+    } as any);
+    setSessionManager({
+      getActionToken: () => ({
+        sessionId: "plugin:auto-update",
+        kind: "plugin-update-restart",
+        pluginUpdateVersion: "4.6.1",
+      }),
+      consumeActionToken: () => ({
+        sessionId: "plugin:auto-update",
+        kind: "plugin-update-restart",
+        pluginUpdateVersion: "4.6.1",
+      }),
+      resolve: () => undefined,
+      getPersistedSession: () => undefined,
+    } as any);
+
+    const handler = createCallbackHandler();
+    const state = createCtx("token-restart");
+    const result = await handler.handler(state.ctx as any);
+
+    assert.deepEqual(result, { handled: true });
+    assert.deepEqual(calls, ["restart"]);
+    assert.match(state.replies[0] ?? "", /Gateway restart requested/);
+  });
+
+  it("records remind-later update callbacks without update or restart commands", async () => {
+    const calls: string[] = [];
+    setAutoUpdateService({
+      installConfirmed: async () => {
+        calls.push("install");
+        return "updated";
+      },
+      restartConfirmed: async () => {
+        calls.push("restart");
+        return "restarted";
+      },
+      remindLater: () => {
+        calls.push("remind-later");
+        return "Will remind later about OCA 4.6.1 update reminder.";
+      },
+      dismiss: () => "dismissed",
+    } as any);
+    setSessionManager({
+      getActionToken: () => ({
+        sessionId: "plugin:auto-update",
+        kind: "plugin-update-remind-later",
+        pluginUpdateVersion: "4.6.1",
+      }),
+      consumeActionToken: () => ({
+        sessionId: "plugin:auto-update",
+        kind: "plugin-update-remind-later",
+        pluginUpdateVersion: "4.6.1",
+      }),
+      resolve: () => undefined,
+      getPersistedSession: () => undefined,
+    } as any);
+
+    const handler = createCallbackHandler();
+    const state = createCtx("token-remind-later");
+    const result = await handler.handler(state.ctx as any);
+
+    assert.deepEqual(result, { handled: true });
+    assert.deepEqual(calls, ["remind-later"]);
+    assert.match(state.replies[0] ?? "", /remind later/i);
   });
 
   it("surfaces PR URLs through explicit view-pr actions", async () => {
