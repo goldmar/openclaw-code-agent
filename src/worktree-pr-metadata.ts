@@ -533,6 +533,11 @@ export function isOcaGeneratedPrBody(body: string | undefined): boolean {
   return body.includes(GENERATED_FOOTER) || body.includes(FALLBACK_METADATA_MARKER);
 }
 
+export function isOcaGeneratedPrTitle(title: string | undefined): boolean {
+  if (!title) return false;
+  return /^OpenClaw agent changes:/i.test(title.trim());
+}
+
 export function formatPrBody(args: {
   sessionName: string;
   metadata: PrMetadata;

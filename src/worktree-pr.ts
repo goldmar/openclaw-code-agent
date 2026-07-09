@@ -323,6 +323,29 @@ export function updatePRBody(repoDir: string, prNumberOrUrl: number | string, bo
   }
 }
 
+export function updatePRTitle(repoDir: string, prNumberOrUrl: number | string, title: string, targetRepo?: string): boolean {
+  if (!isGitHubCLIAvailable()) {
+    return false;
+  }
+
+  try {
+    const ghArgs = ["pr", "edit", String(prNumberOrUrl), "--title", title];
+    if (targetRepo) {
+      ghArgs.push("--repo", targetRepo);
+    }
+    execFileSync("gh", ghArgs, {
+      cwd: repoDir,
+      timeout: 30_000,
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    return true;
+  } catch (err) {
+    console.warn(`[worktree] Failed to update PR title for ${prNumberOrUrl}: ${err instanceof Error ? err.message : String(err)}`);
+    return false;
+  }
+}
+
 export function commentOnPR(repoDir: string, prNumber: number, body: string, targetRepo?: string): boolean {
   if (!isGitHubCLIAvailable()) {
     return false;
