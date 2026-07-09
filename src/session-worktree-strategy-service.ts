@@ -438,10 +438,12 @@ export class SessionWorktreeStrategyService {
   }
 
   private getDeliveredRemoteOutcome(session: Session): "pr-updated" | "pr-opened" | undefined {
-    const persisted = getPersistedMutationRefs(session)
+    const persistedWithRemoteOutcome = getPersistedMutationRefs(session)
       .map((ref) => this.deps.getPersistedSession?.(ref))
-      .find((entry): entry is PersistedSessionInfo => Boolean(entry));
-    return persisted?.worktreeRemoteOutcome;
+      .find((entry): entry is PersistedSessionInfo & { worktreeRemoteOutcome: "pr-updated" | "pr-opened" } => (
+        entry?.worktreeRemoteOutcome === "pr-updated" || entry?.worktreeRemoteOutcome === "pr-opened"
+      ));
+    return persistedWithRemoteOutcome?.worktreeRemoteOutcome;
   }
 
   private hasRecordedOpenTargetPr(session: Session, repoDir: string, baseBranch?: string): boolean {

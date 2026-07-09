@@ -220,6 +220,26 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       const sm = created.sm;
       cleanup = created.cleanup;
       stubDispatch(sm);
+      (sm as any).store.persisted.set("s-pr-updated-clean", {
+        harnessSessionId: "h-pr-updated-clean",
+        backendRef: { kind: "claude-code", conversationId: "h-pr-updated-clean" },
+        name: "pr-updated-clean",
+        prompt: "address comments on the existing PR",
+        workdir: repoDir,
+        route: {
+          provider: "telegram",
+          target: "12345",
+          sessionKey: "agent:main:telegram:group:12345",
+        },
+        status: "completed",
+        costUsd: 0,
+        worktreePath,
+        worktreeBranch: branchName,
+        worktreeStrategy: "auto-pr",
+        worktreeBaseBranch: "main",
+        worktreePrUrl: "https://github.com/example/repo/pull/7",
+        worktreePrNumber: 7,
+      });
       (sm as any).store.persisted.set("h-pr-updated-clean", {
         harnessSessionId: "h-pr-updated-clean",
         backendRef: { kind: "claude-code", conversationId: "h-pr-updated-clean" },
