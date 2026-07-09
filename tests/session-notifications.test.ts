@@ -46,6 +46,39 @@ describe("SessionNotificationService", () => {
     assert.match(String(requests[0]?.wakeMessageOnNotifySuccess), /PR #325 \| \$0\.00 \| 24m0s \| codex \| gpt-5\.5/);
   });
 
+  it("persists PR remote outcome semantics independently of hashed notification dedupe keys", () => {
+    const persisted = { notificationDedupe: undefined, worktreeRemoteOutcome: undefined } as any;
+    const fakeDispatcher = {
+      dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, () => void> }) => {
+        request.hooks?.onNotifyStarted?.();
+        request.hooks?.onNotifySucceeded?.();
+      },
+      dispose: () => {},
+    };
+    const service = new SessionNotificationService(
+      fakeDispatcher as any,
+      (_ref, patch) => Object.assign(persisted, patch),
+      { getPersistedSession: () => persisted },
+    );
+
+    service.notifyWorktreeOutcome(
+      {
+        id: "session-pr-updated-marker",
+        name: "pr-updated-marker",
+        harnessSessionId: "h-pr-updated-marker",
+      } as any,
+      "✅ PR updated: https://github.com/goldmar/openclaw-code-agent/pull/344",
+      {
+        completionWakeOutcomeKey: "worktree-pr:updated:goldmar/openclaw-code-agent:#344:agent/oca-no-change-pr-update-ux:1c852aa",
+      },
+    );
+
+    assert.equal(persisted.worktreeRemoteOutcome, "pr-updated");
+    assert.equal(persisted.notificationDedupe?.[0]?.label, "worktree-outcome");
+    assert.match(persisted.notificationDedupe?.[0]?.key ?? "", /^notification:/);
+    assert.doesNotMatch(persisted.notificationDedupe?.[0]?.key ?? "", /^worktree-outcome:/);
+  });
+
   it("appends session stats to merge worktree notifications", () => {
     const requests: Array<Record<string, unknown>> = [];
     const fakeDispatcher = {

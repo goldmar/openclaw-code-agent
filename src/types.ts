@@ -301,6 +301,8 @@ export interface SessionNotificationDedupeRecord {
   label?: string;
 }
 
+export type WorktreeRemoteOutcome = "pr-opened" | "pr-updated";
+
 export interface SessionCompletionSummaryRecord {
   key: string;
   linkedKeys?: string[];
@@ -549,6 +551,8 @@ export interface PersistedSessionInfo {
   worktreeDecisionSnoozedUntil?: string;
   /** Current lifecycle disposition of the worktree. */
   worktreeDisposition?: "active" | "pr-opened" | "merged" | "dismissed" | "no-change-cleaned";
+  /** Last PR/remote branch outcome completed for this worktree session, if any. */
+  worktreeRemoteOutcome?: WorktreeRemoteOutcome;
   /** ISO timestamp when the worktree was dismissed. */
   worktreeDismissedAt?: string;
   worktreeLifecycle?: PersistedWorktreeLifecycle;

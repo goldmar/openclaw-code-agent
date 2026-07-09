@@ -612,6 +612,7 @@ export function normalizePersistedEntry(raw: unknown): PersistedSessionInfo | un
     worktreePushRemote: toOptionalString(raw.worktreePushRemote),
     worktreeDecisionSnoozedUntil: toOptionalString(raw.worktreeDecisionSnoozedUntil),
     worktreeDisposition: (raw.worktreeDisposition === "active" || raw.worktreeDisposition === "pr-opened" || raw.worktreeDisposition === "merged" || raw.worktreeDisposition === "dismissed" || raw.worktreeDisposition === "no-change-cleaned") ? raw.worktreeDisposition : undefined,
+    worktreeRemoteOutcome: (raw.worktreeRemoteOutcome === "pr-opened" || raw.worktreeRemoteOutcome === "pr-updated") ? raw.worktreeRemoteOutcome : undefined,
     worktreeDismissedAt: toOptionalString(raw.worktreeDismissedAt),
     worktreeLifecycle,
     resumable: recoveredFromRunning ? true : raw.resumable === true,

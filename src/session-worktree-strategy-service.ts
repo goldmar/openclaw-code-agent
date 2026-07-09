@@ -441,25 +441,7 @@ export class SessionWorktreeStrategyService {
     const persisted = getPersistedMutationRefs(session)
       .map((ref) => this.deps.getPersistedSession?.(ref))
       .find((entry): entry is PersistedSessionInfo => Boolean(entry));
-    const records = persisted?.notificationDedupe ?? [];
-    if (records.some((record) => (
-      record.status === "delivered"
-      && record.label === "worktree-outcome"
-      && record.key.startsWith("worktree-outcome:worktree-pr:updated:")
-    ))) {
-      return "pr-updated";
-    }
-    if (records.some((record) => (
-      record.status === "delivered"
-      && record.label === "worktree-outcome"
-      && (
-        record.key.startsWith("worktree-outcome:worktree-pr:opened:")
-        || record.key.startsWith("worktree-outcome:worktree-pr:draft-opened:")
-      )
-    ))) {
-      return "pr-opened";
-    }
-    return undefined;
+    return persisted?.worktreeRemoteOutcome;
   }
 
   private hasRecordedOpenTargetPr(session: Session, repoDir: string, baseBranch?: string): boolean {

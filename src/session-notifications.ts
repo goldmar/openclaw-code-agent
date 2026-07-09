@@ -78,6 +78,15 @@ function writeNotificationDecisionLog(payload: Record<string, unknown>): void {
   process.stderr.write(`[SessionNotification] ${JSON.stringify(payload)}\n`);
 }
 
+function getWorktreeRemoteOutcome(outcomeKey: string | undefined): PersistedSessionInfo["worktreeRemoteOutcome"] | undefined {
+  const parts = outcomeKey?.trim().split(":") ?? [];
+  if (parts[0] !== "worktree-pr") return undefined;
+  const action = parts[1]?.toLowerCase();
+  if (action === "updated" || action === "draft-updated") return "pr-updated";
+  if (action === "opened" || action === "draft-opened") return "pr-opened";
+  return undefined;
+}
+
 export class SessionNotificationService {
   private readonly completionSummaries: CompletionSummaryCoordinator;
   private readonly notificationDedupe: NotificationDedupeCoordinator;
@@ -307,6 +316,10 @@ export class SessionNotificationService {
     options: WorktreeOutcomeNotificationOptions = {},
   ): void {
     const sessionId = this.getDeliveryRef(session);
+    const remoteOutcome = getWorktreeRemoteOutcome(options.completionWakeOutcomeKey);
+    if (sessionId && remoteOutcome) {
+      this.applyPersistedPatch(sessionId, { worktreeRemoteOutcome: remoteOutcome });
+    }
     const outcomeUserMessage = appendSessionStatsSuffix(outcomeLine, session);
     const buildWakeMessage = (canonicalStatusDelivered: boolean): string => buildWorktreeOutcomeFollowupWake({
       sessionId,

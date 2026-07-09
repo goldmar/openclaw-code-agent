@@ -239,12 +239,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
         worktreeBaseBranch: "main",
         worktreePrUrl: "https://github.com/example/repo/pull/7",
         worktreePrNumber: 7,
-        notificationDedupe: [{
-          key: "worktree-outcome:worktree-pr:updated:example/repo:#7:agent/pr-updated-clean:abc1234",
-          status: "delivered",
-          recordedAt: new Date().toISOString(),
-          label: "worktree-outcome",
-        }],
+        worktreeRemoteOutcome: "pr-updated",
       });
 
       const session = {
