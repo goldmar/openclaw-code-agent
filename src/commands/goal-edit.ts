@@ -7,12 +7,12 @@ import {
 import { goalController } from "../singletons";
 import { consumeFirstCommandArg } from "./args";
 
-const GOAL_EDIT_USAGE = "Usage: /goal_edit <task-id-or-name> <replacement-goal>";
+const GOAL_EDIT_USAGE = "Usage: /agent_goal_edit <task-id-or-name> <replacement-goal>";
 
 export function registerGoalEditCommand(api: GoalCommandApi): void {
   api.registerCommand({
-    name: "goal_edit",
-    description: "Edit a running goal task. Usage: /goal_edit <task-id-or-name> <replacement-goal>",
+    name: "agent_goal_edit",
+    description: "Edit a running goal task. Usage: /agent_goal_edit <task-id-or-name> <replacement-goal>",
     acceptsArgs: true,
     requireAuth: true,
     handler: (ctx: GoalCommandContext) => {

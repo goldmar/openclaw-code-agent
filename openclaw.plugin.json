@@ -55,10 +55,10 @@
       "agent_sessions",
       "agent_stats",
       "agent_policy",
-      "goal",
-      "goal_status",
-      "goal_stop",
-      "goal_edit"
+      "agent_goal",
+      "agent_goal_status",
+      "agent_goal_stop",
+      "agent_goal_edit"
     ]
   },
   "setup": {

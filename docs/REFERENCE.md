@@ -582,6 +582,10 @@ Have oca handle the failing dashboard smoke test.
 | `/agent_respond` | Send a reply |
 | `/agent_kill` | Stop a session |
 | `/agent_stats` | Show aggregate metrics |
+| `/agent_goal` | Launch an explicit goal task |
+| `/agent_goal_status` | Show one goal task or list all goal tasks |
+| `/agent_goal_edit` | Change the goal text for an active goal task |
+| `/agent_goal_stop` | Stop a running goal task |
 
 Use `agent_sessions` to inspect resumable sessions. Continue them with `agent_respond`, or fork from prior context with `agent_launch(..., resume_session_id=..., fork_session=true)`. `agent_respond` is the only continuation primitive.
 

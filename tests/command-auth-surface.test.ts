@@ -54,10 +54,10 @@ describe("chat command auth surface", () => {
         ["agent_respond", true],
         ["agent_sessions", true],
         ["agent_stats", true],
-        ["goal", true],
-        ["goal_status", true],
-        ["goal_stop", true],
-        ["goal_edit", true],
+        ["agent_goal", true],
+        ["agent_goal_status", true],
+        ["agent_goal_stop", true],
+        ["agent_goal_edit", true],
       ],
     );
   });
