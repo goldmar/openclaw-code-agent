@@ -571,6 +571,7 @@ export function normalizePersistedEntry(raw: unknown): PersistedSessionInfo | un
     route,
     outputPath: toOptionalString(raw.outputPath),
     harness,
+    resumedFromSessionName: toOptionalString(raw.resumedFromSessionName),
     goalTaskId: toOptionalString(raw.goalTaskId),
     requestedPermissionMode: toOptionalPermissionMode(raw.requestedPermissionMode),
     currentPermissionMode: toOptionalPermissionMode(raw.currentPermissionMode),

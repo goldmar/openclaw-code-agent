@@ -492,6 +492,8 @@ export interface PersistedSessionInfo {
   route?: SessionRoute;
   outputPath?: string;
   harness?: string;
+  /** Original user-facing session name when this record represents a relabeled non-fork resume. */
+  resumedFromSessionName?: string;
   /** Optional goal-task owner for explicit iterative loop orchestration. */
   goalTaskId?: string;
   requestedPermissionMode?: PermissionMode;
