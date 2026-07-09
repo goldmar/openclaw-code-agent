@@ -122,7 +122,7 @@ describe("GoalController", () => {
     assert.deepEqual(notifications.map((note) => note.label), ["goal-task-failed"]);
   });
 
-  it("emits a stopped notification when a goal session is killed outside goal_stop", async () => {
+  it("emits a stopped notification when a goal session is killed outside agent_goal_stop", async () => {
     const notifications: Array<{ label: string; text: string }> = [];
     const controller = new GoalController({
       emitGoalTaskUpdate: (_task: GoalTaskState, text: string, label: string) => {

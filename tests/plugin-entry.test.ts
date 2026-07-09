@@ -352,10 +352,10 @@ describe("plugin entry source", () => {
       "agent_pr",
       "agent_worktree_cleanup",
       "agent_worktree_status",
-      "goal_launch",
-      "goal_status",
-      "goal_stop",
-      "goal_edit",
+      "agent_goal_launch",
+      "agent_goal_status",
+      "agent_goal_stop",
+      "agent_goal_edit",
     ];
     const pluginManifest = JSON.parse(readFileSync(join(rootDir, "openclaw.plugin.json"), "utf8")) as {
       contracts?: {

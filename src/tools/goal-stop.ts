@@ -14,7 +14,7 @@ function isGoalStopParams(value: unknown): value is GoalStopParams {
 
 export function makeGoalStopTool(_ctx: OpenClawPluginToolContext) {
   return {
-    name: "goal_stop",
+    name: "agent_goal_stop",
     description: "Stop an explicit goal task and kill its underlying agent session.",
     parameters: Type.Object({
       task: Type.String({ description: "Goal task name or ID" }),

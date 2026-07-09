@@ -5,7 +5,7 @@ import { registerGoalStopCommand } from "../src/commands/goal-stop";
 import { setGoalController } from "../src/singletons";
 import { makeGoalStopTool } from "../src/tools/goal-stop";
 
-describe("goal_stop surfaces already-terminal tasks clearly", () => {
+describe("agent_goal_stop surfaces already-terminal tasks clearly", () => {
   afterEach(() => {
     setGoalController(null);
   });

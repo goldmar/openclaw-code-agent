@@ -5,7 +5,7 @@ import { setPluginConfig } from "../src/config";
 import { setGoalController, setSessionManager } from "../src/singletons";
 import { makeGoalLaunchTool } from "../src/tools/goal-launch";
 
-describe("goal_launch tool", () => {
+describe("agent_goal_launch tool", () => {
   beforeEach(() => {
     setPluginConfig({});
     setSessionManager(null);

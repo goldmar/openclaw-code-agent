@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
-- Renamed explicit goal chat commands from `/goal`, `/goal_status`, `/goal_edit`, and `/goal_stop` to `/agent_goal`, `/agent_goal_status`, `/agent_goal_edit`, and `/agent_goal_stop` to avoid Telegram command conflicts while keeping the `goal_*` tool names unchanged.
+- Renamed explicit goal chat commands and public goal tools to the `agent_goal*` namespace, avoiding Telegram command conflicts and making the tool surface consistent with the rest of OpenClaw Code Agent.
 
 ## [4.6.0] - 2026-07-02
 
@@ -142,7 +142,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Added experimental OpenCode harness documentation, manifest guidance, and smoke-test instructions for the local `opencode serve` integration.
-- Added experimental OpenCode harness support so `agent_launch`, `goal_launch`, resume handling, plan gating, worktree strategies, and session storage can run through `opencode`.
+- Added experimental OpenCode harness support so `agent_launch`, `agent_goal_launch`, resume handling, plan gating, worktree strategies, and session storage can run through `opencode`.
 - Added `agent_request_worktree_decision` as a tool contract so orchestrator wakes can request a state-aware worktree decision prompt without relying on chat commands.
 
 ### Fixed
@@ -161,7 +161,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [4.3.8] - 2026-06-04
 
 ### Added
-- Added `goal_edit` support so active goal tasks can be refined without relaunching the surrounding workflow.
+- Added `agent_goal_edit` support so active goal tasks can be refined without relaunching the surrounding workflow.
 - Added goal iteration summaries so goal progress updates preserve a concise account of what changed between iterations.
 
 ### Fixed
@@ -297,7 +297,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Removed the stale `workflows/` package file entry because no workflows are shipped in the npm tarball.
 - Reframed README examples around human chat workflows while keeping tools documented as the agent-facing API surface.
 - Routed `/agent` through the shared launch resolver used by `agent_launch`, so chat commands and tool launches share workdir, model, routing, and resume-first behavior.
-- Deduplicated goal launch validation and output formatting across `/agent_goal` and `goal_launch`.
+- Deduplicated goal launch validation and output formatting across `/agent_goal` and `agent_goal_launch`.
 - Extracted shared plan-approval delivery guards/text builders and session output-preview selection from `SessionManager`.
 - Updated the local OpenClaw package target to `openclaw@2026.5.5` while keeping the peer floor at `>=2026.4.21`.
 - Added the generic `agent_send_plan_offer` helper for external workflows that need Start Plan / Dismiss buttons without a monitor-specific API.

@@ -483,6 +483,19 @@ Show aggregate session counts, cost, average duration, and most expensive sessio
 
 This tool takes no parameters.
 
+### Goal Tools
+
+Explicit goal tools use the same `agent_goal_*` public namespace as the chat commands. The previous unprefixed `goal_*` public tool names are not registered as aliases.
+
+| Tool | Purpose |
+| --- | --- |
+| `agent_goal_launch` | Start an explicit verifier or Ralph-style goal loop |
+| `agent_goal_status` | Show one goal task or list all goal tasks |
+| `agent_goal_edit` | Change the goal text for an active goal task |
+| `agent_goal_stop` | Stop a running goal task |
+
+`agent_goal_launch` accepts `goal`, optional `verifier_commands`, `name`, `workdir`, `model`, `system_prompt`, `allowed_tools`, `max_iterations`, `permission_mode`, `harness`, `goal_mode`, and `completion_promise`. Goal launch defaults remain unchanged: verifier commands select verifier mode, otherwise Ralph-style completion-promise mode is used.
+
 ### `agent_merge`
 
 Merge a worktree branch back to base.
