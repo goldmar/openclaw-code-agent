@@ -16,6 +16,8 @@ type DiffSummary = {
   commitMessages: Array<{ hash: string; message: string; author: string }>;
 };
 
+type RemoteWorktreeOutcome = "pr-updated" | "pr-opened";
+
 /**
  * Builds worktree-related notification payloads so strategy decisions stay separate
  * from message formatting.
@@ -47,6 +49,7 @@ export class SessionWorktreeMessageService {
     preview: string;
     originThreadLine?: string;
     preservedSummary?: string;
+    remoteOutcome?: RemoteWorktreeOutcome;
   }): SessionNotificationRequest {
     const {
       session,
@@ -57,6 +60,7 @@ export class SessionWorktreeMessageService {
       preview,
       originThreadLine,
       preservedSummary,
+      remoteOutcome,
     } = args;
     const cleanupState = preservedSummary ? "preserved" : cleanupSucceeded ? "cleaned" : "cleanup-failed";
     const terminalCycleKey = [
@@ -75,6 +79,26 @@ export class SessionWorktreeMessageService {
       harnessName: session.harnessName,
       model: session.model,
     });
+    const completedSummary = remoteOutcome === "pr-updated"
+      ? "PR updated; no local worktree changes remained to merge"
+      : remoteOutcome === "pr-opened"
+      ? "PR opened; no local worktree changes remained to merge"
+      : "Session completed with no worktree changes to merge";
+    const completedWakeSummary = remoteOutcome === "pr-updated"
+      ? `PR updated; no local worktree changes remained to merge — ${cleanupSummary}`
+      : remoteOutcome === "pr-opened"
+      ? `PR opened; no local worktree changes remained to merge — ${cleanupSummary}`
+      : undefined;
+    const failedSummary = remoteOutcome === "pr-updated"
+      ? "PR updated; no local worktree changes remained to merge"
+      : remoteOutcome === "pr-opened"
+      ? "PR opened; no local worktree changes remained to merge"
+      : "Session completed with no worktree changes to merge";
+    const wakeHeadline = remoteOutcome === "pr-updated"
+      ? "Coding agent session updated a PR; no local worktree changes remained to merge."
+      : remoteOutcome === "pr-opened"
+      ? "Coding agent session opened a PR; no local worktree changes remained to merge."
+      : undefined;
 
     return {
       label: preservedSummary
@@ -82,16 +106,17 @@ export class SessionWorktreeMessageService {
         : cleanupSucceeded ? "worktree-no-changes" : "worktree-no-changes-cleanup-failed",
       idempotencyKey: `worktree-no-change:${session.id}:${cleanupState}:${terminalCycleKey}`,
       userMessage: preservedSummary
-        ? `ℹ️ [${session.name}] Session completed with no worktree changes to merge — ${preservedSummary}${statSuffix}`
+        ? `ℹ️ [${session.name}] ${completedSummary} — ${preservedSummary}${statSuffix}`
         : cleanupSucceeded
         ? nativeBackendWorktree
-          ? `ℹ️ [${session.name}] Session completed with no worktree changes to merge — native backend worktree released for backend cleanup${statSuffix}`
-          : `ℹ️ [${session.name}] Session completed with no worktree changes to merge — worktree cleaned up${statSuffix}`
-        : `⚠️ [${session.name}] Session completed with no worktree changes to merge, but worktree cleanup failed. Worktree still exists at ${worktreePath}${statSuffix}`,
+          ? `ℹ️ [${session.name}] ${completedSummary} — native backend worktree released for backend cleanup${statSuffix}`
+          : `ℹ️ [${session.name}] ${completedSummary} — worktree cleaned up${statSuffix}`
+        : `⚠️ [${session.name}] ${failedSummary}, but worktree cleanup failed. Worktree still exists at ${worktreePath}${statSuffix}`,
       wakeMessage: buildNoChangeWakeMessage({
         sessionName: session.name,
         sessionId: session.id,
-        cleanupSummary,
+        headline: wakeHeadline,
+        cleanupSummary: completedWakeSummary ?? cleanupSummary,
         preview,
         originThreadLine,
         requestedPermissionMode: session.requestedPermissionMode,

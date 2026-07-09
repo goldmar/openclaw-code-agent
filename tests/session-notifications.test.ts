@@ -396,6 +396,32 @@ describe("SessionNotificationService", () => {
     );
   });
 
+  it("distinguishes PR-updated cleanup from a genuine no-change terminal notification", () => {
+    const worktreeMessages = new SessionWorktreeMessageService();
+    const request = worktreeMessages.buildNoChangeNotification({
+      session: {
+        id: "session-pr-updated-clean",
+        name: "pr-updated-clean",
+        startedAt: 1_780_000_000_000,
+        completedAt: 1_780_000_061_000,
+      } as any,
+      nativeBackendWorktree: false,
+      cleanupSucceeded: true,
+      worktreePath: "/tmp/oca/pr-updated-clean",
+      worktreeBranch: "agent/pr-updated-clean",
+      preview: "Updated PR branch and verified the final tree.",
+      remoteOutcome: "pr-updated",
+    });
+
+    assert.equal(
+      request.userMessage,
+      "ℹ️ [pr-updated-clean] PR updated; no local worktree changes remained to merge — worktree cleaned up | 1m1s",
+    );
+    assert.match(String(request.wakeMessage), /PR updated; no local worktree changes remained to merge/);
+    assert.match(String(request.wakeMessage), /Coding agent session updated a PR/);
+    assert.doesNotMatch(request.userMessage, /Session completed with no worktree changes to merge/);
+  });
+
   it("dedupes a no-change worktree retry when only completedAt changes", () => {
     const persisted = { notificationDedupe: undefined } as any;
     const requests: Array<Record<string, unknown>> = [];

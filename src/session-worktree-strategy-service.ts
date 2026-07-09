@@ -66,6 +66,7 @@ export class SessionWorktreeStrategyService {
         baseBranch: string,
       ) => WorktreeCompletionState;
       updatePersistedSession: (ref: string, patch: Partial<PersistedSessionInfo>) => boolean;
+      getPersistedSession?: (ref: string) => PersistedSessionInfo | undefined;
       dispatchSessionNotification: (session: Session, request: SessionNotificationRequest) => void;
       getOutputPreview: (session: Session, maxChars?: number) => string;
       originThreadLine: (session: Session) => string;
@@ -387,6 +388,7 @@ export class SessionWorktreeStrategyService {
       return { notificationSent: true, worktreeRemoved: false };
     }
 
+    const remoteOutcome = this.getDeliveredRemoteOutcome(session);
     const removed = nativeBackendWorktree
       ? true
       : removeWorktree(repoDir, worktreePath);
@@ -414,6 +416,7 @@ export class SessionWorktreeStrategyService {
         worktreeBranch: branchName,
         preview: this.deps.getOutputPreview(session),
         originThreadLine: this.deps.originThreadLine(session),
+        remoteOutcome,
       }));
     } else {
       this.deps.dispatchSessionNotification(session, this.deps.worktreeMessages.buildNoChangeNotification({
@@ -424,6 +427,7 @@ export class SessionWorktreeStrategyService {
         worktreeBranch: branchName,
         preview: this.deps.getOutputPreview(session),
         originThreadLine: this.deps.originThreadLine(session),
+        remoteOutcome,
       }));
     }
     return { notificationSent: true, worktreeRemoved: removed };
@@ -431,6 +435,31 @@ export class SessionWorktreeStrategyService {
 
   private hasCurrentlyOpenPrForBranch(session: Session, repoDir: string, branchName: string): boolean {
     return this.deps.hasOpenPrForBranch?.(repoDir, branchName, session.worktreePrTargetRepo) === true;
+  }
+
+  private getDeliveredRemoteOutcome(session: Session): "pr-updated" | "pr-opened" | undefined {
+    const persisted = getPersistedMutationRefs(session)
+      .map((ref) => this.deps.getPersistedSession?.(ref))
+      .find((entry): entry is PersistedSessionInfo => Boolean(entry));
+    const records = persisted?.notificationDedupe ?? [];
+    if (records.some((record) => (
+      record.status === "delivered"
+      && record.label === "worktree-outcome"
+      && record.key.startsWith("worktree-outcome:worktree-pr:updated:")
+    ))) {
+      return "pr-updated";
+    }
+    if (records.some((record) => (
+      record.status === "delivered"
+      && record.label === "worktree-outcome"
+      && (
+        record.key.startsWith("worktree-outcome:worktree-pr:opened:")
+        || record.key.startsWith("worktree-outcome:worktree-pr:draft-opened:")
+      )
+    ))) {
+      return "pr-opened";
+    }
+    return undefined;
   }
 
   private hasRecordedOpenTargetPr(session: Session, repoDir: string, baseBranch?: string): boolean {
