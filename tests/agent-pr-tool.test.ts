@@ -1,10 +1,12 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildPrCompletionWakeOutcomeKey, buildPrMetadata, buildPrOutcomeDetailLines, formatPrBody, normalizeForceNewReplacementPrStatus, resolveExistingTargetPrUpdateBranch, resolveExistingTargetPrUpdateSourceBranch, shouldIgnoreClosedTargetPrForForceNew } from "../src/tools/agent-pr";
+import { buildPrCompletionWakeOutcomeKey, buildPrMetadata, buildPrOutcomeDetailLines, createRuntimePrMetadataProvider, formatPrBody, isOcaGeneratedPrBody, isOcaGeneratedPrTitle, normalizeForceNewReplacementPrStatus, refreshOpenPrMetadata, resolveExistingTargetPrUpdateBranch, resolveExistingTargetPrUpdateSourceBranch, shouldIgnoreClosedTargetPrForForceNew } from "../src/tools/agent-pr";
+import { setPluginRuntime } from "../src/runtime-store";
+import { getPRBody } from "../src/worktree";
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", ["-C", cwd, ...args], {
@@ -39,6 +41,30 @@ function initRepoWithOrigin(prefix: string): { repoDir: string; remoteDir: strin
   git(repoDir, "commit", "-m", "init");
   git(repoDir, "push", "-u", "origin", "main");
   return { repoDir, remoteDir };
+}
+
+function withFakeGh(script: string, run: (binDir: string) => Promise<void> | void): Promise<void> | void {
+  const binDir = mkdtempSync(join(tmpdir(), "openclaw-fake-gh-"));
+  const ghPath = join(binDir, "gh");
+  const previousPath = process.env.PATH;
+  writeFileSync(ghPath, script, "utf-8");
+  chmodSync(ghPath, 0o755);
+  process.env.PATH = `${binDir}:${previousPath ?? ""}`;
+  const cleanup = () => {
+    process.env.PATH = previousPath;
+    rmSync(binDir, { recursive: true, force: true });
+  };
+  try {
+    const result = run(binDir);
+    if (result && typeof result.then === "function") {
+      return result.finally(cleanup);
+    }
+    cleanup();
+    return undefined;
+  } catch (err) {
+    cleanup();
+    throw err;
+  }
 }
 
 describe("agent_pr outcome detail lines", () => {
@@ -434,6 +460,386 @@ describe("agent_pr existing target PR branch resolution", () => {
 });
 
 describe("agent_pr generated PR metadata", () => {
+  it("uses runtime PR metadata providers when agent_pr does not inject a test provider", async () => {
+    setPluginRuntime({
+      prMetadata: {
+        async generatePrMetadata() {
+          return {
+            title: "Refresh generated PR body",
+            summary: ["Refreshes generated PR descriptions from runtime metadata."],
+            changes: ["`src/tools/agent-pr.ts`", "`src/worktree-pr-metadata.ts`", "`tests/agent-pr-tool.test.ts`"],
+            validation: ["pnpm test:file tests/agent-pr-tool.test.ts"],
+            notes: ["Does not expose raw prompts or private paths."],
+          };
+        },
+      },
+    });
+    try {
+      const provider = createRuntimePrMetadataProvider();
+      assert.ok(provider);
+
+      const result = await buildPrMetadata({
+        sessionName: "runtime-pr-metadata",
+        prompt: "Fix PR metadata generation. Do not leak /home/openclaw/private/path or SECRET_TOKEN=ghp_1234567890abcdefghijklmnopqrstuvwxyz.",
+        diffSummary: {
+          commits: 1,
+          filesChanged: 3,
+          insertions: 20,
+          deletions: 4,
+          changedFiles: ["src/tools/agent-pr.ts", "src/worktree-pr-metadata.ts", "tests/agent-pr-tool.test.ts"],
+          commitMessages: [{ hash: "abc1234", message: "Wire runtime PR metadata", author: "Codex" }],
+        },
+        provider,
+      });
+
+      assert.equal(result.ok, true);
+      assert.equal(result.ok && result.metadata.title, "Refresh generated PR body");
+    } finally {
+      setPluginRuntime(undefined);
+    }
+  });
+
+  it("accepts JSON text from generic runtime metadata providers", async () => {
+    setPluginRuntime({
+      llm: {
+        async generateText() {
+          return JSON.stringify({
+            title: "Use generic runtime metadata",
+            summary: ["Parses JSON returned by a generic runtime text provider."],
+            changes: ["`src/worktree-pr-metadata.ts`", "`tests/agent-pr-tool.test.ts`"],
+            validation: ["pnpm test:file tests/agent-pr-tool.test.ts"],
+            notes: ["Keeps provider output behind metadata validation."],
+          });
+        },
+      },
+    });
+    try {
+      const provider = createRuntimePrMetadataProvider();
+      assert.ok(provider);
+      const result = await buildPrMetadata({
+        sessionName: "runtime-generic-provider",
+        prompt: "Summarize runtime provider support.",
+        diffSummary: {
+          commits: 1,
+          filesChanged: 2,
+          insertions: 12,
+          deletions: 1,
+          changedFiles: ["src/worktree-pr-metadata.ts", "tests/agent-pr-tool.test.ts"],
+          commitMessages: [{ hash: "abc1234", message: "Parse generic provider JSON", author: "Codex" }],
+        },
+        provider,
+      });
+
+      assert.equal(result.ok, true);
+      assert.equal(result.ok && result.metadata.title, "Use generic runtime metadata");
+    } finally {
+      setPluginRuntime(undefined);
+    }
+  });
+
+  it("marks only OpenClaw-generated or fallback PR bodies as replaceable by default", () => {
+    const generated = formatPrBody({
+      sessionName: "replaceable",
+      metadata: {
+        title: "Generated metadata",
+        summary: ["Generated summary."],
+        changes: ["`src/tools/agent-pr.ts`"],
+        validation: ["Review CI checks before merging."],
+        notes: ["Generated notes."],
+      },
+    });
+
+    assert.equal(isOcaGeneratedPrBody(generated), true);
+    assert.equal(
+      isOcaGeneratedPrBody("## Summary\n- Deterministic fallback metadata generated because no LLM PR metadata provider is configured."),
+      true,
+    );
+    assert.equal(isOcaGeneratedPrBody("Human-written description with project context and review notes."), false);
+    assert.equal(isOcaGeneratedPrTitle("OpenClaw agent changes: missing provider"), true);
+    assert.equal(isOcaGeneratedPrTitle("Human-written PR title"), false);
+  });
+
+  it("refreshes generated fallback PR title and body from current metadata", async () => {
+    const currentBody = formatPrBody({
+      sessionName: "fallback-metadata",
+      metadata: {
+        title: "OpenClaw agent changes: fallback metadata",
+        summary: ["Deterministic fallback metadata generated because no LLM PR metadata provider is configured."],
+        changes: ["`src/old.ts`"],
+        validation: ["Review CI checks before merging."],
+        notes: ["Generated notes."],
+      },
+    });
+    const updates: { title?: string; body?: string } = {};
+
+    const result = await refreshOpenPrMetadata({
+      repoDir: "/repo",
+      prStatus: {
+        exists: true,
+        state: "open",
+        number: 42,
+        title: "OpenClaw agent changes: fallback metadata",
+      },
+      sessionName: "fallback-metadata",
+      branchName: "agent/fallback-metadata",
+      prompt: "Refresh the generated pull request metadata.",
+      diffSummary: {
+        commits: 1,
+        filesChanged: 1,
+        insertions: 9,
+        deletions: 1,
+        changedFiles: ["src/tools/agent-pr.ts"],
+        commitMessages: [{ hash: "abc1234", message: "Refresh generated PR metadata", author: "Codex" }],
+      },
+      forceRefresh: false,
+      metadataProvider: {
+        async generatePrMetadata() {
+          return {
+            title: "Refresh generated PR metadata",
+            summary: ["Refreshes stale generated PR descriptions."],
+            changes: ["`src/tools/agent-pr.ts`"],
+            validation: ["Focused agent_pr metadata refresh tests passed."],
+            notes: ["Preserves human-authored descriptions by default."],
+          };
+        },
+      },
+      operations: {
+        getBody: () => ({ ok: true, body: currentBody }),
+        updateBody: (_repo, _pr, body) => {
+          updates.body = body;
+          return true;
+        },
+        updateTitle: (_repo, _pr, title) => {
+          updates.title = title;
+          return true;
+        },
+      },
+    });
+
+    assert.deepEqual(result, { status: "updated", updatedTitle: true, updatedBody: true, reason: "generated" });
+    assert.equal(updates.title, "Refresh generated PR metadata");
+    assert.match(updates.body ?? "", /Refreshes stale generated PR descriptions/);
+    assert.doesNotMatch(updates.body ?? "", /no LLM PR metadata provider/i);
+  });
+
+  it("preserves human-edited PR titles and bodies by default", async () => {
+    let updateCalled = false;
+    const result = await refreshOpenPrMetadata({
+      repoDir: "/repo",
+      prStatus: {
+        exists: true,
+        state: "open",
+        number: 42,
+        title: "Carefully edited release notes",
+      },
+      sessionName: "human-edited",
+      prompt: "Refresh metadata.",
+      forceRefresh: false,
+      metadataProvider: {
+        async generatePrMetadata() {
+          throw new Error("provider should not be called for human-edited PR body");
+        },
+      },
+      operations: {
+        getBody: () => ({ ok: true, body: "Human-written description with product context and reviewer notes." }),
+        updateBody: () => {
+          updateCalled = true;
+          return true;
+        },
+        updateTitle: () => {
+          updateCalled = true;
+          return true;
+        },
+      },
+    });
+
+    assert.deepEqual(result, { status: "skipped", reason: "human-edited" });
+    assert.equal(updateCalled, false);
+  });
+
+  it("refreshes a fallback PR title even when the generated body is unchanged", async () => {
+    const nextMetadata = {
+      title: "Refresh generated PR metadata",
+      summary: ["Refreshes stale generated PR descriptions."],
+      changes: ["`src/tools/agent-pr.ts`"],
+      validation: ["Focused agent_pr metadata refresh tests passed."],
+      notes: ["Preserves human-authored descriptions by default."],
+    };
+    const unchangedBody = formatPrBody({
+      sessionName: "fallback-title",
+      metadata: nextMetadata,
+      diffSummary: {
+        commits: 1,
+        filesChanged: 1,
+        insertions: 9,
+        deletions: 1,
+        changedFiles: ["src/tools/agent-pr.ts"],
+        commitMessages: [{ hash: "abc1234", message: "Refresh generated PR metadata", author: "Codex" }],
+      },
+    });
+    const updates: { title?: string; body?: string } = {};
+
+    const result = await refreshOpenPrMetadata({
+      repoDir: "/repo",
+      prStatus: {
+        exists: true,
+        state: "open",
+        number: 42,
+        title: "OpenClaw agent changes: fallback title",
+      },
+      sessionName: "fallback-title",
+      prompt: "Refresh the generated pull request metadata.",
+      diffSummary: {
+        commits: 1,
+        filesChanged: 1,
+        insertions: 9,
+        deletions: 1,
+        changedFiles: ["src/tools/agent-pr.ts"],
+        commitMessages: [{ hash: "abc1234", message: "Refresh generated PR metadata", author: "Codex" }],
+      },
+      forceRefresh: false,
+      metadataProvider: {
+        async generatePrMetadata() {
+          return nextMetadata;
+        },
+      },
+      operations: {
+        getBody: () => ({ ok: true, body: unchangedBody }),
+        updateBody: (_repo, _pr, body) => {
+          updates.body = body;
+          return true;
+        },
+        updateTitle: (_repo, _pr, title) => {
+          updates.title = title;
+          return true;
+        },
+      },
+    });
+
+    assert.deepEqual(result, { status: "updated", updatedTitle: true, updatedBody: false, reason: "generated" });
+    assert.equal(updates.title, "Refresh generated PR metadata");
+    assert.equal(updates.body, undefined);
+  });
+
+  it("forces generated PR metadata refresh for human-edited bodies only when requested", async () => {
+    const updates: { title?: string; body?: string } = {};
+    const result = await refreshOpenPrMetadata({
+      repoDir: "/repo",
+      prStatus: {
+        exists: true,
+        state: "open",
+        number: 42,
+        title: "Carefully edited release notes",
+      },
+      sessionName: "forced-refresh",
+      prompt: "Refresh metadata.",
+      diffSummary: {
+        commits: 1,
+        filesChanged: 1,
+        insertions: 6,
+        deletions: 1,
+        changedFiles: ["src/tools/agent-pr.ts"],
+        commitMessages: [{ hash: "abc1234", message: "Force metadata refresh", author: "Codex" }],
+      },
+      forceRefresh: true,
+      metadataProvider: {
+        async generatePrMetadata() {
+          return {
+            title: "Forced metadata refresh",
+            summary: ["Refreshes metadata because the caller explicitly requested it."],
+            changes: ["`src/tools/agent-pr.ts`"],
+            validation: ["Focused agent_pr metadata refresh tests passed."],
+            notes: ["This path intentionally overrides existing PR metadata."],
+          };
+        },
+      },
+      operations: {
+        getBody: () => ({ ok: true, body: "Human-written description with product context and reviewer notes." }),
+        updateBody: (_repo, _pr, body) => {
+          updates.body = body;
+          return true;
+        },
+        updateTitle: (_repo, _pr, title) => {
+          updates.title = title;
+          return true;
+        },
+      },
+    });
+
+    assert.deepEqual(result, { status: "updated", updatedTitle: true, updatedBody: true, reason: "forced" });
+    assert.equal(updates.title, "Forced metadata refresh");
+    assert.match(updates.body ?? "", /caller explicitly requested it/);
+  });
+
+  it("refreshes an empty existing PR body when metadata refresh is forced", async () => {
+    const updates: { title?: string; body?: string } = {};
+    const result = await refreshOpenPrMetadata({
+      repoDir: "/repo",
+      prStatus: {
+        exists: true,
+        state: "open",
+        number: 42,
+        title: "Carefully edited release notes",
+      },
+      sessionName: "blank-body-refresh",
+      branchName: "agent/blank-body-refresh",
+      forceRefresh: true,
+      diffSummary: {
+        commits: 1,
+        filesChanged: 1,
+        insertions: 3,
+        deletions: 0,
+        changedFiles: ["src/tools/agent-pr.ts"],
+        commitMessages: [{ hash: "abc1234", message: "Refresh blank PR body", author: "Codex" }],
+      },
+      metadataProvider: {
+        async generatePrMetadata() {
+          return {
+            title: "Refresh blank PR body",
+            summary: ["Replaces a blank PR description when refresh is explicitly forced."],
+            changes: ["`src/tools/agent-pr.ts`"],
+            validation: ["Review CI checks before merging."],
+            notes: ["Keeps explicit refresh behavior separate from default preservation."],
+          };
+        },
+      },
+      operations: {
+        getBody: () => ({ ok: true, body: "" }),
+        updateBody: (_repo, _pr, body) => {
+          updates.body = body;
+          return true;
+        },
+        updateTitle: (_repo, _pr, title) => {
+          updates.title = title;
+          return true;
+        },
+      },
+    });
+
+    assert.deepEqual(result, { status: "updated", updatedTitle: true, updatedBody: true, reason: "forced" });
+    assert.equal(updates.title, "Refresh blank PR body");
+    assert.match(updates.body ?? "", /Refresh blank PR body/);
+    assert.match(updates.body ?? "", /Generated with \[openclaw-code-agent\]/);
+  });
+
+  it("surfaces PR body read failures separately from empty bodies", () => {
+    withFakeGh(`#!/bin/sh
+if [ "$1" = "--version" ]; then
+  echo "gh version test"
+  exit 0
+fi
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  echo "transient GitHub failure" >&2
+  exit 42
+fi
+exit 1
+`, () => {
+      const result = getPRBody(process.cwd(), 343, "goldmar/openclaw-code-agent");
+      assert.equal(result.ok, false);
+      assert.match(result.ok ? "" : result.error, /Command failed|transient GitHub failure/);
+    });
+  });
+
   it("uses valid LLM metadata for generated worktree PR content", async () => {
     const diffSummary = {
       commits: 2,

@@ -14,6 +14,7 @@ export interface PRStatus {
   url?: string;
   number?: number;
   title?: string;
+  body?: string;
   headRefName?: string;
   baseRefName?: string;
 }
@@ -272,6 +273,81 @@ export function syncWorktreePRByUrl(repoDir: string, prUrl: string, targetRepo?:
   } catch (err) {
     console.warn(`[worktree] Failed to sync PR status for ${prUrl}: ${err instanceof Error ? err.message : String(err)}`);
     return { exists: false, state: "none" };
+  }
+}
+
+export type PRBodyReadResult =
+  | { ok: true; body?: string }
+  | { ok: false; error: string };
+
+export function getPRBody(repoDir: string, prNumberOrUrl: number | string, targetRepo?: string): PRBodyReadResult {
+  if (!isGitHubCLIAvailable()) {
+    return { ok: false, error: "GitHub CLI (gh) is not available" };
+  }
+
+  try {
+    const ghArgs = ["pr", "view", String(prNumberOrUrl), "--json", "body"];
+    if (targetRepo) {
+      ghArgs.push("--repo", targetRepo);
+    }
+    const result = execFileSync("gh", ghArgs, {
+      cwd: repoDir,
+      timeout: 10_000,
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    const pr = JSON.parse(result.trim()) as { body?: string };
+    return { ok: true, body: typeof pr.body === "string" ? pr.body : undefined };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn(`[worktree] Failed to read PR body for ${prNumberOrUrl}: ${message}`);
+    return { ok: false, error: message };
+  }
+}
+
+export function updatePRBody(repoDir: string, prNumberOrUrl: number | string, body: string, targetRepo?: string): boolean {
+  if (!isGitHubCLIAvailable()) {
+    return false;
+  }
+
+  try {
+    const ghArgs = ["pr", "edit", String(prNumberOrUrl), "--body", body];
+    if (targetRepo) {
+      ghArgs.push("--repo", targetRepo);
+    }
+    execFileSync("gh", ghArgs, {
+      cwd: repoDir,
+      timeout: 30_000,
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    return true;
+  } catch (err) {
+    console.warn(`[worktree] Failed to update PR body for ${prNumberOrUrl}: ${err instanceof Error ? err.message : String(err)}`);
+    return false;
+  }
+}
+
+export function updatePRTitle(repoDir: string, prNumberOrUrl: number | string, title: string, targetRepo?: string): boolean {
+  if (!isGitHubCLIAvailable()) {
+    return false;
+  }
+
+  try {
+    const ghArgs = ["pr", "edit", String(prNumberOrUrl), "--title", title];
+    if (targetRepo) {
+      ghArgs.push("--repo", targetRepo);
+    }
+    execFileSync("gh", ghArgs, {
+      cwd: repoDir,
+      timeout: 30_000,
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    return true;
+  } catch (err) {
+    console.warn(`[worktree] Failed to update PR title for ${prNumberOrUrl}: ${err instanceof Error ? err.message : String(err)}`);
+    return false;
   }
 }
 

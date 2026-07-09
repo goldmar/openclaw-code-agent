@@ -3,20 +3,22 @@ import { execFileSync } from "child_process";
 import { existsSync } from "fs";
 import { sessionManager } from "../singletons";
 import type { OpenClawPluginToolContext, PersistedSessionInfo } from "../types";
-import type { DiffSummary, PRStatus } from "../worktree";
-import { getDiffSummary, createPR, pushBranch, isGitHubCLIAvailable, detectDefaultBranch, syncWorktreePR, syncWorktreePRByUrl, commentOnPR, resolveTargetRepo, formatWorktreeOutcomeLine, branchExists, isBranchAncestorOfBase, getBranchName } from "../worktree";
-import { buildPrMetadata, formatPrBody } from "../worktree-pr-metadata";
+import type { DiffSummary, PRBodyReadResult, PRStatus } from "../worktree";
+import { getDiffSummary, createPR, pushBranch, isGitHubCLIAvailable, detectDefaultBranch, syncWorktreePR, syncWorktreePRByUrl, commentOnPR, resolveTargetRepo, formatWorktreeOutcomeLine, branchExists, isBranchAncestorOfBase, getBranchName, getPRBody, updatePRBody, updatePRTitle } from "../worktree";
+import { buildPrMetadata, createRuntimePrMetadataProvider, formatPrBody, isOcaGeneratedPrBody, isOcaGeneratedPrTitle } from "../worktree-pr-metadata";
 import type { PrMetadata, PrMetadataProvider } from "../worktree-pr-metadata";
 import { buildMergedPatch, buildPrOpenPatch } from "../worktree-session-patches";
 import { getPersistedTargetMutationRefs, resolveWorktreeToolTarget } from "./worktree-tool-context";
 
-export { buildPrMetadata, formatPrBody } from "../worktree-pr-metadata";
+export { buildPrMetadata, createRuntimePrMetadataProvider, formatPrBody, isOcaGeneratedPrBody, isOcaGeneratedPrTitle } from "../worktree-pr-metadata";
 export type { PrMetadata, PrMetadataEvidence, PrMetadataProvider, PrMetadataResult } from "../worktree-pr-metadata";
 
 interface AgentPrParams {
   session: string;
   title?: string;
   body?: string;
+  update_body?: boolean;
+  update_metadata?: boolean;
   base_branch?: string;
   force_new?: boolean;
   target_repo?: string;
@@ -267,6 +269,124 @@ export function buildPrCompletionWakeOutcomeKey(args: {
   ].join(":");
 }
 
+type MetadataRefreshResult =
+  | { status: "updated"; updatedTitle: boolean; updatedBody: boolean; reason: "explicit" | "generated" | "forced" }
+  | { status: "skipped"; reason: "missing-pr-identity" | "human-edited" | "empty-body" | "unchanged" }
+  | { status: "failed"; reason: string };
+
+type MetadataRefreshOperations = {
+  getBody?: (repoDir: string, prNumberOrUrl: number | string, targetRepo?: string) => PRBodyReadResult;
+  updateBody?: (repoDir: string, prNumberOrUrl: number | string, body: string, targetRepo?: string) => boolean;
+  updateTitle?: (repoDir: string, prNumberOrUrl: number | string, title: string, targetRepo?: string) => boolean;
+};
+
+export async function refreshOpenPrMetadata(args: {
+  repoDir: string;
+  prStatus: PRStatus;
+  targetRepo?: string;
+  sessionName: string;
+  branchName?: string;
+  prompt?: string;
+  diffSummary?: DiffSummary;
+  explicitTitle?: string;
+  explicitBody?: string;
+  forceRefresh: boolean;
+  metadataProvider?: PrMetadataProvider;
+  operations?: MetadataRefreshOperations;
+}): Promise<MetadataRefreshResult> {
+  const prIdentity = args.prStatus.number ?? args.prStatus.url;
+  if (!prIdentity) return { status: "skipped", reason: "missing-pr-identity" };
+  const readBody = args.operations?.getBody ?? getPRBody;
+  const writeBody = args.operations?.updateBody ?? updatePRBody;
+  const writeTitle = args.operations?.updateTitle ?? updatePRTitle;
+
+  if (args.explicitTitle !== undefined || args.explicitBody !== undefined) {
+    const updatedTitle = args.explicitTitle === undefined
+      ? false
+      : writeTitle(args.repoDir, prIdentity, args.explicitTitle, args.targetRepo);
+    if (args.explicitTitle !== undefined && !updatedTitle) {
+      return { status: "failed", reason: "failed to update explicit PR title" };
+    }
+
+    const updatedBody = args.explicitBody === undefined
+      ? false
+      : writeBody(args.repoDir, prIdentity, args.explicitBody, args.targetRepo);
+    if (args.explicitBody !== undefined && !updatedBody) {
+      return { status: "failed", reason: "failed to update explicit PR body" };
+    }
+
+    return { status: "updated", updatedTitle, updatedBody, reason: "explicit" };
+  }
+
+  const currentBodyResult = readBody(args.repoDir, prIdentity, args.targetRepo);
+  if (currentBodyResult.ok === false) {
+    return { status: "failed", reason: `failed to read PR body: ${currentBodyResult.error}` };
+  }
+  const currentBody = currentBodyResult.body ?? "";
+  if (currentBody.trim() === "" && !args.forceRefresh) return { status: "skipped", reason: "empty-body" };
+
+  const replaceable = args.forceRefresh || isOcaGeneratedPrBody(currentBody);
+  if (!replaceable) return { status: "skipped", reason: "human-edited" };
+
+  const metadataResult = await buildPrMetadata({
+    sessionName: args.sessionName,
+    branchName: args.branchName,
+    prompt: args.prompt,
+    diffSummary: args.diffSummary,
+    provider: args.metadataProvider,
+  });
+  if (metadataResult.ok === false) {
+    return { status: "failed", reason: metadataResult.error };
+  }
+
+  const nextBody = formatPrBody({
+    sessionName: args.sessionName,
+    metadata: metadataResult.metadata,
+    diffSummary: args.diffSummary,
+  });
+  const shouldRefreshTitle = args.forceRefresh || isOcaGeneratedPrTitle(args.prStatus.title);
+  let updatedTitle = false;
+  if (shouldRefreshTitle && args.prStatus.title?.trim() !== metadataResult.metadata.title.trim()) {
+    updatedTitle = writeTitle(args.repoDir, prIdentity, metadataResult.metadata.title, args.targetRepo);
+    if (!updatedTitle) return { status: "failed", reason: "failed to update generated PR title" };
+  }
+
+  if (nextBody.trim() === currentBody.trim()) {
+    return updatedTitle
+      ? { status: "updated", updatedTitle, updatedBody: false, reason: args.forceRefresh ? "forced" : "generated" }
+      : { status: "skipped", reason: "unchanged" };
+  }
+
+  const updatedBody = writeBody(args.repoDir, prIdentity, nextBody, args.targetRepo);
+  if (!updatedBody) return { status: "failed", reason: "failed to update generated PR body" };
+
+  return { status: "updated", updatedTitle, updatedBody, reason: args.forceRefresh ? "forced" : "generated" };
+}
+
+function formatMetadataRefreshLine(result: MetadataRefreshResult): string | undefined {
+  if (result.status === "updated") {
+    if (result.updatedTitle && result.updatedBody) {
+      return result.reason === "explicit"
+        ? "📝 Replaced PR title/body with explicitly provided metadata."
+        : "📝 Refreshed PR title/body from current OpenClaw metadata.";
+    }
+    if (result.updatedTitle) {
+      return result.reason === "explicit"
+        ? "📝 Replaced PR title with the explicitly provided title."
+        : "📝 Refreshed PR title from current OpenClaw metadata.";
+    }
+    if (result.updatedBody) {
+      return result.reason === "explicit"
+        ? "📝 Replaced PR body with the explicitly provided body."
+        : "📝 Refreshed PR body from current OpenClaw metadata.";
+    }
+  }
+  if (result.status === "failed") {
+    return `⚠️  PR metadata refresh failed: ${result.reason}`;
+  }
+  return undefined;
+}
+
 /** Register the `agent_pr` tool factory. */
 export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { metadataProvider?: PrMetadataProvider } = {}) {
   return {
@@ -275,7 +395,9 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
     parameters: Type.Object({
       session: Type.String({ description: "Session name or ID to create/update PR for" }),
       title: Type.Optional(Type.String({ description: "PR title (default: auto-generated from session name)" })),
-      body: Type.Optional(Type.String({ description: "PR body (default: auto-generated from commit summary)" })),
+      body: Type.Optional(Type.String({ description: "PR body (default: auto-generated from commit summary). For existing open PRs, passing body explicitly replaces the PR body." })),
+      update_body: Type.Optional(Type.Boolean({ description: "For existing open PRs, refresh generated PR metadata when true. Alias for update_metadata; retained for compatibility." })),
+      update_metadata: Type.Optional(Type.Boolean({ description: "For existing open PRs, refresh title/body when true. Default: only refresh bodies clearly generated by OpenClaw and titles that are fallback-generated, or explicit title/body values." })),
       base_branch: Type.Optional(Type.String({ description: "Base branch for the PR (default: detected from repo)" })),
       force_new: Type.Optional(Type.Boolean({ description: "Force creation of a new PR even if one exists (default: false)" })),
       target_repo: Type.Optional(Type.String({ description: "Target repository for cross-repo PRs (e.g. 'openai/codex'). Auto-detected from 'upstream' remote if not set." })),
@@ -285,7 +407,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
         return { content: [{ type: "text", text: "Error: SessionManager not initialized. The code-agent service must be running." }], meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
       }
       if (!isAgentPrParams(params)) {
-        return { content: [{ type: "text", text: "Error: Invalid parameters. Expected { session, title?, body?, base_branch?, force_new? }." }], meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
+        return { content: [{ type: "text", text: "Error: Invalid parameters. Expected { session, title?, body?, update_body?, update_metadata?, base_branch?, force_new? }." }], meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
       }
 
       // Check if gh CLI is available
@@ -317,6 +439,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
       }
 
       const baseBranch = params.base_branch ?? detectDefaultBranch(originalWorkdir);
+      const metadataProvider = options.metadataProvider ?? createRuntimePrMetadataProvider();
       const persistPrOpen = (args: {
         prUrl: string;
         prNumber?: number;
@@ -427,6 +550,19 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
       if (prStatus.exists && prStatus.state === "open") {
         // Case: Open PR exists
         const diffSummary = getDiffSummary(originalWorkdir, branchName, baseBranch);
+        const metadataRefresh = await refreshOpenPrMetadata({
+          repoDir: originalWorkdir,
+          prStatus,
+          targetRepo,
+          sessionName,
+          branchName,
+          prompt: target.prompt,
+          diffSummary,
+          explicitTitle: params.title,
+          explicitBody: params.body,
+          forceRefresh: params.update_body === true || params.update_metadata === true,
+          metadataProvider,
+        });
 
         if (diffSummary && diffSummary.commits > 0) {
           // New commits pushed — add detailed comment
@@ -489,16 +625,23 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
             return {
               content: [{
                 type: "text",
-                text: `${updateOutcomeLine}\n\n📝 Added comment detailing ${diffSummary.commits} new commits (+${diffSummary.insertions} / -${diffSummary.deletions})`
+                text: [
+                  `${updateOutcomeLine}`,
+                  ``,
+                  `📝 Added comment detailing ${diffSummary.commits} new commits (+${diffSummary.insertions} / -${diffSummary.deletions})`,
+                  formatMetadataRefreshLine(metadataRefresh),
+                ].filter(Boolean).join("\n"),
               }],
               meta: { success: true, state: "pr_updated" },
             } satisfies AgentPrExecuteResult;
           } else {
+            const metadataRefreshLine = formatMetadataRefreshLine(metadataRefresh);
             return {
               content: [{
                 type: "text",
                 text: `⚠️  Pushed to ${prStatus.url} but failed to add comment.\n\n` +
-                      `${diffSummary.commits} new commits (+${diffSummary.insertions} / -${diffSummary.deletions})`
+                      `${diffSummary.commits} new commits (+${diffSummary.insertions} / -${diffSummary.deletions})` +
+                      `${metadataRefreshLine ? `\n${metadataRefreshLine}` : ""}`
               }],
               meta: { success: true, state: "pr_open" },
             } satisfies AgentPrExecuteResult;
@@ -506,11 +649,13 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
         } else {
           // No new commits
           persistPrOpen({ prUrl: prStatus.url, prNumber: prStatus.number, targetRepo });
+          const metadataRefreshLine = formatMetadataRefreshLine(metadataRefresh);
           return {
             content: [{
               type: "text",
               text: `ℹ️  PR already exists and is up to date: ${prStatus.url}\n\n` +
-                    `No new commits to push.`
+                    `No new commits to push.` +
+                    `${metadataRefreshLine ? `\n${metadataRefreshLine}` : ""}`
             }],
             meta: { success: true, state: "pr_open" },
           } satisfies AgentPrExecuteResult;
@@ -571,7 +716,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
             branchName,
             prompt: target.prompt,
             diffSummary,
-            provider: options.metadataProvider,
+            provider: metadataProvider,
           });
           if (metadataResult.ok === false) {
             return {

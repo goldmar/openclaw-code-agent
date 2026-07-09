@@ -1,4 +1,5 @@
 import type { DiffSummary } from "./worktree";
+import { getPluginRuntime } from "./runtime-store";
 
 export interface PrMetadataEvidence {
   sessionName: string;
@@ -33,6 +34,16 @@ export type PrMetadataResult =
   | { ok: false; error: string; evidence: PrMetadataEvidence };
 
 const OPAQUE_TOKEN_MIN_LENGTH = 32;
+const GENERATED_FOOTER = "Generated with [openclaw-code-agent](https://github.com/goldmar/openclaw-code-agent)";
+const FALLBACK_METADATA_MARKER = "Deterministic fallback metadata generated because no LLM PR metadata provider is configured.";
+
+type RuntimePrMetadataCandidate = {
+  generatePrMetadata?: (evidence: PrMetadataEvidence) => Promise<unknown> | unknown;
+  generatePullRequestMetadata?: (evidence: PrMetadataEvidence) => Promise<unknown> | unknown;
+  generateObject?: (params: Record<string, unknown>) => Promise<unknown> | unknown;
+  generateText?: (params: Record<string, unknown> | string) => Promise<unknown> | unknown;
+  complete?: (params: Record<string, unknown> | string) => Promise<unknown> | unknown;
+};
 
 function normalizePrText(value: string | undefined, options: { preserveBlankLines?: boolean } = { preserveBlankLines: true }): string | undefined {
   const text = value
@@ -271,7 +282,7 @@ function buildFallbackPrMetadata(evidence: PrMetadataEvidence, prompt: string | 
   const title = truncateText(`OpenClaw agent changes: ${safeName}`, 90);
 
   const baseSummary = [
-    "Deterministic fallback metadata generated because no LLM PR metadata provider is configured.",
+    FALLBACK_METADATA_MARKER,
     `Session: ${safeName}.`,
     ...(evidence.objective ? [`Objective: ${evidence.objective}`] : []),
     ...(evidence.stats
@@ -409,7 +420,7 @@ export async function buildPrMetadata(args: {
 
   try {
     const generated = await args.provider.generatePrMetadata(evidence);
-    const metadata = validateGeneratedPrMetadata(generated, evidence, args.prompt);
+    const metadata = validateGeneratedPrMetadata(normalizeGeneratedPrMetadataPayload(generated), evidence, args.prompt);
     if (metadata) return { ok: true, metadata, evidence };
     return {
       ok: false,
@@ -424,6 +435,107 @@ export async function buildPrMetadata(args: {
       evidence,
     };
   }
+}
+
+export function createRuntimePrMetadataProvider(): PrMetadataProvider | undefined {
+  const runtime = getPluginRuntime() as Record<string, unknown> | undefined;
+  const candidate = findRuntimePrMetadataCandidate(runtime);
+  if (!candidate) return undefined;
+
+  return {
+    async generatePrMetadata(evidence) {
+      if (typeof candidate.generatePrMetadata === "function") {
+        return await candidate.generatePrMetadata(evidence);
+      }
+      if (typeof candidate.generatePullRequestMetadata === "function") {
+        return await candidate.generatePullRequestMetadata(evidence);
+      }
+
+      const prompt = buildPrMetadataPrompt(evidence);
+      if (typeof candidate.generateObject === "function") {
+        return await candidate.generateObject({
+          task: "openclaw-code-agent.pr-metadata",
+          prompt,
+          input: evidence,
+        });
+      }
+      if (typeof candidate.generateText === "function") {
+        return await candidate.generateText({
+          task: "openclaw-code-agent.pr-metadata",
+          prompt,
+        });
+      }
+      if (typeof candidate.complete === "function") {
+        return await candidate.complete({ prompt });
+      }
+      return undefined;
+    },
+  };
+}
+
+function findRuntimePrMetadataCandidate(runtime: Record<string, unknown> | undefined): RuntimePrMetadataCandidate | undefined {
+  const candidates = [
+    runtime?.prMetadata,
+    runtime?.pullRequestMetadata,
+    runtime?.llm,
+    runtime?.ai,
+    runtime?.model,
+    runtime?.models,
+  ];
+  return candidates.find((candidate): candidate is RuntimePrMetadataCandidate =>
+    Boolean(candidate && typeof candidate === "object" && (
+      typeof (candidate as RuntimePrMetadataCandidate).generatePrMetadata === "function"
+      || typeof (candidate as RuntimePrMetadataCandidate).generatePullRequestMetadata === "function"
+      || typeof (candidate as RuntimePrMetadataCandidate).generateObject === "function"
+      || typeof (candidate as RuntimePrMetadataCandidate).generateText === "function"
+      || typeof (candidate as RuntimePrMetadataCandidate).complete === "function"
+    )),
+  );
+}
+
+function buildPrMetadataPrompt(evidence: PrMetadataEvidence): string {
+  return [
+    `Generate concise pull request metadata for OpenClaw Code Agent work.`,
+    `Return only JSON with shape {"title":"...","summary":["..."],"changes":["..."],"validation":["..."],"notes":["..."]}.`,
+    `Use only the supplied evidence. Do not invent files, commands, tests, risks, links, paths, prompts, chat IDs, credentials, tokens, or secrets.`,
+    `Keep the title under 90 characters. Keep bullets short and reviewable.`,
+    ``,
+    `Evidence:`,
+    JSON.stringify(evidence, null, 2),
+  ].join("\n");
+}
+
+function normalizeGeneratedPrMetadataPayload(generated: unknown): unknown {
+  if (typeof generated !== "string") {
+    if (generated && typeof generated === "object" && "object" in generated) {
+      return (generated as { object?: unknown }).object;
+    }
+    if (generated && typeof generated === "object" && "data" in generated) {
+      return (generated as { data?: unknown }).data;
+    }
+    return generated;
+  }
+  const text = generated.trim();
+  if (!text) return undefined;
+  const jsonText = text
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/, "")
+    .trim();
+  try {
+    return JSON.parse(jsonText);
+  } catch {
+    return undefined;
+  }
+}
+
+export function isOcaGeneratedPrBody(body: string | undefined): boolean {
+  if (!body) return false;
+  return body.includes(GENERATED_FOOTER) || body.includes(FALLBACK_METADATA_MARKER);
+}
+
+export function isOcaGeneratedPrTitle(title: string | undefined): boolean {
+  if (!title) return false;
+  return /^OpenClaw agent changes:/i.test(title.trim());
 }
 
 export function formatPrBody(args: {
@@ -461,6 +573,6 @@ export function formatPrBody(args: {
     ``,
   );
 
-  lines.push(`---`, `Generated with [openclaw-code-agent](https://github.com/goldmar/openclaw-code-agent)`);
+  lines.push(`---`, GENERATED_FOOTER);
   return lines.join("\n");
 }
