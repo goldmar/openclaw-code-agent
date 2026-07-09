@@ -1,11 +1,12 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildPrCompletionWakeOutcomeKey, buildPrMetadata, buildPrOutcomeDetailLines, createRuntimePrMetadataProvider, formatPrBody, isOcaGeneratedPrBody, isOcaGeneratedPrTitle, normalizeForceNewReplacementPrStatus, refreshOpenPrMetadata, resolveExistingTargetPrUpdateBranch, resolveExistingTargetPrUpdateSourceBranch, shouldIgnoreClosedTargetPrForForceNew } from "../src/tools/agent-pr";
 import { setPluginRuntime } from "../src/runtime-store";
+import { getPRBody } from "../src/worktree";
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", ["-C", cwd, ...args], {
@@ -40,6 +41,30 @@ function initRepoWithOrigin(prefix: string): { repoDir: string; remoteDir: strin
   git(repoDir, "commit", "-m", "init");
   git(repoDir, "push", "-u", "origin", "main");
   return { repoDir, remoteDir };
+}
+
+function withFakeGh(script: string, run: (binDir: string) => Promise<void> | void): Promise<void> | void {
+  const binDir = mkdtempSync(join(tmpdir(), "openclaw-fake-gh-"));
+  const ghPath = join(binDir, "gh");
+  const previousPath = process.env.PATH;
+  writeFileSync(ghPath, script, "utf-8");
+  chmodSync(ghPath, 0o755);
+  process.env.PATH = `${binDir}:${previousPath ?? ""}`;
+  const cleanup = () => {
+    process.env.PATH = previousPath;
+    rmSync(binDir, { recursive: true, force: true });
+  };
+  try {
+    const result = run(binDir);
+    if (result && typeof result.then === "function") {
+      return result.finally(cleanup);
+    }
+    cleanup();
+    return undefined;
+  } catch (err) {
+    cleanup();
+    throw err;
+  }
 }
 
 describe("agent_pr outcome detail lines", () => {
@@ -579,7 +604,7 @@ describe("agent_pr generated PR metadata", () => {
         },
       },
       operations: {
-        getBody: () => currentBody,
+        getBody: () => ({ ok: true, body: currentBody }),
         updateBody: (_repo, _pr, body) => {
           updates.body = body;
           return true;
@@ -616,7 +641,7 @@ describe("agent_pr generated PR metadata", () => {
         },
       },
       operations: {
-        getBody: () => "Human-written description with product context and reviewer notes.",
+        getBody: () => ({ ok: true, body: "Human-written description with product context and reviewer notes." }),
         updateBody: () => {
           updateCalled = true;
           return true;
@@ -679,7 +704,7 @@ describe("agent_pr generated PR metadata", () => {
         },
       },
       operations: {
-        getBody: () => unchangedBody,
+        getBody: () => ({ ok: true, body: unchangedBody }),
         updateBody: (_repo, _pr, body) => {
           updates.body = body;
           return true;
@@ -729,7 +754,7 @@ describe("agent_pr generated PR metadata", () => {
         },
       },
       operations: {
-        getBody: () => "Human-written description with product context and reviewer notes.",
+        getBody: () => ({ ok: true, body: "Human-written description with product context and reviewer notes." }),
         updateBody: (_repo, _pr, body) => {
           updates.body = body;
           return true;
@@ -744,6 +769,75 @@ describe("agent_pr generated PR metadata", () => {
     assert.deepEqual(result, { status: "updated", updatedTitle: true, updatedBody: true, reason: "forced" });
     assert.equal(updates.title, "Forced metadata refresh");
     assert.match(updates.body ?? "", /caller explicitly requested it/);
+  });
+
+  it("refreshes an empty existing PR body when metadata refresh is forced", async () => {
+    const updates: { title?: string; body?: string } = {};
+    const result = await refreshOpenPrMetadata({
+      repoDir: "/repo",
+      prStatus: {
+        exists: true,
+        state: "open",
+        number: 42,
+        title: "Carefully edited release notes",
+      },
+      sessionName: "blank-body-refresh",
+      branchName: "agent/blank-body-refresh",
+      forceRefresh: true,
+      diffSummary: {
+        commits: 1,
+        filesChanged: 1,
+        insertions: 3,
+        deletions: 0,
+        changedFiles: ["src/tools/agent-pr.ts"],
+        commitMessages: [{ hash: "abc1234", message: "Refresh blank PR body", author: "Codex" }],
+      },
+      metadataProvider: {
+        async generatePrMetadata() {
+          return {
+            title: "Refresh blank PR body",
+            summary: ["Replaces a blank PR description when refresh is explicitly forced."],
+            changes: ["`src/tools/agent-pr.ts`"],
+            validation: ["Review CI checks before merging."],
+            notes: ["Keeps explicit refresh behavior separate from default preservation."],
+          };
+        },
+      },
+      operations: {
+        getBody: () => ({ ok: true, body: "" }),
+        updateBody: (_repo, _pr, body) => {
+          updates.body = body;
+          return true;
+        },
+        updateTitle: (_repo, _pr, title) => {
+          updates.title = title;
+          return true;
+        },
+      },
+    });
+
+    assert.deepEqual(result, { status: "updated", updatedTitle: true, updatedBody: true, reason: "forced" });
+    assert.equal(updates.title, "Refresh blank PR body");
+    assert.match(updates.body ?? "", /Refresh blank PR body/);
+    assert.match(updates.body ?? "", /Generated with \[openclaw-code-agent\]/);
+  });
+
+  it("surfaces PR body read failures separately from empty bodies", () => {
+    withFakeGh(`#!/bin/sh
+if [ "$1" = "--version" ]; then
+  echo "gh version test"
+  exit 0
+fi
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  echo "transient GitHub failure" >&2
+  exit 42
+fi
+exit 1
+`, () => {
+      const result = getPRBody(process.cwd(), 343, "goldmar/openclaw-code-agent");
+      assert.equal(result.ok, false);
+      assert.match(result.ok ? "" : result.error, /Command failed|transient GitHub failure/);
+    });
   });
 
   it("uses valid LLM metadata for generated worktree PR content", async () => {

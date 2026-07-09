@@ -3,7 +3,7 @@ import { execFileSync } from "child_process";
 import { existsSync } from "fs";
 import { sessionManager } from "../singletons";
 import type { OpenClawPluginToolContext, PersistedSessionInfo } from "../types";
-import type { DiffSummary, PRStatus } from "../worktree";
+import type { DiffSummary, PRBodyReadResult, PRStatus } from "../worktree";
 import { getDiffSummary, createPR, pushBranch, isGitHubCLIAvailable, detectDefaultBranch, syncWorktreePR, syncWorktreePRByUrl, commentOnPR, resolveTargetRepo, formatWorktreeOutcomeLine, branchExists, isBranchAncestorOfBase, getBranchName, getPRBody, updatePRBody, updatePRTitle } from "../worktree";
 import { buildPrMetadata, createRuntimePrMetadataProvider, formatPrBody, isOcaGeneratedPrBody, isOcaGeneratedPrTitle } from "../worktree-pr-metadata";
 import type { PrMetadata, PrMetadataProvider } from "../worktree-pr-metadata";
@@ -275,7 +275,7 @@ type MetadataRefreshResult =
   | { status: "failed"; reason: string };
 
 type MetadataRefreshOperations = {
-  getBody?: (repoDir: string, prNumberOrUrl: number | string, targetRepo?: string) => string | undefined;
+  getBody?: (repoDir: string, prNumberOrUrl: number | string, targetRepo?: string) => PRBodyReadResult;
   updateBody?: (repoDir: string, prNumberOrUrl: number | string, body: string, targetRepo?: string) => boolean;
   updateTitle?: (repoDir: string, prNumberOrUrl: number | string, title: string, targetRepo?: string) => boolean;
 };
@@ -318,8 +318,12 @@ export async function refreshOpenPrMetadata(args: {
     return { status: "updated", updatedTitle, updatedBody, reason: "explicit" };
   }
 
-  const currentBody = readBody(args.repoDir, prIdentity, args.targetRepo);
-  if (!currentBody) return { status: "skipped", reason: "empty-body" };
+  const currentBodyResult = readBody(args.repoDir, prIdentity, args.targetRepo);
+  if (currentBodyResult.ok === false) {
+    return { status: "failed", reason: `failed to read PR body: ${currentBodyResult.error}` };
+  }
+  const currentBody = currentBodyResult.body ?? "";
+  if (currentBody.trim() === "" && !args.forceRefresh) return { status: "skipped", reason: "empty-body" };
 
   const replaceable = args.forceRefresh || isOcaGeneratedPrBody(currentBody);
   if (!replaceable) return { status: "skipped", reason: "human-edited" };
@@ -378,7 +382,7 @@ function formatMetadataRefreshLine(result: MetadataRefreshResult): string | unde
     }
   }
   if (result.status === "failed") {
-    return `⚠️  PR metadata refresh skipped: ${result.reason}`;
+    return `⚠️  PR metadata refresh failed: ${result.reason}`;
   }
   return undefined;
 }

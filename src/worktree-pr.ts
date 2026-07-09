@@ -276,9 +276,13 @@ export function syncWorktreePRByUrl(repoDir: string, prUrl: string, targetRepo?:
   }
 }
 
-export function getPRBody(repoDir: string, prNumberOrUrl: number | string, targetRepo?: string): string | undefined {
+export type PRBodyReadResult =
+  | { ok: true; body?: string }
+  | { ok: false; error: string };
+
+export function getPRBody(repoDir: string, prNumberOrUrl: number | string, targetRepo?: string): PRBodyReadResult {
   if (!isGitHubCLIAvailable()) {
-    return undefined;
+    return { ok: false, error: "GitHub CLI (gh) is not available" };
   }
 
   try {
@@ -293,10 +297,11 @@ export function getPRBody(repoDir: string, prNumberOrUrl: number | string, targe
       stdio: ["pipe", "pipe", "pipe"],
     });
     const pr = JSON.parse(result.trim()) as { body?: string };
-    return typeof pr.body === "string" ? pr.body : undefined;
+    return { ok: true, body: typeof pr.body === "string" ? pr.body : undefined };
   } catch (err) {
-    console.warn(`[worktree] Failed to read PR body for ${prNumberOrUrl}: ${err instanceof Error ? err.message : String(err)}`);
-    return undefined;
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn(`[worktree] Failed to read PR body for ${prNumberOrUrl}: ${message}`);
+    return { ok: false, error: message };
   }
 }
 
