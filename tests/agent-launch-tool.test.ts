@@ -457,6 +457,136 @@ describe("agent_launch tool defaults", () => {
     assert.match((result.content[0] as { text: string }).text, /ID: sess-stable/);
   });
 
+  it("preserves the original session name when resuming without an explicit follow-up label", async () => {
+    let spawnConfig: Record<string, unknown> | undefined;
+
+    setSessionManager({
+      resolve: () => undefined,
+      getPersistedSession: () => ({
+        sessionId: "_QDNlLZr",
+        harnessSessionId: "thread-auto-update-feature",
+        name: "oca-auto-update-feature",
+        status: "killed",
+        lifecycle: "terminal",
+        killReason: "shutdown",
+        backendRef: { kind: "codex-app-server", conversationId: "thread-auto-update-feature" },
+      }),
+      resolveHarnessSessionId: (id: string) => id,
+      resolveBackendConversationId: (id: string) => id,
+      spawn(config: Record<string, unknown>) {
+        spawnConfig = config;
+        return {
+          id: config.sessionIdOverride,
+          name: config.name,
+          model: config.model,
+        };
+      },
+    } as any);
+
+    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp" });
+    const result = await tool.execute("tool-id", {
+      prompt: "Continue with the bundle size fix",
+      harness: "codex",
+      resume_session_id: "_QDNlLZr",
+    });
+
+    const text = (result.content[0] as { text: string }).text;
+    assert.equal(spawnConfig?.sessionIdOverride, "_QDNlLZr");
+    assert.equal(spawnConfig?.name, "oca-auto-update-feature");
+    assert.equal(spawnConfig?.resumedFromSessionName, "oca-auto-update-feature");
+    assert.match(text, /Name: oca-auto-update-feature/);
+    assert.match(text, /Resume: oca-auto-update-feature \[_QDNlLZr\]/);
+    assert.doesNotMatch(text, /Follow-up label:/);
+  });
+
+  it("labels explicit names on resumed sessions as follow-up labels", async () => {
+    let spawnConfig: Record<string, unknown> | undefined;
+
+    setSessionManager({
+      resolve: () => undefined,
+      getPersistedSession: () => ({
+        sessionId: "_QDNlLZr",
+        harnessSessionId: "thread-auto-update-feature",
+        name: "oca-auto-update-feature",
+        status: "killed",
+        lifecycle: "terminal",
+        killReason: "shutdown",
+        backendRef: { kind: "codex-app-server", conversationId: "thread-auto-update-feature" },
+      }),
+      resolveHarnessSessionId: (id: string) => id,
+      resolveBackendConversationId: (id: string) => id,
+      spawn(config: Record<string, unknown>) {
+        spawnConfig = config;
+        return {
+          id: config.sessionIdOverride,
+          name: config.name,
+          model: config.model,
+        };
+      },
+    } as any);
+
+    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp" });
+    const result = await tool.execute("tool-id", {
+      prompt: "Continue with the bundle size fix",
+      name: "oca-pr-341-bundle-size-fix",
+      harness: "codex",
+      resume_session_id: "_QDNlLZr",
+    });
+
+    const text = (result.content[0] as { text: string }).text;
+    assert.equal(spawnConfig?.sessionIdOverride, "_QDNlLZr");
+    assert.equal(spawnConfig?.name, "oca-pr-341-bundle-size-fix");
+    assert.equal(spawnConfig?.resumedFromSessionName, "oca-auto-update-feature");
+    assert.match(text, /Name: oca-pr-341-bundle-size-fix/);
+    assert.match(text, /Resume: oca-auto-update-feature \[_QDNlLZr\]/);
+    assert.match(text, /Follow-up label: oca-pr-341-bundle-size-fix/);
+  });
+
+  it("preserves the original resumed identity when relabeling an already relabeled session", async () => {
+    let spawnConfig: Record<string, unknown> | undefined;
+
+    setSessionManager({
+      resolve: () => undefined,
+      getPersistedSession: () => ({
+        sessionId: "_QDNlLZr",
+        harnessSessionId: "thread-auto-update-feature",
+        name: "oca-pr-341-bundle-size-fix",
+        resumedFromSessionName: "oca-auto-update-feature",
+        status: "killed",
+        lifecycle: "terminal",
+        killReason: "shutdown",
+        backendRef: { kind: "codex-app-server", conversationId: "thread-auto-update-feature" },
+      }),
+      resolveHarnessSessionId: (id: string) => id,
+      resolveBackendConversationId: (id: string) => id,
+      spawn(config: Record<string, unknown>) {
+        spawnConfig = config;
+        return {
+          id: config.sessionIdOverride,
+          name: config.name,
+          model: config.model,
+        };
+      },
+    } as any);
+
+    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp" });
+    const result = await tool.execute("tool-id", {
+      prompt: "Continue with the tests",
+      name: "oca-pr-342-tests",
+      harness: "codex",
+      resume_session_id: "_QDNlLZr",
+    });
+
+    const text = (result.content[0] as { text: string }).text;
+    assert.equal(spawnConfig?.sessionIdOverride, "_QDNlLZr");
+    assert.equal(spawnConfig?.name, "oca-pr-342-tests");
+    assert.equal(spawnConfig?.resumedFromSessionName, "oca-auto-update-feature");
+    assert.match(text, /Name: oca-pr-342-tests/);
+    assert.match(text, /Resume: oca-auto-update-feature \[_QDNlLZr\]/);
+    assert.match(text, /Follow-up label: oca-pr-342-tests/);
+    assert.doesNotMatch(text, /Resume: oca-pr-341-bundle-size-fix/);
+  });
+
   it("allows non-fork resume attempts for completed Codex App Server sessions", async () => {
     let spawnConfig: Record<string, unknown> | undefined;
     setSessionManager({

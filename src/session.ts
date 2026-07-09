@@ -115,6 +115,7 @@ export class Session extends EventEmitter {
 
   // Resume/fork
   readonly resumeSessionId?: string;
+  readonly resumedFromSessionName?: string;
   readonly forkSession?: boolean;
 
   // Worktree
@@ -248,6 +249,7 @@ export class Session extends EventEmitter {
     this.route = config.route ? { ...config.route } : undefined;
     this.backendRef = config.backendRef ? { ...config.backendRef } : undefined;
     this.resumeSessionId = config.resumeSessionId;
+    this.resumedFromSessionName = config.resumedFromSessionName;
     this.forkSession = config.forkSession;
     this.multiTurn = config.multiTurn ?? true;
     this.goalTaskId = config.goalTaskId;

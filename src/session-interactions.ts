@@ -260,6 +260,7 @@ export class SessionInteractionService {
     launchSystemPrompt?: string;
     launchAllowedTools?: string[];
     launchResumeSessionId?: string;
+    launchResumedFromSessionName?: string;
     launchResumeWorktreeFrom?: string;
     launchSessionIdOverride?: string;
     launchClearedPersistedCodexResume?: boolean;
@@ -290,6 +291,7 @@ export class SessionInteractionService {
         launchSystemPrompt: args.launchSystemPrompt,
         launchAllowedTools: args.launchAllowedTools,
         launchResumeSessionId: args.launchResumeSessionId,
+        launchResumedFromSessionName: args.launchResumedFromSessionName,
         launchResumeWorktreeFrom: args.launchResumeWorktreeFrom,
         launchSessionIdOverride: args.launchSessionIdOverride,
         launchClearedPersistedCodexResume: args.launchClearedPersistedCodexResume,

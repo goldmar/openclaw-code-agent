@@ -1127,6 +1127,7 @@ export function createCallbackHandler(
               systemPrompt: consumedToken.launchSystemPrompt,
               allowedTools: consumedToken.launchAllowedTools,
               resumeSessionId: consumedToken.launchResumeSessionId,
+              resumedFromSessionName: consumedToken.launchResumedFromSessionName,
               resumeWorktreeFrom: consumedToken.launchResumeWorktreeFrom,
               sessionIdOverride: consumedToken.launchSessionIdOverride,
               clearedPersistedCodexResume: consumedToken.launchClearedPersistedCodexResume,

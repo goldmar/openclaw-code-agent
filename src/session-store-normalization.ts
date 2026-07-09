@@ -571,6 +571,7 @@ export function normalizePersistedEntry(raw: unknown): PersistedSessionInfo | un
     route,
     outputPath: toOptionalString(raw.outputPath),
     harness,
+    resumedFromSessionName: toOptionalString(raw.resumedFromSessionName),
     goalTaskId: toOptionalString(raw.goalTaskId),
     requestedPermissionMode: toOptionalPermissionMode(raw.requestedPermissionMode),
     currentPermissionMode: toOptionalPermissionMode(raw.currentPermissionMode),
@@ -674,6 +675,7 @@ export function normalizeActionToken(raw: unknown): SessionActionToken | undefin
       ? raw.launchAllowedTools.filter((item): item is string => typeof item === "string")
       : undefined,
     launchResumeSessionId: toOptionalString(raw.launchResumeSessionId),
+    launchResumedFromSessionName: toOptionalString(raw.launchResumedFromSessionName),
     launchResumeWorktreeFrom: toOptionalString(raw.launchResumeWorktreeFrom),
     launchSessionIdOverride: toOptionalString(raw.launchSessionIdOverride),
     launchClearedPersistedCodexResume: raw.launchClearedPersistedCodexResume === true ? true : undefined,

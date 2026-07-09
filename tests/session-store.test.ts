@@ -4,6 +4,7 @@ import { SessionStore, sessionStoreInternals } from "../src/session-store";
 import { archiveLegacySessionIndex, sessionStoreStorageInternals } from "../src/session-store-storage";
 import { getSessionOutputFilePath } from "../src/session";
 import { STORE_SCHEMA_VERSION } from "../src/session-store-normalization";
+import { formatLaunchSummaryFromSession } from "../src/launch-summary";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
@@ -404,6 +405,48 @@ describe("SessionStore persisted compatibility", () => {
 
     assert.equal(store.getPersistedSession("skipped-followup")?.completionWakeSummaryRequired, undefined);
     assert.equal(store.getPersistedSession("skipped-followup")?.completionWakeSkipReason, "internal pipeline continuing");
+  });
+
+  it("preserves original resumed identity for relabeled sessions across reload", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-store-resume-label-"));
+    try {
+      const indexPath = join(dir, "sessions.json");
+      writeStore(indexPath, [{
+        sessionId: "_QDNlLZr",
+        harnessSessionId: "thread-auto-update-feature",
+        backendRef: { kind: "codex-app-server", conversationId: "thread-auto-update-feature" },
+        name: "oca-pr-341-bundle-size-fix",
+        resumedFromSessionName: "oca-auto-update-feature",
+        prompt: "Continue with the bundle size fix",
+        workdir: "/repo",
+        status: "completed",
+        costUsd: 0,
+        resumable: true,
+      }]);
+
+      const store = new SessionStore({ indexPath });
+      const persisted = store.getPersistedSession("_QDNlLZr");
+      const text = formatLaunchSummaryFromSession({
+        prompt: "Continue again",
+        workdir: "/repo",
+        harness: "codex",
+        permissionMode: "plan",
+        planApproval: "delegate",
+        resumeSessionId: "_QDNlLZr",
+      }, {
+        id: persisted?.sessionId ?? "",
+        name: persisted?.name ?? "",
+        model: persisted?.model,
+        resumedFromSessionName: persisted?.resumedFromSessionName,
+      });
+
+      assert.equal(persisted?.name, "oca-pr-341-bundle-size-fix");
+      assert.equal(persisted?.resumedFromSessionName, "oca-auto-update-feature");
+      assert.match(text, /Resume: oca-auto-update-feature \[_QDNlLZr\]/);
+      assert.match(text, /Follow-up label: oca-pr-341-bundle-size-fix/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

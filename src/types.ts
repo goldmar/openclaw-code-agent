@@ -282,6 +282,7 @@ export interface SessionActionToken {
   launchSystemPrompt?: string;
   launchAllowedTools?: string[];
   launchResumeSessionId?: string;
+  launchResumedFromSessionName?: string;
   launchResumeWorktreeFrom?: string;
   launchSessionIdOverride?: string;
   launchClearedPersistedCodexResume?: boolean;
@@ -369,6 +370,8 @@ export interface SessionConfig {
   approvalPromptDeliveredAt?: string;
   approvalPromptFailedAt?: string;
   resumeSessionId?: string;
+  /** Original user-facing session name when a non-fork resume continues an existing session. */
+  resumedFromSessionName?: string;
   /** Original requested session ID for worktree inheritance, independent of harness thread resume.
    * Set even when resumeSessionId is cleared (e.g. Codex harness), so the D1 block can still
    * inherit the persisted worktree context. */
@@ -494,6 +497,8 @@ export interface PersistedSessionInfo {
   route?: SessionRoute;
   outputPath?: string;
   harness?: string;
+  /** Original user-facing session name when this record represents a relabeled non-fork resume. */
+  resumedFromSessionName?: string;
   /** Optional goal-task owner for explicit iterative loop orchestration. */
   goalTaskId?: string;
   requestedPermissionMode?: PermissionMode;
