@@ -188,12 +188,119 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       const [_sessionArg, request] = calls[0];
       assert.equal(request.label, "worktree-no-changes");
       assert.match(request.userMessage, /worktree cleaned up/);
+      assert.doesNotMatch(request.userMessage, /PR updated; no local worktree changes remained to merge/);
       assert.equal(request.notifyUser, "always");
       assert.match(request.wakeMessage, /completed with no worktree changes to merge/);
       assert.match(request.wakeMessage, /Built rust-hello-world and verified the binary output/);
       const persisted = (sm as any).store.persisted.get("h-no-change");
       assert.equal(persisted.worktreePath, undefined);
       assert.equal(persisted.worktreeDisposition, "no-change-cleaned");
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+      cleanup();
+    }
+  });
+
+  it("reports PR-updated sessions as remote work completed when the final worktree is clean", async () => {
+    const repoDir = mkdtempSync(join(tmpdir(), "sm-worktree-pr-updated-clean-"));
+    let cleanup = () => {};
+    try {
+      git(repoDir, "init", "-b", "main");
+      git(repoDir, "config", "user.name", "Test User");
+      git(repoDir, "config", "user.email", "test@example.com");
+      writeFileSync(join(repoDir, "README.md"), "hello\n", "utf-8");
+      git(repoDir, "add", "README.md");
+      git(repoDir, "commit", "-m", "init");
+
+      const worktreePath = createWorktree(repoDir, "pr-updated-clean");
+      const branchName = getBranchName(worktreePath);
+      assert.ok(branchName, "worktree branch should exist");
+
+      const created = createTestSessionManager(5);
+      const sm = created.sm;
+      cleanup = created.cleanup;
+      stubDispatch(sm);
+      (sm as any).store.persisted.set("s-pr-updated-clean", {
+        harnessSessionId: "h-pr-updated-clean",
+        backendRef: { kind: "claude-code", conversationId: "h-pr-updated-clean" },
+        name: "pr-updated-clean",
+        prompt: "address comments on the existing PR",
+        workdir: repoDir,
+        route: {
+          provider: "telegram",
+          target: "12345",
+          sessionKey: "agent:main:telegram:group:12345",
+        },
+        status: "completed",
+        costUsd: 0,
+        worktreePath,
+        worktreeBranch: branchName,
+        worktreeStrategy: "auto-pr",
+        worktreeBaseBranch: "main",
+        worktreePrUrl: "https://github.com/example/repo/pull/7",
+        worktreePrNumber: 7,
+      });
+      (sm as any).store.persisted.set("h-pr-updated-clean", {
+        harnessSessionId: "h-pr-updated-clean",
+        backendRef: { kind: "claude-code", conversationId: "h-pr-updated-clean" },
+        name: "pr-updated-clean",
+        prompt: "address comments on the existing PR",
+        workdir: repoDir,
+        route: {
+          provider: "telegram",
+          target: "12345",
+          sessionKey: "agent:main:telegram:group:12345",
+        },
+        status: "completed",
+        costUsd: 0,
+        worktreePath,
+        worktreeBranch: branchName,
+        worktreeStrategy: "auto-pr",
+        worktreeBaseBranch: "main",
+        worktreePrUrl: "https://github.com/example/repo/pull/7",
+        worktreePrNumber: 7,
+        worktreeRemoteOutcome: "pr-updated",
+      });
+
+      const session = {
+        id: "s-pr-updated-clean",
+        name: "pr-updated-clean",
+        status: "completed",
+        phase: "implementing",
+        harnessSessionId: "h-pr-updated-clean",
+        prompt: "address comments on the existing PR",
+        originalWorkdir: repoDir,
+        worktreePath,
+        worktreeBranch: branchName,
+        worktreeStrategy: "auto-pr",
+        worktreeBaseBranch: "main",
+        worktreePrUrl: "https://github.com/example/repo/pull/7",
+        worktreePrNumber: 7,
+        pendingPlanApproval: false,
+        getOutput: () => [
+          "Pushed review fixes to the existing PR.",
+          "Final local worktree is clean.",
+        ],
+      };
+
+      const result = await (sm as any).handleWorktreeStrategy(session);
+
+      assert.deepEqual(result, { notificationSent: true, worktreeRemoved: true });
+      assert.equal(existsSync(worktreePath), false);
+      assert.equal(session.worktreePath, undefined);
+      const calls = (sm as any).__dispatchCalls;
+      assert.equal(calls.length, 1);
+      const [_sessionArg, request] = calls[0];
+      assert.equal(request.label, "worktree-no-changes");
+      assert.match(request.userMessage, /PR updated; no local worktree changes remained to merge/);
+      assert.match(request.userMessage, /worktree cleaned up/);
+      assert.doesNotMatch(request.userMessage, /Session completed with no worktree changes to merge/);
+      assert.match(request.wakeMessage, /PR updated; no local worktree changes remained to merge/);
+      const persisted = (sm as any).store.persisted.get("h-pr-updated-clean");
+      assert.equal(persisted.worktreePath, undefined);
+      assert.equal(persisted.worktreeState, "none");
+      assert.equal(persisted.worktreeDisposition, "no-change-cleaned");
+      assert.equal(persisted.worktreeLifecycle?.state, "no_change");
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
       cleanup();

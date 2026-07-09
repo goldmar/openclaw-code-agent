@@ -323,6 +323,7 @@ export class SessionManager {
         manager.getWorktreeCompletionState(repoDir, worktreePath, branchName, baseBranch)
       ),
       updatePersistedSession: (ref, patch) => manager.updatePersistedSession(ref, patch),
+      getPersistedSession: (ref) => store.getPersistedSession(ref),
       dispatchSessionNotification: (session, request) => manager.dispatchSessionNotification(session, request),
       getOutputPreview: (session, maxChars) => manager.getOutputPreview(session, maxChars),
       originThreadLine: (session) => manager.originThreadLine(session),

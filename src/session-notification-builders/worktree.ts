@@ -88,6 +88,7 @@ export function buildDelegateReminderWakeMessage(
 export function buildNoChangeWakeMessage(args: {
   sessionName: string;
   sessionId: string;
+  headline?: string;
   cleanupSummary: string;
   preview: string;
   originThreadLine?: string;
@@ -103,6 +104,7 @@ export function buildNoChangeWakeMessage(args: {
   const {
     sessionName,
     sessionId,
+    headline,
     cleanupSummary,
     preview,
     originThreadLine,
@@ -121,7 +123,7 @@ export function buildNoChangeWakeMessage(args: {
   const hasOriginRouteBlock = Boolean(originThreadLine?.trim());
 
   return [
-    `Coding agent session completed with no worktree changes to merge.`,
+    headline ?? `Coding agent session completed with no worktree changes to merge.`,
     `Name: ${sessionName} | ID: ${sessionId}`,
     `Worktree outcome: ${cleanupSummary}`,
     ...(hasOriginRouteBlock ? [originThreadLine] : []),
