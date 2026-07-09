@@ -196,8 +196,11 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
           };
         }
 
+        const persistedResumeIdentity = resumeTarget && "resumedFromSessionName" in resumeTarget
+          ? resumeTarget.resumedFromSessionName
+          : undefined;
         const resumedFromSessionName = resumeAssessment?.kind === "resume" && !params.fork_session
-          ? resumeTarget?.name
+          ? persistedResumeIdentity ?? resumeTarget?.name
           : undefined;
         const launchName = resumedFromSessionName && !params.name
           ? resumedFromSessionName
