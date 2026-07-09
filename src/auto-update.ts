@@ -11,7 +11,7 @@ import type { NotificationRoute } from "./wake-route-resolver";
 
 const execFileAsync = promisify(execFile);
 const PACKAGE_NAME = "openclaw-code-agent";
-const CLAWHUB_PACKAGE_URL = `https://clawhub.ai/api/v1/packages/${encodeURIComponent(PACKAGE_NAME)}`;
+const NPM_PACKAGE_URL = `https://registry.npmjs.org/${encodeURIComponent(PACKAGE_NAME)}/latest`;
 const UPDATE_STATE_FILE = "openclaw-code-agent-auto-update.json";
 const DAY_MS = 24 * 60 * 60 * 1000;
 const WEEK_MS = 7 * DAY_MS;
@@ -134,17 +134,19 @@ function fallbackRoute(): SessionRoute | undefined {
   return routeFromOriginMetadata(pluginConfig.fallbackChannel);
 }
 
-async function fetchClawHubLatestRelease(): Promise<ReleaseInfo | undefined> {
-  const response = await fetch(CLAWHUB_PACKAGE_URL, {
+async function fetchNpmLatestRelease(): Promise<ReleaseInfo | undefined> {
+  // Match the normal OCA install/update path: the plugin package declares
+  // openclaw.install.defaultChoice="npm", and `openclaw plugins update <id>`
+  // follows the recorded npm install source for bare OCA installs.
+  const response = await fetch(NPM_PACKAGE_URL, {
     headers: { accept: "application/json" },
   });
   if (!response.ok) {
-    throw new Error(`ClawHub returned HTTP ${response.status}`);
+    throw new Error(`npm registry returned HTTP ${response.status}`);
   }
   const payload = await response.json() as unknown;
-  const packageRecord = isRecord(payload) && isRecord(payload.package) ? payload.package : undefined;
-  const version = typeof packageRecord?.latestVersion === "string"
-    ? normalizeVersion(packageRecord.latestVersion)
+  const version = isRecord(payload) && typeof payload.version === "string"
+    ? normalizeVersion(payload.version)
     : undefined;
   return version ? { version } : undefined;
 }
@@ -171,7 +173,7 @@ export class AutoUpdateService {
   constructor(private readonly options: AutoUpdateServiceOptions) {
     this.statePath = join(options.stateDir, UPDATE_STATE_FILE);
     this.notifier = options.notifier ?? new RuntimeDirectNotificationTransport();
-    this.fetchLatestRelease = options.fetchLatestRelease ?? fetchClawHubLatestRelease;
+    this.fetchLatestRelease = options.fetchLatestRelease ?? fetchNpmLatestRelease;
     this.runCommand = options.runCommand ?? runOpenClawCommand;
     this.now = options.now ?? Date.now;
   }
@@ -291,7 +293,7 @@ export class AutoUpdateService {
 
   private async sendUpdatePrompt(route: NotificationRoute, latestVersion: string): Promise<void> {
     await this.notifier.send(route, [
-      `OCA update available in the OpenClaw plugin catalog: ${this.options.currentVersion} -> ${latestVersion}.`,
+      `OCA update available: ${this.options.currentVersion} -> ${latestVersion}.`,
       ``,
       `Update now will run: openclaw plugins update ${PACKAGE_NAME}`,
       `If the update succeeds, OCA will ask separately before restarting the Gateway.`,
@@ -369,7 +371,7 @@ export class AutoUpdateService {
 }
 
 export const autoUpdateInternals = {
-  CLAWHUB_PACKAGE_URL,
+  NPM_PACKAGE_URL,
   UPDATE_SESSION_ID,
   UPDATE_STATE_FILE,
   DAY_MS,
