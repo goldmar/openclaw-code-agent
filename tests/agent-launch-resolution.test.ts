@@ -85,12 +85,12 @@ describe("resolveAgentLaunchRequest", () => {
     assert.equal(result.kind, "blocked");
   });
 
-  it("accepts gpt-5.5-pro under the built-in Codex allowlist", () => {
+  it("accepts gpt-5.6-pro under the built-in Codex allowlist", () => {
     const result = resolveAgentLaunchRequest(
       {
         prompt: "Use the pro model",
         harness: "codex",
-        model: "gpt-5.5-pro",
+        model: "gpt-5.6-pro",
       },
       { workspaceDir: "/tmp" } as any,
       {},
@@ -98,7 +98,7 @@ describe("resolveAgentLaunchRequest", () => {
 
     assert.equal(result.kind, "resolved");
     if (result.kind === "resolved") {
-      assert.equal(result.resolvedModel, "gpt-5.5-pro");
+      assert.equal(result.resolvedModel, "gpt-5.6-pro");
     }
   });
 
@@ -116,7 +116,7 @@ describe("resolveAgentLaunchRequest", () => {
     assert.equal(result.kind, "resolved");
     if (result.kind === "resolved") {
       assert.equal(result.harness, "codex");
-      assert.equal(result.resolvedModel, "gpt-5.5");
+      assert.equal(result.resolvedModel, "gpt-5.6");
     }
   });
 
@@ -125,7 +125,7 @@ describe("resolveAgentLaunchRequest", () => {
       {
         prompt: "Use the OpenAI-qualified Codex model",
         harness: "codex",
-        model: "openai/gpt-5.5",
+        model: "openai/gpt-5.6",
       },
       { workspaceDir: "/tmp" } as any,
       {},
@@ -133,7 +133,7 @@ describe("resolveAgentLaunchRequest", () => {
 
     assert.equal(result.kind, "resolved");
     if (result.kind === "resolved") {
-      assert.equal(result.resolvedModel, "gpt-5.5");
+      assert.equal(result.resolvedModel, "gpt-5.6");
     }
   });
 

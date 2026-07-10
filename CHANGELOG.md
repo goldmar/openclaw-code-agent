@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Updated the built-in Codex harness default and allowlist from the GPT-5.5 family to `gpt-5.6` and `gpt-5.6-pro`.
+
 ## [4.6.0] - 2026-07-02
 
 ### Added

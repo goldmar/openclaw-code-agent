@@ -114,7 +114,7 @@ Today the `codex` plugin provides:
 - native `/codex ...` chat-control commands for app-server bind/status/models/threads/resume/steer/stop flows
 - Codex-specific App Server transport, native code-mode policy, sandbox integration, `reasoningEffort`, and service-tier config
 
-OpenClaw `2026.6.5` documents Codex as an explicit provider/runtime split. `openai/gpt-5.5` selects an OpenAI model ref and, in the normal Codex setup, runs embedded agent turns through the native Codex app-server runtime. Provider/model-scoped `agentRuntime.id: "codex"` makes that selection fail closed if Codex is unavailable. Provider/model-scoped `agentRuntime.id: "openclaw"` intentionally opts an OpenAI agent model into the OpenClaw embedded runtime. Legacy Codex GPT refs and `codex-cli/*` refs are migration inputs for `openclaw doctor --fix`, not new config to copy.
+OpenClaw `2026.6.5` documents Codex as an explicit provider/runtime split. `openai/gpt-5.6` selects an OpenAI model ref and, in the normal Codex setup, runs embedded agent turns through the native Codex app-server runtime. Provider/model-scoped `agentRuntime.id: "codex"` makes that selection fail closed if Codex is unavailable. Provider/model-scoped `agentRuntime.id: "openclaw"` intentionally opts an OpenAI agent model into the OpenClaw embedded runtime. Legacy Codex GPT refs and `codex-cli/*` refs are migration inputs for `openclaw doctor --fix`, not new config to copy.
 
 That routing policy is separate from this plugin's `harnesses.codex.*` configuration. It is also separate from the ACP/acpx Codex adapter path, which is selected only when ACP/acpx is explicitly needed.
 
