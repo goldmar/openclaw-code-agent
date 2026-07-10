@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { registerAgentCommand } from "../src/commands/agent";
 import { registerAgentKillCommand } from "../src/commands/agent-kill";
 import { registerAgentOutputCommand } from "../src/commands/agent-output";
+import { registerAgentPolicyCommand } from "../src/commands/agent-policy";
 import { registerAgentRespondCommand } from "../src/commands/agent-respond";
 import { registerAgentSessionsCommand } from "../src/commands/agent-sessions";
 import { registerAgentStatsCommand } from "../src/commands/agent-stats";
@@ -39,6 +40,7 @@ describe("chat command auth surface", () => {
       captureCommand(registerAgentRespondCommand),
       captureCommand(registerAgentSessionsCommand),
       captureCommand(registerAgentStatsCommand),
+      captureCommand(registerAgentPolicyCommand),
       captureCommand(registerGoalCommand),
       captureCommand(registerGoalStatusCommand),
       captureCommand(registerGoalStopCommand),
@@ -54,10 +56,11 @@ describe("chat command auth surface", () => {
         ["agent_respond", true],
         ["agent_sessions", true],
         ["agent_stats", true],
-        ["goal", true],
-        ["goal_status", true],
-        ["goal_stop", true],
-        ["goal_edit", true],
+        ["agent_policy", true],
+        ["agent_goal", true],
+        ["agent_goal_status", true],
+        ["agent_goal_stop", true],
+        ["agent_goal_edit", true],
       ],
     );
   });

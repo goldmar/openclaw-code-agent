@@ -19,7 +19,7 @@ export { renderGoalEditResult as formatGoalEditResult };
 
 export function makeGoalEditTool(_ctx: OpenClawPluginToolContext) {
   return {
-    name: "goal_edit",
+    name: "agent_goal_edit",
     description: "Edit the goal text for an active goal task without stopping or relaunching its session.",
     parameters: Type.Object({
       task: Type.String({ description: "Goal task name or ID" }),

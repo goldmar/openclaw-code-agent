@@ -554,6 +554,10 @@ describe("agent_pr generated PR metadata", () => {
       isOcaGeneratedPrBody("## Summary\n- Deterministic fallback metadata generated because no LLM PR metadata provider is configured."),
       true,
     );
+    assert.equal(
+      isOcaGeneratedPrBody("## Summary\n- Deterministic fallback metadata generated because the LLM PR metadata provider failed or returned unusable output."),
+      true,
+    );
     assert.equal(isOcaGeneratedPrBody("Human-written description with project context and review notes."), false);
     assert.equal(isOcaGeneratedPrTitle("OpenClaw agent changes: missing provider"), true);
     assert.equal(isOcaGeneratedPrTitle("Human-written PR title"), false);
@@ -620,6 +624,95 @@ describe("agent_pr generated PR metadata", () => {
     assert.equal(updates.title, "Refresh generated PR metadata");
     assert.match(updates.body ?? "", /Refreshes stale generated PR descriptions/);
     assert.doesNotMatch(updates.body ?? "", /no LLM PR metadata provider/i);
+  });
+
+  it("preserves existing generated PR metadata when fallback would degrade refresh", async () => {
+    const currentBody = formatPrBody({
+      sessionName: "provider-refresh-failure",
+      metadata: {
+        title: "Rich generated metadata",
+        summary: ["Keeps detailed provider-generated PR context."],
+        changes: ["`src/tools/agent-pr.ts`"],
+        validation: ["pnpm test:file tests/agent-pr-tool.test.ts"],
+        notes: ["Existing generated body should survive transient provider failures."],
+      },
+    });
+
+    const cases = [
+      {
+        name: "no provider",
+        provider: undefined,
+      },
+      {
+        name: "provider throw",
+        provider: {
+          async generatePrMetadata() {
+            throw new Error("provider unavailable");
+          },
+        },
+      },
+      {
+        name: "unsafe provider output",
+        provider: {
+          async generatePrMetadata() {
+            return {
+              title: "Leak ghp_1234567890abcdefghijklmnopqrstuvwxyz",
+              summary: ["Looks fine"],
+              changes: ["`src/tools/agent-pr.ts`"],
+              validation: ["Review CI checks before merging."],
+              notes: ["No notes"],
+            };
+          },
+        },
+      },
+    ];
+
+    for (const testCase of cases) {
+      let updateCalled = false;
+      const result = await refreshOpenPrMetadata({
+        repoDir: "/repo",
+        prStatus: {
+          exists: true,
+          state: "open",
+          number: 42,
+          title: "Rich generated metadata",
+        },
+        sessionName: "provider-refresh-failure",
+        branchName: "agent/provider-refresh-failure",
+        prompt: "Refresh the generated pull request metadata.",
+        diffSummary: {
+          commits: 1,
+          filesChanged: 1,
+          insertions: 9,
+          deletions: 1,
+          changedFiles: ["src/tools/agent-pr.ts"],
+          commitMessages: [{ hash: "abc1234", message: "Preserve generated PR metadata", author: "Codex" }],
+        },
+        forceRefresh: false,
+        metadataProvider: testCase.provider,
+        operations: {
+          getBody: () => ({ ok: true, body: currentBody }),
+          updateBody: () => {
+            updateCalled = true;
+            return true;
+          },
+          updateTitle: () => {
+            updateCalled = true;
+            return true;
+          },
+        },
+      });
+
+      assert.deepEqual(
+        result,
+        {
+          status: "failed",
+          reason: "generated PR metadata was unavailable; preserved existing generated PR metadata",
+        },
+        testCase.name,
+      );
+      assert.equal(updateCalled, false, testCase.name);
+    }
   });
 
   it("preserves human-edited PR titles and bodies by default", async () => {
@@ -1058,7 +1151,7 @@ exit 1
     assert.doesNotMatch(body, /sk-abcdefghijklmnopqrstuvwxyz123456/);
   });
 
-  it("fails explicitly when LLM metadata is invalid, unsafe, or references files outside the evidence", async () => {
+  it("falls back when LLM metadata is invalid, unsafe, or references files outside the evidence", async () => {
     const diffSummary = {
       commits: 1,
       filesChanged: 1,
@@ -1101,10 +1194,46 @@ exit 1
         provider: { async generatePrMetadata() { return generated; } },
       });
 
-      assert.equal(result.ok, false);
-      assert.match(result.ok ? "" : result.error, /failed schema or safety validation/);
-      assert.equal("metadata" in result, false);
+      assert.equal(result.ok, true);
+      assert.ok(result.ok && result.metadata.summary.some((s) => /provider failed or returned unusable output/i.test(s)));
+      const body = result.ok ? formatPrBody({ sessionName: "invalid-output-session", metadata: result.metadata, diffSummary }) : "";
+      assert.doesNotMatch(body, /ghp_1234567890abcdefghijklmnopqrstuvwxyz/);
+      assert.doesNotMatch(body, /src\/does-not-exist\.ts/);
+      assert.doesNotMatch(body, /abcdefghijklmnopqrstuvwxyzABCDEF12345678/);
     }
+  });
+
+  it("falls back when the LLM metadata provider throws so Open PR can continue", async () => {
+    const diffSummary = {
+      commits: 1,
+      filesChanged: 2,
+      insertions: 12,
+      deletions: 3,
+      changedFiles: ["src/worktree-pr-metadata.ts", "tests/agent-pr-tool.test.ts"],
+      commitMessages: [{ hash: "abc1234", message: "Fallback after PR metadata provider failure", author: "Codex" }],
+    };
+
+    const result = await buildPrMetadata({
+      sessionName: "rename-goal-commands",
+      branchName: "agent/rename-goal-commands",
+      prompt: "Rename goal commands without changing unrelated worktree decision behavior.",
+      diffSummary,
+      provider: {
+        async generatePrMetadata() {
+          throw new Error("provider unavailable");
+        },
+      },
+    });
+
+    assert.equal(result.ok, true);
+    assert.ok("metadata" in result);
+    const metadata = result.ok ? result.metadata : undefined;
+    assert.match(metadata?.title ?? "", /OpenClaw agent changes: rename goal commands/i);
+    assert.ok(metadata?.summary.some((s) => /provider failed or returned unusable output/i.test(s)));
+    assert.ok(metadata?.notes.some((s) => /Branch: agent\/rename-goal-commands/i.test(s)));
+    const body = metadata ? formatPrBody({ sessionName: "rename-goal-commands", metadata, diffSummary }) : "";
+    assert.match(body, /Deterministic fallback metadata generated because the LLM PR metadata provider failed or returned unusable output/);
+    assert.match(body, /`src\/worktree-pr-metadata\.ts`/);
   });
 
   it("does not reject ordinary JS/TS command mentions in safe model output", async () => {
@@ -1136,7 +1265,7 @@ exit 1
     assert.equal(result.ok && result.metadata.title, "Update package metadata");
   });
 
-  it("rejects hallucinated root-level changed file names", async () => {
+  it("falls back for hallucinated root-level changed file names", async () => {
     const result = await buildPrMetadata({
       sessionName: "root-file-hallucination",
       prompt: "Summarize root-level documentation changes.",
@@ -1161,11 +1290,14 @@ exit 1
       },
     });
 
-    assert.equal(result.ok, false);
-    assert.match(result.ok ? "" : result.error, /failed schema or safety validation/);
+    assert.equal(result.ok, true);
+    const body = result.ok ? formatPrBody({ sessionName: "root-file-hallucination", metadata: result.metadata }) : "";
+    assert.match(body, /provider failed or returned unusable output/i);
+    assert.doesNotMatch(body, /CHANGELOG\.md/);
+    assert.match(body, /README\.md/);
   });
 
-  it("rejects hallucinated root-level JS and TS file names", async () => {
+  it("falls back for hallucinated root-level JS and TS file names", async () => {
     const diffSummary = {
       commits: 1,
       filesChanged: 2,
@@ -1200,8 +1332,12 @@ exit 1
         provider: { async generatePrMetadata() { return generated; } },
       });
 
-      assert.equal(result.ok, false);
-      assert.match(result.ok ? "" : result.error, /failed schema or safety validation/);
+      assert.equal(result.ok, true);
+      const body = result.ok ? formatPrBody({ sessionName: "root-js-ts-hallucination", metadata: result.metadata, diffSummary }) : "";
+      assert.match(body, /provider failed or returned unusable output/i);
+      assert.doesNotMatch(body, /config\.js|declarations\.ts/);
+      assert.match(body, /index\.js/);
+      assert.match(body, /types\.ts/);
     }
   });
 
@@ -1292,7 +1428,7 @@ exit 1
     assert.equal(result.ok && result.metadata.summary.includes("Updates Node.js package metadata and documents `Next.js` support."), true);
   });
 
-  it("rejects hallucinated dot-prefixed path mentions", async () => {
+  it("falls back for hallucinated dot-prefixed path mentions", async () => {
     const diffSummary = {
       commits: 1,
       filesChanged: 1,
@@ -1327,8 +1463,11 @@ exit 1
         provider: { async generatePrMetadata() { return generated; } },
       });
 
-      assert.equal(result.ok, false);
-      assert.match(result.ok ? "" : result.error, /failed schema or safety validation/);
+      assert.equal(result.ok, true);
+      const body = result.ok ? formatPrBody({ sessionName: "dot-path-hallucination", metadata: result.metadata, diffSummary }) : "";
+      assert.match(body, /provider failed or returned unusable output/i);
+      assert.doesNotMatch(body, /\.github\/workflows\/ci\.yml|Changed `.env` handling/);
+      assert.match(body, /src\/tools\/agent-pr\.ts/);
     }
   });
 

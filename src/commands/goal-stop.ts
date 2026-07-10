@@ -8,8 +8,8 @@ import { goalController } from "../singletons";
 
 export function registerGoalStopCommand(api: GoalCommandApi): void {
   api.registerCommand({
-    name: "goal_stop",
-    description: "Stop a goal task. Usage: /goal_stop <task-id-or-name>",
+    name: "agent_goal_stop",
+    description: "Stop a goal task. Usage: /agent_goal_stop <task-id-or-name>",
     acceptsArgs: true,
     requireAuth: true,
     handler: (ctx: GoalCommandContext) => {
@@ -19,7 +19,7 @@ export function registerGoalStopCommand(api: GoalCommandApi): void {
 
       const ref = (ctx.args ?? "").trim();
       if (!ref) {
-        return { text: "Usage: /goal_stop <task-id-or-name>" };
+        return { text: "Usage: /agent_goal_stop <task-id-or-name>" };
       }
 
       const result = goalController.stopTask(ref);

@@ -3,7 +3,7 @@ import { formatGoalLaunchResult, resolveGoalLaunchRequest } from "../goal-launch
 import type { OpenClawPluginToolContext, PermissionMode, GoalLoopMode } from "../types";
 import { tokenizeCommandArgs } from "./args";
 
-const GOAL_USAGE = "Usage: /goal [--name <name>] [--workdir <dir>] [--model <model>] [--harness <name>] [--mode <ralph|verifier>] [--completion-promise <text>] [--max-iterations N] [--verify <cmd> ...] <goal>";
+const GOAL_USAGE = "Usage: /agent_goal [--name <name>] [--workdir <dir>] [--model <model>] [--harness <name>] [--mode <ralph|verifier>] [--completion-promise <text>] [--max-iterations N] [--verify <cmd> ...] <goal>";
 
 interface GoalCommandContext extends Partial<OpenClawPluginToolContext> {
   args?: string;
@@ -21,7 +21,7 @@ interface CommandApi {
 
 export function registerGoalCommand(api: CommandApi): void {
   api.registerCommand({
-    name: "goal",
+    name: "agent_goal",
     description: "Launch an explicit goal task (Ralph-style completion loop or verifier-driven loop)",
     acceptsArgs: true,
     requireAuth: true,

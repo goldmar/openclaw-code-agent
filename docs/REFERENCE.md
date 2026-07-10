@@ -483,6 +483,19 @@ Show aggregate session counts, cost, average duration, and most expensive sessio
 
 This tool takes no parameters.
 
+### Goal Tools
+
+Explicit goal tools use the same `agent_goal_*` public namespace as the chat commands. The previous unprefixed `goal_*` public tool names are not registered as aliases.
+
+| Tool | Purpose |
+| --- | --- |
+| `agent_goal_launch` | Start an explicit verifier or Ralph-style goal loop |
+| `agent_goal_status` | Show one goal task or list all goal tasks |
+| `agent_goal_edit` | Change the goal text for an active goal task |
+| `agent_goal_stop` | Stop a running goal task |
+
+`agent_goal_launch` accepts `goal`, optional `verifier_commands`, `name`, `workdir`, `model`, `system_prompt`, `allowed_tools`, `max_iterations`, `permission_mode`, `harness`, `goal_mode`, and `completion_promise`. Goal launch defaults remain unchanged: verifier commands select verifier mode, otherwise Ralph-style completion-promise mode is used.
+
 ### `agent_merge`
 
 Merge a worktree branch back to base.
@@ -513,7 +526,7 @@ Create or update a GitHub PR for a worktree branch.
 
 The PR path pushes the worktree branch on demand, then handles open, merged, and closed PR states instead of blindly creating duplicates. When session metadata already points at an open PR, `agent_pr` treats that PR's head branch as authoritative; a follow-up/helper worktree branch is fast-forwarded into the original PR branch when safe, and divergent branches are rejected instead of creating a sibling PR. Newly created agent-authored worktree PRs are opened as GitHub draft PRs by default so a human can review before marking them ready. Existing open PR updates preserve the PR's current draft/ready state.
 
-When `title` or `body` is omitted, `agent_pr` prefers configured LLM-generated PR metadata. If no metadata provider is configured, it falls back to deterministic conservative metadata derived from the session name, branch, prompt snippet, and diff summary so explicit PR creation flows can still complete.
+When `title` or `body` is omitted, `agent_pr` prefers configured LLM-generated PR metadata. If no metadata provider is configured, or if the configured provider fails or returns invalid/unsafe output while creating a new PR, it falls back to deterministic conservative metadata derived from the session name, branch, prompt snippet, and diff summary so explicit PR creation flows can still complete. Existing generated PR metadata refreshes are non-destructive: an unavailable provider, provider failure, or invalid/unsafe provider response preserves the current generated PR title/body and reports the refresh failure instead of replacing richer metadata with fallback text.
 
 PR opened and PR updated outcomes use the same post-outcome follow-up contract as merge outcomes: the canonical PR status is delivered first, then the orchestrator is woken with the authoritative session origin route/thread block and must send one concise factual summary in that route/topic.
 
@@ -582,6 +595,11 @@ Have oca handle the failing dashboard smoke test.
 | `/agent_respond` | Send a reply |
 | `/agent_kill` | Stop a session |
 | `/agent_stats` | Show aggregate metrics |
+| `/agent_policy` | Set or inspect repository worktree/PR policy |
+| `/agent_goal` | Launch an explicit goal task |
+| `/agent_goal_status` | Show one goal task or list all goal tasks |
+| `/agent_goal_edit` | Change the goal text for an active goal task |
+| `/agent_goal_stop` | Stop a running goal task |
 
 Use `agent_sessions` to inspect resumable sessions. Continue them with `agent_respond`, or fork from prior context with `agent_launch(..., resume_session_id=..., fork_session=true)`. `agent_respond` is the only continuation primitive.
 

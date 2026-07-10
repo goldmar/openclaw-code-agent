@@ -338,6 +338,12 @@ export async function refreshOpenPrMetadata(args: {
   if (metadataResult.ok === false) {
     return { status: "failed", reason: metadataResult.error };
   }
+  if (metadataResult.fallbackReason !== undefined) {
+    return {
+      status: "failed",
+      reason: "generated PR metadata was unavailable; preserved existing generated PR metadata",
+    };
+  }
 
   const nextBody = formatPrBody({
     sessionName: args.sessionName,

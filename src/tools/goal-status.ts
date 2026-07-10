@@ -10,7 +10,7 @@ interface GoalStatusParams {
 
 export function makeGoalStatusTool(_ctx: OpenClawPluginToolContext) {
   return {
-    name: "goal_status",
+    name: "agent_goal_status",
     description: "Show status for explicit goal tasks managed by the goal controller. Use this to inspect one goal task or list all goal tasks.",
     parameters: Type.Object({
       task: Type.Optional(Type.String({ description: "Task name or ID. Omit to list all tasks." })),
