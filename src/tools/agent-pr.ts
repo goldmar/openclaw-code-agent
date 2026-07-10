@@ -338,10 +338,10 @@ export async function refreshOpenPrMetadata(args: {
   if (metadataResult.ok === false) {
     return { status: "failed", reason: metadataResult.error };
   }
-  if (metadataResult.fallbackReason === "provider-failed" || metadataResult.fallbackReason === "provider-invalid") {
+  if (metadataResult.fallbackReason !== undefined) {
     return {
       status: "failed",
-      reason: "metadata provider failed or returned unusable output; preserved existing generated PR metadata",
+      reason: "generated PR metadata was unavailable; preserved existing generated PR metadata",
     };
   }
 

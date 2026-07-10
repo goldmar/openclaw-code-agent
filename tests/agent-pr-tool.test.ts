@@ -626,7 +626,7 @@ describe("agent_pr generated PR metadata", () => {
     assert.doesNotMatch(updates.body ?? "", /no LLM PR metadata provider/i);
   });
 
-  it("preserves existing generated PR metadata when provider fallback would degrade refresh", async () => {
+  it("preserves existing generated PR metadata when fallback would degrade refresh", async () => {
     const currentBody = formatPrBody({
       sessionName: "provider-refresh-failure",
       metadata: {
@@ -639,6 +639,10 @@ describe("agent_pr generated PR metadata", () => {
     });
 
     const cases = [
+      {
+        name: "no provider",
+        provider: undefined,
+      },
       {
         name: "provider throw",
         provider: {
@@ -703,7 +707,7 @@ describe("agent_pr generated PR metadata", () => {
         result,
         {
           status: "failed",
-          reason: "metadata provider failed or returned unusable output; preserved existing generated PR metadata",
+          reason: "generated PR metadata was unavailable; preserved existing generated PR metadata",
         },
         testCase.name,
       );
