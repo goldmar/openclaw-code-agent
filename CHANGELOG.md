@@ -7,9 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.7.0] - 2026-07-09
+
+### Added
+- Added operator-controlled plugin update prompts that detect newer published versions and support in-chat install/restart follow-through.
+- Added live Codex Telegram proof tooling with credential leasing, bounded response capture, artifact redaction, and safe dry-run coverage.
+
 ### Changed
 - Updated the built-in Codex harness default from the GPT-5.5 family to `gpt-5.6-sol` and restricted the built-in allowlist to `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna`.
 - Renamed explicit goal chat commands and public goal tools to the `agent_goal*` namespace, avoiding Telegram command conflicts and making the tool surface consistent with the rest of OpenClaw Code Agent.
+
+### Fixed
+- Reused and refreshed existing pull requests during worktree follow-through, including resilient metadata fallback, instead of creating duplicate sibling PRs.
+- Clarified resumed-session and clean-worktree update notifications while preventing duplicate auto-resume and completion follow-ups.
 
 ## [4.6.0] - 2026-07-02
 
@@ -578,7 +588,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Default Codex approval policy to `on-request`.
 - Raised the default session limit.
 
-[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.6.0...HEAD
+[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.0...HEAD
+[4.7.0]: https://github.com/goldmar/openclaw-code-agent/compare/v4.6.0...v4.7.0
 [4.6.0]: https://github.com/goldmar/openclaw-code-agent/compare/v4.5.9...v4.6.0
 [4.5.9]: https://github.com/goldmar/openclaw-code-agent/compare/v4.5.8...v4.5.9
 [4.5.8]: https://github.com/goldmar/openclaw-code-agent/compare/v4.5.7...v4.5.8
