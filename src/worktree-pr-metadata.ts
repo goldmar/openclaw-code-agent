@@ -29,13 +29,16 @@ export interface PrMetadataProvider {
   generatePrMetadata(evidence: PrMetadataEvidence): Promise<unknown>;
 }
 
+export type PrMetadataFallbackReason = "no-provider" | "provider-failed" | "provider-invalid";
+
 export type PrMetadataResult =
-  | { ok: true; metadata: PrMetadata; evidence: PrMetadataEvidence }
+  | { ok: true; metadata: PrMetadata; evidence: PrMetadataEvidence; fallbackReason?: PrMetadataFallbackReason }
   | { ok: false; error: string; evidence: PrMetadataEvidence };
 
 const OPAQUE_TOKEN_MIN_LENGTH = 32;
 const GENERATED_FOOTER = "Generated with [openclaw-code-agent](https://github.com/goldmar/openclaw-code-agent)";
 const FALLBACK_METADATA_MARKER = "Deterministic fallback metadata generated because no LLM PR metadata provider is configured.";
+const PROVIDER_FALLBACK_METADATA_MARKER = "Deterministic fallback metadata generated because the LLM PR metadata provider failed or returned unusable output.";
 
 type RuntimePrMetadataCandidate = {
   generatePrMetadata?: (evidence: PrMetadataEvidence) => Promise<unknown> | unknown;
@@ -274,15 +277,22 @@ function validateGeneratedPrMetadata(
   return metadata;
 }
 
-function buildFallbackPrMetadata(evidence: PrMetadataEvidence, prompt: string | undefined): PrMetadata {
+function buildFallbackPrMetadata(
+  evidence: PrMetadataEvidence,
+  prompt: string | undefined,
+  options: { reason?: PrMetadataFallbackReason } = {},
+): PrMetadata {
   const safeName = truncateText(
     redactSensitiveText(evidence.sessionName).replace(/[-_]+/g, " ").replace(/\s+/g, " ").trim() || "agent worktree",
     80,
   );
   const title = truncateText(`OpenClaw agent changes: ${safeName}`, 90);
+  const fallbackMarker = options.reason === "provider-failed" || options.reason === "provider-invalid"
+    ? PROVIDER_FALLBACK_METADATA_MARKER
+    : FALLBACK_METADATA_MARKER;
 
   const baseSummary = [
-    FALLBACK_METADATA_MARKER,
+    fallbackMarker,
     `Session: ${safeName}.`,
     ...(evidence.objective ? [`Objective: ${evidence.objective}`] : []),
     ...(evidence.stats
@@ -341,7 +351,7 @@ function buildFallbackPrMetadata(evidence: PrMetadataEvidence, prompt: string | 
   };
 
   if (metadata.summary.length === 0) {
-    metadata.summary = ["Deterministic fallback metadata generated because no LLM PR metadata provider is configured."];
+    metadata.summary = [fallbackMarker];
   }
   if (metadata.changes.length === 0) {
     metadata.changes = ["Review the pushed worktree branch for the full set of changes."];
@@ -414,25 +424,28 @@ export async function buildPrMetadata(args: {
 }): Promise<PrMetadataResult> {
   const evidence = buildPrMetadataEvidence({ sessionName: args.sessionName, branchName: args.branchName, prompt: args.prompt, diffSummary: args.diffSummary });
   if (!args.provider) {
-    const metadata = buildFallbackPrMetadata(evidence, args.prompt);
-    return { ok: true, metadata, evidence };
+    const metadata = buildFallbackPrMetadata(evidence, args.prompt, { reason: "no-provider" });
+    return { ok: true, metadata, evidence, fallbackReason: "no-provider" };
   }
 
   try {
     const generated = await args.provider.generatePrMetadata(evidence);
     const metadata = validateGeneratedPrMetadata(normalizeGeneratedPrMetadataPayload(generated), evidence, args.prompt);
     if (metadata) return { ok: true, metadata, evidence };
+    console.warn("[agent_pr] PR metadata provider returned invalid or unsafe metadata; using deterministic fallback metadata.");
     return {
-      ok: false,
-      error: "LLM-generated PR metadata failed schema or safety validation. Pass explicit title/body or retry after correcting the provider output.",
+      ok: true,
+      metadata: buildFallbackPrMetadata(evidence, args.prompt, { reason: "provider-invalid" }),
       evidence,
+      fallbackReason: "provider-invalid",
     };
   } catch (err) {
     console.warn(`[agent_pr] PR metadata provider failed: ${err instanceof Error ? err.message : String(err)}`);
     return {
-      ok: false,
-      error: "PR metadata provider failed. Pass explicit title/body or retry after the provider is healthy.",
+      ok: true,
+      metadata: buildFallbackPrMetadata(evidence, args.prompt, { reason: "provider-failed" }),
       evidence,
+      fallbackReason: "provider-failed",
     };
   }
 }
@@ -530,7 +543,7 @@ function normalizeGeneratedPrMetadataPayload(generated: unknown): unknown {
 
 export function isOcaGeneratedPrBody(body: string | undefined): boolean {
   if (!body) return false;
-  return body.includes(GENERATED_FOOTER) || body.includes(FALLBACK_METADATA_MARKER);
+  return body.includes(GENERATED_FOOTER) || body.includes(FALLBACK_METADATA_MARKER) || body.includes(PROVIDER_FALLBACK_METADATA_MARKER);
 }
 
 export function isOcaGeneratedPrTitle(title: string | undefined): boolean {
