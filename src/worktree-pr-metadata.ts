@@ -29,8 +29,10 @@ export interface PrMetadataProvider {
   generatePrMetadata(evidence: PrMetadataEvidence): Promise<unknown>;
 }
 
+export type PrMetadataFallbackReason = "no-provider" | "provider-failed" | "provider-invalid";
+
 export type PrMetadataResult =
-  | { ok: true; metadata: PrMetadata; evidence: PrMetadataEvidence }
+  | { ok: true; metadata: PrMetadata; evidence: PrMetadataEvidence; fallbackReason?: PrMetadataFallbackReason }
   | { ok: false; error: string; evidence: PrMetadataEvidence };
 
 const OPAQUE_TOKEN_MIN_LENGTH = 32;
@@ -278,7 +280,7 @@ function validateGeneratedPrMetadata(
 function buildFallbackPrMetadata(
   evidence: PrMetadataEvidence,
   prompt: string | undefined,
-  options: { reason?: "no-provider" | "provider-failed" | "provider-invalid" } = {},
+  options: { reason?: PrMetadataFallbackReason } = {},
 ): PrMetadata {
   const safeName = truncateText(
     redactSensitiveText(evidence.sessionName).replace(/[-_]+/g, " ").replace(/\s+/g, " ").trim() || "agent worktree",
@@ -423,7 +425,7 @@ export async function buildPrMetadata(args: {
   const evidence = buildPrMetadataEvidence({ sessionName: args.sessionName, branchName: args.branchName, prompt: args.prompt, diffSummary: args.diffSummary });
   if (!args.provider) {
     const metadata = buildFallbackPrMetadata(evidence, args.prompt, { reason: "no-provider" });
-    return { ok: true, metadata, evidence };
+    return { ok: true, metadata, evidence, fallbackReason: "no-provider" };
   }
 
   try {
@@ -435,6 +437,7 @@ export async function buildPrMetadata(args: {
       ok: true,
       metadata: buildFallbackPrMetadata(evidence, args.prompt, { reason: "provider-invalid" }),
       evidence,
+      fallbackReason: "provider-invalid",
     };
   } catch (err) {
     console.warn(`[agent_pr] PR metadata provider failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -442,6 +445,7 @@ export async function buildPrMetadata(args: {
       ok: true,
       metadata: buildFallbackPrMetadata(evidence, args.prompt, { reason: "provider-failed" }),
       evidence,
+      fallbackReason: "provider-failed",
     };
   }
 }

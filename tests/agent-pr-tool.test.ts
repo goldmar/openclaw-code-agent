@@ -554,6 +554,10 @@ describe("agent_pr generated PR metadata", () => {
       isOcaGeneratedPrBody("## Summary\n- Deterministic fallback metadata generated because no LLM PR metadata provider is configured."),
       true,
     );
+    assert.equal(
+      isOcaGeneratedPrBody("## Summary\n- Deterministic fallback metadata generated because the LLM PR metadata provider failed or returned unusable output."),
+      true,
+    );
     assert.equal(isOcaGeneratedPrBody("Human-written description with project context and review notes."), false);
     assert.equal(isOcaGeneratedPrTitle("OpenClaw agent changes: missing provider"), true);
     assert.equal(isOcaGeneratedPrTitle("Human-written PR title"), false);
@@ -620,6 +624,91 @@ describe("agent_pr generated PR metadata", () => {
     assert.equal(updates.title, "Refresh generated PR metadata");
     assert.match(updates.body ?? "", /Refreshes stale generated PR descriptions/);
     assert.doesNotMatch(updates.body ?? "", /no LLM PR metadata provider/i);
+  });
+
+  it("preserves existing generated PR metadata when provider fallback would degrade refresh", async () => {
+    const currentBody = formatPrBody({
+      sessionName: "provider-refresh-failure",
+      metadata: {
+        title: "Rich generated metadata",
+        summary: ["Keeps detailed provider-generated PR context."],
+        changes: ["`src/tools/agent-pr.ts`"],
+        validation: ["pnpm test:file tests/agent-pr-tool.test.ts"],
+        notes: ["Existing generated body should survive transient provider failures."],
+      },
+    });
+
+    const cases = [
+      {
+        name: "provider throw",
+        provider: {
+          async generatePrMetadata() {
+            throw new Error("provider unavailable");
+          },
+        },
+      },
+      {
+        name: "unsafe provider output",
+        provider: {
+          async generatePrMetadata() {
+            return {
+              title: "Leak ghp_1234567890abcdefghijklmnopqrstuvwxyz",
+              summary: ["Looks fine"],
+              changes: ["`src/tools/agent-pr.ts`"],
+              validation: ["Review CI checks before merging."],
+              notes: ["No notes"],
+            };
+          },
+        },
+      },
+    ];
+
+    for (const testCase of cases) {
+      let updateCalled = false;
+      const result = await refreshOpenPrMetadata({
+        repoDir: "/repo",
+        prStatus: {
+          exists: true,
+          state: "open",
+          number: 42,
+          title: "Rich generated metadata",
+        },
+        sessionName: "provider-refresh-failure",
+        branchName: "agent/provider-refresh-failure",
+        prompt: "Refresh the generated pull request metadata.",
+        diffSummary: {
+          commits: 1,
+          filesChanged: 1,
+          insertions: 9,
+          deletions: 1,
+          changedFiles: ["src/tools/agent-pr.ts"],
+          commitMessages: [{ hash: "abc1234", message: "Preserve generated PR metadata", author: "Codex" }],
+        },
+        forceRefresh: false,
+        metadataProvider: testCase.provider,
+        operations: {
+          getBody: () => ({ ok: true, body: currentBody }),
+          updateBody: () => {
+            updateCalled = true;
+            return true;
+          },
+          updateTitle: () => {
+            updateCalled = true;
+            return true;
+          },
+        },
+      });
+
+      assert.deepEqual(
+        result,
+        {
+          status: "failed",
+          reason: "metadata provider failed or returned unusable output; preserved existing generated PR metadata",
+        },
+        testCase.name,
+      );
+      assert.equal(updateCalled, false, testCase.name);
+    }
   });
 
   it("preserves human-edited PR titles and bodies by default", async () => {
