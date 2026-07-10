@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Renamed explicit goal chat commands and public goal tools to the `agent_goal*` namespace, avoiding Telegram command conflicts and making the tool surface consistent with the rest of OpenClaw Code Agent.
+
 ## [4.6.0] - 2026-07-02
 
 ### Added
@@ -139,7 +142,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Added experimental OpenCode harness documentation, manifest guidance, and smoke-test instructions for the local `opencode serve` integration.
-- Added experimental OpenCode harness support so `agent_launch`, `goal_launch`, resume handling, plan gating, worktree strategies, and session storage can run through `opencode`.
+- Added experimental OpenCode harness support so `agent_launch`, `agent_goal_launch`, resume handling, plan gating, worktree strategies, and session storage can run through `opencode`.
 - Added `agent_request_worktree_decision` as a tool contract so orchestrator wakes can request a state-aware worktree decision prompt without relying on chat commands.
 
 ### Fixed
@@ -158,7 +161,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [4.3.8] - 2026-06-04
 
 ### Added
-- Added `goal_edit` support so active goal tasks can be refined without relaunching the surrounding workflow.
+- Added `agent_goal_edit` support so active goal tasks can be refined without relaunching the surrounding workflow.
 - Added goal iteration summaries so goal progress updates preserve a concise account of what changed between iterations.
 
 ### Fixed
@@ -286,7 +289,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Extracted keyed async operation queueing from `SessionManager` and reused it for per-repository merge serialization.
 - Reused the keyed operation queue for ordered wake dispatch and moved session maintenance scheduling into an internal service.
-- Centralized chat command argument tokenization so `/agent`, `/agent_respond`, `/agent_output`, and `/goal` share quoted-argument handling.
+- Centralized chat command argument tokenization so `/agent`, `/agent_respond`, `/agent_output`, and `/agent_goal` share quoted-argument handling.
 - Reworked README goal-task examples to use human conversation prompts instead of command invocations.
 - Updated the release workflow to publish the same packed artifact to npm and ClawHub.
 - Reworked the README into a shorter operator-first guide and moved release-detail emphasis back to the changelog/reference docs.
@@ -294,7 +297,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Removed the stale `workflows/` package file entry because no workflows are shipped in the npm tarball.
 - Reframed README examples around human chat workflows while keeping tools documented as the agent-facing API surface.
 - Routed `/agent` through the shared launch resolver used by `agent_launch`, so chat commands and tool launches share workdir, model, routing, and resume-first behavior.
-- Deduplicated goal launch validation and output formatting across `/goal` and `goal_launch`.
+- Deduplicated goal launch validation and output formatting across `/agent_goal` and `agent_goal_launch`.
 - Extracted shared plan-approval delivery guards/text builders and session output-preview selection from `SessionManager`.
 - Updated the local OpenClaw package target to `openclaw@2026.5.5` while keeping the peer floor at `>=2026.4.21`.
 - Added the generic `agent_send_plan_offer` helper for external workflows that need Start Plan / Dismiss buttons without a monitor-specific API.
@@ -303,7 +306,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - Reused the shared model allowlist helper in agent launch resolution and cleaned up patch-era comments in launch, merge, session, and startup cleanup code.
-- Corrected architecture docs for the current plugin entry surface: 15 tools and 9 chat commands.
+- Corrected architecture docs for the plugin entry surface.
 - Updated plugin manifest worktree-strategy help text to remove stale `Merge locally` / `Create PR` button names.
 
 ## [4.1.2] - 2026-05-06

@@ -27,7 +27,7 @@ function isGoalLaunchParams(value: unknown): value is GoalLaunchParams {
 
 export function makeGoalLaunchTool(ctx: OpenClawPluginToolContext) {
   return {
-    name: "goal_launch",
+    name: "agent_goal_launch",
     description:
       "Launch an explicit goal loop. Use this only when the user specifically asks for a goal task, Ralph-style autonomous loop, iterative loop, autonomous repair loop, or keep-going-until-checks-pass workflow. This is not the default session path.",
     parameters: Type.Object({

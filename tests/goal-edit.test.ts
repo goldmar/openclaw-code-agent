@@ -5,7 +5,7 @@ import { registerGoalEditCommand } from "../src/commands/goal-edit";
 import { setGoalController } from "../src/singletons";
 import { makeGoalEditTool } from "../src/tools/goal-edit";
 
-describe("goal_edit", () => {
+describe("agent_goal_edit", () => {
   afterEach(() => {
     setGoalController(null);
   });

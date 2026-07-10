@@ -224,12 +224,12 @@ Most users interact in chat. The tool surface is for OpenClaw agents and advance
 | `agent_pr` | Create or update a GitHub PR |
 | `agent_worktree_status` | Show worktree lifecycle state and cleanup safety |
 | `agent_worktree_cleanup` | Clean safe worktrees or dismiss one pending decision |
-| `goal_launch` | Start an explicit verifier or Ralph-style goal loop |
-| `goal_status` | Show one goal task or list all goal tasks |
-| `goal_edit` | Change the goal text for an active goal task |
-| `goal_stop` | Stop a running goal task |
+| `agent_goal_launch` | Start an explicit verifier or Ralph-style goal loop |
+| `agent_goal_status` | Show one goal task or list all goal tasks |
+| `agent_goal_edit` | Change the goal text for an active goal task |
+| `agent_goal_stop` | Stop a running goal task |
 
-Chat commands mirror the common workflows when you want explicit commands instead of natural-language chat, but most human use should start with plain requests like the examples above. Available commands are `/agent`, `/agent_sessions`, `/agent_output`, `/agent_respond`, `/agent_kill`, `/agent_stats`, `/goal`, `/goal_status`, `/goal_edit`, and `/goal_stop`.
+Chat commands mirror the common workflows when you want explicit commands instead of natural-language chat, but most human use should start with plain requests like the examples above. Available commands are `/agent`, `/agent_sessions`, `/agent_output`, `/agent_respond`, `/agent_kill`, `/agent_stats`, `/agent_policy`, `/agent_goal`, `/agent_goal_status`, `/agent_goal_edit`, and `/agent_goal_stop`.
 
 ## Docs
 

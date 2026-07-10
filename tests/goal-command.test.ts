@@ -10,7 +10,7 @@ describe("goal command", () => {
     setPluginConfig({});
     setGoalController({
       async launchTask() {
-        throw new Error("launchTask should not be called for invalid /goal input");
+        throw new Error("launchTask should not be called for invalid /agent_goal input");
       },
     } as any);
   });
