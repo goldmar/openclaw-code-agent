@@ -302,7 +302,7 @@ describe("agent_launch tool defaults", () => {
         resume_session_id: "stable-session-1",
         worktree_strategy: "delegate",
         harness: "codex",
-        model: "gpt-5.6",
+        model: "gpt-5.6-sol",
       });
 
       assert.equal(spawnCalled, false);
@@ -311,7 +311,7 @@ describe("agent_launch tool defaults", () => {
       assert.equal(policyLaunchArgs?.workdir, workdir);
       assert.equal(policyLaunchArgs?.worktreeStrategy, "delegate");
       assert.equal(policyLaunchArgs?.harness, "codex");
-      assert.equal(policyLaunchArgs?.model, "gpt-5.6");
+      assert.equal(policyLaunchArgs?.model, "gpt-5.6-sol");
       assert.equal(policyLaunchArgs?.sessionIdOverride, "stable-session-1");
       assert.equal(policyLaunchArgs?.resumeWorktreeFrom, "resolved-stable-session-1");
       assert.equal(policyLaunchArgs?.originAgentId, "agent-main");
