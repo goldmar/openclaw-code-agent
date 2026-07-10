@@ -27,8 +27,8 @@ const BUILTIN_HARNESS_CONFIGS: Record<string, HarnessConfig> = {
     allowedModels: ["sonnet", "opus"],
   },
   codex: {
-    defaultModel: "gpt-5.5",
-    allowedModels: ["gpt-5.5", "gpt-5.5-pro"],
+    defaultModel: "gpt-5.6-sol",
+    allowedModels: ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
     reasoningEffort: "medium",
   },
   opencode: {},

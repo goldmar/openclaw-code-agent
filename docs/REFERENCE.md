@@ -8,8 +8,8 @@ Canonical operator reference for `openclaw-code-agent`: install, configuration, 
 | --- | --- |
 | `defaultHarness` | `claude-code` |
 | `harnesses.claude-code.defaultModel` | `anthropic/claude-sonnet-4-7` |
-| `harnesses.codex.defaultModel` | `gpt-5.5` |
-| `harnesses.codex.allowedModels` | `["gpt-5.5", "gpt-5.5-pro"]` |
+| `harnesses.codex.defaultModel` | `gpt-5.6-sol` |
+| `harnesses.codex.allowedModels` | `["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]` |
 | `harnesses.codex.reasoningEffort` | `medium` |
 | `harnesses.codex.fastMode` | `false` |
 | `harnesses.opencode.defaultModel` | unset; OpenCode uses its configured provider default |
@@ -41,7 +41,7 @@ Configuration guidance for `2026.6.11`:
 - Use `harnesses.codex.defaultModel`, `harnesses.codex.allowedModels`, `harnesses.codex.reasoningEffort`, and `harnesses.codex.fastMode` for Codex. Use `harnesses["claude-code"].defaultModel`, `harnesses["claude-code"].allowedModels`, and optional `harnesses["claude-code"].reasoningEffort` for Claude Code. Use `harnesses.opencode` only for the experimental OpenCode harness; leave `defaultModel` unset to use OpenCode's configured provider default, or set/pass a `provider/model` string when you need an explicit model.
 - Codex `reasoningEffort` is sent as `reasoningEffort` on current App Server thread, resume, and turn-start collaboration settings. Codex `fastMode: true` sends `service_tier: "fast"` on current App Server thread, resume, and turn payloads; the plugin does not emit a `fastMode` payload field.
 - Codex App Server launches default to stdio listener args, use a longer request timeout, and include redacted recent stderr in timeout diagnostics. Resume requests are sent only for UUID-shaped Codex backend thread ids; plugin session ids and other non-backend refs start a fresh thread instead of being forwarded to `thread/resume`.
-- OpenClaw core documents Codex routing as an explicit provider/runtime split: `openai/gpt-5.5` plus `agentRuntime.id: "codex"` uses the bundled native Codex app-server runtime, while `openai-codex/gpt-5.5` remains the PI Codex OAuth route. This plugin's own Codex harness is configured through `harnesses.codex.*`, not through OpenClaw's bundled `codex` provider route.
+- OpenClaw core documents Codex routing as an explicit provider/runtime split: `openai/gpt-5.6-sol` plus `agentRuntime.id: "codex"` uses the bundled native Codex app-server runtime, while `openai-codex/gpt-5.6-sol` remains the PI Codex OAuth route. This plugin's own Codex harness is configured through `harnesses.codex.*`, not through OpenClaw's bundled `codex` provider route.
 - Official provider plugins are increasingly published as independent packages. That packaging change does not affect this plugin's dependency boundary: OCA imports only `openclaw/plugin-sdk/plugin-entry`, keeps `openclaw` as a peer/dev readiness dependency, and keeps `openclaw.extensions` pointing at the built `dist/index.js` artifact.
 - Telegram topic routes remain plain code-agent route metadata. OpenClaw `2026.6.11` keeps improving account-scoped topic routing, rich Telegram delivery, native progress preservation, channel-origin reset handling, and unauthorized DM handling; for cron or release-monitor wakeups, still use fully routable channel strings and preserve topic/thread ids such as `telegram|<chat-id>` with thread `<topic-id>`. The plugin's Start Plan, approval, completion, merge, and PR callbacks continue to route through stored delivery context and action tokens.
 - Current callback handling, including fixes already merged on `main`, prefers native namespaced `callback.data`, `callback_data`, `callbackData`, and matching interaction callback data values before derived payload text. This keeps delayed or raw `code-agent:<token>` callback values on the plugin path instead of surfacing them as chat text, while preserving the legacy payload-token fallback for non-namespaced button labels.
@@ -145,8 +145,8 @@ Add this under `plugins.entries["openclaw-code-agent"]` in `~/.openclaw/openclaw
         "allowedModels": ["sonnet", "opus"]
       },
       "codex": {
-        "defaultModel": "gpt-5.5",
-        "allowedModels": ["gpt-5.5", "gpt-5.5-pro"],
+        "defaultModel": "gpt-5.6-sol",
+        "allowedModels": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
         "reasoningEffort": "medium",
         "fastMode": false
       },

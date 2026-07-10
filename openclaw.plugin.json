@@ -77,10 +77,11 @@
         "description": "Per-harness launch defaults and model restrictions.",
         "default": {
           "codex": {
-            "defaultModel": "gpt-5.5",
+            "defaultModel": "gpt-5.6-sol",
             "allowedModels": [
-              "gpt-5.5",
-              "gpt-5.5-pro"
+              "gpt-5.6-sol",
+              "gpt-5.6-terra",
+              "gpt-5.6-luna"
             ],
             "reasoningEffort": "medium",
             "fastMode": false
@@ -246,7 +247,7 @@
     },
     "harnesses": {
       "label": "Harness configuration",
-      "help": "Per-harness defaults and model restrictions. Set harnesses.codex.fastMode=true to send service_tier=\"fast\" on Codex App Server thread/resume/turn payloads for Codex sessions. OpenCode is experimental; leave harnesses.opencode.defaultModel unset to use OpenCode's provider default, or pass provider/model explicitly. Default: {\"codex\":{\"defaultModel\":\"gpt-5.5\",\"allowedModels\":[\"gpt-5.5\",\"gpt-5.5-pro\"],\"reasoningEffort\":\"medium\",\"fastMode\":false},\"claude-code\":{\"defaultModel\":\"anthropic/claude-sonnet-4-7\",\"allowedModels\":[\"sonnet\",\"opus\"]},\"opencode\":{}}.",
+      "help": "Per-harness defaults and model restrictions. Set harnesses.codex.fastMode=true to send service_tier=\"fast\" on Codex App Server thread/resume/turn payloads for Codex sessions. OpenCode is experimental; leave harnesses.opencode.defaultModel unset to use OpenCode's provider default, or pass provider/model explicitly. Default: {\"codex\":{\"defaultModel\":\"gpt-5.6-sol\",\"allowedModels\":[\"gpt-5.6-sol\",\"gpt-5.6-terra\",\"gpt-5.6-luna\"],\"reasoningEffort\":\"medium\",\"fastMode\":false},\"claude-code\":{\"defaultModel\":\"anthropic/claude-sonnet-4-7\",\"allowedModels\":[\"sonnet\",\"opus\"]},\"opencode\":{}}.",
       "advanced": true
     },
     "maxSessions": {
