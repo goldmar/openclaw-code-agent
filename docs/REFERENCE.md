@@ -595,6 +595,7 @@ Have oca handle the failing dashboard smoke test.
 | `/agent_respond` | Send a reply |
 | `/agent_kill` | Stop a session |
 | `/agent_stats` | Show aggregate metrics |
+| `/agent_policy` | Set or inspect repository worktree/PR policy |
 | `/agent_goal` | Launch an explicit goal task |
 | `/agent_goal_status` | Show one goal task or list all goal tasks |
 | `/agent_goal_edit` | Change the goal text for an active goal task |

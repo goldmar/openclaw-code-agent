@@ -229,7 +229,7 @@ Most users interact in chat. The tool surface is for OpenClaw agents and advance
 | `agent_goal_edit` | Change the goal text for an active goal task |
 | `agent_goal_stop` | Stop a running goal task |
 
-Chat commands mirror the common workflows when you want explicit commands instead of natural-language chat, but most human use should start with plain requests like the examples above. Available commands are `/agent`, `/agent_sessions`, `/agent_output`, `/agent_respond`, `/agent_kill`, `/agent_stats`, `/agent_goal`, `/agent_goal_status`, `/agent_goal_edit`, and `/agent_goal_stop`.
+Chat commands mirror the common workflows when you want explicit commands instead of natural-language chat, but most human use should start with plain requests like the examples above. Available commands are `/agent`, `/agent_sessions`, `/agent_output`, `/agent_respond`, `/agent_kill`, `/agent_stats`, `/agent_policy`, `/agent_goal`, `/agent_goal_status`, `/agent_goal_edit`, and `/agent_goal_stop`.
 
 ## Docs
 
