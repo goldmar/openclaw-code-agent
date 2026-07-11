@@ -56,4 +56,31 @@ describe("SessionActionTokenStore", () => {
     assert.equal(store.getActionToken(otherPolicyToken.id)?.id, otherPolicyToken.id);
     assert.deepEqual(store.listActiveActionTokens("repo-policy-set").map((active) => active.id), [otherPolicyToken.id]);
   });
+
+  it("atomically consumes sibling buttons for one question request", () => {
+    let changeCount = 0;
+    const store = new SessionActionTokenStore(() => { changeCount++; }, 100);
+    const first = store.createActionToken("session-1", "question-answer", {
+      pendingInputRequestId: "request-1",
+      optionIndex: 0,
+    });
+    const sibling = store.createActionToken("session-1", "question-answer", {
+      pendingInputRequestId: "request-1",
+      optionIndex: 1,
+    });
+    const newer = store.createActionToken("session-1", "question-answer", {
+      pendingInputRequestId: "request-2",
+      optionIndex: 0,
+    });
+
+    const beforeConsume = changeCount;
+    const consumed = store.consumeQuestionAnswerTokens("session-1", "request-1");
+
+    assert.deepEqual(consumed.map((token) => token.id), [first.id, sibling.id]);
+    assert.equal(changeCount, beforeConsume + 1);
+    assert.ok(store.getActionToken(first.id)?.consumedAt);
+    assert.ok(store.getActionToken(sibling.id)?.consumedAt);
+    assert.equal(store.getActionToken(newer.id)?.consumedAt, undefined);
+    assert.deepEqual(store.listActiveActionTokens("question-answer").map((token) => token.id), [newer.id]);
+  });
 });

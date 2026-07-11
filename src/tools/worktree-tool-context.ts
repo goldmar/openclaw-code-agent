@@ -1,5 +1,5 @@
-import { existsSync, readFileSync } from "node:fs";
 import type { PersistedSessionInfo } from "../types";
+import { existsSync, readFileSync } from "fs";
 import type { ResolvedWorktreeLifecycle } from "../types";
 import type { Session } from "../session";
 import { getBackendConversationId, getPersistedMutationRefs, getPrimarySessionLookupRef } from "../session-backend-ref";
@@ -34,35 +34,24 @@ export interface ResolvedWorktreeToolTarget {
   };
 }
 
-const MAX_PR_SESSION_OUTPUT_LENGTH = 16_000;
-
-function readPrSessionOutputPreview(
-  activeSession: Session | undefined,
-  persistedSession: PersistedSessionInfo | undefined,
-): string | undefined {
-  const activeOutput = activeSession?.getOutput().join("\n").trim();
-  let persistedOutput: string | undefined;
-  if (persistedSession?.outputPath && existsSync(persistedSession.outputPath)) {
-    try {
-      persistedOutput = readFileSync(persistedSession.outputPath, "utf8").trim();
-    } catch {
-      // PR metadata generation is best-effort; unreadable output falls back to diff evidence.
-    }
-  }
-  const output = (persistedOutput?.length ?? 0) > (activeOutput?.length ?? 0)
-    ? persistedOutput
-    : activeOutput;
-  const normalized = output?.trim();
-  if (!normalized) return undefined;
-  return normalized.slice(-MAX_PR_SESSION_OUTPUT_LENGTH);
-}
-
 export function resolveWorktreeToolTarget(sessionManager: SessionManager, ref: string): ResolvedWorktreeToolTarget {
   const activeSession = sessionManager.resolve(ref);
   const persistedSession = sessionManager.getPersistedSession(ref);
   const persistedRef = activeSession
     ? getPrimarySessionLookupRef(activeSession)
     : (persistedSession ? getPrimarySessionLookupRef(persistedSession) : undefined);
+  const activeOutput = activeSession?.getOutput?.().join("\n").trim();
+  let persistedOutput: string | undefined;
+  if (persistedSession?.outputPath && existsSync(persistedSession.outputPath)) {
+    try {
+      persistedOutput = readFileSync(persistedSession.outputPath, "utf-8").trim();
+    } catch {
+      // PR metadata can still fall back to prompt and diff evidence.
+    }
+  }
+  const output = (persistedOutput?.length ?? 0) > (activeOutput?.length ?? 0)
+    ? persistedOutput
+    : activeOutput;
 
   return {
     activeSession,
@@ -70,7 +59,7 @@ export function resolveWorktreeToolTarget(sessionManager: SessionManager, ref: s
     persistedRef,
     sessionName: activeSession?.name ?? persistedSession?.name ?? ref,
     prompt: activeSession?.prompt ?? persistedSession?.prompt,
-    outputPreview: readPrSessionOutputPreview(activeSession, persistedSession),
+    outputPreview: output ? output.slice(-12_000) : undefined,
     worktreePath: activeSession?.worktreePath ?? persistedSession?.worktreePath,
     originalWorkdir: activeSession?.originalWorkdir ?? persistedSession?.workdir,
     branchName: activeSession?.worktreeBranch ?? persistedSession?.worktreeBranch,
