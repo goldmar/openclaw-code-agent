@@ -73,6 +73,34 @@ describe("worktree-tool-context", () => {
     }
   });
 
+  it("prefers a persisted final report over a longer active transcript without report sections", () => {
+    const dir = mkdtempSync(join(tmpdir(), "oca-pr-report-output-"));
+    const outputPath = join(dir, "session.txt");
+    const persistedReport = "Root cause:\n- Persisted report.\nFix:\n- Durable fix.\nValidation:\n- Tests passed.\n";
+    writeFileSync(outputPath, persistedReport, "utf8");
+    try {
+      const target = resolveWorktreeToolTarget({
+        resolve: () => ({
+          id: "active-1",
+          name: "resumed-session",
+          getOutput: () => ["Progress update without a final report. ".repeat(20)],
+        }),
+        getPersistedSession: () => ({
+          sessionId: "active-1",
+          name: "resumed-session",
+          status: "completed",
+          costUsd: 0,
+          workdir: "/repo",
+          outputPath,
+        }),
+      } as any, "active-1");
+
+      assert.equal(target.outputPreview, persistedReport.trim());
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("merges active and persisted worktree targets while preferring active sessions", () => {
     const targets = listWorktreeToolTargets({
       list: () => [{

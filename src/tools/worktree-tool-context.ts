@@ -34,6 +34,18 @@ export interface ResolvedWorktreeToolTarget {
   };
 }
 
+function containsPrSessionReport(output: string | undefined): boolean {
+  if (!output) return false;
+  const headings = new Set(
+    output.split(/\r?\n/)
+      .map((line) => line.trim().replace(/^[#*_\s]+|[:*_\s]+$/g, "").toLowerCase()),
+  );
+  const hasSummary = ["root cause", "summary", "result"].some((heading) => headings.has(heading));
+  const hasChanges = ["fix", "changes", "implementation", "implemented"].some((heading) => headings.has(heading));
+  const hasValidation = ["validation", "verification", "tests"].some((heading) => headings.has(heading));
+  return hasSummary && hasChanges && hasValidation;
+}
+
 export function resolveWorktreeToolTarget(sessionManager: SessionManager, ref: string): ResolvedWorktreeToolTarget {
   const activeSession = sessionManager.resolve(ref);
   const persistedSession = sessionManager.getPersistedSession(ref);
@@ -49,9 +61,11 @@ export function resolveWorktreeToolTarget(sessionManager: SessionManager, ref: s
       // PR metadata can still fall back to prompt and diff evidence.
     }
   }
-  const output = (persistedOutput?.length ?? 0) > (activeOutput?.length ?? 0)
-    ? persistedOutput
-    : activeOutput;
+  const activeHasReport = containsPrSessionReport(activeOutput);
+  const persistedHasReport = containsPrSessionReport(persistedOutput);
+  const output = activeHasReport === persistedHasReport
+    ? ((persistedOutput?.length ?? 0) > (activeOutput?.length ?? 0) ? persistedOutput : activeOutput)
+    : (persistedHasReport ? persistedOutput : activeOutput);
 
   return {
     activeSession,
