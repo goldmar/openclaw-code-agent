@@ -1,5 +1,8 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   formatWorktreeLifecycleState,
   formatWorktreePreserveReason,
@@ -12,6 +15,92 @@ import {
 } from "../src/tools/worktree-tool-context";
 
 describe("worktree-tool-context", () => {
+  it("loads completed output from a persisted session for PR metadata", () => {
+    const dir = mkdtempSync(join(tmpdir(), "oca-pr-output-"));
+    const outputPath = join(dir, "session.txt");
+    writeFileSync(outputPath, "Root cause:\n- Persisted report evidence.\n", "utf8");
+    try {
+      const target = resolveWorktreeToolTarget({
+        resolve: () => undefined,
+        getPersistedSession: () => ({
+          sessionId: "persisted-1",
+          name: "completed-session",
+          status: "completed",
+          costUsd: 0,
+          workdir: "/repo",
+          worktreePath: "/repo/.worktrees/completed-session",
+          worktreeBranch: "agent/completed-session",
+          outputPath,
+        }),
+      } as any, "persisted-1");
+
+      assert.equal(target.outputPreview, "Root cause:\n- Persisted report evidence.");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("prefers fuller persisted output over an active session buffer", () => {
+    const dir = mkdtempSync(join(tmpdir(), "oca-pr-active-output-"));
+    const outputPath = join(dir, "session.txt");
+    const persistedReport = "Root cause:\n- Full persisted report.\nFix:\n- Durable fix.\nValidation:\n- Full suite passed.\n";
+    writeFileSync(outputPath, persistedReport, "utf8");
+    try {
+      const activeSession = {
+        id: "active-1",
+        name: "completed-session",
+        prompt: "Fix metadata.",
+        worktreePath: "/repo/.worktrees/completed-session",
+        originalWorkdir: "/repo",
+        worktreeBranch: "agent/completed-session",
+        getOutput: () => ["short active tail"],
+      };
+      const target = resolveWorktreeToolTarget({
+        resolve: () => activeSession,
+        getPersistedSession: () => ({
+          sessionId: "active-1",
+          name: "completed-session",
+          status: "completed",
+          costUsd: 0,
+          workdir: "/repo",
+          outputPath,
+        }),
+      } as any, "active-1");
+
+      assert.equal(target.outputPreview, persistedReport.trim());
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("prefers a persisted final report over a longer active transcript without report sections", () => {
+    const dir = mkdtempSync(join(tmpdir(), "oca-pr-report-output-"));
+    const outputPath = join(dir, "session.txt");
+    const persistedReport = "Root cause:\n- Persisted report.\nFix:\n- Durable fix.\nValidation:\n- Tests passed.\n";
+    writeFileSync(outputPath, persistedReport, "utf8");
+    try {
+      const target = resolveWorktreeToolTarget({
+        resolve: () => ({
+          id: "active-1",
+          name: "resumed-session",
+          getOutput: () => ["Progress update without a final report. ".repeat(20)],
+        }),
+        getPersistedSession: () => ({
+          sessionId: "active-1",
+          name: "resumed-session",
+          status: "completed",
+          costUsd: 0,
+          workdir: "/repo",
+          outputPath,
+        }),
+      } as any, "active-1");
+
+      assert.equal(target.outputPreview, persistedReport.trim());
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("merges active and persisted worktree targets while preferring active sessions", () => {
     const targets = listWorktreeToolTargets({
       list: () => [{

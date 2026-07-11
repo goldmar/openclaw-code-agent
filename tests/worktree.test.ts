@@ -168,6 +168,9 @@ describe("createPR", () => {
       "  echo 'https://github.com/acme/repo/pull/1'",
       "  exit 0",
       "fi",
+      "if [ \"$1\" = \"pr\" ] && [ \"$2\" = \"edit\" ]; then",
+      "  exit 0",
+      "fi",
       "if [ \"$1\" = \"pr\" ] && [ \"$2\" = \"list\" ]; then",
       "  if echo \"$*\" | grep -q -- '--head agent/existing-pr'; then",
       "    existing_state=${EXISTING_STATE:-OPEN}",
@@ -246,6 +249,40 @@ describe("createPR", () => {
     assert.deepEqual(result, { success: true, prUrl: "https://github.com/acme/repo/pull/1" });
     const calls = readFileSync(logPath, "utf-8").trim().split("\n");
     assert.equal(calls.at(-1), "pr create --base main --head agent/ready-pr --title Ready PR --body Body");
+  });
+
+  it("normalizes transport-escaped Markdown newlines when creating an explicit PR body", async (t) => {
+    const { logPath } = installMockGh(t);
+    const { createPR } = await import("../src/worktree.js");
+
+    const result = createPR("/tmp", "agent/escaped-body", "main", "Escaped body", "## Summary\\n\\n- First line\\n- Second line");
+
+    assert.equal(result.success, true);
+    const call = readFileSync(logPath, "utf-8");
+    assert.match(call, /--body ## Summary\n\n- First line\n- Second line/);
+    assert.doesNotMatch(call, /Summary\\n\\n-/);
+  });
+
+  it("normalizes transport-escaped Markdown newlines when updating an explicit PR body", async (t) => {
+    const { logPath } = installMockGh(t);
+    const { updatePRBody } = await import("../src/worktree.js");
+
+    const updated = updatePRBody("/tmp", 350, "## Summary\\n\\n- Updated line");
+
+    assert.equal(updated, true);
+    const call = readFileSync(logPath, "utf-8");
+    assert.match(call, /pr edit 350 --body ## Summary\n\n- Updated line/);
+  });
+
+  it("preserves intentional escaped newline text and doubled backslashes", async () => {
+    const { normalizeExplicitPrBody } = await import("../src/worktree.js");
+
+    assert.equal(normalizeExplicitPrBody(String.raw`const newline = "\\n";`), String.raw`const newline = "\\n";`);
+    assert.equal(
+      normalizeExplicitPrBody(String.raw`## Example\n\n- Use \\n in code`),
+      `## Example\n\n- Use ${String.raw`\\n`} in code`,
+    );
+    assert.equal(normalizeExplicitPrBody(String.raw`Literal \n prose without Markdown structure`), String.raw`Literal \n prose without Markdown structure`);
   });
 
   it("retries without --draft and returns warnings when target repo rejects drafts", async (t) => {

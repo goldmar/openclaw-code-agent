@@ -5,12 +5,12 @@ import { sessionManager } from "../singletons";
 import type { OpenClawPluginToolContext, PersistedSessionInfo } from "../types";
 import type { DiffSummary, PRBodyReadResult, PRStatus } from "../worktree";
 import { getDiffSummary, createPR, pushBranch, isGitHubCLIAvailable, detectDefaultBranch, syncWorktreePR, syncWorktreePRByUrl, commentOnPR, resolveTargetRepo, formatWorktreeOutcomeLine, branchExists, isBranchAncestorOfBase, getBranchName, getPRBody, updatePRBody, updatePRTitle } from "../worktree";
-import { buildPrMetadata, createRuntimePrMetadataProvider, formatPrBody, isOcaGeneratedPrBody, isOcaGeneratedPrTitle } from "../worktree-pr-metadata";
+import { buildPrMetadata, createRuntimePrMetadataProvider, formatPrBody, isOcaFallbackPrBody, isOcaGeneratedPrBody, isOcaGeneratedPrTitle } from "../worktree-pr-metadata";
 import type { PrMetadata, PrMetadataProvider } from "../worktree-pr-metadata";
 import { buildMergedPatch, buildPrOpenPatch } from "../worktree-session-patches";
 import { getPersistedTargetMutationRefs, resolveWorktreeToolTarget } from "./worktree-tool-context";
 
-export { buildPrMetadata, createRuntimePrMetadataProvider, formatPrBody, isOcaGeneratedPrBody, isOcaGeneratedPrTitle } from "../worktree-pr-metadata";
+export { buildPrMetadata, createRuntimePrMetadataProvider, formatPrBody, isOcaFallbackPrBody, isOcaGeneratedPrBody, isOcaGeneratedPrTitle } from "../worktree-pr-metadata";
 export type { PrMetadata, PrMetadataEvidence, PrMetadataProvider, PrMetadataResult } from "../worktree-pr-metadata";
 
 interface AgentPrParams {
@@ -342,7 +342,7 @@ export async function refreshOpenPrMetadata(args: {
   }
   const hasSessionReport = metadataResult.evidence.sessionSummary.length > 0
     || metadataResult.evidence.sessionChanges.length > 0;
-  if (metadataResult.fallbackReason !== undefined && !hasSessionReport) {
+  if (metadataResult.fallbackReason !== undefined && (!hasSessionReport || !isOcaFallbackPrBody(currentBody))) {
     return {
       status: "failed",
       reason: "generated PR metadata was unavailable; preserved existing generated PR metadata",

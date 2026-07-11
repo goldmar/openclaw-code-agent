@@ -1029,6 +1029,110 @@ exit 1
     assert.doesNotMatch(body, /under any circumstances/i);
   });
 
+  it("uses the completed session report when runtime generation is unavailable", async () => {
+    const result = await buildPrMetadata({
+      sessionName: "fix-oca-question-buttons",
+      branchName: "agent/fix-oca-question-buttons",
+      prompt: "Fix question buttons after a Gateway restart.",
+      outputPreview: [
+        "Implemented and committed the end-to-end fix.",
+        "",
+        "Root cause:",
+        "- Gateway restart destroyed the live pending-input resolver while the persisted token remained valid.",
+        "",
+        "Fix:",
+        "- Resume the persisted backend and forward the selected answer through the established response lifecycle.",
+        "- Consume sibling tokens atomically after a successful answer.",
+        "",
+        "Validation:",
+        "- Focused callback and token-store tests passed.",
+        "- pnpm verify passed.",
+      ].join("\n"),
+      diffSummary: {
+        commits: 1,
+        filesChanged: 3,
+        insertions: 120,
+        deletions: 8,
+        changedFiles: ["src/callback-handler.ts", "src/session-action-token-store.ts", "tests/callback-handler.test.ts"],
+        commitMessages: [{ hash: "029df6a", message: "fix: recover question answers after Gateway restart", author: "Codex" }],
+      },
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.ok && result.metadata.title, "recover question answers after Gateway restart");
+    assert.equal(result.ok && result.fallbackReason, "no-provider");
+    const body = result.ok ? formatPrBody({ sessionName: "fix-oca-question-buttons", metadata: result.metadata }) : "";
+    assert.match(body, /Gateway restart destroyed the live pending-input resolver/);
+    assert.match(body, /Resume the persisted backend/);
+    assert.match(body, /pnpm verify passed/);
+    assert.doesNotMatch(body, /no LLM PR metadata provider/i);
+  });
+
+  it("preserves richer generated PR metadata when provider failure has session-report fallback", async () => {
+    const currentBody = formatPrBody({
+      sessionName: "existing-rich-report",
+      metadata: {
+        title: "Existing rich metadata",
+        summary: ["Detailed existing generated summary."],
+        changes: ["Detailed existing generated change."],
+        validation: ["Full existing verification passed."],
+        notes: ["Existing generated notes."],
+      },
+    });
+    let updateCalls = 0;
+    const result = await refreshOpenPrMetadata({
+      repoDir: process.cwd(),
+      prStatus: {
+        exists: true,
+        state: "open",
+        number: 350,
+        url: "https://github.com/goldmar/openclaw-code-agent/pull/350",
+        title: "Existing rich metadata",
+      },
+      sessionName: "refresh-with-report",
+      outputPreview: "Root cause:\n- Report fallback exists.\nFix:\n- Report fix.\nValidation:\n- Report test.",
+      forceRefresh: true,
+      metadataProvider: {
+        async generatePrMetadata() {
+          throw new Error("transient provider failure");
+        },
+      },
+      operations: {
+        getBody: () => ({ ok: true, body: currentBody }),
+        updateTitle: () => { updateCalls += 1; return true; },
+        updateBody: () => { updateCalls += 1; return true; },
+      },
+    });
+
+    assert.deepEqual(result, {
+      status: "failed",
+      reason: "generated PR metadata was unavailable; preserved existing generated PR metadata",
+    });
+    assert.equal(updateCalls, 0);
+  });
+
+  it("sanitizes completed session report details before using them in public metadata", async () => {
+    const result = await buildPrMetadata({
+      sessionName: "safe-session-report",
+      outputPreview: [
+        "Root cause:",
+        "- Token SECRET_TOKEN=ghp_1234567890abcdefghijklmnopqrstuvwxyz was read from /home/openclaw/private/file.",
+        "Fix:",
+        "- Updated the recovery path.",
+        "Validation:",
+        "- Tests passed.",
+      ].join("\n"),
+      diffSummary: {
+        commits: 1, filesChanged: 1, insertions: 1, deletions: 0,
+        changedFiles: ["src/callback-handler.ts"],
+        commitMessages: [{ hash: "abc1234", message: "Fix recovery", author: "Codex" }],
+      },
+    });
+    const body = result.ok ? formatPrBody({ sessionName: "safe-session-report", metadata: result.metadata }) : "";
+    assert.doesNotMatch(body, /ghp_1234567890abcdefghijklmnopqrstuvwxyz|\/home\/openclaw\/private/);
+    assert.match(body, /\[redacted credential\]|\[redacted path\]/);
+  });
+
   it("does not send raw prompt secrets or private paths to the metadata provider", async () => {
     const prompt = [
       "Rotate deployment token SECRET_TOKEN=ghp_1234567890abcdefghijklmnopqrstuvwxyz for /home/openclaw/private/repo.",

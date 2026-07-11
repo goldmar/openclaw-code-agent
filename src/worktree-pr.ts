@@ -34,6 +34,18 @@ export interface CreatePROptions {
   draft?: boolean;
 }
 
+const ESCAPED_NEWLINE_SEPARATOR = /(?<!\\)\\(?:r\\)?n/g;
+
+/** Decode transport-escaped Markdown newlines without rewriting intentional escaped text. */
+export function normalizeExplicitPrBody(body: string): string {
+  if (/\r|\n/.test(body) || !/(?<!\\)\\n\\n/.test(body)) return body;
+  const candidate = body.replace(ESCAPED_NEWLINE_SEPARATOR, "\n");
+  const lines = candidate.split("\n");
+  const hasMarkdownStructure = lines.some((line) => /^#{1,6}\s+\S/.test(line.trim()))
+    && lines.some((line) => /^(?:[-*+]\s+|\d+\.\s+|```)/.test(line.trim()));
+  return hasMarkdownStructure ? candidate : body;
+}
+
 export interface WorktreeOutcomeParams {
   kind: "merge" | "pr-opened" | "pr-updated";
   branch: string;
@@ -119,7 +131,7 @@ export function createPR(
     }
     args.push("--head", resolveGhHeadArg(repoDir, branch, targetRepo));
     if (title && body) {
-      args.push("--title", title, "--body", body);
+      args.push("--title", title, "--body", normalizeExplicitPrBody(body));
     } else {
       args.push("--fill-verbose");
     }
@@ -311,7 +323,7 @@ export function updatePRBody(repoDir: string, prNumberOrUrl: number | string, bo
   }
 
   try {
-    const ghArgs = ["pr", "edit", String(prNumberOrUrl), "--body", body];
+    const ghArgs = ["pr", "edit", String(prNumberOrUrl), "--body", normalizeExplicitPrBody(body)];
     if (targetRepo) {
       ghArgs.push("--repo", targetRepo);
     }

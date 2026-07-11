@@ -603,6 +603,14 @@ export function isOcaGeneratedPrBody(body: string | undefined): boolean {
   return body.includes(GENERATED_FOOTER) || body.includes(FALLBACK_METADATA_MARKER) || body.includes(PROVIDER_FALLBACK_METADATA_MARKER);
 }
 
+export function isOcaFallbackPrBody(body: string | undefined): boolean {
+  if (!body) return false;
+  const trimmed = body.trim();
+  return trimmed === GENERATED_FOOTER
+    || body.includes(FALLBACK_METADATA_MARKER)
+    || body.includes(PROVIDER_FALLBACK_METADATA_MARKER);
+}
+
 export function isOcaGeneratedPrTitle(title: string | undefined): boolean {
   if (!title) return false;
   return /^OpenClaw agent changes:/i.test(title.trim());
