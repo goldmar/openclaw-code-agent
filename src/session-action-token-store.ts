@@ -82,6 +82,23 @@ export class SessionActionTokenStore {
     return token;
   }
 
+  consumeQuestionAnswerTokens(sessionId: string, requestId: string): SessionActionToken[] {
+    const consumed: SessionActionToken[] = [];
+    const consumedAt = Date.now();
+    for (const token of this.tokens.values()) {
+      if (
+        token.sessionId !== sessionId
+        || token.kind !== "question-answer"
+        || token.pendingInputRequestId !== requestId
+        || token.consumedAt != null
+      ) continue;
+      token.consumedAt = consumedAt;
+      consumed.push(token);
+    }
+    if (consumed.length > 0) this.notifyChanged();
+    return consumed;
+  }
+
   deleteActionTokensForSession(sessionId: string): void {
     let changed = false;
     for (const [tokenId, token] of this.tokens) {

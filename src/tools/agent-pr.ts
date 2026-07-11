@@ -287,6 +287,7 @@ export async function refreshOpenPrMetadata(args: {
   sessionName: string;
   branchName?: string;
   prompt?: string;
+  outputPreview?: string;
   diffSummary?: DiffSummary;
   explicitTitle?: string;
   explicitBody?: string;
@@ -332,13 +333,16 @@ export async function refreshOpenPrMetadata(args: {
     sessionName: args.sessionName,
     branchName: args.branchName,
     prompt: args.prompt,
+    outputPreview: args.outputPreview,
     diffSummary: args.diffSummary,
     provider: args.metadataProvider,
   });
   if (metadataResult.ok === false) {
     return { status: "failed", reason: metadataResult.error };
   }
-  if (metadataResult.fallbackReason !== undefined) {
+  const hasSessionReport = metadataResult.evidence.sessionSummary.length > 0
+    || metadataResult.evidence.sessionChanges.length > 0;
+  if (metadataResult.fallbackReason !== undefined && !hasSessionReport) {
     return {
       status: "failed",
       reason: "generated PR metadata was unavailable; preserved existing generated PR metadata",
@@ -563,6 +567,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
           sessionName,
           branchName,
           prompt: target.prompt,
+          outputPreview: target.outputPreview,
           diffSummary,
           explicitTitle: params.title,
           explicitBody: params.body,
@@ -721,6 +726,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
             sessionName,
             branchName,
             prompt: target.prompt,
+            outputPreview: target.outputPreview,
             diffSummary,
             provider: metadataProvider,
           });

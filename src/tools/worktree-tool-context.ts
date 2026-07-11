@@ -1,4 +1,5 @@
 import type { PersistedSessionInfo } from "../types";
+import { existsSync, readFileSync } from "fs";
 import type { ResolvedWorktreeLifecycle } from "../types";
 import type { Session } from "../session";
 import { getBackendConversationId, getPersistedMutationRefs, getPrimarySessionLookupRef } from "../session-backend-ref";
@@ -11,6 +12,7 @@ export interface ResolvedWorktreeToolTarget {
   persistedRef?: string;
   sessionName: string;
   prompt?: string;
+  outputPreview?: string;
   worktreePath?: string;
   originalWorkdir?: string;
   branchName?: string;
@@ -38,6 +40,16 @@ export function resolveWorktreeToolTarget(sessionManager: SessionManager, ref: s
   const persistedRef = activeSession
     ? getPrimarySessionLookupRef(activeSession)
     : (persistedSession ? getPrimarySessionLookupRef(persistedSession) : undefined);
+  const activeOutput = activeSession?.getOutput?.().join("\n").trim();
+  let persistedOutput: string | undefined;
+  if (!activeOutput && persistedSession?.outputPath && existsSync(persistedSession.outputPath)) {
+    try {
+      persistedOutput = readFileSync(persistedSession.outputPath, "utf-8").trim();
+    } catch {
+      // PR metadata can still fall back to prompt and diff evidence.
+    }
+  }
+  const output = activeOutput || persistedOutput;
 
   return {
     activeSession,
@@ -45,6 +57,7 @@ export function resolveWorktreeToolTarget(sessionManager: SessionManager, ref: s
     persistedRef,
     sessionName: activeSession?.name ?? persistedSession?.name ?? ref,
     prompt: activeSession?.prompt ?? persistedSession?.prompt,
+    outputPreview: output ? output.slice(-12_000) : undefined,
     worktreePath: activeSession?.worktreePath ?? persistedSession?.worktreePath,
     originalWorkdir: activeSession?.originalWorkdir ?? persistedSession?.workdir,
     branchName: activeSession?.worktreeBranch ?? persistedSession?.worktreeBranch,
