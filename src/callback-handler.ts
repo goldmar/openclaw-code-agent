@@ -58,10 +58,15 @@ function resumableQuestionAnswerTarget(session: PersistedSessionInfo | undefined
 
 function recoveredQuestionAnswerMessage(token: SessionActionToken): string | undefined {
   if (!token.label?.trim()) return undefined;
-  const question = token.pendingInputQuestionId
-    ? `question "${token.pendingInputQuestionId}"`
-    : "the pending question";
-  return `Answer to ${question}: ${token.label.trim()}`;
+  const questionLine = token.pendingInputQuestionId
+    ? `Question ID: ${token.pendingInputQuestionId}`
+    : "Question: the interrupted pending question";
+  return [
+    "[SYSTEM: The gateway restarted while a user question was pending. Treat the user's selection below as the answer to that interrupted question and continue without asking it again.]",
+    "",
+    questionLine,
+    `Selected answer: ${token.label.trim()}`,
+  ].join("\n");
 }
 
 async function waitForPlanDecisionOperation(operation: Promise<unknown>): Promise<void> {
@@ -695,6 +700,7 @@ export function createCallbackHandler(
 
         inFlightQuestionAnswers.add(answerLockKey);
         let submitted = false;
+        let forwardedToResumedSession = false;
         try {
           submitted = await sessionManager.resolvePendingInputOption(sessionId, token.optionIndex, {
             requestId: token.pendingInputRequestId,
@@ -710,6 +716,7 @@ export function createCallbackHandler(
                 userInitiated: true,
               });
               submitted = !result.isError;
+              forwardedToResumedSession = submitted;
             }
           }
         } catch (err) {
@@ -742,12 +749,16 @@ export function createCallbackHandler(
         });
         if (!consumedToken) {
           await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
-          await replyText(ctx, `✅ Answer submitted.`);
+          await replyText(ctx, forwardedToResumedSession
+            ? `✅ Answer forwarded to the resumed session.`
+            : `✅ Answer submitted.`);
           return { handled: true };
         }
 
         await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
-        await replyText(ctx, `✅ Answer submitted.`);
+        await replyText(ctx, forwardedToResumedSession
+          ? `✅ Answer forwarded to the resumed session.`
+          : `✅ Answer submitted.`);
         return { handled: true };
       }
 

@@ -2011,11 +2011,13 @@ describe("createCallbackHandler()", () => {
     assert.deepEqual(result, { handled: true });
     assert.equal(resumeConfig.resumeSessionId, "backend-42");
     assert.equal(resumeConfig.sessionIdOverride, "sess-42");
-    assert.equal(resumeConfig.prompt, 'Answer to question "narration_model": OpenAI model (Recommended)');
+    assert.match(resumeConfig.prompt, /gateway restarted while a user question was pending/);
+    assert.match(resumeConfig.prompt, /Question ID: narration_model/);
+    assert.match(resumeConfig.prompt, /Selected answer: OpenAI model \(Recommended\)/);
     assert.equal(consumedRequestId, "backend-42-request-7");
     assert.equal(state.callbacksAcknowledged, 1);
     assert.equal(state.buttonsCleared, 1);
-    assert.equal(state.replies[0], "✅ Answer submitted.");
+    assert.equal(state.replies[0], "✅ Answer forwarded to the resumed session.");
   });
 
   it("serializes sibling answer buttons for the same persisted question", async () => {
