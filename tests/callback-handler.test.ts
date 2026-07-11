@@ -1961,6 +1961,105 @@ describe("createCallbackHandler()", () => {
     assert.equal(state.replies[0], "⚠️ Could not submit that answer. The question prompt is still active; try again or reply with the answer.");
   });
 
+  it("resumes a persisted suspended runtime and forwards the clicked answer", async () => {
+    const token = {
+      id: "token-question-restart",
+      sessionId: "sess-42",
+      kind: "question-answer",
+      optionIndex: 0,
+      pendingInputRequestId: "backend-42-request-7",
+      pendingInputQuestionId: "narration_model",
+      label: "OpenAI model (Recommended)",
+    };
+    let resumeConfig: any;
+    let consumedRequestId: string | undefined;
+    setSessionManager({
+      getActionToken: () => token,
+      resolve: () => undefined,
+      getPersistedSession: () => ({
+        sessionId: "sess-42",
+        harnessSessionId: "backend-42",
+        backendRef: { kind: "codex-app-server", conversationId: "backend-42" },
+        name: "review-morning-audio-brief",
+        prompt: "Review the morning brief",
+        workdir: "/tmp/repo",
+        status: "killed",
+        lifecycle: "suspended",
+        runtimeState: "stopped",
+        runtimeRecovery: { rawStatus: "running", rawLifecycle: "active", rawResumable: true },
+        resumable: true,
+        harness: "codex",
+        worktreeStrategy: "off",
+      }),
+      resolvePendingInputOption: () => false,
+      canSubmitPendingInputOption: () => false,
+      spawnAndAwaitRunning: async (config: any) => {
+        resumeConfig = config;
+        return createStubSession({ id: "sess-42", name: "review-morning-audio-brief" });
+      },
+      notifyResumedLaunch: () => {},
+      consumeQuestionAnswerTokens: (_sessionId: string, requestId: string) => {
+        consumedRequestId = requestId;
+        return [token];
+      },
+      consumeActionToken: () => undefined,
+    } as any);
+
+    const state = createCtx(token.id);
+    const result = await createCallbackHandler().handler(state.ctx as any);
+
+    assert.deepEqual(result, { handled: true });
+    assert.equal(resumeConfig.resumeSessionId, "backend-42");
+    assert.equal(resumeConfig.sessionIdOverride, "sess-42");
+    assert.equal(resumeConfig.prompt, 'Answer to question "narration_model": OpenAI model (Recommended)');
+    assert.equal(consumedRequestId, "backend-42-request-7");
+    assert.equal(state.callbacksAcknowledged, 1);
+    assert.equal(state.buttonsCleared, 1);
+    assert.equal(state.replies[0], "✅ Answer submitted.");
+  });
+
+  it("serializes sibling answer buttons for the same persisted question", async () => {
+    let releaseResume!: () => void;
+    let resumeCalls = 0;
+    const tokens: Record<string, any> = {
+      first: { id: "first", sessionId: "sess-42", kind: "question-answer", optionIndex: 0, pendingInputRequestId: "request-7", label: "First" },
+      second: { id: "second", sessionId: "sess-42", kind: "question-answer", optionIndex: 1, pendingInputRequestId: "request-7", label: "Second" },
+    };
+    setSessionManager({
+      getActionToken: (id: string) => tokens[id],
+      resolve: () => undefined,
+      getPersistedSession: () => ({
+        sessionId: "sess-42", harnessSessionId: "backend-42",
+        backendRef: { kind: "codex-app-server", conversationId: "backend-42" }, name: "restart-race",
+        prompt: "task", workdir: "/tmp/repo", status: "killed", lifecycle: "suspended",
+        runtimeState: "stopped", runtimeRecovery: { rawStatus: "running", rawLifecycle: "active", rawResumable: true },
+        resumable: true, harness: "codex", worktreeStrategy: "off",
+      }),
+      resolvePendingInputOption: () => false,
+      canSubmitPendingInputOption: () => false,
+      spawnAndAwaitRunning: async () => {
+        resumeCalls++;
+        await new Promise<void>((resolve) => { releaseResume = resolve; });
+        return createStubSession({ id: "sess-42", name: "restart-race" });
+      },
+      notifyResumedLaunch: () => {},
+      consumeQuestionAnswerTokens: () => Object.values(tokens),
+      consumeActionToken: () => undefined,
+    } as any);
+
+    const firstState = createCtx("first");
+    const first = createCallbackHandler().handler(firstState.ctx as any);
+    await new Promise((resolve) => setImmediate(resolve));
+    const secondState = createCtx("second");
+    const second = await createCallbackHandler().handler(secondState.ctx as any);
+
+    assert.equal(resumeCalls, 1);
+    assert.equal(secondState.replies[0], "⚠️ That answer is already being submitted. If the question remains active, try again.");
+    releaseResume();
+    assert.deepEqual(await first, { handled: true });
+    assert.deepEqual(second, { handled: true });
+  });
+
   it("does not consume or clear active question buttons when answer submission throws", async (t) => {
     let consumed = 0;
     const warnings: string[] = [];

@@ -1834,6 +1834,14 @@ export class SessionManager {
     return this.questions.resolveAskUserQuestion(sessionId, optionIndex, context);
   }
 
+  canSubmitPendingInputOption(sessionId: string): boolean {
+    return this.sessions.get(sessionId)?.canSubmitPendingInputOption?.() === true;
+  }
+
+  consumeQuestionAnswerTokens(sessionId: string, requestId: string): SessionActionToken[] {
+    return this.interactions.consumeQuestionAnswerTokens(sessionId, requestId);
+  }
+
   dispose(): void {
     this.disposeMaintenance();
     this.questions.dispose();

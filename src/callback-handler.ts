@@ -13,6 +13,7 @@ import type {
 } from "../api";
 import type { PersistedSessionInfo, SessionActionKind, SessionActionToken } from "./types";
 import { getRepoPolicyOption, validateRepoPolicyForPrAvailability } from "./repo-policy";
+import { assessResumeCandidate } from "./session-resume";
 
 type InteractiveChannel = "telegram" | "discord";
 type InteractiveCallbackContext = PluginInteractiveTelegramHandlerContext | PluginInteractiveDiscordHandlerContext;
@@ -42,10 +43,26 @@ type InteractiveResponder = {
   acknowledge?: () => Promise<void>;
 };
 
-const inFlightQuestionAnswerTokens = new Set<string>();
+const inFlightQuestionAnswers = new Set<string>();
 const retryableQuestionAnswerFailureMessage =
   "⚠️ Could not submit that answer. The question prompt is still active; try again or reply with the answer.";
 const planDecisionInFlight = new Map<string, { operation: Promise<unknown>; tokenId?: string }>();
+
+function questionAnswerLockKey(token: SessionActionToken): string {
+  return `${token.sessionId}:${token.pendingInputRequestId ?? token.id}`;
+}
+
+function resumableQuestionAnswerTarget(session: PersistedSessionInfo | undefined): boolean {
+  return Boolean(session && session.status !== "running" && assessResumeCandidate(session).kind === "resume");
+}
+
+function recoveredQuestionAnswerMessage(token: SessionActionToken): string | undefined {
+  if (!token.label?.trim()) return undefined;
+  const question = token.pendingInputQuestionId
+    ? `question "${token.pendingInputQuestionId}"`
+    : "the pending question";
+  return `Answer to ${question}: ${token.label.trim()}`;
+}
 
 async function waitForPlanDecisionOperation(operation: Promise<unknown>): Promise<void> {
   try {
@@ -670,25 +687,38 @@ export function createCallbackHandler(
           return { handled: true };
         }
 
-        if (inFlightQuestionAnswerTokens.has(tokenId)) {
+        const answerLockKey = questionAnswerLockKey(token);
+        if (inFlightQuestionAnswers.has(answerLockKey)) {
           await replyText(ctx, "⚠️ That answer is already being submitted. If the question remains active, try again.");
           return { handled: true };
         }
 
-        inFlightQuestionAnswerTokens.add(tokenId);
+        inFlightQuestionAnswers.add(answerLockKey);
         let submitted = false;
         try {
           submitted = await sessionManager.resolvePendingInputOption(sessionId, token.optionIndex, {
             requestId: token.pendingInputRequestId,
             questionId: token.pendingInputQuestionId,
           });
+          if (!submitted && !(sessionManager.canSubmitPendingInputOption?.(sessionId) ?? false)) {
+            const persisted = sessionManager.getPersistedSession?.(sessionId);
+            const recoveryMessage = recoveredQuestionAnswerMessage(token);
+            if (recoveryMessage && resumableQuestionAnswerTarget(persisted)) {
+              const result = await executeRespond(sessionManager, {
+                session: sessionId,
+                message: recoveryMessage,
+                userInitiated: true,
+              });
+              submitted = !result.isError;
+            }
+          }
         } catch (err) {
           const errText = err instanceof Error ? err.message : String(err);
           console.warn(`[callback-handler] Failed to submit question-answer callback: ${errText}`);
           await replyText(ctx, retryableQuestionAnswerFailureMessage);
           return { handled: true };
         } finally {
-          inFlightQuestionAnswerTokens.delete(tokenId);
+          inFlightQuestionAnswers.delete(answerLockKey);
         }
 
         if (!submitted) {
@@ -696,7 +726,11 @@ export function createCallbackHandler(
           return { handled: true };
         }
 
-        const consumedToken = sessionManager.consumeActionToken(tokenId);
+        const consumedTokens = token.pendingInputRequestId
+          ? sessionManager.consumeQuestionAnswerTokens(sessionId, token.pendingInputRequestId)
+          : [];
+        const consumedToken = consumedTokens.find((candidate) => candidate.id === tokenId)
+          ?? sessionManager.consumeActionToken(tokenId);
         logButtonDiagnostic("callback_token_consume_completed", {
           channel: ctx.channel,
           namespace: CALLBACK_NAMESPACE,

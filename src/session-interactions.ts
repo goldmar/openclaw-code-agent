@@ -56,6 +56,10 @@ export class SessionInteractionService {
     return this.actionTokens.consumeActionToken(tokenId);
   }
 
+  consumeQuestionAnswerTokens(sessionId: string, requestId: string): SessionActionToken[] {
+    return this.actionTokens.consumeQuestionAnswerTokens(sessionId, requestId);
+  }
+
   getActionToken(tokenId: string): SessionActionToken | undefined {
     return this.actionTokens.getActionToken(tokenId);
   }
