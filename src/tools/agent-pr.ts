@@ -288,6 +288,7 @@ export async function refreshOpenPrMetadata(args: {
   branchName?: string;
   prompt?: string;
   diffSummary?: DiffSummary;
+  outputPreview?: string;
   explicitTitle?: string;
   explicitBody?: string;
   forceRefresh: boolean;
@@ -333,6 +334,7 @@ export async function refreshOpenPrMetadata(args: {
     branchName: args.branchName,
     prompt: args.prompt,
     diffSummary: args.diffSummary,
+    outputPreview: args.outputPreview,
     provider: args.metadataProvider,
   });
   if (metadataResult.ok === false) {
@@ -564,6 +566,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
           branchName,
           prompt: target.prompt,
           diffSummary,
+          outputPreview: target.outputPreview,
           explicitTitle: params.title,
           explicitBody: params.body,
           forceRefresh: params.update_body === true || params.update_metadata === true,
@@ -722,6 +725,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
             branchName,
             prompt: target.prompt,
             diffSummary,
+            outputPreview: target.outputPreview,
             provider: metadataProvider,
           });
           if (metadataResult.ok === false) {

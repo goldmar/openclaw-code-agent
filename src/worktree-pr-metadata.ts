@@ -15,6 +15,11 @@ export interface PrMetadataEvidence {
   commitSubjects: string[];
   validation: string[];
   notes: string[];
+  sessionReport?: {
+    rootCause: string[];
+    changes: string[];
+    validation: string[];
+  };
 }
 
 export interface PrMetadata {
@@ -132,11 +137,48 @@ function defaultNotes(): string[] {
   ];
 }
 
+const SESSION_REPORT_SECTION_LIMIT = 8;
+const SESSION_REPORT_ITEM_LIMIT = 180;
+
+function extractSessionReport(outputPreview: string | undefined): PrMetadataEvidence["sessionReport"] {
+  const normalized = normalizePrText(outputPreview);
+  if (!normalized) return undefined;
+  const lines = normalized.split("\n");
+  const sections = new Map<string, string[]>();
+  let current: string | undefined;
+  for (const line of lines) {
+    const heading = line.match(/^#{0,3}\s*(root cause|fix|changes?|implementation|validation|tests?)\s*:?[ \t]*$/i)?.[1]?.toLowerCase();
+    if (heading) {
+      current = heading;
+      sections.set(current, []);
+      continue;
+    }
+    if (/^#{1,3}\s+/.test(line) || /^[A-Z][A-Za-z /-]{2,30}:\s*$/.test(line)) {
+      current = undefined;
+      continue;
+    }
+    if (!current) continue;
+    const item = line.replace(/^[-*]\s+/, "").trim();
+    if (item) sections.get(current)?.push(item);
+  }
+  const collect = (...keys: string[]): string[] => keys.flatMap((key) => sections.get(key) ?? [])
+    .map((item) => truncateText(redactSensitiveText(item).replace(/\s+/g, " ").trim(), SESSION_REPORT_ITEM_LIMIT))
+    .filter(Boolean)
+    .slice(0, SESSION_REPORT_SECTION_LIMIT);
+  const report = {
+    rootCause: collect("root cause"),
+    changes: collect("fix", "change", "changes", "implementation"),
+    validation: collect("validation", "test", "tests"),
+  };
+  return report.rootCause.length || report.changes.length || report.validation.length ? report : undefined;
+}
+
 function buildPrMetadataEvidence(args: {
   sessionName: string;
   branchName?: string;
   prompt?: string;
   diffSummary?: DiffSummary;
+  outputPreview?: string;
 }): PrMetadataEvidence {
   const objective = buildSafeObjective(args.prompt);
   const diffSummary = args.diffSummary;
@@ -156,6 +198,7 @@ function buildPrMetadataEvidence(args: {
     commitSubjects: formatCommitSubjects(diffSummary, 5),
     validation: defaultValidation(),
     notes: defaultNotes(),
+    sessionReport: extractSessionReport(args.outputPreview),
   };
 }
 
@@ -286,11 +329,16 @@ function buildFallbackPrMetadata(
     redactSensitiveText(evidence.sessionName).replace(/[-_]+/g, " ").replace(/\s+/g, " ").trim() || "agent worktree",
     80,
   );
-  const title = truncateText(`OpenClaw agent changes: ${safeName}`, 90);
+  const reportTitle = evidence.sessionReport && evidence.commitSubjects[0]
+    ? evidence.commitSubjects[0].replace(/^(?:fix|feat|chore|refactor|docs|test)(?:\([^)]*\))?!?:\s*/i, "").trim()
+    : undefined;
+  const title = truncateText(reportTitle || `OpenClaw agent changes: ${safeName}`, 90);
   const fallbackMarker = options.reason === "provider-failed" || options.reason === "provider-invalid"
     ? PROVIDER_FALLBACK_METADATA_MARKER
     : FALLBACK_METADATA_MARKER;
 
+  const sessionReport = evidence.sessionReport;
+  const hasSessionReport = Boolean(sessionReport && (sessionReport.rootCause.length || sessionReport.changes.length || sessionReport.validation.length));
   const baseSummary = [
     fallbackMarker,
     `Session: ${safeName}.`,
@@ -299,20 +347,26 @@ function buildFallbackPrMetadata(
       ? [`Scope: ${evidence.stats.commits} commits, ${evidence.stats.filesChanged} files changed (+${evidence.stats.insertions} / -${evidence.stats.deletions}).`]
       : ["Scope: Diff summary was unavailable when the PR body was generated."]),
   ];
-  const baseChanges = evidence.changedFiles.length > 0
+  const baseChanges = sessionReport?.changes.length
+    ? sessionReport.changes
+    : evidence.changedFiles.length > 0
     ? evidence.changedFiles.slice(0, 10).map((f) => `\`${f}\``)
     : ["Review the pushed worktree branch for the full set of changes."];
   const moreFiles = evidence.changedFiles.length > 10 ? [`...and ${evidence.changedFiles.length - 10} more changed files.`] : [];
   const baseNotes = [
-    "Fallback metadata is conservative; review the diff and CI/checks before marking the draft PR ready.",
+    hasSessionReport
+      ? "Metadata was derived from the completed coding-session report; review the diff and CI/checks before marking the draft PR ready."
+      : "Fallback metadata is conservative; review the diff and CI/checks before marking the draft PR ready.",
     ...evidence.notes,
   ];
 
   let metadata: PrMetadata = {
     title,
-    summary: baseSummary,
+    summary: hasSessionReport
+      ? [...(sessionReport?.rootCause ?? []), ...baseSummary.filter((item) => !item.includes("Deterministic fallback metadata"))]
+      : baseSummary,
     changes: [...baseChanges, ...moreFiles],
-    validation: evidence.validation,
+    validation: sessionReport?.validation.length ? sessionReport.validation : evidence.validation,
     notes: baseNotes,
   };
 
@@ -420,12 +474,15 @@ export async function buildPrMetadata(args: {
   branchName?: string;
   prompt?: string;
   diffSummary?: DiffSummary;
+  outputPreview?: string;
   provider?: PrMetadataProvider;
 }): Promise<PrMetadataResult> {
-  const evidence = buildPrMetadataEvidence({ sessionName: args.sessionName, branchName: args.branchName, prompt: args.prompt, diffSummary: args.diffSummary });
+  const evidence = buildPrMetadataEvidence({ sessionName: args.sessionName, branchName: args.branchName, prompt: args.prompt, diffSummary: args.diffSummary, outputPreview: args.outputPreview });
   if (!args.provider) {
     const metadata = buildFallbackPrMetadata(evidence, args.prompt, { reason: "no-provider" });
-    return { ok: true, metadata, evidence, fallbackReason: "no-provider" };
+    return evidence.sessionReport
+      ? { ok: true, metadata, evidence }
+      : { ok: true, metadata, evidence, fallbackReason: "no-provider" };
   }
 
   try {
@@ -437,7 +494,7 @@ export async function buildPrMetadata(args: {
       ok: true,
       metadata: buildFallbackPrMetadata(evidence, args.prompt, { reason: "provider-invalid" }),
       evidence,
-      fallbackReason: "provider-invalid",
+      ...(evidence.sessionReport ? {} : { fallbackReason: "provider-invalid" as const }),
     };
   } catch (err) {
     console.warn(`[agent_pr] PR metadata provider failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -445,7 +502,7 @@ export async function buildPrMetadata(args: {
       ok: true,
       metadata: buildFallbackPrMetadata(evidence, args.prompt, { reason: "provider-failed" }),
       evidence,
-      fallbackReason: "provider-failed",
+      ...(evidence.sessionReport ? {} : { fallbackReason: "provider-failed" as const }),
     };
   }
 }
