@@ -40,17 +40,18 @@ function readPrSessionOutputPreview(
   activeSession: Session | undefined,
   persistedSession: PersistedSessionInfo | undefined,
 ): string | undefined {
-  let output: string | undefined;
-  if (activeSession) {
-    output = activeSession.getOutput().join("\n");
-  }
-  if (!output && persistedSession?.outputPath && existsSync(persistedSession.outputPath)) {
+  const activeOutput = activeSession?.getOutput().join("\n").trim();
+  let persistedOutput: string | undefined;
+  if (persistedSession?.outputPath && existsSync(persistedSession.outputPath)) {
     try {
-      output = readFileSync(persistedSession.outputPath, "utf8");
+      persistedOutput = readFileSync(persistedSession.outputPath, "utf8").trim();
     } catch {
       // PR metadata generation is best-effort; unreadable output falls back to diff evidence.
     }
   }
+  const output = (persistedOutput?.length ?? 0) > (activeOutput?.length ?? 0)
+    ? persistedOutput
+    : activeOutput;
   const normalized = output?.trim();
   if (!normalized) return undefined;
   return normalized.slice(-MAX_PR_SESSION_OUTPUT_LENGTH);

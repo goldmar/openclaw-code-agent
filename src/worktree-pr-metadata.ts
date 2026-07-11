@@ -480,9 +480,7 @@ export async function buildPrMetadata(args: {
   const evidence = buildPrMetadataEvidence({ sessionName: args.sessionName, branchName: args.branchName, prompt: args.prompt, diffSummary: args.diffSummary, outputPreview: args.outputPreview });
   if (!args.provider) {
     const metadata = buildFallbackPrMetadata(evidence, args.prompt, { reason: "no-provider" });
-    return evidence.sessionReport
-      ? { ok: true, metadata, evidence }
-      : { ok: true, metadata, evidence, fallbackReason: "no-provider" };
+    return { ok: true, metadata, evidence, fallbackReason: "no-provider" };
   }
 
   try {
@@ -494,7 +492,7 @@ export async function buildPrMetadata(args: {
       ok: true,
       metadata: buildFallbackPrMetadata(evidence, args.prompt, { reason: "provider-invalid" }),
       evidence,
-      ...(evidence.sessionReport ? {} : { fallbackReason: "provider-invalid" as const }),
+      fallbackReason: "provider-invalid",
     };
   } catch (err) {
     console.warn(`[agent_pr] PR metadata provider failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -502,7 +500,7 @@ export async function buildPrMetadata(args: {
       ok: true,
       metadata: buildFallbackPrMetadata(evidence, args.prompt, { reason: "provider-failed" }),
       evidence,
-      ...(evidence.sessionReport ? {} : { fallbackReason: "provider-failed" as const }),
+      fallbackReason: "provider-failed",
     };
   }
 }

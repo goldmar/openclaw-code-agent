@@ -40,6 +40,39 @@ describe("worktree-tool-context", () => {
     }
   });
 
+  it("prefers fuller persisted output over an active session buffer", () => {
+    const dir = mkdtempSync(join(tmpdir(), "oca-pr-active-output-"));
+    const outputPath = join(dir, "session.txt");
+    const persistedReport = "Root cause:\n- Full persisted report.\nFix:\n- Durable fix.\nValidation:\n- Full suite passed.\n";
+    writeFileSync(outputPath, persistedReport, "utf8");
+    try {
+      const activeSession = {
+        id: "active-1",
+        name: "completed-session",
+        prompt: "Fix metadata.",
+        worktreePath: "/repo/.worktrees/completed-session",
+        originalWorkdir: "/repo",
+        worktreeBranch: "agent/completed-session",
+        getOutput: () => ["short active tail"],
+      };
+      const target = resolveWorktreeToolTarget({
+        resolve: () => activeSession,
+        getPersistedSession: () => ({
+          sessionId: "active-1",
+          name: "completed-session",
+          status: "completed",
+          costUsd: 0,
+          workdir: "/repo",
+          outputPath,
+        }),
+      } as any, "active-1");
+
+      assert.equal(target.outputPreview, persistedReport.trim());
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("merges active and persisted worktree targets while preferring active sessions", () => {
     const targets = listWorktreeToolTargets({
       list: () => [{

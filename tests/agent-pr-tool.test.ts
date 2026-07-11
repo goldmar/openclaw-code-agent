@@ -1060,12 +1060,55 @@ exit 1
 
     assert.equal(result.ok, true);
     assert.equal(result.ok && result.metadata.title, "recover question answers after Gateway restart");
-    assert.equal(result.ok && result.fallbackReason, undefined);
+    assert.equal(result.ok && result.fallbackReason, "no-provider");
     const body = result.ok ? formatPrBody({ sessionName: "fix-oca-question-buttons", metadata: result.metadata }) : "";
     assert.match(body, /Gateway restart destroyed the live pending-input resolver/);
     assert.match(body, /Resume the persisted backend/);
     assert.match(body, /pnpm verify passed/);
     assert.doesNotMatch(body, /no LLM PR metadata provider/i);
+  });
+
+  it("preserves richer generated PR metadata when provider failure has session-report fallback", async () => {
+    const currentBody = formatPrBody({
+      sessionName: "existing-rich-report",
+      metadata: {
+        title: "Existing rich metadata",
+        summary: ["Detailed existing generated summary."],
+        changes: ["Detailed existing generated change."],
+        validation: ["Full existing verification passed."],
+        notes: ["Existing generated notes."],
+      },
+    });
+    let updateCalls = 0;
+    const result = await refreshOpenPrMetadata({
+      repoDir: process.cwd(),
+      prStatus: {
+        exists: true,
+        state: "open",
+        number: 350,
+        url: "https://github.com/goldmar/openclaw-code-agent/pull/350",
+        title: "Existing rich metadata",
+      },
+      sessionName: "refresh-with-report",
+      outputPreview: "Root cause:\n- Report fallback exists.\nFix:\n- Report fix.\nValidation:\n- Report test.",
+      forceRefresh: true,
+      metadataProvider: {
+        async generatePrMetadata() {
+          throw new Error("transient provider failure");
+        },
+      },
+      operations: {
+        getBody: () => ({ ok: true, body: currentBody }),
+        updateTitle: () => { updateCalls += 1; return true; },
+        updateBody: () => { updateCalls += 1; return true; },
+      },
+    });
+
+    assert.deepEqual(result, {
+      status: "failed",
+      reason: "generated PR metadata was unavailable; preserved existing generated PR metadata",
+    });
+    assert.equal(updateCalls, 0);
   });
 
   it("sanitizes completed session report details before using them in public metadata", async () => {
