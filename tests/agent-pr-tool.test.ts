@@ -1236,6 +1236,94 @@ exit 1
     assert.match(body, /`src\/worktree-pr-metadata\.ts`/);
   });
 
+  it("uses the final Codex report when runtime metadata generation fails", async () => {
+    const result = await buildPrMetadata({
+      sessionName: "fix-oca-question-buttons",
+      branchName: "agent/fix-oca-question-buttons",
+      prompt: "Investigate and properly fix this OCA plugin bug end-to-end.",
+      outputPreview: [
+        "Implemented and committed the end-to-end fix.",
+        "",
+        "Root cause:",
+        "- Gateway restart destroyed the live pending-input resolver while the persisted question token remained valid.",
+        "",
+        "Fix:",
+        "- Resume the persisted backend and forward the selected answer through the established response lifecycle.",
+        "- Consume sibling answer tokens atomically after forwarding succeeds.",
+        "",
+        "Validation:",
+        "- Focused callback and token-store tests passed.",
+        "- pnpm verify passed all 94 test files.",
+      ].join("\n"),
+      diffSummary: {
+        commits: 1,
+        filesChanged: 2,
+        insertions: 42,
+        deletions: 3,
+        changedFiles: ["src/callback-handler.ts", "tests/callback-handler.test.ts"],
+        commitMessages: [{ hash: "029df6a", message: "fix: recover question answers after gateway restart", author: "Codex" }],
+      },
+      provider: {
+        async generatePrMetadata() {
+          throw new Error("runtime provider unavailable");
+        },
+      },
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.ok && result.metadata.title, "recover question answers after gateway restart");
+    const body = result.ok ? formatPrBody({ sessionName: "fix-oca-question-buttons", metadata: result.metadata }) : "";
+    assert.match(body, /metadata generated from the coding agent's final session report/i);
+    assert.match(body, /Gateway restart destroyed the live pending-input resolver/);
+    assert.match(body, /Resume the persisted backend/);
+    assert.match(body, /pnpm verify passed all 94 test files/);
+    assert.doesNotMatch(body, /Not recorded by agent_pr/);
+    assert.doesNotMatch(body, /provider failed or returned unusable output/);
+  });
+
+  it("refreshes an OCA fallback body from the final Codex report even when the provider fails", async () => {
+    const updates: { title?: string; body?: string } = {};
+    const result = await refreshOpenPrMetadata({
+      repoDir: "/repo",
+      prStatus: {
+        exists: true,
+        state: "open",
+        number: 349,
+        title: "OpenClaw agent changes: fix oca question buttons",
+      },
+      sessionName: "fix-oca-question-buttons",
+      prompt: "Fix question buttons after Gateway restart.",
+      outputPreview: [
+        "Root cause:",
+        "- Gateway restart removed the in-memory pending-input resolver.",
+        "Fix:",
+        "- Resume the persisted Codex backend and forward the selected answer.",
+        "Validation:",
+        "- pnpm verify passed all 94 test files.",
+      ].join("\n"),
+      diffSummary: {
+        commits: 1,
+        filesChanged: 1,
+        insertions: 12,
+        deletions: 2,
+        changedFiles: ["src/callback-handler.ts"],
+        commitMessages: [{ hash: "029df6a", message: "fix: recover question answers after gateway restart", author: "Codex" }],
+      },
+      forceRefresh: false,
+      metadataProvider: { async generatePrMetadata() { throw new Error("provider unavailable"); } },
+      operations: {
+        getBody: () => ({ ok: true, body: "Generated with [openclaw-code-agent](https://github.com/goldmar/openclaw-code-agent)" }),
+        updateTitle: (_repo, _pr, title) => { updates.title = title; return true; },
+        updateBody: (_repo, _pr, body) => { updates.body = body; return true; },
+      },
+    });
+
+    assert.deepEqual(result, { status: "updated", updatedTitle: true, updatedBody: true, reason: "generated" });
+    assert.equal(updates.title, "recover question answers after gateway restart");
+    assert.match(updates.body ?? "", /Gateway restart removed the in-memory pending-input resolver/);
+    assert.match(updates.body ?? "", /pnpm verify passed all 94 test files/);
+  });
+
   it("does not reject ordinary JS/TS command mentions in safe model output", async () => {
     const result = await buildPrMetadata({
       sessionName: "command-mentions",
