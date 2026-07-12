@@ -567,7 +567,6 @@ export class SessionWorktreeStrategyService {
     diffSummary: DiffSummary,
     mergeResult: ReturnType<typeof mergeBranch>,
   ): void {
-    deleteBranch(repoDir, branchName);
     this.markMerged(session);
 
     const outcomeLine = formatWorktreeOutcomeLine({

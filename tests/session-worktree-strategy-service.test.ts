@@ -1,4 +1,4 @@
-import { describe, it } from "node:test";
+import { describe, it, mock } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -1156,6 +1156,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
 
   it("requests a routed follow-up summary after auto-merge succeeds", async () => {
     const { repoDir, worktreePath, branchName } = createMergeableWorktree("summary-success");
+    const warn = mock.method(console, "warn", () => {});
     try {
       const notifications: Array<Record<string, unknown>> = [];
       const service = new SessionWorktreeStrategyService({
@@ -1210,7 +1211,12 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       assert.match(String(notifications[0].wakeMessageOnNotifySuccess), /originRoute: \{"provider":"telegram","target":"-100123","threadId":"32947"\}/);
       assert.equal(session.worktreeState, "merged");
       assert.equal(session.worktreeLifecycle?.state, "merged");
+      assert.equal(git(repoDir, "branch", "--show-current"), "main");
+      assert.equal(git(repoDir, "rev-parse", "--verify", branchName).length > 0, true);
+      assert.match(git(repoDir, "worktree", "list", "--porcelain"), new RegExp(`branch refs/heads/${branchName}`));
+      assert.equal(warn.mock.callCount(), 0);
     } finally {
+      warn.mock.restore();
       rmSync(repoDir, { recursive: true, force: true });
     }
   });
