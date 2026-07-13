@@ -1,7 +1,7 @@
 import { describe, it, mock } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { SessionWorktreeMessageService } from "../src/session-worktree-message-service";
@@ -786,6 +786,76 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
     }
   });
 
+  it("does not bypass a never-pr policy for a recorded PR targeting a different base", async () => {
+    const { repoDir, worktreePath, branchName } = createMergeableWorktree("recorded-pr-wrong-base");
+    const notifications: Array<Record<string, unknown>> = [];
+    let autoPrCalled = false;
+    try {
+      const service = new SessionWorktreeStrategyService({
+        shouldRunWorktreeStrategy: () => true,
+        isAlreadyMerged: () => false,
+        resolveWorktreeRepoDir: (dir) => dir,
+        getWorktreeCompletionState: () => "has-commits",
+        updatePersistedSession: (_ref, patch) => {
+          Object.assign(session, patch);
+          return true;
+        },
+        dispatchSessionNotification: (_session, request) => {
+          notifications.push(request as Record<string, unknown>);
+        },
+        getOutputPreview: () => "",
+        originThreadLine: () => "thread",
+        getWorktreeDecisionButtons: () => [[{ label: "Merge", callbackData: "merge" }]],
+        getPolicyAwareWorktreeDecisionButtons: (_sessionId, _options, allowedActions) => policyAwareButtons(allowedActions),
+        makeOpenPrButton: () => ({ label: "Open PR", callbackData: "open-pr" }),
+        isPrAvailable: () => true,
+        hasOpenPrForBranch: () => false,
+        getPrStatusForUrl: (_dir, prUrl) => ({
+          exists: true,
+          state: "open",
+          url: prUrl,
+          number: 98910,
+          headRefName: "agent/task-flow-lifecycle-hooks",
+          baseRefName: "release/next",
+        }),
+        worktreeMessages: new SessionWorktreeMessageService(),
+        enqueueMerge: async (_repoDir, fn) => { await fn(); },
+        mergeBranch,
+        spawnConflictResolver: async () => ({ id: "resolver-unused", name: "unused" }),
+        runAutoPr: async () => {
+          autoPrCalled = true;
+          return { success: true };
+        },
+      });
+      const session: any = {
+        id: "s-recorded-pr-wrong-base",
+        name: "recorded-pr-wrong-base",
+        status: "completed",
+        phase: "implementing",
+        lifecycle: "terminal",
+        worktreeState: "active",
+        originalWorkdir: repoDir,
+        worktreePath,
+        worktreeBranch: branchName,
+        worktreeBaseBranch: "main",
+        worktreeStrategy: "auto-pr",
+        repoIntegrationPolicy: "never-pr",
+        worktreePrUrl: "https://github.com/openclaw/openclaw/pull/98910",
+        pendingPlanApproval: false,
+      };
+
+      const result = await service.handleWorktreeStrategy(session);
+
+      assert.deepEqual(result, { notificationSent: true, worktreeRemoved: false });
+      assert.equal(autoPrCalled, false);
+      assert.equal(session.worktreeState, "pending_decision");
+      assert.equal(notifications.length, 1);
+      assert.equal(notifications[0]?.label, "worktree-merge-ask");
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
   it("downgrades stale pr-open lifecycle under never-pr before starting auto-pr", async () => {
     const { repoDir, worktreePath, branchName } = createMergeableWorktree("stale-pr-open-never-pr");
     const notifications: Array<Record<string, unknown>> = [];
@@ -921,6 +991,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
               baseRefName: "main",
             }
           : { exists: false, state: "none" },
+        fetchRemoteBranch: (_repo, branch) => branch,
         worktreeMessages: new SessionWorktreeMessageService(),
         enqueueMerge: async (_repoDir, fn) => { await fn(); },
         mergeBranch,
@@ -958,6 +1029,96 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       assert.equal(session.worktreeLifecycle?.state, "released");
       assert.deepEqual(session.worktreeLifecycle?.notes, ["released_by_branch:agent/fix-oca-441-regression"]);
       assert.throws(() => git(repoDir, "rev-parse", "--verify", branchName));
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves represented helper work when the remote PR head cannot be verified", async () => {
+    const repoDir = mkdtempSync(join(tmpdir(), "openclaw-auto-pr-fetch-failure-"));
+    const notifications: Array<Record<string, unknown>> = [];
+    const patches: Array<Record<string, unknown>> = [];
+    let autoPrCalled = false;
+    try {
+      git(repoDir, "init", "-b", "main");
+      git(repoDir, "config", "user.name", "Test User");
+      git(repoDir, "config", "user.email", "test@example.com");
+      writeFileSync(join(repoDir, "README.md"), "base\n", "utf-8");
+      git(repoDir, "add", "README.md");
+      git(repoDir, "commit", "-m", "init");
+      git(repoDir, "checkout", "-b", "agent/existing-pr-head");
+      writeFileSync(join(repoDir, "pr.txt"), "existing PR\n", "utf-8");
+      git(repoDir, "add", "pr.txt");
+      git(repoDir, "commit", "-m", "Existing PR work");
+      const worktreePath = createWorktree(repoDir, "fetch-failure-helper");
+      const branchName = getBranchName(worktreePath);
+      assert.ok(branchName);
+      writeFileSync(join(worktreePath, "review.txt"), "review fix\n", "utf-8");
+      git(worktreePath, "add", "review.txt");
+      git(worktreePath, "commit", "-m", "Address review");
+      git(repoDir, "merge", "--ff-only", branchName);
+
+      const service = new SessionWorktreeStrategyService({
+        shouldRunWorktreeStrategy: () => true,
+        isAlreadyMerged: () => false,
+        resolveWorktreeRepoDir: (dir) => dir,
+        getWorktreeCompletionState: () => "has-commits",
+        updatePersistedSession: (_ref, patch) => {
+          patches.push(patch as Record<string, unknown>);
+          Object.assign(session, patch);
+          return true;
+        },
+        dispatchSessionNotification: (_session, request) => {
+          notifications.push(request as Record<string, unknown>);
+        },
+        getOutputPreview: () => "",
+        originThreadLine: () => "thread",
+        getWorktreeDecisionButtons: () => [[{ label: "Open PR", callbackData: "open-pr" }]],
+        makeOpenPrButton: () => ({ label: "Open PR", callbackData: "open-pr" }),
+        getPrStatusForUrl: (_dir, prUrl) => ({
+          exists: true,
+          state: "open",
+          url: prUrl,
+          number: 314,
+          headRefName: "agent/existing-pr-head",
+          baseRefName: "main",
+        }),
+        fetchRemoteBranch: () => undefined,
+        worktreeMessages: new SessionWorktreeMessageService(),
+        enqueueMerge: async (_repoDir, fn) => { await fn(); },
+        mergeBranch,
+        spawnConflictResolver: async () => ({ id: "resolver-unused", name: "unused" }),
+        runAutoPr: async () => {
+          autoPrCalled = true;
+          return { success: false };
+        },
+      });
+      const session: any = {
+        id: "s-fetch-failure-helper",
+        name: "fetch-failure-helper",
+        status: "completed",
+        phase: "implementing",
+        lifecycle: "terminal",
+        worktreeState: "provisioned",
+        originalWorkdir: repoDir,
+        worktreePath,
+        worktreeBranch: branchName,
+        worktreeBaseBranch: "main",
+        worktreeStrategy: "auto-pr",
+        repoIntegrationPolicy: "pr-allowed",
+        worktreePrUrl: "https://github.com/example/repo/pull/314",
+        pendingPlanApproval: false,
+      };
+
+      const result = await service.handleWorktreeStrategy(session);
+
+      assert.deepEqual(result, { notificationSent: true, worktreeRemoved: false });
+      assert.equal(autoPrCalled, true);
+      assert.equal(session.worktreeState, "pending_decision");
+      assert.equal(existsSync(worktreePath), true);
+      assert.equal(git(repoDir, "rev-parse", "--verify", branchName).length > 0, true);
+      assert.equal(patches.some((patch) => patch.worktreeRemoteOutcome === "pr-updated"), false);
+      assert.equal(notifications.at(-1)?.label, "worktree-auto-pr-failed");
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }
@@ -1020,6 +1181,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
               baseRefName: "main",
             }
           : { exists: false, state: "none" },
+        fetchRemoteBranch: (_repo, branch) => branch,
         worktreeMessages: new SessionWorktreeMessageService(),
         enqueueMerge: async (_repoDir, fn) => { await fn(); },
         mergeBranch,
@@ -1083,10 +1245,8 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       writeFileSync(join(worktreePath, "helper.txt"), "helper\n", "utf-8");
       git(worktreePath, "add", "helper.txt");
       git(worktreePath, "commit", "-m", "Helper cleanup work");
-      const helperCommit = git(worktreePath, "rev-parse", "HEAD");
-
       git(repoDir, "checkout", "-b", "staging", "intended-pr");
-      git(repoDir, "cherry-pick", helperCommit);
+      git(repoDir, "merge", "--ff-only", branchName);
       git(repoDir, "merge-base", "--is-ancestor", branchName, "staging");
       assert.throws(() => git(repoDir, "merge-base", "--is-ancestor", branchName, "intended-pr"), /Command failed/);
       assert.throws(() => git(repoDir, "merge-base", "--is-ancestor", branchName, "main"), /Command failed/);
@@ -1213,6 +1373,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
             baseRefName: "main",
           };
         },
+        fetchRemoteBranch: (_repo, branch) => branch,
         worktreeMessages: new SessionWorktreeMessageService(),
         enqueueMerge: async (_repoDir, fn) => { await fn(); },
         mergeBranch,

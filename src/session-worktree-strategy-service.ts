@@ -85,6 +85,7 @@ export class SessionWorktreeStrategyService {
       hasOpenPrForBranch?: (repoDir: string, branchName: string, targetRepo?: string) => boolean;
       getPrStatusForBranch?: (repoDir: string, branchName: string, targetRepo?: string) => PRStatus;
       getPrStatusForUrl?: (repoDir: string, prUrl: string, targetRepo?: string) => PRStatus;
+      fetchRemoteBranch?: (repoDir: string, branchName: string) => string | undefined;
       resolveRepoPolicy?: (repoDir: string) => RepoPolicyResolution;
       worktreeSummaryProvider?: WorktreeDecisionSummaryProvider;
       worktreeMessages: SessionWorktreeMessageService;
@@ -455,7 +456,7 @@ export class SessionWorktreeStrategyService {
     const targetRepo = resolveTargetRepo(repoDir, session.worktreePrTargetRepo);
     if (session.worktreePrUrl) {
       const recorded = this.getPrStatusForUrl(repoDir, session.worktreePrUrl, targetRepo);
-      if (recorded.exists) return recorded;
+      if (recorded.exists && recorded.baseRefName === baseBranch) return recorded;
     }
 
     const parentBranch = getBranchName(repoDir);
@@ -887,7 +888,10 @@ export class SessionWorktreeStrategyService {
     const targetPrStatus = this.resolveExistingTargetPr(session, repoDir, branchName, baseBranch);
     const targetBranch = targetPrStatus?.headRefName;
     if (!targetBranch || targetBranch === branchName || targetBranch === baseBranch) return undefined;
-    const authoritativeTargetRef = fetchRemoteBranchRef(repoDir, targetBranch) ?? targetBranch;
+    const authoritativeTargetRef = this.deps.fetchRemoteBranch
+      ? this.deps.fetchRemoteBranch(repoDir, targetBranch)
+      : fetchRemoteBranchRef(repoDir, targetBranch);
+    if (!authoritativeTargetRef) return undefined;
     const representedByTargetPrBranch = Boolean(
       (targetPrStatus?.state === "open" || targetPrStatus?.state === "merged")
       && targetPrStatus?.baseRefName === baseBranch
