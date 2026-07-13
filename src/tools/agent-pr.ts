@@ -4,7 +4,7 @@ import { existsSync } from "fs";
 import { sessionManager } from "../singletons";
 import type { OpenClawPluginToolContext, PersistedSessionInfo } from "../types";
 import type { DiffSummary, PRBodyReadResult, PRStatus } from "../worktree";
-import { getDiffSummary, createPR, pushBranch, isGitHubCLIAvailable, detectDefaultBranch, syncWorktreePR, syncWorktreePRByUrl, commentOnPR, resolveTargetRepo, formatWorktreeOutcomeLine, branchExists, isBranchAncestorOfBase, getBranchName, getPRBody, updatePRBody, updatePRTitle } from "../worktree";
+import { getDiffSummary, createPR, pushBranch, isGitHubCLIAvailable, detectDefaultBranch, syncWorktreePR, syncWorktreePRByUrl, commentOnPR, resolveTargetRepo, formatWorktreeOutcomeLine, branchExists, isBranchAncestorOfBase, getBranchName, getPRBody, updatePRBody, updatePRTitle, fetchRemoteBranchRef } from "../worktree";
 import { buildPrMetadata, createRuntimePrMetadataProvider, formatPrBody, isOcaFallbackPrBody, isOcaGeneratedPrBody, isOcaGeneratedPrTitle } from "../worktree-pr-metadata";
 import type { PrMetadata, PrMetadataProvider } from "../worktree-pr-metadata";
 import { buildMergedPatch, buildPrOpenPatch } from "../worktree-session-patches";
@@ -79,25 +79,6 @@ export function normalizeForceNewReplacementPrStatus(
   return prStatus;
 }
 
-function fetchRemoteBranch(repoDir: string, branch: string, remote = "origin"): string | undefined {
-  const remoteRef = `refs/remotes/${remote}/${branch}`;
-  try {
-    execFileSync(
-      "git",
-      ["-C", repoDir, "fetch", remote, `${branch}:${remoteRef}`],
-      { timeout: 30_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
-    );
-    execFileSync(
-      "git",
-      ["-C", repoDir, "rev-parse", "--verify", remoteRef],
-      { timeout: 5_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
-    );
-    return remoteRef;
-  } catch {
-    return undefined;
-  }
-}
-
 function getWorktreePathForBranch(repoDir: string, branch: string): string | undefined {
   try {
     const result = execFileSync(
@@ -170,20 +151,35 @@ export function resolveExistingTargetPrUpdateBranch(args: {
   }
 
   const targetBranch = targetPrStatus.headRefName;
-  if (targetBranch === sourceBranch) {
+  const remoteTargetRef = fetchRemoteBranchRef(repoDir, targetBranch);
+  const authoritativeTargetRef = remoteTargetRef ?? targetBranch;
+  if (targetBranch === sourceBranch && !remoteTargetRef) {
     return { success: true, branchName: sourceBranch, alreadyRepresented: false };
   }
-  const remoteTargetRef = fetchRemoteBranch(repoDir, targetBranch);
-  const authoritativeTargetRef = remoteTargetRef ?? targetBranch;
   if (!branchExists(repoDir, targetBranch) && !remoteTargetRef) {
     return { success: false, error: `Target PR branch ${targetBranch} is not available locally. Fetch it before updating the PR.` };
   }
   if (isBranchAncestorOfBase(repoDir, sourceBranch, authoritativeTargetRef)) {
-    if (remoteTargetRef && !isBranchAncestorOfBase(repoDir, remoteTargetRef, targetBranch)) {
+    if (
+      remoteTargetRef
+      && !isBranchAncestorOfBase(repoDir, remoteTargetRef, targetBranch)
+      && isBranchAncestorOfBase(repoDir, targetBranch, remoteTargetRef)
+    ) {
       const synced = moveBranchFastForward(repoDir, targetBranch, remoteTargetRef);
       if ("error" in synced) return synced;
     }
     return { success: true, branchName: targetBranch, alreadyRepresented: true };
+  }
+
+  // The existing PR head may be checked out in the parent checkout and updated there
+  // while the managed worktree still records its temporary helper branch. Prefer that
+  // checked-out head only when it safely contains both the remote PR head and helper work.
+  if (
+    getBranchName(repoDir) === targetBranch
+    && isBranchAncestorOfBase(repoDir, authoritativeTargetRef, targetBranch)
+    && isBranchAncestorOfBase(repoDir, sourceBranch, targetBranch)
+  ) {
+    return { success: true, branchName: targetBranch, alreadyRepresented: false };
   }
   if (!isBranchAncestorOfBase(repoDir, authoritativeTargetRef, sourceBranch)) {
     return {
@@ -193,6 +189,23 @@ export function resolveExistingTargetPrUpdateBranch(args: {
   }
 
   return moveBranchFastForward(repoDir, targetBranch, sourceBranch);
+}
+
+export function discoverExistingTargetPr(args: {
+  repoDir: string;
+  worktreeBranch: string;
+  baseBranch: string;
+  targetRepo?: string;
+}): PRStatus | undefined {
+  const parentBranch = getBranchName(args.repoDir);
+  if (!parentBranch || parentBranch === args.worktreeBranch || parentBranch === args.baseBranch) return undefined;
+  const status = syncWorktreePR(args.repoDir, parentBranch, args.targetRepo);
+  return status.exists
+    && status.state === "open"
+    && status.headRefName === parentBranch
+    && (!status.baseRefName || status.baseRefName === args.baseBranch)
+    ? status
+    : undefined;
 }
 
 export function resolveExistingTargetPrUpdateSourceBranch(args: {
@@ -492,7 +505,19 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
       }
       const forceNewIgnoresClosedTargetPr = shouldIgnoreClosedTargetPrForForceNew(params.force_new, explicitTargetPrStatus);
       const effectiveTargetPrUrl = forceNewIgnoresClosedTargetPr ? undefined : explicitTargetPrUrl;
-      const effectiveTargetPrStatus = forceNewIgnoresClosedTargetPr ? undefined : explicitTargetPrStatus;
+      const discoveredTargetPrStatus = !explicitTargetPrUrl && !params.force_new
+        ? discoverExistingTargetPr({
+            repoDir: originalWorkdir,
+            worktreeBranch: branchName,
+            baseBranch,
+            targetRepo,
+          })
+        : undefined;
+      const effectiveTargetPrStatus = forceNewIgnoresClosedTargetPr
+        ? undefined
+        : (explicitTargetPrStatus ?? discoveredTargetPrStatus);
+      const resolvedTargetPrUrl = effectiveTargetPrUrl ?? discoveredTargetPrStatus?.url;
+      let targetBranchAlreadyRepresented = false;
       if (effectiveTargetPrStatus?.exists && effectiveTargetPrStatus.state === "open") {
         const sourceBranch = resolveExistingTargetPrUpdateSourceBranch({
           repoDir: originalWorkdir,
@@ -511,6 +536,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
           } satisfies AgentPrExecuteResult;
         }
         branchName = branchResolution.branchName;
+        targetBranchAlreadyRepresented = branchResolution.alreadyRepresented;
       }
       const repoPolicy = sessionManager.resolveRepoPolicy(originalWorkdir);
       const existingPrBeforePush = normalizeForceNewReplacementPrStatus(
@@ -530,14 +556,14 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
 
       // Push branch first for open PR updates and new PR creation.
       const shouldPushBranch = !effectiveTargetPrStatus || effectiveTargetPrStatus.state === "open";
-      if (shouldPushBranch && !pushBranch(originalWorkdir, branchName)) {
+      if (shouldPushBranch && !targetBranchAlreadyRepresented && !pushBranch(originalWorkdir, branchName)) {
         return { content: [{ type: "text", text: `❌ Failed to push ${branchName} — cannot create/update PR` }], meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
       }
 
       // Sync PR state from GitHub
       const prStatus = normalizeForceNewReplacementPrStatus(
-        effectiveTargetPrUrl
-          ? syncWorktreePRByUrl(originalWorkdir, effectiveTargetPrUrl, targetRepo)
+        resolvedTargetPrUrl
+          ? syncWorktreePRByUrl(originalWorkdir, resolvedTargetPrUrl, targetRepo)
           : syncWorktreePR(originalWorkdir, branchName, targetRepo),
         explicitTargetPrStatus,
         { forceNewIgnoresClosedTargetPr },

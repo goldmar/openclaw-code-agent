@@ -82,6 +82,109 @@ function policyAwareButtons(allowedActions: { merge: boolean; pr: boolean }) {
 }
 
 describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
+  it("releases stale helper metadata after the existing PR head was updated from a separate worktree", async () => {
+    const repoDir = mkdtempSync(join(tmpdir(), "openclaw-existing-pr-remote-head-"));
+    const remoteDir = `${repoDir}-remote.git`;
+    const worktreePath = `${repoDir}-helper`;
+    const patches: Array<Record<string, unknown>> = [];
+    let autoPrCalled = false;
+    try {
+      git(repoDir, "init", "-b", "main");
+      git(repoDir, "config", "user.name", "Test User");
+      git(repoDir, "config", "user.email", "test@example.com");
+      execFileSync("git", ["init", "--bare", remoteDir], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
+      git(repoDir, "remote", "add", "origin", remoteDir);
+      writeFileSync(join(repoDir, "README.md"), "base\n", "utf-8");
+      git(repoDir, "add", "README.md");
+      git(repoDir, "commit", "-m", "init");
+      git(repoDir, "push", "-u", "origin", "main");
+      git(repoDir, "checkout", "-b", "agent/fix-durable-goal-owner");
+      writeFileSync(join(repoDir, "pr.txt"), "existing PR\n", "utf-8");
+      git(repoDir, "add", "pr.txt");
+      git(repoDir, "commit", "-m", "Existing PR work");
+      git(repoDir, "push", "-u", "origin", "agent/fix-durable-goal-owner");
+      git(repoDir, "worktree", "add", "-b", "agent/address-pr-104265-review", worktreePath, "HEAD");
+      writeFileSync(join(worktreePath, "review.txt"), "review fix\n", "utf-8");
+      git(worktreePath, "add", "review.txt");
+      git(worktreePath, "commit", "-m", "Address review");
+      git(repoDir, "checkout", "main");
+      writeFileSync(join(repoDir, "upstream.txt"), "upstream change\n", "utf-8");
+      git(repoDir, "add", "upstream.txt");
+      git(repoDir, "commit", "-m", "Advance upstream base");
+      git(repoDir, "checkout", "agent/fix-durable-goal-owner");
+      git(worktreePath, "rebase", "main");
+      git(worktreePath, "push", "--force-with-lease", "origin", "HEAD:agent/fix-durable-goal-owner");
+
+      const service = new SessionWorktreeStrategyService({
+        shouldRunWorktreeStrategy: () => true,
+        isAlreadyMerged: () => false,
+        resolveWorktreeRepoDir: (dir) => dir,
+        getWorktreeCompletionState: () => "has-commits",
+        updatePersistedSession: (_ref, patch) => {
+          patches.push(patch as Record<string, unknown>);
+          Object.assign(session, patch);
+          return true;
+        },
+        dispatchSessionNotification: () => { throw new Error("represented update must not leave a worktree decision"); },
+        getOutputPreview: () => "",
+        originThreadLine: () => "thread",
+        getWorktreeDecisionButtons: () => { throw new Error("must not request worktree buttons"); },
+        makeOpenPrButton: () => ({ label: "Open PR", callbackData: "open-pr" }),
+        getPrStatusForBranch: (_dir, branch, targetRepo) => {
+          assert.equal(branch, "agent/fix-durable-goal-owner");
+          assert.equal(targetRepo, "openclaw/openclaw");
+          return {
+            exists: true,
+            state: "open",
+            url: "https://github.com/openclaw/openclaw/pull/104265",
+            number: 104265,
+            headRefName: branch,
+            baseRefName: "main",
+          };
+        },
+        worktreeMessages: new SessionWorktreeMessageService(),
+        enqueueMerge: async (_repoDir, fn) => { await fn(); },
+        mergeBranch,
+        spawnConflictResolver: async () => ({ id: "resolver-unused", name: "unused" }),
+        runAutoPr: async () => {
+          autoPrCalled = true;
+          return { success: false };
+        },
+      });
+      const session: any = {
+        id: "s-pr-104265-review",
+        name: "address-pr-104265-review",
+        harnessSessionId: "_gL05S6a",
+        status: "completed",
+        phase: "implementing",
+        lifecycle: "terminal",
+        worktreeState: "provisioned",
+        originalWorkdir: repoDir,
+        worktreePath,
+        worktreeBranch: "agent/address-pr-104265-review",
+        worktreeBaseBranch: "main",
+        worktreeStrategy: "auto-pr",
+        worktreePrTargetRepo: "openclaw/openclaw",
+        pendingPlanApproval: false,
+      };
+
+      const result = await service.handleWorktreeStrategy(session);
+
+      assert.deepEqual(result, { notificationSent: false, worktreeRemoved: true });
+      assert.equal(autoPrCalled, false);
+      assert.equal(session.worktreePath, undefined);
+      assert.equal(session.worktreeState, "released");
+      assert.equal(session.worktreePrUrl, "https://github.com/openclaw/openclaw/pull/104265");
+      assert.equal(session.worktreePrNumber, 104265);
+      assert.equal(patches.some((patch) => patch.worktreeRemoteOutcome === "pr-updated"), true);
+      assert.equal(patches.some((patch) => patch.worktreeState === "pending_decision"), false);
+    } finally {
+      rmSync(worktreePath, { recursive: true, force: true });
+      rmSync(repoDir, { recursive: true, force: true });
+      rmSync(remoteDir, { recursive: true, force: true });
+    }
+  });
+
   it("keys generic worktree notifications by terminal cycle and worktree identity", async () => {
     const notifications: Array<Record<string, unknown>> = [];
     const service = new SessionWorktreeStrategyService({
@@ -883,10 +986,8 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       writeFileSync(join(worktreePath, "cleanup.txt"), "commit 7f50458\n", "utf-8");
       git(worktreePath, "add", "cleanup.txt");
       git(worktreePath, "commit", "-m", "Address PR 314 review feedback");
-      const helperCommit = git(worktreePath, "rev-parse", "HEAD");
-
       git(repoDir, "checkout", "fix-test-session-store-isolation");
-      git(repoDir, "cherry-pick", helperCommit);
+      git(repoDir, "merge", "--ff-only", branchName);
       git(repoDir, "merge-base", "--is-ancestor", branchName, "fix-test-session-store-isolation");
 
       const notifications: Array<Record<string, unknown>> = [];

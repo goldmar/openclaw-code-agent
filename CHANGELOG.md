@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - Fixed agent-created pull requests losing the completed Codex report when runtime PR metadata generation is unavailable; OCA now builds and posts task-specific title/body metadata from bounded, redacted session output.
+- Reconciled existing fork PR updates performed from isolated worktrees against the authoritative remote PR head, preventing stale helper-branch pushes and bogus follow-up decisions.
 
 ## [4.7.0] - 2026-07-09
 

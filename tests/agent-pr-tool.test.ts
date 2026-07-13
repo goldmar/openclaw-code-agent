@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildPrCompletionWakeOutcomeKey, buildPrMetadata, buildPrOutcomeDetailLines, createRuntimePrMetadataProvider, formatPrBody, isOcaGeneratedPrBody, isOcaGeneratedPrTitle, normalizeForceNewReplacementPrStatus, refreshOpenPrMetadata, resolveExistingTargetPrUpdateBranch, resolveExistingTargetPrUpdateSourceBranch, shouldIgnoreClosedTargetPrForForceNew } from "../src/tools/agent-pr";
+import { buildPrCompletionWakeOutcomeKey, buildPrMetadata, buildPrOutcomeDetailLines, createRuntimePrMetadataProvider, discoverExistingTargetPr, formatPrBody, isOcaGeneratedPrBody, isOcaGeneratedPrTitle, normalizeForceNewReplacementPrStatus, refreshOpenPrMetadata, resolveExistingTargetPrUpdateBranch, resolveExistingTargetPrUpdateSourceBranch, shouldIgnoreClosedTargetPrForForceNew } from "../src/tools/agent-pr";
 import { setPluginRuntime } from "../src/runtime-store";
 import { getPRBody } from "../src/worktree";
 
@@ -157,6 +157,67 @@ describe("agent_pr outcome detail lines", () => {
 });
 
 describe("agent_pr existing target PR branch resolution", () => {
+  it("discovers a fork PR from the parent checkout and treats its remotely updated head as authoritative", async () => {
+    const { repoDir } = initRepoWithOrigin("openclaw-agent-pr-fork-worktree-");
+    const rootDir = join(repoDir, "..");
+    const worktreePath = join(rootDir, "helper-worktree");
+    try {
+      const forkRemoteDir = join(rootDir, "fork-owner", "openclaw.git");
+      mkdirSync(join(rootDir, "fork-owner"));
+      execFileSync("git", ["init", "--bare", forkRemoteDir], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
+      git(repoDir, "remote", "set-url", "origin", forkRemoteDir);
+      git(repoDir, "push", "-u", "origin", "main");
+      git(repoDir, "checkout", "-b", "agent/fix-durable-goal-owner");
+      writeFileSync(join(repoDir, "pr.txt"), "existing PR\n", "utf-8");
+      git(repoDir, "add", "pr.txt");
+      git(repoDir, "commit", "-m", "Existing PR work");
+      git(repoDir, "push", "-u", "origin", "agent/fix-durable-goal-owner");
+      git(repoDir, "worktree", "add", "-b", "agent/address-pr-104265-review", worktreePath, "HEAD");
+      writeFileSync(join(worktreePath, "review.txt"), "review follow-up\n", "utf-8");
+      git(worktreePath, "add", "review.txt");
+      git(worktreePath, "commit", "-m", "Address PR review");
+      git(repoDir, "checkout", "main");
+      writeFileSync(join(repoDir, "upstream.txt"), "upstream change\n", "utf-8");
+      git(repoDir, "add", "upstream.txt");
+      git(repoDir, "commit", "-m", "Advance upstream base");
+      git(repoDir, "checkout", "agent/fix-durable-goal-owner");
+      git(worktreePath, "rebase", "main");
+      git(worktreePath, "push", "--force-with-lease", "origin", "HEAD:agent/fix-durable-goal-owner");
+
+      await withFakeGh([
+        "#!/usr/bin/env sh",
+        "if [ \"$1\" = \"--version\" ]; then echo 'gh version 2.0.0'; exit 0; fi",
+        "if [ \"$1\" = \"pr\" ] && [ \"$2\" = \"list\" ]; then",
+        "  printf '%s\\n' '[{\"url\":\"https://github.com/openclaw/openclaw/pull/104265\",\"number\":104265,\"title\":\"Fix durable goal owner\",\"state\":\"OPEN\",\"headRepositoryOwner\":{\"login\":\"fork-owner\"},\"headRefName\":\"agent/fix-durable-goal-owner\",\"baseRefName\":\"main\"}]'",
+        "  exit 0",
+        "fi",
+        "exit 1",
+        "",
+      ].join("\n"), () => {
+        const status = discoverExistingTargetPr({
+          repoDir,
+          worktreeBranch: "agent/address-pr-104265-review",
+          baseBranch: "main",
+          targetRepo: "openclaw/openclaw",
+        });
+        assert.equal(status?.url, "https://github.com/openclaw/openclaw/pull/104265");
+
+        const resolution = resolveExistingTargetPrUpdateBranch({
+          repoDir,
+          sourceBranch: "agent/address-pr-104265-review",
+          targetPrStatus: status!,
+        });
+        assert.deepEqual(resolution, {
+          success: true,
+          branchName: "agent/fix-durable-goal-owner",
+          alreadyRepresented: true,
+        });
+      });
+    } finally {
+      rmSync(rootDir, { recursive: true, force: true });
+    }
+  });
+
   it("fast-forwards the original PR branch from a follow-up helper branch", () => {
     const repoDir = initRepo("openclaw-agent-pr-target-");
     try {
