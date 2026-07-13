@@ -1,4 +1,4 @@
-import { describe, it } from "node:test";
+import { describe, it, mock } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -1156,6 +1156,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
 
   it("requests a routed follow-up summary after auto-merge succeeds", async () => {
     const { repoDir, worktreePath, branchName } = createMergeableWorktree("summary-success");
+    const warn = mock.method(console, "warn", () => {});
     try {
       const notifications: Array<Record<string, unknown>> = [];
       const service = new SessionWorktreeStrategyService({
@@ -1192,7 +1193,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       const diffSummary = getDiffSummary(repoDir, branchName, "main");
       assert.ok(diffSummary, "diff summary should be available");
 
-      await (service as any).handleAutoMergeStrategy(
+      const worktreeRemoved = await (service as any).handleAutoMergeStrategy(
         session,
         repoDir,
         worktreePath,
@@ -1210,6 +1211,71 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       assert.match(String(notifications[0].wakeMessageOnNotifySuccess), /originRoute: \{"provider":"telegram","target":"-100123","threadId":"32947"\}/);
       assert.equal(session.worktreeState, "merged");
       assert.equal(session.worktreeLifecycle?.state, "merged");
+      assert.equal(git(repoDir, "branch", "--show-current"), "main");
+      assert.equal(worktreeRemoved, true);
+      assert.throws(() => git(repoDir, "rev-parse", "--verify", branchName));
+      assert.doesNotMatch(git(repoDir, "worktree", "list", "--porcelain"), new RegExp(`branch refs/heads/${branchName}`));
+      assert.equal(session.worktreePath, undefined);
+      assert.equal(warn.mock.callCount(), 0);
+    } finally {
+      warn.mock.restore();
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves a dirty merged worktree without blocking a same-name follow-up worktree", async () => {
+    const name = "summary-cleanup-fails";
+    const { repoDir, worktreePath, branchName } = createMergeableWorktree(name);
+    try {
+      writeFileSync(join(worktreePath, "late-dirty.txt"), "preserve me\n", "utf-8");
+      const service = new SessionWorktreeStrategyService({
+        shouldRunWorktreeStrategy: () => true,
+        isAlreadyMerged: () => false,
+        resolveWorktreeRepoDir: (dir) => dir,
+        getWorktreeCompletionState: () => "has-commits",
+        updatePersistedSession: (_ref, patch) => {
+          Object.assign(session, patch);
+          return true;
+        },
+        dispatchSessionNotification: () => {},
+        getOutputPreview: () => "",
+        originThreadLine: () => "thread",
+        getWorktreeDecisionButtons: () => undefined,
+        makeOpenPrButton: () => ({ label: "Open PR", callbackData: "open-pr" }),
+        worktreeMessages: new SessionWorktreeMessageService(),
+        enqueueMerge: async (_repoDir, fn) => { await fn(); },
+        mergeBranch,
+        spawnConflictResolver: async () => ({ id: "resolver-unused", name: "unused" }),
+        runAutoPr: async () => ({ success: true }),
+      });
+      const session: any = {
+        id: "s-summary-cleanup-fails",
+        name,
+        harnessSessionId: "h-summary-cleanup-fails",
+        worktreePath,
+      };
+      const diffSummary = getDiffSummary(repoDir, branchName, "main");
+      assert.ok(diffSummary, "diff summary should be available");
+
+      const worktreeRemoved = await (service as any).handleAutoMergeStrategy(
+        session,
+        repoDir,
+        worktreePath,
+        branchName,
+        "main",
+        diffSummary,
+        session.id,
+      );
+
+      assert.equal(worktreeRemoved, false);
+      assert.equal(session.worktreeState, "merged");
+      assert.equal(session.worktreePath, worktreePath);
+      assert.equal(git(repoDir, "rev-parse", "--verify", branchName).length > 0, true);
+      assert.equal(git(worktreePath, "status", "--short"), "?? late-dirty.txt");
+
+      const followUpPath = createWorktree(repoDir, name);
+      assert.notEqual(followUpPath, worktreePath);
+      assert.notEqual(getBranchName(followUpPath), branchName);
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }

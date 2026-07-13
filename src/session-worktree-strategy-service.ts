@@ -30,6 +30,7 @@ import {
   buildMergeWarningLines,
   appendMergeWarnings,
   syncWorktreePRByUrl,
+  worktreeExists,
 } from "./worktree";
 
 export type WorktreeStrategyResult = {
@@ -325,7 +326,7 @@ export class SessionWorktreeStrategyService {
       return this.handleDelegateStrategy(session, action.branchName, action.baseBranch, action.diffSummary, action.allowedActions, action.policyReason);
     }
     if (action.strategy === "auto-merge") {
-      await this.handleAutoMergeStrategy(
+      const worktreeRemoved = await this.handleAutoMergeStrategy(
         session,
         action.repoDir,
         action.worktreePath,
@@ -335,7 +336,7 @@ export class SessionWorktreeStrategyService {
         action.sessionRef,
         action.allowedActions,
       );
-      return { notificationSent: true, worktreeRemoved: false };
+      return { notificationSent: true, worktreeRemoved };
     }
     if (action.strategy === "auto-pr") {
       return this.handleAutoPrStrategy(
@@ -562,12 +563,21 @@ export class SessionWorktreeStrategyService {
   private handleAutoMergeSuccess(
     session: Session,
     repoDir: string,
+    worktreePath: string,
     branchName: string,
     baseBranch: string,
     diffSummary: DiffSummary,
     mergeResult: ReturnType<typeof mergeBranch>,
-  ): void {
-    deleteBranch(repoDir, branchName);
+  ): boolean {
+    const nativeBackendWorktree = usesNativeBackendWorktree(session);
+    const removed = nativeBackendWorktree
+      || !worktreeExists(worktreePath)
+      || removeWorktree(repoDir, worktreePath);
+    if (removed) {
+      session.worktreePath = undefined;
+      this.updatePersistedSessionFor(session, { worktreePath: undefined });
+      if (!nativeBackendWorktree) deleteBranch(repoDir, branchName);
+    }
     this.markMerged(session);
 
     const outcomeLine = formatWorktreeOutcomeLine({
@@ -629,6 +639,7 @@ export class SessionWorktreeStrategyService {
         canonicalStatusDelivered: false,
       }),
     });
+    return removed;
   }
 
   private async handleInitialAutoMergeConflict(
@@ -746,9 +757,11 @@ export class SessionWorktreeStrategyService {
     diffSummary: DiffSummary,
     sessionRef = getPrimarySessionLookupRef(session) ?? session.harnessSessionId,
     allowedActions: AllowedWorktreeActions = { merge: true, pr: true },
-  ): Promise<void> {
-    if (this.deps.isAlreadyMerged(sessionRef)) return;
-    if (session.autoMergeResolverSessionId) return;
+  ): Promise<boolean> {
+    if (this.deps.isAlreadyMerged(sessionRef)) return false;
+    if (session.autoMergeResolverSessionId) return false;
+
+    let worktreeRemoved = false;
 
     await this.deps.enqueueMerge(
       repoDir,
@@ -758,7 +771,15 @@ export class SessionWorktreeStrategyService {
         const mergeResult = this.deps.mergeBranch(repoDir, branchName, baseBranch, "merge", worktreePath);
 
         if (mergeResult.success) {
-          this.handleAutoMergeSuccess(session, repoDir, branchName, baseBranch, diffSummary, mergeResult);
+          worktreeRemoved = this.handleAutoMergeSuccess(
+            session,
+            repoDir,
+            worktreePath,
+            branchName,
+            baseBranch,
+            diffSummary,
+            mergeResult,
+          );
           return;
         }
 
@@ -800,6 +821,7 @@ export class SessionWorktreeStrategyService {
         });
       },
     );
+    return worktreeRemoved;
   }
 
   private async handleAutoPrStrategy(
