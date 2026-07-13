@@ -1193,7 +1193,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       const diffSummary = getDiffSummary(repoDir, branchName, "main");
       assert.ok(diffSummary, "diff summary should be available");
 
-      await (service as any).handleAutoMergeStrategy(
+      const worktreeRemoved = await (service as any).handleAutoMergeStrategy(
         session,
         repoDir,
         worktreePath,
@@ -1212,8 +1212,10 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       assert.equal(session.worktreeState, "merged");
       assert.equal(session.worktreeLifecycle?.state, "merged");
       assert.equal(git(repoDir, "branch", "--show-current"), "main");
-      assert.equal(git(repoDir, "rev-parse", "--verify", branchName).length > 0, true);
-      assert.match(git(repoDir, "worktree", "list", "--porcelain"), new RegExp(`branch refs/heads/${branchName}`));
+      assert.equal(worktreeRemoved, true);
+      assert.throws(() => git(repoDir, "rev-parse", "--verify", branchName));
+      assert.doesNotMatch(git(repoDir, "worktree", "list", "--porcelain"), new RegExp(`branch refs/heads/${branchName}`));
+      assert.equal(session.worktreePath, undefined);
       assert.equal(warn.mock.callCount(), 0);
     } finally {
       warn.mock.restore();
