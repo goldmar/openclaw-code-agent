@@ -29,6 +29,9 @@ import {
   formatWorktreeOutcomeLine,
   buildMergeWarningLines,
   appendMergeWarnings,
+  fetchRemoteBranchRef,
+  resolveTargetRepo,
+  syncWorktreePR,
   syncWorktreePRByUrl,
   worktreeExists,
 } from "./worktree";
@@ -80,7 +83,9 @@ export class SessionWorktreeStrategyService {
       makeOpenPrButton: (sessionId: string) => NotificationButton;
       isPrAvailable?: (repoDir: string) => boolean;
       hasOpenPrForBranch?: (repoDir: string, branchName: string, targetRepo?: string) => boolean;
+      getPrStatusForBranch?: (repoDir: string, branchName: string, targetRepo?: string) => PRStatus;
       getPrStatusForUrl?: (repoDir: string, prUrl: string, targetRepo?: string) => PRStatus;
+      fetchRemoteBranch?: (repoDir: string, branchName: string) => string | undefined;
       resolveRepoPolicy?: (repoDir: string) => RepoPolicyResolution;
       worktreeSummaryProvider?: WorktreeDecisionSummaryProvider;
       worktreeMessages: SessionWorktreeMessageService;
@@ -447,11 +452,24 @@ export class SessionWorktreeStrategyService {
     return persistedWithRemoteOutcome?.worktreeRemoteOutcome;
   }
 
-  private hasRecordedOpenTargetPr(session: Session, repoDir: string, baseBranch?: string): boolean {
-    if (!session.worktreePrUrl) return false;
-    const prStatus = this.getPrStatusForUrl(repoDir, session.worktreePrUrl, session.worktreePrTargetRepo);
-    return prStatus.state === "open"
-      && (!baseBranch || !prStatus.baseRefName || prStatus.baseRefName === baseBranch);
+  private resolveExistingTargetPr(session: Session, repoDir: string, branchName: string, baseBranch: string): PRStatus | undefined {
+    const targetRepo = resolveTargetRepo(repoDir, session.worktreePrTargetRepo);
+    if (session.worktreePrUrl) {
+      const recorded = this.getPrStatusForUrl(repoDir, session.worktreePrUrl, targetRepo);
+      if (recorded.exists && recorded.baseRefName === baseBranch) return recorded;
+    }
+
+    const parentBranch = session.worktreeParentBranch;
+    if (!parentBranch || getBranchName(repoDir) !== parentBranch) return undefined;
+    if (parentBranch === branchName || parentBranch === baseBranch) return undefined;
+    const discovered = this.deps.getPrStatusForBranch?.(repoDir, parentBranch, targetRepo)
+      ?? syncWorktreePR(repoDir, parentBranch, targetRepo);
+    return discovered.exists
+      && discovered.state === "open"
+      && discovered.headRefName === parentBranch
+      && (!discovered.baseRefName || discovered.baseRefName === baseBranch)
+      ? discovered
+      : undefined;
   }
 
   private shouldUpdateExistingOpenPr(
@@ -463,7 +481,7 @@ export class SessionWorktreeStrategyService {
     return session.worktreeStrategy === "auto-pr"
       && (
         this.hasCurrentlyOpenPrForBranch(session, repoDir, branchName)
-        || this.hasRecordedOpenTargetPr(session, repoDir, baseBranch)
+        || this.resolveExistingTargetPr(session, repoDir, branchName, baseBranch)?.state === "open"
       );
   }
 
@@ -868,16 +886,17 @@ export class SessionWorktreeStrategyService {
   ): WorktreeStrategyResult | undefined {
     if (listDirtyWorktreeEntries(worktreePath).length > 0) return undefined;
 
-    const targetBranch = getBranchName(repoDir);
-    const targetPrUrl = session.worktreePrUrl;
-    if (!targetBranch || !targetPrUrl || targetBranch === branchName || targetBranch === baseBranch) return undefined;
-
-    const targetPrStatus = this.getPrStatusForUrl(repoDir, targetPrUrl, session.worktreePrTargetRepo);
+    const targetPrStatus = this.resolveExistingTargetPr(session, repoDir, branchName, baseBranch);
+    const targetBranch = targetPrStatus?.headRefName;
+    if (!targetBranch || targetBranch === branchName || targetBranch === baseBranch) return undefined;
+    const authoritativeTargetRef = this.deps.fetchRemoteBranch
+      ? this.deps.fetchRemoteBranch(repoDir, targetBranch)
+      : fetchRemoteBranchRef(repoDir, targetBranch);
+    if (!authoritativeTargetRef) return undefined;
     const representedByTargetPrBranch = Boolean(
       (targetPrStatus?.state === "open" || targetPrStatus?.state === "merged")
-      && targetPrStatus?.headRefName === targetBranch
       && targetPrStatus?.baseRefName === baseBranch
-      && isBranchAncestorOfBase(repoDir, branchName, targetBranch)
+      && isBranchAncestorOfBase(repoDir, branchName, authoritativeTargetRef)
     );
     if (!representedByTargetPrBranch) return undefined;
 
@@ -892,7 +911,16 @@ export class SessionWorktreeStrategyService {
     }
 
     session.worktreePath = undefined;
-    this.updatePersistedSessionFor(session, { worktreePath: undefined });
+    session.worktreePrUrl = targetPrStatus.url;
+    session.worktreePrNumber = targetPrStatus.number;
+    session.worktreePrTargetRepo = resolveTargetRepo(repoDir, session.worktreePrTargetRepo);
+    this.updatePersistedSessionFor(session, {
+      worktreePath: undefined,
+      worktreePrUrl: targetPrStatus.url,
+      worktreePrNumber: targetPrStatus.number,
+      worktreePrTargetRepo: session.worktreePrTargetRepo,
+      worktreeRemoteOutcome: "pr-updated",
+    });
     deleteBranch(repoDir, branchName);
     this.markReleased(session, [`released_by_branch:${targetBranch}`]);
     return { notificationSent: false, worktreeRemoved: removed };

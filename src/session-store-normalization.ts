@@ -606,6 +606,7 @@ export function normalizePersistedEntry(raw: unknown): PersistedSessionInfo | un
     pendingWorktreeDecisionSince: toOptionalString(raw.pendingWorktreeDecisionSince),
     lastWorktreeReminderAt: toOptionalString(raw.lastWorktreeReminderAt),
     worktreeBaseBranch: toOptionalString(raw.worktreeBaseBranch),
+    worktreeParentBranch: toOptionalString(raw.worktreeParentBranch),
     worktreePrTargetRepo: toOptionalString(raw.worktreePrTargetRepo),
     autoMergeParentSessionId: toOptionalString(raw.autoMergeParentSessionId),
     autoMergeConflictResolutionAttemptCount: toOptionalNumber(raw.autoMergeConflictResolutionAttemptCount),

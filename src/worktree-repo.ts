@@ -118,6 +118,26 @@ export function branchExists(repoDir: string, branchName: string): boolean {
   }
 }
 
+/** Fetch a single branch into a remote-tracking ref without changing a checkout. */
+export function fetchRemoteBranchRef(repoDir: string, branchName: string, remote = "origin"): string | undefined {
+  const remoteRef = `refs/remotes/${remote}/${branchName}`;
+  try {
+    execFileSync(
+      "git",
+      ["-C", repoDir, "fetch", remote, `+${branchName}:${remoteRef}`],
+      { timeout: 30_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
+    );
+    execFileSync(
+      "git",
+      ["-C", repoDir, "rev-parse", "--verify", remoteRef],
+      { timeout: 5_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
+    );
+    return remoteRef;
+  } catch {
+    return undefined;
+  }
+}
+
 function resolveExistingAncestorPath(targetPath: string): string | undefined {
   let currentPath = targetPath;
   while (true) {
