@@ -197,6 +197,7 @@ describe("agent_pr existing target PR branch resolution", () => {
         const status = discoverExistingTargetPr({
           repoDir,
           worktreeBranch: "agent/address-pr-104265-review",
+          expectedParentBranch: "agent/fix-durable-goal-owner",
           baseBranch: "main",
           targetRepo: "openclaw/openclaw",
         });

@@ -1410,6 +1410,23 @@ describe("SessionStore new worktree lifecycle fields", () => {
     assert.equal(persisted?.worktreeBaseBranch, "develop");
   });
 
+  it("persists and reloads worktreeParentBranch", () => {
+    writeStore(indexPath, [{
+      harnessSessionId: "h-parent-branch",
+      name: "parent-branch-session",
+      prompt: "p",
+      workdir: "/tmp",
+      status: "completed",
+      lifecycle: "terminal",
+      costUsd: 0,
+      worktreeParentBranch: "agent/existing-pr",
+    }]);
+
+    const store = new SessionStore({ indexPath, env: {} });
+    const persisted = store.getPersistedSession("h-parent-branch");
+    assert.equal(persisted?.worktreeParentBranch, "agent/existing-pr");
+  });
+
   it("persists and reloads pendingWorktreeDecisionSince", () => {
     const ts = new Date().toISOString();
     writeStore(indexPath, [{

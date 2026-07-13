@@ -196,11 +196,12 @@ export function resolveExistingTargetPrUpdateBranch(args: {
 export function discoverExistingTargetPr(args: {
   repoDir: string;
   worktreeBranch: string;
+  expectedParentBranch?: string;
   baseBranch: string;
   targetRepo?: string;
 }): PRStatus | undefined {
   const parentBranch = getBranchName(args.repoDir);
-  if (!parentBranch || parentBranch === args.worktreeBranch || parentBranch === args.baseBranch) return undefined;
+  if (!parentBranch || parentBranch !== args.expectedParentBranch || parentBranch === args.worktreeBranch || parentBranch === args.baseBranch) return undefined;
   const status = syncWorktreePR(args.repoDir, parentBranch, args.targetRepo);
   return status.exists
     && status.state === "open"
@@ -511,6 +512,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
         ? discoverExistingTargetPr({
             repoDir: originalWorkdir,
             worktreeBranch: branchName,
+            expectedParentBranch: persistedSession?.worktreeParentBranch ?? targetSession?.worktreeParentBranch,
             baseBranch,
             targetRepo,
           })

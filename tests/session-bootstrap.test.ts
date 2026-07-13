@@ -273,6 +273,7 @@ describe("prepareSessionBootstrap()", () => {
       assert.ok(bootstrap.worktreePath, "fresh Codex ask launch should create a plugin-managed worktree");
       assert.equal(bootstrap.actualWorkdir, bootstrap.worktreePath);
       assert.ok(bootstrap.worktreeBranchName, "fresh Codex ask worktree should have a branch");
+      assert.equal(bootstrap.worktreeParentBranch, "main");
       assert.match(bootstrap.effectiveSystemPrompt ?? "", /You are working in a git worktree/);
       assert.match(bootstrap.effectiveSystemPrompt ?? "", /IMPORTANT: ALL file edits must be made within this worktree/);
       assert.match(bootstrap.effectiveSystemPrompt ?? "", /Before finishing, run `git status --short`/);

@@ -162,6 +162,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         originalWorkdir: repoDir,
         worktreePath,
         worktreeBranch: "agent/address-pr-104265-review",
+        worktreeParentBranch: "agent/fix-durable-goal-owner",
         worktreeBaseBranch: "main",
         worktreeStrategy: "auto-pr",
         worktreePrTargetRepo: "openclaw/openclaw",
@@ -182,6 +183,81 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       rmSync(worktreePath, { recursive: true, force: true });
       rmSync(repoDir, { recursive: true, force: true });
       rmSync(remoteDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not adopt an unrelated parent-checkout PR after the worktree was created", async () => {
+    const repoDir = mkdtempSync(join(tmpdir(), "openclaw-unrelated-parent-pr-"));
+    const notifications: Array<Record<string, unknown>> = [];
+    try {
+      git(repoDir, "init", "-b", "main");
+      git(repoDir, "config", "user.name", "Test User");
+      git(repoDir, "config", "user.email", "test@example.com");
+      writeFileSync(join(repoDir, "README.md"), "base\n", "utf-8");
+      git(repoDir, "add", "README.md");
+      git(repoDir, "commit", "-m", "init");
+      git(repoDir, "checkout", "-b", "agent/intended-pr");
+      const worktreePath = createWorktree(repoDir, "unrelated-parent-helper");
+      const branchName = getBranchName(worktreePath);
+      assert.ok(branchName);
+      writeFileSync(join(worktreePath, "review.txt"), "review fix\n", "utf-8");
+      git(worktreePath, "add", "review.txt");
+      git(worktreePath, "commit", "-m", "Address review");
+
+      git(repoDir, "checkout", "-b", "agent/unrelated-pr");
+      git(repoDir, "merge", "--ff-only", branchName);
+
+      const service = new SessionWorktreeStrategyService({
+        shouldRunWorktreeStrategy: () => true,
+        isAlreadyMerged: () => false,
+        resolveWorktreeRepoDir: (dir) => dir,
+        getWorktreeCompletionState: () => "has-commits",
+        updatePersistedSession: (_ref, patch) => {
+          Object.assign(session, patch);
+          return true;
+        },
+        dispatchSessionNotification: (_session, request) => {
+          notifications.push(request as Record<string, unknown>);
+        },
+        getOutputPreview: () => "",
+        originThreadLine: () => "thread",
+        getWorktreeDecisionButtons: () => [[{ label: "Open PR", callbackData: "open-pr" }]],
+        makeOpenPrButton: () => ({ label: "Open PR", callbackData: "open-pr" }),
+        getPrStatusForBranch: () => {
+          throw new Error("an unrelated current parent branch must not be queried");
+        },
+        worktreeMessages: new SessionWorktreeMessageService(),
+        enqueueMerge: async (_repoDir, fn) => { await fn(); },
+        mergeBranch,
+        spawnConflictResolver: async () => ({ id: "resolver-unused", name: "unused" }),
+        runAutoPr: async () => ({ success: false }),
+      });
+      const session: any = {
+        id: "s-unrelated-parent-pr",
+        name: "unrelated-parent-pr",
+        status: "completed",
+        phase: "implementing",
+        lifecycle: "terminal",
+        worktreeState: "provisioned",
+        originalWorkdir: repoDir,
+        worktreePath,
+        worktreeBranch: branchName,
+        worktreeParentBranch: "agent/intended-pr",
+        worktreeBaseBranch: "main",
+        worktreeStrategy: "auto-pr",
+        repoIntegrationPolicy: "pr-allowed",
+        pendingPlanApproval: false,
+      };
+
+      const result = await service.handleWorktreeStrategy(session);
+
+      assert.deepEqual(result, { notificationSent: true, worktreeRemoved: false });
+      assert.equal(session.worktreeState, "pending_decision");
+      assert.equal(existsSync(worktreePath), true);
+      assert.equal(session.worktreePrUrl, undefined);
+      assert.equal(notifications.at(-1)?.label, "worktree-auto-pr-failed");
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
     }
   });
 
@@ -1336,10 +1412,8 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       writeFileSync(join(worktreePath, "helper.txt"), "helper\n", "utf-8");
       git(worktreePath, "add", "helper.txt");
       git(worktreePath, "commit", "-m", "Helper cleanup work");
-      const helperCommit = git(worktreePath, "rev-parse", "HEAD");
-
       git(repoDir, "checkout", "intended-pr");
-      git(repoDir, "cherry-pick", helperCommit);
+      git(repoDir, "merge", "--ff-only", branchName);
 
       const patches: Array<Record<string, unknown>> = [];
       let injectedDirtyEntry = false;

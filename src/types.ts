@@ -392,6 +392,8 @@ export interface SessionConfig {
   repoProvider?: RepoProviderKind;
   /** Base branch for worktree merge/PR operations. */
   worktreeBaseBranch?: string;
+  /** Branch checked out in the parent repository when this worktree was created. */
+  worktreeParentBranch?: string;
   /** Target repository for cross-repo PRs (e.g. 'openai/codex' for fork-to-upstream workflow). */
   worktreePrTargetRepo?: string;
   /** Internal link back to the original auto-merge session for conflict resolver sessions. */
@@ -547,6 +549,8 @@ export interface PersistedSessionInfo {
   lastWorktreeReminderAt?: string;
   /** Base branch used for worktree merge/PR operations. */
   worktreeBaseBranch?: string;
+  /** Branch checked out in the parent repository when this worktree was created. */
+  worktreeParentBranch?: string;
   /** Target repository for cross-repo PRs (e.g. 'openai/codex'). */
   worktreePrTargetRepo?: string;
   /** Internal link back to the original auto-merge session for conflict resolver sessions. */

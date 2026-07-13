@@ -459,8 +459,9 @@ export class SessionWorktreeStrategyService {
       if (recorded.exists && recorded.baseRefName === baseBranch) return recorded;
     }
 
-    const parentBranch = getBranchName(repoDir);
-    if (!parentBranch || parentBranch === branchName || parentBranch === baseBranch) return undefined;
+    const parentBranch = session.worktreeParentBranch;
+    if (!parentBranch || getBranchName(repoDir) !== parentBranch) return undefined;
+    if (parentBranch === branchName || parentBranch === baseBranch) return undefined;
     const discovered = this.deps.getPrStatusForBranch?.(repoDir, parentBranch, targetRepo)
       ?? syncWorktreePR(repoDir, parentBranch, targetRepo);
     return discovered.exists

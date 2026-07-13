@@ -23,6 +23,7 @@ type Preparation = {
   effectiveSystemPrompt?: string;
   worktreePath?: string;
   worktreeBranchName?: string;
+  worktreeParentBranch?: string;
   clearedResumeSessionId?: boolean;
   clearedResumeWorktreeFrom?: boolean;
   restoredMissingNativeBackendWorktree?: boolean;
@@ -125,6 +126,7 @@ function restoreResumeWorktreeContext(
   originalWorkdir?: string;
   worktreePath?: string;
   worktreeBranchName?: string;
+  worktreeParentBranch?: string;
   clearedResumeSessionId?: boolean;
   clearedResumeWorktreeFrom?: boolean;
   restoredMissingNativeBackendWorktree?: boolean;
@@ -196,6 +198,7 @@ function restoreResumeWorktreeContext(
       originalWorkdir: originalWorkdir ?? persistedSession.worktreePath,
       worktreePath: persistedSession.worktreePath,
       worktreeBranchName: persistedSession.worktreeBranch,
+      worktreeParentBranch: persistedSession.worktreeParentBranch,
     };
   }
 
@@ -215,6 +218,7 @@ function restoreResumeWorktreeContext(
       actualWorkdir: originalWorkdir,
       originalWorkdir,
       worktreeBranchName: persistedSession.worktreeBranch,
+      worktreeParentBranch: persistedSession.worktreeParentBranch,
       clearedResumeWorktreeFrom: !!config.resumeWorktreeFrom,
       restoredMissingNativeBackendWorktree: true,
     };
@@ -233,6 +237,7 @@ function restoreResumeWorktreeContext(
       originalWorkdir,
       worktreePath: recreatedPath,
       worktreeBranchName: persistedSession.worktreeBranch,
+      worktreeParentBranch: persistedSession.worktreeParentBranch,
     };
   } catch (err) {
     console.warn(`[SessionManager] Failed to recreate worktree for resume: ${errorMessage(err)}, using original workdir`);
@@ -258,6 +263,7 @@ export function prepareSessionBootstrap(
     originalWorkdir,
     worktreePath,
     worktreeBranchName,
+    worktreeParentBranch,
     clearedResumeSessionId,
     clearedResumeWorktreeFrom,
     restoredMissingNativeBackendWorktree,
@@ -277,6 +283,9 @@ export function prepareSessionBootstrap(
   const isResumedSession = !!(config.resumeSessionId ?? config.resumeWorktreeFrom);
   const strategy = config.worktreeStrategy ?? pluginConfig.defaultWorktreeStrategy;
   if (strategy) config.worktreeStrategy = strategy;
+  if (!isResumedSession && strategy && strategy !== "off" && isGitRepo(originalWorkdir)) {
+    worktreeParentBranch ??= getBranchName(originalWorkdir);
+  }
   const useNativeCodexWorktree = prefersNativeCodexWorktrees(config);
   const canCreateWorktreeForThisLaunch = !isResumedSession || !!canCreateManagedWorktreeForResumeWithoutPersistedPath;
   const shouldWorktree = canCreateWorktreeForThisLaunch
@@ -335,6 +344,7 @@ export function prepareSessionBootstrap(
       : config.systemPrompt,
     worktreePath,
     worktreeBranchName,
+    worktreeParentBranch,
     clearedResumeSessionId,
     clearedResumeWorktreeFrom,
     restoredMissingNativeBackendWorktree,

@@ -122,6 +122,7 @@ export class Session extends EventEmitter {
   worktreePath?: string;
   originalWorkdir?: string;
   worktreeBranch?: string; // Cached at creation to avoid live lookups after worktree removal.
+  worktreeParentBranch?: string;
   readonly worktreeStrategy?: WorktreeStrategy;
   readonly repoIntegrationPolicy?: RepoIntegrationPolicy;
   readonly repoIntegrationPolicySource?: "stored" | "seeded" | "unknown";
@@ -258,6 +259,7 @@ export class Session extends EventEmitter {
     this.repoIntegrationPolicySource = config.repoIntegrationPolicySource;
     this.repoProvider = config.repoProvider;
     this.worktreeBaseBranch = config.worktreeBaseBranch;
+    this.worktreeParentBranch = config.worktreeParentBranch;
     if (config.worktreePrTargetRepo) {
       this.worktreePrTargetRepo = config.worktreePrTargetRepo;
     }
@@ -496,6 +498,7 @@ export class Session extends EventEmitter {
     | "repoIntegrationPolicySource"
     | "repoProvider"
     | "worktreeBaseBranch"
+    | "worktreeParentBranch"
     | "worktreePrTargetRepo"
     | "autoMergeParentSessionId"
     | "autoMergeConflictResolutionAttemptCount"
@@ -510,6 +513,7 @@ export class Session extends EventEmitter {
       repoIntegrationPolicySource: this.repoIntegrationPolicySource,
       repoProvider: this.repoProvider,
       worktreeBaseBranch: this.worktreeBaseBranch,
+      worktreeParentBranch: this.worktreeParentBranch,
       worktreePrTargetRepo: this.worktreePrTargetRepo,
       autoMergeParentSessionId: this.autoMergeParentSessionId,
       autoMergeConflictResolutionAttemptCount: this.autoMergeConflictResolutionAttemptCount,

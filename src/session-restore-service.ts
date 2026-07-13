@@ -8,6 +8,7 @@ export type PreparedSessionLaunch = {
   effectiveSystemPrompt?: string;
   worktreePath?: string;
   worktreeBranchName?: string;
+  worktreeParentBranch?: string;
 };
 
 export class SessionRestoreService {
@@ -20,13 +21,14 @@ export class SessionRestoreService {
   }
 
   hydrateSpawnedSession(
-    session: Pick<Session, "worktreePath" | "originalWorkdir" | "worktreeBranch" | "worktreeState" | "worktreePrTargetRepo">,
+    session: Pick<Session, "worktreePath" | "originalWorkdir" | "worktreeBranch" | "worktreeParentBranch" | "worktreeState" | "worktreePrTargetRepo">,
     prepared: PreparedSessionLaunch,
     config: Pick<SessionConfig, "worktreePrTargetRepo" | "worktreeStrategy">,
   ): void {
     if (config.worktreeStrategy && config.worktreeStrategy !== "off") {
       session.originalWorkdir = prepared.originalWorkdir;
     }
+    session.worktreeParentBranch = prepared.worktreeParentBranch;
     if (prepared.worktreePath) {
       session.worktreePath = prepared.worktreePath;
       session.worktreeBranch = prepared.worktreeBranchName;
