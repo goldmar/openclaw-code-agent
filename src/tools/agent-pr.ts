@@ -168,7 +168,9 @@ export function resolveExistingTargetPrUpdateBranch(args: {
       const synced = moveBranchFastForward(repoDir, targetBranch, remoteTargetRef);
       if ("error" in synced) return synced;
     }
-    return { success: true, branchName: targetBranch, alreadyRepresented: true };
+    // Local ancestry can select the branch, but only a fetched remote ref proves
+    // the PR head already contains the helper work and makes skipping the push safe.
+    return { success: true, branchName: targetBranch, alreadyRepresented: Boolean(remoteTargetRef) };
   }
 
   // The existing PR head may be checked out in the parent checkout and updated there

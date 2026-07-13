@@ -290,11 +290,62 @@ describe("agent_pr existing target PR branch resolution", () => {
       assert.deepEqual(result, {
         success: true,
         branchName: "agent/codex-telegram-proof-tests",
-        alreadyRepresented: true,
+        alreadyRepresented: false,
       });
       assert.equal(git(repoDir, "rev-parse", "agent/codex-telegram-proof-tests"), helperHead);
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it("requires a push when the remote PR head cannot be verified from stale local state", () => {
+    const { repoDir, remoteDir } = initRepoWithOrigin("openclaw-agent-pr-fetch-failure-");
+    const rootDir = join(repoDir, "..");
+    const cloneDir = join(rootDir, "remote-divergence");
+    try {
+      git(repoDir, "checkout", "-b", "agent/codex-telegram-proof-tests");
+      writeFileSync(join(repoDir, "proof.txt"), "original\n", "utf-8");
+      git(repoDir, "add", "proof.txt");
+      git(repoDir, "commit", "-m", "Original proof work");
+      git(repoDir, "push", "-u", "origin", "agent/codex-telegram-proof-tests");
+
+      execFileSync("git", ["clone", remoteDir, cloneDir], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
+      git(cloneDir, "config", "user.name", "OpenClaw Tests");
+      git(cloneDir, "config", "user.email", "tests@example.com");
+      git(cloneDir, "checkout", "agent/codex-telegram-proof-tests");
+      writeFileSync(join(cloneDir, "remote-only.txt"), "remote update\n", "utf-8");
+      git(cloneDir, "add", "remote-only.txt");
+      git(cloneDir, "commit", "-m", "Remote-only PR update");
+      git(cloneDir, "push", "origin", "agent/codex-telegram-proof-tests");
+
+      git(repoDir, "checkout", "-b", "agent/fix-pr-322-feedback");
+      writeFileSync(join(repoDir, "feedback.txt"), "review fix\n", "utf-8");
+      git(repoDir, "add", "feedback.txt");
+      git(repoDir, "commit", "-m", "Address PR feedback");
+      git(repoDir, "checkout", "agent/codex-telegram-proof-tests");
+      git(repoDir, "merge", "--ff-only", "agent/fix-pr-322-feedback");
+      git(repoDir, "remote", "set-url", "origin", join(rootDir, "missing-origin.git"));
+
+      const result = resolveExistingTargetPrUpdateBranch({
+        repoDir,
+        sourceBranch: "agent/fix-pr-322-feedback",
+        targetPrStatus: {
+          exists: true,
+          state: "open",
+          url: "https://github.com/goldmar/openclaw-code-agent/pull/322",
+          number: 322,
+          headRefName: "agent/codex-telegram-proof-tests",
+          baseRefName: "main",
+        },
+      });
+
+      assert.deepEqual(result, {
+        success: true,
+        branchName: "agent/codex-telegram-proof-tests",
+        alreadyRepresented: false,
+      });
+    } finally {
+      rmSync(rootDir, { recursive: true, force: true });
     }
   });
 
