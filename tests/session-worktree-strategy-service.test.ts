@@ -1223,6 +1223,64 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
     }
   });
 
+  it("preserves a dirty merged worktree without blocking a same-name follow-up worktree", async () => {
+    const name = "summary-cleanup-fails";
+    const { repoDir, worktreePath, branchName } = createMergeableWorktree(name);
+    try {
+      writeFileSync(join(worktreePath, "late-dirty.txt"), "preserve me\n", "utf-8");
+      const service = new SessionWorktreeStrategyService({
+        shouldRunWorktreeStrategy: () => true,
+        isAlreadyMerged: () => false,
+        resolveWorktreeRepoDir: (dir) => dir,
+        getWorktreeCompletionState: () => "has-commits",
+        updatePersistedSession: (_ref, patch) => {
+          Object.assign(session, patch);
+          return true;
+        },
+        dispatchSessionNotification: () => {},
+        getOutputPreview: () => "",
+        originThreadLine: () => "thread",
+        getWorktreeDecisionButtons: () => undefined,
+        makeOpenPrButton: () => ({ label: "Open PR", callbackData: "open-pr" }),
+        worktreeMessages: new SessionWorktreeMessageService(),
+        enqueueMerge: async (_repoDir, fn) => { await fn(); },
+        mergeBranch,
+        spawnConflictResolver: async () => ({ id: "resolver-unused", name: "unused" }),
+        runAutoPr: async () => ({ success: true }),
+      });
+      const session: any = {
+        id: "s-summary-cleanup-fails",
+        name,
+        harnessSessionId: "h-summary-cleanup-fails",
+        worktreePath,
+      };
+      const diffSummary = getDiffSummary(repoDir, branchName, "main");
+      assert.ok(diffSummary, "diff summary should be available");
+
+      const worktreeRemoved = await (service as any).handleAutoMergeStrategy(
+        session,
+        repoDir,
+        worktreePath,
+        branchName,
+        "main",
+        diffSummary,
+        session.id,
+      );
+
+      assert.equal(worktreeRemoved, false);
+      assert.equal(session.worktreeState, "merged");
+      assert.equal(session.worktreePath, worktreePath);
+      assert.equal(git(repoDir, "rev-parse", "--verify", branchName).length > 0, true);
+      assert.equal(git(worktreePath, "status", "--short"), "?? late-dirty.txt");
+
+      const followUpPath = createWorktree(repoDir, name);
+      assert.notEqual(followUpPath, worktreePath);
+      assert.notEqual(getBranchName(followUpPath), branchName);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
   it("marks 0-ahead ancestry-merged auto-merge worktrees as merged without suppressing the generic terminal wake", async () => {
     const { repoDir, worktreePath, branchName } = createMergeableWorktree("already-merged");
     const notifications: Array<Record<string, unknown>> = [];
