@@ -7,11 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.7.2] - 2026-07-13
+
 ### Changed
-- Kept the daily update checker while delegating confirmed installs to OpenClaw's native updater, explicitly following `openclaw-code-agent@latest` so user-approved updates also advance exact pinned installs.
+- Kept the daily update checker while delegating confirmed installs to OpenClaw's native updater with the exact approved version, validating canonical stable versions, and bounding registry requests, so pinned installs advance without a moving npm tag changing what the user confirmed.
 
 ### Fixed
-- Fixed release automation to send the exact verified tarball to ClawHub and to publish npm tarballs through an explicit local path.
+- Fixed restart-notification failures so they cannot misreport a completed plugin update as failed.
+- Fixed release automation to send the exact verified tarball to ClawHub, publish npm tarballs through an explicit local path, retain verified artifacts through delayed environment approval, and attribute the pre-tag ClawHub dry run to the exact commit without claiming a not-yet-created release ref.
+- Stabilized closed-helper-PR cleanup regression coverage on slower CI runners.
 
 ## [4.7.1] - 2026-07-13
 

@@ -115,7 +115,6 @@ jobs:
             --name "$PACKAGE_NAME" \
             --version "${{ inputs.version }}" \
             --source-repo "$GITHUB_REPOSITORY" \
-            --source-ref "v${{ inputs.version }}" \
             --source-commit "${{ inputs.commit }}" \
             --dry-run --json
 
@@ -125,7 +124,7 @@ jobs:
           name: release-${{ inputs.version }}
           path: artifact/${{ steps.pack.outputs.tarball }}
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 90
 
   publish:
     name: Publish release
