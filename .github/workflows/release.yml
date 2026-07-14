@@ -211,6 +211,7 @@ jobs:
               --source-repo "$GITHUB_REPOSITORY" \
               --source-ref "v${{ inputs.version }}" \
               --source-commit "${{ inputs.commit }}" \
+              --manual-override-reason "GitHub Actions workflow_dispatch publish via CLAWHUB_TOKEN" \
               --json
             clawhub package verify "$artifact" --package "$PACKAGE_NAME" --version "${{ inputs.version }}" --json
           fi
