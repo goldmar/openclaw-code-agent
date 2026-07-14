@@ -3,7 +3,10 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
-import { validateReleaseMetadata } from "../scripts/validate-release-metadata.mjs";
+import {
+  normalizeOpenClawTargetVersion,
+  validateReleaseMetadata,
+} from "../scripts/validate-release-metadata.mjs";
 import { register, routeFromInteractiveContext } from "../index";
 import { goalController, sessionManager, setGoalController, setSessionManager } from "../src/singletons";
 
@@ -104,7 +107,7 @@ describe("plugin entry source", () => {
     assert.doesNotMatch(activeWorkflowSources, /\bnpm audit\b/);
   });
 
-  it("requires a v2026.7.1 host while keeping the stable plugin API peer floor", () => {
+  it("requires v2026.7.1 across all public OpenClaw compatibility metadata", () => {
     const packageJson = JSON.parse(readFileSync(join(rootDir, "package.json"), "utf8")) as {
       dependencies?: Record<string, string>;
       openclaw?: {
@@ -120,13 +123,25 @@ describe("plugin entry source", () => {
     assert.equal(packageJson.openclaw?.install?.npmSpec, "openclaw-code-agent");
     assert.equal(packageJson.openclaw?.install?.defaultChoice, "npm");
     assert.equal(packageJson.openclaw?.install?.minHostVersion, ">=2026.7.1");
-    assert.equal(packageJson.openclaw?.compat?.pluginApi, ">=2026.4.21");
-    assert.equal(packageJson.openclaw?.compat?.minGatewayVersion, "2026.4.21");
+    assert.equal(packageJson.openclaw?.compat?.pluginApi, ">=2026.7.1");
+    assert.equal(packageJson.openclaw?.compat?.minGatewayVersion, "2026.7.1");
     assert.equal(packageJson.openclaw?.build?.openclawVersion, "2026.7.1");
     assert.equal(packageJson.openclaw?.build?.pluginSdkVersion, "2026.7.1");
-    assert.equal(packageJson.peerDependencies?.openclaw, ">=2026.4.21");
+    assert.equal(packageJson.peerDependencies?.openclaw, ">=2026.7.1");
     assert.equal(packageJson.devDependencies?.openclaw, "2026.7.1");
     assert.doesNotMatch(readFileSync(join(rootDir, "pnpm-lock.yaml"), "utf8"), /uuid@9\.0\.1/);
+  });
+
+  it("accepts exact and range-shaped manual OpenClaw release targets", () => {
+    assert.equal(normalizeOpenClawTargetVersion("2026.7.1"), "2026.7.1");
+    assert.equal(normalizeOpenClawTargetVersion(">=2026.7.1"), "2026.7.1");
+    assert.doesNotThrow(() =>
+      validateReleaseMetadata({ openclawTargetVersion: ">=2026.7.1" }),
+    );
+    assert.throws(
+      () => normalizeOpenClawTargetVersion("^2026.7.1"),
+      /expected an exact version or >= range/u,
+    );
   });
 
   it("declares high-trust automation config flags for OpenClaw security review", () => {
@@ -431,8 +446,8 @@ describe("plugin entry source", () => {
     const changelog = readFileSync(join(rootDir, "CHANGELOG.md"), "utf8");
 
     assert.match(reference, /OpenClaw 2026\.7\.1 SDK Readiness/);
-    assert.match(reference, /minimum host version advertised for new installs/);
-    assert.match(readme, /minimum host version advertised for new installs/);
+    assert.match(reference, /validated against and requires OpenClaw `2026\.7\.1`/);
+    assert.match(readme, /targets, validates against, and requires OpenClaw `2026\.7\.1`/);
     assert.match(changelog, /Retargeted the OpenClaw package and plugin SDK validation metadata to `2026\.7\.1`/);
     assert.match(changelog, /Codex app-server, Telegram and topic routing, cron\/session delivery/);
     assert.match(readme, /retryable stale plan approval buttons/);
