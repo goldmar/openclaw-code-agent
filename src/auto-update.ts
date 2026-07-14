@@ -15,6 +15,7 @@ const NPM_PACKAGE_URL = `https://registry.npmjs.org/${encodeURIComponent(PACKAGE
 const UPDATE_STATE_FILE = "openclaw-code-agent-auto-update.json";
 const DAY_MS = 24 * 60 * 60 * 1000;
 const WEEK_MS = 7 * DAY_MS;
+const FETCH_TIMEOUT_MS = 10_000;
 const UPDATE_SESSION_ID = "plugin:auto-update";
 
 type AutoUpdateState = {
@@ -82,9 +83,10 @@ function normalizeVersion(version: string | undefined): string | undefined {
 
 function parseStableSemver(version: string | undefined): [number, number, number] | undefined {
   const normalized = normalizeVersion(version);
-  const match = normalized?.match(/^(\d+)\.(\d+)\.(\d+)$/);
+  const match = normalized?.match(/^((?:0|[1-9]\d*))\.((?:0|[1-9]\d*))\.((?:0|[1-9]\d*))$/);
   if (!match?.[1] || !match[2] || !match[3]) return undefined;
-  return [Number(match[1]), Number(match[2]), Number(match[3])];
+  const parts = [Number(match[1]), Number(match[2]), Number(match[3])] as [number, number, number];
+  return parts.every(Number.isSafeInteger) ? parts : undefined;
 }
 
 export function isNewerStableVersion(candidate: string | undefined, current: string | undefined): boolean {
@@ -140,6 +142,7 @@ async function fetchNpmLatestRelease(): Promise<ReleaseInfo | undefined> {
   // follows the recorded npm install source for bare OCA installs.
   const response = await fetch(NPM_PACKAGE_URL, {
     headers: { accept: "application/json" },
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   });
   if (!response.ok) {
     throw new Error(`npm registry returned HTTP ${response.status}`);
@@ -195,9 +198,11 @@ export class AutoUpdateService {
 
   async installConfirmed(version: string | undefined, routeSource?: SessionRouteSource): Promise<string> {
     const normalizedVersion = normalizeVersion(version);
-    if (!normalizedVersion) return "Could not determine which OCA version to update to.";
+    if (!normalizedVersion || !parseStableSemver(normalizedVersion)) {
+      return "Could not determine which stable OCA version to update to.";
+    }
 
-    await this.runCommand("openclaw", ["plugins", "update", `${PACKAGE_NAME}@latest`]);
+    await this.runCommand("openclaw", ["plugins", "update", `${PACKAGE_NAME}@${normalizedVersion}`]);
     const state = this.readState();
     this.writeState({
       ...state,
@@ -206,8 +211,12 @@ export class AutoUpdateService {
 
     const route = routeToNotificationRoute(routeSource?.route ?? fallbackRoute());
     if (route) {
-      await this.sendRestartPrompt(route, normalizedVersion);
-      return `OCA update command completed for ${normalizedVersion}. Restart confirmation was sent.`;
+      try {
+        await this.sendRestartPrompt(route, normalizedVersion);
+        return `OCA update command completed for ${normalizedVersion}. Restart confirmation was sent.`;
+      } catch (error) {
+        console.warn(`[auto-update] OCA ${normalizedVersion} was updated, but the restart prompt failed: ${errorMessage(error)}`);
+      }
     }
 
     return [
@@ -303,7 +312,7 @@ export class AutoUpdateService {
     await this.notifier.send(route, [
       `OCA update available: ${this.options.currentVersion} -> ${latestVersion}.`,
       ``,
-      `Update now will run: openclaw plugins update ${PACKAGE_NAME}@latest`,
+      `Update now will run: openclaw plugins update ${PACKAGE_NAME}@${latestVersion}`,
       `If the update succeeds, OCA will ask separately before restarting the Gateway.`,
     ].join("\n"), [[
       this.options.actionButtonFactory(UPDATE_SESSION_ID, "plugin-update-install", "Update now", {
@@ -384,4 +393,5 @@ export const autoUpdateInternals = {
   UPDATE_STATE_FILE,
   DAY_MS,
   WEEK_MS,
+  FETCH_TIMEOUT_MS,
 };

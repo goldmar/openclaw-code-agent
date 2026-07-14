@@ -222,7 +222,7 @@ describe("agent_worktree_status", () => {
       const helper = createCommittedWorktree(repoDir, "pr-314-comments-cleanup", "cleanup.txt", "commit 7f50458\n");
       const helperCommit = git(helper.worktreePath, "rev-parse", "HEAD");
       git(repoDir, "checkout", "fix-test-session-store-isolation");
-      git(repoDir, "cherry-pick", helperCommit);
+      git(repoDir, "merge", "--ff-only", helperCommit);
 
       const persisted = {
         sessionId: "s-pr-314-comments-cleanup",

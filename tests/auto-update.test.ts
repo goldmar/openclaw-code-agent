@@ -83,6 +83,8 @@ describe("AutoUpdateService", () => {
     assert.equal(isNewerStableVersion("4.6.0", "4.6.0"), false);
     assert.equal(isNewerStableVersion("4.5.9", "4.6.0"), false);
     assert.equal(isNewerStableVersion("4.7.0-beta.1", "4.6.0"), false);
+    assert.equal(isNewerStableVersion("04.7.0", "4.6.0"), false);
+    assert.equal(isNewerStableVersion("9007199254740992.0.0", "4.6.0"), false);
   });
 
   it("checks npm at most once per day", async () => {
@@ -260,11 +262,65 @@ describe("AutoUpdateService", () => {
 
     const updateText = await harness.service.installConfirmed("4.6.1", { route: ROUTE });
     assert.match(updateText, /Restart confirmation was sent/);
-    assert.deepEqual(harness.commands, [["openclaw", "plugins", "update", "openclaw-code-agent@latest"]]);
+    assert.deepEqual(harness.commands, [["openclaw", "plugins", "update", "openclaw-code-agent@4.6.1"]]);
     assert.deepEqual(harness.sends.at(-1)?.labels, ["Restart Gateway", "Remind later", "Dismiss"]);
 
     const restartText = await harness.service.restartConfirmed("4.6.1");
     assert.match(restartText, /Gateway restart requested/);
     assert.deepEqual(harness.commands.at(-1), ["openclaw", "gateway", "restart"]);
+  });
+
+  it("installs the exact approved version when npm latest advances after prompting", async () => {
+    setPluginConfig({});
+    const stateDir = tempStateDir();
+    const harness = createService({
+      stateDir,
+      currentVersion: "4.6.0",
+      latestVersion: "4.6.1",
+    });
+
+    harness.service.maybeCheckForUpdate({ route: ROUTE });
+    await harness.service.waitForIdle();
+    assert.match(harness.sends[0]?.text ?? "", /openclaw-code-agent@4\.6\.1/);
+
+    // The registry may move after the signed callback token was created. The
+    // confirmation must still install the version that the user saw.
+    const updateText = await harness.service.installConfirmed("4.6.1", { route: ROUTE });
+
+    assert.match(updateText, /completed for 4\.6\.1/);
+    assert.deepEqual(harness.commands, [["openclaw", "plugins", "update", "openclaw-code-agent@4.6.1"]]);
+    assert.equal(readState(stateDir).updateInstalledVersion, "4.6.1");
+    assert.match(harness.sends.at(-1)?.text ?? "", /OCA 4\.6\.1 update command completed/);
+  });
+
+  it("rejects non-stable update versions before invoking OpenClaw", async () => {
+    setPluginConfig({});
+    const harness = createService({});
+
+    const updateText = await harness.service.installConfirmed("latest", { route: ROUTE });
+
+    assert.match(updateText, /stable OCA version/);
+    assert.deepEqual(harness.commands, []);
+  });
+
+  it("does not report a completed install as failed when the restart prompt cannot be delivered", async () => {
+    setPluginConfig({});
+    const commands: string[][] = [];
+    const service = new AutoUpdateService({
+      stateDir: tempStateDir(),
+      currentVersion: "4.6.0",
+      actionButtonFactory: (_sessionId, kind, label) => ({ label, callbackData: kind }),
+      notifier: { send: async () => { throw new Error("Telegram message is no longer available"); } },
+      runCommand: async (command, args) => {
+        commands.push([command, ...args]);
+        return { stdout: "", stderr: "" };
+      },
+    });
+
+    const updateText = await service.installConfirmed("4.6.1", { route: ROUTE });
+
+    assert.match(updateText, /update command completed for 4\.6\.1/);
+    assert.match(updateText, /openclaw gateway restart/);
+    assert.deepEqual(commands, [["openclaw", "plugins", "update", "openclaw-code-agent@4.6.1"]]);
   });
 });
