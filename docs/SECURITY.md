@@ -58,17 +58,22 @@ The release package includes:
 
 The orchestration skill should describe plugin tool state without wording that resembles prompt hierarchy changes. Local tests reject `authoritative`, `system prompt`, `developer instruction`, and `higher-priority` phrasing in `skills/code-agent-orchestration/SKILL.md`.
 
-## Current Scanner Findings
+## Current Subprocess Review
 
-`pnpm check-plugin-security` currently reports and explicitly allowlists one expected finding:
+Source review identifies two expected findings in the packed bundle:
 
 1. `Shell command execution detected (child_process)`
+2. `Environment variable access combined with network send — possible credential harvesting`
 
 ### `child_process`
 
-This finding is legitimate but expected. The plugin cannot provide its core orchestration features without spawning local processes.
+This capability is legitimate but expected. The plugin cannot provide its core orchestration features without spawning local processes.
 
-The release checker installs the packed plugin with OpenClaw's unsafe-install override so this known finding can be reviewed without blocking the whole release gate. It still fails if the OpenClaw installer reports any additional dangerous-code finding.
+OpenClaw 2026.7.1 no longer performs built-in dangerous-code blocking during plugin installation. The release checker strips inherited `OPENCLAW_*` overrides, packs and installs the plugin under an isolated temporary home, then runs OpenClaw's deep static code-safety audit and accepts only the two reviewed findings above. Missing scans, scan errors, and additional dangerous-code patterns fail the gate. Operators who need a host-specific install decision should configure `security.installPolicy` after reviewing the subprocess inventory below.
+
+### Bundled environment/network heuristic
+
+The packed bundle contains both local environment reads for harness/configuration behavior and a bounded npm registry request for the opt-in update prompt. OpenClaw's file-level audit therefore reports its environment-plus-network heuristic even though source review keeps those operations separate and the request does not send environment values. The release checker accepts that exact rule/message and rejects any other added audit rule.
 
 ### Environment And Network Review
 

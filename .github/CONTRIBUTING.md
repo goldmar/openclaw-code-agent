@@ -6,7 +6,7 @@ Thank you for your interest in contributing! This guide covers everything you ne
 
 ## Prerequisites
 
-- **Node.js** 22
+- **Node.js** 22.22.3+ (Node 22) or another version supported by the pinned OpenClaw SDK
 - **pnpm** 10+ — install with `npm install -g pnpm`
 
 ---
@@ -54,7 +54,7 @@ Every PR must pass `pnpm verify` locally and in CI. The current automated checks
 
 | Check | Command | Notes |
 |-------|---------|-------|
-| Verify | `pnpm verify` | Canonical typecheck + build + test gate on Node 22 |
+| Verify | `pnpm verify` | Canonical typecheck + build + test gate on Node 22.22.3 |
 | Bundle size | — | `dist/index.js` must be < 600 KB |
 | Lockfile integrity | — | `pnpm-lock.yaml` must be in sync with `package.json` |
 
