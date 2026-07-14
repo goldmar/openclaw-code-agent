@@ -154,6 +154,55 @@ describe("createCallbackHandler()", () => {
     assert.match(state.replies[0] ?? "", /restart prompt sent/);
   });
 
+  it("runs the plugin update from native Telegram callback_data and emits action diagnostics", async (t) => {
+    process.env.OPENCLAW_CODE_AGENT_BUTTON_DIAGNOSTICS = "1";
+    const logs: string[] = [];
+    t.mock.method(console, "info", ((message?: unknown) => { logs.push(String(message)); }) as typeof console.info);
+    let installs = 0;
+    setAutoUpdateService({
+      installConfirmed: async () => {
+        installs++;
+        return "OCA 4.6.1 installation was verified.";
+      },
+    } as any);
+    setSessionManager({
+      getActionToken: () => ({
+        id: "native-update-token",
+        sessionId: "plugin:auto-update",
+        kind: "plugin-update-install",
+        pluginUpdateVersion: "4.6.1",
+      }),
+      consumeActionToken: () => ({
+        id: "native-update-token",
+        sessionId: "plugin:auto-update",
+        kind: "plugin-update-install",
+        pluginUpdateVersion: "4.6.1",
+      }),
+      resolve: () => undefined,
+      getPersistedSession: () => undefined,
+    } as any);
+
+    const handler = createCallbackHandler();
+    const state = createCtx("ignored", "telegram", {
+      telegramCallback: {
+        data: undefined,
+        payload: undefined,
+        callback_data: "code-agent:native-update-token",
+      },
+    });
+    const result = await handler.handler(state.ctx as any);
+
+    assert.deepEqual(result, { handled: true });
+    assert.equal(installs, 1);
+    assert.equal(state.callbacksAcknowledged, 1);
+    assert.match(state.replies[0] ?? "", /installation was verified/);
+    const joined = logs.join("\n");
+    assert.match(joined, /"event":"callback_received"/);
+    assert.match(joined, /"event":"callback_update_action_started"/);
+    assert.match(joined, /"event":"callback_update_action_completed"/);
+    assert.doesNotMatch(joined, /native-update-token/);
+  });
+
   it("restarts the Gateway only from explicit plugin restart confirmation", async () => {
     const calls: string[] = [];
     setAutoUpdateService({

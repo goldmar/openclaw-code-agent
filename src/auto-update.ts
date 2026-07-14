@@ -34,6 +34,20 @@ type ReleaseInfo = {
   version: string;
 };
 
+type ManagedInstallSource = "npm" | "clawhub";
+
+type ManagedInstall = {
+  source: ManagedInstallSource;
+  packageName: string;
+  recordedVersion?: string;
+  resolvedVersion?: string;
+};
+
+type PluginInspection = {
+  pluginVersion: string;
+  install: ManagedInstall;
+};
+
 type CommandResult = {
   stdout: string;
   stderr: string;
@@ -79,6 +93,87 @@ function errorMessage(error: unknown): string {
 function normalizeVersion(version: string | undefined): string | undefined {
   const trimmed = version?.trim().replace(/^v/i, "");
   return trimmed || undefined;
+}
+
+function requiredString(record: Record<string, unknown>, key: string): string | undefined {
+  const value = record[key];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function npmPackageNameFromSpec(spec: string | undefined): string | undefined {
+  const normalized = spec?.trim().replace(/^npm:/, "");
+  if (!normalized) return undefined;
+  if (normalized.startsWith("@")) {
+    const separator = normalized.indexOf("@", 1);
+    return separator === -1 ? normalized : normalized.slice(0, separator);
+  }
+  const separator = normalized.indexOf("@");
+  return separator === -1 ? normalized : normalized.slice(0, separator);
+}
+
+function parsePluginInspection(result: CommandResult): PluginInspection {
+  const combinedOutput = `${result.stdout}\n${result.stderr}`;
+  if (/No install record/i.test(combinedOutput)) {
+    throw new Error("OpenClaw reported no managed install record for OCA.");
+  }
+
+  let payload: unknown;
+  try {
+    payload = JSON.parse(result.stdout);
+  } catch {
+    throw new Error("OpenClaw returned invalid JSON while inspecting the OCA install.");
+  }
+  if (!isRecord(payload) || !isRecord(payload.plugin) || !isRecord(payload.install)) {
+    throw new Error("OpenClaw inspection did not include the OCA plugin and managed install record.");
+  }
+  const pluginId = requiredString(payload.plugin, "id");
+  const pluginVersion = normalizeVersion(requiredString(payload.plugin, "version"));
+  if (pluginId !== PACKAGE_NAME || !pluginVersion) {
+    throw new Error("OpenClaw inspection returned an unexpected OCA plugin identity or version.");
+  }
+
+  const source = requiredString(payload.install, "source");
+  const recordedVersion = normalizeVersion(requiredString(payload.install, "version"));
+  const resolvedVersion = normalizeVersion(requiredString(payload.install, "resolvedVersion"));
+  if (source === "npm") {
+    const packageName = requiredString(payload.install, "resolvedName")
+      ?? npmPackageNameFromSpec(requiredString(payload.install, "spec"))
+      ?? npmPackageNameFromSpec(requiredString(payload.install, "resolvedSpec"));
+    if (!packageName) throw new Error("The OCA npm install record does not identify its package.");
+    return { pluginVersion, install: { source, packageName, recordedVersion, resolvedVersion } };
+  }
+  if (source === "clawhub") {
+    const packageName = requiredString(payload.install, "clawhubPackage");
+    if (!packageName) throw new Error("The OCA ClawHub install record does not identify its package.");
+    return { pluginVersion, install: { source, packageName, recordedVersion, resolvedVersion } };
+  }
+  throw new Error(`OCA self-update does not support managed install source ${source ?? "unknown"}.`);
+}
+
+function installArgs(install: ManagedInstall, version: string): string[] {
+  const spec = install.source === "npm"
+    ? `${install.packageName}@${version}`
+    : `clawhub:${install.packageName}@${version}`;
+  return ["plugins", "install", spec, "--force"];
+}
+
+function assertVerifiedInstall(
+  before: PluginInspection,
+  after: PluginInspection,
+  approvedVersion: string,
+): void {
+  if (after.install.source !== before.install.source || after.install.packageName !== before.install.packageName) {
+    throw new Error("OCA update verification found that the managed install source or package changed.");
+  }
+  if (after.pluginVersion !== approvedVersion) {
+    throw new Error(`OCA update verification found runtime plugin version ${after.pluginVersion}, expected ${approvedVersion}.`);
+  }
+  const managedVersions = [after.install.recordedVersion, after.install.resolvedVersion].filter(
+    (version): version is string => Boolean(version),
+  );
+  if (managedVersions.length === 0 || managedVersions.some((version) => version !== approvedVersion)) {
+    throw new Error(`OCA update verification found managed install version ${managedVersions.join("/") || "unknown"}, expected ${approvedVersion}.`);
+  }
 }
 
 function parseStableSemver(version: string | undefined): [number, number, number] | undefined {
@@ -202,7 +297,17 @@ export class AutoUpdateService {
       return "Could not determine which stable OCA version to update to.";
     }
 
-    await this.runCommand("openclaw", ["plugins", "update", `${PACKAGE_NAME}@${normalizedVersion}`]);
+    const before = parsePluginInspection(
+      await this.runCommand("openclaw", ["plugins", "inspect", PACKAGE_NAME, "--json"]),
+    );
+    const installResult = await this.runCommand("openclaw", installArgs(before.install, normalizedVersion));
+    if (/No install record/i.test(`${installResult.stdout}\n${installResult.stderr}`)) {
+      throw new Error("OpenClaw reported no managed install record while updating OCA.");
+    }
+    const after = parsePluginInspection(
+      await this.runCommand("openclaw", ["plugins", "inspect", PACKAGE_NAME, "--runtime", "--json"]),
+    );
+    assertVerifiedInstall(before, after, normalizedVersion);
     const state = this.readState();
     this.writeState({
       ...state,
@@ -213,14 +318,14 @@ export class AutoUpdateService {
     if (route) {
       try {
         await this.sendRestartPrompt(route, normalizedVersion);
-        return `OCA update command completed for ${normalizedVersion}. Restart confirmation was sent.`;
+        return `OCA ${normalizedVersion} installation was verified. Restart confirmation was sent.`;
       } catch (error) {
         console.warn(`[auto-update] OCA ${normalizedVersion} was updated, but the restart prompt failed: ${errorMessage(error)}`);
       }
     }
 
     return [
-      `OCA update command completed for ${normalizedVersion}.`,
+      `OCA ${normalizedVersion} installation was verified.`,
       `Restart the Gateway explicitly to load it: openclaw gateway restart`,
     ].join("\n");
   }
@@ -312,7 +417,7 @@ export class AutoUpdateService {
     await this.notifier.send(route, [
       `OCA update available: ${this.options.currentVersion} -> ${latestVersion}.`,
       ``,
-      `Update now will run: openclaw plugins update ${PACKAGE_NAME}@${latestVersion}`,
+      `Update now will reinstall the exact approved version from OCA's recorded npm or ClawHub source, then verify it.`,
       `If the update succeeds, OCA will ask separately before restarting the Gateway.`,
     ].join("\n"), [[
       this.options.actionButtonFactory(UPDATE_SESSION_ID, "plugin-update-install", "Update now", {
@@ -350,7 +455,7 @@ export class AutoUpdateService {
 
   private async sendRestartPrompt(route: NotificationRoute, version: string): Promise<void> {
     await this.notifier.send(route, [
-      `OCA ${version} update command completed.`,
+      `OCA ${version} installation was verified.`,
       ``,
       `Restart the Gateway now to load the updated plugin?`,
       `This will run: openclaw gateway restart`,
@@ -394,4 +499,6 @@ export const autoUpdateInternals = {
   DAY_MS,
   WEEK_MS,
   FETCH_TIMEOUT_MS,
+  parsePluginInspection,
+  installArgs,
 };
