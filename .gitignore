@@ -2,6 +2,7 @@ node_modules/
 dist/
 .worktrees/
 .artifacts/
+.reports/
 CLAUDE.md
 
 .idea/

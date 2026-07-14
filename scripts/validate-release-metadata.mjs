@@ -73,10 +73,31 @@ export function validateReleaseMetadata(options = {}) {
     );
   }
 
-  if (openclawInstall.minHostVersion !== ">=2026.4.21") {
+  if (openclawInstall.minHostVersion !== ">=2026.7.1") {
     throw new Error(
-      `OpenClaw install minHostVersion mismatch: expected >=2026.4.21, got ${openclawInstall.minHostVersion}`,
+      `OpenClaw install minHostVersion mismatch: expected >=2026.7.1, got ${openclawInstall.minHostVersion}`,
     );
+  }
+
+  const packageJson = JSON.parse(readFileSync(join(baseDir, "package.json"), "utf8"));
+  const changelog = readFileSync(join(baseDir, "CHANGELOG.md"), "utf8");
+  const lockfile = readFileSync(join(baseDir, "pnpm-lock.yaml"), "utf8");
+  const escapedVersion = packageVersion.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+
+  if (!new RegExp(`^## \\\[${escapedVersion}\\\](?: - .+)?$`, "mu").test(changelog)) {
+    throw new Error(`CHANGELOG.md has no ${packageVersion} section`);
+  }
+
+  if (!lockfile.includes(`openclaw:\n        specifier: ${openclawVersion}`)) {
+    throw new Error(`pnpm-lock.yaml is not pinned to OpenClaw ${openclawVersion}`);
+  }
+
+  if (packageJson.packageManager !== "pnpm@10.30.0") {
+    throw new Error(`Unexpected package manager: ${packageJson.packageManager}`);
+  }
+
+  if (packageJson.publishConfig?.provenance !== true) {
+    throw new Error("npm provenance must be enabled");
   }
 
   return {

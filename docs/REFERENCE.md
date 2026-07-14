@@ -30,9 +30,9 @@ Current releases treat persisted session storage as new-schema-only. If startup 
 
 ### OpenClaw 2026.7.1 SDK Readiness
 
-The current `openclaw-code-agent` package is validated against the OpenClaw SDK package `openclaw@2026.7.1`. The plugin keeps the peer floor at `>=2026.4.21` for compatible existing installs, while package build metadata targets OpenClaw `2026.7.1` for both host and SDK readiness.
+The current `openclaw-code-agent` package is validated against OpenClaw `2026.7.1`, which is also the minimum host version advertised for new installs. The plugin keeps its API peer floor at `>=2026.4.21` for dependency resolution, while package install and build metadata target OpenClaw `2026.7.1` for host and SDK readiness.
 
-No host upgrade, `openclaw doctor --fix`, Gateway restart, or host config change is required for this plugin compatibility update. No new OpenClaw SDK imports were needed for `2026.7.1`: this plugin still depends only on the stable plugin-entry surface. Runtime code still imports only `openclaw/plugin-sdk/plugin-entry` from the OpenClaw SDK, `openclaw.plugin.json` already declares tools through `contracts.tools`, package-level OpenClaw readiness stays in `package.json`, pnpm build policy and overrides live in `pnpm-workspace.yaml`, and code-agent session storage remains plugin-owned. Current callback handling, plan approval, session wake/routing, Codex harness behavior, and worktree follow-through remain plugin-owned compatibility surfaces.
+Hosts already running OpenClaw `2026.7.1` need no host config change. No new OpenClaw SDK imports were needed for `2026.7.1`: this plugin still depends only on the stable plugin-entry surface. Runtime code still imports only `openclaw/plugin-sdk/plugin-entry` from the OpenClaw SDK, `openclaw.plugin.json` already declares tools through `contracts.tools`, package-level OpenClaw readiness stays in `package.json`, pnpm build policy and overrides live in `pnpm-workspace.yaml`, and code-agent session storage remains plugin-owned. Current callback handling, plan approval, session wake/routing, Codex harness behavior, and worktree follow-through remain plugin-owned compatibility surfaces.
 
 Configuration guidance for `2026.7.1`:
 
