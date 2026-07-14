@@ -109,15 +109,12 @@ jobs:
           rm -rf "$base"
 
       - name: ClawHub dry run with exact source attribution
-        env:
-          SOURCE_REF: ${{ github.ref }}
         run: |
           pnpm dlx "clawhub@$CLAWHUB_CLI_VERSION" package publish "$PWD" \
             --family code-plugin \
             --name "$PACKAGE_NAME" \
             --version "${{ inputs.version }}" \
             --source-repo "$GITHUB_REPOSITORY" \
-            --source-ref "$SOURCE_REF" \
             --source-commit "${{ inputs.commit }}" \
             --dry-run --json
 
