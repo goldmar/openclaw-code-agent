@@ -175,6 +175,27 @@ jobs:
       - name: Install ClawHub CLI
         run: npm install --global "clawhub@$CLAWHUB_CLI_VERSION"
 
+      - name: Configure ClawHub token
+        env:
+          CLAWHUB_REGISTRY: https://clawhub.ai
+          CLAWHUB_TOKEN: ${{ secrets.CLAWHUB_TOKEN }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          token = os.environ["CLAWHUB_TOKEN"].strip()
+          if not token:
+              raise SystemExit("CLAWHUB_TOKEN is not configured")
+          path = Path(os.environ["RUNNER_TEMP"]) / "clawhub-config.json"
+          descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+          with os.fdopen(descriptor, "w", encoding="utf-8") as config:
+              json.dump({"registry": os.environ["CLAWHUB_REGISTRY"], "token": token}, config)
+              config.write("\n")
+          PY
+          echo "CLAWHUB_CONFIG_PATH=$RUNNER_TEMP/clawhub-config.json" >> "$GITHUB_ENV"
+
       - name: Publish or verify ClawHub artifact
         env:
           TARBALL: ${{ needs.verify.outputs.tarball }}
@@ -193,6 +214,10 @@ jobs:
               --json
             clawhub package verify "$artifact" --package "$PACKAGE_NAME" --version "${{ inputs.version }}" --json
           fi
+
+      - name: Remove ClawHub token config
+        if: always()
+        run: rm -f "$RUNNER_TEMP/clawhub-config.json"
 
       - name: Publish or verify npm artifact
         env:
