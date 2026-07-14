@@ -184,10 +184,7 @@ jobs:
           if clawhub package verify "$artifact" --package "$PACKAGE_NAME" --version "${{ inputs.version }}" --json; then
             echo "Matching ClawHub artifact already exists."
           else
-            source_dir="$RUNNER_TEMP/clawhub-source"
-            mkdir "$source_dir"
-            tar -xzf "$artifact" -C "$source_dir" --strip-components=1
-            clawhub package publish "$source_dir" \
+            clawhub package publish "$artifact" \
               --family code-plugin \
               --name "$PACKAGE_NAME" \
               --version "${{ inputs.version }}" \
@@ -209,7 +206,7 @@ jobs:
             test "$(sha256sum "$existing" | cut -d' ' -f1)" = "$(sha256sum "artifact/$TARBALL" | cut -d' ' -f1)"
             echo "Matching npm artifact already exists."
           else
-            npm publish "artifact/$TARBALL" --access public --provenance
+            npm publish "./artifact/$TARBALL" --access public --provenance
           fi
 
       - name: Create or update GitHub release

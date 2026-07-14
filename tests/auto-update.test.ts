@@ -260,7 +260,7 @@ describe("AutoUpdateService", () => {
 
     const updateText = await harness.service.installConfirmed("4.6.1", { route: ROUTE });
     assert.match(updateText, /Restart confirmation was sent/);
-    assert.deepEqual(harness.commands, [["openclaw", "plugins", "update", "openclaw-code-agent"]]);
+    assert.deepEqual(harness.commands, [["openclaw", "plugins", "update", "openclaw-code-agent@latest"]]);
     assert.deepEqual(harness.sends.at(-1)?.labels, ["Restart Gateway", "Remind later", "Dismiss"]);
 
     const restartText = await harness.service.restartConfirmed("4.6.1");
