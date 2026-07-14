@@ -45,6 +45,23 @@ export function findUnexpectedPluginSafetyFindings(auditResult, expectedPluginNa
   return unexpected;
 }
 
+export function createIsolatedOpenClawEnv(profileDir, sourceEnv = process.env) {
+  const env = Object.fromEntries(
+    Object.entries(sourceEnv).filter(([key]) => !key.startsWith("OPENCLAW_")),
+  );
+  return {
+    ...env,
+    HOME: profileDir,
+    XDG_CONFIG_HOME: join(profileDir, "config"),
+    XDG_STATE_HOME: join(profileDir, "xdg-state"),
+    XDG_DATA_HOME: join(profileDir, "data"),
+    XDG_CACHE_HOME: join(profileDir, "cache"),
+    OPENCLAW_STATE_DIR: join(profileDir, "state"),
+    OPENCLAW_CONFIG_PATH: join(profileDir, "config.json"),
+    OPENCLAW_GATEWAY_PORT: "65534",
+  };
+}
+
 function runCommand(command, args, options = {}) {
   const child = spawn(command, args, {
     cwd: options.cwd ?? rootDir,
@@ -88,6 +105,7 @@ async function main() {
   const workspaceDir = resolve(rootDir);
   const packDir = await mkdtemp(join(tmpdir(), "openclaw-plugin-pack-"));
   const profileDir = await mkdtemp(join(tmpdir(), "openclaw-plugin-security-"));
+  const isolatedEnv = createIsolatedOpenClawEnv(profileDir);
 
   try {
     const packed = await runCommand("pnpm", [
@@ -124,17 +142,7 @@ async function main() {
       tarballPath,
     ], {
       cwd: workspaceDir,
-      env: {
-        ...process.env,
-        HOME: profileDir,
-        XDG_CONFIG_HOME: join(profileDir, "config"),
-        XDG_STATE_HOME: join(profileDir, "xdg-state"),
-        XDG_DATA_HOME: join(profileDir, "data"),
-        XDG_CACHE_HOME: join(profileDir, "cache"),
-        OPENCLAW_STATE_DIR: join(profileDir, "state"),
-        OPENCLAW_CONFIG_PATH: join(profileDir, "config.json"),
-        OPENCLAW_GATEWAY_PORT: "65534",
-      },
+      env: isolatedEnv,
     });
 
     if (install.code !== 0) {
@@ -151,17 +159,7 @@ async function main() {
       "--json",
     ], {
       cwd: workspaceDir,
-      env: {
-        ...process.env,
-        HOME: profileDir,
-        XDG_CONFIG_HOME: join(profileDir, "config"),
-        XDG_STATE_HOME: join(profileDir, "xdg-state"),
-        XDG_DATA_HOME: join(profileDir, "data"),
-        XDG_CACHE_HOME: join(profileDir, "cache"),
-        OPENCLAW_STATE_DIR: join(profileDir, "state"),
-        OPENCLAW_CONFIG_PATH: join(profileDir, "config.json"),
-        OPENCLAW_GATEWAY_PORT: "65534",
-      },
+      env: isolatedEnv,
       forwardStdout: false,
     });
     if (audit.code !== 0) {

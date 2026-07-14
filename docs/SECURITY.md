@@ -69,7 +69,7 @@ Source review identifies two expected findings in the packed bundle:
 
 This capability is legitimate but expected. The plugin cannot provide its core orchestration features without spawning local processes.
 
-OpenClaw 2026.7.1 no longer performs built-in dangerous-code blocking during plugin installation. The release checker packs and installs the plugin under an isolated temporary home, then runs OpenClaw's deep static code-safety audit and accepts only the two reviewed findings above. Missing scans, scan errors, and additional dangerous-code patterns fail the gate. Operators who need a host-specific install decision should configure `security.installPolicy` after reviewing the subprocess inventory below.
+OpenClaw 2026.7.1 no longer performs built-in dangerous-code blocking during plugin installation. The release checker strips inherited `OPENCLAW_*` overrides, packs and installs the plugin under an isolated temporary home, then runs OpenClaw's deep static code-safety audit and accepts only the two reviewed findings above. Missing scans, scan errors, and additional dangerous-code patterns fail the gate. Operators who need a host-specific install decision should configure `security.installPolicy` after reviewing the subprocess inventory below.
 
 ### Bundled environment/network heuristic
 

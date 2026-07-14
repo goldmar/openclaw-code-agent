@@ -1,6 +1,9 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { findUnexpectedPluginSafetyFindings } from "../scripts/check-plugin-security.mjs";
+import {
+  createIsolatedOpenClawEnv,
+  findUnexpectedPluginSafetyFindings,
+} from "../scripts/check-plugin-security.mjs";
 
 const expectedFinding = {
   checkId: "plugins.code_safety",
@@ -33,5 +36,23 @@ describe("packed-plugin security finding validation", () => {
       }).length,
       2,
     );
+  });
+});
+
+describe("packed-plugin environment isolation", () => {
+  it("drops inherited OpenClaw overrides and keeps only temporary paths", () => {
+    const env = createIsolatedOpenClawEnv("/tmp/isolated-profile", {
+      PATH: "/usr/bin",
+      OPENCLAW_HOME: "/operator/home",
+      OPENCLAW_CODE_AGENT_STATE_DIR: "/operator/plugin-state",
+      OPENCLAW_CODE_AGENT_SESSIONS_PATH: "/operator/sessions.json",
+    });
+
+    assert.equal(env.PATH, "/usr/bin");
+    assert.equal(env.OPENCLAW_HOME, undefined);
+    assert.equal(env.OPENCLAW_CODE_AGENT_STATE_DIR, undefined);
+    assert.equal(env.OPENCLAW_CODE_AGENT_SESSIONS_PATH, undefined);
+    assert.equal(env.OPENCLAW_STATE_DIR, "/tmp/isolated-profile/state");
+    assert.equal(env.OPENCLAW_CONFIG_PATH, "/tmp/isolated-profile/config.json");
   });
 });
