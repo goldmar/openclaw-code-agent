@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
-- Fixed self-updates on OpenClaw `2026.7.1` by reinstalling the exact approved release from the recorded npm or ClawHub source and verifying both runtime inspection and managed install metadata before offering a Gateway restart.
+- Fixed self-updates on OpenClaw `2026.7.1` by discovering releases from the recorded npm or ClawHub source, reinstalling the exact approved release from that source, and verifying installed plugin discovery plus managed install metadata before offering a Gateway restart.
 - Added focused Telegram update-callback diagnostics and regression coverage so plugin-owned handling can be distinguished from callbacks that OpenClaw core never dispatches.
 
 ## [4.7.3] - 2026-07-14

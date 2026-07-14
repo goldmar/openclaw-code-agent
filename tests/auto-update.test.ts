@@ -193,6 +193,13 @@ describe("AutoUpdateService", () => {
             });
           },
         },
+        runCommand: async () => ({
+          stdout: JSON.stringify({
+            plugin: { id: "openclaw-code-agent", version: "4.6.0" },
+            install: { source: "npm", resolvedName: "openclaw-code-agent", resolvedVersion: "4.6.0" },
+          }),
+          stderr: "",
+        }),
       });
 
       service.maybeCheckForUpdate({ route: ROUTE });
@@ -201,6 +208,67 @@ describe("AutoUpdateService", () => {
       assert.equal(requestedUrl, autoUpdateInternals.NPM_PACKAGE_URL);
       assert.equal(readState(stateDir).latestVersion, "4.6.1");
       assert.equal(sends.length, 1);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("uses the recorded ClawHub package for update discovery", async () => {
+    setPluginConfig({});
+    const originalFetch = globalThis.fetch;
+    let npmFetched = false;
+    globalThis.fetch = async () => {
+      npmFetched = true;
+      throw new Error("npm must not be queried for a ClawHub install");
+    };
+    const commands: string[][] = [];
+    try {
+      const sends: Array<{ route: NotificationRoute; text: string; labels: string[] }> = [];
+      const service = new AutoUpdateService({
+        stateDir: tempStateDir(),
+        currentVersion: "4.6.0",
+        actionButtonFactory: (_sessionId, kind, label) => ({ label, callbackData: kind }),
+        notifier: {
+          send: async (route, text, buttons) => {
+            sends.push({ route, text, labels: (buttons ?? []).flat().map((button) => button.label) });
+          },
+        },
+        runCommand: async (command, args) => {
+          commands.push([command, ...args]);
+          if (args[1] === "inspect") {
+            return {
+              stdout: JSON.stringify({
+                plugin: { id: "openclaw-code-agent", version: "4.6.0" },
+                install: {
+                  source: "clawhub",
+                  clawhubPackage: "goldmar/openclaw-code-agent",
+                  resolvedVersion: "4.6.0",
+                },
+              }),
+              stderr: "",
+            };
+          }
+          return {
+            stdout: JSON.stringify({
+              results: [
+                { package: { name: "lookalike", latestVersion: "9.9.9" }, score: 100 },
+                { package: { name: "goldmar/openclaw-code-agent", latestVersion: "4.6.1" }, score: 90 },
+              ],
+            }),
+            stderr: "",
+          };
+        },
+      });
+
+      service.maybeCheckForUpdate({ route: ROUTE });
+      await service.waitForIdle();
+
+      assert.equal(npmFetched, false);
+      assert.deepEqual(commands, [
+        ["openclaw", "plugins", "inspect", "openclaw-code-agent", "--json"],
+        ["openclaw", "plugins", "search", "goldmar/openclaw-code-agent", "--limit", "100", "--json"],
+      ]);
+      assert.match(sends[0]?.text ?? "", /4\.6\.0 -> 4\.6\.1/);
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -294,7 +362,7 @@ describe("AutoUpdateService", () => {
     assert.deepEqual(harness.commands, [
       ["openclaw", "plugins", "inspect", "openclaw-code-agent", "--json"],
       ["openclaw", "plugins", "install", "openclaw-code-agent@4.6.1", "--force"],
-      ["openclaw", "plugins", "inspect", "openclaw-code-agent", "--runtime", "--json"],
+      ["openclaw", "plugins", "inspect", "openclaw-code-agent", "--json"],
     ]);
     assert.deepEqual(harness.sends.at(-1)?.labels, ["Restart Gateway", "Remind later", "Dismiss"]);
 
@@ -324,7 +392,7 @@ describe("AutoUpdateService", () => {
     assert.deepEqual(harness.commands, [
       ["openclaw", "plugins", "inspect", "openclaw-code-agent", "--json"],
       ["openclaw", "plugins", "install", "openclaw-code-agent@4.6.1", "--force"],
-      ["openclaw", "plugins", "inspect", "openclaw-code-agent", "--runtime", "--json"],
+      ["openclaw", "plugins", "inspect", "openclaw-code-agent", "--json"],
     ]);
     assert.equal(readState(stateDir).updateInstalledVersion, "4.6.1");
     assert.match(harness.sends.at(-1)?.text ?? "", /OCA 4\.6\.1 installation was verified/);
@@ -339,7 +407,7 @@ describe("AutoUpdateService", () => {
     assert.deepEqual(harness.commands, [
       ["openclaw", "plugins", "inspect", "openclaw-code-agent", "--json"],
       ["openclaw", "plugins", "install", "clawhub:openclaw-code-agent@4.6.1", "--force"],
-      ["openclaw", "plugins", "inspect", "openclaw-code-agent", "--runtime", "--json"],
+      ["openclaw", "plugins", "inspect", "openclaw-code-agent", "--json"],
     ]);
   });
 
@@ -370,7 +438,7 @@ describe("AutoUpdateService", () => {
     assert.equal(readState(stateDir).updateInstalledVersion, undefined);
   });
 
-  it("requires runtime and managed install versions to match the approval", async () => {
+  it("requires installed plugin and managed install versions to match the approval", async () => {
     setPluginConfig({});
     const stateDir = tempStateDir();
     let inspections = 0;
@@ -398,7 +466,7 @@ describe("AutoUpdateService", () => {
       },
     });
 
-    await assert.rejects(service.installConfirmed("4.6.1", { route: ROUTE }), /runtime plugin version 4\.6\.0/);
+    await assert.rejects(service.installConfirmed("4.6.1", { route: ROUTE }), /installed plugin version 4\.6\.0/);
     assert.equal(inspections, 2);
     assert.equal(readState(stateDir).updateInstalledVersion, undefined);
   });
@@ -416,6 +484,7 @@ describe("AutoUpdateService", () => {
   it("does not report a completed install as failed when the restart prompt cannot be delivered", async () => {
     setPluginConfig({});
     const commands: string[][] = [];
+    let installed = false;
     const service = new AutoUpdateService({
       stateDir: tempStateDir(),
       currentVersion: "4.6.0",
@@ -423,16 +492,17 @@ describe("AutoUpdateService", () => {
       notifier: { send: async () => { throw new Error("Telegram message is no longer available"); } },
       runCommand: async (command, args) => {
         commands.push([command, ...args]);
+        if (args[1] === "install") installed = true;
         if (args[1] === "inspect") {
           return {
             stdout: JSON.stringify({
-              plugin: { id: "openclaw-code-agent", version: args.includes("--runtime") ? "4.6.1" : "4.6.0" },
+              plugin: { id: "openclaw-code-agent", version: installed ? "4.6.1" : "4.6.0" },
               install: {
                 source: "npm",
                 spec: "openclaw-code-agent",
                 resolvedName: "openclaw-code-agent",
-                version: args.includes("--runtime") ? "4.6.1" : "4.6.0",
-                resolvedVersion: args.includes("--runtime") ? "4.6.1" : "4.6.0",
+                version: installed ? "4.6.1" : "4.6.0",
+                resolvedVersion: installed ? "4.6.1" : "4.6.0",
               },
             }),
             stderr: "",

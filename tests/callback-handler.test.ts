@@ -15,6 +15,7 @@ function createCtx(
   options: {
     telegramCallback?: Record<string, unknown>;
     authorized?: boolean;
+    replyError?: Error;
   } = {},
 ) {
   const replies: string[] = [];
@@ -50,6 +51,7 @@ function createCtx(
         respond: {
           acknowledge: async () => { callbacksAcknowledged++; events.push("acknowledge"); },
           reply: async ({ text, buttons }: { text: string; buttons?: unknown[] }) => {
+            if (options.replyError) throw options.replyError;
             replies.push(text);
             if (buttons) replyButtons.push(buttons);
             events.push("reply");
@@ -201,6 +203,46 @@ describe("createCallbackHandler()", () => {
     assert.match(joined, /"event":"callback_update_action_started"/);
     assert.match(joined, /"event":"callback_update_action_completed"/);
     assert.doesNotMatch(joined, /native-update-token/);
+  });
+
+  it("does not relabel a verified install as failed when its Telegram confirmation reply fails", async (t) => {
+    process.env.OPENCLAW_CODE_AGENT_BUTTON_DIAGNOSTICS = "1";
+    const logs: string[] = [];
+    const warnings: string[] = [];
+    t.mock.method(console, "info", ((message?: unknown) => { logs.push(String(message)); }) as typeof console.info);
+    t.mock.method(console, "warn", ((message?: unknown) => { warnings.push(String(message)); }) as typeof console.warn);
+    setAutoUpdateService({
+      installConfirmed: async () => "OCA 4.6.1 installation was verified.",
+    } as any);
+    setSessionManager({
+      getActionToken: () => ({
+        id: "reply-failure-token",
+        sessionId: "plugin:auto-update",
+        kind: "plugin-update-install",
+        pluginUpdateVersion: "4.6.1",
+      }),
+      consumeActionToken: () => ({
+        id: "reply-failure-token",
+        sessionId: "plugin:auto-update",
+        kind: "plugin-update-install",
+        pluginUpdateVersion: "4.6.1",
+      }),
+      resolve: () => undefined,
+      getPersistedSession: () => undefined,
+    } as any);
+
+    const handler = createCallbackHandler();
+    const state = createCtx("reply-failure-token", "telegram", {
+      replyError: new Error("Telegram message unavailable"),
+    });
+    const result = await handler.handler(state.ctx as any);
+
+    assert.deepEqual(result, { handled: true });
+    const joined = logs.join("\n");
+    assert.match(joined, /"event":"callback_update_action_completed"/);
+    assert.match(joined, /"event":"callback_update_confirmation_failed"/);
+    assert.doesNotMatch(joined, /"event":"callback_update_action_failed"/);
+    assert.match(warnings.join("\n"), /update succeeded, but the confirmation reply failed/);
   });
 
   it("restarts the Gateway only from explicit plugin restart confirmation", async () => {

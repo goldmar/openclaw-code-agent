@@ -979,16 +979,11 @@ export function createCallbackHandler(
             await replyText(ctx, "⚠️ OCA update service is not running.");
             break;
           }
+          let text: string;
           try {
-            const text = await autoUpdateService.installConfirmed(consumedToken.pluginUpdateVersion, {
+            text = await autoUpdateService.installConfirmed(consumedToken.pluginUpdateVersion, {
               route: consumedToken.route,
             });
-            logButtonDiagnostic("callback_update_action_completed", {
-              channel: ctx.channel,
-              tokenHash: hashDiagnosticToken(tokenId),
-              approvedVersion: consumedToken.pluginUpdateVersion,
-            });
-            await replyText(ctx, `✅ ${text}`);
           } catch (err) {
             logButtonDiagnostic("callback_update_action_failed", {
               channel: ctx.channel,
@@ -996,6 +991,22 @@ export function createCallbackHandler(
               reason: "install_failed",
             });
             await replyText(ctx, `⚠️ OCA update failed: ${err instanceof Error ? err.message : String(err)}`);
+            break;
+          }
+          logButtonDiagnostic("callback_update_action_completed", {
+            channel: ctx.channel,
+            tokenHash: hashDiagnosticToken(tokenId),
+            approvedVersion: consumedToken.pluginUpdateVersion,
+          });
+          try {
+            await replyText(ctx, `✅ ${text}`);
+          } catch (err) {
+            logButtonDiagnostic("callback_update_confirmation_failed", {
+              channel: ctx.channel,
+              tokenHash: hashDiagnosticToken(tokenId),
+              reason: "reply_failed",
+            });
+            console.warn(`[callback-handler] OCA update succeeded, but the confirmation reply failed: ${err instanceof Error ? err.message : String(err)}`);
           }
           break;
         }

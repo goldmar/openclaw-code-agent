@@ -166,7 +166,7 @@ function assertVerifiedInstall(
     throw new Error("OCA update verification found that the managed install source or package changed.");
   }
   if (after.pluginVersion !== approvedVersion) {
-    throw new Error(`OCA update verification found runtime plugin version ${after.pluginVersion}, expected ${approvedVersion}.`);
+    throw new Error(`OCA update verification found installed plugin version ${after.pluginVersion}, expected ${approvedVersion}.`);
   }
   const managedVersions = [after.install.recordedVersion, after.install.resolvedVersion].filter(
     (version): version is string => Boolean(version),
@@ -232,9 +232,6 @@ function fallbackRoute(): SessionRoute | undefined {
 }
 
 async function fetchNpmLatestRelease(): Promise<ReleaseInfo | undefined> {
-  // Match the normal OCA install/update path: the plugin package declares
-  // openclaw.install.defaultChoice="npm", and `openclaw plugins update <id>`
-  // follows the recorded npm install source for bare OCA installs.
   const response = await fetch(NPM_PACKAGE_URL, {
     headers: { accept: "application/json" },
     signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
@@ -247,6 +244,36 @@ async function fetchNpmLatestRelease(): Promise<ReleaseInfo | undefined> {
     ? normalizeVersion(payload.version)
     : undefined;
   return version ? { version } : undefined;
+}
+
+async function fetchClawHubLatestRelease(
+  runCommand: CommandRunner,
+  packageName: string,
+): Promise<ReleaseInfo | undefined> {
+  const result = await runCommand("openclaw", ["plugins", "search", packageName, "--limit", "100", "--json"]);
+  let payload: unknown;
+  try {
+    payload = JSON.parse(result.stdout);
+  } catch {
+    throw new Error("OpenClaw returned invalid JSON while checking ClawHub for OCA updates.");
+  }
+  const results = isRecord(payload) && Array.isArray(payload.results) ? payload.results : [];
+  for (const entry of results) {
+    if (!isRecord(entry) || !isRecord(entry.package)) continue;
+    if (requiredString(entry.package, "name") !== packageName) continue;
+    const version = normalizeVersion(requiredString(entry.package, "latestVersion"));
+    return version ? { version } : undefined;
+  }
+  return undefined;
+}
+
+async function fetchSourceAwareLatestRelease(runCommand: CommandRunner): Promise<ReleaseInfo | undefined> {
+  const inspection = parsePluginInspection(
+    await runCommand("openclaw", ["plugins", "inspect", PACKAGE_NAME, "--json"]),
+  );
+  return inspection.install.source === "npm"
+    ? fetchNpmLatestRelease()
+    : fetchClawHubLatestRelease(runCommand, inspection.install.packageName);
 }
 
 async function runOpenClawCommand(command: string, args: string[]): Promise<CommandResult> {
@@ -271,8 +298,8 @@ export class AutoUpdateService {
   constructor(private readonly options: AutoUpdateServiceOptions) {
     this.statePath = join(options.stateDir, UPDATE_STATE_FILE);
     this.notifier = options.notifier ?? new RuntimeDirectNotificationTransport();
-    this.fetchLatestRelease = options.fetchLatestRelease ?? fetchNpmLatestRelease;
     this.runCommand = options.runCommand ?? runOpenClawCommand;
+    this.fetchLatestRelease = options.fetchLatestRelease ?? (() => fetchSourceAwareLatestRelease(this.runCommand));
     this.now = options.now ?? Date.now;
   }
 
@@ -305,7 +332,7 @@ export class AutoUpdateService {
       throw new Error("OpenClaw reported no managed install record while updating OCA.");
     }
     const after = parsePluginInspection(
-      await this.runCommand("openclaw", ["plugins", "inspect", PACKAGE_NAME, "--runtime", "--json"]),
+      await this.runCommand("openclaw", ["plugins", "inspect", PACKAGE_NAME, "--json"]),
     );
     assertVerifiedInstall(before, after, normalizedVersion);
     const state = this.readState();
@@ -501,4 +528,5 @@ export const autoUpdateInternals = {
   FETCH_TIMEOUT_MS,
   parsePluginInspection,
   installArgs,
+  fetchClawHubLatestRelease,
 };
