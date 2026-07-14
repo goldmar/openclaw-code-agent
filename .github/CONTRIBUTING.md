@@ -108,24 +108,20 @@ git push origin --delete agent/<session-id>
 2. Make your changes and verify all CI checks pass locally
 3. Open a pull request against `main` — the PR template will guide you
 4. All CI checks must be green before the PR can be merged
-5. At least one review approval is required
+5. Resolve every review conversation and wait for all required checks before merging
 
 ---
 
 ## Release process
 
-Releases are handled via the `release.yml` GitHub Actions workflow:
+Releases are handled only through a manual dispatch of the `release.yml` GitHub Actions workflow. Supply the version without a leading `v` and the full `main` commit SHA to release.
 
-- **Tag push**: push a `v*` tag (e.g. `v2.3.2`) to trigger an automated release
-- **Manual dispatch**: use the "Release" workflow in the Actions tab and supply the version
+The workflow verifies that the selected commit belongs to `main`, runs the full CI and security gates on Node.js 22.22.3, validates package/plugin/changelog/lockfile metadata, and packs one artifact. The protected publish job then uses Node.js 24 and GitHub OIDC to publish that exact tarball to npm and ClawHub, create or verify the immutable `v<version>` tag, and create or update the matching GitHub release. Safe retries verify existing artifact digests before skipping a registry or release upload.
 
-The workflow runs the full CI gate (`pnpm verify`), validates package/plugin version parity against the requested release version, packs one release artifact, publishes that artifact to npm using Trusted Publishing, publishes it to ClawHub with `CLAWHUB_TOKEN`, and creates a GitHub release with notes extracted from `CHANGELOG.md`.
+Both registry trust relationships must match:
 
-**One-time npm setup (repo maintainers only):** On npmjs.com, go to the `openclaw-code-agent`
-package → Settings → Trusted Publishers, and add a GitHub Actions publisher for this
-repository (`goldmar/openclaw-code-agent`, workflow `release.yml`). npm then uses OIDC and
-does not need a stored npm token.
+- repository: `goldmar/openclaw-code-agent`
+- workflow: `release.yml`
+- environment: `release`
 
-**One-time ClawHub setup (repo maintainers only):** Create a ClawHub API token for the package
-owner and store it as the repository secret `CLAWHUB_TOKEN`. Tag-push releases require this
-secret even if workflow-dispatch trusted publishing is configured later.
+npm and ClawHub then authenticate the publish job through OIDC. Do not add `NPM_TOKEN` or `CLAWHUB_TOKEN` repository secrets.

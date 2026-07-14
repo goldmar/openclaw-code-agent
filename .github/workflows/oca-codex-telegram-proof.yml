@@ -80,7 +80,7 @@ jobs:
           done
 
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           ref: ${{ inputs.candidate_ref || github.sha }}
           fetch-depth: 1
@@ -88,7 +88,7 @@ jobs:
           submodules: false
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v6
+        uses: pnpm/action-setup@b0f76dfb45f55f8421693e4803ac7bb65143bd34 # v6
         with:
           version: 10.30.0
 
@@ -96,7 +96,7 @@ jobs:
         run: echo "$PNPM_HOME/bin" >> "$GITHUB_PATH"
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
@@ -147,7 +147,7 @@ jobs:
 
       - name: Upload OCA Codex proof artifacts
         if: ${{ always() }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: oca-codex-telegram-proof-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.OCA_CODEX_PROOF_OUTPUT_DIR }}/${{ github.run_id }}-${{ github.run_attempt }}/public-artifacts

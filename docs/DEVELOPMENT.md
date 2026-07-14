@@ -103,7 +103,7 @@ Release-prep docs should also cover behavior that changed since the previous tag
 
 Release-prep branches should stop after PR-ready changes and validation unless the maintainer explicitly asks to publish. Do not push a `v*` tag, dispatch `.github/workflows/release.yml`, or run `npm publish` / `clawhub package publish` during preparation-only work. Use `npm pack --dry-run` to check package contents without publishing.
 
-The release workflow publishes one packed artifact to both npm and ClawHub. npm uses Trusted Publishing via GitHub OIDC; ClawHub publishing requires the repository secret `CLAWHUB_TOKEN`.
+The manually dispatched release workflow verifies one selected `main` commit, packs one artifact, and publishes that exact tarball to npm and ClawHub. Both registries use Trusted Publishing through GitHub OIDC and the protected `release` environment; no npm or ClawHub publishing token is stored in GitHub.
 
 Additional smoke entry points:
 
