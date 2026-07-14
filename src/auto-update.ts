@@ -197,7 +197,7 @@ export class AutoUpdateService {
     const normalizedVersion = normalizeVersion(version);
     if (!normalizedVersion) return "Could not determine which OCA version to update to.";
 
-    await this.runCommand("openclaw", ["plugins", "update", PACKAGE_NAME]);
+    await this.runCommand("openclaw", ["plugins", "update", `${PACKAGE_NAME}@latest`]);
     const state = this.readState();
     this.writeState({
       ...state,
@@ -303,7 +303,7 @@ export class AutoUpdateService {
     await this.notifier.send(route, [
       `OCA update available: ${this.options.currentVersion} -> ${latestVersion}.`,
       ``,
-      `Update now will run: openclaw plugins update ${PACKAGE_NAME}`,
+      `Update now will run: openclaw plugins update ${PACKAGE_NAME}@latest`,
       `If the update succeeds, OCA will ask separately before restarting the Gateway.`,
     ].join("\n"), [[
       this.options.actionButtonFactory(UPDATE_SESSION_ID, "plugin-update-install", "Update now", {

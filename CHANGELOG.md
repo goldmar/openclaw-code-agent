@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Kept the daily update checker while delegating confirmed installs to OpenClaw's native updater, explicitly following `openclaw-code-agent@latest` so user-approved updates also advance exact pinned installs.
+
+### Fixed
+- Fixed release automation to send the exact verified tarball to ClawHub and to publish npm tarballs through an explicit local path.
+
 ## [4.7.1] - 2026-07-13
 
 ### Changed
