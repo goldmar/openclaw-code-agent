@@ -964,17 +964,49 @@ export function createCallbackHandler(
       switch (consumedToken.kind) {
         case "plugin-update-install": {
           await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged, forceTelegramMarkupEdit: true });
+          logButtonDiagnostic("callback_update_action_started", {
+            channel: ctx.channel,
+            tokenHash: hashDiagnosticToken(tokenId),
+            actionKind: consumedToken.kind,
+            approvedVersion: consumedToken.pluginUpdateVersion,
+          });
           if (!autoUpdateService) {
+            logButtonDiagnostic("callback_update_action_failed", {
+              channel: ctx.channel,
+              tokenHash: hashDiagnosticToken(tokenId),
+              reason: "service_unavailable",
+            });
             await replyText(ctx, "⚠️ OCA update service is not running.");
             break;
           }
+          let text: string;
           try {
-            const text = await autoUpdateService.installConfirmed(consumedToken.pluginUpdateVersion, {
+            text = await autoUpdateService.installConfirmed(consumedToken.pluginUpdateVersion, {
               route: consumedToken.route,
             });
+          } catch (err) {
+            logButtonDiagnostic("callback_update_action_failed", {
+              channel: ctx.channel,
+              tokenHash: hashDiagnosticToken(tokenId),
+              reason: "install_failed",
+            });
+            await replyText(ctx, `⚠️ OCA update failed: ${err instanceof Error ? err.message : String(err)}`);
+            break;
+          }
+          logButtonDiagnostic("callback_update_action_completed", {
+            channel: ctx.channel,
+            tokenHash: hashDiagnosticToken(tokenId),
+            approvedVersion: consumedToken.pluginUpdateVersion,
+          });
+          try {
             await replyText(ctx, `✅ ${text}`);
           } catch (err) {
-            await replyText(ctx, `⚠️ OCA update failed: ${err instanceof Error ? err.message : String(err)}`);
+            logButtonDiagnostic("callback_update_confirmation_failed", {
+              channel: ctx.channel,
+              tokenHash: hashDiagnosticToken(tokenId),
+              reason: "reply_failed",
+            });
+            console.warn(`[callback-handler] OCA update succeeded, but the confirmation reply failed: ${err instanceof Error ? err.message : String(err)}`);
           }
           break;
         }

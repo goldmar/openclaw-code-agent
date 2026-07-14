@@ -716,6 +716,8 @@ Examples:
 
 ## Troubleshooting
 
+- OCA self-update reports success but stays on the old version: OpenClaw `2026.7.1` can treat `openclaw plugins update openclaw-code-agent@<version>` as an install-record ID, print `No install record for "openclaw-code-agent@<version>".`, and exit `0`. Current OCA avoids that selector: npm installs use `openclaw plugins install <recorded-npm-package>@<approved-version> --force`, ClawHub installs use `openclaw plugins install clawhub:<recorded-package>@<approved-version> --force`, and success requires the installed plugin discovery plus managed source, package, and version metadata from `plugins inspect --json` to match. The running Gateway can legitimately retain the prior loaded version until the separately confirmed restart.
+- An OCA Telegram update button spins but no action runs: temporarily enable `OPENCLAW_CODE_AGENT_BUTTON_DIAGNOSTICS=1` and inspect logs for `callback_handler_registered`, `callback_received`, `callback_token_lookup_completed`, and `callback_update_action_started`. Diagnostics contain hashes rather than callback tokens. Registration without `callback_received` means OpenClaw core did not dispatch the tap to OCA; the plugin cannot acknowledge or act on a callback it never receives.
 - No notifications: verify `fallbackChannel` or `agentChannels` use fully routable channel strings. If you changed plugin config on disk, reload or restart the gateway through your normal operator process.
 - Wrong chat receives the update: check `agentChannels` longest-prefix matches and remove ambiguous path entries.
 - Worktree was not created: confirm the workdir is a git repo and there is enough free space for the worktree.
