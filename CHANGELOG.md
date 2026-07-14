@@ -623,7 +623,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Default Codex approval policy to `on-request`.
 - Raised the default session limit.
 
-[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.0...HEAD
+[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.4...HEAD
+[4.7.4]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.3...v4.7.4
+[4.7.3]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.2...v4.7.3
+[4.7.2]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.1...v4.7.2
+[4.7.1]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.0...v4.7.1
 [4.7.0]: https://github.com/goldmar/openclaw-code-agent/compare/v4.6.0...v4.7.0
 [4.6.0]: https://github.com/goldmar/openclaw-code-agent/compare/v4.5.9...v4.6.0
 [4.5.9]: https://github.com/goldmar/openclaw-code-agent/compare/v4.5.8...v4.5.9
