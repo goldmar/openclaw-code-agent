@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.7.3] - 2026-07-14
+
+### Changed
+- Raised the advertised OpenClaw plugin API, Gateway, and peer dependency minimums to `2026.7.1`, keeping ClawHub and OpenClaw install compatibility checks aligned with the release-tested host.
+
 ### Fixed
 - Fixed token-backed ClawHub publishing to use the CLI's documented temporary configuration file while keeping the repository secret out of artifacts and logs.
 

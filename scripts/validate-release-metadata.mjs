@@ -6,6 +6,17 @@ import { fileURLToPath } from "node:url";
 const scriptPath = fileURLToPath(import.meta.url);
 const rootDir = dirname(dirname(scriptPath));
 const defaultOpenClawTargetVersion = "2026.7.1";
+const exactOpenClawVersionPattern = /^\d{4}\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u;
+
+export function normalizeOpenClawTargetVersion(value = defaultOpenClawTargetVersion) {
+  const normalized = value.startsWith(">=") ? value.slice(2) : value;
+  if (!exactOpenClawVersionPattern.test(normalized)) {
+    throw new Error(
+      `Invalid OpenClaw target: expected an exact version or >= range, got ${value}`,
+    );
+  }
+  return normalized;
+}
 
 export function loadReleaseMetadata(baseDir = rootDir) {
   const packageJson = JSON.parse(readFileSync(join(baseDir, "package.json"), "utf8"));
@@ -17,6 +28,8 @@ export function loadReleaseMetadata(baseDir = rootDir) {
     openclawVersion: packageJson.openclaw?.build?.openclawVersion,
     pluginSdkVersion: packageJson.openclaw?.build?.pluginSdkVersion,
     openclawInstall: packageJson.openclaw?.install,
+    openclawCompat: packageJson.openclaw?.compat,
+    openclawPeerVersion: packageJson.peerDependencies?.openclaw,
   };
 }
 
@@ -26,8 +39,16 @@ export function validateReleaseMetadata(options = {}) {
     openclawTargetVersion = defaultOpenClawTargetVersion,
     baseDir = rootDir,
   } = options;
-  const { packageVersion, pluginVersion, openclawVersion, pluginSdkVersion, openclawInstall } =
-    loadReleaseMetadata(baseDir);
+  const normalizedOpenClawTargetVersion = normalizeOpenClawTargetVersion(openclawTargetVersion);
+  const {
+    packageVersion,
+    pluginVersion,
+    openclawVersion,
+    pluginSdkVersion,
+    openclawInstall,
+    openclawCompat,
+    openclawPeerVersion,
+  } = loadReleaseMetadata(baseDir);
 
   if (packageVersion !== pluginVersion) {
     throw new Error(
@@ -51,9 +72,9 @@ export function validateReleaseMetadata(options = {}) {
     );
   }
 
-  if (openclawTargetVersion && openclawVersion !== openclawTargetVersion) {
+  if (openclawVersion !== normalizedOpenClawTargetVersion) {
     throw new Error(
-      `OpenClaw target mismatch: expected ${openclawTargetVersion}, openclawVersion=${openclawVersion}, pluginSdkVersion=${pluginSdkVersion}`,
+      `OpenClaw target mismatch: expected ${normalizedOpenClawTargetVersion}, openclawVersion=${openclawVersion}, pluginSdkVersion=${pluginSdkVersion}`,
     );
   }
 
@@ -73,9 +94,28 @@ export function validateReleaseMetadata(options = {}) {
     );
   }
 
-  if (openclawInstall.minHostVersion !== ">=2026.7.1") {
+  const expectedRange = `>=${normalizedOpenClawTargetVersion}`;
+  if (openclawInstall.minHostVersion !== expectedRange) {
     throw new Error(
-      `OpenClaw install minHostVersion mismatch: expected >=2026.7.1, got ${openclawInstall.minHostVersion}`,
+      `OpenClaw install minHostVersion mismatch: expected ${expectedRange}, got ${openclawInstall.minHostVersion}`,
+    );
+  }
+
+  if (openclawCompat?.pluginApi !== expectedRange) {
+    throw new Error(
+      `OpenClaw pluginApi mismatch: expected ${expectedRange}, got ${openclawCompat?.pluginApi}`,
+    );
+  }
+
+  if (openclawCompat?.minGatewayVersion !== normalizedOpenClawTargetVersion) {
+    throw new Error(
+      `OpenClaw minGatewayVersion mismatch: expected ${normalizedOpenClawTargetVersion}, got ${openclawCompat?.minGatewayVersion}`,
+    );
+  }
+
+  if (openclawPeerVersion !== expectedRange) {
+    throw new Error(
+      `OpenClaw peer dependency mismatch: expected ${expectedRange}, got ${openclawPeerVersion}`,
     );
   }
 
@@ -106,6 +146,8 @@ export function validateReleaseMetadata(options = {}) {
     openclawVersion,
     pluginSdkVersion,
     openclawInstall,
+    openclawCompat,
+    openclawPeerVersion,
   };
 }
 
@@ -115,11 +157,18 @@ function runCli() {
   const openclawTargetVersion = args
     .find((arg) => arg.startsWith("--openclaw-target="))
     ?.slice("--openclaw-target=".length);
-  const { packageVersion, pluginVersion, openclawVersion, pluginSdkVersion, openclawInstall } =
-    validateReleaseMetadata({ releaseVersion, openclawTargetVersion });
+  const {
+    packageVersion,
+    pluginVersion,
+    openclawVersion,
+    pluginSdkVersion,
+    openclawInstall,
+    openclawCompat,
+    openclawPeerVersion,
+  } = validateReleaseMetadata({ releaseVersion, openclawTargetVersion });
   const releaseLabel = releaseVersion ? ` against release ${releaseVersion}` : "";
   console.log(
-    `Release metadata validated${releaseLabel}: package.json=${packageVersion}, openclaw.plugin.json=${pluginVersion}, openclawVersion=${openclawVersion}, pluginSdkVersion=${pluginSdkVersion}, openclaw.install.npmSpec=${openclawInstall.npmSpec}, openclaw.install.defaultChoice=${openclawInstall.defaultChoice}, openclaw.install.minHostVersion=${openclawInstall.minHostVersion}`,
+    `Release metadata validated${releaseLabel}: package.json=${packageVersion}, openclaw.plugin.json=${pluginVersion}, openclawVersion=${openclawVersion}, pluginSdkVersion=${pluginSdkVersion}, openclaw.install.npmSpec=${openclawInstall.npmSpec}, openclaw.install.defaultChoice=${openclawInstall.defaultChoice}, openclaw.install.minHostVersion=${openclawInstall.minHostVersion}, openclaw.compat.pluginApi=${openclawCompat.pluginApi}, openclaw.compat.minGatewayVersion=${openclawCompat.minGatewayVersion}, peerDependencies.openclaw=${openclawPeerVersion}`,
   );
 }
 
