@@ -81,17 +81,18 @@ openclaw gateway restart
 openclaw plugins inspect openclaw-code-agent --runtime --json
 ```
 
-If OpenClaw blocks installation with a dangerous-code scanner finding for
-`child_process`, that is expected for this trusted plugin because it launches
-local coding harnesses and git tooling. Review the rationale in
-[docs/SECURITY.md](docs/SECURITY.md), then rerun the trusted package/source with
-the unsafe-install override:
+OpenClaw 2026.7.1 no longer performs built-in dangerous-code blocking during
+plugin installation. Review the subprocess rationale in
+[docs/SECURITY.md](docs/SECURITY.md) before installing this plugin because it
+launches local coding harnesses and git tooling. Operators who require a local
+allow/block decision should configure OpenClaw's `security.installPolicy`.
+To replace an existing reviewed installation and pin the resolved version, use:
 
 ```bash
-openclaw plugins install openclaw-code-agent --force --pin --dangerously-force-unsafe-install
+openclaw plugins install openclaw-code-agent --force --pin
 ```
 
-Use that override only for a package/source you already trust. When validating a
+Use `--force` only for a package/source you already trust. When validating a
 specific reviewed release, add its version after the package name.
 
 Add the smallest useful config under `plugins.entries["openclaw-code-agent"]` in `~/.openclaw/openclaw.json`:
@@ -127,7 +128,7 @@ Because worktree isolation defaults to `delegate`, `defaultWorkdir` should norma
 
 Chat-launched sessions route updates back to their originating chat thread. For agent-launched tool sessions without an origin route, configure `fallbackChannel` or `agentChannels` in the reference guide.
 
-The current package targets and validates against the OpenClaw SDK package `openclaw@2026.6.11`, while keeping the plugin peer floor at `>=2026.4.21`. No host upgrade or host config change is required for this plugin compatibility update. OpenClaw `2026.6.11` changes the SDK API baseline and adds the `openclaw/plugin-sdk/agent-harness-tool-runtime` export, but `openclaw-code-agent` does not need new SDK imports for the OpenClaw changes: the manifest already declares `contracts.tools`, the plugin still imports only `openclaw/plugin-sdk/plugin-entry`, and its own session store, wake routing, callbacks, worktree flows, and harness model restrictions remain plugin-owned. Current callback behavior around native callback data, routed follow-ups, retryable stale plan approval buttons, and serialized plan decisions remains plugin-owned.
+The current package targets and validates against the OpenClaw SDK package `openclaw@2026.7.1`, while keeping the plugin peer floor at `>=2026.4.21`. No host upgrade or host config change is required for this plugin compatibility update. OpenClaw `2026.7.1` changes Codex app-server, Telegram delivery, cron/session delivery, tool visibility, approval, and plugin update behavior, but `openclaw-code-agent` does not need new SDK imports for those changes: the manifest already declares `contracts.tools`, the plugin still imports only `openclaw/plugin-sdk/plugin-entry`, and its own session store, wake routing, callbacks, worktree flows, and harness model restrictions remain plugin-owned. Current callback behavior around native callback data, routed follow-ups, retryable stale plan approval buttons, and serialized plan decisions remains plugin-owned.
 
 If you use Codex, make sure the local `codex` command or `OPENCLAW_CODEX_APP_SERVER_COMMAND` override is available and authenticated. Codex-specific defaults live under `harnesses.codex`: `reasoningEffort` is sent as `reasoningEffort`, and `fastMode: true` sends `service_tier: "fast"` on Codex App Server thread, resume, and turn payloads. The Codex harness starts the app server with stdio listener args by default, only sends UUID-shaped backend thread IDs to `thread/resume`, and reports startup timeouts with redacted recent stderr. When Codex auth is inconsistent, this is the recommended `~/.codex/config.toml` setting:
 

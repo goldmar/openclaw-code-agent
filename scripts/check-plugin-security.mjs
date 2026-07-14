@@ -7,20 +7,6 @@ import { spawn } from "node:child_process";
 
 const scriptPath = fileURLToPath(import.meta.url);
 const rootDir = dirname(dirname(scriptPath));
-const allowedDangerousFindings = [
-  "Shell command execution detected (child_process)",
-];
-
-function findUnexpectedDangerousFindings(output) {
-  const unexpected = new Set();
-  for (const line of output.split(/\r?\n/)) {
-    if (!line.includes("dangerous code patterns")) continue;
-    const allowed = allowedDangerousFindings.some((finding) => line.includes(finding));
-    if (!allowed) unexpected.add(line.trim());
-  }
-  return [...unexpected];
-}
-
 function runCommand(command, args, options = {}) {
   const child = spawn(command, args, {
     cwd: options.cwd ?? rootDir,
@@ -97,26 +83,17 @@ async function main() {
       "openclaw",
       "plugins",
       "install",
-      "--dangerously-force-unsafe-install",
       tarballPath,
     ], {
       cwd: workspaceDir,
       env: {
         ...process.env,
+        HOME: profileDir,
+        XDG_CONFIG_HOME: join(profileDir, "config"),
         OPENCLAW_STATE_DIR: join(profileDir, "state"),
         OPENCLAW_CONFIG_PATH: join(profileDir, "config.json"),
       },
     });
-
-    const unexpectedFindings = findUnexpectedDangerousFindings(`${install.stdout}\n${install.stderr}`);
-    if (unexpectedFindings.length > 0) {
-      console.error("Unexpected plugin security finding(s):");
-      for (const finding of unexpectedFindings) {
-        console.error(`- ${finding}`);
-      }
-      process.exitCode = 1;
-      return;
-    }
 
     process.exitCode = install.code;
   } finally {

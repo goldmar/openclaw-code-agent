@@ -58,17 +58,17 @@ The release package includes:
 
 The orchestration skill should describe plugin tool state without wording that resembles prompt hierarchy changes. Local tests reject `authoritative`, `system prompt`, `developer instruction`, and `higher-priority` phrasing in `skills/code-agent-orchestration/SKILL.md`.
 
-## Current Scanner Findings
+## Current Subprocess Review
 
-`pnpm check-plugin-security` currently reports and explicitly allowlists one expected finding:
+Source review identifies one expected high-trust capability:
 
 1. `Shell command execution detected (child_process)`
 
 ### `child_process`
 
-This finding is legitimate but expected. The plugin cannot provide its core orchestration features without spawning local processes.
+This capability is legitimate but expected. The plugin cannot provide its core orchestration features without spawning local processes.
 
-The release checker installs the packed plugin with OpenClaw's unsafe-install override so this known finding can be reviewed without blocking the whole release gate. It still fails if the OpenClaw installer reports any additional dangerous-code finding.
+OpenClaw 2026.7.1 no longer performs built-in dangerous-code blocking during plugin installation. The release checker packs and installs the plugin under an isolated temporary home to verify the install contract without reading or migrating operator state. Operators who need a host-specific allow/block decision should configure `security.installPolicy` after reviewing the subprocess inventory below.
 
 ### Environment And Network Review
 
