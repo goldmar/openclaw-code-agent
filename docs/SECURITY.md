@@ -60,15 +60,20 @@ The orchestration skill should describe plugin tool state without wording that r
 
 ## Current Subprocess Review
 
-Source review identifies one expected high-trust capability:
+Source review identifies two expected findings in the packed bundle:
 
 1. `Shell command execution detected (child_process)`
+2. `Environment variable access combined with network send — possible credential harvesting`
 
 ### `child_process`
 
 This capability is legitimate but expected. The plugin cannot provide its core orchestration features without spawning local processes.
 
-OpenClaw 2026.7.1 no longer performs built-in dangerous-code blocking during plugin installation. The release checker packs and installs the plugin under an isolated temporary home to verify the install contract without reading or migrating operator state. Operators who need a host-specific allow/block decision should configure `security.installPolicy` after reviewing the subprocess inventory below.
+OpenClaw 2026.7.1 no longer performs built-in dangerous-code blocking during plugin installation. The release checker packs and installs the plugin under an isolated temporary home, then runs OpenClaw's deep static code-safety audit and accepts only the two reviewed findings above. Missing scans, scan errors, and additional dangerous-code patterns fail the gate. Operators who need a host-specific install decision should configure `security.installPolicy` after reviewing the subprocess inventory below.
+
+### Bundled environment/network heuristic
+
+The packed bundle contains both local environment reads for harness/configuration behavior and a bounded npm registry request for the opt-in update prompt. OpenClaw's file-level audit therefore reports its environment-plus-network heuristic even though source review keeps those operations separate and the request does not send environment values. The release checker accepts that exact rule/message and rejects any other added audit rule.
 
 ### Environment And Network Review
 

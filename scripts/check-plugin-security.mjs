@@ -7,6 +7,44 @@ import { spawn } from "node:child_process";
 
 const scriptPath = fileURLToPath(import.meta.url);
 const rootDir = dirname(dirname(scriptPath));
+const pluginName = "openclaw-code-agent";
+const allowedPluginSafetyFindings = [
+  "[dangerous-exec] Shell command execution detected (child_process)",
+  "[env-harvesting] Environment variable access combined with network send — possible credential harvesting",
+];
+
+export function findUnexpectedPluginSafetyFindings(auditResult, expectedPluginName = pluginName) {
+  const findings = Array.isArray(auditResult?.findings) ? auditResult.findings : [];
+  const pluginLabel = `Plugin "${expectedPluginName}"`;
+  const pluginFindings = findings.filter(
+    (finding) => typeof finding?.title === "string" && finding.title.includes(pluginLabel),
+  );
+  const codeSafetyFindings = pluginFindings.filter(
+    (finding) => finding.checkId === "plugins.code_safety",
+  );
+  const issueLines = codeSafetyFindings.flatMap((finding) =>
+    typeof finding.detail === "string"
+      ? finding.detail.split(/\r?\n/).filter((line) => /\[[a-z-]+\]/.test(line))
+      : [],
+  );
+  const unexpected = pluginFindings
+    .filter((finding) => finding.checkId !== "plugins.code_safety")
+    .map((finding) => finding.title);
+
+  for (const line of issueLines) {
+    if (!allowedPluginSafetyFindings.some((finding) => line.includes(finding))) {
+      unexpected.push(line.trim());
+    }
+  }
+  if (
+    codeSafetyFindings.length !== 1
+    || !issueLines.some((line) => line.includes(allowedPluginSafetyFindings[0]))
+  ) {
+    unexpected.push(`Expected one ${pluginLabel} code-safety finding with reviewed issue detail.`);
+  }
+  return unexpected;
+}
+
 function runCommand(command, args, options = {}) {
   const child = spawn(command, args, {
     cwd: options.cwd ?? rootDir,
@@ -90,12 +128,58 @@ async function main() {
         ...process.env,
         HOME: profileDir,
         XDG_CONFIG_HOME: join(profileDir, "config"),
+        XDG_STATE_HOME: join(profileDir, "xdg-state"),
+        XDG_DATA_HOME: join(profileDir, "data"),
+        XDG_CACHE_HOME: join(profileDir, "cache"),
         OPENCLAW_STATE_DIR: join(profileDir, "state"),
         OPENCLAW_CONFIG_PATH: join(profileDir, "config.json"),
+        OPENCLAW_GATEWAY_PORT: "65534",
       },
     });
 
-    process.exitCode = install.code;
+    if (install.code !== 0) {
+      process.exitCode = install.code;
+      return;
+    }
+
+    const audit = await runCommand("pnpm", [
+      "exec",
+      "openclaw",
+      "security",
+      "audit",
+      "--deep",
+      "--json",
+    ], {
+      cwd: workspaceDir,
+      env: {
+        ...process.env,
+        HOME: profileDir,
+        XDG_CONFIG_HOME: join(profileDir, "config"),
+        XDG_STATE_HOME: join(profileDir, "xdg-state"),
+        XDG_DATA_HOME: join(profileDir, "data"),
+        XDG_CACHE_HOME: join(profileDir, "cache"),
+        OPENCLAW_STATE_DIR: join(profileDir, "state"),
+        OPENCLAW_CONFIG_PATH: join(profileDir, "config.json"),
+        OPENCLAW_GATEWAY_PORT: "65534",
+      },
+      forwardStdout: false,
+    });
+    if (audit.code !== 0) {
+      process.exitCode = audit.code;
+      return;
+    }
+
+    const auditResult = JSON.parse(audit.stdout);
+    const unexpectedFindings = findUnexpectedPluginSafetyFindings(auditResult);
+    if (unexpectedFindings.length > 0) {
+      console.error("Unexpected packed-plugin security finding(s):");
+      for (const finding of unexpectedFindings) console.error(`- ${finding}`);
+      process.exitCode = 1;
+      return;
+    }
+
+    console.error("Packed plugin code-safety findings match the reviewed allowlist.");
+    process.exitCode = 0;
   } finally {
     await Promise.allSettled([
       rm(packDir, { recursive: true, force: true }),

@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Retargeted the OpenClaw package and plugin SDK validation metadata to `2026.7.1` while keeping the compatible `>=2026.4.21` peer/API floor.
 - Refreshed compatibility guidance for OpenClaw `2026.7.1` Codex app-server, Telegram and topic routing, cron/session delivery, approvals, tool allowlists, disabled bundled plugin behavior, completion wakes, model restrictions, and worktree follow-through without requiring host configuration migration.
-- Updated the packed-plugin install smoke for OpenClaw's operator-owned `security.installPolicy` model and isolated it from operator home and state paths.
+- Updated the packed-plugin install smoke for OpenClaw's operator-owned `security.installPolicy` model, isolated all home and XDG paths, and retained a failing deep static-audit gate for any unreviewed dangerous-code finding.
 
 ### Fixed
 - Fixed agent-created pull requests losing the completed Codex report when runtime PR metadata generation is unavailable; OCA now builds and posts task-specific title/body metadata from bounded, redacted session output.

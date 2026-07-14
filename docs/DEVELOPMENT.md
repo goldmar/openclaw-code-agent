@@ -81,13 +81,13 @@ Security automation should work like this:
 - Version maintenance: Dependabot updates the JavaScript dependency set through the npm ecosystem support that covers pnpm projects.
 - Full snapshot audit: run `pnpm audit` when you need the current advisory set for the full resolved pnpm graph, including dev dependencies.
 
-Plugin-behavior review should also include:
+OpenClaw 2026.7.1 requires Node 22.22.3 or newer when using Node 22; CI and release verification pin that patch floor. Plugin-behavior review should also include:
 
 ```bash
 pnpm check-plugin-security
 ```
 
-That checker packs and installs the plugin under an isolated temporary home, proving the OpenClaw install contract without reading or migrating operator state. OpenClaw 2026.7.1 no longer performs built-in dangerous-code blocking during install, so review the accepted `child_process` capability and subprocess inventory in [SECURITY.md](SECURITY.md) separately.
+That checker packs and installs the plugin under an isolated temporary home, runs OpenClaw's deep static code-safety audit, and accepts only the two reviewed findings documented in [SECURITY.md](SECURITY.md). It fails for missing scans, scan errors, or additional dangerous-code patterns without reading or migrating operator state.
 
 This repo currently has dev-only transitive advisories coming from upstream dependencies, so a blanket failing `pnpm audit` step is not the right merge gate until those findings are either remediated upstream or intentionally allowlisted with pnpm audit configuration.
 
