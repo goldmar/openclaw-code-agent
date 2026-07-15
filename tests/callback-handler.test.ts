@@ -16,6 +16,9 @@ function createCtx(
     telegramCallback?: Record<string, unknown>;
     authorized?: boolean;
     replyError?: Error;
+    clearButtonsError?: Error;
+    editButtonsError?: Error;
+    editMessageError?: Error;
   } = {},
 ) {
   const replies: string[] = [];
@@ -56,9 +59,21 @@ function createCtx(
             if (buttons) replyButtons.push(buttons);
             events.push("reply");
           },
-          clearButtons: async () => { buttonsCleared++; events.push("clearButtons"); },
-          editButtons: async () => { buttonMarkupEdits++; events.push("editButtons"); },
-          editMessage: async ({ text }: { text: string }) => { editedMessages.push(text); events.push("editMessage"); },
+          clearButtons: async () => {
+            buttonsCleared++;
+            events.push("clearButtons");
+            if (options.clearButtonsError) throw options.clearButtonsError;
+          },
+          editButtons: async () => {
+            buttonMarkupEdits++;
+            events.push("editButtons");
+            if (options.editButtonsError) throw options.editButtonsError;
+          },
+          editMessage: async ({ text }: { text: string }) => {
+            events.push("editMessage");
+            if (options.editMessageError) throw options.editMessageError;
+            editedMessages.push(text);
+          },
         },
       }
     : {
@@ -203,6 +218,122 @@ describe("createCallbackHandler()", () => {
     assert.match(joined, /"event":"callback_update_action_started"/);
     assert.match(joined, /"event":"callback_update_action_completed"/);
     assert.doesNotMatch(joined, /native-update-token/);
+  });
+
+  it("starts an approved update even when Telegram button cleanup throws", async (t) => {
+    const warnings: string[] = [];
+    t.mock.method(console, "warn", ((message?: unknown) => { warnings.push(String(message)); }) as typeof console.warn);
+    let installs = 0;
+    let consumes = 0;
+    setAutoUpdateService({
+      installConfirmed: async () => {
+        installs++;
+        return "OCA 4.6.1 installation was verified.";
+      },
+    } as any);
+    setSessionManager({
+      getActionToken: () => ({
+        id: "cleanup-failure-token",
+        sessionId: "plugin:auto-update",
+        kind: "plugin-update-install",
+        pluginUpdateVersion: "4.6.1",
+      }),
+      consumeActionToken: () => {
+        consumes++;
+        return {
+          id: "cleanup-failure-token",
+          sessionId: "plugin:auto-update",
+          kind: "plugin-update-install",
+          pluginUpdateVersion: "4.6.1",
+        };
+      },
+      resolve: () => undefined,
+      getPersistedSession: () => undefined,
+    } as any);
+
+    const handler = createCallbackHandler();
+    const state = createCtx("cleanup-failure-token", "telegram", {
+      clearButtonsError: new Error("Telegram cleanup unavailable"),
+    });
+    const result = await handler.handler(state.ctx as any);
+
+    assert.deepEqual(result, { handled: true });
+    assert.equal(consumes, 1);
+    assert.equal(installs, 1);
+    assert.match(state.replies[0] ?? "", /installation was verified/);
+    assert.match(warnings.join("\n"), /continuing approved action/);
+  });
+
+  it("sends a normal-message update result when editing the original Telegram message fails", async () => {
+    let installs = 0;
+    setAutoUpdateService({
+      installConfirmed: async () => {
+        installs++;
+        return "OCA 4.6.1 installation was verified.";
+      },
+    } as any);
+    setSessionManager({
+      getActionToken: () => ({
+        id: "edit-failure-token",
+        sessionId: "plugin:auto-update",
+        kind: "plugin-update-install",
+        pluginUpdateVersion: "4.6.1",
+      }),
+      consumeActionToken: () => ({
+        id: "edit-failure-token",
+        sessionId: "plugin:auto-update",
+        kind: "plugin-update-install",
+        pluginUpdateVersion: "4.6.1",
+      }),
+      resolve: () => undefined,
+      getPersistedSession: () => undefined,
+    } as any);
+
+    const handler = createCallbackHandler();
+    const state = createCtx("edit-failure-token", "telegram", {
+      editButtonsError: new Error("Telegram markup edit unavailable"),
+      editMessageError: new Error("Telegram message edit unavailable"),
+    });
+    const result = await handler.handler(state.ctx as any);
+
+    assert.deepEqual(result, { handled: true });
+    assert.equal(installs, 1);
+    assert.deepEqual(state.editedMessages, []);
+    assert.match(state.replies[0] ?? "", /installation was verified/);
+  });
+
+  it("reports an installer failure after Telegram cleanup fails", async (t) => {
+    t.mock.method(console, "warn", (() => {}) as typeof console.warn);
+    setAutoUpdateService({
+      installConfirmed: async () => {
+        throw new Error("package install exited 1");
+      },
+    } as any);
+    setSessionManager({
+      getActionToken: () => ({
+        id: "install-failure-token",
+        sessionId: "plugin:auto-update",
+        kind: "plugin-update-install",
+        pluginUpdateVersion: "4.6.1",
+      }),
+      consumeActionToken: () => ({
+        id: "install-failure-token",
+        sessionId: "plugin:auto-update",
+        kind: "plugin-update-install",
+        pluginUpdateVersion: "4.6.1",
+      }),
+      resolve: () => undefined,
+      getPersistedSession: () => undefined,
+    } as any);
+
+    const handler = createCallbackHandler();
+    const state = createCtx("install-failure-token", "telegram", {
+      clearButtonsError: new Error("Telegram cleanup unavailable"),
+    });
+    const result = await handler.handler(state.ctx as any);
+
+    assert.deepEqual(result, { handled: true });
+    assert.match(state.replies[0] ?? "", /OCA update failed: package install exited 1/);
   });
 
   it("does not relabel a verified install as failed when its Telegram confirmation reply fails", async (t) => {

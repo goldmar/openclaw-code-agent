@@ -492,6 +492,21 @@ async function replyText(ctx: InteractiveCallbackContext, text: string): Promise
   await ctx.respond.reply({ text, ephemeral: true });
 }
 
+async function clearUpdateActionButtons(
+  ctx: InteractiveCallbackContext,
+  alreadyAcknowledged: boolean,
+): Promise<void> {
+  try {
+    await clearInteractiveState(ctx, {
+      alreadyAcknowledged,
+      forceTelegramMarkupEdit: true,
+    });
+  } catch (err) {
+    const errText = err instanceof Error ? err.message : String(err);
+    console.warn(`[callback-handler] Failed to clear update action buttons; continuing approved action: ${errText}`);
+  }
+}
+
 const planDecisionKindOrder: SessionActionKind[] = ["plan-approve", "plan-request-changes", "plan-reject"];
 
 type ActionTokenLister = {
@@ -975,7 +990,7 @@ export function createCallbackHandler(
       // Route action
       switch (consumedToken.kind) {
         case "plugin-update-install": {
-          await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged, forceTelegramMarkupEdit: true });
+          await clearUpdateActionButtons(ctx, callbackAcknowledged);
           logButtonDiagnostic("callback_update_action_started", {
             channel: ctx.channel,
             tokenHash: hashDiagnosticToken(tokenId),
@@ -1024,7 +1039,7 @@ export function createCallbackHandler(
         }
 
         case "plugin-update-restart": {
-          await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged, forceTelegramMarkupEdit: true });
+          await clearUpdateActionButtons(ctx, callbackAcknowledged);
           if (!autoUpdateService) {
             await replyText(ctx, "⚠️ OCA update service is not running.");
             break;
@@ -1039,7 +1054,7 @@ export function createCallbackHandler(
         }
 
         case "plugin-update-dismiss": {
-          await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged, forceTelegramMarkupEdit: true });
+          await clearUpdateActionButtons(ctx, callbackAcknowledged);
           const text = autoUpdateService
             ? autoUpdateService.dismiss(consumedToken.pluginUpdateVersion)
             : "Dismissed OCA update reminder.";
@@ -1048,7 +1063,7 @@ export function createCallbackHandler(
         }
 
         case "plugin-update-remind-later": {
-          await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged, forceTelegramMarkupEdit: true });
+          await clearUpdateActionButtons(ctx, callbackAcknowledged);
           const text = autoUpdateService
             ? autoUpdateService.remindLater(consumedToken.pluginUpdateVersion)
             : "Will remind later about OCA update reminder.";
