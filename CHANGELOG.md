@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Renamed the user-facing OpenClaw and ClawHub plugin title from "OpenClaw Code Agent" to "Code Agent" while preserving stable package, plugin, and command identifiers.
+
 ## [4.7.5] - 2026-07-14
 
 ### Changed

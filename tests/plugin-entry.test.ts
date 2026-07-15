@@ -68,9 +68,10 @@ describe("plugin entry source", () => {
   });
 
   it("keeps package and plugin manifest versions in sync", () => {
-    const { packageVersion, pluginVersion, openclawVersion, pluginSdkVersion, openclawInstall } =
+    const { packageVersion, pluginVersion, pluginName, openclawVersion, pluginSdkVersion, openclawInstall } =
       validateReleaseMetadata();
     assert.equal(packageVersion, pluginVersion);
+    assert.equal(pluginName, "Code Agent");
     assert.equal(openclawVersion, "2026.7.1");
     assert.equal(pluginSdkVersion, "2026.7.1");
     assert.equal(openclawInstall.npmSpec, "openclaw-code-agent");
@@ -81,6 +82,7 @@ describe("plugin entry source", () => {
       cwd: rootDir,
       encoding: "utf8",
     });
+    assert.match(cliOutput, /openclaw\.plugin\.name=Code Agent/);
     assert.match(cliOutput, /openclaw\.install\.npmSpec=openclaw-code-agent/);
     assert.match(cliOutput, /openclaw\.install\.defaultChoice=npm/);
     assert.match(cliOutput, /openclaw\.install\.minHostVersion=>=2026\.7\.1/);
@@ -426,7 +428,7 @@ describe("plugin entry source", () => {
     assert.match(apiSource, /from "openclaw\/plugin-sdk\/plugin-entry"/);
     assert.match(indexSource, /export default definePluginEntry\(\{/);
     assert.match(indexSource, /id: "openclaw-code-agent"/);
-    assert.match(indexSource, /name: "OpenClaw Code Agent"/);
+    assert.match(indexSource, /name: "Code Agent"/);
     assert.match(indexSource, /register,\s*\n\}\);/);
   });
 

@@ -315,7 +315,7 @@ export function register(api: OpenClawPluginApi): void {
 
 export default definePluginEntry({
   id: "openclaw-code-agent",
-  name: "OpenClaw Code Agent",
+  name: "Code Agent",
   description: "Multi-session coding-agent orchestration from OpenClaw chat",
   register,
 });
