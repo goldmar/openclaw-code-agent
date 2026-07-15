@@ -734,7 +734,11 @@ export function createCallbackHandler(
         }
 
         const consumedTokens = token.pendingInputRequestId
-          ? sessionManager.consumeQuestionAnswerTokens(sessionId, token.pendingInputRequestId)
+          ? sessionManager.consumeQuestionAnswerTokens(
+              sessionId,
+              token.pendingInputRequestId,
+              token.pendingInputQuestionId,
+            )
           : [];
         const consumedToken = consumedTokens.find((candidate) => candidate.id === tokenId)
           ?? sessionManager.consumeActionToken(tokenId);
@@ -749,16 +753,24 @@ export function createCallbackHandler(
         });
         if (!consumedToken) {
           await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
+          const moreInputRequired = !forwardedToResumedSession
+            && (sessionManager.pendingInputSubmissionRequiresMore?.(sessionId) ?? false);
           await replyText(ctx, forwardedToResumedSession
             ? `✅ Answer forwarded to the resumed session.`
-            : `✅ Answer submitted.`);
+            : moreInputRequired
+              ? `✅ Question step answered; more input is required.`
+              : `✅ Pending input request submitted.`);
           return { handled: true };
         }
 
         await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
+        const moreInputRequired = !forwardedToResumedSession
+          && (sessionManager.pendingInputSubmissionRequiresMore?.(sessionId) ?? false);
         await replyText(ctx, forwardedToResumedSession
           ? `✅ Answer forwarded to the resumed session.`
-          : `✅ Answer submitted.`);
+          : moreInputRequired
+            ? `✅ Question step answered; more input is required.`
+            : `✅ Pending input request submitted.`);
         return { handled: true };
       }
 

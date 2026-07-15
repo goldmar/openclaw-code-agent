@@ -82,7 +82,7 @@ export class SessionActionTokenStore {
     return token;
   }
 
-  consumeQuestionAnswerTokens(sessionId: string, requestId: string): SessionActionToken[] {
+  consumeQuestionAnswerTokens(sessionId: string, requestId: string, questionId?: string): SessionActionToken[] {
     const consumed: SessionActionToken[] = [];
     const consumedAt = Date.now();
     for (const token of this.tokens.values()) {
@@ -90,6 +90,7 @@ export class SessionActionTokenStore {
         token.sessionId !== sessionId
         || token.kind !== "question-answer"
         || token.pendingInputRequestId !== requestId
+        || (questionId != null && token.pendingInputQuestionId !== questionId)
         || token.consumedAt != null
       ) continue;
       token.consumedAt = consumedAt;

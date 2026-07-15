@@ -28,6 +28,7 @@ export class SessionTurnRuntime {
   turnInProgress = true;
   currentTurnText = "";
   currentTurnPlanArtifact?: PlanArtifact;
+  private pendingInputNotificationIdentity?: string;
 
   constructor(private readonly deps: TurnRuntimeDeps) {}
 
@@ -78,17 +79,24 @@ export class SessionTurnRuntime {
     this.deps.emitToolUse(name, input);
   }
 
-  notePendingInput(): void {
+  notePendingInput(state?: PendingInputState): void {
     this.lastTurnHadQuestion = true;
     this.deps.applyInputRequested();
-    if (!this.waitingForInputFired) {
+    const activeQuestionIndex = state?.activeQuestionIndex ?? 0;
+    const activeQuestion = state?.questions?.[activeQuestionIndex];
+    const identity = state?.requestId
+      ? `${state.requestId}:${activeQuestion?.id ?? (state.activeQuestionIndex != null ? `q${state.activeQuestionIndex}` : "request")}`
+      : undefined;
+    if (!this.waitingForInputFired || (identity && identity !== this.pendingInputNotificationIdentity)) {
       this.waitingForInputFired = true;
+      this.pendingInputNotificationIdentity = identity;
       this.deps.emitTurnEnd(true);
     }
   }
 
   clearResolvedPendingInput(requestId: string | undefined, currentState?: PendingInputState): PendingInputState | undefined {
     if (!requestId || currentState?.requestId === requestId) {
+      this.pendingInputNotificationIdentity = undefined;
       return undefined;
     }
     return currentState;

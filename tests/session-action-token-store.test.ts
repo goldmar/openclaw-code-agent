@@ -57,6 +57,16 @@ describe("SessionActionTokenStore", () => {
     assert.deepEqual(store.listActiveActionTokens("repo-policy-set").map((active) => active.id), [otherPolicyToken.id]);
   });
 
+  it("consumes only sibling buttons for the answered wizard question", () => {
+    const store = new SessionActionTokenStore(() => {});
+    const q1a = store.createActionToken("session-1", "question-answer", { pendingInputRequestId: "request-1", pendingInputQuestionId: "q1", optionIndex: 0 });
+    const q1b = store.createActionToken("session-1", "question-answer", { pendingInputRequestId: "request-1", pendingInputQuestionId: "q1", optionIndex: 1 });
+    const q2a = store.createActionToken("session-1", "question-answer", { pendingInputRequestId: "request-1", pendingInputQuestionId: "q2", optionIndex: 0 });
+
+    assert.deepEqual(store.consumeQuestionAnswerTokens("session-1", "request-1", "q1").map((token) => token.id).sort(), [q1a.id, q1b.id].sort());
+    assert.equal(store.getActionToken(q2a.id)?.consumedAt, undefined);
+  });
+
   it("atomically consumes sibling buttons for one question request", () => {
     let changeCount = 0;
     const store = new SessionActionTokenStore(() => { changeCount++; }, 100);

@@ -470,6 +470,8 @@ export async function executeRespond(
       }
     }
 
+    const pendingQuestionIndex = session.pendingInputState?.activeQuestionIndex;
+    const pendingQuestionCount = session.pendingInputState?.questions?.length;
     const submittedPendingText =
       !params.approve
       && session.pendingInputState?.allowsFreeText
@@ -484,11 +486,18 @@ export async function executeRespond(
         session.incrementAutoRespond();
       }
       const msgSummary = truncateText(params.message, 80);
+      const moreInputRequired = pendingQuestionIndex != null
+        && pendingQuestionCount != null
+        && pendingQuestionIndex + 1 < pendingQuestionCount;
       return {
         text: [
-          `Pending input answered for session ${session.name} [${session.id}].`,
+          moreInputRequired
+            ? `Pending input question answered for session ${session.name} [${session.id}]; more input is required.`
+            : `Pending input request submitted for session ${session.name} [${session.id}].`,
           `  Message: "${msgSummary}"`,
-          `Use agent_output to see the response.`,
+          moreInputRequired
+            ? `The next question is being delivered to the user.`
+            : `Use agent_output to see the response.`,
         ].join("\n"),
       };
     }
