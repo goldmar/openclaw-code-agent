@@ -32,7 +32,7 @@ jobs:
           submodules: false
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@b0f76dfb45f55f8421693e4803ac7bb65143bd34 # v6
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
         with:
           version: 11.13.0
 
@@ -149,7 +149,7 @@ jobs:
           submodules: false
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@b0f76dfb45f55f8421693e4803ac7bb65143bd34 # v6
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
         with:
           version: 11.13.0
 
