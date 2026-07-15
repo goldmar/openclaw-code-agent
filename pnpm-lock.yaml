@@ -36,8 +36,8 @@ importers:
         specifier: ^0.28.1
         version: 0.28.1
       nanoid:
-        specifier: ^5.1.7
-        version: 5.1.16
+        specifier: ^6.0.0
+        version: 6.0.0
       openclaw:
         specifier: 2026.7.1
         version: 2026.7.1
@@ -1141,9 +1141,9 @@ packages:
   ms@2.1.3:
     resolution: {integrity: sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA==}
 
-  nanoid@5.1.16:
-    resolution: {integrity: sha512-kVrnsrJqMR8+oLJnGEmSWw9BivK5mt7H3FZatVRjrc5wGqFYuBxX1yG7+A7Gi5AefkX6t/oCkizcQgpu0cY1dQ==}
-    engines: {node: ^18 || >=20}
+  nanoid@6.0.0:
+    resolution: {integrity: sha512-mkUH+rPkwU2qPadJ0oJZOjeZ5Mxn8Q1UhevwkTRWNuUZzyia3h4rhzK39hxaHTk0o2OxB8W2SQ6A8k23ZDi1pQ==}
+    engines: {node: ^22 || ^24 || >=26}
     hasBin: true
 
   negotiator@1.0.0:
@@ -2591,7 +2591,7 @@ snapshots:
 
   ms@2.1.3: {}
 
-  nanoid@5.1.16: {}
+  nanoid@6.0.0: {}
 
   negotiator@1.0.0: {}
 
