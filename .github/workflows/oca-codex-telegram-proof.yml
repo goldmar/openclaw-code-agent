@@ -90,7 +90,7 @@ jobs:
       - name: Setup pnpm
         uses: pnpm/action-setup@b0f76dfb45f55f8421693e4803ac7bb65143bd34 # v6
         with:
-          version: 10.30.0
+          version: 11.13.0
 
       - name: Prefer configured pnpm binary
         run: echo "$PNPM_HOME/bin" >> "$GITHUB_PATH"
