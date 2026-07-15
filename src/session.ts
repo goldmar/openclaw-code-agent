@@ -324,7 +324,7 @@ export class Session extends EventEmitter {
       },
       noteTextDelta: (text, pendingPlanApproval) => this.turnRuntime.noteTextDelta(text, pendingPlanApproval),
       noteToolCall: (args) => this.turnRuntime.noteToolCall(args),
-      setPendingInputState: (state) => { this.pendingInputState = state; },
+      setPendingInputState: (state) => this.setPendingInputState(state),
       notePendingInput: (state) => this.turnRuntime.notePendingInput(state),
       clearResolvedPendingInput: (requestId, currentState) => (
         this.turnRuntime.clearResolvedPendingInput(requestId, currentState)
@@ -383,7 +383,7 @@ export class Session extends EventEmitter {
           });
         }
         this.turnRuntime.resetAfterRun();
-        this.pendingInputState = undefined;
+        this.setPendingInputState(undefined);
       },
     });
     this.applyControlEvent({ type: "initialize", hasWorktree: !!(this.worktreeStrategy && this.worktreeStrategy !== "off") });
@@ -851,6 +851,13 @@ export class Session extends EventEmitter {
 
   canSubmitPendingInputOption(): boolean {
     return Boolean(this.pendingInputState && this.harnessHandle?.submitPendingInputOption);
+  }
+
+  private setPendingInputState(state: PendingInputState | undefined): void {
+    this.pendingInputState = state;
+    if (!state) {
+      this.lastPendingInputSubmissionRequiresMore = false;
+    }
   }
 
   pendingInputSubmissionRequiresMore(): boolean {
