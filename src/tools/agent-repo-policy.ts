@@ -29,7 +29,7 @@ function formatPolicy(record: RepoPolicyRecord | undefined): string {
 export function makeAgentRepoPolicyTool(ctx?: OpenClawPluginToolContext) {
   return {
     name: "agent_repo_policy",
-    description: "Inspect or set the repository integration policy that governs OCA worktree merge/PR follow-through.",
+    description: "Inspect or set the repository integration policy that governs OpenClaw Code Agent worktree merge/PR follow-through.",
     parameters: Type.Object({
       workdir: Type.Optional(Type.String({ description: "Repository workdir. Defaults to the current workspace directory." })),
       policy: Type.Optional(Type.Union([

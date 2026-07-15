@@ -433,7 +433,7 @@ describe("session task lifecycle phase-1 adapter", () => {
 
     assert.deepEqual(calls.map((call) => call.method), ["fail"]);
     assert.equal(calls[0].params.expectedRevision, 3);
-    assert.equal(calls[0].params.blockedSummary, "Lost after OCA restart without live process");
+    assert.equal(calls[0].params.blockedSummary, "Lost after OpenClaw Code Agent restart without live process");
     assert.equal((calls[0].params.stateJson as Record<string, unknown>).terminalStatus, "lost");
   });
 

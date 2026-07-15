@@ -64,6 +64,8 @@ describe("repo policy resolution", () => {
       assert.equal(result.ok, false);
       if (!result.ok) {
         assert.match(result.text, /Repo integration policy is not set/);
+        assert.match(result.text, /OpenClaw Code Agent will create isolated worktrees/);
+        assert.doesNotMatch(result.text, /\bOCA\b/);
         assert.match(result.text, /agent_repo_policy/);
       }
       sm.dispose();

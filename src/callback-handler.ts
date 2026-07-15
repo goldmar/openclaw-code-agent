@@ -1003,7 +1003,7 @@ export function createCallbackHandler(
               tokenHash: hashDiagnosticToken(tokenId),
               reason: "service_unavailable",
             });
-            await replyText(ctx, "⚠️ OCA update service is not running.");
+            await replyText(ctx, "⚠️ OpenClaw Code Agent update service is not running.");
             break;
           }
           let text: string;
@@ -1017,7 +1017,7 @@ export function createCallbackHandler(
               tokenHash: hashDiagnosticToken(tokenId),
               reason: "install_failed",
             });
-            await replyText(ctx, `⚠️ OCA update failed: ${err instanceof Error ? err.message : String(err)}`);
+            await replyText(ctx, `⚠️ OpenClaw Code Agent update failed: ${err instanceof Error ? err.message : String(err)}`);
             break;
           }
           logButtonDiagnostic("callback_update_action_completed", {
@@ -1033,7 +1033,7 @@ export function createCallbackHandler(
               tokenHash: hashDiagnosticToken(tokenId),
               reason: "reply_failed",
             });
-            console.warn(`[callback-handler] OCA update succeeded, but the confirmation reply failed: ${err instanceof Error ? err.message : String(err)}`);
+            console.warn(`[callback-handler] OpenClaw Code Agent update succeeded, but the confirmation reply failed: ${err instanceof Error ? err.message : String(err)}`);
           }
           break;
         }
@@ -1041,7 +1041,7 @@ export function createCallbackHandler(
         case "plugin-update-restart": {
           await clearUpdateActionButtons(ctx, callbackAcknowledged);
           if (!autoUpdateService) {
-            await replyText(ctx, "⚠️ OCA update service is not running.");
+            await replyText(ctx, "⚠️ OpenClaw Code Agent update service is not running.");
             break;
           }
           try {
@@ -1057,7 +1057,7 @@ export function createCallbackHandler(
           await clearUpdateActionButtons(ctx, callbackAcknowledged);
           const text = autoUpdateService
             ? autoUpdateService.dismiss(consumedToken.pluginUpdateVersion)
-            : "Dismissed OCA update reminder.";
+            : "Dismissed OpenClaw Code Agent update reminder.";
           await replyText(ctx, `✅ ${text}`);
           break;
         }
@@ -1066,7 +1066,7 @@ export function createCallbackHandler(
           await clearUpdateActionButtons(ctx, callbackAcknowledged);
           const text = autoUpdateService
             ? autoUpdateService.remindLater(consumedToken.pluginUpdateVersion)
-            : "Will remind later about OCA update reminder.";
+            : "Will remind later about OpenClaw Code Agent update reminder.";
           await replyText(ctx, `✅ ${text}`);
           break;
         }

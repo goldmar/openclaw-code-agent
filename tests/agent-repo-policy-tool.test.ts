@@ -8,6 +8,12 @@ describe("agent_repo_policy tool", () => {
     setSessionManager(null);
   });
 
+  it("uses the full plugin name in its customer-facing description", () => {
+    const tool = makeAgentRepoPolicyTool();
+    assert.match(tool.description, /OpenClaw Code Agent worktree merge\/PR follow-through/);
+    assert.doesNotMatch(tool.description, /\bOCA\b/);
+  });
+
   it("continues a matching deferred launch after setting policy manually", async () => {
     setSessionManager({
       setRepoPolicy: () => ({

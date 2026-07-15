@@ -357,7 +357,7 @@ function persistedSessionKey(session: Pick<PersistedSessionInfo, "originSessionK
 
 function persistedTerminalSummary(session: Pick<PersistedSessionInfo, "status" | "killReason" | "runtimeRecovery">): string {
   if (session.runtimeRecovery?.reason === "persisted-running-without-runtime") {
-    return "Lost after OCA restart without live process";
+    return "Lost after OpenClaw Code Agent restart without live process";
   }
   return terminalSummary(session.status, session.killReason ?? "unknown");
 }
