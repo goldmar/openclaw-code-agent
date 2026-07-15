@@ -27,7 +27,7 @@ type SessionHarnessEventApplierDeps = {
     planModeApproved: boolean;
   }) => void;
   setPendingInputState: (state: PendingInputState | undefined) => void;
-  notePendingInput: () => void;
+  notePendingInput: (state: PendingInputState) => void;
   clearResolvedPendingInput: (
     requestId: string | undefined,
     currentState?: PendingInputState,
@@ -80,7 +80,7 @@ export class SessionHarnessEventApplier {
 
     if (msg.type === "pending_input") {
       this.deps.setPendingInputState(msg.state);
-      this.deps.notePendingInput();
+      this.deps.notePendingInput(msg.state);
       return;
     }
 

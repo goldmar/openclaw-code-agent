@@ -24,6 +24,26 @@ describe("SessionTurnRuntime", () => {
     assert.deepEqual(events, ["question"]);
   });
 
+  it("emits a fresh waiting turn-end for each distinct question in one request", () => {
+    const events: string[] = [];
+    const runtime = new SessionTurnRuntime({
+      appendOutput: () => {}, emitOutput: () => {}, emitToolUse: () => {},
+      emitTurnEnd: () => { events.push("question"); }, markPendingPlanApproval: () => {},
+      markAwaitingUserInput: () => {}, applyInputRequested: () => {}, completeTurn: () => {},
+      setPlanFilePath: () => {}, setLatestPlanArtifact: () => {},
+    });
+    const questions = [
+      { id: "fast_path_scope", question: "Fast path?", options: [] },
+      { id: "think_default", question: "Think default?", options: [] },
+    ];
+
+    runtime.notePendingInput({ requestId: "req-1", kind: "question", promptText: "Fast path?", options: [], questions, activeQuestionIndex: 0 });
+    runtime.notePendingInput({ requestId: "req-1", kind: "question", promptText: "Fast path?", options: [], questions, activeQuestionIndex: 0 });
+    runtime.notePendingInput({ requestId: "req-1", kind: "question", promptText: "Think default?", options: [], questions, activeQuestionIndex: 1 });
+
+    assert.deepEqual(events, ["question", "question"]);
+  });
+
   it("marks pending plan approval when a plan-mode tool call requests it", () => {
     const planRequests: string[] = [];
     const toolCalls: string[] = [];

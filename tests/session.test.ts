@@ -390,4 +390,19 @@ describe("Session.phase", () => {
     assert.equal(codexSession.phase, "awaiting_plan_decision",
       "Codex plan-mode sessions must show awaiting_plan_decision once pendingPlanApproval is set");
   });
+
+  it("clears stale more-input status when pending input is resolved", () => {
+    session.pendingInputState = {
+      requestId: "req-multi",
+      kind: "question",
+      promptText: "First?",
+      options: [],
+    };
+    (session as any).lastPendingInputSubmissionRequiresMore = true;
+
+    (session as any).setPendingInputState(undefined);
+
+    assert.equal(session.pendingInputState, undefined);
+    assert.equal(session.pendingInputSubmissionRequiresMore(), false);
+  });
 });

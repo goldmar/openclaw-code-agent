@@ -1,14 +1,12 @@
 packages:
   - .
 
-onlyBuiltDependencies:
-  - esbuild
-  - protobufjs
-
-ignoredBuiltDependencies:
-  - "@google/genai"
-  - openclaw
-  - tree-sitter-bash
+allowBuilds:
+  "@google/genai": false
+  esbuild: true
+  openclaw: false
+  protobufjs: true
+  tree-sitter-bash: false
 
 overrides:
   basic-ftp: 5.3.1

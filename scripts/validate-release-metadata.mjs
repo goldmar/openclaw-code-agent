@@ -132,7 +132,7 @@ export function validateReleaseMetadata(options = {}) {
     throw new Error(`pnpm-lock.yaml is not pinned to OpenClaw ${openclawVersion}`);
   }
 
-  if (packageJson.packageManager !== "pnpm@10.30.0") {
+  if (packageJson.packageManager !== "pnpm@11.13.0") {
     throw new Error(`Unexpected package manager: ${packageJson.packageManager}`);
   }
 

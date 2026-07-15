@@ -334,7 +334,28 @@ describe("executeRespond", () => {
     assert.equal(submittedText, "Optimize first for accurate names and following best practices.");
     assert.equal(sendMessageCalled, false);
     assert.equal(interruptCalled, false);
-    assert.match(result.text, /Pending input answered/);
+    assert.match(result.text, /Pending input request submitted/);
+  });
+
+  it("truthfully reports an answered wizard step while another question remains", async () => {
+    const session = createStubSession({
+      pendingInputState: {
+        requestId: "req-multi", kind: "question", promptText: "First?", options: [],
+        allowsFreeText: true, activeQuestionIndex: 0,
+        questions: [
+          { id: "fast_path_scope", question: "First?", options: [] },
+          { id: "think_default", question: "Second?", options: [] },
+        ],
+      },
+      submitPendingInputText: async () => true,
+    });
+    const result = await executeRespond(createStubSessionManager({ "test-id": session }), {
+      session: "test-id", message: "first answer", userInitiated: true,
+    });
+
+    assert.match(result.text, /question answered.*more input is required/i);
+    assert.match(result.text, /next question is being delivered/i);
+    assert.doesNotMatch(result.text, /request submitted/i);
   });
 
   it("auto-resumes a shutdown-killed pending-plan session when approve=true is sent", async () => {

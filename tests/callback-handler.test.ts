@@ -2028,7 +2028,7 @@ describe("createCallbackHandler()", () => {
     assert.deepEqual(resolved, [{ sessionId: "sess-42", optionIndex: 1 }]);
     assert.equal(consumed, 1);
     assert.equal(state.buttonsCleared, 1);
-    assert.equal(state.replies[0], "✅ Answer submitted.");
+    assert.equal(state.replies[0], "✅ Pending input request submitted.");
   });
 
   it("does not consume or clear active question buttons when answer submission fails", async () => {
@@ -2217,7 +2217,7 @@ describe("createCallbackHandler()", () => {
     assert.equal(submitCalls, 1);
     assert.equal(consumeCalls, 1);
     assert.equal(firstState.buttonsCleared, 1);
-    assert.equal(firstState.replies[0], "✅ Answer submitted.");
+    assert.equal(firstState.replies[0], "✅ Pending input request submitted.");
   });
 
   it("reports duplicate question-answer callbacks as stale after a successful answer", async () => {
@@ -2250,7 +2250,7 @@ describe("createCallbackHandler()", () => {
     assert.deepEqual(firstResult, { handled: true });
     assert.deepEqual(secondResult, { handled: true });
     assert.equal(submitted, true);
-    assert.equal(firstState.replies[0], "✅ Answer submitted.");
+    assert.equal(firstState.replies[0], "✅ Pending input request submitted.");
     assert.equal(secondState.replies[0], "⚠️ That question button is no longer active. Use the latest question prompt.");
   });
 
@@ -2277,7 +2277,7 @@ describe("createCallbackHandler()", () => {
     assert.equal(submitted, true);
     assert.equal(consumes, 1);
     assert.equal(state.componentsCleared, 1);
-    assert.equal(state.replies[0], "✅ Answer submitted.");
+    assert.equal(state.replies[0], "✅ Pending input request submitted.");
   });
 
   it("clears worktree merge buttons without replying when agent_merge succeeds", async () => {

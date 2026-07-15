@@ -179,6 +179,7 @@ export class Session extends EventEmitter {
   readonly originSessionKey?: string;
   route?: SessionRoute;
   pendingInputState?: PendingInputState;
+  private lastPendingInputSubmissionRequiresMore = false;
 
   // Flags
   pendingPlanApproval: boolean = false;
@@ -323,8 +324,8 @@ export class Session extends EventEmitter {
       },
       noteTextDelta: (text, pendingPlanApproval) => this.turnRuntime.noteTextDelta(text, pendingPlanApproval),
       noteToolCall: (args) => this.turnRuntime.noteToolCall(args),
-      setPendingInputState: (state) => { this.pendingInputState = state; },
-      notePendingInput: () => this.turnRuntime.notePendingInput(),
+      setPendingInputState: (state) => this.setPendingInputState(state),
+      notePendingInput: (state) => this.turnRuntime.notePendingInput(state),
       clearResolvedPendingInput: (requestId, currentState) => (
         this.turnRuntime.clearResolvedPendingInput(requestId, currentState)
       ),
@@ -382,7 +383,7 @@ export class Session extends EventEmitter {
           });
         }
         this.turnRuntime.resetAfterRun();
-        this.pendingInputState = undefined;
+        this.setPendingInputState(undefined);
       },
     });
     this.applyControlEvent({ type: "initialize", hasWorktree: !!(this.worktreeStrategy && this.worktreeStrategy !== "off") });
@@ -836,8 +837,13 @@ export class Session extends EventEmitter {
     if (!this.pendingInputState || !this.harnessHandle?.submitPendingInputOption) {
       return false;
     }
+    const activeQuestionIndex = this.pendingInputState.activeQuestionIndex;
+    const questionCount = this.pendingInputState.questions?.length;
     const submitted = await this.harnessHandle.submitPendingInputOption(optionIndex, context);
     if (submitted) {
+      this.lastPendingInputSubmissionRequiresMore = activeQuestionIndex != null
+        && questionCount != null
+        && activeQuestionIndex + 1 < questionCount;
       this.waitingForInputFired = false;
     }
     return submitted;
@@ -847,12 +853,28 @@ export class Session extends EventEmitter {
     return Boolean(this.pendingInputState && this.harnessHandle?.submitPendingInputOption);
   }
 
+  private setPendingInputState(state: PendingInputState | undefined): void {
+    this.pendingInputState = state;
+    if (!state) {
+      this.lastPendingInputSubmissionRequiresMore = false;
+    }
+  }
+
+  pendingInputSubmissionRequiresMore(): boolean {
+    return this.lastPendingInputSubmissionRequiresMore;
+  }
+
   async submitPendingInputText(text: string): Promise<boolean> {
     if (!this.pendingInputState || !this.harnessHandle?.submitPendingInputText) {
       return false;
     }
+    const activeQuestionIndex = this.pendingInputState.activeQuestionIndex;
+    const questionCount = this.pendingInputState.questions?.length;
     const submitted = await this.harnessHandle.submitPendingInputText(text);
     if (submitted) {
+      this.lastPendingInputSubmissionRequiresMore = activeQuestionIndex != null
+        && questionCount != null
+        && activeQuestionIndex + 1 < questionCount;
       this.waitingForInputFired = false;
     }
     return submitted;

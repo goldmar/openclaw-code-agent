@@ -1839,8 +1839,12 @@ export class SessionManager {
     return this.sessions.get(sessionId)?.canSubmitPendingInputOption?.() === true;
   }
 
-  consumeQuestionAnswerTokens(sessionId: string, requestId: string): SessionActionToken[] {
-    return this.interactions.consumeQuestionAnswerTokens(sessionId, requestId);
+  pendingInputSubmissionRequiresMore(sessionId: string): boolean {
+    return this.sessions.get(sessionId)?.pendingInputSubmissionRequiresMore() === true;
+  }
+
+  consumeQuestionAnswerTokens(sessionId: string, requestId: string, questionId?: string): SessionActionToken[] {
+    return this.interactions.consumeQuestionAnswerTokens(sessionId, requestId, questionId);
   }
 
   dispose(): void {
