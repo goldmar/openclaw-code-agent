@@ -308,6 +308,10 @@ describe("AutoUpdateService", () => {
 
     assert.equal(harness.fetchCount, 1);
     assert.equal(harness.sends.length, 1);
+    assert.match(harness.sends[0]?.text ?? "", /^OpenClaw Code Agent update available:/);
+    assert.match(harness.sends[0]?.text ?? "", /OpenClaw Code Agent's recorded npm or ClawHub source/);
+    assert.match(harness.sends[0]?.text ?? "", /OpenClaw Code Agent will ask separately/);
+    assert.doesNotMatch(harness.sends[0]?.text ?? "", /\bOCA\b/);
     assert.equal(readState(stateDir).promptedVersion, "4.6.1");
     assert.equal(readState(stateDir).lastPromptedAt, new Date(now).toISOString());
   });
@@ -395,7 +399,7 @@ describe("AutoUpdateService", () => {
       ["openclaw", "plugins", "inspect", "openclaw-code-agent", "--json"],
     ]);
     assert.equal(readState(stateDir).updateInstalledVersion, "4.6.1");
-    assert.match(harness.sends.at(-1)?.text ?? "", /OCA 4\.6\.1 installation was verified/);
+    assert.match(harness.sends.at(-1)?.text ?? "", /OpenClaw Code Agent 4\.6\.1 installation was verified/);
   });
 
   it("reinstalls an exact approved ClawHub release from the recorded source", async () => {
@@ -477,7 +481,7 @@ describe("AutoUpdateService", () => {
 
     const updateText = await harness.service.installConfirmed("latest", { route: ROUTE });
 
-    assert.match(updateText, /stable OCA version/);
+    assert.match(updateText, /stable OpenClaw Code Agent version/);
     assert.deepEqual(harness.commands, []);
   });
 

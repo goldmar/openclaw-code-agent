@@ -164,7 +164,7 @@ describe("createCallbackHandler()", () => {
     setAutoUpdateService({
       installConfirmed: async () => {
         installs++;
-        return "OCA 4.6.1 installation was verified.";
+        return "OpenClaw Code Agent 4.6.1 installation was verified.";
       },
     } as any);
     setSessionManager({
@@ -212,7 +212,7 @@ describe("createCallbackHandler()", () => {
     t.mock.method(console, "info", ((message?: unknown) => { logs.push(String(message)); }) as typeof console.info);
     t.mock.method(console, "warn", ((message?: unknown) => { warnings.push(String(message)); }) as typeof console.warn);
     setAutoUpdateService({
-      installConfirmed: async () => "OCA 4.6.1 installation was verified.",
+      installConfirmed: async () => "OpenClaw Code Agent 4.6.1 installation was verified.",
     } as any);
     setSessionManager({
       getActionToken: () => ({
@@ -254,7 +254,7 @@ describe("createCallbackHandler()", () => {
       },
       restartConfirmed: async () => {
         calls.push("restart");
-        return "Gateway restart requested for OCA 4.6.1.";
+        return "Gateway restart requested for OpenClaw Code Agent 4.6.1.";
       },
       dismiss: () => "dismissed",
     } as any);
@@ -295,7 +295,7 @@ describe("createCallbackHandler()", () => {
       },
       remindLater: () => {
         calls.push("remind-later");
-        return "Will remind later about OCA 4.6.1 update reminder.";
+        return "Will remind later about OpenClaw Code Agent 4.6.1 update reminder.";
       },
       dismiss: () => "dismissed",
     } as any);

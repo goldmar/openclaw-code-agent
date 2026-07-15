@@ -1565,7 +1565,7 @@ describe("SessionNotificationService", () => {
     service.dispatch(session, {
       label: "goal-foreground-summary",
       userMessage: [
-        "Second full-repo OCA review finished and pushed.",
+        "Second full-repo OpenClaw Code Agent review finished and pushed.",
         "Commit: `753f35f` - `Harden paper runtime approval and execution checks`",
         "Verification passed via `./scripts/check-workspace.sh`.",
       ].join("\n"),
@@ -1608,7 +1608,7 @@ describe("SessionNotificationService", () => {
     assert.equal(requests[2]?.wakeMessage, undefined);
     assert.equal(requests[2]?.completionWakeSummaryRequired, false);
     assert.equal(userMessages.length, 1);
-    assert.match(userMessages[0] ?? "", /Second full-repo OCA review finished and pushed/);
+    assert.match(userMessages[0] ?? "", /Second full-repo OpenClaw Code Agent review finished and pushed/);
     assert.doesNotMatch(userMessages[0] ?? "", /Completion promise/);
     assert.equal(wakeAttempts, 1);
     assert.deepEqual(skippedReasons, ["prior human-visible summary already delivered"]);
@@ -1664,7 +1664,7 @@ describe("SessionNotificationService", () => {
     service.dispatch(session, {
       label: "foreground-routed-summary",
       userMessage: [
-        "Full-repo OCA review finished and pushed.",
+        "Full-repo OpenClaw Code Agent review finished and pushed.",
         "Commit `abc1234` (`Harden repo hygiene checks`).",
         "Two review/implementation iterations completed; verification passed.",
       ].join("\n"),
@@ -1698,7 +1698,7 @@ describe("SessionNotificationService", () => {
 
     assert.equal(requests.length, 3);
     assert.match(userMessages[0] ?? "", /Goal task succeeded/);
-    assert.match(userMessages[1] ?? "", /Full-repo OCA review finished and pushed/);
+    assert.match(userMessages[1] ?? "", /Full-repo OpenClaw Code Agent review finished and pushed/);
     assert.equal(userMessages.length, 2);
     assert.equal(requests[1]?.completionWakeSummaryRequired, false);
     assert.equal(requests[2]?.wakeMessage, undefined);

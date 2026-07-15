@@ -569,7 +569,7 @@ describe("OCA Codex Crabbox integration harness", () => {
       const reconciled = reconcilePersistedSessionTaskMirror(session);
       assert.deepEqual(calls.map((call) => call.method), ["fail"]);
       assert.equal(calls[0].params.expectedRevision, 7);
-      assert.equal(calls[0].params.blockedSummary, "Lost after OCA restart without live process");
+      assert.equal(calls[0].params.blockedSummary, "Lost after OpenClaw Code Agent restart without live process");
       assert.equal(reconciled?.revision, 8);
     } finally {
       setPluginRuntime(undefined);

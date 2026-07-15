@@ -798,7 +798,7 @@ export class SessionManager {
         userMessage: [
           message,
           ``,
-          `After you choose a policy, OCA will continue this launch automatically.`,
+          `After you choose a policy, OpenClaw Code Agent will continue this launch automatically.`,
         ].join("\n"),
         notifyUser: "always",
         requireDirectUserNotification: true,

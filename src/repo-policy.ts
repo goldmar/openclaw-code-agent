@@ -248,14 +248,14 @@ export function formatUnknownRepoPolicyMessage(identity: RepoIdentity, requested
   return [
     `Repo integration policy is not set for ${identity.repoRoot}.`,
     ``,
-    `OCA will create isolated worktrees, but it needs one repo policy before worktree follow-through can run.`,
+    `OpenClaw Code Agent will create isolated worktrees, but it needs one repo policy before worktree follow-through can run.`,
     `Requested worktree strategy: ${requestedStrategy}`,
     `Provider: ${identity.provider}${prAvailable ? "" : " (PR automation unavailable)"}`,
     ``,
     `Choose one available policy:`,
     ...options.map((option) => `- ${option.title}: ${option.description}`),
     ``,
-    `If buttons are unavailable, set it manually. OCA will continue the pending launch automatically when exactly one matching launch is waiting; otherwise run the intended launch again:`,
+    `If buttons are unavailable, set it manually. OpenClaw Code Agent will continue the pending launch automatically when exactly one matching launch is waiting; otherwise run the intended launch again:`,
     ...options.map((option) => `- agent_repo_policy(workdir="${identity.repoRoot}", policy="${option.policy}")`),
   ].join("\n");
 }
