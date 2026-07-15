@@ -35,7 +35,7 @@ import {
 type ClaudeQueryHandle = AsyncIterable<unknown> & {
   setPermissionMode?: (mode: string) => Promise<void>;
   streamInput?: (input: AsyncIterable<SDKUserMessage>) => Promise<void>;
-  interrupt?: () => Promise<void>;
+  interrupt?: () => Promise<unknown>;
 };
 
 type ClaudeWarmQueryHandle = {
