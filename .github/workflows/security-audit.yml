@@ -29,7 +29,7 @@ jobs:
           submodules: false
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@b0f76dfb45f55f8421693e4803ac7bb65143bd34 # v6
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
         with:
           version: 11.13.0
 
@@ -37,7 +37,7 @@ jobs:
         run: echo "$PNPM_HOME/bin" >> "$GITHUB_PATH"
 
       - name: Setup Node.js
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22.22.3
 
