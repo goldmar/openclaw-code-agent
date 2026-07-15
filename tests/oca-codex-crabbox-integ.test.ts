@@ -654,10 +654,10 @@ describe("OCA Codex Crabbox integration harness", () => {
           install: { npmSpec: "openclaw-code-agent", defaultChoice: "npm", minHostVersion: ">=2026.4.21" },
         },
       }));
-      writeFileSync(join(temp, "openclaw.plugin.json"), JSON.stringify({ version: "4.5.8" }));
+      writeFileSync(join(temp, "openclaw.plugin.json"), JSON.stringify({ name: "Code Agent", version: "4.5.8" }));
 
       assert.throws(() => validateReleaseMetadata({ baseDir: temp }), /Version mismatch/u);
-      writeFileSync(join(temp, "openclaw.plugin.json"), JSON.stringify({ version: "4.5.9" }));
+      writeFileSync(join(temp, "openclaw.plugin.json"), JSON.stringify({ name: "Code Agent", version: "4.5.9" }));
       assert.throws(() => validateReleaseMetadata({ baseDir: temp }), /OpenClaw build metadata mismatch/u);
     } finally {
       rmSync(temp, { recursive: true, force: true });

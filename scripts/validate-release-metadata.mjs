@@ -25,6 +25,7 @@ export function loadReleaseMetadata(baseDir = rootDir) {
   return {
     packageVersion: packageJson.version,
     pluginVersion: pluginManifest.version,
+    pluginName: pluginManifest.name,
     openclawVersion: packageJson.openclaw?.build?.openclawVersion,
     pluginSdkVersion: packageJson.openclaw?.build?.pluginSdkVersion,
     openclawInstall: packageJson.openclaw?.install,
@@ -43,12 +44,19 @@ export function validateReleaseMetadata(options = {}) {
   const {
     packageVersion,
     pluginVersion,
+    pluginName,
     openclawVersion,
     pluginSdkVersion,
     openclawInstall,
     openclawCompat,
     openclawPeerVersion,
   } = loadReleaseMetadata(baseDir);
+
+  if (pluginName !== "Code Agent") {
+    throw new Error(
+      `OpenClaw plugin display name mismatch: expected Code Agent, got ${pluginName}`,
+    );
+  }
 
   if (packageVersion !== pluginVersion) {
     throw new Error(
@@ -143,6 +151,7 @@ export function validateReleaseMetadata(options = {}) {
   return {
     packageVersion,
     pluginVersion,
+    pluginName,
     openclawVersion,
     pluginSdkVersion,
     openclawInstall,
@@ -160,6 +169,7 @@ function runCli() {
   const {
     packageVersion,
     pluginVersion,
+    pluginName,
     openclawVersion,
     pluginSdkVersion,
     openclawInstall,
@@ -168,7 +178,7 @@ function runCli() {
   } = validateReleaseMetadata({ releaseVersion, openclawTargetVersion });
   const releaseLabel = releaseVersion ? ` against release ${releaseVersion}` : "";
   console.log(
-    `Release metadata validated${releaseLabel}: package.json=${packageVersion}, openclaw.plugin.json=${pluginVersion}, openclawVersion=${openclawVersion}, pluginSdkVersion=${pluginSdkVersion}, openclaw.install.npmSpec=${openclawInstall.npmSpec}, openclaw.install.defaultChoice=${openclawInstall.defaultChoice}, openclaw.install.minHostVersion=${openclawInstall.minHostVersion}, openclaw.compat.pluginApi=${openclawCompat.pluginApi}, openclaw.compat.minGatewayVersion=${openclawCompat.minGatewayVersion}, peerDependencies.openclaw=${openclawPeerVersion}`,
+    `Release metadata validated${releaseLabel}: package.json=${packageVersion}, openclaw.plugin.json=${pluginVersion}, openclaw.plugin.name=${pluginName}, openclawVersion=${openclawVersion}, pluginSdkVersion=${pluginSdkVersion}, openclaw.install.npmSpec=${openclawInstall.npmSpec}, openclaw.install.defaultChoice=${openclawInstall.defaultChoice}, openclaw.install.minHostVersion=${openclawInstall.minHostVersion}, openclaw.compat.pluginApi=${openclawCompat.pluginApi}, openclaw.compat.minGatewayVersion=${openclawCompat.minGatewayVersion}, peerDependencies.openclaw=${openclawPeerVersion}`,
   );
 }
 
