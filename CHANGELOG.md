@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.7.5] - 2026-07-14
+
+### Changed
+- Upgraded the repository and release workflows to pnpm `11.13.0`, using pnpm's explicit dependency build allowlist so production security audits continue to run with the intended install-script policy.
+
+### Fixed
+- Fixed multi-question Codex input requests so each answer consumes only the active question's controls, delivers the next question, and reports when more input is still required.
+- Cleared resolved pending-input state after the final answer so completed requests no longer remain visible as awaiting input.
+
 ## [4.7.4] - 2026-07-14
 
 ### Fixed
@@ -623,7 +632,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Default Codex approval policy to `on-request`.
 - Raised the default session limit.
 
-[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.4...HEAD
+[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.5...HEAD
+[4.7.5]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.4...v4.7.5
 [4.7.4]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.3...v4.7.4
 [4.7.3]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.2...v4.7.3
 [4.7.2]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.1...v4.7.2
