@@ -7,8 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.7.6] - 2026-07-15
+
 ### Changed
 - Renamed the user-facing OpenClaw and ClawHub plugin title from "OpenClaw Code Agent" to "Code Agent" while preserving stable package, plugin, and command identifiers.
+- Replaced customer-facing "OCA" shorthand with the full "OpenClaw Code Agent" name in update, callback, repository-policy, session, and lifecycle messages.
+- Updated the Claude Agent SDK, TypeScript, nanoid, tsx, and pinned GitHub Actions used by CI and release automation.
+
+### Fixed
+- Kept approved plugin update, restart, dismiss, and reminder callbacks running when Telegram action-button cleanup fails, while logging the cleanup failure for diagnosis.
 
 ## [4.7.5] - 2026-07-14
 
@@ -635,7 +642,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Default Codex approval policy to `on-request`.
 - Raised the default session limit.
 
-[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.5...HEAD
+[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.6...HEAD
+[4.7.6]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.5...v4.7.6
 [4.7.5]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.4...v4.7.5
 [4.7.4]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.3...v4.7.4
 [4.7.3]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.2...v4.7.3

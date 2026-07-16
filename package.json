@@ -1,6 +1,6 @@
 {
   "name": "openclaw-code-agent",
-  "version": "4.7.5",
+  "version": "4.7.6",
   "type": "module",
   "packageManager": "pnpm@11.13.0",
   "main": "dist/index.js",
