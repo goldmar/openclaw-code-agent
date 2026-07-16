@@ -16,7 +16,7 @@ describe("resolveAgentLaunchRequest", () => {
     try {
       const result = resolveAgentLaunchRequest(
         { prompt: `Workdir: ${repoDir}\nRepo: ${repoDir}\n\nInspect the issue.` },
-        { workspaceDir: "/tmp/workspace" },
+        { workspaceDir: "/tmp/workspace", oneShotCliRun: true },
         {},
       );
 
@@ -85,6 +85,39 @@ describe("resolveAgentLaunchRequest", () => {
     assert.equal(result.kind, "blocked");
   });
 
+  it("recovers a trustworthy direct route from the persisted resume target", () => {
+    const result = resolveAgentLaunchRequest(
+      { prompt: "Resume from a nested bridge", workdir: "/tmp", resume_session_id: "saved" },
+      { config: {} } as any,
+      {
+        resolve: () => undefined,
+        resolveBackendConversationId: () => "backend-saved",
+        getPersistedSession: () => ({
+          harness: "codex",
+          backendRef: { kind: "codex-app-server", conversationId: "backend-saved" },
+          originChannel: "telegram|default|-1003863755361",
+          originThreadId: 13832,
+          originSessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+          route: {
+            provider: "telegram",
+            accountId: "default",
+            target: "-1003863755361",
+            threadId: "13832",
+            sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+          },
+        }),
+      },
+    );
+
+    assert.equal(result.kind, "resolved");
+    if (result.kind === "resolved") {
+      assert.equal(result.route?.provider, "telegram");
+      assert.equal(result.route?.target, "-1003863755361");
+      assert.equal(result.route?.threadId, "13832");
+      assert.equal(result.originSessionKey, "agent:main:telegram:group:-1003863755361:topic:13832");
+    }
+  });
+
   for (const model of ["gpt-5.6-terra", "gpt-5.6-luna"]) {
     it(`accepts ${model} under the built-in Codex allowlist`, () => {
       const result = resolveAgentLaunchRequest(
@@ -93,7 +126,7 @@ describe("resolveAgentLaunchRequest", () => {
           harness: "codex",
           model,
         },
-        { workspaceDir: "/tmp" } as any,
+        { workspaceDir: "/tmp", oneShotCliRun: true } as any,
         {},
       );
 
@@ -111,7 +144,7 @@ describe("resolveAgentLaunchRequest", () => {
         harness: "codex",
         model: "gpt-5.5",
       },
-      { workspaceDir: "/tmp" } as any,
+      { workspaceDir: "/tmp", oneShotCliRun: true } as any,
       {},
     );
 
@@ -125,7 +158,7 @@ describe("resolveAgentLaunchRequest", () => {
       {
         prompt: "Use the configured Codex default",
       },
-      { workspaceDir: "/tmp" } as any,
+      { workspaceDir: "/tmp", oneShotCliRun: true } as any,
       {},
     );
 
@@ -143,7 +176,7 @@ describe("resolveAgentLaunchRequest", () => {
         harness: "codex",
         model: "openai/gpt-5.6-sol",
       },
-      { workspaceDir: "/tmp" } as any,
+      { workspaceDir: "/tmp", oneShotCliRun: true } as any,
       {},
     );
 
@@ -168,7 +201,7 @@ describe("resolveAgentLaunchRequest", () => {
         prompt: "Use the configured Codex default",
         harness: "codex",
       },
-      { workspaceDir: "/tmp" } as any,
+      { workspaceDir: "/tmp", oneShotCliRun: true } as any,
       {},
     );
 
@@ -185,7 +218,7 @@ describe("resolveAgentLaunchRequest", () => {
         harness: "codex",
         model: "anthropic/gpt-5.5",
       },
-      { workspaceDir: "/tmp" } as any,
+      { workspaceDir: "/tmp", oneShotCliRun: true } as any,
       {},
     );
 
@@ -212,7 +245,7 @@ describe("resolveAgentLaunchRequest", () => {
         harness: "codex",
         model: "anthropic/gpt-5.5",
       },
-      { workspaceDir: "/tmp" } as any,
+      { workspaceDir: "/tmp", oneShotCliRun: true } as any,
       {},
     );
 
@@ -228,7 +261,7 @@ describe("resolveAgentLaunchRequest", () => {
         prompt: "Use OpenCode defaults",
         harness: "opencode",
       },
-      { workspaceDir: "/tmp" } as any,
+      { workspaceDir: "/tmp", oneShotCliRun: true } as any,
       {},
     );
 
@@ -252,7 +285,7 @@ describe("resolveAgentLaunchRequest", () => {
         prompt: "Use OpenCode with a restricted model set",
         harness: "opencode",
       },
-      { workspaceDir: "/tmp" } as any,
+      { workspaceDir: "/tmp", oneShotCliRun: true } as any,
       {},
     );
 
@@ -272,12 +305,12 @@ describe("resolveAgentLaunchRequest", () => {
 
     const codex = resolveAgentLaunchRequest(
       { prompt: "Use Codex fast mode", harness: "codex" },
-      { workspaceDir: "/tmp" } as any,
+      { workspaceDir: "/tmp", oneShotCliRun: true } as any,
       {},
     );
     const claude = resolveAgentLaunchRequest(
       { prompt: "Use Claude", harness: "claude-code" },
-      { workspaceDir: "/tmp" } as any,
+      { workspaceDir: "/tmp", oneShotCliRun: true } as any,
       {},
     );
 
@@ -306,7 +339,7 @@ describe("resolveAgentLaunchRequest", () => {
         prompt: "Use the configured Codex default",
         harness: "codex",
       },
-      { workspaceDir: "/tmp" } as any,
+      { workspaceDir: "/tmp", oneShotCliRun: true } as any,
       {},
     );
 
@@ -324,7 +357,7 @@ describe("resolveAgentLaunchRequest", () => {
         harness: "claude-code",
         model: "anthropic/claude-opus-4-7",
       },
-      { workspaceDir: "/tmp" } as any,
+      { workspaceDir: "/tmp", oneShotCliRun: true } as any,
       {},
     );
 
@@ -349,7 +382,7 @@ describe("resolveAgentLaunchRequest", () => {
         plan_approval: "ask",
         permission_mode: "default",
       },
-      { workspaceDir: "/tmp" } as any,
+      { workspaceDir: "/tmp", oneShotCliRun: true } as any,
       {},
     );
 
@@ -366,7 +399,7 @@ describe("resolveAgentLaunchRequest", () => {
         prompt: "Continue work",
         resume_session_id: "session-ref",
       },
-      { workspaceDir: "/tmp" },
+      { workspaceDir: "/tmp", oneShotCliRun: true },
       {
         resolveBackendConversationId: (ref) => ref === "session-ref" ? "backend-thread-1" : undefined,
         getPersistedSession: () => ({ harness: "codex", backendRef: { kind: "codex-app-server", conversationId: "backend-thread-1" } }),

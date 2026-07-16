@@ -20,6 +20,7 @@ import {
   isModelFormatSupportedForHarness,
 } from "../harness-models";
 import { decideResumeSessionId } from "../resume-policy";
+import { resolveRequiredAsyncLaunchRoute } from "../async-launch-route";
 import { getBackendConversationId, getPrimarySessionLookupRef } from "../session-backend-ref";
 import type { OpenClawPluginToolContext, PersistedSessionInfo } from "../types";
 
@@ -67,7 +68,10 @@ type SessionManagerLike = {
     backendConversationId?: string;
     harnessSessionId?: string;
   } | undefined;
-  getPersistedSession?: (ref: string) => Pick<PersistedSessionInfo, "harness" | "backendRef"> | undefined;
+  getPersistedSession?: (ref: string) => Pick<
+    PersistedSessionInfo,
+    "harness" | "backendRef" | "route" | "originChannel" | "originThreadId" | "originSessionKey"
+  > | undefined;
   resolveBackendConversationId?: (ref: string) => string | undefined;
   resolveHarnessSessionId?: (ref: string) => string | undefined;
 };
@@ -340,6 +344,14 @@ export function resolveAgentLaunchRequest(
 
   const permissionMode = params.permission_mode ?? pluginConfig.permissionMode;
   const planApproval = params.plan_approval ?? pluginConfig.planApproval;
+  const routeResolution = resolveRequiredAsyncLaunchRoute({
+    ctx,
+    route: resolveSessionRoute(ctx, originChannel, originSessionKey),
+    recoveredRouteSource: persistedResumeSession,
+    operation: "coding session",
+  });
+  if (routeResolution.kind === "error") return routeResolution;
+  const route = routeResolution.route;
 
   return {
     kind: "resolved",
@@ -348,10 +360,14 @@ export function resolveAgentLaunchRequest(
     resolvedModel,
     permissionMode,
     planApproval,
-    originChannel,
-    originThreadId,
-    originSessionKey,
-    route: resolveSessionRoute(ctx, originChannel, originSessionKey),
+    originChannel: routeResolution.recovered
+      ? (route.accountId
+        ? `${route.provider}|${route.accountId}|${route.target}`
+        : `${route.provider}|${route.target}`)
+      : originChannel,
+    originThreadId: routeResolution.recovered ? route.threadId : originThreadId,
+    originSessionKey: routeResolution.recovered ? route.sessionKey : originSessionKey,
+    route,
     resumeSessionId,
     resolvedResumeId,
     clearedPersistedCodexResume,

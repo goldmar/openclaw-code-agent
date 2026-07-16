@@ -154,7 +154,7 @@ describe("agent_goal_launch tool", () => {
       },
     } as any);
 
-    const tool = makeGoalLaunchTool({ workspaceDir: "/tmp" } as any);
+    const tool = makeGoalLaunchTool({ workspaceDir: "/tmp", oneShotCliRun: true } as any);
 
     const result = await tool.execute("tool-id", {
       goal: "Keep Codex model ids canonical",
@@ -211,6 +211,54 @@ describe("agent_goal_launch tool", () => {
     assert.equal((launchConfig?.route as { accountId?: string } | undefined)?.accountId, "agent-1");
   });
 
+  it("fails closed for a route-less deferred plugin-tool bridge context", async () => {
+    let launchCalled = false;
+    setGoalController({
+      async launchTask() {
+        launchCalled = true;
+        throw new Error("must not launch");
+      },
+    } as any);
+
+    const tool = makeGoalLaunchTool({ config: {} } as any);
+    const result = await tool.execute("nested-tool-id", {
+      goal: "Run an asynchronous goal through the nested bridge",
+      workdir: "/tmp",
+    });
+
+    assert.equal(launchCalled, false);
+    assert.match(
+      (result.content[0] as { text: string }).text,
+      /did not provide a trustworthy lifecycle delivery route/,
+    );
+  });
+
+  it("preserves an intentional cron/system launch", async () => {
+    let launchConfig: Record<string, unknown> | undefined;
+    setGoalController({
+      async launchTask(config: Record<string, unknown>) {
+        launchConfig = config;
+        return {
+          id: "goal-cron",
+          name: "goal-cron",
+          workdir: config.workdir,
+          sessionId: "sess-cron",
+          sessionName: "goal-cron",
+          maxIterations: 8,
+          loopMode: "ralph",
+        };
+      },
+    } as any);
+
+    const sessionKey = "agent:main:cron:nightly-verification";
+    const tool = makeGoalLaunchTool({ workspaceDir: "/tmp", sessionKey } as any);
+    await tool.execute("cron-tool-id", { goal: "Run nightly verification" });
+
+    assert.equal((launchConfig?.route as { provider?: string })?.provider, "system");
+    assert.equal((launchConfig?.route as { target?: string })?.target, "system");
+    assert.equal(launchConfig?.originSessionKey, sessionKey);
+  });
+
   it("allows experimental OpenCode goal tasks to use the OpenCode provider default model", async () => {
     let launchConfig: Record<string, unknown> | undefined;
 
@@ -234,7 +282,7 @@ describe("agent_goal_launch tool", () => {
       },
     } as any);
 
-    const tool = makeGoalLaunchTool({ workspaceDir: "/tmp" } as any);
+    const tool = makeGoalLaunchTool({ workspaceDir: "/tmp", oneShotCliRun: true } as any);
 
     const result = await tool.execute("tool-id", {
       goal: "Keep going until DONE",

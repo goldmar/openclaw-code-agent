@@ -231,7 +231,9 @@ export class SessionStore {
       originThreadId: routing.originThreadId,
       originSessionKey: routing.originSessionKey,
     });
-    if (!route) return;
+    if (!route) {
+      throw new Error(`Cannot persist running session ${session.id}: canonical lifecycle route is missing.`);
+    }
     const stub: PersistedSessionInfo = {
       sessionId: session.id,
       harnessSessionId: session.harnessSessionId,
@@ -317,7 +319,9 @@ export class SessionStore {
       originThreadId: routing.originThreadId,
       originSessionKey: routing.originSessionKey,
     });
-    if (!route) return;
+    if (!route) {
+      throw new Error(`Cannot persist terminal session ${session.id}: canonical lifecycle route is missing.`);
+    }
 
     let outputPath: string | undefined;
     try {

@@ -27,6 +27,7 @@ import type {
   ReasoningEffort,
   SessionRoute,
 } from "./types";
+import { resolveRequiredAsyncLaunchRoute } from "./async-launch-route";
 
 export interface GoalLaunchRequest {
   goal: string;
@@ -127,6 +128,13 @@ export function resolveGoalLaunchRequest(
   const ctxChannel = resolveToolChannel(ctx);
   const originChannel = resolveOriginChannel(ctx, ctxChannel || resolveAgentChannel(workdir));
   const route = resolveSessionRoute(ctx, originChannel, originSessionKey);
+  const routeResolution = resolveRequiredAsyncLaunchRoute({
+    ctx,
+    route,
+    operation: "goal task",
+  });
+  if (routeResolution.kind === "error") return routeResolution;
+  const resolvedRoute = routeResolution.route;
 
   return {
     kind: "resolved",
@@ -147,7 +155,7 @@ export function resolveGoalLaunchRequest(
     originThreadId: route?.threadId,
     originAgentId: ctx.agentId || undefined,
     originSessionKey,
-    route,
+    route: resolvedRoute,
     verifierCommands,
   };
 }
