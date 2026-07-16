@@ -258,6 +258,30 @@ describe("agent_launch tool defaults", () => {
     assert.match((result.content[0] as { text: string }).text, /Session launched successfully/);
   });
 
+  it("fails closed for the route-less context produced by the standalone deferred plugin-tool bridge", async () => {
+    let spawnCalled = false;
+    setSessionManager({
+      resolveHarnessSessionId: (id: string) => id,
+      spawn() {
+        spawnCalled = true;
+        throw new Error("must not spawn");
+      },
+    } as any);
+
+    // OpenClaw's standalone plugin-tools server constructs factories with
+    // exactly `{ config }`, dropping the originating ToolContext route.
+    const tool = makeAgentLaunchTool({ config: {} } as any);
+    const result = await tool.execute("nested-tool-id", {
+      prompt: "Launch through the deferred nested bridge",
+      workdir: "/tmp",
+    });
+
+    assert.equal(spawnCalled, false);
+    const text = (result.content[0] as { text: string }).text;
+    assert.match(text, /did not provide a trustworthy lifecycle delivery route/);
+    assert.match(text, /No coding session was started/);
+  });
+
   it("asks for repo policy with buttons before launching worktree sessions for unknown repos", async () => {
     const workdir = mkdtempSync(join(tmpdir(), "agent-launch-policy-"));
     let spawnCalled = false;

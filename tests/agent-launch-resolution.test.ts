@@ -85,6 +85,39 @@ describe("resolveAgentLaunchRequest", () => {
     assert.equal(result.kind, "blocked");
   });
 
+  it("recovers a trustworthy direct route from the persisted resume target", () => {
+    const result = resolveAgentLaunchRequest(
+      { prompt: "Resume from a nested bridge", workdir: "/tmp", resume_session_id: "saved" },
+      { config: {} } as any,
+      {
+        resolve: () => undefined,
+        resolveBackendConversationId: () => "backend-saved",
+        getPersistedSession: () => ({
+          harness: "codex",
+          backendRef: { kind: "codex-app-server", conversationId: "backend-saved" },
+          originChannel: "telegram|default|-1003863755361",
+          originThreadId: 13832,
+          originSessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+          route: {
+            provider: "telegram",
+            accountId: "default",
+            target: "-1003863755361",
+            threadId: "13832",
+            sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
+          },
+        }),
+      },
+    );
+
+    assert.equal(result.kind, "resolved");
+    if (result.kind === "resolved") {
+      assert.equal(result.route?.provider, "telegram");
+      assert.equal(result.route?.target, "-1003863755361");
+      assert.equal(result.route?.threadId, "13832");
+      assert.equal(result.originSessionKey, "agent:main:telegram:group:-1003863755361:topic:13832");
+    }
+  });
+
   for (const model of ["gpt-5.6-terra", "gpt-5.6-luna"]) {
     it(`accepts ${model} under the built-in Codex allowlist`, () => {
       const result = resolveAgentLaunchRequest(
