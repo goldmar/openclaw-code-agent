@@ -333,7 +333,7 @@ describe("createCallbackHandler()", () => {
     const result = await handler.handler(state.ctx as any);
 
     assert.deepEqual(result, { handled: true });
-    assert.match(state.replies[0] ?? "", /OCA update failed: package install exited 1/);
+    assert.match(state.replies[0] ?? "", /OpenClaw Code Agent update failed: package install exited 1/);
   });
 
   it("does not relabel a verified install as failed when its Telegram confirmation reply fails", async (t) => {
