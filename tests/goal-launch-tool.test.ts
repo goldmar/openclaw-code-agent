@@ -154,7 +154,7 @@ describe("agent_goal_launch tool", () => {
       },
     } as any);
 
-    const tool = makeGoalLaunchTool({ workspaceDir: "/tmp" } as any);
+    const tool = makeGoalLaunchTool({ workspaceDir: "/tmp", oneShotCliRun: true } as any);
 
     const result = await tool.execute("tool-id", {
       goal: "Keep Codex model ids canonical",
@@ -282,7 +282,7 @@ describe("agent_goal_launch tool", () => {
       },
     } as any);
 
-    const tool = makeGoalLaunchTool({ workspaceDir: "/tmp" } as any);
+    const tool = makeGoalLaunchTool({ workspaceDir: "/tmp", oneShotCliRun: true } as any);
 
     const result = await tool.execute("tool-id", {
       goal: "Keep going until DONE",

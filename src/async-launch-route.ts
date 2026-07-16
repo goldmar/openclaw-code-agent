@@ -14,7 +14,6 @@ export type AsyncLaunchRouteResolution =
 
 function isIntentionalNonUserContext(ctx: OpenClawPluginToolContext): boolean {
   if (ctx.oneShotCliRun === true) return true;
-  if (ctx.workspaceDir?.trim()) return true;
   return Boolean(ctx.sessionKey?.includes(":cron:"));
 }
 

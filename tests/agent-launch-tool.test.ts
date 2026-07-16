@@ -42,7 +42,7 @@ describe("agent_launch tool defaults", () => {
       },
     } as any);
 
-    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp" });
+    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp", oneShotCliRun: true });
     const result = await tool.execute("tool-id", { prompt: "Ship it" });
 
     assert.ok(spawnConfig, "spawn should be called");
@@ -86,7 +86,7 @@ describe("agent_launch tool defaults", () => {
       },
     } as any);
 
-    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp" });
+    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp", oneShotCliRun: true });
     await tool.execute("tool-id", { prompt: "Ship it", model: "gpt-5.5" });
 
     assert.ok(spawnConfig, "spawn should be called");
@@ -113,7 +113,7 @@ describe("agent_launch tool defaults", () => {
       },
     } as any);
 
-    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp" });
+    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp", oneShotCliRun: true });
     await tool.execute("tool-id", { prompt: "Inspect only" });
 
     assert.ok(spawnConfig, "spawn should be called");
@@ -249,7 +249,7 @@ describe("agent_launch tool defaults", () => {
       },
     } as any);
 
-    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp" } as any);
+    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp", oneShotCliRun: true } as any);
     const result = await tool.execute("tool-id", { prompt: "Launch without explicit chat metadata" });
 
     assert.ok(spawnConfig, "spawn should be called");
@@ -366,7 +366,7 @@ describe("agent_launch tool defaults", () => {
         },
       } as any);
 
-      const tool = makeAgentLaunchTool({ workspaceDir: workdir } as any);
+      const tool = makeAgentLaunchTool({ workspaceDir: workdir, oneShotCliRun: true } as any);
       const result = await tool.execute("tool-id", {
         prompt: "Continue after restart",
         resume_session_id: "old-thread",
@@ -400,7 +400,7 @@ describe("agent_launch tool defaults", () => {
       },
     } as any);
 
-    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp" });
+    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp", oneShotCliRun: true });
     const result = await tool.execute("tool-id", {
       prompt: "Continue after restart",
       harness: "codex",
@@ -431,7 +431,7 @@ describe("agent_launch tool defaults", () => {
       },
     } as any);
 
-    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp" });
+    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp", oneShotCliRun: true });
     await tool.execute("tool-id", {
       prompt: "Continue active session",
       harness: "codex",
@@ -468,7 +468,7 @@ describe("agent_launch tool defaults", () => {
       },
     } as any);
 
-    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp" });
+    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp", oneShotCliRun: true });
     const result = await tool.execute("tool-id", {
       prompt: "Continue stable session",
       harness: "codex",
@@ -507,7 +507,7 @@ describe("agent_launch tool defaults", () => {
       },
     } as any);
 
-    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp" });
+    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp", oneShotCliRun: true });
     const result = await tool.execute("tool-id", {
       prompt: "Continue with the bundle size fix",
       harness: "codex",
@@ -549,7 +549,7 @@ describe("agent_launch tool defaults", () => {
       },
     } as any);
 
-    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp" });
+    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp", oneShotCliRun: true });
     const result = await tool.execute("tool-id", {
       prompt: "Continue with the bundle size fix",
       name: "oca-pr-341-bundle-size-fix",
@@ -593,7 +593,7 @@ describe("agent_launch tool defaults", () => {
       },
     } as any);
 
-    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp" });
+    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp", oneShotCliRun: true });
     const result = await tool.execute("tool-id", {
       prompt: "Continue with the tests",
       name: "oca-pr-342-tests",
@@ -636,7 +636,7 @@ describe("agent_launch tool defaults", () => {
       },
     } as any);
 
-    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp" });
+    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp", oneShotCliRun: true });
     const result = await tool.execute("tool-id", {
       prompt: "Continue closed session",
       harness: "codex",
@@ -669,7 +669,7 @@ describe("agent_launch tool defaults", () => {
       },
     } as any);
 
-    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp" });
+    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp", oneShotCliRun: true });
     await tool.execute("tool-id", {
       prompt: "Ship it",
       plan_approval: "ask",
@@ -695,7 +695,7 @@ describe("agent_launch tool defaults", () => {
         },
       } as any);
 
-      const tool = makeAgentLaunchTool({ workspaceDir: "/tmp/orchestrator-workspace" });
+      const tool = makeAgentLaunchTool({ workspaceDir: "/tmp/orchestrator-workspace", oneShotCliRun: true });
       await tool.execute("tool-id", {
         prompt: `Workdir: ${repoDir}\nRepo: ${repoDir}\n\nInvestigate the bug.`,
       });
@@ -724,7 +724,7 @@ describe("agent_launch tool defaults", () => {
         },
       } as any);
 
-      const tool = makeAgentLaunchTool({ workspaceDir: fallbackDir });
+      const tool = makeAgentLaunchTool({ workspaceDir: fallbackDir, oneShotCliRun: true });
       await tool.execute("tool-id", {
         prompt: `Investigate the bug.\n\nThe notes say Repo: ${repoDir} but that should not be parsed as launch metadata.`,
       });
@@ -845,7 +845,7 @@ describe("agent_launch allowedModels validation", () => {
       },
     } as any);
 
-    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp" });
+    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp", oneShotCliRun: true });
     const result = await tool.execute("tool-id", { prompt: "test", model: "anthropic/claude-opus-4-6" });
 
     assert.ok(spawnConfig, "spawn should be called");
@@ -871,7 +871,7 @@ describe("agent_launch allowedModels validation", () => {
       },
     } as any);
 
-    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp" });
+    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp", oneShotCliRun: true });
     const result = await tool.execute("tool-id", { prompt: "test", model: "anthropic/claude-opus-4-6" });
 
     assert.ok(spawnConfig, "spawn should be called");
@@ -890,7 +890,7 @@ describe("agent_launch allowedModels validation", () => {
       },
     } as any);
 
-    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp" });
+    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp", oneShotCliRun: true });
     const result = await tool.execute("tool-id", { prompt: "test", model: "anthropic/claude-SONNET-4-6" });
 
     assert.ok(spawnConfig, "spawn should be called");
@@ -909,7 +909,7 @@ describe("agent_launch allowedModels validation", () => {
       },
     } as any);
 
-    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp" });
+    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp", oneShotCliRun: true });
     const result = await tool.execute("tool-id", { prompt: "test", model: "claude-sonnet-4-6" });
 
     assert.ok(spawnConfig, "spawn should be called");
@@ -923,7 +923,7 @@ describe("agent_launch allowedModels validation", () => {
       resolveHarnessSessionId: (id: string) => id,
     } as any);
 
-    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp" });
+    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp", oneShotCliRun: true });
     const result = await tool.execute("tool-id", { prompt: "test", model: "anthropic/claude-opus-4-6" });
 
     const text = (result.content[0] as { text: string }).text;
@@ -937,7 +937,7 @@ describe("agent_launch allowedModels validation", () => {
       resolveHarnessSessionId: (id: string) => id,
     } as any);
 
-    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp" });
+    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp", oneShotCliRun: true });
     const result = await tool.execute("tool-id", { prompt: "test", model: "gpt-4" });
 
     const text = (result.content[0] as { text: string }).text;
@@ -958,7 +958,7 @@ describe("agent_launch allowedModels validation", () => {
       resolveHarnessSessionId: (id: string) => id,
     } as any);
 
-    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp" });
+    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp", oneShotCliRun: true });
     const result = await tool.execute("tool-id", { prompt: "test" });
 
     const text = (result.content[0] as { text: string }).text;
@@ -983,7 +983,7 @@ describe("agent_launch allowedModels validation", () => {
       },
     } as any);
 
-    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp" });
+    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp", oneShotCliRun: true });
     const result = await tool.execute("tool-id", { prompt: "test" });
 
     const text = (result.content[0] as { text: string }).text;
@@ -1010,7 +1010,7 @@ describe("agent_launch allowedModels validation", () => {
       },
     } as any);
 
-    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp" });
+    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp", oneShotCliRun: true });
     const result = await tool.execute("tool-id", { prompt: "test", harness: "codex", model: "openai/gpt-5.5" });
 
     const text = (result.content[0] as { text: string }).text;
@@ -1032,7 +1032,7 @@ describe("agent_launch allowedModels validation", () => {
       resolveHarnessSessionId: (id: string) => id,
     } as any);
 
-    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp" });
+    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp", oneShotCliRun: true });
     const result = await tool.execute("tool-id", { prompt: "test", harness: "codex" });
 
     const text = (result.content[0] as { text: string }).text;
@@ -1053,7 +1053,7 @@ describe("agent_launch allowedModels validation", () => {
       resolveHarnessSessionId: (id: string) => id,
     } as any);
 
-    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp" });
+    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp", oneShotCliRun: true });
     const result = await tool.execute("tool-id", { prompt: "test" });
 
     const text = (result.content[0] as { text: string }).text;
@@ -1072,7 +1072,7 @@ describe("agent_launch allowedModels validation", () => {
       },
     } as any);
 
-    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp" });
+    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp", oneShotCliRun: true });
     const result = await tool.execute("tool-id", { prompt: "test", model: "claude-sonnet-4-6" });
 
     const text = (result.content[0] as { text: string }).text;
@@ -1092,7 +1092,7 @@ describe("agent_launch allowedModels validation", () => {
       },
     } as any);
 
-    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp" });
+    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp", oneShotCliRun: true });
     const result = await tool.execute("tool-id", { prompt: "test", model: "anthropic/claude-sonnet-4-7" });
 
     const text = (result.content[0] as { text: string }).text;
