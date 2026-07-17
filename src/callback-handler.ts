@@ -504,7 +504,12 @@ async function rejectStaleAction(
     const errText = err instanceof Error ? err.message : String(err);
     console.warn(`[callback-handler] Failed to clear stale callback controls: ${errText}`);
   }
-  await replyText(ctx, staleActionMessage);
+  try {
+    await replyText(ctx, staleActionMessage);
+  } catch (err) {
+    const errText = err instanceof Error ? err.message : String(err);
+    console.warn(`[callback-handler] Failed to report stale callback: ${errText}`);
+  }
 }
 
 async function clearUpdateActionButtons(

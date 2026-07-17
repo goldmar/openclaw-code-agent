@@ -187,6 +187,24 @@ describe("createCallbackHandler()", () => {
     assert.equal(state.replies[0], "⚠️ This action is stale or has already been used.");
   });
 
+  it("finishes rejecting a stale callback when its visible response cannot be delivered", async (t) => {
+    const warnings: string[] = [];
+    t.mock.method(console, "warn", ((message?: unknown) => {
+      warnings.push(String(message));
+    }) as typeof console.warn);
+    setSessionManager({
+      getActionToken: () => undefined,
+    } as any);
+
+    const state = createCtx("expired-token", "telegram", {
+      replyError: new Error("Telegram reply unavailable"),
+    });
+    const result = await createCallbackHandler().handler(state.ctx as any);
+
+    assert.deepEqual(result, { handled: true });
+    assert.match(warnings.join("\n"), /Failed to report stale callback: Telegram reply unavailable/);
+  });
+
   it("visibly rejects a raced Telegram update approval without running it", async () => {
     let installs = 0;
     setAutoUpdateService({
