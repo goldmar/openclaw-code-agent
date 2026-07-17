@@ -492,6 +492,21 @@ async function replyText(ctx: InteractiveCallbackContext, text: string): Promise
   await ctx.respond.reply({ text, ephemeral: true });
 }
 
+const staleActionMessage = "⚠️ This action is stale or has already been used.";
+
+async function rejectStaleAction(
+  ctx: InteractiveCallbackContext,
+  clear: () => Promise<unknown>,
+): Promise<void> {
+  try {
+    await clear();
+  } catch (err) {
+    const errText = err instanceof Error ? err.message : String(err);
+    console.warn(`[callback-handler] Failed to clear stale callback controls: ${errText}`);
+  }
+  await replyText(ctx, staleActionMessage);
+}
+
 async function clearUpdateActionButtons(
   ctx: InteractiveCallbackContext,
   alreadyAcknowledged: boolean,
@@ -662,10 +677,8 @@ export function createCallbackHandler(
         planDecisionVersion: token?.planDecisionVersion,
       });
       if (!token) {
-        await clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged });
-        if (ctx.channel !== "telegram") {
-          await replyText(ctx, "⚠️ This action is stale or has already been used.");
-        }
+        await rejectStaleAction(ctx, () =>
+          clearInteractiveState(ctx, { alreadyAcknowledged: callbackAcknowledged }));
         return { handled: true };
       }
 
@@ -804,10 +817,7 @@ export function createCallbackHandler(
           await waitForPlanDecisionOperation(inFlight.operation);
           const latestToken = sessionManager.getActionToken(tokenId);
           if (!latestToken) {
-            await clearPlanDecisionButtons(ctx, callbackAcknowledged);
-            if (ctx.channel !== "telegram") {
-              await replyText(ctx, "⚠️ This action is stale or has already been used.");
-            }
+            await rejectStaleAction(ctx, () => clearPlanDecisionButtons(ctx, callbackAcknowledged));
             return { handled: true };
           }
 
@@ -892,10 +902,7 @@ export function createCallbackHandler(
           planDecisionVersion: consumedToken?.planDecisionVersion,
         });
         if (!consumedToken) {
-          await clearApprovalPrompt(true);
-          if (ctx.channel !== "telegram") {
-            await replyText(ctx, "⚠️ This action is stale or has already been used.");
-          }
+          await rejectStaleAction(ctx, () => clearApprovalPrompt(true));
           return { handled: true };
         }
 
@@ -907,10 +914,7 @@ export function createCallbackHandler(
         return await withPlanDecisionLock(decisionLockKey, tokenId, async () => {
           const latestToken = sessionManager.getActionToken(tokenId);
           if (!latestToken) {
-            await clearPlanDecisionButtons(ctx, callbackAcknowledged);
-            if (ctx.channel !== "telegram") {
-              await replyText(ctx, "⚠️ This action is stale or has already been used.");
-            }
+            await rejectStaleAction(ctx, () => clearPlanDecisionButtons(ctx, callbackAcknowledged));
             return { handled: true };
           }
 
@@ -947,10 +951,7 @@ export function createCallbackHandler(
             planDecisionVersion: consumedToken?.planDecisionVersion,
           });
           if (!consumedToken) {
-            await clearPlanDecisionButtons(ctx, callbackAcknowledged);
-            if (ctx.channel !== "telegram") {
-              await replyText(ctx, "⚠️ This action is stale or has already been used.");
-            }
+            await rejectStaleAction(ctx, () => clearPlanDecisionButtons(ctx, callbackAcknowledged));
             return { handled: true };
           }
 
@@ -977,13 +978,10 @@ export function createCallbackHandler(
         planDecisionVersion: consumedToken?.planDecisionVersion,
       });
       if (!consumedToken) {
-        await clearInteractiveState(ctx, {
+        await rejectStaleAction(ctx, () => clearInteractiveState(ctx, {
           alreadyAcknowledged: callbackAcknowledged,
           forceTelegramMarkupEdit: token.kind === "plan-offer-start" || token.kind === "plan-offer-dismiss",
-        });
-        if (ctx.channel !== "telegram") {
-          await replyText(ctx, "⚠️ This action is stale or has already been used.");
-        }
+        }));
         return { handled: true };
       }
 

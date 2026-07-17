@@ -171,6 +171,49 @@ describe("createCallbackHandler()", () => {
     assert.match(state.replies[0] ?? "", /restart prompt sent/);
   });
 
+  it("visibly rejects a stale Telegram callback even when control cleanup fails", async (t) => {
+    t.mock.method(console, "warn", (() => {}) as typeof console.warn);
+    setSessionManager({
+      getActionToken: () => undefined,
+    } as any);
+
+    const state = createCtx("expired-token", "telegram", {
+      clearButtonsError: new Error("Telegram cleanup unavailable"),
+    });
+    const result = await createCallbackHandler().handler(state.ctx as any);
+
+    assert.deepEqual(result, { handled: true });
+    assert.equal(state.callbacksAcknowledged, 1);
+    assert.equal(state.replies[0], "⚠️ This action is stale or has already been used.");
+  });
+
+  it("visibly rejects a raced Telegram update approval without running it", async () => {
+    let installs = 0;
+    setAutoUpdateService({
+      installConfirmed: async () => {
+        installs++;
+        return "updated";
+      },
+    } as any);
+    setSessionManager({
+      getActionToken: () => ({
+        sessionId: "plugin:auto-update",
+        kind: "plugin-update-install",
+        pluginUpdateVersion: "4.6.1",
+      }),
+      consumeActionToken: () => undefined,
+      resolve: () => undefined,
+      getPersistedSession: () => undefined,
+    } as any);
+
+    const state = createCtx("raced-update-token");
+    const result = await createCallbackHandler().handler(state.ctx as any);
+
+    assert.deepEqual(result, { handled: true });
+    assert.equal(installs, 0);
+    assert.equal(state.replies[0], "⚠️ This action is stale or has already been used.");
+  });
+
   it("runs the plugin update from native Telegram callback_data and emits action diagnostics", async (t) => {
     process.env.OPENCLAW_CODE_AGENT_BUTTON_DIAGNOSTICS = "1";
     const logs: string[] = [];
@@ -1306,7 +1349,7 @@ describe("createCallbackHandler()", () => {
     assert.equal(second.replies[0], "⚠️ This plan is no longer awaiting approval.");
   });
 
-  it("clears Telegram plan approval buttons when the token is missing after successful approval", async () => {
+  it("clears Telegram plan approval buttons and reports when the token is missing after successful approval", async () => {
     let sendCount = 0;
     const token = {
       sessionId: "test-id",
@@ -1346,7 +1389,7 @@ describe("createCallbackHandler()", () => {
     assert.equal(sendCount, 1);
     assert.equal(state.buttonsCleared, 1);
     assert.equal(state.buttonMarkupEdits, 1);
-    assert.deepEqual(state.replies, []);
+    assert.equal(state.replies[0], "⚠️ This action is stale or has already been used.");
   });
 
   it("serializes concurrent plan approval clicks so approval is sent once", async () => {
@@ -2082,7 +2125,7 @@ describe("createCallbackHandler()", () => {
     assert.match(state.replies[0], /stale/i);
   });
 
-  it("clears Telegram buttons and stays quiet for duplicate consumed callbacks", async () => {
+  it("clears Telegram buttons and reports duplicate consumed callbacks", async () => {
     let consumes = 0;
     setSessionManager({
       getActionToken: () => undefined,
@@ -2100,8 +2143,8 @@ describe("createCallbackHandler()", () => {
     assert.equal(state.callbacksAcknowledged, 1);
     assert.equal(state.buttonsCleared, 1);
     assert.equal(consumes, 0);
-    assert.deepEqual(state.replies, []);
-    assert.deepEqual(state.events, ["acknowledge", "clearButtons"]);
+    assert.equal(state.replies[0], "⚠️ This action is stale or has already been used.");
+    assert.deepEqual(state.events, ["acknowledge", "clearButtons", "reply"]);
   });
 
   it("does not echo raw malformed Telegram callback text", async () => {
@@ -3411,7 +3454,7 @@ describe("createCallbackHandler()", () => {
     ]);
     assert.equal(secondState.buttonMarkupEdits, 0);
     assert.equal(secondState.buttonsCleared, 1);
-    assert.deepEqual(secondState.replies, []);
+    assert.equal(secondState.replies[0], "⚠️ This action is stale or has already been used.");
   });
 
   it("rejects stale repo policy callback tokens when PR automation is unavailable", async () => {
@@ -3710,7 +3753,7 @@ describe("createCallbackHandler()", () => {
     assert.deepEqual(state.events, ["acknowledge", "editButtons", "clearButtons", "reply"]);
   });
 
-  it("clears Start Plan buttons quietly when an already-started plan-offer callback is retried", async () => {
+  it("clears Start Plan buttons and reports when an already-started callback is retried", async () => {
     let consumes = 0;
     setSessionManager({
       getActionToken: () => ({
@@ -3746,7 +3789,7 @@ describe("createCallbackHandler()", () => {
     assert.equal(consumes, 1);
     assert.equal(state.buttonMarkupEdits, 1);
     assert.equal(state.buttonsCleared, 1);
-    assert.deepEqual(state.replies, []);
+    assert.equal(state.replies[0], "⚠️ This action is stale or has already been used.");
     assert.doesNotMatch(state.replies.join("\n"), /code-agent:plan-token/);
   });
 
