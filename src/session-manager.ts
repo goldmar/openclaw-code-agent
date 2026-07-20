@@ -2,8 +2,7 @@ import { createHash } from "crypto";
 import { Session } from "./session";
 import { pluginConfig, getDefaultHarnessName } from "./config";
 import { generateSessionName } from "./format";
-import { formatLaunchSummaryFromSession, formatResumedLaunchMessage } from "./launch-summary";
-import { formatHarnessModelLabel } from "./session-display";
+import { formatLaunchSummaryFromSession } from "./launch-summary";
 import { pathsReferToSameLocation } from "./path-utils";
 import {
   getBackendConversationId,
@@ -1479,23 +1478,9 @@ export class SessionManager {
   }
 
   notifyResumedLaunch(session: Session): void {
-    if (!session.resumeSessionId) return;
-    const workdirLabel = this.formatLaunchWorkdirLabel(session);
-    const harnessLabel = formatHarnessModelLabel({
-      harness: session.harnessName,
-      model: session.model,
-    }) ?? "default";
-    this.notifySession(
-      session,
-      formatResumedLaunchMessage({
-        sessionName: session.name,
-        resumedFromSessionName: session.resumedFromSessionName,
-        workdirLabel,
-        harnessLabel,
-      }),
-      "resumed-launch",
-      `resumed-launch:${session.id}:${session.startedAt}:${session.resumeSessionId}`,
-    );
+    // The foreground resume response is the acknowledgement. Keep this method
+    // as a compatibility no-op for callers while avoiding a second push.
+    void session;
   }
 
   sendPlanOffer(args: {
@@ -1567,7 +1552,7 @@ export class SessionManager {
       label,
       idempotencyKey: `goal:${task.id}:${label}:${requiresGoalSuccessFollowup ? "success" : text}`,
       userMessage: requiresGoalSuccessFollowup ? goalSuccessUserMessage : text,
-      notifyUser: "always",
+      notifyUser: label === "goal-task-progress" ? "never" : "always",
       completionSummary: requiresGoalSuccessFollowup
         ? {
             required: true,

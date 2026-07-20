@@ -153,6 +153,17 @@ export class SessionNotificationService {
       this.applyCompletionSummaryDedupePatch(deliveryRef, completionSummaryDecision.records);
     }
     let dispatchRequest = foregroundOwnsSummary ? this.withoutCompletionWake(request) : request;
+    // Preserve the plugin text only as a deterministic routed fallback when
+    // the single orchestrator-owned summary wake genuinely fails. The wake
+    // dispatcher normalizes this request at the transport boundary so the
+    // original lifecycle facts remain available to diagnostics and hooks.
+    if (
+      !foregroundOwnsSummary
+      && completionSummaryFact?.required === true
+      && (request.wakeMessageOnNotifySuccess?.trim() || request.wakeMessage?.trim())
+    ) {
+      dispatchRequest = { ...request, userMessageOnWakeFailure: request.userMessage?.trim() };
+    }
     if (completionSummaryDecision.required && !completionSummaryDecision.allowed) {
       this.logNotificationDecision({
         session,
@@ -170,7 +181,12 @@ export class SessionNotificationService {
         this.releaseNotificationDedupe(deliveryRef, notificationDedupeKey);
         return;
       } else if (completionSummaryDecision.explicit) {
-        dispatchRequest = this.withoutCompletionWake(request);
+        dispatchRequest = this.withoutCompletionWake(dispatchRequest);
+        if (dispatchRequest.userMessageOnWakeFailure) {
+          // Preserve the deterministic dispatch/delivery ledger without
+          // surfacing a later terse status after a summary already won.
+          dispatchRequest = { ...dispatchRequest, notifyUser: "never" };
+        }
       } else {
         this.releaseNotificationDedupe(deliveryRef, notificationDedupeKey);
         return;
@@ -299,6 +315,38 @@ export class SessionNotificationService {
         this.releaseNotificationDedupe(deliveryRef, notificationDedupeKey);
         notificationDedupeResolved = true;
         dispatchRequest.hooks?.onWakeFailed?.();
+        const fallback = dispatchRequest.userMessageOnWakeFailure?.trim();
+        if (fallback) {
+          this.wakeDispatcher.dispatchSessionNotification(session as Session, {
+            label: `${dispatchRequest.label}-wake-fallback`,
+            idempotencyKey: `${notificationDedupeKey}:wake-fallback`,
+            userMessage: fallback,
+            notifyUser: "always",
+            requireDirectUserNotification: true,
+            hooks: {
+              onNotifySucceeded: () => {
+                this.markNotificationDedupeDelivered(deliveryRef, notificationDedupeKey, dispatchRequest.label);
+                this.markCompletionSummaryDelivered(
+                  deliveryRef,
+                  completionSummaryDecision.key,
+                  `${dispatchRequest.label}-wake-fallback`,
+                  "orchestrator wake failed; routed plugin fallback delivered",
+                );
+                this.applyPersistedPatchWithCompletionWake(
+                  deliveryRef,
+                  "idle",
+                  this.buildCompletionWakeSucceededPatch(completionWakePatch),
+                  {
+                    completionWakeSucceededAt: undefined,
+                    completionWakeSkippedAt: new Date().toISOString(),
+                    completionWakeSkipReason: "orchestrator wake failed; routed plugin fallback delivered",
+                  },
+                );
+                this.completionSummaries.finish(completionSummaryDecision.key, true);
+              },
+            },
+          });
+        }
       },
     };
 

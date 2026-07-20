@@ -42,8 +42,8 @@ describe("SessionNotificationService", () => {
       requests[1]?.userMessage,
       "✅ PR updated: https://github.com/goldmar/openclaw-code-agent/pull/325 | $0.00 | 24m0s | codex | gpt-5.5",
     );
-    assert.doesNotMatch(String(requests[0]?.wakeMessageOnNotifySuccess), /https:\/\/github\.com\/goldmar\/openclaw-code-agent\/pull\/325/);
-    assert.match(String(requests[0]?.wakeMessageOnNotifySuccess), /PR #325 \| \$0\.00 \| 24m0s \| codex \| gpt-5\.5/);
+    assert.match(String(requests[0]?.wakeMessageOnNotifySuccess), /https:\/\/github\.com\/goldmar\/openclaw-code-agent\/pull\/325/);
+    assert.match(String(requests[0]?.wakeMessageOnNotifySuccess), /Include the PR link/);
   });
 
   it("persists PR remote outcome semantics independently of hashed notification dedupe keys", () => {
@@ -1380,7 +1380,7 @@ describe("SessionNotificationService", () => {
     assert.equal(wakeAttempts, 1);
   });
 
-  it("allows a retry for the same goal terminal outcome after the follow-up wake fails", () => {
+  it("suppresses a retry after the routed plugin fallback delivers the goal outcome", () => {
     const requests: Array<Record<string, unknown>> = [];
     let wakeAttempts = 0;
     const fakeDispatcher = {
@@ -1426,12 +1426,14 @@ describe("SessionNotificationService", () => {
       notifyUser: "always",
     });
 
-    assert.equal(requests.length, 2);
+    assert.equal(requests.length, 3);
+    assert.equal(requests[1]?.label, "goal-task-succeeded-wake-fallback");
     assert.deepEqual(
-      requests.map((request) => request.wakeMessageOnNotifySuccess),
-      ["goal success follow-up wake", "retry terminal completion wake"],
+      requests.filter((request) => request.completionWakeSummaryRequired === true).map((request) => request.wakeMessageOnNotifySuccess),
+      ["goal success follow-up wake"],
     );
-    assert.equal(wakeAttempts, 2);
+    assert.equal(requests[2]?.notifyUser, "never");
+    assert.equal(wakeAttempts, 3);
   });
 
   it("deduplicates goal success summary wakes within the Trading Platform Telegram topic", () => {
@@ -1921,12 +1923,12 @@ describe("SessionNotificationService", () => {
     assert.match(requests[0]?.wakeMessageOnNotifySuccess as string, /agent_output\(session='pr-174-update-session', full=true\)/);
     assert.match(requests[0]?.wakeMessageOnNotifySuccess as string, /plugin's terse status line/);
     assert.match(requests[0]?.wakeMessageOnNotifySuccess as string, /Do this even when agent_output already contains a good final summary/);
-    assert.match(requests[0]?.wakeMessageOnNotifySuccess as string, /Do not include raw PR URLs/);
-    assert.doesNotMatch(
+    assert.match(requests[0]?.wakeMessageOnNotifySuccess as string, /Include the PR link/);
+    assert.match(
       requests[0]?.wakeMessageOnNotifySuccess as string,
       /https:\/\/github\.com\/goldmar\/openclaw-code-agent\/pull\/174/,
     );
-    assert.match(requests[0]?.wakeMessageOnNotifySuccess as string, /PR #174/);
+    assert.match(requests[0]?.wakeMessageOnNotifySuccess as string, /PR number: #174/);
   });
 
   it("suppresses duplicate opened PR follow-through wakes across session refs for the same routed outcome", () => {
@@ -2063,11 +2065,11 @@ describe("SessionNotificationService", () => {
     assert.equal(requests[0]?.completionWakeSummaryRequired, true);
     assert.equal(requests[1]?.completionWakeSummaryRequired, false);
     assert.equal(requests[1]?.wakeMessageOnNotifySuccess, undefined);
-    assert.doesNotMatch(
+    assert.match(
       requests[0]?.wakeMessageOnNotifySuccess as string,
       /https:\/\/github\.com\/goldmar\/openclaw-code-agent\/pull\/185/,
     );
-    assert.match(requests[0]?.wakeMessageOnNotifySuccess as string, /PR #185/);
+    assert.match(requests[0]?.wakeMessageOnNotifySuccess as string, /PR number: #185/);
   });
 
   it("dispatches a PR-updated completion wake after a resumed auto-pr session with a prior PR-open summary", () => {

@@ -389,7 +389,7 @@ describe("agent_merge push behavior", () => {
     }
   });
 
-  it("leaves the merge outcome summary repair flag durable when the immediate wake fails", async () => {
+  it("records routed fallback delivery when the immediate merge summary wake fails", async () => {
     const { repoDir, remoteDir } = createRepoWithRemote("agent-merge-wake-failure");
     try {
       const sessionName = "merge-wake-failure";
@@ -408,15 +408,18 @@ describe("agent_merge push behavior", () => {
       const result = await tool.execute("tool-id", { session: sessionName, delete_branch: false });
 
       assert.match((result.content[0] as { text: string }).text, /Fast-forward|Merge commit/);
-      assert.equal(capturedRequests.length, 1);
+      assert.equal(capturedRequests.length, 2);
       assert.equal(capturedRequests[0].request.deferConditionalWakeUntilNextTick, true);
+      assert.equal(capturedRequests[1].request.label, "worktree-outcome-wake-fallback");
       assert.equal(persistedSession.worktreeMerged, true);
       assert.equal(persistedSession.worktreeState, "merged");
-      assert.equal(persistedSession.deliveryState, "failed");
-      assert.equal(persistedSession.completionWakeSummaryRequired, true);
+      assert.equal(persistedSession.deliveryState, "idle");
+      assert.equal(persistedSession.completionWakeSummaryRequired, undefined);
       assert.equal(typeof persistedSession.completionWakeIssuedAt, "string");
       assert.equal(persistedSession.completionWakeSucceededAt, undefined);
       assert.equal(typeof persistedSession.completionWakeFailedAt, "string");
+      assert.equal(typeof persistedSession.completionWakeSkippedAt, "string");
+      assert.match(persistedSession.completionWakeSkipReason, /plugin fallback delivered/);
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
       rmSync(remoteDir, { recursive: true, force: true });

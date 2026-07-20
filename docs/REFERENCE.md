@@ -51,7 +51,7 @@ Configuration guidance for `2026.7.1`:
 - OpenClaw `2026.7.1` requires app-server 0.143 or newer for its bundled Codex runtime, removes pre-0.142 wire compatibility, and migrates retired `on-failure` approval settings to `on-request`. This plugin keeps its independent Codex harness isolated from bundled Codex provider/runtime config and continues to send `reasoningEffort`, optional `service_tier: "fast"`, and its fixed `approval_policy: "never"` execution policy through its own payload builders.
 - OpenClaw Claude CLI handling now routes live Bash permission requests through OpenClaw exec policy and audits YOLO policy overrides. This plugin's Claude Code harness remains plugin-owned: use `harnesses["claude-code"].allowedModels` for model restrictions, and keep plan approval controlled through `permissionMode` plus `planApproval`.
 - OpenClaw `2026.7.1` adds exit-triggered and detached session-targeted cron schedules and preserves implicit delivery modes during partial cron edits. OCA has no cron API migration because it treats cron-origin sessions as stored delivery context and already suppresses visible completion follow-ups for silent cron/system completions unless the session explicitly requires routed user delivery.
-- OpenClaw `2026.7.1` improves yielded Codex subagent completion and outbound delivery recovery. OCA's deterministic completion wake contract remains unchanged: canonical plugin status is delivered first, then at most one orchestrator-owned factual follow-up is requested when `completionWakeSummaryRequired=true`. Current main also deduplicates PR update completion summaries by material outcome identity, while still allowing later PR updates with new commits to produce a fresh routed summary.
+- OpenClaw `2026.7.1` improves yielded Codex subagent completion and outbound delivery recovery. OCA uses one orchestrator-owned factual terminal summary when `completionWakeSummaryRequired=true`, with a routed plugin fallback only when that wake fails. PR update completion summaries are deduplicated by material outcome identity, while later PR updates with new commits can produce a fresh routed summary.
 - OpenClaw wake payloads can now carry both `sessionKey` and `agentId` for multi-agent routing. This plugin already stores origin session keys and origin agent ids separately, and its wake follow-ups continue to route through the authoritative session key or system fallback.
 - Installed plugins that register host-trusted pre-tool policies must declare `contracts.trustedToolPolicies`. This plugin does not register trusted pre-tool policies, so no manifest contract is needed beyond the existing `contracts.tools` list.
 - The removed upstream sender-owner tool gating path does not replace this plugin's auth boundary. Chat commands remain auth-required, and Telegram/Discord callbacks still require authorized senders before `agent_respond`, plan approval, merge, PR, cleanup, or Start Plan actions are applied. OpenClaw's plugin write ownership checks are host-side package safety checks; OCA should not claim ownership of host or adjacent plugin package writes.
@@ -302,9 +302,9 @@ Treat those fields as authoritative in orchestration logic:
 
 - `approved_then_implemented` is normal approved execution and should not be narrated as an approval bypass
 - `implemented_without_required_approval` is the explicit approval-bypass case
-- successful completion wakes already correspond to a canonical plugin-sent completion notification, and the orchestrator should usually follow that with a short factual outcome summary
+- successful completion wakes own the canonical human-readable result; the plugin status is reserved as a routed fallback when the wake fails
 - that expectation applies to ordinary terminal/manual completions and no-change completion wakes too, not just delegated worktree flows
-- a final summary that exists only inside `agent_output(session, full=true)` is source material, not visible delivery; when the plugin has posted only its terse status line, the orchestrator must still send one short routed summary
+- a final summary that exists only inside `agent_output(session, full=true)` is source material, not visible delivery; the orchestrator must send one short routed summary
 - send at most one orchestrator-owned human summary for a terminal/worktree outcome; if a duplicate wake can confirm that prior orchestrator follow-up was already visibly delivered, skip the duplicate
 - otherwise skip the summary only when the orchestrator is silently continuing an internal pipeline, there is no meaningful confirmed outcome to report yet, result data is incomplete or unreliable, or an explicit NO_REPLY/silent cron/system opt-out applies
 
@@ -513,7 +513,7 @@ Merge a worktree branch back to base.
 
 On conflicts, the plugin spawns a conflict-resolver session using the configured default harness.
 
-After a successful local merge, auto-merge, or local-merge-with-push-failure outcome, the plugin sends the canonical worktree status and wakes the orchestrator with `completionWakeSummaryRequired=true`. The wake carries the authoritative session origin route/thread block, including persisted route metadata when the active row no longer has it. The orchestrator must read `agent_output(session, full=true)` when available and send one short factual routed summary to that origin route; a good summary inside that output is not itself visible delivery. The generic terminal completion path must not emit a second completion follow-up for that same worktree outcome. If `push=true` fails after the local merge, that follow-up must describe the push failure and must not claim the merge reached the remote. The persisted `completionWakeSummaryRequired` bit is pending-only; it is cleared only after the routed wake transport succeeds with a non-empty final response that is not `NO_REPLY`. For PR outcomes, the canonical status is the only message that carries the raw PR URL; follow-up summaries should refer to PR number, repository, and branch instead.
+After a successful local merge, auto-merge, or local-merge-with-push-failure outcome, the plugin wakes the orchestrator with `completionWakeSummaryRequired=true`. The wake carries the authoritative session origin route/thread block, including persisted route metadata when the active row no longer has it. The orchestrator must read `agent_output(session, full=true)` when available and send one factual routed summary to that origin route; the plugin sends the prepared status only as a direct fallback if the wake fails. The generic terminal path must not emit a second completion for the same worktree outcome. If `push=true` fails after the local merge, the result must describe the push failure and must not claim the merge reached the remote. The persisted pending bit is cleared only after a non-empty routed response that is not `NO_REPLY`. PR results include the PR link, number, repository, branch, and useful verification/review state when known.
 
 ### `agent_pr`
 
@@ -531,7 +531,7 @@ The PR path pushes the worktree branch on demand, then handles open, merged, and
 
 When `title` or `body` is omitted, `agent_pr` prefers configured LLM-generated PR metadata. It also reads a bounded, redacted preview of active or persisted coding-session output. If no metadata provider is configured, or if the provider fails or returns invalid/unsafe output, structured `Root cause`, `Fix`/`Changes`, and `Validation` sections from the completed session report provide task-specific metadata; the commit subject supplies the title. If neither source is usable while creating a new PR, it falls back to deterministic conservative metadata derived from the session name, branch, prompt snippet, and diff summary so explicit PR creation flows can still complete. Existing generated PR metadata refreshes are non-destructive: unavailable task-specific evidence preserves the current generated PR title/body and reports the refresh failure instead of replacing richer metadata with generic fallback text.
 
-PR opened and PR updated outcomes use the same post-outcome follow-up contract as merge outcomes: the canonical PR status is delivered first, then the orchestrator is woken with the authoritative session origin route/thread block and must send one concise factual summary in that route/topic.
+PR opened and PR updated outcomes use the same single-summary contract as merge outcomes: the orchestrator is woken with the authoritative origin route/thread block and sends one concise factual result in that route/topic. A direct plugin status is reserved for wake-delivery failure.
 
 ### `agent_worktree_status`
 
@@ -669,14 +669,13 @@ Prefer fully routable channel strings in `fallbackChannel` and `agentChannels`. 
 
 | Event | User Message |
 | --- | --- |
-| Launch | `🚀` session launched |
+| Launch | `🚀` one concise acknowledgement for a fresh session |
 | Waiting for input | `❓` session asked a real question |
 | Plan ready | `📋` plan ready for review |
-| Reply or redirect sent | `↪️` follow-up delivered |
-| Plan approved | `👍` plan approved |
-| Resumed | `▶️` session resumed from persisted context |
-| Turn completed | `⏸️` paused after turn |
-| Completed | `✅` done with cost and duration |
+| Reply, redirect, or approval applied | Acknowledged by the originating interaction; no extra push |
+| Resumed | Acknowledged by the originating command; no extra push |
+| Turn completed | Internal lifecycle/wake state; no routine user push |
+| Completed | One routed human-readable result; `✅` direct fallback only if its wake fails |
 | Failed | `❌` failed, with recovery guidance |
 | Idle timeout | `💤` idle kill |
 | Stopped | `⛔` stopped by user or shutdown |

@@ -1412,7 +1412,7 @@ describe("createCallbackHandler()", () => {
     assert.deepEqual(secondResult, { handled: true });
     assert.equal(sendCount, 1);
     assert.equal(switchCount, 1);
-    assert.equal(notifyCount, 1);
+    assert.equal(notifyCount, 0);
     assert.equal(first.buttonsCleared, 1);
     assert.equal(second.buttonsCleared, 1);
     assert.equal(first.buttonMarkupEdits, 1);

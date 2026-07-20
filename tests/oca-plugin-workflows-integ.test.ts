@@ -176,7 +176,7 @@ describe("OCA plugin workflow integration coverage", () => {
       assert.equal(session.approvalState, "approved");
       assert.equal(session.approvalExecutionState, "approved_then_implemented");
       assert.equal(session.planModeApproved, true);
-      assert.match(notifications[0], /Plan approved/u);
+      assert.deepEqual(notifications, []);
       assert.equal(typeof sm.getActionToken(approveToken)?.consumedAt, "number");
 
       const staleReject = makeTelegramCallback(rejectToken);

@@ -60,14 +60,6 @@ export interface GoalTaskFollowupContract {
   appliesToGoalTaskCompletions: true;
 }
 
-function makeGithubPrUrlRe(): RegExp {
-  return /https?:\/\/github\.com\/[^\s)]+\/[^\s)]+\/pull\/(\d+)(?=[\s).,;:]|$)/gi;
-}
-
-function makeRawUrlRe(): RegExp {
-  return /https?:\/\/\S+/gi;
-}
-
 export function formatApprovalExecutionContextLines(
   context: ApprovalExecutionContext,
 ): string[] {
@@ -219,7 +211,10 @@ export function buildCompletedPayload(args: {
   ].join("\n");
 
   return {
-    userMessage: `✅ [${session.name}] Completed${formatSessionStatsSuffix(session)}`,
+    userMessage: [
+      `✅ [${session.name}] Completed`,
+      ...(preview.trim() ? ["", preview.trim()] : []),
+    ].join("\n"),
     wakeMessageOnNotifySuccess: buildWakeMessage(true),
     wakeMessageOnNotifyFailed: buildWakeMessage(false),
     followupContract,
@@ -261,7 +256,7 @@ export function buildWorktreeOutcomeFollowupWake(args: {
     `3. Use the full output plus the canonical outcome facts above to send the user one short factual outcome summary. Do this even when agent_output already contains a good final summary.`,
     `4. If full output is unavailable or not meaningful, say only what is proven by the merge/PR facts above; do not invent task details.`,
     `5. Mention blockers such as push failure when present; do not describe a local-only merge as pushed.`,
-    `6. Do not include raw PR URLs in the follow-up summary. The plugin already posted the PR link in the canonical status; refer to PRs by number, repo, and branch instead.`,
+    `6. Include the PR link when this is a PR outcome, plus the PR number, repository, and branch when known.`,
     ...(hasOriginRouteBlock
       ? [`7. Before sending that follow-up, honor the Session origin route block above. If originRoute differs from the current chat, do NOT use a plain final assistant reply; use a routed send path that preserves provider/target/threadId.`]
       : []),
@@ -309,9 +304,7 @@ export function buildGoalTaskSucceededFollowupWake(args: {
 }
 
 function sanitizeFollowupLine(line: string): string {
-  return line
-    .replace(makeGithubPrUrlRe(), "PR #$1")
-    .replace(makeRawUrlRe(), "[link omitted]");
+  return line;
 }
 
 export function buildFailedPayload(args: {
@@ -367,7 +360,7 @@ export function buildFailedPayload(args: {
       `2. Continue the same session with agent_respond(session='${session.id}', message='<next instruction>').`,
       `   If you intentionally want to fork or switch harnesses, launch a new session with agent_launch(resume_session_id='${session.id}', fork_session=true, ...)`,
       `   If the failure is a launch/config issue, relaunch fresh with agent_launch(prompt=...).`,
-      `3. Notify the user with the failure cause and the next action you are taking.`,
+      `3. The plugin already sent the canonical failure notification. Do not repeat it. Only send another user message if you take a recovery action or discover a materially different required next step.`,
     ].join("\n"),
     buttons: failedButtons,
   };

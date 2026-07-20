@@ -1591,6 +1591,35 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
     assert.equal(wakeParams.threadId, undefined);
   });
 
+  it("gives completion wakes sole visible ownership of successful results", async () => {
+    const dispatcher = createDispatcher();
+    const session: FakeSession = {
+      id: "session-single-summary",
+      route: buildRoute(),
+      originSessionKey: "agent:main:telegram:group:-1003863755361:topic:11239",
+    };
+    process.env.OPENCLAW_TEST_STDOUT = "Sent one useful completion summary.";
+
+    dispatcher.dispatchSessionNotification(session as any, {
+      label: "completed",
+      userMessage: "✅ terse plugin status",
+      wakeMessageOnNotifySuccess: "status was delivered",
+      wakeMessageOnNotifyFailed: "status was not delivered; send the full result",
+      notifyUser: "always",
+      completionSummary: {
+        required: true,
+        producer: "terminal",
+        outcomeKey: "terminal:session-single-summary",
+      },
+      completionWakeSummaryRequired: true,
+    });
+
+    const calls = await waitForCalls(logPath, 1);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]?.[0], "gateway");
+    assert.match(String(parseChatSendParams(calls[0] ?? []).message), /status was not delivered/);
+  });
+
   it("treats empty button rows as a plain direct notification instead of an interactive failure", async () => {
     const dispatcher = createDispatcher();
     const session: FakeSession = {

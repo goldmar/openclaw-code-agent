@@ -32,7 +32,7 @@ This plugin is separate from OpenClaw's bundled `acpx` runtime plugin and bundle
 
 ### Direct Completion
 
-For small trusted changes, an orchestrator can launch a session, let the selected harness finish, and report the verified outcome back to chat. The session stays observable through launch, completion, cost, duration, and commit summary.
+For small trusted changes, an orchestrator can launch a session, let the selected harness finish, and report the verified outcome back to chat. Chat receives one concise start acknowledgement, required-action prompts when needed, and one useful terminal result; detailed runtime metadata remains available through session status and output commands.
 
 ![Direct completion](https://raw.githubusercontent.com/goldmar/openclaw-code-agent/main/assets/no-plan.png)
 
@@ -188,7 +188,7 @@ New sessions use delegated worktree follow-through unless configured otherwise. 
 
 Ask OpenClaw for worktree status before cleaning resolved sandboxes.
 
-Merge, PR, ordinary terminal, and no-change worktree outcomes use a two-step completion contract: the plugin delivers the canonical terse status, then wakes the orchestrator with the original route/thread metadata and `completionWakeSummaryRequired=true`. The orchestrator must read the full output, treat any final summary inside `agent_output` as source material rather than visible delivery, avoid repeating the status line, and send at most one short factual summary to the session origin route for the terminal/worktree outcome.
+Merge, PR, ordinary terminal, and no-change worktree outcomes use a single-summary completion contract. The plugin wakes the orchestrator with the original route/thread metadata and `completionWakeSummaryRequired=true`; the orchestrator reads the full output and sends one factual result to the session origin route, including the PR link and verification or required next step when applicable. The plugin sends its routed fallback only if that summary wake fails. Questions, approval gates, conflicts, and other required-action states remain immediate direct notifications, while resume acknowledgements, turn boundaries, recovered internal errors, and goal-loop progress remain in session diagnostics instead of producing chat noise.
 
 ### Goal Tasks
 

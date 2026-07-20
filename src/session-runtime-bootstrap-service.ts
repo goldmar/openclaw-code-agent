@@ -1,6 +1,4 @@
 import type { Session } from "./session";
-import { formatHarnessModelLabel } from "./session-display";
-import { formatResumedLaunchMessage } from "./launch-summary";
 import type { SessionConfig, SessionLifecycle, SessionStatus } from "./types";
 
 type SpawnOptions = {
@@ -63,7 +61,9 @@ export class SessionRuntimeBootstrapService {
 
     session.start();
 
-    if (options.notifyLaunch !== false) {
+    // A resume is already acknowledged by the foreground command/tool response.
+    // Pushing another lifecycle message creates duplicate Telegram chatter.
+    if (options.notifyLaunch !== false && !session.resumeSessionId) {
       const notification = this.buildLaunchNotification(session);
       this.deps.notifySession(session, notification.text, notification.label, notification.idempotencyKey);
     }
@@ -76,25 +76,8 @@ export class SessionRuntimeBootstrapService {
     label: string;
     idempotencyKey?: string;
   } {
-    const workdirLabel = this.deps.formatLaunchWorkdirLabel(session);
-    const harnessLabel = formatHarnessModelLabel({
-      harness: session.harnessName,
-      model: session.model,
-    }) ?? "default";
-    if (session.resumeSessionId) {
-      return {
-        text: formatResumedLaunchMessage({
-          sessionName: session.name,
-          resumedFromSessionName: session.resumedFromSessionName,
-          workdirLabel,
-          harnessLabel,
-        }),
-        label: "resumed-launch",
-        idempotencyKey: `resumed-launch:${session.id}:${session.startedAt}:${session.resumeSessionId}`,
-      };
-    }
     return {
-      text: `🚀 [${session.name}] Launched | ${workdirLabel} | ${harnessLabel}`,
+      text: `🚀 [${session.name}] Started`,
       label: "launch",
     };
   }

@@ -683,7 +683,9 @@ export class SessionLifecycleService {
       idempotencyKey: `turn-complete:${session.id}:${buildTurnCycleKey(session)}`,
       userMessage: payload.userMessage,
       wakeMessage: payload.wakeMessage,
-      notifyUser: "always",
+      // Turn boundaries are internal lifecycle telemetry. The wake still lets
+      // the orchestrator advance the workflow without another user push.
+      notifyUser: "never",
       onUserNotifyFailed: () => {
         console.warn(
           `[SessionManager] turn-complete delivery failed for session ${session.id} — firing terminal notification as fallback`,

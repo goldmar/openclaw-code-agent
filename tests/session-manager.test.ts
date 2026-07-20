@@ -2133,7 +2133,7 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(sessionArg.id, "s-turn");
     assert.equal(request.label, "turn-complete");
     assert.equal(request.idempotencyKey, "turn-complete:s-turn:1700000000000:unknown-backend-session:0");
-    assert.equal(request.notifyUser, "always");
+    assert.equal(request.notifyUser, "never");
     assert.match(request.wakeMessage, /Name: deterministic/);
     assert.match(request.wakeMessage, /Status: running/);
     assert.match(request.wakeMessage, /Last output/);
@@ -3007,7 +3007,7 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(calls.length, 1);
     const [_sessionArg, request] = calls[0];
     assert.equal(request.label, "completed");
-    assert.equal(request.userMessage, "✅ [review-session] Completed | $0.00 | 12s");
+    assert.equal(request.userMessage, `✅ [review-session] Completed\n\n${reviewSummary}`);
     assert.match(request.wakeMessageOnNotifySuccess, /Output preview:/);
     assert.doesNotMatch(request.wakeMessageOnNotifySuccess, /Completion summary:/);
   });
@@ -3032,7 +3032,7 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(calls.length, 1);
     const [_sessionArg, request] = calls[0];
     assert.equal(request.label, "completed");
-    assert.equal(request.userMessage, "✅ [normal-session] Completed | $0.00 | 8s");
+    assert.equal(request.userMessage, "✅ [normal-session] Completed\n\nImplemented the fix and updated tests.");
     assert.match(request.wakeMessageOnNotifySuccess, /Session origin route \(authoritative for human follow-ups\):/);
     assert.match(request.wakeMessageOnNotifySuccess, /"provider":"telegram"/);
     assert.match(request.wakeMessageOnNotifySuccess, /"target":"12345"/);
@@ -3073,7 +3073,7 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(calls.length, 1);
     const [_sessionArg, request] = calls[0];
     assert.equal(request.label, "completed");
-    assert.equal(request.userMessage, "✅ [analytics-refresh] Completed | $0.00 | 11s");
+    assert.equal(request.userMessage, "✅ [analytics-refresh] Completed\n\nSuccess. No user-facing message was sent to Telegram topic 6898.");
     assert.equal(request.completionWakeSummaryRequired, false);
     assert.equal(request.wakeMessageOnNotifySuccess, undefined);
     assert.equal(request.wakeMessageOnNotifyFailed, undefined);
@@ -3101,7 +3101,7 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(calls.length, 1);
     const [_sessionArg, request] = calls[0];
     assert.equal(request.label, "completed");
-    assert.equal(request.userMessage, "✅ [tail-summary-session] Completed | $0.00 | 9s");
+    assert.equal(request.userMessage, `✅ [tail-summary-session] Completed\n\n${lines.join("\n")}`);
     assert.doesNotMatch(request.wakeMessageOnNotifySuccess, /Completion summary:/);
   });
 
@@ -3128,7 +3128,7 @@ describe("SessionManager turn-end wake", () => {
     const [_sessionArg, request] = calls[0];
     assert.equal(request.label, "completed");
     assert.doesNotMatch(request.userMessage, /⏸️/);
-    assert.equal(request.userMessage, "✅ [terminal-race] Completed | $0.00 | 5s");
+    assert.equal(request.userMessage, "✅ [terminal-race] Completed\n\nApplied the completion fix and added tests.");
   });
 });
 
@@ -3449,7 +3449,7 @@ describe("SessionManager terminal wake behavior", () => {
     assert.equal(persisted?.completionWakeFailedAt, undefined);
   });
 
-  it("keeps the persisted completion summary flag after an ordinary terminal completion wake fails", async () => {
+  it("clears the completion repair flag when the routed terminal fallback succeeds", async () => {
     (sm as any).notifications = new SessionNotificationService(
       {
         dispatchSessionNotification: (_session: unknown, request: { hooks?: Record<string, () => void> }) => {
@@ -3477,10 +3477,12 @@ describe("SessionManager terminal wake behavior", () => {
     await (sm as any).onSessionTerminal(s);
 
     const persisted = sm.getPersistedSession("s-completion-wake-failure");
-    assert.equal(persisted?.completionWakeSummaryRequired, true);
+    assert.equal(persisted?.completionWakeSummaryRequired, undefined);
     assert.equal(typeof persisted?.completionWakeIssuedAt, "string");
     assert.equal(persisted?.completionWakeSucceededAt, undefined);
     assert.equal(typeof persisted?.completionWakeFailedAt, "string");
+    assert.equal(typeof persisted?.completionWakeSkippedAt, "string");
+    assert.match(persisted?.completionWakeSkipReason ?? "", /plugin fallback delivered/);
   });
 
   it("wakes the originating agent when a session fails", async () => {

@@ -36,6 +36,10 @@ export interface SessionNotificationRequest {
   buttons?: Array<Array<{ label: string; callbackData: string }>>;
   shouldDispatch?: () => boolean;
   onUserNotifyFailed?: () => void;
+  /** Direct, routed fallback used only when a canonical summary wake fails. */
+  userMessageOnWakeFailure?: string;
+  /** @internal Prevents recursive summary-only normalization. */
+  summaryDispatchNormalized?: boolean;
   hooks?: SessionNotificationHooks;
 }
 
@@ -513,6 +517,27 @@ export class WakeDispatcher {
   }
 
   dispatchSessionNotification(session: Session, request: SessionNotificationRequest): void {
+    if (
+      request.summaryDispatchNormalized !== true
+      && request.completionSummary?.required === true
+      && (request.wakeMessageOnNotifySuccess?.trim() || request.wakeMessage?.trim())
+    ) {
+      this.dispatchSessionNotification(session, {
+        ...request,
+        userMessage: undefined,
+        userMessages: undefined,
+        buttons: undefined,
+        notifyUser: "never",
+        // No plugin status was sent, so the wake must account for that gap.
+        wakeMessage: request.wakeMessageOnNotifyFailed?.trim()
+          || request.wakeMessageOnNotifySuccess?.trim()
+          || request.wakeMessage?.trim(),
+        wakeMessageOnNotifySuccess: undefined,
+        wakeMessageOnNotifyFailed: undefined,
+        summaryDispatchNormalized: true,
+      });
+      return;
+    }
     const hooks = request.hooks;
     const hasConditionalWake =
       request.wakeMessageOnNotifySuccess != null || request.wakeMessageOnNotifyFailed != null;

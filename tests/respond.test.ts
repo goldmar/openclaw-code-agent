@@ -635,7 +635,7 @@ describe("executeRespond", () => {
     assert.equal(patches[0].patch.planDecisionVersion, 9);
   });
 
-  it("keeps only the delegated approval thumbs-up fallback for active sessions", async () => {
+  it("does not echo delegated approval as a second push for active sessions", async () => {
     const notifications: Array<{ text: string; label?: string }> = [];
     let switchedTo: string | undefined;
     const session = createStubSession({
@@ -662,12 +662,10 @@ describe("executeRespond", () => {
     assert.equal(switchedTo, "bypassPermissions");
     assert.equal(result.isError, undefined);
     assert.equal(session.approvalRationale, "The scope matches the request and the change is low risk.");
-    assert.equal(notifications.length, 1);
-    assert.equal(notifications[0].label, "plan-approved");
-    assert.equal(notifications[0].text, "👍 [test-session] Plan approved");
+    assert.equal(notifications.length, 0);
   });
 
-  it("persists active plan approval state before notifying", async () => {
+  it("persists active plan approval state without an extra push", async () => {
     const persistedPatches: Array<{ ref: string; patch: Record<string, unknown> }> = [];
     const notifications: Array<{ text: string; label?: string }> = [];
     const session = createStubSession({
@@ -720,8 +718,7 @@ describe("executeRespond", () => {
     assert.equal(persistedPatches[0].patch.actionablePlanDecisionVersion, undefined);
     assert.equal(persistedPatches[0].patch.planModeApproved, true);
     assert.equal(persistedPatches[0].patch.approvalRationale, "The plan matches topic 28 scope.");
-    assert.equal(notifications.length, 1);
-    assert.equal(notifications[0].label, "plan-approved");
+    assert.equal(notifications.length, 0);
   });
 
   it("does not infer delegated approval rationale from arbitrary message text", async () => {
@@ -748,8 +745,7 @@ describe("executeRespond", () => {
 
     assert.equal(result.isError, undefined);
     assert.equal(session.approvalRationale, undefined);
-    assert.equal(notifications.length, 1);
-    assert.equal(notifications[0].label, "plan-approved");
+    assert.equal(notifications.length, 0);
   });
 
   it("allows approve=true for the latest actionable revised plan even if changes were requested previously", async () => {
@@ -833,7 +829,7 @@ describe("executeRespond", () => {
     assert.match(result.text, /missing_backend_state/);
   });
 
-  it("emits one lifecycle resume notification when auto-resuming a suspended session", async () => {
+  it("uses only the foreground acknowledgement when auto-resuming a suspended session", async () => {
     const harness = createFakeHarness("respond-resume-harness");
     registerHarness(harness);
 
@@ -882,13 +878,7 @@ describe("executeRespond", () => {
     const result = await pending;
 
     assert.ok(result.text.includes("Resume started"));
-    assert.equal((sm as any).__dispatchCalls.length, 1);
-    const [_resumedSession, request] = (sm as any).__dispatchCalls[0];
-    assert.equal(request.label, "resumed-launch");
-    assert.match(request.idempotencyKey, /^resumed-launch:suspended-id:\d+:harness-resume-only$/);
-    assert.match(request.userMessage, /▶️ \[resume-only\] Resumed \| \/tmp\/repo \| respond-resume-harness \| test-model/);
-    assert.doesNotMatch(request.userMessage, /Auto-resumed/);
-    assert.doesNotMatch(request.userMessage, /Launched/);
+    assert.equal((sm as any).__dispatchCalls.length, 0);
   });
 
   it("does not emit a lifecycle resume notification when auto-resume startup fails", async () => {

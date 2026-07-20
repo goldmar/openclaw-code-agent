@@ -4,7 +4,7 @@ import { EventEmitter } from "node:events";
 import { SessionRuntimeBootstrapService } from "../src/session-runtime-bootstrap-service";
 
 describe("SessionRuntimeBootstrapService", () => {
-  it("includes harness and model in launch notifications", () => {
+  it("sends one concise launch acknowledgement without implementation metadata", () => {
     const notifications: Array<{ text: string; label?: string; idempotencyKey?: string }> = [];
     const service = new SessionRuntimeBootstrapService({
       hydrateSpawnedSession: () => {},
@@ -29,14 +29,14 @@ describe("SessionRuntimeBootstrapService", () => {
 
     assert.deepEqual(notifications, [
       {
-        text: "🚀 [launch-session] Launched | /repo/worktree (worktree of /repo) | codex | gpt-5.5",
+        text: "🚀 [launch-session] Started",
         label: "launch",
         idempotencyKey: undefined,
       },
     ]);
   });
 
-  it("uses a resumed launch notification and cycle-specific idempotency key", () => {
+  it("does not push another launch notification for a resumed session", () => {
     const notifications: Array<{ text: string; label?: string; idempotencyKey?: string }> = [];
     const service = new SessionRuntimeBootstrapService({
       hydrateSpawnedSession: () => {},
@@ -61,16 +61,10 @@ describe("SessionRuntimeBootstrapService", () => {
 
     service.initializeSession(session as any, {} as any, { resumeSessionId: "backend-thread-1" } as any);
 
-    assert.deepEqual(notifications, [
-      {
-        text: "▶️ [resume-session] Resumed | /repo | codex | gpt-5.5",
-        label: "resumed-launch",
-        idempotencyKey: "resumed-launch:stable-session-1:1780000001000:backend-thread-1",
-      },
-    ]);
+    assert.deepEqual(notifications, []);
   });
 
-  it("shows the original session name and explicit follow-up label in resumed launch notifications", () => {
+  it("keeps renamed resumed sessions silent too", () => {
     const notifications: Array<{ text: string; label?: string; idempotencyKey?: string }> = [];
     const service = new SessionRuntimeBootstrapService({
       hydrateSpawnedSession: () => {},
@@ -96,12 +90,6 @@ describe("SessionRuntimeBootstrapService", () => {
 
     service.initializeSession(session as any, {} as any, { resumeSessionId: "thread-auto-update-feature" } as any);
 
-    assert.deepEqual(notifications, [
-      {
-        text: "▶️ [oca-auto-update-feature] Resumed | Follow-up label: oca-pr-341-bundle-size-fix | /repo | codex | gpt-5.5",
-        label: "resumed-launch",
-        idempotencyKey: "resumed-launch:_QDNlLZr:1780000001000:thread-auto-update-feature",
-      },
-    ]);
+    assert.deepEqual(notifications, []);
   });
 });

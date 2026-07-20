@@ -362,7 +362,6 @@ async function tryAutoResume(
         text: `Plan approved for session ${resumed.name} [${resumed.id}]. Session resumed in bypassPermissions mode. Use agent_output to see the response.`,
       };
     }
-    sm.notifyResumedLaunch(resumed);
     return { text: `Resume started for session ${resumed.name} [${resumed.id}]. Use agent_output to see the response.` };
   } catch (err: unknown) {
     return formatResumeUnavailable(session, "missing_backend_state", `Backend resume failed: ${errorMessage(err)}`);
@@ -478,10 +477,6 @@ export async function executeRespond(
       && (await session.submitPendingInputText?.(params.message)) === true;
 
     if (submittedPendingText) {
-      if (params.userInitiated) {
-        const notifyPreview = truncateText(params.message, 100);
-        sm.notifySession(session, `↪️ [${session.name}] "${notifyPreview}"`, "agent-respond");
-      }
       if (!params.userInitiated) {
         session.incrementAutoRespond();
       }
@@ -533,12 +528,8 @@ export async function executeRespond(
 
     // Single notification: plan approval gets a dedicated icon; everything else
     // (including interrupt/redirect) collapses into one ↪️ message with preview.
-    if (isPlanApproval) {
-      sm.notifySession(session, `👍 [${session.name}] Plan approved`, "plan-approved");
-    } else if (params.userInitiated) {
-      const notifyPreview = truncateText(params.message, 100);
-      sm.notifySession(session, `↪️ [${session.name}] "${notifyPreview}"`, "agent-respond");
-    }
+    // The originating command/button interaction already acknowledges the
+    // response. Do not echo it as a second lifecycle notification.
     // else: silent auto-respond — no notification
 
     if (!params.userInitiated) {

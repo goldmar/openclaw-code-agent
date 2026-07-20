@@ -202,7 +202,7 @@ describe("session-notification-builder", () => {
     assert.match(wake, /plugin's terse status line/);
     assert.match(wake, /send the user one short factual outcome summary/);
     assert.match(wake, /Do this even when agent_output already contains a good final summary/);
-    assert.match(wake, /Do not include raw PR URLs/);
+    assert.match(wake, /Include the PR link/);
     assert.match(wake, /Send a normal concise final response/);
     assert.match(wake, /Send at most one human-visible summary/);
     assert.match(wake, /foreground assistant turn or routed message tools/);
@@ -514,7 +514,7 @@ describe("session-notification-builder", () => {
       preview: "Final output",
     });
 
-    assert.equal(payload.userMessage, "✅ [done-session] Completed | $1.25 | 1m1s");
+    assert.equal(payload.userMessage, "✅ [done-session] Completed\n\nFinal output");
     assert.equal(payload.followupContract.requiresShortFactualSummary, true);
     assert.equal(payload.followupContract.appliesToOrdinaryTerminalCompletions, true);
     assert.match(payload.wakeMessageOnNotifySuccess, /Coding agent session completed\./);
@@ -535,7 +535,7 @@ describe("session-notification-builder", () => {
     assert.match(payload.wakeMessageOnNotifyFailed, /do NOT assume the plugin already reached the user/i);
   });
 
-  it("includes harness and model in terminal completion status lines", () => {
+  it("keeps harness, model, cost, and duration out of terminal fallback text", () => {
     const payload = buildCompletedPayload({
       session: {
         id: "session-2",
@@ -550,7 +550,7 @@ describe("session-notification-builder", () => {
       preview: "Final output",
     });
 
-    assert.equal(payload.userMessage, "✅ [done-session] Completed | $1.25 | 1m1s | codex | gpt-5.5");
+    assert.equal(payload.userMessage, "✅ [done-session] Completed\n\nFinal output");
   });
 
   it("omits route-block follow-up guidance when terminal completion has no origin route block", () => {
@@ -602,7 +602,7 @@ describe("session-notification-builder", () => {
     assert.doesNotMatch(message, /already summarized by completed session/);
   });
 
-  it("omits raw PR URLs from worktree follow-up wake content", () => {
+  it("keeps the PR URL available for the single canonical summary", () => {
     const message = buildWorktreeOutcomeFollowupWake({
       sessionId: "session-pr-summary",
       sessionName: "format-launch-notification-model-separator",
@@ -616,9 +616,9 @@ describe("session-notification-builder", () => {
       canonicalStatusDelivered: true,
     });
 
-    assert.doesNotMatch(message, /https:\/\/github\.com\/goldmar\/openclaw-code-agent\/pull\/185/);
-    assert.match(message, /PR #185/);
-    assert.match(message, /Do not include raw PR URLs/);
+    assert.match(message, /https:\/\/github\.com\/goldmar\/openclaw-code-agent\/pull\/185/);
+    assert.match(message, /PR number: #185/);
+    assert.match(message, /Include the PR link/);
     assert.doesNotMatch(message, /COMPLETION_FOLLOWUP_/);
   });
 

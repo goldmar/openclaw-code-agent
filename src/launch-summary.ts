@@ -115,16 +115,3 @@ export function formatLaunchSummaryFromSession(
     resumeSessionName: session.resumedFromSessionName ?? input.resumeSessionName,
   });
 }
-
-export function formatResumedLaunchMessage(input: {
-  sessionName: string;
-  resumedFromSessionName?: string;
-  workdirLabel: string;
-  harnessLabel: string;
-}): string {
-  const identity = input.resumedFromSessionName || input.sessionName;
-  const labelSuffix = input.resumedFromSessionName && input.sessionName !== input.resumedFromSessionName
-    ? ` | Follow-up label: ${input.sessionName}`
-    : "";
-  return `▶️ [${identity}] Resumed${labelSuffix} | ${input.workdirLabel} | ${input.harnessLabel}`;
-}
