@@ -5,6 +5,22 @@ import type { Session } from "../session";
 
 type OriginThreadLine = string;
 
+function sanitizeCompletionFallbackPreview(value: string): string {
+  return value
+    .replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/?#@]+@/gi, "$1[redacted credential]@")
+    .replace(/\b(authorization\s*[:=]\s*)[^\r\n,;}]+/gi, "$1[redacted credential]")
+    .replace(/\b(Bearer\s+)[^\s]+/gi, "$1[redacted credential]")
+    .replace(/(["'][A-Za-z0-9_.-]*(?:api[_-]?key|token|secret|password|authorization)[A-Za-z0-9_.-]*["']\s*:\s*["'])[^"']+(["'])/gi, "$1[redacted credential]$2")
+    .replace(/\b([A-Za-z0-9_.-]*(?:api[_-]?key|token|secret|password|authorization)[A-Za-z0-9_.-]*\s*[:=]\s*)[^\s,;}]+/gi, "$1[redacted credential]")
+    .replace(/\b(?:sk-[A-Za-z0-9_-]{8,}|gh[opsru]_[A-Za-z0-9_]{8,}|xox[baprs]-[A-Za-z0-9-]{16,}|AKIA[0-9A-Z]{16}|[A-Za-z0-9_-]{32,})\b/g, "[redacted token]")
+    .replace(/(?:\/Users|\/home|\/var|\/etc|\/private|\/tmp)\/[^\s`'").]+/g, "[redacted path]")
+    .replace(/\bhttps?:\/\/[^\s]+/gi, (url) =>
+      /^https:\/\/github\.com\/[^/?#\s]+\/[^/?#\s]+\/pull\/\d+(?:[#?][^\s]*)?$/i.test(url)
+        ? url
+        : "[redacted link]",
+    );
+}
+
 type ApprovalExecutionContext = {
   requestedPermissionMode?: PermissionMode;
   currentPermissionMode?: PermissionMode;
@@ -189,6 +205,7 @@ export function buildCompletedPayload(args: {
   followupContract: CompletionFollowupContract;
 } {
   const { session, originThreadLine, preview } = args;
+  const safeFallbackPreview = sanitizeCompletionFallbackPreview(preview).trim();
   const hasOriginRouteBlock = Boolean(originThreadLine.trim());
   const followupContract = buildCompletionFollowupContract();
   const buildWakeMessage = (canonicalStatusDelivered: boolean): string => [
@@ -213,7 +230,7 @@ export function buildCompletedPayload(args: {
   return {
     userMessage: [
       `✅ [${session.name}] Completed`,
-      ...(preview.trim() ? ["", preview.trim()] : []),
+      ...(safeFallbackPreview ? ["", safeFallbackPreview] : []),
     ].join("\n"),
     wakeMessageOnNotifySuccess: buildWakeMessage(true),
     wakeMessageOnNotifyFailed: buildWakeMessage(false),

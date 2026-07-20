@@ -553,6 +553,30 @@ describe("session-notification-builder", () => {
     assert.equal(payload.userMessage, "✅ [done-session] Completed\n\nFinal output");
   });
 
+  it("redacts sensitive output from the routed terminal fallback while retaining PR links", () => {
+    const payload = buildCompletedPayload({
+      session: {
+        id: "session-sensitive-fallback",
+        name: "done-session",
+        status: "completed",
+      } as any,
+      originThreadLine: "",
+      preview: [
+        "Updated https://github.com/example/project/pull/42",
+        "token=ghp_abcdefghijklmnopqrstuvwxyz123456",
+        "Log: /home/example/private/run.log",
+        "Details: https://internal.example.test/build/42",
+      ].join("\n"),
+    });
+
+    assert.match(payload.userMessage, /https:\/\/github\.com\/example\/project\/pull\/42/u);
+    assert.match(payload.userMessage, /token=\[redacted credential\]/u);
+    assert.match(payload.userMessage, /Log: \[redacted path\]/u);
+    assert.match(payload.userMessage, /Details: \[redacted link\]/u);
+    assert.doesNotMatch(payload.userMessage, /ghp_|\/home\/example|internal\.example/u);
+    assert.match(payload.wakeMessageOnNotifyFailed, /ghp_abcdefghijklmnopqrstuvwxyz123456/u);
+  });
+
   it("omits route-block follow-up guidance when terminal completion has no origin route block", () => {
     const payload = buildCompletedPayload({
       session: {
