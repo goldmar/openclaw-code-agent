@@ -121,7 +121,7 @@ describe("plugin entry source", () => {
       peerDependencies?: Record<string, string>;
     };
 
-    assert.equal(packageJson.dependencies?.["@anthropic-ai/claude-agent-sdk"], "^0.3.142");
+    assert.equal(packageJson.dependencies?.["@anthropic-ai/claude-agent-sdk"], "^0.3.216");
     assert.equal(packageJson.openclaw?.install?.npmSpec, "openclaw-code-agent");
     assert.equal(packageJson.openclaw?.install?.defaultChoice, "npm");
     assert.equal(packageJson.openclaw?.install?.minHostVersion, ">=2026.7.1");
