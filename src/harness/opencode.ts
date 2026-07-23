@@ -62,6 +62,7 @@ type OpenCodePendingInput = {
 const OPENCODE_COMMAND_ENV = "OPENCLAW_OPENCODE_COMMAND";
 const STARTUP_TIMEOUT_MS = 15_000;
 const REQUEST_TIMEOUT_MS = 60_000;
+const SESSION_COST_TIMEOUT_MS = 250;
 const TURN_TIMEOUT_MS = 15 * 60_000;
 const MUTATION_PERMISSIONS = [
   "edit",
@@ -783,6 +784,7 @@ export class OpenCodeHarness implements AgentHarness {
     let turnInProgress = false;
     let turnWaitCompleted = false;
     let turnCompletionEmitted = false;
+    let turnCompletionPromise: Promise<void> | undefined;
     let sessionInterrupted = false;
     let turnSawSseIdle = false;
     let lastBackendRefConversationId: string | undefined;
@@ -980,7 +982,9 @@ export class OpenCodeHarness implements AgentHarness {
     };
 
     const fetchSession = async (http: OpenCodeClient, id: string): Promise<OpenCodeSession> => {
-      return await http.request<OpenCodeSession>("GET", `/session/${encodeURIComponent(id)}`);
+      return await http.request<OpenCodeSession>("GET", `/session/${encodeURIComponent(id)}`, undefined, {
+        timeoutMs: Math.min(this.deps.requestTimeoutMs ?? REQUEST_TIMEOUT_MS, SESSION_COST_TIMEOUT_MS),
+      });
     };
 
     const sendPrompt = async (http: OpenCodeClient, id: string, text: string, promptSystemPrompt: string | undefined, signal: AbortSignal): Promise<void> => {
@@ -1073,26 +1077,30 @@ export class OpenCodeHarness implements AgentHarness {
       return sessionId;
     };
 
-    const completeTurn = async (success: boolean, result?: string, outcome: "completed" | "failed" | "interrupted" = success ? "completed" : "failed"): Promise<void> => {
-      let finalResult = result;
-      let totalCostUsd = 0;
-      if (client && sessionId) {
-        const [messages, session] = await Promise.all([
-          success
-            ? fetchSessionMessages(client, sessionId).catch((): undefined => undefined)
-            : Promise.resolve(undefined),
-          fetchSession(client, sessionId).catch((): undefined => undefined),
-        ]);
-        finalResult = finalResult ?? extractAssistantResult(messages);
-        totalCostUsd = sessionCostUsd(session);
-      }
-      finishTurn(success, outcome, finalResult, totalCostUsd);
+    const completeTurn = (success: boolean, result?: string, outcome: "completed" | "failed" | "interrupted" = success ? "completed" : "failed"): Promise<void> => {
+      turnCompletionPromise ??= (async () => {
+        let finalResult = result;
+        let totalCostUsd = 0;
+        if (client && sessionId) {
+          const [messages, session] = await Promise.all([
+            success
+              ? fetchSessionMessages(client, sessionId).catch((): undefined => undefined)
+              : Promise.resolve(undefined),
+            fetchSession(client, sessionId).catch((): undefined => undefined),
+          ]);
+          finalResult = finalResult ?? extractAssistantResult(messages);
+          totalCostUsd = sessionCostUsd(session);
+        }
+        finishTurn(success, outcome, finalResult, totalCostUsd);
+      })();
+      return turnCompletionPromise;
     };
 
     const runTurn = async (text: string): Promise<void> => {
       turnInProgress = true;
       turnWaitCompleted = false;
       turnCompletionEmitted = false;
+      turnCompletionPromise = undefined;
       turnSawSseIdle = false;
       try {
         const http = await ensureClient();
@@ -1183,7 +1191,10 @@ export class OpenCodeHarness implements AgentHarness {
         }
       } catch (error) {
         if (!sessionInterrupted) {
-          if (!turnInProgress) turnCompletionEmitted = false;
+          if (!turnInProgress) {
+            turnCompletionEmitted = false;
+            turnCompletionPromise = undefined;
+          }
           await completeTurn(false, errorMessage(error));
         }
       } finally {
@@ -1241,6 +1252,7 @@ export class OpenCodeHarness implements AgentHarness {
         activeWaitController?.abort();
         if (!turnInProgress) {
           turnCompletionEmitted = false;
+          turnCompletionPromise = undefined;
         }
         if (!client) {
           finishTurn(false, "interrupted");
