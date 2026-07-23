@@ -15,6 +15,7 @@ type RequestRecord = {
 class MockOpenCodeServer {
   requests: RequestRecord[] = [];
   closed = false;
+  sessionCost = 0;
   waitMode: "immediate" | "defer" = "immediate";
   statusMode: "idle" | "busy-then-idle" | "always-busy" | "timeout" = "idle";
   busyStatusResponses = 0;
@@ -54,6 +55,9 @@ class MockOpenCodeServer {
     if (path === "/api/health") return json({ healthy: true, version: "1.16.2" });
     if (method === "POST" && path === "/session") return json({ id: "ses_test" });
     if (method === "POST" && path === "/session/ses_existing/fork") return json({ id: "ses_forked" });
+    if (method === "GET" && /^\/session\/ses_[^/]+$/.test(path)) {
+      return json({ id: path.slice("/session/".length), cost: this.sessionCost });
+    }
     if (method === "GET" && path === "/session/status") {
       this.statusRequests += 1;
       if (this.statusMode === "timeout") {
@@ -288,6 +292,25 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     assert.equal(mock.closed, true);
   });
 
+  it("reports OpenCode's persisted cumulative session cost", async () => {
+    const mock = new MockOpenCodeServer();
+    mock.sessionCost = 41.5661305;
+    const harness = new OpenCodeHarness({
+      createServer: async () => mock.handle(),
+      fetch: mock.fetch,
+    });
+
+    const messages = await collectMessages(harness.launch({
+      prompt: "ship it",
+      cwd: "/repo",
+    }));
+
+    const result = messages.find((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }> | undefined;
+    assert.equal(result?.data.success, true);
+    assert.equal(result?.data.total_cost_usd, 41.5661305);
+    assert.equal(mock.requests.some((request) => request.method === "GET" && request.path === "/session/ses_test"), true);
+  });
+
   it("uses the real OpenCode classic JSON lifecycle endpoints", async () => {
     const mock = new MockOpenCodeServer();
     const harness = new OpenCodeHarness({
@@ -310,6 +333,7 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
       "/session",
       "/session/ses_test/message",
       "/session/ses_test/prompt_async",
+      "/session/ses_test",
       "/session/status",
     ]));
   });
