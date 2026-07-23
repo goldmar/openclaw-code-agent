@@ -1091,7 +1091,11 @@ export class OpenCodeHarness implements AgentHarness {
           finalResult = finalResult ?? extractAssistantResult(messages);
           totalCostUsd = sessionCostUsd(session);
         }
-        finishTurn(success, outcome, finalResult, totalCostUsd);
+        if (sessionInterrupted) {
+          finishTurn(false, "interrupted", undefined, totalCostUsd);
+        } else {
+          finishTurn(success, outcome, finalResult, totalCostUsd);
+        }
       })();
       return turnCompletionPromise;
     };

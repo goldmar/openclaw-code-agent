@@ -1292,6 +1292,51 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     assert.equal(completions[0]?.data.result, "tool failed");
   });
 
+  it("keeps interruption authoritative when it races with an SSE failure completion", async () => {
+    const mock = new MockOpenCodeServer();
+    mock.waitMode = "defer";
+    mock.sessionCost = 7.25;
+    const costRequested = Promise.withResolvers<void>();
+    const releaseCostRequest = Promise.withResolvers<void>();
+    const originalFetch = mock.fetch;
+    mock.fetch = async (input, init) => {
+      const response = await originalFetch(input, init);
+      const url = new URL(typeof input === "string" ? input : input.url);
+      if ((init?.method ?? "GET") === "GET" && url.pathname === "/session/ses_test") {
+        costRequested.resolve();
+        await releaseCostRequest.promise;
+      }
+      return response;
+    };
+    const harness = new OpenCodeHarness({
+      createServer: async () => mock.handle(),
+      fetch: mock.fetch,
+    });
+
+    const session = harness.launch({ prompt: "stop during failure", cwd: "/repo" });
+    await waitForRequest(mock, "/session/ses_test/prompt_async");
+    mock.emit({
+      type: "session.next.step.failed",
+      properties: {
+        sessionID: "ses_test",
+        error: { message: "tool failed during interruption" },
+      },
+    });
+    await costRequested.promise;
+    const interruption = session.interrupt?.();
+    releaseCostRequest.resolve();
+    await interruption;
+
+    const messages = await collectAllMessages(session);
+    const completions = messages.filter((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }>[];
+    assert.equal(completions.length, 1);
+    assert.equal(completions[0]?.data.success, false);
+    assert.equal(completions[0]?.data.outcome, "interrupted");
+    assert.equal(completions[0]?.data.result, undefined);
+    assert.equal(completions[0]?.data.total_cost_usd, 7.25);
+    assert.equal(mock.requests.filter((request) => request.method === "GET" && request.path === "/session/ses_test").length, 1);
+  });
+
   it("keeps wait success when an SSE failure arrives during context fetch", async () => {
     const mock = new MockOpenCodeServer();
     const contextRequested = Promise.withResolvers<void>();
