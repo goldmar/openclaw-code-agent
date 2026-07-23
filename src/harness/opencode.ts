@@ -62,6 +62,7 @@ type OpenCodePendingInput = {
 const OPENCODE_COMMAND_ENV = "OPENCLAW_OPENCODE_COMMAND";
 const STARTUP_TIMEOUT_MS = 15_000;
 const REQUEST_TIMEOUT_MS = 60_000;
+const SESSION_COST_TIMEOUT_MS = 250;
 const TURN_TIMEOUT_MS = 15 * 60_000;
 const MUTATION_PERMISSIONS = [
   "edit",
@@ -115,6 +116,12 @@ function resolveCommandPath(command: string, envPath = process.env.PATH): string
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function sessionCostUsd(session: OpenCodeSession | undefined): number {
+  return typeof session?.cost === "number" && Number.isFinite(session.cost) && session.cost >= 0
+    ? session.cost
+    : 0;
 }
 
 function extractPromptText(message: unknown): string {
@@ -777,6 +784,7 @@ export class OpenCodeHarness implements AgentHarness {
     let turnInProgress = false;
     let turnWaitCompleted = false;
     let turnCompletionEmitted = false;
+    let turnCompletionPromise: Promise<void> | undefined;
     let sessionInterrupted = false;
     let turnSawSseIdle = false;
     let lastBackendRefConversationId: string | undefined;
@@ -792,11 +800,12 @@ export class OpenCodeHarness implements AgentHarness {
       success: boolean,
       outcome: "completed" | "failed" | "interrupted",
       result?: string,
+      totalCostUsd = 0,
     ): boolean => emitRunCompleted({
       success,
       outcome,
       duration_ms: 0,
-      total_cost_usd: 0,
+      total_cost_usd: totalCostUsd,
       num_turns: runCounter,
       result,
       session_id: sessionId ?? "",
@@ -894,7 +903,7 @@ export class OpenCodeHarness implements AgentHarness {
           : `${event.type} failed`;
         if (turnInProgress && !turnWaitCompleted) {
           activeWaitController?.abort();
-          finishTurn(false, "failed", reason);
+          await completeTurn(false, reason);
         }
         return;
       }
@@ -957,10 +966,10 @@ export class OpenCodeHarness implements AgentHarness {
       if (streamStarted || !client) return;
       streamStarted = true;
       void client.streamEvents(handleEvent, streamController.signal)
-        .catch((error) => {
+        .catch(async (error) => {
           if (!streamController.signal.aborted && turnInProgress && !turnWaitCompleted) {
             activeWaitController?.abort();
-            finishTurn(false, "failed", errorMessage(error));
+            await completeTurn(false, errorMessage(error));
           }
         })
         .finally(() => {
@@ -970,6 +979,12 @@ export class OpenCodeHarness implements AgentHarness {
 
     const fetchSessionMessages = async (http: OpenCodeClient, id: string): Promise<unknown> => {
       return await http.request<unknown>("GET", `/session/${encodeURIComponent(id)}/message`);
+    };
+
+    const fetchSession = async (http: OpenCodeClient, id: string): Promise<OpenCodeSession> => {
+      return await http.request<OpenCodeSession>("GET", `/session/${encodeURIComponent(id)}`, undefined, {
+        timeoutMs: Math.min(this.deps.requestTimeoutMs ?? REQUEST_TIMEOUT_MS, SESSION_COST_TIMEOUT_MS),
+      });
     };
 
     const sendPrompt = async (http: OpenCodeClient, id: string, text: string, promptSystemPrompt: string | undefined, signal: AbortSignal): Promise<void> => {
@@ -1062,20 +1077,34 @@ export class OpenCodeHarness implements AgentHarness {
       return sessionId;
     };
 
-    const completeTurn = async (success: boolean, result?: string, outcome: "completed" | "failed" | "interrupted" = success ? "completed" : "failed"): Promise<void> => {
-      let finalResult = result;
-      if (success && client && sessionId) {
-        const messages = await fetchSessionMessages(client, sessionId)
-          .catch((): undefined => undefined);
-        finalResult = finalResult ?? extractAssistantResult(messages);
-      }
-      finishTurn(success, outcome, finalResult);
+    const completeTurn = (success: boolean, result?: string, outcome: "completed" | "failed" | "interrupted" = success ? "completed" : "failed"): Promise<void> => {
+      turnCompletionPromise ??= (async () => {
+        let finalResult = result;
+        let totalCostUsd = 0;
+        if (client && sessionId) {
+          const [messages, session] = await Promise.all([
+            success
+              ? fetchSessionMessages(client, sessionId).catch((): undefined => undefined)
+              : Promise.resolve(undefined),
+            fetchSession(client, sessionId).catch((): undefined => undefined),
+          ]);
+          finalResult = finalResult ?? extractAssistantResult(messages);
+          totalCostUsd = sessionCostUsd(session);
+        }
+        if (sessionInterrupted) {
+          finishTurn(false, "interrupted", undefined, totalCostUsd);
+        } else {
+          finishTurn(success, outcome, finalResult, totalCostUsd);
+        }
+      })();
+      return turnCompletionPromise;
     };
 
     const runTurn = async (text: string): Promise<void> => {
       turnInProgress = true;
       turnWaitCompleted = false;
       turnCompletionEmitted = false;
+      turnCompletionPromise = undefined;
       turnSawSseIdle = false;
       try {
         const http = await ensureClient();
@@ -1097,7 +1126,11 @@ export class OpenCodeHarness implements AgentHarness {
         await completeTurn(true);
       } catch (error) {
         activeWaitController = undefined;
-        await completeTurn(false, errorMessage(error));
+        if (sessionInterrupted) {
+          await completeTurn(false, undefined, "interrupted");
+        } else {
+          await completeTurn(false, errorMessage(error));
+        }
       } finally {
         turnInProgress = false;
         turnWaitCompleted = false;
@@ -1162,8 +1195,11 @@ export class OpenCodeHarness implements AgentHarness {
         }
       } catch (error) {
         if (!sessionInterrupted) {
-          if (!turnInProgress) turnCompletionEmitted = false;
-          finishTurn(false, "failed", errorMessage(error));
+          if (!turnInProgress) {
+            turnCompletionEmitted = false;
+            turnCompletionPromise = undefined;
+          }
+          await completeTurn(false, errorMessage(error));
         }
       } finally {
         streamController.abort();
@@ -1220,15 +1256,20 @@ export class OpenCodeHarness implements AgentHarness {
         activeWaitController?.abort();
         if (!turnInProgress) {
           turnCompletionEmitted = false;
+          turnCompletionPromise = undefined;
         }
-        finishTurn(false, "interrupted");
         if (!client) {
+          finishTurn(false, "interrupted");
           await server?.close().catch((): undefined => undefined);
           return;
         }
-        if (!sessionId) return;
+        if (!sessionId) {
+          finishTurn(false, "interrupted");
+          return;
+        }
         const abortRequest = client.request("POST", `/session/${encodeURIComponent(sessionId)}/abort`).catch((): undefined => undefined);
         await abortRequest;
+        await completeTurn(false, undefined, "interrupted");
       },
     };
   }

@@ -15,6 +15,7 @@ type RequestRecord = {
 class MockOpenCodeServer {
   requests: RequestRecord[] = [];
   closed = false;
+  sessionCost = 0;
   waitMode: "immediate" | "defer" = "immediate";
   statusMode: "idle" | "busy-then-idle" | "always-busy" | "timeout" = "idle";
   busyStatusResponses = 0;
@@ -54,6 +55,9 @@ class MockOpenCodeServer {
     if (path === "/api/health") return json({ healthy: true, version: "1.16.2" });
     if (method === "POST" && path === "/session") return json({ id: "ses_test" });
     if (method === "POST" && path === "/session/ses_existing/fork") return json({ id: "ses_forked" });
+    if (method === "GET" && /^\/session\/ses_[^/]+$/.test(path)) {
+      return json({ id: path.slice("/session/".length), cost: this.sessionCost });
+    }
     if (method === "GET" && path === "/session/status") {
       this.statusRequests += 1;
       if (this.statusMode === "timeout") {
@@ -288,6 +292,60 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     assert.equal(mock.closed, true);
   });
 
+  it("reports OpenCode's persisted cumulative session cost", async () => {
+    const mock = new MockOpenCodeServer();
+    mock.sessionCost = 41.5661305;
+    const harness = new OpenCodeHarness({
+      createServer: async () => mock.handle(),
+      fetch: mock.fetch,
+    });
+
+    const messages = await collectMessages(harness.launch({
+      prompt: "ship it",
+      cwd: "/repo",
+    }));
+
+    const result = messages.find((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }> | undefined;
+    assert.equal(result?.data.success, true);
+    assert.equal(result?.data.total_cost_usd, 41.5661305);
+    assert.equal(mock.requests.some((request) => request.method === "GET" && request.path === "/session/ses_test"), true);
+  });
+
+  it("falls back promptly when the optional session cost endpoint is unavailable", async () => {
+    const mock = new MockOpenCodeServer();
+    const originalFetch = mock.fetch;
+    let costRequestAborted = false;
+    mock.fetch = async (input, init) => {
+      const url = new URL(typeof input === "string" ? input : input.url);
+      const method = init?.method ?? "GET";
+      if (method === "GET" && url.pathname === "/session/ses_test") {
+        await originalFetch(input, init);
+        return await new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => {
+            costRequestAborted = true;
+            reject(new Error("session cost unavailable"));
+          }, { once: true });
+        });
+      }
+      return await originalFetch(input, init);
+    };
+    const harness = new OpenCodeHarness({
+      createServer: async () => mock.handle(),
+      fetch: mock.fetch,
+      requestTimeoutMs: 5_000,
+    });
+
+    const startedAt = Date.now();
+    const messages = await collectMessages(harness.launch({ prompt: "ship it", cwd: "/repo" }));
+    const elapsedMs = Date.now() - startedAt;
+
+    const result = messages.find((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }> | undefined;
+    assert.equal(result?.data.success, true);
+    assert.equal(result?.data.total_cost_usd, 0);
+    assert.equal(costRequestAborted, true);
+    assert.ok(elapsedMs < 1_000, `completion took ${elapsedMs}ms`);
+  });
+
   it("uses the real OpenCode classic JSON lifecycle endpoints", async () => {
     const mock = new MockOpenCodeServer();
     const harness = new OpenCodeHarness({
@@ -310,6 +368,7 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
       "/session",
       "/session/ses_test/message",
       "/session/ses_test/prompt_async",
+      "/session/ses_test",
       "/session/status",
     ]));
   });
@@ -1233,6 +1292,51 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
     assert.equal(completions[0]?.data.result, "tool failed");
   });
 
+  it("keeps interruption authoritative when it races with an SSE failure completion", async () => {
+    const mock = new MockOpenCodeServer();
+    mock.waitMode = "defer";
+    mock.sessionCost = 7.25;
+    const costRequested = Promise.withResolvers<void>();
+    const releaseCostRequest = Promise.withResolvers<void>();
+    const originalFetch = mock.fetch;
+    mock.fetch = async (input, init) => {
+      const response = await originalFetch(input, init);
+      const url = new URL(typeof input === "string" ? input : input.url);
+      if ((init?.method ?? "GET") === "GET" && url.pathname === "/session/ses_test") {
+        costRequested.resolve();
+        await releaseCostRequest.promise;
+      }
+      return response;
+    };
+    const harness = new OpenCodeHarness({
+      createServer: async () => mock.handle(),
+      fetch: mock.fetch,
+    });
+
+    const session = harness.launch({ prompt: "stop during failure", cwd: "/repo" });
+    await waitForRequest(mock, "/session/ses_test/prompt_async");
+    mock.emit({
+      type: "session.next.step.failed",
+      properties: {
+        sessionID: "ses_test",
+        error: { message: "tool failed during interruption" },
+      },
+    });
+    await costRequested.promise;
+    const interruption = session.interrupt?.();
+    releaseCostRequest.resolve();
+    await interruption;
+
+    const messages = await collectAllMessages(session);
+    const completions = messages.filter((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }>[];
+    assert.equal(completions.length, 1);
+    assert.equal(completions[0]?.data.success, false);
+    assert.equal(completions[0]?.data.outcome, "interrupted");
+    assert.equal(completions[0]?.data.result, undefined);
+    assert.equal(completions[0]?.data.total_cost_usd, 7.25);
+    assert.equal(mock.requests.filter((request) => request.method === "GET" && request.path === "/session/ses_test").length, 1);
+  });
+
   it("keeps wait success when an SSE failure arrives during context fetch", async () => {
     const mock = new MockOpenCodeServer();
     const contextRequested = Promise.withResolvers<void>();
@@ -1298,6 +1402,19 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
   it("does not emit a failed completion after interrupt aborts an active wait", async () => {
     const mock = new MockOpenCodeServer();
     mock.waitMode = "defer";
+    mock.sessionCost = 12.75;
+    const releaseCostRequest = Promise.withResolvers<void>();
+    let costRequests = 0;
+    const originalFetch = mock.fetch;
+    mock.fetch = async (input, init) => {
+      const response = await originalFetch(input, init);
+      const url = new URL(typeof input === "string" ? input : input.url);
+      if ((init?.method ?? "GET") === "GET" && url.pathname === "/session/ses_test") {
+        costRequests += 1;
+        await releaseCostRequest.promise;
+      }
+      return response;
+    };
     const harness = new OpenCodeHarness({
       createServer: async () => mock.handle(),
       fetch: mock.fetch,
@@ -1305,13 +1422,20 @@ describe("OpenCodeHarness HTTP/SSE mapping", () => {
 
     const session = harness.launch({ prompt: "stop", cwd: "/repo" });
     await waitForRequest(mock, "/session/ses_test/prompt_async");
-    await session.interrupt?.();
+    const interruption = session.interrupt?.();
+    await waitForRequest(mock, "/session/ses_test");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(costRequests, 1);
+    releaseCostRequest.resolve();
+    await interruption;
 
     const messages = await collectAllMessages(session);
     const completions = messages.filter((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }>[];
     assert.equal(completions.length, 1);
     assert.equal(completions[0]?.data.success, false);
     assert.equal(completions[0]?.data.outcome, "interrupted");
+    assert.equal(completions[0]?.data.total_cost_usd, 12.75);
+    assert.equal(costRequests, 1);
     assert.equal(mock.requests.some((request) => request.method === "POST" && request.path === "/session/ses_test/abort"), true);
   });
 
