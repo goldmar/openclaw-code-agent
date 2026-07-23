@@ -7,6 +7,7 @@ on:
   pull_request:
     branches:
       - main
+      - agent/codeql-fork-policy
   schedule:
     - cron: "17 8 * * 1"
 
