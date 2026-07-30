@@ -525,6 +525,50 @@ describe("SessionStore path resolution", () => {
     assert.deepEqual([...store.persisted.keys()], []);
   });
 
+  it("preserves completion summary history when a stable session id starts a resumed lifecycle", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-store-resumed-summary-"));
+    const indexPath = join(dir, "sessions.json");
+    const recordedAt = new Date().toISOString();
+    writeStore(indexPath, [{
+      sessionId: "stable-resumed-session",
+      harnessSessionId: "h-stable-resumed-session",
+      name: "stable-resumed-session",
+      prompt: "first turn",
+      workdir: "/tmp",
+      status: "completed",
+      lifecycle: "terminal",
+      costUsd: 0,
+      completionSummaryDedupe: [{
+        key: "route:cycle-one:outcome",
+        recordedAt,
+        label: "completed",
+      }],
+    }]);
+    const store = new SessionStore({ indexPath, env: {} });
+
+    store.markRunning({
+      id: "stable-resumed-session",
+      name: "stable-resumed-session",
+      harnessSessionId: "h-stable-resumed-session",
+      prompt: "second turn",
+      workdir: "/tmp",
+      startedAt: Date.now(),
+      route: DEFAULT_ROUTE,
+      harnessName: "codex",
+    } as any);
+
+    assert.deepEqual(
+      store.getPersistedSession("stable-resumed-session")?.completionSummaryDedupe,
+      [{
+        key: "route:cycle-one:outcome",
+        linkedKeys: undefined,
+        recordedAt,
+        label: "completed",
+        skipReason: undefined,
+      }],
+    );
+  });
+
   it("rebuilds short session ID lookup from persisted index after restart", () => {
     const dir = mkdtempSync(join(tmpdir(), "openclaw-store-restart-"));
     const indexPath = join(dir, "sessions.json");

@@ -25,6 +25,8 @@ export type CompletionSummarySession = Pick<
   name?: string;
   goalTaskId?: string;
   sessionId?: string;
+  startedAt?: number;
+  createdAt?: number;
 };
 
 export type PersistedCompletionSummarySession = Pick<
@@ -38,8 +40,10 @@ export type PersistedCompletionSummarySession = Pick<
   | "originThreadId"
   | "originSessionKey"
   | "goalTaskId"
+  | "createdAt"
 > & {
   id?: string;
+  startedAt?: number;
 };
 
 export interface CompletionSummaryDecision {
@@ -385,6 +389,12 @@ export class CompletionSummaryCoordinator {
     aliasKind: "visible-summary" | "goal-summary",
   ): string[] {
     const scope = this.buildVisibleScope(deliveryRef, session);
+    const lifecycleStartedAt = "startedAt" in session
+      ? session.startedAt
+      : session.createdAt;
+    const lifecycleScope = Number.isFinite(lifecycleStartedAt)
+      ? `${scope}:cycle:${this.digest(String(lifecycleStartedAt))}`
+      : scope;
     const refs = [
       "id" in session ? session.id : undefined,
       "sessionId" in session ? session.sessionId : undefined,
@@ -396,7 +406,7 @@ export class CompletionSummaryCoordinator {
       .map((ref) => ref?.trim())
       .filter((ref): ref is string => Boolean(ref));
     return [...new Set(refs)]
-      .map((ref) => `${scope}:session:${this.digest(ref)}:${aliasKind}`);
+      .map((ref) => `${lifecycleScope}:session:${this.digest(ref)}:${aliasKind}`);
   }
 
   private getDeliveryRef(session: CompletionSummarySession | PersistedCompletionSummarySession): string {
