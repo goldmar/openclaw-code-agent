@@ -10,7 +10,6 @@ const rootDir = dirname(dirname(scriptPath));
 const pluginName = "openclaw-code-agent";
 const allowedPluginSafetyFindings = [
   "[dangerous-exec] Shell command execution detected (child_process)",
-  "[env-harvesting] Environment variable access combined with network send — possible credential harvesting",
 ];
 
 export function findUnexpectedPluginSafetyFindings(auditResult, expectedPluginName = pluginName) {

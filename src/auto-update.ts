@@ -232,14 +232,8 @@ function fallbackRoute(): SessionRoute | undefined {
 }
 
 async function fetchNpmLatestRelease(): Promise<ReleaseInfo | undefined> {
-  const response = await fetch(NPM_PACKAGE_URL, {
-    headers: { accept: "application/json" },
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-  });
-  if (!response.ok) {
-    throw new Error(`npm registry returned HTTP ${response.status}`);
-  }
-  const payload = await response.json() as unknown;
+  const { fetchNpmReleaseMetadata } = await import("./npm-release-client");
+  const payload = await fetchNpmReleaseMetadata(NPM_PACKAGE_URL, FETCH_TIMEOUT_MS);
   const version = isRecord(payload) && typeof payload.version === "string"
     ? normalizeVersion(payload.version)
     : undefined;

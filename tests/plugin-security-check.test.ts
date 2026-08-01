@@ -11,13 +11,20 @@ const expectedFinding = {
   detail: [
     "Found 1 critical issue(s) in 1 scanned file(s):",
     "  - dist/index.js:1 [dangerous-exec] Shell command execution detected (child_process)",
-    "  - dist/index.js:2 [env-harvesting] Environment variable access combined with network send — possible credential harvesting",
   ].join("\n"),
 };
 
 describe("packed-plugin security finding validation", () => {
-  it("accepts only the reviewed child_process and bundled env/network findings", () => {
+  it("accepts only the reviewed child_process finding", () => {
     assert.deepEqual(findUnexpectedPluginSafetyFindings({ findings: [expectedFinding] }), []);
+  });
+
+  it("rejects environment access combined with a network send", () => {
+    const finding = {
+      ...expectedFinding,
+      detail: `${expectedFinding.detail}\n  - dist/index.js:2 [env-harvesting] Environment variable access combined with network send — possible credential harvesting`,
+    };
+    assert.match(findUnexpectedPluginSafetyFindings({ findings: [finding] })[0], /env-harvesting/);
   });
 
   it("rejects additional dangerous-code patterns", () => {

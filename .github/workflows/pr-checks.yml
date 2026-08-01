@@ -57,31 +57,18 @@ jobs:
         with:
           script: |
             const fs = require('fs');
+            const path = require('path');
+            const distDir = 'dist';
 
-            const distFile = 'dist/index.js';
-            const maxSizeBytes = 600 * 1024; // 600 KB
-
-            if (!fs.existsSync(distFile)) {
-              core.setFailed(`Build artifact not found: ${distFile}`);
+            if (!fs.existsSync(distDir)) {
+              core.setFailed(`Build artifact directory not found: ${distDir}`);
               return;
             }
 
-            const sizeBytes = fs.statSync(distFile).size;
-            const sizeKb = (sizeBytes / 1024).toFixed(1);
-            const overLimit = sizeBytes > maxSizeBytes;
-            const status = overLimit ? '❌ EXCEEDS LIMIT' : '✅ Within limit';
-
-            const body = [
-              '## Bundle Size Report',
-              '',
-              '| File | Size | Limit | Status |',
-              '|------|------|-------|--------|',
-              `| \`dist/index.js\` | ${sizeKb} KB | 600 KB | ${status} |`,
-              '',
-              overLimit
-                ? '> ⚠️ **Bundle exceeds the 600 KB limit.** Please reduce bundle size before merging.'
-                : '> Bundle is within the 600 KB limit.',
-            ].join('\n');
+            const { createBundleSizeReport } = await import(
+              `file://${path.resolve('scripts/check-bundle-size.mjs')}`
+            );
+            const { body, overLimit, sizeKb } = createBundleSizeReport(distDir);
 
             core.setOutput('body', body);
             core.setOutput('size_kb', sizeKb);
@@ -131,7 +118,7 @@ jobs:
       - name: Fail if bundle exceeds limit
         if: steps.bundle-size.outputs.over_limit == 'true'
         run: |
-          echo "Bundle size ${{ steps.bundle-size.outputs.size_kb }} KB exceeds the 600 KB limit."
+          echo "Complete bundle size ${{ steps.bundle-size.outputs.size_kb }} KB exceeds the 600 KB limit."
           exit 1
 
   lockfile-check:
