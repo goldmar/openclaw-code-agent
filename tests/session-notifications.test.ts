@@ -265,7 +265,7 @@ describe("SessionNotificationService", () => {
     assert.equal(persisted.notificationDedupe?.every((record: { status?: string }) => record.status === "delivered"), true);
   });
 
-  it("dedupes one terminal completion notification but allows a later terminal cycle for the same session id", () => {
+  it("delivers one canonical completion and wake for each of two sequential resumed cycles on the same session id", () => {
     const persisted = { notificationDedupe: undefined } as any;
     const requests: Array<Record<string, unknown>> = [];
     const fakeDispatcher = {
@@ -283,8 +283,9 @@ describe("SessionNotificationService", () => {
       (_ref, patch) => Object.assign(persisted, patch),
       { getPersistedSession: () => persisted },
     );
-    const session = {
+    const firstSession = {
       id: "stable-terminal-session",
+      startedAt: 1780000001000,
       route: { provider: "telegram", target: "topic", threadId: "13832", sessionKey: "session:terminal" },
     } as any;
     const firstCycleRequest = {
@@ -299,7 +300,10 @@ describe("SessionNotificationService", () => {
       },
       completionWakeSummaryRequired: true,
       completionWakeOutcomeKey: "terminal:stable-terminal-session:completed:1780000001000:backend-thread:4:unknown",
-      wakeMessageOnNotifySuccess: "terminal follow-up wake",
+      wakeMessageOnNotifySuccess: [
+        "terminal follow-up wake",
+        'originRoute: {"provider":"telegram","target":"topic","threadId":"13832","sessionKey":"session:terminal"}',
+      ].join("\n"),
     };
     const laterCycleRequest = {
       ...firstCycleRequest,
@@ -311,15 +315,49 @@ describe("SessionNotificationService", () => {
       },
       completionWakeOutcomeKey: "terminal:stable-terminal-session:completed:1780000002000:backend-thread:5:unknown",
     };
+    const finalCycleRequest = {
+      ...firstCycleRequest,
+      idempotencyKey: "terminal-completed:stable-terminal-session:completed:1780000003000:backend-thread:6:unknown",
+      completionSummary: {
+        required: true,
+        producer: "terminal" as const,
+        outcomeKey: "terminal:stable-terminal-session:completed:1780000003000:backend-thread:6:unknown",
+      },
+      completionWakeOutcomeKey: "terminal:stable-terminal-session:completed:1780000003000:backend-thread:6:unknown",
+    };
 
-    service.dispatch(session, firstCycleRequest);
-    service.dispatch(session, firstCycleRequest);
-    service.dispatch(session, laterCycleRequest);
+    const resumedSession = {
+      ...firstSession,
+      startedAt: 1780000002000,
+    } as any;
+    const resumedAgainSession = {
+      ...firstSession,
+      startedAt: 1780000003000,
+    } as any;
 
-    assert.equal(requests.length, 2);
-    assert.deepEqual(requests.map((request) => request.label), ["completed", "completed"]);
+    service.dispatch(firstSession, firstCycleRequest);
+    service.dispatch(firstSession, firstCycleRequest);
+    service.dispatch(resumedSession, laterCycleRequest);
+    service.dispatch(resumedSession, laterCycleRequest);
+    service.dispatch(resumedAgainSession, finalCycleRequest);
+    service.dispatch(resumedAgainSession, finalCycleRequest);
+
+    assert.equal(requests.length, 3);
+    assert.deepEqual(requests.map((request) => request.label), ["completed", "completed", "completed"]);
     assert.notEqual(requests[0]?.idempotencyKey, requests[1]?.idempotencyKey);
-    assert.equal(persisted.notificationDedupe?.length, 2);
+    assert.notEqual(requests[1]?.idempotencyKey, requests[2]?.idempotencyKey);
+    assert.deepEqual(
+      requests.map((request) => request.completionWakeSummaryRequired),
+      [true, true, true],
+    );
+    assert.equal(
+      requests.every((request) => String(request.wakeMessageOnNotifySuccess).includes(
+        'originRoute: {"provider":"telegram","target":"topic","threadId":"13832","sessionKey":"session:terminal"}',
+      )),
+      true,
+    );
+    assert.equal(persisted.notificationDedupe?.length, 3);
+    assert.ok(persisted.completionSummaryDedupe?.length > 0);
   });
 
   it("dedupes one no-change terminal cycle but allows a later resumed cycle for the same session id", () => {

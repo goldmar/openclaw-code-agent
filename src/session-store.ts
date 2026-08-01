@@ -253,6 +253,7 @@ export class SessionStore {
       taskFlowMirror: session.taskFlowMirror,
       deliveryState: session.deliveryState,
       notificationDedupe: this.getExistingNotificationDedupe(session),
+      completionSummaryDedupe: this.getExistingCompletionSummaryDedupe(session),
       costUsd: 0,
       originAgentId: routing.originAgentId,
       originChannel: routing.originChannel,
@@ -364,6 +365,7 @@ export class SessionStore {
       taskFlowMirror: session.taskFlowMirror,
       deliveryState: session.deliveryState,
       notificationDedupe: this.getExistingNotificationDedupe(session),
+      completionSummaryDedupe: this.getExistingCompletionSummaryDedupe(session),
       killReason: session.killReason,
       costUsd: session.costUsd,
       originAgentId: routing.originAgentId,
@@ -417,6 +419,12 @@ export class SessionStore {
     return this.getPersistedSession(session.id)?.notificationDedupe
       ?? (session.harnessSessionId ? this.getPersistedSession(session.harnessSessionId)?.notificationDedupe : undefined)
       ?? (getBackendConversationId(session) ? this.getPersistedSession(getBackendConversationId(session)!)?.notificationDedupe : undefined);
+  }
+
+  private getExistingCompletionSummaryDedupe(session: Session): PersistedSessionInfo["completionSummaryDedupe"] {
+    return this.getPersistedSession(session.id)?.completionSummaryDedupe
+      ?? (session.harnessSessionId ? this.getPersistedSession(session.harnessSessionId)?.completionSummaryDedupe : undefined)
+      ?? (getBackendConversationId(session) ? this.getPersistedSession(getBackendConversationId(session)!)?.completionSummaryDedupe : undefined);
   }
 
   /** Return newest persisted entry for a user-facing name, handling name collisions. */
