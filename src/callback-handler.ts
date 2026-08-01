@@ -14,6 +14,7 @@ import type {
 import type { PersistedSessionInfo, SessionActionKind, SessionActionToken } from "./types";
 import { getRepoPolicyOption, validateRepoPolicyForPrAvailability } from "./repo-policy";
 import { assessResumeCandidate } from "./session-resume";
+import { resolveCurrentPlanDecisionVersion, tokenMatchesAppliedPlanApproval } from "./plan-decision-state";
 
 type InteractiveChannel = "telegram" | "discord";
 type InteractiveCallbackContext = PluginInteractiveTelegramHandlerContext | PluginInteractiveDiscordHandlerContext;
@@ -199,27 +200,6 @@ function planDecisionLockKey(token: SessionActionToken): string | undefined {
 function planApprovalWasApplied(session: PlanDecisionTarget | undefined): boolean {
   if (!session) return false;
   return session.approvalState === "approved" || !session.pendingPlanApproval;
-}
-
-function latestDefinedVersion(...versions: Array<number | undefined>): number | undefined {
-  let latest: number | undefined;
-  for (const version of versions) {
-    if (version == null) continue;
-    latest = latest == null ? version : Math.max(latest, version);
-  }
-  return latest;
-}
-
-function resolveCurrentPlanDecisionVersion(session: PlanDecisionTarget): number | undefined {
-  if (session.actionablePlanDecisionVersion != null) return session.actionablePlanDecisionVersion;
-
-  const deliveryVersion = latestDefinedVersion(
-    session.approvalPromptRequiredVersion,
-    session.approvalPromptVersion,
-  );
-  if (deliveryVersion != null) return deliveryVersion;
-
-  return session.canonicalPlanPromptVersion ?? session.planDecisionVersion;
 }
 
 function validatePlanDecisionToken(
@@ -696,6 +676,12 @@ export function createCallbackHandler(
       let sessionId = token.sessionId;
       let actionSession = sessionManager.resolve?.(sessionId) ?? sessionManager.getPersistedSession?.(sessionId);
       let actionSessionName = actionSession?.name ?? sessionId;
+      if (actionSession && tokenMatchesAppliedPlanApproval(token, actionSession)) {
+        sessionManager.consumePlanDecisionTokens?.(sessionId, token.planDecisionVersion!);
+        await clearPlanDecisionButtons(ctx, callbackAcknowledged);
+        await replyText(ctx, `✅ Plan v${token.planDecisionVersion} was already approved and the session has resumed.`);
+        return { handled: true };
+      }
       let invalidPlanDecision = validatePlanDecisionToken(token, actionSession);
       logButtonDiagnostic("callback_plan_validation_completed", {
         channel: ctx.channel,
@@ -829,6 +815,12 @@ export function createCallbackHandler(
           sessionId = latestToken.sessionId;
           actionSession = sessionManager.resolve?.(sessionId) ?? sessionManager.getPersistedSession?.(sessionId);
           actionSessionName = actionSession?.name ?? sessionId;
+          if (actionSession && tokenMatchesAppliedPlanApproval(latestToken, actionSession)) {
+            sessionManager.consumePlanDecisionTokens?.(sessionId, latestToken.planDecisionVersion!);
+            await clearPlanDecisionButtons(ctx, callbackAcknowledged);
+            await replyText(ctx, `✅ Plan v${latestToken.planDecisionVersion} was already approved and the session has resumed.`);
+            return { handled: true };
+          }
           invalidPlanDecision = validatePlanDecisionToken(latestToken, actionSession);
           logButtonDiagnostic("callback_plan_validation_completed", {
             channel: ctx.channel,

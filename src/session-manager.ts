@@ -56,6 +56,7 @@ import {
 } from "./question-context-summary";
 import { SessionRuntimeRegistry } from "./session-runtime-registry";
 import { SessionRuntimeBootstrapService } from "./session-runtime-bootstrap-service";
+import { buildResumedPlanState } from "./plan-decision-state";
 import { SessionWorktreeMessageService } from "./session-worktree-message-service";
 import { getSessionOutputPreview } from "./session-output-preview";
 import { formatOriginRouteWakeBlock } from "./session-route";
@@ -251,6 +252,7 @@ export class SessionManager {
   private readonly runtimeBootstrap: SessionRuntimeBootstrapService;
   private readonly worktreeMessages: SessionWorktreeMessageService;
   private readonly maintenance: SessionMaintenanceService;
+  private readonly pendingPlanResumeClaims = new Map<string, PersistedSessionInfo>();
 
   constructor(
     maxSessions: number = 20,
@@ -443,9 +445,21 @@ export class SessionManager {
       },
       markRunning: (session) => {
         store.markRunning(session);
+        if (session.approvalState === "approved" && session.planDecisionVersion > 0) {
+          interactions.consumePlanDecisionTokens(session.id, session.planDecisionVersion - 1);
+        }
+        manager.pendingPlanResumeClaims.delete(session.id);
         manager.onPersistedSessionChanged(store.getPersistedSession(session.id));
       },
-      handleTerminal: async (session) => manager.onSessionTerminal(session),
+      handleTerminal: async (session) => {
+        const retryablePlan = manager.pendingPlanResumeClaims.get(session.id);
+        await manager.onSessionTerminal(session);
+        if (retryablePlan) {
+          store.replacePersistedSession(retryablePlan);
+          manager.pendingPlanResumeClaims.delete(session.id);
+          manager.onPersistedSessionChanged(retryablePlan);
+        }
+      },
       handleTurnEnd: (session, hadQuestion) => lifecycle.handleTurnEnd(session, hadQuestion),
       formatLaunchWorkdirLabel: (session) => manager.formatLaunchWorkdirLabel(session),
       notifySession: (session, text, label, idempotencyKey) => manager.notifySession(session, text, label, idempotencyKey),
@@ -523,7 +537,23 @@ export class SessionManager {
       throw new Error(`Max sessions reached (${this.maxSessions}). Use agent_sessions to list active sessions and agent_kill to end one.`);
     }
 
+    let pendingPlanResumeClaim: PersistedSessionInfo | undefined;
     if (config.sessionIdOverride) {
+      const replacedPersisted = this.getPersistedSession(config.sessionIdOverride);
+      if (config.resumeSessionId && replacedPersisted?.pendingPlanApproval) {
+        const resumedPlanState = buildResumedPlanState(
+          replacedPersisted,
+          config.permissionMode ?? pluginConfig.permissionMode,
+        );
+        config = {
+          ...config,
+          permissionMode: resumedPlanState.permissionMode,
+          ...resumedPlanState.patch,
+        };
+        if (resumedPlanState.approvalApplied) {
+          pendingPlanResumeClaim = replacedPersisted;
+        }
+      }
       const existing = this.registry.get(config.sessionIdOverride);
       if (existing?.status === "starting" || existing?.status === "running") {
         throw new Error(`Cannot reuse session ID ${config.sessionIdOverride}: that session is still ${existing.status}.`);
@@ -578,9 +608,17 @@ export class SessionManager {
       canUseTool,
     }, name);
     sessionIdRef = session.id; // bind late — canUseTool closure captures this ref
+    if (pendingPlanResumeClaim) {
+      this.pendingPlanResumeClaims.set(session.id, pendingPlanResumeClaim);
+    }
     this.registry.add(session);
     this.metrics.incrementLaunched();
-    return this.runtimeBootstrap.initializeSession(session, preparedLaunch, config, options);
+    try {
+      return this.runtimeBootstrap.initializeSession(session, preparedLaunch, config, options);
+    } catch (err) {
+      this.pendingPlanResumeClaims.delete(session.id);
+      throw err;
+    }
   }
 
   /** Spawn a session and wait until it is truly running or fails before startup. */
@@ -1845,6 +1883,10 @@ export class SessionManager {
 
   consumeQuestionAnswerTokens(sessionId: string, requestId: string, questionId?: string): SessionActionToken[] {
     return this.interactions.consumeQuestionAnswerTokens(sessionId, requestId, questionId);
+  }
+
+  consumePlanDecisionTokens(sessionId: string, planDecisionVersion: number): SessionActionToken[] {
+    return this.interactions.consumePlanDecisionTokens(sessionId, planDecisionVersion);
   }
 
   dispose(): void {

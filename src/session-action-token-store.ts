@@ -100,6 +100,23 @@ export class SessionActionTokenStore {
     return consumed;
   }
 
+  consumePlanDecisionTokens(sessionId: string, planDecisionVersion: number): SessionActionToken[] {
+    const consumed: SessionActionToken[] = [];
+    const consumedAt = Date.now();
+    for (const token of this.tokens.values()) {
+      if (
+        token.sessionId !== sessionId
+        || !isPlanDecisionKind(token.kind)
+        || token.planDecisionVersion !== planDecisionVersion
+        || token.consumedAt != null
+      ) continue;
+      token.consumedAt = consumedAt;
+      consumed.push(token);
+    }
+    if (consumed.length > 0) this.notifyChanged();
+    return consumed;
+  }
+
   deleteActionTokensForSession(sessionId: string): void {
     let changed = false;
     for (const [tokenId, token] of this.tokens) {

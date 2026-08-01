@@ -12,6 +12,7 @@ import {
   type AgentLaunchParams,
 } from "./agent-launch-resolution";
 import { resolveSessionTaskLifecycle } from "../session-task-lifecycle";
+import { buildResumedPlanState } from "../plan-decision-state";
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -211,6 +212,9 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
             ? resumeAssessment.stableSessionId
             : undefined)
           : undefined;
+        const resumedPlanState = resumeAssessment?.kind === "resume" && !params.fork_session && resumeTarget
+          ? buildResumedPlanState(resumeTarget, permissionMode)
+          : { permissionMode, approvalApplied: false, patch: {} };
         if (launchWorktreeStrategy !== "off" && hasRequestRepoPolicyForLaunch(sessionManager)) {
           const policyCheck = sessionManager.checkRepoPolicyForLaunch(workdir, params.worktree_strategy);
           if (policyCheck.ok === false) {
@@ -264,9 +268,10 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
           resumeWorktreeFrom: resolvedResumeId,
           forkSession: resumeSessionId ? params.fork_session : false,
           multiTurn: true,
-          permissionMode,
+          permissionMode: resumedPlanState.permissionMode,
           planApproval,
           codexApprovalPolicy: harness === "codex" ? "never" : undefined,
+          ...resumedPlanState.patch,
           originChannel,
           originThreadId,
           originAgentId: ctx.agentId || undefined,
@@ -278,13 +283,12 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
           worktreeBaseBranch: params.worktree_base_branch,
           worktreePrTargetRepo: params.worktree_pr_target_repo,
         });
-
         const launchText = hasFormatLaunchResult(sessionManager)
           ? sessionManager.formatLaunchResult({
               prompt: params.prompt,
               workdir,
               harness,
-              permissionMode: permissionMode ?? pluginConfig.permissionMode,
+              permissionMode: resumedPlanState.permissionMode,
               planApproval,
               forceNewSession: params.force_new_session,
               resumeSessionId: params.resume_session_id,
@@ -296,7 +300,7 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
               prompt: params.prompt,
               workdir,
               harness,
-              permissionMode: permissionMode ?? pluginConfig.permissionMode,
+              permissionMode: resumedPlanState.permissionMode,
               planApproval,
               resumeSessionId: params.resume_session_id,
               resumeSessionName: resumedFromSessionName,

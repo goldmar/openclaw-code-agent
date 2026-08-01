@@ -447,6 +447,13 @@ export class SessionStore {
     return this.queries.getPersistedSession(ref);
   }
 
+  replacePersistedSession(entry: PersistedSessionInfo): void {
+    const existing = entry.sessionId ? this.getPersistedSession(entry.sessionId) : undefined;
+    if (existing) this.removePersistedIndexes(existing);
+    this.indexPersistedEntry(entry);
+    this.saveIndex();
+  }
+
   /** List persisted sessions sorted by completion time (newest first). */
   listPersistedSessions(): PersistedSessionInfo[] {
     return this.queries.listPersistedSessions();

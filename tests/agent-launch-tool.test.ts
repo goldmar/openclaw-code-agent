@@ -481,6 +481,96 @@ describe("agent_launch tool defaults", () => {
     assert.match((result.content[0] as { text: string }).text, /ID: sess-stable/);
   });
 
+  it("preserves a suspended pending plan when a stable-ID resume is not an approval", async () => {
+    let spawnConfig: Record<string, unknown> | undefined;
+    const pendingPlan = {
+      sessionId: "sess-plan",
+      harnessSessionId: "thread-plan",
+      name: "pending-plan",
+      status: "killed",
+      lifecycle: "suspended",
+      killReason: "idle-timeout",
+      backendRef: { kind: "codex-app-server", conversationId: "thread-plan" },
+      pendingPlanApproval: true,
+      approvalState: "pending",
+      planApprovalContext: "plan-mode",
+      planDecisionVersion: 4,
+      actionablePlanDecisionVersion: 4,
+      canonicalPlanPromptVersion: 4,
+      approvalPromptRequiredVersion: 4,
+      approvalPromptVersion: 4,
+      approvalPromptStatus: "delivered",
+      approvalPromptTransport: "direct-message",
+      approvalPromptMessageKind: "canonical_buttons",
+    };
+    setSessionManager({
+      resolve: () => undefined,
+      getPersistedSession: () => pendingPlan,
+      resolveHarnessSessionId: () => "thread-plan",
+      resolveBackendConversationId: () => "thread-plan",
+      spawn(config: Record<string, unknown>) {
+        spawnConfig = config;
+        return { id: "sess-plan", name: "pending-plan", model: config.model };
+      },
+    } as any);
+
+    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp", oneShotCliRun: true });
+    await tool.execute("tool-id", {
+      prompt: "Continue reviewing",
+      harness: "codex",
+      resume_session_id: "sess-plan",
+      permission_mode: "default",
+    });
+
+    assert.equal(spawnConfig?.permissionMode, "plan");
+    assert.equal(spawnConfig?.pendingPlanApproval, true);
+    assert.equal(spawnConfig?.approvalState, "pending");
+    assert.equal(spawnConfig?.planDecisionVersion, 4);
+    assert.equal(spawnConfig?.actionablePlanDecisionVersion, 4);
+  });
+
+  it("records exact approval state when bypass-resuming a suspended pending plan", async () => {
+    let spawnConfig: Record<string, unknown> | undefined;
+    setSessionManager({
+      resolve: () => undefined,
+      getPersistedSession: () => ({
+        sessionId: "sess-plan",
+        harnessSessionId: "thread-plan",
+        name: "pending-plan",
+        status: "killed",
+        lifecycle: "suspended",
+        killReason: "idle-timeout",
+        backendRef: { kind: "codex-app-server", conversationId: "thread-plan" },
+        pendingPlanApproval: true,
+        approvalState: "pending",
+        planApprovalContext: "plan-mode",
+        planDecisionVersion: 4,
+        actionablePlanDecisionVersion: 4,
+      }),
+      resolveHarnessSessionId: () => "thread-plan",
+      resolveBackendConversationId: () => "thread-plan",
+      spawn(config: Record<string, unknown>) {
+        spawnConfig = config;
+        return { id: "sess-plan", name: "pending-plan", model: config.model };
+      },
+    } as any);
+
+    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp", oneShotCliRun: true });
+    await tool.execute("tool-id", {
+      prompt: "The user approved Plan v4. Implement it.",
+      harness: "codex",
+      resume_session_id: "sess-plan",
+      permission_mode: "bypassPermissions",
+    });
+
+    assert.equal(spawnConfig?.permissionMode, "bypassPermissions");
+    assert.equal(spawnConfig?.pendingPlanApproval, false);
+    assert.equal(spawnConfig?.approvalState, "approved");
+    assert.equal(spawnConfig?.approvalExecutionState, "approved_then_implemented");
+    assert.equal(spawnConfig?.planDecisionVersion, 5);
+    assert.equal(spawnConfig?.actionablePlanDecisionVersion, undefined);
+  });
+
   it("preserves the original session name when resuming without an explicit follow-up label", async () => {
     let spawnConfig: Record<string, unknown> | undefined;
 

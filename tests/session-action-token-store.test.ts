@@ -93,4 +93,23 @@ describe("SessionActionTokenStore", () => {
     assert.equal(store.getActionToken(newer.id)?.consumedAt, undefined);
     assert.deepEqual(store.listActiveActionTokens("question-answer").map((token) => token.id), [newer.id]);
   });
+
+  it("atomically consumes only one exact plan-decision version", () => {
+    const store = new SessionActionTokenStore(() => {});
+    const approve = store.createActionToken("session-1", "plan-approve", { planDecisionVersion: 2 });
+    const revise = store.createActionToken("session-1", "plan-request-changes", { planDecisionVersion: 2 });
+    const reject = store.createActionToken("session-1", "plan-reject", { planDecisionVersion: 2 });
+    const superseding = store.createActionToken("session-1", "plan-approve", { planDecisionVersion: 3 });
+    const other = store.createActionToken("session-2", "plan-approve", { planDecisionVersion: 2 });
+
+    assert.deepEqual(
+      store.consumePlanDecisionTokens("session-1", 2).map((token) => token.id),
+      [approve.id, revise.id, reject.id],
+    );
+    assert.ok(store.getActionToken(approve.id)?.consumedAt);
+    assert.ok(store.getActionToken(revise.id)?.consumedAt);
+    assert.ok(store.getActionToken(reject.id)?.consumedAt);
+    assert.equal(store.getActionToken(superseding.id)?.consumedAt, undefined);
+    assert.equal(store.getActionToken(other.id)?.consumedAt, undefined);
+  });
 });
