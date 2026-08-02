@@ -288,7 +288,11 @@ export class SessionLifecycleService {
     // the plan decision. That is a waiting state, not a terminal worktree
     // outcome: do not inspect, classify, clean, or summarize its worktree.
     if (session.pendingPlanApproval || session.lifecycle === "awaiting_plan_decision") {
-      await this.emitWaitingForInput(session);
+      if (session.killReason === "idle-timeout" && session.pendingPlanApproval) {
+        this.emitIdleTimeoutPlanApproval(session);
+      } else {
+        await this.emitWaitingForInput(session);
+      }
       this.deps.clearRetryTimersForSession(session.id);
       return;
     }
@@ -390,65 +394,8 @@ export class SessionLifecycleService {
     const costStr = `$${(session.costUsd ?? 0).toFixed(2)}`;
     const duration = session.duration;
     if (session.killReason === "idle-timeout") {
-      const planApprovalMode = session.pendingPlanApproval
-        ? this.deps.resolvePlanApprovalMode(session)
-        : undefined;
       if (session.pendingPlanApproval) {
-        const actionableVersion = session.actionablePlanDecisionVersion ?? session.planDecisionVersion;
-        const promptAlreadyProven = hasProvablePlanReviewPrompt(session, actionableVersion);
-        if (planApprovalMode === "delegate") {
-          this.deps.dispatchSessionNotification(session, {
-            label: "plan-approval-timeout",
-            idempotencyKey: `plan-approval-timeout:${session.id}:v${actionableVersion ?? "unknown"}:delegate`,
-            wakeMessage: [
-              `[DELEGATED PLAN APPROVAL REMINDER] Plan review is still pending after the session hit idle timeout.`,
-              `Name: ${session.name} | ID: ${session.id}`,
-              this.deps.originThreadLine(session),
-              `The agent already produced a plan and is waiting for a delegated decision.`,
-              `Review privately first. Approve directly with agent_respond(..., approve=true, approval_rationale='...') if the plan is clearly within scope and low risk.`,
-              `Escalate only if needed via agent_request_plan_approval(summary='...').`,
-              `If you approve directly, follow up with a short user-facing explanation; the plugin's thumbs-up line is only the minimal approval acknowledgment.`,
-              `If a canonical approval prompt was already posted for this plan version, do not restate it in plain text.`,
-            ].join("\n"),
-            notifyUser: "never",
-          });
-          this.deps.clearRetryTimersForSession(session.id);
-          return;
-        }
-        if (planApprovalMode === "ask" && promptAlreadyProven) {
-          this.deps.dispatchSessionNotification(session, {
-            label: "plan-approval-timeout",
-            idempotencyKey: `plan-approval-timeout:${session.id}:v${actionableVersion ?? "unknown"}:already-delivered`,
-            notifyUser: "never",
-            wakeMessage: [
-              `[PLAN APPROVAL REMINDER] The user already has an actionable plan review prompt for this plan version.`,
-              `Name: ${session.name} | ID: ${session.id} | Plan v${actionableVersion ?? "?"}`,
-              this.deps.originThreadLine(session),
-              `Do NOT post another approval summary unless canonical delivery is known to be missing.`,
-            ].join("\n"),
-          });
-          this.deps.clearRetryTimersForSession(session.id);
-          return;
-        }
-        this.deps.dispatchSessionNotification(session, {
-          label: "plan-approval-timeout",
-          idempotencyKey: `plan-approval-timeout:${session.id}:v${actionableVersion ?? "unknown"}:user-prompt`,
-          userMessage: [
-            `📋 [${session.name}] Plan v${actionableVersion ?? "?"} still awaiting approval after idle timeout | ${costStr} | ${formatDuration(duration)}`,
-            ``,
-            `The agent already produced a plan and is waiting for your decision.`,
-            `Approve resumes the session and starts implementation.`,
-            `Revise resumes it in plan mode so it can update the plan first.`,
-            `Reject keeps the session stopped.`,
-          ].join("\n"),
-          notifyUser: "always",
-          buttons: planApprovalMode === "ask" && !promptAlreadyProven
-            ? this.deps.getPlanApprovalButtons(session.id, {
-              ...session,
-              planDecisionVersion: actionableVersion,
-            })
-            : undefined,
-        });
+        this.emitIdleTimeoutPlanApproval(session);
         this.deps.clearRetryTimersForSession(session.id);
         return;
       }
@@ -465,6 +412,63 @@ export class SessionLifecycleService {
 
     this.deps.notifySession(session, `⛔ [${session.name}] ${getStoppedStatusLabel(session.killReason)} | ${costStr} | ${formatDuration(duration)}`);
     this.deps.clearRetryTimersForSession(session.id);
+  }
+
+  private emitIdleTimeoutPlanApproval(session: Session): void {
+    const planApprovalMode = this.deps.resolvePlanApprovalMode(session);
+    const actionableVersion = session.actionablePlanDecisionVersion ?? session.planDecisionVersion;
+    const promptAlreadyProven = hasProvablePlanReviewPrompt(session, actionableVersion);
+    if (planApprovalMode === "delegate") {
+      this.deps.dispatchSessionNotification(session, {
+        label: "plan-approval-timeout",
+        idempotencyKey: `plan-approval-timeout:${session.id}:v${actionableVersion ?? "unknown"}:delegate`,
+        wakeMessage: [
+          `[DELEGATED PLAN APPROVAL REMINDER] Plan review is still pending after the session hit idle timeout.`,
+          `Name: ${session.name} | ID: ${session.id}`,
+          this.deps.originThreadLine(session),
+          `The agent already produced a plan and is waiting for a delegated decision.`,
+          `Review privately first. Approve directly with agent_respond(..., approve=true, approval_rationale='...') if the plan is clearly within scope and low risk.`,
+          `Escalate only if needed via agent_request_plan_approval(summary='...').`,
+          `If you approve directly, follow up with a short user-facing explanation; the plugin's thumbs-up line is only the minimal approval acknowledgment.`,
+          `If a canonical approval prompt was already posted for this plan version, do not restate it in plain text.`,
+        ].join("\n"),
+        notifyUser: "never",
+      });
+      return;
+    }
+    if (planApprovalMode === "ask" && promptAlreadyProven) {
+      this.deps.dispatchSessionNotification(session, {
+        label: "plan-approval-timeout",
+        idempotencyKey: `plan-approval-timeout:${session.id}:v${actionableVersion ?? "unknown"}:already-delivered`,
+        notifyUser: "never",
+        wakeMessage: [
+          `[PLAN APPROVAL REMINDER] The user already has an actionable plan review prompt for this plan version.`,
+          `Name: ${session.name} | ID: ${session.id} | Plan v${actionableVersion ?? "?"}`,
+          this.deps.originThreadLine(session),
+          `Do NOT post another approval summary unless canonical delivery is known to be missing.`,
+        ].join("\n"),
+      });
+      return;
+    }
+    this.deps.dispatchSessionNotification(session, {
+      label: "plan-approval-timeout",
+      idempotencyKey: `plan-approval-timeout:${session.id}:v${actionableVersion ?? "unknown"}:user-prompt`,
+      userMessage: [
+        `📋 [${session.name}] Plan v${actionableVersion ?? "?"} still awaiting approval after idle timeout | $${(session.costUsd ?? 0).toFixed(2)} | ${formatDuration(session.duration)}`,
+        ``,
+        `The agent already produced a plan and is waiting for your decision.`,
+        `Approve resumes the session and starts implementation.`,
+        `Revise resumes it in plan mode so it can update the plan first.`,
+        `Reject keeps the session stopped.`,
+      ].join("\n"),
+      notifyUser: "always",
+      buttons: planApprovalMode === "ask" && !promptAlreadyProven
+        ? this.deps.getPlanApprovalButtons(session.id, {
+          ...session,
+          planDecisionVersion: actionableVersion,
+        })
+        : undefined,
+    });
   }
 
   async emitWaitingForInput(session: Session): Promise<void> {
