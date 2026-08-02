@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  commandExists,
   buildProofPlan,
   collectDoctorChecks,
   parseArgs,
@@ -100,6 +101,11 @@ describe("OCA Codex Telegram proof runner", () => {
     } finally {
       rmSync(outside, { recursive: true, force: true });
     }
+  });
+
+  it("checks executable paths without interpreting shell syntax", () => {
+    assert.equal(commandExists(process.execPath), true);
+    assert.equal(commandExists("definitely-missing-command; true"), false);
   });
 
   it("prints a redacted proof plan without exposing Convex secret values", () => {

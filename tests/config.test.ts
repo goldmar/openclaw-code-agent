@@ -47,6 +47,12 @@ describe("resolveAgentChannel", () => {
     assert.equal(resolveAgentChannel("/home/user"), "telegram|bot1|123");
   });
 
+  it("normalizes long runs of trailing slashes in linear time", () => {
+    const trailingSlashes = "/".repeat(100_000);
+    setPluginConfig({ agentChannels: { [`/home/user${trailingSlashes}`]: "telegram|bot1|123" } });
+    assert.equal(resolveAgentChannel(`/home/user${trailingSlashes}`), "telegram|bot1|123");
+  });
+
   it("returns undefined for non-matching path", () => {
     setPluginConfig({ agentChannels: { "/home/user/project": "telegram|bot1|123" } });
     assert.equal(resolveAgentChannel("/other/path"), undefined);

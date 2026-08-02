@@ -2,7 +2,9 @@
 import { spawn, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
+  accessSync,
   chmodSync,
+  constants,
   copyFileSync,
   existsSync,
   mkdirSync,
@@ -386,12 +388,27 @@ export function resolveProofOutputDir(outputDir: string): string {
   return resolved;
 }
 
-function commandExists(command: string): boolean {
-  if (command.includes("/") || command.includes("\\")) return existsSync(expandHome(command));
-  const result = spawnSync("sh", ["-c", `command -v "$1" >/dev/null 2>&1`, "sh", command], {
-    stdio: "ignore",
+export function commandExists(command: string): boolean {
+  const candidates = command.includes("/") || command.includes("\\")
+    ? [expandHome(command)]
+    : (process.env.PATH ?? "")
+        .split(path.delimiter)
+        .filter(Boolean)
+        .flatMap((directory) => {
+          const base = path.join(directory, command);
+          if (process.platform !== "win32") return [base];
+          const extensions = (process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM").split(";").filter(Boolean);
+          return [base, ...extensions.map((extension) => `${base}${extension.toLowerCase()}`)];
+        });
+
+  return candidates.some((candidate) => {
+    try {
+      accessSync(candidate, constants.X_OK);
+      return statSync(candidate).isFile();
+    } catch {
+      return false;
+    }
   });
-  return result.status === 0;
 }
 
 function shellQuote(value: string): string {
