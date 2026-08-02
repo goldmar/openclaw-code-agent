@@ -60,6 +60,10 @@ export class SessionInteractionService {
     return this.actionTokens.consumeQuestionAnswerTokens(sessionId, requestId, questionId);
   }
 
+  consumePlanDecisionTokens(sessionId: string, planDecisionVersion: number): SessionActionToken[] {
+    return this.actionTokens.consumePlanDecisionTokens(sessionId, planDecisionVersion);
+  }
+
   getActionToken(tokenId: string): SessionActionToken | undefined {
     return this.actionTokens.getActionToken(tokenId);
   }

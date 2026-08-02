@@ -197,6 +197,13 @@ export class SessionStore {
 
   private indexPersistedEntry(entry: PersistedSessionInfo): void {
     const storageKey = this.getEntryStorageKey(entry);
+    if (entry.sessionId) {
+      const replacedStorageKey = this.idIndex.get(entry.sessionId);
+      if (replacedStorageKey && replacedStorageKey !== storageKey) {
+        const replaced = this.persisted.get(replacedStorageKey);
+        if (replaced) this.removePersistedIndexes(replaced);
+      }
+    }
     this.persisted.set(storageKey, entry);
     if (entry.sessionId) this.idIndex.set(entry.sessionId, storageKey);
     if (entry.name) this.nameIndex.set(entry.name, storageKey);
@@ -445,6 +452,13 @@ export class SessionStore {
   /** Resolve persisted session metadata by session id, name, backend id, or compatibility key. */
   getPersistedSession(ref: string): PersistedSessionInfo | undefined {
     return this.queries.getPersistedSession(ref);
+  }
+
+  replacePersistedSession(entry: PersistedSessionInfo): void {
+    const existing = entry.sessionId ? this.getPersistedSession(entry.sessionId) : undefined;
+    if (existing) this.removePersistedIndexes(existing);
+    this.indexPersistedEntry(entry);
+    this.saveIndex();
   }
 
   /** List persisted sessions sorted by completion time (newest first). */

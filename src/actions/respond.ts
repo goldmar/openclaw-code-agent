@@ -329,7 +329,9 @@ async function tryAutoResume(
       codexApprovalPolicy: session.codexApprovalPolicy,
       pendingPlanApproval: isPlanApproval ? false : session.pendingPlanApproval,
       planApprovalContext: session.planApprovalContext,
-      planDecisionVersion: session.planDecisionVersion,
+      planDecisionVersion: isPlanApproval
+        ? (session.actionablePlanDecisionVersion ?? session.planDecisionVersion) + 1
+        : session.planDecisionVersion,
       actionablePlanDecisionVersion: isPlanApproval ? undefined : session.actionablePlanDecisionVersion,
       canonicalPlanPromptVersion: session.canonicalPlanPromptVersion,
       approvalPromptRequiredVersion: session.approvalPromptRequiredVersion,

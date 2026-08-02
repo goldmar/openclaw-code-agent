@@ -33,6 +33,28 @@ function installFakeGit(t: import("node:test").TestContext, scriptLines: string[
 }
 
 describe("SessionWorktreeController.getCompletionState()", () => {
+  it("fails closed when persisted branch metadata points at a sibling worktree", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "session-worktree-controller-mismatch-"));
+    const repoDir = join(tempDir, "repo");
+    const worktreePath = join(tempDir, "worktree");
+    try {
+      mkdirSync(repoDir);
+      git(repoDir, "init", "-b", "main");
+      git(repoDir, "config", "user.email", "test@example.com");
+      git(repoDir, "config", "user.name", "Test User");
+      writeFileSync(join(repoDir, "README.md"), "base\n");
+      git(repoDir, "add", "README.md");
+      git(repoDir, "commit", "-m", "base");
+      git(repoDir, "worktree", "add", "-b", "agent/actual-branch", worktreePath, "main");
+      const controller = new SessionWorktreeController();
+      assert.equal(
+        controller.getCompletionState(repoDir, worktreePath, "agent/stale-branch", "main"),
+        "has-commits",
+      );
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
   it("classifies ahead branches with content already on base as released", () => {
     const tempDir = mkdtempSync(join(tmpdir(), "session-worktree-controller-released-"));
     const repoDir = join(tempDir, "repo");
@@ -150,6 +172,10 @@ describe("SessionWorktreeController.getCompletionState()", () => {
       "if [ \"$3\" = \"merge-base\" ]; then",
       "  exit 1",
       "fi",
+      "if [ \"$3\" = \"rev-parse\" ]; then",
+      "  echo feature",
+      "  exit 0",
+      "fi",
       "if [ \"$3\" = \"status\" ]; then",
       "  echo '?? dirty.txt'",
       "  exit 0",
@@ -211,4 +237,51 @@ describe("SessionWorktreeController.getCompletionState()", () => {
     );
   });
 
+});
+
+describe("SessionWorktreeController.isResolvedWorktreeEligibleForCleanup()", () => {
+  it("preserves resumable and plan-gated worktrees", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "session-worktree-controller-retention-"));
+    const repoDir = join(tempDir, "repo");
+    const worktreePath = join(tempDir, "worktree");
+    try {
+      mkdirSync(repoDir);
+      git(repoDir, "init", "-b", "main");
+      git(repoDir, "config", "user.email", "test@example.com");
+      git(repoDir, "config", "user.name", "Test User");
+      writeFileSync(join(repoDir, "README.md"), "base\n");
+      git(repoDir, "add", "README.md");
+      git(repoDir, "commit", "-m", "base");
+      git(repoDir, "worktree", "add", "-b", "agent/retained", worktreePath, "main");
+      const controller = new SessionWorktreeController();
+      const base = {
+        sessionId: "retained",
+        harnessSessionId: "backend-retained",
+        name: "retained",
+        prompt: "p",
+        workdir: repoDir,
+        worktreePath,
+        worktreeBranch: "agent/retained",
+        status: "killed" as const,
+        lifecycle: "terminal" as const,
+        costUsd: 0,
+        completedAt: Date.now() - 60_000,
+      };
+      assert.equal(controller.isResolvedWorktreeEligibleForCleanup({ ...base, resumable: true }, Date.now(), 1), false);
+      assert.equal(controller.isResolvedWorktreeEligibleForCleanup({
+        ...base,
+        resumable: false,
+        lifecycle: "awaiting_plan_decision",
+        pendingPlanApproval: true,
+      }, Date.now(), 1), false);
+      assert.equal(controller.isResolvedWorktreeEligibleForCleanup({
+        ...base,
+        resumable: false,
+        lifecycle: "awaiting_plan_decision",
+        pendingPlanApproval: false,
+      }, Date.now(), 1), true);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
 });

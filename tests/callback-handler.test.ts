@@ -1316,7 +1316,7 @@ describe("createCallbackHandler()", () => {
     assert.match(state.replies[0], /stream failed after approval/);
   });
 
-  it("reports duplicate plan approval clicks as no longer awaiting approval", async () => {
+  it("reports duplicate plan approval clicks as an idempotent applied approval", async () => {
     let consumed = false;
     const token = {
       sessionId: "test-id",
@@ -1331,6 +1331,7 @@ describe("createCallbackHandler()", () => {
       sendMessage: async () => {
         session.pendingPlanApproval = false;
         session.approvalState = "approved";
+        session.planDecisionVersion = 2;
         session.actionablePlanDecisionVersion = undefined;
       },
       switchPermissionMode: (mode: string) => {
@@ -1364,7 +1365,79 @@ describe("createCallbackHandler()", () => {
     assert.equal(first.buttonMarkupEdits, 1);
     assert.equal(second.buttonMarkupEdits, 1);
     assert.deepEqual(first.replies, []);
-    assert.equal(second.replies[0], "⚠️ This plan is no longer awaiting approval.");
+    assert.equal(second.replies[0], "✅ Plan v1 was already approved; resume is in progress or running.");
+  });
+
+  it("approves and resumes an idle-timeout suspended persisted plan", async () => {
+    const token = {
+      id: "approve-suspended",
+      sessionId: "stable-plan",
+      kind: "plan-approve" as const,
+      planDecisionVersion: 6,
+      createdAt: Date.now(),
+    };
+    const persisted = {
+      sessionId: "stable-plan",
+      harnessSessionId: "backend-plan",
+      backendRef: { kind: "codex-app-server", conversationId: "backend-plan" },
+      name: "suspended-plan",
+      prompt: "Create the plan.",
+      workdir: "/tmp",
+      status: "killed",
+      lifecycle: "suspended",
+      runtimeState: "stopped",
+      killReason: "idle-timeout",
+      resumable: true,
+      pendingPlanApproval: true,
+      approvalState: "pending",
+      planApprovalContext: "plan-mode",
+      planDecisionVersion: 6,
+      actionablePlanDecisionVersion: 6,
+      currentPermissionMode: "plan",
+      requestedPermissionMode: "plan",
+      planApproval: "ask",
+      costUsd: 0,
+      route: { provider: "telegram", target: "1" },
+      harness: "codex",
+    };
+    let resumedConfig: any;
+    let active: any;
+    let consumed = 0;
+    setSessionManager({
+      getActionToken: () => token,
+      getPersistedSession: () => persisted,
+      resolve: () => active,
+      spawnAndAwaitRunning: async (config: any) => {
+        resumedConfig = config;
+        active = createStubSession({
+          id: "stable-plan",
+          name: "suspended-plan",
+          status: "running",
+          pendingPlanApproval: false,
+          approvalState: "approved",
+          planDecisionVersion: 7,
+          currentPermissionMode: "bypassPermissions",
+          startedAt: Date.now(),
+        });
+        return active;
+      },
+      consumeActionToken: () => { consumed++; return token; },
+      notifySession: () => {},
+      clearPlanDecisionTokens: () => {},
+    } as any);
+
+    const handler = createCallbackHandler();
+    const state = createCtx("approve-suspended");
+    const result = await handler.handler(state.ctx as any);
+
+    assert.deepEqual(result, { handled: true });
+    assert.equal(consumed, 1);
+    assert.equal(resumedConfig.sessionIdOverride, "stable-plan");
+    assert.equal(resumedConfig.resumeSessionId, "backend-plan");
+    assert.equal(resumedConfig.permissionMode, "bypassPermissions");
+    assert.equal(resumedConfig.planDecisionVersion, 7);
+    assert.equal(resumedConfig.approvalState, "approved");
+    assert.equal(state.buttonsCleared, 1);
   });
 
   it("clears Telegram plan approval buttons and reports when the token is missing after successful approval", async () => {
