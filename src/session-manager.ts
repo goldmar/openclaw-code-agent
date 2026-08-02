@@ -453,15 +453,20 @@ export class SessionManager {
       },
       handleTerminal: async (session) => {
         const retryablePlan = manager.pendingPlanResumeClaims.get(session.id);
-        await manager.onSessionTerminal(session);
-        if (retryablePlan) {
-          const rollbackState = buildFailedPlanResumeRollbackState(
-            retryablePlan,
-            store.getPersistedSession(session.id),
-          );
-          store.replacePersistedSession(rollbackState);
-          manager.pendingPlanResumeClaims.delete(session.id);
-          manager.onPersistedSessionChanged(rollbackState);
+        try {
+          await manager.onSessionTerminal(session);
+        } finally {
+          // A failed approved resume must remain retryable even when terminal
+          // persistence, cleanup, or notification handling itself throws.
+          if (retryablePlan) {
+            const rollbackState = buildFailedPlanResumeRollbackState(
+              retryablePlan,
+              store.getPersistedSession(session.id),
+            );
+            store.replacePersistedSession(rollbackState);
+            manager.pendingPlanResumeClaims.delete(session.id);
+            manager.onPersistedSessionChanged(rollbackState);
+          }
         }
       },
       handleTurnEnd: (session, hadQuestion) => lifecycle.handleTurnEnd(session, hadQuestion),

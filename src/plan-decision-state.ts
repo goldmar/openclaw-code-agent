@@ -73,6 +73,16 @@ export function buildFailedPlanResumeRollbackState(
       ...retryablePlan,
       worktreePath: undefined,
       worktreeBranch: undefined,
+      worktreeState: postTerminal.worktreeState,
+      worktreeDisposition: postTerminal.worktreeDisposition,
+      worktreeLifecycle: postTerminal.worktreeLifecycle,
+      pendingWorktreeDecisionSince: postTerminal.pendingWorktreeDecisionSince,
+      lastWorktreeReminderAt: postTerminal.lastWorktreeReminderAt,
+      worktreeDecisionSnoozedUntil: postTerminal.worktreeDecisionSnoozedUntil,
+      worktreeMerged: postTerminal.worktreeMerged,
+      worktreeMergedAt: postTerminal.worktreeMergedAt,
+      worktreeDismissedAt: postTerminal.worktreeDismissedAt,
+      worktreeRemoteOutcome: postTerminal.worktreeRemoteOutcome,
     };
   }
   return retryablePlan;

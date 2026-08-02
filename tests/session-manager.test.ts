@@ -3429,6 +3429,48 @@ describe("SessionManager terminal wakes", () => {
     assert.equal(restored?.worktreeBranch, undefined);
     assert.equal((sm as any).pendingPlanResumeClaims.has(retryablePlan.sessionId), false);
   });
+
+  it("restores a retryable approved plan when terminal handling throws", async () => {
+    const retryablePlan = {
+      sessionId: "s-terminal-handler-failure",
+      harnessSessionId: "thread-terminal-handler-failure",
+      name: "terminal-handler-failure",
+      prompt: "implement approved plan",
+      workdir: "/tmp/repo",
+      status: "killed" as const,
+      lifecycle: "suspended" as const,
+      pendingPlanApproval: true,
+      approvalState: "pending" as const,
+      planDecisionVersion: 4,
+      actionablePlanDecisionVersion: 4,
+      costUsd: 0,
+    };
+    (sm as any).store.replacePersistedSession(retryablePlan);
+    (sm as any).pendingPlanResumeClaims.set(retryablePlan.sessionId, retryablePlan);
+    (sm as any).onSessionTerminal = async () => {
+      (sm as any).store.replacePersistedSession({
+        ...retryablePlan,
+        status: "failed",
+        lifecycle: "terminal",
+        pendingPlanApproval: false,
+        approvalState: "approved",
+      });
+      throw new Error("terminal persistence failed");
+    };
+
+    await assert.rejects(
+      (sm as any).runtimeBootstrap.deps.handleTerminal(fakeSession({ id: retryablePlan.sessionId })),
+      /terminal persistence failed/,
+    );
+
+    const restored = sm.getPersistedSession(retryablePlan.sessionId);
+    assert.equal(restored?.status, "killed");
+    assert.equal(restored?.lifecycle, "suspended");
+    assert.equal(restored?.pendingPlanApproval, true);
+    assert.equal(restored?.approvalState, "pending");
+    assert.equal(restored?.actionablePlanDecisionVersion, 4);
+    assert.equal((sm as any).pendingPlanResumeClaims.has(retryablePlan.sessionId), false);
+  });
 });
 
 describe("SessionManager terminal wake behavior", () => {

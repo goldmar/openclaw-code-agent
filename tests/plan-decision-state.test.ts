@@ -109,11 +109,21 @@ describe("resumed plan decision state", () => {
       pendingPlanApproval: false,
       worktreePath: undefined,
       worktreeBranch: undefined,
+      worktreeState: "none",
+      worktreeDisposition: "no-change-cleaned",
+      worktreeLifecycle: {
+        state: "no_change",
+        baseBranch: "main",
+        updatedAt: "2026-08-01T00:00:00.000Z",
+      },
     });
     assert.equal(rollback.pendingPlanApproval, true);
     assert.equal(rollback.lifecycle, "suspended");
     assert.equal(rollback.worktreePath, undefined);
     assert.equal(rollback.worktreeBranch, undefined);
+    assert.equal(rollback.worktreeState, "none");
+    assert.equal(rollback.worktreeDisposition, "no-change-cleaned");
+    assert.equal(rollback.worktreeLifecycle?.state, "no_change");
   });
 
   it("prefers actionable and delivered versions over stale aggregate state", () => {
