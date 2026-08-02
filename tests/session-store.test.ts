@@ -34,6 +34,53 @@ function writeStore(
   }), "utf-8");
 }
 
+describe("SessionStore stable session replacement", () => {
+  it("keeps one canonical row and removes stale backend indexes", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-store-stable-replacement-"));
+    try {
+      const indexPath = join(dir, "sessions.json");
+      writeStore(indexPath, [
+        {
+          sessionId: "stable-id",
+          harnessSessionId: "backend-old",
+          backendRef: { kind: "codex-app-server", conversationId: "backend-old" },
+          name: "stable-session",
+          prompt: "plan",
+          workdir: "/tmp",
+          status: "killed",
+          lifecycle: "suspended",
+          pendingPlanApproval: true,
+          planDecisionVersion: 1,
+          costUsd: 0,
+        },
+        {
+          sessionId: "stable-id",
+          harnessSessionId: "backend-new",
+          backendRef: { kind: "codex-app-server", conversationId: "backend-new" },
+          name: "stable-session",
+          prompt: "implementation",
+          workdir: "/tmp",
+          status: "completed",
+          lifecycle: "terminal",
+          pendingPlanApproval: false,
+          approvalState: "approved",
+          planDecisionVersion: 2,
+          costUsd: 0,
+        },
+      ]);
+
+      const store = new SessionStore({ indexPath, env: {} });
+
+      assert.equal(store.listPersistedSessions().length, 1);
+      assert.equal(store.getPersistedSession("stable-id")?.harnessSessionId, "backend-new");
+      assert.equal(store.getPersistedSession("backend-old"), undefined);
+      assert.equal(store.getPersistedSession("backend-new")?.planDecisionVersion, 2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("SessionStore getLatestPersistedByName", () => {
   let store: SessionStore;
 

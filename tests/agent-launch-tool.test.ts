@@ -337,7 +337,7 @@ describe("agent_launch tool defaults", () => {
       assert.equal(policyLaunchArgs?.harness, "codex");
       assert.equal(policyLaunchArgs?.model, "gpt-5.6-sol");
       assert.equal(policyLaunchArgs?.sessionIdOverride, "stable-session-1");
-      assert.equal(policyLaunchArgs?.resumeWorktreeFrom, "resolved-stable-session-1");
+      assert.equal(policyLaunchArgs?.resumeWorktreeFrom, "stable-session-1");
       assert.equal(policyLaunchArgs?.originAgentId, "agent-main");
     } finally {
       rmSync(workdir, { recursive: true, force: true });

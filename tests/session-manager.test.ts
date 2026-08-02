@@ -3665,6 +3665,11 @@ describe("SessionManager terminal wake behavior", () => {
   });
 
   it("keeps timed-out pending plans in the plan-decision UX", async () => {
+    let worktreeStrategyCalls = 0;
+    (sm as any).worktreeStrategy.handleWorktreeStrategy = async () => {
+      worktreeStrategyCalls++;
+      return { notificationSent: true, worktreeRemoved: true };
+    };
     const s = fakeSession({
       id: "s-plan-timeout",
       name: "spellcast-release-readiness-plan",
@@ -3676,6 +3681,10 @@ describe("SessionManager terminal wake behavior", () => {
       isExplicitlyResumable: true,
       costUsd: 0,
       startedAt: Date.now() - 2_000,
+      originalWorkdir: "/tmp/repo",
+      worktreePath: "/tmp/repo/.worktrees/pending-plan",
+      worktreeBranch: "agent/pending-plan",
+      worktreeStrategy: "delegate",
     });
 
     await (sm as any).onSessionTerminal(s);
@@ -3692,6 +3701,8 @@ describe("SessionManager terminal wake behavior", () => {
       (request.buttons ?? []).map((row: Array<{ label: string }>) => row.map((button) => button.label)),
       [["Approve", "Revise", "Reject"]],
     );
+    assert.equal(worktreeStrategyCalls, 0);
+    assert.equal(s.worktreePath, "/tmp/repo/.worktrees/pending-plan");
   });
 
   it("suppresses duplicate timed-out ask-mode summaries once a provable review prompt exists", async () => {

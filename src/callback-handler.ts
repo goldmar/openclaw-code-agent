@@ -679,7 +679,7 @@ export function createCallbackHandler(
       if (actionSession && tokenMatchesAppliedPlanApproval(token, actionSession)) {
         sessionManager.consumePlanDecisionTokens?.(sessionId, token.planDecisionVersion!);
         await clearPlanDecisionButtons(ctx, callbackAcknowledged);
-        await replyText(ctx, `✅ Plan v${token.planDecisionVersion} was already approved and the session has resumed.`);
+        await replyText(ctx, `✅ Plan v${token.planDecisionVersion} was already approved; resume is in progress or running.`);
         return { handled: true };
       }
       let invalidPlanDecision = validatePlanDecisionToken(token, actionSession);
@@ -818,7 +818,7 @@ export function createCallbackHandler(
           if (actionSession && tokenMatchesAppliedPlanApproval(latestToken, actionSession)) {
             sessionManager.consumePlanDecisionTokens?.(sessionId, latestToken.planDecisionVersion!);
             await clearPlanDecisionButtons(ctx, callbackAcknowledged);
-            await replyText(ctx, `✅ Plan v${latestToken.planDecisionVersion} was already approved and the session has resumed.`);
+            await replyText(ctx, `✅ Plan v${latestToken.planDecisionVersion} was already approved; resume is in progress or running.`);
             return { handled: true };
           }
           invalidPlanDecision = validatePlanDecisionToken(latestToken, actionSession);

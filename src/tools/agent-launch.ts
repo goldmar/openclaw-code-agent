@@ -233,7 +233,7 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
                   allowedTools: params.allowed_tools,
                   resumeSessionId: resumeAssessment?.kind === "resume" ? resumeAssessment.resumeSessionId : resumeSessionId,
                   resumedFromSessionName,
-                  resumeWorktreeFrom: resolvedResumeId,
+                  resumeWorktreeFrom: launchSessionIdOverride ?? params.resume_session_id ?? resolvedResumeId,
                   sessionIdOverride: launchSessionIdOverride,
                   clearedPersistedCodexResume,
                   forkSession: resumeSessionId ? params.fork_session : false,
@@ -265,7 +265,7 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
           resumedFromSessionName,
           // Worktree inheritance needs the original resolved session ref even when
           // backend resume state is intentionally cleared for a fresh launch.
-          resumeWorktreeFrom: resolvedResumeId,
+          resumeWorktreeFrom: launchSessionIdOverride ?? params.resume_session_id ?? resolvedResumeId,
           forkSession: resumeSessionId ? params.fork_session : false,
           multiTurn: true,
           permissionMode: resumedPlanState.permissionMode,

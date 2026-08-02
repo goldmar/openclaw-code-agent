@@ -1365,7 +1365,7 @@ describe("createCallbackHandler()", () => {
     assert.equal(first.buttonMarkupEdits, 1);
     assert.equal(second.buttonMarkupEdits, 1);
     assert.deepEqual(first.replies, []);
-    assert.equal(second.replies[0], "✅ Plan v1 was already approved and the session has resumed.");
+    assert.equal(second.replies[0], "✅ Plan v1 was already approved; resume is in progress or running.");
   });
 
   it("approves and resumes an idle-timeout suspended persisted plan", async () => {

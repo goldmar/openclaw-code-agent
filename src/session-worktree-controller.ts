@@ -1,6 +1,6 @@
 import { existsSync } from "fs";
 import type { PersistedSessionInfo } from "./types";
-import { getCommitsAheadCount, hasDirtyWorktreeEntries, isBranchAncestorOfBase, wouldMergeBeNoop } from "./worktree";
+import { getBranchName, getCommitsAheadCount, hasDirtyWorktreeEntries, isBranchAncestorOfBase, wouldMergeBeNoop } from "./worktree";
 
 export type WorktreeCompletionState =
   | "no-change"
@@ -17,6 +17,10 @@ export class SessionWorktreeController {
     branchName: string,
     baseBranch: string,
   ): WorktreeCompletionState {
+    // Never classify or clean a worktree whose checked-out branch does not
+    // match the session's persisted association. This can happen after a
+    // stale resume/recovery row points at a sibling replacement worktree.
+    if (getBranchName(worktreePath) !== branchName) return "has-commits";
     const branchAheadCount = getCommitsAheadCount(repoDir, branchName, baseBranch);
     if (branchAheadCount === undefined) return "has-commits";
     if (branchAheadCount === 0) {
@@ -43,6 +47,8 @@ export class SessionWorktreeController {
     if (!existsSync(session.worktreePath)) return false;
     if (session.pendingWorktreeDecisionSince) return false;
     if (session.worktreeState === "pending_decision") return false;
+    if (session.pendingPlanApproval || session.lifecycle === "awaiting_plan_decision" || session.resumable) return false;
+    if (session.worktreeBranch && getBranchName(session.worktreePath) !== session.worktreeBranch) return false;
 
     const resolvedAtIso =
       session.worktreeMergedAt
