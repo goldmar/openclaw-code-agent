@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+  buildFailedPlanResumeRollbackState,
   buildResumedPlanState,
   resolveCurrentPlanDecisionVersion,
   tokenMatchesAppliedPlanApproval,
@@ -67,6 +68,52 @@ describe("resumed plan decision state", () => {
     assert.equal(result.permissionMode, "plan");
     assert.equal(result.patch.pendingPlanApproval, true);
     assert.equal(result.patch.actionablePlanDecisionVersion, undefined);
+  });
+
+  it("does not approve or recreate an actionable version after changes were requested", () => {
+    const result = buildResumedPlanState({
+      ...pending,
+      approvalState: "changes_requested",
+      planDecisionVersion: 2,
+      actionablePlanDecisionVersion: undefined,
+      canonicalPlanPromptVersion: undefined,
+      approvalPromptRequiredVersion: undefined,
+      approvalPromptVersion: undefined,
+    }, "bypassPermissions");
+    assert.equal(result.approvalApplied, false);
+    assert.equal(result.permissionMode, "plan");
+    assert.equal(result.decisionVersion, 2);
+    assert.equal(result.patch.pendingPlanApproval, true);
+    assert.equal(result.patch.approvalState, "changes_requested");
+    assert.equal(result.patch.actionablePlanDecisionVersion, undefined);
+  });
+
+  it("keeps terminal worktree cleanup authoritative when a failed approval resume is rolled back", () => {
+    const retryablePlan = {
+      ...pending,
+      sessionId: "stable-plan",
+      harnessSessionId: "backend-plan",
+      name: "stable-plan",
+      prompt: "implement",
+      workdir: "/repo",
+      worktreePath: "/repo/.worktrees/stable-plan",
+      worktreeBranch: "agent/stable-plan",
+      status: "killed" as const,
+      lifecycle: "suspended" as const,
+      costUsd: 0,
+    };
+    const rollback = buildFailedPlanResumeRollbackState(retryablePlan, {
+      ...retryablePlan,
+      status: "failed",
+      lifecycle: "terminal",
+      pendingPlanApproval: false,
+      worktreePath: undefined,
+      worktreeBranch: undefined,
+    });
+    assert.equal(rollback.pendingPlanApproval, true);
+    assert.equal(rollback.lifecycle, "suspended");
+    assert.equal(rollback.worktreePath, undefined);
+    assert.equal(rollback.worktreeBranch, undefined);
   });
 
   it("prefers actionable and delivered versions over stale aggregate state", () => {

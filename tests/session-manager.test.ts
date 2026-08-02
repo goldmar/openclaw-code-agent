@@ -3379,6 +3379,56 @@ describe("SessionManager terminal wakes", () => {
       "terminal-completed:s-terminal-completed-at:completed:1700000004000:thread-terminal:2:unknown",
     );
   });
+
+  it("does not resurrect cleaned worktree metadata when an approved resume fails before running", async () => {
+    const retryablePlan = {
+      sessionId: "s-failed-approved-resume",
+      harnessSessionId: "thread-failed-approved-resume",
+      backendRef: { kind: "codex-app-server" as const, conversationId: "thread-failed-approved-resume" },
+      name: "failed-approved-resume",
+      prompt: "implement approved plan",
+      workdir: "/tmp/repo",
+      worktreePath: "/tmp/repo/.worktrees/failed-approved-resume",
+      worktreeBranch: "agent/failed-approved-resume",
+      status: "killed" as const,
+      lifecycle: "suspended" as const,
+      pendingPlanApproval: true,
+      approvalState: "pending" as const,
+      planDecisionVersion: 3,
+      actionablePlanDecisionVersion: 3,
+      costUsd: 0,
+      route: {
+        provider: "telegram",
+        accountId: "bot",
+        target: "12345",
+        threadId: "42",
+        sessionKey: "agent:main:telegram:group:12345:topic:42",
+      },
+    };
+    (sm as any).store.replacePersistedSession(retryablePlan);
+    (sm as any).pendingPlanResumeClaims.set(retryablePlan.sessionId, retryablePlan);
+    (sm as any).onSessionTerminal = async () => {
+      (sm as any).store.replacePersistedSession({
+        ...retryablePlan,
+        status: "failed",
+        lifecycle: "terminal",
+        pendingPlanApproval: false,
+        approvalState: "approved",
+        worktreePath: undefined,
+        worktreeBranch: undefined,
+      });
+    };
+
+    await (sm as any).runtimeBootstrap.deps.handleTerminal(fakeSession({ id: retryablePlan.sessionId }));
+
+    const restored = sm.getPersistedSession(retryablePlan.sessionId);
+    assert.equal(restored?.status, "killed");
+    assert.equal(restored?.lifecycle, "suspended");
+    assert.equal(restored?.pendingPlanApproval, true);
+    assert.equal(restored?.worktreePath, undefined);
+    assert.equal(restored?.worktreeBranch, undefined);
+    assert.equal((sm as any).pendingPlanResumeClaims.has(retryablePlan.sessionId), false);
+  });
 });
 
 describe("SessionManager terminal wake behavior", () => {
@@ -3703,6 +3753,32 @@ describe("SessionManager terminal wake behavior", () => {
     );
     assert.equal(worktreeStrategyCalls, 0);
     assert.equal(s.worktreePath, "/tmp/repo/.worktrees/pending-plan");
+  });
+
+  it("does not let stale awaiting-plan lifecycle suppress a resolved terminal worktree outcome", async () => {
+    let worktreeStrategyCalls = 0;
+    (sm as any).worktreeStrategy.handleWorktreeStrategy = async () => {
+      worktreeStrategyCalls++;
+      return { notificationSent: true, worktreeRemoved: false };
+    };
+    const s = fakeSession({
+      id: "s-stale-awaiting-plan",
+      name: "resolved-plan-implementation",
+      status: "completed",
+      lifecycle: "awaiting_plan_decision",
+      killReason: "done",
+      pendingPlanApproval: false,
+      approvalState: "approved",
+      originalWorkdir: "/tmp/repo",
+      worktreePath: "/tmp/repo/.worktrees/resolved-plan",
+      worktreeBranch: "agent/resolved-plan",
+      worktreeStrategy: "delegate",
+    });
+
+    await (sm as any).onSessionTerminal(s);
+
+    assert.equal(worktreeStrategyCalls, 1);
+    assert.equal((sm as any).__dispatchCalls.length, 0);
   });
 
   it("suppresses duplicate timed-out ask-mode summaries once a provable review prompt exists", async () => {

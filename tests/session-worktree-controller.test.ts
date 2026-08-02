@@ -274,6 +274,12 @@ describe("SessionWorktreeController.isResolvedWorktreeEligibleForCleanup()", () 
         lifecycle: "awaiting_plan_decision",
         pendingPlanApproval: true,
       }, Date.now(), 1), false);
+      assert.equal(controller.isResolvedWorktreeEligibleForCleanup({
+        ...base,
+        resumable: false,
+        lifecycle: "awaiting_plan_decision",
+        pendingPlanApproval: false,
+      }, Date.now(), 1), true);
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }

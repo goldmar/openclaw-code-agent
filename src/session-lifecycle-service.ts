@@ -284,10 +284,10 @@ export class SessionLifecycleService {
       return;
     }
 
-    // A plan-only turn can end, time out, or be recovered without resolving
-    // the plan decision. That is a waiting state, not a terminal worktree
-    // outcome: do not inspect, classify, clean, or summarize its worktree.
-    if (session.pendingPlanApproval || session.lifecycle === "awaiting_plan_decision") {
+    // pendingPlanApproval is the deterministic gate. Lifecycle can lag behind
+    // approval/rejection during persistence recovery and must not suppress a
+    // real terminal worktree outcome after the decision has been resolved.
+    if (session.pendingPlanApproval) {
       if (session.killReason === "idle-timeout" && session.pendingPlanApproval) {
         this.emitIdleTimeoutPlanApproval(session);
       } else {

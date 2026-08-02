@@ -64,6 +64,20 @@ export type ResumedPlanState = {
   patch: Partial<SessionConfig>;
 };
 
+export function buildFailedPlanResumeRollbackState(
+  retryablePlan: PersistedSessionInfo,
+  postTerminal: PersistedSessionInfo | undefined,
+): PersistedSessionInfo {
+  if (retryablePlan.worktreePath && postTerminal && !postTerminal.worktreePath) {
+    return {
+      ...retryablePlan,
+      worktreePath: undefined,
+      worktreeBranch: undefined,
+    };
+  }
+  return retryablePlan;
+}
+
 /**
  * Carry a stable session's unresolved plan gate across runtime replacement.
  * A bypassPermissions resume is an explicit approval only when an exact,
@@ -93,8 +107,9 @@ export function buildResumedPlanState(
 
   if (
     requestedPermissionMode === "bypassPermissions"
-    && decisionVersion != null
-    && decisionVersion > 0
+    && session.actionablePlanDecisionVersion != null
+    && session.actionablePlanDecisionVersion > 0
+    && decisionVersion === session.actionablePlanDecisionVersion
     && session.approvalState !== "rejected"
   ) {
     return {
@@ -124,7 +139,7 @@ export function buildResumedPlanState(
       pendingPlanApproval: true,
       approvalState: session.approvalState ?? "pending",
       planDecisionVersion: decisionVersion ?? session.planDecisionVersion,
-      actionablePlanDecisionVersion: decisionVersion && decisionVersion > 0 ? decisionVersion : undefined,
+      actionablePlanDecisionVersion: session.actionablePlanDecisionVersion,
     },
   };
 }

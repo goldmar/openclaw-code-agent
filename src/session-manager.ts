@@ -56,7 +56,7 @@ import {
 } from "./question-context-summary";
 import { SessionRuntimeRegistry } from "./session-runtime-registry";
 import { SessionRuntimeBootstrapService } from "./session-runtime-bootstrap-service";
-import { buildResumedPlanState } from "./plan-decision-state";
+import { buildFailedPlanResumeRollbackState, buildResumedPlanState } from "./plan-decision-state";
 import { SessionWorktreeMessageService } from "./session-worktree-message-service";
 import { getSessionOutputPreview } from "./session-output-preview";
 import { formatOriginRouteWakeBlock } from "./session-route";
@@ -455,9 +455,13 @@ export class SessionManager {
         const retryablePlan = manager.pendingPlanResumeClaims.get(session.id);
         await manager.onSessionTerminal(session);
         if (retryablePlan) {
-          store.replacePersistedSession(retryablePlan);
+          const rollbackState = buildFailedPlanResumeRollbackState(
+            retryablePlan,
+            store.getPersistedSession(session.id),
+          );
+          store.replacePersistedSession(rollbackState);
           manager.pendingPlanResumeClaims.delete(session.id);
-          manager.onPersistedSessionChanged(retryablePlan);
+          manager.onPersistedSessionChanged(rollbackState);
         }
       },
       handleTurnEnd: (session, hadQuestion) => lifecycle.handleTurnEnd(session, hadQuestion),

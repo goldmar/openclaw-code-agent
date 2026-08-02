@@ -47,7 +47,7 @@ export class SessionWorktreeController {
     if (!existsSync(session.worktreePath)) return false;
     if (session.pendingWorktreeDecisionSince) return false;
     if (session.worktreeState === "pending_decision") return false;
-    if (session.pendingPlanApproval || session.lifecycle === "awaiting_plan_decision" || session.resumable) return false;
+    if (session.pendingPlanApproval || session.resumable) return false;
     if (session.worktreeBranch && getBranchName(session.worktreePath) !== session.worktreeBranch) return false;
 
     const resolvedAtIso =
