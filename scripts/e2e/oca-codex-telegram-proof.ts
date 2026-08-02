@@ -389,17 +389,17 @@ export function resolveProofOutputDir(outputDir: string): string {
 }
 
 export function commandExists(command: string): boolean {
+  const pathEntries = process.env.PATH === undefined
+    ? (process.platform === "win32" ? [] : ["/usr/bin", "/bin"])
+    : process.env.PATH.split(path.delimiter).map((directory) => directory || ".");
   const candidates = command.includes("/") || command.includes("\\")
     ? [expandHome(command)]
-    : (process.env.PATH ?? "")
-        .split(path.delimiter)
-        .filter(Boolean)
-        .flatMap((directory) => {
-          const base = path.join(directory, command);
-          if (process.platform !== "win32") return [base];
-          const extensions = (process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM").split(";").filter(Boolean);
-          return [base, ...extensions.map((extension) => `${base}${extension.toLowerCase()}`)];
-        });
+    : pathEntries.flatMap((directory) => {
+        const base = path.join(directory, command);
+        if (process.platform !== "win32") return [base];
+        const extensions = (process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM").split(";").filter(Boolean);
+        return [base, ...extensions.map((extension) => `${base}${extension.toLowerCase()}`)];
+      });
 
   return candidates.some((candidate) => {
     try {

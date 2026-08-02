@@ -1,9 +1,9 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import {
   commandExists,
   buildProofPlan,
@@ -106,6 +106,25 @@ describe("OCA Codex Telegram proof runner", () => {
   it("checks executable paths without interpreting shell syntax", () => {
     assert.equal(commandExists(process.execPath), true);
     assert.equal(commandExists("definitely-missing-command; true"), false);
+  });
+
+  it("preserves POSIX empty PATH entries as the current directory", { skip: process.platform === "win32" }, () => {
+    const originalCwd = process.cwd();
+    const originalPath = process.env.PATH;
+    const directory = mkdtempSync(join(tmpdir(), "oca-proof-command-path-"));
+    const command = "oca-proof-local-command";
+    try {
+      writeFileSync(join(directory, command), "#!/bin/sh\nexit 0\n");
+      chmodSync(join(directory, command), 0o700);
+      process.chdir(directory);
+      process.env.PATH = `${delimiter}${originalPath ?? ""}`;
+      assert.equal(commandExists(command), true);
+    } finally {
+      process.chdir(originalCwd);
+      if (originalPath === undefined) delete process.env.PATH;
+      else process.env.PATH = originalPath;
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it("prints a redacted proof plan without exposing Convex secret values", () => {
