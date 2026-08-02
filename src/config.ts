@@ -372,7 +372,11 @@ export function resolveAgentChannel(workdir: string): string | undefined {
   const mapping = pluginConfig.agentChannels;
   if (!mapping) return undefined;
 
-  const normalise = (p: string) => p.replace(/\/+$/, "");
+  const normalise = (p: string) => {
+    let end = p.length;
+    while (end > 0 && p[end - 1] === "/") end -= 1;
+    return p.slice(0, end);
+  };
   const normWorkdir = normalise(workdir);
 
   const entries = Object.entries(mapping).sort((a, b) => b[0].length - a[0].length);
