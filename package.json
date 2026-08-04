@@ -33,11 +33,11 @@
     "install": {
       "npmSpec": "openclaw-code-agent",
       "defaultChoice": "npm",
-      "minHostVersion": ">=2026.7.1"
+      "minHostVersion": ">=2026.7.1-2"
     },
     "compat": {
-      "pluginApi": ">=2026.7.1",
-      "minGatewayVersion": "2026.7.1"
+      "pluginApi": ">=2026.7.1-2",
+      "minGatewayVersion": "2026.7.1-2"
     },
     "build": {
       "openclawVersion": "2026.7.1-2",
@@ -95,7 +95,7 @@
   },
   "description": "An OpenClaw plugin that orchestrates coding agent sessions as managed background processes. Launch, monitor, and control coding agents (Claude Code, Codex, experimental OpenCode, and more) directly from your AI gateway.",
   "peerDependencies": {
-    "openclaw": ">=2026.7.1"
+    "openclaw": ">=2026.7.1-2"
   },
   "overrides": {
     "basic-ftp": "5.3.1",

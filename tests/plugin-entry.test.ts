@@ -76,7 +76,7 @@ describe("plugin entry source", () => {
     assert.equal(pluginSdkVersion, "2026.7.1-2");
     assert.equal(openclawInstall.npmSpec, "openclaw-code-agent");
     assert.equal(openclawInstall.defaultChoice, "npm");
-    assert.equal(openclawInstall.minHostVersion, ">=2026.7.1");
+    assert.equal(openclawInstall.minHostVersion, ">=2026.7.1-2");
 
     const cliOutput = execFileSync("node", ["scripts/validate-release-metadata.mjs"], {
       cwd: rootDir,
@@ -85,7 +85,7 @@ describe("plugin entry source", () => {
     assert.match(cliOutput, /openclaw\.plugin\.name=Code Agent/);
     assert.match(cliOutput, /openclaw\.install\.npmSpec=openclaw-code-agent/);
     assert.match(cliOutput, /openclaw\.install\.defaultChoice=npm/);
-    assert.match(cliOutput, /openclaw\.install\.minHostVersion=>=2026\.7\.1/);
+    assert.match(cliOutput, /openclaw\.install\.minHostVersion=>=2026\.7\.1-2/);
   });
 
   it("keeps security audit automation on the pnpm-only path", () => {
@@ -109,7 +109,7 @@ describe("plugin entry source", () => {
     assert.doesNotMatch(activeWorkflowSources, /\bnpm audit\b/);
   });
 
-  it("targets v2026.7.1-2 while retaining the v2026.7.1 compatibility floor", () => {
+  it("uses a correction-release floor that includes v2026.7.1-2 and stable v2026.7.1", () => {
     const packageJson = JSON.parse(readFileSync(join(rootDir, "package.json"), "utf8")) as {
       dependencies?: Record<string, string>;
       openclaw?: {
@@ -124,12 +124,12 @@ describe("plugin entry source", () => {
     assert.equal(packageJson.dependencies?.["@anthropic-ai/claude-agent-sdk"], "^0.3.216");
     assert.equal(packageJson.openclaw?.install?.npmSpec, "openclaw-code-agent");
     assert.equal(packageJson.openclaw?.install?.defaultChoice, "npm");
-    assert.equal(packageJson.openclaw?.install?.minHostVersion, ">=2026.7.1");
-    assert.equal(packageJson.openclaw?.compat?.pluginApi, ">=2026.7.1");
-    assert.equal(packageJson.openclaw?.compat?.minGatewayVersion, "2026.7.1");
+    assert.equal(packageJson.openclaw?.install?.minHostVersion, ">=2026.7.1-2");
+    assert.equal(packageJson.openclaw?.compat?.pluginApi, ">=2026.7.1-2");
+    assert.equal(packageJson.openclaw?.compat?.minGatewayVersion, "2026.7.1-2");
     assert.equal(packageJson.openclaw?.build?.openclawVersion, "2026.7.1-2");
     assert.equal(packageJson.openclaw?.build?.pluginSdkVersion, "2026.7.1-2");
-    assert.equal(packageJson.peerDependencies?.openclaw, ">=2026.7.1");
+    assert.equal(packageJson.peerDependencies?.openclaw, ">=2026.7.1-2");
     assert.equal(packageJson.devDependencies?.openclaw, "2026.7.1-2");
     assert.doesNotMatch(readFileSync(join(rootDir, "pnpm-lock.yaml"), "utf8"), /uuid@9\.0\.1/);
   });
@@ -140,7 +140,7 @@ describe("plugin entry source", () => {
     assert.doesNotThrow(() =>
       validateReleaseMetadata({
         openclawTargetVersion: "2026.7.1-2",
-        openclawCompatibilityFloor: ">=2026.7.1",
+        openclawCompatibilityFloor: ">=2026.7.1-2",
       }),
     );
     assert.throws(
