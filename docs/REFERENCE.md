@@ -28,13 +28,13 @@ Sessions are multi-turn. Active sessions accept follow-up messages via `agent_re
 
 Current releases treat persisted session storage as new-schema-only. If startup finds an older or invalid session store, the plugin archives it to a timestamped `.legacy-*.json` backup and starts with a fresh index instead of migrating rows in place.
 
-### OpenClaw 2026.7.1 SDK Readiness
+### OpenClaw 2026.7.1-2 SDK Readiness
 
-The current `openclaw-code-agent` package is validated against and requires OpenClaw `2026.7.1`. Package install, plugin API, Gateway, peer dependency, and build metadata now share that minimum so registry and host compatibility checks cannot select the package for an older OpenClaw installation.
+The current `openclaw-code-agent` package is validated against OpenClaw `2026.7.1-2` and retains OpenClaw `2026.7.1` as its minimum compatible host. Exact build metadata and the development dependency record the tested correction release, while package install, plugin API, Gateway, and peer dependency metadata continue to reject hosts older than `2026.7.1` without unnecessarily excluding the compatible base release.
 
-Hosts already running OpenClaw `2026.7.1` need no host config change. No new OpenClaw SDK imports were needed for `2026.7.1`: this plugin still depends only on the stable plugin-entry surface. Runtime code still imports only `openclaw/plugin-sdk/plugin-entry` from the OpenClaw SDK, `openclaw.plugin.json` already declares tools through `contracts.tools`, package-level OpenClaw readiness stays in `package.json`, pnpm build policy and overrides live in `pnpm-workspace.yaml`, and code-agent session storage remains plugin-owned. Current callback handling, plan approval, session wake/routing, Codex harness behavior, and worktree follow-through remain plugin-owned compatibility surfaces.
+Hosts already running OpenClaw `2026.7.1` need no host config change. OpenClaw `2026.7.1-2` only normalizes singleton-array output from newer `npm view --json` clients and continues to reject ambiguous multi-version arrays. No new SDK imports or Code Agent runtime changes are needed: runtime code still imports only `openclaw/plugin-sdk/plugin-entry`, `openclaw.plugin.json` already declares tools through `contracts.tools`, pnpm build policy and overrides remain in `pnpm-workspace.yaml`, and code-agent session storage remains plugin-owned. Current Start Plan and approval callbacks, Telegram/topic routing, completion and cron/session wakes, Codex and Claude model restrictions, runtime tool visibility, disabled bundled-plugin boundaries, and plan/worktree follow-through remain unchanged.
 
-Configuration guidance for `2026.7.1`:
+Configuration guidance for the `2026.7.1` compatibility floor and tested `2026.7.1-2` correction release:
 
 - If `plugins.allow` is present, add `openclaw-code-agent`. OpenClaw treats that allowlist as exclusive, so `tools.allow` cannot make this plugin's tools available when the owning plugin is blocked.
 - New OpenClaw configs default `plugins.bundledDiscovery` to `allowlist`, so a restrictive `plugins.allow` list can also block omitted bundled provider or runtime plugins. OpenClaw `2026.7.1` continues to discover externally installed channel plugins at Gateway startup, but that host-side discovery does not make those plugins implicitly available to OCA sessions. Disabled or omitted adjacent plugins remain unavailable unless explicitly enabled or auto-enabled by their own OpenClaw contracts.

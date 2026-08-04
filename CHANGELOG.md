@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.7.7] - 2026-08-03
+
+### Changed
+- Validated and retargeted package and plugin SDK build metadata to OpenClaw `2026.7.1-2` while retaining the compatible OpenClaw `2026.7.1` install, plugin API, Gateway, and peer dependency floor.
+- Confirmed that the OpenClaw correction release's singleton-array npm metadata fix requires no changes to Code Agent tools, callbacks, wake routing, worktree flows, plan approval, or harness model restrictions.
+
 ## [4.7.6] - 2026-07-15
 
 ### Changed
