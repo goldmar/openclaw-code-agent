@@ -9,6 +9,8 @@ allowBuilds:
   tree-sitter-bash: false
 
 minimumReleaseAgeExclude:
+  # security-exception advisory=GHSA-8j4g-w8fx-2239 published=2026-08-03T02:36:40.543Z quarantineEnds=2026-08-04T02:36:40.543Z expires=2026-08-05T02:36:40.543Z
+  - hono@4.12.34
   - '@anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.216'
   - '@anthropic-ai/claude-agent-sdk-darwin-x64@0.3.216'
   - '@anthropic-ai/claude-agent-sdk-linux-arm64-musl@0.3.216'
@@ -31,8 +33,8 @@ overrides:
   path-to-regexp@>=8.0.0 <8.4.0: ">=8.4.0"
   "@anthropic-ai/sdk@<0.93.0": 0.93.0
   ip-address@<10.1.1: 10.1.1
-  fast-uri@<=3.1.3: 3.1.4
+  fast-uri@<3.1.5: 3.1.5
   qs@<6.15.2: 6.15.2
-  hono@<4.12.27: 4.12.27
+  hono@<4.12.34: 4.12.34
   "@hono/node-server@<2.0.10": 2.0.10
   undici@>=8.0.0 <8.5.0: 8.5.0

@@ -7,7 +7,7 @@
   "scripts": {
     "audit:prod": "pnpm audit --prod",
     "build": "esbuild index.ts --bundle --splitting --platform=node --target=node22 --format=esm --outdir=dist --entry-names=index --chunk-names=chunks/[name] --minify --charset=utf8 --pure:console.log --pure:console.warn --pure:console.info --pure:console.debug --external:@anthropic-ai/claude-agent-sdk --external:openclaw/plugin-sdk/plugin-entry",
-    "check-static-guardrails": "node scripts/check-static-guardrails.mjs",
+    "check-static-guardrails": "node scripts/check-static-guardrails.mjs && node scripts/check-release-age-exceptions.mjs",
     "check-plugin-security": "node scripts/check-plugin-security.mjs",
     "test": "node scripts/run-tests.mjs",
     "test:integ:crabbox": "node scripts/run-tests.mjs tests/oca-codex-crabbox-integ.test.ts tests/oca-plugin-workflows-integ.test.ts tests/oca-codex-telegram-proof.test.ts tests/oca-codex-proof-app-server.test.ts tests/oca-codex-proof-workflow.test.ts",
