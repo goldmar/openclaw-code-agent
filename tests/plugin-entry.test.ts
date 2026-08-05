@@ -109,15 +109,29 @@ describe("plugin entry source", () => {
     assert.doesNotMatch(activeWorkflowSources, /\bnpm audit\b/);
   });
 
-  it("ships patched runtime dependency floors in npm package metadata", () => {
+  it("ships patched runtime dependencies as enforceable exact dependencies", () => {
     const packageJson = JSON.parse(readFileSync(join(rootDir, "package.json"), "utf8")) as {
+      dependencies?: Record<string, string>;
       overrides?: Record<string, string>;
     };
 
-    assert.equal(packageJson.overrides?.["fast-uri@<3.1.5"], "3.1.5");
-    assert.equal(packageJson.overrides?.["hono@<4.12.34"], "4.12.34");
-    assert.equal(packageJson.overrides?.["ip-address@<10.3.1"], "10.3.1");
-    assert.equal(packageJson.overrides?.["ip-address@<10.1.1"], undefined);
+    assert.equal(packageJson.dependencies?.["fast-uri"], "3.1.5");
+    assert.equal(packageJson.dependencies?.hono, "4.12.34");
+    assert.equal(packageJson.dependencies?.["ip-address"], "10.3.1");
+    assert.equal(packageJson.overrides, undefined);
+    assert.doesNotThrow(() =>
+      execFileSync("node", ["scripts/check-npm-shrinkwrap.mjs"], {
+        cwd: rootDir,
+        encoding: "utf8",
+      }),
+    );
+    const pack = JSON.parse(
+      execFileSync("npm", ["pack", "--dry-run", "--json"], {
+        cwd: rootDir,
+        encoding: "utf8",
+      }),
+    ) as Array<{ files?: Array<{ path?: string }> }>;
+    assert.ok(pack[0]?.files?.some((file) => file.path === "npm-shrinkwrap.json"));
   });
 
   it("uses a correction-release floor that includes v2026.7.1-2 and stable v2026.7.1", () => {
@@ -132,7 +146,7 @@ describe("plugin entry source", () => {
       peerDependencies?: Record<string, string>;
     };
 
-    assert.equal(packageJson.dependencies?.["@anthropic-ai/claude-agent-sdk"], "^0.3.216");
+    assert.equal(packageJson.dependencies?.["@anthropic-ai/claude-agent-sdk"], "0.3.220");
     assert.equal(packageJson.openclaw?.install?.npmSpec, "openclaw-code-agent");
     assert.equal(packageJson.openclaw?.install?.defaultChoice, "npm");
     assert.equal(packageJson.openclaw?.install?.minHostVersion, ">=2026.7.1-2");

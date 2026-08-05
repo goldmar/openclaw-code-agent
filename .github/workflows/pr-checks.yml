@@ -154,6 +154,10 @@ jobs:
         run: pnpm install --frozen-lockfile
         continue-on-error: true
 
+      - name: Verify packed npm consumer dependency graph
+        if: steps.lockfile.outcome == 'success'
+        run: pnpm verify:npm-consumer
+
       - name: Comment on PR if lockfile is out of sync
         if: steps.lockfile.outcome == 'failure' && github.event.pull_request.head.repo.fork == false
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9

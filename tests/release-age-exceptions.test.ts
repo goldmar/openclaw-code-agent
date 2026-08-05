@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { validateSecurityExceptions } from "../scripts/check-release-age-exceptions.mjs";
+import {
+  collectPublishedPackages,
+  findTooNewPackages,
+} from "../scripts/check-npm-shrinkwrap-release-age.mjs";
 
 const exception = (packageSpec = "hono@4.12.34", expires = "2026-08-05T02:36:40.543Z") => `
 minimumReleaseAge: 1440
@@ -47,5 +51,44 @@ describe("release-age security exceptions", () => {
       () => validateSecurityExceptions(exception().replace("minimumReleaseAge: 1440\n", "")),
       /preserve the 24-hour minimumReleaseAge: 1440 policy/,
     );
+  });
+
+  it("rejects exclusions that are not covered by an auditable expiring marker", () => {
+    assert.throws(
+      () =>
+        validateSecurityExceptions(
+          "minimumReleaseAge: 1440\nminimumReleaseAgeExclude:\n  - hono@4.12.34\n",
+        ),
+      /unannotated exception/u,
+    );
+  });
+
+  it("checks every shrinkwrapped package version against the same 24-hour window", async () => {
+    const packages = collectPublishedPackages({
+      packages: {
+        "": { name: "root", version: "1.0.0" },
+        "node_modules/aged": { version: "1.0.0" },
+        "node_modules/parent/node_modules/@scope/fresh": { version: "2.0.0" },
+      },
+    });
+    const publicationTimes: Record<string, Record<string, string>> = {
+      aged: { "1.0.0": "2026-08-01T00:00:00.000Z" },
+      "@scope/fresh": { "2.0.0": "2026-08-04T18:00:00.000Z" },
+    };
+    const tooNew = await findTooNewPackages({
+      packages,
+      now: new Date("2026-08-05T00:00:00.000Z"),
+      fetchImpl: async (url: string) => {
+        const name = decodeURIComponent(url.slice(url.lastIndexOf("/") + 1));
+        return {
+          ok: true,
+          json: async () => ({ time: publicationTimes[name] }),
+        } as Response;
+      },
+    });
+
+    assert.deepEqual(tooNew, [
+      { package: "@scope/fresh@2.0.0", published: "2026-08-04T18:00:00.000Z" },
+    ]);
   });
 });

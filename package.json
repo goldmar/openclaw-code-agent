@@ -1,13 +1,14 @@
 {
   "name": "openclaw-code-agent",
-  "version": "4.7.7",
+  "version": "4.7.8",
   "type": "module",
   "packageManager": "pnpm@11.15.1",
   "main": "dist/index.js",
   "scripts": {
     "audit:prod": "pnpm audit --prod",
     "build": "esbuild index.ts --bundle --splitting --platform=node --target=node22 --format=esm --outdir=dist --entry-names=index --chunk-names=chunks/[name] --minify --charset=utf8 --pure:console.log --pure:console.warn --pure:console.info --pure:console.debug --external:@anthropic-ai/claude-agent-sdk --external:openclaw/plugin-sdk/plugin-entry",
-    "check-static-guardrails": "node scripts/check-static-guardrails.mjs && node scripts/check-release-age-exceptions.mjs",
+    "generate:npm-shrinkwrap": "node scripts/generate-npm-shrinkwrap.mjs",
+    "check-static-guardrails": "node scripts/check-static-guardrails.mjs && node scripts/check-release-age-exceptions.mjs && node scripts/check-npm-shrinkwrap.mjs",
     "check-plugin-security": "node scripts/check-plugin-security.mjs",
     "test": "node scripts/run-tests.mjs",
     "test:integ:crabbox": "node scripts/run-tests.mjs tests/oca-codex-crabbox-integ.test.ts tests/oca-plugin-workflows-integ.test.ts tests/oca-codex-telegram-proof.test.ts tests/oca-codex-proof-app-server.test.ts tests/oca-codex-proof-workflow.test.ts",
@@ -24,6 +25,7 @@
     "smoke:opencode-live": "OPENCLAW_RUN_LIVE_OPENCODE_SMOKE=1 node scripts/run-tests.mjs tests/live-opencode-server-smoke.test.ts",
     "typecheck": "tsc -p tsconfig.typecheck.json --noEmit",
     "validate:release-metadata": "node scripts/validate-release-metadata.mjs",
+    "verify:npm-consumer": "node scripts/check-npm-shrinkwrap-release-age.mjs && node scripts/verify-npm-consumer-install.mjs",
     "verify": "pnpm check-static-guardrails && pnpm typecheck && pnpm build && pnpm test"
   },
   "openclaw": {
@@ -48,11 +50,20 @@
     "dist/",
     "skills/",
     "openclaw.plugin.json",
+    "npm-shrinkwrap.json",
     "README.md",
     "LICENSE"
   ],
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.3.216"
+    "@anthropic-ai/claude-agent-sdk": "0.3.220",
+    "@anthropic-ai/sdk": "0.109.1",
+    "@hono/node-server": "2.0.10",
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "express-rate-limit": "8.6.1",
+    "fast-uri": "3.1.5",
+    "hono": "4.12.34",
+    "ip-address": "10.3.1",
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@types/node": "^26.0.1",
@@ -96,12 +107,5 @@
   "description": "An OpenClaw plugin that orchestrates coding agent sessions as managed background processes. Launch, monitor, and control coding agents (Claude Code, Codex, experimental OpenCode, and more) directly from your AI gateway.",
   "peerDependencies": {
     "openclaw": ">=2026.7.1-2"
-  },
-  "overrides": {
-    "basic-ftp": "5.3.1",
-    "fast-xml-builder@<1.1.7": "1.1.7",
-    "fast-uri@<3.1.5": "3.1.5",
-    "hono@<4.12.34": "4.12.34",
-    "ip-address@<10.3.1": "10.3.1"
   }
 }
