@@ -4,6 +4,7 @@ import { describe, it } from "node:test";
 import { validateSecurityExceptions } from "../scripts/check-release-age-exceptions.mjs";
 
 const exception = (packageSpec = "hono@4.12.34", expires = "2026-08-05T02:36:40.543Z") => `
+minimumReleaseAge: 1440
 minimumReleaseAgeExclude:
   # security-exception advisory=GHSA-8j4g-w8fx-2239 published=2026-08-03T02:36:40.543Z quarantineEnds=2026-08-04T02:36:40.543Z expires=${expires}
   - ${packageSpec}
@@ -34,6 +35,17 @@ describe("release-age security exceptions", () => {
     assert.throws(
       () => validateSecurityExceptions(source, new Date("2026-08-03T03:00:00Z")),
       /24-hour quarantine/,
+    );
+  });
+
+  it("rejects removal or reduction of the repository-wide quarantine", () => {
+    assert.throws(
+      () => validateSecurityExceptions(exception().replace("minimumReleaseAge: 1440", "minimumReleaseAge: 60")),
+      /preserve the 24-hour minimumReleaseAge: 1440 policy/,
+    );
+    assert.throws(
+      () => validateSecurityExceptions(exception().replace("minimumReleaseAge: 1440\n", "")),
+      /preserve the 24-hour minimumReleaseAge: 1440 policy/,
     );
   });
 });

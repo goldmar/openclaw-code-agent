@@ -12,10 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Validated and retargeted package and plugin SDK build metadata to OpenClaw `2026.7.1-2`, using that correction release as the install, plugin API, Gateway, and peer dependency floor so both it and stable `2026.7.1` satisfy the declared compatibility contract.
 - Confirmed that the OpenClaw correction release's singleton-array npm metadata fix requires no changes to Code Agent tools, callbacks, wake routing, worktree flows, plan approval, or harness model restrictions.
-- Pinned patched `fast-uri` and Hono transitive releases, with a machine-checked, exact-version exception that permits only `hono@4.12.34` through the normal 24-hour release-age quarantine and expires after the quarantine clears.
+- Pinned patched `fast-uri` and Hono transitive releases; the temporary machine-checked `hono@4.12.34` quarantine exception was removed after the patched release aged through the normal 24-hour release-age policy.
 
 ### Fixed
-- Removed the production dependency advisories for `fast-uri` URI authority parsing and Hono CORS-header regular-expression denial of service without weakening the repository-wide release-age policy.
+- Removed production dependency advisories for `fast-uri` URI authority parsing, Hono CORS-header regular-expression denial of service, and `ip-address` special-use classification, plus development-graph advisories in `protobufjs`, `tar`, and `undici`, without weakening the repository-wide release-age policy.
 
 ## [4.7.6] - 2026-07-15
 

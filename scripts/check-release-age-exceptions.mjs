@@ -28,6 +28,9 @@ export function parseSecurityExceptions(source) {
 }
 
 export function validateSecurityExceptions(source, now = new Date()) {
+  if (!/^minimumReleaseAge:\s*1440\s*$/mu.test(source)) {
+    throw new Error("pnpm-workspace.yaml must preserve the 24-hour minimumReleaseAge: 1440 policy");
+  }
   const exceptions = parseSecurityExceptions(source);
   for (const exception of exceptions) {
     if (!exactPackageVersion.test(exception.package)) {

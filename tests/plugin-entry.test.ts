@@ -109,6 +109,17 @@ describe("plugin entry source", () => {
     assert.doesNotMatch(activeWorkflowSources, /\bnpm audit\b/);
   });
 
+  it("ships patched runtime dependency floors in npm package metadata", () => {
+    const packageJson = JSON.parse(readFileSync(join(rootDir, "package.json"), "utf8")) as {
+      overrides?: Record<string, string>;
+    };
+
+    assert.equal(packageJson.overrides?.["fast-uri@<3.1.5"], "3.1.5");
+    assert.equal(packageJson.overrides?.["hono@<4.12.34"], "4.12.34");
+    assert.equal(packageJson.overrides?.["ip-address@<10.3.1"], "10.3.1");
+    assert.equal(packageJson.overrides?.["ip-address@<10.1.1"], undefined);
+  });
+
   it("uses a correction-release floor that includes v2026.7.1-2 and stable v2026.7.1", () => {
     const packageJson = JSON.parse(readFileSync(join(rootDir, "package.json"), "utf8")) as {
       dependencies?: Record<string, string>;

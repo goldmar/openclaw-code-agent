@@ -9,18 +9,18 @@ overrides:
   axios@<1.15.0: '>=1.15.0'
   fast-xml-builder@<1.1.7: 1.1.7
   follow-redirects@<1.16.0: 1.16.0
-  protobufjs@>=7 <7.6.3: 7.6.3
-  tar@<7.5.16: 7.5.16
+  protobufjs@>=7 <7.6.5: 7.6.5
+  tar@<7.5.21: 7.5.21
   '@protobufjs/utf8@<1.1.1': 1.1.1
   brace-expansion@>=4.0.0 <5.0.7: '>=5.0.7'
   path-to-regexp@>=8.0.0 <8.4.0: '>=8.4.0'
   '@anthropic-ai/sdk@<0.93.0': 0.93.0
-  ip-address@<10.1.1: 10.1.1
+  ip-address@<10.3.1: 10.3.1
   fast-uri@<3.1.5: 3.1.5
   qs@<6.15.2: 6.15.2
   hono@<4.12.34: 4.12.34
   '@hono/node-server@<2.0.10': 2.0.10
-  undici@>=8.0.0 <8.5.0: 8.5.0
+  undici@>=8.0.0 <8.9.0: 8.9.0
 
 importers:
 
@@ -397,7 +397,7 @@ packages:
     resolution: {integrity: sha512-sftHnW69NHQqLjCxBTvQ8f/eQl+peZ5pHCBQtuTWBbeuYRHZ0/GXVTmw/O/YKsShMbqPWhJB0UYtPPdvCUSS8w==}
     engines: {node: '>=22.19.0'}
     peerDependencies:
-      undici: 8.5.0
+      undici: 8.9.0
 
   '@opentelemetry/semantic-conventions@1.43.0':
     resolution: {integrity: sha512-eSYWTm620tTk45EKSedaUL8MFYI8hW164hIXsgIHyxu3VobUB3fFCu5t0hQby6OoWRPsG1KkKUG2M5UadiLiVg==}
@@ -420,9 +420,6 @@ packages:
 
   '@protobufjs/float@1.0.2':
     resolution: {integrity: sha512-Ddb+kVXlXst9d+R9PfTIxh1EdNkgoRe5tOX6t01f1lYWOvJnSPDBlG241QLzcyPdoNTsblLUdujGSE4RzrTZGQ==}
-
-  '@protobufjs/inquire@1.1.2':
-    resolution: {integrity: sha512-pa0vFRuws4wkvaXKK1uXZMAwAX4/t8ANaJo45iw/oQHNQ9q5xUzwgFmVJGXiga2BeN+zpX7Vf9vmsiIa2J+MUw==}
 
   '@protobufjs/path@1.1.2':
     resolution: {integrity: sha512-6JOcJ5Tm08dOHAbdR3GrvP+yUUfkjG5ePsHYczMFLq3ZmMkAD98cDgcT2iA1lJ9NVwFd4tH/iSSoe44YWkltEA==}
@@ -1014,8 +1011,8 @@ packages:
   inherits@2.0.4:
     resolution: {integrity: sha512-k/vGaX4/Yla3WzyMCvTQOXYeIHvqOKtnqBduzTHpzpQZzAskKMhZ2K+EnBiSM9zGSoIFeMpXKxa4dYeZIQqewQ==}
 
-  ip-address@10.4.0:
-    resolution: {integrity: sha512-oSK96Grm3aP6OrS263xVxbNDGVL7rzBtYdpGqlDG8iQdoenDoTs/nkki+DflYbAEE8Xl6o5YxhxlrKvI3nqKXQ==}
+  ip-address@10.3.1:
+    resolution: {integrity: sha512-1e9d3kb97NHJTIJDZW9rKqW2h6+dFa50Dy0fpPSMQp2ADje5gvKsXmdiK6dwY5t76TaTt5+P5N1Y/LoToIxP6g==}
     engines: {node: '>= 12'}
 
   ipaddr.js@1.9.1:
@@ -1284,8 +1281,8 @@ packages:
   proper-lockfile@4.1.2:
     resolution: {integrity: sha512-TjNPblN4BwAWMXU8s9AEz4JmQxnD1NNL7bNOY/AKUzyamc379FWASUhc/K1pL2noVb+XmZKLL68cjzLsiOAMaA==}
 
-  protobufjs@7.6.3:
-    resolution: {integrity: sha512-+k0vdJKNdW+Vu+dYe8tZA/VvQb6XKNWexC6URwBFXxNnjLJz9nQJCemGyNgRAWD+B7+nGNc9qMPGwcD7s4nzUw==}
+  protobufjs@7.6.5:
+    resolution: {integrity: sha512-/FPD0nUc9jH6rfFjji9IBqOz4pcSE3CsT1m7Ep6Mdb0LxSUMj8hgl6GomOvZzpNpAqqGaXA0P3VSrZLFzIhQrw==}
     engines: {node: '>=12.0.0'}
 
   proxy-addr@2.0.7:
@@ -1459,8 +1456,8 @@ packages:
     resolution: {integrity: sha512-ki4hZQfh5rX0QDLLkOCj+h+CVNkqmp/CMf8v8kZpkNVK6jGQooMytqzLZYUVYIZcFZ6yDB70EfD8POcFXiF5oA==}
     engines: {node: '>=18'}
 
-  tar@7.5.19:
-    resolution: {integrity: sha512-4LeEWl96twnS2Q7Bz4MGqgazLqO+hJN63GZxXoIqh1T3VweYD997gbU1ItNsQafqqXTXd5WFyFdReLtwvRBNiw==}
+  tar@7.5.21:
+    resolution: {integrity: sha512-XdhtCvlMywwxpCW8YEq3lOXBJpUPTR2OHHcwLPO3HwsJqOHa2Ok/oJ7ruGzp+JrKoRPVCzJwAdEjqLW/vNRPHA==}
     engines: {node: '>=18'}
 
   toidentifier@1.0.1:
@@ -1524,8 +1521,8 @@ packages:
   undici-types@8.3.0:
     resolution: {integrity: sha512-j375ScV60dom+YkPFIfTLcOiPxkN/buHz5GobjLhixFuANaNs3C9l4GmrWqejgXWJ7BbJcFYpTEUkS1Ge8bpZQ==}
 
-  undici@8.5.0:
-    resolution: {integrity: sha512-xamtWoB1EshgjpmlXd7GGm2VfdDtw1+rD8uhry8pSNW3If6S8E0m2T2+orSKeZXEn/aPJMviCpDBA65WJt8zhg==}
+  undici@8.9.0:
+    resolution: {integrity: sha512-aWZpUj7XoGonMClx4gdDRfgBjqeA+F473aDmROQQbM9n6PRfK/u1q/a0X4wMTgcHfT8H6fpbt98PFuDUwFg2YA==}
     engines: {node: '>=22.19.0'}
 
   unpipe@1.0.0:
@@ -1783,7 +1780,7 @@ snapshots:
     dependencies:
       google-auth-library: 10.9.1
       p-retry: 4.6.2
-      protobufjs: 7.6.3
+      protobufjs: 7.6.5
       ws: 8.21.0
     optionalDependencies:
       '@modelcontextprotocol/sdk': 1.29.0(zod@4.4.3)
@@ -1905,11 +1902,11 @@ snapshots:
   '@openclaw/fs-safe@0.4.1':
     optionalDependencies:
       jszip: 3.10.1
-      tar: 7.5.19
+      tar: 7.5.21
 
-  '@openclaw/proxyline@0.3.3(undici@8.5.0)':
+  '@openclaw/proxyline@0.3.3(undici@8.9.0)':
     dependencies:
-      undici: 8.5.0
+      undici: 8.9.0
 
   '@opentelemetry/semantic-conventions@1.43.0': {}
 
@@ -1926,8 +1923,6 @@ snapshots:
       '@protobufjs/aspromise': 1.1.2
 
   '@protobufjs/float@1.0.2': {}
-
-  '@protobufjs/inquire@1.1.2': {}
 
   '@protobufjs/path@1.1.2': {}
 
@@ -2273,7 +2268,7 @@ snapshots:
     dependencies:
       debug: 4.4.3
       express: 5.2.1
-      ip-address: 10.4.0
+      ip-address: 10.3.1
     transitivePeerDependencies:
       - supports-color
 
@@ -2494,7 +2489,7 @@ snapshots:
 
   inherits@2.0.4: {}
 
-  ip-address@10.4.0: {}
+  ip-address@10.3.1: {}
 
   ipaddr.js@1.9.1: {}
 
@@ -2663,7 +2658,7 @@ snapshots:
       '@mozilla/readability': 0.6.0
       '@openclaw/ai': 2026.7.1-2(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(ws@8.21.0)(zod@4.4.3)
       '@openclaw/fs-safe': 0.4.1
-      '@openclaw/proxyline': 0.3.3(undici@8.5.0)
+      '@openclaw/proxyline': 0.3.3(undici@8.9.0)
       '@silvia-odwyer/photon-node': 0.3.4
       chalk: 5.6.2
       chokidar: 5.0.0
@@ -2693,12 +2688,12 @@ snapshots:
       qrcode: 1.5.4
       quickjs-wasi: 3.0.2
       rastermill: 0.3.1
-      tar: 7.5.19
+      tar: 7.5.21
       tree-sitter-bash: 0.25.1
       tslog: 4.10.2
       typebox: 1.3.3
       typescript: 6.0.3
-      undici: 8.5.0
+      undici: 8.9.0
       web-push: 3.6.7
       web-tree-sitter: 0.26.10
       ws: 8.21.0
@@ -2765,7 +2760,7 @@ snapshots:
       retry: 0.12.0
       signal-exit: 3.0.7
 
-  protobufjs@7.6.3:
+  protobufjs@7.6.5:
     dependencies:
       '@protobufjs/aspromise': 1.1.2
       '@protobufjs/base64': 1.1.2
@@ -2773,7 +2768,6 @@ snapshots:
       '@protobufjs/eventemitter': 1.1.1
       '@protobufjs/fetch': 1.1.1
       '@protobufjs/float': 1.0.2
-      '@protobufjs/inquire': 1.1.2
       '@protobufjs/path': 1.1.2
       '@protobufjs/pool': 1.1.0
       '@protobufjs/utf8': 1.1.2
@@ -2973,7 +2967,7 @@ snapshots:
     dependencies:
       '@tokenizer/token': 0.3.0
 
-  tar@7.5.19:
+  tar@7.5.21:
     dependencies:
       '@isaacs/fs-minipass': 4.0.1
       chownr: 3.0.0
@@ -3047,7 +3041,7 @@ snapshots:
 
   undici-types@8.3.0: {}
 
-  undici@8.5.0: {}
+  undici@8.9.0: {}
 
   unpipe@1.0.0: {}
 
