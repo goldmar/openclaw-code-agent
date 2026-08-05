@@ -1,13 +1,13 @@
 {
   "name": "openclaw-code-agent",
-  "version": "4.7.6",
+  "version": "4.7.7",
   "type": "module",
   "packageManager": "pnpm@11.15.1",
   "main": "dist/index.js",
   "scripts": {
     "audit:prod": "pnpm audit --prod",
     "build": "esbuild index.ts --bundle --splitting --platform=node --target=node22 --format=esm --outdir=dist --entry-names=index --chunk-names=chunks/[name] --minify --charset=utf8 --pure:console.log --pure:console.warn --pure:console.info --pure:console.debug --external:@anthropic-ai/claude-agent-sdk --external:openclaw/plugin-sdk/plugin-entry",
-    "check-static-guardrails": "node scripts/check-static-guardrails.mjs",
+    "check-static-guardrails": "node scripts/check-static-guardrails.mjs && node scripts/check-release-age-exceptions.mjs",
     "check-plugin-security": "node scripts/check-plugin-security.mjs",
     "test": "node scripts/run-tests.mjs",
     "test:integ:crabbox": "node scripts/run-tests.mjs tests/oca-codex-crabbox-integ.test.ts tests/oca-plugin-workflows-integ.test.ts tests/oca-codex-telegram-proof.test.ts tests/oca-codex-proof-app-server.test.ts tests/oca-codex-proof-workflow.test.ts",
@@ -33,15 +33,15 @@
     "install": {
       "npmSpec": "openclaw-code-agent",
       "defaultChoice": "npm",
-      "minHostVersion": ">=2026.7.1"
+      "minHostVersion": ">=2026.7.1-2"
     },
     "compat": {
-      "pluginApi": ">=2026.7.1",
-      "minGatewayVersion": "2026.7.1"
+      "pluginApi": ">=2026.7.1-2",
+      "minGatewayVersion": "2026.7.1-2"
     },
     "build": {
-      "openclawVersion": "2026.7.1",
-      "pluginSdkVersion": "2026.7.1"
+      "openclawVersion": "2026.7.1-2",
+      "pluginSdkVersion": "2026.7.1-2"
     }
   },
   "files": [
@@ -58,7 +58,7 @@
     "@types/node": "^26.0.1",
     "esbuild": "^0.28.1",
     "nanoid": "^6.0.0",
-    "openclaw": "2026.7.1",
+    "openclaw": "2026.7.1-2",
     "tsx": "^4.21.0",
     "typescript": "^7.0.2"
   },
@@ -95,11 +95,13 @@
   },
   "description": "An OpenClaw plugin that orchestrates coding agent sessions as managed background processes. Launch, monitor, and control coding agents (Claude Code, Codex, experimental OpenCode, and more) directly from your AI gateway.",
   "peerDependencies": {
-    "openclaw": ">=2026.7.1"
+    "openclaw": ">=2026.7.1-2"
   },
   "overrides": {
     "basic-ftp": "5.3.1",
     "fast-xml-builder@<1.1.7": "1.1.7",
-    "ip-address@<10.1.1": "10.1.1"
+    "fast-uri@<3.1.5": "3.1.5",
+    "hono@<4.12.34": "4.12.34",
+    "ip-address@<10.3.1": "10.3.1"
   }
 }
