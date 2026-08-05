@@ -27,11 +27,37 @@ export function parseSecurityExceptions(source) {
   return exceptions;
 }
 
+function parseMinimumReleaseAgeExcludes(source) {
+  const lines = source.split(/\r?\n/);
+  const start = lines.findIndex((line) => /^minimumReleaseAgeExclude:\s*$/u.test(line));
+  if (start < 0) return [];
+
+  const excludes = [];
+  for (let index = start + 1; index < lines.length; index += 1) {
+    if (/^\S/u.test(lines[index])) break;
+    const match = entry.exec(lines[index]);
+    if (match) excludes.push(match[1]);
+  }
+  return excludes;
+}
+
 export function validateSecurityExceptions(source, now = new Date()) {
   if (!/^minimumReleaseAge:\s*1440\s*$/mu.test(source)) {
     throw new Error("pnpm-workspace.yaml must preserve the 24-hour minimumReleaseAge: 1440 policy");
   }
   const exceptions = parseSecurityExceptions(source);
+  const excludes = parseMinimumReleaseAgeExcludes(source);
+  const annotatedPackages = exceptions.map((exception) => exception.package);
+  const unannotated = excludes.filter((packageSpec) => !annotatedPackages.includes(packageSpec));
+  if (unannotated.length > 0) {
+    throw new Error(
+      `minimumReleaseAgeExclude contains unannotated exception(s): ${unannotated.join(", ")}`,
+    );
+  }
+  const detached = annotatedPackages.filter((packageSpec) => !excludes.includes(packageSpec));
+  if (detached.length > 0) {
+    throw new Error(`security exception marker is outside minimumReleaseAgeExclude: ${detached.join(", ")}`);
+  }
   for (const exception of exceptions) {
     if (!exactPackageVersion.test(exception.package)) {
       throw new Error(`Security exception on line ${exception.line} is not an exact package@version: ${exception.package}`);

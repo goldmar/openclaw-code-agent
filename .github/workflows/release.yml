@@ -70,6 +70,7 @@ jobs:
           pnpm check-plugin-security
           pnpm validate:release-metadata -- "${{ inputs.version }}"
           pnpm audit:prod
+          pnpm verify:npm-consumer
 
       - name: Run ClawHub inspector
         run: |
@@ -213,7 +214,15 @@ jobs:
               --source-commit "${{ inputs.commit }}" \
               --manual-override-reason "GitHub Actions workflow_dispatch publish via CLAWHUB_TOKEN" \
               --json
-            clawhub package verify "$artifact" --package "$PACKAGE_NAME" --version "${{ inputs.version }}" --json
+            verified=false
+            for delay in 5 10 20 40 60; do
+              if clawhub package verify "$artifact" --package "$PACKAGE_NAME" --version "${{ inputs.version }}" --json; then
+                verified=true
+                break
+              fi
+              sleep "$delay"
+            done
+            test "$verified" = true
           fi
 
       - name: Remove ClawHub token config

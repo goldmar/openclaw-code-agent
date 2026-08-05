@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.7.8] - 2026-08-05
+
+### Security
+
+- Declare the patched `fast-uri@3.1.5`, `hono@4.12.34`, and `ip-address@10.3.1` runtime versions as exact package dependencies and ship a machine-checked npm shrinkwrap. npm ignores `overrides` from installed dependencies, so this makes the security floors part of the consumer-resolved dependency contract instead of ineffective published metadata.
+- Upgrade the declared MCP runtime to `1.30.0`, pin `@hono/node-server@2.0.10` and `express-rate-limit@8.6.1`, and machine-check every shrinkwrapped package against the 24-hour release-age window. This removes the adapter path-traversal advisory without silently admitting newly published transitive releases.
+- Remove obsolete Claude SDK release-age exclusions and reject any future `minimumReleaseAgeExclude` entry that lacks the required exact-version, advisory, quarantine, and expiry metadata.
+
+### Release
+
+- Retry ClawHub verification with bounded backoff after a successful publish so registry propagation does not strand npm and GitHub publication.
+
 ## [4.7.7] - 2026-08-03
 
 ### Changed
@@ -652,7 +664,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Default Codex approval policy to `on-request`.
 - Raised the default session limit.
 
-[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.6...HEAD
+[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.8...HEAD
+[4.7.8]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.7...v4.7.8
+[4.7.7]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.6...v4.7.7
 [4.7.6]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.5...v4.7.6
 [4.7.5]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.4...v4.7.5
 [4.7.4]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.3...v4.7.4
