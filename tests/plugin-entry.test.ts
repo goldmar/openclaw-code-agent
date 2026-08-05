@@ -72,11 +72,11 @@ describe("plugin entry source", () => {
       validateReleaseMetadata();
     assert.equal(packageVersion, pluginVersion);
     assert.equal(pluginName, "Code Agent");
-    assert.equal(openclawVersion, "2026.7.1");
-    assert.equal(pluginSdkVersion, "2026.7.1");
+    assert.equal(openclawVersion, "2026.7.1-2");
+    assert.equal(pluginSdkVersion, "2026.7.1-2");
     assert.equal(openclawInstall.npmSpec, "openclaw-code-agent");
     assert.equal(openclawInstall.defaultChoice, "npm");
-    assert.equal(openclawInstall.minHostVersion, ">=2026.7.1");
+    assert.equal(openclawInstall.minHostVersion, ">=2026.7.1-2");
 
     const cliOutput = execFileSync("node", ["scripts/validate-release-metadata.mjs"], {
       cwd: rootDir,
@@ -85,7 +85,7 @@ describe("plugin entry source", () => {
     assert.match(cliOutput, /openclaw\.plugin\.name=Code Agent/);
     assert.match(cliOutput, /openclaw\.install\.npmSpec=openclaw-code-agent/);
     assert.match(cliOutput, /openclaw\.install\.defaultChoice=npm/);
-    assert.match(cliOutput, /openclaw\.install\.minHostVersion=>=2026\.7\.1/);
+    assert.match(cliOutput, /openclaw\.install\.minHostVersion=>=2026\.7\.1-2/);
   });
 
   it("keeps security audit automation on the pnpm-only path", () => {
@@ -109,7 +109,32 @@ describe("plugin entry source", () => {
     assert.doesNotMatch(activeWorkflowSources, /\bnpm audit\b/);
   });
 
-  it("requires v2026.7.1 across all public OpenClaw compatibility metadata", () => {
+  it("ships patched runtime dependencies as enforceable exact dependencies", () => {
+    const packageJson = JSON.parse(readFileSync(join(rootDir, "package.json"), "utf8")) as {
+      dependencies?: Record<string, string>;
+      overrides?: Record<string, string>;
+    };
+
+    assert.equal(packageJson.dependencies?.["fast-uri"], "3.1.5");
+    assert.equal(packageJson.dependencies?.hono, "4.12.34");
+    assert.equal(packageJson.dependencies?.["ip-address"], "10.3.1");
+    assert.equal(packageJson.overrides, undefined);
+    assert.doesNotThrow(() =>
+      execFileSync("node", ["scripts/check-npm-shrinkwrap.mjs"], {
+        cwd: rootDir,
+        encoding: "utf8",
+      }),
+    );
+    const pack = JSON.parse(
+      execFileSync("npm", ["pack", "--dry-run", "--json"], {
+        cwd: rootDir,
+        encoding: "utf8",
+      }),
+    ) as Array<{ files?: Array<{ path?: string }> }>;
+    assert.ok(pack[0]?.files?.some((file) => file.path === "npm-shrinkwrap.json"));
+  });
+
+  it("uses a correction-release floor that includes v2026.7.1-2 and stable v2026.7.1", () => {
     const packageJson = JSON.parse(readFileSync(join(rootDir, "package.json"), "utf8")) as {
       dependencies?: Record<string, string>;
       openclaw?: {
@@ -121,24 +146,27 @@ describe("plugin entry source", () => {
       peerDependencies?: Record<string, string>;
     };
 
-    assert.equal(packageJson.dependencies?.["@anthropic-ai/claude-agent-sdk"], "^0.3.216");
+    assert.equal(packageJson.dependencies?.["@anthropic-ai/claude-agent-sdk"], "0.3.220");
     assert.equal(packageJson.openclaw?.install?.npmSpec, "openclaw-code-agent");
     assert.equal(packageJson.openclaw?.install?.defaultChoice, "npm");
-    assert.equal(packageJson.openclaw?.install?.minHostVersion, ">=2026.7.1");
-    assert.equal(packageJson.openclaw?.compat?.pluginApi, ">=2026.7.1");
-    assert.equal(packageJson.openclaw?.compat?.minGatewayVersion, "2026.7.1");
-    assert.equal(packageJson.openclaw?.build?.openclawVersion, "2026.7.1");
-    assert.equal(packageJson.openclaw?.build?.pluginSdkVersion, "2026.7.1");
-    assert.equal(packageJson.peerDependencies?.openclaw, ">=2026.7.1");
-    assert.equal(packageJson.devDependencies?.openclaw, "2026.7.1");
+    assert.equal(packageJson.openclaw?.install?.minHostVersion, ">=2026.7.1-2");
+    assert.equal(packageJson.openclaw?.compat?.pluginApi, ">=2026.7.1-2");
+    assert.equal(packageJson.openclaw?.compat?.minGatewayVersion, "2026.7.1-2");
+    assert.equal(packageJson.openclaw?.build?.openclawVersion, "2026.7.1-2");
+    assert.equal(packageJson.openclaw?.build?.pluginSdkVersion, "2026.7.1-2");
+    assert.equal(packageJson.peerDependencies?.openclaw, ">=2026.7.1-2");
+    assert.equal(packageJson.devDependencies?.openclaw, "2026.7.1-2");
     assert.doesNotMatch(readFileSync(join(rootDir, "pnpm-lock.yaml"), "utf8"), /uuid@9\.0\.1/);
   });
 
   it("accepts exact and range-shaped manual OpenClaw release targets", () => {
-    assert.equal(normalizeOpenClawTargetVersion("2026.7.1"), "2026.7.1");
+    assert.equal(normalizeOpenClawTargetVersion("2026.7.1-2"), "2026.7.1-2");
     assert.equal(normalizeOpenClawTargetVersion(">=2026.7.1"), "2026.7.1");
     assert.doesNotThrow(() =>
-      validateReleaseMetadata({ openclawTargetVersion: ">=2026.7.1" }),
+      validateReleaseMetadata({
+        openclawTargetVersion: "2026.7.1-2",
+        openclawCompatibilityFloor: ">=2026.7.1-2",
+      }),
     );
     assert.throws(
       () => normalizeOpenClawTargetVersion("^2026.7.1"),
@@ -442,15 +470,15 @@ describe("plugin entry source", () => {
     assert.doesNotMatch(apiSource, /openclaw\/plugin-sdk\/discord/);
   });
 
-  it("documents 2026.7.1 plugin allowlist and apply_patch policy boundaries", () => {
+  it("documents the 2026.7.1-2 target and 2026.7.1 compatibility boundaries", () => {
     const reference = readFileSync(join(rootDir, "docs", "REFERENCE.md"), "utf8");
     const readme = readFileSync(join(rootDir, "README.md"), "utf8");
     const changelog = readFileSync(join(rootDir, "CHANGELOG.md"), "utf8");
 
-    assert.match(reference, /OpenClaw 2026\.7\.1 SDK Readiness/);
-    assert.match(reference, /validated against and requires OpenClaw `2026\.7\.1`/);
-    assert.match(readme, /targets, validates against, and requires OpenClaw `2026\.7\.1`/);
-    assert.match(changelog, /Retargeted the OpenClaw package and plugin SDK validation metadata to `2026\.7\.1`/);
+    assert.match(reference, /OpenClaw 2026\.7\.1-2 SDK Readiness/);
+    assert.match(reference, /validated against OpenClaw `2026\.7\.1-2`/);
+    assert.match(readme, /targets and validates against OpenClaw `2026\.7\.1-2`/);
+    assert.match(changelog, /retargeted package and plugin SDK build metadata to OpenClaw `2026\.7\.1-2`/i);
     assert.match(changelog, /Codex app-server, Telegram and topic routing, cron\/session delivery/);
     assert.match(readme, /retryable stale plan approval buttons/);
     assert.match(reference, /pnpm-workspace\.yaml/);

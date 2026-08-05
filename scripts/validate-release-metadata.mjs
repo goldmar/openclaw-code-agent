@@ -5,7 +5,8 @@ import { fileURLToPath } from "node:url";
 
 const scriptPath = fileURLToPath(import.meta.url);
 const rootDir = dirname(dirname(scriptPath));
-const defaultOpenClawTargetVersion = "2026.7.1";
+const defaultOpenClawTargetVersion = "2026.7.1-2";
+const defaultOpenClawCompatibilityFloor = "2026.7.1-2";
 const exactOpenClawVersionPattern = /^\d{4}\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u;
 
 export function normalizeOpenClawTargetVersion(value = defaultOpenClawTargetVersion) {
@@ -38,9 +39,13 @@ export function validateReleaseMetadata(options = {}) {
   const {
     releaseVersion,
     openclawTargetVersion = defaultOpenClawTargetVersion,
+    openclawCompatibilityFloor = defaultOpenClawCompatibilityFloor,
     baseDir = rootDir,
   } = options;
   const normalizedOpenClawTargetVersion = normalizeOpenClawTargetVersion(openclawTargetVersion);
+  const normalizedOpenClawCompatibilityFloor = normalizeOpenClawTargetVersion(
+    openclawCompatibilityFloor,
+  );
   const {
     packageVersion,
     pluginVersion,
@@ -102,7 +107,7 @@ export function validateReleaseMetadata(options = {}) {
     );
   }
 
-  const expectedRange = `>=${normalizedOpenClawTargetVersion}`;
+  const expectedRange = `>=${normalizedOpenClawCompatibilityFloor}`;
   if (openclawInstall.minHostVersion !== expectedRange) {
     throw new Error(
       `OpenClaw install minHostVersion mismatch: expected ${expectedRange}, got ${openclawInstall.minHostVersion}`,
@@ -115,9 +120,9 @@ export function validateReleaseMetadata(options = {}) {
     );
   }
 
-  if (openclawCompat?.minGatewayVersion !== normalizedOpenClawTargetVersion) {
+  if (openclawCompat?.minGatewayVersion !== normalizedOpenClawCompatibilityFloor) {
     throw new Error(
-      `OpenClaw minGatewayVersion mismatch: expected ${normalizedOpenClawTargetVersion}, got ${openclawCompat?.minGatewayVersion}`,
+      `OpenClaw minGatewayVersion mismatch: expected ${normalizedOpenClawCompatibilityFloor}, got ${openclawCompat?.minGatewayVersion}`,
     );
   }
 
@@ -138,6 +143,12 @@ export function validateReleaseMetadata(options = {}) {
 
   if (!lockfile.includes(`openclaw:\n        specifier: ${openclawVersion}`)) {
     throw new Error(`pnpm-lock.yaml is not pinned to OpenClaw ${openclawVersion}`);
+  }
+
+  if (packageJson.devDependencies?.openclaw !== normalizedOpenClawTargetVersion) {
+    throw new Error(
+      `OpenClaw dev dependency mismatch: expected ${normalizedOpenClawTargetVersion}, got ${packageJson.devDependencies?.openclaw}`,
+    );
   }
 
   if (packageJson.packageManager !== "pnpm@11.15.1") {
