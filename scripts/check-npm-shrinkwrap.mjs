@@ -7,7 +7,7 @@ const rootDir = dirname(dirname(fileURLToPath(import.meta.url)));
 const packageJson = JSON.parse(readFileSync(join(rootDir, "package.json"), "utf8"));
 const shrinkwrap = JSON.parse(readFileSync(join(rootDir, "npm-shrinkwrap.json"), "utf8"));
 const requiredSecurityVersions = {
-  "@hono/node-server": "2.1.0",
+  "@hono/node-server": "2.1.1",
   "express-rate-limit": "8.6.1",
   "fast-uri": "3.1.5",
   hono: "4.12.34",
