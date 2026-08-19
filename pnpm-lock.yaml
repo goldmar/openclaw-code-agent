@@ -28,10 +28,10 @@ importers:
     dependencies:
       '@anthropic-ai/claude-agent-sdk':
         specifier: 0.3.233
-        version: 0.3.233(@anthropic-ai/sdk@0.109.1(zod@4.4.3))(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(zod@4.4.3)
+        version: 0.3.233(@anthropic-ai/sdk@0.117.1(zod@4.4.3))(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(zod@4.4.3)
       '@anthropic-ai/sdk':
-        specifier: 0.109.1
-        version: 0.109.1(zod@4.4.3)
+        specifier: 0.117.1
+        version: 0.117.1(zod@4.4.3)
       '@hono/node-server':
         specifier: 2.1.0
         version: 2.1.0(hono@4.12.34)
@@ -134,6 +134,15 @@ packages:
 
   '@anthropic-ai/sdk@0.109.1':
     resolution: {integrity: sha512-q9OnEKLr5H9nxSuXdgDgJhxfYMiE+AaUEBze2Gk91UcaaLnsN+Lx5fbCYywiqurU/APLdwv23x03Wm6WN3EBsg==}
+    hasBin: true
+    peerDependencies:
+      zod: ^3.25.0 || ^4.0.0
+    peerDependenciesMeta:
+      zod:
+        optional: true
+
+  '@anthropic-ai/sdk@0.117.1':
+    resolution: {integrity: sha512-Yn2QlXfyCiKJ5YGCOOay7ZE78ISvII2XY621WMCiflmG8IYgwx59IBwPExxki3Xk9jKUtnD/Sj6UvplWr0rZxg==}
     hasBin: true
     peerDependencies:
       zod: ^3.25.0 || ^4.0.0
@@ -1699,9 +1708,9 @@ snapshots:
   '@anthropic-ai/claude-agent-sdk-win32-x64@0.3.233':
     optional: true
 
-  '@anthropic-ai/claude-agent-sdk@0.3.233(@anthropic-ai/sdk@0.109.1(zod@4.4.3))(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(zod@4.4.3)':
+  '@anthropic-ai/claude-agent-sdk@0.3.233(@anthropic-ai/sdk@0.117.1(zod@4.4.3))(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(zod@4.4.3)':
     dependencies:
-      '@anthropic-ai/sdk': 0.109.1(zod@4.4.3)
+      '@anthropic-ai/sdk': 0.117.1(zod@4.4.3)
       '@modelcontextprotocol/sdk': 1.30.0(zod@4.4.3)
       zod: 4.4.3
     optionalDependencies:
@@ -1715,6 +1724,13 @@ snapshots:
       '@anthropic-ai/claude-agent-sdk-win32-x64': 0.3.233
 
   '@anthropic-ai/sdk@0.109.1(zod@4.4.3)':
+    dependencies:
+      json-schema-to-ts: 3.1.1
+      standardwebhooks: 1.0.0
+    optionalDependencies:
+      zod: 4.4.3
+
+  '@anthropic-ai/sdk@0.117.1(zod@4.4.3)':
     dependencies:
       json-schema-to-ts: 3.1.1
       standardwebhooks: 1.0.0
