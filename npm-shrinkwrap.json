@@ -10,7 +10,7 @@
       "license": "MIT",
       "dependencies": {
         "@anthropic-ai/claude-agent-sdk": "0.3.233",
-        "@anthropic-ai/sdk": "0.109.1",
+        "@anthropic-ai/sdk": "0.117.1",
         "@hono/node-server": "2.1.1",
         "@modelcontextprotocol/sdk": "1.30.0",
         "express-rate-limit": "8.6.1",
@@ -164,9 +164,9 @@
       ]
     },
     "node_modules/@anthropic-ai/sdk": {
-      "version": "0.109.1",
-      "resolved": "https://registry.npmjs.org/@anthropic-ai/sdk/-/sdk-0.109.1.tgz",
-      "integrity": "sha512-q9OnEKLr5H9nxSuXdgDgJhxfYMiE+AaUEBze2Gk91UcaaLnsN+Lx5fbCYywiqurU/APLdwv23x03Wm6WN3EBsg==",
+      "version": "0.117.1",
+      "resolved": "https://registry.npmjs.org/@anthropic-ai/sdk/-/sdk-0.117.1.tgz",
+      "integrity": "sha512-Yn2QlXfyCiKJ5YGCOOay7ZE78ISvII2XY621WMCiflmG8IYgwx59IBwPExxki3Xk9jKUtnD/Sj6UvplWr0rZxg==",
       "license": "MIT",
       "dependencies": {
         "json-schema-to-ts": "^3.1.1",
