@@ -1,0 +1,101 @@
+name: Dependabot Auto-merge
+
+on:
+  pull_request_target:
+    branches:
+      - main
+    types:
+      - opened
+      - reopened
+      - ready_for_review
+      - synchronize
+  issue_comment:
+    types:
+      - created
+
+concurrency:
+  group: dependabot-automerge-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: write
+
+jobs:
+  enable-auto-merge:
+    if: >-
+      (github.event_name == 'pull_request_target' && github.event.pull_request.base.ref == 'main') ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request)
+    runs-on: ubuntu-latest
+    steps:
+      # Do not check out or execute Dependabot's branch in this privileged workflow.
+      - name: Read Dependabot metadata
+        id: metadata
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
+        with:
+          pr-url: ${{ github.event.pull_request.html_url || github.event.issue.pull_request.html_url }}
+
+      - name: Enforce low-risk policy and Greptile review
+        id: policy
+        env:
+          DEPENDENCY_NAMES: ${{ steps.metadata.outputs.dependency-names }}
+          DEPENDENCY_TYPE: ${{ steps.metadata.outputs.dependency-type }}
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ github.event.pull_request.html_url || github.event.issue.pull_request.html_url }}
+          UPDATE_TYPE: ${{ steps.metadata.outputs.update-type }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          pr_json="$(gh pr view "$PR_URL" --json author,baseRefName,files,headRefOid,headRepositoryOwner,isDraft,number)"
+          test "$(jq -r '.author.login' <<<"$pr_json")" = "app/dependabot"
+          test "$(jq -r '.baseRefName' <<<"$pr_json")" = "main"
+          test "$(jq -r '.headRepositoryOwner.login' <<<"$pr_json")" = "goldmar"
+          test "$(jq -r '.isDraft' <<<"$pr_json")" = "false"
+
+          case "$UPDATE_TYPE" in
+            version-update:semver-patch|version-update:semver-minor) ;;
+            *) echo "Manual review required for update type: $UPDATE_TYPE"; exit 0 ;;
+          esac
+
+          names="${DEPENDENCY_NAMES,,}"
+          case "$names" in
+            *anthropic*|*claude*|*openclaw*|*modelcontextprotocol*|*fast-uri*|*express-rate-limit*|*hono*|*ip-address*|*zod*)
+              echo "Manual review required for protected dependency: $DEPENDENCY_NAMES"
+              exit 0
+              ;;
+          esac
+
+          if [[ "$DEPENDENCY_TYPE" == "direct:development" ]]; then
+            jq -e 'all(.files[].path; . == "package.json" or . == "pnpm-lock.yaml")' <<<"$pr_json" >/dev/null
+          elif [[ "$names" == *"github/codeql-action/"* ]]; then
+            jq -e 'all(.files[].path; startswith(".github/workflows/"))' <<<"$pr_json" >/dev/null
+          else
+            echo "Manual review required for dependency type: $DEPENDENCY_TYPE"
+            exit 0
+          fi
+
+          pr_number="$(jq -r '.number' <<<"$pr_json")"
+          head_sha="$(jq -r '.headRefOid' <<<"$pr_json")"
+          comments="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${pr_number}/comments" --paginate)"
+          if ! jq -e --arg sha "$head_sha" '
+            any(.[ ];
+              .user.login == "greptile-apps[bot]" and
+              (.body | contains("Confidence Score: 5/5")) and
+              (.body | contains("No blocking issues found")) and
+              (.body | contains($sha))
+            )
+          ' <<<"$comments" >/dev/null; then
+            echo "Waiting for a 5/5 Greptile review of exact head $head_sha"
+            exit 0
+          fi
+
+          echo "eligible=true" >>"$GITHUB_OUTPUT"
+
+      - name: Enable protected squash auto-merge
+        if: steps.policy.outputs.eligible == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ github.event.pull_request.html_url || github.event.issue.pull_request.html_url }}
+        run: gh pr merge --auto --squash "$PR_URL"

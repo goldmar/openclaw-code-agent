@@ -4,7 +4,18 @@ updates:
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 5
+      day: monday
+      time: "09:00"
+      timezone: America/Los_Angeles
+    # Match the repository's mandatory pnpm minimumReleaseAge quarantine.
+    cooldown:
+      default-days: 1
+    # CodeQL init/analyze must move together or the analysis workflow fails.
+    groups:
+      codeql:
+        patterns:
+          - github/codeql-action/*
+    open-pull-requests-limit: 3
     commit-message:
       prefix: chore
       include: scope
@@ -13,6 +24,20 @@ updates:
     directory: /
     schedule:
       interval: weekly
+      day: monday
+      time: "09:15"
+      timezone: America/Los_Angeles
+    # This complements, but never replaces, pnpm's enforced 24-hour gate.
+    cooldown:
+      default-days: 1
+    # Reduce noise only for development updates; runtime dependencies stay
+    # isolated for npm-shrinkwrap and compatibility review.
+    groups:
+      low-risk-development:
+        dependency-type: development
+        update-types:
+          - minor
+          - patch
     open-pull-requests-limit: 5
     commit-message:
       prefix: chore
