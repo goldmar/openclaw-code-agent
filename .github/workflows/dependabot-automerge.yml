@@ -48,11 +48,18 @@ jobs:
         run: |
           set -euo pipefail
 
-          pr_json="$(gh pr view "$PR_URL" --json author,baseRefName,files,headRefOid,headRepositoryOwner,isDraft,number)"
+          pr_json="$(gh pr view "$PR_URL" --json author,autoMergeRequest,baseRefName,files,headRefOid,headRepositoryOwner,isDraft,number)"
           test "$(jq -r '.author.login' <<<"$pr_json")" = "app/dependabot"
           test "$(jq -r '.baseRefName' <<<"$pr_json")" = "main"
           test "$(jq -r '.headRepositoryOwner.login' <<<"$pr_json")" = "goldmar"
           test "$(jq -r '.isDraft' <<<"$pr_json")" = "false"
+
+          # A synchronized Dependabot head inherits an existing auto-merge
+          # request. Revoke it before evaluating the replacement head, then
+          # re-enable only after that exact SHA has its own Greptile review.
+          if [[ "$(jq -r '.autoMergeRequest != null' <<<"$pr_json")" == "true" ]]; then
+            gh pr merge --disable-auto "$PR_URL"
+          fi
 
           case "$UPDATE_TYPE" in
             version-update:semver-patch|version-update:semver-minor) ;;

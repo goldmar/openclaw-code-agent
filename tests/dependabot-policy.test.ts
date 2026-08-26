@@ -39,7 +39,13 @@ describe("Dependabot maintenance policy", () => {
     assert.match(workflow, /Confidence Score: 5\/5/);
     assert.match(workflow, /No blocking issues found/);
     assert.match(workflow, /contains\(\$sha\)/);
+    assert.match(workflow, /autoMergeRequest/);
+    assert.match(workflow, /gh pr merge --disable-auto/);
     assert.match(workflow, /gh pr merge --auto --squash/);
     assert.doesNotMatch(workflow, /--admin|--force/);
+    assert.ok(
+      workflow.indexOf("gh pr merge --disable-auto") < workflow.indexOf('case "$UPDATE_TYPE"'),
+      "stale auto-merge must be revoked before replacement-head eligibility checks",
+    );
   });
 });
