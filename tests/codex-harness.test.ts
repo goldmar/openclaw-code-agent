@@ -1,5 +1,8 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { getHarness, listHarnesses } from "../src/harness/index";
 import { CodexHarness, DEFAULT_APP_SERVER_ARGS, DEFAULT_REQUEST_TIMEOUT_MS, isCodexAppServerSessionId } from "../src/harness/codex";
 import { StdioJsonRpcClient } from "../src/harness/codex-rpc";
@@ -294,6 +297,37 @@ describe("Codex App Server RPC diagnostics", () => {
       assert.equal(spawn?.requestTimeoutMs, 1234);
     } finally {
       console.warn = originalWarn;
+    }
+  });
+
+  it("does not release close until a SIGTERM-resistant child has actually exited", async () => {
+    const fixtureDir = mkdtempSync(join(tmpdir(), "oca-codex-rpc-close-"));
+    const fixturePath = join(fixtureDir, "ignore-sigterm.mjs");
+    writeFileSync(fixturePath, [
+      "#!/usr/bin/env node",
+      "process.on('SIGTERM', () => {});",
+      "setInterval(() => {}, 1000);",
+      "",
+    ].join("\n"));
+    chmodSync(fixturePath, 0o755);
+
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(" ")); };
+    try {
+      const client = new StdioJsonRpcClient(fixturePath, [], 1_000, 10);
+      await client.connect();
+      await new Promise<void>((resolve) => { setTimeout(resolve, 250); });
+      await client.close();
+
+      const events = warnings.map((warning) => JSON.parse(warning) as { event?: string });
+      const forceKillIndex = events.findIndex((entry) => entry.event === "process.force_kill");
+      const processCloseIndex = events.findIndex((entry) => entry.event === "process.close");
+      assert.ok(forceKillIndex >= 0);
+      assert.ok(processCloseIndex > forceKillIndex);
+    } finally {
+      console.warn = originalWarn;
+      rmSync(fixtureDir, { recursive: true, force: true });
     }
   });
 });

@@ -121,6 +121,7 @@ export class StdioJsonRpcClient implements JsonRpcClient {
     private readonly command: string,
     private readonly args: string[],
     private readonly requestTimeoutMs: number,
+    private readonly shutdownGraceMs: number = 1_000,
   ) {}
 
   setNotificationHandler(handler: JsonRpcNotificationHandler): void {
@@ -198,8 +199,7 @@ export class StdioJsonRpcClient implements JsonRpcClient {
           logCodexRpcDiagnostic("process.force_kill", { pid: child.pid });
           child.kill("SIGKILL");
         }
-        finish();
-      }, 1_000);
+      }, Math.max(1, this.shutdownGraceMs));
       forceKillTimer.unref?.();
       child.kill("SIGTERM");
     });
