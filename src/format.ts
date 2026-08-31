@@ -214,6 +214,7 @@ export function formatStats(metrics: SessionMetrics, runningCount: number): stri
     `   Killed:     ${killed}`,
     ``,
     `⏱️  Average duration: ${avgDurationMs > 0 ? formatDuration(avgDurationMs) : "n/a"}`,
+    `💵 Estimated API cost: $${metrics.totalCostUsd.toFixed(2)}`,
   ];
 
   if (metrics.mostExpensive) {
@@ -222,6 +223,7 @@ export function formatStats(metrics: SessionMetrics, runningCount: number): stri
       ``,
       `🏆 Notable session`,
       `   ${me.name} [${me.id}]`,
+      `   💵 $${me.costUsd.toFixed(2)}`,
       `   📝 "${me.prompt}"`,
     );
   }

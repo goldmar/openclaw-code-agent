@@ -272,6 +272,8 @@ describe("formatStats", () => {
     assert.ok(result.includes("Running:    2"));
     assert.ok(result.includes("Completed:  5"));
     assert.ok(result.includes("2m0s"), "avg duration should be 120s = 2m0s");
+    assert.ok(result.includes("Estimated API cost: $1.50"));
     assert.ok(result.includes("big-job"), "should show notable session");
+    assert.ok(result.includes("$0.80"), "should show notable session cost");
   });
 });
