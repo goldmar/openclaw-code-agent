@@ -687,14 +687,40 @@ describe("CodexHarness App Server mapping", () => {
       cwd: "/tmp/fork-worktree",
       resumeSessionId: VALID_THREAD_ID,
       forkSession: true,
+      fastMode: true,
     }));
 
     assert.equal(client.requests.some((request) => request.method === "thread/resume"), false);
     const forkRequest = client.requests.find((request) => request.method === "thread/fork");
     assert.equal((forkRequest?.params as { threadId?: string }).threadId, VALID_THREAD_ID);
     assert.equal((forkRequest?.params as { cwd?: string }).cwd, "/tmp/fork-worktree");
+    assert.equal((forkRequest?.params as { service_tier?: string }).service_tier, "fast");
     const ref = messages.find((message) => message.type === "backend_ref") as Extract<HarnessMessage, { type: "backend_ref" }>;
     assert.equal(ref.ref.conversationId, forkedThreadId);
+  });
+
+  it("forks only the first turn of a multi-turn session", async () => {
+    const forkedThreadId = "223e4567-e89b-12d3-a456-426614174000";
+    const client = new MockJsonRpcClient({ threadId: forkedThreadId, assistantText: "Forked." });
+    const harness = new CodexHarness({ createClient: () => client as any });
+    async function* prompts() {
+      yield { type: "user", text: "first turn", session_id: VALID_THREAD_ID };
+      yield { type: "user", text: "follow-up turn", session_id: forkedThreadId };
+    }
+
+    await collectMessages(harness.launch({
+      prompt: prompts(),
+      cwd: "/tmp/fork-worktree",
+      resumeSessionId: VALID_THREAD_ID,
+      forkSession: true,
+    }));
+
+    const forkRequests = client.requests.filter((request) => request.method === "thread/fork");
+    const resumeRequests = client.requests.filter((request) => request.method === "thread/resume");
+    assert.equal(forkRequests.length, 1);
+    assert.equal((forkRequests[0]?.params as { threadId?: string }).threadId, VALID_THREAD_ID);
+    assert.equal(resumeRequests.length, 1);
+    assert.equal((resumeRequests[0]?.params as { threadId?: string }).threadId, forkedThreadId);
   });
 
   it("reports the observed active-writer resume failure before implementation starts and closes its client", async () => {

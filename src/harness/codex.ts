@@ -198,6 +198,7 @@ export class CodexHarness implements AgentHarness {
 
     const queue = new HarnessMessageQueue();
     let threadId = normalizeCodexAppServerSessionId(options.resumeSessionId);
+    let forkPending = options.forkSession === true;
     if (options.resumeSessionId && !threadId) {
       console.warn("[CodexHarness] Ignoring invalid Codex App Server resume session id. Expected UUID or urn:uuid UUID.");
     }
@@ -438,12 +439,13 @@ export class CodexHarness implements AgentHarness {
         options.codexApprovalPolicy,
       );
       if (threadId) {
-        const threadMethod = options.forkSession ? "thread/fork" : "thread/resume";
-        logCodexHarnessDiagnostic(options.forkSession ? "thread.fork.start" : "thread.resume.start", threadDiagnosticFields({ threadId }));
+        const shouldFork = forkPending;
+        const threadMethod = shouldFork ? "thread/fork" : "thread/resume";
+        logCodexHarnessDiagnostic(shouldFork ? "thread.fork.start" : "thread.resume.start", threadDiagnosticFields({ threadId }));
         const resumed = await requestWithFallbacks({
           client,
           methods: [threadMethod],
-          payloads: options.forkSession ? buildThreadForkPayloads({
+          payloads: shouldFork ? buildThreadForkPayloads({
             threadId,
             cwd: options.cwd,
             model: runtimeModel,
@@ -462,9 +464,10 @@ export class CodexHarness implements AgentHarness {
         });
         const state = extractThreadState(resumed);
         threadId = state.threadId ?? threadId;
+        if (shouldFork) forkPending = false;
         updateBackendWorktree(state.cwd);
         emitBackendRef();
-        logCodexHarnessDiagnostic(options.forkSession ? "thread.fork.done" : "thread.resume.done", {
+        logCodexHarnessDiagnostic(shouldFork ? "thread.fork.done" : "thread.resume.done", {
           ...threadDiagnosticFields({ threadId, backendWorktreePath, backendWorktreeId }),
         });
         return;

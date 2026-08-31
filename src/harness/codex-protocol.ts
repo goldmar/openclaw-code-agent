@@ -335,7 +335,7 @@ export function buildThreadForkPayloads(params: {
 }): Array<Record<string, unknown>> {
   const base: Record<string, unknown> = { threadId: params.threadId };
   if (params.model?.trim()) base.model = params.model.trim();
-  if (params.fastMode === true) base.serviceTier = "fast";
+  if (params.fastMode === true) base.service_tier = "fast";
   if (params.cwd?.trim()) base.cwd = params.cwd.trim();
   if (params.approvalPolicy?.trim()) base.approvalPolicy = params.approvalPolicy.trim();
   if (params.sandbox?.trim()) base.sandbox = params.sandbox.trim();

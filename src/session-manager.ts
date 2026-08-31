@@ -547,6 +547,29 @@ export class SessionManager {
     }
 
     let pendingPlanResumeClaim: PersistedSessionInfo | undefined;
+    let startAfter: Promise<void> | undefined;
+    if (config.resumeSessionId && !config.forkSession) {
+      const resumeOwner = this.registry.list().find((candidate) => (
+        candidate.backendKind === "codex-app-server"
+        && (
+          candidate.harnessSessionId === config.resumeSessionId
+          || candidate.backendRef?.conversationId === config.resumeSessionId
+          || (
+            !candidate.harnessSessionId
+            && !candidate.backendRef?.conversationId
+            && candidate.resumeSessionId === config.resumeSessionId
+          )
+        )
+      ));
+      if (resumeOwner?.status === "starting" || resumeOwner?.status === "running") {
+        throw new Error(
+          `Cannot resume backend thread ${config.resumeSessionId}: session ${resumeOwner.id} still owns its active writer.`,
+        );
+      }
+      if (resumeOwner && typeof resumeOwner.waitForTeardown === "function") {
+        startAfter = resumeOwner.waitForTeardown();
+      }
+    }
     if (config.sessionIdOverride) {
       const replacedPersisted = this.getPersistedSession(config.sessionIdOverride);
       if (config.resumeSessionId && replacedPersisted?.pendingPlanApproval) {
@@ -568,6 +591,9 @@ export class SessionManager {
         throw new Error(`Cannot reuse session ID ${config.sessionIdOverride}: that session is still ${existing.status}.`);
       }
       if (existing) {
+        if (typeof existing.waitForTeardown === "function") {
+          startAfter ??= existing.waitForTeardown();
+        }
         this.registry.remove(existing.id, "session-id-override-replacement");
       }
       this.clearWaitingTimestampsForSession(config.sessionIdOverride);
@@ -623,7 +649,10 @@ export class SessionManager {
     this.registry.add(session);
     this.metrics.incrementLaunched();
     try {
-      return this.runtimeBootstrap.initializeSession(session, preparedLaunch, config, options);
+      return this.runtimeBootstrap.initializeSession(session, preparedLaunch, config, {
+        ...options,
+        startAfter,
+      });
     } catch (err) {
       this.pendingPlanResumeClaims.delete(session.id);
       throw err;

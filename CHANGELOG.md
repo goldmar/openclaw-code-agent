@@ -16,8 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Close Codex App Server transports whenever an OCA session becomes terminal, wait for the owned child process to exit, and force-kill it after a bounded grace period. This prevents suspended, failed-startup, and replaced sessions from retaining a backend thread writer that makes approval resumes fail with RPC `-32600`.
-- Use Codex App Server's `thread/fork` operation for `fork_session=true` instead of accidentally resuming the source thread and competing for its active writer.
+- Close Codex App Server transports whenever an OCA session becomes terminal, wait for the owned child process to exit, and force-kill it after a bounded grace period. Replacement resumes wait on that teardown barrier, and duplicate resumes fail before launch while a live session still owns the writer, preventing suspended, failed-startup, and replaced sessions from triggering RPC `-32600`.
+- Use Codex App Server's `thread/fork` operation once for `fork_session=true` instead of accidentally resuming the source thread, competing for its active writer, or creating a new nested fork on every follow-up turn.
 - Keep an accepted plan resume in `awaiting_plan_output` until its backend reaches `running`, so a zero-output resume failure remains retryable and is not falsely persisted or reported as `approved_then_implemented`.
 
 ## [4.7.8] - 2026-08-05

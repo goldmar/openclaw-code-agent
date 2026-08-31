@@ -717,6 +717,50 @@ describe("Session.kill() teardown", () => {
     assert.equal(session.status, "killed");
   });
 
+  it("exposes a teardown barrier until the harness releases its backend writer", async () => {
+    let releaseClose!: () => void;
+    const closeBarrier = new Promise<void>((resolve) => { releaseClose = resolve; });
+    const closingHarness: AgentHarness = {
+      name: "test-harness-writer-release-barrier",
+      backendKind: "codex-app-server",
+      supportedPermissionModes: ["default", "plan", "bypassPermissions"],
+      capabilities: {
+        nativePendingInput: true,
+        nativePlanArtifacts: true,
+        worktrees: "plugin-managed",
+      },
+      launch(): HarnessSession {
+        async function* messages() {
+          yield { type: "run_started" } as const;
+          await new Promise<void>(() => undefined);
+        }
+        return {
+          messages: messages(),
+          async close(): Promise<void> { await closeBarrier; },
+        };
+      },
+      buildUserMessage(text: string, sessionId: string): unknown {
+        return { type: "user", text, session_id: sessionId };
+      },
+    };
+    registerHarness(closingHarness);
+
+    const session = new Session(makeSessionConfig({ harness: closingHarness.name }), "writer-release-barrier");
+    await session.start();
+    await tick(20);
+    session.kill("user");
+
+    let released = false;
+    void session.waitForTeardown().then(() => { released = true; });
+    await tick(20);
+    assert.equal(session.status, "killed");
+    assert.equal(released, false);
+
+    releaseClose();
+    await session.waitForTeardown();
+    assert.equal(released, true);
+  });
+
   it("does not report implementation started when an approved recovery fails before backend startup", async () => {
     const activeWriterError = "codex app server rpc error (-32600): thread 01a0583d-acad-74f2-a02e-8402323f60d8 already has an active writer";
     const failingRecoveryHarness: AgentHarness = {

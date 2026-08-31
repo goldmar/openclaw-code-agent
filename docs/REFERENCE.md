@@ -32,7 +32,7 @@ Current releases treat persisted session storage as new-schema-only. If startup 
 
 The current `openclaw-code-agent` package is validated against and requires OpenClaw `2026.8.1`. Exact build metadata, the development dependency, package install, plugin API, Gateway, and peer dependency metadata all record that verified floor.
 
-No host config migration is performed by this package. No new SDK imports or Code Agent runtime changes are needed: runtime code still imports only `openclaw/plugin-sdk/plugin-entry`, `openclaw.plugin.json` declares tools through `contracts.tools`, pnpm build policy and overrides remain in `pnpm-workspace.yaml`, and code-agent session storage remains plugin-owned. Current Start Plan and approval callbacks, Telegram/topic routing, completion and cron/session wakes, Codex and Claude model restrictions, runtime tool visibility, disabled bundled-plugin boundaries, and plan/worktree follow-through remain unchanged.
+No host config migration is performed by this package. No new SDK imports are needed: runtime code still imports only `openclaw/plugin-sdk/plugin-entry`, `openclaw.plugin.json` declares tools through `contracts.tools`, pnpm build policy and overrides remain in `pnpm-workspace.yaml`, and code-agent session storage remains plugin-owned. The 4.7.9 runtime fix is confined to plugin-owned Codex writer teardown, one-shot thread forking, and truthful approval-recovery state. Current Start Plan and approval callbacks, Telegram/topic routing, completion and cron/session wakes, Codex and Claude model restrictions, runtime tool visibility, disabled bundled-plugin boundaries, and plan/worktree follow-through retain their existing contracts.
 
 Configuration guidance for the `2026.8.1` compatibility floor:
 
