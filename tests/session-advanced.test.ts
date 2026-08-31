@@ -716,6 +716,57 @@ describe("Session.kill() teardown", () => {
     assert.equal(closeCalls, 1);
     assert.equal(session.status, "killed");
   });
+
+  it("does not report implementation started when an approved recovery fails before backend startup", async () => {
+    const activeWriterError = "codex app server rpc error (-32600): thread 01a0583d-acad-74f2-a02e-8402323f60d8 already has an active writer";
+    const failingRecoveryHarness: AgentHarness = {
+      name: "test-harness-active-writer-startup-failure",
+      backendKind: "codex-app-server",
+      supportedPermissionModes: ["default", "plan", "bypassPermissions"],
+      capabilities: {
+        nativePendingInput: true,
+        nativePlanArtifacts: true,
+        worktrees: "plugin-managed",
+      },
+      launch(): HarnessSession {
+        async function* messages() {
+          yield {
+            type: "run_completed",
+            data: {
+              success: false,
+              duration_ms: 0,
+              total_cost_usd: 0,
+              num_turns: 0,
+              result: activeWriterError,
+              session_id: "01a0583d-acad-74f2-a02e-8402323f60d8",
+            },
+          } as const;
+        }
+        return { messages: messages() };
+      },
+      buildUserMessage(text: string, sessionId: string): unknown {
+        return { type: "user", text, session_id: sessionId };
+      },
+    };
+    registerHarness(failingRecoveryHarness);
+
+    const session = new Session(makeSessionConfig({
+      harness: failingRecoveryHarness.name,
+      permissionMode: "bypassPermissions",
+      requestedPermissionMode: "plan",
+      approvalState: "approved",
+      approvalExecutionState: "awaiting_plan_output",
+      planModeApproved: true,
+    }), "active-writer-recovery");
+    await session.start();
+    await tick(20);
+
+    assert.equal(session.status, "failed");
+    assert.equal(session.approvalState, "approved");
+    assert.equal(session.approvalExecutionState, "awaiting_plan_output");
+    assert.equal(session.result?.num_turns, 0);
+    assert.equal(session.error ?? session.result?.result, activeWriterError);
+  });
 });
 
 describe("Session.complete() teardown", () => {

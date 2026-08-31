@@ -114,6 +114,7 @@ function deriveApprovalExecutionState(state: SessionControlState): ApprovalExecu
     // Approval is durable as soon as it is claimed, but implementation is not:
     // a backend resume can still fail before the session reaches running.
     return state.status === "starting"
+      || (state.status !== "running" && state.approvalExecutionState === "awaiting_plan_output")
       ? "awaiting_plan_output"
       : "approved_then_implemented";
   }

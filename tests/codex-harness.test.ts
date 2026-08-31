@@ -20,6 +20,7 @@ const CODEX_ARGS_ENV = "OPENCLAW_CODEX_APP_SERVER_ARGS";
 class MockJsonRpcClient {
   requests: Array<{ method: string; params: unknown; timeoutMs: number | undefined }> = [];
   pendingInputResponses: unknown[] = [];
+  closeCalls = 0;
   private notificationHandler: NotificationHandler = () => undefined;
   private requestHandler: RequestHandler = async () => ({});
 
@@ -35,6 +36,7 @@ class MockJsonRpcClient {
         params: unknown;
       };
       failTurn?: string;
+      failResume?: string;
       turnCompletionMethod?: "turn/completed" | "turn/failed" | "turn/cancelled";
       turnStatus?: "completed" | "failed" | "interrupted" | "cancelled";
       accountType?: "apiKey" | "chatgpt";
@@ -61,7 +63,7 @@ class MockJsonRpcClient {
   }
 
   async connect(): Promise<void> {}
-  async close(): Promise<void> {}
+  async close(): Promise<void> { this.closeCalls += 1; }
   async notify(_method: string, _params?: unknown): Promise<void> {}
 
   async request(method: string, params?: unknown, timeoutMs?: number): Promise<unknown> {
@@ -80,6 +82,9 @@ class MockJsonRpcClient {
       };
     }
     if (method === "thread/resume" || method === "thread/fork") {
+      if (method === "thread/resume" && this.options.failResume) {
+        throw new Error(this.options.failResume);
+      }
       return {
         threadId: this.options.threadId ?? "thread-resume",
         ...(this.options.threadCwd ? { cwd: this.options.threadCwd } : {}),
@@ -690,6 +695,26 @@ describe("CodexHarness App Server mapping", () => {
     assert.equal((forkRequest?.params as { cwd?: string }).cwd, "/tmp/fork-worktree");
     const ref = messages.find((message) => message.type === "backend_ref") as Extract<HarnessMessage, { type: "backend_ref" }>;
     assert.equal(ref.ref.conversationId, forkedThreadId);
+  });
+
+  it("reports the observed active-writer resume failure before implementation starts and closes its client", async () => {
+    const activeWriterError = `codex app server rpc error (-32600): thread ${VALID_THREAD_ID} already has an active writer`;
+    const client = new MockJsonRpcClient({ failResume: activeWriterError });
+    const harness = new CodexHarness({ createClient: () => client as any });
+
+    const messages = await collectMessages(harness.launch({
+      prompt: "implement the approved plan",
+      cwd: "/tmp",
+      resumeSessionId: VALID_THREAD_ID,
+    }));
+
+    assert.equal(messages.some((message) => message.type === "backend_ref"), false);
+    assert.equal(messages.some((message) => message.type === "run_started"), false);
+    const result = messages.find((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }>;
+    assert.equal(result.data.success, false);
+    assert.equal(result.data.num_turns, 0);
+    assert.equal(result.data.result, activeWriterError);
+    assert.equal(client.closeCalls, 1);
   });
 
   it("normalizes accepted Codex App Server resume ids before resuming", async () => {
