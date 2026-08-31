@@ -676,6 +676,46 @@ describe("Session.kill() teardown", () => {
     assert.equal(session.status, "killed");
     assert.equal(session.killReason, "user");
   });
+
+  it("closes the harness transport when a session is terminated", async () => {
+    let closeCalls = 0;
+    const closingHarness: AgentHarness = {
+      name: "test-harness-close-on-terminal",
+      backendKind: "codex-app-server",
+      supportedPermissionModes: ["default", "plan", "bypassPermissions"],
+      capabilities: {
+        nativePendingInput: true,
+        nativePlanArtifacts: true,
+        worktrees: "plugin-managed",
+      },
+      launch(): HarnessSession {
+        async function* messages() {
+          yield {
+            type: "backend_ref",
+            ref: { kind: "codex-app-server", conversationId: "writer-owned-thread" },
+          } as const;
+          await new Promise<void>(() => undefined);
+        }
+        return {
+          messages: messages(),
+          async close(): Promise<void> { closeCalls += 1; },
+        };
+      },
+      buildUserMessage(text: string, sessionId: string): unknown {
+        return { type: "user", text, session_id: sessionId };
+      },
+    };
+    registerHarness(closingHarness);
+
+    const session = new Session(makeSessionConfig({ harness: closingHarness.name }), "close-session");
+    await session.start();
+    await tick(20);
+    session.kill("idle-timeout");
+    await tick(20);
+
+    assert.equal(closeCalls, 1);
+    assert.equal(session.status, "killed");
+  });
 });
 
 describe("Session.complete() teardown", () => {

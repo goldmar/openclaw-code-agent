@@ -66,9 +66,9 @@ describe("session-state reducer", () => {
     assert.equal(next.lifecycle, "awaiting_plan_decision");
   });
 
-  it("marks approved plan sessions as approved_then_implemented once the approval path is applied", () => {
+  it("does not claim implementation before an approved resume reaches running", () => {
     const next = reduceSessionControlState(baseState({
-      status: "running",
+      status: "starting",
       lifecycle: "awaiting_plan_decision",
       requestedPermissionMode: "plan",
       currentPermissionMode: "bypassPermissions",
@@ -79,7 +79,13 @@ describe("session-state reducer", () => {
     });
 
     assert.equal(next.approvalState, "approved");
-    assert.equal(next.approvalExecutionState, "approved_then_implemented");
+    assert.equal(next.approvalExecutionState, "awaiting_plan_output");
+
+    const running = reduceSessionControlState(next, {
+      type: "status.transition",
+      status: "running",
+    });
+    assert.equal(running.approvalExecutionState, "approved_then_implemented");
   });
 
   it("marks plan-gated sessions that leave plan mode without approval as implemented_without_required_approval", () => {

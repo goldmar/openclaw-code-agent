@@ -195,7 +195,7 @@ describe("executeRespond", () => {
     assert.equal(capturedConfig.permissionMode, "bypassPermissions");
     assert.equal(capturedConfig.requestedPermissionMode, "plan");
     assert.equal(capturedConfig.approvalState, "approved");
-    assert.equal(capturedConfig.approvalExecutionState, "approved_then_implemented");
+    assert.equal(capturedConfig.approvalExecutionState, "awaiting_plan_output");
     assert.equal(capturedConfig.planModeApproved, true);
     assert.equal(capturedConfig.pendingPlanApproval, false);
     assert.match(capturedConfig.prompt, /The user has approved your plan/i);

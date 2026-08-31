@@ -79,7 +79,7 @@ class MockJsonRpcClient {
         ...(this.options.threadCwd ? { cwd: this.options.threadCwd } : {}),
       };
     }
-    if (method === "thread/resume") {
+    if (method === "thread/resume" || method === "thread/fork") {
       return {
         threadId: this.options.threadId ?? "thread-resume",
         ...(this.options.threadCwd ? { cwd: this.options.threadCwd } : {}),
@@ -670,6 +670,26 @@ describe("CodexHarness App Server mapping", () => {
     assert.equal(Object.hasOwn((resumeRequest?.params as Record<string, unknown>) ?? {}, "cwd"), false);
     const ref = messages.find((message) => message.type === "backend_ref") as Extract<HarnessMessage, { type: "backend_ref" }> | undefined;
     assert.equal(ref?.ref.conversationId, VALID_THREAD_ID);
+  });
+
+  it("forks to a new thread instead of resuming the source writer", async () => {
+    const forkedThreadId = "223e4567-e89b-12d3-a456-426614174000";
+    const client = new MockJsonRpcClient({ threadId: forkedThreadId, assistantText: "Forked." });
+    const harness = new CodexHarness({ createClient: () => client as any });
+
+    const messages = await collectMessages(harness.launch({
+      prompt: "continue independently",
+      cwd: "/tmp/fork-worktree",
+      resumeSessionId: VALID_THREAD_ID,
+      forkSession: true,
+    }));
+
+    assert.equal(client.requests.some((request) => request.method === "thread/resume"), false);
+    const forkRequest = client.requests.find((request) => request.method === "thread/fork");
+    assert.equal((forkRequest?.params as { threadId?: string }).threadId, VALID_THREAD_ID);
+    assert.equal((forkRequest?.params as { cwd?: string }).cwd, "/tmp/fork-worktree");
+    const ref = messages.find((message) => message.type === "backend_ref") as Extract<HarnessMessage, { type: "backend_ref" }>;
+    assert.equal(ref.ref.conversationId, forkedThreadId);
   });
 
   it("normalizes accepted Codex App Server resume ids before resuming", async () => {

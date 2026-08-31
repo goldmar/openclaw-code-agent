@@ -38,6 +38,7 @@ import { canonicalizeModelForHarness, isModelFormatSupportedForHarness } from ".
 import {
   buildPendingInputState,
   buildThreadResumePayloads,
+  buildThreadForkPayloads,
   buildThreadStartPayloads,
   buildTurnInterruptPayloads,
   buildTurnStartPayloads,
@@ -437,11 +438,19 @@ export class CodexHarness implements AgentHarness {
         options.codexApprovalPolicy,
       );
       if (threadId) {
-        logCodexHarnessDiagnostic("thread.resume.start", threadDiagnosticFields({ threadId }));
+        const threadMethod = options.forkSession ? "thread/fork" : "thread/resume";
+        logCodexHarnessDiagnostic(options.forkSession ? "thread.fork.start" : "thread.resume.start", threadDiagnosticFields({ threadId }));
         const resumed = await requestWithFallbacks({
           client,
-          methods: ["thread/resume"],
-          payloads: buildThreadResumePayloads({
+          methods: [threadMethod],
+          payloads: options.forkSession ? buildThreadForkPayloads({
+            threadId,
+            cwd: options.cwd,
+            model: runtimeModel,
+            fastMode: options.fastMode,
+            approvalPolicy: executionPolicy.approvalPolicy,
+            sandbox: executionPolicy.sandbox,
+          }) : buildThreadResumePayloads({
             threadId,
             model: runtimeModel,
             reasoningEffort: options.reasoningEffort,
@@ -455,7 +464,7 @@ export class CodexHarness implements AgentHarness {
         threadId = state.threadId ?? threadId;
         updateBackendWorktree(state.cwd);
         emitBackendRef();
-        logCodexHarnessDiagnostic("thread.resume.done", {
+        logCodexHarnessDiagnostic(options.forkSession ? "thread.fork.done" : "thread.resume.done", {
           ...threadDiagnosticFields({ threadId, backendWorktreePath, backendWorktreeId }),
         });
         return;
@@ -723,6 +732,10 @@ export class CodexHarness implements AgentHarness {
           payloads: buildTurnInterruptPayloads({ threadId, turnId }),
           timeoutMs: clientSettings.requestTimeoutMs,
         }).catch((): undefined => undefined);
+      },
+
+      async close(): Promise<void> {
+        await client.close();
       },
     };
   }

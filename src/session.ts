@@ -716,6 +716,7 @@ export class Session extends EventEmitter {
       this.logDiagnostic("harness.launch.created", {
         hasStreamInput: Boolean(handle.streamInput),
         hasInterrupt: Boolean(handle.interrupt),
+        hasClose: Boolean(handle.close),
         hasPermissionModeSwitch: Boolean(handle.setPermissionMode),
       });
       this.setTimer("startup", STARTUP_TIMEOUT_MS, () => {
@@ -931,6 +932,11 @@ export class Session extends EventEmitter {
     if (this.harnessHandle?.interrupt) {
       void this.harnessHandle.interrupt().catch((err: unknown) => {
         console.warn(`[Session ${this.id}] interrupt during teardown failed: ${errorMessage(err)}`);
+      });
+    }
+    if (this.harnessHandle?.close) {
+      void this.harnessHandle.close().catch((err: unknown) => {
+        console.warn(`[Session ${this.id}] harness close during teardown failed: ${errorMessage(err)}`);
       });
     }
     this.abortController.abort();

@@ -566,7 +566,7 @@ describe("agent_launch tool defaults", () => {
     assert.equal(spawnConfig?.permissionMode, "bypassPermissions");
     assert.equal(spawnConfig?.pendingPlanApproval, false);
     assert.equal(spawnConfig?.approvalState, "approved");
-    assert.equal(spawnConfig?.approvalExecutionState, "approved_then_implemented");
+    assert.equal(spawnConfig?.approvalExecutionState, "awaiting_plan_output");
     assert.equal(spawnConfig?.planDecisionVersion, 5);
     assert.equal(spawnConfig?.actionablePlanDecisionVersion, undefined);
   });
