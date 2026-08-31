@@ -2070,6 +2070,16 @@ describe("SessionManager resumed launch routing", () => {
       await tick(20);
       assert.equal(replacement.status, "starting");
       assert.equal(launchCalls, 1);
+      assert.throws(() => sm.spawn({
+        prompt: "overlapping replacement",
+        workdir: "/tmp",
+        name: "overlapping-writer-replacement",
+        harness: harness.name,
+        resumeSessionId: backendThreadId,
+        worktreeStrategy: "off",
+        route,
+      }, { notifyLaunch: false }), /still owns its active writer/);
+      assert.equal(launchCalls, 1);
 
       releaseClose();
       await tick(20);

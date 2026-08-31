@@ -549,7 +549,7 @@ export class SessionManager {
     let pendingPlanResumeClaim: PersistedSessionInfo | undefined;
     let startAfter: Promise<void> | undefined;
     if (config.resumeSessionId && !config.forkSession) {
-      const resumeOwner = this.registry.list().find((candidate) => (
+      const resumeOwners = this.registry.list().filter((candidate) => (
         candidate.backendKind === "codex-app-server"
         && (
           candidate.harnessSessionId === config.resumeSessionId
@@ -561,11 +561,15 @@ export class SessionManager {
           )
         )
       ));
-      if (resumeOwner?.status === "starting" || resumeOwner?.status === "running") {
+      const activeResumeOwner = resumeOwners.find((candidate) => (
+        candidate.status === "starting" || candidate.status === "running"
+      ));
+      if (activeResumeOwner) {
         throw new Error(
-          `Cannot resume backend thread ${config.resumeSessionId}: session ${resumeOwner.id} still owns its active writer.`,
+          `Cannot resume backend thread ${config.resumeSessionId}: session ${activeResumeOwner.id} still owns its active writer.`,
         );
       }
+      const resumeOwner = resumeOwners[0];
       if (resumeOwner && typeof resumeOwner.waitForTeardown === "function") {
         startAfter = resumeOwner.waitForTeardown();
       }
