@@ -93,7 +93,7 @@ try {
   const rateLimit = requireDependency(
     mcp,
     "express-rate-limit",
-    "8.6.2",
+    "8.7.0",
     "@modelcontextprotocol/sdk",
   );
   requireDependency(mcp, "@hono/node-server", "2.1.1", "@modelcontextprotocol/sdk");
