@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.7.9] - 2026-08-31
+
+### Changed
+
+- Validated the plugin entrypoint, harnesses, approvals, callbacks, Telegram/topic routing, session restore, worktree/PR policy, wake delivery, tool visibility, and disabled bundled-plugin boundaries against OpenClaw `2026.8.1`, and raised the install, plugin API, Gateway, peer, build, and development target to that release.
+- Documented that OpenClaw's host-side `codex/*` and `openai-codex/*` to `openai/*` route migration does not rewrite Code Agent's plugin-owned Codex model names or bypass its harness-scoped `allowedModels`; no host configuration migration is performed by this package.
+
+### Fixed
+
+- Close Codex App Server transports whenever an OCA session becomes terminal, wait for the owned child process to exit, and force-kill it after a bounded grace period. This prevents suspended, failed-startup, and replaced sessions from retaining a backend thread writer that makes approval resumes fail with RPC `-32600`.
+- Use Codex App Server's `thread/fork` operation for `fork_session=true` instead of accidentally resuming the source thread and competing for its active writer.
+- Keep an accepted plan resume in `awaiting_plan_output` until its backend reaches `running`, so a zero-output resume failure remains retryable and is not falsely persisted or reported as `approved_then_implemented`.
+
 ## [4.7.8] - 2026-08-05
 
 ### Security
