@@ -107,16 +107,17 @@ export function validateReleaseMetadata(options = {}) {
     );
   }
 
-  const expectedRange = `>=${normalizedOpenClawCompatibilityFloor}`;
-  if (openclawInstall.minHostVersion !== expectedRange) {
+  const expectedInstallRange = `>=${normalizedOpenClawTargetVersion}`;
+  const expectedCompatibilityRange = `>=${normalizedOpenClawCompatibilityFloor}`;
+  if (openclawInstall.minHostVersion !== expectedInstallRange) {
     throw new Error(
-      `OpenClaw install minHostVersion mismatch: expected ${expectedRange}, got ${openclawInstall.minHostVersion}`,
+      `OpenClaw install minHostVersion mismatch: expected ${expectedInstallRange}, got ${openclawInstall.minHostVersion}`,
     );
   }
 
-  if (openclawCompat?.pluginApi !== expectedRange) {
+  if (openclawCompat?.pluginApi !== expectedCompatibilityRange) {
     throw new Error(
-      `OpenClaw pluginApi mismatch: expected ${expectedRange}, got ${openclawCompat?.pluginApi}`,
+      `OpenClaw pluginApi mismatch: expected ${expectedCompatibilityRange}, got ${openclawCompat?.pluginApi}`,
     );
   }
 
@@ -126,9 +127,9 @@ export function validateReleaseMetadata(options = {}) {
     );
   }
 
-  if (openclawPeerVersion !== expectedRange) {
+  if (openclawPeerVersion !== expectedCompatibilityRange) {
     throw new Error(
-      `OpenClaw peer dependency mismatch: expected ${expectedRange}, got ${openclawPeerVersion}`,
+      `OpenClaw peer dependency mismatch: expected ${expectedCompatibilityRange}, got ${openclawPeerVersion}`,
     );
   }
 
