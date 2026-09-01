@@ -548,6 +548,11 @@ export class SessionManager {
 
     let pendingPlanResumeClaim: PersistedSessionInfo | undefined;
     let startAfter: Promise<void> | undefined;
+    const appendStartBarrier = (barrier: Promise<void>): void => {
+      startAfter = startAfter
+        ? Promise.all([startAfter, barrier]).then((): void => undefined)
+        : barrier;
+    };
     if (config.resumeSessionId && !config.forkSession) {
       const resumeOwners = this.registry.list().filter((candidate) => (
         candidate.backendKind === "codex-app-server"
@@ -569,9 +574,10 @@ export class SessionManager {
           `Cannot resume backend thread ${config.resumeSessionId}: session ${activeResumeOwner.id} still owns its active writer.`,
         );
       }
-      const resumeOwner = resumeOwners[0];
-      if (resumeOwner && typeof resumeOwner.waitForTeardown === "function") {
-        startAfter = resumeOwner.waitForTeardown();
+      for (const resumeOwner of resumeOwners) {
+        if (typeof resumeOwner.waitForTeardown === "function") {
+          appendStartBarrier(resumeOwner.waitForTeardown());
+        }
       }
     }
     if (config.sessionIdOverride) {
@@ -596,7 +602,7 @@ export class SessionManager {
       }
       if (existing) {
         if (typeof existing.waitForTeardown === "function") {
-          startAfter ??= existing.waitForTeardown();
+          appendStartBarrier(existing.waitForTeardown());
         }
         this.registry.remove(existing.id, "session-id-override-replacement");
       }
