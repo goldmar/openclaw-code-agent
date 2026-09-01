@@ -238,7 +238,7 @@ export class SessionNotificationService {
           hasWakeAfterNotifyFailure ? "wake_pending" : "failed",
           hasWakeAfterNotifyFailure ? completionWakePatch : undefined,
         );
-        if (!hasWakeAfterNotifyFailure || !failureWakeConfirmsNotificationDelivery) {
+        if (!hasWakeAfterNotifyFailure) {
           this.completionSummaries.finish(completionSummaryDecision.key, false);
           this.releaseNotificationDedupe(deliveryRef, notificationDedupeKey);
           notificationDedupeResolved = true;
@@ -257,7 +257,9 @@ export class SessionNotificationService {
       },
       onWakeSucceeded: () => {
         notificationDedupeResolved = true;
-        if (!notifyDeliveryFailed || failureWakeConfirmsNotificationDelivery) {
+        if (notifyDeliveryFailed && !failureWakeConfirmsNotificationDelivery) {
+          this.releaseNotificationDedupe(deliveryRef, notificationDedupeKey);
+        } else {
           this.markNotificationDedupeDelivered(deliveryRef, notificationDedupeKey, dispatchRequest.label);
         }
         this.markCompletionSummaryDelivered(
@@ -280,7 +282,9 @@ export class SessionNotificationService {
           return;
         }
         notificationDedupeResolved = true;
-        if (!notifyDeliveryFailed || failureWakeConfirmsNotificationDelivery) {
+        if (notifyDeliveryFailed && !failureWakeConfirmsNotificationDelivery) {
+          this.releaseNotificationDedupe(deliveryRef, notificationDedupeKey);
+        } else {
           this.markNotificationDedupeDelivered(deliveryRef, notificationDedupeKey, dispatchRequest.label);
         }
         this.markCompletionSummaryDelivered(

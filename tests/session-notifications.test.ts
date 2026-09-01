@@ -770,6 +770,7 @@ describe("SessionNotificationService", () => {
   it("does not consume a fallback retry when its failure-report wake succeeds", () => {
     const persisted = { notificationDedupe: undefined } as any;
     let attempts = 0;
+    let settleFailureWake: (() => void) | undefined;
     const fakeDispatcher = {
       dispatchSessionNotification: (
         _session: unknown,
@@ -780,7 +781,7 @@ describe("SessionNotificationService", () => {
         if (attempts === 1) {
           request.hooks?.onNotifyFailed?.();
           request.hooks?.onWakeStarted?.();
-          request.hooks?.onWakeSucceeded?.();
+          settleFailureWake = request.hooks?.onWakeSucceeded;
         } else {
           request.hooks?.onNotifySucceeded?.();
         }
@@ -806,6 +807,12 @@ describe("SessionNotificationService", () => {
     };
 
     service.dispatch(session, request);
+    assert.equal(persisted.notificationDedupe?.[0]?.status, "in_flight");
+
+    service.dispatch(session, request);
+    assert.equal(attempts, 1);
+
+    settleFailureWake?.();
     assert.equal(persisted.notificationDedupe?.length ?? 0, 0);
 
     service.dispatch(session, request);
