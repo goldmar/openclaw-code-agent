@@ -37,6 +37,18 @@ class MockJsonRpcClient {
       failTurn?: string;
       turnCompletionMethod?: "turn/completed" | "turn/failed" | "turn/cancelled";
       turnStatus?: "completed" | "failed" | "interrupted" | "cancelled";
+      accountType?: "apiKey" | "chatgpt";
+      reroutedModel?: string;
+      rawResponses?: Array<{
+        responseId: string;
+        usage: {
+          inputTokens: number;
+          cachedInputTokens: number;
+          cacheWriteInputTokens: number;
+          outputTokens: number;
+          reasoningOutputTokens: number;
+        };
+      }>;
     } = {},
   ) {}
 
@@ -56,6 +68,11 @@ class MockJsonRpcClient {
     this.requests.push({ method, params, timeoutMs });
 
     if (method === "initialize") return {};
+    if (method === "account/read") {
+      return this.options.accountType
+        ? { account: { type: this.options.accountType }, requiresOpenaiAuth: true }
+        : { account: null, requiresOpenaiAuth: true };
+    }
     if (method === "thread/start" || method === "thread/new") {
       return {
         threadId: this.options.threadId ?? "thread-123",
@@ -110,6 +127,24 @@ class MockJsonRpcClient {
           threadId,
           turnId: runId,
           item: { id: "plan-1", type: "plan", text: this.options.finalPlanMarkdown },
+        });
+      }
+
+      if (this.options.reroutedModel) {
+        await this.notificationHandler("model/rerouted", {
+          threadId,
+          turnId: runId,
+          fromModel: "gpt-5.6-sol",
+          toModel: this.options.reroutedModel,
+          reason: "policy",
+        });
+      }
+
+      for (const response of this.options.rawResponses ?? []) {
+        await this.notificationHandler("rawResponse/completed", {
+          threadId,
+          turnId: runId,
+          ...response,
         });
       }
 
@@ -259,6 +294,111 @@ describe("Codex App Server RPC diagnostics", () => {
 });
 
 describe("CodexHarness App Server mapping", () => {
+  it("reports cumulative token charges for API-key Codex without double-counting reasoning", async () => {
+    const client = new MockJsonRpcClient({
+      accountType: "apiKey",
+      rawResponses: [
+        {
+          responseId: "resp-1",
+          usage: {
+            inputTokens: 1_000,
+            cachedInputTokens: 400,
+            cacheWriteInputTokens: 200,
+            outputTokens: 100,
+            reasoningOutputTokens: 90,
+          },
+        },
+        {
+          responseId: "resp-2",
+          usage: {
+            inputTokens: 500,
+            cachedInputTokens: 0,
+            cacheWriteInputTokens: 0,
+            outputTokens: 50,
+            reasoningOutputTokens: 40,
+          },
+        },
+      ],
+    });
+    const harness = new CodexHarness({ createClient: () => client });
+
+    const messages = await collectMessages(harness.launch({
+      prompt: "ship it",
+      cwd: "/repo",
+      model: "gpt-5.6-sol",
+    }));
+
+    const completed = messages.find((message) => message.type === "run_completed");
+    assert.equal(completed?.type, "run_completed");
+    if (completed?.type !== "run_completed") return;
+    assert.equal(completed.data.total_cost_usd, 0.00776);
+    assert.deepEqual(
+      client.requests.find((request) => request.method === "account/read")?.params,
+      { refreshToken: false },
+    );
+    assert.equal(
+      client.requests.find((request) => request.method === "account/read")?.timeoutMs,
+      5_000,
+    );
+  });
+
+  it("keeps ChatGPT OAuth Codex sessions unpriced", async () => {
+    const client = new MockJsonRpcClient({
+      accountType: "chatgpt",
+      rawResponses: [{
+        responseId: "resp-oauth",
+        usage: {
+          inputTokens: 100_000,
+          cachedInputTokens: 0,
+          cacheWriteInputTokens: 0,
+          outputTokens: 10_000,
+          reasoningOutputTokens: 9_000,
+        },
+      }],
+    });
+    const harness = new CodexHarness({ createClient: () => client });
+
+    const messages = await collectMessages(harness.launch({
+      prompt: "ship it",
+      cwd: "/repo",
+      model: "gpt-5.6-sol",
+    }));
+
+    const completed = messages.find((message) => message.type === "run_completed");
+    assert.equal(completed?.type, "run_completed");
+    if (completed?.type !== "run_completed") return;
+    assert.equal(completed.data.total_cost_usd, 0);
+  });
+
+  it("prices an API response with the effective rerouted model", async () => {
+    const client = new MockJsonRpcClient({
+      accountType: "apiKey",
+      reroutedModel: "gpt-5.6-luna",
+      rawResponses: [{
+        responseId: "resp-rerouted",
+        usage: {
+          inputTokens: 1_000,
+          cachedInputTokens: 0,
+          cacheWriteInputTokens: 0,
+          outputTokens: 100,
+          reasoningOutputTokens: 90,
+        },
+      }],
+    });
+    const harness = new CodexHarness({ createClient: () => client });
+
+    const messages = await collectMessages(harness.launch({
+      prompt: "ship it",
+      cwd: "/repo",
+      model: "gpt-5.6-sol",
+    }));
+
+    const completed = messages.find((message) => message.type === "run_completed");
+    assert.equal(completed?.type, "run_completed");
+    if (completed?.type !== "run_completed") return;
+    assert.equal(completed.data.total_cost_usd, 0.00032);
+  });
+
   it("passes configured Codex request timeout to createClient, initialize, thread start, and turn start", async () => {
     await withCodexTimeoutEnv("12345", async () => {
       const client = new MockJsonRpcClient({ assistantText: "Done." });

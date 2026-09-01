@@ -15,6 +15,12 @@ import type {
 import type { JsonRpcClient } from "./codex-rpc";
 import { StdioJsonRpcClient } from "./codex-rpc";
 import {
+  estimateCodexApiCostUsd,
+  extractCodexAccountType,
+  extractRawResponseUsage,
+  type CodexAccountType,
+} from "./codex-cost";
+import {
   createBackendRefEvent,
   createPendingInputEvent,
   createPendingInputResolvedEvent,
@@ -72,6 +78,7 @@ type CodexPendingInput = {
 const DEFAULT_PROTOCOL_VERSION = "1.0";
 export const DEFAULT_REQUEST_TIMEOUT_MS = 120_000;
 export const DEFAULT_APP_SERVER_ARGS = ["--listen", "stdio://"];
+const ACCOUNT_READ_TIMEOUT_MS = 5_000;
 const OPENCLAW_CODEX_APP_SERVER_COMMAND_ENV = "OPENCLAW_CODEX_APP_SERVER_COMMAND";
 const OPENCLAW_CODEX_APP_SERVER_ARGS_ENV = "OPENCLAW_CODEX_APP_SERVER_ARGS";
 const OPENCLAW_CODEX_APP_SERVER_TIMEOUT_MS_ENV = "OPENCLAW_CODEX_APP_SERVER_TIMEOUT_MS";
@@ -203,6 +210,10 @@ export class CodexHarness implements AgentHarness {
     }
     let currentPendingInput: CodexPendingInput | undefined;
     let runCounter = 0;
+    let accountType: CodexAccountType | undefined;
+    let effectiveModel = runtimeModel;
+    let cumulativeCostUsd = 0;
+    const pricedResponseIds = new Set<string>();
     let planExplanation = "";
     let planSteps: PlanArtifactStep[] = [];
     let activeTurnCompletion:
@@ -259,6 +270,30 @@ export class CodexHarness implements AgentHarness {
           queue.enqueue(createPendingInputResolvedEvent(currentPendingInput.requestId));
           currentPendingInput = undefined;
         }
+        return;
+      }
+
+      if (methodLower === "model/rerouted") {
+        const reroute = params && typeof params === "object" && !Array.isArray(params)
+          ? params as Record<string, unknown>
+          : undefined;
+        if (typeof reroute?.toModel === "string" && reroute.toModel.trim()) {
+          effectiveModel = reroute.toModel.trim();
+        }
+        return;
+      }
+
+      if (methodLower === "rawresponse/completed" && accountType === "apiKey") {
+        const response = extractRawResponseUsage(params);
+        if (!response || pricedResponseIds.has(response.responseId)) return;
+        const estimatedCost = estimateCodexApiCostUsd({
+          model: effectiveModel,
+          fastMode: options.fastMode,
+          usage: response.usage,
+        });
+        if (estimatedCost === undefined) return;
+        pricedResponseIds.add(response.responseId);
+        cumulativeCostUsd += estimatedCost;
         return;
       }
 
@@ -378,8 +413,21 @@ export class CodexHarness implements AgentHarness {
         capabilities: { experimentalApi: true },
       }, clientSettings.requestTimeoutMs);
       await client.notify("initialized", {});
+      try {
+        const account = await client.request(
+          "account/read",
+          { refreshToken: false },
+          Math.min(clientSettings.requestTimeoutMs, ACCOUNT_READ_TIMEOUT_MS),
+        );
+        accountType = extractCodexAccountType(account);
+      } catch (error) {
+        logCodexHarnessDiagnostic("account.read.unavailable", {
+          error: errorMessage(error),
+        });
+      }
       logCodexHarnessDiagnostic("client.initialize.done", {
         hasResumeSessionId: Boolean(options.resumeSessionId),
+        accountType: accountType ?? "unknown",
       });
     };
 
@@ -441,6 +489,9 @@ export class CodexHarness implements AgentHarness {
 
     const runTurn = async (prompt: string): Promise<void> => {
       await ensureThread();
+      // Model reroutes are turn-scoped; begin each new turn from the requested
+      // model and let a fresh model/rerouted notification override it.
+      effectiveModel = runtimeModel;
       logCodexHarnessDiagnostic("turn.start", {
         ...threadDiagnosticFields({ threadId }),
         runCounter: runCounter + 1,
@@ -502,7 +553,7 @@ export class CodexHarness implements AgentHarness {
           success: outcome === "completed",
           outcome,
           duration_ms: 0,
-          total_cost_usd: 0,
+          total_cost_usd: cumulativeCostUsd,
           num_turns: runCounter,
           result: extractTerminalMessage(terminalMethod, terminalParams),
           session_id: threadId!,
@@ -515,7 +566,7 @@ export class CodexHarness implements AgentHarness {
         queue.enqueue(createRunCompletedEvent({
           success: false,
           duration_ms: 0,
-          total_cost_usd: 0,
+          total_cost_usd: cumulativeCostUsd,
           num_turns: runCounter,
           result: errorMessage(error),
           session_id: threadId ?? "",
@@ -632,7 +683,7 @@ export class CodexHarness implements AgentHarness {
         queue.enqueue(createRunCompletedEvent({
           success: false,
           duration_ms: 0,
-          total_cost_usd: 0,
+          total_cost_usd: cumulativeCostUsd,
           num_turns: runCounter,
           result: errorMessage(error),
           session_id: threadId ?? options.resumeSessionId ?? "",

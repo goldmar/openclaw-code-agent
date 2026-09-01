@@ -136,6 +136,8 @@ If you use Codex, make sure the local `codex` command or `OPENCLAW_CODEX_APP_SER
 forced_login_method = "chatgpt"
 ```
 
+For Codex sessions authenticated with an OpenAI API key, the plugin estimates token charges from the App Server's per-response usage and shows the cumulative amount in session listings and `agent_stats`. ChatGPT OAuth/subscription sessions remain `$0` because they are quota-backed rather than pay-as-you-go API calls. The estimator covers the built-in GPT-5.6 Sol, Terra, and Luna models, including cached input, cache writes, Fast mode, and long-context rates; unknown models remain unpriced. Reasoning tokens are already included in App Server `outputTokens` and are not added a second time.
+
 If you use experimental OpenCode, make sure local `opencode >= 1.16.2` is available and configured with provider auth. The plugin starts `opencode serve` per session on localhost and uses OpenCode's classic session lifecycle routes while v2 session wait remains unavailable. Leave `harnesses.opencode.defaultModel` unset to let OpenCode choose its configured provider default, or pass an explicit `provider/model` string for a launch.
 
 ## First Session
