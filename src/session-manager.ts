@@ -1243,7 +1243,7 @@ export class SessionManager {
     const userMessages = planPrompt.userMessages.map((text, index, all) => ({
       text,
       buttons: index === all.length - 1 ? buttons : undefined,
-      requiredForSequenceSuccess: index === all.length - 1,
+      requiredForSequenceSuccess: true,
     }));
 
     this.notifications.dispatch(

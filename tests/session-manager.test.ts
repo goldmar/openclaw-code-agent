@@ -2839,7 +2839,7 @@ describe("SessionManager turn-end wake", () => {
     assert.match(rendered, /Unknowns \/ decisions:/);
     assert.doesNotMatch(rendered, /omitted for brevity/i);
     assert.equal(request.userMessages[0].buttons, undefined);
-    assert.equal(request.userMessages.at(-1).requiredForSequenceSuccess, true);
+    assert.equal(request.userMessages.every((message) => message.requiredForSequenceSuccess), true);
     assert.deepEqual(
       request.userMessages.at(-1).buttons.map((row: Array<{ label: string }>) => row.map((button) => button.label)),
       [["Approve", "Revise", "Reject"]],
@@ -2850,7 +2850,7 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(fallbackRequest.label, "plan-approval-fallback");
     assert.ok(fallbackRequest.userMessages.length > 1);
     assert.ok(fallbackRequest.userMessages.every((message: { text: string }) => message.text.length <= 3_000));
-    assert.equal(fallbackRequest.userMessages.at(-1).requiredForSequenceSuccess, true);
+    assert.equal(fallbackRequest.userMessages.every((message) => message.requiredForSequenceSuccess), true);
     assert.match(fallbackRequest.userMessages.map((message: { text: string }) => message.text).join("\n"), /delete reviewed dated memory Markdown older than today/);
   });
 
@@ -2914,7 +2914,7 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(fallbackRequest.label, "plan-approval-fallback");
     assert.equal(fallbackRequest.buttons, undefined);
     assert.match(fallbackRequest.userMessages[0].text, /buttons could not be delivered/i);
-    assert.equal(fallbackRequest.userMessages.at(-1).requiredForSequenceSuccess, true);
+    assert.equal(fallbackRequest.userMessages.every((message) => message.requiredForSequenceSuccess), true);
     fallbackRequest.hooks.onNotifySucceeded();
     assert.equal(s.approvalPromptStatus, "fallback_delivered");
     assert.equal(s.approvalPromptMessageKind, "explicit_fallback_text");

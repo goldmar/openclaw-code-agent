@@ -73,7 +73,7 @@ export function buildPlanApprovalFallbackMessages(
     text: parts.length === 1
       ? text
       : `${text}\n\n${index === parts.length - 1 ? "End of decision context." : "Continued in next message."}`,
-    requiredForSequenceSuccess: index === parts.length - 1,
+    requiredForSequenceSuccess: true,
   }));
 }
 
@@ -138,7 +138,7 @@ export function buildWaitingForInputPayload(args: {
           ? planPrompt.userMessages.map((text, index, all) => ({
               text,
               buttons: index === all.length - 1 ? planApprovalButtons : undefined,
-              requiredForSequenceSuccess: index === all.length - 1,
+              requiredForSequenceSuccess: true,
             }))
           : undefined
       )
