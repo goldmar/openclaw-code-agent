@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.7.10] - 2026-09-01
+
+### Changed
+
+- Validated the plugin entrypoint, tool contracts, harness model restrictions, plan approval and worktree strategy flows, Telegram/topic callbacks, completion and cron/session wake delivery, runtime tool allowlists, and disabled bundled-plugin boundaries against OpenClaw `2026.8.2`.
+- Updated exact OpenClaw package and Plugin SDK build provenance to `2026.8.2` while retaining the verified `2026.8.1` install, plugin API, Gateway, and peer compatibility floor.
+- Documented OpenClaw's broader default visibility for unsandboxed same-agent sessions, including retained cron sessions; operators who need narrower isolation can explicitly configure `tools.sessions.visibility`, and this package performs no host configuration migration.
+
 ## [4.7.9] - 2026-08-31
 
 ### Changed

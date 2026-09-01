@@ -72,8 +72,8 @@ describe("plugin entry source", () => {
       validateReleaseMetadata();
     assert.equal(packageVersion, pluginVersion);
     assert.equal(pluginName, "Code Agent");
-    assert.equal(openclawVersion, "2026.8.1");
-    assert.equal(pluginSdkVersion, "2026.8.1");
+    assert.equal(openclawVersion, "2026.8.2");
+    assert.equal(pluginSdkVersion, "2026.8.2");
     assert.equal(openclawInstall.npmSpec, "openclaw-code-agent");
     assert.equal(openclawInstall.defaultChoice, "npm");
     assert.equal(openclawInstall.minHostVersion, ">=2026.8.1");
@@ -134,7 +134,7 @@ describe("plugin entry source", () => {
     assert.ok(pack[0]?.files?.some((file) => file.path === "npm-shrinkwrap.json"));
   });
 
-  it("uses the verified OpenClaw 2026.8.1 compatibility floor", () => {
+  it("targets OpenClaw 2026.8.2 while retaining the verified 2026.8.1 compatibility floor", () => {
     const packageJson = JSON.parse(readFileSync(join(rootDir, "package.json"), "utf8")) as {
       dependencies?: Record<string, string>;
       openclaw?: {
@@ -152,19 +152,19 @@ describe("plugin entry source", () => {
     assert.equal(packageJson.openclaw?.install?.minHostVersion, ">=2026.8.1");
     assert.equal(packageJson.openclaw?.compat?.pluginApi, ">=2026.8.1");
     assert.equal(packageJson.openclaw?.compat?.minGatewayVersion, "2026.8.1");
-    assert.equal(packageJson.openclaw?.build?.openclawVersion, "2026.8.1");
-    assert.equal(packageJson.openclaw?.build?.pluginSdkVersion, "2026.8.1");
+    assert.equal(packageJson.openclaw?.build?.openclawVersion, "2026.8.2");
+    assert.equal(packageJson.openclaw?.build?.pluginSdkVersion, "2026.8.2");
     assert.equal(packageJson.peerDependencies?.openclaw, ">=2026.8.1");
-    assert.equal(packageJson.devDependencies?.openclaw, "2026.8.1");
+    assert.equal(packageJson.devDependencies?.openclaw, "2026.8.2");
     assert.doesNotMatch(readFileSync(join(rootDir, "pnpm-lock.yaml"), "utf8"), /uuid@9\.0\.1/);
   });
 
   it("accepts exact and range-shaped manual OpenClaw release targets", () => {
-    assert.equal(normalizeOpenClawTargetVersion("2026.8.1"), "2026.8.1");
+    assert.equal(normalizeOpenClawTargetVersion("2026.8.2"), "2026.8.2");
     assert.equal(normalizeOpenClawTargetVersion(">=2026.7.1"), "2026.7.1");
     assert.doesNotThrow(() =>
       validateReleaseMetadata({
-        openclawTargetVersion: "2026.8.1",
+        openclawTargetVersion: "2026.8.2",
         openclawCompatibilityFloor: ">=2026.8.1",
       }),
     );
@@ -470,7 +470,7 @@ describe("plugin entry source", () => {
     assert.doesNotMatch(apiSource, /openclaw\/plugin-sdk\/discord/);
   });
 
-  it("documents the 2026.8.1 compatibility and ownership boundaries", () => {
+  it("documents the 2026.8.2 compatibility and ownership boundaries", () => {
     const reference = readFileSync(join(rootDir, "docs", "REFERENCE.md"), "utf8");
     const readme = readFileSync(join(rootDir, "README.md"), "utf8");
     const changelog = readFileSync(join(rootDir, "CHANGELOG.md"), "utf8");
