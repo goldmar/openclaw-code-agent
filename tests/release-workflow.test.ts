@@ -22,6 +22,10 @@ describe("release workflow", () => {
       workflow,
       /pnpm dlx "clawhub@\$CLAWHUB_INSPECTOR_VERSION" package validate/,
     );
+    assert.match(
+      workflow,
+      /pnpm dlx "clawhub@\$CLAWHUB_CLI_VERSION" package publish/,
+    );
     assert.match(workflow, /npm install --global "clawhub@\$CLAWHUB_CLI_VERSION"/);
   });
 
