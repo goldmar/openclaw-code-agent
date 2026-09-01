@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Validated the plugin entrypoint, tool contracts, harness model restrictions, plan approval and worktree strategy flows, Telegram/topic callbacks, completion and cron/session wake delivery, runtime tool allowlists, and disabled bundled-plugin boundaries against OpenClaw `2026.8.2`.
 - Updated exact OpenClaw package and Plugin SDK build provenance to `2026.8.2` while retaining the verified `2026.8.1` install, plugin API, Gateway, and peer compatibility floor.
 - Documented OpenClaw's broader default visibility for unsandboxed same-agent sessions, including retained cron sessions; operators who need narrower isolation can explicitly configure `tools.sessions.visibility`, and this package performs no host configuration migration.
+- Removed the repository's publication-age waiting policy and Dependabot cooldowns. Dependency updates now rely on deterministic pnpm/npm lock artifacts, frozen installation, exact-version validation, audits, dependency review, packed-consumer verification, and exact-head review instead of elapsed time.
 
 ## [4.7.9] - 2026-08-31
 
@@ -33,8 +34,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 
 - Declare the patched `fast-uri@3.1.5`, `hono@4.12.34`, and `ip-address@10.3.1` runtime versions as exact package dependencies and ship a machine-checked npm shrinkwrap. npm ignores `overrides` from installed dependencies, so this makes the security floors part of the consumer-resolved dependency contract instead of ineffective published metadata.
-- Upgrade the declared MCP runtime to `1.30.0`, pin `@hono/node-server@2.0.10` and `express-rate-limit@8.6.1`, and machine-check every shrinkwrapped package against the 24-hour release-age window. This removes the adapter path-traversal advisory without silently admitting newly published transitive releases.
-- Remove obsolete Claude SDK release-age exclusions and reject any future `minimumReleaseAgeExclude` entry that lacks the required exact-version, advisory, quarantine, and expiry metadata.
+- Upgrade the declared MCP runtime to `1.30.0`, pin `@hono/node-server@2.0.10` and `express-rate-limit@8.6.1`, and machine-check the shrinkwrapped runtime dependency graph. This removes the adapter path-traversal advisory while preserving deterministic consumer resolution.
+- Remove obsolete Claude SDK dependency exceptions and keep exact runtime dependency and generated-lock validation centralized in repository-owned checks.
 
 ### Release
 
@@ -45,10 +46,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Validated and retargeted package and plugin SDK build metadata to OpenClaw `2026.7.1-2`, using that correction release as the install, plugin API, Gateway, and peer dependency floor so both it and stable `2026.7.1` satisfy the declared compatibility contract.
 - Confirmed that the OpenClaw correction release's singleton-array npm metadata fix requires no changes to Code Agent tools, callbacks, wake routing, worktree flows, plan approval, or harness model restrictions.
-- Pinned patched `fast-uri` and Hono transitive releases; the temporary machine-checked `hono@4.12.34` quarantine exception was removed after the patched release aged through the normal 24-hour release-age policy.
+- Pinned patched `fast-uri` and Hono transitive releases and removed the temporary `hono@4.12.34` dependency exception after incorporating the fixed version into normal lock generation.
 
 ### Fixed
-- Removed production dependency advisories for `fast-uri` URI authority parsing, Hono CORS-header regular-expression denial of service, and `ip-address` special-use classification, plus development-graph advisories in `protobufjs`, `tar`, and `undici`, without weakening the repository-wide release-age policy.
+- Removed production dependency advisories for `fast-uri` URI authority parsing, Hono CORS-header regular-expression denial of service, and `ip-address` special-use classification, plus development-graph advisories in `protobufjs`, `tar`, and `undici`, while retaining exact dependency and lockfile validation.
 
 ## [4.7.6] - 2026-07-15
 

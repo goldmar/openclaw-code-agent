@@ -7,9 +7,6 @@ updates:
       day: monday
       time: "09:00"
       timezone: America/Los_Angeles
-    # Match the repository's mandatory pnpm minimumReleaseAge quarantine.
-    cooldown:
-      default-days: 1
     # CodeQL init/analyze must move together or the analysis workflow fails.
     groups:
       codeql:
@@ -27,9 +24,6 @@ updates:
       day: monday
       time: "09:15"
       timezone: America/Los_Angeles
-    # This complements, but never replaces, pnpm's enforced 24-hour gate.
-    cooldown:
-      default-days: 1
     # Reduce noise only for development updates; runtime dependencies stay
     # isolated for npm-shrinkwrap and compatibility review.
     groups:

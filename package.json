@@ -8,7 +8,7 @@
     "audit:prod": "pnpm audit --prod",
     "build": "esbuild index.ts --bundle --splitting --platform=node --target=node22 --format=esm --outdir=dist --entry-names=index --chunk-names=chunks/[name] --minify --charset=utf8 --pure:console.log --pure:console.warn --pure:console.info --pure:console.debug --external:@anthropic-ai/claude-agent-sdk --external:openclaw/plugin-sdk/plugin-entry",
     "generate:npm-shrinkwrap": "node scripts/generate-npm-shrinkwrap.mjs",
-    "check-static-guardrails": "node scripts/check-static-guardrails.mjs && node scripts/check-release-age-exceptions.mjs && node scripts/check-npm-shrinkwrap.mjs",
+    "check-static-guardrails": "node scripts/check-static-guardrails.mjs && node scripts/check-npm-shrinkwrap.mjs",
     "check-plugin-security": "node scripts/check-plugin-security.mjs",
     "test": "node scripts/run-tests.mjs",
     "test:integ:crabbox": "node scripts/run-tests.mjs tests/oca-codex-crabbox-integ.test.ts tests/oca-plugin-workflows-integ.test.ts tests/oca-codex-telegram-proof.test.ts tests/oca-codex-proof-app-server.test.ts tests/oca-codex-proof-workflow.test.ts",
@@ -25,7 +25,7 @@
     "smoke:opencode-live": "OPENCLAW_RUN_LIVE_OPENCODE_SMOKE=1 node scripts/run-tests.mjs tests/live-opencode-server-smoke.test.ts",
     "typecheck": "tsc -p tsconfig.typecheck.json --noEmit",
     "validate:release-metadata": "node scripts/validate-release-metadata.mjs",
-    "verify:npm-consumer": "node scripts/check-npm-shrinkwrap-release-age.mjs && node scripts/verify-npm-consumer-install.mjs",
+    "verify:npm-consumer": "node scripts/verify-npm-consumer-install.mjs",
     "verify": "pnpm check-static-guardrails && pnpm typecheck && pnpm build && pnpm test"
   },
   "openclaw": {
