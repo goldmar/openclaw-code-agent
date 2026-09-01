@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+  buildPackedPluginInstallArgs,
   createIsolatedOpenClawEnv,
   findUnexpectedPluginSafetyFindings,
 } from "../scripts/check-plugin-security.mjs";
@@ -17,6 +18,22 @@ const expectedFinding = {
 describe("packed-plugin security finding validation", () => {
   it("accepts only the reviewed child_process finding", () => {
     assert.deepEqual(findUnexpectedPluginSafetyFindings({ findings: [expectedFinding] }), []);
+  });
+
+  it("accepts only the bounded summary for additional reviewed child_process matches", () => {
+    const finding = {
+      ...expectedFinding,
+      detail: `${expectedFinding.detail}\n  - [dangerous-exec-truncated] 27 additional dangerous-exec matches omitted after 32 findings (dist/chunks/chunk.js:31)`,
+    };
+    assert.deepEqual(findUnexpectedPluginSafetyFindings({ findings: [finding] }), []);
+  });
+
+  it("rejects malformed or differently categorized truncation summaries", () => {
+    const finding = {
+      ...expectedFinding,
+      detail: `${expectedFinding.detail}\n  - [env-harvesting-truncated] 27 additional matches omitted after 32 findings (dist/index.js:1)`,
+    };
+    assert.match(findUnexpectedPluginSafetyFindings({ findings: [finding] })[0], /env-harvesting-truncated/);
   });
 
   it("rejects environment access combined with a network send", () => {
@@ -61,5 +78,17 @@ describe("packed-plugin environment isolation", () => {
     assert.equal(env.OPENCLAW_CODE_AGENT_SESSIONS_PATH, undefined);
     assert.equal(env.OPENCLAW_STATE_DIR, "/tmp/isolated-profile/state");
     assert.equal(env.OPENCLAW_CONFIG_PATH, "/tmp/isolated-profile/config.json");
+  });
+
+  it("explicitly acknowledges OpenClaw local-archive provenance without changing the source", () => {
+    assert.deepEqual(buildPackedPluginInstallArgs("/tmp/reviewed-plugin.tgz"), [
+      "exec",
+      "openclaw",
+      "plugins",
+      "install",
+      "/tmp/reviewed-plugin.tgz",
+      "--force",
+      "--accept-capabilities",
+    ]);
   });
 });

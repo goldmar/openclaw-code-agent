@@ -11,6 +11,9 @@ const pluginName = "openclaw-code-agent";
 const allowedPluginSafetyFindings = [
   "[dangerous-exec] Shell command execution detected (child_process)",
 ];
+const allowedPluginSafetyFindingPatterns = [
+  /^- \[dangerous-exec-truncated\] \d+ additional dangerous-exec matches omitted after \d+ findings \(.+:\d+\)$/u,
+];
 
 export function findUnexpectedPluginSafetyFindings(auditResult, expectedPluginName = pluginName) {
   const findings = Array.isArray(auditResult?.findings) ? auditResult.findings : [];
@@ -31,8 +34,12 @@ export function findUnexpectedPluginSafetyFindings(auditResult, expectedPluginNa
     .map((finding) => finding.title);
 
   for (const line of issueLines) {
-    if (!allowedPluginSafetyFindings.some((finding) => line.includes(finding))) {
-      unexpected.push(line.trim());
+    const trimmed = line.trim();
+    if (
+      !allowedPluginSafetyFindings.some((finding) => trimmed.includes(finding))
+      && !allowedPluginSafetyFindingPatterns.some((pattern) => pattern.test(trimmed))
+    ) {
+      unexpected.push(trimmed);
     }
   }
   if (
@@ -59,6 +66,18 @@ export function createIsolatedOpenClawEnv(profileDir, sourceEnv = process.env) {
     OPENCLAW_CONFIG_PATH: join(profileDir, "config.json"),
     OPENCLAW_GATEWAY_PORT: "65534",
   };
+}
+
+export function buildPackedPluginInstallArgs(tarballPath) {
+  return [
+    "exec",
+    "openclaw",
+    "plugins",
+    "install",
+    tarballPath,
+    "--force",
+    "--accept-capabilities",
+  ];
 }
 
 function runCommand(command, args, options = {}) {
@@ -133,13 +152,7 @@ async function main() {
     console.error(`Packed plugin tarball: ${tarballPath}`);
     console.error(`Checking packed plugin security via ${tarballPath}`);
 
-    const install = await runCommand("pnpm", [
-      "exec",
-      "openclaw",
-      "plugins",
-      "install",
-      tarballPath,
-    ], {
+    const install = await runCommand("pnpm", buildPackedPluginInstallArgs(tarballPath), {
       cwd: workspaceDir,
       env: isolatedEnv,
     });

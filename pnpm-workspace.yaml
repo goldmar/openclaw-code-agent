@@ -4,6 +4,7 @@ packages:
 allowBuilds:
   "@google/genai": false
   esbuild: true
+  koffi: false
   openclaw: false
   protobufjs: true
   tree-sitter-bash: false

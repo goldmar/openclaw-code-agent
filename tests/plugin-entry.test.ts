@@ -85,7 +85,7 @@ describe("plugin entry source", () => {
     assert.match(cliOutput, /openclaw\.plugin\.name=Code Agent/);
     assert.match(cliOutput, /openclaw\.install\.npmSpec=openclaw-code-agent/);
     assert.match(cliOutput, /openclaw\.install\.defaultChoice=npm/);
-    assert.match(cliOutput, /openclaw\.install\.minHostVersion=>=2026\.7\.1-2/);
+    assert.match(cliOutput, /openclaw\.install\.minHostVersion=>=2026\.8\.1/);
   });
 
   it("keeps security audit automation on the pnpm-only path", () => {

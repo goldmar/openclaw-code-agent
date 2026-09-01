@@ -104,7 +104,7 @@ jobs:
           export XDG_CONFIG_HOME="$base/.config"
           export XDG_CACHE_HOME="$base/.cache"
           export XDG_DATA_HOME="$base/.local/share"
-          pnpm exec openclaw plugins install "npm-pack:$GITHUB_WORKSPACE/artifact/$TARBALL"
+          pnpm exec openclaw plugins install "npm-pack:$GITHUB_WORKSPACE/artifact/$TARBALL" --force --accept-capabilities
           pnpm exec openclaw plugins enable openclaw-code-agent
           pnpm exec openclaw plugins inspect openclaw-code-agent --runtime --json
           rm -rf "$base"

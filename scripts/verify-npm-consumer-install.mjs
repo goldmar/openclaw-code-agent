@@ -38,7 +38,7 @@ try {
   mkdirSync(hostDir);
   writeFileSync(
     join(hostDir, "package.json"),
-    `${JSON.stringify({ name: "openclaw", version: "2026.7.1-2" }, null, 2)}\n`,
+    `${JSON.stringify({ name: "openclaw", version: "2026.8.1" }, null, 2)}\n`,
   );
 
   const pack = JSON.parse(
