@@ -9,7 +9,8 @@ allowBuilds:
   protobufjs: true
   tree-sitter-bash: false
 
-minimumReleaseAge: 1440
+minimumReleaseAge: 0
+
 overrides:
   basic-ftp: 5.3.1
   axios@<1.15.0: ">=1.15.0"

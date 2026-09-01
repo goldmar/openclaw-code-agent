@@ -11,9 +11,9 @@ const workflow = readFileSync(
 );
 
 describe("Dependabot maintenance policy", () => {
-  it("uses weekly one-day-cooled updates and keeps CodeQL actions together", () => {
+  it("uses weekly updates without a publication-age cooldown and keeps CodeQL actions together", () => {
     assert.equal((dependabot.match(/interval: weekly/g) ?? []).length, 2);
-    assert.equal((dependabot.match(/default-days: 1/g) ?? []).length, 2);
+    assert.doesNotMatch(dependabot, /cooldown:|default-days:/);
     assert.match(dependabot, /codeql:\n\s+patterns:\n\s+- github\/codeql-action\/\*/);
     assert.match(dependabot, /low-risk-development:[\s\S]*dependency-type: development/);
     assert.match(dependabot, /update-types:\n\s+- minor\n\s+- patch/);
