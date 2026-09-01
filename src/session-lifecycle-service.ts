@@ -35,8 +35,12 @@ type WorktreeStrategyResult = {
 type DispatchNotification = (session: Session, request: SessionNotificationRequest) => void;
 const OPTION_DESCRIPTION_MAX_CHARS = 280;
 
-function resolvePlanArtifactForPrompt(
-  session: Pick<Session, "latestPlanArtifactVersion" | "latestPlanArtifact" | "planFilePath">,
+export function resolvePlanArtifactForPrompt(
+  session: {
+    latestPlanArtifactVersion?: number;
+    latestPlanArtifact?: PlanArtifact;
+    planFilePath?: string;
+  },
   planDecisionVersion?: number,
 ): PlanArtifact | undefined {
   if (session.latestPlanArtifactVersion === planDecisionVersion && session.latestPlanArtifact) {

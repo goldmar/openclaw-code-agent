@@ -2755,6 +2755,11 @@ describe("SessionManager turn-end wake", () => {
       pendingPlanApproval: true,
       planDecisionVersion: 9,
       planApproval: "delegate",
+      latestPlanArtifactVersion: 9,
+      latestPlanArtifact: {
+        markdown: "Objective: preserve approval ownership\n\nImplementation steps:\n1. Update `src/session-manager.ts`\n2. Add routing tests\n\nVerification: run focused tests\n\nExternal effects: none\n\nRisks: approval routing regressions",
+        steps: [],
+      },
     });
     (sm as any).sessions.set(s.id, s);
     stubDispatch(sm);
@@ -2774,6 +2779,11 @@ describe("SessionManager turn-end wake", () => {
     assert.match(request.userMessage, /Plan v9 needs your decision/);
     assert.match(request.userMessage, /Why this was escalated:/);
     assert.match(request.userMessage, /Risk: medium/);
+    assert.match(request.userMessage, /Latest actionable plan:/);
+    assert.match(request.userMessage, /Objective: preserve approval ownership/);
+    assert.match(request.userMessage, /Implementation steps:/);
+    assert.match(request.userMessage, /Verification: run focused tests/);
+    assert.match(request.userMessage, /External effects: none/);
     assert.deepEqual(
       request.buttons.map((row: Array<{ label: string }>) => row.map((button) => button.label)),
       [["Approve", "Revise", "Reject"]],
@@ -2783,7 +2793,11 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(approveToken?.planDecisionVersion, 9);
   });
 
-  it("bounds delegated approval summaries before sending button prompts", () => {
+  it("paginates a long destructive delegated plan without omitting decision context", () => {
+    const destructiveSteps = Array.from(
+      { length: 45 },
+      (_, index) => `${index + 1}. Update component ${index + 1} and verify its approval behavior.`,
+    ).join("\n");
     const s = fakeSession({
       id: "s-plan-escalate-long",
       name: "plan-escalate-long",
@@ -2791,21 +2805,51 @@ describe("SessionManager turn-end wake", () => {
       pendingPlanApproval: true,
       planDecisionVersion: 10,
       planApproval: "delegate",
+      latestPlanArtifactVersion: 10,
+      latestPlanArtifact: {
+        markdown: [
+          "Objective / scope: harden memory maintenance within the workspace-owned job.",
+          "Affected files: scripts/memory-maintenance.ts and tests/memory-maintenance.test.ts.",
+          "Implementation steps:",
+          destructiveSteps,
+          "Tests / verification: dry-run fixtures, deletion guard tests, and the full verification gate.",
+          "Destructive effects: delete reviewed dated memory Markdown older than today.",
+          "Material risks: an incorrect date boundary could delete retained memory.",
+          "Unknowns / omissions: exact production file count is not known until dry-run.",
+        ].join("\n\n"),
+        steps: [],
+      },
     });
     (sm as any).sessions.set(s.id, s);
     stubDispatch(sm);
 
     sm.requestPlanApprovalFromUser(
       s.id,
-      `Summary:\n- ${"oversized transcript detail ".repeat(100)}`,
+      "Escalating because reviewed dated memory Markdown older than today may be deleted; this is destructive even though it matches the requested maintenance scope.",
     );
 
     const calls = (sm as any).__dispatchCalls;
     assert.equal(calls.length, 1);
     const [_sessionArg, request] = calls[0];
     assert.equal(request.label, "plan-approval");
-    assert.ok((request.userMessage ?? "").length < 2000);
-    assert.match(request.userMessage, /Additional plan details omitted for brevity/);
+    assert.equal(request.userMessage, undefined);
+    assert.ok((request.userMessages?.length ?? 0) > 1);
+    assert.ok(request.userMessages.every((message: { text: string }) => message.text.length <= 3_000));
+    const rendered = request.userMessages.map((message: { text: string }) => message.text).join("\n");
+    assert.match(rendered, /Why this was escalated:/);
+    assert.match(rendered, /delete reviewed dated memory Markdown older than today/);
+    assert.match(rendered, /Latest actionable plan:/);
+    assert.match(rendered, /Affected files:/);
+    assert.match(rendered, /Tests \/ verification:/);
+    assert.match(rendered, /Destructive effects:/);
+    assert.match(rendered, /Material risks:/);
+    assert.match(rendered, /Unknowns \/ omissions:/);
+    assert.doesNotMatch(rendered, /omitted for brevity/i);
+    assert.equal(request.userMessages[0].buttons, undefined);
+    assert.deepEqual(
+      request.userMessages.at(-1).buttons.map((row: Array<{ label: string }>) => row.map((button) => button.label)),
+      [["Approve", "Revise", "Reject"]],
+    );
   });
 
   it("suppresses duplicate delegated escalations for the same plan decision version", () => {

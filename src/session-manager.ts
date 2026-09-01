@@ -42,9 +42,10 @@ import {
   type PendingAskUserQuestion,
 } from "./session-question-service";
 import { SessionReminderService } from "./session-reminder-service";
-import { SessionLifecycleService } from "./session-lifecycle-service";
+import { resolvePlanArtifactForPrompt, SessionLifecycleService } from "./session-lifecycle-service";
 import {
   buildGoalTaskSucceededFollowupWake,
+  buildPlanApprovalPromptContent,
   buildPlanApprovalFallbackText,
   formatPlanApprovalSummary,
 } from "./session-notification-builder";
@@ -1227,15 +1228,22 @@ export class SessionManager {
       ...session,
       planDecisionVersion: actionableVersion,
     });
-    const message = [
-      `📋 [${session.name}] Plan v${actionableVersion ?? "?"} needs your decision:`,
-      ``,
-      `Why this was escalated:`,
-      ``,
-      formattedSummary,
-      ``,
-      `Choose Approve, Revise, or Reject below.`,
-    ].join("\n");
+    const currentArtifact = activeSession
+      ? resolvePlanArtifactForPrompt(activeSession, actionableVersion)
+      : undefined;
+    const planPrompt = buildPlanApprovalPromptContent({
+      sessionName: session.name,
+      actionableVersion,
+      preview: activeSession?.getOutput().join("\n") ?? "",
+      artifact: currentArtifact,
+      escalationRationale: formattedSummary,
+      hasButtons: true,
+      heading: "needs your decision",
+    });
+    const userMessages = planPrompt.userMessages.map((text, index, all) => ({
+      text,
+      buttons: index === all.length - 1 ? buttons : undefined,
+    }));
 
     this.notifications.dispatch(
       this.buildRoutingProxy({
@@ -1249,9 +1257,10 @@ export class SessionManager {
       {
         label: "plan-approval",
         idempotencyKey: `plan-approval:${sessionId}:v${actionableVersion ?? "unknown"}:canonical`,
-        userMessage: message,
+        userMessage: userMessages.length === 1 ? userMessages[0]?.text : undefined,
+        userMessages: userMessages.length > 1 ? userMessages : undefined,
         notifyUser: "always",
-        buttons,
+        buttons: userMessages.length === 1 ? buttons : undefined,
         hooks: {
           onNotifyStarted: () => {
             this.updatePersistedSession(sessionId, {

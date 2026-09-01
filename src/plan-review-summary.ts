@@ -5,10 +5,6 @@ const PLAN_APPROVAL_FULL_PLAN_MAX_CHARS = 3_200;
 const PLAN_APPROVAL_FULL_PLAN_CHUNK_MAX_CHARS = 3_000;
 const PLAN_APPROVAL_FULL_PLAN_CHUNK_BODY_MAX_CHARS = 2_400;
 const PLAN_APPROVAL_SESSION_NAME_MAX_CHARS = 120;
-const PLAN_APPROVAL_FALLBACK_SUMMARY_MAX_ITEMS = 5;
-const PLAN_APPROVAL_FALLBACK_SUMMARY_MAX_LINE_CHARS = 280;
-const PLAN_APPROVAL_FALLBACK_SUMMARY_MAX_CHARS = 1_400;
-const OMITTED_PLAN_SUMMARY_LINE = "- Additional plan details omitted for brevity.";
 
 export type PlanApprovalPromptContent = {
   displayMode: "single-full-plan" | "chunked-full-plan" | "summary";
@@ -38,18 +34,6 @@ function extractPlanSummaryCandidates(text: string): string[] {
     .filter((line) => !/^(thinking|checking|considering|analyzing)\b/i.test(line));
 }
 
-function extractFallbackSummaryCandidates(text: string): string[] {
-  return text
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map(normalizeSummaryItem)
-    .filter((line) => line.length > 0)
-    .filter((line) => !/^(plan|proposed plan|implementation plan|review summary|summary|why this was escalated|full plan)[:]?$/i.test(line))
-    .filter((line) => !/^(should|can|could|would|will)\b.*\?$/i.test(line))
-    .filter((line) => !/^(thinking|checking|considering|analyzing)\b/i.test(line));
-}
-
 function buildDeterministicFallbackSummary(source: string): string {
   const summaryCandidates = extractPlanSummaryCandidates(source);
   if (summaryCandidates.length === 0) {
@@ -62,39 +46,8 @@ function buildDeterministicFallbackSummary(source: string): string {
   ].join("\n");
 }
 
-function formatPlanSummaryItems(items: string[]): string[] {
-  const lines: string[] = [];
-  let omitted = false;
-
-  for (const item of items) {
-    const normalized = item.replace(/\s+/g, " ").trim();
-    if (!normalized) continue;
-    const truncated = truncateText(normalized, PLAN_APPROVAL_FALLBACK_SUMMARY_MAX_LINE_CHARS);
-    if (truncated.length < normalized.length) omitted = true;
-    const line = `- ${truncated}`;
-
-    if (lines.length >= PLAN_APPROVAL_FALLBACK_SUMMARY_MAX_ITEMS || [...lines, line].join("\n").length > PLAN_APPROVAL_FALLBACK_SUMMARY_MAX_CHARS) {
-      omitted = true;
-      break;
-    }
-    lines.push(line);
-  }
-
-  if (lines.length === 0) {
-    return ["- Plan details are available in the full session output."];
-  }
-
-  if (!omitted) return lines;
-
-  const boundedLines = [...lines];
-  while (boundedLines.length > 0 && [...boundedLines, OMITTED_PLAN_SUMMARY_LINE].join("\n").length > PLAN_APPROVAL_FALLBACK_SUMMARY_MAX_CHARS) {
-    boundedLines.pop();
-  }
-  return [...boundedLines, OMITTED_PLAN_SUMMARY_LINE];
-}
-
 export function formatPlanApprovalSummary(summary: string): string {
-  return formatPlanSummaryItems(extractFallbackSummaryCandidates(summary)).join("\n");
+  return summary.trim();
 }
 
 function splitLongLine(text: string, maxChars: number): string[] {
@@ -166,31 +119,14 @@ function buildPlanApprovalFooter(hasButtons: boolean, isLastChunk: boolean): str
     : "\n\nApproval is still pending for this plan version.";
 }
 
-function buildTruncatedFullPlanFallbackMessage(args: {
-  sessionName: string;
-  actionableVersion?: number;
-  fullPlanText: string;
-  hasButtons: boolean;
-}): string {
-  const { sessionName, actionableVersion, fullPlanText, hasButtons } = args;
-  const header = `📋 [${sessionName}] Plan v${actionableVersion ?? "?"} ready for approval:`;
-  const bodyLabel = "\n\nFull plan (truncated):\n";
-  const footer = buildPlanApprovalFooter(hasButtons, true);
-  const availableBodyChars = Math.max(
-    0,
-    PLAN_APPROVAL_FULL_PLAN_CHUNK_MAX_CHARS - header.length - bodyLabel.length - footer.length,
-  );
-
-  return `${header}${bodyLabel}${truncateText(fullPlanText, availableBodyChars)}${footer}`;
-}
-
 function buildChunkedFullPlanMessages(args: {
   sessionName: string;
   actionableVersion?: number;
   fullPlanText: string;
   hasButtons: boolean;
+  heading: string;
 }): string[] {
-  const { sessionName, actionableVersion, fullPlanText, hasButtons } = args;
+  const { sessionName, actionableVersion, fullPlanText, hasButtons, heading } = args;
   const displaySessionName = formatPlanApprovalSessionName(sessionName);
   let chunkBodyMaxChars = PLAN_APPROVAL_FULL_PLAN_CHUNK_BODY_MAX_CHARS;
 
@@ -199,7 +135,7 @@ function buildChunkedFullPlanMessages(args: {
     const messages = bodyChunks.map((body, index) => {
       const total = bodyChunks.length;
       const header = [
-        `📋 [${displaySessionName}] Plan v${actionableVersion ?? "?"} ready for approval (${index + 1}/${total}):`,
+        `📋 [${displaySessionName}] Plan v${actionableVersion ?? "?"} ${heading} (${index + 1}/${total}):`,
         "",
         index === 0 ? "Full plan:" : "",
       ].filter(Boolean).join("\n");
@@ -217,14 +153,35 @@ function buildChunkedFullPlanMessages(args: {
     chunkBodyMaxChars -= Math.max(overshoot, 50);
   }
 
-  return [
-    buildTruncatedFullPlanFallbackMessage({
-      sessionName: displaySessionName,
-      actionableVersion,
-      fullPlanText,
-      hasButtons,
-    }),
-  ];
+  // Session names are bounded, so this conservative body size always fits. Keep
+  // the complete plan even if future header/footer changes defeat rebalancing.
+  const bodyChunks = splitPlanBodyIntoChunks(fullPlanText, 100);
+  return bodyChunks.map((body, index) => {
+    const isLast = index === bodyChunks.length - 1;
+    return `📋 [${displaySessionName}] Plan v${actionableVersion ?? "?"} ${heading} (${index + 1}/${bodyChunks.length}):\n${body}${buildPlanApprovalFooter(hasButtons, isLast)}`;
+  });
+}
+
+function buildDecisionBody(args: {
+  fullPlanText?: string;
+  preview: string;
+  escalationRationale?: string;
+}): string {
+  const sections: string[] = [];
+  if (args.escalationRationale?.trim()) {
+    sections.push(`Why this was escalated:\n${args.escalationRationale.trim()}`);
+  }
+  if (args.fullPlanText) {
+    sections.push(`Latest actionable plan:\n${args.fullPlanText}`);
+  } else {
+    sections.push([
+      `Latest actionable plan (full structured plan unavailable):`,
+      args.preview.trim() || "No plan text was available.",
+      "",
+      `Unknowns / omissions: The full plan artifact was unavailable for this plan version; review the session output before approving if this preview is insufficient.`,
+    ].join("\n"));
+  }
+  return sections.join("\n\n");
 }
 
 export function buildPlanReviewSummary(args: {
@@ -246,18 +203,26 @@ export function buildPlanApprovalPromptContent(args: {
   preview: string;
   artifact?: PlanArtifact;
   hasButtons: boolean;
+  escalationRationale?: string;
+  heading?: "ready for approval" | "needs your decision";
 }): PlanApprovalPromptContent {
-  const { sessionName, actionableVersion, preview, artifact, hasButtons } = args;
+  const { sessionName, actionableVersion, preview, artifact, hasButtons, escalationRationale } = args;
+  const heading = args.heading ?? "ready for approval";
   const fullPlanText = artifact?.markdown?.trim();
   const displaySessionName = formatPlanApprovalSessionName(sessionName);
+  const decisionBody = escalationRationale
+    ? buildDecisionBody({ fullPlanText, preview, escalationRationale })
+    : fullPlanText
+      ? `Full plan:\n${fullPlanText}`
+      : undefined;
 
-  if (fullPlanText) {
-    const singleMessage = `📋 [${displaySessionName}] Plan v${actionableVersion ?? "?"} ready for approval:\n\nFull plan:\n${fullPlanText}\n\n${hasButtons ? "Choose Approve, Revise, or Reject below." : "Approval is still pending for this plan version."}`;
+  if (decisionBody) {
+    const singleMessage = `📋 [${displaySessionName}] Plan v${actionableVersion ?? "?"} ${heading}:\n\n${decisionBody}\n\n${hasButtons ? "Choose Approve, Revise, or Reject below." : "Approval is still pending for this plan version."}`;
     if (singleMessage.length <= PLAN_APPROVAL_FULL_PLAN_MAX_CHARS) {
       return {
         displayMode: "single-full-plan",
         userMessages: [singleMessage],
-        reviewSummary: `Full plan:\n${fullPlanText}`,
+        reviewSummary: decisionBody,
       };
     }
 
@@ -266,10 +231,11 @@ export function buildPlanApprovalPromptContent(args: {
       userMessages: buildChunkedFullPlanMessages({
         sessionName,
         actionableVersion,
-        fullPlanText,
+        fullPlanText: escalationRationale ? decisionBody : (fullPlanText ?? decisionBody),
         hasButtons,
+        heading,
       }),
-      reviewSummary: buildDeterministicFallbackSummary(fullPlanText),
+      reviewSummary: escalationRationale ? decisionBody : buildDeterministicFallbackSummary(fullPlanText ?? preview),
     };
   }
 
