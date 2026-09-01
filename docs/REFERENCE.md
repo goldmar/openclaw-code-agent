@@ -30,11 +30,11 @@ Current releases treat persisted session storage as new-schema-only. If startup 
 
 ### OpenClaw 2026.8.2 SDK Readiness
 
-The current `openclaw-code-agent` package is built and validated against OpenClaw `2026.8.2` while retaining the verified OpenClaw `2026.8.1` compatibility floor. Exact build metadata and the development dependency record `2026.8.2`; package install, plugin API, Gateway, and peer dependency metadata retain the `2026.8.1` floor.
+The current `openclaw-code-agent` package requires, is built against, and is validated against OpenClaw `2026.8.2`. Package installation therefore requires `2026.8.2`, while plugin API, Gateway, and peer dependency metadata retain the verified `2026.8.1` compatibility floor.
 
 No host config migration is performed by this package. No new SDK imports are needed: runtime code still imports only `openclaw/plugin-sdk/plugin-entry`, `openclaw.plugin.json` declares tools through `contracts.tools`, pnpm build policy and overrides remain in `pnpm-workspace.yaml`, and code-agent session storage remains plugin-owned. Current Start Plan and approval callbacks, Telegram/topic routing, completion and cron/session wakes, Codex and Claude model restrictions, runtime tool visibility, disabled bundled-plugin boundaries, and plan/worktree follow-through retain their existing contracts.
 
-Configuration guidance for the `2026.8.2` target and retained `2026.8.1` compatibility floor:
+Configuration guidance for the `2026.8.2` installation target and retained `2026.8.1` API compatibility floor:
 
 - If `plugins.allow` is present, add `openclaw-code-agent`. OpenClaw treats that allowlist as exclusive, so `tools.allow` cannot make this plugin's tools available when the owning plugin is blocked.
 - A restrictive `plugins.allow` list can block omitted bundled provider or runtime plugins. Host-side discovery does not make them implicitly available to Code Agent sessions. Code Agent remains independent of bundled ACPX/core Codex, and disabled, quarantined, or absent adjacent plugins remain unavailable; required runtime capabilities fail closed.
@@ -57,7 +57,7 @@ Configuration guidance for the `2026.8.2` target and retained `2026.8.1` compati
 - Installed plugins that register host-trusted pre-tool policies must declare `contracts.trustedToolPolicies`. This plugin does not register trusted pre-tool policies, so no manifest contract is needed beyond the existing `contracts.tools` list.
 - The removed upstream sender-owner tool gating path does not replace this plugin's auth boundary. Chat commands remain auth-required, and Telegram/Discord callbacks still require authorized senders before `agent_respond`, plan approval, merge, PR, cleanup, or Start Plan actions are applied. OpenClaw's plugin write ownership checks are host-side package safety checks; OCA should not claim ownership of host or adjacent plugin package writes.
 - Legacy `defaultModel`, `model`, `reasoningEffort`, and global `allowedModels` are compatibility fields only. New configs should not use them.
-- Managed external-plugin npm installs enforce `openclaw.compat.pluginApi` when selecting compatible package versions. This package keeps that range, its Gateway minimum, and its peer dependency at the verified OpenClaw `2026.8.1` floor while exact build provenance targets `2026.8.2`. Keep `openclaw.extensions` pointing at the built `dist/index.js` artifact.
+- Managed external-plugin installs enforce `openclaw.install.minHostVersion`; this package sets that installation boundary to its exact OpenClaw `2026.8.2` build target. Its plugin API range, Gateway minimum, and peer dependency retain the verified OpenClaw `2026.8.1` floor. Keep `openclaw.extensions` pointing at the built `dist/index.js` artifact.
 - OpenClaw `2026.7.1` removes built-in dangerous-code blocking from plugin installs and deprecates `--dangerously-force-unsafe-install`; operators who require a host-specific allow/block decision should configure `security.installPolicy`. OCA's release smoke installs only its freshly packed artifact under an isolated temporary home and does not read or migrate operator state.
 - `tools.deny` does not disable OpenClaw's `apply_patch` tool by itself in current OpenClaw. To restrict patch edits, configure OpenClaw `tools.exec.applyPatch.enabled`, `tools.exec.applyPatch.workspaceOnly`, or `tools.exec.applyPatch.allowModels`.
 

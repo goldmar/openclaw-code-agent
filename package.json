@@ -35,7 +35,7 @@
     "install": {
       "npmSpec": "openclaw-code-agent",
       "defaultChoice": "npm",
-      "minHostVersion": ">=2026.8.1"
+      "minHostVersion": ">=2026.8.2"
     },
     "compat": {
       "pluginApi": ">=2026.8.1",
