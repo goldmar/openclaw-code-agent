@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { readFile } from "node:fs/promises";
 
-import { validateSecurityExceptions } from "./check-release-age-exceptions.mjs";
+import { validateReleaseAgeExceptions } from "./check-release-age-exceptions.mjs";
 
 const rootUrl = new URL("../", import.meta.url);
 const quarantineMs = 24 * 60 * 60 * 1000;
@@ -66,7 +66,7 @@ async function main() {
     readFile(new URL("npm-shrinkwrap.json", rootUrl), "utf8"),
     readFile(new URL("pnpm-workspace.yaml", rootUrl), "utf8"),
   ]);
-  const exceptions = validateSecurityExceptions(workspaceSource);
+  const exceptions = validateReleaseAgeExceptions(workspaceSource);
   const allowed = new Set(exceptions.map((exception) => exception.package));
   const tooNew = (await findTooNewPackages({
     packages: collectPublishedPackages(JSON.parse(shrinkwrapSource)),

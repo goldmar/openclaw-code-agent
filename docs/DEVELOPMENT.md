@@ -81,7 +81,7 @@ Security automation should work like this:
 - Version maintenance: Dependabot updates the JavaScript dependency set through the npm ecosystem support that covers pnpm projects.
 - Full snapshot audit: run `pnpm audit` when you need the current advisory set for the full resolved pnpm graph, including dev dependencies.
 
-The 24-hour minimum-release-age policy remains the default for every dependency. If a security-fixed release must be admitted before that quarantine ends, use an exact `package@version` entry in `minimumReleaseAgeExclude` immediately preceded by a `security-exception` comment containing the advisory, publication time, quarantine end, and removal deadline. `pnpm check-static-guardrails` rejects malformed, non-exact, or expired exceptions; remove the entry and comment once the deadline passes.
+The 24-hour minimum-release-age policy remains the default for every dependency. If a security-fixed release must be admitted before that quarantine ends, use an exact `package@version` entry in `minimumReleaseAgeExclude` immediately preceded by a `security-exception` comment containing the advisory, publication time, quarantine end, and removal deadline. An explicitly approved release operation may instead use a `release-exception` comment with a machine-readable reason and the same publication, quarantine-end, and removal timestamps. Both forms are exact-version, auditable, and temporary; `pnpm check-static-guardrails` rejects malformed, ranged, shortened-quarantine, or expired exceptions. Remove each entry and comment once its deadline passes.
 
 OpenClaw 2026.7.1 requires Node 22.22.3 or newer when using Node 22; CI and release verification pin that patch floor. Plugin-behavior review should also include:
 

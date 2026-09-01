@@ -475,11 +475,11 @@ describe("plugin entry source", () => {
     const readme = readFileSync(join(rootDir, "README.md"), "utf8");
     const changelog = readFileSync(join(rootDir, "CHANGELOG.md"), "utf8");
 
-    assert.match(reference, /OpenClaw 2026\.8\.1 SDK Readiness/);
-    assert.match(reference, /validated against and requires OpenClaw `2026\.8\.1`/);
-    assert.match(readme, /targets and requires OpenClaw `2026\.8\.1`/);
-    assert.match(changelog, /against OpenClaw `2026\.8\.1`/i);
-    assert.match(changelog, /Telegram\/topic routing, session restore, worktree\/PR policy, wake delivery/);
+    assert.match(reference, /OpenClaw 2026\.8\.2 SDK Readiness/);
+    assert.match(reference, /built and validated against OpenClaw `2026\.8\.2`/);
+    assert.match(readme, /built and validated against OpenClaw `2026\.8\.2`/);
+    assert.match(changelog, /against OpenClaw `2026\.8\.2`/i);
+    assert.match(changelog, /Telegram\/topic callbacks, completion and cron\/session wake delivery/);
     assert.match(readme, /callback ownership, and tool allowlists remain under the same plugin contracts/);
     assert.match(reference, /pnpm-workspace\.yaml/);
     assert.doesNotMatch(reference, /2026\.5\.8/);
