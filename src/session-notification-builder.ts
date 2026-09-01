@@ -4,6 +4,7 @@ export {
   buildNoChangeWakeMessage,
 } from "./session-notification-builders/worktree";
 export {
+  buildPlanApprovalFallbackMessages,
   buildPlanApprovalFallbackText,
   buildWaitingForInputPayload,
 } from "./session-notification-builders/waiting";

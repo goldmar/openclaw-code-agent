@@ -20,7 +20,7 @@ export function makeAgentRequestPlanApprovalTool(_ctx?: OpenClawPluginToolContex
       "Send a plan-approval decision prompt to the user for a session that is already waiting on plan approval. Reuses the plugin's Approve/Revise/Reject buttons so the user can decide directly from the message.",
     parameters: Type.Object({
       session: Type.String({ description: "Session name or ID awaiting plan approval" }),
-      summary: Type.String({ description: "Concise user-facing summary of scope, risk, and any concerns that should accompany the approval buttons" }),
+      summary: Type.String({ description: "Concise user-facing escalation rationale covering scope match, affected files/systems, destructive or external effects, material risks, verification, and unknowns or decisions" }),
     }),
     async execute(_id: string, params: unknown) {
       if (!sessionManager) {

@@ -4,7 +4,7 @@ import { getPersistedMutationRefs, usesNativeBackendWorktree } from "./session-b
 import {
   buildCompletedPayload,
   buildFailedPayload,
-  buildPlanApprovalFallbackText,
+  buildPlanApprovalFallbackMessages,
   buildTurnCompletePayload,
   buildWaitingForInputPayload,
   getStoppedStatusLabel,
@@ -176,7 +176,7 @@ export class SessionLifecycleService {
     this.deps.dispatchSessionNotification(session, {
       label: "plan-approval-fallback",
       idempotencyKey: `plan-approval:${session.id}:v${planDecisionVersion ?? "unknown"}:fallback`,
-      userMessage: buildPlanApprovalFallbackText({ session, summary }),
+      userMessages: buildPlanApprovalFallbackMessages({ session, summary }),
       notifyUser: "always",
       shouldDispatch: () => isCurrentPendingPlanDecision(session, planDecisionVersion),
       hooks: {

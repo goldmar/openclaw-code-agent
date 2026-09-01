@@ -2374,7 +2374,7 @@ describe("SessionManager turn-end wake", () => {
     const [_sessionArg, request] = calls[0];
     assert.equal(request.label, "plan-approval");
     assert.match(request.userMessage, /Plan v7 ready for approval/);
-    assert.match(request.userMessage, /Review summary:/);
+    assert.match(request.userMessage, /Decision brief:/);
     assert.match(request.userMessage, /- Plan preview/);
     assert.equal(request.buttons[0][0].label, "Approve");
     assert.equal(request.buttons[0][1].label, "Revise");
@@ -2501,9 +2501,11 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(calls.length, 1);
     const [_sessionArg, request] = calls[0];
     assert.equal(request.label, "plan-approval");
-    assert.match(request.userMessage, /Full plan:/);
-    assert.match(request.userMessage, /1\. Update prompt/);
-    assert.match(request.userMessage, /2\. Add tests/);
+    assert.match(request.userMessage, /Objective \/ scope:/);
+    assert.match(request.userMessage, /Keep the scope inside the approval flow/);
+    assert.match(request.userMessage, /Implementation approach:/);
+    assert.match(request.userMessage, /Update the prompt copy/);
+    assert.match(request.userMessage, /Add focused regression tests/);
   });
 
   it("uses finalized artifact markdown instead of preview transcript when structured plan fields are absent", async () => {
@@ -2537,14 +2539,14 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(calls.length, 1);
     const [_sessionArg, request] = calls[0];
     assert.equal(request.label, "plan-approval");
-    assert.match(request.userMessage, /Full plan:/);
-    assert.match(request.userMessage, /1\. Keep only the distilled final plan in the approval summary/);
-    assert.match(request.userMessage, /2\. Add a regression test for transcript leakage/);
+    assert.match(request.userMessage, /Decision brief:/);
+    assert.match(request.userMessage, /Keep only the distilled final plan in the approval summary/);
+    assert.match(request.userMessage, /Add a regression test for transcript leakage/);
     assert.doesNotMatch(request.userMessage, /Thinking through the notification path/);
     assert.doesNotMatch(request.userMessage, /running progress/);
   });
 
-  it("shows the full finalized plan in ask-mode approval prompts when it fits", async () => {
+  it("shows a structured decision brief instead of the raw finalized plan", async () => {
     const s = fakeSession({
       id: "s-plan-full",
       name: "plan-full",
@@ -2572,14 +2574,15 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(calls.length, 1);
     const [_sessionArg, request] = calls[0];
     assert.equal(request.label, "plan-approval");
-    assert.match(request.userMessage, /Full plan:/);
+    assert.match(request.userMessage, /Decision brief:/);
+    assert.match(request.userMessage, /Implementation approach:/);
     assert.match(request.userMessage, /Trace the approval path/);
     assert.match(request.userMessage, /Render the full plan in the prompt/);
     assert.match(request.userMessage, /Add a regression test/);
     assert.doesNotMatch(request.userMessage, /running progress/);
   });
 
-  it("paginates medium full plans across multiple ask-mode approval messages and keeps buttons on the final chunk", async () => {
+  it("compacts medium plans into one decision brief with canonical buttons", async () => {
     const mediumPlanItems = Array.from({ length: 32 }, (_, index) =>
       `${index + 1}. Step ${index + 1}: update a specific approval path detail while keeping the final plan explicit enough for human review without leaking transcript chatter.`,
     );
@@ -2605,20 +2608,17 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(calls.length, 1);
     const [_sessionArg, request] = calls[0];
     assert.equal(request.label, "plan-approval");
-    assert.equal(request.userMessage, undefined);
-    assert.ok(Array.isArray(request.userMessages));
-    assert.ok(request.userMessages.length > 1);
-    assert.match(request.userMessages[0].text, /ready for approval \(1\//);
-    assert.match(request.userMessages[0].text, /Full plan:/);
-    assert.equal(request.userMessages[0].buttons, undefined);
+    assert.match(request.userMessage, /Decision brief:/);
+    assert.match(request.userMessage, /Full-plan detail:/);
+    assert.match(request.userMessage, /additional/);
+    assert.equal(request.userMessages, undefined);
     assert.deepEqual(
-      request.userMessages.at(-1).buttons.map((row: Array<{ label: string }>) => row.map((button) => button.label)),
+      request.buttons.map((row: Array<{ label: string }>) => row.map((button) => button.label)),
       [["Approve", "Revise", "Reject"]],
     );
-    assert.match(request.userMessages.at(-1).text, /Choose Approve, Revise, or Reject below\./);
   });
 
-  it("keeps paginating finalized plans when they exceed the single-message budget", async () => {
+  it("keeps very large routine plans bounded instead of dumping the raw plan", async () => {
     const longPlanItems = Array.from({ length: 90 }, (_, index) =>
       `${index + 1}. Step ${index + 1}: capture a distinct part of the approval review, keep the wording explicit for users, preserve enough detail for a usable decision, and include validation notes so the finalized plan is intentionally larger than the full-plan pagination budget.`,
     );
@@ -2651,16 +2651,10 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(calls.length, 1);
     const [_sessionArg, request] = calls[0];
     assert.equal(request.label, "plan-approval");
-    assert.equal(request.userMessage, undefined);
-    assert.ok(Array.isArray(request.userMessages));
-    assert.ok(request.userMessages.length > 2);
-    assert.match(request.userMessages[0].text, /Full plan:/);
-    assert.equal(request.userMessages[0].buttons, undefined);
-    assert.deepEqual(
-      request.userMessages.at(-1).buttons.map((row: Array<{ label: string }>) => row.map((button) => button.label)),
-      [["Approve", "Revise", "Reject"]],
-    );
-    assert.match(request.userMessages.at(-1).text, /Choose Approve, Revise, or Reject below\./);
+    assert.ok((request.userMessage ?? "").length <= 3_200);
+    assert.match(request.userMessage, /Full-plan detail:/);
+    assert.doesNotMatch(request.userMessage, /Step 90:/);
+    assert.deepEqual(request.buttons.map((row: Array<{ label: string }>) => row.map((button) => button.label)), [["Approve", "Revise", "Reject"]]);
   });
 
   it("uses the plan file for the original ask-mode approval prompt when no structured artifact is cached", async () => {
@@ -2695,16 +2689,11 @@ describe("SessionManager turn-end wake", () => {
       assert.equal(calls.length, 1);
       const [_sessionArg, request] = calls[0];
       assert.equal(request.label, "plan-approval");
-      assert.equal(request.userMessage, undefined);
-      assert.ok(Array.isArray(request.userMessages));
-      assert.ok(request.userMessages.length > 1);
-      assert.match(request.userMessages[0].text, /Full plan:/);
-      assert.match(request.userMessages[0].text, /ready for approval \(1\//);
-      assert.doesNotMatch(request.userMessages[0].text, /grounding in the current workspace state/);
-      assert.deepEqual(
-        request.userMessages.at(-1).buttons.map((row: Array<{ label: string }>) => row.map((button) => button.label)),
-        [["Approve", "Revise", "Reject"]],
-      );
+      assert.match(request.userMessage, /Decision brief:/);
+      assert.match(request.userMessage, /Step 1:/);
+      assert.match(request.userMessage, /additional routine implementation step/);
+      assert.doesNotMatch(request.userMessage, /grounding in the current workspace state/);
+      assert.deepEqual(request.buttons.map((row: Array<{ label: string }>) => row.map((button) => button.label)), [["Approve", "Revise", "Reject"]]);
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
@@ -2739,7 +2728,7 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(calls.length, 1);
     const [_sessionArg, request] = calls[0];
     assert.equal(request.label, "plan-approval");
-    assert.match(request.userMessage, /Review summary:/);
+    assert.match(request.userMessage, /Decision brief:/);
     assert.match(request.userMessage, /- Inspect the current notification flow/);
     assert.match(request.userMessage, /- Add a safe fallback summary/);
     assert.doesNotMatch(request.userMessage, /Stale explanation/);
@@ -2779,9 +2768,10 @@ describe("SessionManager turn-end wake", () => {
     assert.match(request.userMessage, /Plan v9 needs your decision/);
     assert.match(request.userMessage, /Why this was escalated:/);
     assert.match(request.userMessage, /Risk: medium/);
-    assert.match(request.userMessage, /Latest actionable plan:/);
-    assert.match(request.userMessage, /Objective: preserve approval ownership/);
-    assert.match(request.userMessage, /Implementation steps:/);
+    assert.match(request.userMessage, /Decision brief:/);
+    assert.match(request.userMessage, /Objective \/ scope:/);
+    assert.match(request.userMessage, /preserve approval ownership/);
+    assert.match(request.userMessage, /Implementation approach:/);
     assert.match(request.userMessage, /Verification: run focused tests/);
     assert.match(request.userMessage, /External effects: none/);
     assert.deepEqual(
@@ -2825,7 +2815,10 @@ describe("SessionManager turn-end wake", () => {
 
     sm.requestPlanApprovalFromUser(
       s.id,
-      "Escalating because reviewed dated memory Markdown older than today may be deleted; this is destructive even though it matches the requested maintenance scope.",
+      [
+        "Escalating because reviewed dated memory Markdown older than today may be deleted; this is destructive even though it matches the requested maintenance scope.",
+        ...Array.from({ length: 30 }, (_, index) => `Review concern ${index + 1}: confirm the retained-memory boundary before approval.`),
+      ].join("\n"),
     );
 
     const calls = (sm as any).__dispatchCalls;
@@ -2838,18 +2831,27 @@ describe("SessionManager turn-end wake", () => {
     const rendered = request.userMessages.map((message: { text: string }) => message.text).join("\n");
     assert.match(rendered, /Why this was escalated:/);
     assert.match(rendered, /delete reviewed dated memory Markdown older than today/);
-    assert.match(rendered, /Latest actionable plan:/);
-    assert.match(rendered, /Affected files:/);
+    assert.match(rendered, /Decision brief:/);
+    assert.match(rendered, /Files \/ systems affected:/);
     assert.match(rendered, /Tests \/ verification:/);
-    assert.match(rendered, /Destructive effects:/);
+    assert.match(rendered, /Destructive \/ external effects:/);
     assert.match(rendered, /Material risks:/);
-    assert.match(rendered, /Unknowns \/ omissions:/);
+    assert.match(rendered, /Unknowns \/ decisions:/);
     assert.doesNotMatch(rendered, /omitted for brevity/i);
     assert.equal(request.userMessages[0].buttons, undefined);
+    assert.equal(request.userMessages.at(-1).requiredForSequenceSuccess, true);
     assert.deepEqual(
       request.userMessages.at(-1).buttons.map((row: Array<{ label: string }>) => row.map((button) => button.label)),
       [["Approve", "Revise", "Reject"]],
     );
+
+    request.onUserNotifyFailed();
+    const fallbackRequest = calls[1][1];
+    assert.equal(fallbackRequest.label, "plan-approval-fallback");
+    assert.ok(fallbackRequest.userMessages.length > 1);
+    assert.ok(fallbackRequest.userMessages.every((message: { text: string }) => message.text.length <= 3_000));
+    assert.equal(fallbackRequest.userMessages.at(-1).requiredForSequenceSuccess, true);
+    assert.match(fallbackRequest.userMessages.map((message: { text: string }) => message.text).join("\n"), /delete reviewed dated memory Markdown older than today/);
   });
 
   it("suppresses duplicate delegated escalations for the same plan decision version", () => {
@@ -2911,7 +2913,8 @@ describe("SessionManager turn-end wake", () => {
     const [_fallbackSession, fallbackRequest] = calls[1];
     assert.equal(fallbackRequest.label, "plan-approval-fallback");
     assert.equal(fallbackRequest.buttons, undefined);
-    assert.match(fallbackRequest.userMessage, /buttons could not be delivered/i);
+    assert.match(fallbackRequest.userMessages[0].text, /buttons could not be delivered/i);
+    assert.equal(fallbackRequest.userMessages.at(-1).requiredForSequenceSuccess, true);
     fallbackRequest.hooks.onNotifySucceeded();
     assert.equal(s.approvalPromptStatus, "fallback_delivered");
     assert.equal(s.approvalPromptMessageKind, "explicit_fallback_text");

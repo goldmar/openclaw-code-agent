@@ -45,8 +45,8 @@ import { SessionReminderService } from "./session-reminder-service";
 import { resolvePlanArtifactForPrompt, SessionLifecycleService } from "./session-lifecycle-service";
 import {
   buildGoalTaskSucceededFollowupWake,
+  buildPlanApprovalFallbackMessages,
   buildPlanApprovalPromptContent,
-  buildPlanApprovalFallbackText,
   formatPlanApprovalSummary,
 } from "./session-notification-builder";
 import { SessionWorktreeDecisionService } from "./session-worktree-decision-service";
@@ -1084,7 +1084,7 @@ export class SessionManager {
     this.notifications.dispatch(session, {
       label: "plan-approval-fallback",
       idempotencyKey: `plan-approval:${session.id}:v${planDecisionVersion ?? "unknown"}:fallback`,
-      userMessage: buildPlanApprovalFallbackText({ session, summary }),
+      userMessages: buildPlanApprovalFallbackMessages({ session, summary }),
       notifyUser: "always",
       shouldDispatch: () => this.isCurrentPendingPlanDecision(session.id, planDecisionVersion),
       hooks: {
@@ -1243,6 +1243,7 @@ export class SessionManager {
     const userMessages = planPrompt.userMessages.map((text, index, all) => ({
       text,
       buttons: index === all.length - 1 ? buttons : undefined,
+      requiredForSequenceSuccess: index === all.length - 1,
     }));
 
     this.notifications.dispatch(
@@ -1306,7 +1307,7 @@ export class SessionManager {
             route: activeSession?.route ?? persistedSession?.route,
           }),
           actionableVersion,
-          formattedSummary,
+          planPrompt.reviewSummary,
         ),
         wakeMessageOnNotifySuccess: buildPlanApprovalWakeText({ id: sessionId, name: session.name }, actionableVersion),
       },
