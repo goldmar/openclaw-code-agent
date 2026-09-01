@@ -18,6 +18,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  CLAWHUB_INSPECTOR_VERSION: "0.23.1"
   CLAWHUB_CLI_VERSION: "0.23.3"
   PACKAGE_NAME: openclaw-code-agent
 
@@ -74,7 +75,7 @@ jobs:
 
       - name: Run ClawHub inspector
         run: |
-          pnpm dlx "clawhub@$CLAWHUB_CLI_VERSION" package validate "$PWD" --runtime --allow-execute --out .reports/clawhub --json | tee /tmp/clawhub-validation.json
+          pnpm dlx "clawhub@$CLAWHUB_INSPECTOR_VERSION" package validate "$PWD" --runtime --allow-execute --out .reports/clawhub --json | tee /tmp/clawhub-validation.json
           test "$(jq -r '.status' /tmp/clawhub-validation.json)" = pass
           test "$(jq -r '.summary.issueCount' /tmp/clawhub-validation.json)" -eq 0
 
