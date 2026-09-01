@@ -9,11 +9,24 @@ const workflow = readFileSync(join(repoRoot, ".github", "workflows", "release.ym
 
 describe("release workflow", () => {
   it("waits for definitive ClawHub publication before verifying the artifact", () => {
+    assert.match(workflow, /CLAWHUB_INSPECTOR_VERSION: "0\.23\.1"/);
     assert.match(workflow, /CLAWHUB_CLI_VERSION: "0\.23\.3"/);
     assert.match(
       workflow,
       /clawhub package publish "\$artifact"[\s\S]*--wait \\\n+[\s\S]*--wait-timeout 2400 \\\n+[\s\S]*--json\n\s+clawhub package verify/,
     );
+  });
+
+  it("keeps publication polling upgrades separate from inspector policy", () => {
+    assert.match(
+      workflow,
+      /pnpm dlx "clawhub@\$CLAWHUB_INSPECTOR_VERSION" package validate/,
+    );
+    assert.match(
+      workflow,
+      /pnpm dlx "clawhub@\$CLAWHUB_CLI_VERSION" package publish/,
+    );
+    assert.match(workflow, /npm install --global "clawhub@\$CLAWHUB_CLI_VERSION"/);
   });
 
   it("does not substitute fixed sleeps for ClawHub publication state", () => {
