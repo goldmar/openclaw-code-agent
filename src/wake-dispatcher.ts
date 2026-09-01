@@ -26,6 +26,8 @@ export interface SessionNotificationRequest {
   wakeMessage?: string;
   wakeMessageOnNotifySuccess?: string;
   wakeMessageOnNotifyFailed?: string;
+  /** Whether a failure-report wake proves the preceding user notification was delivered. */
+  failureWakeConfirmsNotificationDelivery?: boolean;
   completionSummary?: CompletionSummaryFact;
   completionSummaryOwner?: "wake" | "foreground";
   completionWakeSummaryRequired?: boolean;

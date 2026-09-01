@@ -192,7 +192,9 @@ export class SessionNotificationService {
     const completionWakePatch = this.buildCompletionWakePatch(dispatchRequest);
     const hasWakeAfterNotifySuccess = Boolean(dispatchRequest.wakeMessage?.trim() || dispatchRequest.wakeMessageOnNotifySuccess?.trim());
     const hasWakeAfterNotifyFailure = Boolean(dispatchRequest.wakeMessage?.trim() || dispatchRequest.wakeMessageOnNotifyFailed?.trim());
+    const failureWakeConfirmsNotificationDelivery = dispatchRequest.failureWakeConfirmsNotificationDelivery !== false;
     let notificationDedupeResolved = false;
+    let notifyDeliveryFailed = false;
     let dispatchCancelled = false;
     const cancelDispatch = (): void => {
       if (dispatchCancelled) return;
@@ -230,12 +232,13 @@ export class SessionNotificationService {
         dispatchRequest.hooks?.onNotifySucceeded?.();
       },
       onNotifyFailed: () => {
+        notifyDeliveryFailed = true;
         this.applyNotifyDeliveryState(
           deliveryRef,
           hasWakeAfterNotifyFailure ? "wake_pending" : "failed",
           hasWakeAfterNotifyFailure ? completionWakePatch : undefined,
         );
-        if (!hasWakeAfterNotifyFailure) {
+        if (!hasWakeAfterNotifyFailure || !failureWakeConfirmsNotificationDelivery) {
           this.completionSummaries.finish(completionSummaryDecision.key, false);
           this.releaseNotificationDedupe(deliveryRef, notificationDedupeKey);
           notificationDedupeResolved = true;
@@ -254,7 +257,9 @@ export class SessionNotificationService {
       },
       onWakeSucceeded: () => {
         notificationDedupeResolved = true;
-        this.markNotificationDedupeDelivered(deliveryRef, notificationDedupeKey, dispatchRequest.label);
+        if (!notifyDeliveryFailed || failureWakeConfirmsNotificationDelivery) {
+          this.markNotificationDedupeDelivered(deliveryRef, notificationDedupeKey, dispatchRequest.label);
+        }
         this.markCompletionSummaryDelivered(
           deliveryRef,
           completionSummaryDecision.key,
@@ -275,7 +280,9 @@ export class SessionNotificationService {
           return;
         }
         notificationDedupeResolved = true;
-        this.markNotificationDedupeDelivered(deliveryRef, notificationDedupeKey, dispatchRequest.label);
+        if (!notifyDeliveryFailed || failureWakeConfirmsNotificationDelivery) {
+          this.markNotificationDedupeDelivered(deliveryRef, notificationDedupeKey, dispatchRequest.label);
+        }
         this.markCompletionSummaryDelivered(
           deliveryRef,
           completionSummaryDecision.key,

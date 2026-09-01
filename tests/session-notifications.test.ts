@@ -767,6 +767,54 @@ describe("SessionNotificationService", () => {
     assert.equal(persisted.notificationDedupe?.[0]?.status, "delivered");
   });
 
+  it("does not consume a fallback retry when its failure-report wake succeeds", () => {
+    const persisted = { notificationDedupe: undefined } as any;
+    let attempts = 0;
+    const fakeDispatcher = {
+      dispatchSessionNotification: (
+        _session: unknown,
+        request: { hooks?: Record<string, () => void> },
+      ) => {
+        attempts += 1;
+        request.hooks?.onNotifyStarted?.();
+        if (attempts === 1) {
+          request.hooks?.onNotifyFailed?.();
+          request.hooks?.onWakeStarted?.();
+          request.hooks?.onWakeSucceeded?.();
+        } else {
+          request.hooks?.onNotifySucceeded?.();
+        }
+      },
+      dispose: () => {},
+    };
+    const service = new SessionNotificationService(
+      fakeDispatcher as any,
+      (_ref, patch) => Object.assign(persisted, patch),
+      { getPersistedSession: () => persisted },
+    );
+    const session = { id: "session-partial-fallback", harnessSessionId: "h-partial-fallback" } as any;
+    const request = {
+      label: "plan-approval-fallback",
+      idempotencyKey: "plan-approval:session-partial-fallback:v4:fallback",
+      userMessages: [
+        { text: "fallback context 1", requiredForSequenceSuccess: true },
+        { text: "fallback context 2", requiredForSequenceSuccess: true },
+      ],
+      wakeMessageOnNotifyFailed: "Plan fallback delivery failed",
+      failureWakeConfirmsNotificationDelivery: false,
+      notifyUser: "always" as const,
+    };
+
+    service.dispatch(session, request);
+    assert.equal(persisted.notificationDedupe?.length ?? 0, 0);
+
+    service.dispatch(session, request);
+
+    assert.equal(attempts, 2);
+    assert.equal(persisted.notificationDedupe?.length, 1);
+    assert.equal(persisted.notificationDedupe?.[0]?.status, "delivered");
+  });
+
   it("marks failed notify paths as failed when no wake fallback exists", () => {
     const patches: Array<{ ref: string; deliveryState?: string }> = [];
     const fakeDispatcher = {

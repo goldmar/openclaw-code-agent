@@ -1124,6 +1124,7 @@ export class SessionManager {
       },
       wakeMessageOnNotifySuccess: buildPlanApprovalWakeText(session, planDecisionVersion, true),
       wakeMessageOnNotifyFailed: buildPlanApprovalDeliveryFailureWake({ session, planDecisionVersion }),
+      failureWakeConfirmsNotificationDelivery: false,
     });
   }
 

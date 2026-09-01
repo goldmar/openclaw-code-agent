@@ -220,6 +220,7 @@ export class SessionLifecycleService {
         planDecisionVersion,
         originThreadLine: this.deps.originThreadLine(session),
       }),
+      failureWakeConfirmsNotificationDelivery: false,
     });
   }
 

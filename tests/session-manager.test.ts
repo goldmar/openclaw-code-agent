@@ -2851,6 +2851,7 @@ describe("SessionManager turn-end wake", () => {
     assert.ok(fallbackRequest.userMessages.length > 1);
     assert.ok(fallbackRequest.userMessages.every((message: { text: string }) => message.text.length <= 3_000));
     assert.equal(fallbackRequest.userMessages.every((message) => message.requiredForSequenceSuccess), true);
+    assert.equal(fallbackRequest.failureWakeConfirmsNotificationDelivery, false);
     assert.match(fallbackRequest.userMessages.map((message: { text: string }) => message.text).join("\n"), /delete reviewed dated memory Markdown older than today/);
   });
 
@@ -2915,6 +2916,7 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(fallbackRequest.buttons, undefined);
     assert.match(fallbackRequest.userMessages[0].text, /buttons could not be delivered/i);
     assert.equal(fallbackRequest.userMessages.every((message) => message.requiredForSequenceSuccess), true);
+    assert.equal(fallbackRequest.failureWakeConfirmsNotificationDelivery, false);
     fallbackRequest.hooks.onNotifySucceeded();
     assert.equal(s.approvalPromptStatus, "fallback_delivered");
     assert.equal(s.approvalPromptMessageKind, "explicit_fallback_text");
