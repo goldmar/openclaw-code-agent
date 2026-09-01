@@ -1,7 +1,7 @@
 import type { Session } from "../session";
 import type { NotificationButton } from "../session-interactions";
 import type { PlanApprovalMode, PlanArtifact } from "../types";
-import { buildPlanApprovalPromptContent, buildPlanReviewSummary } from "../plan-review-summary";
+import { buildPlanApprovalPromptContent, buildPlanReviewSummary, paginatePlanApprovalText } from "../plan-review-summary";
 import type { SessionNotificationMessage } from "../wake-dispatcher";
 
 type OriginThreadLine = string;
@@ -59,10 +59,22 @@ export function buildPlanApprovalFallbackText(args: {
     `- Reply "reject" to reject and stop the session`,
     `- Any other reply will be sent back as revision feedback`,
     ``,
-    `Why this was escalated:`,
+    `Decision context:`,
     ``,
     summary,
   ].join("\n");
+}
+
+export function buildPlanApprovalFallbackMessages(
+  args: Parameters<typeof buildPlanApprovalFallbackText>[0],
+): SessionNotificationMessage[] {
+  const parts = paginatePlanApprovalText(buildPlanApprovalFallbackText(args));
+  return parts.map((text, index) => ({
+    text: parts.length === 1
+      ? text
+      : `${text}\n\n${index === parts.length - 1 ? "End of decision context." : "Continued in next message."}`,
+    requiredForSequenceSuccess: true,
+  }));
 }
 
 export function buildWaitingForInputPayload(args: {
@@ -126,6 +138,7 @@ export function buildWaitingForInputPayload(args: {
           ? planPrompt.userMessages.map((text, index, all) => ({
               text,
               buttons: index === all.length - 1 ? planApprovalButtons : undefined,
+              requiredForSequenceSuccess: true,
             }))
           : undefined
       )

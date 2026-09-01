@@ -15,6 +15,8 @@ export type SessionNotificationPolicy = "always" | "on-wake-fallback" | "never";
 export interface SessionNotificationMessage {
   text: string;
   buttons?: Array<Array<{ label: string; callbackData: string }>>;
+  /** A failure delivering this message makes the whole sequence non-actionable. */
+  requiredForSequenceSuccess?: boolean;
 }
 
 export interface SessionNotificationRequest {
@@ -24,6 +26,8 @@ export interface SessionNotificationRequest {
   wakeMessage?: string;
   wakeMessageOnNotifySuccess?: string;
   wakeMessageOnNotifyFailed?: string;
+  /** Whether a failure-report wake proves the preceding user notification was delivered. */
+  failureWakeConfirmsNotificationDelivery?: boolean;
   completionSummary?: CompletionSummaryFact;
   completionSummaryOwner?: "wake" | "foreground";
   completionWakeSummaryRequired?: boolean;
@@ -449,6 +453,7 @@ export class WakeDispatcher {
       .map((message) => ({
         text: message.text.trim(),
         buttons: message.buttons,
+        requiredForSequenceSuccess: message.requiredForSequenceSuccess,
       }))
       .filter((message) => message.text.length > 0);
 
@@ -485,7 +490,8 @@ export class WakeDispatcher {
         onSuccess?.();
         return;
       }
-      const onFailure = index === 0 ? onAllFailed : onSuccess;
+      const failureIsTerminal = index === 0 || message.requiredForSequenceSuccess === true;
+      const onFailure = failureIsTerminal ? onAllFailed : onSuccess;
       logButtonDiagnostic("wake_notify_sequence_chunk_selected", {
         sessionId: session.id,
         sessionName: session.name,
@@ -493,7 +499,7 @@ export class WakeDispatcher {
         chunkIndex: index + 1,
         chunkCount: normalizedMessages.length,
         messageTextLength: message.text.length,
-        failureHandler: index === 0 ? "all-failed" : "sequence-success",
+        failureHandler: failureIsTerminal ? "sequence-failed" : "partial-success",
         ...summarizeButtons(message.buttons),
       });
 
@@ -525,6 +531,7 @@ export class WakeDispatcher {
     ).map((message) => ({
       text: message.text.trim(),
       buttons: message.buttons,
+      requiredForSequenceSuccess: message.requiredForSequenceSuccess,
     })).filter((message) => message.text.length > 0);
     const wakeMessage = request.wakeMessage?.trim();
     const shouldDispatch = request.shouldDispatch;

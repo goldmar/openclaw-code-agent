@@ -4,10 +4,11 @@ export {
   buildNoChangeWakeMessage,
 } from "./session-notification-builders/worktree";
 export {
+  buildPlanApprovalFallbackMessages,
   buildPlanApprovalFallbackText,
   buildWaitingForInputPayload,
 } from "./session-notification-builders/waiting";
-export { buildPlanReviewSummary, formatPlanApprovalSummary } from "./plan-review-summary";
+export { buildPlanApprovalPromptContent, buildPlanReviewSummary, formatPlanApprovalSummary } from "./plan-review-summary";
 export {
   buildCompletedPayload,
   buildFailedPayload,

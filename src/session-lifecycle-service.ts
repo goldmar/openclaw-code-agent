@@ -4,7 +4,7 @@ import { getPersistedMutationRefs, usesNativeBackendWorktree } from "./session-b
 import {
   buildCompletedPayload,
   buildFailedPayload,
-  buildPlanApprovalFallbackText,
+  buildPlanApprovalFallbackMessages,
   buildTurnCompletePayload,
   buildWaitingForInputPayload,
   getStoppedStatusLabel,
@@ -35,8 +35,12 @@ type WorktreeStrategyResult = {
 type DispatchNotification = (session: Session, request: SessionNotificationRequest) => void;
 const OPTION_DESCRIPTION_MAX_CHARS = 280;
 
-function resolvePlanArtifactForPrompt(
-  session: Pick<Session, "latestPlanArtifactVersion" | "latestPlanArtifact" | "planFilePath">,
+export function resolvePlanArtifactForPrompt(
+  session: {
+    latestPlanArtifactVersion?: number;
+    latestPlanArtifact?: PlanArtifact;
+    planFilePath?: string;
+  },
   planDecisionVersion?: number,
 ): PlanArtifact | undefined {
   if (session.latestPlanArtifactVersion === planDecisionVersion && session.latestPlanArtifact) {
@@ -172,7 +176,7 @@ export class SessionLifecycleService {
     this.deps.dispatchSessionNotification(session, {
       label: "plan-approval-fallback",
       idempotencyKey: `plan-approval:${session.id}:v${planDecisionVersion ?? "unknown"}:fallback`,
-      userMessage: buildPlanApprovalFallbackText({ session, summary }),
+      userMessages: buildPlanApprovalFallbackMessages({ session, summary }),
       notifyUser: "always",
       shouldDispatch: () => isCurrentPendingPlanDecision(session, planDecisionVersion),
       hooks: {
@@ -216,6 +220,7 @@ export class SessionLifecycleService {
         planDecisionVersion,
         originThreadLine: this.deps.originThreadLine(session),
       }),
+      failureWakeConfirmsNotificationDelivery: false,
     });
   }
 

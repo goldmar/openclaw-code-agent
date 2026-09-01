@@ -1384,6 +1384,125 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
     assert.deepEqual(wakeEvents, ["notify success wake"]);
   });
 
+  it("fails a sequence when the final actionable chunk fails after earlier chunks succeed", () => {
+    const dispatcher = createDispatcher();
+    const session: FakeSession = {
+      id: "session-final-action-failure",
+      route: buildRoute(),
+    };
+    const deliveries: string[] = [];
+    const wakeEvents: string[] = [];
+    let notifyFailed = 0;
+    let notifySucceeded = 0;
+
+    (dispatcher as any).sendUserNotification = (
+      _session: FakeSession,
+      text: string,
+      _label: string,
+      _buttons: unknown,
+      onAllFailed?: () => void,
+      onSuccess?: () => void,
+    ) => {
+      deliveries.push(text);
+      if (deliveries.length === 1) onSuccess?.();
+      else onAllFailed?.();
+    };
+    (dispatcher as any).sendWake = (
+      _session: FakeSession,
+      text: string,
+      _label: string,
+      _phase: string,
+      _onFinalFailure?: () => void,
+      onSuccess?: () => void,
+    ) => {
+      wakeEvents.push(text);
+      onSuccess?.();
+    };
+
+    dispatcher.dispatchSessionNotification(session as any, {
+      label: "plan-approval",
+      userMessages: [
+        { text: "decision context" },
+        {
+          text: "canonical decision prompt",
+          buttons: [[{ label: "Approve", callbackData: "approve-v2" }]],
+          requiredForSequenceSuccess: true,
+        },
+      ],
+      wakeMessageOnNotifySuccess: "notify success wake",
+      wakeMessageOnNotifyFailed: "notify failed wake",
+      hooks: {
+        onNotifyFailed: () => { notifyFailed += 1; },
+        onNotifySucceeded: () => { notifySucceeded += 1; },
+      },
+    });
+
+    assert.deepEqual(deliveries, ["decision context", "canonical decision prompt"]);
+    assert.equal(notifyFailed, 1);
+    assert.equal(notifySucceeded, 0);
+    assert.deepEqual(wakeEvents, ["notify failed wake"]);
+  });
+
+  it("fails an approval sequence when a required middle chunk fails before the actions", () => {
+    const dispatcher = createDispatcher();
+    const session: FakeSession = {
+      id: "session-middle-approval-failure",
+      route: buildRoute(),
+    };
+    const deliveries: string[] = [];
+    const wakeEvents: string[] = [];
+    let notifyFailed = 0;
+    let notifySucceeded = 0;
+
+    (dispatcher as any).sendUserNotification = (
+      _session: FakeSession,
+      text: string,
+      _label: string,
+      _buttons: unknown,
+      onAllFailed?: () => void,
+      onSuccess?: () => void,
+    ) => {
+      deliveries.push(text);
+      if (deliveries.length === 2) onAllFailed?.();
+      else onSuccess?.();
+    };
+    (dispatcher as any).sendWake = (
+      _session: FakeSession,
+      text: string,
+      _label: string,
+      _phase: string,
+      _onFinalFailure?: () => void,
+      onSuccess?: () => void,
+    ) => {
+      wakeEvents.push(text);
+      onSuccess?.();
+    };
+
+    dispatcher.dispatchSessionNotification(session as any, {
+      label: "plan-approval",
+      userMessages: [
+        { text: "decision context 1", requiredForSequenceSuccess: true },
+        { text: "decision context 2", requiredForSequenceSuccess: true },
+        {
+          text: "canonical decision prompt",
+          buttons: [[{ label: "Approve", callbackData: "approve-v3" }]],
+          requiredForSequenceSuccess: true,
+        },
+      ],
+      wakeMessageOnNotifySuccess: "notify success wake",
+      wakeMessageOnNotifyFailed: "notify failed wake",
+      hooks: {
+        onNotifyFailed: () => { notifyFailed += 1; },
+        onNotifySucceeded: () => { notifySucceeded += 1; },
+      },
+    });
+
+    assert.deepEqual(deliveries, ["decision context 1", "decision context 2"]);
+    assert.equal(notifyFailed, 1);
+    assert.equal(notifySucceeded, 0);
+    assert.deepEqual(wakeEvents, ["notify failed wake"]);
+  });
+
   it("falls back to system notify when no explicit route is present", async () => {
     const dispatcher = createDispatcher();
     const session: FakeSession = {

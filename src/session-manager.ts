@@ -42,10 +42,11 @@ import {
   type PendingAskUserQuestion,
 } from "./session-question-service";
 import { SessionReminderService } from "./session-reminder-service";
-import { SessionLifecycleService } from "./session-lifecycle-service";
+import { resolvePlanArtifactForPrompt, SessionLifecycleService } from "./session-lifecycle-service";
 import {
   buildGoalTaskSucceededFollowupWake,
-  buildPlanApprovalFallbackText,
+  buildPlanApprovalFallbackMessages,
+  buildPlanApprovalPromptContent,
   formatPlanApprovalSummary,
 } from "./session-notification-builder";
 import { SessionWorktreeDecisionService } from "./session-worktree-decision-service";
@@ -1083,7 +1084,7 @@ export class SessionManager {
     this.notifications.dispatch(session, {
       label: "plan-approval-fallback",
       idempotencyKey: `plan-approval:${session.id}:v${planDecisionVersion ?? "unknown"}:fallback`,
-      userMessage: buildPlanApprovalFallbackText({ session, summary }),
+      userMessages: buildPlanApprovalFallbackMessages({ session, summary }),
       notifyUser: "always",
       shouldDispatch: () => this.isCurrentPendingPlanDecision(session.id, planDecisionVersion),
       hooks: {
@@ -1123,6 +1124,7 @@ export class SessionManager {
       },
       wakeMessageOnNotifySuccess: buildPlanApprovalWakeText(session, planDecisionVersion, true),
       wakeMessageOnNotifyFailed: buildPlanApprovalDeliveryFailureWake({ session, planDecisionVersion }),
+      failureWakeConfirmsNotificationDelivery: false,
     });
   }
 
@@ -1227,15 +1229,23 @@ export class SessionManager {
       ...session,
       planDecisionVersion: actionableVersion,
     });
-    const message = [
-      `📋 [${session.name}] Plan v${actionableVersion ?? "?"} needs your decision:`,
-      ``,
-      `Why this was escalated:`,
-      ``,
-      formattedSummary,
-      ``,
-      `Choose Approve, Revise, or Reject below.`,
-    ].join("\n");
+    const currentArtifact = activeSession
+      ? resolvePlanArtifactForPrompt(activeSession, actionableVersion)
+      : undefined;
+    const planPrompt = buildPlanApprovalPromptContent({
+      sessionName: session.name,
+      actionableVersion,
+      preview: activeSession?.getOutput().join("\n") ?? "",
+      artifact: currentArtifact,
+      escalationRationale: formattedSummary,
+      hasButtons: true,
+      heading: "needs your decision",
+    });
+    const userMessages = planPrompt.userMessages.map((text, index, all) => ({
+      text,
+      buttons: index === all.length - 1 ? buttons : undefined,
+      requiredForSequenceSuccess: true,
+    }));
 
     this.notifications.dispatch(
       this.buildRoutingProxy({
@@ -1249,9 +1259,10 @@ export class SessionManager {
       {
         label: "plan-approval",
         idempotencyKey: `plan-approval:${sessionId}:v${actionableVersion ?? "unknown"}:canonical`,
-        userMessage: message,
+        userMessage: userMessages.length === 1 ? userMessages[0]?.text : undefined,
+        userMessages: userMessages.length > 1 ? userMessages : undefined,
         notifyUser: "always",
-        buttons,
+        buttons: userMessages.length === 1 ? buttons : undefined,
         hooks: {
           onNotifyStarted: () => {
             this.updatePersistedSession(sessionId, {
@@ -1297,7 +1308,7 @@ export class SessionManager {
             route: activeSession?.route ?? persistedSession?.route,
           }),
           actionableVersion,
-          formattedSummary,
+          planPrompt.reviewSummary,
         ),
         wakeMessageOnNotifySuccess: buildPlanApprovalWakeText({ id: sessionId, name: session.name }, actionableVersion),
       },
