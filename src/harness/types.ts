@@ -95,6 +95,9 @@ export interface HarnessSession {
 
   /** Interrupt the current turn. */
   interrupt?(): Promise<void>;
+
+  /** Release backend transports and child processes owned by this session. */
+  close?(): Promise<void>;
 }
 
 // ---------------------------------------------------------------------------

@@ -5,6 +5,7 @@ import type { SessionConfig, SessionLifecycle, SessionStatus } from "./types";
 
 type SpawnOptions = {
   notifyLaunch?: boolean;
+  startAfter?: Promise<void>;
 };
 
 type PreparedLaunch = ReturnType<import("./session-restore-service").SessionRestoreService["prepareSpawn"]>;
@@ -61,7 +62,13 @@ export class SessionRuntimeBootstrapService {
       });
     });
 
-    session.start();
+    if (options.startAfter) {
+      void options.startAfter.then(() => session.start()).catch((err) => {
+        console.error(`[SessionRuntimeBootstrap] deferred start threw for session ${session.id}:`, err);
+      });
+    } else {
+      void session.start();
+    }
 
     if (options.notifyLaunch !== false) {
       const notification = this.buildLaunchNotification(session);

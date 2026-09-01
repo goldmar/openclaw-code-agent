@@ -676,6 +676,141 @@ describe("Session.kill() teardown", () => {
     assert.equal(session.status, "killed");
     assert.equal(session.killReason, "user");
   });
+
+  it("closes the harness transport when a session is terminated", async () => {
+    let closeCalls = 0;
+    const closingHarness: AgentHarness = {
+      name: "test-harness-close-on-terminal",
+      backendKind: "codex-app-server",
+      supportedPermissionModes: ["default", "plan", "bypassPermissions"],
+      capabilities: {
+        nativePendingInput: true,
+        nativePlanArtifacts: true,
+        worktrees: "plugin-managed",
+      },
+      launch(): HarnessSession {
+        async function* messages() {
+          yield {
+            type: "backend_ref",
+            ref: { kind: "codex-app-server", conversationId: "writer-owned-thread" },
+          } as const;
+          await new Promise<void>(() => undefined);
+        }
+        return {
+          messages: messages(),
+          async close(): Promise<void> { closeCalls += 1; },
+        };
+      },
+      buildUserMessage(text: string, sessionId: string): unknown {
+        return { type: "user", text, session_id: sessionId };
+      },
+    };
+    registerHarness(closingHarness);
+
+    const session = new Session(makeSessionConfig({ harness: closingHarness.name }), "close-session");
+    await session.start();
+    await tick(20);
+    session.kill("idle-timeout");
+    await tick(20);
+
+    assert.equal(closeCalls, 1);
+    assert.equal(session.status, "killed");
+  });
+
+  it("exposes a teardown barrier until the harness releases its backend writer", async () => {
+    let releaseClose!: () => void;
+    const closeBarrier = new Promise<void>((resolve) => { releaseClose = resolve; });
+    const closingHarness: AgentHarness = {
+      name: "test-harness-writer-release-barrier",
+      backendKind: "codex-app-server",
+      supportedPermissionModes: ["default", "plan", "bypassPermissions"],
+      capabilities: {
+        nativePendingInput: true,
+        nativePlanArtifacts: true,
+        worktrees: "plugin-managed",
+      },
+      launch(): HarnessSession {
+        async function* messages() {
+          yield { type: "run_started" } as const;
+          await new Promise<void>(() => undefined);
+        }
+        return {
+          messages: messages(),
+          async close(): Promise<void> { await closeBarrier; },
+        };
+      },
+      buildUserMessage(text: string, sessionId: string): unknown {
+        return { type: "user", text, session_id: sessionId };
+      },
+    };
+    registerHarness(closingHarness);
+
+    const session = new Session(makeSessionConfig({ harness: closingHarness.name }), "writer-release-barrier");
+    await session.start();
+    await tick(20);
+    session.kill("user");
+
+    let released = false;
+    void session.waitForTeardown().then(() => { released = true; });
+    await tick(20);
+    assert.equal(session.status, "killed");
+    assert.equal(released, false);
+
+    releaseClose();
+    await session.waitForTeardown();
+    assert.equal(released, true);
+  });
+
+  it("does not report implementation started when an approved recovery fails before backend startup", async () => {
+    const activeWriterError = "codex app server rpc error (-32600): thread 01a0583d-acad-74f2-a02e-8402323f60d8 already has an active writer";
+    const failingRecoveryHarness: AgentHarness = {
+      name: "test-harness-active-writer-startup-failure",
+      backendKind: "codex-app-server",
+      supportedPermissionModes: ["default", "plan", "bypassPermissions"],
+      capabilities: {
+        nativePendingInput: true,
+        nativePlanArtifacts: true,
+        worktrees: "plugin-managed",
+      },
+      launch(): HarnessSession {
+        async function* messages() {
+          yield {
+            type: "run_completed",
+            data: {
+              success: false,
+              duration_ms: 0,
+              total_cost_usd: 0,
+              num_turns: 0,
+              result: activeWriterError,
+              session_id: "01a0583d-acad-74f2-a02e-8402323f60d8",
+            },
+          } as const;
+        }
+        return { messages: messages() };
+      },
+      buildUserMessage(text: string, sessionId: string): unknown {
+        return { type: "user", text, session_id: sessionId };
+      },
+    };
+    registerHarness(failingRecoveryHarness);
+
+    const session = new Session(makeSessionConfig({
+      harness: failingRecoveryHarness.name,
+      permissionMode: "bypassPermissions",
+      requestedPermissionMode: "plan",
+      approvalState: "approved",
+      approvalExecutionState: "awaiting_plan_output",
+      planModeApproved: true,
+    }), "active-writer-recovery");
+    await session.start();
+    await tick(20);
+
+    assert.equal(session.status, "failed");
+    assert.equal(session.approvalState, "approved");
+    assert.equal(session.approvalExecutionState, "awaiting_plan_output");
+    assert.equal(session.result?.num_turns, 0);
+    assert.equal(session.error ?? session.result?.result, activeWriterError);
+  });
 });
 
 describe("Session.complete() teardown", () => {

@@ -186,6 +186,75 @@ describe("resolveAgentLaunchRequest", () => {
     }
   });
 
+  it("keeps host Codex route migration separate from explicit plugin model overrides", () => {
+    for (const model of ["codex/gpt-5.6-sol", "openai-codex/gpt-5.6-sol"]) {
+      const rejected = resolveAgentLaunchRequest(
+        { prompt: "Use a host-owned Codex route", harness: "codex", model },
+        { workspaceDir: "/tmp", oneShotCliRun: true } as any,
+        {},
+      );
+      assert.equal(rejected.kind, "error");
+      if (rejected.kind === "error") {
+        assert.match(rejected.text, /bare Codex model id/);
+      }
+    }
+
+    const migrated = resolveAgentLaunchRequest(
+      { prompt: "Use the migrated host route alias", harness: "codex", model: "openai/gpt-5.6-sol" },
+      { workspaceDir: "/tmp", oneShotCliRun: true } as any,
+      {},
+    );
+    assert.equal(migrated.kind, "resolved");
+    if (migrated.kind === "resolved") {
+      assert.equal(migrated.resolvedModel, "gpt-5.6-sol");
+    }
+  });
+
+  it("applies the plugin Codex allowlist to explicit overrides on restored sessions", () => {
+    const persisted = {
+      sessionId: "persisted-1",
+      harnessSessionId: "123e4567-e89b-42d3-a456-426614174000",
+      name: "restored-codex",
+      harness: "codex",
+      status: "completed",
+      lifecycle: "suspended",
+      route: { provider: "telegram", target: "12345", sessionKey: "agent:main:telegram:12345" },
+    } as any;
+    const sessionManager = {
+      resolve: () => undefined,
+      getPersistedSession: () => persisted,
+      resolveBackendConversationId: () => persisted.harnessSessionId,
+    } as any;
+
+    const allowed = resolveAgentLaunchRequest(
+      {
+        prompt: "Resume with an explicit allowed model",
+        harness: "codex",
+        model: "openai/gpt-5.6-terra",
+        resume_session_id: "persisted-1",
+      },
+      { workspaceDir: "/tmp", oneShotCliRun: true } as any,
+      sessionManager,
+    );
+    assert.equal(allowed.kind, "resolved");
+    if (allowed.kind === "resolved") {
+      assert.equal(allowed.resolvedModel, "gpt-5.6-terra");
+      assert.equal(allowed.resolvedResumeId, persisted.harnessSessionId);
+    }
+
+    const denied = resolveAgentLaunchRequest(
+      {
+        prompt: "Resume with a host route outside plugin syntax",
+        harness: "codex",
+        model: "openai-codex/gpt-5.6-terra",
+        resume_session_id: "persisted-1",
+      },
+      { workspaceDir: "/tmp", oneShotCliRun: true } as any,
+      sessionManager,
+    );
+    assert.equal(denied.kind, "error");
+  });
+
   it("normalizes provider-prefixed Codex defaults before allowlist validation", () => {
     setPluginConfig({
       harnesses: {

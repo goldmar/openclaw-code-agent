@@ -130,7 +130,7 @@ export function buildResumedPlanState(
         ...common,
         pendingPlanApproval: false,
         approvalState: "approved",
-        approvalExecutionState: "approved_then_implemented",
+        approvalExecutionState: "awaiting_plan_output",
         planModeApproved: true,
         planDecisionVersion: decisionVersion + 1,
         actionablePlanDecisionVersion: undefined,

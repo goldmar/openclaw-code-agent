@@ -52,7 +52,7 @@ describe("resumed plan decision state", () => {
     assert.equal(result.patch.approvalState, "approved");
     assert.equal(result.patch.planDecisionVersion, 2);
     assert.equal(result.patch.actionablePlanDecisionVersion, undefined);
-    assert.equal(result.patch.approvalExecutionState, "approved_then_implemented");
+    assert.equal(result.patch.approvalExecutionState, "awaiting_plan_output");
   });
 
   it("does not manufacture approval when no actionable version exists", () => {

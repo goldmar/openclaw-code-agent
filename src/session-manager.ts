@@ -547,6 +547,39 @@ export class SessionManager {
     }
 
     let pendingPlanResumeClaim: PersistedSessionInfo | undefined;
+    let startAfter: Promise<void> | undefined;
+    const appendStartBarrier = (barrier: Promise<void>): void => {
+      startAfter = startAfter
+        ? Promise.all([startAfter, barrier]).then((): void => undefined)
+        : barrier;
+    };
+    if (config.resumeSessionId && !config.forkSession) {
+      const resumeOwners = this.registry.list().filter((candidate) => (
+        candidate.backendKind === "codex-app-server"
+        && (
+          candidate.harnessSessionId === config.resumeSessionId
+          || candidate.backendRef?.conversationId === config.resumeSessionId
+          || (
+            !candidate.harnessSessionId
+            && !candidate.backendRef?.conversationId
+            && candidate.resumeSessionId === config.resumeSessionId
+          )
+        )
+      ));
+      const activeResumeOwner = resumeOwners.find((candidate) => (
+        candidate.status === "starting" || candidate.status === "running"
+      ));
+      if (activeResumeOwner) {
+        throw new Error(
+          `Cannot resume backend thread ${config.resumeSessionId}: session ${activeResumeOwner.id} still owns its active writer.`,
+        );
+      }
+      for (const resumeOwner of resumeOwners) {
+        if (typeof resumeOwner.waitForTeardown === "function") {
+          appendStartBarrier(resumeOwner.waitForTeardown());
+        }
+      }
+    }
     if (config.sessionIdOverride) {
       const replacedPersisted = this.getPersistedSession(config.sessionIdOverride);
       if (config.resumeSessionId && replacedPersisted?.pendingPlanApproval) {
@@ -568,6 +601,9 @@ export class SessionManager {
         throw new Error(`Cannot reuse session ID ${config.sessionIdOverride}: that session is still ${existing.status}.`);
       }
       if (existing) {
+        if (typeof existing.waitForTeardown === "function") {
+          appendStartBarrier(existing.waitForTeardown());
+        }
         this.registry.remove(existing.id, "session-id-override-replacement");
       }
       this.clearWaitingTimestampsForSession(config.sessionIdOverride);
@@ -623,7 +659,10 @@ export class SessionManager {
     this.registry.add(session);
     this.metrics.incrementLaunched();
     try {
-      return this.runtimeBootstrap.initializeSession(session, preparedLaunch, config, options);
+      return this.runtimeBootstrap.initializeSession(session, preparedLaunch, config, {
+        ...options,
+        startAfter,
+      });
     } catch (err) {
       this.pendingPlanResumeClaims.delete(session.id);
       throw err;

@@ -13,7 +13,7 @@ import { SessionNotificationService } from "../src/session-notifications";
 import { SessionWorktreeDecisionService } from "../src/session-worktree-decision-service";
 import { SessionMetricsRecorder } from "../src/session-metrics";
 import { registerHarness } from "../src/harness";
-import { createFakeHarness } from "./helpers";
+import { createFakeHarness, tick } from "./helpers";
 
 afterEach(() => {
   setPluginRuntime(undefined);
@@ -1997,6 +1997,198 @@ describe("SessionManager.notifySession()", () => {
 // =========================================================================
 
 describe("SessionManager resumed launch routing", () => {
+  it("waits for a terminal Codex owner to release its writer before starting a replacement resume", async () => {
+    let launchCalls = 0;
+    let releaseClose!: () => void;
+    const closeBarrier = new Promise<void>((resolve) => { releaseClose = resolve; });
+    const backendThreadId = "123e4567-e89b-12d3-a456-426614174000";
+    const harness = {
+      name: "resume-writer-release-harness",
+      backendKind: "codex-app-server" as const,
+      supportedPermissionModes: ["default", "plan", "bypassPermissions"] as const,
+      capabilities: {
+        nativePendingInput: true,
+        nativePlanArtifacts: true,
+        worktrees: "plugin-managed" as const,
+      },
+      launch() {
+        launchCalls += 1;
+        async function* messages() {
+          yield {
+            type: "backend_ref" as const,
+            ref: { kind: "codex-app-server" as const, conversationId: backendThreadId },
+          };
+          yield { type: "run_started" as const };
+          await new Promise<void>(() => undefined);
+        }
+        return {
+          messages: messages(),
+          async close(): Promise<void> { await closeBarrier; },
+        };
+      },
+      buildUserMessage(text: string, sessionId: string) {
+        return { type: "user", text, session_id: sessionId };
+      },
+    };
+    registerHarness(harness);
+    setPluginConfig({});
+    const sm = new SessionManager(5);
+    const route = { provider: "telegram", target: "12345" };
+
+    try {
+      const owner = sm.spawn({
+        prompt: "first",
+        workdir: "/tmp",
+        name: "writer-owner",
+        harness: harness.name,
+        worktreeStrategy: "off",
+        route,
+      }, { notifyLaunch: false });
+      await tick(20);
+      assert.equal(owner.status, "running");
+      assert.throws(() => sm.spawn({
+        prompt: "duplicate resume",
+        workdir: "/tmp",
+        name: "duplicate-writer",
+        harness: harness.name,
+        resumeSessionId: backendThreadId,
+        worktreeStrategy: "off",
+        route,
+      }, { notifyLaunch: false }), /still owns its active writer/);
+      assert.equal(launchCalls, 1);
+      owner.kill("user");
+
+      const replacement = sm.spawn({
+        prompt: "resume after release",
+        workdir: "/tmp",
+        name: "writer-replacement",
+        harness: harness.name,
+        resumeSessionId: backendThreadId,
+        worktreeStrategy: "off",
+        route,
+      }, { notifyLaunch: false });
+      await tick(20);
+      assert.equal(replacement.status, "starting");
+      assert.equal(launchCalls, 1);
+      assert.throws(() => sm.spawn({
+        prompt: "overlapping replacement",
+        workdir: "/tmp",
+        name: "overlapping-writer-replacement",
+        harness: harness.name,
+        resumeSessionId: backendThreadId,
+        worktreeStrategy: "off",
+        route,
+      }, { notifyLaunch: false }), /still owns its active writer/);
+      assert.equal(launchCalls, 1);
+
+      releaseClose();
+      await tick(20);
+      assert.equal(launchCalls, 2);
+      assert.equal(replacement.status, "running");
+    } finally {
+      releaseClose();
+      sm.dispose();
+    }
+  });
+
+  it("waits for every retained terminal Codex claimant before a later resume", async () => {
+    let launchCalls = 0;
+    const closeReleases: Array<() => void> = [];
+    const backendThreadId = "123e4567-e89b-12d3-a456-426614174001";
+    const harness = {
+      name: "resume-latest-writer-release-harness",
+      backendKind: "codex-app-server" as const,
+      supportedPermissionModes: ["default", "plan", "bypassPermissions"] as const,
+      capabilities: {
+        nativePendingInput: true,
+        nativePlanArtifacts: true,
+        worktrees: "plugin-managed" as const,
+      },
+      launch() {
+        launchCalls += 1;
+        let releaseClose!: () => void;
+        const closeBarrier = new Promise<void>((resolve) => { releaseClose = resolve; });
+        closeReleases.push(releaseClose);
+        async function* messages() {
+          yield {
+            type: "backend_ref" as const,
+            ref: { kind: "codex-app-server" as const, conversationId: backendThreadId },
+          };
+          yield { type: "run_started" as const };
+          await new Promise<void>(() => undefined);
+        }
+        return {
+          messages: messages(),
+          async close(): Promise<void> { await closeBarrier; },
+        };
+      },
+      buildUserMessage(text: string, sessionId: string) {
+        return { type: "user", text, session_id: sessionId };
+      },
+    };
+    registerHarness(harness);
+    setPluginConfig({});
+    const sm = new SessionManager(5);
+    const route = { provider: "telegram", target: "12345" };
+
+    try {
+      const first = sm.spawn({
+        prompt: "first owner",
+        workdir: "/tmp",
+        name: "first-writer-owner",
+        harness: harness.name,
+        worktreeStrategy: "off",
+        route,
+      }, { notifyLaunch: false });
+      await tick(20);
+      assert.equal(first.status, "running");
+      first.kill("user");
+
+      const second = sm.spawn({
+        prompt: "second owner",
+        workdir: "/tmp",
+        name: "second-writer-owner",
+        harness: harness.name,
+        resumeSessionId: backendThreadId,
+        worktreeStrategy: "off",
+        route,
+      }, { notifyLaunch: false });
+      await tick(20);
+      assert.equal(second.status, "starting");
+      assert.equal(launchCalls, 1);
+
+      closeReleases[0]?.();
+      await tick(20);
+      assert.equal(second.status, "running");
+      assert.equal(launchCalls, 2);
+      second.kill("user");
+
+      const third = sm.spawn({
+        prompt: "third owner",
+        workdir: "/tmp",
+        name: "third-writer-owner",
+        harness: harness.name,
+        resumeSessionId: backendThreadId,
+        worktreeStrategy: "off",
+        route,
+      }, { notifyLaunch: false });
+      await tick(20);
+      assert.equal(third.status, "starting");
+      assert.equal(launchCalls, 2, "the latest retained claimant must release before another resume starts");
+
+      closeReleases[1]?.();
+      await tick(20);
+      assert.equal(third.status, "running");
+      assert.equal(launchCalls, 3);
+      third.kill("user");
+      closeReleases[2]?.();
+      await tick(20);
+    } finally {
+      for (const releaseClose of closeReleases) releaseClose();
+      sm.dispose();
+    }
+  });
+
   it("inherits the persisted origin route before starting a resumed system-routed launch", () => {
     const harness = createFakeHarness("resume-route-fake-harness");
     registerHarness(harness);

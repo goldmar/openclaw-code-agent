@@ -345,7 +345,7 @@ async function tryAutoResume(
       ...(isPlanApproval
         ? {
             approvalState: "approved" as const,
-            approvalExecutionState: "approved_then_implemented" as const,
+            approvalExecutionState: "awaiting_plan_output" as const,
             approvalRationale,
             planModeApproved: true,
           }

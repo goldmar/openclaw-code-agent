@@ -154,6 +154,7 @@ export class Session extends EventEmitter {
 
   // Abort
   private abortController: AbortController;
+  private teardownPromise?: Promise<void>;
 
   // Output
   outputBuffer: string[] = [];
@@ -716,6 +717,7 @@ export class Session extends EventEmitter {
       this.logDiagnostic("harness.launch.created", {
         hasStreamInput: Boolean(handle.streamInput),
         hasInterrupt: Boolean(handle.interrupt),
+        hasClose: Boolean(handle.close),
         hasPermissionModeSwitch: Boolean(handle.setPermissionMode),
       });
       this.setTimer("startup", STARTUP_TIMEOUT_MS, () => {
@@ -894,6 +896,11 @@ export class Session extends EventEmitter {
     this.transitionToTerminal("killed", { reason });
   }
 
+  /** Wait until the harness transport owned by this session has released its backend writer. */
+  async waitForTeardown(): Promise<void> {
+    await (this.teardownPromise ?? Promise.resolve());
+  }
+
   /** Mark the session completed and transition to `completed` when still active. */
   complete(reason: KillReason = "done"): void {
     this.transitionToTerminal("completed", { reason });
@@ -925,6 +932,7 @@ export class Session extends EventEmitter {
   }
 
   private teardown(): void {
+    if (this.teardownPromise) return;
     this.clearAllTimers();
     if (!this.completedAt) this.completedAt = Date.now();
     if (this.messageStream) this.messageStream.end();
@@ -933,6 +941,12 @@ export class Session extends EventEmitter {
         console.warn(`[Session ${this.id}] interrupt during teardown failed: ${errorMessage(err)}`);
       });
     }
+    const closePromise = this.harnessHandle?.close
+      ? this.harnessHandle.close().catch((err: unknown) => {
+        console.warn(`[Session ${this.id}] harness close during teardown failed: ${errorMessage(err)}`);
+      })
+      : Promise.resolve();
+    this.teardownPromise = closePromise;
     this.abortController.abort();
     this.applyControlEvent({ type: "terminal.entered", suspended: this.lifecycle === "suspended" });
   }
@@ -940,8 +954,8 @@ export class Session extends EventEmitter {
   /**
    * Enter a terminal state in strict order so listeners persist consistent data:
    * 1) set terminal metadata (`killReason` / `error` / `completedAt`)
-   * 2) emit the state transition
-   * 3) teardown timers/streams/process signal
+   * 2) begin teardown so replacement sessions can await backend writer release
+   * 3) emit the state transition
    */
   private transitionToTerminal(
     status: Extract<SessionStatus, "completed" | "failed" | "killed">,
@@ -964,8 +978,8 @@ export class Session extends EventEmitter {
       type: "terminal.entered",
       suspended: status === "killed" && options.reason === "idle-timeout",
     });
-    this.transition(status);
     this.teardown();
+    this.transition(status);
   }
 
   private async consumeMessages(messages: AsyncIterable<HarnessMessage>): Promise<void> {

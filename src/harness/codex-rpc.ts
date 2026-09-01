@@ -121,6 +121,7 @@ export class StdioJsonRpcClient implements JsonRpcClient {
     private readonly command: string,
     private readonly args: string[],
     private readonly requestTimeoutMs: number,
+    private readonly shutdownGraceMs: number = 1_000,
   ) {}
 
   setNotificationHandler(handler: JsonRpcNotificationHandler): void {
@@ -183,7 +184,25 @@ export class StdioJsonRpcClient implements JsonRpcClient {
     const child = this.process;
     this.process = null;
     if (!child) return;
-    child.kill();
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    await new Promise<void>((resolve) => {
+      let settled = false;
+      const finish = (): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(forceKillTimer);
+        resolve();
+      };
+      child.once("close", finish);
+      const forceKillTimer = setTimeout(() => {
+        if (child.exitCode === null && child.signalCode === null) {
+          logCodexRpcDiagnostic("process.force_kill", { pid: child.pid });
+          child.kill("SIGKILL");
+        }
+      }, Math.max(1, this.shutdownGraceMs));
+      forceKillTimer.unref?.();
+      child.kill("SIGTERM");
+    });
   }
 
   async notify(method: string, params?: unknown): Promise<void> {

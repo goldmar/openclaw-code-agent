@@ -325,6 +325,23 @@ export function buildThreadResumePayloads(params: {
   return [base];
 }
 
+export function buildThreadForkPayloads(params: {
+  threadId: string;
+  model?: string;
+  fastMode?: boolean;
+  cwd?: string;
+  approvalPolicy?: string;
+  sandbox?: string;
+}): Array<Record<string, unknown>> {
+  const base: Record<string, unknown> = { threadId: params.threadId };
+  if (params.model?.trim()) base.model = params.model.trim();
+  if (params.fastMode === true) base.service_tier = "fast";
+  if (params.cwd?.trim()) base.cwd = params.cwd.trim();
+  if (params.approvalPolicy?.trim()) base.approvalPolicy = params.approvalPolicy.trim();
+  if (params.sandbox?.trim()) base.sandbox = params.sandbox.trim();
+  return [base];
+}
+
 export function buildTurnInput(prompt: string): Array<Record<string, unknown>> {
   return [{ type: "text", text: prompt }];
 }

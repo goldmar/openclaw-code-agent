@@ -1,5 +1,8 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { getHarness, listHarnesses } from "../src/harness/index";
 import { CodexHarness, DEFAULT_APP_SERVER_ARGS, DEFAULT_REQUEST_TIMEOUT_MS, isCodexAppServerSessionId } from "../src/harness/codex";
 import { StdioJsonRpcClient } from "../src/harness/codex-rpc";
@@ -20,6 +23,7 @@ const CODEX_ARGS_ENV = "OPENCLAW_CODEX_APP_SERVER_ARGS";
 class MockJsonRpcClient {
   requests: Array<{ method: string; params: unknown; timeoutMs: number | undefined }> = [];
   pendingInputResponses: unknown[] = [];
+  closeCalls = 0;
   private notificationHandler: NotificationHandler = () => undefined;
   private requestHandler: RequestHandler = async () => ({});
 
@@ -35,6 +39,7 @@ class MockJsonRpcClient {
         params: unknown;
       };
       failTurn?: string;
+      failResume?: string;
       turnCompletionMethod?: "turn/completed" | "turn/failed" | "turn/cancelled";
       turnStatus?: "completed" | "failed" | "interrupted" | "cancelled";
       accountType?: "apiKey" | "chatgpt";
@@ -61,7 +66,7 @@ class MockJsonRpcClient {
   }
 
   async connect(): Promise<void> {}
-  async close(): Promise<void> {}
+  async close(): Promise<void> { this.closeCalls += 1; }
   async notify(_method: string, _params?: unknown): Promise<void> {}
 
   async request(method: string, params?: unknown, timeoutMs?: number): Promise<unknown> {
@@ -79,7 +84,10 @@ class MockJsonRpcClient {
         ...(this.options.threadCwd ? { cwd: this.options.threadCwd } : {}),
       };
     }
-    if (method === "thread/resume") {
+    if (method === "thread/resume" || method === "thread/fork") {
+      if (method === "thread/resume" && this.options.failResume) {
+        throw new Error(this.options.failResume);
+      }
       return {
         threadId: this.options.threadId ?? "thread-resume",
         ...(this.options.threadCwd ? { cwd: this.options.threadCwd } : {}),
@@ -289,6 +297,37 @@ describe("Codex App Server RPC diagnostics", () => {
       assert.equal(spawn?.requestTimeoutMs, 1234);
     } finally {
       console.warn = originalWarn;
+    }
+  });
+
+  it("does not release close until a SIGTERM-resistant child has actually exited", async () => {
+    const fixtureDir = mkdtempSync(join(tmpdir(), "oca-codex-rpc-close-"));
+    const fixturePath = join(fixtureDir, "ignore-sigterm.mjs");
+    writeFileSync(fixturePath, [
+      "#!/usr/bin/env node",
+      "process.on('SIGTERM', () => {});",
+      "setInterval(() => {}, 1000);",
+      "",
+    ].join("\n"));
+    chmodSync(fixturePath, 0o755);
+
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(" ")); };
+    try {
+      const client = new StdioJsonRpcClient(fixturePath, [], 1_000, 10);
+      await client.connect();
+      await new Promise<void>((resolve) => { setTimeout(resolve, 250); });
+      await client.close();
+
+      const events = warnings.map((warning) => JSON.parse(warning) as { event?: string });
+      const forceKillIndex = events.findIndex((entry) => entry.event === "process.force_kill");
+      const processCloseIndex = events.findIndex((entry) => entry.event === "process.close");
+      assert.ok(forceKillIndex >= 0);
+      assert.ok(processCloseIndex > forceKillIndex);
+    } finally {
+      console.warn = originalWarn;
+      rmSync(fixtureDir, { recursive: true, force: true });
     }
   });
 });
@@ -670,6 +709,72 @@ describe("CodexHarness App Server mapping", () => {
     assert.equal(Object.hasOwn((resumeRequest?.params as Record<string, unknown>) ?? {}, "cwd"), false);
     const ref = messages.find((message) => message.type === "backend_ref") as Extract<HarnessMessage, { type: "backend_ref" }> | undefined;
     assert.equal(ref?.ref.conversationId, VALID_THREAD_ID);
+  });
+
+  it("forks to a new thread instead of resuming the source writer", async () => {
+    const forkedThreadId = "223e4567-e89b-12d3-a456-426614174000";
+    const client = new MockJsonRpcClient({ threadId: forkedThreadId, assistantText: "Forked." });
+    const harness = new CodexHarness({ createClient: () => client as any });
+
+    const messages = await collectMessages(harness.launch({
+      prompt: "continue independently",
+      cwd: "/tmp/fork-worktree",
+      resumeSessionId: VALID_THREAD_ID,
+      forkSession: true,
+      fastMode: true,
+    }));
+
+    assert.equal(client.requests.some((request) => request.method === "thread/resume"), false);
+    const forkRequest = client.requests.find((request) => request.method === "thread/fork");
+    assert.equal((forkRequest?.params as { threadId?: string }).threadId, VALID_THREAD_ID);
+    assert.equal((forkRequest?.params as { cwd?: string }).cwd, "/tmp/fork-worktree");
+    assert.equal((forkRequest?.params as { service_tier?: string }).service_tier, "fast");
+    const ref = messages.find((message) => message.type === "backend_ref") as Extract<HarnessMessage, { type: "backend_ref" }>;
+    assert.equal(ref.ref.conversationId, forkedThreadId);
+  });
+
+  it("forks only the first turn of a multi-turn session", async () => {
+    const forkedThreadId = "223e4567-e89b-12d3-a456-426614174000";
+    const client = new MockJsonRpcClient({ threadId: forkedThreadId, assistantText: "Forked." });
+    const harness = new CodexHarness({ createClient: () => client as any });
+    async function* prompts() {
+      yield { type: "user", text: "first turn", session_id: VALID_THREAD_ID };
+      yield { type: "user", text: "follow-up turn", session_id: forkedThreadId };
+    }
+
+    await collectMessages(harness.launch({
+      prompt: prompts(),
+      cwd: "/tmp/fork-worktree",
+      resumeSessionId: VALID_THREAD_ID,
+      forkSession: true,
+    }));
+
+    const forkRequests = client.requests.filter((request) => request.method === "thread/fork");
+    const resumeRequests = client.requests.filter((request) => request.method === "thread/resume");
+    assert.equal(forkRequests.length, 1);
+    assert.equal((forkRequests[0]?.params as { threadId?: string }).threadId, VALID_THREAD_ID);
+    assert.equal(resumeRequests.length, 1);
+    assert.equal((resumeRequests[0]?.params as { threadId?: string }).threadId, forkedThreadId);
+  });
+
+  it("reports the observed active-writer resume failure before implementation starts and closes its client", async () => {
+    const activeWriterError = `codex app server rpc error (-32600): thread ${VALID_THREAD_ID} already has an active writer`;
+    const client = new MockJsonRpcClient({ failResume: activeWriterError });
+    const harness = new CodexHarness({ createClient: () => client as any });
+
+    const messages = await collectMessages(harness.launch({
+      prompt: "implement the approved plan",
+      cwd: "/tmp",
+      resumeSessionId: VALID_THREAD_ID,
+    }));
+
+    assert.equal(messages.some((message) => message.type === "backend_ref"), false);
+    assert.equal(messages.some((message) => message.type === "run_started"), false);
+    const result = messages.find((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }>;
+    assert.equal(result.data.success, false);
+    assert.equal(result.data.num_turns, 0);
+    assert.equal(result.data.result, activeWriterError);
+    assert.equal(client.closeCalls, 1);
   });
 
   it("normalizes accepted Codex App Server resume ids before resuming", async () => {
