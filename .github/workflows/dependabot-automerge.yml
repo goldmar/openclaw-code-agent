@@ -30,19 +30,39 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # Do not check out or execute Dependabot's branch in this privileged workflow.
+      - name: Identify Dependabot PR
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          pr_json="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}")"
+          if [[ "$(jq -r '.user.login' <<<"$pr_json")" != "dependabot[bot]" ]]; then
+            echo "dependabot=false" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "dependabot=true" >>"$GITHUB_OUTPUT"
+          echo "url=$(jq -r '.html_url' <<<"$pr_json")" >>"$GITHUB_OUTPUT"
+
       - name: Read Dependabot metadata
+        if: steps.pr.outputs.dependabot == 'true'
         id: metadata
         uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
         with:
-          pr-url: ${{ github.event.pull_request.html_url || github.event.issue.pull_request.html_url }}
+          pr-url: ${{ steps.pr.outputs.url }}
 
       - name: Enforce low-risk policy and Greptile review
+        if: steps.pr.outputs.dependabot == 'true'
         id: policy
         env:
           DEPENDENCY_NAMES: ${{ steps.metadata.outputs.dependency-names }}
           DEPENDENCY_TYPE: ${{ steps.metadata.outputs.dependency-type }}
           GH_TOKEN: ${{ github.token }}
-          PR_URL: ${{ github.event.pull_request.html_url || github.event.issue.pull_request.html_url }}
+          PR_URL: ${{ steps.pr.outputs.url }}
           UPDATE_TYPE: ${{ steps.metadata.outputs.update-type }}
         shell: bash
         run: |

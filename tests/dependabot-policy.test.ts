@@ -29,6 +29,13 @@ describe("Dependabot maintenance policy", () => {
       workflow,
       /dependabot\/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3\.1\.0/,
     );
+    assert.match(workflow, /if \[\[ "\$\(jq -r '\.user\.login'/);
+    assert.match(workflow, /!= "dependabot\[bot\]"/);
+    assert.equal((workflow.match(/if: steps\.pr\.outputs\.dependabot == 'true'/g) ?? []).length, 2);
+    assert.ok(
+      workflow.indexOf("Identify Dependabot PR") < workflow.indexOf("dependabot/fetch-metadata@"),
+      "the workflow must reject ordinary PRs before invoking Dependabot metadata",
+    );
   });
 
   it("limits auto-merge to low-risk exact heads after Greptile and protection gates", () => {
