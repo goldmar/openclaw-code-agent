@@ -11,7 +11,7 @@ const requiredSecurityVersions = {
   "express-rate-limit": "8.7.0",
   "fast-uri": "3.1.5",
   hono: "4.12.34",
-  "ip-address": "10.5.0",
+  "ip-address": "10.7.0",
 };
 
 if (shrinkwrap.lockfileVersion !== 3) {

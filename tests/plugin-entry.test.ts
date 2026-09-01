@@ -117,7 +117,7 @@ describe("plugin entry source", () => {
 
     assert.equal(packageJson.dependencies?.["fast-uri"], "3.1.5");
     assert.equal(packageJson.dependencies?.hono, "4.12.34");
-    assert.equal(packageJson.dependencies?.["ip-address"], "10.5.0");
+    assert.equal(packageJson.dependencies?.["ip-address"], "10.7.0");
     assert.equal(packageJson.overrides, undefined);
     assert.doesNotThrow(() =>
       execFileSync("node", ["scripts/check-npm-shrinkwrap.mjs"], {
