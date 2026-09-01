@@ -18,7 +18,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  CLAWHUB_CLI_VERSION: "0.23.1"
+  CLAWHUB_CLI_VERSION: "0.23.3"
   PACKAGE_NAME: openclaw-code-agent
 
 jobs:
@@ -213,16 +213,10 @@ jobs:
               --source-ref "v${{ inputs.version }}" \
               --source-commit "${{ inputs.commit }}" \
               --manual-override-reason "GitHub Actions workflow_dispatch publish via CLAWHUB_TOKEN" \
+              --wait \
+              --wait-timeout 2400 \
               --json
-            verified=false
-            for delay in 5 10 20 40 60; do
-              if clawhub package verify "$artifact" --package "$PACKAGE_NAME" --version "${{ inputs.version }}" --json; then
-                verified=true
-                break
-              fi
-              sleep "$delay"
-            done
-            test "$verified" = true
+            clawhub package verify "$artifact" --package "$PACKAGE_NAME" --version "${{ inputs.version }}" --json
           fi
 
       - name: Remove ClawHub token config
