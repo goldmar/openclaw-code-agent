@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.7.11] - 2026-09-02
+
+### Fixed
+
+- Defer Code Agent startup work until after OpenClaw's side-effect-free tool factory enumeration, and deduplicate persisted workdir Git discovery so retained sessions no longer repeat repository probes.
+
 ## [4.7.10] - 2026-09-01
 
 ### Changed
@@ -686,7 +692,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Default Codex approval policy to `on-request`.
 - Raised the default session limit.
 
-[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.8...HEAD
+[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.11...HEAD
+[4.7.11]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.10...v4.7.11
 [4.7.8]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.7...v4.7.8
 [4.7.7]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.6...v4.7.7
 [4.7.6]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.5...v4.7.6
