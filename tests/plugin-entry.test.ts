@@ -7,7 +7,7 @@ import {
   normalizeOpenClawTargetVersion,
   validateReleaseMetadata,
 } from "../scripts/validate-release-metadata.mjs";
-import { register, routeFromInteractiveContext } from "../index";
+import { register, routeFromInteractiveContext, uniquePersistedWorkdirs } from "../index";
 import { goalController, sessionManager, setGoalController, setSessionManager } from "../src/singletons";
 
 const rootDir = join(import.meta.dirname, "..");
@@ -65,6 +65,16 @@ describe("plugin entry source", () => {
     }
     setGoalController(null);
     setSessionManager(null);
+  });
+
+  it("deduplicates persisted workdirs before synchronous Git discovery", () => {
+    assert.deepEqual(uniquePersistedWorkdirs([
+      { workdir: "/repo/a" },
+      { workdir: "/repo/a" },
+      {},
+      { workdir: "" },
+      { workdir: "/repo/b" },
+    ]), ["/repo/a", "/repo/b"]);
   });
 
   it("keeps package and plugin manifest versions in sync", () => {
@@ -582,7 +592,7 @@ describe("plugin entry source", () => {
     assert.match(indexSource, /gc\.start\(\)/);
   });
 
-  it("lazily starts the code-agent service before a tool can observe an uninitialized SessionManager", async () => {
+  it("keeps tool construction side-effect free and starts before execution", async () => {
     const { api, services, tools } = createPluginApi();
     register(api as any);
     assert.equal(sessionManager, null);
@@ -590,9 +600,10 @@ describe("plugin entry source", () => {
     const factory = tools.find((tool) => tool.options?.name === "agent_sessions")?.factory;
     assert.ok(factory, "expected agent_sessions factory");
     const tool = factory({ workspaceDir: rootDir });
-    assert.ok(sessionManager, "tool construction should initialize SessionManager");
+    assert.equal(sessionManager, null, "tool construction must not initialize SessionManager");
 
     const result = await tool.execute("tool-id", {});
+    assert.ok(sessionManager, "tool execution should initialize SessionManager");
     assert.doesNotMatch(result.content?.[0]?.text ?? "", /SessionManager not initialized/);
     stopCapturedServices(services);
   });
@@ -611,13 +622,15 @@ describe("plugin entry source", () => {
     stopCapturedServices(services);
   });
 
-  it("keeps service startup idempotent when service start runs after lazy tool initialization", () => {
+  it("keeps service startup idempotent when service start follows tool execution", async () => {
     const { api, services, tools } = createPluginApi();
     register(api as any);
 
     const factory = tools.find((tool) => tool.options?.name === "agent_sessions")?.factory;
     assert.ok(factory, "expected agent_sessions factory");
-    factory({ workspaceDir: rootDir });
+    const tool = factory({ workspaceDir: rootDir });
+    assert.equal(sessionManager, null);
+    await tool.execute("tool-id", {});
     const lazySessionManager = sessionManager;
     assert.ok(lazySessionManager, "expected lazy SessionManager");
 

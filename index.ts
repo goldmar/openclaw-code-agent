@@ -45,6 +45,16 @@ import { routeFromOriginMetadata } from "./src/session-route";
 import type { SessionRoute } from "./src/types";
 import { definePluginEntry, type OpenClawPluginApi, type OpenClawPluginServiceContext, type OpenClawPluginToolContext } from "./api";
 
+export function uniquePersistedWorkdirs(
+  sessions: Array<{ workdir?: string }>,
+): string[] {
+  return [...new Set(
+    sessions
+      .map((session) => session.workdir)
+      .filter((workdir): workdir is string => typeof workdir === "string" && workdir.length > 0),
+  )];
+}
+
 /**
  * Startup orphan cleanup: scan worktree base dir(s) for old worktrees and clean them up.
  * For each dir matching openclaw-worktree-* older than the cleanup age:
@@ -72,13 +82,14 @@ function cleanupOrphanedWorktrees(sm: SessionManager): void {
   if (fixedBaseDir) {
     dirsToScan.add(fixedBaseDir);
   } else {
-    // No fixed dir — collect unique repo roots from persisted session workdirs
-    for (const session of sm.listPersistedSessions()) {
-      if (!session.workdir) continue;
+    // Resolve each distinct workdir once. Persisted history commonly contains
+    // hundreds of sessions but only a handful of repository roots, and running
+    // a synchronous Git process per session blocks plugin startup/tool listing.
+    for (const workdir of uniquePersistedWorkdirs(sm.listPersistedSessions())) {
       try {
         const root = execFileSync(
           "git", ["rev-parse", "--show-toplevel"],
-          { cwd: session.workdir, timeout: 5_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
+          { cwd: workdir, timeout: 5_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
         ).trim();
         if (root) dirsToScan.add(join(root, ".worktrees"));
       } catch {
@@ -236,9 +247,18 @@ export function register(api: OpenClawPluginApi): void {
     options: { optional?: boolean; name?: string },
   ): void => {
     registerTool((ctx: OpenClawPluginToolContext) => {
-      startCodeAgentService();
-      maybeCheckForAutoUpdate(routeFromToolContext(ctx));
-      return tool(ctx);
+      const definition = tool(ctx) as {
+        execute: (id: string, params: unknown) => unknown;
+        [key: string]: unknown;
+      };
+      return {
+        ...definition,
+        execute(id: string, params: unknown) {
+          startCodeAgentService();
+          maybeCheckForAutoUpdate(routeFromToolContext(ctx));
+          return definition.execute(id, params);
+        },
+      };
     }, options);
   };
 
