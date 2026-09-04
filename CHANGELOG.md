@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.7.12] - 2026-09-04
+
+### Changed
+
+- Validated the plugin entrypoint, declared tool capabilities, Codex and Claude Code model restrictions, plan approval and worktree strategy flows, Telegram/topic callbacks, completion and cron/session wake delivery, restrictive namespaced tool allowlists, and disabled bundled-plugin boundaries against OpenClaw `2026.9.1`.
+- Updated exact OpenClaw package and Plugin SDK build provenance plus the managed-install minimum to `2026.9.1`, while retaining the verified `2026.8.1` plugin API, Gateway, and peer compatibility floor.
+- Documented OpenClaw's renewed plugin capability consent, activatable-harness validation, origin-channel approval delivery, host-managed worktree settings, and cron delivery improvements without performing a host configuration migration.
+
+### Security
+
+- Raised the consumer-enforced `fast-uri` floor to `3.1.6` and added `qs@6.16.0` to the exact published dependency contract, clearing the current production URI-normalization, SSRF, array-limit bypass, and denial-of-service advisories.
+
 ## [4.7.11] - 2026-09-02
 
 ### Fixed
@@ -692,7 +704,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Default Codex approval policy to `on-request`.
 - Raised the default session limit.
 
-[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.11...HEAD
+[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.12...HEAD
+[4.7.12]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.11...v4.7.12
 [4.7.11]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.10...v4.7.11
 [4.7.8]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.7...v4.7.8
 [4.7.7]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.6...v4.7.7

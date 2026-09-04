@@ -1,12 +1,12 @@
 {
   "name": "openclaw-code-agent",
-  "version": "4.7.11",
+  "version": "4.7.12",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "openclaw-code-agent",
-      "version": "4.7.11",
+      "version": "4.7.12",
       "license": "MIT",
       "dependencies": {
         "@anthropic-ai/claude-agent-sdk": "0.3.251",
@@ -14,9 +14,10 @@
         "@hono/node-server": "2.1.1",
         "@modelcontextprotocol/sdk": "1.30.0",
         "express-rate-limit": "8.7.0",
-        "fast-uri": "3.1.5",
+        "fast-uri": "3.1.6",
         "hono": "4.12.34",
         "ip-address": "10.7.0",
+        "qs": "6.16.0",
         "zod": "4.5.4"
       },
       "peerDependencies": {
@@ -639,9 +640,9 @@
       "license": "Unlicense"
     },
     "node_modules/fast-uri": {
-      "version": "3.1.5",
-      "resolved": "https://registry.npmjs.org/fast-uri/-/fast-uri-3.1.5.tgz",
-      "integrity": "sha512-gHwA1O9LDIcKunMKhObS/HimwtehO1nPUECKAu5TpKgaO19fcWEl4bliWe1jWxVFvIXztJjjQ4L8XQ1EU9f7Jw==",
+      "version": "3.1.6",
+      "resolved": "https://registry.npmjs.org/fast-uri/-/fast-uri-3.1.6.tgz",
+      "integrity": "sha512-7Ical1vFEMr0onbVzEDIreM22I4khW+fzyQPwvAFWBp1iwdshSZRsL4jjRvPG9JP1uiqMHRto+YU6R2/CzDz5Q==",
       "funding": [
         {
           "type": "github",
@@ -857,9 +858,9 @@
       "license": "ISC"
     },
     "node_modules/jose": {
-      "version": "6.2.10",
-      "resolved": "https://registry.npmjs.org/jose/-/jose-6.2.10.tgz",
-      "integrity": "sha512-iiW7J9qRFlGxvCOIBDBDxFePQSn7ZMAnrYGhrrOo6siO/MIqwfyilLR27pkfDgUk+raLuzADS8A3S/KLBisc0g==",
+      "version": "6.2.11",
+      "resolved": "https://registry.npmjs.org/jose/-/jose-6.2.11.tgz",
+      "integrity": "sha512-A5NPn7g8EAzGU3IzRs+Yiq8K5n3ypYS75M5+KKiVHdUexfpWK1kP4ZMq7QnTGDoMj6TJ1dtcEJjW60yZDXS4hg==",
       "license": "MIT",
       "funding": {
         "url": "https://github.com/sponsors/panva"

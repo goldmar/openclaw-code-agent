@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 const scriptPath = fileURLToPath(import.meta.url);
 const rootDir = dirname(dirname(scriptPath));
-const defaultOpenClawTargetVersion = "2026.8.2";
+const defaultOpenClawTargetVersion = "2026.9.1";
 const defaultOpenClawCompatibilityFloor = "2026.8.1";
 const exactOpenClawVersionPattern = /^\d{4}\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u;
 
