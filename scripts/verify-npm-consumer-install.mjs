@@ -38,7 +38,7 @@ try {
   mkdirSync(hostDir);
   writeFileSync(
     join(hostDir, "package.json"),
-    `${JSON.stringify({ name: "openclaw", version: "2026.8.2" }, null, 2)}\n`,
+    `${JSON.stringify({ name: "openclaw", version: "2026.9.1" }, null, 2)}\n`,
   );
 
   const pack = JSON.parse(
@@ -98,7 +98,8 @@ try {
   );
   requireDependency(mcp, "@hono/node-server", "2.1.1", "@modelcontextprotocol/sdk");
   requireDependency(mcp, "hono", "4.12.34", "@modelcontextprotocol/sdk");
-  requireDependency(ajv, "fast-uri", "3.1.5", "ajv");
+  requireDependency(ajv, "fast-uri", "3.1.6", "ajv");
+  requireDependency(plugin, "qs", "6.16.0", packageJson.name);
   requireDependency(plugin, "ip-address", "10.7.0", packageJson.name);
 
   console.log(`npm consumer install validated ${packageJson.name}@${packageJson.version}`);
