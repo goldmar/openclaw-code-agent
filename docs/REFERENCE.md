@@ -8,8 +8,8 @@ Canonical operator reference for `openclaw-code-agent`: install, configuration, 
 | --- | --- |
 | `defaultHarness` | `claude-code` |
 | `harnesses.claude-code.defaultModel` | `anthropic/claude-sonnet-4-7` |
-| `harnesses.codex.defaultModel` | `gpt-5.6-sol` |
-| `harnesses.codex.allowedModels` | `["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]` |
+| `harnesses.codex.defaultModel` | `gpt-6-astra` |
+| `harnesses.codex.allowedModels` | `["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]` |
 | `harnesses.codex.reasoningEffort` | `medium` |
 | `harnesses.codex.fastMode` | `false` |
 | `harnesses.opencode.defaultModel` | unset; OpenCode uses its configured provider default |
@@ -154,8 +154,8 @@ Add this under `plugins.entries["openclaw-code-agent"]` in `~/.openclaw/openclaw
         "allowedModels": ["sonnet", "opus"]
       },
       "codex": {
-        "defaultModel": "gpt-5.6-sol",
-        "allowedModels": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
+        "defaultModel": "gpt-6-astra",
+        "allowedModels": ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
         "reasoningEffort": "medium",
         "fastMode": false
       },

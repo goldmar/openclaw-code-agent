@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Made `gpt-6-astra` the default Codex harness model while retaining GPT-5.6 Sol, Terra, and Luna as explicit supported overrides.
+
 ## [4.7.12] - 2026-09-04
 
 ### Changed
