@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.7.13] - 2026-09-04
+
 ### Changed
 
 - Made `gpt-6-astra` the default Codex harness model while retaining GPT-5.6 Sol, Terra, and Luna as explicit supported overrides.
@@ -708,7 +710,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Default Codex approval policy to `on-request`.
 - Raised the default session limit.
 
-[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.12...HEAD
+[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.13...HEAD
+[4.7.13]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.12...v4.7.13
 [4.7.12]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.11...v4.7.12
 [4.7.11]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.10...v4.7.11
 [4.7.8]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.7...v4.7.8
