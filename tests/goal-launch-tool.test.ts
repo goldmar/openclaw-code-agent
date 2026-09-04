@@ -19,8 +19,8 @@ describe("agent_goal_launch tool", () => {
       defaultHarness: "codex",
       harnesses: {
         codex: {
-          defaultModel: "gpt-5.5",
-          allowedModels: ["gpt-5.5"],
+          defaultModel: "gpt-6-astra",
+          allowedModels: ["gpt-6-astra"],
           reasoningEffort: "high",
         },
       },
@@ -57,7 +57,7 @@ describe("agent_goal_launch tool", () => {
 
     assert.ok(launchConfig, "launchTask should be called");
     assert.equal(launchConfig?.harness, "codex");
-    assert.equal(launchConfig?.model, "gpt-5.5");
+    assert.equal(launchConfig?.model, "gpt-6-astra");
     assert.equal(launchConfig?.reasoningEffort, "high");
     assert.equal(launchConfig?.permissionMode, "bypassPermissions");
     assert.equal(launchConfig?.originChannel, "discord|123456789");
@@ -132,8 +132,8 @@ describe("agent_goal_launch tool", () => {
       defaultHarness: "codex",
       harnesses: {
         codex: {
-          defaultModel: "gpt-5.5",
-          allowedModels: ["gpt-5.5"],
+          defaultModel: "gpt-6-astra",
+          allowedModels: ["gpt-6-astra"],
         },
       },
     });
@@ -158,12 +158,12 @@ describe("agent_goal_launch tool", () => {
 
     const result = await tool.execute("tool-id", {
       goal: "Keep Codex model ids canonical",
-      model: "openai/gpt-5.5",
+      model: "openai/gpt-6-astra",
     });
 
     assert.ok(launchConfig, "launchTask should be called");
-    assert.equal(launchConfig?.model, "gpt-5.5");
-    assert.match((result.content[0] as { text: string }).text, /Model: gpt-5\.5/);
+    assert.equal(launchConfig?.model, "gpt-6-astra");
+    assert.match((result.content[0] as { text: string }).text, /Model: gpt-6-astra/);
   });
 
   it("uses agentChannels for the requested workdir when the context lacks a direct route", async () => {

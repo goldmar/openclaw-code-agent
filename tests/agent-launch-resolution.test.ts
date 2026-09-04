@@ -118,7 +118,7 @@ describe("resolveAgentLaunchRequest", () => {
     }
   });
 
-  for (const model of ["gpt-5.6-terra", "gpt-5.6-luna"]) {
+  for (const model of ["gpt-6-astra", "gpt-5.6-terra", "gpt-5.6-luna"]) {
     it(`accepts ${model} under the built-in Codex allowlist`, () => {
       const result = resolveAgentLaunchRequest(
         {
@@ -186,6 +186,23 @@ describe("resolveAgentLaunchRequest", () => {
     }
   });
 
+  it("normalizes the provider-prefixed GPT-6 Astra model id", () => {
+    const result = resolveAgentLaunchRequest(
+      {
+        prompt: "Use GPT-6 Astra",
+        harness: "codex",
+        model: "openai/gpt-6-astra",
+      },
+      { workspaceDir: "/tmp", oneShotCliRun: true } as any,
+      {},
+    );
+
+    assert.equal(result.kind, "resolved");
+    if (result.kind === "resolved") {
+      assert.equal(result.resolvedModel, "gpt-6-astra");
+    }
+  });
+
   it("keeps host Codex route migration separate from explicit plugin model overrides", () => {
     for (const model of ["codex/gpt-5.6-sol", "openai-codex/gpt-5.6-sol"]) {
       const rejected = resolveAgentLaunchRequest(
@@ -230,7 +247,7 @@ describe("resolveAgentLaunchRequest", () => {
       {
         prompt: "Resume with an explicit allowed model",
         harness: "codex",
-        model: "openai/gpt-5.6-terra",
+        model: "openai/gpt-6-astra",
         resume_session_id: "persisted-1",
       },
       { workspaceDir: "/tmp", oneShotCliRun: true } as any,
@@ -238,7 +255,7 @@ describe("resolveAgentLaunchRequest", () => {
     );
     assert.equal(allowed.kind, "resolved");
     if (allowed.kind === "resolved") {
-      assert.equal(allowed.resolvedModel, "gpt-5.6-terra");
+      assert.equal(allowed.resolvedModel, "gpt-6-astra");
       assert.equal(allowed.resolvedResumeId, persisted.harnessSessionId);
     }
 

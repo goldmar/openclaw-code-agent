@@ -7,6 +7,21 @@ import {
 } from "../src/harness/codex-cost";
 
 describe("Codex API cost accounting", () => {
+  it("prices GPT-6 Astra input, cached input, and output tokens", () => {
+    const cost = estimateCodexApiCostUsd({
+      model: "gpt-6-astra",
+      usage: {
+        inputTokens: 100_000,
+        cachedInputTokens: 20_000,
+        cacheWriteInputTokens: 0,
+        outputTokens: 10_000,
+        reasoningOutputTokens: 5_000,
+      },
+    });
+
+    assert.equal(cost, 1.32);
+  });
+
   it("does not double-count reasoning tokens already included in outputTokens", () => {
     const cost = estimateCodexApiCostUsd({
       model: "gpt-5.6-sol",
@@ -41,6 +56,16 @@ describe("Codex API cost accounting", () => {
   it("leaves unknown models and inconsistent usage unpriced", () => {
     assert.equal(estimateCodexApiCostUsd({
       model: "future-model",
+      usage: {
+        inputTokens: 10,
+        cachedInputTokens: 0,
+        cacheWriteInputTokens: 0,
+        outputTokens: 1,
+        reasoningOutputTokens: 0,
+      },
+    }), undefined);
+    assert.equal(estimateCodexApiCostUsd({
+      model: "gpt-6-astra-unlisted-snapshot",
       usage: {
         inputTokens: 10,
         cachedInputTokens: 0,
