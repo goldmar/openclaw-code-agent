@@ -561,7 +561,7 @@ describe("setPluginConfig", () => {
     assert.equal(pluginConfig.maxAutoResponds, 10);
     assert.equal(pluginConfig.harnesses["claude-code"]?.defaultModel, "anthropic/claude-sonnet-4-7");
     assert.deepEqual(pluginConfig.harnesses["claude-code"]?.allowedModels, ["sonnet", "opus"]);
-    assert.equal(pluginConfig.harnesses.codex?.defaultModel, "gpt-5.6-sol");
+    assert.equal(pluginConfig.harnesses.codex?.defaultModel, "gpt-6-astra");
     assert.deepEqual(pluginConfig.harnesses.codex?.allowedModels, ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]);
     assert.equal(pluginConfig.harnesses.codex?.reasoningEffort, "medium");
     assert.equal(pluginConfig.harnesses.codex?.fastMode, undefined);
@@ -600,7 +600,7 @@ describe("setPluginConfig", () => {
     setPluginConfig({});
     assert.equal(pluginConfig.harnesses["claude-code"]?.defaultModel, "anthropic/claude-sonnet-4-7");
     assert.deepEqual(pluginConfig.harnesses["claude-code"]?.allowedModels, ["sonnet", "opus"]);
-    assert.equal(pluginConfig.harnesses.codex?.defaultModel, "gpt-5.6-sol");
+    assert.equal(pluginConfig.harnesses.codex?.defaultModel, "gpt-6-astra");
     assert.deepEqual(pluginConfig.harnesses.codex?.allowedModels, ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]);
     assert.deepEqual(pluginConfig.harnesses.opencode, {});
     assert.equal(pluginConfig.defaultWorkdir, undefined);
@@ -664,7 +664,7 @@ describe("pluginConfig singleton", () => {
     assert.equal(pluginConfig.defaultWorktreeStrategy, "delegate");
     assert.equal(pluginConfig.harnesses["claude-code"]?.defaultModel, "anthropic/claude-sonnet-4-7");
     assert.deepEqual(pluginConfig.harnesses["claude-code"]?.allowedModels, ["sonnet", "opus"]);
-    assert.equal(pluginConfig.harnesses.codex?.defaultModel, "gpt-5.6-sol");
+    assert.equal(pluginConfig.harnesses.codex?.defaultModel, "gpt-6-astra");
     assert.deepEqual(pluginConfig.harnesses.codex?.allowedModels, ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]);
     assert.equal(pluginConfig.harnesses.codex?.reasoningEffort, "medium");
     assert.equal(pluginConfig.harnesses.codex?.fastMode, undefined);

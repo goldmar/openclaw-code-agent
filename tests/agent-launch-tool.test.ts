@@ -15,19 +15,9 @@ describe("agent_launch tool defaults", () => {
     setSessionManager(null);
   });
 
-  it("uses plugin Codex model and reasoningEffort defaults when no model is provided", async () => {
+  it("uses built-in Codex model and reasoningEffort defaults when no model is provided", async () => {
     let spawnConfig: Record<string, unknown> | undefined;
-    setPluginConfig({
-      defaultHarness: "codex",
-      harnesses: {
-        codex: {
-          defaultModel: "gpt-5.3-codex",
-          allowedModels: ["gpt-5.3-codex", "gpt-5.5"],
-          reasoningEffort: "high",
-          fastMode: true,
-        },
-      },
-    });
+    setPluginConfig({ defaultHarness: "codex" });
 
     setSessionManager({
       resolveHarnessSessionId: (id: string) => id,
@@ -47,17 +37,16 @@ describe("agent_launch tool defaults", () => {
 
     assert.ok(spawnConfig, "spawn should be called");
     assert.equal(spawnConfig?.harness, "codex");
-    assert.equal(spawnConfig?.model, "gpt-5.3-codex");
-    assert.equal(spawnConfig?.reasoningEffort, "high");
-    assert.equal(spawnConfig?.fastMode, true);
+    assert.equal(spawnConfig?.model, "gpt-6-astra");
+    assert.equal(spawnConfig?.reasoningEffort, "medium");
+    assert.equal(spawnConfig?.fastMode, undefined);
     assert.equal(spawnConfig?.codexApprovalPolicy, "never");
     const text = (result.content[0] as { text: string }).text;
     assert.match(text, /Harness: codex/);
     assert.match(text, /Permission mode: plan/);
     assert.match(text, /Plan approval: delegate/);
     assert.match(text, /Worktree strategy: delegate/);
-    assert.match(text, /Model: gpt-5\.3-codex/);
-    assert.match(text, /Fast mode: enabled/);
+    assert.match(text, /Model: gpt-6-astra/);
   });
 
   it("prefers an explicit model while keeping the plugin Codex approval policy", async () => {
@@ -409,6 +398,8 @@ describe("agent_launch tool defaults", () => {
     });
 
     assert.ok(spawnConfig, "spawn should be called");
+    assert.equal(spawnConfig?.model, "gpt-6-astra");
+    assert.equal(spawnConfig?.reasoningEffort, "medium");
     assert.equal(spawnConfig?.resumeSessionId, undefined);
     assert.equal(spawnConfig?.forkSession, false);
     assert.match((result.content[0] as { text: string }).text, /historical Codex state cleared/);
@@ -439,6 +430,8 @@ describe("agent_launch tool defaults", () => {
     });
 
     assert.ok(spawnConfig, "spawn should be called");
+    assert.equal(spawnConfig?.model, "gpt-6-astra");
+    assert.equal(spawnConfig?.reasoningEffort, "medium");
     assert.equal(spawnConfig?.resumeSessionId, "resolved-old-thread");
   });
 
