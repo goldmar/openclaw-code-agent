@@ -850,6 +850,7 @@ describe("executeRespond", () => {
       workdir: "/tmp/repo",
       worktreeStrategy: "off",
       model: "test-model",
+      reasoningEffort: "low",
     });
     const sm = new SessionManager(5);
     (sm as any).notifications = {
@@ -882,6 +883,7 @@ describe("executeRespond", () => {
     const result = await pending;
 
     assert.ok(result.text.includes("Resume started"));
+    assert.equal(harness.lastLaunchOptions?.reasoningEffort, "low");
     assert.equal((sm as any).__dispatchCalls.length, 1);
     const [_resumedSession, request] = (sm as any).__dispatchCalls[0];
     assert.equal(request.label, "resumed-launch");

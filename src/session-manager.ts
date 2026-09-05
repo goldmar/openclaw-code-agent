@@ -1182,6 +1182,7 @@ export class SessionManager {
       completedAt?: number;
       harnessName?: string;
       model?: string;
+      reasoningEffort?: ReasoningEffort;
     },
     outcomeLine: string,
     options?: {
@@ -1581,6 +1582,7 @@ export class SessionManager {
     const harnessLabel = formatHarnessModelLabel({
       harness: session.harnessName,
       model: session.model,
+      reasoningEffort: session.reasoningEffort,
     }) ?? "default";
     this.notifySession(
       session,
@@ -1627,7 +1629,7 @@ export class SessionManager {
   emitGoalTaskUpdate(
     task: Pick<
       GoalTaskState,
-      "id" | "name" | "sessionId" | "sessionName" | "route" | "originChannel" | "originThreadId" | "originSessionKey"
+      "id" | "name" | "sessionId" | "sessionName" | "route" | "originChannel" | "originThreadId" | "originSessionKey" | "harness" | "model" | "reasoningEffort"
     >,
     text: string,
     label: string = "goal-task",
@@ -1642,6 +1644,14 @@ export class SessionManager {
       originThreadId?: string | number;
       originSessionKey?: string;
     };
+    const active = task.sessionId ? this.resolve(task.sessionId) : undefined;
+    const saved = task.sessionId ? this.getPersistedSession(task.sessionId) : undefined;
+    const metadata = active ?? saved ?? task;
+    Object.assign(routingProxy, {
+      harnessName: "harnessName" in metadata ? metadata.harnessName : metadata.harness,
+      model: metadata.model,
+      reasoningEffort: metadata.reasoningEffort,
+    });
     routingProxy.originChannel = task.originChannel;
     routingProxy.originThreadId = task.originThreadId;
     routingProxy.originSessionKey = task.originSessionKey;

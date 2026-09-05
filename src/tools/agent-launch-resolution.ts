@@ -29,6 +29,7 @@ export interface AgentLaunchParams {
   name?: string;
   workdir?: string;
   model?: string;
+  reasoning_effort?: PersistedSessionInfo["reasoningEffort"];
   system_prompt?: string;
   allowed_tools?: string[];
   resume_session_id?: string;
@@ -65,12 +66,14 @@ type SessionManagerLike = {
   }>;
   listPersistedSessions?: () => PersistedSessionInfo[];
   resolve?: (ref: string) => {
+    harnessName?: string;
+    reasoningEffort?: PersistedSessionInfo["reasoningEffort"];
     backendConversationId?: string;
     harnessSessionId?: string;
   } | undefined;
   getPersistedSession?: (ref: string) => Pick<
     PersistedSessionInfo,
-    "harness" | "backendRef" | "route" | "originChannel" | "originThreadId" | "originSessionKey"
+    "harness" | "reasoningEffort" | "backendRef" | "route" | "originChannel" | "originThreadId" | "originSessionKey"
   > | undefined;
   resolveBackendConversationId?: (ref: string) => string | undefined;
   resolveHarnessSessionId?: (ref: string) => string | undefined;
@@ -371,7 +374,10 @@ export function resolveAgentLaunchRequest(
     resumeSessionId,
     resolvedResumeId,
     clearedPersistedCodexResume,
-    reasoningEffort: resolveReasoningEffortForHarness(harness),
+    reasoningEffort: params.reasoning_effort
+      ?? (activeResumeSession?.harnessName === harness ? activeResumeSession.reasoningEffort : undefined)
+      ?? (persistedResumeSession?.harness === harness ? persistedResumeSession.reasoningEffort : undefined)
+      ?? resolveReasoningEffortForHarness(harness),
     fastMode: resolveFastModeForHarness(harness),
   };
 }

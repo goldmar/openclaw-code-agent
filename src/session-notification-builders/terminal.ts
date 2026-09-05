@@ -187,6 +187,7 @@ export function buildCompletedPayload(args: {
     | "approvalPromptDeliveredAt"
     | "harnessName"
     | "model"
+    | "reasoningEffort"
   >;
   originThreadLine: OriginThreadLine;
   preview: string;
@@ -332,6 +333,7 @@ export function buildFailedPayload(args: {
     | "approvalPromptDeliveredAt"
     | "harnessName"
     | "model"
+    | "reasoningEffort"
   > & { harnessSessionId?: string };
   originThreadLine: OriginThreadLine;
   errorSummary: string;
@@ -374,7 +376,7 @@ export function buildFailedPayload(args: {
 }
 
 export function buildTurnCompletePayload(args: {
-  session: Pick<Session, "id" | "name" | "status" | "lifecycle" | "costUsd" | "harnessName" | "model"> & { worktreeStrategy?: Session["worktreeStrategy"] };
+  session: Pick<Session, "id" | "name" | "status" | "lifecycle" | "costUsd" | "harnessName" | "model" | "reasoningEffort"> & { worktreeStrategy?: Session["worktreeStrategy"] };
   originThreadLine: OriginThreadLine;
   preview: string;
 }): { userMessage: string; wakeMessage: string } {

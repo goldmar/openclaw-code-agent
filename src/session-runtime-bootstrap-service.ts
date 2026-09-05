@@ -11,7 +11,7 @@ type SpawnOptions = {
 type PreparedLaunch = ReturnType<import("./session-restore-service").SessionRestoreService["prepareSpawn"]>;
 type LaunchNotificationSession = Pick<
   Session,
-  "id" | "name" | "workdir" | "worktreePath" | "originalWorkdir" | "harnessName" | "model" | "startedAt" | "resumeSessionId" | "resumedFromSessionName"
+  "id" | "name" | "workdir" | "worktreePath" | "originalWorkdir" | "harnessName" | "model" | "reasoningEffort" | "startedAt" | "resumeSessionId" | "resumedFromSessionName"
 >;
 
 /**
@@ -87,6 +87,7 @@ export class SessionRuntimeBootstrapService {
     const harnessLabel = formatHarnessModelLabel({
       harness: session.harnessName,
       model: session.model,
+      reasoningEffort: session.reasoningEffort,
     }) ?? "default";
     if (session.resumeSessionId) {
       return {

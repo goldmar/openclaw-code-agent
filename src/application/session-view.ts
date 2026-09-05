@@ -56,6 +56,7 @@ interface SessionListingItem {
   resumable?: boolean;
   harness?: string;
   model?: string;
+  reasoningEffort?: PersistedSessionInfo["reasoningEffort"];
   backendRef?: PersistedSessionInfo["backendRef"];
   harnessSessionId?: string;
   requestedPermissionMode?: PermissionMode;
@@ -318,6 +319,7 @@ function mergeActiveAndPersistedSessions(active: Session[], persisted: Persisted
       resumable: p.resumable,
       harness: p.harness,
       model: p.model,
+      reasoningEffort: p.reasoningEffort,
       backendRef: p.backendRef,
       harnessSessionId: p.harnessSessionId,
       requestedPermissionMode: p.requestedPermissionMode,
@@ -356,6 +358,7 @@ function mergeActiveAndPersistedSessions(active: Session[], persisted: Persisted
       resumable: session.isExplicitlyResumable,
       harness: session.harnessName,
       model: session.model,
+      reasoningEffort: session.reasoningEffort,
       backendRef: session.backendRef,
       harnessSessionId: session.harnessSessionId,
       requestedPermissionMode: session.requestedPermissionMode,

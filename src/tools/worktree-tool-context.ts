@@ -31,6 +31,7 @@ export interface ResolvedWorktreeToolTarget {
     completedAt?: number;
     harnessName?: string;
     model?: string;
+    reasoningEffort?: PersistedSessionInfo["reasoningEffort"];
   };
 }
 
@@ -93,6 +94,7 @@ export function resolveWorktreeToolTarget(sessionManager: SessionManager, ref: s
           ...(persistedSession.completedAt !== undefined ? { completedAt: persistedSession.completedAt } : {}),
           ...(persistedSession.harness !== undefined ? { harnessName: persistedSession.harness } : {}),
           ...(persistedSession.model !== undefined ? { model: persistedSession.model } : {}),
+          ...(persistedSession.reasoningEffort !== undefined ? { reasoningEffort: persistedSession.reasoningEffort } : {}),
         }
       : undefined),
   };

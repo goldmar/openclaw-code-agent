@@ -10,6 +10,7 @@
 import type {
   ApprovalExecutionState,
   PermissionMode,
+  ReasoningEffort,
   PersistedWorktreeLifecycle,
   SessionBackendRef,
   SessionMetrics,
@@ -34,6 +35,7 @@ export interface SessionListRenderable {
   resumable?: boolean;
   harness?: string;
   model?: string;
+  reasoningEffort?: ReasoningEffort;
   backendRef?: SessionBackendRef;
   harnessSessionId?: string;
   resumeSessionId?: string;
@@ -178,6 +180,7 @@ export function formatSessionListing(session: SessionListRenderable): string {
     lines.push(`   🧰 Harness | model: ${formatHarnessModelLabel({
       harness: session.harness,
       model: session.model,
+      reasoningEffort: session.reasoningEffort,
     })}`);
   } else if (session.model) {
     lines.push(`   🧰 Harness | model: ${session.model}`);

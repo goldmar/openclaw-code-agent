@@ -41,6 +41,7 @@ export class SessionWorktreeMessageService {
       | "costUsd"
       | "harnessName"
       | "model"
+      | "reasoningEffort"
     >;
     nativeBackendWorktree: boolean;
     cleanupSucceeded: boolean;
@@ -78,6 +79,7 @@ export class SessionWorktreeMessageService {
       duration: typeof session.completedAt === "number" ? session.completedAt - session.startedAt : undefined,
       harnessName: session.harnessName,
       model: session.model,
+      reasoningEffort: session.reasoningEffort,
     });
     const completedSummary = remoteOutcome === "pr-updated"
       ? "PR updated; no local worktree changes remained to merge"
