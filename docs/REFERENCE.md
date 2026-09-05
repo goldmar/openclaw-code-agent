@@ -386,6 +386,7 @@ Launch a background coding session.
 | `prompt` | `string` | Yes | Task to execute |
 | `name` | `string` | No | Short session name; auto-generated if omitted |
 | `workdir` | `string` | No | Defaults to tool workspace, plugin `defaultWorkdir`, or cwd |
+| `reasoning_effort` | `low \| medium \| high \| xhigh \| max` | No | Per-launch override. Otherwise retains saved resume/fork effort, then uses the harness default. Known supported settings appear as `reasoning: <level>` in session status headings; unknown/unsupported settings are omitted. |
 | `model` | `string` | No | Defaults to the selected harness default model. For experimental OpenCode, omit to use OpenCode's configured provider default or pass `provider/model` explicitly |
 | `system_prompt` | `string` | No | Extra system prompt |
 | `allowed_tools` | `string[]` | No | Harness tool allowlist |

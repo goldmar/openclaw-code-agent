@@ -1,3 +1,4 @@
+import { REASONING_EFFORTS, type ReasoningEffort } from "../types";
 import { Type } from "../tool-schema";
 import { sessionManager } from "../singletons";
 import { formatLaunchSummaryFromSession, type LaunchSummarySessionLike } from "../launch-summary";
@@ -26,7 +27,8 @@ function resumeTargetRef(target: PersistedSessionInfo | { id: string; name: stri
 function isAgentLaunchParams(value: unknown): value is AgentLaunchParams {
   if (!value || typeof value !== "object") return false;
   const p = value as Record<string, unknown>;
-  return typeof p.prompt === "string";
+  return typeof p.prompt === "string"
+    && (p.reasoning_effort === undefined || REASONING_EFFORTS.includes(p.reasoning_effort as ReasoningEffort));
 }
 
 
@@ -99,6 +101,10 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
       ),
       workdir: Type.Optional(Type.String({ description: "Working directory (defaults to cwd)" })),
       model: Type.Optional(Type.String({ description: "Model name to use" })),
+      reasoning_effort: Type.Optional(Type.Union(
+        REASONING_EFFORTS.map((level) => Type.Literal(level)),
+        { description: "Reasoning effort override for this launch. Otherwise retains the resumed/forked session setting, then uses the harness default. Only supported harness/model combinations apply it." },
+      )),
       system_prompt: Type.Optional(Type.String({ description: "Additional system prompt" })),
       allowed_tools: Type.Optional(Type.Array(Type.String(), { description: "List of allowed tools" })),
       resume_session_id: Type.Optional(

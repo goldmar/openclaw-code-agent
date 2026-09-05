@@ -540,7 +540,12 @@ export class GoalController {
       // Goal loops intentionally own terminal handling and disable worktree flows.
       worktreeStrategy: "off",
     };
-    return this.sessionManager.spawnAndAwaitRunning(config, { notifyLaunch: false });
+    const session = await this.sessionManager.spawnAndAwaitRunning(config, { notifyLaunch: false });
+    // Pin resolved settings for later iterations and restart recovery.
+    task.harness = session.harnessName ?? task.harness;
+    task.model = session.model ?? task.model;
+    task.reasoningEffort = session.reasoningEffort ?? task.reasoningEffort;
+    return session;
   }
 
   private async resumeTaskSession(task: GoalTaskState, prompt: string, session: Session): Promise<Session> {

@@ -195,6 +195,8 @@ Merge, PR, ordinary terminal, and no-change worktree outcomes use a two-step com
 ### Goal Tasks
 
 Goal tasks are explicit autonomous loops for work that should keep iterating toward a defined finish line. They do not replace ordinary coding sessions.
+Session notification headings include a concise `| reasoning: medium` field when OCA knows the selected harness/model supports the session's reasoning setting. `agent_launch(reasoning_effort="high")` overrides the harness default for that launch; resume and fork retain the saved setting unless overridden. Launch, approval/progress, terminal and later worktree notifications use that session setting even after a Gateway restart or default change. Unknown historical settings and unsupported models/harnesses (including OpenCode, which does not forward this option) omit the field. OCA does not infer a backend default or a silently downgraded Claude effort level.
+
 Goal iteration progress is controller progress: the counter advances only when the goal controller starts another agent turn after a missing completion promise or failed verifier. If the agent performs several review/implementation passes inside one successful turn, those internal passes should appear in the single completion summary rather than as separate goal iteration notifications.
 
 Ask in normal chat:

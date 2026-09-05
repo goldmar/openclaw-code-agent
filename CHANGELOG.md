@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Show the known session reasoning level consistently in launch, approval/progress, terminal and manual/worktree notification headings, preserving saved settings after restart and resume/fork instead of consulting changed defaults.
+- Allow an explicit `agent_launch(reasoning_effort=...)` override and retain resumed/forked session effort ahead of harness defaults; omit notification effort for unknown or unsupported harness/model settings.
+
 ## [4.7.13] - 2026-09-04
 
 ### Changed

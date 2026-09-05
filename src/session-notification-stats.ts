@@ -1,3 +1,4 @@
+import type { ReasoningEffort } from "./types";
 import { formatDuration } from "./format";
 import { formatHarnessModelLabel } from "./session-display";
 
@@ -9,6 +10,7 @@ export type SessionNotificationStats = {
   harnessName?: string;
   harness?: string;
   model?: string;
+  reasoningEffort?: ReasoningEffort;
 };
 
 export function formatSessionStatsSuffix(stats: SessionNotificationStats): string {
@@ -26,6 +28,7 @@ export function formatSessionStatsSuffix(stats: SessionNotificationStats): strin
   const harnessModel = formatHarnessModelLabel({
     harness: stats.harnessName ?? stats.harness,
     model: stats.model,
+    reasoningEffort: stats.reasoningEffort,
   });
   if (harnessModel) {
     parts.push(...harnessModel.split(" | "));
