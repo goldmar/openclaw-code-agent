@@ -57,6 +57,10 @@ describe("notification reasoning visibility", () => {
     { harness: "claude-code", model: "haiku", reasoningEffort: "high" },
     { harness: "claude-code", model: "claude-sonnet-4-6", reasoningEffort: "xhigh" },
     { harness: "codex", model: "gpt-6-astra", reasoningEffort: "bogus" },
+    { harness: "codex", model: "gpt-5.1-2025-11-13", reasoningEffort: "xhigh" },
+    { harness: "codex", model: "gpt-5.5-2026-05-01", reasoningEffort: "max" },
+    { harness: "claude-code", model: "claude-sonnet-4-6-20260217", reasoningEffort: "xhigh" },
+    { harness: "claude-code", model: "claude-opus-4-5-20251101", reasoningEffort: "max" },
   ]) {
     it(`omits unknown/unsupported settings: ${JSON.stringify(input)}`, () => {
       assert.equal(formatReasoningSuffix(input as any), "");
@@ -69,6 +73,10 @@ describe("notification reasoning visibility", () => {
       ["codex", "openai/gpt-5.6-sol", "max"],
       ["claude-code", "anthropic/claude-sonnet-4-7", "high"],
       ["claude-code", "claude-opus-4-7", "xhigh"],
+      ["codex", "openai/gpt-6-astra-2026-09-01", "max"],
+      ["codex", "gpt-5.6-sol-2026-07-01", "xhigh"],
+      ["claude-code", "anthropic/claude-opus-4-7-20260416", "xhigh"],
+      ["claude-code", "claude-sonnet-4-6-20260217", "max"],
     ]) {
       assert.equal(formatHarnessModelLabel({ harness, model, reasoningEffort: effort as ReasoningEffort }),
         `${harness} | ${model} | reasoning: ${effort}`);
