@@ -206,8 +206,6 @@ describe("session task lifecycle async adapter", () => {
           return taskFlow[method](params);
         },
       });
-      const warnings: string[] = [];
-      t.mock.method(console, "warn", (message: unknown) => { warnings.push(String(message)); });
       const sink = resolveSessionTaskLifecycle({ sessionKey: "agent:main:telegram:group:123" });
       const session = createSession();
       if (method !== "createManaged") await sink.create(session);
@@ -217,6 +215,8 @@ describe("session task lifecycle async adapter", () => {
         ? sink.create(session)
         : method === "resume" ? sink.progress(session) : sink.finalize(session);
       const previousMirror = session.taskFlowMirror;
+      const warnings: string[] = [];
+      t.mock.method(console, "warn", (message: unknown) => { warnings.push(String(message)); });
 
       await assert.doesNotReject(async () => { await invoke(); });
       assert.equal(attempts, 1);
