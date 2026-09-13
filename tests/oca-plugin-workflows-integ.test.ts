@@ -386,25 +386,29 @@ describe("OCA plugin workflow integration coverage", () => {
     }
   });
 
-  it("finalizes TaskFlow mirrors for completed and failed terminal sessions", () => {
+  it("finalizes TaskFlow mirrors for completed and failed terminal sessions", async () => {
     const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
     setPluginRuntime({
-      taskFlow: {
-        fromToolContext() {
-          return {
-            setWaiting(params: Record<string, unknown>) {
-              calls.push({ method: "setWaiting", params });
-              return { applied: true, flow: { flowId: String(params.flowId), revision: 10 } };
+      tasks: {
+        async: {
+          managedFlows: {
+            fromToolContext() {
+              return {
+                async setWaiting(params: Record<string, unknown>) {
+                  calls.push({ method: "setWaiting", params });
+                  return { applied: true, flow: { flowId: String(params.flowId), revision: 10 } };
+                },
+                async finish(params: Record<string, unknown>) {
+                  calls.push({ method: "finish", params });
+                  return { applied: true, flow: { flowId: String(params.flowId), revision: 10, status: "succeeded" } };
+                },
+                async fail(params: Record<string, unknown>) {
+                  calls.push({ method: "fail", params });
+                  return { applied: true, flow: { flowId: String(params.flowId), revision: 10, status: "failed" } };
+                },
+              };
             },
-            finish(params: Record<string, unknown>) {
-              calls.push({ method: "finish", params });
-              return { applied: true, flow: { flowId: String(params.flowId), revision: 10, status: "succeeded" } };
-            },
-            fail(params: Record<string, unknown>) {
-              calls.push({ method: "fail", params });
-              return { applied: true, flow: { flowId: String(params.flowId), revision: 10, status: "failed" } };
-            },
-          };
+          },
         },
       },
     });
@@ -422,13 +426,13 @@ describe("OCA plugin workflow integration coverage", () => {
       route: { provider: "telegram", target: "123", sessionKey: "agent:main:telegram:group:123" },
     } satisfies Partial<PersistedSessionInfo>;
 
-    const completedMirror = reconcilePersistedSessionTaskMirror({
+    const completedMirror = await reconcilePersistedSessionTaskMirror({
       ...base,
       status: "completed",
       killReason: "done",
       taskFlowMirror: { flowId: "flow-complete", revision: 9, status: "running" },
     } as PersistedSessionInfo);
-    const failedMirror = reconcilePersistedSessionTaskMirror({
+    const failedMirror = await reconcilePersistedSessionTaskMirror({
       ...base,
       sessionId: "taskflow-failed",
       harnessSessionId: "h-taskflow-failed",

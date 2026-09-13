@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Migrate TaskFlow mirroring to `tasks.async.managedFlows`, preserving lifecycle event order and awaiting recovery, terminal persistence, and shutdown completion. Mirror support requires a host release providing the async managed-flow mutations; the dependency floor remains pending that release.
+
 ## [4.7.16] - 2026-09-10
 
 ### Changed

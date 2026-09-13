@@ -517,25 +517,29 @@ describe("OCA Codex Crabbox integration harness", () => {
     assert.equal(patches.some(({ patch }) => patch.completionWakeSummaryRequired === true), true);
   });
 
-  it("reconciles orphan running TaskFlow mirrors after runtime recovery", () => {
+  it("reconciles orphan running TaskFlow mirrors after runtime recovery", async () => {
     const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
     setPluginRuntime({
-      taskFlow: {
-        fromToolContext() {
-          return {
-            setWaiting(params: Record<string, unknown>) {
-              calls.push({ method: "setWaiting", params });
-              return { applied: true, flow: { flowId: "flow-1", revision: 8 } };
+      tasks: {
+        async: {
+          managedFlows: {
+            fromToolContext() {
+              return {
+                async setWaiting(params: Record<string, unknown>) {
+                  calls.push({ method: "setWaiting", params });
+                  return { applied: true, flow: { flowId: "flow-1", revision: 8 } };
+                },
+                async finish(params: Record<string, unknown>) {
+                  calls.push({ method: "finish", params });
+                  return { applied: true, flow: { flowId: "flow-1", revision: 8 } };
+                },
+                async fail(params: Record<string, unknown>) {
+                  calls.push({ method: "fail", params });
+                  return { applied: true, flow: { flowId: "flow-1", revision: 8 } };
+                },
+              };
             },
-            finish(params: Record<string, unknown>) {
-              calls.push({ method: "finish", params });
-              return { applied: true, flow: { flowId: "flow-1", revision: 8 } };
-            },
-            fail(params: Record<string, unknown>) {
-              calls.push({ method: "fail", params });
-              return { applied: true, flow: { flowId: "flow-1", revision: 8 } };
-            },
-          };
+          },
         },
       },
     });
@@ -566,7 +570,7 @@ describe("OCA Codex Crabbox integration harness", () => {
         taskFlowMirror: { flowId: "flow-1", revision: 7, status: "running" },
       } satisfies PersistedSessionInfo;
 
-      const reconciled = reconcilePersistedSessionTaskMirror(session);
+      const reconciled = await reconcilePersistedSessionTaskMirror(session);
       assert.deepEqual(calls.map((call) => call.method), ["fail"]);
       assert.equal(calls[0].params.expectedRevision, 7);
       assert.equal(calls[0].params.blockedSummary, "Lost after OpenClaw Code Agent restart without live process");
@@ -576,7 +580,7 @@ describe("OCA Codex Crabbox integration harness", () => {
     }
   });
 
-  it("reconciles persisted running TaskFlow mirrors through SessionManager after a restart", () => {
+  it("reconciles persisted running TaskFlow mirrors through SessionManager after a restart", async () => {
     const dir = mkdtempSync(join(tmpdir(), "oca-crabbox-manager-restart-"));
     const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
     try {
@@ -605,28 +609,33 @@ describe("OCA Codex Crabbox integration harness", () => {
         repoPolicies: [],
       }));
       setPluginRuntime({
-        taskFlow: {
-          fromToolContext() {
-            return {
-              setWaiting(params: Record<string, unknown>) {
-                calls.push({ method: "setWaiting", params });
-                return { applied: true, flow: { flowId: "flow-restart", revision: 5 } };
+        tasks: {
+          async: {
+            managedFlows: {
+              fromToolContext() {
+                return {
+                  async setWaiting(params: Record<string, unknown>) {
+                    calls.push({ method: "setWaiting", params });
+                    return { applied: true, flow: { flowId: "flow-restart", revision: 5 } };
+                  },
+                  async finish(params: Record<string, unknown>) {
+                    calls.push({ method: "finish", params });
+                    return { applied: true, flow: { flowId: "flow-restart", revision: 5 } };
+                  },
+                  async fail(params: Record<string, unknown>) {
+                    calls.push({ method: "fail", params });
+                    return { applied: true, flow: { flowId: "flow-restart", revision: 5 } };
+                  },
+                };
               },
-              finish(params: Record<string, unknown>) {
-                calls.push({ method: "finish", params });
-                return { applied: true, flow: { flowId: "flow-restart", revision: 5 } };
-              },
-              fail(params: Record<string, unknown>) {
-                calls.push({ method: "fail", params });
-                return { applied: true, flow: { flowId: "flow-restart", revision: 5 } };
-              },
-            };
+            },
           },
         },
       });
 
       const manager = new SessionManager(5, 50, { store: { indexPath, env: {} } });
       try {
+        await manager.ready;
         const persisted = manager.getPersistedSession("session-restart-orphan");
         assert.equal(persisted?.status, "killed");
         assert.equal(persisted?.runtimeState, "stopped");

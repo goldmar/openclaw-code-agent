@@ -253,6 +253,8 @@ export class SessionManager {
   private readonly runtimeBootstrap: SessionRuntimeBootstrapService;
   private readonly worktreeMessages: SessionWorktreeMessageService;
   private readonly maintenance: SessionMaintenanceService;
+  readonly ready: Promise<void>;
+  private shuttingDown = false;
   private readonly pendingPlanResumeClaims = new Map<string, PersistedSessionInfo>();
 
   constructor(
@@ -285,7 +287,7 @@ export class SessionManager {
     this.runtimeBootstrap = services.runtimeBootstrap;
     this.worktreeMessages = services.worktreeMessages;
     this.maintenance = services.maintenance;
-    this.reconcilePersistedTaskFlowMirrors();
+    this.ready = this.reconcilePersistedTaskFlowMirrors();
   }
 
   private static createServiceBundle(
@@ -452,7 +454,14 @@ export class SessionManager {
         manager.pendingPlanResumeClaims.delete(session.id);
         manager.onPersistedSessionChanged(store.getPersistedSession(session.id));
       },
+      syncTaskMirror: (session) => {
+        if (sessions.get(session.id) !== session || !session.taskFlowMirror) return;
+        const persisted = store.getPersistedSession(session.id);
+        if (!persisted || persisted.taskFlowMirror === session.taskFlowMirror) return;
+        manager.updatePersistedSession(session.id, { taskFlowMirror: session.taskFlowMirror });
+      },
       handleTerminal: async (session) => {
+        if (sessions.get(session.id) !== session) return;
         const retryablePlan = manager.pendingPlanResumeClaims.get(session.id);
         try {
           await manager.onSessionTerminal(session);
@@ -542,6 +551,9 @@ export class SessionManager {
 
   /** Spawn and start a new session, wiring lifecycle listeners and launch notification. */
   spawn(config: SessionConfig, options: SpawnOptions = {}): Session {
+    if (this.shuttingDown) {
+      throw new Error("Cannot launch a session: the code-agent service is shutting down.");
+    }
     const activeCount = this.registry.activeSessionCount();
     if (activeCount >= this.maxSessions) {
       throw new Error(`Max sessions reached (${this.maxSessions}). Use agent_sessions to list active sessions and agent_kill to end one.`);
@@ -1550,10 +1562,16 @@ export class SessionManager {
     this.syncTmpOutputCleanupDeadline();
   }
 
-  private reconcilePersistedTaskFlowMirrors(): void {
+  private async reconcilePersistedTaskFlowMirrors(): Promise<void> {
     let changed = false;
     for (const session of this.store.listPersistedSessions()) {
-      const reconciled = reconcilePersistedSessionTaskMirror(session);
+      let reconciled: Awaited<ReturnType<typeof reconcilePersistedSessionTaskMirror>>;
+      try {
+        reconciled = await reconcilePersistedSessionTaskMirror(session);
+      } catch (err) {
+        console.warn(`[SessionTaskLifecycle] reconciliation failed for session ${session.sessionId}:`, err);
+        continue;
+      }
       if (!reconciled) continue;
       session.taskFlowMirror = reconciled;
       changed = true;
@@ -1962,5 +1980,23 @@ export class SessionManager {
     this.disposeMaintenance();
     this.questions.dispose();
     this.notifications.dispose();
+  }
+
+  async drainTaskLifecycle(): Promise<void> {
+    await this.ready;
+    await this.runtimeBootstrap.drain();
+  }
+
+  async shutdown(): Promise<void> {
+    this.shuttingDown = true;
+    try {
+      this.disposeMaintenance();
+      const sessions = [...this.sessions.values()];
+      this.killAll("shutdown");
+      await Promise.all(sessions.map((session) => session.waitForTeardown()));
+      await this.drainTaskLifecycle();
+    } finally {
+      this.dispose();
+    }
   }
 }

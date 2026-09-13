@@ -102,7 +102,9 @@ Plan-gated sessions also persist deterministic approval/execution context:
 - the current effective permission mode
 - an explicit approval/execution state such as `awaiting_approval`, `approved_then_implemented`, `implemented_without_required_approval`, or `not_plan_gated`
 
-When the OpenClaw runtime exposes the managed TaskFlow API, sessions also mirror high-level lifecycle progress into a gateway-owned flow record. The adapter is intentionally opportunistic: it creates, updates, waits, and finalizes managed flows when the API is present, and otherwise degrades to a no-op so session execution, notifications, and persistence do not depend on unreleased runtime surfaces.
+When the OpenClaw runtime exposes `api.runtime.tasks.async.managedFlows`, sessions also mirror high-level lifecycle progress into a gateway-owned flow record. The adapter captures each lifecycle event and serializes its asynchronous mutations per session, using the latest completed flow revision. It does not fall back to the deprecated synchronous task API. Mirroring remains opportunistic when the async surface is absent or a mutation fails.
+
+Service startup joins persisted mirror reconciliation before exposing the session manager or starting maintenance. Terminal persistence waits for mirror finalization, and service shutdown drains pending mirror and terminal work before disposing the manager and clearing the runtime. Synchronous plugin registration and session construction remain unchanged.
 
 ### Harness Abstraction
 

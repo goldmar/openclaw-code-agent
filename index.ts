@@ -187,7 +187,13 @@ export function register(api: OpenClawPluginApi): void {
     autoUpdate?.maybeCheckForUpdate({ route });
   };
 
-  const startCodeAgentService = (ctx?: OpenClawPluginServiceContext): void => {
+  let starting: Promise<void> | undefined;
+  let stopping: Promise<void> | undefined;
+
+  const startCodeAgentService = async (ctx?: OpenClawPluginServiceContext): Promise<void> => {
+    while (stopping || starting) {
+      await (stopping ?? starting);
+    }
     if (started) {
       if (ctx && !startedWithServiceContext) {
         setPluginRuntime(api.runtime, ctx.config);
@@ -196,50 +202,80 @@ export function register(api: OpenClawPluginApi): void {
       return;
     }
 
-    const config = api.pluginConfig ?? {};
-    setPluginConfig(config);
-    if (ctx) {
-      setPluginRuntime(api.runtime, ctx.config);
-      startedWithServiceContext = true;
-    } else {
-      setPluginRuntime(api.runtime);
+    starting = Promise.resolve().then(async () => {
+      const config = api.pluginConfig ?? {};
+      setPluginConfig(config);
+      if (ctx) {
+        setPluginRuntime(api.runtime, ctx.config);
+        startedWithServiceContext = true;
+      } else {
+        setPluginRuntime(api.runtime);
+        startedWithServiceContext = false;
+      }
+
+      sm = new SessionManager(pluginConfig.maxSessions, pluginConfig.maxPersistedSessions, {
+        worktreeSummaryProvider: createRuntimeWorktreeDecisionSummaryProvider(),
+      });
+      await sm.ready;
+      gc = new GoalController(sm);
+      autoUpdate = new AutoUpdateService({
+        stateDir: ctx?.stateDir ?? defaultStateDir(),
+        currentVersion: api.version ?? (packageJson as { version?: string }).version ?? "0.0.0",
+        actionButtonFactory: (sessionId, kind, label, options) =>
+          sm!.makePluginActionButton(sessionId, kind, label, options),
+      });
+      setSessionManager(sm);
+      setGoalController(gc);
+      setAutoUpdateService(autoUpdate);
+      gc.start();
+
+      cleanupOrphanedWorktrees(sm);
+      sm.bootstrapMaintenanceSchedules();
+      started = true;
+      maybeCheckForAutoUpdate();
+    });
+    try {
+      await starting;
+    } catch (err) {
+      gc?.stop();
+      sm?.dispose();
+      sm = null;
+      gc = null;
+      autoUpdate = null;
+      started = false;
       startedWithServiceContext = false;
+      setPluginRuntime(undefined);
+      setSessionManager(null);
+      setGoalController(null);
+      setAutoUpdateService(null);
+      throw err;
+    } finally {
+      starting = undefined;
     }
-
-    sm = new SessionManager(pluginConfig.maxSessions, pluginConfig.maxPersistedSessions, {
-      worktreeSummaryProvider: createRuntimeWorktreeDecisionSummaryProvider(),
-    });
-    gc = new GoalController(sm);
-    autoUpdate = new AutoUpdateService({
-      stateDir: ctx?.stateDir ?? defaultStateDir(),
-      currentVersion: api.version ?? (packageJson as { version?: string }).version ?? "0.0.0",
-      actionButtonFactory: (sessionId, kind, label, options) =>
-        sm!.makePluginActionButton(sessionId, kind, label, options),
-    });
-    setSessionManager(sm);
-    setGoalController(gc);
-    setAutoUpdateService(autoUpdate);
-    gc.start();
-
-    cleanupOrphanedWorktrees(sm);
-    sm.bootstrapMaintenanceSchedules();
-    started = true;
-    maybeCheckForAutoUpdate();
   };
 
-  const stopCodeAgentService = (): void => {
-    if (gc) gc.stop();
-    if (sm) sm.killAll("shutdown");
-    if (sm) sm.dispose();
-    gc = null;
-    sm = null;
-    autoUpdate = null;
-    started = false;
-    startedWithServiceContext = false;
-    setPluginRuntime(undefined);
-    setGoalController(null);
-    setSessionManager(null);
-    setAutoUpdateService(null);
+  const stopCodeAgentService = (): Promise<void> => {
+    if (stopping) return stopping;
+    stopping = Promise.resolve().then(async () => {
+      await starting?.catch(() => {});
+      if (gc) gc.stop();
+      try {
+        await sm?.shutdown();
+      } finally {
+        gc = null;
+        sm = null;
+        autoUpdate = null;
+        started = false;
+        startedWithServiceContext = false;
+        setPluginRuntime(undefined);
+        setGoalController(null);
+        setSessionManager(null);
+        setAutoUpdateService(null);
+      }
+    }).finally(() => {
+      stopping = undefined;
+    });
+    return stopping;
   };
 
   const registerCodeAgentTool = (
@@ -253,8 +289,8 @@ export function register(api: OpenClawPluginApi): void {
       };
       return {
         ...definition,
-        execute(id: string, params: unknown) {
-          startCodeAgentService();
+        async execute(id: string, params: unknown) {
+          await startCodeAgentService();
           maybeCheckForAutoUpdate(routeFromToolContext(ctx));
           return definition.execute(id, params);
         },
@@ -267,8 +303,8 @@ export function register(api: OpenClawPluginApi): void {
     registerCommand(command: Parameters<OpenClawPluginApi["registerCommand"]>[0]) {
       api.registerCommand({
         ...command,
-        handler: (ctx: Parameters<typeof command.handler>[0]) => {
-          startCodeAgentService();
+        handler: async (ctx: Parameters<typeof command.handler>[0]) => {
+          await startCodeAgentService();
           maybeCheckForAutoUpdate(routeFromToolContext(ctx as unknown as OpenClawPluginToolContext));
           return command.handler(ctx);
         },
@@ -281,7 +317,7 @@ export function register(api: OpenClawPluginApi): void {
     api.registerInteractiveHandler({
       ...registration,
       handler: async (ctx: Parameters<typeof registration.handler>[0]) => {
-        startCodeAgentService();
+        await startCodeAgentService();
         maybeCheckForAutoUpdate(routeFromInteractiveContext(ctx));
         return registration.handler(ctx);
       },

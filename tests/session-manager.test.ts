@@ -108,8 +108,11 @@ function writeManagerStore(indexPath: string, sessions: Record<string, unknown>[
 }
 
 describe("SessionManager TaskFlow mirror reconciliation", () => {
-  it("fails recovered non-live running mirrors on load when there is no actionable wait", () => {
+  it("fails recovered non-live running mirrors on load when there is no actionable wait", async () => {
     const dir = mkdtempSync(join(tmpdir(), "openclaw-manager-taskflow-lost-"));
+    let finishRecovery!: () => void;
+    const hostResponse = new Promise<void>((resolve) => { finishRecovery = resolve; });
+    let manager: SessionManager | undefined;
     try {
       const indexPath = join(dir, "sessions.json");
       writeManagerStore(indexPath, [{
@@ -127,27 +130,42 @@ describe("SessionManager TaskFlow mirror reconciliation", () => {
 
       const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
       setPluginRuntime({
-        taskFlow: {
-          fromToolContext() {
-            return {
-              setWaiting(params: Record<string, unknown>) {
-                calls.push({ method: "setWaiting", params });
-                return { applied: true, flow: { flowId: "flow-lost", revision: 4, status: "waiting" } };
+        tasks: {
+          async: {
+            managedFlows: {
+              fromToolContext() {
+                return {
+                  async setWaiting(params: Record<string, unknown>) {
+                    calls.push({ method: "setWaiting", params });
+                    return { applied: true, flow: { flowId: "flow-lost", revision: 4, status: "waiting" } };
+                  },
+                  async finish(params: Record<string, unknown>) {
+                    calls.push({ method: "finish", params });
+                    return { applied: true, flow: { flowId: "flow-lost", revision: 4, status: "succeeded" } };
+                  },
+                  async fail(params: Record<string, unknown>) {
+                    calls.push({ method: "fail", params });
+                    await hostResponse;
+                    return { applied: true, flow: { flowId: "flow-lost", revision: 4, status: "failed" } };
+                  },
+                };
               },
-              finish(params: Record<string, unknown>) {
-                calls.push({ method: "finish", params });
-                return { applied: true, flow: { flowId: "flow-lost", revision: 4, status: "succeeded" } };
-              },
-              fail(params: Record<string, unknown>) {
-                calls.push({ method: "fail", params });
-                return { applied: true, flow: { flowId: "flow-lost", revision: 4, status: "failed" } };
-              },
-            };
+            },
           },
         },
       });
 
-      new SessionManager(5, 50, { store: { indexPath, env: {} } });
+      manager = new SessionManager(5, 50, { store: { indexPath, env: {} } });
+      const beforeRecovery = readFileSync(indexPath, "utf-8");
+      let ready = false;
+      const completion = manager.ready.then(() => { ready = true; });
+      await Promise.resolve();
+      assert.equal(ready, false);
+      assert.equal(readFileSync(indexPath, "utf-8"), beforeRecovery);
+      assert.equal(JSON.parse(beforeRecovery).sessions[0].taskFlowMirror.revision, 3);
+
+      finishRecovery();
+      await completion;
 
       assert.deepEqual(calls.map((call) => call.method), ["fail"]);
       assert.equal(calls[0].params.flowId, "flow-lost");
@@ -159,11 +177,14 @@ describe("SessionManager TaskFlow mirror reconciliation", () => {
         status: "failed",
       });
     } finally {
+      finishRecovery();
+      await manager?.ready;
+      manager?.dispose();
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it("keeps plan-approval mirrors waiting on load", () => {
+  it("keeps plan-approval mirrors waiting on load", async () => {
     const dir = mkdtempSync(join(tmpdir(), "openclaw-manager-taskflow-wait-"));
     try {
       const indexPath = join(dir, "sessions.json");
@@ -183,27 +204,33 @@ describe("SessionManager TaskFlow mirror reconciliation", () => {
 
       const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
       setPluginRuntime({
-        taskFlow: {
-          fromToolContext() {
-            return {
-              setWaiting(params: Record<string, unknown>) {
-                calls.push({ method: "setWaiting", params });
-                return { applied: true, flow: { flowId: "flow-waiting", revision: 9, status: "waiting" } };
+        tasks: {
+          async: {
+            managedFlows: {
+              fromToolContext() {
+                return {
+                  async setWaiting(params: Record<string, unknown>) {
+                    calls.push({ method: "setWaiting", params });
+                    return { applied: true, flow: { flowId: "flow-waiting", revision: 9, status: "waiting" } };
+                  },
+                  async finish(params: Record<string, unknown>) {
+                    calls.push({ method: "finish", params });
+                    return { applied: true, flow: { flowId: "flow-waiting", revision: 9, status: "succeeded" } };
+                  },
+                  async fail(params: Record<string, unknown>) {
+                    calls.push({ method: "fail", params });
+                    return { applied: true, flow: { flowId: "flow-waiting", revision: 9, status: "failed" } };
+                  },
+                };
               },
-              finish(params: Record<string, unknown>) {
-                calls.push({ method: "finish", params });
-                return { applied: true, flow: { flowId: "flow-waiting", revision: 9, status: "succeeded" } };
-              },
-              fail(params: Record<string, unknown>) {
-                calls.push({ method: "fail", params });
-                return { applied: true, flow: { flowId: "flow-waiting", revision: 9, status: "failed" } };
-              },
-            };
+            },
           },
         },
       });
 
-      new SessionManager(5, 50, { store: { indexPath, env: {} } });
+      const manager = new SessionManager(5, 50, { store: { indexPath, env: {} } });
+      await manager.ready;
+      manager.dispose();
 
       assert.deepEqual(calls.map((call) => call.method), ["setWaiting"]);
       assert.equal(calls[0].params.currentStep, "Waiting for plan approval");
@@ -214,6 +241,67 @@ describe("SessionManager TaskFlow mirror reconciliation", () => {
         status: "waiting",
       });
     } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("continues recovering later mirrors when one host mutation rejects", async (t) => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-manager-taskflow-rejection-"));
+    const warn = t.mock.method(console, "warn", () => {});
+    let manager: SessionManager | undefined;
+    try {
+      const indexPath = join(dir, "sessions.json");
+      const completedAt = Date.now();
+      writeManagerStore(indexPath, ["failed-first", "completed-second"].map((id, index) => ({
+        sessionId: id,
+        harnessSessionId: `h-${id}`,
+        backendRef: { kind: "codex-app-server", conversationId: `h-${id}` },
+        name: id,
+        prompt: "p",
+        workdir: "/tmp",
+        status: index === 0 ? "failed" : "completed",
+        lifecycle: "terminal",
+        runtimeState: "stopped",
+        completedAt: completedAt - index,
+        taskFlowMirror: { flowId: id, revision: 3, status: "running" },
+      })));
+      const calls: string[] = [];
+      setPluginRuntime({
+        tasks: {
+          async: {
+            managedFlows: {
+              fromToolContext() {
+                return {
+                  async setWaiting() { assert.fail("terminal recovery must not wait"); },
+                  async fail(params: { flowId: string }) {
+                    calls.push(params.flowId);
+                    throw new Error("host unavailable for first mirror");
+                  },
+                  async finish(params: { flowId: string }) {
+                    calls.push(params.flowId);
+                    return { applied: true, flow: { flowId: params.flowId, revision: 4, status: "succeeded" } };
+                  },
+                };
+              },
+            },
+          },
+        },
+      });
+
+      manager = new SessionManager(5, 50, { store: { indexPath, env: {} } });
+      await manager.ready;
+
+      assert.deepEqual(calls, ["failed-first", "completed-second"]);
+      assert.equal(warn.mock.callCount(), 1);
+      const saved = JSON.parse(readFileSync(indexPath, "utf-8"));
+      const mirrors = saved.sessions.map((session: { taskFlowMirror: unknown }) => session.taskFlowMirror);
+      assert.deepEqual(mirrors, [
+        { flowId: "failed-first", revision: 3, status: "running" },
+        { flowId: "completed-second", revision: 4, status: "succeeded" },
+      ]);
+    } finally {
+      await manager?.ready;
+      manager?.dispose();
       rmSync(dir, { recursive: true, force: true });
     }
   });

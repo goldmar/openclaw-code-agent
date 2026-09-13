@@ -1,4 +1,4 @@
-import { afterEach, describe, it } from "node:test";
+import { afterEach, describe, it, mock } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -9,6 +9,9 @@ import {
 } from "../scripts/validate-release-metadata.mjs";
 import { register, routeFromInteractiveContext, uniquePersistedWorkdirs } from "../index";
 import { goalController, sessionManager, setGoalController, setSessionManager } from "../src/singletons";
+import { SessionManager } from "../src/session-manager";
+import { Session } from "../src/session";
+import { GoalController } from "../src/goal-controller";
 
 const rootDir = join(import.meta.dirname, "..");
 
@@ -21,8 +24,8 @@ type CapturedTool = {
 
 function createPluginApi(pluginConfig: Record<string, unknown> = {}) {
   const tools: CapturedTool[] = [];
-  const commands: Array<{ name: string; handler: (ctx: Record<string, unknown>) => { text: string } }> = [];
-  const services: Array<{ start: (ctx: Record<string, unknown>) => void; stop?: (ctx: Record<string, unknown>) => void }> = [];
+  const commands: Array<{ name: string; handler: (ctx: Record<string, unknown>) => { text: string } | Promise<{ text: string }> }> = [];
+  const services: Array<{ start: (ctx: Record<string, unknown>) => void | Promise<void>; stop?: (ctx: Record<string, unknown>) => void | Promise<void> }> = [];
   const interactiveHandlers: Array<{ handler: (ctx: Record<string, unknown>) => Promise<unknown> }> = [];
   const runtimeConfig = { runtime: true };
   const api = {
@@ -35,10 +38,10 @@ function createPluginApi(pluginConfig: Record<string, unknown> = {}) {
     registerTool(factory: CapturedTool["factory"], options?: { name?: string }) {
       tools.push({ factory, options });
     },
-    registerCommand(command: { name: string; handler: (ctx: Record<string, unknown>) => { text: string } }) {
+    registerCommand(command: { name: string; handler: (ctx: Record<string, unknown>) => { text: string } | Promise<{ text: string }> }) {
       commands.push(command);
     },
-    registerService(service: { start: (ctx: Record<string, unknown>) => void; stop?: (ctx: Record<string, unknown>) => void }) {
+    registerService(service: { start: (ctx: Record<string, unknown>) => void | Promise<void>; stop?: (ctx: Record<string, unknown>) => void | Promise<void> }) {
       services.push(service);
     },
     registerInteractiveHandler(handler: { handler: (ctx: Record<string, unknown>) => Promise<unknown> }) {
@@ -48,19 +51,20 @@ function createPluginApi(pluginConfig: Record<string, unknown> = {}) {
   return { api, commands, services, tools, interactiveHandlers };
 }
 
-function stopCapturedServices(services: Array<{ stop?: (ctx: Record<string, unknown>) => void }>): void {
+async function stopCapturedServices(services: Array<{ stop?: (ctx: Record<string, unknown>) => void | Promise<void> }>): Promise<void> {
   for (const service of services) {
-    service.stop?.({});
+    await service.stop?.({});
   }
 }
 
 describe("plugin entry source", () => {
-  afterEach(() => {
+  afterEach(async () => {
     if (goalController) {
       goalController.stop();
     }
     if (sessionManager) {
       sessionManager.killAll("shutdown");
+      await sessionManager.drainTaskLifecycle();
       sessionManager.dispose();
     }
     setGoalController(null);
@@ -611,21 +615,21 @@ describe("plugin entry source", () => {
     const result = await tool.execute("tool-id", {});
     assert.ok(sessionManager, "tool execution should initialize SessionManager");
     assert.doesNotMatch(result.content?.[0]?.text ?? "", /SessionManager not initialized/);
-    stopCapturedServices(services);
+    await stopCapturedServices(services);
   });
 
-  it("lazily starts the code-agent service before command handlers can observe uninitialized state", () => {
+  it("lazily starts the code-agent service before command handlers can observe uninitialized state", async () => {
     const { api, commands, services } = createPluginApi();
     register(api as any);
     assert.equal(sessionManager, null);
 
     const command = commands.find((entry) => entry.name === "agent_sessions");
     assert.ok(command, "expected agent_sessions command");
-    const result = command.handler({ args: "--full" });
+    const result = await command.handler({ args: "--full" });
 
     assert.ok(sessionManager, "command handler should initialize SessionManager");
     assert.doesNotMatch(result.text, /SessionManager not initialized/);
-    stopCapturedServices(services);
+    await stopCapturedServices(services);
   });
 
   it("keeps service startup idempotent when service start follows tool execution", async () => {
@@ -640,10 +644,68 @@ describe("plugin entry source", () => {
     const lazySessionManager = sessionManager;
     assert.ok(lazySessionManager, "expected lazy SessionManager");
 
-    services[0]?.start({ config: { gateway: true } });
+    await services[0]?.start({ config: { gateway: true } });
     assert.equal(sessionManager, lazySessionManager);
 
-    stopCapturedServices(services);
+    await stopCapturedServices(services);
     assert.equal(sessionManager, null);
+  });
+
+  it("shares concurrent startup and waits for drainage before a lazy restart", async () => {
+    const entered = Promise.withResolvers<void>();
+    const drained = Promise.withResolvers<void>();
+    const start = mock.method(GoalController.prototype, "start", () => {});
+    const launch = mock.method(Session.prototype, "start", async () => {});
+    const drain = mock.method(SessionManager.prototype, "drainTaskLifecycle", async () => {
+      entered.resolve();
+      await drained.promise;
+    });
+    const { api, services, tools } = createPluginApi();
+    register(api as any);
+    const factory = tools.find((tool) => tool.options?.name === "agent_sessions")?.factory;
+    assert.ok(factory);
+    const tool = factory({ workspaceDir: rootDir });
+    let restart: Promise<unknown> | undefined;
+    let stopping: Promise<unknown> | undefined;
+    try {
+      await Promise.all([
+        tool.execute("first", {}),
+        tool.execute("second", {}),
+        services[0].start({ config: { gateway: true } }),
+      ]);
+      assert.equal(start.mock.callCount(), 1);
+      const previous = sessionManager;
+      assert.ok(previous);
+      stopping = Promise.resolve(services[0].stop?.({}));
+      assert.equal(sessionManager, previous);
+      let restarted = false;
+      restart = Promise.resolve(tool.execute("restart", {})).then(() => { restarted = true; });
+      await entered.promise;
+      assert.equal(restarted, false);
+      assert.equal(sessionManager, previous);
+      const lateLaunch = () => previous.spawn({
+        prompt: "Launch prepared before shutdown",
+        workdir: rootDir,
+        permissionMode: "plan",
+        worktreeStrategy: "off",
+        route: { provider: "system", target: "system" },
+      });
+      assert.throws(lateLaunch, /service is shutting down/);
+      assert.equal(launch.mock.callCount(), 0);
+      assert.deepEqual(previous.list(), []);
+      drained.resolve();
+      await stopping;
+      await restart;
+      assert.notEqual(sessionManager, previous);
+      assert.equal(start.mock.callCount(), 2);
+      assert.throws(lateLaunch, /service is shutting down/);
+    } finally {
+      drained.resolve();
+      await Promise.allSettled([stopping, restart]);
+      await stopCapturedServices(services);
+      drain.mock.restore();
+      start.mock.restore();
+      launch.mock.restore();
+    }
   });
 });

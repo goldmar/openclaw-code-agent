@@ -20,7 +20,7 @@ describe("task-flow runtime seam", () => {
         return { id: "flow-1", lookupKey: lookup };
       },
     };
-    setPluginRuntime({ tasks: { managedFlows: taskFlow } });
+    setPluginRuntime({ tasks: { async: { managedFlows: taskFlow } } });
 
     const runtime = resolveTaskFlowRuntime();
     assert.equal(runtime, taskFlow);
@@ -31,28 +31,23 @@ describe("task-flow runtime seam", () => {
     });
   });
 
-  it("falls back to the legacy taskFlow alias without requiring a specific host version", async () => {
+  it("does not fall back to synchronous or legacy managed-flow surfaces", () => {
     const taskFlow = {
       async lookup(lookup: string) {
         return { id: "flow-legacy", lookupKey: lookup };
       },
     };
-    setPluginRuntime({ taskFlow });
+    setPluginRuntime({ tasks: { managedFlows: taskFlow }, taskFlow });
 
-    const runtime = resolveTaskFlowRuntime();
-    assert.equal(runtime, taskFlow);
-    assert.equal(getTaskFlowRuntimeAvailability().available, true);
-    assert.deepEqual(await runtime?.lookup?.("session-legacy"), {
-      id: "flow-legacy",
-      lookupKey: "session-legacy",
-    });
+    assert.equal(resolveTaskFlowRuntime(), undefined);
+    assert.deepEqual(getTaskFlowRuntimeAvailability(), { available: false });
   });
 
-  it("prefers the current managed TaskFlow runtime over the legacy alias", () => {
+  it("uses async managed flows when synchronous and legacy surfaces also exist", () => {
     const current = { show: async () => ({ id: "current" }) };
     const legacy = { show: async () => ({ id: "legacy" }) };
     setPluginRuntime({
-      tasks: { managedFlows: current },
+      tasks: { async: { managedFlows: current }, managedFlows: legacy },
       taskFlow: legacy,
     });
 
