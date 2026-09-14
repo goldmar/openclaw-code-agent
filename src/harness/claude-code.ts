@@ -135,6 +135,7 @@ export class ClaudeCodeHarness implements AgentHarness {
     let sawPlanGateSignal = false;
     let requestCounter = 0;
     let currentSessionId = options.resumeSessionId ?? "";
+    let currentPermissionMode = options.permissionMode;
 
     const canUseToolCallback = options.canUseTool;
     const sdkOptions: Record<string, unknown> = {
@@ -144,7 +145,9 @@ export class ClaudeCodeHarness implements AgentHarness {
       permissionMode: options.permissionMode,
       allowDangerouslySkipPermissions: true,
       allowedTools: options.allowedTools,
-      systemPrompt: options.systemPrompt,
+      systemPrompt: options.systemPrompt === undefined
+        ? undefined
+        : { type: "custom", prompt: options.systemPrompt, snapshot: false },
       includePartialMessages: true,
       abortController: options.abortController,
       mcpServers: options.mcpServers,
@@ -152,6 +155,12 @@ export class ClaudeCodeHarness implements AgentHarness {
         ? {
             canUseTool: async (toolName: string, input: Record<string, unknown>) => {
               if (toolName !== "AskUserQuestion") {
+                if (currentPermissionMode === "plan") {
+                  return {
+                    behavior: "deny" as const,
+                    message: "Tool use is not allowed while reviewing a plan.",
+                  };
+                }
                 return { behavior: "allow" as const };
               }
               const state = buildPendingInputState(currentSessionId, ++requestCounter, input);
@@ -207,6 +216,7 @@ export class ClaudeCodeHarness implements AgentHarness {
           }
 
           if (msg.type === "system" && msg.subtype === "status" && msg.permissionMode) {
+            currentPermissionMode = msg.permissionMode;
             queue.enqueue(createSettingsChangedEvent(msg.permissionMode));
             continue;
           }
@@ -284,6 +294,7 @@ export class ClaudeCodeHarness implements AgentHarness {
         const q = await qPromise;
         if (typeof q.setPermissionMode === "function") {
           await q.setPermissionMode(mode);
+          currentPermissionMode = mode;
         }
       },
 
