@@ -3751,7 +3751,9 @@ describe("SessionManager terminal wakes", () => {
       });
     };
 
-    await (sm as any).runtimeBootstrap.deps.handleTerminal(fakeSession({ id: retryablePlan.sessionId }));
+    const session = fakeSession({ id: retryablePlan.sessionId });
+    (sm as any).sessions.set(session.id, session);
+    await (sm as any).runtimeBootstrap.deps.handleTerminal(session);
 
     const restored = sm.getPersistedSession(retryablePlan.sessionId);
     assert.equal(restored?.status, "killed");
@@ -3760,6 +3762,19 @@ describe("SessionManager terminal wakes", () => {
     assert.equal(restored?.worktreePath, undefined);
     assert.equal(restored?.worktreeBranch, undefined);
     assert.equal((sm as any).pendingPlanResumeClaims.has(retryablePlan.sessionId), false);
+  });
+
+  it("ignores delayed terminal handling from a replaced session", async () => {
+    const stale = fakeSession({ id: "replaced-session" });
+    const current = fakeSession({ id: stale.id, status: "running" });
+    (sm as any).sessions.set(current.id, current);
+    let handled = false;
+    (sm as any).onSessionTerminal = async () => { handled = true; };
+
+    await (sm as any).runtimeBootstrap.deps.handleTerminal(stale);
+
+    assert.equal(handled, false);
+    assert.equal(sm.resolve(current.id), current);
   });
 
   it("restores a retryable approved plan when terminal handling throws", async () => {
@@ -3790,8 +3805,10 @@ describe("SessionManager terminal wakes", () => {
       throw new Error("terminal persistence failed");
     };
 
+    const session = fakeSession({ id: retryablePlan.sessionId });
+    (sm as any).sessions.set(session.id, session);
     await assert.rejects(
-      (sm as any).runtimeBootstrap.deps.handleTerminal(fakeSession({ id: retryablePlan.sessionId })),
+      (sm as any).runtimeBootstrap.deps.handleTerminal(session),
       /terminal persistence failed/,
     );
 

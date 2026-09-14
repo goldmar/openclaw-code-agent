@@ -5,6 +5,30 @@ import { SessionRuntimeBootstrapService } from "../src/session-runtime-bootstrap
 import type { Session } from "../src/session";
 
 describe("SessionRuntimeBootstrapService", () => {
+  it("does not launch a deferred session terminated while its previous writer drains", async () => {
+    const previousWriter = Promise.withResolvers<void>();
+    let launched = false;
+    const service = new SessionRuntimeBootstrapService({
+      hydrateSpawnedSession: () => {}, markRunning: () => {}, syncTaskMirror: () => {},
+      handleTerminal: async () => {}, handleTurnEnd: async () => {},
+      formatLaunchWorkdirLabel: () => "/repo", notifySession: () => {},
+    });
+    const session = Object.assign(new EventEmitter(), {
+      id: "deferred-shutdown", name: "deferred-shutdown", status: "starting",
+      start: async () => { launched = true; },
+    });
+    service.initializeSession(session as Session, {} as any, {} as any, {
+      startAfter: previousWriter.promise, notifyLaunch: false,
+    });
+    session.status = "killed";
+    session.emit("statusChange", session, "killed");
+    await service.drain();
+    previousWriter.resolve();
+    await previousWriter.promise;
+    await Promise.resolve();
+    assert.equal(launched, false);
+  });
+
   it("drains mirror completion before terminal persistence and its cleanup finish", async () => {
     const finalized = Promise.withResolvers<void>();
     const terminalEntered = Promise.withResolvers<void>();

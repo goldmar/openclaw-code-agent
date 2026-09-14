@@ -104,7 +104,9 @@ Plan-gated sessions also persist deterministic approval/execution context:
 
 When the OpenClaw runtime exposes `api.runtime.tasks.async.managedFlows`, sessions also mirror high-level lifecycle progress into a gateway-owned flow record. The adapter captures each lifecycle event and serializes its asynchronous mutations per session, using the latest completed flow revision. It does not fall back to the deprecated synchronous task API. Mirroring remains opportunistic when the async surface is absent or a mutation fails.
 
-Service startup joins persisted mirror reconciliation before exposing the session manager or starting maintenance. Terminal persistence waits for mirror finalization, and service shutdown drains pending mirror and terminal work before disposing the manager and clearing the runtime. Synchronous plugin registration and session construction remain unchanged.
+Service startup joins persisted mirror reconciliation before exposing the session manager or starting maintenance. Terminal persistence waits for mirror finalization, and service shutdown drains pending mirror and terminal work before disposing the manager and clearing the runtime. Synchronous plugin registration and session construction remain unchanged. Published OpenClaw 2026.9.4 remains supported without the optional mirror; no synchronous or legacy mirror surface is consulted.
+
+The opt-in `tests/session-task-lifecycle-candidate.test.ts` exercises actual async SQLite mutations, delayed creation, terminal drainage, and persisted recovery against an independently installed OpenClaw source checkout. Candidate `b01c37d6692eb7ccec7a50c161b97a81e009a632` contains upstream #146495 (merge `5b792cf8f396ddc4c11f54d8d370d64a6354b2b2`). From the OCA checkout, set `OPENCLAW_TASKFLOW_CANDIDATE` to that source directory and `TSX_TSCONFIG_PATH` to its `tsconfig.json`, then run `node --import "$OPENCLAW_TASKFLOW_CANDIDATE/scripts/tsx.mjs" --test tests/session-task-lifecycle-candidate.test.ts` on each supported Node lane. The test uses temporary state and closes the candidate's workers; the regular verification suite skips this optional source gate.
 
 ### Harness Abstraction
 

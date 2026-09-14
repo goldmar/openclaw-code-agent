@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Migrate TaskFlow mirroring to `tasks.async.managedFlows`, preserving lifecycle event order and awaiting recovery, terminal persistence, and shutdown completion. Mirror support requires a host release providing the async managed-flow mutations; the dependency floor remains pending that release.
+- Migrate TaskFlow mirroring to `tasks.async.managedFlows`, preserving lifecycle event order and awaiting recovery, terminal persistence, and shutdown completion. Published OpenClaw 2026.9.4 remains supported with mirroring disabled; hosts providing the async managed-flow mutations enable mirroring through structural detection without changing dependency or compatibility metadata.
 
 ## [4.7.16] - 2026-09-10
 

@@ -65,7 +65,10 @@ export class SessionRuntimeBootstrapService {
     });
 
     if (options.startAfter) {
-      void options.startAfter.then(() => session.start()).catch((err) => {
+      void options.startAfter.then(() => {
+        // Shutdown may terminate a queued resume while its previous writer drains.
+        if (session.status === "starting") return session.start();
+      }).catch((err) => {
         console.error(`[SessionRuntimeBootstrap] deferred start threw for session ${session.id}:`, err);
       });
     } else {
