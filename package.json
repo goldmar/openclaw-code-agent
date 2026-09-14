@@ -64,7 +64,7 @@
     "hono": "4.13.7",
     "ip-address": "10.7.0",
     "qs": "6.16.0",
-    "zod": "4.5.4"
+    "zod": "4.6.2"
   },
   "devDependencies": {
     "@types/node": "^26.0.1",
