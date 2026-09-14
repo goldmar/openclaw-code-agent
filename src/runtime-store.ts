@@ -15,8 +15,9 @@ type TaskFlowRuntime = {
 };
 
 type RuntimeTasks = {
-  managedFlows?: TaskFlowRuntime;
-  flow?: TaskFlowRuntime;
+  async?: {
+    managedFlows?: TaskFlowRuntime;
+  };
   [key: string]: unknown;
 };
 
@@ -61,8 +62,6 @@ type RuntimeConfigStore = {
 };
 
 export interface PluginRuntimeStore {
-  /** @deprecated OpenClaw now exposes managed TaskFlow runtime at tasks.managedFlows. */
-  taskFlow?: TaskFlowRuntime;
   channel?: RuntimeChannel;
   config?: RuntimeConfigStore;
   tasks?: RuntimeTasks;
@@ -102,7 +101,7 @@ export function getPluginRuntime(): PluginRuntimeStore | undefined {
 }
 
 export function getManagedTaskFlowRuntime(): TaskFlowRuntime | undefined {
-  return pluginRuntime?.tasks?.managedFlows ?? pluginRuntime?.taskFlow;
+  return pluginRuntime?.tasks?.async?.managedFlows;
 }
 
 export function getRuntimeConfig(): unknown {

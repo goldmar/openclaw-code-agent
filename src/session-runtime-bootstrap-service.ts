@@ -18,10 +18,13 @@ type LaunchNotificationSession = Pick<
  * Owns runtime session hydration, listener wiring, startup, and launch notification.
  */
 export class SessionRuntimeBootstrapService {
+  private readonly pending = new Set<Promise<void>>();
+
   constructor(
     private readonly deps: {
       hydrateSpawnedSession: (session: Session, preparedLaunch: PreparedLaunch, config: SessionConfig) => void;
       markRunning: (session: Session) => void;
+      syncTaskMirror: (session: Session) => void;
       handleTerminal: (session: Session) => Promise<void>;
       handleTurnEnd: (session: Session, hadQuestion: boolean) => Promise<void>;
       formatLaunchWorkdirLabel: (session: Pick<Session, "workdir" | "worktreePath" | "originalWorkdir">) => string;
@@ -36,34 +39,36 @@ export class SessionRuntimeBootstrapService {
     options: SpawnOptions = {},
   ): Session {
     this.deps.hydrateSpawnedSession(session, preparedLaunch, config);
-    config.taskLifecycle?.create(session);
+    this.observeMirror(config.taskLifecycle?.create(session), session);
 
     session.on("statusChange", (_session: Session, newStatus: SessionStatus) => {
       if (newStatus === "running") {
         if (session.harnessSessionId) {
           this.deps.markRunning(session);
         }
-        config.taskLifecycle?.progress(session);
+        this.observeMirror(config.taskLifecycle?.progress(session), session);
       } else if (newStatus === "completed" || newStatus === "failed" || newStatus === "killed") {
-        config.taskLifecycle?.finalize(session);
-        void this.deps.handleTerminal(session).catch((err) => {
-          console.error(`[SessionRuntimeBootstrap] handleTerminal threw for session ${session.id}:`, err);
-        });
+        const finalized = config.taskLifecycle?.finalize(session);
+        const terminal = finalized
+          ? finalized.catch((err) => this.warnMirror(session, err)).then(() => this.deps.handleTerminal(session))
+          : this.deps.handleTerminal(session);
+        this.track(terminal, session, "handleTerminal");
       }
     });
 
     session.on("lifecycleChange", (_session: Session, _next: SessionLifecycle) => {
-      config.taskLifecycle?.progress(session);
+      this.observeMirror(config.taskLifecycle?.progress(session), session);
     });
 
     session.on("turnEnd", (_session: Session, hadQuestion: boolean) => {
-      void this.deps.handleTurnEnd(session, hadQuestion).catch((err) => {
-        console.error(`[SessionRuntimeBootstrap] handleTurnEnd threw for session ${session.id}:`, err);
-      });
+      this.track(this.deps.handleTurnEnd(session, hadQuestion), session, "handleTurnEnd");
     });
 
     if (options.startAfter) {
-      void options.startAfter.then(() => session.start()).catch((err) => {
+      void options.startAfter.then(() => {
+        // Shutdown may terminate a queued resume while its previous writer drains.
+        if (session.status === "starting") return session.start();
+      }).catch((err) => {
         console.error(`[SessionRuntimeBootstrap] deferred start threw for session ${session.id}:`, err);
       });
     } else {
@@ -76,6 +81,29 @@ export class SessionRuntimeBootstrapService {
     }
 
     return session;
+  }
+
+  async drain(): Promise<void> {
+    while (this.pending.size > 0) {
+      await Promise.all([...this.pending]);
+    }
+  }
+
+  private observeMirror(completion: void | Promise<void>, session: Session): void {
+    if (completion) {
+      this.track(completion.then(() => this.deps.syncTaskMirror(session)), session, "task mirror");
+    }
+  }
+
+  private warnMirror(session: Session, err: unknown): void {
+    console.warn(`[SessionRuntimeBootstrap] task mirror failed for session ${session.id}:`, err);
+  }
+
+  private track(operation: Promise<void>, session: Session, action: string): void {
+    const pending = operation.catch((err) => {
+      console.error(`[SessionRuntimeBootstrap] ${action} threw for session ${session.id}:`, err);
+    }).finally(() => this.pending.delete(pending));
+    this.pending.add(pending);
   }
 
   private buildLaunchNotification(session: LaunchNotificationSession): {

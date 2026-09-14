@@ -1,15 +1,13 @@
 import { truncateText } from "./format";
 import { getManagedTaskFlowRuntime } from "./runtime-store";
+import { KeyedOperationQueue } from "./keyed-operation-queue";
 import type { Session } from "./session";
 import type { KillReason, PersistedSessionInfo, SessionLifecycle, SessionStatus } from "./types";
 
 const CONTROLLER_ID = "openclaw-code-agent";
 const TITLE_MAX_LENGTH = 160;
 
-// Phase 1 intentionally uses only the released managed TaskFlow runtime.
-// Current OpenClaw SDKs can create/update/finalize the flow record, but they
-// do not expose plugin-owned child task run create/progress/finalize methods.
-// When that surface is absent, this adapter degrades to the no-op sink below.
+// Mirroring remains optional when the host has no async managed-flow surface.
 
 type TaskNotifyPolicy = "done_only" | "state_changes" | "silent";
 type ManagedTaskFlowStatus = "queued" | "running" | "waiting" | "blocked" | "succeeded" | "failed" | "cancelled" | "lost";
@@ -44,7 +42,7 @@ type BoundTaskFlowRuntime = {
     createdAt?: number;
     updatedAt?: number;
     endedAt?: number | null;
-  }) => ManagedTaskFlowRecord;
+  }) => Promise<ManagedTaskFlowRecord>;
   setWaiting?: (params: {
     flowId: string;
     expectedRevision: number;
@@ -53,7 +51,7 @@ type BoundTaskFlowRuntime = {
     waitJson?: Record<string, unknown> | null;
     blockedSummary?: string | null;
     updatedAt?: number;
-  }) => ManagedTaskFlowMutationResult;
+  }) => Promise<ManagedTaskFlowMutationResult>;
   resume?: (params: {
     flowId: string;
     expectedRevision: number;
@@ -61,14 +59,14 @@ type BoundTaskFlowRuntime = {
     currentStep?: string | null;
     stateJson?: Record<string, unknown> | null;
     updatedAt?: number;
-  }) => ManagedTaskFlowMutationResult;
+  }) => Promise<ManagedTaskFlowMutationResult>;
   finish?: (params: {
     flowId: string;
     expectedRevision: number;
     stateJson?: Record<string, unknown> | null;
     updatedAt?: number;
     endedAt?: number;
-  }) => ManagedTaskFlowMutationResult;
+  }) => Promise<ManagedTaskFlowMutationResult>;
   fail?: (params: {
     flowId: string;
     expectedRevision: number;
@@ -76,7 +74,7 @@ type BoundTaskFlowRuntime = {
     blockedSummary?: string | null;
     updatedAt?: number;
     endedAt?: number;
-  }) => ManagedTaskFlowMutationResult;
+  }) => Promise<ManagedTaskFlowMutationResult>;
 };
 
 type ToolContextLike = {
@@ -85,9 +83,28 @@ type ToolContextLike = {
 };
 
 export interface SessionTaskLifecycleSink {
-  create(session: Session): void;
-  progress(session: Session): void;
-  finalize(session: Session): void;
+  create(session: Session): void | Promise<void>;
+  progress(session: Session): void | Promise<void>;
+  finalize(session: Session): void | Promise<void>;
+}
+
+type SessionTaskEvent = Pick<Session,
+  "id" | "name" | "prompt" | "status" | "lifecycle" | "startedAt" | "completedAt" | "killReason" | "error"
+> & { occurredAt: number };
+
+function captureSessionTaskEvent(session: Session): SessionTaskEvent {
+  return {
+    id: session.id,
+    name: session.name,
+    prompt: session.prompt,
+    status: session.status,
+    lifecycle: session.lifecycle,
+    startedAt: session.startedAt,
+    completedAt: session.completedAt,
+    killReason: session.killReason,
+    error: session.error,
+    occurredAt: Date.now(),
+  };
 }
 
 const NOOP_SESSION_TASK_LIFECYCLE: SessionTaskLifecycleSink = {
@@ -179,7 +196,7 @@ function persistedWaitLifecycle(session: PersistedSessionInfo): SessionLifecycle
   return session.lifecycle;
 }
 
-function buildStateJson(session: Session, phase: "created" | "progress" | "terminal", summary: string): Record<string, unknown> {
+function buildStateJson(session: SessionTaskEvent, phase: "created" | "progress" | "terminal", summary: string): Record<string, unknown> {
   return {
     phase,
     integration: "phase-1-managed-task-flow",
@@ -212,45 +229,56 @@ function applyMutation(
 }
 
 class ManagedTaskFlowSessionTaskLifecycleSink implements SessionTaskLifecycleSink {
+  private readonly operations = new KeyedOperationQueue();
   private flow?: ManagedTaskFlowRecord;
   private finalized = false;
   private lastProgressKey?: string;
 
   constructor(private readonly taskFlow: Required<Pick<BoundTaskFlowRuntime, "createManaged" | "resume" | "setWaiting" | "finish" | "fail">>) {}
 
-  create(session: Session): void {
+  create(session: Session): Promise<void> {
+    const event = captureSessionTaskEvent(session);
+    return this.operations.enqueue(session.id, () => this.createEvent(session, event));
+  }
+
+  private async createEvent(session: Session, event: SessionTaskEvent): Promise<void> {
     if (this.flow || this.finalized) return;
     const summary = "Starting";
-    const now = Date.now();
+    const now = event.occurredAt;
     try {
-      this.flow = this.taskFlow.createManaged({
+      this.flow = await this.taskFlow.createManaged({
         controllerId: CONTROLLER_ID,
-        goal: buildSessionTaskTitle(session),
+        goal: buildSessionTaskTitle(event),
         status: "running",
         notifyPolicy: "silent",
         currentStep: summary,
-        stateJson: buildStateJson(session, "created", summary),
-        createdAt: session.startedAt,
+        stateJson: buildStateJson(event, "created", summary),
+        createdAt: event.startedAt,
         updatedAt: now,
       });
       session.taskFlowMirror = this.flow;
-      this.lastProgressKey = this.progressKey(session, summary);
+      this.lastProgressKey = this.progressKey(event, summary);
     } catch (err) {
       warnLifecycleError("create", err);
     }
   }
 
-  progress(session: Session): void {
+  progress(session: Session): Promise<void> {
+    const event = captureSessionTaskEvent(session);
+    return this.operations.enqueue(session.id, () => this.progressEvent(session, event));
+  }
+
+  private async progressEvent(session: Session, event: SessionTaskEvent): Promise<void> {
     if (!this.flow || this.finalized) return;
-    const summary = mapSessionLifecycleProgress(session);
+    const summary = mapSessionLifecycleProgress(event);
     if (!summary) return;
-    const key = this.progressKey(session, summary);
+    const key = this.progressKey(event, summary);
     if (key === this.lastProgressKey) return;
     try {
-      const stateJson = buildStateJson(session, "progress", summary);
-      const updatedAt = Date.now();
-      const mutation = isWaitingLifecycle(session)
-        ? this.taskFlow.setWaiting({
+      const stateJson = buildStateJson(event, "progress", summary);
+      const updatedAt = event.occurredAt;
+      const mutation = isWaitingLifecycle(event)
+        ? await this.taskFlow.setWaiting({
             flowId: this.flow.flowId,
             expectedRevision: this.flow.revision,
             currentStep: summary,
@@ -259,9 +287,8 @@ class ManagedTaskFlowSessionTaskLifecycleSink implements SessionTaskLifecycleSin
             blockedSummary: summary,
             updatedAt,
           })
-        // Current released SDKs use resume as the non-waiting update path too,
-        // so this intentionally carries running-state step/state changes.
-        : this.taskFlow.resume({
+        // Resume also carries non-waiting step/state changes.
+        : await this.taskFlow.resume({
             flowId: this.flow.flowId,
             expectedRevision: this.flow.revision,
             status: "running",
@@ -277,36 +304,41 @@ class ManagedTaskFlowSessionTaskLifecycleSink implements SessionTaskLifecycleSin
     }
   }
 
-  finalize(session: Session): void {
+  finalize(session: Session): Promise<void> {
+    const event = captureSessionTaskEvent(session);
+    return this.operations.enqueue(session.id, () => this.finalizeEvent(session, event));
+  }
+
+  private async finalizeEvent(session: Session, event: SessionTaskEvent): Promise<void> {
     if (!this.flow || this.finalized) return;
-    const status = mapSessionTaskTerminalStatus(session);
+    const status = mapSessionTaskTerminalStatus(event);
     if (!status) return;
     const summary = status === "succeeded"
       ? "Completed"
       : status === "failed"
         ? "Failed"
-        : terminalSummary(session.status, session.killReason);
+        : terminalSummary(event.status, event.killReason);
     try {
-      const endedAt = session.completedAt ?? Date.now();
+      const endedAt = event.completedAt ?? event.occurredAt;
       const stateJson = {
-        ...buildStateJson(session, "terminal", summary),
+        ...buildStateJson(event, "terminal", summary),
         terminalStatus: status,
-        terminalSummary: terminalSummary(session.status, session.killReason),
-        ...(session.status === "failed" && session.error ? { error: session.error } : {}),
+        terminalSummary: terminalSummary(event.status, event.killReason),
+        ...(event.status === "failed" && event.error ? { error: event.error } : {}),
       };
       const mutation = status === "succeeded"
-        ? this.taskFlow.finish({
+        ? await this.taskFlow.finish({
             flowId: this.flow.flowId,
             expectedRevision: this.flow.revision,
             stateJson,
             updatedAt: endedAt,
             endedAt,
           })
-        : this.taskFlow.fail({
+        : await this.taskFlow.fail({
             flowId: this.flow.flowId,
             expectedRevision: this.flow.revision,
             stateJson,
-            blockedSummary: terminalSummary(session.status, session.killReason),
+            blockedSummary: terminalSummary(event.status, event.killReason),
             updatedAt: endedAt,
             endedAt,
           });
@@ -362,9 +394,9 @@ function persistedTerminalSummary(session: Pick<PersistedSessionInfo, "status" |
   return terminalSummary(session.status, session.killReason ?? "unknown");
 }
 
-export function reconcilePersistedSessionTaskMirror(
+export async function reconcilePersistedSessionTaskMirror(
   session: PersistedSessionInfo,
-): ManagedTaskFlowRecord | undefined {
+): Promise<ManagedTaskFlowRecord | undefined> {
   const flow = session.taskFlowMirror ? { ...session.taskFlowMirror } : undefined;
   if (!flow || isTerminalMirrorStatus(flow.status)) return undefined;
   const taskFlow = bindTaskFlowRuntimeForSessionKey(persistedSessionKey(session));
@@ -376,7 +408,7 @@ export function reconcilePersistedSessionTaskMirror(
       status: session.status,
       lifecycle: persistedWaitLifecycle(session) ?? "suspended",
     }) ?? "Waiting";
-    const mutation = taskFlow.setWaiting({
+    const mutation = await taskFlow.setWaiting({
       flowId: flow.flowId,
       expectedRevision: flow.revision,
       currentStep: summary,
@@ -420,14 +452,14 @@ export function reconcilePersistedSessionTaskMirror(
     runtimeRecovery: session.runtimeRecovery,
   };
   const mutation = terminalStatus === "succeeded"
-    ? taskFlow.finish({
+    ? await taskFlow.finish({
         flowId: flow.flowId,
         expectedRevision: flow.revision,
         stateJson,
         updatedAt: endedAt,
         endedAt,
       })
-    : taskFlow.fail({
+    : await taskFlow.fail({
         flowId: flow.flowId,
         expectedRevision: flow.revision,
         stateJson,

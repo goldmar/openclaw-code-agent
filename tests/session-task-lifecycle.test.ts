@@ -24,30 +24,34 @@ function createSession(overrides: Partial<SessionConfig> = {}): Session {
   return new Session({ ...BASE_CONFIG, ...overrides }, "task-lifecycle");
 }
 
+function setManagedTaskFlow(taskFlow: unknown): void {
+  setPluginRuntime({ tasks: { async: { managedFlows: { fromToolContext: () => taskFlow } } } });
+}
+
 function createTaskFlowRecorder() {
   const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
   let revision = 1;
   const taskFlow = {
-    createManaged(params: Record<string, unknown>) {
+    async createManaged(params: Record<string, unknown>) {
       calls.push({ method: "createManaged", params });
       return { flowId: "flow-1", revision };
     },
-    resume(params: Record<string, unknown>) {
+    async resume(params: Record<string, unknown>) {
       calls.push({ method: "resume", params });
       revision += 1;
       return { applied: true, flow: { flowId: "flow-1", revision } };
     },
-    setWaiting(params: Record<string, unknown>) {
+    async setWaiting(params: Record<string, unknown>) {
       calls.push({ method: "setWaiting", params });
       revision += 1;
       return { applied: true, flow: { flowId: "flow-1", revision } };
     },
-    finish(params: Record<string, unknown>) {
+    async finish(params: Record<string, unknown>) {
       calls.push({ method: "finish", params });
       revision += 1;
       return { applied: true, flow: { flowId: "flow-1", revision } };
     },
-    fail(params: Record<string, unknown>) {
+    async fail(params: Record<string, unknown>) {
       calls.push({ method: "fail", params });
       revision += 1;
       return { applied: true, flow: { flowId: "flow-1", revision } };
@@ -56,8 +60,8 @@ function createTaskFlowRecorder() {
   return { calls, taskFlow };
 }
 
-describe("session task lifecycle phase-1 adapter", () => {
-  it("creates, updates, and finalizes a managed TaskFlow through the current SDK runtime", () => {
+describe("session task lifecycle async adapter", () => {
+  it("creates, updates, and finalizes a managed TaskFlow through the current SDK runtime", async () => {
     const { calls, taskFlow } = createTaskFlowRecorder();
     const ctx = {
       sessionKey: "agent:main:telegram:group:123",
@@ -66,10 +70,12 @@ describe("session task lifecycle phase-1 adapter", () => {
     let receivedCtx: unknown;
     setPluginRuntime({
       tasks: {
-        managedFlows: {
-          fromToolContext(input: unknown) {
-            receivedCtx = input;
-            return taskFlow;
+        async: {
+          managedFlows: {
+            fromToolContext(input: unknown) {
+              receivedCtx = input;
+              return taskFlow;
+            },
           },
         },
       },
@@ -78,14 +84,14 @@ describe("session task lifecycle phase-1 adapter", () => {
     const sink = resolveSessionTaskLifecycle(ctx);
     const session = createSession();
     session.startedAt = 100;
-    sink.create(session);
+    await sink.create(session);
     assert.deepEqual(session.taskFlowMirror, { flowId: "flow-1", revision: 1 });
     session.transition("running");
-    sink.progress(session);
+    await sink.progress(session);
     session.markAwaitingUserInput();
-    sink.progress(session);
+    await sink.progress(session);
     session.complete("done");
-    sink.finalize(session);
+    await sink.finalize(session);
     assert.deepEqual(session.taskFlowMirror, { flowId: "flow-1", revision: 4 });
 
     assert.equal(receivedCtx, ctx);
@@ -126,34 +132,138 @@ describe("session task lifecycle phase-1 adapter", () => {
     assert.equal((calls[3].params.stateJson as Record<string, unknown>).terminalStatus, "succeeded");
   });
 
-  it("falls back to the legacy TaskFlow runtime alias for older OpenClaw hosts", () => {
+  it("serializes delayed lifecycle writes with event snapshots and committed revisions", async (t) => {
     const { calls, taskFlow } = createTaskFlowRecorder();
-    setPluginRuntime({
-      taskFlow: {
-        fromToolContext() {
-          return taskFlow;
+    const methods = ["createManaged", "resume", "setWaiting", "finish"] as const;
+    const entered = methods.map(() => Promise.withResolvers<void>());
+    const releases = methods.map(() => Promise.withResolvers<void>());
+    setManagedTaskFlow({
+      ...taskFlow,
+      ...Object.fromEntries(methods.map((method, index) => [
+        method,
+        async (params: Record<string, unknown>) => {
+          entered[index].resolve();
+          await releases[index].promise;
+          return taskFlow[method](params);
         },
-      },
+      ])),
     });
+    let now = 100;
+    t.mock.method(Date, "now", () => now);
+    const session = createSession();
+    const sink = resolveSessionTaskLifecycle({ sessionKey: "agent:main:telegram:group:123" });
+    const completed: string[] = [];
+    const creation = Promise.resolve(sink.create(session)).then(() => { completed.push("create"); });
+    now = 200;
+    session.transition("running");
+    const running = Promise.resolve(sink.progress(session)).then(() => { completed.push("running"); });
+    now = 300;
+    session.markAwaitingUserInput();
+    const waiting = Promise.resolve(sink.progress(session)).then(() => { completed.push("waiting"); });
+    now = 400;
+    session.complete("done");
+    const terminal = Promise.resolve(sink.finalize(session)).then(() => { completed.push("terminal"); });
+    now = 999;
+
+    await entered[0].promise;
+    assert.equal(session.taskFlowMirror, undefined);
+    assert.deepEqual(completed, []);
+    const completions = [creation, running, waiting, terminal];
+    for (let index = 0; index < methods.length; index += 1) {
+      await entered[index].promise;
+      assert.equal(calls.length, index);
+      assert.equal(completed.length, index);
+      releases[index].resolve();
+      await completions[index];
+      assert.deepEqual(session.taskFlowMirror, { flowId: "flow-1", revision: index + 1 });
+    }
+
+    assert.deepEqual(completed, ["create", "running", "waiting", "terminal"]);
+    assert.deepEqual(calls.map(({ method }) => method), methods);
+    assert.deepEqual(calls.slice(1).map(({ params }) => params.expectedRevision), [1, 2, 3]);
+    assert.deepEqual(calls.map(({ params }) => params.updatedAt), [100, 200, 300, 400]);
+    assert.deepEqual(calls.map(({ params }) => {
+      const state = params.stateJson as Record<string, unknown>;
+      return [state.sessionStatus, state.sessionLifecycle, state.summary];
+    }), [
+      ["starting", "starting", "Starting"],
+      ["running", "active", "Running"],
+      ["running", "awaiting_user_input", "Waiting for input"],
+      ["completed", "terminal", "Completed"],
+    ]);
+    assert.equal(calls[3].params.endedAt, 400);
+  });
+
+  for (const method of ["createManaged", "resume", "finish"] as const) {
+    it(`keeps ${method} rejection optional and retries only on a later lifecycle call`, async (t) => {
+      const { calls, taskFlow } = createTaskFlowRecorder();
+      let attempts = 0;
+      setManagedTaskFlow({
+        ...taskFlow,
+        async [method](params: Record<string, unknown>) {
+          attempts += 1;
+          if (attempts === 1) throw new Error("mirror unavailable");
+          return taskFlow[method](params);
+        },
+      });
+      const sink = resolveSessionTaskLifecycle({ sessionKey: "agent:main:telegram:group:123" });
+      const session = createSession();
+      if (method !== "createManaged") await sink.create(session);
+      session.transition("running");
+      if (method === "finish") session.complete("done");
+      const invoke = () => method === "createManaged"
+        ? sink.create(session)
+        : method === "resume" ? sink.progress(session) : sink.finalize(session);
+      const previousMirror = session.taskFlowMirror;
+      const warnings: string[] = [];
+      t.mock.method(console, "warn", (message: unknown) => { warnings.push(String(message)); });
+
+      await assert.doesNotReject(async () => { await invoke(); });
+      assert.equal(attempts, 1);
+      assert.deepEqual(session.taskFlowMirror, previousMirror);
+      assert.deepEqual(warnings, [
+        `[SessionTaskLifecycle] ${method === "createManaged" ? "create" : method === "resume" ? "progress" : "finalize"} failed: mirror unavailable`,
+      ]);
+
+      await invoke();
+      assert.equal(attempts, 2);
+      assert.equal(calls.at(-1)?.method, method);
+      assert.deepEqual(session.taskFlowMirror, {
+        flowId: "flow-1",
+        revision: method === "createManaged" ? 1 : 2,
+      });
+      if (method !== "createManaged") assert.equal(calls.at(-1)?.params.expectedRevision, 1);
+    });
+  }
+
+  it("no-ops instead of falling back to synchronous or legacy managed flows", async () => {
+    const { calls, taskFlow } = createTaskFlowRecorder();
+    const legacy = { fromToolContext: () => taskFlow };
+    setPluginRuntime({ tasks: { managedFlows: legacy }, taskFlow: legacy });
 
     const sink = resolveSessionTaskLifecycle({
       sessionKey: "agent:main:telegram:group:123",
     });
-    sink.create(createSession());
+    const session = createSession();
+    await sink.create(session);
+    session.transition("running");
+    await sink.progress(session);
+    session.complete("done");
+    await sink.finalize(session);
 
-    assert.deepEqual(calls.map((call) => call.method), ["createManaged"]);
+    assert.deepEqual(calls, []);
+    assert.equal(session.taskFlowMirror, undefined);
   });
 
-  it("prefers tasks.managedFlows when both current and legacy TaskFlow runtimes exist", () => {
+  it("uses async managed flows when synchronous and legacy surfaces also exist", async () => {
     const current = createTaskFlowRecorder();
     const legacy = createTaskFlowRecorder();
     setPluginRuntime({
       tasks: {
-        managedFlows: {
-          fromToolContext() {
-            return current.taskFlow;
-          },
+        async: {
+          managedFlows: { fromToolContext: () => current.taskFlow },
         },
+        managedFlows: { fromToolContext: () => legacy.taskFlow },
       },
       taskFlow: {
         fromToolContext() {
@@ -165,36 +275,30 @@ describe("session task lifecycle phase-1 adapter", () => {
     const sink = resolveSessionTaskLifecycle({
       sessionKey: "agent:main:telegram:group:123",
     });
-    sink.create(createSession());
+    await sink.create(createSession());
 
     assert.deepEqual(current.calls.map((call) => call.method), ["createManaged"]);
     assert.deepEqual(legacy.calls, []);
   });
 
-  it("fails the managed TaskFlow for failed or cancelled terminal sessions", () => {
+  it("fails the managed TaskFlow for failed or cancelled terminal sessions", async () => {
     const { calls, taskFlow } = createTaskFlowRecorder();
-    setPluginRuntime({
-      taskFlow: {
-        fromToolContext() {
-          return taskFlow;
-        },
-      },
-    });
+    setManagedTaskFlow(taskFlow);
 
     const sink = resolveSessionTaskLifecycle({
       sessionKey: "agent:main:telegram:group:123",
     });
     const session = createSession();
-    sink.create(session);
+    await sink.create(session);
     session.kill("user");
-    sink.finalize(session);
+    await sink.finalize(session);
 
     assert.deepEqual(calls.map((call) => call.method), ["createManaged", "fail"]);
     assert.equal((calls[1].params.stateJson as Record<string, unknown>).terminalStatus, "cancelled");
     assert.equal(calls[1].params.blockedSummary, "Cancelled by user");
   });
 
-  it("warns once when terminal TaskFlow mutation is not applied and does not retry", () => {
+  it("warns once when terminal TaskFlow mutation is not applied and does not retry", async () => {
     const warnings: string[] = [];
     const originalWarn = console.warn;
     console.warn = (message?: unknown) => {
@@ -203,19 +307,19 @@ describe("session task lifecycle phase-1 adapter", () => {
     try {
       const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
       const taskFlow = {
-        createManaged(params: Record<string, unknown>) {
+        async createManaged(params: Record<string, unknown>) {
           calls.push({ method: "createManaged", params });
           return { flowId: "flow-1", revision: 1 };
         },
-        resume(params: Record<string, unknown>) {
+        async resume(params: Record<string, unknown>) {
           calls.push({ method: "resume", params });
           return { applied: true, flow: { flowId: "flow-1", revision: 2 } };
         },
-        setWaiting(params: Record<string, unknown>) {
+        async setWaiting(params: Record<string, unknown>) {
           calls.push({ method: "setWaiting", params });
           return { applied: true, flow: { flowId: "flow-1", revision: 2 } };
         },
-        finish(params: Record<string, unknown>) {
+        async finish(params: Record<string, unknown>) {
           calls.push({ method: "finish", params });
           return {
             applied: false,
@@ -223,28 +327,22 @@ describe("session task lifecycle phase-1 adapter", () => {
             current: { flowId: "flow-1", revision: 2, status: "running" },
           };
         },
-        fail(params: Record<string, unknown>) {
+        async fail(params: Record<string, unknown>) {
           calls.push({ method: "fail", params });
           return { applied: true, flow: { flowId: "flow-1", revision: 2 } };
         },
       };
-      setPluginRuntime({
-        taskFlow: {
-          fromToolContext() {
-            return taskFlow;
-          },
-        },
-      });
+      setManagedTaskFlow(taskFlow);
 
       const sink = resolveSessionTaskLifecycle({
         sessionKey: "agent:main:telegram:group:123",
       });
       const session = createSession();
-      sink.create(session);
+      await sink.create(session);
       session.transition("running");
       session.complete("done");
-      sink.finalize(session);
-      sink.finalize(session);
+      await sink.finalize(session);
+      await sink.finalize(session);
 
       assert.deepEqual(calls.map((call) => call.method), ["createManaged", "finish"]);
       assert.deepEqual(warnings.filter((warning) => warning.startsWith("[SessionTaskLifecycle]")), [
@@ -255,37 +353,39 @@ describe("session task lifecycle phase-1 adapter", () => {
     }
   });
 
-  it("no-ops safely when the current TaskFlow runtime is absent", () => {
+  it("no-ops safely when the current TaskFlow runtime is absent", async () => {
     setPluginRuntime({});
     const sink = resolveSessionTaskLifecycle({
       sessionKey: "agent:main:telegram:group:123",
     });
     const session = createSession();
 
-    assert.doesNotThrow(() => {
-      sink.create(session);
+    await assert.doesNotReject(async () => {
+      await sink.create(session);
       session.transition("running");
-      sink.progress(session);
+      await sink.progress(session);
       session.kill("user");
-      sink.finalize(session);
+      await sink.finalize(session);
     });
   });
 
-  it("ignores unreleased task run lifecycle shapes instead of depending on them", () => {
+  it("does not use task-run lifecycle methods as a managed-flow fallback", async () => {
     let fromToolContextCalled = false;
     setPluginRuntime({
       tasks: {
-        managedFlows: undefined,
-        runs: {
-          fromToolContext() {
-            fromToolContextCalled = true;
-            return {
-              lifecycle: {
-                create() {},
-                progress() {},
-                finalize() {},
-              },
-            };
+        async: {
+          managedFlows: undefined,
+          runs: {
+            fromToolContext() {
+              fromToolContextCalled = true;
+              return {
+                lifecycle: {
+                  create() {},
+                  progress() {},
+                  finalize() {},
+                },
+              };
+            },
           },
         },
       },
@@ -294,48 +394,46 @@ describe("session task lifecycle phase-1 adapter", () => {
     const sink = resolveSessionTaskLifecycle({
       sessionKey: "agent:main:telegram:group:123",
     });
-    sink.create(createSession());
+    await sink.create(createSession());
 
     assert.equal(fromToolContextCalled, false);
   });
 
-  it("does not call the host API without a bound session key", () => {
+  it("does not call the host API without a bound session key", async () => {
     let fromToolContextCalled = false;
     setPluginRuntime({
-      taskFlow: {
-        fromToolContext() {
-          fromToolContextCalled = true;
-          return createTaskFlowRecorder().taskFlow;
+      tasks: {
+        async: {
+          managedFlows: {
+            fromToolContext() {
+              fromToolContextCalled = true;
+              return createTaskFlowRecorder().taskFlow;
+            },
+          },
         },
       },
     });
 
     const sink = resolveSessionTaskLifecycle({});
-    sink.create(createSession());
+    await sink.create(createSession());
 
     assert.equal(fromToolContextCalled, false);
   });
 
-  it("de-dupes repeated progress for the same status and lifecycle state", () => {
+  it("de-dupes repeated progress for the same status and lifecycle state", async () => {
     const { calls, taskFlow } = createTaskFlowRecorder();
-    setPluginRuntime({
-      taskFlow: {
-        fromToolContext() {
-          return taskFlow;
-        },
-      },
-    });
+    setManagedTaskFlow(taskFlow);
 
     const sink = resolveSessionTaskLifecycle({
       sessionKey: "agent:main:telegram:group:123",
     });
     const session = createSession();
-    sink.create(session);
-    sink.progress(session);
-    sink.progress(session);
+    await sink.create(session);
+    await sink.progress(session);
+    await sink.progress(session);
     session.transition("running");
-    sink.progress(session);
-    sink.progress(session);
+    await sink.progress(session);
+    await sink.progress(session);
 
     assert.deepEqual(calls.map((call) => call.method), ["createManaged", "resume"]);
   });
@@ -363,15 +461,9 @@ describe("session task lifecycle phase-1 adapter", () => {
     );
   });
 
-  it("reconciles terminal persisted sessions to terminal managed TaskFlow mirrors", () => {
+  it("reconciles terminal persisted sessions to terminal managed TaskFlow mirrors", async () => {
     const { calls, taskFlow } = createTaskFlowRecorder();
-    setPluginRuntime({
-      taskFlow: {
-        fromToolContext() {
-          return taskFlow;
-        },
-      },
-    });
+    setManagedTaskFlow(taskFlow);
     const session = {
       sessionId: "session-terminal",
       harnessSessionId: "h-terminal",
@@ -387,7 +479,7 @@ describe("session task lifecycle phase-1 adapter", () => {
       taskFlowMirror: { flowId: "flow-1", revision: 7, status: "running" },
     } satisfies PersistedSessionInfo;
 
-    const reconciled = reconcilePersistedSessionTaskMirror(session);
+    const reconciled = await reconcilePersistedSessionTaskMirror(session);
 
     assert.equal(reconciled?.revision, 2);
     assert.deepEqual(calls.map((call) => call.method), ["finish"]);
@@ -396,15 +488,9 @@ describe("session task lifecycle phase-1 adapter", () => {
     assert.equal((calls[0].params.stateJson as Record<string, unknown>).terminalStatus, "succeeded");
   });
 
-  it("fails recovered non-live persisted mirrors with no actionable wait state", () => {
+  it("fails recovered non-live persisted mirrors with no actionable wait state", async () => {
     const { calls, taskFlow } = createTaskFlowRecorder();
-    setPluginRuntime({
-      taskFlow: {
-        fromToolContext() {
-          return taskFlow;
-        },
-      },
-    });
+    setManagedTaskFlow(taskFlow);
     const session = {
       sessionId: "session-lost",
       harnessSessionId: "h-lost",
@@ -429,7 +515,7 @@ describe("session task lifecycle phase-1 adapter", () => {
       taskFlowMirror: { flowId: "flow-1", revision: 3, status: "running" },
     } satisfies PersistedSessionInfo;
 
-    reconcilePersistedSessionTaskMirror(session);
+    await reconcilePersistedSessionTaskMirror(session);
 
     assert.deepEqual(calls.map((call) => call.method), ["fail"]);
     assert.equal(calls[0].params.expectedRevision, 3);
@@ -437,15 +523,9 @@ describe("session task lifecycle phase-1 adapter", () => {
     assert.equal((calls[0].params.stateJson as Record<string, unknown>).terminalStatus, "lost");
   });
 
-  it("keeps legitimate waiting persisted mirrors waiting during reconciliation", () => {
+  it("keeps legitimate waiting persisted mirrors waiting during reconciliation", async () => {
     const { calls, taskFlow } = createTaskFlowRecorder();
-    setPluginRuntime({
-      taskFlow: {
-        fromToolContext() {
-          return taskFlow;
-        },
-      },
-    });
+    setManagedTaskFlow(taskFlow);
     const session = {
       sessionId: "session-waiting",
       harnessSessionId: "h-waiting",
@@ -462,7 +542,7 @@ describe("session task lifecycle phase-1 adapter", () => {
       taskFlowMirror: { flowId: "flow-1", revision: 5, status: "running" },
     } satisfies PersistedSessionInfo;
 
-    reconcilePersistedSessionTaskMirror(session);
+    await reconcilePersistedSessionTaskMirror(session);
 
     assert.deepEqual(calls.map((call) => call.method), ["setWaiting"]);
     assert.equal(calls[0].params.expectedRevision, 5);

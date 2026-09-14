@@ -173,19 +173,24 @@ describe("agent_launch tool defaults", () => {
   it("attaches a managed TaskFlow lifecycle sink when the current runtime is available", async () => {
     let spawnConfig: Record<string, unknown> | undefined;
     const createManagedCalls: Record<string, unknown>[] = [];
+    let creation: void | Promise<void> = undefined;
     setPluginRuntime({
-      taskFlow: {
-        fromToolContext() {
-          return {
-            createManaged(params: Record<string, unknown>) {
-              createManagedCalls.push(params);
-              return { flowId: "flow-1", revision: 1 };
+      tasks: {
+        async: {
+          managedFlows: {
+            fromToolContext() {
+              return {
+                async createManaged(params: Record<string, unknown>) {
+                  createManagedCalls.push(params);
+                  return { flowId: "flow-1", revision: 1 };
+                },
+                async resume() { return { applied: true, flow: { flowId: "flow-1", revision: 2 } }; },
+                async setWaiting() { return { applied: true, flow: { flowId: "flow-1", revision: 2 } }; },
+                async finish() { return { applied: true, flow: { flowId: "flow-1", revision: 2 } }; },
+                async fail() { return { applied: true, flow: { flowId: "flow-1", revision: 2 } }; },
+              };
             },
-            resume() { return { applied: true, flow: { flowId: "flow-1", revision: 2 } }; },
-            setWaiting() { return { applied: true, flow: { flowId: "flow-1", revision: 2 } }; },
-            finish() { return { applied: true, flow: { flowId: "flow-1", revision: 2 } }; },
-            fail() { return { applied: true, flow: { flowId: "flow-1", revision: 2 } }; },
-          };
+          },
         },
       },
     });
@@ -203,7 +208,7 @@ describe("agent_launch tool defaults", () => {
           lifecycle: "starting",
           model: config.model,
         };
-        (config.taskLifecycle as { create: (session: unknown) => void }).create(session);
+        creation = (config.taskLifecycle as { create: (session: unknown) => void | Promise<void> }).create(session);
         return session;
       },
     } as any);
@@ -213,6 +218,7 @@ describe("agent_launch tool defaults", () => {
       sessionKey: "agent:main:telegram:group:123",
     } as any);
     await tool.execute("tool-id", { prompt: "Represent this session in native tasks" });
+    await creation;
 
     assert.ok(spawnConfig?.taskLifecycle);
     assert.equal(createManagedCalls.length, 1);
