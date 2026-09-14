@@ -154,6 +154,64 @@ describe("ClaudeCodeHarness", () => {
     assert.equal(messages.at(-1)?.type, "run_completed");
   });
 
+  it("preserves the pre-0.3.267 custom system prompt snapshot behavior", async () => {
+    let optionsSeen: Record<string, unknown> | undefined;
+    const { handle } = createQueryHandle([
+      { type: "result", subtype: "success", session_id: "claude-system-prompt", duration_ms: 0, total_cost_usd: 0, num_turns: 1, result: "done" },
+    ]);
+    const harness = new ClaudeCodeHarness({
+      startup: async ({ options } = {}) => {
+        optionsSeen = options;
+        return { query: () => handle as any };
+      },
+    });
+
+    await collectMessages(harness.launch({
+      prompt: "follow the custom prompt",
+      cwd: "/tmp/project",
+      systemPrompt: "custom system prompt",
+    }));
+
+    assert.deepEqual(optionsSeen?.systemPrompt, {
+      type: "custom",
+      prompt: "custom system prompt",
+      snapshot: false,
+    });
+  });
+
+  it("keeps plan-mode writes denied when the SDK routes them through canUseTool", async () => {
+    const startupOptions = Promise.withResolvers<Record<string, unknown>>();
+    const { handle } = createQueryHandle([
+      { type: "result", subtype: "success", session_id: "claude-plan-tools", duration_ms: 0, total_cost_usd: 0, num_turns: 1, result: "done" },
+    ]);
+    const harness = new ClaudeCodeHarness({
+      startup: async ({ options } = {}) => {
+        startupOptions.resolve(options ?? {});
+        return { query: () => handle as any };
+      },
+    });
+
+    const session = harness.launch({
+      prompt: "plan only",
+      cwd: "/tmp/project",
+      permissionMode: "plan",
+      canUseTool: async (_toolName, input) => ({ behavior: "allow", updatedInput: input }),
+    });
+    const options = await startupOptions.promise;
+    const canUseTool = options.canUseTool as ((toolName: string, input: Record<string, unknown>) => Promise<unknown>);
+
+    assert.deepEqual(await canUseTool("Write", { file_path: "/tmp/project/output.txt" }), {
+      behavior: "deny",
+      message: "Tool use is not allowed while reviewing a plan.",
+    });
+
+    await session.setPermissionMode?.("bypassPermissions");
+    assert.deepEqual(await canUseTool("Write", { file_path: "/tmp/project/output.txt" }), {
+      behavior: "allow",
+    });
+    await collectMessages(session);
+  });
+
   it("passes configured reasoning effort to Claude Code without inventing a default", async () => {
     const seenOptions: Record<string, unknown>[] = [];
     const { handle } = createQueryHandle([
