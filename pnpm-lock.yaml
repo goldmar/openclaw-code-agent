@@ -42,8 +42,8 @@ importers:
         specifier: 8.7.0
         version: 8.7.0(express@5.2.1)
       fast-uri:
-        specifier: 3.1.7
-        version: 3.1.7
+        specifier: 4.2.1
+        version: 4.2.1
       hono:
         specifier: 4.13.7
         version: 4.13.7
@@ -1164,6 +1164,9 @@ packages:
 
   fast-uri@3.1.7:
     resolution: {integrity: sha512-dOvZVzjdZdz7phd9v6jCbwxrBW3fK6n8Rc0CtdmM4bumzMnxywBYhuph6J819RRw/ku+rLbelwfMunktuzVVHg==}
+
+  fast-uri@4.2.1:
+    resolution: {integrity: sha512-TmHQgewjHtMq1E5QKA0tOE0yeYGQs25KZC/ziJpubRtWI15W92e6vPFydWOeZBVROSHBYw/QhD9d5OefdD6LDg==}
 
   fast-wrap-ansi@0.2.2:
     resolution: {integrity: sha512-7F2Fl+TjRSenLqlU3UjSH0iyqopqoZIu7eZVpEirP2g1GtWa2G/ecEmBdgz31+Mxr+ELclgg6sokpSFIQiZ02Q==}
@@ -2902,6 +2905,8 @@ snapshots:
       fast-string-truncated-width: 3.0.3
 
   fast-uri@3.1.7: {}
+
+  fast-uri@4.2.1: {}
 
   fast-wrap-ansi@0.2.2:
     dependencies:
