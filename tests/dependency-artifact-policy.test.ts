@@ -21,11 +21,11 @@ describe("dependency artifact policy", () => {
     assert.equal(packageJson.scripts?.["verify:npm-consumer"], "node scripts/verify-npm-consumer-install.mjs");
   });
 
-  it("keeps exact OpenClaw 2026.9.4 resolution in the generated pnpm lockfile", () => {
+  it("keeps exact OpenClaw 2026.9.5 resolution in the generated pnpm lockfile", () => {
     const lockfile = read("pnpm-lock.yaml");
 
-    assert.match(lockfile, /openclaw:\n\s+specifier: 2026\.9\.4\n\s+version: 2026\.9\.4/);
-    assert.match(lockfile, /'@openclaw\/ai@2026\.9\.4':/);
+    assert.match(lockfile, /openclaw:\n\s+specifier: 2026\.9\.5\n\s+version: 2026\.9\.5/);
+    assert.match(lockfile, /'@openclaw\/ai@2026\.9\.5':/);
   });
 
   it("rejects generated shrinkwrap engine metadata that drifts from package.json", (t) => {
