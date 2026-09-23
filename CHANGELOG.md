@@ -7,10 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
-
-- Default new Codex launches to the App Server catalog's canonical `gpt-6-sol` model at its supported `medium` reasoning default, and default new Claude Code launches to Claude Code's canonical `anthropic/claude-opus-5-5` model while preserving explicit model overrides and the existing harness-scoped allowlists.
-
 ## [4.7.17] - 2026-09-23
 
 ### Changed
@@ -19,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Verify plugin tools, commands, and service reload, Codex and Claude Code model restrictions, Start Plan and approval behavior, Telegram/topic callbacks, completion and cron/session wake delivery, runtime allowlists, disabled bundled-plugin boundaries, and managed worktree/auto-PR flows against OpenClaw `2026.9.5`.
 - Document live plugin reload, private completion handoffs, Telegram policy reload, scheduled-delivery correctness, Gateway V2 node transport boundaries, and the deprecated model-policy `allowsKey` surface without migrating host configuration.
 - Migrate TaskFlow mirroring to `tasks.async.managedFlows`, preserving lifecycle event order and awaiting recovery, terminal persistence, and shutdown completion. Older compatible hosts without the async managed-flow mutations keep mirroring disabled through structural detection.
+- Default new Codex launches to the App Server catalog's canonical `gpt-6-sol` model at its supported `medium` reasoning default, and default new Claude Code launches to Claude Code's canonical `anthropic/claude-opus-5-5` model while preserving explicit model overrides and the existing harness-scoped allowlists.
 
 ## [4.7.16] - 2026-09-10
 

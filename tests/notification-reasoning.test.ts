@@ -81,9 +81,12 @@ describe("notification reasoning visibility", () => {
   it("formats known Codex and Claude effort without altering provider IDs", () => {
     for (const [harness, model, effort] of [
       ["codex", "gpt-6-sol", "medium"],
+      ["codex", "gpt-6-sol", "max"],
       ["codex", "gpt-6-astra", "medium"],
       ["codex", "openai/gpt-5.6-sol", "max"],
       ["claude-code", "anthropic/claude-opus-5-5", "medium"],
+      ["claude-code", "anthropic/claude-opus-5-5", "xhigh"],
+      ["claude-code", "anthropic/claude-opus-5-5", "max"],
       ["claude-code", "anthropic/claude-sonnet-4-7", "high"],
       ["claude-code", "claude-opus-4-7", "xhigh"],
       ["codex", "openai/gpt-6-astra-2026-09-01", "max"],
