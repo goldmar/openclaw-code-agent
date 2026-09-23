@@ -37,7 +37,7 @@ describe("agent_launch tool defaults", () => {
 
     assert.ok(spawnConfig, "spawn should be called");
     assert.equal(spawnConfig?.harness, "codex");
-    assert.equal(spawnConfig?.model, "gpt-6-astra");
+    assert.equal(spawnConfig?.model, "gpt-6-sol");
     assert.equal(spawnConfig?.reasoningEffort, "medium");
     assert.equal(spawnConfig?.fastMode, undefined);
     assert.equal(spawnConfig?.codexApprovalPolicy, "never");
@@ -46,7 +46,7 @@ describe("agent_launch tool defaults", () => {
     assert.match(text, /Permission mode: plan/);
     assert.match(text, /Plan approval: delegate/);
     assert.match(text, /Worktree strategy: delegate/);
-    assert.match(text, /Model: gpt-6-astra/);
+    assert.match(text, /Model: gpt-6-sol/);
   });
 
   it("prefers an explicit model while keeping the plugin Codex approval policy", async () => {
@@ -404,7 +404,7 @@ describe("agent_launch tool defaults", () => {
     });
 
     assert.ok(spawnConfig, "spawn should be called");
-    assert.equal(spawnConfig?.model, "gpt-6-astra");
+    assert.equal(spawnConfig?.model, "gpt-6-sol");
     assert.equal(spawnConfig?.reasoningEffort, "medium");
     assert.equal(spawnConfig?.resumeSessionId, undefined);
     assert.equal(spawnConfig?.forkSession, false);
@@ -436,7 +436,7 @@ describe("agent_launch tool defaults", () => {
     });
 
     assert.ok(spawnConfig, "spawn should be called");
-    assert.equal(spawnConfig?.model, "gpt-6-astra");
+    assert.equal(spawnConfig?.model, "gpt-6-sol");
     assert.equal(spawnConfig?.reasoningEffort, "medium");
     assert.equal(spawnConfig?.resumeSessionId, "resolved-old-thread");
   });

@@ -118,7 +118,7 @@ describe("resolveAgentLaunchRequest", () => {
     }
   });
 
-  for (const model of ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]) {
+  for (const model of ["gpt-6-sol", "gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]) {
     it(`accepts ${model} under the built-in Codex allowlist`, () => {
       const result = resolveAgentLaunchRequest(
         {
@@ -165,7 +165,34 @@ describe("resolveAgentLaunchRequest", () => {
     assert.equal(result.kind, "resolved");
     if (result.kind === "resolved") {
       assert.equal(result.harness, "codex");
-      assert.equal(result.resolvedModel, "gpt-6-astra");
+      assert.equal(result.resolvedModel, "gpt-6-sol");
+    }
+  });
+
+  it("uses the canonical Claude Code default model when model is omitted", () => {
+    const result = resolveAgentLaunchRequest(
+      { prompt: "Use the configured Claude Code default" },
+      { workspaceDir: "/tmp", oneShotCliRun: true } as any,
+      {},
+    );
+
+    assert.equal(result.kind, "resolved");
+    if (result.kind === "resolved") {
+      assert.equal(result.harness, "claude-code");
+      assert.equal(result.resolvedModel, "anthropic/claude-opus-5-5");
+    }
+  });
+
+  it("prefers an explicit Claude Code model over the built-in default", () => {
+    const result = resolveAgentLaunchRequest(
+      { prompt: "Use Sonnet explicitly", harness: "claude-code", model: "anthropic/claude-sonnet-5" },
+      { workspaceDir: "/tmp", oneShotCliRun: true } as any,
+      {},
+    );
+
+    assert.equal(result.kind, "resolved");
+    if (result.kind === "resolved") {
+      assert.equal(result.resolvedModel, "anthropic/claude-sonnet-5");
     }
   });
 
@@ -270,7 +297,7 @@ describe("resolveAgentLaunchRequest", () => {
     );
     assert.equal(defaulted.kind, "resolved");
     if (defaulted.kind === "resolved") {
-      assert.equal(defaulted.resolvedModel, "gpt-6-astra");
+      assert.equal(defaulted.resolvedModel, "gpt-6-sol");
       assert.equal(defaulted.resolvedResumeId, persisted.harnessSessionId);
     }
 

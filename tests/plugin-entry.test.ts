@@ -394,7 +394,8 @@ describe("plugin entry source", () => {
       "max",
     ]);
     assert.equal(pluginManifest.configSchema?.properties?.harnesses?.additionalProperties?.properties?.fastMode?.type, "boolean");
-    assert.equal(pluginManifest.configSchema?.properties?.harnesses?.default?.codex?.defaultModel, "gpt-6-astra");
+    assert.equal(pluginManifest.configSchema?.properties?.harnesses?.default?.codex?.defaultModel, "gpt-6-sol");
+    assert.equal(pluginManifest.configSchema?.properties?.harnesses?.default?.["claude-code"]?.defaultModel, "anthropic/claude-opus-5-5");
     assert.equal(pluginManifest.configSchema?.properties?.harnesses?.default?.codex?.fastMode, false);
     assert.deepEqual(pluginManifest.configSchema?.properties?.harnesses?.default?.opencode, {});
     assert.match(pluginManifest.uiHints?.harnesses?.help ?? "", /harnesses\.codex\.fastMode=true/);

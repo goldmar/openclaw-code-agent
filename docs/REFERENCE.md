@@ -7,9 +7,9 @@ Canonical operator reference for `openclaw-code-agent`: install, configuration, 
 | Setting | Default |
 | --- | --- |
 | `defaultHarness` | `claude-code` |
-| `harnesses.claude-code.defaultModel` | `anthropic/claude-sonnet-4-7` |
-| `harnesses.codex.defaultModel` | `gpt-6-astra` |
-| `harnesses.codex.allowedModels` | `["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]` |
+| `harnesses.claude-code.defaultModel` | `anthropic/claude-opus-5-5` |
+| `harnesses.codex.defaultModel` | `gpt-6-sol` |
+| `harnesses.codex.allowedModels` | `["gpt-6-sol", "gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]` |
 | `harnesses.codex.reasoningEffort` | `medium` |
 | `harnesses.codex.fastMode` | `false` |
 | `harnesses.opencode.defaultModel` | unset; OpenCode uses its configured provider default |
@@ -92,11 +92,11 @@ For example, replace legacy global model restrictions with explicit restrictions
 {
   "harnesses": {
     "codex": {
-      "defaultModel": "gpt-6-astra",
-      "allowedModels": ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]
+      "defaultModel": "gpt-6-sol",
+      "allowedModels": ["gpt-6-sol", "gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]
     },
     "claude-code": {
-      "defaultModel": "anthropic/claude-sonnet-4-7",
+      "defaultModel": "anthropic/claude-opus-5-5",
       "allowedModels": ["sonnet", "opus"]
     }
   }
@@ -189,12 +189,12 @@ Add this under `plugins.entries["openclaw-code-agent"]` in `~/.openclaw/openclaw
     "fallbackChannel": "telegram|my-bot|123456789",
     "harnesses": {
       "claude-code": {
-        "defaultModel": "anthropic/claude-sonnet-4-7",
+        "defaultModel": "anthropic/claude-opus-5-5",
         "allowedModels": ["sonnet", "opus"]
       },
       "codex": {
-        "defaultModel": "gpt-6-astra",
-        "allowedModels": ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
+        "defaultModel": "gpt-6-sol",
+        "allowedModels": ["gpt-6-sol", "gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
         "reasoningEffort": "medium",
         "fastMode": false
       },

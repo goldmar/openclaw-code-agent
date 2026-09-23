@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Default new Codex launches to the App Server catalog's canonical `gpt-6-sol` model at its supported `medium` reasoning default, and default new Claude Code launches to Claude Code's canonical `anthropic/claude-opus-5-5` model while preserving explicit model overrides and the existing harness-scoped allowlists.
+
 ## [4.7.17] - 2026-09-23
 
 ### Changed
