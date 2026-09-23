@@ -65,7 +65,7 @@ function formatReasoningSuffix(input: {
     const basic = /^(?:claude-)?(?:opus|sonnet)(?:-4-[678]|-5(?:-5)?)?$/.test(model)
       || /^(?:claude-)?opus-4-5$/.test(model);
     if (!basic || !["low", "medium", "high", "xhigh", "max"].includes(effort)) return "";
-    if (effort === "xhigh" && !/^(?:claude-)?(?:opus-(?:4-[78]|5(?:-5)?)|sonnet-5)$/.test(model)) return "";
+    if (effort === "xhigh" && model !== "opus" && !/^(?:claude-)?(?:opus-(?:4-[78]|5(?:-5)?)|sonnet-5)$/.test(model)) return "";
     if (effort === "max" && /opus-4-5/.test(model)) return "";
   } else {
     // OpenCode currently does not forward OCA's reasoningEffort option.

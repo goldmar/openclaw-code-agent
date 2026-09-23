@@ -2,6 +2,7 @@ import { beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 
 import { setPluginConfig } from "../src/config";
+import { resolveGoalLaunchRequest } from "../src/goal-launch-resolution";
 import { setGoalController, setSessionManager } from "../src/singletons";
 import { makeGoalLaunchTool } from "../src/tools/goal-launch";
 
@@ -10,6 +11,19 @@ describe("agent_goal_launch tool", () => {
     setPluginConfig({});
     setSessionManager(null);
     setGoalController(null);
+  });
+
+  it("rejects a legacy provider-qualified Claude default before starting a goal", () => {
+    setPluginConfig({ harnesses: { "claude-code": {
+      defaultModel: "anthropic/claude-opus-5-5",
+      allowedModels: ["sonnet", "opus"],
+    } } });
+    const result = resolveGoalLaunchRequest(
+      { goal: "Check the default" },
+      { workspaceDir: "/tmp" } as any,
+    );
+    assert.equal(result.kind, "error");
+    if (result.kind === "error") assert.match(result.text, /not supported by Claude Code.*"opus" alias/);
   });
 
   it("uses harness-scoped defaults and origin routing when launching a goal task", async () => {

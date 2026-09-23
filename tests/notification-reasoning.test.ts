@@ -84,6 +84,8 @@ describe("notification reasoning visibility", () => {
       ["codex", "gpt-6-sol", "max"],
       ["codex", "gpt-6-astra", "medium"],
       ["codex", "openai/gpt-5.6-sol", "max"],
+      ["claude-code", "opus", "medium"],
+      ["claude-code", "opus", "xhigh"],
       ["claude-code", "anthropic/claude-opus-5-5", "medium"],
       ["claude-code", "anthropic/claude-opus-5-5", "xhigh"],
       ["claude-code", "anthropic/claude-opus-5-5", "max"],
