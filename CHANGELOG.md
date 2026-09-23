@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.7.18] - 2026-09-23
+
 ### Fixed
 
 - Use Claude Code's native `opus` alias for new default launches. Reject the unsupported `anthropic/claude-opus-5-5` spelling with an actionable error when it remains in explicit or legacy configuration; other model overrides remain unchanged.
@@ -754,7 +756,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Default Codex approval policy to `on-request`.
 - Raised the default session limit.
 
-[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.17...HEAD
+[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.18...HEAD
+[4.7.18]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.17...v4.7.18
 [4.7.17]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.16...v4.7.17
 [4.7.16]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.15...v4.7.16
 [4.7.15]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.14...v4.7.15
