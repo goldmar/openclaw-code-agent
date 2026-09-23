@@ -39,6 +39,7 @@ import {
   resolveReasoningEffortForHarness,
 } from "./config";
 import { getBackendConversationId } from "./session-backend-ref";
+import { isModelFormatSupportedForHarness } from "./harness-models";
 import {
   reduceSessionControlState,
   SESSION_STATUS_TRANSITIONS,
@@ -229,6 +230,11 @@ export class Session extends EventEmitter {
     this.prompt = config.prompt;
     this.workdir = config.workdir;
     this.model = config.model ?? resolveDefaultModelForHarness(this.harness.name);
+    // Internal launches can construct sessions without passing through a tool
+    // resolver. Fail before the Claude SDK receives this unsupported spelling.
+    if (this.harness.name === "claude-code" && !isModelFormatSupportedForHarness(this.harness.name, this.model)) {
+      throw new Error(`Model "${this.model}" is not supported by Claude Code. Use the "opus" alias instead.`);
+    }
     this.reasoningEffort = config.reasoningEffort ?? resolveReasoningEffortForHarness(this.harness.name);
     this.fastMode = this.harness.name === "codex"
       ? (config.fastMode ?? resolveFastModeForHarness(this.harness.name))

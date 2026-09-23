@@ -2,6 +2,8 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { ClaudeCodeHarness } from "../src/harness/claude-code";
+import { setPluginConfig } from "../src/config";
+import { resolveAgentLaunchRequest } from "../src/tools/agent-launch-resolution";
 import type { HarnessMessage } from "../src/harness/types";
 
 function createQueryHandle(messages: unknown[]) {
@@ -50,6 +52,30 @@ async function collectMessages(
 }
 
 describe("ClaudeCodeHarness", () => {
+  it("passes the omitted Claude model as the native opus alias to the SDK", async () => {
+    setPluginConfig({});
+    const launch = resolveAgentLaunchRequest(
+      { prompt: "check default" },
+      { workspaceDir: "/tmp", oneShotCliRun: true } as any,
+      {},
+    );
+    assert.equal(launch.kind, "resolved");
+    if (launch.kind !== "resolved") return;
+
+    let sdkOptions: Record<string, unknown> | undefined;
+    const { handle } = createQueryHandle([
+      { type: "result", subtype: "success", session_id: "claude-default-model", duration_ms: 0, total_cost_usd: 0, num_turns: 1, result: "done" },
+    ]);
+    const harness = new ClaudeCodeHarness({
+      startup: async ({ options } = {}) => {
+        sdkOptions = options;
+        return { query: () => handle as any };
+      },
+    });
+    await collectMessages(harness.launch({ prompt: "check default", cwd: "/tmp", model: launch.resolvedModel }));
+    assert.equal(sdkOptions?.model, "opus");
+  });
+
   it("treats Claude AskUserQuestion questions[] as a formal multi-question contract", async () => {
     const startupOptions = Promise.withResolvers<Record<string, unknown>>();
     const { handle } = createQueryHandle([

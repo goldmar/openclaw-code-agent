@@ -179,7 +179,7 @@ describe("resolveAgentLaunchRequest", () => {
     assert.equal(result.kind, "resolved");
     if (result.kind === "resolved") {
       assert.equal(result.harness, "claude-code");
-      assert.equal(result.resolvedModel, "anthropic/claude-opus-5-5");
+      assert.equal(result.resolvedModel, "opus");
     }
   });
 
@@ -194,6 +194,42 @@ describe("resolveAgentLaunchRequest", () => {
     if (result.kind === "resolved") {
       assert.equal(result.resolvedModel, "anthropic/claude-sonnet-5");
     }
+  });
+
+  it("preserves an explicit Claude Code alias", () => {
+    const result = resolveAgentLaunchRequest(
+      { prompt: "Use Sonnet", harness: "claude-code", model: "sonnet" },
+      { workspaceDir: "/tmp", oneShotCliRun: true } as any,
+      {},
+    );
+
+    assert.equal(result.kind, "resolved");
+    if (result.kind === "resolved") assert.equal(result.resolvedModel, "sonnet");
+  });
+
+  it("rejects the old provider-qualified Claude default even when its allowlist matches", () => {
+    setPluginConfig({ harnesses: { "claude-code": {
+      defaultModel: "anthropic/claude-opus-5-5",
+      allowedModels: ["sonnet", "opus"],
+    } } });
+    const result = resolveAgentLaunchRequest(
+      { prompt: "Use the configured default" },
+      { workspaceDir: "/tmp", oneShotCliRun: true } as any,
+      {},
+    );
+
+    assert.equal(result.kind, "error");
+    if (result.kind === "error") assert.match(result.text, /not supported by Claude Code.*"opus" alias/);
+  });
+
+  it("rejects an explicit provider-qualified Opus 5.5 override", () => {
+    const result = resolveAgentLaunchRequest(
+      { prompt: "Use Opus", model: "anthropic/claude-opus-5-5" },
+      { workspaceDir: "/tmp", oneShotCliRun: true } as any,
+      {},
+    );
+
+    assert.equal(result.kind, "error");
   });
 
   it("normalizes provider-prefixed Codex model ids before allowlist validation", () => {

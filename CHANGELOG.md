@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Use Claude Code's native `opus` alias for new default launches. Reject the unsupported `anthropic/claude-opus-5-5` spelling with an actionable error when it remains in explicit or legacy configuration; other model overrides remain unchanged.
+
 ## [4.7.17] - 2026-09-23
 
 ### Changed
