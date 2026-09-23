@@ -56,16 +56,16 @@ function formatReasoningSuffix(input: {
   if (!model) return "";
   if (input.harness === "codex") {
     // Exclude chat/non-reasoning variants and unknown custom provider models.
-    if (!/^(gpt-6-astra|gpt-5\.6-(sol|terra|luna)|gpt-5(?:\.[1-5])?(?:-codex(?:-max|-mini)?|-mini|-nano)?|o[134](?:-mini)?)$/.test(model)) return "";
+    if (!/^(gpt-6-(?:astra|sol)|gpt-5\.6-(sol|terra|luna)|gpt-5(?:\.[1-5])?(?:-codex(?:-max|-mini)?|-mini|-nano)?|o[134](?:-mini)?)$/.test(model)) return "";
     if (effort === "xhigh" && /^(gpt-5(?:-mini|-nano|-codex)?|gpt-5\.1(?:-codex(?:-mini)?)?|o[134](?:-mini)?)$/.test(model)) return "";
-    if (effort === "max" && !/^(gpt-6-astra|gpt-5\.6-(sol|terra|luna))$/.test(model)) return "";
+    if (effort === "max" && !/^(gpt-6-(?:astra|sol)|gpt-5\.6-(sol|terra|luna))$/.test(model)) return "";
   } else if (input.harness === "claude-code") {
     // Claude Code can silently downgrade unsupported effort levels. Omit those
     // rather than claim the requested level was applied by the backend.
-    const basic = /^(?:claude-)?(?:opus|sonnet)(?:-4-[678]|-5)?$/.test(model)
+    const basic = /^(?:claude-)?(?:opus|sonnet)(?:-4-[678]|-5(?:-5)?)?$/.test(model)
       || /^(?:claude-)?opus-4-5$/.test(model);
     if (!basic || !["low", "medium", "high", "xhigh", "max"].includes(effort)) return "";
-    if (effort === "xhigh" && !/^(?:claude-)?(?:opus-(?:4-[78]|5)|sonnet-5)$/.test(model)) return "";
+    if (effort === "xhigh" && !/^(?:claude-)?(?:opus-(?:4-[78]|5(?:-5)?)|sonnet-5)$/.test(model)) return "";
     if (effort === "max" && /opus-4-5/.test(model)) return "";
   } else {
     // OpenCode currently does not forward OCA's reasoningEffort option.

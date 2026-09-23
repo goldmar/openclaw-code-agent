@@ -83,7 +83,7 @@ Security automation should work like this:
 
 Dependency updates are admitted by reproducible artifacts and verification rather than publication age. The repository sets pnpm's `minimumReleaseAge` to `0` because the pinned pnpm version otherwise applies a one-day default; do not add age exclusions, strict mode, cooldowns, or another elapsed-time gate. Regenerate `pnpm-lock.yaml` with pnpm and `npm-shrinkwrap.json` through `pnpm generate:npm-shrinkwrap`; then require frozen installation, exact runtime-version validation, the full build/test suite, production audit, dependency review, packed-consumer installation, and exact-head review. Do not hand-edit either lock artifact or weaken those gates for a newly published package.
 
-OpenClaw 2026.9.4 supports Node 24.16.0+ on Node 24 and Node 26.1.0+ on Node 26; Node 22 and 25 are unsupported. CI covers both supported lines and release verification pins Node 24.16.0. Plugin-behavior review should also include:
+OpenClaw 2026.9.5 supports Node 24.16.0+ on Node 24 and Node 26.1.0+ on Node 26; Node 22 and 25 are unsupported. CI covers both supported lines and release verification pins Node 24.16.0. Plugin-behavior review should also include:
 
 ```bash
 pnpm check-plugin-security

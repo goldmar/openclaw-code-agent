@@ -248,7 +248,7 @@ export function resolveAgentLaunchRequest(
   if (canonicalResolvedModel && !isModelFormatSupportedForHarness(harness, canonicalResolvedModel)) {
     return {
       kind: "error",
-      text: `Error: Model "${rawResolvedModel}" is not supported for harness "${harness}". Use a bare Codex model id such as "gpt-6-astra" or "gpt-5.6-sol".`,
+      text: `Error: Model "${rawResolvedModel}" is not supported for harness "${harness}". Use a bare Codex model id such as "gpt-6-sol" or "gpt-6-astra".`,
     };
   }
 

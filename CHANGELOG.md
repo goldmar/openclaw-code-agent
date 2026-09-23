@@ -7,9 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.7.17] - 2026-09-23
+
 ### Changed
 
-- Migrate TaskFlow mirroring to `tasks.async.managedFlows`, preserving lifecycle event order and awaiting recovery, terminal persistence, and shutdown completion. Published OpenClaw 2026.9.4 remains supported with mirroring disabled; hosts providing the async managed-flow mutations enable mirroring through structural detection without changing dependency or compatibility metadata.
+- Target OpenClaw and Plugin SDK `2026.9.5`, requiring `>=2026.9.5` for managed installation while retaining the verified `2026.8.1` plugin API, Gateway, and peer compatibility floor.
+- Verify plugin tools, commands, and service reload, Codex and Claude Code model restrictions, Start Plan and approval behavior, Telegram/topic callbacks, completion and cron/session wake delivery, runtime allowlists, disabled bundled-plugin boundaries, and managed worktree/auto-PR flows against OpenClaw `2026.9.5`.
+- Document live plugin reload, private completion handoffs, Telegram policy reload, scheduled-delivery correctness, Gateway V2 node transport boundaries, and the deprecated model-policy `allowsKey` surface without migrating host configuration.
+- Migrate TaskFlow mirroring to `tasks.async.managedFlows`, preserving lifecycle event order and awaiting recovery, terminal persistence, and shutdown completion. Older compatible hosts without the async managed-flow mutations keep mirroring disabled through structural detection.
+- Default new Codex launches to the App Server catalog's canonical `gpt-6-sol` model at its supported `medium` reasoning default, and default new Claude Code launches to Claude Code's canonical `anthropic/claude-opus-5-5` model while preserving explicit model overrides and the existing harness-scoped allowlists.
 
 ## [4.7.16] - 2026-09-10
 
@@ -744,7 +750,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Default Codex approval policy to `on-request`.
 - Raised the default session limit.
 
-[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.16...HEAD
+[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.17...HEAD
+[4.7.17]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.16...v4.7.17
 [4.7.16]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.15...v4.7.16
 [4.7.15]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.14...v4.7.15
 [4.7.14]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.13...v4.7.14
