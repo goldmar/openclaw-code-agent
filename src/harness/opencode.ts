@@ -1,7 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { constants as fsConstants, accessSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, dirname, join, sep } from "node:path";
+import { delimiter, dirname, join, resolve, sep } from "node:path";
 import type {
   PendingInputAction,
   PendingInputQuestion,
@@ -129,10 +129,16 @@ function candidateSearchPaths(envPath: string | undefined): string[] {
   return [...new Set(expanded)];
 }
 
-function resolveCommandPath(command: string, envPath = process.env.PATH): string {
-  if (commandHasPathSeparator(command)) return command;
+/**
+ * Resolve the OpenCode executable to an absolute path against the Gateway's
+ * working directory. The server is spawned with `cwd: tmpdir()`, so a relative
+ * override such as `./bin/opencode` (or a relative PATH entry) would otherwise
+ * be looked up from the temp directory.
+ */
+export function resolveCommandPath(command: string, envPath = process.env.PATH, baseDir = process.cwd()): string {
+  if (commandHasPathSeparator(command)) return resolve(baseDir, command);
   for (const entry of candidateSearchPaths(envPath)) {
-    const candidate = join(entry, command);
+    const candidate = resolve(baseDir, entry, command);
     if (isExecutable(candidate)) return candidate;
   }
   return command;
