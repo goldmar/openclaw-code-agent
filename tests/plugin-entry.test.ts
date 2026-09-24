@@ -15,6 +15,39 @@ import { GoalController } from "../src/goal-controller";
 
 const rootDir = join(import.meta.dirname, "..");
 
+type PackageMetadata = {
+  version: string;
+  dependencies?: Record<string, string>;
+  devDependencies?: Record<string, string>;
+  peerDependencies?: Record<string, string>;
+  engines?: Record<string, string>;
+  openclaw?: {
+    install?: Record<string, string>;
+    compat?: Record<string, string>;
+    build?: Record<string, string>;
+  };
+};
+
+const packageMetadata = JSON.parse(readFileSync(join(rootDir, "package.json"), "utf8")) as PackageMetadata;
+/** Exact OpenClaw release the plugin is built and validated against. */
+const openclawTarget = packageMetadata.openclaw?.build?.openclawVersion ?? "";
+/** Oldest OpenClaw plugin API / Gateway the plugin still declares compatibility with. */
+const openclawFloor = packageMetadata.openclaw?.compat?.minGatewayVersion ?? "";
+const EXACT_OPENCLAW_VERSION = /^\d{4}\.\d+\.\d+$/u;
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+function compareOpenClawVersions(left: string, right: string): number {
+  const a = left.split(".").map(Number);
+  const b = right.split(".").map(Number);
+  for (let index = 0; index < 3; index += 1) {
+    if (a[index] !== b[index]) return (a[index] ?? 0) - (b[index] ?? 0);
+  }
+  return 0;
+}
+
 type CapturedTool = {
   factory: (ctx: Record<string, unknown>) => {
     execute: (id: string, params: unknown) => Promise<{ content?: Array<{ text?: string }> }> | { content?: Array<{ text?: string }> };
@@ -76,11 +109,12 @@ describe("plugin entry source", () => {
       validateReleaseMetadata();
     assert.equal(packageVersion, pluginVersion);
     assert.equal(pluginName, "Code Agent");
-    assert.equal(openclawVersion, "2026.9.6");
-    assert.equal(pluginSdkVersion, "2026.9.6");
+    assert.match(openclawTarget, EXACT_OPENCLAW_VERSION);
+    assert.equal(openclawVersion, openclawTarget);
+    assert.equal(pluginSdkVersion, openclawTarget);
     assert.equal(openclawInstall.npmSpec, "openclaw-code-agent");
     assert.equal(openclawInstall.defaultChoice, "npm");
-    assert.equal(openclawInstall.minHostVersion, ">=2026.9.6");
+    assert.equal(openclawInstall.minHostVersion, `>=${openclawTarget}`);
     assert.equal(nodeEngine, ">=24.16.0 <25 || >=26.1.0");
 
     const cliOutput = execFileSync("node", ["scripts/validate-release-metadata.mjs"], {
@@ -90,7 +124,7 @@ describe("plugin entry source", () => {
     assert.match(cliOutput, /openclaw\.plugin\.name=Code Agent/);
     assert.match(cliOutput, /openclaw\.install\.npmSpec=openclaw-code-agent/);
     assert.match(cliOutput, /openclaw\.install\.defaultChoice=npm/);
-    assert.match(cliOutput, /openclaw\.install\.minHostVersion=>=2026\.9\.6/);
+    assert.match(cliOutput, new RegExp(`openclaw\\.install\\.minHostVersion=>=${escapeRegExp(openclawTarget)}`));
     assert.match(cliOutput, /engines\.node=>=24\.16\.0 <25 \|\| >=26\.1\.0/);
   });
 
@@ -141,41 +175,42 @@ describe("plugin entry source", () => {
     assert.ok(pack[0]?.files?.some((file) => file.path === "npm-shrinkwrap.json"));
   });
 
-  it("requires OpenClaw 2026.9.6 for installation while retaining the verified 2026.8.1 API floor", () => {
-    const packageJson = JSON.parse(readFileSync(join(rootDir, "package.json"), "utf8")) as {
-      dependencies?: Record<string, string>;
-      openclaw?: {
-        install?: Record<string, string>;
-        compat?: Record<string, string>;
-        build?: Record<string, string>;
-      };
-      devDependencies?: Record<string, string>;
-      engines?: Record<string, string>;
-      peerDependencies?: Record<string, string>;
-    };
+  it("requires the built OpenClaw release for installation while retaining the declared API floor", () => {
+    const packageJson = packageMetadata;
 
-    assert.equal(packageJson.dependencies?.["@anthropic-ai/claude-agent-sdk"], "0.3.281");
+    assert.match(packageJson.dependencies?.["@anthropic-ai/claude-agent-sdk"] ?? "", /^\d+\.\d+\.\d+$/u);
     assert.equal(packageJson.openclaw?.install?.npmSpec, "openclaw-code-agent");
     assert.equal(packageJson.openclaw?.install?.defaultChoice, "npm");
-    assert.equal(packageJson.openclaw?.install?.minHostVersion, ">=2026.9.6");
-    assert.equal(packageJson.openclaw?.compat?.pluginApi, ">=2026.8.1");
-    assert.equal(packageJson.openclaw?.compat?.minGatewayVersion, "2026.8.1");
-    assert.equal(packageJson.openclaw?.build?.openclawVersion, "2026.9.6");
-    assert.equal(packageJson.openclaw?.build?.pluginSdkVersion, "2026.9.6");
-    assert.equal(packageJson.peerDependencies?.openclaw, ">=2026.8.1");
-    assert.equal(packageJson.devDependencies?.openclaw, "2026.9.6");
+    assert.match(openclawTarget, EXACT_OPENCLAW_VERSION);
+    assert.match(openclawFloor, EXACT_OPENCLAW_VERSION);
+    assert.ok(compareOpenClawVersions(openclawFloor, openclawTarget) <= 0, "compatibility floor must not exceed the build target");
+    assert.equal(packageJson.openclaw?.install?.minHostVersion, `>=${openclawTarget}`);
+    assert.equal(packageJson.openclaw?.compat?.pluginApi, `>=${openclawFloor}`);
+    assert.equal(packageJson.openclaw?.compat?.minGatewayVersion, openclawFloor);
+    assert.equal(packageJson.openclaw?.build?.openclawVersion, openclawTarget);
+    assert.equal(packageJson.openclaw?.build?.pluginSdkVersion, openclawTarget);
+    assert.equal(packageJson.peerDependencies?.openclaw, `>=${openclawFloor}`);
+    assert.equal(packageJson.devDependencies?.openclaw, openclawTarget);
     assert.equal(packageJson.engines?.node, ">=24.16.0 <25 || >=26.1.0");
     assert.doesNotMatch(readFileSync(join(rootDir, "pnpm-lock.yaml"), "utf8"), /uuid@9\.0\.1/);
   });
 
   it("accepts exact and range-shaped manual OpenClaw release targets", () => {
-    assert.equal(normalizeOpenClawTargetVersion("2026.9.6"), "2026.9.6");
-    assert.equal(normalizeOpenClawTargetVersion(">=2026.7.1"), "2026.7.1");
+    assert.equal(normalizeOpenClawTargetVersion(openclawTarget), openclawTarget);
+    assert.equal(normalizeOpenClawTargetVersion(`>=${openclawTarget}`), openclawTarget);
     assert.doesNotThrow(() =>
       validateReleaseMetadata({
-        openclawTargetVersion: "2026.9.6",
-        openclawCompatibilityFloor: ">=2026.8.1",
+        openclawTargetVersion: openclawTarget,
+        openclawCompatibilityFloor: `>=${openclawFloor}`,
       }),
+    );
+    assert.throws(
+      () => validateReleaseMetadata({ openclawTargetVersion: "2000.1.1" }),
+      /OpenClaw target mismatch/u,
+    );
+    assert.throws(
+      () => validateReleaseMetadata({ openclawCompatibilityFloor: "2000.1.1" }),
+      /OpenClaw pluginApi mismatch/u,
     );
     assert.throws(
       () => normalizeOpenClawTargetVersion("^2026.7.1"),

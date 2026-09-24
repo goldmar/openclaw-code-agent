@@ -5,11 +5,12 @@ import { fileURLToPath } from "node:url";
 
 const scriptPath = fileURLToPath(import.meta.url);
 const rootDir = dirname(dirname(scriptPath));
-const defaultOpenClawTargetVersion = "2026.9.6";
-const defaultOpenClawCompatibilityFloor = "2026.8.1";
 const exactOpenClawVersionPattern = /^\d{4}\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u;
 
-export function normalizeOpenClawTargetVersion(value = defaultOpenClawTargetVersion) {
+export function normalizeOpenClawTargetVersion(value) {
+  if (typeof value !== "string") {
+    throw new Error(`Invalid OpenClaw target: expected an exact version or >= range, got ${value}`);
+  }
   const normalized = value.startsWith(">=") ? value.slice(2) : value;
   if (!exactOpenClawVersionPattern.test(normalized)) {
     throw new Error(
@@ -36,17 +37,26 @@ export function loadReleaseMetadata(baseDir = rootDir) {
   };
 }
 
+/**
+ * Without explicit options, the OpenClaw target is the package's own build
+ * metadata and the compatibility floor is its declared minimum Gateway version.
+ * Every other pinned field must then agree with those two values, so a
+ * compatibility bump only edits package.json (and regenerates the lockfile).
+ * Release CI can still pass an explicit `--openclaw-target=` to pin the target.
+ */
+function resolveDefaultOpenClawVersions(baseDir) {
+  const packageJson = JSON.parse(readFileSync(join(baseDir, "package.json"), "utf8"));
+  return {
+    target: packageJson.openclaw?.build?.openclawVersion,
+    floor: packageJson.openclaw?.compat?.minGatewayVersion,
+  };
+}
+
 export function validateReleaseMetadata(options = {}) {
-  const {
-    releaseVersion,
-    openclawTargetVersion = defaultOpenClawTargetVersion,
-    openclawCompatibilityFloor = defaultOpenClawCompatibilityFloor,
-    baseDir = rootDir,
-  } = options;
-  const normalizedOpenClawTargetVersion = normalizeOpenClawTargetVersion(openclawTargetVersion);
-  const normalizedOpenClawCompatibilityFloor = normalizeOpenClawTargetVersion(
-    openclawCompatibilityFloor,
-  );
+  const { releaseVersion, baseDir = rootDir } = options;
+  const defaults = resolveDefaultOpenClawVersions(baseDir);
+  const openclawTargetVersion = options.openclawTargetVersion ?? defaults.target;
+  const openclawCompatibilityFloor = options.openclawCompatibilityFloor ?? defaults.floor;
   const {
     packageVersion,
     pluginVersion,
@@ -86,6 +96,14 @@ export function validateReleaseMetadata(options = {}) {
       `OpenClaw build metadata mismatch: openclawVersion=${openclawVersion}, pluginSdkVersion=${pluginSdkVersion}`,
     );
   }
+
+  if (!openclawCompatibilityFloor) {
+    throw new Error("Missing OpenClaw compatibility floor (openclaw.compat.minGatewayVersion) in package.json");
+  }
+  const normalizedOpenClawTargetVersion = normalizeOpenClawTargetVersion(openclawTargetVersion);
+  const normalizedOpenClawCompatibilityFloor = normalizeOpenClawTargetVersion(
+    openclawCompatibilityFloor,
+  );
 
   if (openclawVersion !== normalizedOpenClawTargetVersion) {
     throw new Error(
