@@ -8,8 +8,6 @@ import { createLogger } from "./logger";
 
 const log = createLogger("worktree-repo");
 
-let gitAvailableCache: Promise<boolean> | undefined;
-let ghCliAvailableCache: Promise<boolean> | undefined;
 
 async function getRepoRoot(dir: string): Promise<string | undefined> {
   try {
@@ -71,16 +69,63 @@ function primaryRepoRootFromDefaultLayout(worktreePath: string): string | undefi
   return fs.existsSync(join(root, ".git")) ? root : undefined;
 }
 
-/** Probe `git --version` once per process; concurrent callers share the probe. */
-export function isGitAvailable(): Promise<boolean> {
-  gitAvailableCache ??= runGit(["--version"], { timeout: 5_000 }).then(() => true, () => false);
-  return gitAvailableCache;
+/** How long a timed-out probe result is trusted before probing again. */
+const PROBE_TIMEOUT_RETRY_MS = 60_000;
+const PROBE_TIMEOUT_MS = 5_000;
+
+type ProbeState = { result: Promise<boolean>; expiresAt?: number };
+
+/**
+ * Cache a CLI availability probe. A success or a definitive failure (missing
+ * binary, non-zero exit) is cached for the process; a probe that timed out (for
+ * example a slow first start on a cold host) is cached only briefly, so a slow
+ * probe never disables the CLI for the whole process.
+ */
+function cachedProbe(
+  state: ProbeState | undefined,
+  run: () => Promise<unknown>,
+  now: () => number = Date.now,
+): ProbeState {
+  if (state && (state.expiresAt === undefined || now() < state.expiresAt)) return state;
+  const next: ProbeState = {
+    result: run().then(
+      () => true,
+      (err: unknown) => {
+        const failure = err as { killed?: boolean; signal?: unknown };
+        if (failure?.killed && failure.signal) next.expiresAt = now() + PROBE_TIMEOUT_RETRY_MS;
+        return false;
+      },
+    ),
+  };
+  return next;
 }
 
-/** Probe `gh --version` once per process; concurrent callers share the probe. */
+let gitProbe: ProbeState | undefined;
+let ghProbe: ProbeState | undefined;
+let ghAvailabilityOverride: boolean | undefined;
+
+/** Probe `git --version`; concurrent callers share the probe. */
+export function isGitAvailable(): Promise<boolean> {
+  gitProbe = cachedProbe(gitProbe, () => runGit(["--version"], { timeout: PROBE_TIMEOUT_MS }));
+  return gitProbe.result;
+}
+
+/** Probe `gh --version`; concurrent callers share the probe. */
 export function isGitHubCLIAvailable(): Promise<boolean> {
-  ghCliAvailableCache ??= runGh(["--version"], { timeout: 5_000 }).then(() => true, () => false);
-  return ghCliAvailableCache;
+  if (ghAvailabilityOverride !== undefined) return Promise.resolve(ghAvailabilityOverride);
+  ghProbe = cachedProbe(ghProbe, () => runGh(["--version"], { timeout: PROBE_TIMEOUT_MS }));
+  return ghProbe.result;
+}
+
+export const worktreeRepoInternals = { cachedProbe, PROBE_TIMEOUT_RETRY_MS };
+
+/**
+ * Test seam: pin GitHub CLI availability (`undefined` restores the real probe
+ * and clears its cache) so tests never depend on the host's `gh` binary.
+ */
+export function setGitHubCliAvailabilityForTests(value: boolean | undefined): void {
+  ghAvailabilityOverride = value;
+  ghProbe = undefined;
 }
 
 export async function isGitRepo(dir: string): Promise<boolean> {

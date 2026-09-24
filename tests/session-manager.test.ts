@@ -1,4 +1,4 @@
-import { describe, it, beforeEach, afterEach } from "node:test";
+import { describe, it, beforeEach, afterEach, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -15,6 +15,12 @@ import { SessionWorktreeDecisionService } from "../src/session-worktree-decision
 import { computeSessionMetrics } from "../src/session-metrics";
 import { registerHarness } from "../src/harness";
 import { createFakeHarness, TEST_RUNTIME_LLM, tick } from "./helpers";
+import { setGitHubCliAvailabilityForTests } from "../src/worktree-repo";
+
+// PR buttons depend on GitHub CLI availability; never probe the host `gh` (a slow
+// cold start used to hit the probe timeout and flip these tests).
+before(() => setGitHubCliAvailabilityForTests(true));
+after(() => setGitHubCliAvailabilityForTests(undefined));
 
 afterEach(() => {
   setPluginRuntime(undefined);

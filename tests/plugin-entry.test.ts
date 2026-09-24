@@ -1,4 +1,4 @@
-import { afterEach, describe, it, mock } from "node:test";
+import { afterEach, describe, it, mock, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -13,6 +13,12 @@ import { SessionManager } from "../src/session-manager";
 import { Session } from "../src/session";
 import { GoalController } from "../src/goal-controller";
 import { TEST_RUNTIME_LLM } from "./helpers";
+import { setGitHubCliAvailabilityForTests } from "../src/worktree-repo";
+
+// PR buttons depend on GitHub CLI availability; never probe the host `gh` (a slow
+// cold start used to hit the probe timeout and flip these tests).
+before(() => setGitHubCliAvailabilityForTests(true));
+after(() => setGitHubCliAvailabilityForTests(undefined));
 
 const rootDir = join(import.meta.dirname, "..");
 

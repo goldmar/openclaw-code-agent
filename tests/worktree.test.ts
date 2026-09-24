@@ -526,6 +526,51 @@ describe("syncWorktreePR", () => {
   });
 });
 
+describe("CLI availability probe cache", () => {
+  it("caches success and definitive failures, but retries a timed-out probe after a short delay", async () => {
+    const { worktreeRepoInternals } = await import("../src/worktree-repo.js");
+    const { cachedProbe, PROBE_TIMEOUT_RETRY_MS } = worktreeRepoInternals;
+    let now = 1_000;
+    const clock = () => now;
+    let runs = 0;
+
+    let state = cachedProbe(undefined, async () => { runs += 1; }, clock);
+    assert.equal(await state.result, true);
+    state = cachedProbe(state, async () => { runs += 1; }, clock);
+    assert.equal(runs, 1, "success is cached");
+
+    const missing = Object.assign(new Error("spawn gh ENOENT"), { code: "ENOENT" });
+    let failed = cachedProbe(undefined, async () => { runs += 1; throw missing; }, clock);
+    assert.equal(await failed.result, false);
+    now += PROBE_TIMEOUT_RETRY_MS * 10;
+    failed = cachedProbe(failed, async () => { runs += 1; }, clock);
+    assert.equal(await failed.result, false, "a missing binary stays unavailable");
+    assert.equal(runs, 2);
+
+    const timedOut = Object.assign(new Error("timed out"), { killed: true, signal: "SIGTERM" });
+    let slow = cachedProbe(undefined, async () => { runs += 1; throw timedOut; }, clock);
+    assert.equal(await slow.result, false);
+    slow = cachedProbe(slow, async () => { runs += 1; }, clock);
+    assert.equal(runs, 3, "a timeout is cached briefly");
+    now += PROBE_TIMEOUT_RETRY_MS;
+    slow = cachedProbe(slow, async () => { runs += 1; }, clock);
+    assert.equal(await slow.result, true, "the probe is retried after the timeout window");
+    assert.equal(runs, 4);
+  });
+
+  it("lets tests pin GitHub CLI availability without running gh", async () => {
+    const { isGitHubCLIAvailable, setGitHubCliAvailabilityForTests } = await import("../src/worktree-repo.js");
+    try {
+      setGitHubCliAvailabilityForTests(false);
+      assert.equal(await isGitHubCLIAvailable(), false);
+      setGitHubCliAvailabilityForTests(true);
+      assert.equal(await isGitHubCLIAvailable(), true);
+    } finally {
+      setGitHubCliAvailabilityForTests(undefined);
+    }
+  });
+});
+
 describe("worktree base dir and PR target resolution", () => {
   it("defaults the worktree base dir to <repo>/.worktrees", async () => {
     const { getWorktreeBaseDir } = await import("../src/worktree.js");
