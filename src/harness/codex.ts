@@ -398,7 +398,11 @@ export class CodexHarness implements AgentHarness {
       const usage = tokenUsageFromBreakdown(params.tokenUsage.last);
       if (!usage) return;
       const cost = estimateCodexApiCostUsd({ model: effectiveModel ?? threadModel, serviceTier, usage });
-      if (cost !== undefined) cumulativeCostUsd += cost;
+      if (cost === undefined) return;
+      cumulativeCostUsd += cost;
+      // Report the running total so status views show spend mid-turn (for
+      // example while the turn waits on an approval or a question).
+      queue.enqueue({ type: "usage_updated", usage: { costUsd: cumulativeCostUsd } });
     };
 
     client.setCloseHandler?.(() => {

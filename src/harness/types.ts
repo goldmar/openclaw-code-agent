@@ -37,6 +37,12 @@ export interface HarnessModelUsage {
 
 /** Usage snapshot reported by a backend. Fields are replaced, not summed. */
 export interface HarnessUsage {
+  /**
+   * Running cost so far, on the same basis as `HarnessResult.total_cost_usd`
+   * (which replaces it when the turn completes). Lets status views show spend
+   * while a turn is still open, for example while it waits for user input.
+   */
+  costUsd?: number;
   models?: HarnessModelUsage[];
   contextTokens?: number;
   contextWindow?: number;

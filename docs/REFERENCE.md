@@ -192,7 +192,7 @@ Codex harness details:
 - Reasoning effort: `harnesses.codex.reasoningEffort` (or the launch `reasoning_effort`) is sent when set. There is no built-in default; unset means Codex's own configured/model default. When the session's own Codex connection (`model/list`) says a model does not support the requested effort, the harness omits it rather than failing the turn and reports that to the session, so status lines only show efforts that are actually applied (before the first Codex session loads the catalog, only `low`/`medium`/`high` are shown).
 - `harnesses.codex.fastMode: true` requests `serviceTier: "priority"` (Codex's fast tier). API-key cost estimates apply the fast multiplier only when Codex reports `priority` as the thread's effective tier.
 - Resume sends `excludeTurns: true`; OCA never hydrates full thread history.
-- Cost: for API-key accounts the harness prices each `thread/tokenUsage/updated` response (`last` breakdown) against the built-in price table. ChatGPT-login sessions stay unpriced.
+- Cost: for API-key accounts the harness prices each `thread/tokenUsage/updated` response (`last` breakdown) against the built-in price table and reports the running total as each response is priced, so the session cost is current mid-turn (for example while an approval is pending). ChatGPT-login sessions stay unpriced.
 - Permissions and approvals are configured per operator, identically for every OCA permission mode (OCA permission modes only select Codex's `plan` vs `default` collaboration mode):
   - `harnesses.codex.permissionProfile`: `:danger-full-access` (no sandbox), `:workspace`, or `:read-only`. Sent as the thread `permissions` profile.
   - `harnesses.codex.approvalPolicy`: `never` (no Codex prompts), `on-request` (Codex asks before escalating out of the sandbox), or `untrusted`.
@@ -231,7 +231,7 @@ Claude Code harness details:
 - A turn that ends while SDK background tasks (for example background shells) are still running keeps the session running until the tasks finish; the follow-up turn Claude Code starts to report them ends the session normally.
 - If `ExitPlanMode` carries neither `plan` nor `planFilePath`, the pending plan is read from the last file this session wrote to a Claude plans directory (never another session's plan), so `agent_output` and the approval prompt still show it.
 - A forked session reports only its own cost: the parent's usage at fork time is subtracted from the SDK totals. When the parent is no longer live, only its total cost is known, so the fork's per-model breakdown is omitted rather than showing the parent's tokens.
-- Cost is the sum of the SDK's per-model `modelUsage` entries. `agent_output` shows the per-model cost and tokens, the context window fill from `getContextUsage()`, and the number of live background tasks. OCA enables session-state events and records permission denials as diagnostics.
+- Cost is the sum of the SDK's per-model `modelUsage` entries. `agent_output` shows the per-model cost and tokens, the context window fill from `getContextUsage()`, and the number of live background tasks. The SDK reports cost only in each turn's `result`, so the session cost updates when a turn completes, not while it waits on a question (the only mid-turn cost read, `usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET`, is marked unstable and is not used). OCA enables session-state events and records permission denials as diagnostics.
 - File rewind (`rewindFiles`) is not used: it needs SDK file checkpointing, the checkpoints live only in the Claude Code process, and OCA already isolates edits in git worktrees that can be reset or discarded with git.
 
 OpenCode harness details:
@@ -244,7 +244,7 @@ OpenCode harness details:
 - Plan mode prompts OpenCode's built-in `plan` agent, which denies edits except its own plan files. OCA adds a session overlay that also denies `bash` and access outside the project, because the plan agent otherwise relies on instructions to keep shell commands read-only. After approval, prompts use the `build` agent; OpenCode then adds its own build-switch reminder. The plugin still owns the plan approval gate. (OpenCode's own `plan_exit` tool is only available in the OpenCode CLI.)
 - Multi-question requests are answered with one answer list per question. Multi-select questions accept several comma-separated labels or option numbers in a text reply.
 - The session's reasoning effort is sent as the prompt's `variant`. OpenCode ignores variant names that the model does not define.
-- Turn duration, per-model tokens, and cost come from OpenCode's assistant message records; the session record's cost is used when available.
+- Turn duration, per-model tokens, and cost come from OpenCode's assistant message records; the session record's cost is used when available. The running cost is refreshed after each finished step and when a question or permission request opens, so `agent_output` shows the spend so far mid-turn. OpenCode prices a step only when it finishes: a step that is blocked on a question (for example the first step of a turn that opens with a question) adds its cost after the answer.
 - `OPENCLAW_OPENCODE_COMMAND` can override the `opencode` executable. If `OPENCODE_SERVER_PASSWORD` is set, the plugin sends Basic Auth using `OPENCODE_SERVER_USERNAME` or `opencode` as the default username.
 - Native OpenCode worktrees are out of scope for this integration. Worktree strategies use the plugin-managed worktree path.
 - OpenCode does not emit structured OpenClaw plan artifacts in this version, so `nativePlanArtifacts` is false.
@@ -558,6 +558,9 @@ Terminate a running session or mark it complete.
 | --- | --- | --- | --- |
 | `session` | `string` | Yes | Name or internal ID |
 | `reason` | `killed \| completed` | No | Omit to stop; use `completed` to mark success |
+| `forget` | `boolean` | No | Delete a finished session's stored record instead of stopping it |
+
+`forget=true` (chat: `/agent_kill --forget <session>`) removes a finished session from `code-agent-sessions.json` together with its action tokens, maintenance schedules, and output transcript, so it no longer appears in `agent_sessions` and cannot be resumed. It is refused while the session is running or suspended (stop or dismiss it with `agent_kill` first), while its worktree is not settled (a pending decision, a merge or PR in progress, an open PR, or a worktree directory still on disk; merge, open a PR, dismiss, or run `agent_worktree_cleanup` first), while its final notification is still being delivered, and while a running goal loop owns it. Without `forget`, finished sessions are still removed by `maxPersistedSessions` retention.
 
 ### `agent_stats`
 
@@ -675,7 +678,7 @@ Have oca handle the failing dashboard smoke test.
 | `/agent_sessions` | List sessions |
 | `/agent_output` | Show recent output |
 | `/agent_respond` | Send a reply |
-| `/agent_kill` | Stop a session |
+| `/agent_kill` | Stop a session; `--forget <session>` deletes a finished session's record |
 | `/agent_stats` | Show aggregate metrics |
 | `/agent_policy` | Set or inspect repository worktree/PR policy |
 | `/agent_goal` | Launch an explicit goal task |
@@ -813,17 +816,23 @@ Inspect or update repo integration policy.
 | --- | --- | --- | --- |
 | `workdir` | `string` | No | Repo directory; defaults to the current tool workspace |
 | `policy` | `pr-required \| pr-allowed \| never-pr \| manual` | No | Sets the policy for the repo |
-| `reset` | `boolean` | No | Removes a stored policy |
+| `reset` | `boolean` | No | Removes a stored policy; also works after the repo directory was deleted |
 | `list` | `boolean` | No | Lists stored repo policies |
 | `cleanup` | `boolean` | No | Removes stored repo policies whose repo root no longer exists on disk |
 
 Examples:
 
 - `agent_repo_policy(workdir="/repo", policy="pr-required")`
+- `agent_repo_policy(workdir="/deleted/repo", reset=true)`
 - `agent_repo_policy(cleanup=true)`
 - `/agent_policy pr-allowed`
+- `/agent_policy reset /deleted/repo`
 - `/agent_policy cleanup`
 - `/agent_policy list`
+
+A stored policy is keyed by the repo root and its normalized remote URL. Reset and the status view first resolve the live repo; when the directory is gone or is no longer a git checkout, they match stored records by repo path (a path inside the deleted repo matches its deepest stored root) or by a stored key. Resetting a live repo also removes records left at the same path under an older remote. `list` marks policies whose repo directory is missing with `(missing)`.
+
+Stored policies for deleted repos are not pruned automatically: a directory can be missing only for a while (an unmounted volume, or a re-clone at the same path, which reuses the policy), and the records are small. Remove them with `reset` or `cleanup`, which also drops records whose repo now resolves to a different remote.
 
 ## Troubleshooting
 

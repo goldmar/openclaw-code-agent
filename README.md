@@ -236,7 +236,7 @@ Most users interact in chat. The tool surface is for OpenClaw agents and advance
 | `agent_send_plan_offer` | Send a message with Start Plan / Dismiss buttons for a plan-gated follow-up |
 | `agent_output` | Read buffered session output |
 | `agent_sessions` | List active and recent sessions |
-| `agent_kill` | Stop or mark a session completed |
+| `agent_kill` | Stop or mark a session completed, or forget a finished one |
 | `agent_stats` | Show aggregate usage and cost |
 | `agent_merge` | Merge a worktree branch back to base |
 | `agent_pr` | Create or update a GitHub PR |

@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { createHash } from "crypto";
 import { Session } from "./session";
 import { pluginConfig, getDefaultHarnessName } from "./config";
@@ -89,6 +90,7 @@ import {
   resolveAllowedWorktreeActions,
   resolveRepoIdentity,
   seededRepoPolicy,
+  findStoredRepoPolicies,
   type RepoPolicyResolution,
 } from "./repo-policy";
 import { createLogger } from "./logger";
@@ -100,6 +102,44 @@ const TERMINAL_STATUSES = new Set<SessionStatus>(["completed", "failed", "killed
 const KILLABLE_STATUSES = new Set<SessionStatus>(["starting", "running"]);
 const WAITING_EVENT_DEBOUNCE_MS = 5_000;
 
+
+export type ForgetSessionResult =
+  | { ok: true; name: string; id?: string }
+  | {
+    ok: false;
+    reason: "not_found" | "running" | "not_persisted" | "suspended" | "worktree" | "delivery";
+    detail?: string;
+    name?: string;
+    id?: string;
+  };
+
+const UNSETTLED_WORKTREE_STATES = new Set<string>([
+  "provisioned",
+  "pending_decision",
+  "merge_conflict_resolving",
+  "merge_in_progress",
+  "pr_in_progress",
+  "pr_open",
+]);
+
+/** Why a persisted session must be kept, or undefined when it can be forgotten. */
+function forgetBlockReason(
+  session: PersistedSessionInfo,
+): { reason: "running" | "suspended" | "worktree" | "delivery"; detail?: string } | undefined {
+  if (!TERMINAL_STATUSES.has(session.status) || session.runtimeState === "live") return { reason: "running" };
+  if (session.lifecycle && session.lifecycle !== "terminal") return { reason: "suspended", detail: session.lifecycle };
+  const worktreeState = session.worktreeLifecycle?.state ?? session.worktreeState;
+  if (session.pendingWorktreeDecisionSince || (worktreeState && UNSETTLED_WORKTREE_STATES.has(worktreeState))) {
+    return { reason: "worktree", detail: worktreeState ?? "pending_decision" };
+  }
+  if (session.worktreePath && existsSync(session.worktreePath)) {
+    return { reason: "worktree", detail: `worktree still on disk at ${session.worktreePath}` };
+  }
+  if (session.deliveryState === "notifying" || session.deliveryState === "wake_pending") {
+    return { reason: "delivery", detail: session.deliveryState };
+  }
+  return undefined;
+}
 
 type LaunchOptions = {
   notifyLaunch?: boolean;
@@ -883,9 +923,31 @@ export class SessionManager {
     return this.store.setRepoPolicy(createRepoPolicyRecord(identity, policy, "stored"));
   }
 
-  async resetRepoPolicy(workdir: string): Promise<boolean> {
-    const identity = await resolveRepoIdentity(workdir);
-    return identity ? this.store.resetRepoPolicy(identity.key) : false;
+  /**
+   * Stored policy records for a repo whose identity cannot be resolved (the
+   * directory was deleted or is no longer a git checkout). Matches by stored
+   * key or repo root; see `findStoredRepoPolicies`.
+   */
+  findStoredRepoPolicies(ref: string): RepoPolicyRecord[] {
+    return findStoredRepoPolicies(this.store.listRepoPolicies(), ref);
+  }
+
+  /**
+   * Remove the stored policy for a repo. `ref` is a workdir, a stored repo
+   * root, or a stored key. When the repo still resolves, its live key is
+   * removed together with records left at the same root under an older
+   * remote; when it no longer resolves (for example the directory was
+   * deleted), records are matched from what they store.
+   */
+  async resetRepoPolicy(ref: string): Promise<RepoPolicyRecord[]> {
+    const identity = await resolveRepoIdentity(ref);
+    const records = this.store.listRepoPolicies();
+    const keys = identity
+      ? records
+        .filter((record) => record.key === identity.key || record.repoRoot === identity.repoRoot)
+        .map((record) => record.key)
+      : findStoredRepoPolicies(records, ref).map((record) => record.key);
+    return this.store.removeRepoPolicies(keys);
   }
 
   async requestRepoPolicyForLaunch(args: RepoPolicyLaunchArgs): Promise<string> {
@@ -1954,6 +2016,42 @@ export class SessionManager {
     }
     session.kill(reason ?? "user");
     return true;
+  }
+
+  /**
+   * Remove a finished session's stored record, its schedules, action tokens,
+   * and output file. Refuses anything that could still need the record: a
+   * running or suspended (resumable) session, an unsettled worktree (a
+   * worktree directory still on disk, a pending decision, a merge or PR in
+   * progress, or an open PR), or an undelivered terminal notification.
+   * Callers check goal-loop ownership (see `getForgetSessionText`).
+   */
+  forgetSession(ref: string): ForgetSessionResult {
+    const active = this.resolve(ref);
+    if (active && !TERMINAL_STATUSES.has(active.status)) {
+      return { ok: false, reason: "running", name: active.name, id: active.id };
+    }
+    const persisted = active ? this.store.getPersistedSession(active.id) : this.getPersistedSession(ref);
+    if (!persisted) {
+      return active
+        ? { ok: false, reason: "not_persisted", name: active.name, id: active.id }
+        : { ok: false, reason: "not_found" };
+    }
+    const id = persisted.sessionId ?? persisted.harnessSessionId;
+    const blocked = forgetBlockReason(persisted);
+    if (blocked) return { ok: false, reason: blocked.reason, detail: blocked.detail, name: persisted.name, id };
+
+    if (active) {
+      this.registry.remove(active.id, "forget");
+      this.clearWaitingTimestampsForSession(active.id);
+      this.lastTurnCompleteMarkers.delete(active.id);
+      this.lastTerminalWakeMarkers.delete(active.id);
+    }
+    const removed = this.store.removePersistedSession(persisted.sessionId ?? ref);
+    if (!removed) return { ok: false, reason: "not_found" };
+    if (removed.sessionId) this.store.deleteActionTokensForSession(removed.sessionId);
+    this.maintenance.forgetPersistedSession(removed);
+    return { ok: true, name: removed.name, id };
   }
 
   /** Kill all active sessions. Per-session retry timers are cleared in onSessionTerminal. */

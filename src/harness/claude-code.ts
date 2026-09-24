@@ -584,6 +584,10 @@ export class ClaudeCodeHarness implements AgentHarness {
       void task.then(forget, forget);
     };
 
+    // No running cost is reported mid-turn: the SDK prices a turn only in its
+    // `result` message, and the only mid-turn cost read is
+    // `usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET`, which the SDK
+    // marks unstable. Session cost therefore updates when each turn completes.
     const publishContextUsage = (q: Query): void => {
       track((async () => {
         try {

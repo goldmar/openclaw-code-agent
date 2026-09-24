@@ -889,8 +889,15 @@ describe("CodexHarness cost accounting (B8)", () => {
       accountType: "apiKey",
       tokenUsage: [breakdown(1_000, 400, 200, 100, 90), breakdown(500, 0, 0, 50, 40)],
     });
-    const result = runCompleted(await collectMessages(launch(client, { model: "gpt-5.6-sol" })));
+    const messages = await collectMessages(launch(client, { model: "gpt-5.6-sol" }));
+    const result = runCompleted(messages);
     assert.equal(result?.data.total_cost_usd, 0.00776);
+    // The running total is reported as each response is priced, before the turn completes.
+    const running = messages.flatMap((message) => message.type === "usage_updated" && message.usage.costUsd !== undefined ? [message.usage.costUsd] : []);
+    assert.equal(running.length, 2);
+    assert.ok(running[0]! > 0 && running[0]! < running[1]!);
+    assert.equal(running[1], 0.00776);
+    assert.ok(messages.findIndex((message) => message.type === "usage_updated") < messages.findIndex((message) => message.type === "run_completed"));
   });
 
   it("applies the fast multiplier only when Codex reports the priority tier", async () => {

@@ -143,4 +143,26 @@ describe("/agent_policy command", () => {
     assert.doesNotMatch(result.text, /pr-required/);
     assert.doesNotMatch(result.text, /pr-allowed/);
   });
+
+  it("resets a stored policy by path and shows stored policies for a deleted repo", async () => {
+    const resetRefs: string[] = [];
+    setSessionManager({
+      resetRepoPolicy: (ref: string) => {
+        resetRefs.push(ref);
+        return ref === "/gone/repo" ? [{ ...policyRecord("never-pr"), key: "/gone/repo|https://github.com/x/y", repoRoot: "/gone/repo" }] : [];
+      },
+      resolveRepoPolicy: () => ({ source: "none", provider: "unsupported", prAvailable: false }),
+      findStoredRepoPolicies: (ref: string) => ref === "/gone/repo" ? [{ ...policyRecord("never-pr"), repoRoot: "/gone/repo" }] : [],
+    } as any);
+    const handler = captureHandler();
+
+    assert.equal((await handler({ args: "reset \"/gone/repo\"", workspaceDir: "/elsewhere" })).text, "Repo policy reset for /gone/repo.");
+    assert.match((await handler({ args: "reset", workspaceDir: "/elsewhere" })).text, /No stored repo policy found for \/elsewhere\. List stored policies with \/agent_policy list/);
+    assert.deepEqual(resetRefs, ["/gone/repo", "/elsewhere"]);
+
+    const status = await handler({ workspaceDir: "/gone/repo" });
+    assert.match(status.text, /Repo policy: never-pr/);
+    assert.match(status.text, /Remove with \/agent_policy reset "\/gone\/repo", or remove every policy whose repo is gone with \/agent_policy cleanup\./);
+    assert.equal((await handler({ workspaceDir: "/not-a-repo" })).text, "No git repository found for /not-a-repo.");
+  });
 });

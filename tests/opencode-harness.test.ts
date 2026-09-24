@@ -955,6 +955,44 @@ describe("OpenCodeHarness pending input", () => {
     await collector.done;
   });
 
+  it("reports the running session cost after a finished step and while a question is pending", async () => {
+    const mock = new MockOpenCodeServer();
+    mock.autoComplete = false;
+    mock.sessionCost = 0;
+    const { stream, collector } = launch(harnessFor(mock));
+    stream.push("ask");
+    await waitFor(() => mock.requestsTo("POST", /\/prompt_async$/).length === 1, "prompt");
+    const runningCosts = (): number[] => collector.messages.flatMap((message) => (
+      message.type === "usage_updated" && message.usage.costUsd !== undefined ? [message.usage.costUsd] : []
+    ));
+
+    // A finished step (OpenCode prices a step only once it finishes).
+    mock.session("ses_1").messages.push({
+      info: { role: "assistant", id: "msg_step_1", providerID: "openai", modelID: "gpt-5.5", cost: 0.02, tokens: { total: 900, input: 800, output: 100, reasoning: 0, cache: { read: 0, write: 0 } }, time: { created: 1_000, completed: 1_500 } },
+      parts: [{ type: "step-finish", cost: 0.02 }],
+    });
+    mock.sessionCost = 0.02;
+    mock.emit({ type: "message.part.updated", properties: { sessionID: "ses_1", part: { type: "step-finish", cost: 0.02 } } });
+    await collector.until(() => runningCosts().length === 1, "running cost after step");
+    assert.equal(runningCosts()[0], 0.02);
+    const update = collector.messages.find((message) => message.type === "usage_updated");
+    assert.equal(update?.type === "usage_updated" ? update.usage.models?.[0]?.costUsd : undefined, 0.02);
+
+    // The next step asks a question; the cost so far is refreshed for the waiting view.
+    mock.sessionCost = 0.03;
+    mock.emit({ type: "question.asked", properties: { id: "que_cost", sessionID: "ses_1", question: "Which branch?" } });
+    await collector.until(() => runningCosts().length === 2, "running cost at question");
+    assert.equal(runningCosts()[1], 0.03);
+
+    mock.emit({ type: "question.replied", properties: { sessionID: "ses_1", requestID: "que_cost" } });
+    mock.sessionCost = 0.25;
+    mock.completeTurn("ses_1");
+    await collector.untilCompletions(1);
+    assert.equal(collector.completions()[0]?.data.total_cost_usd, 0.25);
+    stream.end();
+    await collector.done;
+  });
+
   it("submits structured option values for single questions", async () => {
     const mock = new MockOpenCodeServer();
     mock.autoComplete = false;

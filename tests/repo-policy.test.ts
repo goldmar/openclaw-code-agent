@@ -2,7 +2,7 @@ import "./test-env";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -17,6 +17,8 @@ import { setPluginConfig } from "../src/config";
 import { SessionWorktreeActionService } from "../src/session-worktree-action-service";
 import { createWorktree, getBranchName } from "../src/worktree";
 import { SessionManager } from "../src/session-manager";
+import { makeAgentRepoPolicyTool } from "../src/tools/agent-repo-policy";
+import { setSessionManager } from "../src/singletons";
 import { CALLBACK_NAMESPACE } from "../src/interactive-constants";
 
 function git(cwd: string, ...args: string[]): string {
@@ -696,6 +698,79 @@ describe("repo policy resolution", () => {
       sm?.dispose();
       rmSync(repoDir, { recursive: true, force: true });
       rmSync(secondRepoDir, { recursive: true, force: true });
+      rmSync(storeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("finds and resets stored policies after the repo directory is deleted", async () => {
+    const parentDir = mkdtempSync(join(tmpdir(), "openclaw-policy-deleted-"));
+    const repoDir = join(parentDir, "repo");
+    const otherDir = join(parentDir, "other");
+    const storeDir = mkdtempSync(join(tmpdir(), "openclaw-policy-deleted-store-"));
+    let sm: SessionManager | undefined;
+    try {
+      for (const dir of [repoDir, otherDir]) {
+        mkdirSync(dir);
+        git(dir, "init", "-b", "main");
+        git(dir, "remote", "add", "origin", `https://github.com/example/${dir === repoDir ? "repo" : "other"}.git`);
+      }
+      sm = new SessionManager(1, 10, { store: { indexPath: join(storeDir, "sessions.json") } });
+      setSessionManager(sm);
+      const record = await sm.setRepoPolicy(repoDir, "never-pr");
+      const otherRecord = await sm.setRepoPolicy(otherDir, "manual");
+      assert.ok(record && otherRecord);
+      assert.match(record.key, /\|https:\/\/github\.com\/example\/repo$/);
+      rmSync(repoDir, { recursive: true, force: true });
+      rmSync(otherDir, { recursive: true, force: true });
+
+      const tool = makeAgentRepoPolicyTool();
+      const text = async (params: Record<string, unknown>): Promise<string> => (
+        ((await tool.execute("id", params)).content[0] as { text: string }).text
+      );
+
+      const status = await text({ workdir: repoDir });
+      assert.match(status, /Repo policy: never-pr/);
+      assert.match(status, /kept until reset/);
+      assert.match(status, /reset=true/);
+      assert.match(await text({ list: true }), new RegExp(`never-pr \\| github \\| ${repoDir} \\(missing\\)`));
+
+      // A path inside the deleted repo resolves to the deepest stored root.
+      assert.deepEqual(sm.findStoredRepoPolicies(join(repoDir, "src", "deep")).map((entry) => entry.key), [record.key]);
+      assert.match(await text({ workdir: repoDir, reset: true }), new RegExp(`Repo policy reset for ${repoDir}\\.`));
+      assert.deepEqual(sm.listRepoPolicies().map((entry) => entry.key), [otherRecord.key]);
+      assert.match(await text({ workdir: repoDir, reset: true }), /No stored repo policy found/);
+
+      // A stored key from the listing also works.
+      assert.match(await text({ workdir: otherRecord.key, reset: true }), /Removed:\nmanual \| github/);
+      assert.deepEqual(sm.listRepoPolicies(), []);
+    } finally {
+      setSessionManager(null);
+      sm?.dispose();
+      rmSync(parentDir, { recursive: true, force: true });
+      rmSync(storeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reset also drops records left at the same repo root under an older remote", async () => {
+    const repoDir = mkdtempSync(join(tmpdir(), "openclaw-policy-reset-remote-"));
+    const storeDir = mkdtempSync(join(tmpdir(), "openclaw-policy-reset-remote-store-"));
+    let sm: SessionManager | undefined;
+    try {
+      git(repoDir, "init", "-b", "main");
+      git(repoDir, "remote", "add", "origin", "https://github.com/example/old.git");
+      sm = new SessionManager(1, 10, { store: { indexPath: join(storeDir, "sessions.json") } });
+      const oldRecord = await sm.setRepoPolicy(repoDir, "never-pr");
+      git(repoDir, "remote", "set-url", "origin", "https://github.com/example/new.git");
+      const newRecord = await sm.setRepoPolicy(repoDir, "manual");
+      assert.ok(oldRecord && newRecord);
+      assert.notEqual(oldRecord.key, newRecord.key);
+
+      const removed = await sm.resetRepoPolicy(repoDir);
+      assert.deepEqual(removed.map((entry) => entry.key).sort(), [oldRecord.key, newRecord.key].sort());
+      assert.deepEqual(sm.listRepoPolicies(), []);
+    } finally {
+      sm?.dispose();
+      rmSync(repoDir, { recursive: true, force: true });
       rmSync(storeDir, { recursive: true, force: true });
     }
   });
