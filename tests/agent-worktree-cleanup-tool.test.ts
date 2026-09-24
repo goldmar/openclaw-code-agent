@@ -134,7 +134,9 @@ describe("agent_worktree_status", () => {
       const text = (result.content[0] as { text: string }).text;
 
       assert.match(text, /Session: released-status \[s-released-status\]/);
-      assert.match(text, /Lifecycle:\s*needs decision/);
+      assert.match(text, /^  Lifecycle: needs decision$/m);
+      assert.match(text, /^  Branch:    \S/m);
+      assert.match(text, /^  Cleanup:   \S/m);
       assert.match(text, /Derived:\s*released/);
       assert.match(text, /Cleanup:\s*safe now/);
       assert.match(text, /Ahead:\s*\d+ ahead \/ \d+ behind/);
@@ -182,7 +184,7 @@ describe("agent_worktree_status", () => {
       const result = await tool.execute("tool-id", { session: "conflict-resolving-status" });
       const text = (result.content[0] as { text: string }).text;
 
-      assert.match(text, /Lifecycle:\s*conflict resolving/);
+      assert.match(text, /^  Lifecycle: conflict resolving$/m);
       assert.match(text, /Cleanup:\s*preserve/);
       assert.match(text, /Reasons:\s*conflict resolving, still has unique content/);
     } finally {
@@ -270,7 +272,7 @@ describe("agent_worktree_status", () => {
       const statusResult = await statusTool.execute("tool-id", { session: "pr-314-comments-cleanup" });
       const statusText = (statusResult.content[0] as { text: string }).text;
 
-      assert.match(statusText, /Lifecycle:\s*pr open/);
+      assert.match(statusText, /^  Lifecycle: pr open$/m);
       assert.match(statusText, /Derived:\s*released/);
       assert.match(statusText, /Cleanup:\s*safe now/);
       assert.match(statusText, /PR:\s*https:\/\/github\.com\/goldmar\/openclaw-code-agent\/pull\/315 \(closed\)/);
