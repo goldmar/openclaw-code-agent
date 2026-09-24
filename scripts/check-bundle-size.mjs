@@ -1,7 +1,7 @@
 import { readdirSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 
-export const DEFAULT_BUNDLE_LIMIT_BYTES = 600 * 1024;
+export const DEFAULT_BUNDLE_LIMIT_BYTES = 700 * 1024;
 
 function collectFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {

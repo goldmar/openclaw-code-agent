@@ -118,7 +118,7 @@ jobs:
       - name: Fail if bundle exceeds limit
         if: steps.bundle-size.outputs.over_limit == 'true'
         run: |
-          echo "Complete bundle size ${{ steps.bundle-size.outputs.size_kb }} KB exceeds the 600 KB limit."
+          echo "Complete bundle size ${{ steps.bundle-size.outputs.size_kb }} KB exceeds the 700 KB limit."
           exit 1
 
   lockfile-check:

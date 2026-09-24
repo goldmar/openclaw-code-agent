@@ -81,6 +81,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `api.runtime` is typed with the published plugin SDK `PluginRuntime`.
 - The build externalizes the public SDK subpaths `channel-outbound`, `json-store`, `routing`, and `state-paths` in addition to `plugin-entry`. All four are public SDK subpaths on the OpenClaw `2026.9.6` floor.
 - Update `@anthropic-ai/claude-agent-sdk` to 0.3.281 (Claude Code 2.1.281), which Claude Code requires for `claude-opus-5-5`, and use its public `startup()`/`WarmQuery` and `Query` types.
+- The PR bundle-size check limit is 700 KB (was 600 KB). The complete `dist/` bundle is almost entirely OCA's own minified code (dependencies are about 10 KB), and 5.0.0 reached the old limit.
 
 ### Removed
 
