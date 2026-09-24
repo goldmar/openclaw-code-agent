@@ -523,15 +523,6 @@ export class SessionStore {
     return getNextSessionOutputCleanupAt(now, SESSION_OUTPUT_MAX_AGE_MS, this.getReferencedOutputPaths());
   }
 
-  /** Remove one persisted session record and its indexes. Returns the removed record. */
-  removePersistedSession(ref: string): PersistedSessionInfo | undefined {
-    const entry = this.getPersistedSession(ref);
-    if (!entry) return undefined;
-    this.removePersistedIndexes(entry);
-    this.saveIndex();
-    return entry;
-  }
-
   /** Enforce max persisted session retention by evicting oldest records and indexes. */
   evictOldestPersisted(maxPersistedSessions: number): PersistedSessionInfo[] {
     const all = this.listPersistedSessions();

@@ -558,9 +558,8 @@ Terminate a running session or mark it complete.
 | --- | --- | --- | --- |
 | `session` | `string` | Yes | Name or internal ID |
 | `reason` | `killed \| completed` | No | Omit to stop; use `completed` to mark success |
-| `forget` | `boolean` | No | Delete a finished session's stored record instead of stopping it |
 
-`forget=true` (chat: `/agent_kill --forget <session>`) removes a finished session from `code-agent-sessions.json` together with its action tokens, maintenance schedules, and output transcript, so it no longer appears in `agent_sessions` and cannot be resumed. It is refused while the session is running or suspended (stop or dismiss it with `agent_kill` first), while its worktree is not settled (a pending decision, a merge or PR in progress, an open PR, or a worktree directory still on disk; merge, open a PR, dismiss, or run `agent_worktree_cleanup` first), while it has a PR that `gh` does not confirm as merged or closed, while its final notification is still being delivered, and while a running goal loop owns it. Without `forget`, finished sessions are still removed by `maxPersistedSessions` retention.
+Any other parameter is rejected with `Invalid parameters` and nothing is stopped.
 
 ### `agent_stats`
 
@@ -678,7 +677,7 @@ Have oca handle the failing dashboard smoke test.
 | `/agent_sessions` | List sessions |
 | `/agent_output` | Show recent output |
 | `/agent_respond` | Send a reply |
-| `/agent_kill` | Stop a session; `--forget <session>` deletes a finished session's record |
+| `/agent_kill` | Stop a session |
 | `/agent_stats` | Show aggregate metrics |
 | `/agent_policy` | Set or inspect repository worktree/PR policy |
 | `/agent_goal` | Launch an explicit goal task |

@@ -257,14 +257,6 @@ export class SessionMaintenanceService {
     }
   }
 
-  /** Drop every schedule and the output file of a persisted session removed on request. */
-  forgetPersistedSession(session: PersistedSessionInfo): void {
-    this.cancelPersistedMaintenance(session);
-    if (session.sessionId) this.cancelRuntimeGc(session.sessionId);
-    this.cleanupOutputPathIfUnreferenced(session.outputPath);
-    this.syncSessionOutputCleanupDeadline();
-  }
-
   dispose(): void {
     this.disposed = true;
     this.scheduler.dispose();

@@ -1,5 +1,5 @@
-import { goalController, sessionManager } from "../singletons";
-import { getForgetSessionText, getKillSessionText } from "../application/session-control";
+import { sessionManager } from "../singletons";
+import { getKillSessionText } from "../application/session-control";
 
 interface CommandApi {
   registerCommand(config: {
@@ -7,7 +7,7 @@ interface CommandApi {
     description: string;
     acceptsArgs: boolean;
     requireAuth: boolean;
-    handler: (ctx: { args?: string }) => { text: string } | Promise<{ text: string }>;
+    handler: (ctx: { args?: string }) => { text: string };
   }): void;
 }
 
@@ -15,20 +15,17 @@ interface CommandApi {
 export function registerAgentKillCommand(api: CommandApi): void {
   api.registerCommand({
     name: "agent_kill",
-    description: "Kill a coding agent session by name or ID (--forget deletes a finished session's record)",
+    description: "Kill a coding agent session by name or ID",
     acceptsArgs: true,
     requireAuth: true,
-    handler: async (ctx: { args?: string }) => {
+    handler: (ctx: { args?: string }) => {
       if (!sessionManager) {
         return { text: "Error: SessionManager not initialized. The code-agent service must be running." };
       }
 
-      const args = ctx.args?.trim() ?? "";
-      const forgetMatch = /^--forget(?:\s+|$)/.exec(args);
-      const ref = forgetMatch ? args.slice(forgetMatch[0].length).trim() : args;
-      if (!ref) return { text: "Usage: /agent_kill <name-or-id> | /agent_kill --forget <name-or-id>" };
+      const ref = ctx.args?.trim();
+      if (!ref) return { text: "Usage: /agent_kill <name-or-id>" };
 
-      if (forgetMatch) return { text: await getForgetSessionText(sessionManager, ref, goalController) };
       return { text: getKillSessionText(sessionManager, ref, "killed") };
     },
   });

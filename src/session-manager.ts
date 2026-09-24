@@ -1,5 +1,3 @@
-import { existsSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { createHash } from "crypto";
 import { Session } from "./session";
 import { pluginConfig, getDefaultHarnessName } from "./config";
@@ -103,44 +101,6 @@ const TERMINAL_STATUSES = new Set<SessionStatus>(["completed", "failed", "killed
 const KILLABLE_STATUSES = new Set<SessionStatus>(["starting", "running"]);
 const WAITING_EVENT_DEBOUNCE_MS = 5_000;
 
-
-export type ForgetSessionResult =
-  | { ok: true; name: string; id?: string }
-  | {
-    ok: false;
-    reason: "not_found" | "running" | "suspended" | "worktree" | "delivery";
-    detail?: string;
-    name?: string;
-    id?: string;
-  };
-
-const UNSETTLED_WORKTREE_STATES = new Set<string>([
-  "provisioned",
-  "pending_decision",
-  "merge_conflict_resolving",
-  "merge_in_progress",
-  "pr_in_progress",
-  "pr_open",
-]);
-
-/** Why a persisted session must be kept, or undefined when it can be forgotten. */
-function forgetBlockReason(
-  session: PersistedSessionInfo,
-): { reason: "running" | "suspended" | "worktree" | "delivery"; detail?: string } | undefined {
-  if (!TERMINAL_STATUSES.has(session.status) || session.runtimeState === "live") return { reason: "running" };
-  if (session.lifecycle && session.lifecycle !== "terminal") return { reason: "suspended", detail: session.lifecycle };
-  const worktreeState = session.worktreeLifecycle?.state ?? session.worktreeState;
-  if (session.pendingWorktreeDecisionSince || (worktreeState && UNSETTLED_WORKTREE_STATES.has(worktreeState))) {
-    return { reason: "worktree", detail: worktreeState ?? "pending_decision" };
-  }
-  if (session.worktreePath && existsSync(session.worktreePath)) {
-    return { reason: "worktree", detail: `worktree still on disk at ${session.worktreePath}` };
-  }
-  if (session.deliveryState === "notifying" || session.deliveryState === "wake_pending") {
-    return { reason: "delivery", detail: session.deliveryState };
-  }
-  return undefined;
-}
 
 type LaunchOptions = {
   notifyLaunch?: boolean;
@@ -2017,54 +1977,6 @@ export class SessionManager {
     }
     session.kill(reason ?? "user");
     return true;
-  }
-
-  /**
-   * Remove a finished session's stored record, schedules, action tokens, and
-   * output file. Refuses anything that may still need the record: running or
-   * suspended sessions, unsettled worktrees, a PR not confirmed merged or
-   * closed, and in-flight terminal delivery. Callers check goal ownership.
-   */
-  async forgetSession(ref: string): Promise<ForgetSessionResult> {
-    const active = this.resolve(ref);
-    if (active && !TERMINAL_STATUSES.has(active.status)) {
-      return { ok: false, reason: "running", name: active.name, id: active.id };
-    }
-    const persisted = active ? this.store.getPersistedSession(active.id) : this.getPersistedSession(ref);
-    if (!persisted) {
-      return active ? { ok: false, reason: "running", name: active.name, id: active.id } : { ok: false, reason: "not_found" };
-    }
-    const id = persisted.sessionId ?? persisted.harnessSessionId;
-    const blocked = forgetBlockReason(persisted);
-    if (blocked) return { ok: false, ...blocked, name: persisted.name, id };
-    const prUrl = persisted.worktreePrUrl;
-    if (prUrl) {
-      // A released worktree can still be represented by an open PR; keep the
-      // record unless GitHub confirms the PR is finished.
-      const cwd = persisted.workdir && existsSync(persisted.workdir) ? persisted.workdir : tmpdir();
-      const pr = await syncWorktreePRByUrl(cwd, prUrl, persisted.worktreePrTargetRepo);
-      if (pr.state !== "merged" && pr.state !== "closed") {
-        return { ok: false, reason: "worktree", detail: `PR ${prUrl} is ${pr.state === "none" ? "not confirmed closed" : pr.state}`, name: persisted.name, id };
-      }
-    }
-    // The PR check awaited: re-read so a concurrent resume or update wins.
-    const latest = this.store.getPersistedSession(persisted.sessionId ?? ref);
-    const current = this.resolve(ref);
-    if (!latest || (current && !TERMINAL_STATUSES.has(current.status)) || forgetBlockReason(latest)) {
-      return { ok: false, reason: "running", name: persisted.name, id };
-    }
-
-    if (current) {
-      this.registry.remove(current.id, "forget");
-      this.clearWaitingTimestampsForSession(current.id);
-      this.lastTurnCompleteMarkers.delete(current.id);
-      this.lastTerminalWakeMarkers.delete(current.id);
-    }
-    const removed = this.store.removePersistedSession(latest.sessionId ?? ref);
-    if (!removed) return { ok: false, reason: "not_found" };
-    if (removed.sessionId) this.store.deleteActionTokensForSession(removed.sessionId);
-    this.maintenance.forgetPersistedSession(removed);
-    return { ok: true, name: removed.name, id };
   }
 
   /** Kill all active sessions. Per-session retry timers are cleared in onSessionTerminal. */
