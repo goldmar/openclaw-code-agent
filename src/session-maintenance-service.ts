@@ -110,8 +110,7 @@ export class SessionMaintenanceService {
       includePrSync: session.worktreeLifecycle?.state === "pr_open" || Boolean(session.worktreePrUrl),
     });
     const resolvedAtIso = this.resolvedAtIso(session);
-    const legacyResolved = this.isLegacyResolvedWorktree(session);
-    if ((resolved.cleanupSafe || legacyResolved) && typeof resolvedAtIso === "string") {
+    if (resolved.cleanupSafe && typeof resolvedAtIso === "string") {
       const resolvedAt = new Date(resolvedAtIso).getTime();
       if (Number.isFinite(resolvedAt)) {
         this.schedule(this.persistedMaintenanceKey(ref, "worktree-retention"), resolvedAt + RESOLVED_WORKTREE_RETENTION_MS, () => {
@@ -130,8 +129,7 @@ export class SessionMaintenanceService {
     });
     const resolvedAtIso = this.resolvedAtIso(session);
     const resolvedAt = resolvedAtIso ? new Date(resolvedAtIso).getTime() : 0;
-    const legacyResolvedState = this.legacyResolvedWorktreeState(session);
-    if ((!resolved.cleanupSafe && !legacyResolvedState) || !resolvedAtIso || !Number.isFinite(resolvedAt) || now - resolvedAt < RESOLVED_WORKTREE_RETENTION_MS) return;
+    if (!resolved.cleanupSafe || !resolvedAtIso || !Number.isFinite(resolvedAt) || now - resolvedAt < RESOLVED_WORKTREE_RETENTION_MS) return;
 
     try {
       if (!session.worktreePath && !usesNativeBackendWorktree(session)) return;
@@ -151,7 +149,7 @@ export class SessionMaintenanceService {
           worktreeDecisionSnoozedUntil: undefined,
           worktreeLifecycle: {
             ...(session.worktreeLifecycle ?? resolved.lifecycle),
-            state: resolved.cleanupSafe ? resolved.derivedState : legacyResolvedState ?? resolved.derivedState,
+            state: resolved.derivedState,
             updatedAt: new Date(now).toISOString(),
             resolvedAt: session.worktreeLifecycle?.resolvedAt ?? resolvedAtIso,
             resolutionSource: session.worktreeLifecycle?.resolutionSource ?? "maintenance",
@@ -269,28 +267,5 @@ export class SessionMaintenanceService {
       ?? session.worktreeMergedAt
       ?? session.worktreeDismissedAt
       ?? (session.completedAt ? new Date(session.completedAt).toISOString() : undefined);
-  }
-
-  private isLegacyResolvedWorktree(session: Pick<
-    PersistedSessionInfo,
-    "worktreeMerged" | "worktreeDisposition" | "worktreeState"
-  >): boolean {
-    return this.legacyResolvedWorktreeState(session) != null;
-  }
-
-  private legacyResolvedWorktreeState(session: Pick<
-    PersistedSessionInfo,
-    "worktreeMerged" | "worktreeDisposition" | "worktreeState"
-  >): "merged" | "dismissed" | "no_change" | undefined {
-    if (session.worktreeMerged === true || session.worktreeDisposition === "merged" || session.worktreeState === "merged") {
-      return "merged";
-    }
-    if (session.worktreeDisposition === "dismissed" || session.worktreeState === "dismissed") {
-      return "dismissed";
-    }
-    if (session.worktreeDisposition === "no-change-cleaned") {
-      return "no_change";
-    }
-    return undefined;
   }
 }

@@ -20,7 +20,7 @@ describe("agent_launch tool defaults", () => {
     setPluginConfig({ defaultHarness: "codex" });
 
     setSessionManager({
-      resolveHarnessSessionId: (id: string) => id,
+      resolveBackendConversationId: (id: string) => id,
       spawn(config: Record<string, unknown>) {
         spawnConfig = config;
         return {
@@ -63,7 +63,7 @@ describe("agent_launch tool defaults", () => {
     });
 
     setSessionManager({
-      resolveHarnessSessionId: (id: string) => id,
+      resolveBackendConversationId: (id: string) => id,
       spawn(config: Record<string, unknown>) {
         spawnConfig = config;
         return {
@@ -91,7 +91,7 @@ describe("agent_launch tool defaults", () => {
     });
 
     setSessionManager({
-      resolveHarnessSessionId: (id: string) => id,
+      resolveBackendConversationId: (id: string) => id,
       spawn(config: Record<string, unknown>) {
         spawnConfig = config;
         return {
@@ -113,7 +113,7 @@ describe("agent_launch tool defaults", () => {
     let spawnConfig: Record<string, unknown> | undefined;
 
     setSessionManager({
-      resolveHarnessSessionId: (id: string) => id,
+      resolveBackendConversationId: (id: string) => id,
       spawn(config: Record<string, unknown>) {
         spawnConfig = config;
         return {
@@ -141,7 +141,7 @@ describe("agent_launch tool defaults", () => {
     let spawnConfig: Record<string, unknown> | undefined;
 
     setSessionManager({
-      resolveHarnessSessionId: (id: string) => id,
+      resolveBackendConversationId: (id: string) => id,
       spawn(config: Record<string, unknown>) {
         spawnConfig = config;
         return {
@@ -197,7 +197,7 @@ describe("agent_launch tool defaults", () => {
     });
 
     setSessionManager({
-      resolveHarnessSessionId: (id: string) => id,
+      resolveBackendConversationId: (id: string) => id,
       spawn(config: Record<string, unknown>) {
         spawnConfig = config;
         const session = {
@@ -234,7 +234,7 @@ describe("agent_launch tool defaults", () => {
     let spawnConfig: Record<string, unknown> | undefined;
 
     setSessionManager({
-      resolveHarnessSessionId: (id: string) => id,
+      resolveBackendConversationId: (id: string) => id,
       spawn(config: Record<string, unknown>) {
         spawnConfig = config;
         return {
@@ -257,7 +257,7 @@ describe("agent_launch tool defaults", () => {
   it("fails closed for the route-less context produced by the standalone deferred plugin-tool bridge", async () => {
     let spawnCalled = false;
     setSessionManager({
-      resolveHarnessSessionId: (id: string) => id,
+      resolveBackendConversationId: (id: string) => id,
       spawn() {
         spawnCalled = true;
         throw new Error("must not spawn");
@@ -295,7 +295,6 @@ describe("agent_launch tool defaults", () => {
           killReason: "shutdown",
           backendRef: { kind: "codex-app-server", conversationId: "backend-session-1" },
         }),
-        resolveHarnessSessionId: (id: string) => id,
         resolveBackendConversationId: (id: string) => `resolved-${id}`,
         checkRepoPolicyForLaunch: () => ({
           ok: false,
@@ -348,7 +347,7 @@ describe("agent_launch tool defaults", () => {
       setSessionManager({
         resolve: () => undefined,
         getPersistedSession: () => ({ harness: "codex" }),
-        resolveHarnessSessionId: (id: string) => `resolved-${id}`,
+        resolveBackendConversationId: (id: string) => `resolved-${id}`,
         checkRepoPolicyForLaunch: () => ({
           ok: false,
           text: "Repo integration policy is not set.",
@@ -385,7 +384,7 @@ describe("agent_launch tool defaults", () => {
     setSessionManager({
       resolve: () => undefined,
       getPersistedSession: () => ({ harness: "codex" }),
-      resolveHarnessSessionId: (id: string) => `resolved-${id}`,
+      resolveBackendConversationId: (id: string) => `resolved-${id}`,
       spawn(config: Record<string, unknown>) {
         spawnConfig = config;
         return {
@@ -418,7 +417,7 @@ describe("agent_launch tool defaults", () => {
     setSessionManager({
       resolve: () => ({ harnessSessionId: "resolved-old-thread" }),
       getPersistedSession: () => ({ harness: "codex" }),
-      resolveHarnessSessionId: (id: string) => `resolved-${id}`,
+      resolveBackendConversationId: (id: string) => `resolved-${id}`,
       spawn(config: Record<string, unknown>) {
         spawnConfig = config;
         return {
@@ -456,7 +455,6 @@ describe("agent_launch tool defaults", () => {
         killReason: "shutdown",
         backendRef: { kind: "codex-app-server", conversationId: "resolved-old-thread" },
       }),
-      resolveHarnessSessionId: (id: string) => `resolved-${id}`,
       resolveBackendConversationId: (id: string) => `resolved-${id}`,
       spawn(config: Record<string, unknown>) {
         spawnConfig = config;
@@ -506,7 +504,6 @@ describe("agent_launch tool defaults", () => {
     setSessionManager({
       resolve: () => undefined,
       getPersistedSession: () => pendingPlan,
-      resolveHarnessSessionId: () => "thread-plan",
       resolveBackendConversationId: () => "thread-plan",
       spawn(config: Record<string, unknown>) {
         spawnConfig = config;
@@ -547,7 +544,6 @@ describe("agent_launch tool defaults", () => {
         planDecisionVersion: 4,
         actionablePlanDecisionVersion: 4,
       }),
-      resolveHarnessSessionId: () => "thread-plan",
       resolveBackendConversationId: () => "thread-plan",
       spawn(config: Record<string, unknown>) {
         spawnConfig = config;
@@ -585,7 +581,6 @@ describe("agent_launch tool defaults", () => {
         killReason: "shutdown",
         backendRef: { kind: "codex-app-server", conversationId: "thread-auto-update-feature" },
       }),
-      resolveHarnessSessionId: (id: string) => id,
       resolveBackendConversationId: (id: string) => id,
       spawn(config: Record<string, unknown>) {
         spawnConfig = config;
@@ -627,7 +622,6 @@ describe("agent_launch tool defaults", () => {
         killReason: "shutdown",
         backendRef: { kind: "codex-app-server", conversationId: "thread-auto-update-feature" },
       }),
-      resolveHarnessSessionId: (id: string) => id,
       resolveBackendConversationId: (id: string) => id,
       spawn(config: Record<string, unknown>) {
         spawnConfig = config;
@@ -671,7 +665,6 @@ describe("agent_launch tool defaults", () => {
         killReason: "shutdown",
         backendRef: { kind: "codex-app-server", conversationId: "thread-auto-update-feature" },
       }),
-      resolveHarnessSessionId: (id: string) => id,
       resolveBackendConversationId: (id: string) => id,
       spawn(config: Record<string, unknown>) {
         spawnConfig = config;
@@ -714,7 +707,6 @@ describe("agent_launch tool defaults", () => {
         killReason: "done",
         backendRef: { kind: "codex-app-server", conversationId: "resolved-old-thread" },
       }),
-      resolveHarnessSessionId: (id: string) => `resolved-${id}`,
       resolveBackendConversationId: (id: string) => `resolved-${id}`,
       spawn(config: Record<string, unknown>) {
         spawnConfig = config;
@@ -748,7 +740,7 @@ describe("agent_launch tool defaults", () => {
     });
 
     setSessionManager({
-      resolveHarnessSessionId: (id: string) => id,
+      resolveBackendConversationId: (id: string) => id,
       spawn(config: Record<string, unknown>) {
         spawnConfig = config;
         return {
@@ -774,7 +766,7 @@ describe("agent_launch tool defaults", () => {
     const repoDir = mkdtempSync(join(tmpdir(), "agent-launch-workdir-"));
     try {
       setSessionManager({
-        resolveHarnessSessionId: (id: string) => id,
+        resolveBackendConversationId: (id: string) => id,
         spawn(config: Record<string, unknown>) {
           spawnConfig = config;
           return {
@@ -803,7 +795,7 @@ describe("agent_launch tool defaults", () => {
     const fallbackDir = mkdtempSync(join(tmpdir(), "agent-launch-fallback-workdir-"));
     try {
       setSessionManager({
-        resolveHarnessSessionId: (id: string) => id,
+        resolveBackendConversationId: (id: string) => id,
         spawn(config: Record<string, unknown>) {
           spawnConfig = config;
           return {
@@ -928,7 +920,7 @@ describe("agent_launch allowedModels validation", () => {
       },
     });
     setSessionManager({
-      resolveHarnessSessionId: (id: string) => id,
+      resolveBackendConversationId: (id: string) => id,
       spawn(config: Record<string, unknown>) {
         spawnConfig = config;
         return { id: "sess-1", name: "test", model: config.model };
@@ -954,7 +946,7 @@ describe("agent_launch allowedModels validation", () => {
       },
     });
     setSessionManager({
-      resolveHarnessSessionId: (id: string) => id,
+      resolveBackendConversationId: (id: string) => id,
       spawn(config: Record<string, unknown>) {
         spawnConfig = config;
         return { id: "sess-1", name: "test", model: config.model };
@@ -973,7 +965,7 @@ describe("agent_launch allowedModels validation", () => {
     let spawnConfig: Record<string, unknown> | undefined;
     setPluginConfig({ harnesses: { "claude-code": { allowedModels: ["sonnet", "opus"] } } });
     setSessionManager({
-      resolveHarnessSessionId: (id: string) => id,
+      resolveBackendConversationId: (id: string) => id,
       spawn(config: Record<string, unknown>) {
         spawnConfig = config;
         return { id: "sess-1", name: "test", model: config.model };
@@ -992,7 +984,7 @@ describe("agent_launch allowedModels validation", () => {
     let spawnConfig: Record<string, unknown> | undefined;
     setPluginConfig({ harnesses: { "claude-code": { allowedModels: ["sonnet"] } } });
     setSessionManager({
-      resolveHarnessSessionId: (id: string) => id,
+      resolveBackendConversationId: (id: string) => id,
       spawn(config: Record<string, unknown>) {
         spawnConfig = config;
         return { id: "sess-1", name: "test", model: config.model };
@@ -1010,7 +1002,7 @@ describe("agent_launch allowedModels validation", () => {
   it("blocks explicit model not in allowedModels", async () => {
     setPluginConfig({ harnesses: { "claude-code": { allowedModels: ["sonnet"] } } });
     setSessionManager({
-      resolveHarnessSessionId: (id: string) => id,
+      resolveBackendConversationId: (id: string) => id,
     } as any);
 
     const tool = makeAgentLaunchTool({ workspaceDir: "/tmp", oneShotCliRun: true });
@@ -1024,7 +1016,7 @@ describe("agent_launch allowedModels validation", () => {
   it("blocks explicit model with multiple allowedModels shown", async () => {
     setPluginConfig({ harnesses: { "claude-code": { allowedModels: ["sonnet", "opus", "haiku"] } } });
     setSessionManager({
-      resolveHarnessSessionId: (id: string) => id,
+      resolveBackendConversationId: (id: string) => id,
     } as any);
 
     const tool = makeAgentLaunchTool({ workspaceDir: "/tmp", oneShotCliRun: true });
@@ -1045,7 +1037,7 @@ describe("agent_launch allowedModels validation", () => {
       },
     });
     setSessionManager({
-      resolveHarnessSessionId: (id: string) => id,
+      resolveBackendConversationId: (id: string) => id,
     } as any);
 
     const tool = makeAgentLaunchTool({ workspaceDir: "/tmp", oneShotCliRun: true });
@@ -1066,7 +1058,7 @@ describe("agent_launch allowedModels validation", () => {
       },
     });
     setSessionManager({
-      resolveHarnessSessionId: (id: string) => id,
+      resolveBackendConversationId: (id: string) => id,
       spawn(config: Record<string, unknown>) {
         spawnConfig = config;
         return { id: "sess-1", name: "test", model: config.model };
@@ -1093,7 +1085,7 @@ describe("agent_launch allowedModels validation", () => {
       },
     });
     setSessionManager({
-      resolveHarnessSessionId: (id: string) => id,
+      resolveBackendConversationId: (id: string) => id,
       spawn(config: Record<string, unknown>) {
         spawnConfig = config;
         return { id: "sess-1", name: "test", model: config.model };
@@ -1119,7 +1111,7 @@ describe("agent_launch allowedModels validation", () => {
       },
     });
     setSessionManager({
-      resolveHarnessSessionId: (id: string) => id,
+      resolveBackendConversationId: (id: string) => id,
     } as any);
 
     const tool = makeAgentLaunchTool({ workspaceDir: "/tmp", oneShotCliRun: true });
@@ -1140,7 +1132,7 @@ describe("agent_launch allowedModels validation", () => {
       },
     });
     setSessionManager({
-      resolveHarnessSessionId: (id: string) => id,
+      resolveBackendConversationId: (id: string) => id,
     } as any);
 
     const tool = makeAgentLaunchTool({ workspaceDir: "/tmp", oneShotCliRun: true });
@@ -1155,7 +1147,7 @@ describe("agent_launch allowedModels validation", () => {
     let spawnConfig: Record<string, unknown> | undefined;
     setPluginConfig({ harnesses: { "claude-code": { allowedModels: ["SONNET"] } } });
     setSessionManager({
-      resolveHarnessSessionId: (id: string) => id,
+      resolveBackendConversationId: (id: string) => id,
       spawn(config: Record<string, unknown>) {
         spawnConfig = config;
         return { id: "sess-1", name: "test", model: config.model };
@@ -1175,7 +1167,7 @@ describe("agent_launch allowedModels validation", () => {
     let spawnConfig: Record<string, unknown> | undefined;
     setPluginConfig({ harnesses: { "claude-code": { allowedModels: ["claude-son"] } } });
     setSessionManager({
-      resolveHarnessSessionId: (id: string) => id,
+      resolveBackendConversationId: (id: string) => id,
       spawn(config: Record<string, unknown>) {
         spawnConfig = config;
         return { id: "sess-1", name: "test", model: config.model };

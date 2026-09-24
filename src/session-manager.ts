@@ -513,11 +513,6 @@ export class SessionManager {
     };
   }
 
-  // Back-compat for tests and internal inspection.
-  get persisted(): Map<string, PersistedSessionInfo> { return this.store.persisted; }
-  get idIndex(): Map<string, string> { return this.store.idIndex; }
-  get nameIndex(): Map<string, string> { return this.store.nameIndex; }
-
   private uniqueName(baseName: string): string {
     return this.registry.uniqueName(baseName);
   }
@@ -1873,11 +1868,6 @@ export class SessionManager {
   /** Resolve any reference to a canonical backend conversation id for resume flows. */
   resolveBackendConversationId(ref: string): string | undefined {
     return this.references.resolveBackendConversationId(ref);
-  }
-
-  /** Compatibility wrapper retained for older callers/tests. */
-  resolveHarnessSessionId(ref: string): string | undefined {
-    return this.resolveBackendConversationId(ref);
   }
 
   /** Read persisted metadata by harness id, internal id, or name. */

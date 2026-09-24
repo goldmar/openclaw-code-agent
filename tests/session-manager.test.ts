@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { SessionManager } from "../src/session-manager";
 import { setPluginConfig } from "../src/config";
 import { setPluginRuntime } from "../src/runtime-store";
-import { STORE_SCHEMA_VERSION } from "../src/session-store-normalization";
+import { normalizePersistedEntry, STORE_SCHEMA_VERSION } from "../src/session-store-normalization";
 import { buildPresentation } from "../src/direct-notification-transport";
 import { SessionReminderService } from "../src/session-reminder-service";
 import { SessionNotificationService } from "../src/session-notifications";
@@ -698,10 +698,10 @@ describe("SessionManager.killAll()", () => {
 });
 
 // =========================================================================
-// resolveHarnessSessionId
+// resolveBackendConversationId
 // =========================================================================
 
-describe("SessionManager.resolveHarnessSessionId()", () => {
+describe("SessionManager.resolveBackendConversationId()", () => {
   let sm: SessionManager;
 
   beforeEach(() => {
@@ -715,7 +715,7 @@ describe("SessionManager.resolveHarnessSessionId()", () => {
       backendRef: { kind: "claude-code", conversationId: "backend-abc" },
     });
     (sm as any).sessions.set("s1", s);
-    assert.equal(sm.resolveHarnessSessionId("s1"), "backend-abc");
+    assert.equal(sm.resolveBackendConversationId("s1"), "backend-abc");
   });
 
   it("returns harnessSessionId from active session matched by name", () => {
@@ -726,40 +726,40 @@ describe("SessionManager.resolveHarnessSessionId()", () => {
       backendRef: { kind: "claude-code", conversationId: "backend-def" },
     });
     (sm as any).sessions.set("s1", s);
-    assert.equal(sm.resolveHarnessSessionId("my-session"), "backend-def");
+    assert.equal(sm.resolveBackendConversationId("my-session"), "backend-def");
   });
 
   it("looks up by idIndex when session is not active", () => {
-    (sm as any).idIndex.set("old-id", "harness-ghi");
-    (sm as any).persisted.set("harness-ghi", {
+    (sm as any).store.idIndex.set("old-id", "harness-ghi");
+    (sm as any).store.persisted.set("harness-ghi", {
       harnessSessionId: "harness-ghi",
       backendRef: { kind: "claude-code", conversationId: "backend-ghi" },
     });
-    assert.equal(sm.resolveHarnessSessionId("old-id"), "backend-ghi");
+    assert.equal(sm.resolveBackendConversationId("old-id"), "backend-ghi");
   });
 
   it("looks up latest persisted entry by name when session is not active", () => {
-    (sm as any).persisted.set("harness-jkl-old", {
+    (sm as any).store.persisted.set("harness-jkl-old", {
       harnessSessionId: "harness-jkl-old",
       backendRef: { kind: "claude-code", conversationId: "backend-jkl-old" },
       name: "old-name",
       createdAt: 100,
     });
-    (sm as any).persisted.set("harness-jkl-new", {
+    (sm as any).store.persisted.set("harness-jkl-new", {
       harnessSessionId: "harness-jkl-new",
       backendRef: { kind: "claude-code", conversationId: "backend-jkl-new" },
       name: "old-name",
       createdAt: 200,
     });
-    assert.equal(sm.resolveHarnessSessionId("old-name"), "backend-jkl-new");
+    assert.equal(sm.resolveBackendConversationId("old-name"), "backend-jkl-new");
   });
 
   it("returns ref directly if it exists in persisted map", () => {
-    (sm as any).persisted.set("direct-key", {
+    (sm as any).store.persisted.set("direct-key", {
       harnessSessionId: "direct-key",
       backendRef: { kind: "claude-code", conversationId: "backend-direct" },
     });
-    assert.equal(sm.resolveHarnessSessionId("direct-key"), "backend-direct");
+    assert.equal(sm.resolveBackendConversationId("direct-key"), "backend-direct");
   });
 
   it("resolves active sessions by backend conversation id before legacy harness id", () => {
@@ -774,11 +774,11 @@ describe("SessionManager.resolveHarnessSessionId()", () => {
 
   it("returns UUID ref as-is even when not in any index", () => {
     const uuid = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
-    assert.equal(sm.resolveHarnessSessionId(uuid), uuid);
+    assert.equal(sm.resolveBackendConversationId(uuid), uuid);
   });
 
   it("returns undefined for non-UUID unresolvable ref", () => {
-    assert.equal(sm.resolveHarnessSessionId("random-text"), undefined);
+    assert.equal(sm.resolveBackendConversationId("random-text"), undefined);
   });
 });
 
@@ -795,14 +795,14 @@ describe("SessionManager.getPersistedSession()", () => {
 
   it("returns session by direct harnessSessionId", () => {
     const info = { harnessSessionId: "h1", name: "s1" };
-    (sm as any).persisted.set("h1", info);
+    (sm as any).store.persisted.set("h1", info);
     assert.equal(sm.getPersistedSession("h1"), info);
   });
 
   it("returns session by internal session ID via idIndex", () => {
     const info = { harnessSessionId: "h2", name: "s2" };
-    (sm as any).persisted.set("h2", info);
-    (sm as any).idIndex.set("internal-id", "h2");
+    (sm as any).store.persisted.set("h2", info);
+    (sm as any).store.idIndex.set("internal-id", "h2");
     assert.equal(sm.getPersistedSession("internal-id"), info);
   });
 
@@ -812,7 +812,7 @@ describe("SessionManager.getPersistedSession()", () => {
       backendRef: { kind: "claude-code", conversationId: "backend-h3" },
       name: "s3",
     };
-    (sm as any).persisted.set("legacy-h3", info);
+    (sm as any).store.persisted.set("legacy-h3", info);
     (sm as any).store.backendIdIndex.set("backend-h3", "legacy-h3");
     assert.equal(sm.getPersistedSession("backend-h3"), info);
   });
@@ -820,8 +820,8 @@ describe("SessionManager.getPersistedSession()", () => {
   it("returns latest session by name from persisted records", () => {
     const infoOld = { harnessSessionId: "h3-old", name: "s3", createdAt: 100 };
     const infoNew = { harnessSessionId: "h3-new", name: "s3", createdAt: 200 };
-    (sm as any).persisted.set("h3-old", infoOld);
-    (sm as any).persisted.set("h3-new", infoNew);
+    (sm as any).store.persisted.set("h3-old", infoOld);
+    (sm as any).store.persisted.set("h3-new", infoNew);
     assert.equal(sm.getPersistedSession("s3"), infoNew);
   });
 
@@ -835,15 +835,15 @@ describe("SessionManager.listPersistedSessions()", () => {
 
   beforeEach(() => {
     sm = new SessionManager(5);
-    (sm as any).persisted.clear();
-    (sm as any).idIndex.clear();
-    (sm as any).nameIndex.clear();
+    (sm as any).store.persisted.clear();
+    (sm as any).store.idIndex.clear();
+    (sm as any).store.nameIndex.clear();
   });
 
   it("returns sorted by completedAt descending", () => {
-    (sm as any).persisted.set("h1", { harnessSessionId: "h1", completedAt: 1000 });
-    (sm as any).persisted.set("h2", { harnessSessionId: "h2", completedAt: 3000 });
-    (sm as any).persisted.set("h3", { harnessSessionId: "h3", completedAt: 2000 });
+    (sm as any).store.persisted.set("h1", { harnessSessionId: "h1", completedAt: 1000 });
+    (sm as any).store.persisted.set("h2", { harnessSessionId: "h2", completedAt: 3000 });
+    (sm as any).store.persisted.set("h3", { harnessSessionId: "h3", completedAt: 2000 });
     const list = sm.listPersistedSessions();
     assert.equal(list[0].harnessSessionId, "h2");
     assert.equal(list[1].harnessSessionId, "h3");
@@ -1128,10 +1128,10 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
       },
     };
 
-    (sm as any).persisted.set(pending.harnessSessionId, pending);
-    (sm as any).persisted.set(resolved.harnessSessionId, resolved);
-    (sm as any).idIndex.set(pending.sessionId, pending.harnessSessionId);
-    (sm as any).idIndex.set(resolved.sessionId, resolved.harnessSessionId);
+    (sm as any).store.persisted.set(pending.harnessSessionId, pending);
+    (sm as any).store.persisted.set(resolved.harnessSessionId, resolved);
+    (sm as any).store.idIndex.set(pending.sessionId, pending.harnessSessionId);
+    (sm as any).store.idIndex.set(resolved.sessionId, resolved.harnessSessionId);
     (sm as any).store.actionTokens.set("token-1", {
       id: "token-1",
       sessionId: "pending-session",
@@ -1302,7 +1302,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     }
   });
 
-  it("seeds retention for legacy merged sessions without worktreeLifecycle metadata", () => {
+  it("seeds retention for 4.x merged sessions whose lifecycle is synthesized on load", () => {
     const sm = new SessionManager(5, 5);
     const now = Date.now();
     const scheduledKeys: string[] = [];
@@ -1333,8 +1333,10 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
       worktreeMergedAt: new Date(now - 10_000).toISOString(),
     };
 
-    (sm as any).persisted.set(legacyResolved.harnessSessionId, legacyResolved);
-    (sm as any).idIndex.set(legacyResolved.sessionId, legacyResolved.harnessSessionId);
+    const normalized = normalizePersistedEntry({ ...legacyResolved, route: { provider: "telegram", target: "123" } });
+    assert.equal(normalized?.worktreeLifecycle?.state, "merged");
+    (sm as any).store.persisted.set(legacyResolved.harnessSessionId, normalized);
+    (sm as any).store.idIndex.set(legacyResolved.sessionId, legacyResolved.harnessSessionId);
 
     sm.bootstrapMaintenanceSchedules();
 
@@ -1499,8 +1501,8 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
         pendingWorktreeDecisionSince: new Date(now - 4 * 60 * 60 * 1000).toISOString(),
       };
 
-      (sm as any).persisted.set(pending.harnessSessionId, pending);
-      (sm as any).idIndex.set(pending.sessionId, pending.harnessSessionId);
+      (sm as any).store.persisted.set(pending.harnessSessionId, pending);
+      (sm as any).store.idIndex.set(pending.sessionId, pending.harnessSessionId);
       (sm as any).maintenance.cancel = (() => {}) as any;
       (sm as any).maintenance.schedule = ((key: string, at: number, cb: () => void) => {
         scheduled.push({ key, at, cb });
@@ -1567,8 +1569,8 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
       };
       const dispatchCalls: Array<{ request: any }> = [];
 
-      (sm as any).persisted.set(pending.harnessSessionId, pending);
-      (sm as any).idIndex.set(pending.sessionId, pending.harnessSessionId);
+      (sm as any).store.persisted.set(pending.harnessSessionId, pending);
+      (sm as any).store.idIndex.set(pending.sessionId, pending.harnessSessionId);
       (sm as any).interactions.isGitHubCliAvailable = () => true;
       (sm as any).resolveRepoPolicy = () => ({
         source: "stored",
@@ -1640,8 +1642,8 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     };
     const dispatchCalls: Array<{ request: any }> = [];
 
-    (sm as any).persisted.set(pending.harnessSessionId, pending);
-    (sm as any).idIndex.set(pending.sessionId, pending.harnessSessionId);
+    (sm as any).store.persisted.set(pending.harnessSessionId, pending);
+    (sm as any).store.idIndex.set(pending.sessionId, pending.harnessSessionId);
     (sm as any).resolveWorktreeRepoDir = () => undefined;
     (sm as any).resolveRepoPolicy = () => {
       throw new Error("resolveRepoPolicy should not run without a repo dir");
@@ -1706,8 +1708,8 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     };
     const dispatchCalls: Array<{ request: any }> = [];
 
-    (sm as any).persisted.set(pending.harnessSessionId, pending);
-    (sm as any).idIndex.set(pending.sessionId, pending.harnessSessionId);
+    (sm as any).store.persisted.set(pending.harnessSessionId, pending);
+    (sm as any).store.idIndex.set(pending.sessionId, pending.harnessSessionId);
     (sm as any).interactions.isGitHubCliAvailable = () => true;
     (sm as any).resolveWorktreeRepoDir = () => undefined;
     (sm as any).resolveRepoPolicy = () => {
@@ -1814,8 +1816,8 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
       },
     };
 
-    (sm as any).persisted.set(stale.harnessSessionId, stale);
-    (sm as any).idIndex.set(stale.sessionId, stale.harnessSessionId);
+    (sm as any).store.persisted.set(stale.harnessSessionId, stale);
+    (sm as any).store.idIndex.set(stale.sessionId, stale.harnessSessionId);
     (sm as any).maintenance.cancel = (() => {}) as any;
     (sm as any).maintenance.schedule = ((key: string, at: number, cb: () => void) => {
       scheduled.push({ key, at, cb });
@@ -1868,8 +1870,8 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
       },
     };
 
-    (sm as any).persisted.set(stale.harnessSessionId, stale);
-    (sm as any).idIndex.set(stale.sessionId, stale.harnessSessionId);
+    (sm as any).store.persisted.set(stale.harnessSessionId, stale);
+    (sm as any).store.idIndex.set(stale.sessionId, stale.harnessSessionId);
     (sm as any).maintenance.cancel = (() => {}) as any;
     (sm as any).maintenance.schedule = ((key: string, at: number, cb: () => void) => {
       scheduled.push({ key, at, cb });
@@ -1988,8 +1990,8 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
         },
       };
 
-      (sm as any).persisted.set(pending.harnessSessionId, pending);
-      (sm as any).idIndex.set(pending.sessionId, pending.harnessSessionId);
+      (sm as any).store.persisted.set(pending.harnessSessionId, pending);
+      (sm as any).store.idIndex.set(pending.sessionId, pending.harnessSessionId);
       (sm as any).maintenance.cancel = (() => {}) as any;
       (sm as any).maintenance.schedule = ((key: string, at: number, cb: () => void) => {
         scheduled.push({ key, at, cb });
@@ -2289,7 +2291,7 @@ describe("SessionManager resumed launch routing", () => {
       threadId: "26",
       sessionKey: "agent:main:telegram:group:-1003863755361:topic:26",
     };
-    (sm as any).persisted.set("7dkMOGyB", {
+    (sm as any).store.persisted.set("7dkMOGyB", {
       sessionId: "fix-pr-98922-quality-codex",
       harnessSessionId: "7dkMOGyB",
       backendRef: { kind: "codex-app-server", conversationId: "7dkMOGyB" },
@@ -3479,7 +3481,7 @@ describe("SessionManager restored button parity", () => {
     const telegramId = "h-telegram-worktree";
     const discordId = "h-discord-worktree";
 
-    sm.persisted.set(telegramId, {
+    (sm as any).store.persisted.set(telegramId, {
       harnessSessionId: telegramId,
       name: "telegram-worktree",
       prompt: "p",
@@ -3493,7 +3495,7 @@ describe("SessionManager restored button parity", () => {
       worktreePath: "/tmp/repo/.worktrees/telegram-worktree",
       worktreeBranch: "agent/telegram-worktree",
     } as any);
-    sm.persisted.set(discordId, {
+    (sm as any).store.persisted.set(discordId, {
       harnessSessionId: discordId,
       name: "discord-worktree",
       prompt: "p",

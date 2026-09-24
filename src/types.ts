@@ -68,11 +68,7 @@ export type KillReason = "user" | "idle-timeout" | "startup-timeout" | "shutdown
 
 /** Unified permission modes exposed by tools/commands across harnesses. */
 export type PermissionMode = "default" | "plan" | "bypassPermissions";
-/**
- * `plan-mode` is the canonical persisted plan-review context for all harnesses.
- * Legacy values like `soft-plan` and `codex-first-turn-plan` are normalized back
- * to `plan-mode` on read so new writes only use one explicit value.
- */
+/** `plan-mode` is the only persisted plan-review context; unknown values are dropped on read. */
 export type PlanApprovalContext = "plan-mode";
 export const WORKTREE_STRATEGIES = ["off", "manual", "ask", "delegate", "auto-merge", "auto-pr"] as const;
 export type WorktreeStrategy = typeof WORKTREE_STRATEGIES[number];

@@ -76,7 +76,6 @@ type SessionManagerLike = {
     "harness" | "reasoningEffort" | "backendRef" | "route" | "originChannel" | "originThreadId" | "originSessionKey"
   > | undefined;
   resolveBackendConversationId?: (ref: string) => string | undefined;
-  resolveHarnessSessionId?: (ref: string) => string | undefined;
 };
 
 export type AgentLaunchResolution =
@@ -324,8 +323,7 @@ export function resolveAgentLaunchRequest(
     ? sessionManager.getPersistedSession?.(resolvedResumeId)
     : undefined;
   if (resolvedResumeId) {
-    const resolved = sessionManager.resolveBackendConversationId?.(resolvedResumeId)
-      ?? sessionManager.resolveHarnessSessionId?.(resolvedResumeId);
+    const resolved = sessionManager.resolveBackendConversationId?.(resolvedResumeId);
     if (!resolved) {
       return {
         kind: "error",

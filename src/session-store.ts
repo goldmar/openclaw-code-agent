@@ -449,11 +449,6 @@ export class SessionStore {
     return this.queries.resolveBackendConversationId(ref, activeBackendConversationId);
   }
 
-  /** Compatibility wrapper retained for older call sites and tests. */
-  resolveHarnessSessionId(ref: string, activeHarnessSessionId?: string): string | undefined {
-    return this.queries.resolveHarnessSessionId(ref, activeHarnessSessionId);
-  }
-
   /** Resolve persisted session metadata by session id, name, backend id, or compatibility key. */
   getPersistedSession(ref: string): PersistedSessionInfo | undefined {
     return this.queries.getPersistedSession(ref);

@@ -229,7 +229,7 @@ describe("notification reasoning visibility", () => {
       setPluginConfig({ defaultHarness: "codex", harnesses: { codex: { reasoningEffort: "high" } } });
       const params = { prompt: "Continue", workdir: "/tmp", resume_session_id: "old", fork_session: fork };
       const manager = {
-        resolveHarnessSessionId: () => "old-thread",
+        resolveBackendConversationId: () => "old-thread",
         getPersistedSession: () => ({ harness: "codex", reasoningEffort: "low" as const }),
       };
       const ctx = { workspaceDir: "/tmp", oneShotCliRun: true };
