@@ -15,6 +15,7 @@ import {
   classifyTurnOutcome,
   DEFAULT_CODEX_EXECUTION_SETTINGS,
   matchApprovalChoiceFromText,
+  readOpenClawExecMode,
   resolveCodexExecutionSettings,
   turnErrorMessage,
 } from "../src/harness/codex-protocol";
@@ -35,9 +36,9 @@ describe("codex protocol thread payloads", () => {
       model: "gpt-6-sol",
       serviceTier: "priority",
       developerInstructions: "Follow the worktree rules.",
-      permissions: ":workspace",
-      approvalPolicy: "on-request",
-      approvalsReviewer: "auto_review",
+      permissions: ":danger-full-access",
+      approvalPolicy: "never",
+      approvalsReviewer: "user",
     });
     assert.equal("reasoningEffort" in params, false);
     assert.equal("service_tier" in params, false);
@@ -68,26 +69,49 @@ describe("codex protocol thread payloads", () => {
 
   it("applies configured execution settings and rejects unknown values", () => {
     assert.deepEqual(DEFAULT_CODEX_EXECUTION_SETTINGS, {
-      permissionProfile: ":workspace",
-      approvalPolicy: "on-request",
-      approvalsReviewer: "auto_review",
-    });
-    const settings = resolveCodexExecutionSettings({
       permissionProfile: ":danger-full-access",
       approvalPolicy: "never",
       approvalsReviewer: "user",
     });
+    const settings = resolveCodexExecutionSettings({
+      permissionProfile: ":workspace",
+      approvalPolicy: "on-request",
+      approvalsReviewer: "auto_review",
+    });
     assert.deepEqual(buildThreadStartParams({ cwd: "/r", execution: settings }), {
       cwd: "/r",
-      permissions: ":danger-full-access",
-      approvalPolicy: "never",
-      approvalsReviewer: "user",
+      permissions: ":workspace",
+      approvalPolicy: "on-request",
+      approvalsReviewer: "auto_review",
     });
     assert.deepEqual(
       resolveCodexExecutionSettings({ permissionProfile: "root", approvalPolicy: "sometimes", approvalsReviewer: "bob" }),
       DEFAULT_CODEX_EXECUTION_SETTINGS,
     );
     assert.deepEqual(resolveCodexExecutionSettings(undefined), DEFAULT_CODEX_EXECUTION_SETTINGS);
+  });
+
+  it("maps the host tools.exec.mode like the bundled Codex plugin when OCA keys are unset", () => {
+    assert.deepEqual(resolveCodexExecutionSettings({}, "auto"), { permissionProfile: ":workspace", approvalPolicy: "on-request", approvalsReviewer: "auto_review" });
+    assert.deepEqual(resolveCodexExecutionSettings({}, "ask"), { permissionProfile: ":workspace", approvalPolicy: "on-request", approvalsReviewer: "user" });
+    assert.deepEqual(resolveCodexExecutionSettings({}, "full"), DEFAULT_CODEX_EXECUTION_SETTINGS);
+    assert.deepEqual(resolveCodexExecutionSettings({}, undefined), DEFAULT_CODEX_EXECUTION_SETTINGS);
+    assert.throws(() => resolveCodexExecutionSettings({}, "deny"), /tools\.exec\.mode is "deny"/);
+    assert.throws(() => resolveCodexExecutionSettings({}, "allowlist"), /tools\.exec\.mode is "allowlist"/);
+    assert.deepEqual(readOpenClawExecMode({ tools: { exec: { mode: "auto" } } }), "auto");
+    assert.equal(readOpenClawExecMode({ tools: { exec: { mode: "bogus" } } }), undefined);
+    assert.equal(readOpenClawExecMode(undefined), undefined);
+  });
+
+  it("lets explicit OCA settings win over the host exec mode", () => {
+    assert.deepEqual(
+      resolveCodexExecutionSettings({ permissionProfile: ":danger-full-access", approvalPolicy: "never" }, "auto"),
+      { permissionProfile: ":danger-full-access", approvalPolicy: "never", approvalsReviewer: "auto_review" },
+    );
+    assert.deepEqual(
+      resolveCodexExecutionSettings({ permissionProfile: ":read-only" }, "deny"),
+      { permissionProfile: ":read-only", approvalPolicy: "on-request", approvalsReviewer: "user" },
+    );
   });
 });
 

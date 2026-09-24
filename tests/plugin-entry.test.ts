@@ -439,9 +439,9 @@ describe("plugin entry source", () => {
     assert.match(pluginManifest.uiHints?.harnesses?.help ?? "", /"defaultModel":"opus"/);
     assert.equal(pluginManifest.configSchema?.properties?.harnesses?.default?.codex?.fastMode, false);
     assert.equal(pluginManifest.configSchema?.properties?.harnesses?.default?.codex?.reasoningEffort, undefined);
-    assert.equal(pluginManifest.configSchema?.properties?.harnesses?.default?.codex?.permissionProfile, ":workspace");
-    assert.equal(pluginManifest.configSchema?.properties?.harnesses?.default?.codex?.approvalPolicy, "on-request");
-    assert.equal(pluginManifest.configSchema?.properties?.harnesses?.default?.codex?.approvalsReviewer, "auto_review");
+    assert.equal(pluginManifest.configSchema?.properties?.harnesses?.default?.codex?.permissionProfile, undefined, "unset so it follows tools.exec.mode");
+    assert.equal(pluginManifest.configSchema?.properties?.harnesses?.default?.codex?.approvalPolicy, undefined);
+    assert.equal(pluginManifest.configSchema?.properties?.harnesses?.default?.codex?.approvalsReviewer, undefined);
     assert.deepEqual(pluginManifest.configSchema?.properties?.harnesses?.additionalProperties?.properties?.permissionProfile?.enum, [
       ":read-only",
       ":workspace",

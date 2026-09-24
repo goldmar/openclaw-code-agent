@@ -11,6 +11,7 @@
 
 import packageJson from "../../package.json";
 import { getHarnessConfig } from "../config";
+import { getPluginRuntime, getRuntimeConfig } from "../runtime-store";
 import type { PendingInputState, PlanArtifact, PlanArtifactStep, ThreadAction } from "../types";
 import type {
   AgentHarness,
@@ -60,6 +61,7 @@ import {
   codexRequest,
   mapTurnPlanSteps,
   matchApprovalChoiceFromText,
+  readOpenClawExecMode,
   resolveCodexExecutionSettings,
   turnErrorMessage,
   type CodexApprovalChoice,
@@ -145,6 +147,20 @@ const OPTED_OUT_NOTIFICATIONS = [
   "item/plan/delta",
   "command/exec/outputDelta",
 ];
+
+/**
+ * The host `tools.exec.mode` at launch time: the live config when the runtime
+ * exposes it, else the snapshot taken at service start.
+ */
+function readHostExecMode(): ReturnType<typeof readOpenClawExecMode> {
+  let config: unknown;
+  try {
+    config = getPluginRuntime()?.config.current();
+  } catch {
+    config = undefined;
+  }
+  return readOpenClawExecMode(config ?? getRuntimeConfig());
+}
 
 function normalizeCodexAppServerSessionId(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
@@ -288,7 +304,7 @@ export class CodexHarness implements AgentHarness {
         clientSettings.args,
         clientSettings.requestTimeoutMs,
       );
-    const execution = resolveCodexExecutionSettings(getHarnessConfig("codex"));
+    const execution = resolveCodexExecutionSettings(getHarnessConfig("codex"), readHostExecMode());
 
     const queue = new HarnessMessageQueue();
     let threadId = normalizeCodexAppServerSessionId(options.resumeSessionId);

@@ -9,6 +9,7 @@ import { JsonRpcResponseError, StdioJsonRpcClient, dispatchJsonRpcEnvelope, type
 import { codexModelSupportsEffort, recordCodexModelCatalog, resetCodexModelCatalogForTests } from "../src/harness/codex-model-catalog";
 import { getCodexRateLimits, listCodexRateLimits, resetCodexRateLimitsForTests } from "../src/harness/codex-rate-limits";
 import { setPluginConfig } from "../src/config";
+import { setPluginRuntime } from "../src/runtime-store";
 import type { HarnessMessage, HarnessSession } from "../src/harness/types";
 import type { TokenUsageBreakdown } from "../src/harness/codex-app-server-protocol/v2/TokenUsageBreakdown";
 import type { Model } from "../src/harness/codex-app-server-protocol/v2/Model";
@@ -324,6 +325,7 @@ beforeEach(() => {
 
 afterEach(() => {
   setPluginConfig({});
+  setPluginRuntime(undefined);
 });
 
 describe("CodexHarness static properties", () => {
@@ -533,9 +535,9 @@ describe("CodexHarness launch settings", () => {
       model: "gpt-6-astra",
       serviceTier: "priority",
       developerInstructions: "You are working in a git worktree.",
-      permissions: ":workspace",
-      approvalPolicy: "on-request",
-      approvalsReviewer: "auto_review",
+      permissions: ":danger-full-access",
+      approvalPolicy: "never",
+      approvalsReviewer: "user",
     });
     assert.deepEqual(client.requestsFor("turn/start")[0], {
       threadId: VALID_THREAD_ID,
@@ -559,15 +561,42 @@ describe("CodexHarness launch settings", () => {
   });
 
   it("applies configured Codex permission profile, approval policy, and reviewer (B5)", async () => {
-    // Restoring the pre-5.0 full-access, no-prompt behavior is an explicit opt-in.
-    setPluginConfig({ harnesses: { codex: { permissionProfile: ":danger-full-access", approvalPolicy: "never", approvalsReviewer: "user" } } });
+    setPluginConfig({ harnesses: { codex: { permissionProfile: ":workspace", approvalPolicy: "on-request", approvalsReviewer: "auto_review" } } });
     const client = new MockCodexClient();
     await collectMessages(launch(client, { permissionMode: "bypassPermissions" }));
     const start = client.requestsFor("thread/start")[0];
-    assert.equal(start.permissions, ":danger-full-access");
-    assert.equal(start.approvalPolicy, "never");
-    assert.equal(start.approvalsReviewer, "user");
+    assert.equal(start.permissions, ":workspace");
+    assert.equal(start.approvalPolicy, "on-request");
+    assert.equal(start.approvalsReviewer, "auto_review");
     assert.equal("sandbox" in start, false);
+  });
+
+  it("follows the host tools.exec.mode read from the live runtime config at launch", async () => {
+    let execMode = "auto";
+    setPluginRuntime({ config: { current: () => ({ tools: { exec: { mode: execMode } } }) } });
+    const auto = new MockCodexClient();
+    await collectMessages(launch(auto));
+    const autoStart = auto.requestsFor("thread/start")[0];
+    assert.deepEqual([autoStart.permissions, autoStart.approvalPolicy, autoStart.approvalsReviewer], [":workspace", "on-request", "auto_review"]);
+
+    execMode = "full";
+    const full = new MockCodexClient();
+    await collectMessages(launch(full));
+    const fullStart = full.requestsFor("thread/start")[0];
+    assert.deepEqual([fullStart.permissions, fullStart.approvalPolicy, fullStart.approvalsReviewer], [":danger-full-access", "never", "user"]);
+
+    // Explicit OCA settings win over the host exec mode.
+    execMode = "auto";
+    setPluginConfig({ harnesses: { codex: { approvalsReviewer: "user" } } });
+    const mixed = new MockCodexClient();
+    await collectMessages(launch(mixed));
+    const mixedStart = mixed.requestsFor("thread/start")[0];
+    assert.deepEqual([mixedStart.permissions, mixedStart.approvalPolicy, mixedStart.approvalsReviewer], [":workspace", "on-request", "user"]);
+  });
+
+  it("refuses to launch Codex when tools.exec.mode blocks local execution and no profile is configured", () => {
+    setPluginRuntime({ config: { current: () => ({ tools: { exec: { mode: "deny" } } }) } });
+    assert.throws(() => launch(new MockCodexClient()), /tools\.exec\.mode is "deny"/);
   });
 
   it("sends bare Codex model ids and rejects provider-prefixed ones before launch", async () => {

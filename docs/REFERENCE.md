@@ -12,9 +12,9 @@ Canonical operator reference for `openclaw-code-agent`: install, configuration, 
 | `harnesses.codex.allowedModels` | `["gpt-6-sol", "gpt-6-astra", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]` |
 | `harnesses.codex.reasoningEffort` | unset; Codex applies its configured/model default |
 | `harnesses.codex.fastMode` | `false` |
-| `harnesses.codex.permissionProfile` | `:workspace` |
-| `harnesses.codex.approvalPolicy` | `on-request` |
-| `harnesses.codex.approvalsReviewer` | `auto_review` |
+| `harnesses.codex.permissionProfile` | unset; follows `tools.exec.mode` (`:danger-full-access` when that is unset) |
+| `harnesses.codex.approvalPolicy` | unset; follows `tools.exec.mode` (`never` when that is unset) |
+| `harnesses.codex.approvalsReviewer` | unset; follows `tools.exec.mode` (`user` when that is unset) |
 | `harnesses.opencode.defaultModel` | unset; OpenCode uses its configured provider default |
 | `permissionMode` | `plan` |
 | `planApproval` | `delegate` |
@@ -53,7 +53,7 @@ The current `openclaw-code-agent` package requires, is built against, and is val
   ```
 
   Place these fields under `plugins.entries.openclaw-code-agent.config`. An empty `allowedModels: []` removes that harness restriction; omission keeps the built-in list, but setting a custom `defaultModel` without an explicit list drops the built-in restriction.
-- **Codex sessions.** Rows from the pre-App-Server Codex SDK backend are dropped when the store loads, and 4.x rows whose worktree was a native Codex backend worktree load without worktree metadata. `harnesses.codex.reasoningEffort` no longer defaults to `medium` (unset uses Codex's own default), and Codex execution settings come from `harnesses.codex.permissionProfile` / `approvalPolicy` / `approvalsReviewer`. Their defaults changed from full access with no prompts to the `:workspace` sandbox with `on-request` escalations reviewed by `auto_review`; set `permissionProfile: ":danger-full-access"` and `approvalPolicy: "never"` under `harnesses.codex` to keep the 4.x behavior (see [Harnesses](#harnesses)).
+- **Codex sessions.** Rows from the pre-App-Server Codex SDK backend are dropped when the store loads, and 4.x rows whose worktree was a native Codex backend worktree load without worktree metadata. `harnesses.codex.reasoningEffort` no longer defaults to `medium` (unset uses Codex's own default), and Codex execution settings come from `harnesses.codex.permissionProfile` / `approvalPolicy` / `approvalsReviewer`. When they are unset, Codex follows the host `tools.exec.mode` like OpenClaw's bundled Codex plugin; with no `tools.exec.mode` (or `full`) that is the 4.x full-access, no-prompt behavior (see [Harnesses](#harnesses)).
 - **State paths.** OCA resolves its state directory like the Gateway (`OPENCLAW_STATE_DIR`; `OPENCLAW_HOME` is the home-directory override). Output transcripts and auto-update state moved under `<stateDir>/plugin-state/openclaw-code-agent/` (see [OpenClaw Host Integration](#openclaw-host-integration)).
 
 ### Host Configuration Notes
@@ -194,11 +194,21 @@ Codex harness details:
 - Resume sends `excludeTurns: true`; OCA never hydrates full thread history.
 - Cost: for API-key accounts the harness prices each `thread/tokenUsage/updated` response (`last` breakdown) against the built-in price table. ChatGPT-login sessions stay unpriced.
 - Permissions and approvals are configured per operator, identically for every OCA permission mode (OCA permission modes only select Codex's `plan` vs `default` collaboration mode):
-  - `harnesses.codex.permissionProfile`: `:workspace` (default), `:read-only`, or `:danger-full-access` (no sandbox; the 4.x default). Sent as the thread `permissions` profile.
-  - `harnesses.codex.approvalPolicy`: `on-request` (default; Codex asks before escalating out of the sandbox), `untrusted`, or `never` (no Codex prompts; the 4.x default).
-  - `harnesses.codex.approvalsReviewer`: `auto_review` (default; Codex's reviewer subagent decides) or `user` (approval buttons in chat).
+  - `harnesses.codex.permissionProfile`: `:danger-full-access` (no sandbox), `:workspace`, or `:read-only`. Sent as the thread `permissions` profile.
+  - `harnesses.codex.approvalPolicy`: `never` (no Codex prompts), `on-request` (Codex asks before escalating out of the sandbox), or `untrusted`.
+  - `harnesses.codex.approvalsReviewer`: `user` (approval buttons in chat) or `auto_review` (opt-in; Codex's reviewer subagent decides).
+  - When these keys are unset, OCA follows the host `tools.exec.mode` at each Codex launch, like OpenClaw's bundled Codex plugin:
+
+    | `tools.exec.mode` | `permissionProfile` | `approvalPolicy` | `approvalsReviewer` |
+    | --- | --- | --- | --- |
+    | unset or `full` | `:danger-full-access` | `never` | `user` |
+    | `auto` | `:workspace` | `on-request` | `auto_review` |
+    | `ask` | `:workspace` | `on-request` | `user` |
+    | `deny` or `allowlist` | Codex launch is refused, unless `permissionProfile` is set explicitly | | |
+
+  - Explicit `harnesses.codex.*` values always win, field by field. This differs from the bundled Codex plugin, where `tools.exec.mode: "auto"` overrides configured values.
   - Under `:workspace`, Codex may write only inside the workspace and has no network access. A command that needs more (network, for example `git push`, package installs, or API calls; or writes outside the workspace) is an escalation: with `on-request` Codex asks, and `auto_review` has Codex's reviewer subagent approve or deny it based on the task and its risk, usually within seconds and without a chat prompt. Denied requests fail back to the model. In an OCA worktree, `git add` and `git commit` also escalate, because they write to the main checkout's `.git` directory outside the worktree; in live testing the reviewer approved each in 3–5 s. Set `approvalsReviewer: "user"` to get approval buttons in chat instead, or `[sandbox_workspace_write] network_access = true` in `~/.codex/config.toml` to allow network inside the sandbox.
-  - To restore the 4.x behavior (full access, no prompts), set `permissionProfile: ":danger-full-access"` and `approvalPolicy: "never"`.
+  - To pin the full-access, no-prompt posture regardless of `tools.exec.mode`, set `permissionProfile: ":danger-full-access"` and `approvalPolicy: "never"`. To opt into auto-review without changing the host exec mode, set `permissionProfile: ":workspace"`, `approvalPolicy: "on-request"`, and `approvalsReviewer: "auto_review"`.
   - Command, file-change, and permission approval requests appear as pending-input approvals with buttons (for example `Approve once`, `Approve for session`, `Always allow \`<prefix>\``, `Decline`, `Decline and stop turn`). Plain-text replies such as `yes`, `approve for session`, `no`, or `cancel` also work; any other text declines the request and is steered into the turn as feedback.
 - Server requests OCA cannot serve are answered explicitly: MCP elicitations are declined, dynamic tool calls return `success: false`, and ChatGPT token refresh / unknown requests get a JSON-RPC method-not-found error.
 - Follow-ups sent with `agent_respond` while a Codex turn is running are steered into that turn (`turn/steer` with `expectedTurnId`). With `interrupt: true` the turn is interrupted instead and the message starts a new turn. If Codex rejects the steer (the turn just ended), the message is queued as the next turn.
@@ -303,7 +313,7 @@ These should remain manual or follow-up configuration:
 
 | Mode | Meaning |
 | --- | --- |
-| `default` | Plugin-managed interactive execution. The session can ask questions or pause between turns. Codex sandbox escalations follow `harnesses.codex.approvalPolicy` and `approvalsReviewer` (by default reviewed by Codex's `auto_review` subagent, not the user) |
+| `default` | Plugin-managed interactive execution. The session can ask questions or pause between turns. Codex-side approvals follow `harnesses.codex.approvalPolicy` and `approvalsReviewer`, or the host `tools.exec.mode` when those are unset (none by default) |
 | `plan` | Present the plan first, then block implementation until approval |
 | `bypassPermissions` | Fully autonomous execution with no plan checkpoint |
 
@@ -362,7 +372,7 @@ On first worktree use in a git repo with no stored policy, `agent_launch` blocks
 
 Worktrees are created under `OPENCLAW_WORKTREE_DIR`, else `worktreeDir`, else `<repoRoot>/.worktrees`. Outside a git repository there is no base directory: a launch that needs a worktree fails with a clear error instead of creating one in the OS temp directory. Use `worktree_strategy: "off"` for non-git directories.
 
-GitHub is the only PR provider supported in this release. Non-GitHub repos keep worktree isolation, but PR buttons/actions are disabled by policy resolution. The `goldmar/openclaw-code-agent` repository is treated as `pr-required`.
+GitHub is the only PR provider supported in this release. OCA calls `gh` only when a remote points at a GitHub host `gh` can serve: github.com, `GH_HOST`, or a host listed in `gh`'s `hosts.yml` (GitHub Enterprise). Non-GitHub repos keep worktree isolation, but PR buttons/actions are disabled by policy resolution. The `goldmar/openclaw-code-agent` repository is treated as `pr-required`.
 
 | Strategy | Where It Is Set | Behavior |
 | --- | --- | --- |
@@ -416,7 +426,7 @@ New OCA worktrees follow the same repository conventions as OpenClaw managed wor
 1. **`.worktreeinclude`** at the source checkout root lists gitignored files to copy into the new worktree (for example `.env` or local config). It uses gitignore syntax (comments, `!` negation, `**`, trailing `/`) and is evaluated by git itself: a file is copied only when it matches `.worktreeinclude` and is ignored by the repository's standard excludes, so tracked files are never copied. Symlinked files, paths through symlinked directories, and files that already exist in the worktree are skipped; file modes are preserved. A `.worktreeinclude` that is not a regular file fails the launch.
 2. **`.openclaw/worktree-setup.sh`**, when it exists and is executable, then runs inside the new worktree. It is executed directly (give it a shebang), with the Gateway environment plus `OPENCLAW_SOURCE_TREE_PATH` and `OPENCLAW_WORKTREE_PATH`, no stdin, and a 120 s timeout after which its whole process group is terminated.
 
-OCA always runs the setup script for its worktrees, unlike OpenClaw core, which runs it for managed worktrees only when the caller has admin scope. Core's rule protects the `worktrees.create` Gateway method, which lower-privileged clients can reach. An OCA worktree exists only for a coding session launched in an operator-chosen repository, so running the repository's own setup script is part of trusting that repository. The script runs unsandboxed with the Gateway's privileges, which is more than a default Codex session gets inside its `:workspace` sandbox. Do not point OCA at repositories whose setup scripts you do not trust.
+OCA always runs the setup script for its worktrees, unlike OpenClaw core, which runs it for managed worktrees only when the caller has admin scope. Core's rule protects the `worktrees.create` Gateway method, which lower-privileged clients can reach. An OCA worktree exists only for a coding session launched in an operator-chosen repository, so running the repository's own setup script is part of trusting that repository. The script runs unsandboxed with the Gateway's privileges, which can be more than a Codex session gets inside a `:workspace` sandbox. Do not point OCA at repositories whose setup scripts you do not trust.
 
 If either step fails, the launch fails with the reason (for the setup script, the exit code or timeout plus the tail of its output), the new worktree is removed, and the new `agent/*` branch is deleted; a resumed session's existing branch is kept. Git hooks are disabled for the provisioning git calls. OCA keeps its `agent/*` branch prefix so its branches never collide with core's `openclaw/*` managed worktrees.
 - `agent_worktree_cleanup(mode="preview_safe")` previews what Clean all safe would remove, `mode="clean_safe"` performs it, and `mode="preview_all"` shows both safe sandboxes and retained reasons.

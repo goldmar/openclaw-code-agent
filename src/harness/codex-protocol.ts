@@ -124,29 +124,98 @@ export interface CodexExecutionSettings {
 }
 
 /**
- * Default Codex execution: the `:workspace` sandbox (writes inside the
- * workspace, network off) with `on-request` approvals decided by Codex's
- * `auto_review` subagent, so escalations (writes outside the workspace,
- * network, sandbox escapes) are reviewed without prompting the user.
- * Restore the pre-5.0 behavior with `:danger-full-access` + `never`.
+ * Default Codex execution when `harnesses.codex` sets none of the execution
+ * keys and the host has no `tools.exec.mode` (or `full`): the trusted local
+ * operator posture of OpenClaw's bundled Codex plugin (full access, no
+ * Codex-side prompts). OCA's own plan review still gates implementation.
  */
 export const DEFAULT_CODEX_EXECUTION_SETTINGS: CodexExecutionSettings = {
-  permissionProfile: ":workspace",
-  approvalPolicy: "on-request",
-  approvalsReviewer: "auto_review",
+  permissionProfile: ":danger-full-access",
+  approvalPolicy: "never",
+  approvalsReviewer: "user",
 };
 
-export function resolveCodexExecutionSettings(config: {
-  permissionProfile?: string;
-  approvalPolicy?: string;
-  approvalsReviewer?: string;
-} | undefined): CodexExecutionSettings {
-  const pick = <T extends string>(value: string | undefined, allowed: readonly T[], fallback: T): T =>
-    allowed.includes(value as T) ? value as T : fallback;
+/** OpenClaw's normalized host exec policy (`tools.exec.mode`). */
+export type OpenClawExecMode = "deny" | "allowlist" | "ask" | "auto" | "full";
+
+function normalizeExecMode(value: unknown): OpenClawExecMode | undefined {
+  return value === "deny" || value === "allowlist" || value === "ask" || value === "auto" || value === "full"
+    ? value
+    : undefined;
+}
+
+/** Read `tools.exec.mode` from an OpenClaw config snapshot. */
+export function readOpenClawExecMode(config: unknown): OpenClawExecMode | undefined {
+  if (!config || typeof config !== "object") return undefined;
+  const tools = (config as { tools?: unknown }).tools;
+  if (!tools || typeof tools !== "object") return undefined;
+  const exec = (tools as { exec?: unknown }).exec;
+  if (!exec || typeof exec !== "object") return undefined;
+  return normalizeExecMode((exec as { mode?: unknown }).mode);
+}
+
+/**
+ * The Codex posture the host exec mode implies, mirroring the bundled Codex
+ * plugin: `auto` → guardian (`:workspace`, `on-request`, `auto_review`),
+ * `ask` → the same sandbox with approvals routed to the user, `full` or unset
+ * → full access with no prompts. `deny` / `allowlist` block Codex local
+ * execution, so they have no posture.
+ */
+function postureForExecMode(mode: OpenClawExecMode | undefined): CodexExecutionSettings | undefined {
+  switch (mode) {
+    case "auto":
+      return { permissionProfile: ":workspace", approvalPolicy: "on-request", approvalsReviewer: "auto_review" };
+    case "ask":
+      return { permissionProfile: ":workspace", approvalPolicy: "on-request", approvalsReviewer: "user" };
+    case "deny":
+    case "allowlist":
+      return undefined;
+    default:
+      return DEFAULT_CODEX_EXECUTION_SETTINGS;
+  }
+}
+
+export class CodexExecModeBlockedError extends Error {
+  constructor(mode: OpenClawExecMode) {
+    super(
+      `Codex sessions are unavailable because the host's tools.exec.mode is "${mode}", which blocks Codex local execution `
+      + `(as in OpenClaw's bundled Codex plugin). Set harnesses.codex.permissionProfile (and optionally approvalPolicy / approvalsReviewer) `
+      + `in the openclaw-code-agent config to run Codex with an explicit posture, or change tools.exec.mode.`,
+    );
+    this.name = "CodexExecModeBlockedError";
+  }
+}
+
+/**
+ * Resolve the Codex execution settings for a new session. Explicit
+ * `harnesses.codex.*` values always win (unlike the bundled Codex plugin, whose
+ * `tools.exec.mode: "auto"` overrides configured values); unset fields follow
+ * the host `tools.exec.mode` posture.
+ */
+export function resolveCodexExecutionSettings(
+  config: {
+    permissionProfile?: string;
+    approvalPolicy?: string;
+    approvalsReviewer?: string;
+  } | undefined,
+  execMode?: OpenClawExecMode,
+): CodexExecutionSettings {
+  const explicit = <T extends string>(value: string | undefined, allowed: readonly T[]): T | undefined =>
+    allowed.includes(value as T) ? value as T : undefined;
+  const permissionProfile = explicit(config?.permissionProfile, CODEX_PERMISSION_PROFILES);
+  const approvalPolicy = explicit(config?.approvalPolicy, CODEX_APPROVAL_POLICIES);
+  const approvalsReviewer = explicit(config?.approvalsReviewer, CODEX_APPROVALS_REVIEWERS);
+  let posture = postureForExecMode(execMode);
+  if (!posture) {
+    // deny / allowlist: only an explicit sandbox choice may run Codex; the rest
+    // of the posture then asks the user before any escalation.
+    if (!permissionProfile) throw new CodexExecModeBlockedError(execMode!);
+    posture = { permissionProfile, approvalPolicy: "on-request", approvalsReviewer: "user" };
+  }
   return {
-    permissionProfile: pick(config?.permissionProfile, CODEX_PERMISSION_PROFILES, DEFAULT_CODEX_EXECUTION_SETTINGS.permissionProfile),
-    approvalPolicy: pick(config?.approvalPolicy, CODEX_APPROVAL_POLICIES, DEFAULT_CODEX_EXECUTION_SETTINGS.approvalPolicy),
-    approvalsReviewer: pick(config?.approvalsReviewer, CODEX_APPROVALS_REVIEWERS, DEFAULT_CODEX_EXECUTION_SETTINGS.approvalsReviewer),
+    permissionProfile: permissionProfile ?? posture.permissionProfile,
+    approvalPolicy: approvalPolicy ?? posture.approvalPolicy,
+    approvalsReviewer: approvalsReviewer ?? posture.approvalsReviewer,
   };
 }
 

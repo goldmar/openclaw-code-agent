@@ -87,10 +87,7 @@
               "gpt-5.6-terra",
               "gpt-5.6-luna"
             ],
-            "fastMode": false,
-            "permissionProfile": ":workspace",
-            "approvalPolicy": "on-request",
-            "approvalsReviewer": "auto_review"
+            "fastMode": false
           },
           "claude-code": {
             "defaultModel": "opus",
@@ -139,7 +136,7 @@
                 ":workspace",
                 ":danger-full-access"
               ],
-              "description": "Codex-only built-in permission profile sent as the thread `permissions`. Default ':workspace' allows writes inside the workspace with network off; anything beyond that is an escalation that goes through approvalPolicy. ':read-only' blocks writes; ':danger-full-access' disables the sandbox (the pre-5.0 default)."
+              "description": "Codex-only built-in permission profile sent as the thread `permissions`. Unset follows the host tools.exec.mode like OpenClaw's bundled Codex plugin: ':workspace' for 'auto' and 'ask', ':danger-full-access' when tools.exec.mode is 'full' or unset; 'deny' and 'allowlist' block Codex unless this is set. ':workspace' allows writes inside the workspace with network off; ':read-only' blocks writes; ':danger-full-access' disables the sandbox. An explicit value always wins over tools.exec.mode."
             },
             "approvalPolicy": {
               "type": "string",
@@ -148,7 +145,7 @@
                 "on-request",
                 "untrusted"
               ],
-              "description": "Codex-only approval policy. Default 'on-request': Codex asks before escalating out of the sandbox (for example network access or writes outside the workspace); the request goes to approvalsReviewer. 'untrusted' also asks before commands Codex does not consider safe. 'never' never asks (failures go back to the model); use it with ':danger-full-access' to restore the pre-5.0 behavior."
+              "description": "Codex-only approval policy. Unset follows the host tools.exec.mode: 'on-request' for 'auto' and 'ask', 'never' when tools.exec.mode is 'full' or unset. 'on-request' asks before escalating out of the sandbox (for example network access or writes outside the workspace); the request goes to approvalsReviewer. 'untrusted' also asks before commands Codex does not consider safe. 'never' never asks."
             },
             "approvalsReviewer": {
               "type": "string",
@@ -156,7 +153,7 @@
                 "user",
                 "auto_review"
               ],
-              "description": "Codex-only reviewer for approval requests: 'auto_review' (default; Codex's reviewer subagent approves or denies each request based on the task and its risk) or 'user' (requests are sent to the chat as approval buttons)."
+              "description": "Codex-only reviewer for approval requests: 'user' (requests are sent to the chat as approval buttons) or 'auto_review' (opt-in; Codex's reviewer subagent approves or denies each request based on the task and its risk). Unset follows the host tools.exec.mode: 'auto_review' for 'auto', 'user' otherwise."
             }
           }
         }
@@ -258,7 +255,7 @@
     },
     "harnesses": {
       "label": "Harness configuration",
-      "help": "Per-harness defaults and model restrictions. Set harnesses.codex.fastMode=true to request Codex's priority (fast) service tier. harnesses.codex.permissionProfile / approvalPolicy / approvalsReviewer control the Codex sandbox and approval prompts (default: ':workspace' sandbox, 'on-request' escalations reviewed by Codex's 'auto_review' subagent; set ':danger-full-access' + 'never' for the pre-5.0 full-access behavior). OpenCode is experimental; leave harnesses.opencode.defaultModel unset to use OpenCode's provider default, or pass provider/model explicitly. Default: {\"codex\":{\"defaultModel\":\"gpt-6-sol\",\"allowedModels\":[\"gpt-6-sol\",\"gpt-6-astra\",\"gpt-6-luna\",\"gpt-5.6-sol\",\"gpt-5.6-terra\",\"gpt-5.6-luna\"],\"fastMode\":false,\"permissionProfile\":\":workspace\",\"approvalPolicy\":\"on-request\",\"approvalsReviewer\":\"auto_review\"},\"claude-code\":{\"defaultModel\":\"opus\",\"allowedModels\":[\"sonnet\",\"opus\"]},\"opencode\":{}}.",
+      "help": "Per-harness defaults and model restrictions. Set harnesses.codex.fastMode=true to request Codex's priority (fast) service tier. harnesses.codex.permissionProfile / approvalPolicy / approvalsReviewer control the Codex sandbox and approval prompts; when unset they follow the host tools.exec.mode like OpenClaw's bundled Codex plugin ('full' or unset: full access, no prompts; 'auto': ':workspace' + 'on-request' + 'auto_review'; 'ask': the same with approvals in chat), and explicit values always win. OpenCode is experimental; leave harnesses.opencode.defaultModel unset to use OpenCode's provider default, or pass provider/model explicitly. Default: {\"codex\":{\"defaultModel\":\"gpt-6-sol\",\"allowedModels\":[\"gpt-6-sol\",\"gpt-6-astra\",\"gpt-6-luna\",\"gpt-5.6-sol\",\"gpt-5.6-terra\",\"gpt-5.6-luna\"],\"fastMode\":false},\"claude-code\":{\"defaultModel\":\"opus\",\"allowedModels\":[\"sonnet\",\"opus\"]},\"opencode\":{}}.",
       "advanced": true
     },
     "maxSessions": {

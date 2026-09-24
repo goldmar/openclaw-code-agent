@@ -523,14 +523,14 @@ describe("setPluginConfig", () => {
     assert.equal("codexApprovalPolicy" in pluginConfig, false);
   });
 
-  it("defaults Codex to the workspace sandbox with auto-reviewed on-request escalations", () => {
+  it("leaves Codex execution keys unset so they follow the host tools.exec.mode", () => {
     setPluginConfig({});
-    assert.equal(pluginConfig.harnesses.codex?.permissionProfile, ":workspace");
-    assert.equal(pluginConfig.harnesses.codex?.approvalPolicy, "on-request");
-    assert.equal(pluginConfig.harnesses.codex?.approvalsReviewer, "auto_review");
+    assert.equal(pluginConfig.harnesses.codex?.permissionProfile, undefined);
+    assert.equal(pluginConfig.harnesses.codex?.approvalPolicy, undefined);
+    assert.equal(pluginConfig.harnesses.codex?.approvalsReviewer, undefined);
   });
 
-  it("restores the 4.x full-access Codex behavior when configured", () => {
+  it("keeps explicitly configured Codex execution keys", () => {
     setPluginConfig({ harnesses: { codex: { permissionProfile: ":danger-full-access", approvalPolicy: "never", approvalsReviewer: "user" } } });
     assert.equal(pluginConfig.harnesses.codex?.permissionProfile, ":danger-full-access");
     assert.equal(pluginConfig.harnesses.codex?.approvalPolicy, "never");
