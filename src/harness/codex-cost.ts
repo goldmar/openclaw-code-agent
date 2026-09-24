@@ -17,8 +17,13 @@ type TokenRates = {
 // USD per 1M tokens. These are the current standard API rates documented on
 // the official OpenAI model pages as of 2026-09-04.
 // GPT-6 Astra: https://developers.openai.com/api/docs/models/gpt-6-astra
+// GPT-6 Sol and Luna: https://developers.openai.com/api/docs/pricing (Standard,
+// short context, as of 2026-09-23; also announced in
+// https://developers.openai.com/api/docs/changelog).
 const STANDARD_RATES: Record<string, TokenRates> = {
   "gpt-6-astra": { input: 10, cachedInput: 1, output: 50 },
+  "gpt-6-sol": { input: 2, cachedInput: 0.2, output: 10 },
+  "gpt-6-luna": { input: 0.1, cachedInput: 0.01, output: 0.5 },
   "gpt-5.6-sol": { input: 4, cachedInput: 0.4, output: 20 },
   "gpt-5.6-terra": { input: 2, cachedInput: 0.2, output: 12 },
   "gpt-5.6-luna": { input: 0.2, cachedInput: 0.02, output: 1.2 },
@@ -43,9 +48,11 @@ function canonicalPricingModel(model: string | undefined): string | undefined {
   const normalized = model?.trim().toLowerCase();
   if (!normalized) return undefined;
   if (normalized === "gpt-5.6") return "gpt-5.6-sol";
-  if (normalized === "gpt-6-astra") return "gpt-6-astra";
+  // GPT-6 models are priced by exact id only; unlisted snapshots stay unpriced.
+  if (normalized.startsWith("gpt-6-")) {
+    return Object.hasOwn(STANDARD_RATES, normalized) ? normalized : undefined;
+  }
   for (const pricedModel of Object.keys(STANDARD_RATES)) {
-    if (pricedModel === "gpt-6-astra") continue;
     if (normalized === pricedModel || normalized.startsWith(`${pricedModel}-`)) {
       return pricedModel;
     }
