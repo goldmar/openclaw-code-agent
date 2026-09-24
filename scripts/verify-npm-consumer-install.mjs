@@ -100,7 +100,7 @@ try {
   requireDependency(mcp, "hono", "4.13.7", "@modelcontextprotocol/sdk");
   requireDependency(ajv, "fast-uri", "3.1.7", "ajv");
   requireDependency(plugin, "qs", "6.16.0", packageJson.name);
-  requireDependency(plugin, "ip-address", "10.7.0", packageJson.name);
+  requireDependency(plugin, "ip-address", "10.7.2", packageJson.name);
 
   console.log(`npm consumer install validated ${packageJson.name}@${packageJson.version}`);
 } finally {
