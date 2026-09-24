@@ -1,6 +1,6 @@
 import { branchNameValidationError } from "../worktree-ref-validation";
 import { REASONING_EFFORTS, type ReasoningEffort } from "../types";
-import { Type } from "../tool-schema";
+import { Type } from "typebox";
 import { sessionManager } from "../singletons";
 import { formatLaunchSummaryFromSession, type LaunchSummarySessionLike } from "../launch-summary";
 import {

@@ -72,6 +72,9 @@ importers:
       tsx:
         specifier: ^4.21.0
         version: 4.23.15
+      typebox:
+        specifier: 1.3.30
+        version: 1.3.30
       typescript:
         specifier: ^7.0.2
         version: 7.0.2

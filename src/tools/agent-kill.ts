@@ -1,4 +1,4 @@
-import { Type } from "../tool-schema";
+import { Type } from "typebox";
 import { sessionManager } from "../singletons";
 import type { OpenClawPluginToolContext } from "../types";
 import { getKillSessionText } from "../application/session-control";

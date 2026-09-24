@@ -1,4 +1,4 @@
-import { Type } from "../tool-schema";
+import { Type } from "typebox";
 import { sessionManager } from "../singletons";
 import type { OpenClawPluginToolContext, RepoIntegrationPolicy, RepoPolicyRecord } from "../types";
 import { validateRepoPolicyForPrAvailability } from "../repo-policy";

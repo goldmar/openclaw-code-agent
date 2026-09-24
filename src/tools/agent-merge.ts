@@ -1,5 +1,5 @@
 import { branchNameValidationError } from "../worktree-ref-validation";
-import { Type } from "../tool-schema";
+import { Type } from "typebox";
 import { existsSync } from "fs";
 import { getDefaultHarnessName } from "../config";
 import { sessionManager } from "../singletons";

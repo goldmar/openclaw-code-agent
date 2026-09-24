@@ -1,5 +1,5 @@
 import { branchNameValidationError } from "../worktree-ref-validation";
-import { Type } from "../tool-schema";
+import { Type } from "typebox";
 import type { OpenClawPluginToolContext } from "../types";
 import { sessionManager } from "../singletons";
 import { usesNativeBackendWorktree } from "../session-backend-ref";

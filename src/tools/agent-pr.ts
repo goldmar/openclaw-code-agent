@@ -1,5 +1,5 @@
 import { assertBranchName, branchNameValidationError, localBranchRef } from "../worktree-ref-validation";
-import { Type } from "../tool-schema";
+import { Type } from "typebox";
 import { execFileSync } from "child_process";
 import { existsSync } from "fs";
 import { sessionManager } from "../singletons";

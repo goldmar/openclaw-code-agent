@@ -1,4 +1,4 @@
-import { Type } from "../tool-schema";
+import { Type } from "typebox";
 
 import { GOAL_CONTROLLER_MISSING_MESSAGE, renderGoalStopResult } from "../application/goal-view";
 import { goalController } from "../singletons";
