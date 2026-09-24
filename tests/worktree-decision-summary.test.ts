@@ -242,9 +242,9 @@ describe("worktree decision work summaries", () => {
     }
   });
 
-  it("returns no provider without runtime.llm and falls back when the host denies completion", async () => {
+  it("returns no provider before plugin registration and falls back when the host denies completion", async () => {
     try {
-      setPluginRuntime({ worktreeDecisionSummary: { generateWorktreeDecisionSummary: async () => ({ summary: ["x"] }) } });
+      setPluginRuntime(undefined);
       assert.equal(createRuntimeWorktreeDecisionSummaryProvider(), undefined);
 
       setPluginRuntime({

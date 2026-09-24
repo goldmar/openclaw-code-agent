@@ -123,7 +123,7 @@ export function archiveLegacySessionIndex(indexPath: string, reason: string): bo
  * Keep a verbatim copy of a store before rows that no longer normalize are
  * dropped, so an upgrade never discards data without a recoverable backup.
  */
-export function backupSessionIndex(indexPath: string, rawPayload: string, reason: string): boolean {
+function backupSessionIndex(indexPath: string, rawPayload: string, reason: string): boolean {
   try {
     const backupPath = getAvailableArchivePath(indexPath, "legacy");
     if (!backupPath) {

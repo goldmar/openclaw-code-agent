@@ -1,102 +1,100 @@
 # Security
 
-Security notes for `openclaw-code-agent`: accepted subprocess surfaces, shell boundaries, and current plugin-security scanner behavior.
+Security notes for `openclaw-code-agent`: the subprocesses it runs, its network and self-update behavior, the data it stores, and how the release gates check the packed bundle.
 
 ## Threat Model Summary
 
-This plugin is intentionally an orchestration layer around local developer tooling. It is expected to:
+This plugin is an orchestration layer around local developer tooling. It is expected to:
 
-- spawn local agent backends
-- run local `git` / `gh` commands for worktree and PR flows
-- use OpenClaw-owned runtime/gateway surfaces for wake and notification delivery
+- start local coding-agent backends (Claude Code in-process through its SDK; Codex and OpenCode as child processes)
+- run local `git` / `gh` commands for worktree, merge, and PR flows
+- run a repository's own `.openclaw/worktree-setup.sh` when it creates a worktree
 - optionally run operator-provided verifier shell commands in explicit goal-task flows
+- use OpenClaw's in-process runtime for notifications, system events, logging, LLM summaries, and Task Flow mirroring, and the local `openclaw` CLI for the few host operations external plugins cannot call in-process
 
-Because of that design, static scanners that flag any `child_process` usage will report this plugin. That finding is expected and should be reviewed as an accepted design surface, not treated as accidental malicious behavior.
+Anyone who can launch an OCA session can make a coding agent run arbitrary commands in the chosen repository. Treat access to the orchestrator, and the repositories you point OCA at, accordingly.
 
-The package also declares OpenClaw install metadata in `package.json` and dangerous configuration flags in `openclaw.plugin.json` so review tools can identify it as an executable high-trust developer automation plugin rather than an instruction-only helper.
+The package declares OpenClaw install metadata in `package.json` and dangerous configuration flags in `openclaw.plugin.json`, so review tools can identify it as an executable, high-trust developer automation plugin rather than an instruction-only helper.
 
-## Accepted Subprocess Surfaces
+## Subprocess Inventory
 
-The reviewed subprocess surfaces are:
+Nothing runs through a shell string except the goal verifier, which is a shell command by design.
 
-- Wake and fallback delivery via the local `openclaw` CLI.
-  Source: `src/wake-delivery-executor.ts`
-  Rationale: wake delivery stays gateway-owned; the plugin does not create its own network client for lifecycle wakes.
-- Direct user notifications via OpenClaw runtime channel adapters.
-  Sources: `src/direct-notification-transport.ts`, `src/wake-dispatcher.ts`
-  Rationale: direct delivery stays inside the gateway runtime so channel account, topic/thread routing, and interactive presentation handling remain provider-owned.
-- Codex App Server launch over stdio.
-  Source: `src/harness/codex-rpc.ts`
-  Rationale: this is the native Codex backend transport.
-- OpenCode server launch on localhost.
-  Source: `src/harness/opencode.ts`
-  Rationale: experimental OpenCode support uses the current `opencode serve` HTTP/SSE API. The plugin binds to `127.0.0.1`, polls `/api/health`, and shuts down the child process with the session.
-- Git and GitHub CLI operations for worktree lifecycle, merge, and PR flows.
-  Sources: `src/git-exec.ts` (the shared async runner), `src/worktree*.ts`, `src/repo-policy.ts`, `src/tools/agent-pr.ts`
-  Rationale: worktree creation, merge, status, and PR handling are core product features.
-- Repository worktree setup scripts.
-  Source: `src/worktree-provisioning.ts`
-  Rationale: new OCA worktrees follow OpenClaw's managed-worktree convention and run an executable `.openclaw/worktree-setup.sh` from the repository, with no shell, no stdin, a 120 s timeout, and process-group termination. Repositories whose setup scripts you do not trust should not be used as OCA workdirs.
-- Goal-task verifier commands.
-  Source: `src/goal-controller.ts`
-  Rationale: verifier mode is explicitly a trusted-operator feature that runs user-supplied shell checks between iterations.
+### Fixed executables
 
-## Hardening Notes
+These call sites name the executable as a string literal with an argument array (`execFile("git", [...])`), never with `shell: true`.
 
-The plugin keeps subprocess use narrow where practical:
+| Executable | Source | What runs |
+| --- | --- | --- |
+| `git` | `src/git-exec.ts` (`runGit`), used by `src/worktree*.ts`, `src/worktree-ref-validation.ts`, `src/repo-policy.ts`, `src/tools/agent-pr.ts` | Worktree add/remove, status, diff, merge, rebase, push, and `git check-ref-format` branch-name validation. Explicit per-call timeouts, closed stdin, the Gateway's environment. Mutating sequences are serialized per repository. |
+| `gh` | `src/git-exec.ts` (`runGh`), used by `src/worktree-repo.ts`, `src/worktree-pr.ts` | PR create, view, list, and edit when the GitHub CLI is installed and authenticated. |
+| `openclaw` | `src/wake-delivery-executor.ts` | `openclaw gateway call chat.send --params <json>` for session wakes. This is the only delivery path that still uses the CLI: the in-process `runtime.gateway.request` surface is reserved for trusted plugins. |
+| `openclaw` | `src/auto-update.ts` | `openclaw plugins inspect openclaw-code-agent --json` and, for ClawHub installs, `openclaw plugins search <package> --json` (update check); `openclaw plugins install <package>@<version> --force` (only after the user presses **Update now**); `openclaw gateway restart` (only after the user presses **Restart Gateway**). See [Self-update](#self-update). |
 
-- `openclaw`, `git`, and `gh` invocations use `execFile` argument arrays rather than shell-string interpolation. Worktree-layer `git` / `gh` calls go through the async `runGit` / `runGh` helpers in `src/git-exec.ts` (explicit per-call timeout, closed stdin, inherited Gateway environment); only the `git check-ref-format` branch-name guard stays synchronous. Mutating git sequences (worktree add/remove, checkout, merge, branch deletion) are serialized per repository.
-- Branch names and refs are validated (`src/worktree-ref-validation.ts`) and passed as `refs/heads/...` before any git command runs, so option-shaped or revision-expression names never reach git.
-- Discord delivery now uses explicit dependency injection in tests instead of a production env-var override for the sender module.
-- Goal-task verifier execution still uses `bash -lc` by design, but now strips `BASH_ENV` and `ENV` so ambient shell bootstrap hooks cannot silently rewrite verifier execution.
+### Dynamic executables
 
-Verifier commands remain powerful by design. They should be treated as trusted operator input and not exposed to untrusted users.
+These run a configurable command or a repository-provided file, so the executable cannot be a literal. Each has one call site.
 
-## Security Metadata
+| Command | Source | Notes |
+| --- | --- | --- |
+| Codex App Server | `src/harness/codex-rpc.ts` | `codex app-server --listen stdio://` (override with `OPENCLAW_CODEX_APP_SERVER_COMMAND` / `OPENCLAW_CODEX_APP_SERVER_ARGS`). JSON-RPC over stdio; one process per Codex session. |
+| OpenCode server | `src/harness/opencode.ts` | One shared `opencode serve --hostname 127.0.0.1 --port 0 --print-logs` (override the binary with `OPENCLAW_OPENCODE_COMMAND`). Started lazily for the first OpenCode session, addressed through the URL it prints, and shut down about 30 seconds after the last OpenCode session ends. Binds to localhost only. |
+| Worktree setup script | `src/worktree-provisioning.ts` | The repository's executable `.openclaw/worktree-setup.sh`, run directly (no shell, no stdin) in each new OCA worktree with a 120 s timeout and process-group termination. See [Worktree setup script](#worktree-setup-script). |
+| Goal verifier | `src/goal-controller.ts` | `bash -lc <command>` for operator-supplied verifier commands in `agent_goal_launch(verifier...)`. `BASH_ENV` and `ENV` are removed from its environment so shell bootstrap hooks cannot rewrite verifier execution. Verifier commands are trusted operator input; do not expose goal launches to untrusted users. |
 
-The release package includes:
+### In-process host surfaces (no subprocess)
 
-- `openclaw.install.npmSpec`, `defaultChoice`, and `minHostVersion` in `package.json`.
-- `configContracts.dangerousFlags` for `permissionMode: "bypassPermissions"`, `planApproval: "approve"`, `defaultWorktreeStrategy: "auto-merge"`, and `defaultWorktreeStrategy: "auto-pr"` in `openclaw.plugin.json`.
-- Skill install metadata for the `openclaw-code-agent` npm package.
+- Direct user notifications: `sendDurableMessageBatch` from `openclaw/plugin-sdk/channel-outbound` (`src/direct-notification-transport.ts`). The host durable queue owns rendering, routing, and retries.
+- System events and wake fallbacks: `api.runtime.system.enqueueSystemEvent` plus `requestHeartbeat` (`src/wake-transport.ts`).
+- LLM summaries: `api.runtime.llm.complete` against the default agent's model (`src/runtime-llm.ts`); OCA never requests a model, agent, or auth-profile override.
+- Logging: `api.runtime.logging.getChildLogger` (`src/logger.ts`).
+- Task Flow mirroring: `api.runtime.tasks.async.managedFlows` (`src/session-task-lifecycle.ts`).
 
-The orchestration skill should describe plugin tool state without wording that resembles prompt hierarchy changes. Local tests reject `authoritative`, `system prompt`, `developer instruction`, and `higher-priority` phrasing in `skills/code-agent-orchestration/SKILL.md`.
+## Network
 
-## Current Subprocess Review
+OCA makes one outbound request of its own: the npm update check, a bounded HTTPS `GET https://registry.npmjs.org/openclaw-code-agent/latest` with a 10 s timeout, sent only for npm installs and only while `autoUpdate` is on. It lives in its own bundle chunk (`dist/chunks/npm-release-client-*.js`), which reads no environment variables and sends no local data. ClawHub installs check through `openclaw plugins search` instead. Coding-agent backends make their own model-provider requests with their own credentials; OCA does not read or forward those credentials.
 
-Source review identifies two expected findings in the packed bundle:
+The environment variables OCA reads are local configuration: harness command overrides (`OPENCLAW_CODEX_APP_SERVER_*`, `OPENCLAW_OPENCODE_COMMAND`), OpenCode localhost server auth (`OPENCODE_SERVER_USERNAME`, `OPENCODE_SERVER_PASSWORD`), worktree and state path overrides (`OPENCLAW_WORKTREE_DIR`, `OPENCLAW_STATE_DIR`, `OPENCLAW_HOME`, `OPENCLAW_CODE_AGENT_*_PATH`), and diagnostics switches. None are serialized into notifications, wakes, or the update check.
 
-1. `Shell command execution detected (child_process)`
-2. `Environment variable access combined with network send — possible credential harvesting`
+## Self-Update
 
-### `child_process`
+The plugin config key `autoUpdate` (default `true`) controls the self-updater:
 
-This capability is legitimate but expected. The plugin cannot provide its core orchestration features without spawning local processes.
+- **On:** about once a day OCA checks for a newer stable release from the plugin's recorded install source and, if one exists, sends **Update now** / **Remind later** / **Dismiss** buttons. Nothing is installed until a user presses **Update now**. OCA then reinstalls exactly the approved version from the recorded npm or ClawHub source (`openclaw plugins install <package>@<version> --force`) and verifies the installed version and install record with `openclaw plugins inspect`. The Gateway is restarted only after a separate **Restart Gateway** press (`openclaw gateway restart`).
+- **Off (`autoUpdate: false`):** no update checks, installs, or restarts. Update buttons sent before the change reply that self-update is disabled.
 
-OpenClaw 2026.7.1 no longer performs built-in dangerous-code blocking during plugin installation. The release checker strips inherited `OPENCLAW_*` overrides, packs and installs the plugin under an isolated temporary home, then runs OpenClaw's deep static code-safety audit and accepts only the two reviewed findings above. Missing scans, scan errors, and additional dangerous-code patterns fail the gate. Operators who need a host-specific install decision should configure `security.installPolicy` after reviewing the subprocess inventory below.
+Update buttons are single-use action tokens bound to the approved version.
 
-### Bundled environment/network heuristic
+## Worktree Setup Script
 
-The packed bundle contains both local environment reads for harness/configuration behavior and a bounded npm registry request for the opt-in update prompt. OpenClaw's file-level audit therefore reports its environment-plus-network heuristic even though source review keeps those operations separate and the request does not send environment values. The release checker accepts that exact rule/message and rejects any other added audit rule.
+OpenClaw core runs `.openclaw/worktree-setup.sh` for its managed worktrees only when the caller has admin scope, because the `worktrees.create` Gateway method can be reached by lower-privileged clients. OCA always runs it for its own worktrees. An OCA worktree is created only for a coding session that the orchestrator launched in an operator-chosen repository, and the coding agent then runs in that same checkout with write and command access (full access by default after plan approval). The setup script therefore grants nothing the session does not already have. Do not use repositories whose setup scripts you do not trust as OCA workdirs.
 
-### Environment And Network Review
+## Data Locations
 
-The source tree does read environment variables for normal local configuration, for example:
+State lives under the OpenClaw state directory (`$OPENCLAW_STATE_DIR`, default `~/.openclaw`):
 
-- Codex command overrides
-- OpenCode command and localhost server auth overrides: `OPENCLAW_OPENCODE_COMMAND`, `OPENCODE_SERVER_USERNAME`, and `OPENCODE_SERVER_PASSWORD`
-- worktree directory overrides
-- persisted-path resolution
+| Path | Contents |
+| --- | --- |
+| `<stateDir>/code-agent-sessions.json` | Session index: prompts, routes, worktree metadata, costs, and action tokens (override with `OPENCLAW_CODE_AGENT_SESSIONS_PATH`) |
+| `<stateDir>/code-agent-goal-tasks.json` | Goal-task definitions and progress (override with `OPENCLAW_CODE_AGENT_GOAL_TASKS_PATH`) |
+| `<stateDir>/plugin-state/openclaw-code-agent/output/` | Session output transcripts (private directory and files) |
+| `<stateDir>/plugin-state/openclaw-code-agent/auto-update.json` | Update-check state |
+| `<repoRoot>/.worktrees/` | OCA worktrees (override with `worktreeDir` or `OPENCLAW_WORKTREE_DIR`) |
 
-The source tree also sends lifecycle notifications and wakes.
+JSON stores are written as private (`0600`) files. [REFERENCE.md](REFERENCE.md#openclaw-host-integration) lists every path.
 
-In the reviewed source paths, the notification and wake code does not read sensitive env values and forward them into outbound payloads. Treat any future env-to-network scanner finding as suspicious until source review confirms whether it is only a bundled-file heuristic or a concrete exfiltration path.
+## Release Gates
+
+- `pnpm check-clawhub-scan` (part of `pnpm verify`) runs ClawHub's static moderation scan, vendored from the ClawHub repository with its MIT license in `scripts/vendor/clawhub-moderation-engine.mjs`, over the exact packed file list. Any finding fails the gate. It also requires that `fetch(` appears only in the npm release-client chunk and that no packed file combines `process.env` with a network call. Refresh the vendored engine with `pnpm sync:clawhub-scan -- --clawhub <checkout>`.
+- `pnpm check-plugin-security` packs and installs the plugin under an isolated temporary home and runs OpenClaw's deep static code-safety audit. It accepts only the reviewed `dangerous-exec` finding (`Shell command execution detected (child_process)`), which maps to the subprocess inventory above. Missing scans, scan errors, and any other finding fail the gate.
+
+OpenClaw no longer blocks dangerous code during plugin installation. Operators who need a host-specific install decision should configure `security.installPolicy` after reviewing the inventory above.
 
 ## Review Guidance
 
-When reviewing future scanner output for this plugin:
+When reviewing scanner output or a change touching subprocess or transport code:
 
-- expect `child_process` findings and verify they still map only to the accepted surfaces above
-- scrutinize any new env-to-network path that reads secrets and serializes them into outbound messages or external subprocess arguments
-- treat new shell usage outside the accepted surfaces as suspicious until justified
-- keep tests around Discord delivery, wake delivery, and goal verifiers green after any refactor touching transport or subprocess code
+- `child_process` findings must map to the inventory above. New executables, shell strings, or `shell: true` need a documented reason.
+- Keep fixed commands literal (`execFile("git", [...])`); add new dynamic commands only with an entry here.
+- Treat any path that reads environment values or secrets and sends them in outbound messages, subprocess arguments, or network requests as suspicious until reviewed.
+- Keep the wake-delivery, direct-notification, auto-update, and goal-verifier tests green.

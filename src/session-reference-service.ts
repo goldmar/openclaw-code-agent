@@ -24,8 +24,7 @@ export class SessionReferenceService {
     if (byId) return byId;
 
     return this.findPreferredMatch(ref, (session) => session.name === ref)
-      ?? this.findPreferredMatch(ref, (session) => getBackendConversationId(session) === ref)
-      ?? this.findPreferredMatch(ref, (session) => session.harnessSessionId === ref);
+      ?? this.findPreferredMatch(ref, (session) => getBackendConversationId(session) === ref);
   }
 
   getPersistedSession(ref: string): PersistedSessionInfo | undefined {
@@ -36,7 +35,7 @@ export class SessionReferenceService {
     const active = this.resolveActive(ref);
     return this.store.resolveBackendConversationId(
       ref,
-      active ? (getBackendConversationId(active) ?? active.harnessSessionId) : undefined,
+      active ? getBackendConversationId(active) : undefined,
     );
   }
 

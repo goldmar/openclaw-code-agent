@@ -104,7 +104,7 @@ const QUESTION_CONTEXT_SUMMARY_SYSTEM_PROMPT = [
   `Do not answer the question. Do not invent choices. Do not alter option labels or semantics.`,
 ].join("\n");
 
-export function buildQuestionContextSummaryPrompt(evidence: QuestionContextSummaryEvidence): string {
+function buildQuestionContextSummaryPrompt(evidence: QuestionContextSummaryEvidence): string {
   return [
     `Evidence:`,
     JSON.stringify(evidence, null, 2),

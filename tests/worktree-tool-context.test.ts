@@ -138,23 +138,20 @@ describe("worktree-tool-context", () => {
       worktreeMergedAt: undefined,
       worktreePrUrl: undefined,
       backendConversationId: "backend-persisted",
-      harnessSessionId: "legacy-persisted",
     });
     assert.equal(targets[1]?.id, "active-1");
   });
 
-  it("matches session refs by session id, name, backend id, and legacy harness id", () => {
+  it("matches session refs by session id, name, and backend id", () => {
     const target = {
       id: "session-1",
       name: "feature-work",
       backendConversationId: "backend-1",
-      harnessSessionId: "legacy-1",
     };
 
     assert.equal(matchesWorktreeToolRef(target, "session-1"), true);
     assert.equal(matchesWorktreeToolRef(target, "feature-work"), true);
     assert.equal(matchesWorktreeToolRef(target, "backend-1"), true);
-    assert.equal(matchesWorktreeToolRef(target, "legacy-1"), true);
     assert.equal(matchesWorktreeToolRef(target, "missing"), false);
   });
 
@@ -166,7 +163,7 @@ describe("worktree-tool-context", () => {
           : undefined;
       },
       getPersistedSession(ref: string) {
-        return ref === "legacy-1"
+        return ref === "feature-work"
           ? { sessionId: "persisted-1", name: "feature-work" }
           : undefined;
       },
@@ -177,7 +174,6 @@ describe("worktree-tool-context", () => {
         id: "session-1",
         name: "feature-work",
         backendConversationId: "backend-1",
-        harnessSessionId: "legacy-1",
       }),
       {
         activeSession: { id: "active-1", name: "feature-work" },
@@ -206,10 +202,8 @@ describe("worktree-tool-context", () => {
     assert.deepEqual(refs, [
       "fresh-persisted",
       "fresh-backend",
-      "fresh-harness",
       "active-runtime",
       "active-backend",
-      "active-harness",
     ]);
   });
 

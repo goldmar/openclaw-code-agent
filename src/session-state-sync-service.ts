@@ -65,7 +65,6 @@ export class SessionStateSyncService {
     const existingBackendConversationId = getBackendConversationId(existing);
     if (existing.sessionId && session.id === existing.sessionId) return true;
     if (existingBackendConversationId && existingBackendConversationId === sessionBackendConversationId) return true;
-    if (existing?.harnessSessionId && session.harnessSessionId === existing.harnessSessionId) return true;
     if (existing?.name && session.name === existing.name) return true;
     return false;
   }

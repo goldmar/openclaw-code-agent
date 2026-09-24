@@ -96,7 +96,7 @@ export function getStoppedStatusLabel(killReason?: KillReason): string {
   }
 }
 
-export function buildCompletionFollowupContract(): CompletionFollowupContract {
+function buildCompletionFollowupContract(): CompletionFollowupContract {
   return {
     requiresShortFactualSummary: true,
     owner: "agent",
@@ -104,7 +104,7 @@ export function buildCompletionFollowupContract(): CompletionFollowupContract {
   };
 }
 
-export function buildWorktreeOutcomeFollowupContract(): WorktreeOutcomeFollowupContract {
+function buildWorktreeOutcomeFollowupContract(): WorktreeOutcomeFollowupContract {
   return {
     requiresShortFactualSummary: true,
     owner: "agent",
@@ -112,7 +112,7 @@ export function buildWorktreeOutcomeFollowupContract(): WorktreeOutcomeFollowupC
   };
 }
 
-export function buildGoalTaskFollowupContract(): GoalTaskFollowupContract {
+function buildGoalTaskFollowupContract(): GoalTaskFollowupContract {
   return {
     requiresShortFactualSummary: true,
     owner: "agent",

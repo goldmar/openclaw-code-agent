@@ -101,7 +101,7 @@ const KILLABLE_STATUSES = new Set<SessionStatus>(["starting", "running"]);
 const WAITING_EVENT_DEBOUNCE_MS = 5_000;
 
 
-type SpawnOptions = {
+type LaunchOptions = {
   notifyLaunch?: boolean;
 };
 
@@ -356,7 +356,7 @@ export class SessionManager {
       enqueueMerge: (repoDir, fn, onQueued) => manager.enqueueMerge(repoDir, fn, onQueued),
       mergeBranch,
       spawnConflictResolver: async ({ session, worktreePath, prompt }) => {
-        return manager.spawn({
+        return manager.launchSession({
           prompt,
           workdir: worktreePath,
           name: `${session.name}-conflict-resolver`,
@@ -563,13 +563,13 @@ export class SessionManager {
    * creation) is asynchronous, and the next launch's max-session, unique-name,
    * and session-id checks must see the previous launch already registered.
    */
-  spawn(config: SessionConfig, options: SpawnOptions = {}): Promise<Session> {
-    const launch = this.spawnTail.then((): Promise<Session> => this.spawnSerialized(config, options));
+  launchSession(config: SessionConfig, options: LaunchOptions = {}): Promise<Session> {
+    const launch = this.spawnTail.then((): Promise<Session> => this.launchSerialized(config, options));
     this.spawnTail = launch.then((): void => undefined, (): void => undefined);
     return launch;
   }
 
-  private async spawnSerialized(config: SessionConfig, options: SpawnOptions): Promise<Session> {
+  private async launchSerialized(config: SessionConfig, options: LaunchOptions): Promise<Session> {
     if (this.shuttingDown) {
       throw new Error("Cannot launch a session: the code-agent service is shutting down.");
     }
@@ -589,11 +589,9 @@ export class SessionManager {
       const resumeOwners = this.registry.list().filter((candidate) => (
         candidate.backendKind === "codex-app-server"
         && (
-          candidate.harnessSessionId === config.resumeSessionId
-          || candidate.backendRef?.conversationId === config.resumeSessionId
+          candidate.backendRef?.conversationId === config.resumeSessionId
           || (
-            !candidate.harnessSessionId
-            && !candidate.backendRef?.conversationId
+            !candidate.backendRef?.conversationId
             && candidate.resumeSessionId === config.resumeSessionId
           )
         )
@@ -711,8 +709,8 @@ export class SessionManager {
   }
 
   /** Spawn a session and wait until it is truly running or fails before startup. */
-  async spawnAndAwaitRunning(config: SessionConfig, options: SpawnOptions = {}): Promise<Session> {
-    const session = await this.spawn(config, options);
+  async launchAndAwaitRunning(config: SessionConfig, options: LaunchOptions = {}): Promise<Session> {
+    const session = await this.launchSession(config, options);
     await this.waitForRunningSession(session);
     return session;
   }
@@ -956,7 +954,7 @@ export class SessionManager {
     const harness = args.harness ?? getDefaultHarnessName();
     const permissionMode = args.permissionMode ?? pluginConfig.permissionMode;
     const planApproval = args.planApproval ?? pluginConfig.planApproval;
-    const session = await this.spawn({
+    const session = await this.launchSession({
       prompt: args.prompt,
       workdir: args.workdir,
       sessionIdOverride: args.sessionIdOverride,
@@ -1743,7 +1741,7 @@ export class SessionManager {
     worktreeStrategy?: WorktreeStrategy;
   }): Promise<Session> {
     const route = args.route ?? { provider: "system", target: "system" };
-    return this.spawn({
+    return this.launchSession({
       prompt: args.prompt,
       workdir: args.workdir,
       name: args.name,

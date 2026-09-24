@@ -1,52 +1,51 @@
-import { execFileSync } from "node:child_process";
+import { runGit } from "./git-exec";
 
-/** Local branch names only: reject standard full-ref namespaces, options, and revisions. */
-export function branchNameValidationError(value: unknown): string | undefined {
-  if (typeof value !== "string" || !value || value.startsWith("-") || /^refs\/(?:heads|remotes|tags)\//u.test(value) || value === "HEAD" || value === "@" || /\s|[\x00-\x1f\x7f]/u.test(value)) {
-    return "Expected a literal Git branch name (local branch only; not a full ref, option, or revision expression).";
-  }
+const REF_FORMAT_TIMEOUT_MS = 5_000;
+
+async function isValidRefFormat(ref: string): Promise<boolean> {
   try {
-    // Prefixing the argument prevents option parsing and avoids --branch's @{-n}
-    // expansion. Git owns the remaining ref grammar, including slash components.
-    execFileSync("git", ["check-ref-format", `refs/heads/${value}`], {
-      timeout: 5_000,
-      stdio: ["ignore", "ignore", "ignore"],
-    });
-    return undefined;
+    await runGit(["check-ref-format", ref], { timeout: REF_FORMAT_TIMEOUT_MS });
+    return true;
   } catch {
-    return "Expected a valid literal Git branch name; Git ref validation failed.";
+    return false;
   }
 }
 
-export function assertBranchName(value: unknown): asserts value is string {
-  const error = branchNameValidationError(value);
+/** Local branch names only: reject standard full-ref namespaces, options, and revisions. */
+export async function branchNameValidationError(value: unknown): Promise<string | undefined> {
+  if (typeof value !== "string" || !value || value.startsWith("-") || /^refs\/(?:heads|remotes|tags)\//u.test(value) || value === "HEAD" || value === "@" || /\s|[\x00-\x1f\x7f]/u.test(value)) {
+    return "Expected a literal Git branch name (local branch only; not a full ref, option, or revision expression).";
+  }
+  // Prefixing the argument prevents option parsing and avoids --branch's @{-n}
+  // expansion. Git owns the remaining ref grammar, including slash components.
+  return await isValidRefFormat(`refs/heads/${value}`)
+    ? undefined
+    : "Expected a valid literal Git branch name; Git ref validation failed.";
+}
+
+export async function assertBranchName(value: unknown): Promise<void> {
+  const error = await branchNameValidationError(value);
   if (error) throw new Error(error);
 }
 
 /** Fully qualify a validated local branch anywhere Git performs revision lookup. */
-export function localBranchRef(value: unknown): string {
-  assertBranchName(value);
-  return `refs/heads/${value}`;
+export async function localBranchRef(value: unknown): Promise<string> {
+  await assertBranchName(value);
+  return `refs/heads/${value as string}`;
 }
 
 /** Read-only ancestry checks may compare a local branch with a computed remote-tracking ref. */
-export function assertBranchOrRemoteTrackingRef(value: unknown): asserts value is string {
+export async function assertBranchOrRemoteTrackingRef(value: unknown): Promise<void> {
   if (typeof value === "string" && value.startsWith("refs/remotes/")) {
-    try {
-      execFileSync("git", ["check-ref-format", value], {
-        timeout: 5_000,
-        stdio: ["ignore", "ignore", "ignore"],
-      });
-      return;
-    } catch {
-      throw new Error("Expected a valid literal Git branch or remote-tracking ref.");
-    }
+    if (await isValidRefFormat(value)) return;
+    throw new Error("Expected a valid literal Git branch or remote-tracking ref.");
   }
-  assertBranchName(value);
+  await assertBranchName(value);
 }
 
 /** Qualify local branches while preserving validated, internally computed remote refs. */
-export function branchOrRemoteTrackingRef(value: unknown): string {
-  assertBranchOrRemoteTrackingRef(value);
-  return value.startsWith("refs/remotes/") ? value : localBranchRef(value);
+export async function branchOrRemoteTrackingRef(value: unknown): Promise<string> {
+  await assertBranchOrRemoteTrackingRef(value);
+  const ref = value as string;
+  return ref.startsWith("refs/remotes/") ? ref : `refs/heads/${ref}`;
 }

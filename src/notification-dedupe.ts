@@ -15,7 +15,7 @@ export interface NotificationDedupeClaim {
 const DEFAULT_MAX_RECORDS = 64;
 const DEFAULT_IN_FLIGHT_TTL_MS = 10 * 60 * 1000;
 
-export const DUPLICATE_NOTIFICATION_SKIP_REASON =
+const DUPLICATE_NOTIFICATION_SKIP_REASON =
   "duplicate notification already delivered or in flight";
 
 export class NotificationDedupeCoordinator {

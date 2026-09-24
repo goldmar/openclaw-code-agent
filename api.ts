@@ -2,9 +2,7 @@ export {
   definePluginEntry,
   type OpenClawPluginApi,
   type OpenClawPluginToolContext,
-  type OpenClawPluginService,
   type OpenClawPluginServiceContext,
-  type PluginLogger,
 } from "openclaw/plugin-sdk/plugin-entry";
 
 // Host types come from the published SDK above (`OpenClawPluginApi["runtime"]` is
@@ -65,22 +63,6 @@ export type PluginInteractiveDiscordHandlerContext = {
     clearComponents?: (params?: { text?: string }) => Promise<void>;
     followUp?: (params: { text: string; ephemeral?: boolean }) => Promise<void>;
   };
-};
-
-export type PluginInteractiveTelegramHandlerRegistration = {
-  channel: "telegram";
-  namespace: string;
-  handler:
-    | ((ctx: PluginInteractiveTelegramHandlerContext) => Promise<PluginInteractiveHandlerResult>)
-    | ((ctx: PluginInteractiveTelegramHandlerContext) => PluginInteractiveHandlerResult);
-};
-
-export type PluginInteractiveDiscordHandlerRegistration = {
-  channel: "discord";
-  namespace: string;
-  handler:
-    | ((ctx: PluginInteractiveDiscordHandlerContext) => Promise<PluginInteractiveHandlerResult>)
-    | ((ctx: PluginInteractiveDiscordHandlerContext) => PluginInteractiveHandlerResult);
 };
 
 export type PluginInteractiveTelegramHandlerResult = PluginInteractiveHandlerResult;

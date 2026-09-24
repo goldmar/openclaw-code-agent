@@ -1,7 +1,7 @@
 import { existsSync, realpathSync } from "fs";
 import { resolve } from "path";
 
-export function canonicalizePath(input: string | undefined): string | undefined {
+function canonicalizePath(input: string | undefined): string | undefined {
   if (!input) return undefined;
   const resolved = resolve(input);
   try {

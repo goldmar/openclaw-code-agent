@@ -116,8 +116,8 @@ export async function createPR(
   targetRepo?: string,
   options: CreatePROptions = {},
 ): Promise<PRResult> {
-  assertBranchName(branch);
-  assertBranchName(base);
+  await assertBranchName(branch);
+  await assertBranchName(base);
   if (!(await isGitHubCLIAvailable())) {
     return { success: false, error: "GitHub CLI (gh) is not available" };
   }
@@ -176,7 +176,7 @@ export async function createPR(
 }
 
 export async function syncWorktreePR(repoDir: string, branchName: string, targetRepo?: string): Promise<PRStatus> {
-  assertBranchName(branchName);
+  await assertBranchName(branchName);
   if (!(await isGitHubCLIAvailable())) {
     return { exists: false, state: "none" };
   }

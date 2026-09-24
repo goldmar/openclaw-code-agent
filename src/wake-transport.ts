@@ -60,9 +60,7 @@ const MAIN_SESSION_ALIAS = "main";
 export class RuntimeSystemEventTransport implements SystemEventTransport {
   async enqueue(text: string, options: SystemEventWakeOptions = {}): Promise<void> {
     const system = getPluginRuntime()?.system;
-    if (typeof system?.enqueueSystemEvent !== "function" || typeof system.requestHeartbeat !== "function") {
-      throw new Error("OpenClaw runtime system events are unavailable");
-    }
+    if (!system) throw new Error("OpenClaw runtime system events are unavailable before plugin registration");
     const targetSessionKey = options.sessionKey?.trim() || undefined;
     const contextKey = options.contextKey?.trim() || undefined;
     let sessionKey = targetSessionKey ?? MAIN_SESSION_ALIAS;

@@ -29,7 +29,7 @@ export type JsonRpcRequestHandler = (method: string, params: unknown, id: JsonRp
 
 /** Standard JSON-RPC error codes used for server-initiated requests OCA cannot serve. */
 export const JSON_RPC_METHOD_NOT_FOUND = -32601;
-export const JSON_RPC_INTERNAL_ERROR = -32603;
+const JSON_RPC_INTERNAL_ERROR = -32603;
 
 /**
  * Throw from a request handler to answer a server request with a specific
@@ -74,7 +74,7 @@ function processLaunchDiagnosticFields(command: string, args: readonly string[])
   };
 }
 
-export function parseJsonRpc(raw: string): JsonRpcEnvelope | null {
+function parseJsonRpc(raw: string): JsonRpcEnvelope | null {
   try {
     const payload = JSON.parse(raw) as unknown;
     if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;

@@ -57,7 +57,7 @@ function formatResolvedWorkdir(input: LaunchSummaryInput): string {
   return `${input.worktreePath} (worktree of ${input.originalWorkdir})`;
 }
 
-export function formatLaunchSummary(input: LaunchSummaryInput): string {
+function formatLaunchSummary(input: LaunchSummaryInput): string {
   const details = [
     "Session launched successfully.",
     `  Name: ${input.sessionName}`,

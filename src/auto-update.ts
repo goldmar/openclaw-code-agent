@@ -2,7 +2,6 @@ import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { loadJsonFile, saveJsonFile } from "openclaw/plugin-sdk/json-store";
-import { promisify } from "node:util";
 import { RuntimeDirectNotificationTransport, type DirectNotificationTransport } from "./direct-notification-transport";
 import { pluginConfig } from "./config";
 import { routeFromOriginMetadata, type SessionRouteSource } from "./session-route";
@@ -13,7 +12,6 @@ import { createLogger } from "./logger";
 
 const log = createLogger("auto-update");
 
-const execFileAsync = promisify(execFile);
 const PACKAGE_NAME = "openclaw-code-agent";
 const NPM_PACKAGE_URL = `https://registry.npmjs.org/${encodeURIComponent(PACKAGE_NAME)}/latest`;
 const UPDATE_STATE_FILE = "auto-update.json";
@@ -59,7 +57,8 @@ type CommandResult = {
   stderr: string;
 };
 
-type CommandRunner = (command: string, args: string[]) => Promise<CommandResult>;
+/** Runs the local `openclaw` CLI; the self-updater never runs any other executable. */
+type CommandRunner = (command: "openclaw", args: string[]) => Promise<CommandResult>;
 type ReleaseFetcher = () => Promise<ReleaseInfo | undefined>;
 
 type PluginUpdateActionKind = Extract<
@@ -289,15 +288,16 @@ async function fetchSourceAwareLatestRelease(runCommand: CommandRunner): Promise
     : fetchClawHubLatestRelease(runCommand, inspection.install.packageName);
 }
 
-async function runOpenClawCommand(command: string, args: string[]): Promise<CommandResult> {
-  const result = await execFileAsync(command, args, {
-    timeout: 120_000,
-    maxBuffer: 1024 * 1024,
+function runOpenClawCommand(_command: "openclaw", args: string[]): Promise<CommandResult> {
+  return new Promise((resolve, reject) => {
+    execFile("openclaw", [...args], { timeout: 120_000, maxBuffer: 1024 * 1024, encoding: "utf-8" }, (error, stdout, stderr) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve({ stdout: stdout ?? "", stderr: stderr ?? "" });
+    });
   });
-  return {
-    stdout: result.stdout?.toString() ?? "",
-    stderr: result.stderr?.toString() ?? "",
-  };
 }
 
 export class AutoUpdateService {

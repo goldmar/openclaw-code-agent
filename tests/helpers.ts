@@ -190,7 +190,7 @@ export function createFakeHarness(
 // Base session config
 // ---------------------------------------------------------------------------
 
-export const BASE_CONFIG: SessionConfig = {
+const BASE_CONFIG: SessionConfig = {
   prompt: "test prompt",
   workdir: "/tmp",
   permissionMode: "plan",
@@ -281,6 +281,10 @@ export function createStubSession(overrides: Record<string, any> = {}): any {
     incrementAutoRespond() { session.autoRespondCount++; },
     ...overrides,
   };
+  // A real Session sets harnessSessionId only from its backend ref.
+  if (session.harnessSessionId && !("backendRef" in overrides)) {
+    session.backendRef = { kind: "claude-code", conversationId: session.harnessSessionId };
+  }
   return session;
 }
 
@@ -292,3 +296,14 @@ export function createStubSession(overrides: Record<string, any> = {}): any {
 export function tick(ms: number = 10): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
+
+/**
+ * `api.runtime.llm` stand-in for tests whose runtime fake only exercises another
+ * surface. OCA calls published runtime surfaces directly (OpenClaw >= 2026.9.6),
+ * so a runtime fake that reaches SessionManager must include `llm`.
+ */
+export const TEST_RUNTIME_LLM = {
+  async complete(): Promise<never> {
+    throw Object.assign(new Error("runtime.llm is not used in this test"), { code: "LLM_COMPLETION_FAILED" });
+  },
+};

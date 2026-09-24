@@ -1,8 +1,8 @@
 import { truncateText } from "./format";
-import { getManagedTaskFlowRuntime } from "./runtime-store";
+import { getManagedTaskFlowRuntime, type ManagedTaskFlowRuntime } from "./runtime-store";
 import { KeyedOperationQueue } from "./keyed-operation-queue";
 import type { Session } from "./session";
-import type { KillReason, PersistedSessionInfo, SessionLifecycle, SessionStatus } from "./types";
+import type { KillReason, PersistedSessionInfo, PersistedTaskFlowMirror, SessionLifecycle, SessionStatus } from "./types";
 import { createLogger } from "./logger";
 
 const log = createLogger("session-task-lifecycle");
@@ -13,101 +13,23 @@ const TITLE_MAX_LENGTH = 160;
 export const TASK_FLOW_CANCEL_POLL_INTERVAL_MS = 15_000;
 const USER_CANCEL_MAX_ATTEMPTS = 3;
 
-// Mirroring remains optional when the host has no async managed-flow surface.
-
-type TaskNotifyPolicy = "done_only" | "state_changes" | "silent";
-type ManagedTaskFlowStatus = "queued" | "running" | "waiting" | "blocked" | "succeeded" | "failed" | "cancelled" | "lost";
 type TaskLifecycleTerminalStatus = "succeeded" | "failed" | "timed_out" | "cancelled";
 
-type ManagedTaskFlowRecord = {
-  flowId: string;
-  revision: number;
-  status?: ManagedTaskFlowStatus;
-  cancelRequestedAt?: number | null;
-  [key: string]: unknown;
-};
-
-type ManagedTaskFlowMutationResult = {
-  applied: true;
-  flow: ManagedTaskFlowRecord;
-  current?: never;
-} | {
-  applied: false;
-  code?: string;
-  current?: ManagedTaskFlowRecord;
-};
-
-type ManagedTaskFlowCreateParams = {
-  controllerId: string;
-  goal: string;
-  status?: ManagedTaskFlowStatus;
-  notifyPolicy?: TaskNotifyPolicy;
-  currentStep?: string | null;
-  stateJson?: Record<string, unknown> | null;
-  waitJson?: Record<string, unknown> | null;
-  createdAt?: number;
-  updatedAt?: number;
-  endedAt?: number | null;
-};
-
-// Structural subset of the host's `BoundAsyncManagedTaskFlowsRuntime`
-// (`api.runtime.tasks.async.managedFlows.fromToolContext(...)`); partial hosts and
-// tests may omit methods, so every call is guarded.
+// Published host types (`api.runtime.tasks.async.managedFlows.fromToolContext(...)`).
 // `getTaskSummary` is intentionally unused: OCA flows never start child tasks
 // (`runTask`), so the host's task summary for them is always empty.
-type BoundTaskFlowRuntime = {
-  tryCreateManaged?: (params: ManagedTaskFlowCreateParams) => Promise<ManagedTaskFlowRecord | null>;
-  get?: (flowId: string) => Promise<ManagedTaskFlowRecord | undefined>;
-  requestCancel?: (params: {
-    flowId: string;
-    expectedRevision: number;
-    cancelRequestedAt?: number;
-  }) => Promise<ManagedTaskFlowMutationResult>;
-  createManaged?: (params: {
-    controllerId: string;
-    goal: string;
-    status?: ManagedTaskFlowStatus;
-    notifyPolicy?: TaskNotifyPolicy;
-    currentStep?: string | null;
-    stateJson?: Record<string, unknown> | null;
-    waitJson?: Record<string, unknown> | null;
-    createdAt?: number;
-    updatedAt?: number;
-    endedAt?: number | null;
-  }) => Promise<ManagedTaskFlowRecord>;
-  setWaiting?: (params: {
-    flowId: string;
-    expectedRevision: number;
-    currentStep?: string | null;
-    stateJson?: Record<string, unknown> | null;
-    waitJson?: Record<string, unknown> | null;
-    blockedSummary?: string | null;
-    updatedAt?: number;
-  }) => Promise<ManagedTaskFlowMutationResult>;
-  resume?: (params: {
-    flowId: string;
-    expectedRevision: number;
-    status?: Extract<ManagedTaskFlowStatus, "queued" | "running">;
-    currentStep?: string | null;
-    stateJson?: Record<string, unknown> | null;
-    updatedAt?: number;
-  }) => Promise<ManagedTaskFlowMutationResult>;
-  finish?: (params: {
-    flowId: string;
-    expectedRevision: number;
-    stateJson?: Record<string, unknown> | null;
-    updatedAt?: number;
-    endedAt?: number;
-  }) => Promise<ManagedTaskFlowMutationResult>;
-  fail?: (params: {
-    flowId: string;
-    expectedRevision: number;
-    stateJson?: Record<string, unknown> | null;
-    blockedSummary?: string | null;
-    updatedAt?: number;
-    endedAt?: number;
-  }) => Promise<ManagedTaskFlowMutationResult>;
-};
+type BoundTaskFlowRuntime = ReturnType<ManagedTaskFlowRuntime["fromToolContext"]>;
+type ManagedTaskFlowStatus = NonNullable<Awaited<ReturnType<BoundTaskFlowRuntime["get"]>>>["status"];
+/** The fields OCA reads from a host flow record; also what the session store persists. */
+type ManagedTaskFlowRecord = PersistedTaskFlowMirror;
+type ManagedTaskFlowMutationResult = Awaited<ReturnType<BoundTaskFlowRuntime["finish"]>>;
+type ManagedTaskFlowCreateParams = Parameters<BoundTaskFlowRuntime["tryCreateManaged"]>[0];
+type TaskFlowStateJson = NonNullable<ManagedTaskFlowCreateParams["stateJson"]>;
+
+/** OCA's flow state is plain JSON data (strings, numbers, booleans, nested records). */
+function jsonState(value: Record<string, unknown>): TaskFlowStateJson {
+  return value as unknown as TaskFlowStateJson;
+}
 
 type ToolContextLike = {
   sessionKey?: string;
@@ -167,7 +89,7 @@ export function buildSessionTaskTitle(session: Pick<Session, "prompt" | "name">)
   return truncateText(collapsed || session.name, TITLE_MAX_LENGTH);
 }
 
-export function mapSessionLifecycleProgress(
+function mapSessionLifecycleProgress(
   session: Pick<Session, "status" | "lifecycle">,
 ): string | undefined {
   if (session.status === "starting" || session.lifecycle === "starting") return "Starting";
@@ -245,27 +167,11 @@ function buildStateJson(session: SessionTaskEvent, phase: "created" | "progress"
   };
 }
 
-// `requestCancel` ships with every host that has the async managed-flow binding;
-// requiring it keeps user stops recorded as cancellations, never as failures.
-type MirrorTaskFlowRuntime = Required<Pick<BoundTaskFlowRuntime, "createManaged" | "resume" | "setWaiting" | "finish" | "fail" | "requestCancel">>
-  & Pick<BoundTaskFlowRuntime, "tryCreateManaged" | "get">;
-
-function isManagedTaskFlowRuntime(value: unknown): value is MirrorTaskFlowRuntime {
-  if (!value || typeof value !== "object") return false;
-  const runtime = value as BoundTaskFlowRuntime;
-  return typeof runtime.createManaged === "function"
-    && typeof runtime.resume === "function"
-    && typeof runtime.setWaiting === "function"
-    && typeof runtime.finish === "function"
-    && typeof runtime.fail === "function"
-    && typeof runtime.requestCancel === "function";
-}
-
 function applyMutation(
   current: ManagedTaskFlowRecord | undefined,
   mutation: ManagedTaskFlowMutationResult,
 ): ManagedTaskFlowRecord | undefined {
-  if (mutation.applied) return mutation.flow;
+  if (mutation.applied === true) return mutation.flow;
   const currentFlow = mutation.current;
   if (currentFlow?.flowId && typeof currentFlow.revision === "number") return currentFlow;
   return current;
@@ -277,7 +183,7 @@ function applyMutation(
  * is true once the flow carries a cancel intent or is already terminal.
  */
 async function requestCancelWithRetry(
-  requestCancel: NonNullable<BoundTaskFlowRuntime["requestCancel"]>,
+  requestCancel: BoundTaskFlowRuntime["requestCancel"],
   initial: ManagedTaskFlowRecord,
   cancelRequestedAt: number,
   action: string,
@@ -303,7 +209,7 @@ async function requestCancelWithRetry(
 }
 
 /** The host recorded a cancel intent (or already cancelled the flow). */
-export function isTaskFlowCancelRequested(flow: Pick<ManagedTaskFlowRecord, "status" | "cancelRequestedAt"> | undefined): boolean {
+function isTaskFlowCancelRequested(flow: Pick<ManagedTaskFlowRecord, "status" | "cancelRequestedAt"> | undefined): boolean {
   return Boolean(flow && (flow.cancelRequestedAt != null || flow.status === "cancelled"));
 }
 
@@ -316,7 +222,7 @@ class ManagedTaskFlowSessionTaskLifecycleSink implements SessionTaskLifecycleSin
   private hooks: SessionTaskLifecycleHooks = {};
   private cancelPoll?: ReturnType<typeof setInterval>;
 
-  constructor(private readonly taskFlow: MirrorTaskFlowRuntime) {}
+  constructor(private readonly taskFlow: BoundTaskFlowRuntime) {}
 
   create(session: Session, hooks: SessionTaskLifecycleHooks = {}): Promise<void> {
     this.hooks = hooks;
@@ -334,15 +240,13 @@ class ManagedTaskFlowSessionTaskLifecycleSink implements SessionTaskLifecycleSin
       status: "running",
       notifyPolicy: "silent",
       currentStep: summary,
-      stateJson: buildStateJson(event, "created", summary),
+      stateJson: jsonState(buildStateJson(event, "created", summary)),
       createdAt: event.startedAt,
       updatedAt: now,
     };
     try {
       // `tryCreateManaged` reports a persistence failure as `null` instead of throwing.
-      const created = typeof this.taskFlow.tryCreateManaged === "function"
-        ? await this.taskFlow.tryCreateManaged(params)
-        : await this.taskFlow.createManaged(params);
+      const created = await this.taskFlow.tryCreateManaged(params);
       if (!created) {
         log.warn("[SessionTaskLifecycle] create skipped: TaskFlow persistence is unavailable");
         return;
@@ -368,7 +272,7 @@ class ManagedTaskFlowSessionTaskLifecycleSink implements SessionTaskLifecycleSin
     const key = this.progressKey(event, summary);
     if (key === this.lastProgressKey) return;
     try {
-      const stateJson = buildStateJson(event, "progress", summary);
+      const stateJson = jsonState(buildStateJson(event, "progress", summary));
       const updatedAt = event.occurredAt;
       const mutation = isWaitingLifecycle(event)
         ? await this.taskFlow.setWaiting({
@@ -426,12 +330,12 @@ class ManagedTaskFlowSessionTaskLifecycleSink implements SessionTaskLifecycleSin
         this.finalized = await this.recordUserCancel(session, endedAt);
         return;
       }
-      const stateJson = {
+      const stateJson = jsonState({
         ...buildStateJson(event, "terminal", summary),
         terminalStatus: status,
         terminalSummary: terminalSummary(event.status, event.killReason),
         ...(event.status === "failed" && event.error ? { error: event.error } : {}),
-      };
+      });
       const mutation = status === "succeeded"
         ? await this.taskFlow.finish({
             flowId: this.flow.flowId,
@@ -466,7 +370,7 @@ class ManagedTaskFlowSessionTaskLifecycleSink implements SessionTaskLifecycleSin
   }
 
   private startCancelPoll(session: Session): void {
-    if (typeof this.taskFlow.get !== "function" || this.cancelPoll) return;
+    if (this.cancelPoll) return;
     this.cancelPoll = setInterval(() => {
       void this.operations.enqueue(session.id, () => this.pollCancel(session));
     }, TASK_FLOW_CANCEL_POLL_INTERVAL_MS);
@@ -480,7 +384,7 @@ class ManagedTaskFlowSessionTaskLifecycleSink implements SessionTaskLifecycleSin
   }
 
   private async pollCancel(session: Session): Promise<void> {
-    if (!this.flow || this.finalized || this.cancelRequested || typeof this.taskFlow.get !== "function") return;
+    if (!this.flow || this.finalized || this.cancelRequested) return;
     try {
       const current = await this.taskFlow.get(this.flow.flowId);
       if (!isTaskFlowCancelRequested(current)) return;
@@ -513,28 +417,9 @@ function isTerminalMirrorStatus(status: ManagedTaskFlowStatus | undefined): bool
   return status === "succeeded" || status === "failed" || status === "cancelled" || status === "lost";
 }
 
-function bindTaskFlowRuntimeForSessionKey(
-  sessionKey: string | undefined,
-): (Required<Pick<BoundTaskFlowRuntime, "setWaiting" | "finish" | "fail">> & Pick<BoundTaskFlowRuntime, "requestCancel">) | undefined {
+function bindTaskFlowRuntimeForSessionKey(sessionKey: string | undefined): BoundTaskFlowRuntime | undefined {
   if (!sessionKey?.trim()) return undefined;
-  const fromToolContext = getManagedTaskFlowRuntime()?.fromToolContext;
-  if (typeof fromToolContext !== "function") return undefined;
-  const value = fromToolContext({ sessionKey });
-  if (!value || typeof value !== "object") return undefined;
-  const runtime = value as BoundTaskFlowRuntime;
-  if (
-    typeof runtime.setWaiting !== "function"
-    || typeof runtime.finish !== "function"
-    || typeof runtime.fail !== "function"
-  ) {
-    return undefined;
-  }
-  return {
-    setWaiting: runtime.setWaiting,
-    finish: runtime.finish,
-    fail: runtime.fail,
-    ...(typeof runtime.requestCancel === "function" ? { requestCancel: runtime.requestCancel } : {}),
-  };
+  return getManagedTaskFlowRuntime()?.fromToolContext({ sessionKey });
 }
 
 function persistedSessionKey(session: Pick<PersistedSessionInfo, "originSessionKey" | "route">): string | undefined {
@@ -565,7 +450,6 @@ export async function reconcilePersistedSessionTaskMirror(
     session.status === "killed"
     && session.killReason === "user"
     && session.runtimeRecovery?.reason !== "persisted-running-without-runtime"
-    && typeof taskFlow.requestCancel === "function"
   ) {
     // A user stop whose live cancel intent was not recorded is still a cancellation.
     return (await requestCancelWithRetry(taskFlow.requestCancel, flow, session.completedAt ?? now, "reconcile-cancel")).flow;
@@ -580,7 +464,7 @@ export async function reconcilePersistedSessionTaskMirror(
       flowId: flow.flowId,
       expectedRevision: flow.revision,
       currentStep: summary,
-      stateJson: {
+      stateJson: jsonState({
         phase: "progress",
         integration: "phase-1-managed-task-flow",
         sessionId: session.sessionId,
@@ -589,7 +473,7 @@ export async function reconcilePersistedSessionTaskMirror(
         sessionLifecycle: session.lifecycle,
         summary,
         reconciled: true,
-      },
+      }),
       waitJson: { reason: summary, sessionId: session.sessionId },
       blockedSummary: summary,
       updatedAt: now,
@@ -604,7 +488,7 @@ export async function reconcilePersistedSessionTaskMirror(
   }) ?? "failed";
   const summary = persistedTerminalSummary(session);
   const endedAt = session.completedAt ?? now;
-  const stateJson = {
+  const stateJson = jsonState({
     phase: "terminal",
     integration: "phase-1-managed-task-flow",
     sessionId: session.sessionId,
@@ -618,7 +502,7 @@ export async function reconcilePersistedSessionTaskMirror(
     terminalSummary: summary,
     reconciled: true,
     runtimeRecovery: session.runtimeRecovery,
-  };
+  });
   const mutation = terminalStatus === "succeeded"
     ? await taskFlow.finish({
         flowId: flow.flowId,
@@ -642,11 +526,9 @@ export async function reconcilePersistedSessionTaskMirror(
 export function resolveSessionTaskLifecycle(ctx: ToolContextLike): SessionTaskLifecycleSink {
   if (!ctx.sessionKey?.trim()) return NOOP_SESSION_TASK_LIFECYCLE;
   try {
-    const fromToolContext = getManagedTaskFlowRuntime()?.fromToolContext;
-    if (typeof fromToolContext !== "function") return NOOP_SESSION_TASK_LIFECYCLE;
-    const taskFlow = fromToolContext(ctx);
-    if (!isManagedTaskFlowRuntime(taskFlow)) return NOOP_SESSION_TASK_LIFECYCLE;
-    return new ManagedTaskFlowSessionTaskLifecycleSink(taskFlow);
+    const managedFlows = getManagedTaskFlowRuntime();
+    if (!managedFlows) return NOOP_SESSION_TASK_LIFECYCLE;
+    return new ManagedTaskFlowSessionTaskLifecycleSink(managedFlows.fromToolContext(ctx));
   } catch (err) {
     warnLifecycleError("resolve", err);
     return NOOP_SESSION_TASK_LIFECYCLE;

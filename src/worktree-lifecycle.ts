@@ -123,6 +123,9 @@ async function createWorktreeLocked(
 ): Promise<CreatedWorktree> {
   const sanitized = sanitizeBranchName(sessionName);
   const baseDir = await getWorktreeBaseDir(repoDir);
+  if (!baseDir) {
+    throw new Error(`Cannot create a worktree for ${repoDir}: it is not inside a git repository. Launch from a repository root, or set worktree_strategy "off".`);
+  }
   await ensureWorktreeBaseIgnored(repoDir, baseDir);
   mkdirSync(baseDir, { recursive: true });
   const allowExistingBranch = options.allowExistingBranch === true;

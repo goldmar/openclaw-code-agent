@@ -53,7 +53,7 @@ function canResumeCompletedSession(session: ResumableSessionLike): boolean {
   return RESUMABLE_COMPLETED_BACKENDS.has(session.backendRef?.kind ?? "");
 }
 
-export function isNeverStartedRelaunch(session: ResumableSessionLike): boolean {
+function isNeverStartedRelaunch(session: ResumableSessionLike): boolean {
   return (session.killReason === "shutdown" || session.killReason === "startup-timeout")
     && !getBackendConversationId(session);
 }

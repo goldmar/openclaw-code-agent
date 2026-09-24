@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, type ChildProcess } from "node:child_process";
 
 /**
  * Async `git` / `gh` execution for the worktree layer.
@@ -28,39 +28,55 @@ export type CommandError = Error & {
   stderr?: string;
 };
 
-function runCommand(file: "git" | "gh", args: readonly string[], options: CommandOptions): Promise<string> {
+type ExecFileCallback = (error: Error | null, stdout: string, stderr: string) => void;
+
+function settleCommand(
+  label: string,
+  args: readonly string[],
+  options: CommandOptions,
+  resolve: (stdout: string) => void,
+  reject: (error: CommandError) => void,
+): ExecFileCallback {
+  return (error, stdout, stderr) => {
+    if (!error) {
+      resolve(stdout);
+      return;
+    }
+    const failure = error as CommandError;
+    failure.stdout = stdout;
+    failure.stderr = stderr;
+    if (failure.killed && failure.signal) {
+      failure.message = `Command timed out after ${options.timeout} ms: ${[label, ...args].join(" ")}`;
+    }
+    reject(failure);
+  };
+}
+
+function execOptions(options: CommandOptions) {
+  return { cwd: options.cwd, timeout: options.timeout, encoding: "utf-8", maxBuffer: 1024 * 1024, windowsHide: true } as const;
+}
+
+function closeStdin(child: ChildProcess, input: string | undefined): void {
+  // A command can exit before reading its input; the resulting EPIPE must not
+  // become an unhandled stream error. The exit status still reports the failure.
+  child.stdin?.on("error", () => {});
+  child.stdin?.end(input);
+}
+
+// The executable is a string literal at each call site (no shell, fixed binary):
+// OCA only ever runs `git` and `gh` from this module.
+export function runGit(args: readonly string[], options: CommandOptions): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = execFile(
-      file,
-      args,
-      { cwd: options.cwd, timeout: options.timeout, encoding: "utf-8", maxBuffer: 1024 * 1024, windowsHide: true },
-      (error, stdout, stderr) => {
-        if (!error) {
-          resolve(stdout);
-          return;
-        }
-        const failure = error as CommandError;
-        failure.stdout = stdout;
-        failure.stderr = stderr;
-        if (failure.killed && failure.signal) {
-          failure.message = `Command timed out after ${options.timeout} ms: ${[file, ...args].join(" ")}`;
-        }
-        reject(failure);
-      },
-    );
-    // A command can exit before reading its input; the resulting EPIPE must not
-    // become an unhandled stream error. The exit status still reports the failure.
-    child.stdin?.on("error", () => {});
-    child.stdin?.end(options.input);
+    const child = execFile("git", [...args], execOptions(options), settleCommand("git", args, options, resolve, reject));
+    closeStdin(child, options.input);
   });
 }
 
-export function runGit(args: readonly string[], options: CommandOptions): Promise<string> {
-  return runCommand("git", args, options);
-}
-
 export function runGh(args: readonly string[], options: CommandOptions): Promise<string> {
-  return runCommand("gh", args, options);
+  return new Promise((resolve, reject) => {
+    const child = execFile("gh", [...args], execOptions(options), settleCommand("gh", args, options, resolve, reject));
+    closeStdin(child, options.input);
+  });
 }
 
 const repoTails = new Map<string, Promise<void>>();

@@ -9,7 +9,7 @@ pnpm install
 pnpm verify
 ```
 
-Build output is the ESM bundle at `dist/index.js`.
+Build output is the ESM bundle at `dist/index.js`. `pnpm build` deletes `dist/` first, and `prepack` runs the build, so `npm pack` and registry publishing never ship stale chunks.
 `pnpm-lock.yaml` is the only committed JavaScript lockfile in this repo. Do not add `package-lock.json`; npm is only used for `npm publish` in release, while install, CI, and dependency resolution are all pnpm-based.
 
 ## Repository Layout
@@ -93,7 +93,9 @@ OpenClaw 2026.9.6 supports Node 24.16.0+ on Node 24 and Node 26.1.0+ on Node 26;
 pnpm check-plugin-security
 ```
 
-That checker packs and installs the plugin under an isolated temporary home, runs OpenClaw's deep static code-safety audit, and accepts only the two reviewed findings documented in [SECURITY.md](SECURITY.md). It fails for missing scans, scan errors, or additional dangerous-code patterns without reading or migrating operator state.
+That checker packs and installs the plugin under an isolated temporary home, runs OpenClaw's deep static code-safety audit, and accepts only the reviewed `dangerous-exec` finding documented in [SECURITY.md](SECURITY.md). It fails for missing scans, scan errors, or additional dangerous-code patterns without reading or migrating operator state.
+
+`pnpm verify` also runs `pnpm check-clawhub-scan` after the build: ClawHub's static moderation scan (vendored in `scripts/vendor/clawhub-moderation-engine.mjs`, MIT) over the exact `npm pack` file list, plus two guards (`fetch(` only in the npm release-client chunk, and no packed file that combines `process.env` with a network call). It must report no findings. Keep fixed commands literal (`execFile("git", [...])`), never name a function or method `spawn` / `exec` / `execFile`, and add any new dynamic command to the SECURITY.md inventory. Refresh the vendored engine from a ClawHub checkout with `pnpm sync:clawhub-scan -- --clawhub <dir>` (`--check` reports drift).
 
 This repo currently has dev-only transitive advisories coming from upstream dependencies, so a blanket failing `pnpm audit` step is not the right merge gate until those findings are either remediated upstream or intentionally allowlisted with pnpm audit configuration.
 
@@ -102,6 +104,13 @@ For release preparation, also validate metadata parity explicitly:
 ```bash
 pnpm run validate:release-metadata -- <version>
 ```
+
+Release checklist:
+
+1. `pnpm verify` (includes the ClawHub static scan of the packed files) and `pnpm check-plugin-security`.
+2. `pnpm run validate:release-metadata -- <version>` and `pnpm verify:npm-consumer`.
+3. `pnpm sync:codex-protocol -- --check` against the Codex CLI you validate with; it must report no drift. With a live Codex environment, run `pnpm smoke:codex-live` and `pnpm smoke:codex-release`, which repeat that check first.
+4. `npm pack --dry-run` to review the package contents (`prepack` rebuilds `dist/`).
 
 Release metadata for external plugin installs lives in `package.json` under `openclaw.compat` and `openclaw.build`, while the plugin manifest version and manifest-owned activation/setup descriptors live in `openclaw.plugin.json`. When cutting a release, keep the package/plugin versions aligned and update the manifest descriptors whenever the plugin-owned command or onboarding surface changes.
 
@@ -122,7 +131,7 @@ Additional smoke entry points:
 
 ### Codex App Server Protocol Types
 
-`src/harness/codex-app-server-protocol/` is generated. Do not edit it by hand. Regenerate it from the installed Codex CLI with `pnpm sync:codex-protocol` (runs `codex app-server generate-ts --experimental` and keeps only the import closure of the types the harness uses), and check drift with `pnpm sync:codex-protocol -- --check`. After a Codex upgrade, regenerate, run `pnpm typecheck`, and run the live Codex smoke.
+`src/harness/codex-app-server-protocol/` is generated. Do not edit it by hand. Regenerate it from the installed Codex CLI with `pnpm sync:codex-protocol` (runs `codex app-server generate-ts --experimental` and keeps only the import closure of the types the harness uses), and check drift with `pnpm sync:codex-protocol -- --check`. After a Codex upgrade, regenerate, run `pnpm typecheck`, and run the live Codex smoke. Both `pnpm smoke:codex-live` and `pnpm smoke:codex-release` start with that `--check`, so a live smoke fails when the installed Codex CLI's protocol no longer matches the vendored types.
 
 ### Live Codex Release Check
 
@@ -175,7 +184,7 @@ Use `pnpm smoke:opencode-live` only when a real OpenCode environment is availabl
 - Treat `fallbackChannel` as routing metadata, not a secret. Multi-workspace maps like `agentChannels` should stay advanced/manual because the generic wizard cannot collect them well.
 - Model settings live only under `harnesses.*` (plus `defaultHarness`); the removed flat keys (`defaultModel`, `model`, `reasoningEffort`, global `allowedModels`) must stay out of the schema and onboarding.
 - Tool parameter schemas use the TypeBox builders from `src/tool-parameter-schema.ts`, not the `typebox` root `Type` object, which would pull the whole TypeBox type system into the bundle.
-- Worktree-layer `git` / `gh` calls go through `runGit` / `runGh` in `src/git-exec.ts`; do not add `execFileSync` there. Wrap multi-step mutating git sequences in `withRepoLock`.
+- Every `git` / `gh` call in `src/` (the worktree layer and branch-name validation) goes through the async `runGit` / `runGh` in `src/git-exec.ts`; do not add `execFileSync` anywhere in `src/`. Wrap multi-step mutating git sequences in `withRepoLock`.
 - Import only public `openclaw/plugin-sdk/*` subpaths that untrusted external plugins may use (check the host `package.json` exports and `docs/plugins/sdk-subpaths.md`; private-local and trusted-only surfaces are off limits). Type-only imports are erased; every value or dynamic import must also be listed as `--external:` in the `build` script, which `tests/plugin-entry.test.ts` enforces.
 - Log through `createLogger(...)` from `src/logger.ts` instead of `console.*`: it writes to the Gateway log via `api.runtime.logging.getChildLogger`. The build keeps `--pure:console.*` so the console fallback (tests, hosts without runtime logging) never reaches production output.
 

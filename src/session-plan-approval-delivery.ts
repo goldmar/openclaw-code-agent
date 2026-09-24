@@ -14,7 +14,7 @@ export function hasProvablePlanReviewPrompt(
     && isDeliveredApprovalPromptStatus(session.approvalPromptStatus);
 }
 
-export function isDeliveredApprovalPromptStatus(status?: SessionApprovalPromptStatus): boolean {
+function isDeliveredApprovalPromptStatus(status?: SessionApprovalPromptStatus): boolean {
   return status === "delivered" || status === "fallback_delivered";
 }
 

@@ -74,10 +74,6 @@ export function getCodexModelInfo(model: string | undefined): CodexModelInfo | u
   return catalog.models.find((entry) => entry.id.toLowerCase() === wanted || entry.model.toLowerCase() === wanted);
 }
 
-export function getDefaultCodexModelInfo(): CodexModelInfo | undefined {
-  return catalog?.models.find((entry) => entry.isDefault);
-}
-
 /**
  * Whether Codex accepts `effort` for `model`. `undefined` means the catalog
  * does not know the model (or has not been loaded yet).

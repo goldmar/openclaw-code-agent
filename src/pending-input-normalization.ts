@@ -3,13 +3,13 @@ import type {
   PendingInputQuestion,
 } from "./types";
 
-export function asRecord(value: unknown): Record<string, unknown> | null {
+function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
 }
 
-export function pickString(
+function pickString(
   record: Record<string, unknown> | null | undefined,
   keys: readonly string[],
   options?: { trim?: boolean },
@@ -23,14 +23,14 @@ export function pickString(
   return undefined;
 }
 
-export function optionLooksRecommended(label: string, record?: Record<string, unknown>): boolean {
+function optionLooksRecommended(label: string, record?: Record<string, unknown>): boolean {
   if (record && typeof record.recommended === "boolean") return record.recommended;
   if (record && typeof record.isRecommended === "boolean") return record.isRecommended;
   if (/\b(?:not\s+(?:a\s+)?|non[-\s]?|un)recommended\b/i.test(label)) return false;
   return /\brecommended\b/i.test(label);
 }
 
-export function normalizePendingInputOption(value: unknown): PendingInputOption | undefined {
+function normalizePendingInputOption(value: unknown): PendingInputOption | undefined {
   if (typeof value === "string") {
     const label = value.trim();
     return label ? { label, value: label, recommended: optionLooksRecommended(label) } : undefined;
@@ -69,7 +69,7 @@ export function extractPendingInputQuestions(value: unknown): PendingInputQuesti
     .filter((question): question is PendingInputQuestion => Boolean(question));
 }
 
-export function normalizePendingInputQuestion(value: unknown, index = 0): PendingInputQuestion | undefined {
+function normalizePendingInputQuestion(value: unknown, index = 0): PendingInputQuestion | undefined {
   const questionRecord = asRecord(value);
   if (!questionRecord) return undefined;
   const question = pickString(questionRecord, ["question", "prompt", "message", "text", "summary"])?.trim();
@@ -102,7 +102,7 @@ export function normalizePendingInputQuestion(value: unknown, index = 0): Pendin
   };
 }
 
-export function formatPendingInputQuestion(question: PendingInputQuestion, index: number, count: number): string[] {
+function formatPendingInputQuestion(question: PendingInputQuestion, index: number, count: number): string[] {
   const title = [
     count > 1 ? `Question ${index + 1}` : undefined,
     question.header,

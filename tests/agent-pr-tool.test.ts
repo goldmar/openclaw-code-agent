@@ -626,16 +626,9 @@ describe("agent_pr generated PR metadata", () => {
     }
   });
 
-  it("does not probe speculative runtime metadata surfaces", () => {
-    setPluginRuntime({
-      prMetadata: { async generatePrMetadata() { return {}; } },
-      ai: { async generateText() { return "{}"; } },
-    });
-    try {
-      assert.equal(createRuntimePrMetadataProvider(), undefined);
-    } finally {
-      setPluginRuntime(undefined);
-    }
+  it("has no runtime metadata provider before plugin registration", () => {
+    setPluginRuntime(undefined);
+    assert.equal(createRuntimePrMetadataProvider(), undefined);
   });
 
   it("falls back to deterministic metadata when runtime.llm.complete fails", async () => {

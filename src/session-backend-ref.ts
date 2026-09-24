@@ -9,23 +9,24 @@ type SessionIdentity = {
   backendRef?: SessionBackendRef;
 };
 
+/**
+ * The backend conversation id. A live session sets `harnessSessionId` only from
+ * its backend ref, and every loadable persisted row carries a backend ref (4.x
+ * Claude Code rows get one synthesized on load), so there is no separate
+ * `harnessSessionId` identity to match.
+ */
 export function getBackendConversationId(session: SessionIdentity): string | undefined {
-  return session.backendRef?.conversationId ?? session.harnessSessionId;
+  return session.backendRef?.conversationId;
 }
 
 export function getPrimarySessionLookupRef(session: SessionIdentity): string | undefined {
-  return session.id ?? session.sessionId ?? session.name ?? getBackendConversationId(session) ?? session.harnessSessionId;
-}
-
-export function getCompatibilityHarnessSessionId(session: SessionIdentity): string | undefined {
-  return session.harnessSessionId;
+  return session.id ?? session.sessionId ?? session.name ?? getBackendConversationId(session);
 }
 
 export function getPersistedMutationRefs(session: SessionIdentity): string[] {
   const refs = [
     getPrimarySessionLookupRef(session),
     getBackendConversationId(session),
-    getCompatibilityHarnessSessionId(session),
   ].filter((ref): ref is string => Boolean(ref));
 
   return [...new Set(refs)];

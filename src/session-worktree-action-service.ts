@@ -1,4 +1,3 @@
-import { existsSync } from "fs";
 import type { Session } from "./session";
 import type { WorktreeCompletionState } from "./session-worktree-controller";
 import { getPrimarySessionLookupRef } from "./session-backend-ref";

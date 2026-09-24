@@ -15,8 +15,6 @@ function isGoalEditParams(value: unknown): value is GoalEditParams {
   return typeof params.task === "string" && typeof params.goal === "string";
 }
 
-export { renderGoalEditResult as formatGoalEditResult };
-
 export function makeGoalEditTool(_ctx: OpenClawPluginToolContext) {
   return {
     name: "agent_goal_edit",

@@ -114,7 +114,7 @@ async function spawnFreshRelaunch(
       planApproval: session.planApproval,
       harness: "harnessName" in session ? session.harnessName : session.harness,
     };
-    const relaunched = await sm.spawnAndAwaitRunning(freshConfig, { notifyLaunch: false });
+    const relaunched = await sm.launchAndAwaitRunning(freshConfig, { notifyLaunch: false });
     sm.notifySession(
       relaunched,
       `▶️ [${relaunched.name}] Relaunched fresh`,
@@ -355,7 +355,7 @@ async function tryAutoResume(
         : {}),
       harness: "harnessName" in session ? session.harnessName : session.harness,
     };
-    const resumed = await sm.spawnAndAwaitRunning(resumeConfig, { notifyLaunch: false });
+    const resumed = await sm.launchAndAwaitRunning(resumeConfig, { notifyLaunch: false });
     if (isPlanApproval) {
       sm.notifySession(
         resumed,

@@ -751,6 +751,9 @@ describe("CodexHarness resume and fork", () => {
     const client = new MockCodexClient();
     await collectMessages(launch(client, { resumeSessionId: "ses_plugin_owned_thread" }));
     assert.equal(isCodexAppServerSessionId("ses_plugin_owned_thread"), false);
+    // Codex emits plain UUID thread ids; OCA resumes only ids it stored from Codex.
+    assert.equal(isCodexAppServerSessionId(`urn:uuid:${VALID_THREAD_ID}`), false);
+    assert.equal(isCodexAppServerSessionId(VALID_THREAD_ID), true);
     assert.equal(client.requestsFor("thread/resume").length, 0);
     assert.equal(client.requestsFor("thread/start").length, 1);
   });

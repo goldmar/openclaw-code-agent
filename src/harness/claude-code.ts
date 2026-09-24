@@ -81,7 +81,7 @@ const PLAN_MODE_TOOL_DENIED_MESSAGE =
   "Plan mode is active: implementation tools stay blocked until the user approves your plan. Finish the plan and call ExitPlanMode.";
 
 /** Tool-result text returned to Claude when the user requests plan changes. */
-export function formatPlanRevisionFeedback(feedback: string): string {
+function formatPlanRevisionFeedback(feedback: string): string {
   return [
     "The user reviewed this plan and requested changes before approving it. Do not implement anything yet.",
     "",

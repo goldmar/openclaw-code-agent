@@ -1,7 +1,6 @@
 import { assertBranchName, branchOrRemoteTrackingRef, localBranchRef } from "./worktree-ref-validation";
 import { runGit, runGh, withRepoLock } from "./git-exec";
 import * as fs from "fs";
-import { tmpdir } from "os";
 import { dirname, join } from "path";
 import { pluginConfig } from "./config";
 import { createLogger } from "./logger";
@@ -20,14 +19,17 @@ async function getRepoRoot(dir: string): Promise<string | undefined> {
   }
 }
 
-async function getWorktreeBaseDir(repoDir?: string): Promise<string> {
+/**
+ * Base directory for new worktrees: `OPENCLAW_WORKTREE_DIR`, then `worktreeDir`,
+ * then `<repoRoot>/.worktrees`. Without an override and outside a git repository
+ * there is no base directory (worktrees are never created in the OS temp dir).
+ */
+async function getWorktreeBaseDir(repoDir?: string): Promise<string | undefined> {
   if (process.env.OPENCLAW_WORKTREE_DIR) return process.env.OPENCLAW_WORKTREE_DIR;
   if (pluginConfig.worktreeDir) return pluginConfig.worktreeDir;
-  if (repoDir) {
-    const root = await getRepoRoot(repoDir);
-    if (root) return join(root, ".worktrees");
-  }
-  return tmpdir();
+  if (!repoDir) return undefined;
+  const root = await getRepoRoot(repoDir);
+  return root ? join(root, ".worktrees") : undefined;
 }
 
 export function sanitizeBranchName(name: string): string {
@@ -79,6 +81,8 @@ export async function isGitRepo(dir: string): Promise<boolean> {
 export async function hasEnoughWorktreeSpace(repoDir?: string): Promise<boolean> {
   try {
     const baseDir = await getWorktreeBaseDir(repoDir);
+    // No base directory means worktree creation fails with its own clear error.
+    if (!baseDir) return true;
     const probePath = resolveExistingAncestorPath(baseDir);
     if (!probePath) {
       log.warn(`[worktree] Failed to resolve free-space probe path for ${baseDir}`);
@@ -94,10 +98,10 @@ export async function hasEnoughWorktreeSpace(repoDir?: string): Promise<boolean>
 }
 
 export async function branchExists(repoDir: string, branchName: string): Promise<boolean> {
-  assertBranchName(branchName);
+  await assertBranchName(branchName);
 
   try {
-    await runGit(["-C", repoDir, "rev-parse", "--verify", localBranchRef(branchName)], { timeout: 5_000 });
+    await runGit(["-C", repoDir, "rev-parse", "--verify", await localBranchRef(branchName)], { timeout: 5_000 });
     return true;
   } catch {
     return false;
@@ -106,12 +110,12 @@ export async function branchExists(repoDir: string, branchName: string): Promise
 
 /** Fetch a single branch into a remote-tracking ref without changing a checkout. */
 export async function fetchRemoteBranchRef(repoDir: string, branchName: string, remote = "origin"): Promise<string | undefined> {
-  assertBranchName(branchName);
-  assertBranchName(remote);
+  await assertBranchName(branchName);
+  await assertBranchName(remote);
 
   const remoteRef = `refs/remotes/${remote}/${branchName}`;
   try {
-    await runGit(["-C", repoDir, "fetch", remote, `+${localBranchRef(branchName)}:${remoteRef}`], { timeout: 30_000 });
+    await runGit(["-C", repoDir, "fetch", remote, `+${await localBranchRef(branchName)}:${remoteRef}`], { timeout: 30_000 });
     await runGit(["-C", repoDir, "rev-parse", "--verify", remoteRef], { timeout: 5_000 });
     return remoteRef;
   } catch {
@@ -130,7 +134,8 @@ function resolveExistingAncestorPath(targetPath: string): string | undefined {
 }
 
 export async function getWorktreeSpaceProbePath(repoDir?: string): Promise<string | undefined> {
-  return resolveExistingAncestorPath(await getWorktreeBaseDir(repoDir));
+  const baseDir = await getWorktreeBaseDir(repoDir);
+  return baseDir ? resolveExistingAncestorPath(baseDir) : undefined;
 }
 
 export function hasEnoughFreeBytes(freeBytes: number): boolean {
@@ -141,7 +146,7 @@ export function hasEnoughFreeBytes(freeBytes: number): boolean {
 export async function detectDefaultBranch(repoDir: string): Promise<string> {
   const envBranch = process.env.OPENCLAW_WORKTREE_BASE_BRANCH;
   if (envBranch !== undefined) {
-    assertBranchName(envBranch);
+    await assertBranchName(envBranch);
     return envBranch;
   }
 
@@ -149,7 +154,7 @@ export async function detectDefaultBranch(repoDir: string): Promise<string> {
     const result = await runGit(["-C", repoDir, "rev-parse", "--abbrev-ref", "origin/HEAD"], { timeout: 5_000 });
     const branch = result.trim().replace(/^origin\//, "");
     if (branch) {
-      assertBranchName(branch);
+      await assertBranchName(branch);
       return branch;
     }
   } catch {
@@ -157,14 +162,14 @@ export async function detectDefaultBranch(repoDir: string): Promise<string> {
   }
 
   try {
-    await runGit(["-C", repoDir, "rev-parse", "--verify", localBranchRef("main")], { timeout: 5_000 });
+    await runGit(["-C", repoDir, "rev-parse", "--verify", await localBranchRef("main")], { timeout: 5_000 });
     return "main";
   } catch {
     // fall through
   }
 
   try {
-    await runGit(["-C", repoDir, "rev-parse", "--verify", localBranchRef("master")], { timeout: 5_000 });
+    await runGit(["-C", repoDir, "rev-parse", "--verify", await localBranchRef("master")], { timeout: 5_000 });
     return "master";
   } catch {
     return "main";
@@ -186,12 +191,12 @@ export async function getBranchName(worktreePath: string): Promise<string | unde
 }
 
 export async function getCommitsAheadCount(repoDir: string, branch: string, base: string): Promise<number | undefined> {
-  assertBranchName(branch);
-  assertBranchName(base);
+  await assertBranchName(branch);
+  await assertBranchName(base);
 
   try {
     const result = await runGit(
-      ["-C", repoDir, "rev-list", "--count", `${localBranchRef(base)}..${localBranchRef(branch)}`],
+      ["-C", repoDir, "rev-list", "--count", `${await localBranchRef(base)}..${await localBranchRef(branch)}`],
       { timeout: 10_000 },
     );
     const count = parseInt(result.trim(), 10);
@@ -210,12 +215,12 @@ export async function getAheadBehindCounts(
   branch: string,
   base: string,
 ): Promise<{ ahead: number; behind: number } | undefined> {
-  assertBranchName(branch);
-  assertBranchName(base);
+  await assertBranchName(branch);
+  await assertBranchName(base);
 
   try {
     const result = (await runGit(
-      ["-C", repoDir, "rev-list", "--left-right", "--count", `${localBranchRef(branch)}...${localBranchRef(base)}`],
+      ["-C", repoDir, "rev-list", "--left-right", "--count", `${await localBranchRef(branch)}...${await localBranchRef(base)}`],
       { timeout: 10_000 },
     )).trim();
     const [aheadRaw, behindRaw] = result.split(/\s+/);
@@ -229,8 +234,8 @@ export async function getAheadBehindCounts(
 }
 
 export async function isBranchAncestorOfBase(repoDir: string, branch: string, base: string): Promise<boolean> {
-  const branchRef = branchOrRemoteTrackingRef(branch);
-  const baseRef = branchOrRemoteTrackingRef(base);
+  const branchRef = await branchOrRemoteTrackingRef(branch);
+  const baseRef = await branchOrRemoteTrackingRef(base);
 
   try {
     await runGit(["-C", repoDir, "merge-base", "--is-ancestor", branchRef, baseRef], { timeout: 10_000 });
@@ -241,16 +246,16 @@ export async function isBranchAncestorOfBase(repoDir: string, branch: string, ba
 }
 
 export async function wouldMergeBeNoop(repoDir: string, branch: string, base: string): Promise<boolean> {
-  assertBranchName(branch);
-  assertBranchName(base);
+  await assertBranchName(branch);
+  await assertBranchName(base);
 
   try {
     const mergedTree = (await runGit(
-      ["-C", repoDir, "merge-tree", "--write-tree", localBranchRef(base), localBranchRef(branch)],
+      ["-C", repoDir, "merge-tree", "--write-tree", await localBranchRef(base), await localBranchRef(branch)],
       { timeout: 15_000 },
     )).trim();
     const baseTree = (await runGit(
-      ["-C", repoDir, "rev-parse", `${localBranchRef(base)}^{tree}`],
+      ["-C", repoDir, "rev-parse", `${await localBranchRef(base)}^{tree}`],
       { timeout: 10_000 },
     )).trim();
     return Boolean(mergedTree) && mergedTree === baseTree;
@@ -260,7 +265,7 @@ export async function wouldMergeBeNoop(repoDir: string, branch: string, base: st
 }
 
 export async function deleteBranch(repoDir: string, branch: string): Promise<boolean> {
-  assertBranchName(branch);
+  await assertBranchName(branch);
 
   return withRepoLock(repoDir, async () => {
     try {

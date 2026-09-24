@@ -489,6 +489,26 @@ describe("worktree base dir and PR target resolution", () => {
     }
   });
 
+  it("has no worktree base dir outside a git repository and refuses to create one there", async () => {
+    const { createWorktree, getWorktreeBaseDir, getWorktreeSpaceProbePath } = await import("../src/worktree.js");
+    const plainDir = mkdtempSync(join(tmpdir(), "openclaw-worktree-no-repo-"));
+    const previousEnv = process.env.OPENCLAW_WORKTREE_DIR;
+    delete process.env.OPENCLAW_WORKTREE_DIR;
+    try {
+      assert.equal(await getWorktreeBaseDir(plainDir), undefined);
+      assert.equal(await getWorktreeBaseDir(), undefined);
+      assert.equal(await getWorktreeSpaceProbePath(plainDir), undefined);
+      await assert.rejects(
+        async () => await createWorktree(plainDir, "no-repo"),
+        /not inside a git repository/,
+      );
+    } finally {
+      if (previousEnv === undefined) delete process.env.OPENCLAW_WORKTREE_DIR;
+      else process.env.OPENCLAW_WORKTREE_DIR = previousEnv;
+      rmSync(plainDir, { recursive: true, force: true });
+    }
+  });
+
   it("adds the default managed worktree directory to the repo-local exclude file", async () => {
     const { createWorktree } = await import("../src/worktree.js");
     const repoDir = mkdtempSync(join(tmpdir(), "openclaw-worktree-exclude-default-"));

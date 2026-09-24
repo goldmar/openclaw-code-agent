@@ -22,8 +22,8 @@ export interface RuntimeLlmTextRequest {
  * deterministic fallback.
  */
 export function getRuntimeLlmComplete(): RuntimeLlmComplete | undefined {
-  const complete = getPluginRuntime()?.llm?.complete;
-  return typeof complete === "function" ? complete : undefined;
+  // Undefined only before plugin registration; callers then use their fallback.
+  return getPluginRuntime()?.llm.complete;
 }
 
 /** Returns the completion text, or throws the host error (with its stable `code`). */

@@ -2,6 +2,16 @@ import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 
 import { WakeDeliveryExecutor, wakeDeliveryExecutorInternals } from "../src/wake-delivery-executor";
+import { WakeTransport } from "../src/wake-transport";
+
+/** The only CLI dispatch production still runs: `openclaw gateway call chat.send`. */
+function chatSendArgs(message: string): string[] {
+  return new WakeTransport().buildChatSendArgs("agent:main:main", message, true, `idem-${message}`);
+}
+
+function chatSendMessage(args: readonly string[]): string {
+  return String((JSON.parse(args[7] ?? "{}") as { message?: unknown }).message ?? "");
+}
 
 describe("WakeDeliveryExecutor", () => {
   const originalSetTimeout = global.setTimeout;
@@ -65,7 +75,10 @@ describe("WakeDeliveryExecutor", () => {
       errors.push([message, ...rest].map((value) => String(value)).join(" "));
     };
 
-    t.mock.method(wakeDeliveryExecutorInternals, "execFile", ((_file, _args, _options, callback) => {
+    const attemptedArgs: string[][] = [];
+    t.mock.method(wakeDeliveryExecutorInternals, "execFile", ((file, args, _options, callback) => {
+      assert.equal(file, "openclaw");
+      attemptedArgs.push([...(args as string[])]);
       attempts += 1;
       const error = new Error(attempts === 1 ? "Command timed out" : "gateway unavailable") as Error & { killed?: boolean; signal?: NodeJS.Signals };
       if (attempts === 1) {
@@ -78,7 +91,7 @@ describe("WakeDeliveryExecutor", () => {
     }) as typeof wakeDeliveryExecutorInternals.execFile);
 
     executor.execute(
-      ["gateway", "call", "chat.send", "--expect-final", "--timeout", "30000", "--params", "{}"],
+      chatSendArgs("launch wake"),
       {
         label: "launch-notify",
         sessionId: "session-direct-failure",
@@ -96,6 +109,8 @@ describe("WakeDeliveryExecutor", () => {
     await new Promise((resolve) => setImmediate(resolve));
 
     assert.equal(attempts, 4);
+    // Every retry re-sends the identical argv, so the chat.send idempotency key is stable.
+    assert.ok(attemptedArgs.every((args) => JSON.stringify(args) === JSON.stringify(chatSendArgs("launch wake"))));
     assert.equal(finalFailureCount, 1);
     assert.ok(errors.some((line) => line.includes("\"event\":\"dispatch_retry_scheduled\"")));
   });
@@ -203,7 +218,7 @@ describe("WakeDeliveryExecutor", () => {
     assert.equal(secondDispatchRuns, 0);
   });
 
-  it("does not hold an ordered lane on retry when shouldContinue becomes false after failure", async (t) => {
+  it("does not hold an ordered chat.send lane on retry when shouldContinue becomes false after failure", async (t) => {
     const executor = new WakeDeliveryExecutor();
     const retryDelays: number[] = [];
     let shouldDeliverFirst = true;
@@ -215,8 +230,12 @@ describe("WakeDeliveryExecutor", () => {
     }) as typeof setTimeout);
     global.clearTimeout = ((() => {}) as typeof clearTimeout);
 
-    t.mock.method(wakeDeliveryExecutorInternals, "execFile", ((_file, args, _options, callback) => {
-      if ((args as string[]).includes("first")) {
+    const dispatchedMessages: string[] = [];
+    t.mock.method(wakeDeliveryExecutorInternals, "execFile", ((file, args, _options, callback) => {
+      assert.equal(file, "openclaw");
+      assert.deepEqual((args as string[]).slice(0, 3), ["gateway", "call", "chat.send"]);
+      dispatchedMessages.push(chatSendMessage(args as string[]));
+      if (chatSendMessage(args as string[]) === "first") {
         shouldDeliverFirst = false;
         callback?.(new Error("stale delivery failed"), "", "stale delivery failed");
         return {} as any;
@@ -227,35 +246,36 @@ describe("WakeDeliveryExecutor", () => {
     }) as typeof wakeDeliveryExecutorInternals.execFile);
 
     executor.execute(
-      ["message", "send", "--message", "first"],
+      chatSendArgs("first"),
       {
         label: "first",
         sessionId: "session-ordered-stale",
-        target: "message.send",
-        phase: "notify",
-        routeSummary: "discord|channel:123",
-        messageKind: "notify",
-        orderingKey: "notify:discord|channel:123",
+        target: "chat.send",
+        phase: "wake",
+        routeSummary: "session:agent:main:main",
+        messageKind: "wake",
+        orderingKey: "wake:agent:main:main",
         shouldContinue: () => shouldDeliverFirst,
       },
     );
 
     executor.execute(
-      ["message", "send", "--message", "second"],
+      chatSendArgs("second"),
       {
         label: "second",
         sessionId: "session-ordered-stale",
-        target: "message.send",
-        phase: "notify",
-        routeSummary: "discord|channel:123",
-        messageKind: "notify",
-        orderingKey: "notify:discord|channel:123",
+        target: "chat.send",
+        phase: "wake",
+        routeSummary: "session:agent:main:main",
+        messageKind: "wake",
+        orderingKey: "wake:agent:main:main",
       },
     );
 
     await new Promise((resolve) => setImmediate(resolve));
     await new Promise((resolve) => setImmediate(resolve));
 
+    assert.deepEqual(dispatchedMessages, ["first", "second"]);
     assert.equal(secondDispatchRuns, 1);
     assert.equal(retryDelays.length, 0);
   });
@@ -340,9 +360,9 @@ describe("WakeDeliveryExecutor", () => {
       {
         label: "wake-retry",
         sessionId: "session-wake-dispose",
-        target: "message.send",
+        target: "system.event",
         phase: "wake",
-        routeSummary: "telegram|bot|12345",
+        routeSummary: "system",
         messageKind: "wake",
       },
     );

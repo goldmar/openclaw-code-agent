@@ -6,11 +6,15 @@
   "main": "dist/index.js",
   "scripts": {
     "audit:prod": "pnpm audit --prod",
-    "build": "esbuild index.ts --bundle --splitting --platform=node --target=node24 --format=esm --outdir=dist --entry-names=index --chunk-names=chunks/[name]-[hash] --minify --charset=utf8 --pure:console.log --pure:console.warn --pure:console.info --pure:console.debug --external:@anthropic-ai/claude-agent-sdk --external:openclaw/plugin-sdk/plugin-entry --external:openclaw/plugin-sdk/channel-outbound --external:openclaw/plugin-sdk/json-store --external:openclaw/plugin-sdk/routing --external:openclaw/plugin-sdk/state-paths",
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "build": "pnpm clean && esbuild index.ts --bundle --splitting --platform=node --target=node24 --format=esm --outdir=dist --entry-names=index --chunk-names=chunks/[name]-[hash] --minify --charset=utf8 --pure:console.log --pure:console.warn --pure:console.info --pure:console.debug --external:@anthropic-ai/claude-agent-sdk --external:openclaw/plugin-sdk/plugin-entry --external:openclaw/plugin-sdk/channel-outbound --external:openclaw/plugin-sdk/json-store --external:openclaw/plugin-sdk/routing --external:openclaw/plugin-sdk/state-paths",
+    "prepack": "pnpm build",
     "generate:npm-shrinkwrap": "node scripts/generate-npm-shrinkwrap.mjs",
     "check-static-guardrails": "node scripts/check-static-guardrails.mjs && node scripts/check-npm-shrinkwrap.mjs",
     "check-plugin-security": "node scripts/check-plugin-security.mjs",
+    "check-clawhub-scan": "node scripts/check-clawhub-scan.mjs",
     "sync:codex-protocol": "node scripts/sync-codex-protocol.mjs",
+    "sync:clawhub-scan": "node scripts/sync-clawhub-scan.mjs",
     "test": "node scripts/run-tests.mjs",
     "test:integ:crabbox": "node scripts/run-tests.mjs tests/oca-codex-crabbox-integ.test.ts tests/oca-plugin-workflows-integ.test.ts tests/oca-codex-telegram-proof.test.ts tests/oca-codex-proof-app-server.test.ts tests/oca-codex-proof-workflow.test.ts",
     "test:serial": "node scripts/run-tests.mjs",
@@ -27,7 +31,7 @@
     "typecheck": "tsc -p tsconfig.typecheck.json --noEmit",
     "validate:release-metadata": "node scripts/validate-release-metadata.mjs",
     "verify:npm-consumer": "node scripts/verify-npm-consumer-install.mjs",
-    "verify": "pnpm check-static-guardrails && pnpm typecheck && pnpm build && pnpm test"
+    "verify": "pnpm check-static-guardrails && pnpm typecheck && pnpm build && pnpm check-clawhub-scan && pnpm test"
   },
   "openclaw": {
     "extensions": [
@@ -39,8 +43,8 @@
       "minHostVersion": ">=2026.9.6"
     },
     "compat": {
-      "pluginApi": ">=2026.8.1",
-      "minGatewayVersion": "2026.8.1"
+      "pluginApi": ">=2026.9.6",
+      "minGatewayVersion": "2026.9.6"
     },
     "build": {
       "openclawVersion": "2026.9.6",
@@ -53,6 +57,7 @@
     "openclaw.plugin.json",
     "npm-shrinkwrap.json",
     "README.md",
+    "docs/SECURITY.md",
     "LICENSE"
   ],
   "dependencies": {
@@ -112,6 +117,6 @@
   },
   "description": "An OpenClaw plugin that orchestrates coding agent sessions as managed background processes. Launch, monitor, and control coding agents (Claude Code, Codex, experimental OpenCode, and more) directly from your AI gateway.",
   "peerDependencies": {
-    "openclaw": ">=2026.8.1"
+    "openclaw": ">=2026.9.6"
   }
 }

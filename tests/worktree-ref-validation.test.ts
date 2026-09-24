@@ -18,17 +18,18 @@ const invalid: unknown[] = [null, 3, {}, [], "", " main", "main ", "a\nb", "a\0b
 describe("literal worktree ref boundary", () => {
   afterEach(() => setSessionManager(null as any));
 
-  it("rejects options, revision syntax, malformed refs and nonstring runtime input", () => {
-    for (const value of invalid) assert.throws(() => assertBranchName(value), /literal Git branch|valid literal/);
+  it("rejects options, revision syntax, malformed refs and nonstring runtime input", async () => {
+    for (const value of invalid) await assert.rejects(async () => await assertBranchName(value), /literal Git branch|valid literal/);
     for (const value of ["main", "feature/security-fix", "release/2026.9", "refs/feature", "refs/feature/topic", "refs/heads-up"]) {
-      assert.equal(branchNameValidationError(value), undefined);
+      assert.equal(await branchNameValidationError(value), undefined);
     }
   });
 
-  it("permits computed remote-tracking refs only at read-only comparison boundaries", () => {
-    assert.doesNotThrow(() => assertBranchOrRemoteTrackingRef("refs/remotes/origin/main"));
-    assert.throws(() => assertBranchOrRemoteTrackingRef("refs/heads/main"), /literal Git branch/);
-    assert.throws(() => assertBranchOrRemoteTrackingRef("refs/tags/v1"), /literal Git branch/);
+  it("permits computed remote-tracking refs only at read-only comparison boundaries", async () => {
+    await assert.doesNotReject(async () => await assertBranchOrRemoteTrackingRef("refs/remotes/origin/main"));
+    await assert.rejects(async () => await assertBranchOrRemoteTrackingRef("refs/remotes/origin/bad..ref"), /valid literal Git branch or remote-tracking ref/);
+    await assert.rejects(async () => await assertBranchOrRemoteTrackingRef("refs/heads/main"), /literal Git branch/);
+    await assert.rejects(async () => await assertBranchOrRemoteTrackingRef("refs/tags/v1"), /literal Git branch/);
   });
 
   it("rejects direct tool calls before session resolution or launch", async () => {

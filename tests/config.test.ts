@@ -673,3 +673,14 @@ describe("pluginConfig singleton", () => {
     assert.equal(pluginConfig.maxSessions, 20);
   });
 });
+
+describe("autoUpdate config", () => {
+  it("defaults to enabled and honors an explicit false", () => {
+    setPluginConfig({});
+    assert.equal(pluginConfig.autoUpdate, true);
+    setPluginConfig({ autoUpdate: false });
+    assert.equal(pluginConfig.autoUpdate, false);
+    setPluginConfig({ autoUpdate: true });
+    assert.equal(pluginConfig.autoUpdate, true);
+  });
+});

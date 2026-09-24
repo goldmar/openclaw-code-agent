@@ -192,7 +192,7 @@
           "plan",
           "bypassPermissions"
         ],
-        "description": "Default plugin orchestration mode for coding-agent sessions. This controls OpenClaw plan/default/bypass behavior and is separate from the fixed Codex execution policy."
+        "description": "Default plugin orchestration mode for coding-agent sessions. This controls OpenClaw plan/default/bypass behavior. The Codex sandbox and approval prompts are configured separately with harnesses.codex.permissionProfile, approvalPolicy, and approvalsReviewer."
       },
       "agentChannels": {
         "type": "object",
@@ -214,7 +214,7 @@
           "ask",
           "delegate"
         ],
-        "description": "Plan approval behavior. 'delegate' (default): orchestrator must review the full plan, then approve low-risk plans or escalate to the user. 'ask': always forwards plans to the user for approval. 'approve': orchestrator can auto-approve after verification."
+        "description": "Plan approval behavior. 'delegate' (default): orchestrator must review the full plan, then approve low-risk plans or escalate to the user. 'ask': always forwards plans to the user for approval. 'approve': orchestrator may approve without asking the user, but only after verifying the full plan; destructive or out-of-scope plans still go to the user."
       },
       "defaultHarness": {
         "type": "string",
@@ -231,6 +231,11 @@
       "worktreeDir": {
         "type": "string",
         "description": "Base directory for agent worktrees. Defaults to <repoRoot>/.worktrees when unset. Overridden by OPENCLAW_WORKTREE_DIR env var."
+      },
+      "autoUpdate": {
+        "type": "boolean",
+        "default": true,
+        "description": "Check daily for a newer OpenClaw Code Agent release and offer it with Update now / Remind later / Dismiss buttons. The plugin reinstalls itself (openclaw plugins install <exact version> --force) only after a user presses Update now, and restarts the Gateway (openclaw gateway restart) only after a separate Restart Gateway press. false disables update checks, installs, and restarts entirely."
       }
     }
   },
@@ -273,12 +278,17 @@
     },
     "permissionMode": {
       "label": "Default permission mode",
-      "help": "Default plugin orchestration mode used when new coding-agent sessions are launched. Use this for plan/default/bypass behavior; Codex execution stays fixed to 'never'.",
+      "help": "Default plugin orchestration mode used when new coding-agent sessions are launched. Use this for plan/default/bypass behavior; the Codex sandbox and approval prompts come from harnesses.codex.permissionProfile, approvalPolicy, and approvalsReviewer.",
       "advanced": true
     },
     "planApproval": {
       "label": "Plan approval policy",
-      "help": "Choose whether plans are delegated to the orchestrator for full-plan review first (`delegate`, default), always sent to the user with Approve/Revise/Reject buttons, or auto-approved.",
+      "help": "Choose whether plans are delegated to the orchestrator for full-plan review first (`delegate`, default), always sent to the user with Approve/Revise/Reject buttons, or approved by the orchestrator after it verifies the plan (`approve`).",
+      "advanced": true
+    },
+    "autoUpdate": {
+      "label": "Plugin self-update",
+      "help": "On (default): check daily for a newer release and offer it with buttons. Installing and restarting the Gateway each need an explicit button press. Off: no update checks, installs, or restarts.",
       "advanced": true
     },
     "defaultWorktreeStrategy": {

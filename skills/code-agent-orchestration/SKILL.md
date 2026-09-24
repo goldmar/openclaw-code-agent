@@ -155,7 +155,10 @@ Use `permission_mode: "plan"` whenever the user wants a real planning checkpoint
 
 ### `planApproval: "approve"`
 
-- Auto-approve only after verification per the session policy.
+- The orchestrator may approve without asking the user, but only after it verifies the plan. This setting never approves a plan on its own.
+- Verify first: read the full plan with `agent_output(session, full=true)` and confirm that it stays within the requested task, the session's workdir or worktree, and the repository's policy.
+- Send the plan to the user with `agent_request_plan_approval(session='...', summary='...')` instead of approving when it deletes or rewrites data, history, or files outside the task; touches credentials, secrets, CI/release, or deployment; runs destructive or irreversible commands; or goes beyond what the user asked for.
+- When verification passes, approve with `agent_respond(..., approve=true, approval_rationale='...')`, and tell the user in one short line what you approved and why.
 
 ## Worktree Decisions
 

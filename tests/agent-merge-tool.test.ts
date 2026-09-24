@@ -144,7 +144,7 @@ function installPersistedSessionWithNotificationService(args: {
     notifyWorktreeOutcome(session: unknown, outcomeLine: string, options?: unknown) {
       notificationService.notifyWorktreeOutcome(session as any, outcomeLine, options as any);
     },
-    spawn() {
+    launchSession() {
       throw new Error("conflict resolver should not be spawned in this test");
     },
   } as any);
@@ -190,7 +190,7 @@ function installPersistedSessionStub(
     notifyWorktreeOutcome(session: unknown, outcomeLine: string, options?: unknown) {
       notifications.push({ session, outcomeLine, options });
     },
-    spawn() {
+    launchSession() {
       throw new Error("conflict resolver should not be spawned in this test");
     },
   } as any);

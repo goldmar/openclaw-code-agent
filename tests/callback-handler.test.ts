@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createCallbackHandler } from "../src/callback-handler";
 import { SessionActionTokenStore } from "../src/session-action-token-store";
 import { setAutoUpdateService, setSessionManager } from "../src/singletons";
+import { setPluginConfig } from "../src/config";
 import { createStubSession } from "./helpers";
 
 const TELEGRAM_FORUM_TARGET = "-1001234567890";
@@ -169,6 +170,27 @@ describe("createCallbackHandler()", () => {
     assert.deepEqual(result, { handled: true });
     assert.deepEqual(calls, ["install"]);
     assert.match(state.replies[0] ?? "", /restart prompt sent/);
+  });
+
+  it("reports a disabled self-updater for update buttons when autoUpdate is false", async () => {
+    setPluginConfig({ autoUpdate: false });
+    try {
+      for (const kind of ["plugin-update-install", "plugin-update-restart"] as const) {
+        setSessionManager({
+          getActionToken: () => ({ sessionId: "plugin:auto-update", kind, pluginUpdateVersion: "5.0.1" }),
+          consumeActionToken: () => ({ sessionId: "plugin:auto-update", kind, pluginUpdateVersion: "5.0.1" }),
+          resolve: () => undefined,
+          getPersistedSession: () => undefined,
+        } as any);
+        const state = createCtx(`token-${kind}`);
+        const result = await createCallbackHandler().handler(state.ctx as any);
+
+        assert.deepEqual(result, { handled: true });
+        assert.match(state.replies.at(-1) ?? "", /self-update is disabled \(plugin config `autoUpdate: false`\)/);
+      }
+    } finally {
+      setPluginConfig({});
+    }
   });
 
   it("visibly rejects a stale Telegram callback even when control cleanup fails", async (t) => {
@@ -1101,7 +1123,7 @@ describe("createCallbackHandler()", () => {
       getActionToken: () => token,
       getPersistedSession: () => persisted,
       resolve: () => active,
-      spawnAndAwaitRunning: async (config: any) => {
+      launchAndAwaitRunning: async (config: any) => {
         resumedConfig = config;
         active = createStubSession({
           id: "stable-plan",
@@ -2042,7 +2064,7 @@ describe("createCallbackHandler()", () => {
       }),
       resolvePendingInputOption: () => false,
       canSubmitPendingInputOption: () => false,
-      spawnAndAwaitRunning: async (config: any) => {
+      launchAndAwaitRunning: async (config: any) => {
         resumeConfig = config;
         return createStubSession({ id: "sess-42", name: "review-morning-audio-brief" });
       },
@@ -2060,7 +2082,8 @@ describe("createCallbackHandler()", () => {
     assert.deepEqual(result, { handled: true });
     assert.equal(resumeConfig.resumeSessionId, "backend-42");
     assert.equal(resumeConfig.sessionIdOverride, "sess-42");
-    assert.match(resumeConfig.prompt, /gateway restarted while a user question was pending/);
+    assert.match(resumeConfig.prompt, /interrupted by an OpenClaw Gateway restart/);
+    assert.doesNotMatch(resumeConfig.prompt, /\[SYSTEM:/);
     assert.match(resumeConfig.prompt, /Question ID: narration_model/);
     assert.match(resumeConfig.prompt, /Selected answer: OpenAI model \(Recommended\)/);
     assert.equal(consumedRequestId, "backend-42-request-7");
@@ -2088,7 +2111,7 @@ describe("createCallbackHandler()", () => {
       }),
       resolvePendingInputOption: () => false,
       canSubmitPendingInputOption: () => false,
-      spawnAndAwaitRunning: async () => {
+      launchAndAwaitRunning: async () => {
         resumeCalls++;
         await new Promise<void>((resolve) => { releaseResume = resolve; });
         return createStubSession({ id: "sess-42", name: "restart-race" });

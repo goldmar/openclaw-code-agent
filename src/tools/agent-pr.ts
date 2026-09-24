@@ -14,7 +14,7 @@ import { createLogger } from "../logger";
 
 const log = createLogger("agent-pr");
 
-export { buildPrMetadata, createRuntimePrMetadataProvider, formatPrBody, isOcaFallbackPrBody, isOcaGeneratedPrBody, isOcaGeneratedPrTitle } from "../worktree-pr-metadata";
+export { buildPrMetadata, createRuntimePrMetadataProvider, formatPrBody, isOcaGeneratedPrBody, isOcaGeneratedPrTitle } from "../worktree-pr-metadata";
 export type { PrMetadata, PrMetadataEvidence, PrMetadataProvider, PrMetadataResult } from "../worktree-pr-metadata";
 
 interface AgentPrParams {
@@ -106,20 +106,20 @@ async function getWorktreePathForBranch(repoDir: string, branch: string): Promis
 }
 
 async function moveBranchFastForward(repoDir: string, targetBranch: string, sourceRef: string): Promise<ExistingTargetPrBranchResolution> {
-  assertBranchName(targetBranch);
-  assertBranchName(sourceRef);
+  await assertBranchName(targetBranch);
+  await assertBranchName(sourceRef);
   try {
     const targetWorktreePath = await getWorktreePathForBranch(repoDir, targetBranch);
     if (targetWorktreePath) {
-      await runGit(["-C", targetWorktreePath, "merge", "--ff-only", localBranchRef(sourceRef)], { timeout: 30_000 });
+      await runGit(["-C", targetWorktreePath, "merge", "--ff-only", await localBranchRef(sourceRef)], { timeout: 30_000 });
       return { success: true, branchName: targetBranch, alreadyRepresented: false };
     }
 
     const currentBranch = await getBranchName(repoDir);
     if (currentBranch === targetBranch) {
-      await runGit(["-C", repoDir, "merge", "--ff-only", localBranchRef(sourceRef)], { timeout: 30_000 });
+      await runGit(["-C", repoDir, "merge", "--ff-only", await localBranchRef(sourceRef)], { timeout: 30_000 });
     } else {
-      await runGit(["-C", repoDir, "branch", "-f", targetBranch, localBranchRef(sourceRef)], { timeout: 10_000 });
+      await runGit(["-C", repoDir, "branch", "-f", targetBranch, await localBranchRef(sourceRef)], { timeout: 10_000 });
     }
     return { success: true, branchName: targetBranch, alreadyRepresented: false };
   } catch (err) {
@@ -150,13 +150,13 @@ async function resolveExistingTargetPrUpdateBranchLocked(args: {
   targetPrStatus: PRStatus;
 }): Promise<ExistingTargetPrBranchResolution> {
   const { repoDir, sourceBranch, targetPrStatus } = args;
-  assertBranchName(sourceBranch);
+  await assertBranchName(sourceBranch);
   if (!targetPrStatus.exists || targetPrStatus.state !== "open" || !targetPrStatus.headRefName) {
     return { success: false, error: "Target PR is not an open PR with a resolvable head branch." };
   }
 
   const targetBranch = targetPrStatus.headRefName;
-  assertBranchName(targetBranch);
+  await assertBranchName(targetBranch);
   const remoteTargetRef = await fetchRemoteBranchRef(repoDir, targetBranch);
   const authoritativeTargetRef = remoteTargetRef ?? targetBranch;
   if (targetBranch === sourceBranch && !remoteTargetRef) {
@@ -443,7 +443,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
       }
 
       if (params.base_branch !== undefined) {
-        const branchError = branchNameValidationError(params.base_branch);
+        const branchError = await branchNameValidationError(params.base_branch);
         if (branchError) return { content: [{ type: "text", text: `Error: ${branchError}` }], meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
       }
 

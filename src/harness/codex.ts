@@ -128,7 +128,7 @@ const AUXILIARY_READ_TIMEOUT_MS = 5_000;
 const OPENCLAW_CODEX_APP_SERVER_COMMAND_ENV = "OPENCLAW_CODEX_APP_SERVER_COMMAND";
 const OPENCLAW_CODEX_APP_SERVER_ARGS_ENV = "OPENCLAW_CODEX_APP_SERVER_ARGS";
 const OPENCLAW_CODEX_APP_SERVER_TIMEOUT_MS_ENV = "OPENCLAW_CODEX_APP_SERVER_TIMEOUT_MS";
-const CODEX_APP_SERVER_SESSION_ID_RE = /^(?:urn:uuid:)?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+const CODEX_APP_SERVER_SESSION_ID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
 /**
  * High-volume notifications OCA never consumes. Opting out keeps the stdio
@@ -165,7 +165,7 @@ function parseRequestTimeoutMs(value: string | undefined): number {
     : DEFAULT_REQUEST_TIMEOUT_MS;
 }
 
-export function parseCsvEnv(value: string | undefined): string[] {
+function parseCsvEnv(value: string | undefined): string[] {
   if (!value) return [];
   return value.split(",").map((entry) => entry.trim()).filter(Boolean);
 }
@@ -278,7 +278,7 @@ export class CodexHarness implements AgentHarness {
     const queue = new HarnessMessageQueue();
     let threadId = normalizeCodexAppServerSessionId(options.resumeSessionId);
     if (options.resumeSessionId && !threadId) {
-      log.warn("[CodexHarness] Ignoring invalid Codex App Server resume session id. Expected UUID or urn:uuid UUID.");
+      log.warn("[CodexHarness] Ignoring invalid Codex App Server resume session id. Expected a Codex thread UUID.");
     }
     let threadReady = false;
     let forkPending = options.forkSession === true && !!threadId;

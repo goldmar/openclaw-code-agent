@@ -256,6 +256,49 @@ describe("Session consumeMessages — result message (single-turn)", () => {
     assert.equal(session.usage?.models?.[0]?.model, "claude-opus-5-5");
   });
 
+  it("shows the structured backend error code in the failure text", async () => {
+    const session = await startSession({ multiTurn: false });
+    fakeHarness.pushMessage({
+      type: "result",
+      data: {
+        success: false,
+        outcome: "failed",
+        outcomeAuthoritative: true,
+        errorCode: "authentication_failed",
+        duration_ms: 5,
+        total_cost_usd: 0,
+        num_turns: 0,
+        result: "Invalid API key",
+        session_id: session.harnessSessionId!,
+      },
+    });
+    await tick(50);
+
+    assert.equal(session.status, "failed");
+    assert.equal(session.error, "Invalid API key (error code: authentication_failed)");
+  });
+
+  it("reports a bare backend error code when the failure has no text", async () => {
+    const session = await startSession({ multiTurn: false });
+    fakeHarness.pushMessage({
+      type: "result",
+      data: {
+        success: false,
+        outcome: "failed",
+        outcomeAuthoritative: true,
+        errorCode: "cwd_unavailable",
+        duration_ms: 5,
+        total_cost_usd: 0,
+        num_turns: 0,
+        session_id: session.harnessSessionId!,
+      },
+    });
+    await tick(50);
+
+    assert.equal(session.status, "failed");
+    assert.equal(session.error, "Backend error: cwd_unavailable");
+  });
+
   it("merges usage snapshots and records backend model facts", async () => {
     const session = await startSession({ multiTurn: true });
     fakeHarness.pushMessage({ type: "usage_updated", usage: { backgroundTasks: 2 } });

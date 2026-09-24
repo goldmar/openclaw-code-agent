@@ -842,7 +842,7 @@ describe("GoalController", () => {
     const controller = new GoalController({
       resolve: (id: string) => sessions.get(id),
       getPersistedSession: () => undefined,
-      spawnAndAwaitRunning: async (config: any) => {
+      launchAndAwaitRunning: async (config: any) => {
         capturedConfig = config;
         sessions.set("session-1", resumed);
         return resumed;
@@ -898,9 +898,9 @@ describe("GoalController", () => {
   it("rejects zero-verifier verifier-mode tasks before creating a session", async () => {
     let spawned = false;
     const controller = new GoalController({
-      spawnAndAwaitRunning: async () => {
+      launchAndAwaitRunning: async () => {
         spawned = true;
-        throw new Error("spawnAndAwaitRunning should not be called");
+        throw new Error("launchAndAwaitRunning should not be called");
       },
     } as any);
 
@@ -919,9 +919,9 @@ describe("GoalController", () => {
   it("rejects whitespace-only verifier commands before creating a session", async () => {
     let spawned = false;
     const controller = new GoalController({
-      spawnAndAwaitRunning: async () => {
+      launchAndAwaitRunning: async () => {
         spawned = true;
-        throw new Error("spawnAndAwaitRunning should not be called");
+        throw new Error("launchAndAwaitRunning should not be called");
       },
     } as any);
 
@@ -1008,7 +1008,7 @@ describe("GoalController", () => {
         harness: "codex",
         backendRef: { kind: "codex-app-server", conversationId: "thread-app-server" },
       }),
-      spawnAndAwaitRunning: async (config: any) => {
+      launchAndAwaitRunning: async (config: any) => {
         capturedConfig = config;
         return createStubSession({
           id: "session-2",

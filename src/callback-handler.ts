@@ -16,8 +16,15 @@ import { getRepoPolicyOption, validateRepoPolicyForPrAvailability } from "./repo
 import { assessResumeCandidate } from "./session-resume";
 import { resolveCurrentPlanDecisionVersion, tokenMatchesAppliedPlanApproval } from "./plan-decision-state";
 import { createLogger } from "./logger";
+import { pluginConfig } from "./config";
 
 const log = createLogger("callback-handler");
+
+function updateServiceUnavailableText(): string {
+  return pluginConfig.autoUpdate
+    ? "⚠️ OpenClaw Code Agent update service is not running."
+    : "⚠️ OpenClaw Code Agent self-update is disabled (plugin config `autoUpdate: false`).";
+}
 
 type InteractiveChannel = "telegram" | "discord";
 type InteractiveCallbackContext = PluginInteractiveTelegramHandlerContext | PluginInteractiveDiscordHandlerContext;
@@ -66,7 +73,7 @@ function recoveredQuestionAnswerMessage(token: SessionActionToken): string | und
     ? `Question ID: ${token.pendingInputQuestionId}`
     : "Question: the interrupted pending question";
   return [
-    "[SYSTEM: The gateway restarted while a user question was pending. Treat the user's selection below as the answer to that interrupted question and continue without asking it again.]",
+    "Your earlier question was interrupted by an OpenClaw Gateway restart. The user has now answered it; treat the selection below as the answer and continue without asking it again.",
     "",
     questionLine,
     `Selected answer: ${token.label.trim()}`,
@@ -924,9 +931,9 @@ export function createCallbackHandler(
             logButtonDiagnostic("callback_update_action_failed", {
               channel: ctx.channel,
               tokenHash: hashDiagnosticToken(tokenId),
-              reason: "service_unavailable",
+              reason: pluginConfig.autoUpdate ? "service_unavailable" : "auto_update_disabled",
             });
-            await replyText(ctx, "⚠️ OpenClaw Code Agent update service is not running.");
+            await replyText(ctx, updateServiceUnavailableText());
             break;
           }
           let text: string;
@@ -964,7 +971,7 @@ export function createCallbackHandler(
         case "plugin-update-restart": {
           await clearUpdateActionButtons(ctx, callbackAcknowledged);
           if (!autoUpdateService) {
-            await replyText(ctx, "⚠️ OpenClaw Code Agent update service is not running.");
+            await replyText(ctx, updateServiceUnavailableText());
             break;
           }
           try {

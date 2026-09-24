@@ -47,12 +47,13 @@ describe("executeRespond", () => {
       isExplicitlyResumable: false,
       killReason: "user",
       harnessSessionId: "harness-idle",
+      backendRef: { kind: "claude-code", conversationId: "harness-idle" },
       name: "suspended-session",
     });
     const sm = createStubSessionManager({ "test-id": session });
 
     let capturedConfig: any;
-    sm.spawn = (config: any) => {
+    sm.launchSession = (config: any) => {
       capturedConfig = config;
       return createStubSession({ name: "suspended-session", id: "test-id" });
     };
@@ -71,6 +72,7 @@ describe("executeRespond", () => {
       isExplicitlyResumable: true,
       killReason: "idle-timeout",
       harnessSessionId: "harness-meta",
+      backendRef: { kind: "claude-code", conversationId: "harness-meta" },
       harnessName: "codex",
       originChannel: "telegram|bot|123",
       originThreadId: 42,
@@ -82,7 +84,7 @@ describe("executeRespond", () => {
     const sm = createStubSessionManager({ "test-id": session });
 
     let capturedConfig: any;
-    sm.spawn = (config: any) => {
+    sm.launchSession = (config: any) => {
       capturedConfig = config;
       return createStubSession({ name: "resumed", id: "test-id" });
     };
@@ -110,7 +112,7 @@ describe("executeRespond", () => {
     });
     const sm = createStubSessionManager({ "test-id": session });
     let capturedConfig: any;
-    sm.spawn = (config: any) => {
+    sm.launchSession = (config: any) => {
       capturedConfig = config;
       return createStubSession({ name: "claude-complete", id: "test-id" });
     };
@@ -140,6 +142,7 @@ describe("executeRespond", () => {
       lifecycle: "terminal",
       killReason: "done",
       harnessSessionId: "thread-codex-complete",
+      backendRef: { kind: "claude-code", conversationId: "thread-codex-complete" },
       harnessName: "codex",
       backendRef: { kind: "codex-app-server", conversationId: "thread-codex-complete" },
       name: "codex-complete",
@@ -147,7 +150,7 @@ describe("executeRespond", () => {
     const sm = createStubSessionManager({ "test-id": session });
 
     let capturedConfig: any;
-    sm.spawn = (config: any) => {
+    sm.launchSession = (config: any) => {
       capturedConfig = config;
       return createStubSession({ name: "codex-complete", id: "test-id" });
     };
@@ -166,9 +169,10 @@ describe("executeRespond", () => {
       isExplicitlyResumable: true,
       killReason: "idle-timeout",
       harnessSessionId: "harness-err",
+      backendRef: { kind: "claude-code", conversationId: "harness-err" },
     });
     const sm = createStubSessionManager({ "test-id": session });
-    sm.spawn = () => { throw new Error("spawn failed"); };
+    sm.launchSession = () => { throw new Error("spawn failed"); };
 
     const result = await executeRespond(sm, { session: "test-id", message: "continue" });
     assert.equal(result.isError, true);
@@ -182,6 +186,7 @@ describe("executeRespond", () => {
     (sm as any).store.persisted.set("harness-plan", {
       sessionId: "dead-plan",
       harnessSessionId: "harness-plan",
+      backendRef: { kind: "claude-code", conversationId: "harness-plan" },
       name: "plan-session",
       prompt: "Plan only and stop.",
       workdir: "/tmp",
@@ -198,7 +203,7 @@ describe("executeRespond", () => {
     (sm as any).store.idIndex.set("dead-plan", "harness-plan");
 
     let capturedConfig: any;
-    sm.spawn = (config: any) => {
+    sm.launchSession = (config: any) => {
       capturedConfig = config;
       return createStubSession({ name: "plan-session", id: "dead-plan" });
     };
@@ -257,7 +262,7 @@ describe("executeRespond", () => {
     (sm as any).store.idIndex.set("SPhNrL4Q", "019e6c36-1321-7130-a871-7b4303e8ff32");
 
     let capturedConfig: any;
-    sm.spawn = (config: any) => {
+    sm.launchSession = (config: any) => {
       capturedConfig = config;
       return createStubSession({ name: "repair-real-openclaw-dashboard", id: "SPhNrL4Q" });
     };
@@ -283,6 +288,7 @@ describe("executeRespond", () => {
     (sm as any).store.persisted.set("harness-plan-off", {
       sessionId: "dead-plan-off",
       harnessSessionId: "harness-plan-off",
+      backendRef: { kind: "claude-code", conversationId: "harness-plan-off" },
       name: "plan-session-off",
       prompt: "Plan only and stop.",
       workdir: "/tmp/repo",
@@ -300,7 +306,7 @@ describe("executeRespond", () => {
     (sm as any).store.idIndex.set("dead-plan-off", "harness-plan-off");
 
     let capturedConfig: any;
-    sm.spawn = (config: any) => {
+    sm.launchSession = (config: any) => {
       capturedConfig = config;
       return createStubSession({ name: "plan-session-off", id: "dead-plan-off" });
     };
@@ -381,6 +387,7 @@ describe("executeRespond", () => {
     (sm as any).store.persisted.set("harness-plan-shutdown", {
       sessionId: "dead-plan-shutdown",
       harnessSessionId: "harness-plan-shutdown",
+      backendRef: { kind: "claude-code", conversationId: "harness-plan-shutdown" },
       name: "plan-session-shutdown",
       prompt: "Plan only and stop.",
       workdir: "/tmp",
@@ -398,7 +405,7 @@ describe("executeRespond", () => {
 
     const notifications: Array<{ text: string; label?: string; idempotencyKey?: string }> = [];
     let capturedConfig: any;
-    sm.spawn = (config: any) => {
+    sm.launchSession = (config: any) => {
       capturedConfig = config;
       return createStubSession({ name: "plan-session-shutdown", id: "dead-plan-shutdown", startedAt: 1_780_000_003_000 });
     };
@@ -433,6 +440,7 @@ describe("executeRespond", () => {
     (sm as any).store.persisted.set("harness-plan-revise", {
       sessionId: "dead-plan-revise",
       harnessSessionId: "harness-plan-revise",
+      backendRef: { kind: "claude-code", conversationId: "harness-plan-revise" },
       name: "plan-session-revise",
       prompt: "Plan only and stop.",
       workdir: "/tmp",
@@ -448,7 +456,7 @@ describe("executeRespond", () => {
     (sm as any).store.idIndex.set("dead-plan-revise", "harness-plan-revise");
 
     let capturedConfig: any;
-    sm.spawn = (config: any) => {
+    sm.launchSession = (config: any) => {
       capturedConfig = config;
       return createStubSession({ name: "plan-session-revise", id: "dead-plan-revise" });
     };
@@ -838,7 +846,7 @@ describe("executeRespond", () => {
     const sm = createStubSessionManager({ "test-id": session });
 
     let capturedConfig: any;
-    sm.spawn = (config: any) => {
+    sm.launchSession = (config: any) => {
       capturedConfig = config;
       return createStubSession({ name: "startup-failure", id: "test-id", status: "running" });
     };
@@ -877,6 +885,7 @@ describe("executeRespond", () => {
       isExplicitlyResumable: true,
       killReason: "idle-timeout",
       harnessSessionId: "harness-resume-only",
+      backendRef: { kind: "claude-code", conversationId: "harness-resume-only" },
       harnessName: "respond-resume-harness",
       name: "resume-only",
       workdir: "/tmp/repo",
@@ -937,6 +946,7 @@ describe("executeRespond", () => {
       isExplicitlyResumable: true,
       killReason: "idle-timeout",
       harnessSessionId: "harness-resume-failure",
+      backendRef: { kind: "claude-code", conversationId: "harness-resume-failure" },
       harnessName: "respond-resume-failure-harness",
       name: "resume-failure",
       workdir: "/tmp/repo",

@@ -18,9 +18,9 @@ const log = createLogger("worktree-provisioning");
  *
  * Either step failing fails the worktree creation.
  */
-export const WORKTREE_INCLUDE_FILE = ".worktreeinclude";
-export const WORKTREE_SETUP_SCRIPT = join(".openclaw", "worktree-setup.sh");
-export const WORKTREE_SETUP_TIMEOUT_MS = 120_000;
+const WORKTREE_INCLUDE_FILE = ".worktreeinclude";
+const WORKTREE_SETUP_SCRIPT = join(".openclaw", "worktree-setup.sh");
+const WORKTREE_SETUP_TIMEOUT_MS = 120_000;
 
 const GIT_PATHSPEC_BATCH_MAX_PATHS = 128;
 const GIT_PATHSPEC_BATCH_MAX_BYTES = 16 * 1024;

@@ -145,7 +145,7 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
       }
 
       if (params.base_branch !== undefined) {
-        const branchError = branchNameValidationError(params.base_branch);
+        const branchError = await branchNameValidationError(params.base_branch);
         if (branchError) return { content: [{ type: "text", text: `Error: ${branchError}` }] };
       }
 
@@ -351,7 +351,7 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
           ].join("\n");
 
           try {
-            const conflictSession = await sessionManager.spawn({
+            const conflictSession = await sessionManager.launchSession({
               prompt: conflictPrompt,
               workdir: effectiveWorkdir,
               name: `${params.session}-conflict-resolver`,

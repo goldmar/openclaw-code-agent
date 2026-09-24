@@ -24,12 +24,13 @@ Canonical operator reference for `openclaw-code-agent`: install, configuration, 
 | `idleTimeoutMinutes` | `15` |
 | `sessionGcAgeMinutes` | `1440` |
 | `maxPersistedSessions` | `10000` |
+| `autoUpdate` | `true` (check and offer; install and restart only after a button press) |
 
 Sessions are multi-turn. Active sessions accept follow-up messages via `agent_respond`, and explicitly suspended sessions can also be continued with `agent_respond`.
 
 ## Compatibility And Upgrades
 
-The current `openclaw-code-agent` package requires, is built against, and is validated against OpenClaw `2026.9.6`. Package installation therefore requires `2026.9.6` and Node `>=24.16.0 <25 || >=26.1.0`, while plugin API, Gateway, and peer dependency metadata keep the verified `2026.8.1` compatibility floor. No host config migration is performed by this package; pnpm build policy and overrides stay in `pnpm-workspace.yaml`, and code-agent session storage stays plugin-owned. Release-by-release host notes live in [CHANGELOG.md](../CHANGELOG.md).
+The current `openclaw-code-agent` package requires, is built against, and is validated against OpenClaw `2026.9.6`. Package installation therefore requires `2026.9.6` and Node `>=24.16.0 <25 || >=26.1.0`, and the plugin API, Gateway, and peer dependency metadata keep the verified `2026.9.6` compatibility floor (raised from `2026.8.1` in 5.0). OCA calls the host surfaces listed under [OpenClaw Host Integration](#openclaw-host-integration) directly, without presence checks, so older hosts are not supported. No host config migration is performed by this package; pnpm build policy and overrides stay in `pnpm-workspace.yaml`, and code-agent session storage stays plugin-owned. Release-by-release host notes live in [CHANGELOG.md](../CHANGELOG.md).
 
 ### Upgrading from 4.x
 
@@ -180,7 +181,9 @@ forced_login_method = "chatgpt"
 | `codex` | Controlled by `harnesses.codex.allowedModels` | Native Codex App Server harness with structured pending input, structured plans, approvals, steering, rewind/fork, compaction, and inline review |
 | `opencode` | Optional `provider/model`; unset uses OpenCode's configured provider default | Experimental OpenCode server harness with native pending input, OpenCode's built-in `plan`/`build` agents behind the plugin-owned plan gate, and plugin-managed worktrees |
 
-Allowed-model matching is case-insensitive substring matching. If the resolved model is not allowed, `agent_launch` fails immediately. Because OpenCode can use its own configured provider default, do not configure `harnesses.opencode.allowedModels` unless you also configure or pass an explicit OpenCode model that can be checked.
+Allowed-model matching is case-insensitive substring matching. If the resolved model is not allowed, `agent_launch` fails immediately.
+
+The built-in Codex default (`gpt-6-sol`) and allowlist are static operator policy. OCA does not substitute the `model/list` entry marked `isDefault`: the allowlist check runs before launch, when no Codex connection (and so no catalog) exists yet, and a catalog default that moves with a Codex upgrade would silently change the model new sessions use, possibly to one outside the allowlist. Set `harnesses.codex.defaultModel` to choose another default. Because OpenCode can use its own configured provider default, do not configure `harnesses.opencode.allowedModels` unless you also configure or pass an explicit OpenCode model that can be checked.
 
 Codex harness details:
 
@@ -243,11 +246,14 @@ This plugin is expected to use local subprocesses. That is part of the product d
 
 Accepted subprocess surfaces:
 
-- local `openclaw` CLI calls for wakes and notifications
+- local `openclaw` CLI calls for `chat.send` wakes and for the button-confirmed self-update (`plugins inspect` / `search` / `install`, `gateway restart`); notifications and system events stay in-process
 - Codex App Server launch over stdio
-- OpenCode server launch on `127.0.0.1` for experimental OpenCode sessions
+- one shared OpenCode server on `127.0.0.1` for experimental OpenCode sessions
 - local `git` / `gh` commands for worktree and PR flows
+- a repository's executable `.openclaw/worktree-setup.sh` in new OCA worktrees
 - operator-provided verifier shell commands in explicit goal tasks
+
+Self-update: with `autoUpdate: true` (default) OCA checks about once a day for a newer release and offers it with buttons. It reinstalls itself only after a user presses **Update now**, and restarts the Gateway only after a separate **Restart Gateway** press. `autoUpdate: false` disables update checks, installs, and restarts.
 
 Operator guidance:
 
@@ -278,6 +284,7 @@ These should remain manual or follow-up configuration:
 - `planApproval`
 - `defaultWorktreeStrategy`
 - `worktreeDir`
+- `autoUpdate`
 - session/concurrency/retention limits such as `maxSessions`, `idleTimeoutMinutes`, `sessionGcAgeMinutes`, `maxPersistedSessions`, and `maxAutoResponds`
 
 ### Removed Fields
@@ -304,11 +311,11 @@ For Codex, `permissionMode` selects Codex's `plan` or `default` collaboration mo
 | --- | --- |
 | `ask` | Notify the user directly with a bounded decision-grade plan brief and wait for explicit approval or revision |
 | `delegate` | Default. Wake the orchestrator, require a full-plan review, then let it either approve directly or escalate back to the user with the same approval buttons |
-| `approve` | Auto-approve after verification |
+| `approve` | Wake the orchestrator, which may approve without asking the user only after reading and verifying the full plan; destructive, credential-touching, or out-of-scope plans still go to the user with `agent_request_plan_approval` |
 
 In `ask`, the plugin sends action buttons for `Approve`, `Revise`, and `Reject` when interactive callbacks are available. The user-facing message is a bounded decision brief with objective/scope, implementation approach, affected files or systems, verification, destructive or external effects, material risks, and unknowns or decisions. Only routine implementation detail is counted and compacted. Scope, affected systems, verification, destructive/external actions, costs, risks, choices, and rollback remain explicit and paginate when necessary. The detail notice provides `/agent_output <session-name> --full` for available full output (or a request for the complete plan when a command-safe name is unavailable). Inspect details before approval; requesting a revision remains available. Empty sections are absent, each section label shares a line with its first item, and Markdown tables become labeled fields on both Telegram and Discord. Pagination keeps a heading with its first body item; supporting pages have no decision controls. Telegram and Discord both use OpenClaw's shared direct-message presentation contract for the outbound button UI. Each session keeps one canonical actionable approval prompt per plan review version; later reminders for that same version are non-canonical reminders, not a fresh approval cycle. For a multi-message brief, delivery is successful only after the final action-bearing message is confirmed; an earlier informational chunk cannot prove canonical delivery. When a newer review state supersedes an older one, the plugin invalidates older plan-decision tokens and clears old controls where the transport supports edits; an already-visible old callback can still be acknowledged as stale. If buttons are unavailable, hidden by the client, or fail to deliver, the same flow still works through plain replies: `Approve` approves and resumes implementation, `Revise` records changes requested for the current review version, and `Reject` kills the pending plan session instead of forwarding the word as normal task input. In `delegate`, the orchestrator must read the full plan with `agent_output(..., full=true)` before approving anything.
 
-Direct interactive notifications for Telegram and Discord now share the same OpenClaw `message.send --presentation` contract. Callback handling and route repair still remain provider-specific.
+Direct interactive notifications for Telegram and Discord share OpenClaw's durable outbound `presentation` contract (`sendDurableMessageBatch`). Callback handling and route repair still remain provider-specific.
 
 Revision and approval rules are version-scoped:
 
@@ -346,6 +353,8 @@ On first worktree use in a git repo with no stored policy, `agent_launch` blocks
 | `pr-allowed` | Merge or PR follow-through may be used according to the requested worktree strategy |
 | `never-pr` | PR creation/update is hidden and blocked; use merge or manual handling |
 | `manual` | Automatic merge/PR follow-through is disabled; every changed worktree requires explicit follow-up |
+
+Worktrees are created under `OPENCLAW_WORKTREE_DIR`, else `worktreeDir`, else `<repoRoot>/.worktrees`. Outside a git repository there is no base directory: a launch that needs a worktree fails with a clear error instead of creating one in the OS temp directory. Use `worktree_strategy: "off"` for non-git directories.
 
 GitHub is the only PR provider supported in this release. Non-GitHub repos keep worktree isolation, but PR buttons/actions are disabled by policy resolution. The `goldmar/openclaw-code-agent` repository is treated as `pr-required`.
 
@@ -400,6 +409,8 @@ New OCA worktrees follow the same repository conventions as OpenClaw managed wor
 
 1. **`.worktreeinclude`** at the source checkout root lists gitignored files to copy into the new worktree (for example `.env` or local config). It uses gitignore syntax (comments, `!` negation, `**`, trailing `/`) and is evaluated by git itself: a file is copied only when it matches `.worktreeinclude` and is ignored by the repository's standard excludes, so tracked files are never copied. Symlinked files, paths through symlinked directories, and files that already exist in the worktree are skipped; file modes are preserved. A `.worktreeinclude` that is not a regular file fails the launch.
 2. **`.openclaw/worktree-setup.sh`**, when it exists and is executable, then runs inside the new worktree. It is executed directly (give it a shebang), with the Gateway environment plus `OPENCLAW_SOURCE_TREE_PATH` and `OPENCLAW_WORKTREE_PATH`, no stdin, and a 120 s timeout after which its whole process group is terminated.
+
+OCA always runs the setup script for its worktrees, unlike OpenClaw core, which runs it for managed worktrees only when the caller has admin scope. Core's rule protects the `worktrees.create` Gateway method, which lower-privileged clients can reach. An OCA worktree exists only for a coding session launched in an operator-chosen repository, and that session's agent can already run commands in the same checkout, so the script grants nothing new. Do not point OCA at repositories whose setup scripts you do not trust.
 
 If either step fails, the launch fails with the reason (for the setup script, the exit code or timeout plus the tail of its output), the new worktree is removed, and the new `agent/*` branch is deleted; a resumed session's existing branch is kept. Git hooks are disabled for the provisioning git calls. OCA keeps its `agent/*` branch prefix so its branches never collide with core's `openclaw/*` managed worktrees.
 - `agent_worktree_cleanup(mode="preview_safe")` previews what Clean all safe would remove, `mode="clean_safe"` performs it, and `mode="preview_all"` shows both safe sandboxes and retained reasons.
@@ -745,13 +756,13 @@ OCA uses only public plugin-SDK surfaces that OpenClaw grants untrusted external
 | --- | --- | --- |
 | Plugin entry and types | `openclaw/plugin-sdk/plugin-entry` | `api.runtime` is typed as the published `PluginRuntime`. Telegram/Discord interactive handler contexts stay local in `api.ts` because the host only publishes a generic `PluginInteractiveRegistration<unknown>`; OCA reads only the namespace-stripped `payload` field. |
 | Tool parameter schemas | `typebox` (bundled) | Tool parameters are TypeBox schemas, the format the plugin SDK types tool parameters with. |
-| Direct user notifications | `openclaw/plugin-sdk/channel-outbound` `sendDurableMessageBatch` | Text plus a channel-agnostic `presentation` (buttons) goes through the host's durable outbound queue with `durability: "required"`. Core renders Telegram inline keyboards / Discord components and owns retry and crash recovery for an admitted send, so OCA sends each notification once and never re-sends it through another path. A send that times out with an unknown outcome is reported as a delivery failure without any system-event fallback. There is no `openclaw message send` CLI fallback. |
+| Direct user notifications | `openclaw/plugin-sdk/channel-outbound` `sendDurableMessageBatch` | Text plus a channel-agnostic `presentation` (buttons) goes through the host's durable outbound queue with `durability: "required"`. Core renders Telegram inline keyboards / Discord components and owns retry and crash recovery for an admitted send, so OCA sends each notification once and never re-sends it to the user. When the host reports a definite failure for a text-only notification that does not require direct delivery, OCA hands the text to the agent session as a system event instead; notifications with buttons or that require direct delivery are reported as failed. A send that times out with an unknown outcome is reported as a delivery failure without any system-event fallback. There is no `openclaw message send` CLI fallback. |
 | Orchestrator wakes | `openclaw gateway call chat.send` subprocess | Stays a subprocess: in-process `runtime.gateway.request` with operator scopes is trusted-only. |
 | Wake fallback / system notices | `api.runtime.system.enqueueSystemEvent` + `requestHeartbeat` | Replaces `openclaw system event --mode now`. Events target the origin session key when known (falling back to the default agent's `main` session) and request an immediate `notifications-event` wake. |
 | LLM summaries | `api.runtime.llm.complete` | Worktree decision summaries, question context summaries, and PR metadata send `messages`, `systemPrompt`, `purpose` (`openclaw-code-agent.*`), `maxTokens`, and `reasoning: "low"`, and parse `LlmCompleteResult.text`. OCA requests no model/agent/profile override, so no `plugins.entries.openclaw-code-agent.llm.*` opt-in is needed; an operator `llm.allowedCompletionModels` allowlist can still deny the default model (`LLM_COMPLETION_NOT_AUTHORIZED`). Every summary keeps its deterministic fallback. Question summaries have a 5 s budget and abort the completion when it expires. `runtime.subagent.complete` is not used: it is only bound inside a Gateway request scope, and these summaries run from background session events. |
-| Session lifecycle mirror | `api.runtime.tasks.async.managedFlows` (no `runtime.taskFlow` or synchronous fallback; hosts without it run without a mirror) | Creates flows with `tryCreateManaged` (no mirror when the host cannot persist), mirrors progress with `setWaiting`/`resume`, and finishes with `finish`/`fail`. A user stop records `requestCancel` (retried against the host's current revision after a concurrent update, and repeated by restart reconciliation if it was never recorded), so the host settles the flow as `cancelled`. The mirror requires a host binding with `requestCancel`, which every async managed-flow host provides. `openclaw tasks flow cancel <flow>` is honored: live mirrors re-read their flow every 15 s (and inspect every mutation result) and stop the session when a cancel intent appears. `getTaskSummary` is not used because OCA flows never own child tasks. |
+| Session lifecycle mirror | `api.runtime.tasks.async.managedFlows` (no `runtime.taskFlow` or synchronous fallback) | Creates flows with `tryCreateManaged` (no mirror when the host cannot persist), mirrors progress with `setWaiting`/`resume`, and finishes with `finish`/`fail`. A user stop records `requestCancel` (retried against the host's current revision after a concurrent update, and repeated by restart reconciliation if it was never recorded), so the host settles the flow as `cancelled`. `openclaw tasks flow cancel <flow>` is honored: live mirrors re-read their flow every 15 s (and inspect every mutation result) and stop the session when a cancel intent appears. `getTaskSummary` is not used because OCA flows never own child tasks. |
 | State paths | `openclaw/plugin-sdk/state-paths` `resolveStateDir` | Follows the Gateway's `OPENCLAW_STATE_DIR` / `OPENCLAW_HOME` rules. |
-| JSON stores | `openclaw/plugin-sdk/json-store` `saveJsonFile` / `loadJsonFile` | The session index, goal task store, and auto-update state are written as private (`0600`) files through an fsync'd temp file and atomic rename. The synchronous helper is used because these stores are saved from synchronous code paths; the async `writeJsonFileAtomically` would let concurrent saves reorder. |
+| JSON stores | `openclaw/plugin-sdk/json-store` `saveJsonFile` / `loadJsonFile` | The session index, goal task store, and auto-update state are written as private (`0600`) files in a `0700` directory: the helper writes a temp file in the same directory, fsyncs it, renames it over the target, then fsyncs the directory on a best-effort basis. Where rename cannot replace an existing file (Windows `EPERM`/`EEXIST`) it removes the target first, so that replacement is not atomic. The synchronous helper is used because these stores are saved from synchronous code paths; the async `writeJsonFileAtomically` would let concurrent saves reorder. |
 | Logging | `api.runtime.logging.getChildLogger` | Plugin diagnostics are written to the Gateway log with `{ plugin: "openclaw-code-agent", subsystem }` bindings. Per-dispatch delivery progress logs at `debug`; failures at `warn`/`error`. |
 
 Files owned by the plugin:

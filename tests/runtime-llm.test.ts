@@ -46,11 +46,11 @@ describe("runtime.llm completion adapter", () => {
   });
 
   it("only resolves the public runtime.llm.complete surface", () => {
-    setPluginRuntime({ ai: { complete: async () => ({ text: "x" }) }, models: { complete: async () => ({ text: "x" }) } });
+    setPluginRuntime(undefined);
     assert.equal(getRuntimeLlmComplete(), undefined);
 
     const complete = async () => ({ text: "x" });
-    setPluginRuntime({ llm: { complete } });
+    setPluginRuntime({ llm: { complete }, ai: { complete: async () => ({ text: "ai" }) }, models: { complete: async () => ({ text: "models" }) } });
     assert.equal(getRuntimeLlmComplete(), complete);
   });
 

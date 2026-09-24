@@ -33,9 +33,15 @@ function createTaskFlowRecorder() {
   const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
   let revision = 1;
   const taskFlow = {
-    async createManaged(params: Record<string, unknown>) {
-      calls.push({ method: "createManaged", params });
+    async tryCreateManaged(params: Record<string, unknown>) {
+      calls.push({ method: "tryCreateManaged", params });
       return { flowId: "flow-1", revision };
+    },
+    async createManaged(): Promise<never> {
+      throw new Error("OCA creates flows with tryCreateManaged");
+    },
+    async get(flowId: string) {
+      return { flowId, revision };
     },
     async resume(params: Record<string, unknown>) {
       calls.push({ method: "resume", params });
@@ -102,7 +108,7 @@ describe("session task lifecycle async adapter", () => {
 
     assert.equal(receivedCtx, ctx);
     assert.deepEqual(calls.map((call) => call.method), [
-      "createManaged",
+      "tryCreateManaged",
       "resume",
       "setWaiting",
       "finish",
@@ -140,7 +146,7 @@ describe("session task lifecycle async adapter", () => {
 
   it("serializes delayed lifecycle writes with event snapshots and committed revisions", async (t) => {
     const { calls, taskFlow } = createTaskFlowRecorder();
-    const methods = ["createManaged", "resume", "setWaiting", "finish"] as const;
+    const methods = ["tryCreateManaged", "resume", "setWaiting", "finish"] as const;
     const entered = methods.map(() => Promise.withResolvers<void>());
     const releases = methods.map(() => Promise.withResolvers<void>());
     setManagedTaskFlow({
@@ -200,7 +206,7 @@ describe("session task lifecycle async adapter", () => {
     assert.equal(calls[3].params.endedAt, 400);
   });
 
-  for (const method of ["createManaged", "resume", "finish"] as const) {
+  for (const method of ["tryCreateManaged", "resume", "finish"] as const) {
     it(`keeps ${method} rejection optional and retries only on a later lifecycle call`, async (t) => {
       const { calls, taskFlow } = createTaskFlowRecorder();
       let attempts = 0;
@@ -214,10 +220,10 @@ describe("session task lifecycle async adapter", () => {
       });
       const sink = resolveSessionTaskLifecycle({ sessionKey: "agent:main:telegram:group:123" });
       const session = createSession();
-      if (method !== "createManaged") await sink.create(session);
+      if (method !== "tryCreateManaged") await sink.create(session);
       session.transition("running");
       if (method === "finish") session.complete("done");
-      const invoke = () => method === "createManaged"
+      const invoke = () => method === "tryCreateManaged"
         ? sink.create(session)
         : method === "resume" ? sink.progress(session) : sink.finalize(session);
       const previousMirror = session.taskFlowMirror;
@@ -228,7 +234,7 @@ describe("session task lifecycle async adapter", () => {
       assert.equal(attempts, 1);
       assert.deepEqual(session.taskFlowMirror, previousMirror);
       assert.deepEqual(warnings, [
-        `[SessionTaskLifecycle] ${method === "createManaged" ? "create" : method === "resume" ? "progress" : "finalize"} failed: mirror unavailable`,
+        `[SessionTaskLifecycle] ${method === "tryCreateManaged" ? "create" : method === "resume" ? "progress" : "finalize"} failed: mirror unavailable`,
       ]);
 
       await invoke();
@@ -236,56 +242,11 @@ describe("session task lifecycle async adapter", () => {
       assert.equal(calls.at(-1)?.method, method);
       assert.deepEqual(session.taskFlowMirror, {
         flowId: "flow-1",
-        revision: method === "createManaged" ? 1 : 2,
+        revision: method === "tryCreateManaged" ? 1 : 2,
       });
-      if (method !== "createManaged") assert.equal(calls.at(-1)?.params.expectedRevision, 1);
+      if (method !== "tryCreateManaged") assert.equal(calls.at(-1)?.params.expectedRevision, 1);
     });
   }
-
-  it("no-ops instead of falling back to synchronous or legacy managed flows", async () => {
-    const { calls, taskFlow } = createTaskFlowRecorder();
-    const legacy = { fromToolContext: () => taskFlow };
-    setPluginRuntime({ tasks: { managedFlows: legacy }, taskFlow: legacy });
-
-    const sink = resolveSessionTaskLifecycle({
-      sessionKey: "agent:main:telegram:group:123",
-    });
-    const session = createSession();
-    await sink.create(session);
-    session.transition("running");
-    await sink.progress(session);
-    session.complete("done");
-    await sink.finalize(session);
-
-    assert.deepEqual(calls, []);
-    assert.equal(session.taskFlowMirror, undefined);
-  });
-
-  it("uses async managed flows when synchronous and legacy surfaces also exist", async () => {
-    const current = createTaskFlowRecorder();
-    const legacy = createTaskFlowRecorder();
-    setPluginRuntime({
-      tasks: {
-        async: {
-          managedFlows: { fromToolContext: () => current.taskFlow },
-        },
-        managedFlows: { fromToolContext: () => legacy.taskFlow },
-      },
-      taskFlow: {
-        fromToolContext() {
-          return legacy.taskFlow;
-        },
-      },
-    });
-
-    const sink = resolveSessionTaskLifecycle({
-      sessionKey: "agent:main:telegram:group:123",
-    });
-    await sink.create(createSession());
-
-    assert.deepEqual(current.calls.map((call) => call.method), ["createManaged"]);
-    assert.deepEqual(legacy.calls, []);
-  });
 
   it("fails the managed TaskFlow for sessions cancelled by shutdown", async () => {
     const { calls, taskFlow } = createTaskFlowRecorder();
@@ -299,23 +260,9 @@ describe("session task lifecycle async adapter", () => {
     session.kill("shutdown");
     await sink.finalize(session);
 
-    assert.deepEqual(calls.map((call) => call.method), ["createManaged", "fail"]);
+    assert.deepEqual(calls.map((call) => call.method), ["tryCreateManaged", "fail"]);
     assert.equal((calls[1].params.stateJson as Record<string, unknown>).terminalStatus, "cancelled");
     assert.equal(calls[1].params.blockedSummary, "Cancelled during shutdown");
-  });
-
-  it("does not mirror onto a partial runtime without requestCancel", async () => {
-    const { calls, taskFlow } = createTaskFlowRecorder();
-    const { requestCancel: _omitted, ...partial } = taskFlow;
-    setManagedTaskFlow(partial);
-
-    const sink = resolveSessionTaskLifecycle({ sessionKey: "agent:main:telegram:group:123" });
-    const session = createSession();
-    await sink.create(session);
-    session.kill("user");
-    await sink.finalize(session);
-
-    assert.deepEqual(calls, []);
   });
 
   it("warns once when terminal TaskFlow mutation is not applied and does not retry", async () => {
@@ -327,9 +274,12 @@ describe("session task lifecycle async adapter", () => {
     try {
       const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
       const taskFlow = {
-        async createManaged(params: Record<string, unknown>) {
-          calls.push({ method: "createManaged", params });
+        async tryCreateManaged(params: Record<string, unknown>) {
+          calls.push({ method: "tryCreateManaged", params });
           return { flowId: "flow-1", revision: 1 };
+        },
+        async get(flowId: string) {
+          return { flowId, revision: 2, status: "running" };
         },
         async resume(params: Record<string, unknown>) {
           calls.push({ method: "resume", params });
@@ -368,7 +318,7 @@ describe("session task lifecycle async adapter", () => {
       await sink.finalize(session);
       await sink.finalize(session);
 
-      assert.deepEqual(calls.map((call) => call.method), ["createManaged", "finish"]);
+      assert.deepEqual(calls.map((call) => call.method), ["tryCreateManaged", "finish"]);
       assert.deepEqual(warnings.filter((warning) => warning.startsWith("[SessionTaskLifecycle]")), [
         "[SessionTaskLifecycle] finalize mutation was not applied (revision_conflict)",
       ]);
@@ -377,8 +327,8 @@ describe("session task lifecycle async adapter", () => {
     }
   });
 
-  it("no-ops safely when the current TaskFlow runtime is absent", async () => {
-    setPluginRuntime({});
+  it("no-ops safely before the plugin runtime is registered", async () => {
+    setPluginRuntime(undefined);
     const sink = resolveSessionTaskLifecycle({
       sessionKey: "agent:main:telegram:group:123",
     });
@@ -391,36 +341,6 @@ describe("session task lifecycle async adapter", () => {
       session.kill("user");
       await sink.finalize(session);
     });
-  });
-
-  it("does not use task-run lifecycle methods as a managed-flow fallback", async () => {
-    let fromToolContextCalled = false;
-    setPluginRuntime({
-      tasks: {
-        async: {
-          managedFlows: undefined,
-          runs: {
-            fromToolContext() {
-              fromToolContextCalled = true;
-              return {
-                lifecycle: {
-                  create() {},
-                  progress() {},
-                  finalize() {},
-                },
-              };
-            },
-          },
-        },
-      },
-    });
-
-    const sink = resolveSessionTaskLifecycle({
-      sessionKey: "agent:main:telegram:group:123",
-    });
-    await sink.create(createSession());
-
-    assert.equal(fromToolContextCalled, false);
   });
 
   it("does not call the host API without a bound session key", async () => {
@@ -459,7 +379,7 @@ describe("session task lifecycle async adapter", () => {
     await sink.progress(session);
     await sink.progress(session);
 
-    assert.deepEqual(calls.map((call) => call.method), ["createManaged", "resume"]);
+    assert.deepEqual(calls.map((call) => call.method), ["tryCreateManaged", "resume"]);
   });
 
   it("maps terminal statuses precisely", () => {
@@ -577,7 +497,7 @@ describe("session task lifecycle async adapter", () => {
     });
   });
 
-  it("prefers tryCreateManaged and skips mirroring when the host cannot persist the flow", async () => {
+  it("skips mirroring when tryCreateManaged reports that the host cannot persist the flow", async () => {
     const { calls, taskFlow } = createTaskFlowRecorder();
     const created: unknown[] = [];
     setManagedTaskFlow({
@@ -622,7 +542,7 @@ describe("session task lifecycle async adapter", () => {
     session.kill("user");
     await sink.finalize(session);
 
-    assert.deepEqual(calls.map((call) => call.method), ["createManaged", "requestCancel"]);
+    assert.deepEqual(calls.map((call) => call.method), ["tryCreateManaged", "requestCancel"]);
     assert.equal(calls[1].params.expectedRevision, 1);
     assert.equal(typeof calls[1].params.cancelRequestedAt, "number");
     assert.equal((session.taskFlowMirror as { cancelRequestedAt?: number }).cancelRequestedAt, calls[1].params.cancelRequestedAt);
@@ -664,7 +584,7 @@ describe("session task lifecycle async adapter", () => {
     await sink.finalize(session);
     t.mock.timers.tick(TASK_FLOW_CANCEL_POLL_INTERVAL_MS * 2);
     await new Promise((resolve) => setImmediate(resolve));
-    assert.deepEqual(calls.map((call) => call.method), ["createManaged"]);
+    assert.deepEqual(calls.map((call) => call.method), ["tryCreateManaged"]);
     assert.equal(reads.length, 2);
     assert.equal(cancelRequests, 1);
   });
@@ -762,7 +682,7 @@ describe("session task lifecycle async adapter", () => {
     session.kill("user");
     await sink.finalize(session);
 
-    assert.deepEqual(calls.map((call) => call.method), ["createManaged", "requestCancel", "requestCancel"]);
+    assert.deepEqual(calls.map((call) => call.method), ["tryCreateManaged", "requestCancel", "requestCancel"]);
     assert.equal(calls[2].params.expectedRevision, 7);
     assert.equal(session.taskFlowMirror?.revision, 8);
     assert.equal(typeof session.taskFlowMirror?.cancelRequestedAt, "number");
@@ -784,7 +704,7 @@ describe("session task lifecycle async adapter", () => {
     session.kill("user");
     await sink.finalize(session);
 
-    assert.deepEqual(calls.map((call) => call.method), ["createManaged", "requestCancel"]);
+    assert.deepEqual(calls.map((call) => call.method), ["tryCreateManaged", "requestCancel"]);
     assert.equal(session.taskFlowMirror?.status, "cancelled");
   });
 

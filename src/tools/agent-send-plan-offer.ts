@@ -52,7 +52,7 @@ function resolveRoute(ctx: OpenClawPluginToolContext, params: Pick<AgentSendPlan
   return route;
 }
 
-export async function executePlanOffer(
+async function executePlanOffer(
   ctx: OpenClawPluginToolContext,
   params: AgentSendPlanOfferParams,
 ): Promise<{ content: Array<{ type: "text"; text: string }> }> {

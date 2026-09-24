@@ -231,8 +231,10 @@ export function buildWaitingForInputPayload(args: {
       userMessage,
       planReviewSummary,
       wakeMessage: [
-        `[AUTO-APPROVE] Session has a plan ready. Approve it now:`,
-        `agent_respond(session='${session.id}', message='Approved. Go ahead.', approve=true)`,
+        `[PLAN READY] Session has a plan ready. planApproval is "approve": you may approve without asking the user, but only after verifying the plan.`,
+        `1. Read the full plan: agent_output(session='${session.id}', full=true).`,
+        `2. If it deletes or rewrites data or history, touches credentials, secrets, CI/release, or production, runs destructive or irreversible commands, or goes beyond the requested task, send it to the user instead: agent_request_plan_approval(session='${session.id}', summary='<why you are escalating>').`,
+        `3. Otherwise approve: agent_respond(session='${session.id}', message='Approved. Go ahead.', approve=true, approval_rationale='<why this plan is in scope and safe>').`,
       ].join("\n"),
     };
   }

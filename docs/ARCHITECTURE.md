@@ -102,9 +102,9 @@ Plan-gated sessions also persist deterministic approval/execution context:
 - the current effective permission mode
 - an explicit approval/execution state such as `awaiting_approval`, `approved_then_implemented`, `implemented_without_required_approval`, or `not_plan_gated`
 
-When the OpenClaw runtime exposes `api.runtime.tasks.async.managedFlows`, sessions also mirror high-level lifecycle progress into a gateway-owned flow record. The adapter captures each lifecycle event and serializes its asynchronous mutations per session, using the latest completed flow revision. It does not fall back to the deprecated synchronous task API. Mirroring remains opportunistic when the async surface is absent or a mutation fails. Flows are created with `tryCreateManaged`; a user stop records `requestCancel` so the host settles the flow as `cancelled`. The mirror also honors host-side cancellation (`openclaw tasks flow cancel`): it re-reads the flow every 15 s and inspects every mutation result, and a cancel intent stops the session through `SessionManager.kill`.
+Sessions launched with a bound OpenClaw session key also mirror high-level lifecycle progress into a gateway-owned flow record through `api.runtime.tasks.async.managedFlows`. The adapter captures each lifecycle event and serializes its asynchronous mutations per session, using the latest completed flow revision. It does not fall back to the deprecated synchronous task API. Mirroring stays opportunistic: a failed mutation is logged and retried on the next lifecycle event, and a host that cannot persist the flow (`tryCreateManaged` returns `null`) leaves the session unmirrored. Flows are created with `tryCreateManaged`; a user stop records `requestCancel` so the host settles the flow as `cancelled`. The mirror also honors host-side cancellation (`openclaw tasks flow cancel`): it re-reads the flow every 15 s and inspects every mutation result, and a cancel intent stops the session through `SessionManager.kill`.
 
-Service startup joins persisted mirror reconciliation before exposing the session manager or starting maintenance. Terminal persistence waits for mirror finalization, and service shutdown drains pending mirror and terminal work before disposing the manager and clearing the runtime. Synchronous plugin registration and session construction remain unchanged. Published OpenClaw 2026.9.4 remains supported without the optional mirror; no synchronous or legacy mirror surface is consulted.
+Service startup joins persisted mirror reconciliation before exposing the session manager or starting maintenance. Terminal persistence waits for mirror finalization, and service shutdown drains pending mirror and terminal work before disposing the manager and clearing the runtime. Synchronous plugin registration and session construction remain unchanged. The async managed-flow binding is part of the supported OpenClaw floor (2026.9.6), so OCA uses it directly; no synchronous or legacy mirror surface is consulted.
 
 The opt-in `tests/session-task-lifecycle-candidate.test.ts` exercises actual async SQLite mutations, delayed creation, terminal drainage, and persisted recovery against an independently installed OpenClaw source checkout. Candidate `b01c37d6692eb7ccec7a50c161b97a81e009a632` contains upstream #146495 (merge `5b792cf8f396ddc4c11f54d8d370d64a6354b2b2`). From the OCA checkout, set `OPENCLAW_TASKFLOW_CANDIDATE` to that source directory and `TSX_TSCONFIG_PATH` to its `tsconfig.json`, then run `node --import "$OPENCLAW_TASKFLOW_CANDIDATE/scripts/tsx.mjs" --test tests/session-task-lifecycle-candidate.test.ts` on each supported Node lane. The test uses temporary state and closes the candidate's workers; the regular verification suite skips this optional source gate.
 
@@ -204,7 +204,7 @@ agent_launch / /agent
   -> resolve resume/fork metadata if present
   -> decide effective worktree strategy
   -> create plugin-managed worktree only when the selected backend requires it
-  -> SessionManager.spawn()
+  -> SessionManager.launchSession()
   -> Session starts streaming output
 ```
 
@@ -283,7 +283,7 @@ The notification pipeline is intentionally centralized:
 2. `WakeDispatcher` decides whether it is notify-only, wake-only, or both.
 3. Direct user notifications go through the host durable outbound queue; Telegram and Discord interactive notifications attach buttons as a `presentation`.
 4. Wakes use `chat.send` because it targets the originating runtime session precisely.
-5. An in-process system event (targeting the origin session when known) is the recovery path when richer routing metadata is missing or delivery fails repeatedly.
+5. An in-process system event (targeting the origin session when known) is the recovery path when a wake fails or the session has no deliverable route. A text-only notification whose durable send definitively failed is also handed to the agent session as a system event; notifications with buttons or that require direct delivery are reported as failed instead, and a send with an unknown outcome (timeout) is never followed by a system event.
 
 The design goal is deterministic wakes with the fewest possible duplicate pings.
 
@@ -302,7 +302,7 @@ Worktree terminal outcomes use a two-step UX contract. The plugin first delivers
 - diff summary generation for delegated decisions
 - new-worktree provisioning (`src/worktree-provisioning.ts`): `.worktreeinclude` gitignored-file copies and the repository's `.openclaw/worktree-setup.sh`, with rollback of the worktree and new branch on failure
 
-Every `git` / `gh` call in this layer is asynchronous and goes through `src/git-exec.ts` (argument arrays, per-call timeouts, closed stdin). Because the calls no longer block the event loop, multi-step mutating sequences (worktree add/remove, checkout plus merge, branch deletion) are serialized per repository, session launches are serialized in `SessionManager.spawn`, and persisted-session maintenance applies only the latest schedule computed for a session.
+Every `git` / `gh` call in this layer is asynchronous and goes through `src/git-exec.ts` (argument arrays, per-call timeouts, closed stdin). Because the calls no longer block the event loop, multi-step mutating sequences (worktree add/remove, checkout plus merge, branch deletion) are serialized per repository, session launches are serialized in `SessionManager.launchSession`, and persisted-session maintenance applies only the latest schedule computed for a session.
 
 `src/worktree-lifecycle-resolver.ts` sits above those helpers and produces:
 

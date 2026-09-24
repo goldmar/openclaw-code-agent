@@ -44,7 +44,7 @@ function hasDirectLaunchRoute(config: SessionConfig): boolean {
   }));
 }
 
-export function preserveResumeRoutingContext(
+function preserveResumeRoutingContext(
   config: SessionConfig,
   getPersistedSession: (ref: string) => PersistedSessionInfo | undefined,
 ): void {
@@ -211,7 +211,7 @@ export async function prepareSessionBootstrap(
   name: string,
   getPersistedSession: (ref: string) => PersistedSessionInfo | undefined,
 ): Promise<Preparation> {
-  if (config.worktreeBaseBranch !== undefined) assertBranchName(config.worktreeBaseBranch);
+  if (config.worktreeBaseBranch !== undefined) await assertBranchName(config.worktreeBaseBranch);
   preserveResumeRoutingContext(config, getPersistedSession);
 
   let {

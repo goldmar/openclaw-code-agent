@@ -85,7 +85,7 @@ export function registerAgentCommand(api: CommandApi): void {
           return { text: resolution.text };
         }
 
-        const session = await sessionManager.spawn({
+        const session = await sessionManager.launchSession({
           prompt,
           name,
           workdir: resolution.workdir,

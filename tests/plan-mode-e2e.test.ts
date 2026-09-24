@@ -143,6 +143,26 @@ describe("Plan mode E2E: ExitPlanMode flow", () => {
     session.kill("user");
   });
 
+  it("plan flow: a native harness without setPermissionMode gets the plain approval text", async () => {
+    const session = await startSession({ permissionMode: "plan", multiTurn: true });
+    await raiseNativePlanRequest();
+    // The native plan request is gone (for example the backend dropped it) and the
+    // handle cannot switch modes: approval falls through to a plain follow-up message.
+    fakeHarness.nativePlanRequestPending = false;
+    (session as any).harnessHandle.setPermissionMode = undefined;
+
+    session.switchPermissionMode("bypassPermissions");
+    await session.sendMessage("Approved. Go ahead.");
+    await tick(20);
+
+    assert.equal(session.pendingPlanApproval, false);
+    const sent = fakeHarness.consumedPrompts.at(-1) as { text?: string } | undefined;
+    assert.equal(sent?.text, "Approved. Go ahead.");
+    assert.doesNotMatch(sent?.text ?? "", /\[SYSTEM:/);
+
+    session.kill("user");
+  });
+
   it("plan flow: revision feedback keeps pendingPlanApproval true", async () => {
     const session = await startSession({ permissionMode: "plan", multiTurn: true });
 
@@ -207,6 +227,7 @@ describe("Plan mode E2E: approve=true on idle-killed plan session (double-approv
     const deadPersistedSession = {
       sessionId: "dead-id",
       harnessSessionId: "harness-dead-123",
+      backendRef: { kind: "claude-code" as const, conversationId: "harness-dead-123" },
       name: "plan-merge-robustness",
       prompt: "Write a plan for X",
       workdir: "/tmp",
@@ -224,12 +245,12 @@ describe("Plan mode E2E: approve=true on idle-killed plan session (double-approv
     // Build a stub SessionManager that:
     //  - resolve() returns null (session is dead)
     //  - getPersistedSession() returns the dead session
-    //  - spawnAndAwaitRunning() captures the config and returns a fake running session
+    //  - launchAndAwaitRunning() captures the config and returns a fake running session
     const sm = {
       resolve: (_ref: string) => null,
       getPersistedSession: (_ref: string) => deadPersistedSession,
       notifySession: () => {},
-      spawnAndAwaitRunning: async (config: import("../src/types").SessionConfig) => {
+      launchAndAwaitRunning: async (config: import("../src/types").SessionConfig) => {
         capturedResumeConfig = config;
         return {
           id: "new-session-id",
@@ -252,7 +273,7 @@ describe("Plan mode E2E: approve=true on idle-killed plan session (double-approv
       `Should confirm resumed bypassPermissions mode: ${result.text}`,
     );
 
-    assert.ok(capturedResumeConfig, "spawnAndAwaitRunning should have been called");
+    assert.ok(capturedResumeConfig, "launchAndAwaitRunning should have been called");
     assert.equal(
       capturedResumeConfig!.permissionMode,
       "bypassPermissions",
@@ -272,6 +293,7 @@ describe("Plan mode E2E: approve=true on idle-killed plan session (double-approv
     const deadDefaultSession = {
       sessionId: "dead-default",
       harnessSessionId: "harness-default-456",
+      backendRef: { kind: "claude-code" as const, conversationId: "harness-default-456" },
       name: "normal-session",
       prompt: "Do some work",
       workdir: "/tmp",
@@ -290,7 +312,7 @@ describe("Plan mode E2E: approve=true on idle-killed plan session (double-approv
       resolve: (_ref: string) => null,
       getPersistedSession: (_ref: string) => deadDefaultSession,
       notifySession: () => {},
-      spawnAndAwaitRunning: async (config: import("../src/types").SessionConfig) => {
+      launchAndAwaitRunning: async (config: import("../src/types").SessionConfig) => {
         capturedResumeConfig = config;
         return { id: "new-id", name: "normal-session", status: "running" };
       },
@@ -302,7 +324,7 @@ describe("Plan mode E2E: approve=true on idle-killed plan session (double-approv
       approve: true,
     });
 
-    assert.ok(capturedResumeConfig, "spawnAndAwaitRunning should have been called");
+    assert.ok(capturedResumeConfig, "launchAndAwaitRunning should have been called");
     assert.equal(
       capturedResumeConfig!.permissionMode,
       "default",
@@ -318,6 +340,7 @@ describe("Plan mode E2E: approve=true on idle-killed plan session (double-approv
     const deadPlanSession = {
       sessionId: "dead-plan-2",
       harnessSessionId: "harness-plan-789",
+      backendRef: { kind: "claude-code" as const, conversationId: "harness-plan-789" },
       name: "plan-session-2",
       prompt: "Write a plan",
       workdir: "/tmp",
@@ -336,7 +359,7 @@ describe("Plan mode E2E: approve=true on idle-killed plan session (double-approv
       resolve: (_ref: string) => null,
       getPersistedSession: (_ref: string) => deadPlanSession,
       notifySession: () => {},
-      spawnAndAwaitRunning: async (config: any) => {
+      launchAndAwaitRunning: async (config: any) => {
         capturedConfig = config;
         return { id: "new", name: "plan-session-2", status: "running" };
       },

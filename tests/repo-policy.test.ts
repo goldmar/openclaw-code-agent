@@ -260,7 +260,7 @@ describe("repo policy resolution", () => {
     try {
       const sm = new SessionManager(1, 10, { store: { indexPath: join(storeDir, "sessions.json") } });
       let spawnConfig: Record<string, unknown> | undefined;
-      (sm as any).spawn = (config: Record<string, unknown>) => {
+      (sm as any).launchSession = (config: Record<string, unknown>) => {
         spawnConfig = config;
         return {
           id: "stable-session-1",
@@ -308,7 +308,7 @@ describe("repo policy resolution", () => {
         dispose: () => {},
       };
       let spawnConfig: Record<string, unknown> | undefined;
-      (sm as any).spawn = (config: Record<string, unknown>) => {
+      (sm as any).launchSession = (config: Record<string, unknown>) => {
         spawnConfig = config;
         return {
           id: "manual-policy-session",
@@ -360,7 +360,7 @@ describe("repo policy resolution", () => {
         dispose: () => {},
       };
       let spawnConfig: Record<string, unknown> | undefined;
-      (sm as any).spawn = (config: Record<string, unknown>) => {
+      (sm as any).launchSession = (config: Record<string, unknown>) => {
         spawnConfig = config;
         return {
           id: "manual-policy-default-strategy",
@@ -408,7 +408,7 @@ describe("repo policy resolution", () => {
       };
       let spawnCount = 0;
       let spawnConfig: Record<string, unknown> | undefined;
-      (sm as any).spawn = (config: Record<string, unknown>) => {
+      (sm as any).launchSession = (config: Record<string, unknown>) => {
         spawnCount++;
         spawnConfig = config;
         return {
@@ -465,7 +465,7 @@ describe("repo policy resolution", () => {
         notifyWorktreeOutcome: () => {},
         dispose: () => {},
       };
-      (sm as any).spawn = () => {
+      (sm as any).launchSession = () => {
         throw new Error("launch capacity unavailable");
       };
 
@@ -502,7 +502,7 @@ describe("repo policy resolution", () => {
         notifyWorktreeOutcome: () => {},
         dispose: () => {},
       };
-      (sm as any).spawn = () => {
+      (sm as any).launchSession = () => {
         throw new Error("spawn should not run without a matching policy token");
       };
 
@@ -546,7 +546,7 @@ describe("repo policy resolution", () => {
         dispose: () => {},
       };
       let spawnCalled = false;
-      (sm as any).spawn = () => {
+      (sm as any).launchSession = () => {
         spawnCalled = true;
         throw new Error("spawn should not run for ambiguous manual policy continuation");
       };

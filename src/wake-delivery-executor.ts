@@ -141,7 +141,7 @@ export class WakeDeliveryExecutor {
     // request surface is reserved for trusted plugins.
     wakeDeliveryExecutorInternals.execFile(
       "openclaw",
-      args,
+      [...args],
       { timeout: WAKE_CLI_TIMEOUT_MS, killSignal: "SIGKILL" },
       (err, stdout, stderr) => {
         if (this.disposed) {

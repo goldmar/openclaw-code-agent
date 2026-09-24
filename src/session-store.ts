@@ -426,13 +426,11 @@ export class SessionStore {
 
   private getExistingNotificationDedupe(session: Session): PersistedSessionInfo["notificationDedupe"] {
     return this.getPersistedSession(session.id)?.notificationDedupe
-      ?? (session.harnessSessionId ? this.getPersistedSession(session.harnessSessionId)?.notificationDedupe : undefined)
       ?? (getBackendConversationId(session) ? this.getPersistedSession(getBackendConversationId(session)!)?.notificationDedupe : undefined);
   }
 
   private getExistingCompletionSummaryDedupe(session: Session): PersistedSessionInfo["completionSummaryDedupe"] {
     return this.getPersistedSession(session.id)?.completionSummaryDedupe
-      ?? (session.harnessSessionId ? this.getPersistedSession(session.harnessSessionId)?.completionSummaryDedupe : undefined)
       ?? (getBackendConversationId(session) ? this.getPersistedSession(getBackendConversationId(session)!)?.completionSummaryDedupe : undefined);
   }
 

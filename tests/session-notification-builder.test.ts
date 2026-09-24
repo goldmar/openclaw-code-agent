@@ -38,6 +38,27 @@ describe("session-notification-builder", () => {
     assert.match(payload.wakeMessage, /USER APPROVAL REQUESTED/);
   });
 
+  it("requires verification and escalation rules in approve-mode plan wakes", () => {
+    const payload = buildWaitingForInputPayload({
+      session: {
+        id: "session-approve",
+        name: "approve-session",
+        multiTurn: true,
+        pendingPlanApproval: true,
+      } as any,
+      preview: "1. Update the parser",
+      originThreadLine: "Origin thread: telegram topic 42",
+      planApprovalMode: "approve",
+    });
+
+    assert.equal(payload.label, "plan-approval");
+    assert.doesNotMatch(payload.wakeMessage, /AUTO-APPROVE|Approve it now/);
+    assert.match(payload.wakeMessage, /only after verifying the plan/);
+    assert.match(payload.wakeMessage, /agent_output\(session='session-approve', full=true\)/);
+    assert.match(payload.wakeMessage, /agent_request_plan_approval\(session='session-approve'/);
+    assert.match(payload.wakeMessage, /approval_rationale=/);
+  });
+
   it("builds review summaries from structured plan artifacts", () => {
     const summary = buildPlanReviewSummary({
       preview: "ignored preview",

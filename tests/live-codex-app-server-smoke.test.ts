@@ -1,5 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -54,6 +55,17 @@ function completed(messages: HarnessMessage[]): Extract<HarnessMessage, { type: 
 }
 
 describe("live Codex App Server smoke", () => {
+  it("vendored App Server protocol types match the installed codex", { skip: !RUN_LIVE && !RUN_LIVE_RELEASE, timeout: LIVE_TIMEOUT_MS }, () => {
+    // Fails with a diff summary when `pnpm sync:codex-protocol` would change the
+    // vendored types; honors OPENCLAW_CODEX_APP_SERVER_COMMAND like the harness.
+    const codexBin = process.env.OPENCLAW_CODEX_APP_SERVER_COMMAND?.trim();
+    execFileSync(process.execPath, [
+      join(process.cwd(), "scripts", "sync-codex-protocol.mjs"),
+      "--check",
+      ...(codexBin ? ["--codex", codexBin] : []),
+    ], { stdio: "inherit", timeout: LIVE_TIMEOUT_MS });
+  });
+
   it("applies developer instructions, then resumes the thread", { skip: !RUN_LIVE, timeout: LIVE_TIMEOUT_MS }, async () => {
     const codex = getHarness("codex");
     const cwd = mkdtempSync(join(tmpdir(), "oca-live-codex-"));

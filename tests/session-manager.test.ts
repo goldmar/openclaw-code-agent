@@ -14,7 +14,7 @@ import { SessionNotificationService } from "../src/session-notifications";
 import { SessionWorktreeDecisionService } from "../src/session-worktree-decision-service";
 import { SessionMetricsRecorder } from "../src/session-metrics";
 import { registerHarness } from "../src/harness";
-import { createFakeHarness, tick } from "./helpers";
+import { createFakeHarness, TEST_RUNTIME_LLM, tick } from "./helpers";
 
 afterEach(() => {
   setPluginRuntime(undefined);
@@ -131,6 +131,7 @@ describe("SessionManager TaskFlow mirror reconciliation", () => {
 
       const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
       setPluginRuntime({
+        llm: TEST_RUNTIME_LLM,
         tasks: {
           async: {
             managedFlows: {
@@ -205,6 +206,7 @@ describe("SessionManager TaskFlow mirror reconciliation", () => {
 
       const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
       setPluginRuntime({
+        llm: TEST_RUNTIME_LLM,
         tasks: {
           async: {
             managedFlows: {
@@ -268,6 +270,7 @@ describe("SessionManager TaskFlow mirror reconciliation", () => {
       })));
       const calls: string[] = [];
       setPluginRuntime({
+        llm: TEST_RUNTIME_LLM,
         tasks: {
           async: {
             managedFlows: {
@@ -2210,7 +2213,7 @@ describe("SessionManager resumed launch routing", () => {
     const harness = createFakeHarness("shutdown-order-harness");
     registerHarness(harness);
     const sm = new SessionManager(5, 5);
-    const active = await sm.spawn({
+    const active = await sm.launchSession({
       prompt: "active",
       workdir: "/tmp",
       harness: harness.name,
@@ -2224,7 +2227,7 @@ describe("SessionManager resumed launch routing", () => {
       await policyGate;
       return originalCheck(...args);
     };
-    const slowLaunch = sm.spawn({
+    const slowLaunch = sm.launchSession({
       prompt: "slow",
       workdir: "/tmp",
       harness: harness.name,
@@ -2257,7 +2260,7 @@ describe("SessionManager resumed launch routing", () => {
       return originalCheck(...args);
     };
 
-    const launch = sm.spawn({
+    const launch = sm.launchSession({
       prompt: "late",
       workdir: "/tmp",
       harness: harness.name,
@@ -2311,7 +2314,7 @@ describe("SessionManager resumed launch routing", () => {
     const route = { provider: "telegram", target: "12345" };
 
     try {
-      const owner = await sm.spawn({
+      const owner = await sm.launchSession({
         prompt: "first",
         workdir: "/tmp",
         name: "writer-owner",
@@ -2321,7 +2324,7 @@ describe("SessionManager resumed launch routing", () => {
       }, { notifyLaunch: false });
       await tick(20);
       assert.equal(owner.status, "running");
-      await assert.rejects(async () => await sm.spawn({
+      await assert.rejects(async () => await sm.launchSession({
         prompt: "duplicate resume",
         workdir: "/tmp",
         name: "duplicate-writer",
@@ -2333,7 +2336,7 @@ describe("SessionManager resumed launch routing", () => {
       assert.equal(launchCalls, 1);
       owner.kill("user");
 
-      const replacement = await sm.spawn({
+      const replacement = await sm.launchSession({
         prompt: "resume after release",
         workdir: "/tmp",
         name: "writer-replacement",
@@ -2345,7 +2348,7 @@ describe("SessionManager resumed launch routing", () => {
       await tick(20);
       assert.equal(replacement.status, "starting");
       assert.equal(launchCalls, 1);
-      await assert.rejects(async () => await sm.spawn({
+      await assert.rejects(async () => await sm.launchSession({
         prompt: "overlapping replacement",
         workdir: "/tmp",
         name: "overlapping-writer-replacement",
@@ -2406,7 +2409,7 @@ describe("SessionManager resumed launch routing", () => {
     const route = { provider: "telegram", target: "12345" };
 
     try {
-      const first = await sm.spawn({
+      const first = await sm.launchSession({
         prompt: "first owner",
         workdir: "/tmp",
         name: "first-writer-owner",
@@ -2418,7 +2421,7 @@ describe("SessionManager resumed launch routing", () => {
       assert.equal(first.status, "running");
       first.kill("user");
 
-      const second = await sm.spawn({
+      const second = await sm.launchSession({
         prompt: "second owner",
         workdir: "/tmp",
         name: "second-writer-owner",
@@ -2437,7 +2440,7 @@ describe("SessionManager resumed launch routing", () => {
       assert.equal(launchCalls, 2);
       second.kill("user");
 
-      const third = await sm.spawn({
+      const third = await sm.launchSession({
         prompt: "third owner",
         workdir: "/tmp",
         name: "third-writer-owner",
@@ -2490,7 +2493,7 @@ describe("SessionManager resumed launch routing", () => {
       route,
     });
 
-    const session = await sm.spawn({
+    const session = await sm.launchSession({
       prompt: "Compare message_sending vs reply_payload_sending.",
       workdir: "/tmp",
       name: "compare-pr-98922-hook-layer",
@@ -2535,7 +2538,7 @@ describe("SessionManager.launchPlanOffer()", () => {
 
   it("starts a plan-gated auto-pr session with preserved topic routing", async () => {
     const spawnCalls: Array<Record<string, unknown>> = [];
-    (sm as any).spawn = (config: Record<string, unknown>) => {
+    (sm as any).launchSession = (config: Record<string, unknown>) => {
       spawnCalls.push(config);
       return { id: "sess-plan", name: config.name };
     };

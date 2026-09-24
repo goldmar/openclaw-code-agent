@@ -527,7 +527,7 @@ const PR_METADATA_SYSTEM_PROMPT = [
   `Keep the title under 90 characters. Keep bullets short and reviewable.`,
 ].join("\n");
 
-export function buildPrMetadataPrompt(evidence: PrMetadataEvidence): string {
+function buildPrMetadataPrompt(evidence: PrMetadataEvidence): string {
   return [
     `Evidence:`,
     JSON.stringify(evidence, null, 2),

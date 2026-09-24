@@ -29,7 +29,7 @@ describe("agent command", () => {
     setSessionManager({
       list: () => [],
       listPersistedSessions: () => [],
-      spawn(config: Record<string, unknown>) {
+      launchSession(config: Record<string, unknown>) {
         spawnConfig = config;
         return {
           id: "sess-agent-command",
@@ -77,7 +77,7 @@ describe("agent command", () => {
         originChannel: "telegram|123",
       }],
       listPersistedSessions: () => [],
-      spawn() {
+      launchSession() {
         spawnCalled = true;
         throw new Error("spawn should not be called");
       },

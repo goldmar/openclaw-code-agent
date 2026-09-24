@@ -108,10 +108,13 @@ export async function codexRequest<M extends CodexClientMethod>(
 // Execution settings (B5)
 // ---------------------------------------------------------------------------
 
-// Compile-time guards: OCA's exposed values must stay valid wire values.
+// Compile-time guards: OCA's exposed values must stay valid wire values. The
+// constraint is checked even though nothing references the alias.
 type AssertAssignable<T extends U, U> = T;
-export type CodexApprovalPolicyWire = AssertAssignable<CodexApprovalPolicy, AskForApproval>;
-export type CodexApprovalsReviewerWire = AssertAssignable<CodexApprovalsReviewer, ApprovalsReviewer>;
+type CodexExecutionWireGuards = [
+  AssertAssignable<CodexApprovalPolicy, AskForApproval>,
+  AssertAssignable<CodexApprovalsReviewer, ApprovalsReviewer>,
+];
 
 /** Thread-level Codex execution settings, identical for every OCA permission mode. */
 export interface CodexExecutionSettings {
@@ -158,7 +161,7 @@ function executionFields(execution: CodexExecutionSettings): Pick<ThreadStartPar
 // ---------------------------------------------------------------------------
 
 /** Codex's model catalog exposes fast mode as the `priority` service tier. */
-export const CODEX_FAST_SERVICE_TIER = "priority";
+const CODEX_FAST_SERVICE_TIER = "priority";
 
 type CommonThreadOptions = {
   model?: string;
@@ -212,11 +215,11 @@ export function buildThreadForkParams(options: CommonThreadOptions & {
   };
 }
 
-export function buildTurnInput(prompt: string): UserInput[] {
+function buildTurnInput(prompt: string): UserInput[] {
   return [{ type: "text", text: prompt, text_elements: [] }];
 }
 
-export function collaborationModeKindForPermissionMode(permissionMode: string | undefined): CollaborationMode["mode"] {
+function collaborationModeKindForPermissionMode(permissionMode: string | undefined): CollaborationMode["mode"] {
   return permissionMode === "plan" ? "plan" : "default";
 }
 

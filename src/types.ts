@@ -351,7 +351,7 @@ export type CanUseToolCallback = (
   input: Record<string, unknown>,
 ) => Promise<{ behavior: "allow"; updatedInput: Record<string, unknown> }>;
 
-/** Session creation options used by SessionManager.spawn(). */
+/** Session creation options used by SessionManager.launchSession(). */
 export interface SessionConfig {
   prompt: string;
   workdir: string;
@@ -427,7 +427,7 @@ export interface SessionConfig {
   canUseTool?: CanUseToolCallback;
   /** Explicit backend ref when reconstructing a persisted session against a native backend conversation. */
   backendRef?: SessionBackendRef;
-  /** Optional phase-1 bridge to current host TaskFlow task surfaces. */
+  /** Mirrors the session into a host-managed Task Flow (`runtime.tasks.async.managedFlows`). */
   taskLifecycle?: SessionTaskLifecycleSink;
 }
 
@@ -452,6 +452,11 @@ export interface PluginConfig {
   defaultWorktreeStrategy?: WorktreeStrategy;
   /** Override base directory for agent worktrees. Defaults to <repoRoot>/.worktrees when unset. */
   worktreeDir?: string;
+  /**
+   * Daily update check with button-confirmed install and Gateway restart
+   * (default true). `false` disables update checks, installs, and restarts.
+   */
+  autoUpdate: boolean;
 }
 
 /** Raw plugin config as accepted from OpenClaw (validated against `openclaw.plugin.json` configSchema). */
@@ -472,6 +477,8 @@ export interface RawPluginConfig {
   defaultWorktreeStrategy?: WorktreeStrategy;
   /** Override base directory for agent worktrees. Defaults to <repoRoot>/.worktrees when unset. */
   worktreeDir?: string;
+  /** Update check with button-confirmed install/restart; default true. */
+  autoUpdate?: boolean;
 }
 
 /** Persisted session metadata retained for resume/list/output after GC/restart. */

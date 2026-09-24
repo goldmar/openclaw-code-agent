@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { WakeDispatcher, validateCompletionFollowupWakeSuccess, type WakeDispatcherOptions } from "../src/wake-dispatcher";
-import { buildPresentation, type DirectNotificationTransport } from "../src/direct-notification-transport";
-import type { SystemEventTransport } from "../src/wake-transport";
+import {
+  RuntimeDirectNotificationTransport,
+  type DurableMessageBatchSendResult,
+} from "../src/direct-notification-transport";
+import { setPluginRuntime } from "../src/runtime-store";
 import { buildWaitingForInputPayload } from "../src/session-notification-builders/waiting";
 import { wakeDeliveryExecutorInternals } from "../src/wake-delivery-executor";
 
@@ -37,51 +37,124 @@ function buildRoute(overrides: Partial<NonNullable<FakeSession["route"]>> = {}):
 }
 
 /**
- * Test transports that record each delivery as the equivalent `openclaw` CLI argv
- * through the (mockable) executor execFile hook, so tests can keep asserting on the
- * fake-CLI call log and inject failures per call.
+ * Structured records of what the production transports hand to the host:
+ * `sendDurableMessageBatch` params (direct notifications, through the real
+ * `RuntimeDirectNotificationTransport`), `runtime.system.enqueueSystemEvent`
+ * calls (through the real `RuntimeSystemEventTransport`), and the
+ * `openclaw gateway call chat.send` argv (the only delivery that still runs the
+ * CLI, through the executor's `execFile` hook).
  */
-function runRecordedOpenClaw(args: string[]): Promise<void> {
-  return new Promise((resolve, reject) => {
-    wakeDeliveryExecutorInternals.execFile("openclaw", args, { timeout: 30_000, killSignal: "SIGKILL" }, (err, _stdout, stderr) => {
-      if (err) {
-        const suffix = stderr?.toString().trim() ? ` | stderr: ${stderr.toString().trim()}` : "";
-        reject(Object.assign(err, { message: `${err.message}${suffix}` }));
-        return;
-      }
-      resolve();
-    });
-  });
+type DurableSendCall = {
+  kind: "durable-send";
+  channel: string;
+  to: string;
+  accountId?: string;
+  threadId?: string;
+  text: string;
+  presentation?: unknown;
+  durability: string;
+};
+type SystemEventCall = { kind: "system-event"; text: string; sessionKey: string; contextKey?: string };
+type ChatSendCall = { kind: "chat-send"; argv: string[]; params: Record<string, unknown> };
+type DeliveryCall = DurableSendCall | SystemEventCall | ChatSendCall;
+type HeartbeatCall = Record<string, unknown>;
+
+/**
+ * Injected outcome for the first matching delivery call (or every match when
+ * `once` is false). `failed` returns a durable `{ status: "failed" }` result (or,
+ * for chat.send, a non-zero CLI exit); `throw` rejects/throws; `hang` never settles.
+ */
+type DeliveryRule = {
+  match: (call: DeliveryCall) => boolean;
+  outcome: "ok" | "failed" | "throw" | "hang";
+  error?: string;
+  delayMs?: number;
+  once?: boolean;
+};
+
+let calls: DeliveryCall[] = [];
+let heartbeats: HeartbeatCall[] = [];
+let rules: DeliveryRule[] = [];
+let chatSendStdout = "";
+
+function takeRule(call: DeliveryCall): DeliveryRule | undefined {
+  const index = rules.findIndex((rule) => rule.match(call));
+  if (index < 0) return undefined;
+  const rule = rules[index]!;
+  if (rule.once !== false) rules.splice(index, 1);
+  return rule;
 }
 
-const recordedDirectNotifications: DirectNotificationTransport = {
-  send: async (route, text, buttons) => {
-    const presentation = buildPresentation(buttons);
-    await runRecordedOpenClaw([
-      "message", "send",
-      "--channel", route.channel,
-      "--target", route.target,
-      "--message", text,
-      ...(route.accountId ? ["--account", route.accountId] : []),
-      ...(route.threadId ? ["--thread-id", route.threadId] : []),
-      ...(presentation ? ["--presentation", JSON.stringify(presentation)] : []),
-    ]);
+function delay(ms: number | undefined): Promise<void> {
+  return ms ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve();
+}
+
+async function fakeSendDurableMessageBatch(params: Record<string, any>): Promise<DurableMessageBatchSendResult> {
+  const payload = params.payloads?.[0] ?? {};
+  const call: DurableSendCall = {
+    kind: "durable-send",
+    channel: params.channel,
+    to: params.to,
+    ...(params.accountId ? { accountId: params.accountId } : {}),
+    ...(params.threadId ? { threadId: params.threadId } : {}),
+    text: payload.text,
+    ...(payload.presentation ? { presentation: payload.presentation } : {}),
+    durability: params.durability,
+  };
+  assert.equal(params.payloads.length, 1, "OCA sends one payload per durable batch");
+  calls.push(call);
+  const rule = takeRule(call);
+  await delay(rule?.delayMs);
+  if (rule?.outcome === "hang") await new Promise<void>(() => {});
+  if (rule?.outcome === "throw") throw new Error(rule.error ?? "durable send threw");
+  if (rule?.outcome === "failed") {
+    return { status: "failed", error: new Error(rule.error ?? "durable send failed"), stage: "send" } as unknown as DurableMessageBatchSendResult;
+  }
+  return { status: "sent", results: [], receipt: {} } as unknown as DurableMessageBatchSendResult;
+}
+
+const fakeSystemRuntime = {
+  enqueueSystemEvent(text: string, options: { sessionKey: string; contextKey?: string }) {
+    const call: SystemEventCall = {
+      kind: "system-event",
+      text,
+      sessionKey: options.sessionKey,
+      ...(options.contextKey ? { contextKey: options.contextKey } : {}),
+    };
+    calls.push(call);
+    const rule = takeRule(call);
+    if (rule?.outcome === "throw" || rule?.outcome === "failed") throw new Error(rule.error ?? "system event refused");
+    return true;
+  },
+  requestHeartbeat(options: HeartbeatCall) {
+    heartbeats.push(options);
   },
 };
 
-const recordedSystemEvents: SystemEventTransport = {
-  enqueue: async (text, options) => {
-    await runRecordedOpenClaw([
-      "system", "event", "--text", text, "--mode", "now",
-      ...(options?.sessionKey ? ["--session-key", options.sessionKey] : []),
-    ]);
-  },
-};
+const fakeChatSendExecFile = ((file: string, args: string[], _options: unknown, callback?: (err: Error | null, stdout: string, stderr: string) => void) => {
+  assert.equal(file, "openclaw");
+  assert.deepEqual(args.slice(0, 7), ["gateway", "call", "chat.send", "--expect-final", "--timeout", "30000", "--params"]);
+  const call: ChatSendCall = { kind: "chat-send", argv: [...args], params: JSON.parse(args[7] ?? "{}") };
+  calls.push(call);
+  const rule = takeRule(call);
+  if (rule?.outcome !== "hang") {
+    void delay(rule?.delayMs).then(() => {
+      if (rule?.outcome === "failed" || rule?.outcome === "throw") {
+        const message = rule.error ?? "chat.send failed";
+        callback?.(new Error(`Command failed: openclaw gateway call chat.send\n${message}`), "", message);
+        return;
+      }
+      callback?.(null, chatSendStdout, "");
+    });
+  }
+  return {} as any;
+}) as unknown as typeof wakeDeliveryExecutorInternals.execFile;
+
+const originalExecFile = wakeDeliveryExecutorInternals.execFile;
 
 function createDispatcher(options: WakeDispatcherOptions = {}) {
   return new WakeDispatcher({
-    directNotifications: recordedDirectNotifications,
-    systemEvents: recordedSystemEvents,
+    directNotifications: new RuntimeDirectNotificationTransport(async () => fakeSendDurableMessageBatch as never),
     ...options,
   });
 }
@@ -89,20 +162,13 @@ function createDispatcher(options: WakeDispatcherOptions = {}) {
 const WAIT_STEP_MS = 25;
 const WAIT_TIMEOUT_MS = 7_000;
 
-function readCalls(logPath: string): string[][] {
-  const raw = readFileSync(logPath, "utf8").trim();
-  if (!raw) return [];
-  return raw.split("\n").map((line) => JSON.parse(line) as string[]);
-}
-
-async function waitForCalls(logPath: string, count: number): Promise<string[][]> {
+async function waitForCalls(count: number): Promise<DeliveryCall[]> {
   const deadline = Date.now() + WAIT_TIMEOUT_MS;
   while (Date.now() < deadline) {
-    const calls = readCalls(logPath);
     if (calls.length >= count) return calls;
     await new Promise((resolve) => setTimeout(resolve, WAIT_STEP_MS));
   }
-  throw new Error(`Timed out waiting for ${count} openclaw call(s) in ${logPath}`);
+  throw new Error(`Timed out waiting for ${count} delivery call(s); saw ${JSON.stringify(calls)}`);
 }
 
 async function waitFor(predicate: () => boolean, label: string): Promise<void> {
@@ -114,87 +180,38 @@ async function waitFor(predicate: () => boolean, label: string): Promise<void> {
   throw new Error(`Timed out waiting for ${label}`);
 }
 
-function parseChatSendParams(call: string[]): Record<string, string> {
-  assert.deepEqual(call.slice(0, 6), [
-    "gateway",
-    "call",
-    "chat.send",
-    "--expect-final",
-    "--timeout",
-    "30000",
-  ]);
-  assert.equal(call[6], "--params");
-  return JSON.parse(call[7] ?? "{}") as Record<string, string>;
+function asDurableSend(call: DeliveryCall | undefined): DurableSendCall {
+  assert.equal(call?.kind, "durable-send", `expected a durable send, got ${JSON.stringify(call)}`);
+  return call as DurableSendCall;
 }
 
-function parseMessageSendArgs(call: string[]) {
-  assert.deepEqual(call.slice(0, 2), ["message", "send"]);
-  const parsed: Record<string, string> = {};
-  for (let i = 2; i < call.length; i += 2) {
-    const key = call[i];
-    const value = call[i + 1];
-    if (!key?.startsWith("--")) {
-      throw new Error(`Unexpected message.send arg shape: ${JSON.stringify(call)}`);
-    }
-    parsed[key.slice(2)] = value ?? "";
-  }
-  return parsed;
+function asChatSend(call: DeliveryCall | undefined): Record<string, unknown> {
+  assert.equal(call?.kind, "chat-send", `expected a chat.send wake, got ${JSON.stringify(call)}`);
+  return (call as ChatSendCall).params;
+}
+
+function findCall<K extends DeliveryCall["kind"]>(kind: K): Extract<DeliveryCall, { kind: K }> | undefined {
+  return calls.find((call) => call.kind === kind) as Extract<DeliveryCall, { kind: K }> | undefined;
+}
+
+function systemEvent(text: string, sessionId: string, sessionKey = "main"): SystemEventCall {
+  return { kind: "system-event", text, sessionKey, contextKey: `openclaw-code-agent:${sessionId}` };
 }
 
 describe("WakeDispatcher", () => {
-  const originalPath = process.env.PATH ?? "";
-  const originalLogPath = process.env.OPENCLAW_TEST_LOG;
   const originalConsoleInfo = console.info;
   const originalConsoleDebug = console.debug;
   const originalConsoleError = console.error;
   const originalSetTimeout = global.setTimeout;
   const originalClearTimeout = global.clearTimeout;
-  let tempDir: string;
-  let logPath: string;
-  let failStatePath: string;
 
   beforeEach(() => {
-    tempDir = mkdtempSync(join(tmpdir(), "wake-dispatcher-test-"));
-    logPath = join(tempDir, "openclaw-calls.log");
-    failStatePath = join(tempDir, "openclaw-fail-state.json");
-    writeFileSync(logPath, "");
-
-    const fakeOpenClawPath = join(tempDir, "openclaw");
-    writeFileSync(fakeOpenClawPath, `#!/usr/bin/env node
-const { appendFileSync, existsSync, readFileSync, writeFileSync } = require("node:fs");
-
-const args = process.argv.slice(2);
-appendFileSync(process.env.OPENCLAW_TEST_LOG, JSON.stringify(args) + "\\n");
-
-const failConfigRaw = process.env.OPENCLAW_TEST_FAIL_ONCE_FOR;
-if (failConfigRaw) {
-  const failConfig = JSON.parse(failConfigRaw);
-  const joined = args.join(" ");
-  const statePath = process.env.OPENCLAW_TEST_FAIL_ONCE_STATE;
-  const state = statePath && existsSync(statePath)
-    ? new Set(JSON.parse(readFileSync(statePath, "utf8")))
-    : new Set();
-  if (joined.includes(failConfig.match) && !state.has(failConfig.match)) {
-    state.add(failConfig.match);
-    if (statePath) writeFileSync(statePath, JSON.stringify([...state]));
-    const delayMs = Number(failConfig.delayMs ?? 0);
-    setTimeout(() => {
-      process.stderr.write(String(failConfig.stderr ?? "forced failure"));
-      process.exit(Number(failConfig.exitCode ?? 1));
-    }, delayMs);
-    return;
-  }
-}
-if (process.env.OPENCLAW_TEST_STDOUT) {
-  process.stdout.write(process.env.OPENCLAW_TEST_STDOUT);
-}
-`);
-    chmodSync(fakeOpenClawPath, 0o755);
-
-    process.env.OPENCLAW_TEST_LOG = logPath;
-    process.env.OPENCLAW_TEST_FAIL_ONCE_STATE = failStatePath;
-    process.env.PATH = `${tempDir}:${originalPath}`;
-    delete process.env.OPENCLAW_TEST_STDOUT;
+    calls = [];
+    heartbeats = [];
+    rules = [];
+    chatSendStdout = "";
+    setPluginRuntime({ system: fakeSystemRuntime }, { channels: {} });
+    wakeDeliveryExecutorInternals.execFile = fakeChatSendExecFile;
   });
 
   afterEach(() => {
@@ -203,17 +220,9 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
     console.error = originalConsoleError;
     global.setTimeout = originalSetTimeout;
     global.clearTimeout = originalClearTimeout;
-    process.env.PATH = originalPath;
-    if (originalLogPath == null) {
-      delete process.env.OPENCLAW_TEST_LOG;
-    } else {
-      process.env.OPENCLAW_TEST_LOG = originalLogPath;
-    }
-    delete process.env.OPENCLAW_TEST_FAIL_ONCE_FOR;
-    delete process.env.OPENCLAW_TEST_FAIL_ONCE_STATE;
-    delete process.env.OPENCLAW_TEST_STDOUT;
+    wakeDeliveryExecutorInternals.execFile = originalExecFile;
+    setPluginRuntime(undefined);
     delete process.env.OPENCLAW_CODE_AGENT_BUTTON_DIAGNOSTICS;
-    rmSync(tempDir, { recursive: true, force: true });
   });
 
   it("does not accept NO_REPLY even when a completion marker appears elsewhere in the payload", () => {
@@ -262,15 +271,15 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
       userMessage: "🚀 launched",
       notifyUser: "always",
     });
-    const calls = await waitForCalls(logPath, 1);
+    const calls = await waitForCalls(1);
 
     assert.equal(calls.length, 1);
-    const params = parseMessageSendArgs(calls[0] ?? []);
+    const params = asDurableSend(calls[0]);
     assert.equal(params.channel, "telegram");
-    assert.equal(params.account, "bot");
-    assert.equal(params.target, "-1003863755361");
-    assert.equal(params.message, "🚀 launched");
-    assert.equal(params["thread-id"], "11239");
+    assert.equal(params.accountId, "bot");
+    assert.equal(params.to, "-1003863755361");
+    assert.equal(params.text, "🚀 launched");
+    assert.equal(params.threadId, "11239");
     await waitFor(
       () => infoLogs.some((line) => line.includes("\"event\":\"dispatch_succeeded\"") && line.includes("\"target\":\"message.send\"")),
       "dispatcher completion log",
@@ -279,11 +288,11 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
   });
 
   it("keeps direct notification order when an earlier delivery falls back", async () => {
-    process.env.OPENCLAW_TEST_FAIL_ONCE_FOR = JSON.stringify({
-      match: "🚀 launched",
+    rules.push({
+      match: (call) => call.kind === "durable-send" && call.text === "🚀 launched",
+      outcome: "failed",
       delayMs: 50,
-      stderr: "launch delivery failed once",
-      exitCode: 1,
+      error: "launch delivery failed once",
     });
     const dispatcher = createDispatcher();
     const session: FakeSession = {
@@ -308,19 +317,16 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
     // Direct sends are never retried by OCA (the host durable queue owns retries);
     // later notifications keep their order and the failed plain notification is
     // re-queued on the same route lane as a system-event fallback.
-    const calls = await waitForCalls(logPath, 3);
-    assert.deepEqual(calls.map((call) => call.slice(0, 2).join(" ")), ["message send", "message send", "system event"]);
-    assert.equal(parseMessageSendArgs(calls[0]!).message, "🚀 launched");
-    assert.equal(parseMessageSendArgs(calls[1]!).message, "✅ completed");
-    assert.equal(calls[2]![3], "🚀 launched");
+    const calls = await waitForCalls(3);
+    assert.deepEqual(calls.map((call) => call.kind), ["durable-send", "durable-send", "system-event"]);
+    assert.equal(asDurableSend(calls[0]).text, "🚀 launched");
+    assert.equal(asDurableSend(calls[1]).text, "✅ completed");
+    // The notify fallback has no wake session, so it targets the main session.
+    assert.deepEqual(calls[2], systemEvent("🚀 launched", "session-ordering"));
   });
 
   it("defers conditional worktree wakes until after the notification turn yields", async () => {
-    const dispatcher = createDispatcher({
-      directNotifications: {
-        send: async () => {},
-      } as any,
-    });
+    const dispatcher = createDispatcher();
     const session: FakeSession = {
       id: "session-worktree-deferred-wake",
       route: buildRoute({ threadId: "13832", sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832" }),
@@ -340,15 +346,16 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
 
     await Promise.resolve();
     await Promise.resolve();
-    assert.equal(readCalls(logPath).length, 0);
+    assert.equal(findCall("chat-send"), undefined);
 
-    const calls = await waitForCalls(logPath, 1);
-    const wakeParams = parseChatSendParams(calls[0] ?? []);
+    const calls = await waitForCalls(2);
+    assert.equal(asDurableSend(calls[0]).text, "✅ Merged: agent/example → main");
+    const wakeParams = asChatSend(calls[1]);
     assert.equal(wakeParams.sessionKey, "agent:main:telegram:group:-1003863755361:topic:13832");
     assert.equal(wakeParams.message, "Worktree follow-through outcome recorded.");
   });
 
-  it("honors an explicit conditional wake grace delay", async (t) => {
+  it("honors an explicit conditional wake grace delay", async () => {
     const dispatcher = createDispatcher();
     const session: FakeSession = {
       id: "session-worktree-grace-delay",
@@ -366,11 +373,7 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
       queueMicrotask(() => fn());
       return { fake: true, unref() { return this; } } as any;
     }) as typeof setTimeout);
-    t.mock.method(wakeDeliveryExecutorInternals, "execFile", ((_file, args, _options, callback) => {
-      writeFileSync(logPath, `${JSON.stringify(args)}\n`, { flag: "a" });
-      callback?.(null, "COMPLETION_FOLLOWUP_DELIVERED", "");
-      return {} as any;
-    }) as typeof wakeDeliveryExecutorInternals.execFile);
+    chatSendStdout = "Sent the routed PR update summary.";
 
     dispatcher.dispatchSessionNotification(session as any, {
       label: "worktree-outcome",
@@ -382,14 +385,14 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
       deferConditionalWakeMs: 2000,
     });
 
-    const calls = await waitForCalls(logPath, 2);
+    const calls = await waitForCalls(2);
     assert.equal(delays.includes(2000), true);
-    const wakeCall = calls.find((call) => call[0] === "gateway");
+    const wakeCall = calls.find((call) => call.kind === "chat-send");
     assert.ok(wakeCall, "expected delayed wake");
-    assert.equal(parseChatSendParams(wakeCall).message, "Worktree follow-through outcome recorded.");
+    assert.equal(asChatSend(wakeCall).message, "Worktree follow-through outcome recorded.");
   });
 
-  it("suppresses queued revised plan prompts when the plan decision is rejected before delivery starts", async (t) => {
+  it("suppresses queued revised plan prompts when the plan decision is rejected before delivery starts", async () => {
     const dispatcher = createDispatcher();
     const session: FakeSession = {
       id: "session-plan-rejected",
@@ -400,11 +403,11 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
     };
     let shouldDeliverPlanV2 = true;
 
-    t.mock.method(wakeDeliveryExecutorInternals, "execFile", ((_file, args, _options, callback) => {
-      writeFileSync(logPath, `${JSON.stringify(args)}\n`, { flag: "a" });
-      setTimeout(() => callback?.(null, "", ""), 50);
-      return {} as any;
-    }) as typeof wakeDeliveryExecutorInternals.execFile);
+    rules.push({
+      match: (call) => call.kind === "durable-send" && call.text === "Plan v1 needs your decision",
+      outcome: "ok",
+      delayMs: 50,
+    });
 
     dispatcher.dispatchSessionNotification(session as any, {
       label: "plan-v1",
@@ -419,16 +422,15 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
       shouldDispatch: () => shouldDeliverPlanV2,
     });
 
-    await waitForCalls(logPath, 1);
+    await waitForCalls(1);
     shouldDeliverPlanV2 = false;
     await new Promise((resolve) => setTimeout(resolve, 150));
 
-    const calls = readCalls(logPath);
     assert.equal(calls.length, 1);
-    assert.equal(parseMessageSendArgs(calls[0] ?? []).message, "Plan v1 needs your decision");
+    assert.equal(asDurableSend(calls[0]).text, "Plan v1 needs your decision");
   });
 
-  it("falls back and does not retry a direct launch notification after a failed send", async (t) => {
+  it("falls back and does not retry a direct launch notification after a failed send", async () => {
     const dispatcher = createDispatcher();
     const session: FakeSession = {
       id: "session-launch-timeout",
@@ -441,21 +443,11 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
     console.error = (message?: unknown, ...rest: unknown[]) => {
       errorLogs.push([message, ...rest].map((value) => String(value)).join(" "));
     };
-    t.mock.method(wakeDeliveryExecutorInternals, "execFile", ((_file, args, _options, callback) => {
-      writeFileSync(logPath, `${JSON.stringify(args)}\n`, { flag: "a" });
-      if ((args as string[])[0] === "message") {
-        const error = new Error("Command timed out after 30000ms") as Error & {
-          killed: boolean;
-          signal: NodeJS.Signals;
-        };
-        error.killed = true;
-        error.signal = "SIGKILL";
-        callback?.(error, "", "");
-        return {} as any;
-      }
-      callback?.(null, "", "");
-      return {} as any;
-    }) as typeof wakeDeliveryExecutorInternals.execFile);
+    rules.push({
+      match: (call) => call.kind === "durable-send",
+      outcome: "throw",
+      error: "durable outbound admission rejected",
+    });
 
     dispatcher.dispatchSessionNotification(session as any, {
       label: "launch",
@@ -468,22 +460,16 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
       "terminal direct-send failure log",
     );
 
-    const calls = await waitForCalls(logPath, 2);
+    const calls = await waitForCalls(2);
     assert.equal(calls.length, 2);
-    assert.equal(parseMessageSendArgs(calls[0] ?? []).message, "🚀 launched");
-    assert.deepEqual(calls[1], ["system", "event", "--text", "🚀 launched", "--mode", "now"]);
+    assert.equal(asDurableSend(calls[0]).text, "🚀 launched");
+    assert.deepEqual(calls[1], systemEvent("🚀 launched", "session-launch-timeout"));
+    assert.deepEqual(heartbeats, [{ source: "notifications-event", intent: "immediate", reason: "wake" }]);
     assert.ok(!errorLogs.some((line) => line.includes("\"event\":\"dispatch_retry_scheduled\"")));
   });
 
-  it("uses in-process runtime delivery for Telegram topic direct notifications", async () => {
-    const sends: Array<Record<string, unknown>> = [];
-    const dispatcher = createDispatcher({
-      directNotifications: {
-        send: async (route, text) => {
-          sends.push({ route, text });
-        },
-      },
-    });
+  it("hands Telegram topic direct notifications to the host durable outbound queue", async () => {
+    const dispatcher = createDispatcher();
     const session: FakeSession = {
       id: "session-runtime-direct",
       route: buildRoute({ threadId: "28", sessionKey: "agent:main:telegram:group:-1003863755361:topic:28" }),
@@ -502,33 +488,30 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
       notifyUser: "always",
     });
 
-    await waitFor(() => sends.length === 1, "runtime direct send");
-    assert.deepEqual(sends, [
-      {
-        route: {
-          channel: "telegram",
-          target: "-1003863755361",
-          accountId: "bot",
-          threadId: "28",
-          sessionKey: "agent:main:telegram:group:-1003863755361:topic:28",
-        },
-        text: "🚀 launched",
-      },
-    ]);
-    assert.deepEqual(readCalls(logPath), []);
+    await waitFor(
+      () => infoLogs.some((line) => line.includes("\"event\":\"dispatch_succeeded\"")),
+      "runtime direct send",
+    );
+    assert.deepEqual(calls, [{
+      kind: "durable-send",
+      channel: "telegram",
+      to: "-1003863755361",
+      accountId: "bot",
+      threadId: "28",
+      text: "🚀 launched",
+      durability: "required",
+    }]);
+    assert.deepEqual(heartbeats, []);
     assert.ok(infoLogs.some((line) => line.includes("\"event\":\"dispatch_succeeded\"") && line.includes("\"target\":\"message.send\"")));
   });
 
   it("falls back on unavailable in-process direct notify without blocking the route lane", async () => {
-    const sends: string[] = [];
-    const dispatcher = createDispatcher({
-      directNotifications: {
-        send: async (_route, text) => {
-          sends.push(text);
-          if (text === "🚀 launched") throw new Error("runtime direct sender unavailable");
-        },
-      },
+    rules.push({
+      match: (call) => call.kind === "durable-send" && call.text === "🚀 launched",
+      outcome: "throw",
+      error: "runtime direct sender unavailable",
     });
+    const dispatcher = createDispatcher();
     const session: FakeSession = {
       id: "session-runtime-direct-unavailable",
       route: buildRoute({ threadId: "28", sessionKey: "agent:main:telegram:group:-1003863755361:topic:28" }),
@@ -548,28 +531,18 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
       notifyUser: "always",
     });
 
-    await waitFor(() => sends.includes("✅ completed"), "second notification after first direct failure");
-    const calls = await waitForCalls(logPath, 1);
-    assert.deepEqual(sends, ["🚀 launched", "✅ completed"]);
-    assert.deepEqual(calls, [["system", "event", "--text", "🚀 launched", "--mode", "now"]]);
+    const calls = await waitForCalls(3);
+    assert.deepEqual(calls.map((call) => call.kind), ["durable-send", "durable-send", "system-event"]);
+    assert.equal(asDurableSend(calls[0]).text, "🚀 launched");
+    assert.equal(asDurableSend(calls[1]).text, "✅ completed");
+    assert.deepEqual(calls[2], systemEvent("🚀 launched", "session-runtime-direct-unavailable"));
   });
 
   it("does not resend a plain notification through a system event after an ambiguous durable-send timeout", async (t) => {
     t.mock.timers.enable({ apis: ["setTimeout"] });
-    const sends: string[] = [];
-    const systemEvents: string[] = [];
+    rules.push({ match: (call) => call.kind === "durable-send", outcome: "hang" });
     let notifyFailed = 0;
-    const dispatcher = createDispatcher({
-      directNotifications: {
-        send: async (_route, text) => {
-          sends.push(text);
-          await new Promise<void>(() => {});
-        },
-      },
-      systemEvents: {
-        enqueue: async (text) => { systemEvents.push(text); },
-      },
-    });
+    const dispatcher = createDispatcher();
     const session: FakeSession = {
       id: "session-durable-timeout",
       route: buildRoute(),
@@ -582,27 +555,24 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
       notifyUser: "always",
       hooks: { onNotifyFailed: () => { notifyFailed += 1; } },
     });
-    await Promise.resolve();
-    await Promise.resolve();
+    for (let i = 0; i < 20; i += 1) await Promise.resolve();
     t.mock.timers.tick(30_000);
-    for (let i = 0; i < 5; i += 1) await Promise.resolve();
+    for (let i = 0; i < 20; i += 1) await Promise.resolve();
 
-    assert.deepEqual(sends, ["🚀 launched"]);
-    assert.deepEqual(systemEvents, []);
+    assert.deepEqual(calls.map((call) => call.kind), ["durable-send"]);
+    assert.equal(asDurableSend(calls[0]).text, "🚀 launched");
+    assert.deepEqual(heartbeats, []);
     assert.equal(notifyFailed, 1);
     dispatcher.dispose();
   });
 
   it("does not system-fallback strict runtime direct notification failures", async () => {
-    const sends: string[] = [];
-    const dispatcher = createDispatcher({
-      directNotifications: {
-        send: async (_route, text) => {
-          sends.push(text);
-          throw new Error("runtime direct sender unavailable after send ambiguity");
-        },
-      },
+    rules.push({
+      match: (call) => call.kind === "durable-send",
+      outcome: "throw",
+      error: "runtime direct sender unavailable after send ambiguity",
     });
+    const dispatcher = createDispatcher();
     const session: FakeSession = {
       id: "session-runtime-strict-direct-unavailable",
       route: buildRoute({ threadId: "28", sessionKey: "agent:main:telegram:group:-1003863755361:topic:28" }),
@@ -620,14 +590,14 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
       notifyUser: "always",
     });
 
-    const calls = await waitForCalls(logPath, 1);
-    assert.deepEqual(sends, ["✅ PR opened: https://github.com/goldmar/openclaw-workspace/pull/3"]);
-    assert.equal(calls.some((call) => call[0] === "system"), false);
-    const wakeParams = parseChatSendParams(calls[0] ?? []);
+    const calls = await waitForCalls(2);
+    assert.equal(asDurableSend(calls[0]).text, "✅ PR opened: https://github.com/goldmar/openclaw-workspace/pull/3");
+    assert.equal(calls.some((call) => call.kind === "system-event"), false);
+    const wakeParams = asChatSend(calls[1]);
     assert.equal(wakeParams.message, "Canonical worktree status delivered to user: no");
   });
 
-  it("reports a strict completion notification send failure before waking", async (t) => {
+  it("reports a strict completion notification send failure before waking", async () => {
     const dispatcher = createDispatcher();
     const session: FakeSession = {
       id: "session-completion-strict",
@@ -640,21 +610,7 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
     console.error = (message?: unknown, ...rest: unknown[]) => {
       errorLogs.push([message, ...rest].map((value) => String(value)).join(" "));
     };
-    t.mock.method(wakeDeliveryExecutorInternals, "execFile", ((_file, args, _options, callback) => {
-      writeFileSync(logPath, `${JSON.stringify(args)}\n`, { flag: "a" });
-      if ((args as string[])[0] === "message") {
-        const error = new Error("Command timed out after 30000ms") as Error & {
-          killed: boolean;
-          signal: NodeJS.Signals;
-        };
-        error.killed = true;
-        error.signal = "SIGKILL";
-        callback?.(error, "", "");
-        return {} as any;
-      }
-      callback?.(null, "", "");
-      return {} as any;
-    }) as typeof wakeDeliveryExecutorInternals.execFile);
+    rules.push({ match: (call) => call.kind === "durable-send", outcome: "throw", error: "durable outbound admission rejected" });
 
     dispatcher.dispatchSessionNotification(session as any, {
       label: "completed",
@@ -665,19 +621,19 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
       notifyUser: "always",
     });
 
-    const calls = await waitForCalls(logPath, 2);
+    const calls = await waitForCalls(2);
     assert.equal(calls.length, 2);
-    assert.equal(calls[0]?.[0], "message");
-    assert.equal(calls[1]?.[0], "gateway");
-    assert.equal(parseMessageSendArgs(calls[0] ?? []).message, "✅ completed");
-    assert.equal(parseMessageSendArgs(calls[0] ?? [])["thread-id"], "26");
-    const wakeParams = parseChatSendParams(calls[1] ?? []);
+    assert.equal(calls[0]?.kind, "durable-send");
+    assert.equal(calls[1]?.kind, "chat-send");
+    assert.equal(asDurableSend(calls[0]).text, "✅ completed");
+    assert.equal(asDurableSend(calls[0]).threadId, "26");
+    const wakeParams = asChatSend(calls[1]);
     assert.equal(wakeParams.message, "Canonical completion status delivered to user: no");
     assert.equal(wakeParams.sessionKey, "agent:main:telegram:group:-1003863755361:topic:26");
     assert.ok(errorLogs.some((line) => line.includes("\"terminal\":true") && line.includes("\"target\":\"message.send\"")));
   });
 
-  it("does not count system fallback as strict completion notification success", async (t) => {
+  it("does not count system fallback as strict completion notification success", async () => {
     const dispatcher = createDispatcher();
     const session: FakeSession = {
       id: "session-completion-strict-failure",
@@ -687,15 +643,7 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
       originSessionKey: "agent:main:telegram:group:-1003863755361:topic:26",
     };
 
-    t.mock.method(wakeDeliveryExecutorInternals, "execFile", ((_file, args, _options, callback) => {
-      writeFileSync(logPath, `${JSON.stringify(args)}\n`, { flag: "a" });
-      if ((args as string[])[0] === "message") {
-        callback?.(new Error("telegram send failed"), "", "telegram send failed");
-        return {} as any;
-      }
-      callback?.(null, "", "");
-      return {} as any;
-    }) as typeof wakeDeliveryExecutorInternals.execFile);
+    rules.push({ match: (call) => call.kind === "durable-send", outcome: "failed", error: "telegram send failed" });
 
     dispatcher.dispatchSessionNotification(session as any, {
       label: "completed",
@@ -707,16 +655,16 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
     });
 
     // One direct attempt: the host durable queue, not OCA, owns send retries.
-    const calls = await waitForCalls(logPath, 2);
-    assert.equal(calls.filter((call) => call[0] === "message").length, 1);
-    assert.equal(calls.some((call) => call[0] === "system"), false);
-    const wakeCall = calls.find((call) => call[0] === "gateway");
+    const calls = await waitForCalls(2);
+    assert.equal(calls.filter((call) => call.kind === "durable-send").length, 1);
+    assert.equal(calls.some((call) => call.kind === "system-event"), false);
+    const wakeCall = calls.find((call) => call.kind === "chat-send");
     assert.ok(wakeCall, "expected failed-delivery wake");
-    const wakeParams = parseChatSendParams(wakeCall);
+    const wakeParams = asChatSend(wakeCall);
     assert.equal(wakeParams.message, "Canonical completion status delivered to user: no");
   });
 
-  it("does not count system fallback as strict notify-only completion success", async (t) => {
+  it("does not count system fallback as strict notify-only completion success", async () => {
     const dispatcher = createDispatcher();
     const session: FakeSession = {
       id: "session-completion-strict-no-wake",
@@ -728,15 +676,7 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
     let notifySucceeded = 0;
     let notifyFailed = 0;
 
-    t.mock.method(wakeDeliveryExecutorInternals, "execFile", ((_file, args, _options, callback) => {
-      writeFileSync(logPath, `${JSON.stringify(args)}\n`, { flag: "a" });
-      if ((args as string[])[0] === "message") {
-        callback?.(new Error("telegram send failed"), "", "telegram send failed");
-        return {} as any;
-      }
-      callback?.(null, "", "");
-      return {} as any;
-    }) as typeof wakeDeliveryExecutorInternals.execFile);
+    rules.push({ match: (call) => call.kind === "durable-send", outcome: "failed", error: "telegram send failed" });
 
     dispatcher.dispatchSessionNotification(session as any, {
       label: "completed",
@@ -750,10 +690,9 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
     });
 
     await waitFor(() => notifyFailed === 1, "strict notify-only failure");
-    const calls = readCalls(logPath);
-    assert.equal(calls.filter((call) => call[0] === "message").length, 1);
-    assert.equal(calls.some((call) => call[0] === "system"), false);
-    assert.equal(calls.some((call) => call[0] === "gateway"), false);
+    assert.equal(calls.filter((call) => call.kind === "durable-send").length, 1);
+    assert.equal(calls.some((call) => call.kind === "system-event"), false);
+    assert.equal(calls.some((call) => call.kind === "chat-send"), false);
     assert.equal(notifySucceeded, 0);
   });
 
@@ -772,10 +711,10 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
       userMessage: "🚀 launched",
       notifyUser: "always",
     });
-    const calls = await waitForCalls(logPath, 1);
+    const calls = await waitForCalls(1);
 
     assert.equal(calls.length, 1);
-    assert.deepEqual(calls[0], ["system", "event", "--text", "🚀 launched", "--mode", "now"]);
+    assert.deepEqual(calls[0], systemEvent("🚀 launched", "session-system-route"));
   });
 
   it("recovers a direct Telegram notification route from degraded persisted metadata", async () => {
@@ -796,14 +735,14 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
       userMessage: "🚀 launched",
       notifyUser: "always",
     });
-    const calls = await waitForCalls(logPath, 1);
+    const calls = await waitForCalls(1);
 
     assert.equal(calls.length, 1);
-    const params = parseMessageSendArgs(calls[0] ?? []);
+    const params = asDurableSend(calls[0]);
     assert.equal(params.channel, "telegram");
-    assert.equal(params.target, "-1003863755361");
-    assert.equal(params["thread-id"], "11239");
-    assert.equal(params.message, "🚀 launched");
+    assert.equal(params.to, "-1003863755361");
+    assert.equal(params.threadId, "11239");
+    assert.equal(params.text, "🚀 launched");
   });
 
   it("does not install process-level signal listeners per instance", () => {
@@ -835,16 +774,16 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
       wakeMessage: "Coding agent session completed.",
       notifyUser: "always",
     });
-    const calls = await waitForCalls(logPath, 2);
+    const calls = await waitForCalls(2);
 
     assert.equal(calls.length, 2);
-    const notifyCall = calls.find((call) => call[0] === "message");
-    const wakeCall = calls.find((call) => call[0] === "gateway");
-    assert.ok(notifyCall, "expected a message.send notification call");
+    const notifyCall = calls.find((call) => call.kind === "durable-send");
+    const wakeCall = calls.find((call) => call.kind === "chat-send");
+    assert.ok(notifyCall, "expected a durable-send notification");
     assert.ok(wakeCall, "expected a chat.send wake call");
-    const notifyArgs = parseMessageSendArgs(notifyCall);
-    assert.equal(notifyArgs.message, "✅ completed");
-    const wakeParams = parseChatSendParams(wakeCall);
+    const notifyArgs = asDurableSend(notifyCall);
+    assert.equal(notifyArgs.text, "✅ completed");
+    const wakeParams = asChatSend(wakeCall);
     assert.equal(wakeParams.message, "Coding agent session completed.");
     assert.equal(wakeParams.deliver, true);
     assert.equal(wakeParams.channel, undefined);
@@ -874,16 +813,16 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
         { label: "📬 Open PR", callbackData: "token-pr" },
       ]],
     });
-    const calls = await waitForCalls(logPath, 2);
+    const calls = await waitForCalls(2);
 
     assert.equal(calls.length, 2);
-    const notifyCall = calls.find((call) => call[0] === "message");
-    const wakeCall = calls.find((call) => call[0] === "gateway");
-    assert.ok(notifyCall, "expected a message.send notification call");
+    const notifyCall = calls.find((call) => call.kind === "durable-send");
+    const wakeCall = calls.find((call) => call.kind === "chat-send");
+    assert.ok(notifyCall, "expected a durable-send notification");
     assert.ok(wakeCall, "expected a chat.send wake call");
-    const notifyArgs = parseMessageSendArgs(notifyCall);
-    assert.equal(notifyArgs.message, "🔀 Worktree decision required");
-    assert.deepEqual(JSON.parse(notifyArgs.presentation ?? "{}"), {
+    const notifyArgs = asDurableSend(notifyCall);
+    assert.equal(notifyArgs.text, "🔀 Worktree decision required");
+    assert.deepEqual(notifyArgs.presentation, {
       blocks: [{
         type: "buttons",
         buttons: [
@@ -892,7 +831,7 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
         ],
       }],
     });
-    const wakeParams = parseChatSendParams(wakeCall);
+    const wakeParams = asChatSend(wakeCall);
     assert.equal(wakeParams.message, "Delegated worktree decision wake");
   });
 
@@ -912,21 +851,21 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
       wakeMessage: "Delegated worktree decision wake",
       notifyUser: "never",
     });
-    const calls = await waitForCalls(logPath, 1);
+    const calls = await waitForCalls(1);
 
     assert.equal(calls.length, 1);
-    assert.equal(calls.some((call) => call[0] === "message"), false);
-    const wakeCall = calls.find((call) => call[0] === "gateway");
+    assert.equal(calls.some((call) => call.kind === "durable-send"), false);
+    const wakeCall = calls.find((call) => call.kind === "chat-send");
     assert.ok(wakeCall, "expected a chat.send wake call");
-    const wakeParams = parseChatSendParams(wakeCall);
+    const wakeParams = asChatSend(wakeCall);
     assert.equal(wakeParams.message, "Delegated worktree decision wake");
   });
 
   it("logs Telegram interactive delivery context when direct button sends fail", async () => {
-    process.env.OPENCLAW_TEST_FAIL_ONCE_FOR = JSON.stringify({
-      match: "--presentation",
-      stderr: "telegram button delivery failed",
-      exitCode: 1,
+    rules.push({
+      match: (call) => call.kind === "durable-send" && call.presentation !== undefined,
+      outcome: "failed",
+      error: "telegram button delivery failed",
     });
 
     const dispatcher = createDispatcher();
@@ -981,22 +920,15 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
       wakeMessage: "Session is waiting for input.",
       notifyUser: "on-wake-fallback",
     });
-    const calls = await waitForCalls(logPath, 2);
+    const calls = await waitForCalls(2);
 
     assert.equal(calls.length, 2);
-    const notifyCall = calls.find((call) => call[0] === "message");
-    const systemCall = calls.find((call) => call[0] === "system");
-    assert.ok(notifyCall, "expected a message.send notification call");
-    assert.ok(systemCall, "expected a system.event fallback call");
-    assert.equal(parseMessageSendArgs(notifyCall).message, "🔔 waiting");
-    assert.deepEqual(systemCall, [
-      "system",
-      "event",
-      "--text",
-      "Session is waiting for input.",
-      "--mode",
-      "now",
-    ]);
+    const notifyCall = calls.find((call) => call.kind === "durable-send");
+    const systemCall = calls.find((call) => call.kind === "system-event");
+    assert.ok(notifyCall, "expected a durable-send notification");
+    assert.ok(systemCall, "expected a system-event fallback");
+    assert.equal(asDurableSend(notifyCall).text, "🔔 waiting");
+    assert.deepEqual(systemCall, systemEvent("Session is waiting for input.", "session-3"));
   });
 
   it("does not silently downgrade interactive notifications to system text when direct routing is unavailable", async () => {
@@ -1015,17 +947,10 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
       ]],
       wakeMessageOnNotifyFailed: "Interactive delivery failed; no buttons were sent.",
     });
-    const calls = await waitForCalls(logPath, 1);
+    const calls = await waitForCalls(1);
 
     assert.equal(calls.length, 1);
-    assert.deepEqual(calls[0], [
-      "system",
-      "event",
-      "--text",
-      "Interactive delivery failed; no buttons were sent.",
-      "--mode",
-      "now",
-    ]);
+    assert.deepEqual(calls[0], systemEvent("Interactive delivery failed; no buttons were sent.", "session-interactive-no-route"));
   });
 
   it("prefers the structured route over legacy originChannel fields for new-schema sessions", async () => {
@@ -1046,11 +971,11 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
       userMessage: "🚀 launched",
       notifyUser: "always",
     });
-    const calls = await waitForCalls(logPath, 1);
-    const params = parseMessageSendArgs(calls[0] ?? []);
+    const calls = await waitForCalls(1);
+    const params = asDurableSend(calls[0]);
     assert.equal(params.channel, "discord");
-    assert.equal(params.account, "bot-account");
-    assert.equal(params.target, "channel:999");
+    assert.equal(params.accountId, "bot-account");
+    assert.equal(params.to, "channel:999");
   });
 
   it("uses the wake/system fallback only once when originSessionKey is missing", async () => {
@@ -1063,22 +988,15 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
       wakeMessage: "Coding agent session completed.",
       notifyUser: "always",
     });
-    const calls = await waitForCalls(logPath, 2);
+    const calls = await waitForCalls(2);
 
     assert.equal(calls.length, 2);
-    const notifyCall = calls.find((call) => call[0] === "message");
-    const systemCall = calls.find((call) => call[0] === "system");
-    assert.ok(notifyCall, "expected a message.send notification call");
-    assert.ok(systemCall, "expected a system.event fallback call");
-    assert.equal(parseMessageSendArgs(notifyCall).message, "✅ completed");
-    assert.deepEqual(systemCall, [
-      "system",
-      "event",
-      "--text",
-      "Coding agent session completed.",
-      "--mode",
-      "now",
-    ]);
+    const notifyCall = calls.find((call) => call.kind === "durable-send");
+    const systemCall = calls.find((call) => call.kind === "system-event");
+    assert.ok(notifyCall, "expected a durable-send notification");
+    assert.ok(systemCall, "expected a system-event fallback");
+    assert.equal(asDurableSend(notifyCall).text, "✅ completed");
+    assert.deepEqual(systemCall, systemEvent("Coding agent session completed.", "session-4"));
   });
 
   it("does not send a direct notify fallback when wake routing is recoverable from originSessionKey", async () => {
@@ -1095,11 +1013,11 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
       wakeMessage: "Session is waiting for input.",
       notifyUser: "on-wake-fallback",
     });
-    const calls = await waitForCalls(logPath, 1);
+    const calls = await waitForCalls(1);
 
     assert.equal(calls.length, 1);
-    assert.equal(calls[0]?.[0], "gateway");
-    const wakeParams = parseChatSendParams(calls[0] ?? []);
+    assert.equal(calls[0]?.kind, "chat-send");
+    const wakeParams = asChatSend(calls[0]);
     assert.equal(wakeParams.sessionKey, "agent:main:telegram:group:-1003863755361:topic:11239");
     assert.equal(wakeParams.channel, undefined);
     assert.equal(wakeParams.threadId, undefined);
@@ -1114,16 +1032,9 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
       userMessage: "🚀 launched",
       notifyUser: "always",
     });
-    const calls = await waitForCalls(logPath, 1);
+    const calls = await waitForCalls(1);
 
-    assert.deepEqual(calls, [[
-      "system",
-      "event",
-      "--text",
-      "🚀 launched",
-      "--mode",
-      "now",
-    ]]);
+    assert.deepEqual(calls, [systemEvent("🚀 launched", "session-5")]);
   });
 
   it("routes explicit Discord channel targets through message.send", async () => {
@@ -1144,13 +1055,13 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
       userMessage: "🚀 launched",
       notifyUser: "always",
     });
-    const calls = await waitForCalls(logPath, 1);
+    const calls = await waitForCalls(1);
 
     assert.equal(calls.length, 1);
-    const params = parseMessageSendArgs(calls[0] ?? []);
+    const params = asDurableSend(calls[0]);
     assert.equal(params.channel, "discord");
-    assert.equal(params.target, "channel:1481874223294054540");
-    assert.equal(params.message, "🚀 launched");
+    assert.equal(params.to, "channel:1481874223294054540");
+    assert.equal(params.text, "🚀 launched");
   });
 
   it("routes explicit Discord DM targets through message.send", async () => {
@@ -1171,13 +1082,13 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
       userMessage: "🚀 launched",
       notifyUser: "always",
     });
-    const calls = await waitForCalls(logPath, 1);
+    const calls = await waitForCalls(1);
 
     assert.equal(calls.length, 1);
-    const params = parseMessageSendArgs(calls[0] ?? []);
+    const params = asDurableSend(calls[0]);
     assert.equal(params.channel, "discord");
-    assert.equal(params.target, "user:774236449288749097");
-    assert.equal(params.message, "🚀 launched");
+    assert.equal(params.to, "user:774236449288749097");
+    assert.equal(params.text, "🚀 launched");
   });
 
   it("sends Discord buttons through the shared direct presentation path", async () => {
@@ -1206,13 +1117,13 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
       ]],
     });
 
-    const calls = await waitForCalls(logPath, 1);
-    const args = parseMessageSendArgs(calls[0] ?? []);
+    const calls = await waitForCalls(1);
+    const args = asDurableSend(calls[0]);
     assert.equal(args.channel, "discord");
-    assert.equal(args.target, "channel:1481874223294054540");
-    assert.equal(args.message, "📋 Plan ready");
-    assert.equal(args["thread-id"], "1481999999999999999");
-    assert.deepEqual(JSON.parse(args.presentation ?? "{}"), {
+    assert.equal(args.to, "channel:1481874223294054540");
+    assert.equal(args.text, "📋 Plan ready");
+    assert.equal(args.threadId, "1481999999999999999");
+    assert.deepEqual(args.presentation, {
       blocks: [{
         type: "buttons",
         buttons: [
@@ -1246,13 +1157,13 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
       ]],
     });
 
-    const calls = await waitForCalls(logPath, 1);
-    const args = parseMessageSendArgs(calls[0] ?? []);
+    const calls = await waitForCalls(1);
+    const args = asDurableSend(calls[0]);
     assert.equal(args.channel, "discord");
-    assert.equal(args.account, "bot-account");
-    assert.equal(args.target, "channel:1481874223294054540");
-    assert.equal(args["thread-id"], "1481999999999999999");
-    assert.deepEqual(JSON.parse(args.presentation ?? "{}"), {
+    assert.equal(args.accountId, "bot-account");
+    assert.equal(args.to, "channel:1481874223294054540");
+    assert.equal(args.threadId, "1481999999999999999");
+    assert.deepEqual(args.presentation, {
       blocks: [{
         type: "buttons",
         buttons: [
@@ -1264,10 +1175,10 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
   });
 
   it("logs Discord interactive delivery context when shared presentation delivery fails", async () => {
-    process.env.OPENCLAW_TEST_FAIL_ONCE_FOR = JSON.stringify({
-      match: "--presentation",
-      stderr: "discord presentation delivery failed",
-      exitCode: 1,
+    rules.push({
+      match: (call) => call.kind === "durable-send" && call.presentation !== undefined,
+      outcome: "failed",
+      error: "discord presentation delivery failed",
     });
 
     const dispatcher = createDispatcher();
@@ -1340,22 +1251,28 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
       ],
     });
 
-    const calls = await waitForCalls(logPath, 3);
+    const calls = await waitForCalls(3);
     assert.equal(calls.length, 3);
 
-    const first = parseMessageSendArgs(calls[0] ?? []);
-    const second = parseMessageSendArgs(calls[1] ?? []);
-    const third = parseMessageSendArgs(calls[2] ?? []);
+    const first = asDurableSend(calls[0]);
+    const second = asDurableSend(calls[1]);
+    const third = asDurableSend(calls[2]);
 
-    assert.equal(first.message, "📋 Plan part 1\n\nFull plan:\nchunk one");
+    assert.equal(first.text, "📋 Plan part 1\n\nFull plan:\nchunk one");
     assert.equal(first.presentation, undefined);
-    assert.equal(second.message, "📋 Plan part 2\n\nchunk two");
+    assert.equal(second.text, "📋 Plan part 2\n\nchunk two");
     assert.equal(second.presentation, undefined);
-    assert.equal(third.message, "📋 Plan part 3\n\nchunk three\n\nChoose Approve, Revise, or Reject below.");
-    assert.ok(third.presentation);
-    assert.match(third.presentation, /Approve/);
-    assert.match(third.presentation, /Revise/);
-    assert.match(third.presentation, /Reject/);
+    assert.equal(third.text, "📋 Plan part 3\n\nchunk three\n\nChoose Approve, Revise, or Reject below.");
+    assert.deepEqual(third.presentation, {
+      blocks: [{
+        type: "buttons",
+        buttons: [
+          { label: "Approve", value: "code-agent:token-approve" },
+          { label: "Revise", value: "code-agent:token-revise" },
+          { label: "Reject", value: "code-agent:token-reject" },
+        ],
+      }],
+    });
   });
 
   it("emits privacy-safe diagnostics for paginated button-bearing chunks", async (t) => {
@@ -1364,11 +1281,7 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
     t.mock.method(console, "info", (message?: unknown, ...rest: unknown[]) => {
       infoLogs.push([message, ...rest].map((value) => String(value)).join(" "));
     });
-    const dispatcher = createDispatcher({
-      directNotifications: {
-        send: async () => {},
-      },
-    });
+    const dispatcher = createDispatcher();
     const session: FakeSession = {
       id: "session-paginated-diagnostics",
       route: buildRoute({ threadId: "13832", sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832" }),
@@ -1599,16 +1512,9 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
       userMessage: "🚀 launched",
       notifyUser: "always",
     });
-    const calls = await waitForCalls(logPath, 1);
+    const calls = await waitForCalls(1);
 
-    assert.deepEqual(calls, [[
-      "system",
-      "event",
-      "--text",
-      "🚀 launched",
-      "--mode",
-      "now",
-    ]]);
+    assert.deepEqual(calls, [systemEvent("🚀 launched", "session-8")]);
   });
 
   it("preserves existing Telegram routing when Discord sessions are added", async () => {
@@ -1623,15 +1529,15 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
       userMessage: "🚀 launched",
       notifyUser: "always",
     });
-    const calls = await waitForCalls(logPath, 1);
+    const calls = await waitForCalls(1);
 
     assert.equal(calls.length, 1);
-    const params = parseMessageSendArgs(calls[0] ?? []);
+    const params = asDurableSend(calls[0]);
     assert.equal(params.channel, "telegram");
-    assert.equal(params.account, "bot");
-    assert.equal(params.target, "-1003863755361");
-    assert.equal(params.message, "🚀 launched");
-    assert.equal(params["thread-id"], "11239");
+    assert.equal(params.accountId, "bot");
+    assert.equal(params.to, "-1003863755361");
+    assert.equal(params.text, "🚀 launched");
+    assert.equal(params.threadId, "11239");
   });
 
   it("preserves Telegram topic routing for follow-up notifications", async () => {
@@ -1655,19 +1561,19 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
       userMessage: "✅ completed",
       notifyUser: "always",
     });
-    const calls = await waitForCalls(logPath, 1);
+    const calls = await waitForCalls(1);
 
     assert.equal(calls.length, 1);
-    const params = parseMessageSendArgs(calls[0] ?? []);
+    const params = asDurableSend(calls[0]);
     assert.equal(params.channel, "telegram");
-    assert.equal(params.account, "bot");
-    assert.equal(params.target, "-1003863755361");
-    assert.equal(params.message, "✅ completed");
-    assert.equal(params["thread-id"], "13832");
+    assert.equal(params.accountId, "bot");
+    assert.equal(params.to, "-1003863755361");
+    assert.equal(params.text, "✅ completed");
+    assert.equal(params.threadId, "13832");
   });
 
   it("does not accept a NO_REPLY completion follow-up wake and falls back to a session system event", async () => {
-    process.env.OPENCLAW_TEST_STDOUT = "NO_REPLY\n";
+    chatSendStdout = "NO_REPLY\n";
     const dispatcher = createDispatcher();
     const session: FakeSession = {
       id: "session-no-visible-followup",
@@ -1687,20 +1593,27 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
       },
     });
 
-    const calls = await waitForCalls(logPath, 2);
+    const calls = await waitForCalls(2);
     await waitFor(() => wakeSucceeded === 1, "system event fallback after NO_REPLY");
 
-    assert.equal(calls[0]?.[0], "gateway");
-    assert.deepEqual(calls[1], [
-      "system", "event", "--text", "Coding agent session completed. Send the user a short factual completion summary.",
-      "--mode", "now", "--session-key", "agent:main:telegram:group:-1003863755361:topic:11239",
-    ]);
-    assert.equal(calls.filter((call) => call[0] === "gateway").length, 1);
+    assert.equal(calls[0]?.kind, "chat-send");
+    assert.deepEqual(calls[1], systemEvent(
+      "Coding agent session completed. Send the user a short factual completion summary.",
+      "session-no-visible-followup",
+      "agent:main:telegram:group:-1003863755361:topic:11239",
+    ));
+    assert.deepEqual(heartbeats, [{
+      source: "notifications-event",
+      intent: "immediate",
+      reason: "wake",
+      sessionKey: "agent:main:telegram:group:-1003863755361:topic:11239",
+    }]);
+    assert.equal(calls.filter((call) => call.kind === "chat-send").length, 1);
     assert.equal(wakeFailed, 0);
   });
 
   it("marks completion follow-up wakes successful after normal marker-free final text", async () => {
-    process.env.OPENCLAW_TEST_STDOUT = "Sent the routed summary for PR #185 without repeating the link.\n";
+    chatSendStdout = "Sent the routed summary for PR #185 without repeating the link.\n";
     const dispatcher = createDispatcher();
     const session: FakeSession = {
       id: "session-visible-followup",
@@ -1720,7 +1633,7 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
       },
     });
 
-    await waitForCalls(logPath, 1);
+    await waitForCalls(1);
     await waitFor(() => wakeSucceeded === 1, "completion follow-up wake validation success");
 
     assert.equal(wakeSucceeded, 1);
@@ -1728,7 +1641,7 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
   });
 
   it("does not treat legacy completion skip marker text as a transport skip", async () => {
-    process.env.OPENCLAW_TEST_STDOUT = "COMPLETION_FOLLOWUP_SKIPPED: internal pipeline continuing\n";
+    chatSendStdout = "COMPLETION_FOLLOWUP_SKIPPED: internal pipeline continuing\n";
     const dispatcher = createDispatcher();
     const session: FakeSession = {
       id: "session-skipped-followup",
@@ -1750,7 +1663,7 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
       },
     });
 
-    await waitForCalls(logPath, 1);
+    await waitForCalls(1);
     await waitFor(() => wakeSucceeded === 1, "completion follow-up wake success");
 
     assert.equal(wakeSucceeded, 1);
@@ -1780,19 +1693,19 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
       wakeMessage: "Coding agent session completed.",
       notifyUser: "always",
     });
-    const calls = await waitForCalls(logPath, 2);
+    const calls = await waitForCalls(2);
 
     assert.equal(calls.length, 2);
-    const notifyCall = calls.find((call) => call[0] === "message");
-    const wakeCall = calls.find((call) => call[0] === "gateway");
-    assert.ok(notifyCall, "expected a message.send notification call");
+    const notifyCall = calls.find((call) => call.kind === "durable-send");
+    const wakeCall = calls.find((call) => call.kind === "chat-send");
+    assert.ok(notifyCall, "expected a durable-send notification");
     assert.ok(wakeCall, "expected a chat.send wake call");
 
-    const notifyArgs = parseMessageSendArgs(notifyCall);
-    assert.equal(notifyArgs.target, "-1003863755361");
-    assert.equal(notifyArgs["thread-id"], "13832");
+    const notifyArgs = asDurableSend(notifyCall);
+    assert.equal(notifyArgs.to, "-1003863755361");
+    assert.equal(notifyArgs.threadId, "13832");
 
-    const wakeParams = parseChatSendParams(wakeCall);
+    const wakeParams = asChatSend(wakeCall);
     assert.equal(wakeParams.sessionKey, "agent:main:telegram:group:-1003863755361:topic:13832");
     assert.equal(wakeParams.channel, undefined);
     assert.equal(wakeParams.accountId, undefined);
@@ -1812,15 +1725,8 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
       notifyUser: "always",
       buttons: [[], []],
     });
-    const calls = await waitForCalls(logPath, 1);
+    const calls = await waitForCalls(1);
 
-    assert.deepEqual(calls, [[
-      "system",
-      "event",
-      "--text",
-      "🚀 launched",
-      "--mode",
-      "now",
-    ]]);
+    assert.deepEqual(calls, [systemEvent("🚀 launched", "session-empty-button-rows")]);
   });
 });

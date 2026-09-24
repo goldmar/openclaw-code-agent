@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 
-export const CODE_AGENT_PLUGIN_ID = "openclaw-code-agent";
+const CODE_AGENT_PLUGIN_ID = "openclaw-code-agent";
 
 /**
  * OpenClaw's state directory, resolved by the host's public

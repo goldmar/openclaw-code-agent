@@ -44,10 +44,10 @@ function errorMessage(err: unknown): string {
 }
 
 export async function getDiffSummary(repoDir: string, branch: string, base: string): Promise<DiffSummary | undefined> {
-  assertBranchName(branch);
-  assertBranchName(base);
-  const branchRef = localBranchRef(branch);
-  const baseRef = localBranchRef(base);
+  await assertBranchName(branch);
+  await assertBranchName(base);
+  const branchRef = await localBranchRef(branch);
+  const baseRef = await localBranchRef(base);
 
   try {
     const countResult = await runGit(["-C", repoDir, "rev-list", "--count", `${baseRef}..${branchRef}`], { timeout: 10_000 });
@@ -95,9 +95,9 @@ export async function getDiffSummary(repoDir: string, branch: string, base: stri
 }
 
 export async function pushBranch(repoDir: string, branch: string, remote: string = "origin"): Promise<boolean> {
-  assertBranchName(branch);
-  assertBranchName(remote);
-  const branchRef = localBranchRef(branch);
+  await assertBranchName(branch);
+  await assertBranchName(remote);
+  const branchRef = await localBranchRef(branch);
 
   try {
     await runGit(["-C", repoDir, "push", remote, `${branchRef}:${branchRef}`], { timeout: 60_000 });
@@ -136,10 +136,10 @@ async function mergeBranchLocked(
   strategy: "merge" | "squash",
   worktreePath: string | undefined,
 ): Promise<MergeResult> {
-  assertBranchName(branch);
-  assertBranchName(base);
-  const branchRef = localBranchRef(branch);
-  const baseRef = localBranchRef(base);
+  await assertBranchName(branch);
+  await assertBranchName(base);
+  const branchRef = await localBranchRef(branch);
+  const baseRef = await localBranchRef(base);
 
   let stashed = false;
   let stashRef: string | undefined;

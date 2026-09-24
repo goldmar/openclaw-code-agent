@@ -56,7 +56,7 @@ export function makeAgentWorktreeCleanupTool(_ctx?: OpenClawPluginToolContext) {
       }
 
       if (params.base_branch !== undefined) {
-        const branchError = branchNameValidationError(params.base_branch);
+        const branchError = await branchNameValidationError(params.base_branch);
         if (branchError) return { content: [{ type: "text", text: `Error: ${branchError}` }] };
       }
 
@@ -92,7 +92,7 @@ export function makeAgentWorktreeCleanupTool(_ctx?: OpenClawPluginToolContext) {
       const failures: string[] = [];
 
       for (const target of targets) {
-        const { persistedSession: persisted, activeSession: active, resolvedLifecycle: resolved } = await resolveWorktreeToolLifecycle(sessionManager, target, {
+        const { persistedSession: persisted, resolvedLifecycle: resolved } = await resolveWorktreeToolLifecycle(sessionManager, target, {
           baseBranch: params.base_branch,
         });
 

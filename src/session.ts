@@ -100,6 +100,14 @@ function logSessionDiagnostic(event: string, fields: Record<string, unknown>): v
   }));
 }
 
+/** Append a structured backend error code (e.g. Claude `authentication_failed`) to failure text. */
+function withErrorCode(text: string | undefined, code: string | undefined): string | undefined {
+  const trimmed = text?.trim();
+  if (!code) return trimmed || undefined;
+  if (!trimmed) return `Backend error: ${code}`;
+  return trimmed.includes(code) ? trimmed : `${trimmed} (error code: ${code})`;
+}
+
 function backendRefDiagnosticFields(backendRef: SessionBackendRef | undefined): Record<string, unknown> {
   if (!backendRef) return {};
   return {
@@ -424,8 +432,9 @@ export class Session extends EventEmitter {
           });
         } else {
           this.turnRuntime.finishTerminalTurn();
+          const failureText = outcome === "failed" ? withErrorCode(resultText, data.errorCode) : undefined;
           this.transitionToTerminal(outcome === "completed" ? "completed" : "failed", {
-            ...(outcome === "failed" && resultText ? { error: resultText } : {}),
+            ...(failureText ? { error: failureText } : {}),
           });
         }
         this.turnRuntime.resetAfterRun();
@@ -851,7 +860,7 @@ export class Session extends EventEmitter {
         if (newMode !== "plan") {
           this.applyControlEvent({ type: "plan.approved" });
         }
-        effectiveText = `${PLAN_APPROVED_PROMPT_PREFIX}${text}`;
+        if (!nativePlanDecisions) effectiveText = `${PLAN_APPROVED_PROMPT_PREFIX}${text}`;
         log.warn(`[Session ${this.id}] Cannot call setPermissionMode — falling back to text prefix only (currentPermissionMode remains ${this.currentPermissionMode})`);
       }
     } else if ((this.pendingPlanApproval || this.approvalState === "changes_requested") && !this.planModeApproved) {
