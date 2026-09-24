@@ -23,7 +23,7 @@ let cachedMcpServers: McpServerConfig | undefined;
 const DEFAULT_HARNESS = "claude-code";
 const BUILTIN_HARNESS_CONFIGS: Record<string, HarnessConfig> = {
   "claude-code": {
-    defaultModel: "anthropic/claude-opus-5-5",
+    defaultModel: "opus",
     allowedModels: ["sonnet", "opus"],
   },
   codex: {

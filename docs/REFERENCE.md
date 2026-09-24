@@ -7,7 +7,7 @@ Canonical operator reference for `openclaw-code-agent`: install, configuration, 
 | Setting | Default |
 | --- | --- |
 | `defaultHarness` | `claude-code` |
-| `harnesses.claude-code.defaultModel` | `anthropic/claude-opus-5-5` |
+| `harnesses.claude-code.defaultModel` | `opus` |
 | `harnesses.codex.defaultModel` | `gpt-6-sol` |
 | `harnesses.codex.allowedModels` | `["gpt-6-sol", "gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]` |
 | `harnesses.codex.reasoningEffort` | `medium` |
@@ -81,7 +81,7 @@ Configuration guidance for the `2026.9.5` installation target and retained `2026
 - OpenClaw wake payloads can now carry both `sessionKey` and `agentId` for multi-agent routing. This plugin already stores origin session keys and origin agent ids separately, and its wake follow-ups continue to route through the authoritative session key or system fallback.
 - Installed plugins that register host-trusted pre-tool policies must declare `contracts.trustedToolPolicies`. This plugin does not register trusted pre-tool policies, so no manifest contract is needed beyond the existing `contracts.tools` list.
 - The removed upstream sender-owner tool gating path does not replace this plugin's auth boundary. Chat commands remain auth-required, and Telegram/Discord callbacks still require authorized senders before `agent_respond`, plan approval, merge, PR, cleanup, or Start Plan actions are applied. OpenClaw's plugin write ownership checks are host-side package safety checks; OCA should not claim ownership of host or adjacent plugin package writes.
-- Legacy `defaultModel`, `model`, `reasoningEffort`, and global `allowedModels` are compatibility fields only. New configs should not use them.
+- Legacy `defaultModel`, `model`, `reasoningEffort`, and global `allowedModels` are compatibility fields only. New configs should not use them. Existing explicit Claude Code defaults using `anthropic/claude-opus-5-5` must be changed to `opus`; that provider-qualified value is rejected at launch. Other explicit model overrides retain their existing behavior.
 - Managed external-plugin installs enforce `openclaw.install.minHostVersion`; this package sets that installation boundary to its exact OpenClaw `2026.9.5` build target. Its plugin API range, Gateway minimum, and peer dependency retain the verified OpenClaw `2026.8.1` floor. Keep `openclaw.extensions` pointing at the built `dist/index.js` artifact.
 - OpenClaw `2026.7.1` removes built-in dangerous-code blocking from plugin installs and deprecates `--dangerously-force-unsafe-install`; operators who require a host-specific allow/block decision should configure `security.installPolicy`. OCA's release smoke installs only its freshly packed artifact under an isolated temporary home and does not read or migrate operator state.
 - `tools.deny` does not disable OpenClaw's `apply_patch` tool by itself in current OpenClaw. To restrict patch edits, configure OpenClaw `tools.exec.applyPatch.enabled`, `tools.exec.applyPatch.workspaceOnly`, or `tools.exec.applyPatch.allowModels`.
@@ -96,7 +96,7 @@ For example, replace legacy global model restrictions with explicit restrictions
       "allowedModels": ["gpt-6-sol", "gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]
     },
     "claude-code": {
-      "defaultModel": "anthropic/claude-opus-5-5",
+      "defaultModel": "opus",
       "allowedModels": ["sonnet", "opus"]
     }
   }
@@ -189,7 +189,7 @@ Add this under `plugins.entries["openclaw-code-agent"]` in `~/.openclaw/openclaw
     "fallbackChannel": "telegram|my-bot|123456789",
     "harnesses": {
       "claude-code": {
-        "defaultModel": "anthropic/claude-opus-5-5",
+        "defaultModel": "opus",
         "allowedModels": ["sonnet", "opus"]
       },
       "codex": {

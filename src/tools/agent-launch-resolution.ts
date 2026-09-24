@@ -248,7 +248,9 @@ export function resolveAgentLaunchRequest(
   if (canonicalResolvedModel && !isModelFormatSupportedForHarness(harness, canonicalResolvedModel)) {
     return {
       kind: "error",
-      text: `Error: Model "${rawResolvedModel}" is not supported for harness "${harness}". Use a bare Codex model id such as "gpt-6-sol" or "gpt-6-astra".`,
+      text: harness === "claude-code"
+        ? `Error: Model "${rawResolvedModel}" is not supported by Claude Code. Use the "opus" alias instead.`
+        : `Error: Model "${rawResolvedModel}" is not supported for harness "${harness}". Use a bare Codex model id such as "gpt-6-sol" or "gpt-6-astra".`,
     };
   }
 
