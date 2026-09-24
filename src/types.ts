@@ -433,19 +433,11 @@ export interface PluginConfig {
   defaultWorktreeStrategy?: WorktreeStrategy;
   /** Override base directory for agent worktrees. Defaults to <repoRoot>/.worktrees when unset. */
   worktreeDir?: string;
-  /**
-   * Deprecated global allowed-model fallback preserved during migration from the
-   * pre-harness config shape. Matching remains case-insensitive substring-based.
-   */
-  allowedModels?: string[];
 }
 
-/** Raw plugin config as accepted from OpenClaw, including deprecated legacy keys. */
+/** Raw plugin config as accepted from OpenClaw (validated against `openclaw.plugin.json` configSchema). */
 export interface RawPluginConfig {
   maxSessions?: number;
-  defaultModel?: string;
-  model?: string;
-  reasoningEffort?: ReasoningEffort;
   defaultWorkdir?: string;
   idleTimeoutMinutes?: number;
   sessionGcAgeMinutes?: number;
@@ -456,7 +448,6 @@ export interface RawPluginConfig {
   maxAutoResponds?: number;
   planApproval?: PlanApprovalMode;
   defaultHarness?: string;
-  allowedModels?: string[];
   harnesses?: Record<string, HarnessConfig>;
   /** Default worktree strategy for new sessions. */
   defaultWorktreeStrategy?: WorktreeStrategy;

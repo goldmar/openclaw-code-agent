@@ -261,7 +261,7 @@ export function resolveAgentLaunchRequest(
       kind: "error",
       text: wasExplicitModel
         ? `Error: Model "${rawResolvedModel}" is not allowed. Permitted models: ${allowedModels.join(", ")}`
-        : `Error: Default model "${rawResolvedModel || "undefined"}" is not in allowedModels (${allowedModels.join(", ")}). Update your plugin config to set a compatible defaultModel.`,
+        : `Error: Default model "${rawResolvedModel || "undefined"}" is not in allowedModels (${allowedModels.join(", ")}). Update harnesses.${harness}.defaultModel or harnesses.${harness}.allowedModels in the plugin config.`,
     };
   }
   const resolvedModel = canonicalAllowedModelForHarness(harness, canonicalResolvedModel, allowedModels);

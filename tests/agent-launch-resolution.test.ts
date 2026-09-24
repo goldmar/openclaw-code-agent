@@ -511,7 +511,7 @@ describe("resolveAgentLaunchRequest", () => {
     assert.equal(result.kind, "error");
     if (result.kind === "error") {
       assert.match(result.text, /Default model "gpt-5\.4" is not in allowedModels/);
-      assert.match(result.text, /compatible defaultModel/);
+      assert.match(result.text, /Update harnesses\.codex\.defaultModel or harnesses\.codex\.allowedModels/);
     }
   });
 

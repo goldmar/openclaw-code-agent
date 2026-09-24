@@ -1044,7 +1044,7 @@ describe("agent_launch allowedModels validation", () => {
     const result = await tool.execute("tool-id", { prompt: "test" });
 
     const text = (result.content[0] as { text: string }).text;
-    assert.match(text, /Error: Default model "anthropic\/claude-opus-4-6" is not in allowedModels \(sonnet, haiku\)\. Update your plugin config to set a compatible defaultModel\./);
+    assert.match(text, /Error: Default model "anthropic\/claude-opus-4-6" is not in allowedModels \(sonnet, haiku\)\. Update harnesses\.claude-code\.defaultModel or harnesses\.claude-code\.allowedModels in the plugin config\./);
   });
 
   it("allows launch when default model is in allowedModels", async () => {
@@ -1140,7 +1140,7 @@ describe("agent_launch allowedModels validation", () => {
 
     const text = (result.content[0] as { text: string }).text;
     // mismatched default should trigger error
-    assert.match(text, /Error: Default model "haiku" is not in allowedModels \(sonnet\)\. Update your plugin config to set a compatible defaultModel\./);
+    assert.match(text, /Error: Default model "haiku" is not in allowedModels \(sonnet\)\. Update harnesses\.claude-code\.defaultModel or harnesses\.claude-code\.allowedModels in the plugin config\./);
   });
 
   it("case-insensitive matching works both ways", async () => {
