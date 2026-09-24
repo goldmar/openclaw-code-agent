@@ -8,10 +8,15 @@ interface AgentKillParams {
   reason?: "completed" | "killed";
 }
 
+const AGENT_KILL_PARAM_KEYS = new Set(["session", "reason"]);
+
 function isAgentKillParams(value: unknown): value is AgentKillParams {
   if (!value || typeof value !== "object") return false;
   const params = value as Record<string, unknown>;
   if (typeof params.session !== "string") return false;
+  // Reject unknown fields so a call written for another parameter shape is
+  // refused instead of falling through to a kill.
+  if (Object.keys(params).some((key) => !AGENT_KILL_PARAM_KEYS.has(key))) return false;
   if (params.reason === undefined) return true;
   return params.reason === "completed" || params.reason === "killed";
 }
@@ -29,7 +34,7 @@ export function makeAgentKillTool(_ctx?: OpenClawPluginToolContext) {
           { description: "Reason for closing the session. 'completed' marks it as successfully done (sends ✅ notification). 'killed' (default) terminates it." },
         ),
       ),
-    }),
+    }, { additionalProperties: false }),
     async execute(_id: string, params: unknown) {
       if (!sessionManager) {
         return { content: [{ type: "text", text: "Error: SessionManager not initialized. The code-agent service must be running." }] };

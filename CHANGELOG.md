@@ -38,6 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Codex follows the host `tools.exec.mode` when `harnesses.codex.permissionProfile` / `approvalPolicy` / `approvalsReviewer` are unset. Hosts without `tools.exec.mode` (or with `full`) keep the 4.x full-access, no-prompt behavior. With `tools.exec.mode: "auto"` Codex now runs in the `:workspace` sandbox with `on-request` escalations reviewed by Codex's `auto_review` subagent (network access such as `git push` to a real remote, and git writes to the main checkout's `.git`, become reviewed escalations); `ask` routes those approvals to chat; `deny` / `allowlist` refuse Codex launches. Set `harnesses.codex.permissionProfile: ":danger-full-access"` and `approvalPolicy: "never"` to keep full access on such hosts.
 - Codex: the per-session `codexApprovalPolicy` field is removed from session config, persisted rows, and repo-policy launch tokens; Codex execution settings now come from `harnesses.codex` (see Added).
 - In-process API: `SessionManager.resetRepoPolicy(ref)` now returns the removed `RepoPolicyRecord[]` instead of a boolean.
+- `agent_kill` rejects parameters other than `session` and `reason` (its schema sets `additionalProperties: false`). Previously unknown fields were ignored and the call still stopped the session.
 
 ### Added
 

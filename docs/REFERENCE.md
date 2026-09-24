@@ -559,6 +559,8 @@ Terminate a running session or mark it complete.
 | `session` | `string` | Yes | Name or internal ID |
 | `reason` | `killed \| completed` | No | Omit to stop; use `completed` to mark success |
 
+Any other parameter is rejected with `Invalid parameters` and nothing is stopped.
+
 ### `agent_stats`
 
 Show aggregate session counts, cost, average duration, and most expensive sessions. When a Codex session has observed account rate limits (ChatGPT login), the latest primary/secondary usage windows and reset times are appended.
