@@ -78,11 +78,9 @@ function formatResumeUnavailable(
 ): RespondResult {
   const guidance = reason === "completed"
     ? `This session is closed by default. Launch a fresh session, or fork from prior context with agent_launch(resume_session_id='${getSessionRef(session)}', fork_session=true, prompt='<new task>').`
-    : reason === "legacy_non_resumable"
-      ? `Persisted historical backend state is intentionally non-resumable here. Launch fresh, or fork with agent_launch(resume_session_id='${getSessionRef(session)}', fork_session=true, prompt='<new task>').`
-      : reason === "missing_backend_state"
-        ? `No resumable backend state is available. Launch a fresh session, or fork from prior context with agent_launch(resume_session_id='${getSessionRef(session)}', fork_session=true, prompt='<new task>').`
-        : `Use agent_respond(session='${getSessionRef(session)}', message='<next instruction>') to continue the running session.`;
+    : reason === "missing_backend_state"
+      ? `No resumable backend state is available. Launch a fresh session, or fork from prior context with agent_launch(resume_session_id='${getSessionRef(session)}', fork_session=true, prompt='<new task>').`
+      : `Use agent_respond(session='${getSessionRef(session)}', message='<next instruction>') to continue the running session.`;
   const detailLine = details ? ` ${details}` : "";
   return {
     text: `Resume unavailable for session ${session.name} [${getSessionRef(session)}] (${reason}).${detailLine} ${guidance}`,
@@ -114,7 +112,6 @@ async function spawnFreshRelaunch(
       permissionMode: session.currentPermissionMode,
       requestedPermissionMode: session.requestedPermissionMode ?? session.currentPermissionMode,
       planApproval: session.planApproval,
-      codexApprovalPolicy: session.codexApprovalPolicy,
       harness: "harnessName" in session ? session.harnessName : session.harness,
     };
     const relaunched = await sm.spawnAndAwaitRunning(freshConfig, { notifyLaunch: false });
@@ -326,7 +323,6 @@ async function tryAutoResume(
       permissionMode: isPlanApproval ? "bypassPermissions" : session.currentPermissionMode,
       requestedPermissionMode: session.requestedPermissionMode ?? session.currentPermissionMode,
       planApproval: session.planApproval,
-      codexApprovalPolicy: session.codexApprovalPolicy,
       pendingPlanApproval: isPlanApproval ? false : session.pendingPlanApproval,
       planApprovalContext: session.planApprovalContext,
       planDecisionVersion: isPlanApproval
@@ -528,7 +524,7 @@ export async function executeRespond(
       approvalWarning = `\nℹ️ Session has a pending plan — sending as revision feedback. The agent will revise and re-submit. Set approve=true to approve instead.`;
     }
 
-    await session.sendMessage(params.message);
+    const delivery = await session.sendMessage(params.message);
     if (isPlanApproval) {
       persistPlanApprovalState(sm, session);
     }
@@ -560,6 +556,7 @@ export async function executeRespond(
         redirectedActiveTurn
           ? `  (redirected active turn first)`
           : (params.interrupt ? `  (no active turn to interrupt)` : ""),
+        delivery === "steered" ? `  (steered into the running turn)` : "",
         `  Message: "${msgSummary}"`,
         approvalWarning,
         `Use agent_output to see the response.`,

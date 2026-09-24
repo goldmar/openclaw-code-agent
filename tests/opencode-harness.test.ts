@@ -236,7 +236,7 @@ describe("OpenCodeHarness static properties", () => {
     assert.ok(h.supportedPermissionModes.includes("bypassPermissions"));
     assert.equal(h.capabilities.nativePendingInput, true);
     assert.equal(h.capabilities.nativePlanArtifacts, false);
-    assert.equal(h.capabilities.worktrees, "plugin-managed");
+    assert.equal(Object.hasOwn(h.capabilities, "worktrees"), false);
   });
 
   it("builds user messages", () => {

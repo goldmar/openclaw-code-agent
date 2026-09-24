@@ -1,9 +1,10 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+  codexAccountType,
   estimateCodexApiCostUsd,
-  extractCodexAccountType,
-  extractRawResponseUsage,
+  isFastServiceTier,
+  tokenUsageFromBreakdown,
 } from "../src/harness/codex-cost";
 
 describe("Codex API cost accounting", () => {
@@ -40,7 +41,7 @@ describe("Codex API cost accounting", () => {
     // $8 input, $0.80 cached input, $10 cache writes, $30 output per 1M.
     assert.equal(estimateCodexApiCostUsd({
       model: "gpt-6-sol",
-      fastMode: true,
+      serviceTier: "priority",
       usage: {
         inputTokens: 300_000,
         cachedInputTokens: 100_000,
@@ -80,7 +81,7 @@ describe("Codex API cost accounting", () => {
   it("applies Fast mode and long-context multipliers per response", () => {
     const cost = estimateCodexApiCostUsd({
       model: "gpt-5.6-luna",
-      fastMode: true,
+      serviceTier: "priority",
       usage: {
         inputTokens: 300_000,
         cachedInputTokens: 100_000,
@@ -126,40 +127,49 @@ describe("Codex API cost accounting", () => {
         },
       }), undefined, model);
     }
-    assert.equal(extractRawResponseUsage({
-      responseId: "resp-1",
-      usage: {
-        inputTokens: 10,
-        cachedInputTokens: 11,
-        cacheWriteInputTokens: 0,
-        outputTokens: 1,
-        reasoningOutputTokens: 0,
-      },
+    assert.equal(tokenUsageFromBreakdown({
+      totalTokens: 11,
+      inputTokens: 10,
+      cachedInputTokens: 11,
+      cacheWriteInputTokens: 0,
+      outputTokens: 1,
+      reasoningOutputTokens: 0,
     }), undefined);
   });
 
-  it("extracts only explicit app-server account and usage fields", () => {
-    assert.equal(extractCodexAccountType({ account: { type: "apiKey" } }), "apiKey");
-    assert.equal(extractCodexAccountType({ account: null }), undefined);
-    assert.equal(extractCodexAccountType({ account: { type: "secret-account-type" } }), undefined);
-    assert.deepEqual(extractRawResponseUsage({
-      responseId: "resp-1",
-      usage: {
-        inputTokens: 10,
-        cachedInputTokens: 4,
-        cacheWriteInputTokens: 2,
-        outputTokens: 3,
-        reasoningOutputTokens: 2,
-      },
+  it("applies the fast multiplier only for the effective priority tier Codex reports", () => {
+    const usage = {
+      inputTokens: 100_000,
+      cachedInputTokens: 20_000,
+      cacheWriteInputTokens: 0,
+      outputTokens: 10_000,
+      reasoningOutputTokens: 5_000,
+    };
+    const standard = estimateCodexApiCostUsd({ model: "gpt-6-sol", usage });
+    assert.equal(estimateCodexApiCostUsd({ model: "gpt-6-sol", serviceTier: null, usage }), standard);
+    assert.equal(estimateCodexApiCostUsd({ model: "gpt-6-sol", serviceTier: "default", usage }), standard);
+    assert.equal(estimateCodexApiCostUsd({ model: "gpt-6-sol", serviceTier: "priority", usage }), standard! * 2);
+    assert.equal(isFastServiceTier("fast"), true);
+    assert.equal(isFastServiceTier("flex"), false);
+  });
+
+  it("reads the typed account type and token-usage breakdowns", () => {
+    assert.equal(codexAccountType({ account: { type: "apiKey" }, requiresOpenaiAuth: true, workspaceRouting: null }), "apiKey");
+    assert.equal(codexAccountType({ account: null, requiresOpenaiAuth: true, workspaceRouting: null }), undefined);
+    assert.equal(codexAccountType(undefined), undefined);
+    assert.deepEqual(tokenUsageFromBreakdown({
+      totalTokens: 13,
+      inputTokens: 10,
+      cachedInputTokens: 4,
+      cacheWriteInputTokens: 2,
+      outputTokens: 3,
+      reasoningOutputTokens: 2,
     }), {
-      responseId: "resp-1",
-      usage: {
-        inputTokens: 10,
-        cachedInputTokens: 4,
-        cacheWriteInputTokens: 2,
-        outputTokens: 3,
-        reasoningOutputTokens: 2,
-      },
+      inputTokens: 10,
+      cachedInputTokens: 4,
+      cacheWriteInputTokens: 2,
+      outputTokens: 3,
+      reasoningOutputTokens: 2,
     });
   });
 });

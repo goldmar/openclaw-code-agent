@@ -271,7 +271,7 @@ export class SessionInteractionService {
     launchResumedFromSessionName?: string;
     launchResumeWorktreeFrom?: string;
     launchSessionIdOverride?: string;
-    launchClearedPersistedCodexResume?: boolean;
+    launchRewindTurns?: number;
     launchForkSession?: boolean;
     launchForceNewSession?: boolean;
     launchPermissionMode?: PermissionMode;
@@ -302,7 +302,7 @@ export class SessionInteractionService {
         launchResumedFromSessionName: args.launchResumedFromSessionName,
         launchResumeWorktreeFrom: args.launchResumeWorktreeFrom,
         launchSessionIdOverride: args.launchSessionIdOverride,
-        launchClearedPersistedCodexResume: args.launchClearedPersistedCodexResume,
+        launchRewindTurns: args.launchRewindTurns,
         launchForkSession: args.launchForkSession,
         launchForceNewSession: args.launchForceNewSession,
         launchPermissionMode: args.launchPermissionMode,

@@ -1,23 +1,28 @@
 /**
  * Codex harness backed by the Codex App Server protocol over stdio.
  *
- * This file is intentionally small now: transport lives in `codex-rpc`,
- * protocol normalization/builders live in `codex-protocol`, and the harness
- * here just coordinates launch/resume/interrupt with the shared contract.
+ * Transport lives in `codex-rpc`, typed request builders and server-request
+ * translation live in `codex-protocol`, and the wire types are vendored from
+ * `codex app-server generate-ts` in `codex-app-server-protocol/`. This file
+ * coordinates one app-server connection per OCA session: thread
+ * start/resume/fork, turns, steering, interrupts, approvals, and thread
+ * actions (compact, review).
  */
 
-import type { PendingInputState, PlanArtifact, PlanArtifactStep } from "../types";
+import packageJson from "../../package.json";
+import { getHarnessConfig } from "../config";
+import type { PendingInputState, PlanArtifact, PlanArtifactStep, ThreadAction } from "../types";
 import type {
   AgentHarness,
   HarnessLaunchOptions,
   HarnessSession,
 } from "./types";
-import type { JsonRpcClient } from "./codex-rpc";
-import { StdioJsonRpcClient } from "./codex-rpc";
+import type { JsonRpcClient, JsonRpcId } from "./codex-rpc";
+import { JSON_RPC_METHOD_NOT_FOUND, JsonRpcResponseError, StdioJsonRpcClient } from "./codex-rpc";
 import {
+  codexAccountType,
   estimateCodexApiCostUsd,
-  extractCodexAccountType,
-  extractRawResponseUsage,
+  tokenUsageFromBreakdown,
   type CodexAccountType,
 } from "./codex-cost";
 import {
@@ -31,32 +36,52 @@ import {
   createTextDeltaEvent,
   HarnessMessageQueue,
 } from "./harness-events";
-import {
-  formatPendingInputWizardQuestion,
-} from "../pending-input-normalization";
+import { formatPendingInputWizardQuestion } from "../pending-input-normalization";
 import { canonicalizeModelForHarness, isModelFormatSupportedForHarness } from "../harness-models";
 import {
-  buildPendingInputState,
-  buildThreadResumePayloads,
-  buildThreadForkPayloads,
-  buildThreadStartPayloads,
-  buildTurnInterruptPayloads,
-  buildTurnStartPayloads,
-  codexExecutionPolicyForMode,
-  deriveWorktreeIdFromPath,
-  extractAssistantNotificationText,
-  classifyTerminalOutcome,
-  extractCompletedPlanText,
-  extractIds,
-  extractPlanDeltaNotification,
-  extractTerminalMessage,
-  extractThreadState,
-  extractTurnPlanUpdate,
-  isInteractiveServerRequest,
-  isNativeCodexWorktreePath,
-  parseCsvEnv,
-  requestWithFallbacks,
+  buildCommandApprovalRequest,
+  buildFileChangeApprovalRequest,
+  buildPermissionsApprovalRequest,
+  buildReviewStartParams,
+  buildThreadForkParams,
+  buildThreadResumeParams,
+  buildThreadStartParams,
+  buildTurnStartParams,
+  buildTurnSteerParams,
+  buildUserInputRequest,
+  classifyTurnOutcome,
+  CODEX_COMMAND_APPROVAL_METHOD,
+  CODEX_FILE_CHANGE_APPROVAL_METHOD,
+  CODEX_PERMISSIONS_APPROVAL_METHOD,
+  CODEX_USER_INPUT_METHOD,
+  codexRequest,
+  mapTurnPlanSteps,
+  matchApprovalChoiceFromText,
+  resolveCodexExecutionSettings,
+  turnErrorMessage,
+  type CodexApprovalChoice,
+  type CodexPendingRequest,
 } from "./codex-protocol";
+import { codexModelSupportsEffort, isCodexModelCatalogFresh, refreshCodexModelCatalog } from "./codex-model-catalog";
+import { describeCodexLimitReset, mergeCodexRateLimitsUpdate, recordCodexRateLimits } from "./codex-rate-limits";
+import type { ThreadForkResponse, ThreadResumeResponse, ThreadStartResponse } from "./codex-app-server-protocol";
+import type { AccountRateLimitsUpdatedNotification } from "./codex-app-server-protocol/v2/AccountRateLimitsUpdatedNotification";
+import type { AgentMessageDeltaNotification } from "./codex-app-server-protocol/v2/AgentMessageDeltaNotification";
+import type { CommandExecutionRequestApprovalParams } from "./codex-app-server-protocol/v2/CommandExecutionRequestApprovalParams";
+import type { DynamicToolCallResponse } from "./codex-app-server-protocol/v2/DynamicToolCallResponse";
+import type { FileChangeRequestApprovalParams } from "./codex-app-server-protocol/v2/FileChangeRequestApprovalParams";
+import type { ItemCompletedNotification } from "./codex-app-server-protocol/v2/ItemCompletedNotification";
+import type { McpServerElicitationRequestResponse } from "./codex-app-server-protocol/v2/McpServerElicitationRequestResponse";
+import type { ModelReroutedNotification } from "./codex-app-server-protocol/v2/ModelReroutedNotification";
+import type { PermissionsRequestApprovalParams } from "./codex-app-server-protocol/v2/PermissionsRequestApprovalParams";
+import type { ServerRequestResolvedNotification } from "./codex-app-server-protocol/v2/ServerRequestResolvedNotification";
+import type { ThreadSettingsUpdatedNotification } from "./codex-app-server-protocol/v2/ThreadSettingsUpdatedNotification";
+import type { ThreadTokenUsageUpdatedNotification } from "./codex-app-server-protocol/v2/ThreadTokenUsageUpdatedNotification";
+import type { ToolRequestUserInputParams } from "./codex-app-server-protocol/v2/ToolRequestUserInputParams";
+import type { Turn } from "./codex-app-server-protocol/v2/Turn";
+import type { TurnCompletedNotification } from "./codex-app-server-protocol/v2/TurnCompletedNotification";
+import type { TurnPlanUpdatedNotification } from "./codex-app-server-protocol/v2/TurnPlanUpdatedNotification";
+import type { TurnStartedNotification } from "./codex-app-server-protocol/v2/TurnStartedNotification";
 
 interface CodexHarnessDeps {
   createClient?: (settings: {
@@ -66,24 +91,48 @@ interface CodexHarnessDeps {
   }) => JsonRpcClient;
 }
 
+/** An in-flight server request surfaced to OCA's pending-input UI. */
 type CodexPendingInput = {
   requestId: string;
-  methodLower: string;
+  request: CodexPendingRequest;
   state: PendingInputState;
-  options: string[];
-  actions: import("../types").PendingInputAction[];
   answers: Record<string, { answers: string[] }>;
   resolveResponse: (payload: unknown) => void;
 };
 
-const DEFAULT_PROTOCOL_VERSION = "1.0";
+type ActiveTurn = {
+  kind: "user" | "compact" | "review";
+  turnId?: string;
+  interruptRequested: boolean;
+  terminal?: Turn;
+  failure?: string;
+  resolve: () => void;
+};
+
+/** Queued control message for thread actions (see `buildThreadActionMessage`). */
+type CodexThreadActionMessage = { type: "codex_thread_action"; action: ThreadAction };
+
 export const DEFAULT_REQUEST_TIMEOUT_MS = 120_000;
 export const DEFAULT_APP_SERVER_ARGS = ["--listen", "stdio://"];
-const ACCOUNT_READ_TIMEOUT_MS = 5_000;
+const AUXILIARY_READ_TIMEOUT_MS = 5_000;
 const OPENCLAW_CODEX_APP_SERVER_COMMAND_ENV = "OPENCLAW_CODEX_APP_SERVER_COMMAND";
 const OPENCLAW_CODEX_APP_SERVER_ARGS_ENV = "OPENCLAW_CODEX_APP_SERVER_ARGS";
 const OPENCLAW_CODEX_APP_SERVER_TIMEOUT_MS_ENV = "OPENCLAW_CODEX_APP_SERVER_TIMEOUT_MS";
 const CODEX_APP_SERVER_SESSION_ID_RE = /^(?:urn:uuid:)?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
+/**
+ * High-volume notifications OCA never consumes. Opting out keeps the stdio
+ * stream (and the event loop) quiet during long command output or reasoning.
+ */
+const OPTED_OUT_NOTIFICATIONS = [
+  "item/commandExecution/outputDelta",
+  "item/fileChange/outputDelta",
+  "item/reasoning/summaryTextDelta",
+  "item/reasoning/summaryPartAdded",
+  "item/reasoning/textDelta",
+  "item/plan/delta",
+  "command/exec/outputDelta",
+];
 
 function normalizeCodexAppServerSessionId(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
@@ -104,6 +153,11 @@ function parseRequestTimeoutMs(value: string | undefined): number {
   return Number.isSafeInteger(parsed) && parsed > 0
     ? parsed
     : DEFAULT_REQUEST_TIMEOUT_MS;
+}
+
+export function parseCsvEnv(value: string | undefined): string[] {
+  if (!value) return [];
+  return value.split(",").map((entry) => entry.trim()).filter(Boolean);
 }
 
 function errorMessage(error: unknown): string {
@@ -127,17 +181,10 @@ function clientSettingsDiagnosticFields(settings: { command: string; args: reado
   };
 }
 
-function threadDiagnosticFields(args: {
-  threadId?: string;
-  turnId?: string;
-  backendWorktreePath?: string;
-  backendWorktreeId?: string;
-}): Record<string, unknown> {
+function threadDiagnosticFields(args: { threadId?: string; turnId?: string }): Record<string, unknown> {
   return {
     hasThreadId: Boolean(args.threadId),
     hasTurnId: Boolean(args.turnId),
-    hasBackendWorktreePath: Boolean(args.backendWorktreePath),
-    hasBackendWorktreeId: Boolean(args.backendWorktreeId),
   };
 }
 
@@ -148,6 +195,19 @@ function extractPromptText(message: unknown): string {
   if (typeof record.message?.content === "string") return record.message.content;
   if (typeof record.text === "string") return record.text;
   return String(message);
+}
+
+function asThreadActionMessage(message: unknown): CodexThreadActionMessage | undefined {
+  return message
+    && typeof message === "object"
+    && (message as { type?: unknown }).type === "codex_thread_action"
+    ? message as CodexThreadActionMessage
+    : undefined;
+}
+
+function notificationThreadId(params: unknown): string | undefined {
+  const threadId = params && typeof params === "object" ? (params as { threadId?: unknown }).threadId : undefined;
+  return typeof threadId === "string" ? threadId : undefined;
 }
 
 function updateCodexWizardState(
@@ -162,10 +222,17 @@ function updateCodexWizardState(
     ...base,
     promptText: formatPendingInputWizardQuestion(activeQuestion, activeQuestionIndex, questions.length),
     options: activeQuestion.options.map((option) => option.label),
+    actions: activeQuestion.options.map((option) => ({ kind: "option", label: option.label, value: option.value ?? option.label })),
     activeQuestionIndex,
     answers,
   };
 }
+
+const DECLINED_ELICITATION: McpServerElicitationRequestResponse = { action: "decline", content: null, _meta: null };
+const DECLINED_DYNAMIC_TOOL: DynamicToolCallResponse = {
+  contentItems: [{ type: "inputText", text: "OpenClaw Code Agent does not register dynamic tools; this call was declined." }],
+  success: false,
+};
 
 export class CodexHarness implements AgentHarness {
   readonly name = "codex";
@@ -178,7 +245,7 @@ export class CodexHarness implements AgentHarness {
   readonly capabilities = {
     nativePendingInput: true,
     nativePlanArtifacts: true,
-    worktrees: "native-restore",
+    threadActions: ["compact", "review"],
   } as const;
 
   constructor(private readonly deps: CodexHarnessDeps = {}) {}
@@ -189,218 +256,229 @@ export class CodexHarness implements AgentHarness {
       args: resolveAppServerArgs(process.env[OPENCLAW_CODEX_APP_SERVER_ARGS_ENV]),
       requestTimeoutMs: parseRequestTimeoutMs(process.env[OPENCLAW_CODEX_APP_SERVER_TIMEOUT_MS_ENV]),
     };
+    const timeoutMs = clientSettings.requestTimeoutMs;
     const client = this.deps.createClient?.(clientSettings)
       ?? new StdioJsonRpcClient(
         clientSettings.command,
         clientSettings.args,
         clientSettings.requestTimeoutMs,
       );
+    const execution = resolveCodexExecutionSettings(getHarnessConfig("codex"));
 
     const queue = new HarnessMessageQueue();
     let threadId = normalizeCodexAppServerSessionId(options.resumeSessionId);
-    let forkPending = options.forkSession === true;
     if (options.resumeSessionId && !threadId) {
       console.warn("[CodexHarness] Ignoring invalid Codex App Server resume session id. Expected UUID or urn:uuid UUID.");
     }
-    let turnId: string | undefined;
-    let backendWorktreePath = options.backendRef?.worktreePath;
-    let backendWorktreeId = options.backendRef?.worktreeId;
+    let threadReady = false;
+    let forkPending = options.forkSession === true && !!threadId;
+    let rewindTurns = options.rewindTurns && options.rewindTurns > 0 ? Math.floor(options.rewindTurns) : 0;
+    let lastTurnId: string | undefined;
     let currentPermissionMode = options.permissionMode ?? "default";
     const runtimeModel = canonicalizeModelForHarness(this.name, options.model);
     if (!isModelFormatSupportedForHarness(this.name, runtimeModel)) {
       throw new Error(`Codex model "${options.model}" is not supported. Use a bare Codex model id such as "gpt-6-sol" or "gpt-6-astra".`);
     }
-    let currentPendingInput: CodexPendingInput | undefined;
-    let runCounter = 0;
-    let accountType: CodexAccountType | undefined;
+    let threadModel: string | undefined;
     let effectiveModel = runtimeModel;
+    let serviceTier: string | null | undefined;
+    let accountType: CodexAccountType | undefined;
+    let currentPendingInput: CodexPendingInput | undefined;
+    let activeTurn: ActiveTurn | undefined;
+    let runCounter = 0;
     let cumulativeCostUsd = 0;
-    const pricedResponseIds = new Set<string>();
+    let lastPricedTotalTokens: number | undefined;
     let planExplanation = "";
     let planSteps: PlanArtifactStep[] = [];
-    let activeTurnCompletion:
-      | {
-          resolve: () => void;
-          method?: string;
-          params?: unknown;
-        }
-      | undefined;
-    const planDraftByItemId = new Map<string, string>();
-    const assistantStreamByItemId = new Set<string>();
-
-    const updateBackendWorktree = (candidatePath: string | undefined): void => {
-      const trimmed = candidatePath?.trim();
-      if (!trimmed) return;
-      const originalWorkdir = options.originalWorkdir?.trim() || options.cwd.trim();
-      const worktreesEnabled = !!options.worktreeStrategy && options.worktreeStrategy !== "off";
-      if (!worktreesEnabled) return;
-      if (trimmed === originalWorkdir) return;
-      if (!isNativeCodexWorktreePath(trimmed)) return;
-      backendWorktreePath = trimmed;
-      backendWorktreeId = deriveWorktreeIdFromPath(trimmed);
-    };
+    const streamedAgentItemIds = new Set<string>();
 
     const emitBackendRef = (): void => {
       if (!threadId) return;
       queue.enqueue(createBackendRefEvent({
         kind: "codex-app-server",
         conversationId: threadId,
-        ...(turnId ? { runId: turnId } : {}),
-        ...(backendWorktreeId ? { worktreeId: backendWorktreeId } : {}),
-        ...(backendWorktreePath ? { worktreePath: backendWorktreePath } : {}),
+        ...(lastTurnId ? { runId: lastTurnId } : {}),
       }));
     };
 
-    client.setNotificationHandler(async (method, params) => {
-      const methodLower = method.trim().toLowerCase();
-      const ids = extractIds(params);
-      const threadState = extractThreadState(params);
-      if (ids.threadId && threadId && ids.threadId !== threadId) return;
-      if (ids.threadId) {
-        threadId = ids.threadId;
-      }
-      if (ids.runId) {
-        turnId = ids.runId;
-      }
-      updateBackendWorktree(threadState.cwd);
-      if (ids.threadId || ids.runId || threadState.cwd) {
+    const noteTurnId = (turnId: string): void => {
+      if (activeTurn && !activeTurn.turnId) activeTurn.turnId = turnId;
+      if (lastTurnId !== turnId) {
+        lastTurnId = turnId;
         emitBackendRef();
       }
+    };
 
-      if (methodLower === "serverrequest/resolved") {
-        if (currentPendingInput) {
-          queue.enqueue(createPendingInputResolvedEvent(currentPendingInput.requestId));
-          currentPendingInput = undefined;
-        }
+    const finishActiveTurn = (update: { terminal?: Turn; failure?: string }): void => {
+      if (!activeTurn) return;
+      activeTurn.terminal ??= update.terminal;
+      activeTurn.failure ??= update.failure;
+      activeTurn.resolve();
+    };
+
+    const resolvePendingInput = (payload: unknown): void => {
+      const pending = currentPendingInput;
+      if (!pending) return;
+      currentPendingInput = undefined;
+      pending.resolveResponse(payload);
+      queue.enqueue(createPendingInputResolvedEvent(pending.requestId));
+    };
+
+    const priceTokenUsage = (params: ThreadTokenUsageUpdatedNotification): void => {
+      const total = params.tokenUsage.total.totalTokens;
+      // Only price responses produced by the turn we are running, once each.
+      if (!activeTurn?.turnId || params.turnId !== activeTurn.turnId) {
+        lastPricedTotalTokens = total;
         return;
       }
+      if (lastPricedTotalTokens !== undefined && total <= lastPricedTotalTokens) return;
+      lastPricedTotalTokens = total;
+      if (accountType !== "apiKey") return;
+      const usage = tokenUsageFromBreakdown(params.tokenUsage.last);
+      if (!usage) return;
+      const cost = estimateCodexApiCostUsd({ model: effectiveModel ?? threadModel, serviceTier, usage });
+      if (cost !== undefined) cumulativeCostUsd += cost;
+    };
 
-      if (methodLower === "model/rerouted") {
-        const reroute = params && typeof params === "object" && !Array.isArray(params)
-          ? params as Record<string, unknown>
-          : undefined;
-        if (typeof reroute?.toModel === "string" && reroute.toModel.trim()) {
-          effectiveModel = reroute.toModel.trim();
-        }
-        return;
-      }
+    client.setCloseHandler?.(() => {
+      finishActiveTurn({ failure: "Codex App Server exited before the turn completed." });
+    });
 
-      if (methodLower === "rawresponse/completed" && accountType === "apiKey") {
-        const response = extractRawResponseUsage(params);
-        if (!response || pricedResponseIds.has(response.responseId)) return;
-        const estimatedCost = estimateCodexApiCostUsd({
-          model: effectiveModel,
-          fastMode: options.fastMode,
-          usage: response.usage,
-        });
-        if (estimatedCost === undefined) return;
-        pricedResponseIds.add(response.responseId);
-        cumulativeCostUsd += estimatedCost;
-        return;
-      }
+    client.setNotificationHandler(async (method, params) => {
+      const notifiedThreadId = notificationThreadId(params);
+      if (notifiedThreadId && threadId && notifiedThreadId !== threadId) return;
 
-      if (methodLower === "turn/plan/updated") {
-        const update = extractTurnPlanUpdate(params);
-        planExplanation = update.explanation ?? planExplanation;
-        if (update.steps.length > 0) {
-          planSteps = update.steps;
-        }
-        return;
-      }
-
-      if (methodLower === "item/plan/delta") {
-        const delta = extractPlanDeltaNotification(params);
-        if (delta.itemId && delta.delta) {
-          const existing = planDraftByItemId.get(delta.itemId) ?? "";
-          planDraftByItemId.set(delta.itemId, `${existing}${delta.delta}`);
-        }
-        return;
-      }
-
-      if (methodLower === "item/completed") {
-        const completedPlan = extractCompletedPlanText(params);
-        if (completedPlan.text?.trim()) {
-          const artifact: PlanArtifact = {
-            explanation: planExplanation || undefined,
-            steps: planSteps,
-            markdown: completedPlan.text.trim(),
-          };
-          queue.enqueue(createPlanArtifactEvent(artifact, true));
+      switch (method) {
+        case "turn/started": {
+          const { turn } = params as TurnStartedNotification;
+          noteTurnId(turn.id);
           return;
         }
-      }
-
-      const assistant = extractAssistantNotificationText(methodLower, params);
-      if (assistant.mode === "delta" && assistant.text) {
-        if (assistant.itemId) {
-          assistantStreamByItemId.add(assistant.itemId);
+        case "turn/completed": {
+          const { turn } = params as TurnCompletedNotification;
+          if (activeTurn && (!activeTurn.turnId || activeTurn.turnId === turn.id)) {
+            noteTurnId(turn.id);
+            finishActiveTurn({ terminal: turn });
+          }
+          return;
         }
-        queue.enqueue(createTextDeltaEvent(assistant.text));
-        return;
-      }
-      if (assistant.mode === "snapshot" && assistant.text) {
-        if (!assistant.itemId || !assistantStreamByItemId.has(assistant.itemId)) {
-          queue.enqueue(createTextDeltaEvent(assistant.text));
+        case "serverRequest/resolved": {
+          const { requestId } = params as ServerRequestResolvedNotification;
+          if (currentPendingInput && currentPendingInput.requestId === String(requestId)) {
+            // Codex resolved the request itself (e.g. the turn was interrupted);
+            // our late answer is ignored by the server.
+            resolvePendingInput(currentPendingInput.request.kind === "approval"
+              ? currentPendingInput.request.declineResponse
+              : { answers: {} });
+          }
+          return;
         }
-      }
-
-      if (methodLower === "turn/completed" || methodLower === "turn/failed" || methodLower === "turn/cancelled") {
-        if (activeTurnCompletion) {
-          activeTurnCompletion.method = method;
-          activeTurnCompletion.params = params;
-          activeTurnCompletion.resolve();
+        case "model/rerouted": {
+          const { toModel } = params as ModelReroutedNotification;
+          if (toModel.trim()) effectiveModel = toModel.trim();
+          return;
         }
+        case "thread/settings/updated": {
+          const { threadSettings } = params as ThreadSettingsUpdatedNotification;
+          serviceTier = threadSettings.serviceTier;
+          threadModel = threadSettings.model || threadModel;
+          return;
+        }
+        case "thread/tokenUsage/updated":
+          priceTokenUsage(params as ThreadTokenUsageUpdatedNotification);
+          return;
+        case "account/rateLimits/updated":
+          mergeCodexRateLimitsUpdate((params as AccountRateLimitsUpdatedNotification).rateLimits);
+          return;
+        case "turn/plan/updated": {
+          const update = params as TurnPlanUpdatedNotification;
+          planExplanation = update.explanation ?? planExplanation;
+          if (update.plan.length > 0) planSteps = mapTurnPlanSteps(update.plan);
+          return;
+        }
+        case "item/agentMessage/delta": {
+          const delta = params as AgentMessageDeltaNotification;
+          if (!delta.delta) return;
+          streamedAgentItemIds.add(delta.itemId);
+          queue.enqueue(createTextDeltaEvent(delta.delta));
+          return;
+        }
+        case "item/completed": {
+          const { item } = params as ItemCompletedNotification;
+          if (item.type === "plan" && item.text.trim()) {
+            const artifact: PlanArtifact = {
+              explanation: planExplanation || undefined,
+              steps: planSteps,
+              markdown: item.text.trim(),
+            };
+            queue.enqueue(createPlanArtifactEvent(artifact, true));
+          } else if (item.type === "agentMessage" && item.text && !streamedAgentItemIds.has(item.id)) {
+            queue.enqueue(createTextDeltaEvent(item.text));
+          } else if (item.type === "contextCompaction") {
+            queue.enqueue(createTextDeltaEvent("[Codex] Conversation context compacted."));
+          }
+          return;
+        }
+        default:
+          return;
       }
     });
 
-    client.setRequestHandler(async (method, params) => {
-      if (!isInteractiveServerRequest(method)) {
-        return {};
+    const awaitPendingInput = (requestId: JsonRpcId, request: CodexPendingRequest): Promise<unknown> => {
+      if (currentPendingInput) {
+        // Codex serializes interactive requests per turn; decline a second
+        // concurrent one rather than silently replacing the visible prompt.
+        logCodexHarnessDiagnostic("pending_input.concurrent_declined", { requestKind: request.kind });
+        return Promise.resolve(request.kind === "approval" ? request.declineResponse : { answers: {} });
       }
-
-      const ids = extractIds(params);
-      const threadState = extractThreadState(params);
-      if (ids.threadId && threadId && ids.threadId !== threadId) {
-        return {};
-      }
-      if (ids.threadId) {
-        threadId = ids.threadId;
-      }
-      if (ids.runId) {
-        turnId = ids.runId;
-      }
-      updateBackendWorktree(threadState.cwd);
-      if (ids.threadId || ids.runId || threadState.cwd) {
-        emitBackendRef();
-      }
-
-      const requestId = ids.requestId ?? `${threadId ?? "codex"}-${Date.now().toString(36)}`;
-      let state: PendingInputState;
-      try {
-        state = buildPendingInputState(method, requestId, params);
-      } catch (error) {
-        const message = errorMessage(error);
-        console.warn(`[CodexHarness] ${message}`);
-        return { error: message };
-      }
-      const methodLower = method.trim().toLowerCase();
-      const options = state.options;
-      const actions = state.actions ?? [];
-      const response = await new Promise<unknown>((resolve) => {
+      return new Promise<unknown>((resolve) => {
         currentPendingInput = {
-          requestId,
-          methodLower,
-          state,
-          options,
-          actions,
-          answers: { ...(state.answers ?? {}) },
+          requestId: String(requestId),
+          request,
+          state: request.state,
+          answers: {},
           resolveResponse: resolve,
         };
-        queue.enqueue(createPendingInputEvent(state));
+        queue.enqueue(createPendingInputEvent(request.state));
       });
-      currentPendingInput = undefined;
-      queue.enqueue(createPendingInputResolvedEvent(requestId));
-      return response;
+    };
+
+    client.setRequestHandler(async (method, params, id) => {
+      const requestId = String(id);
+      switch (method) {
+        case CODEX_COMMAND_APPROVAL_METHOD:
+          return await awaitPendingInput(id, buildCommandApprovalRequest(requestId, params as CommandExecutionRequestApprovalParams));
+        case CODEX_FILE_CHANGE_APPROVAL_METHOD:
+          return await awaitPendingInput(id, buildFileChangeApprovalRequest(requestId, params as FileChangeRequestApprovalParams));
+        case CODEX_PERMISSIONS_APPROVAL_METHOD:
+          return await awaitPendingInput(id, buildPermissionsApprovalRequest(requestId, params as PermissionsRequestApprovalParams));
+        case CODEX_USER_INPUT_METHOD: {
+          let request: CodexPendingRequest;
+          try {
+            request = buildUserInputRequest(requestId, params as ToolRequestUserInputParams);
+          } catch (error) {
+            console.warn(`[CodexHarness] ${errorMessage(error)}`);
+            throw error;
+          }
+          return await awaitPendingInput(id, request);
+        }
+        case "mcpServer/elicitation/request":
+          // OCA has no UI for MCP elicitation forms/URLs; decline explicitly.
+          logCodexHarnessDiagnostic("server_request.declined", { method });
+          return DECLINED_ELICITATION;
+        case "item/tool/call":
+          logCodexHarnessDiagnostic("server_request.declined", { method });
+          return DECLINED_DYNAMIC_TOOL;
+        case "currentTime/read":
+          return { currentTimeAt: Math.floor(Date.now() / 1000) };
+        case "account/chatgptAuthTokens/refresh":
+          // Only sent to clients that log in with externally managed ChatGPT
+          // tokens; OCA always lets Codex manage its own credentials.
+          throw new JsonRpcResponseError(JSON_RPC_METHOD_NOT_FOUND, "OpenClaw Code Agent does not manage ChatGPT auth tokens; Codex must use its own login.");
+        default:
+          logCodexHarnessDiagnostic("server_request.unsupported", { method });
+          throw new JsonRpcResponseError(JSON_RPC_METHOD_NOT_FOUND, `OpenClaw Code Agent does not support server request ${method}.`);
+      }
     });
 
     const initialize = async (): Promise<void> => {
@@ -409,23 +487,29 @@ export class CodexHarness implements AgentHarness {
         hasResumeSessionId: Boolean(options.resumeSessionId),
       });
       await client.connect();
-      await client.request("initialize", {
-        protocolVersion: DEFAULT_PROTOCOL_VERSION,
-        clientInfo: { name: "openclaw-code-agent", version: "3.1.0" },
-        capabilities: { experimentalApi: true },
-      }, clientSettings.requestTimeoutMs);
+      await codexRequest(client, "initialize", {
+        clientInfo: { name: "openclaw-code-agent", title: "OpenClaw Code Agent", version: packageJson.version },
+        capabilities: {
+          experimentalApi: true,
+          requestAttestation: false,
+          optOutNotificationMethods: OPTED_OUT_NOTIFICATIONS,
+        },
+      }, timeoutMs);
       await client.notify("initialized", {});
-      try {
-        const account = await client.request(
-          "account/read",
-          { refreshToken: false },
-          Math.min(clientSettings.requestTimeoutMs, ACCOUNT_READ_TIMEOUT_MS),
-        );
-        accountType = extractCodexAccountType(account);
-      } catch (error) {
-        logCodexHarnessDiagnostic("account.read.unavailable", {
-          error: errorMessage(error),
-        });
+      const auxTimeoutMs = Math.min(timeoutMs, AUXILIARY_READ_TIMEOUT_MS);
+      const [account] = await Promise.allSettled([
+        codexRequest(client, "account/read", { refreshToken: false }, auxTimeoutMs),
+        isCodexModelCatalogFresh() ? Promise.resolve() : refreshCodexModelCatalog(client, auxTimeoutMs),
+      ]);
+      if (account.status === "fulfilled") {
+        accountType = codexAccountType(account.value);
+      } else {
+        logCodexHarnessDiagnostic("account.read.unavailable", { error: errorMessage(account.reason) });
+      }
+      if (accountType === "chatgpt") {
+        await codexRequest(client, "account/rateLimits/read", undefined, auxTimeoutMs)
+          .then((limits) => recordCodexRateLimits(limits))
+          .catch((error: unknown) => logCodexHarnessDiagnostic("rate_limits.read.unavailable", { error: errorMessage(error) }));
       }
       logCodexHarnessDiagnostic("client.initialize.done", {
         hasResumeSessionId: Boolean(options.resumeSessionId),
@@ -433,146 +517,152 @@ export class CodexHarness implements AgentHarness {
       });
     };
 
-    const ensureThread = async (): Promise<void> => {
-      const executionPolicy = codexExecutionPolicyForMode(
-        currentPermissionMode,
-        options.codexApprovalPolicy,
-      );
-      if (threadId) {
-        const shouldFork = forkPending;
-        const threadMethod = shouldFork ? "thread/fork" : "thread/resume";
-        logCodexHarnessDiagnostic(shouldFork ? "thread.fork.start" : "thread.resume.start", threadDiagnosticFields({ threadId }));
-        const resumed = await requestWithFallbacks({
-          client,
-          methods: [threadMethod],
-          payloads: shouldFork ? buildThreadForkPayloads({
-            threadId,
-            cwd: options.cwd,
-            model: runtimeModel,
-            fastMode: options.fastMode,
-            approvalPolicy: executionPolicy.approvalPolicy,
-            sandbox: executionPolicy.sandbox,
-          }) : buildThreadResumePayloads({
-            threadId,
-            model: runtimeModel,
-            reasoningEffort: options.reasoningEffort,
-            fastMode: options.fastMode,
-            approvalPolicy: executionPolicy.approvalPolicy,
-            sandbox: executionPolicy.sandbox,
-          }),
-          timeoutMs: clientSettings.requestTimeoutMs,
-        });
-        const state = extractThreadState(resumed);
-        threadId = state.threadId ?? threadId;
-        if (shouldFork) forkPending = false;
-        updateBackendWorktree(state.cwd);
-        emitBackendRef();
-        logCodexHarnessDiagnostic(shouldFork ? "thread.fork.done" : "thread.resume.done", {
-          ...threadDiagnosticFields({ threadId, backendWorktreePath, backendWorktreeId }),
-        });
-        return;
-      }
-
-      logCodexHarnessDiagnostic("thread.start.start", { hasCwd: Boolean(options.cwd) });
-      const started = await requestWithFallbacks({
-        client,
-        methods: ["thread/start", "thread/new"],
-        payloads: buildThreadStartPayloads({
-          cwd: options.cwd,
-          model: runtimeModel,
-          reasoningEffort: options.reasoningEffort,
-          fastMode: options.fastMode,
-          approvalPolicy: executionPolicy.approvalPolicy,
-          sandbox: executionPolicy.sandbox,
-        }),
-        timeoutMs: clientSettings.requestTimeoutMs,
-      });
-      const state = extractThreadState(started);
-      threadId = state.threadId;
-      if (!threadId) {
-        throw new Error("Codex App Server did not return a thread id.");
-      }
-      updateBackendWorktree(state.cwd);
+    const applyThreadResponse = (response: ThreadStartResponse | ThreadResumeResponse | ThreadForkResponse): void => {
+      threadId = response.thread.id;
+      threadModel = response.model || threadModel;
+      serviceTier = response.serviceTier;
+      threadReady = true;
       emitBackendRef();
-      logCodexHarnessDiagnostic("thread.start.done", {
-        ...threadDiagnosticFields({ threadId, backendWorktreePath, backendWorktreeId }),
-      });
     };
 
-    const runTurn = async (prompt: string): Promise<void> => {
-      await ensureThread();
-      // Model reroutes are turn-scoped; begin each new turn from the requested
-      // model and let a fresh model/rerouted notification override it.
-      effectiveModel = runtimeModel;
+    const threadOptions = () => ({
+      model: runtimeModel,
+      fastMode: options.fastMode,
+      developerInstructions: options.systemPrompt,
+      execution,
+    });
+
+    /** Resolve the turn id that starts the last `count` turns of a thread. */
+    const resolveRewindBeforeTurnId = async (sourceThreadId: string, count: number): Promise<string> => {
+      const page = await codexRequest(client, "thread/turns/list", {
+        threadId: sourceThreadId,
+        limit: count,
+        sortDirection: "desc",
+        itemsView: "notLoaded",
+      }, timeoutMs);
+      const turns = page.data.filter((turn) => turn.status !== "inProgress");
+      if (turns.length < count) {
+        throw new Error(`Cannot rewind ${count} turn(s): the Codex thread only has ${turns.length} completed turn(s).`);
+      }
+      return turns[count - 1].id;
+    };
+
+    const ensureThread = async (): Promise<void> => {
+      if (threadReady) return;
+      if (threadId && forkPending) {
+        logCodexHarnessDiagnostic("thread.fork.start", { ...threadDiagnosticFields({ threadId }), rewindTurns });
+        const beforeTurnId = rewindTurns > 0 ? await resolveRewindBeforeTurnId(threadId, rewindTurns) : undefined;
+        const forked = await codexRequest(client, "thread/fork", buildThreadForkParams({
+          ...threadOptions(),
+          threadId,
+          cwd: options.cwd,
+          beforeTurnId,
+        }), timeoutMs);
+        forkPending = false;
+        rewindTurns = 0;
+        applyThreadResponse(forked);
+        logCodexHarnessDiagnostic("thread.fork.done", threadDiagnosticFields({ threadId }));
+        return;
+      }
+      if (threadId) {
+        logCodexHarnessDiagnostic("thread.resume.start", { ...threadDiagnosticFields({ threadId }), rewindTurns });
+        const resumed = await codexRequest(client, "thread/resume", buildThreadResumeParams({
+          ...threadOptions(),
+          threadId,
+          cwd: options.cwd,
+        }), timeoutMs);
+        applyThreadResponse(resumed);
+        if (rewindTurns > 0) {
+          const beforeTurnId = await resolveRewindBeforeTurnId(threadId, rewindTurns);
+          await codexRequest(client, "thread/revert", { threadId, beforeTurnId }, timeoutMs);
+          logCodexHarnessDiagnostic("thread.revert.done", { ...threadDiagnosticFields({ threadId }), rewindTurns });
+          rewindTurns = 0;
+        }
+        logCodexHarnessDiagnostic("thread.resume.done", threadDiagnosticFields({ threadId }));
+        return;
+      }
+      logCodexHarnessDiagnostic("thread.start.start", { hasCwd: Boolean(options.cwd) });
+      const started = await codexRequest(client, "thread/start", buildThreadStartParams({
+        ...threadOptions(),
+        cwd: options.cwd,
+      }), timeoutMs);
+      applyThreadResponse(started);
+      logCodexHarnessDiagnostic("thread.start.done", threadDiagnosticFields({ threadId }));
+    };
+
+    const resolveTurnModel = (): string => {
+      const model = runtimeModel ?? threadModel;
+      if (!model) throw new Error("Codex App Server did not report the thread model.");
+      return model;
+    };
+
+    const resolveTurnEffort = (model: string): string | undefined => {
+      const effort = options.reasoningEffort;
+      if (!effort) return undefined;
+      if (codexModelSupportsEffort(model, effort) === false) {
+        logCodexHarnessDiagnostic("turn.effort.unsupported", { model, effort });
+        return undefined;
+      }
+      return effort;
+    };
+
+    /**
+     * Run one Codex turn started by `start` and translate its lifecycle into
+     * harness events. Every turn kind (user prompt, compaction, review) ends
+     * with exactly one `turn/completed`.
+     */
+    const runTrackedTurn = async (
+      kind: ActiveTurn["kind"],
+      start: () => Promise<string | undefined>,
+    ): Promise<void> => {
       logCodexHarnessDiagnostic("turn.start", {
         ...threadDiagnosticFields({ threadId }),
+        kind,
         runCounter: runCounter + 1,
-        promptChars: prompt.length,
         permissionMode: currentPermissionMode,
       });
       queue.enqueue(createRunStartedEvent());
       runCounter += 1;
       planExplanation = "";
       planSteps = [];
-      planDraftByItemId.clear();
-      assistantStreamByItemId.clear();
+      streamedAgentItemIds.clear();
+      // Model reroutes are turn-scoped; begin each turn from the requested model.
+      effectiveModel = runtimeModel;
 
-      let terminalMethod = "";
-      let terminalParams: unknown;
-      let completionResolve!: () => void;
       const completion = new Promise<void>((resolve) => {
-        completionResolve = resolve;
+        activeTurn = { kind, interruptRequested: false, resolve };
       });
-      activeTurnCompletion = { resolve: completionResolve };
-
+      const turn = activeTurn!;
       try {
-        const executionPolicy = codexExecutionPolicyForMode(
-          currentPermissionMode,
-          options.codexApprovalPolicy,
-        );
-        const started = await requestWithFallbacks({
-          client,
-          methods: ["turn/start"],
-          payloads: buildTurnStartPayloads({
-            threadId: threadId!,
-            prompt,
-            model: runtimeModel,
-            reasoningEffort: options.reasoningEffort,
-            fastMode: options.fastMode,
-            systemPrompt: options.systemPrompt,
-            permissionMode: currentPermissionMode,
-            approvalPolicy: executionPolicy.approvalPolicy,
-            sandbox: executionPolicy.sandbox,
-          }),
-          timeoutMs: clientSettings.requestTimeoutMs,
-        });
-        const ids = extractIds(started);
-        if (ids.runId) {
-          turnId = ids.runId;
-          emitBackendRef();
-        }
-
+        const startedTurnId = await start();
+        if (startedTurnId) noteTurnId(startedTurnId);
         await completion;
-        terminalMethod = activeTurnCompletion?.method ?? "turn/failed";
-        terminalParams = activeTurnCompletion?.params;
-        const outcome = classifyTerminalOutcome(terminalMethod, terminalParams);
+        if (turn.failure && !turn.terminal) throw new Error(turn.failure);
+        const outcome = classifyTurnOutcome(turn.terminal);
+        let resultText = turnErrorMessage(turn.terminal);
+        const errorInfo = turn.terminal?.error?.codexErrorInfo;
+        if (errorInfo === "usageLimitExceeded" || errorInfo === "rateLimitExceeded") {
+          const resetHint = describeCodexLimitReset();
+          if (resetHint) resultText = resultText ? `${resultText}\n${resetHint}` : resetHint;
+        }
         logCodexHarnessDiagnostic("turn.terminal", {
-          ...threadDiagnosticFields({ threadId, turnId }),
-          terminalMethod,
+          ...threadDiagnosticFields({ threadId, turnId: turn.turnId }),
+          kind,
           outcome,
         });
         queue.enqueue(createRunCompletedEvent({
           success: outcome === "completed",
           outcome,
-          duration_ms: 0,
+          duration_ms: turn.terminal?.durationMs ?? 0,
           total_cost_usd: cumulativeCostUsd,
           num_turns: runCounter,
-          result: extractTerminalMessage(terminalMethod, terminalParams),
+          result: resultText,
           session_id: threadId!,
         }));
       } catch (error) {
         logCodexHarnessDiagnostic("turn.error", {
-          ...threadDiagnosticFields({ threadId, turnId }),
+          ...threadDiagnosticFields({ threadId, turnId: turn.turnId }),
+          kind,
           error: errorMessage(error),
         });
         queue.enqueue(createRunCompletedEvent({
@@ -584,40 +674,106 @@ export class CodexHarness implements AgentHarness {
           session_id: threadId ?? "",
         }));
       } finally {
-        activeTurnCompletion = undefined;
+        if (activeTurn === turn) activeTurn = undefined;
+        if (currentPendingInput) {
+          resolvePendingInput(currentPendingInput.request.kind === "approval"
+            ? currentPendingInput.request.declineResponse
+            : { answers: {} });
+        }
       }
+    };
+
+    const runUserTurn = async (prompt: string): Promise<void> => {
+      await ensureThread();
+      const model = resolveTurnModel();
+      await runTrackedTurn("user", async () => {
+        const started = await codexRequest(client, "turn/start", buildTurnStartParams({
+          threadId: threadId!,
+          prompt,
+          model,
+          reasoningEffort: resolveTurnEffort(model),
+          permissionMode: currentPermissionMode,
+        }), timeoutMs);
+        return started.turn.id;
+      });
+    };
+
+    const runThreadAction = async (action: ThreadAction): Promise<void> => {
+      await ensureThread();
+      if (action.kind === "compact") {
+        await runTrackedTurn("compact", async () => {
+          await codexRequest(client, "thread/compact/start", { threadId: threadId! }, timeoutMs);
+          return undefined;
+        });
+        return;
+      }
+      await runTrackedTurn("review", async () => {
+        const started = await codexRequest(client, "review/start", buildReviewStartParams(threadId!, action.target), timeoutMs);
+        return started.turn.id;
+      });
+    };
+
+    const steer = async (text: string): Promise<boolean> => {
+      const turn = activeTurn;
+      if (!turn || turn.kind !== "user" || !turn.turnId || turn.interruptRequested || turn.terminal || !threadId) {
+        return false;
+      }
+      try {
+        await codexRequest(client, "turn/steer", buildTurnSteerParams({
+          threadId,
+          expectedTurnId: turn.turnId,
+          text,
+        }), timeoutMs);
+        logCodexHarnessDiagnostic("turn.steer.done", threadDiagnosticFields({ threadId, turnId: turn.turnId }));
+        return true;
+      } catch (error) {
+        // Typically "no active turn" or an expectedTurnId mismatch because the
+        // turn just ended; the caller queues the message as a new turn.
+        logCodexHarnessDiagnostic("turn.steer.rejected", {
+          ...threadDiagnosticFields({ threadId, turnId: turn.turnId }),
+          error: errorMessage(error),
+        });
+        return false;
+      }
+    };
+
+    const answerQuestion = (pending: CodexPendingInput, questionId: string, answer: string): boolean => {
+      const questions = pending.state.questions ?? [];
+      const activeIndex = pending.state.activeQuestionIndex ?? 0;
+      pending.answers = { ...pending.answers, [questionId]: { answers: [answer] } };
+      const nextIndex = activeIndex + 1;
+      if (nextIndex < questions.length) {
+        pending.state = updateCodexWizardState(pending.state, nextIndex, pending.answers);
+        queue.enqueue(createPendingInputEvent(pending.state));
+        return true;
+      }
+      resolvePendingInput({ answers: pending.answers });
+      return true;
+    };
+
+    const resolveApprovalChoice = (choice: CodexApprovalChoice): void => {
+      resolvePendingInput(choice.response);
     };
 
     const submitPendingInputText = async (text: string): Promise<boolean> => {
       const pending = currentPendingInput;
       if (!pending) return false;
       const answer = text.trim();
-      if (pending.methodLower.includes("requestapproval")) {
-        pending.resolveResponse({ decision: answer || "decline" });
-        return true;
-      }
-      const questions = pending.state.questions ?? [];
-      if (questions.length > 0) {
-        if (!answer) return false;
-        const activeIndex = pending.state.activeQuestionIndex ?? 0;
-        const question = questions[activeIndex];
-        if (!question) return false;
-        pending.answers = {
-          ...pending.answers,
-          [question.id]: { answers: [answer] },
-        };
-        const nextIndex = activeIndex + 1;
-        if (nextIndex < questions.length) {
-          pending.state = updateCodexWizardState(pending.state, nextIndex, pending.answers);
-          pending.options = pending.state.options;
-          queue.enqueue(createPendingInputEvent(pending.state));
+      if (pending.request.kind === "approval") {
+        const choice = matchApprovalChoiceFromText(pending.request.choices, answer);
+        if (choice) {
+          resolveApprovalChoice(choice);
           return true;
         }
-        pending.resolveResponse({ answers: pending.answers });
-      } else {
-        pending.resolveResponse({ text: answer });
+        // Not a decision: decline and hand the text to the agent as feedback.
+        resolvePendingInput(pending.request.declineResponse);
+        return answer ? await steer(answer) : true;
       }
-      return true;
+      if (!answer) return false;
+      const questions = pending.state.questions ?? [];
+      const question = questions[pending.state.activeQuestionIndex ?? 0];
+      if (!question) return false;
+      return answerQuestion(pending, question.id, answer);
     };
 
     const submitPendingInputOption = async (
@@ -627,53 +783,24 @@ export class CodexHarness implements AgentHarness {
       const pending = currentPendingInput;
       if (!pending) return false;
       if (context.requestId && context.requestId !== pending.state.requestId) return false;
-      const action = pending.actions[index];
-      if (action?.kind === "approval") {
-        pending.resolveResponse({
-          decision: action.responseDecision,
-          ...(action.proposedExecpolicyAmendment
-            ? { proposedExecpolicyAmendment: action.proposedExecpolicyAmendment }
-            : {}),
-        });
+      if (pending.request.kind === "approval") {
+        const choice = pending.request.choices[index];
+        if (!choice) return false;
+        resolveApprovalChoice(choice);
         return true;
       }
       const questions = pending.state.questions ?? [];
-      const activeQuestionIndex = pending.state.activeQuestionIndex ?? 0;
-      const structuredQuestion = questions.length > 0
-        ? questions[activeQuestionIndex]
-        : undefined;
-      if (context.questionId && context.questionId !== structuredQuestion?.id) return false;
-      const structuredOption = structuredQuestion?.options[index];
-      if (structuredQuestion && structuredOption) {
-        pending.answers = {
-          ...pending.answers,
-          [structuredQuestion.id]: {
-            answers: [structuredOption.value ?? structuredOption.label],
-          },
-        };
-        const nextIndex = activeQuestionIndex + 1;
-        if (nextIndex < questions.length) {
-          pending.state = updateCodexWizardState(pending.state, nextIndex, pending.answers);
-          pending.options = pending.state.options;
-          queue.enqueue(createPendingInputEvent(pending.state));
-          return true;
-        }
-        pending.resolveResponse({ answers: pending.answers });
-        return true;
-      }
-      const option = pending.options[index];
+      const question = questions[pending.state.activeQuestionIndex ?? 0];
+      if (!question) return false;
+      if (context.questionId && context.questionId !== question.id) return false;
+      const option = question.options[index];
       if (!option) return false;
-      if (pending.methodLower.includes("requestapproval")) {
-        pending.resolveResponse({ decision: option });
-      } else {
-        pending.resolveResponse({ option, index });
-      }
-      return true;
+      return answerQuestion(pending, question.id, option.value ?? option.label);
     };
 
     const promptIterable = typeof options.prompt === "string"
       ? (async function* (): AsyncGenerator<unknown> {
-          yield { type: "user", text: options.prompt, session_id: options.resumeSessionId ?? "" };
+          yield { type: "user", text: options.prompt };
         })()
       : options.prompt;
 
@@ -681,15 +808,20 @@ export class CodexHarness implements AgentHarness {
       try {
         await initialize();
         for await (const rawMessage of promptIterable) {
+          const control = asThreadActionMessage(rawMessage);
+          if (control) {
+            await runThreadAction(control.action);
+            continue;
+          }
           const text = extractPromptText(rawMessage).trim();
           if (!text) continue;
           const handledPending = await submitPendingInputText(text);
           if (handledPending) continue;
-          await runTurn(text);
+          await runUserTurn(text);
         }
       } catch (error) {
         logCodexHarnessDiagnostic("session.error", {
-          ...threadDiagnosticFields({ threadId, turnId }),
+          ...threadDiagnosticFields({ threadId, turnId: lastTurnId }),
           error: errorMessage(error),
         });
         queue.enqueue(createRunCompletedEvent({
@@ -701,9 +833,9 @@ export class CodexHarness implements AgentHarness {
           session_id: threadId ?? options.resumeSessionId ?? "",
         }));
       } finally {
-        logCodexHarnessDiagnostic("client.close.start", threadDiagnosticFields({ threadId, turnId }));
+        logCodexHarnessDiagnostic("client.close.start", threadDiagnosticFields({ threadId, turnId: lastTurnId }));
         await client.close().catch((): undefined => undefined);
-        logCodexHarnessDiagnostic("client.close.done", threadDiagnosticFields({ threadId, turnId }));
+        logCodexHarnessDiagnostic("client.close.done", threadDiagnosticFields({ threadId, turnId: lastTurnId }));
         queue.close();
       }
     })();
@@ -727,14 +859,14 @@ export class CodexHarness implements AgentHarness {
         return submitPendingInputText(text);
       },
 
+      steer,
+
       async interrupt(): Promise<void> {
-        if (!threadId || !turnId) return;
-        await requestWithFallbacks({
-          client,
-          methods: ["turn/interrupt"],
-          payloads: buildTurnInterruptPayloads({ threadId, turnId }),
-          timeoutMs: clientSettings.requestTimeoutMs,
-        }).catch((): undefined => undefined);
+        const turn = activeTurn;
+        if (!threadId || !turn?.turnId) return;
+        turn.interruptRequested = true;
+        await codexRequest(client, "turn/interrupt", { threadId, turnId: turn.turnId }, timeoutMs)
+          .catch((): undefined => undefined);
       },
 
       async close(): Promise<void> {
@@ -745,6 +877,10 @@ export class CodexHarness implements AgentHarness {
 
   buildUserMessage(text: string, sessionId: string): unknown {
     return { type: "user", text, session_id: sessionId };
+  }
+
+  buildThreadActionMessage(action: ThreadAction): unknown {
+    return { type: "codex_thread_action", action } satisfies CodexThreadActionMessage;
   }
 }
 

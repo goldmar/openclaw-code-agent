@@ -1,6 +1,6 @@
 import { removeWorktree, deleteBranch } from "./worktree";
 import { formatDuration, truncateText } from "./format";
-import { getPersistedMutationRefs, usesNativeBackendWorktree } from "./session-backend-ref";
+import { getPersistedMutationRefs } from "./session-backend-ref";
 import {
   buildCompletedPayload,
   buildFailedPayload,
@@ -320,18 +320,17 @@ export class SessionLifecycleService {
     ) {
       const repoDir = this.deps.resolveWorktreeRepoDir(session.originalWorkdir, session.worktreePath);
       const branchName = session.worktreeBranch;
-      const nativeBackendWorktree = usesNativeBackendWorktree(session);
       console.info(
         `[SessionManager] Early startup failure for "${session.name}" — auto-cleaning worktree ` +
         `(cost=$${session.costUsd.toFixed(2)}, duration=${session.duration}ms)`,
       );
 
       let removedWorktree = false;
-      if (repoDir && !nativeBackendWorktree) {
+      if (repoDir) {
         removedWorktree = removeWorktree(repoDir, session.worktreePath);
       }
 
-      if (repoDir && branchName && !nativeBackendWorktree && removedWorktree) {
+      if (repoDir && branchName && removedWorktree) {
         deleteBranch(repoDir, branchName);
       }
 
@@ -350,7 +349,6 @@ export class SessionLifecycleService {
       session.worktreeStrategy !== "off" && session.worktreeStrategy !== "manual";
     if (!worktreeAutoCleaned && session.worktreePath && session.originalWorkdir) {
       const repoDir = this.deps.resolveWorktreeRepoDir(session.originalWorkdir, session.worktreePath);
-      const nativeBackendWorktree = usesNativeBackendWorktree(session);
       if (worktreeResult.worktreeRemoved) {
         console.info(
           `[SessionManager] Worktree already removed for "${session.name}" during strategy handling.`,
@@ -359,7 +357,7 @@ export class SessionLifecycleService {
         console.info(
           `[SessionManager] Keeping worktree alive for "${session.name}" (strategy=${session.worktreeStrategy}) — will be cleaned up on explicit resolution.`,
         );
-      } else if (repoDir && !nativeBackendWorktree) {
+      } else if (repoDir) {
         removeWorktree(repoDir, session.worktreePath);
       }
     }

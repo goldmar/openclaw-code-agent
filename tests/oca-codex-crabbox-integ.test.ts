@@ -469,7 +469,7 @@ describe("OCA Codex Crabbox integration harness", () => {
         approvalPromptDeliveredAt: undefined,
         startedAt: 1780000000000,
       } as any,
-      nativeBackendWorktree: false,
+     
       cleanupSucceeded: true,
       worktreePath: "/tmp/oca-no-change",
       worktreeBranch: "agent/no-change",

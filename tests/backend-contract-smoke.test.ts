@@ -16,16 +16,16 @@ describe("backend contract smoke", () => {
     assert.equal(codex.backendKind, "codex-app-server");
     assert.equal(codex.capabilities.nativePendingInput, true);
     assert.equal(codex.capabilities.nativePlanArtifacts, true);
-    assert.equal(codex.capabilities.worktrees, "native-restore");
+    assert.deepEqual([...(codex.capabilities.threadActions ?? [])], ["compact", "review"]);
 
     assert.equal(claude.backendKind, "claude-code");
     assert.equal(claude.capabilities.nativePendingInput, false);
     assert.equal(claude.capabilities.nativePlanArtifacts, false);
-    assert.equal(claude.capabilities.worktrees, "plugin-managed");
+    assert.equal(claude.capabilities.threadActions, undefined);
 
     assert.equal(opencode.backendKind, "opencode-server");
     assert.equal(opencode.capabilities.nativePendingInput, true);
     assert.equal(opencode.capabilities.nativePlanArtifacts, false);
-    assert.equal(opencode.capabilities.worktrees, "plugin-managed");
+    assert.equal(opencode.capabilities.threadActions, undefined);
   });
 });

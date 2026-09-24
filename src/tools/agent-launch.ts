@@ -44,7 +44,7 @@ function hasFormatLaunchResult(value: unknown): value is {
     resumeSessionId?: string;
     resumeSessionName?: string;
     forkSession?: boolean;
-    clearedPersistedCodexResume?: boolean;
+    rewindTurns?: number;
   }, session: LaunchSummarySessionLike) => string;
 } {
   return !!value
@@ -71,7 +71,7 @@ function hasRequestRepoPolicyForLaunch(value: unknown): value is {
     resumedFromSessionName?: string;
     resumeWorktreeFrom?: string;
     sessionIdOverride?: string;
-    clearedPersistedCodexResume?: boolean;
+    rewindTurns?: number;
     forkSession?: boolean;
     forceNewSession?: boolean;
     permissionMode?: "default" | "plan" | "bypassPermissions";
@@ -113,6 +113,9 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
       ),
       fork_session: Type.Optional(
         Type.Boolean({ description: "When resuming, fork to a new session instead of continuing the existing one. Use with resume_session_id." }),
+      ),
+      rewind_turns: Type.Optional(
+        Type.Number({ minimum: 1, description: "Codex only, integer, with resume_session_id: drop the latest N turns of the backend thread before continuing. With fork_session=true the fork is created before those turns (the original thread is untouched); without it the resumed thread's history is reverted in place. Conversation history only — files changed by those turns are NOT reverted." }),
       ),
       force_new_session: Type.Optional(
         Type.Boolean({ description: "Bypass resume-first protection and start a brand-new linked session even when a resumable or active linked session already exists." }),
@@ -181,7 +184,7 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
           route,
           resumeSessionId,
           resolvedResumeId,
-          clearedPersistedCodexResume,
+          rewindTurns,
           reasoningEffort,
           fastMode,
         } = resolution;
@@ -247,7 +250,7 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
                   resumedFromSessionName,
                   resumeWorktreeFrom: launchSessionIdOverride ?? params.resume_session_id ?? resolvedResumeId,
                   sessionIdOverride: launchSessionIdOverride,
-                  clearedPersistedCodexResume,
+                  rewindTurns,
                   forkSession: resumeSessionId ? params.fork_session : false,
                   forceNewSession: params.force_new_session,
                   permissionMode,
@@ -279,10 +282,10 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
           // backend resume state is intentionally cleared for a fresh launch.
           resumeWorktreeFrom: launchSessionIdOverride ?? params.resume_session_id ?? resolvedResumeId,
           forkSession: resumeSessionId ? params.fork_session : false,
+          rewindTurns,
           multiTurn: true,
           permissionMode: resumedPlanState.permissionMode,
           planApproval,
-          codexApprovalPolicy: harness === "codex" ? "never" : undefined,
           ...resumedPlanState.patch,
           originChannel,
           originThreadId,
@@ -306,7 +309,7 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
               resumeSessionId: params.resume_session_id,
               resumeSessionName: resumedFromSessionName,
               forkSession: params.fork_session,
-              clearedPersistedCodexResume,
+              rewindTurns,
             }, session)
           : formatLaunchSummaryFromSession({
               prompt: params.prompt,
@@ -318,7 +321,7 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
               resumeSessionName: resumedFromSessionName,
               forkSession: params.fork_session,
               forceNewSession: params.force_new_session,
-              clearedPersistedCodexResume,
+              rewindTurns,
             }, {
               id: session.id,
               name: session.name,

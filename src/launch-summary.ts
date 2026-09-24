@@ -28,7 +28,7 @@ export interface LaunchSummaryInput {
   resumeSessionName?: string;
   forkSession?: boolean;
   forceNewSession?: boolean;
-  clearedPersistedCodexResume?: boolean;
+  rewindTurns?: number;
 }
 
 export interface LaunchSummarySessionLike {
@@ -89,8 +89,10 @@ export function formatLaunchSummary(input: LaunchSummaryInput): string {
   } else if (input.forceNewSession) {
     details.push("  Force new session: true");
   }
-  if (input.clearedPersistedCodexResume) {
-    details.push("  Thread state: historical Codex state cleared; starting a fresh thread.");
+  if (input.rewindTurns) {
+    details.push(input.forkSession
+      ? `  Rewind: forking before the last ${input.rewindTurns} turn(s) (conversation only; files unchanged)`
+      : `  Rewind: reverting the last ${input.rewindTurns} turn(s) of the thread (conversation only; files unchanged)`);
   }
   details.push("  Mode: multi-turn (use agent_respond to send follow-up messages)");
   details.push("", "Use agent_sessions to check status, agent_output to see output.");

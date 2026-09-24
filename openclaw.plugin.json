@@ -10,6 +10,7 @@
       "agent_kill",
       "agent_output",
       "agent_respond",
+      "agent_session_action",
       "agent_request_plan_approval",
       "agent_request_worktree_decision",
       "agent_send_plan_offer",
@@ -86,8 +87,10 @@
               "gpt-5.6-terra",
               "gpt-5.6-luna"
             ],
-            "reasoningEffort": "medium",
-            "fastMode": false
+            "fastMode": false,
+            "permissionProfile": ":danger-full-access",
+            "approvalPolicy": "never",
+            "approvalsReviewer": "user"
           },
           "claude-code": {
             "defaultModel": "opus",
@@ -122,12 +125,38 @@
                 "xhigh",
                 "max"
               ],
-              "description": "Harness-specific reasoning effort. Used by Codex and passed to Claude Code when configured."
+              "description": "Harness-specific reasoning effort. Passed to Codex (as the turn effort, skipped when Codex's model/list says the model does not support it) and to Claude Code when configured. Unset for Codex means Codex's own configured/model default."
             },
             "fastMode": {
               "type": "boolean",
               "default": false,
-              "description": "Codex-only fast service-tier mode. When true under harnesses.codex, new Codex App Server thread/resume/turn payloads include service_tier=\"fast\"."
+              "description": "Codex-only fast mode. When true under harnesses.codex, Codex App Server threads request serviceTier=\"priority\" (Codex's fast tier); API-key cost estimates apply the fast multiplier only when Codex reports the priority tier as active."
+            },
+            "permissionProfile": {
+              "type": "string",
+              "enum": [
+                ":read-only",
+                ":workspace",
+                ":danger-full-access"
+              ],
+              "description": "Codex-only built-in permission profile sent as the thread `permissions`. Default ':danger-full-access' keeps OCA's historical full-access behavior; ':workspace' sandboxes writes to the workspace; ':read-only' blocks writes."
+            },
+            "approvalPolicy": {
+              "type": "string",
+              "enum": [
+                "never",
+                "on-request",
+                "untrusted"
+              ],
+              "description": "Codex-only approval policy. Default 'never' (no Codex-side prompts; OCA's plan approval still applies). 'on-request' / 'untrusted' let Codex ask before escalating; requests are routed to the chat as approval buttons."
+            },
+            "approvalsReviewer": {
+              "type": "string",
+              "enum": [
+                "user",
+                "auto_review"
+              ],
+              "description": "Codex-only reviewer for approval requests: 'user' (default, routed to chat) or 'auto_review' (Codex's reviewer subagent decides)."
             }
           }
         }
@@ -250,7 +279,7 @@
     },
     "harnesses": {
       "label": "Harness configuration",
-      "help": "Per-harness defaults and model restrictions. Set harnesses.codex.fastMode=true to send service_tier=\"fast\" on Codex App Server thread/resume/turn payloads for Codex sessions. OpenCode is experimental; leave harnesses.opencode.defaultModel unset to use OpenCode's provider default, or pass provider/model explicitly. Default: {\"codex\":{\"defaultModel\":\"gpt-6-sol\",\"allowedModels\":[\"gpt-6-sol\",\"gpt-6-astra\",\"gpt-6-luna\",\"gpt-5.6-sol\",\"gpt-5.6-terra\",\"gpt-5.6-luna\"],\"reasoningEffort\":\"medium\",\"fastMode\":false},\"claude-code\":{\"defaultModel\":\"opus\",\"allowedModels\":[\"sonnet\",\"opus\"]},\"opencode\":{}}.",
+      "help": "Per-harness defaults and model restrictions. Set harnesses.codex.fastMode=true to request Codex's priority (fast) service tier. harnesses.codex.permissionProfile / approvalPolicy / approvalsReviewer control the Codex sandbox and approval prompts (default: full access, no prompts). OpenCode is experimental; leave harnesses.opencode.defaultModel unset to use OpenCode's provider default, or pass provider/model explicitly. Default: {\"codex\":{\"defaultModel\":\"gpt-6-sol\",\"allowedModels\":[\"gpt-6-sol\",\"gpt-6-astra\",\"gpt-6-luna\",\"gpt-5.6-sol\",\"gpt-5.6-terra\",\"gpt-5.6-luna\"],\"fastMode\":false,\"permissionProfile\":\":danger-full-access\",\"approvalPolicy\":\"never\",\"approvalsReviewer\":\"user\"},\"claude-code\":{\"defaultModel\":\"opus\",\"allowedModels\":[\"sonnet\",\"opus\"]},\"opencode\":{}}.",
       "advanced": true
     },
     "maxSessions": {

@@ -398,7 +398,7 @@ describe("SessionNotificationService", () => {
     } as any;
     const firstCycleRequest = worktreeMessages.buildNoChangeNotification({
       session,
-      nativeBackendWorktree: false,
+     
       cleanupSucceeded: true,
       worktreePath: "/tmp/oca/pr-311-cleanup-a",
       worktreeBranch: "agent/pr-311-cleanup-a",
@@ -417,7 +417,7 @@ describe("SessionNotificationService", () => {
     } as any;
     const laterCycleRequest = worktreeMessages.buildNoChangeNotification({
       session: resumedSession,
-      nativeBackendWorktree: false,
+     
       cleanupSucceeded: true,
       worktreePath: "/tmp/oca/pr-311-cleanup-b",
       worktreeBranch: "agent/pr-311-cleanup-b",
@@ -454,7 +454,7 @@ describe("SessionNotificationService", () => {
         harnessName: "codex",
         model: "gpt-5.5",
       } as any,
-      nativeBackendWorktree: false,
+     
       cleanupSucceeded: true,
       worktreePath: "/tmp/oca/no-change-stats",
       worktreeBranch: "agent/no-change-stats",
@@ -476,7 +476,7 @@ describe("SessionNotificationService", () => {
         startedAt: 1_780_000_000_000,
         completedAt: 1_780_000_061_000,
       } as any,
-      nativeBackendWorktree: false,
+     
       cleanupSucceeded: true,
       worktreePath: "/tmp/oca/pr-updated-clean",
       worktreeBranch: "agent/pr-updated-clean",
@@ -529,7 +529,7 @@ describe("SessionNotificationService", () => {
     } as any;
     const firstRequest = worktreeMessages.buildNoChangeNotification({
       session,
-      nativeBackendWorktree: false,
+     
       cleanupSucceeded: true,
       worktreePath: "/tmp/oca/pr-311-cleanup",
       worktreeBranch: "agent/pr-311-cleanup",
@@ -541,7 +541,7 @@ describe("SessionNotificationService", () => {
     session.completedAt = 1_780_000_004_000;
     const retryRequest = worktreeMessages.buildNoChangeNotification({
       session,
-      nativeBackendWorktree: false,
+     
       cleanupSucceeded: true,
       worktreePath: "/tmp/oca/pr-311-cleanup",
       worktreeBranch: "agent/pr-311-cleanup",

@@ -2,7 +2,6 @@ import { branchNameValidationError } from "../worktree-ref-validation";
 import { Type } from "../tool-schema";
 import type { OpenClawPluginToolContext } from "../types";
 import { sessionManager } from "../singletons";
-import { usesNativeBackendWorktree } from "../session-backend-ref";
 import { deleteBranch, removeWorktree } from "../worktree";
 import {
   formatWorktreeLifecycleState,
@@ -112,8 +111,7 @@ export function makeAgentWorktreeCleanupTool(_ctx?: OpenClawPluginToolContext) {
 
         try {
           const repoDir = target.workdir;
-          const nativeBackendWorktree = Boolean((persisted ?? active) && usesNativeBackendWorktree((persisted ?? active)!));
-          if (!nativeBackendWorktree && target.worktreePath) {
+          if (target.worktreePath) {
             removeWorktree(repoDir, target.worktreePath, { destructive: false });
           }
           if (target.worktreeBranch) {

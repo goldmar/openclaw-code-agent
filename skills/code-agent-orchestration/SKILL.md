@@ -48,6 +48,10 @@ When a session already exists for the task, keep using it.
 - Waiting for a question answer: `agent_respond(session, message)`
 - Killed/stopped by restart: `agent_respond(session, message)`
 - Completed but needs follow-up: `agent_launch(resume_session_id=session_id, prompt="...")`
+- Running Codex session needs a correction mid-turn: `agent_respond(session, message)` steers it into the current turn; add `interrupt=true` only to stop the turn and restart from your message
+- Codex went down a wrong path in its last turn(s): `agent_launch(resume_session_id=session_id, fork_session=true, rewind_turns=1, prompt="...")` forks from before those turns (omit `fork_session` to revert the thread in place). File changes are not undone; tell the agent to revert them if needed
+- Long Codex session near its context limit: `agent_session_action(session, action="compact")`
+- Want an independent code review before merge/PR (Codex): `agent_session_action(session, action="review")` reviews the worktree branch against its base; read the findings with `agent_output`
 - Fresh `agent_launch` is only for genuinely independent work
 
 Do not launch a new coding session from a wake event for the same task.

@@ -1,4 +1,7 @@
+import { codexModelSupportsEffort, hasCodexModelCatalog } from "./harness/codex-model-catalog";
 import { REASONING_EFFORTS, type ReasoningEffort } from "./types";
+
+const CODEX_UNIVERSAL_EFFORTS: ReadonlySet<string> = new Set(["low", "medium", "high"]);
 
 export function formatHarnessModelLabel(input: {
   harness?: string;
@@ -55,10 +58,14 @@ function formatReasoningSuffix(input: {
     .replace(/-(?:\d{4}-\d{2}-\d{2}|\d{8})$/, "");
   if (!model) return "";
   if (input.harness === "codex") {
-    // Exclude chat/non-reasoning variants and unknown custom provider models.
-    if (!/^(gpt-6-(?:astra|sol)|gpt-5\.6-(sol|terra|luna)|gpt-5(?:\.[1-5])?(?:-codex(?:-max|-mini)?|-mini|-nano)?|o[134](?:-mini)?)$/.test(model)) return "";
-    if (effort === "xhigh" && /^(gpt-5(?:-mini|-nano|-codex)?|gpt-5\.1(?:-codex(?:-mini)?)?|o[134](?:-mini)?)$/.test(model)) return "";
-    if (effort === "max" && !/^(gpt-6-(?:astra|sol)|gpt-5\.6-(sol|terra|luna))$/.test(model)) return "";
+    // Codex's model/list catalog is authoritative: omit efforts it rejects and
+    // models it does not list. Before any Codex session has loaded the catalog,
+    // only claim the levels every Codex reasoning model accepts.
+    if (hasCodexModelCatalog()) {
+      if (codexModelSupportsEffort(model, effort) !== true) return "";
+    } else if (!CODEX_UNIVERSAL_EFFORTS.has(effort)) {
+      return "";
+    }
   } else if (input.harness === "claude-code") {
     // Claude Code can silently downgrade unsupported effort levels. Omit those
     // rather than claim the requested level was applied by the backend.

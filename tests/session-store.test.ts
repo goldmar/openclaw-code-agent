@@ -748,8 +748,7 @@ describe("SessionStore path resolution", () => {
     assert.equal(recovered?.hasHarnessSessionId, true);
     assert.equal(recovered?.backendRefKind, "codex-app-server");
     assert.equal(recovered?.hasBackendConversationId, true);
-    assert.equal(recovered?.hasBackendWorktreeId, true);
-    assert.equal(recovered?.hasBackendWorktreePath, true);
+    assert.equal(Object.hasOwn(recovered ?? {}, "hasBackendWorktreeId"), false);
   });
 
   it("resolves persisted sessions by backend conversation id before legacy harness id", () => {
@@ -904,30 +903,6 @@ describe("SessionStore path resolution", () => {
 
     const persisted = store.getPersistedSession("plan-context");
     assert.equal(persisted?.planApprovalContext, "plan-mode");
-  });
-
-  it("normalizes legacy Codex on-request approval policy to never", () => {
-    const dir = mkdtempSync(join(tmpdir(), "openclaw-store-codex-approval-"));
-    const indexPath = join(dir, "sessions.json");
-    writeStore(indexPath, [{
-      sessionId: "codex-approval",
-      harnessSessionId: "h-codex-approval",
-      name: "codex-approval",
-      prompt: "p",
-      workdir: "/tmp",
-      status: "completed",
-      lifecycle: "terminal",
-      codexApprovalPolicy: "on-request",
-      costUsd: 0,
-    }]);
-
-    const store = new SessionStore({
-      indexPath,
-      env: {},
-    });
-
-    const persisted = store.getPersistedSession("codex-approval");
-    assert.equal(persisted?.codexApprovalPolicy, "never");
   });
 
   it("preserves persisted waiting lifecycles across reload", () => {
@@ -1196,7 +1171,7 @@ describe("SessionStore path resolution", () => {
     assert.equal(readFileSync(join(dir, archived[0]!), "utf-8"), originalPayload);
   });
 
-  it("archives legacy Codex SDK session rows and keeps only App Server-backed sessions", () => {
+  it("drops legacy Codex SDK session rows without archiving and keeps App Server-backed sessions (B7)", () => {
     const dir = mkdtempSync(join(tmpdir(), "openclaw-store-codex-upgrade-"));
     const indexPath = join(dir, "sessions.json");
     writeStore(indexPath, [
@@ -1236,42 +1211,9 @@ describe("SessionStore path resolution", () => {
     assert.equal(store.getPersistedSession("legacy-codex"), undefined);
     assert.equal(store.getPersistedSession("current-codex")?.backendRef?.kind, "codex-app-server");
 
-    const archivedLegacyFiles = readdirSync(dir).filter((name) => name.includes(".codex-sdk-legacy-"));
-    assert.equal(archivedLegacyFiles.length, 1);
-    const archivedPayload = JSON.parse(readFileSync(join(dir, archivedLegacyFiles[0]), "utf-8"));
-    assert.equal(Array.isArray(archivedPayload), true);
-    assert.equal(archivedPayload[0].harnessSessionId, "h-legacy-codex");
-  });
-
-  it("archives legacy Codex SDK session rows to a suffixed path when the timestamp target exists", (t) => {
-    const dir = mkdtempSync(join(tmpdir(), "openclaw-store-codex-upgrade-collision-"));
-    const indexPath = join(dir, "sessions.json");
-    const now = 1700000000000;
-    writeStore(indexPath, [
-      {
-        sessionId: "legacy-codex",
-        harnessSessionId: "h-legacy-codex",
-        name: "legacy-codex",
-        prompt: "p",
-        workdir: "/tmp",
-        status: "completed",
-        costUsd: 0,
-        harness: "codex",
-      },
-    ]);
-    writeFileSync(`${indexPath}.codex-sdk-legacy-${now}.json`, "existing", "utf-8");
-    t.mock.method(Date, "now", () => now);
-
-    const store = new SessionStore({
-      indexPath,
-      env: {},
-    });
-
-    assert.equal(store.getPersistedSession("legacy-codex"), undefined);
-    assert.equal(readFileSync(`${indexPath}.codex-sdk-legacy-${now}.json`, "utf-8"), "existing");
-    const archivedPayload = JSON.parse(readFileSync(`${indexPath}.codex-sdk-legacy-${now}-1.json`, "utf-8"));
-    assert.equal(Array.isArray(archivedPayload), true);
-    assert.equal(archivedPayload[0].harnessSessionId, "h-legacy-codex");
+    assert.deepEqual(readdirSync(dir).filter((name) => name.includes("legacy")), []);
+    const saved = JSON.parse(readFileSync(indexPath, "utf-8")) as { sessions: Array<{ sessionId: string }> };
+    assert.deepEqual(saved.sessions.map((entry) => entry.sessionId), ["current-codex"]);
   });
 
   it("normalizes and indexes OpenCode backend refs", () => {

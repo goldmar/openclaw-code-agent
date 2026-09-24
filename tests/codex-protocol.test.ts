@@ -1,295 +1,264 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
-  buildThreadStartPayloads,
-  buildThreadResumePayloads,
-  buildPendingInputState,
-  buildTurnStartPayloads,
-  classifyTerminalOutcome,
-  codexExecutionPolicyForMode,
+  buildCollaborationMode,
+  buildCommandApprovalRequest,
+  buildFileChangeApprovalRequest,
+  buildPermissionsApprovalRequest,
+  buildReviewStartParams,
+  buildThreadForkParams,
+  buildThreadResumeParams,
+  buildThreadStartParams,
+  buildTurnStartParams,
+  buildTurnSteerParams,
+  buildUserInputRequest,
+  classifyTurnOutcome,
+  DEFAULT_CODEX_EXECUTION_SETTINGS,
+  matchApprovalChoiceFromText,
+  resolveCodexExecutionSettings,
+  turnErrorMessage,
 } from "../src/harness/codex-protocol";
 
+const execution = DEFAULT_CODEX_EXECUTION_SETTINGS;
+
+describe("codex protocol thread payloads", () => {
+  it("sends the system prompt as thread developerInstructions and never the removed reasoningEffort/service_tier fields", () => {
+    const params = buildThreadStartParams({
+      cwd: "/repo",
+      model: "gpt-6-sol",
+      fastMode: true,
+      developerInstructions: "  Follow the worktree rules.  ",
+      execution,
+    });
+    assert.deepEqual(params, {
+      cwd: "/repo",
+      model: "gpt-6-sol",
+      serviceTier: "priority",
+      developerInstructions: "Follow the worktree rules.",
+      permissions: ":danger-full-access",
+      approvalPolicy: "never",
+      approvalsReviewer: "user",
+    });
+    assert.equal("reasoningEffort" in params, false);
+    assert.equal("service_tier" in params, false);
+    assert.equal("sandbox" in params, false, "permissions cannot be combined with sandbox");
+  });
+
+  it("omits the service tier when fast mode is off so the thread keeps its configured tier", () => {
+    const params = buildThreadStartParams({ cwd: "/repo", execution });
+    assert.equal("serviceTier" in params, false);
+    assert.equal("model" in params, false);
+  });
+
+  it("resumes with excludeTurns instead of the removed persistExtendedHistory flag", () => {
+    const params = buildThreadResumeParams({ threadId: "t-1", cwd: "/wt", developerInstructions: "x", execution });
+    assert.equal(params.excludeTurns, true);
+    assert.equal(params.threadId, "t-1");
+    assert.equal(params.cwd, "/wt");
+    assert.equal(params.developerInstructions, "x");
+    assert.equal("persistExtendedHistory" in params, false);
+  });
+
+  it("forks before a turn only when asked", () => {
+    assert.equal("beforeTurnId" in buildThreadForkParams({ threadId: "t-1", execution }), false);
+    const params = buildThreadForkParams({ threadId: "t-1", beforeTurnId: "turn-9", execution });
+    assert.equal(params.beforeTurnId, "turn-9");
+    assert.equal(params.excludeTurns, true);
+  });
+
+  it("applies configured execution settings and rejects unknown values", () => {
+    const settings = resolveCodexExecutionSettings({
+      permissionProfile: ":workspace",
+      approvalPolicy: "on-request",
+      approvalsReviewer: "auto_review",
+    });
+    assert.deepEqual(buildThreadStartParams({ cwd: "/r", execution: settings }), {
+      cwd: "/r",
+      permissions: ":workspace",
+      approvalPolicy: "on-request",
+      approvalsReviewer: "auto_review",
+    });
+    assert.deepEqual(
+      resolveCodexExecutionSettings({ permissionProfile: "root", approvalPolicy: "sometimes", approvalsReviewer: "bob" }),
+      DEFAULT_CODEX_EXECUTION_SETTINGS,
+    );
+    assert.deepEqual(resolveCodexExecutionSettings(undefined), DEFAULT_CODEX_EXECUTION_SETTINGS);
+  });
+});
+
 describe("codex protocol turn payloads", () => {
-  it("uses current reasoningEffort naming on fresh thread-start payloads", () => {
-    const payloads = buildThreadStartPayloads({
-      cwd: "/tmp/project",
-      model: "gpt-5.5",
-      reasoningEffort: "xhigh",
-      approvalPolicy: "never",
-      sandbox: "danger-full-access",
+  it("uses snake_case collaboration settings with built-in mode instructions", () => {
+    assert.deepEqual(buildCollaborationMode("plan", "gpt-6-sol", "high"), {
+      mode: "plan",
+      settings: { model: "gpt-6-sol", reasoning_effort: "high", developer_instructions: null },
     });
-
-    assert.deepEqual(payloads[0], {
-      cwd: "/tmp/project",
-      model: "gpt-5.5",
-      reasoningEffort: "xhigh",
-      approvalPolicy: "never",
-      sandbox: "danger-full-access",
+    assert.deepEqual(buildCollaborationMode("default", "gpt-6-sol"), {
+      mode: "default",
+      settings: { model: "gpt-6-sol", reasoning_effort: null, developer_instructions: null },
     });
-    assert.equal(payloads.length, 1);
-    assert.equal(Object.hasOwn(payloads[0] as Record<string, unknown>, "reasoning_effort"), false);
   });
 
-  it("maps Codex fastMode to service_tier fast without undocumented fast-mode payload fields", () => {
-    const threadStart = buildThreadStartPayloads({
-      cwd: "/tmp/project",
-      model: "gpt-5.5",
+  it("sends top-level effort, the model, and a collaboration mode for every turn", () => {
+    const plan = buildTurnStartParams({
+      threadId: "t-1",
+      prompt: "Plan it",
+      model: "gpt-6-sol",
       reasoningEffort: "xhigh",
-      fastMode: true,
-      approvalPolicy: "never",
-      sandbox: "danger-full-access",
-    });
-    const threadResume = buildThreadResumePayloads({
-      threadId: "thread-1",
-      model: "gpt-5.5",
-      reasoningEffort: "xhigh",
-      fastMode: true,
-      approvalPolicy: "never",
-      sandbox: "danger-full-access",
-    });
-    const turnStart = buildTurnStartPayloads({
-      threadId: "thread-1",
-      prompt: "Ship it",
-      model: "gpt-5.5",
-      reasoningEffort: "xhigh",
-      fastMode: true,
       permissionMode: "plan",
-      approvalPolicy: "never",
-      sandbox: "danger-full-access",
     });
-
-    assert.equal((threadStart[0] as Record<string, unknown>).service_tier, "fast");
-    assert.equal(threadResume[0].service_tier, "fast");
-    assert.equal((turnStart[0] as Record<string, unknown>).service_tier, "fast");
-    for (const payload of [...threadStart, ...threadResume, ...turnStart] as Array<Record<string, unknown>>) {
-      assert.equal(Object.hasOwn(payload, "fastMode"), false);
-      assert.equal(Object.hasOwn(payload, "fast_mode"), false);
-    }
-    assert.deepEqual((turnStart[0] as any).collaborationMode.settings, {
-      model: "gpt-5.5",
-      reasoningEffort: "xhigh",
-      developerInstructions: null,
-    });
-    assert.equal(Object.hasOwn((turnStart[0] as any).collaborationMode.settings, "fastMode"), false);
-    assert.equal(turnStart.length, 1);
-  });
-
-  it("includes execution policy alongside plan collaboration mode", () => {
-    const payloads = buildTurnStartPayloads({
-      threadId: "thread-1",
-      prompt: "Plan the work",
-      model: "gpt-5.5",
-      reasoningEffort: "medium",
-      permissionMode: "plan",
-      approvalPolicy: "never",
-      sandbox: "danger-full-access",
-    });
-
-    assert.deepEqual(payloads[0], {
-      threadId: "thread-1",
-      input: [{ type: "text", text: "Plan the work" }],
-      model: "gpt-5.5",
-      approvalPolicy: "never",
-      sandbox: "danger-full-access",
+    assert.deepEqual(plan, {
+      threadId: "t-1",
+      input: [{ type: "text", text: "Plan it", text_elements: [] }],
+      model: "gpt-6-sol",
+      effort: "xhigh",
       collaborationMode: {
         mode: "plan",
-        settings: {
-          model: "gpt-5.5",
-          reasoningEffort: "medium",
-          developerInstructions: null,
-        },
+        settings: { model: "gpt-6-sol", reasoning_effort: "xhigh", developer_instructions: null },
       },
     });
+    const implement = buildTurnStartParams({ threadId: "t-1", prompt: "Go", model: "gpt-6-sol", permissionMode: "bypassPermissions" });
+    assert.equal(implement.collaborationMode?.mode, "default");
+    assert.equal("effort" in implement, false);
+    for (const removed of ["approvalPolicy", "sandbox", "service_tier", "systemPrompt"]) {
+      assert.equal(removed in implement, false, removed);
+    }
   });
 
-  it("includes execution policy for bypassPermissions implementation turns", () => {
-    const payloads = buildTurnStartPayloads({
-      threadId: "thread-2",
-      prompt: "Implement it",
-      model: "gpt-5.5",
-      permissionMode: "bypassPermissions",
-      approvalPolicy: "never",
-      sandbox: "danger-full-access",
-    });
-
-    assert.deepEqual(payloads[0], {
-      threadId: "thread-2",
-      input: [{ type: "text", text: "Implement it" }],
-      model: "gpt-5.5",
-      approvalPolicy: "never",
-      sandbox: "danger-full-access",
-      collaborationMode: {
-        mode: "default",
-        settings: {
-          model: "gpt-5.5",
-          developerInstructions: null,
-        },
-      },
+  it("steers with the required expectedTurnId precondition", () => {
+    assert.deepEqual(buildTurnSteerParams({ threadId: "t-1", expectedTurnId: "turn-2", text: "also do X" }), {
+      threadId: "t-1",
+      input: [{ type: "text", text: "also do X", text_elements: [] }],
+      expectedTurnId: "turn-2",
     });
   });
 
-  it("forwards Codex system prompts through collaboration-mode developer instructions", () => {
-    const payloads = buildTurnStartPayloads({
-      threadId: "thread-3",
-      prompt: "Implement it",
-      model: "gpt-5.5",
-      systemPrompt: "Follow OpenClaw orchestration rules.",
-      permissionMode: "default",
-      approvalPolicy: "never",
-      sandbox: "danger-full-access",
+  it("starts inline reviews", () => {
+    assert.deepEqual(buildReviewStartParams("t-1", { type: "baseBranch", branch: "main" }), {
+      threadId: "t-1",
+      target: { type: "baseBranch", branch: "main" },
+      delivery: "inline",
     });
-
-    assert.deepEqual(payloads[0], {
-      threadId: "thread-3",
-      input: [{ type: "text", text: "Implement it" }],
-      model: "gpt-5.5",
-      approvalPolicy: "never",
-      sandbox: "danger-full-access",
-      collaborationMode: {
-        mode: "default",
-        settings: {
-          model: "gpt-5.5",
-          developerInstructions: "Follow OpenClaw orchestration rules.",
-        },
-      },
-    });
-    assert.equal(payloads.length, 1);
+    assert.deepEqual(buildReviewStartParams("t-1", { type: "commit", sha: "abc" }).target, { type: "commit", sha: "abc", title: null });
   });
 
-  it("defaults Codex execution policy to never so OpenClaw plan/default sessions do not fall back to on-request", () => {
-    assert.deepEqual(codexExecutionPolicyForMode("plan"), {
-      approvalPolicy: "never",
-      sandbox: "danger-full-access",
-    });
-    assert.deepEqual(codexExecutionPolicyForMode("default"), {
-      approvalPolicy: "never",
-      sandbox: "danger-full-access",
-    });
+  it("classifies terminal turn status from turn/completed only", () => {
+    assert.equal(classifyTurnOutcome({ status: "completed" }), "completed");
+    assert.equal(classifyTurnOutcome({ status: "failed" }), "failed");
+    assert.equal(classifyTurnOutcome({ status: "interrupted" }), "interrupted");
+    assert.equal(classifyTurnOutcome(undefined), "completed");
+    assert.equal(turnErrorMessage({
+      error: { message: "boom", codexErrorInfo: null, additionalDetails: "details", misalignment: null },
+    }), "boom\ndetails");
+    assert.equal(turnErrorMessage({ error: null }), undefined);
   });
+});
 
-  it("keeps bypassPermissions on the same explicit execution policy instead of relying on upstream defaults", () => {
-    assert.deepEqual(codexExecutionPolicyForMode("bypassPermissions"), {
-      approvalPolicy: "never",
-      sandbox: "danger-full-access",
-    });
-  });
+describe("codex protocol server requests", () => {
+  const commandParams = {
+    kind: "command" as const,
+    threadId: "t-1",
+    turnId: "turn-1",
+    itemId: "item-1",
+    startedAtMs: 0,
+    environmentId: null,
+    command: "rm -rf build",
+    cwd: "/repo",
+    reason: "Clean the build",
+  };
 
-  it("classifies interrupted and cancelled Codex turn outcomes as interrupted, not failed", () => {
-    assert.equal(
-      classifyTerminalOutcome("turn/completed", { turn: { status: "interrupted" } }),
-      "interrupted",
-    );
-    assert.equal(
-      classifyTerminalOutcome("turn/cancelled", { turn: { status: "cancelled" } }),
-      "interrupted",
-    );
-  });
-
-  it("rejects top-level-only Codex request_user_input payloads with an explicit diagnostic", () => {
-    assert.throws(() => buildPendingInputState("tool/requestUserInput", "req-legacy", {
-      question: "Choose an environment",
-      options: [{
-        label: "Staging",
-        description: "Use staging credentials.",
-      }, "Production"],
-    }), /Malformed Codex request_user_input payload for req-legacy: expected non-empty questions\[\]/);
-  });
-
-  it("defensively extracts observed nested Codex request_user_input questions and option metadata", () => {
-    const state = buildPendingInputState("tool/requestUserInput", "req-questions", {
-      questions: [{
-        id: "confirm_path",
-        header: "Confirm",
-        question: "Proceed with the plan?",
-        isOther: true,
-        options: [{
-          label: "Yes (Recommended)",
-          description: "Continue the current plan.",
-        }, {
-          label: "No",
-          description: "Stop and revisit the approach.",
-        }],
-      }],
-    });
-
-    assert.equal(state.kind, "question");
-    assert.deepEqual(state.options, ["Yes (Recommended)", "No"]);
-    assert.deepEqual(state.questions, [{
-      id: "confirm_path",
-      header: "Confirm",
-      question: "Proceed with the plan?",
-      options: [
-        {
-          label: "Yes (Recommended)",
-          description: "Continue the current plan.",
-          recommended: true,
-        },
-        {
-          label: "No",
-          description: "Stop and revisit the approach.",
-          recommended: false,
-        },
+  it("maps command approvals to typed decisions from availableDecisions", () => {
+    const request = buildCommandApprovalRequest("7", {
+      ...commandParams,
+      availableDecisions: [
+        "accept",
+        { acceptWithExecpolicyAmendment: { execpolicy_amendment: ["rm", "-rf"] } },
+        "decline",
+        "cancel",
       ],
-      allowsFreeText: true,
-    }]);
-    assert.match(state.promptText ?? "", /Confirm/);
-    assert.equal(
-      buildPendingInputState("tool/requestUserInput", "req-negated", {
-        questions: [{
-          question: "Which path?",
-          options: ["Not Recommended", "Recommended"],
-        }],
-      }).questions?.[0]?.options[0]?.recommended,
-      false,
-    );
-    assert.match(state.promptText ?? "", /Yes \(Recommended\) - Continue the current plan\./);
-    assert.match(state.promptText ?? "", /Free-form answer is allowed\./);
+    });
+    assert.equal(request.kind, "approval");
+    if (request.kind !== "approval") return;
+    assert.equal(request.state.requestId, "7");
+    assert.equal(request.state.kind, "approval");
+    assert.deepEqual(request.state.options, ["Approve once", "Always allow `rm -rf`", "Decline", "Decline and stop turn"]);
+    assert.match(request.state.promptText ?? "", /Command: rm -rf build/);
+    assert.match(request.state.promptText ?? "", /Reason: Clean the build/);
+    assert.deepEqual(request.choices.map((choice) => choice.response), [
+      { decision: "accept" },
+      { decision: { acceptWithExecpolicyAmendment: { execpolicy_amendment: ["rm", "-rf"] } } },
+      { decision: "decline" },
+      { decision: "cancel" },
+    ]);
+    assert.deepEqual(request.declineResponse, { decision: "decline" });
   });
 
-  it("starts multiple observed nested Codex request_user_input questions at the first wizard step", () => {
-    const state = buildPendingInputState("tool/requestUserInput", "req-multi", {
-      questions: [{
-        id: "environment",
-        header: "Environment",
-        question: "Which environment should I target?",
-        options: [
-          { label: "Staging", description: "Use staging credentials." },
-          { label: "Production", description: "Use production credentials." },
-        ],
-      }, {
-        id: "scope",
-        header: "Scope",
-        question: "How broad should the rollout be?",
-        options: [
-          { label: "Canary", description: "Start with a small cohort." },
-          { label: "Everyone", description: "Roll out to all users." },
-        ],
-      }],
-    });
-
-    assert.deepEqual(state.options, ["Staging", "Production"]);
-    assert.equal(state.questions?.length, 2);
-    assert.equal(state.activeQuestionIndex, 0);
-    assert.match(state.promptText ?? "", /Question 1 - Environment/);
-    assert.doesNotMatch(state.promptText ?? "", /Question 2 - Scope/);
+  it("defaults command approvals to the standard decision set", () => {
+    const request = buildCommandApprovalRequest("8", commandParams);
+    assert.deepEqual(request.state.options, ["Approve once", "Approve for session", "Decline", "Decline and stop turn"]);
   });
 
-  it("tolerates sparse Codex nested question fields as the protocol evolves", () => {
-    const state = buildPendingInputState("tool/requestUserInput", "req-sparse", {
-      questions: [{
-        prompt: "Provide a branch name",
-        options: [
-          { label: "main" },
-          { text: "Other", isOther: true },
-        ],
-      }],
-    });
+  it("maps file-change approvals", () => {
+    const request = buildFileChangeApprovalRequest("9", { threadId: "t", turnId: "u", itemId: "i", startedAtMs: 0, grantRoot: "/repo/out" });
+    assert.match(request.state.promptText ?? "", /Requested write root: \/repo\/out/);
+    assert.equal(request.state.options.length, 4);
+  });
 
-    assert.equal(state.kind, "question");
-    assert.deepEqual(state.options, ["main", "Other"]);
-    assert.equal(state.questions?.[0]?.id, "question_1");
-    assert.equal(state.questions?.[0]?.question, "Provide a branch name");
-    assert.equal(state.questions?.[0]?.options[1]?.isOther, true);
-    assert.equal(state.questions?.[0]?.allowsFreeText, true);
+  it("answers permission requests with granted profiles and a decline that grants nothing", () => {
+    const request = buildPermissionsApprovalRequest("10", {
+      threadId: "t",
+      turnId: "u",
+      itemId: "i",
+      environmentId: null,
+      startedAtMs: 0,
+      cwd: "/repo",
+      reason: "Needs network",
+      permissions: { network: { enabled: true }, fileSystem: null },
+    });
+    if (request.kind !== "approval") throw new Error("expected approval");
+    assert.deepEqual(request.choices[0].response, { permissions: { network: { enabled: true } }, scope: "turn" });
+    assert.deepEqual(request.choices[1].response, { permissions: { network: { enabled: true } }, scope: "session" });
+    assert.deepEqual(request.declineResponse, { permissions: {}, scope: "turn" });
+    assert.match(request.state.promptText ?? "", /Network access/);
+  });
+
+  it("maps request_user_input questions into a wizard", () => {
+    const request = buildUserInputRequest("11", {
+      threadId: "t",
+      turnId: "u",
+      itemId: "i",
+      isBlocking: true,
+      autoResolutionMs: null,
+      questions: [
+        {
+          id: "env",
+          header: "Environment",
+          question: "Where?",
+          isOther: false,
+          isSecret: false,
+          options: [{ label: "Staging", description: "safe" }, { label: "Prod", description: "" }],
+        },
+        { id: "name", header: "", question: "Name?", isOther: true, isSecret: true, options: null },
+      ],
+    });
+    assert.equal(request.kind, "question");
+    assert.equal(request.state.activeQuestionIndex, 0);
+    assert.deepEqual(request.state.options, ["Staging", "Prod"]);
+    assert.deepEqual(request.state.questions?.[0].options[0], { label: "Staging", value: "Staging", description: "safe" });
+    assert.equal(request.state.questions?.[1].allowsFreeText, true);
+    assert.equal(request.state.questions?.[1].isSecret, true);
+    assert.throws(() => buildUserInputRequest("12", {
+      threadId: "t", turnId: "u", itemId: "i", isBlocking: true, autoResolutionMs: null, questions: [],
+    }), /expected non-empty questions/);
+  });
+
+  it("matches free-text approval replies without guessing at arbitrary text", () => {
+    const request = buildCommandApprovalRequest("8", commandParams);
+    if (request.kind !== "approval") throw new Error("expected approval");
+    assert.equal(matchApprovalChoiceFromText(request.choices, "yes")?.decision, "accept");
+    assert.equal(matchApprovalChoiceFromText(request.choices, "Approve for session")?.decision, "acceptForSession");
+    assert.equal(matchApprovalChoiceFromText(request.choices, "2")?.decision, "acceptForSession");
+    assert.equal(matchApprovalChoiceFromText(request.choices, "no.")?.decision, "decline");
+    assert.equal(matchApprovalChoiceFromText(request.choices, "cancel")?.decision, "cancel");
+    assert.equal(matchApprovalChoiceFromText(request.choices, "use a dry run first"), undefined);
   });
 });

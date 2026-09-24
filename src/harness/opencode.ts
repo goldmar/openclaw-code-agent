@@ -760,7 +760,6 @@ export class OpenCodeHarness implements AgentHarness {
   readonly capabilities = {
     nativePendingInput: true,
     nativePlanArtifacts: false,
-    worktrees: "plugin-managed",
   } as const;
 
   constructor(private readonly deps: OpenCodeHarnessDeps = {}) {}

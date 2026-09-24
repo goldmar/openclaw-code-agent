@@ -78,7 +78,6 @@ describe("executeRespond", () => {
       originSessionKey: "agent:main:telegram:group:123:topic:42",
       requestedPermissionMode: "default",
       currentPermissionMode: "default",
-      codexApprovalPolicy: "never",
     });
     const sm = createStubSessionManager({ "test-id": session });
 
@@ -97,7 +96,7 @@ describe("executeRespond", () => {
     assert.equal(capturedConfig.originAgentId, "agent-main");
     assert.equal(capturedConfig.permissionMode, "default");
     assert.equal(capturedConfig.requestedPermissionMode, "default");
-    assert.equal(capturedConfig.codexApprovalPolicy, "never");
+    assert.equal("codexApprovalPolicy" in capturedConfig, false);
     assert.equal(capturedConfig.sessionIdOverride, "test-id");
   });
 
@@ -458,6 +457,20 @@ describe("executeRespond", () => {
     const result = await executeRespond(sm, { session: "test-id", message: "hello" });
     assert.equal(result.isError, undefined);
     assert.match(result.text, /Message sent to session/);
+    assert.doesNotMatch(result.text, /steered/);
+  });
+
+  it("reports when a follow-up was steered into the running turn", async () => {
+    const session = createStubSession({
+      status: "running",
+      lifecycle: "active",
+      sendMessage: async () => "steered",
+    });
+    const sm = createStubSessionManager({ "test-id": session });
+
+    const result = await executeRespond(sm, { session: "test-id", message: "also fix the docs" });
+    assert.equal(result.isError, undefined);
+    assert.match(result.text, /\(steered into the running turn\)/);
   });
 
   it("handles plan approval for active sessions", async () => {

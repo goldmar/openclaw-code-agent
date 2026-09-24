@@ -63,7 +63,7 @@ describe("agent_goal_launch tool", () => {
     assert.ok(launchConfig, "launchTask should be called");
     assert.equal(launchConfig?.harness, "codex");
     assert.equal(launchConfig?.model, "gpt-6-sol");
-    assert.equal(launchConfig?.reasoningEffort, "medium");
+    assert.equal(launchConfig?.reasoningEffort, undefined);
     assert.equal(launchConfig?.permissionMode, "bypassPermissions");
     assert.equal(launchConfig?.originChannel, "discord|123456789");
     assert.equal(launchConfig?.originSessionKey, "agent:main:discord:channel:123456789");

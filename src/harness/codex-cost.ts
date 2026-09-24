@@ -1,4 +1,5 @@
-import { asRecord } from "../pending-input-normalization";
+import type { GetAccountResponse } from "./codex-app-server-protocol";
+import type { TokenUsageBreakdown } from "./codex-app-server-protocol/v2/TokenUsageBreakdown";
 
 export type CodexTokenUsage = {
   inputTokens: number;
@@ -60,59 +61,50 @@ function canonicalPricingModel(model: string | undefined): string | undefined {
   return undefined;
 }
 
-export type CodexAccountType = "apiKey" | "chatgpt" | "amazonBedrock";
+export type CodexAccountType = NonNullable<GetAccountResponse["account"]>["type"];
 
-export function extractCodexAccountType(value: unknown): CodexAccountType | undefined {
-  const response = asRecord(value);
-  const account = asRecord(response?.account);
-  const type = account?.type;
-  return type === "apiKey" || type === "chatgpt" || type === "amazonBedrock"
-    ? type
-    : undefined;
-}
-
-export function extractRawResponseUsage(value: unknown): {
-  responseId: string;
-  usage: CodexTokenUsage;
-} | undefined {
-  const response = asRecord(value);
-  const usage = asRecord(response?.usage);
-  const responseId = typeof response?.responseId === "string"
-    ? response.responseId.trim()
-    : "";
-  if (!responseId || !usage) return undefined;
-
-  const inputTokens = nonNegativeInteger(usage.inputTokens);
-  const cachedInputTokens = nonNegativeInteger(usage.cachedInputTokens);
-  const cacheWriteInputTokens = nonNegativeInteger(usage.cacheWriteInputTokens);
-  const outputTokens = nonNegativeInteger(usage.outputTokens);
-  const reasoningOutputTokens = nonNegativeInteger(usage.reasoningOutputTokens);
-  if (
-    inputTokens === undefined
-    || cachedInputTokens === undefined
-    || cacheWriteInputTokens === undefined
-    || outputTokens === undefined
-    || reasoningOutputTokens === undefined
-    || cachedInputTokens + cacheWriteInputTokens > inputTokens
-    || reasoningOutputTokens > outputTokens
-  ) {
-    return undefined;
-  }
-
-  return {
-    responseId,
-    usage: {
-      inputTokens,
-      cachedInputTokens,
-      cacheWriteInputTokens,
-      outputTokens,
-      reasoningOutputTokens,
-    },
-  };
+export function codexAccountType(response: GetAccountResponse | undefined): CodexAccountType | undefined {
+  return response?.account?.type;
 }
 
 /**
- * Estimate OpenAI API token charges for one upstream Codex response.
+ * Codex reports fast mode as the `priority` service tier (sending `fast` is
+ * normalized to `priority`). Only the tier the server actually applied counts.
+ */
+export function isFastServiceTier(serviceTier: string | null | undefined): boolean {
+  const normalized = serviceTier?.trim().toLowerCase();
+  return normalized === "priority" || normalized === "fast";
+}
+
+/** Convert one `thread/tokenUsage/updated` breakdown into priced token usage. */
+export function tokenUsageFromBreakdown(breakdown: TokenUsageBreakdown | undefined): CodexTokenUsage | undefined {
+  if (!breakdown) return undefined;
+  const usage: CodexTokenUsage = {
+    inputTokens: breakdown.inputTokens,
+    cachedInputTokens: breakdown.cachedInputTokens,
+    cacheWriteInputTokens: breakdown.cacheWriteInputTokens,
+    outputTokens: breakdown.outputTokens,
+    reasoningOutputTokens: breakdown.reasoningOutputTokens,
+  };
+  return isValidUsage(usage) ? usage : undefined;
+}
+
+function isValidUsage(usage: CodexTokenUsage): boolean {
+  const values = [
+    usage.inputTokens,
+    usage.cachedInputTokens,
+    usage.cacheWriteInputTokens,
+    usage.outputTokens,
+    usage.reasoningOutputTokens,
+  ];
+  return values.every((value) => nonNegativeInteger(value) !== undefined)
+    && usage.cachedInputTokens + usage.cacheWriteInputTokens <= usage.inputTokens
+    && usage.reasoningOutputTokens <= usage.outputTokens;
+}
+
+/**
+ * Estimate OpenAI API token charges for one upstream Codex model response
+ * (the `last` breakdown of a `thread/tokenUsage/updated` notification).
  *
  * `outputTokens` already contains reasoning tokens; reasoningOutputTokens is a
  * diagnostic subset and must not be added again. Unknown models and malformed
@@ -120,31 +112,24 @@ export function extractRawResponseUsage(value: unknown): {
  */
 export function estimateCodexApiCostUsd(params: {
   model?: string;
-  fastMode?: boolean;
+  /** Effective service tier reported by Codex for the thread. */
+  serviceTier?: string | null;
   usage: CodexTokenUsage;
 }): number | undefined {
   const pricingModel = canonicalPricingModel(params.model);
   const baseRates = pricingModel ? STANDARD_RATES[pricingModel] : undefined;
   if (!baseRates) return undefined;
 
+  if (!isValidUsage(params.usage)) return undefined;
   const {
     inputTokens,
     cachedInputTokens,
     cacheWriteInputTokens,
     outputTokens,
-    reasoningOutputTokens,
   } = params.usage;
-  if (
-    ![inputTokens, cachedInputTokens, cacheWriteInputTokens, outputTokens, reasoningOutputTokens]
-      .every((value) => Number.isSafeInteger(value) && value >= 0)
-    || cachedInputTokens + cacheWriteInputTokens > inputTokens
-    || reasoningOutputTokens > outputTokens
-  ) {
-    return undefined;
-  }
 
   const isLongContext = inputTokens > LONG_CONTEXT_INPUT_THRESHOLD;
-  const serviceMultiplier = params.fastMode ? FAST_MODE_MULTIPLIER : 1;
+  const serviceMultiplier = isFastServiceTier(params.serviceTier) ? FAST_MODE_MULTIPLIER : 1;
   const inputMultiplier = serviceMultiplier * (isLongContext ? LONG_CONTEXT_INPUT_MULTIPLIER : 1);
   const outputMultiplier = serviceMultiplier * (isLongContext ? LONG_CONTEXT_OUTPUT_MULTIPLIER : 1);
   const uncachedInputTokens = inputTokens - cachedInputTokens - cacheWriteInputTokens;

@@ -1,0 +1,87 @@
+import { beforeEach, describe, it } from "node:test";
+import assert from "node:assert/strict";
+import {
+  describeCodexLimitReset,
+  formatCodexRateLimits,
+  getCodexRateLimits,
+  mergeCodexRateLimitsUpdate,
+  recordCodexRateLimits,
+  resetCodexRateLimitsForTests,
+} from "../src/harness/codex-rate-limits";
+import { formatStats } from "../src/format";
+import type { RateLimitSnapshot } from "../src/harness/codex-app-server-protocol/v2/RateLimitSnapshot";
+
+const NOW = 1_800_000_000_000;
+
+function snapshot(overrides: Partial<RateLimitSnapshot> = {}): RateLimitSnapshot {
+  return {
+    limitId: "codex",
+    limitName: null,
+    normalModelSlug: null,
+    primary: { usedPercent: 17, windowDurationMins: 300, resetsAt: NOW / 1000 + 3_600 },
+    secondary: { usedPercent: 42.4, windowDurationMins: 10_080, resetsAt: NOW / 1000 + 3 * 86_400 },
+    credits: null,
+    individualLimit: null,
+    spendControlReached: null,
+    planType: "pro",
+    rateLimitReachedType: null,
+    ...overrides,
+  };
+}
+
+describe("Codex rate-limit surfacing (B14)", () => {
+  beforeEach(() => resetCodexRateLimitsForTests());
+
+  it("formats nothing until a snapshot is observed", () => {
+    assert.deepEqual(formatCodexRateLimits(undefined, NOW), []);
+  });
+
+  it("formats primary and secondary windows with reset times", () => {
+    recordCodexRateLimits({
+      ordinaryUsageAllowed: true,
+      rateLimits: snapshot(),
+      rateLimitsByLimitId: null,
+      rateLimitResetCredits: null,
+      accountId: null,
+      rateLimitUpsell: null,
+    }, NOW - 120_000);
+    assert.deepEqual(formatCodexRateLimits(getCodexRateLimits(), NOW), [
+      "Codex usage limits (pro plan), observed 2m ago:",
+      "  Primary (5h): 17% used, resets in 1h 0m",
+      "  Secondary (weekly): 42% used, resets in 3d 0h",
+    ]);
+  });
+
+  it("merges sparse updates without clearing previously observed values", () => {
+    recordCodexRateLimits({
+      ordinaryUsageAllowed: false,
+      rateLimits: snapshot(),
+      rateLimitsByLimitId: null,
+      rateLimitResetCredits: null,
+      accountId: null,
+      rateLimitUpsell: null,
+    }, NOW);
+    mergeCodexRateLimitsUpdate(snapshot({ primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: NOW / 1000 + 600 }, secondary: null, planType: null, rateLimitReachedType: "rate_limit_reached" }), NOW);
+    const state = getCodexRateLimits();
+    assert.equal(state?.snapshot.primary?.usedPercent, 100);
+    assert.equal(state?.snapshot.secondary?.usedPercent, 42.4);
+    assert.equal(state?.snapshot.planType, "pro");
+    assert.equal(state?.ordinaryUsageAllowed, false);
+    assert.match(formatCodexRateLimits(state, NOW).join("\n"), /Limit reached: rate limit reached/);
+    assert.match(describeCodexLimitReset(NOW) ?? "", /^Codex usage limit resets in 10m/);
+  });
+
+  it("appends the snapshot to agent_stats output", () => {
+    const metrics = {
+      totalLaunched: 1,
+      sessionsByStatus: { completed: 1, failed: 0, killed: 0 },
+      sessionsWithDuration: 0,
+      totalDurationMs: 0,
+      totalCostUsd: 0,
+    } as unknown as Parameters<typeof formatStats>[0];
+    assert.doesNotMatch(formatStats(metrics, 0, []), /Codex usage/);
+    const text = formatStats(metrics, 0, ["Codex usage limits (pro plan), observed 0m ago:", "  Primary (5h): 1% used"]);
+    assert.match(text, /📈 Codex usage limits \(pro plan\)/);
+    assert.match(text, /Primary \(5h\): 1% used/);
+  });
+});

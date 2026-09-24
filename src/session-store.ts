@@ -159,7 +159,6 @@ export class SessionStore {
       approvalPromptDeliveredAt: session.approvalPromptDeliveredAt,
       approvalPromptFailedAt: session.approvalPromptFailedAt,
       planApproval: session.planApproval,
-      codexApprovalPolicy: session.codexApprovalPolicy,
     };
   }
 
@@ -289,7 +288,6 @@ export class SessionStore {
       approvalPromptDeliveredAt: approval.approvalPromptDeliveredAt,
       approvalPromptFailedAt: approval.approvalPromptFailedAt,
       planApproval: approval.planApproval,
-      codexApprovalPolicy: approval.codexApprovalPolicy,
       worktreePath: worktree.worktreePath,
       worktreeBranch: worktree.worktreeBranch,
       worktreeStrategy: worktree.worktreeStrategy,
@@ -403,7 +401,6 @@ export class SessionStore {
       approvalPromptDeliveredAt: approval.approvalPromptDeliveredAt,
       approvalPromptFailedAt: approval.approvalPromptFailedAt,
       planApproval: approval.planApproval,
-      codexApprovalPolicy: approval.codexApprovalPolicy,
       worktreePath: worktree.worktreePath,
       worktreeBranch: worktree.worktreeBranch,
       worktreeStrategy: worktree.worktreeStrategy,

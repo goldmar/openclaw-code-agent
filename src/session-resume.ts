@@ -1,4 +1,3 @@
-import { decideResumeSessionId } from "./resume-policy";
 import { getBackendConversationId } from "./session-backend-ref";
 import type { Session } from "./session";
 import type { PersistedSessionInfo } from "./types";
@@ -8,7 +7,6 @@ export type ResumableSessionLike = Session | PersistedSessionInfo;
 export type ResumeUnavailableReason =
   | "already_running"
   | "completed"
-  | "legacy_non_resumable"
   | "missing_backend_state";
 
 export type ResumeAssessment =
@@ -20,7 +18,6 @@ export type ResumeAssessment =
       kind: "resume";
       resumeSessionId: string;
       stableSessionId?: string;
-      clearedPersistedCodexResume: boolean;
     }
   | {
       kind: "relaunch";
@@ -30,7 +27,6 @@ export type ResumeAssessment =
       kind: "unavailable";
       reason: ResumeUnavailableReason;
       stableSessionId?: string;
-      clearedPersistedCodexResume?: boolean;
     };
 
 export function getStableSessionId(session: ResumableSessionLike): string | undefined {
@@ -63,31 +59,10 @@ export function assessResumeCandidate(session: ResumableSessionLike): ResumeAsse
 
   const backendConversationId = getBackendConversationId(session);
   if (backendConversationId) {
-    const persistedSession = "harnessName" in session ? undefined : session;
-    const { resumeSessionId, clearedPersistedCodexResume } = decideResumeSessionId({
-      requestedResumeSessionId: backendConversationId,
-      activeSession: "harnessName" in session
-        ? { harnessSessionId: backendConversationId }
-        : undefined,
-      persistedSession: persistedSession
-        ? { harness: persistedSession.harness, backendRef: persistedSession.backendRef }
-        : undefined,
-    });
-
-    if (resumeSessionId) {
-      return {
-        kind: "resume",
-        resumeSessionId,
-        stableSessionId,
-        clearedPersistedCodexResume,
-      };
-    }
-
     return {
-      kind: "unavailable",
-      reason: "legacy_non_resumable",
+      kind: "resume",
+      resumeSessionId: backendConversationId,
       stableSessionId,
-      clearedPersistedCodexResume,
     };
   }
 
