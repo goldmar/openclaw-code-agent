@@ -1,4 +1,4 @@
-import { Type } from "typebox";
+import { Type } from "../tool-parameter-schema";
 import { sessionManager } from "../singletons";
 import { executeRespond } from "../actions/respond";
 import type { OpenClawPluginToolContext } from "../types";

@@ -1,4 +1,4 @@
-import { Type } from "typebox";
+import { Type } from "../tool-parameter-schema";
 
 import { goalController } from "../singletons";
 import { formatGoalLaunchResult, resolveGoalLaunchRequest } from "../goal-launch-resolution";

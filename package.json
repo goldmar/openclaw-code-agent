@@ -6,7 +6,7 @@
   "main": "dist/index.js",
   "scripts": {
     "audit:prod": "pnpm audit --prod",
-    "build": "esbuild index.ts --bundle --splitting --platform=node --target=node24 --format=esm --outdir=dist --entry-names=index --chunk-names=chunks/[name] --minify --charset=utf8 --pure:console.log --pure:console.warn --pure:console.info --pure:console.debug --external:@anthropic-ai/claude-agent-sdk --external:openclaw/plugin-sdk/plugin-entry --external:openclaw/plugin-sdk/channel-outbound --external:openclaw/plugin-sdk/json-store --external:openclaw/plugin-sdk/routing --external:openclaw/plugin-sdk/state-paths",
+    "build": "esbuild index.ts --bundle --splitting --platform=node --target=node24 --format=esm --outdir=dist --entry-names=index --chunk-names=chunks/[name]-[hash] --minify --charset=utf8 --pure:console.log --pure:console.warn --pure:console.info --pure:console.debug --external:@anthropic-ai/claude-agent-sdk --external:openclaw/plugin-sdk/plugin-entry --external:openclaw/plugin-sdk/channel-outbound --external:openclaw/plugin-sdk/json-store --external:openclaw/plugin-sdk/routing --external:openclaw/plugin-sdk/state-paths",
     "generate:npm-shrinkwrap": "node scripts/generate-npm-shrinkwrap.mjs",
     "check-static-guardrails": "node scripts/check-static-guardrails.mjs && node scripts/check-npm-shrinkwrap.mjs",
     "check-plugin-security": "node scripts/check-plugin-security.mjs",
