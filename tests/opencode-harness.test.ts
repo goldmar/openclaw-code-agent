@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -973,9 +973,10 @@ describe("startOpenCodeServer", () => {
     try {
       const binDir = join(base, "bin");
       const command = installFakeOpenCodeServer("", binDir);
-      assert.equal(resolveCommandPath("./bin/opencode", "", base), command);
-      assert.equal(resolveCommandPath("opencode", "bin", base), command);
-      assert.equal(resolveCommandPath("/abs/opencode", "", base), "/abs/opencode");
+      assert.equal(resolveCommandPath("./bin/opencode", "", base), `${base}/./bin/opencode`);
+      assert.equal(realpathSync(resolveCommandPath("./bin/opencode", "", base)), realpathSync(command));
+      assert.equal(realpathSync(resolveCommandPath("opencode", "bin", base)), realpathSync(command));
+      assert.equal(resolveCommandPath("/abs/link/../opencode", "", base), "/abs/link/../opencode", "absolute overrides are not normalized");
       assert.equal(resolveCommandPath("missing-opencode", "", base), "missing-opencode");
     } finally {
       rmSync(base, { recursive: true, force: true });

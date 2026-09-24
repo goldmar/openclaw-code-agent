@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getHarness, listHarnesses } from "../src/harness/index";
@@ -403,7 +403,8 @@ describe("Codex App Server RPC transport", () => {
   it("does not release close until a SIGTERM-resistant child has actually exited", async () => {
     const fixtureDir = mkdtempSync(join(tmpdir(), "oca-codex-rpc-close-"));
     const fixturePath = join(fixtureDir, "ignore-sigterm.mjs");
-    writeFileSync(fixturePath, "#!/usr/bin/env node\nprocess.on('SIGTERM', () => {});\nsetInterval(() => {}, 1000);\n");
+    const readyPath = join(fixtureDir, "ready");
+    writeFileSync(fixturePath, `#!/usr/bin/env node\nimport { writeFileSync } from 'node:fs';\nprocess.on('SIGTERM', () => {});\nwriteFileSync(${JSON.stringify(readyPath)}, 'ok');\nsetInterval(() => {}, 1000);\n`);
     chmodSync(fixturePath, 0o755);
     const warnings: string[] = [];
     const originalWarn = console.warn;
@@ -411,7 +412,10 @@ describe("Codex App Server RPC transport", () => {
     try {
       const client = new StdioJsonRpcClient(fixturePath, [], 1_000, 10);
       await client.connect();
-      await new Promise<void>((resolve) => { setTimeout(resolve, 250); });
+      // Wait until the child has installed its SIGTERM handler (slow under load).
+      for (let i = 0; i < 200 && !existsSync(readyPath); i += 1) {
+        await new Promise<void>((resolve) => { setTimeout(resolve, 25); });
+      }
       await client.close();
       const events = warnings.map((warning) => JSON.parse(warning) as { event?: string });
       const forceKillIndex = events.findIndex((entry) => entry.event === "process.force_kill");

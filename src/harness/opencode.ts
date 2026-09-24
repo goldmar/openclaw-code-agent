@@ -1,7 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { constants as fsConstants, accessSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, dirname, join, resolve, sep } from "node:path";
+import { delimiter, dirname, isAbsolute, join, sep } from "node:path";
 import type {
   PendingInputAction,
   PendingInputQuestion,
@@ -136,9 +136,12 @@ function candidateSearchPaths(envPath: string | undefined): string[] {
  * be looked up from the temp directory.
  */
 export function resolveCommandPath(command: string, envPath = process.env.PATH, baseDir = process.cwd()): string {
-  if (commandHasPathSeparator(command)) return resolve(baseDir, command);
+  // Prefix relative paths without normalizing: `..` must still be resolved by
+  // the OS after symlinks, and absolute overrides pass through unchanged.
+  const anchor = (path: string): string => (isAbsolute(path) ? path : `${baseDir}${sep}${path}`);
+  if (commandHasPathSeparator(command)) return anchor(command);
   for (const entry of candidateSearchPaths(envPath)) {
-    const candidate = resolve(baseDir, entry, command);
+    const candidate = isAbsolute(entry) ? join(entry, command) : `${anchor(entry)}${sep}${command}`;
     if (isExecutable(candidate)) return candidate;
   }
   return command;
