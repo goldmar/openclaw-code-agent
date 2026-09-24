@@ -26,7 +26,7 @@ Canonical operator reference for `openclaw-code-agent`: install, configuration, 
 | `maxPersistedSessions` | `10000` |
 | `autoUpdate` | `true` (check and offer; install and restart only after a button press) |
 
-Sessions are multi-turn. Active sessions accept follow-up messages via `agent_respond`, and explicitly suspended sessions can also be continued with `agent_respond`.
+Sessions are multi-turn. Active sessions accept follow-up messages via `agent_respond`, and stopped, completed, or suspended sessions that still have a backend conversation can also be continued with `agent_respond`.
 
 ## Compatibility And Upgrades
 
@@ -54,12 +54,16 @@ The current `openclaw-code-agent` package requires, is built against, and is val
 
   Place these fields under `plugins.entries.openclaw-code-agent.config`. An empty `allowedModels: []` removes that harness restriction; omission keeps the built-in list, but setting a custom `defaultModel` without an explicit list drops the built-in restriction.
 - **Codex sessions.** Rows from the pre-App-Server Codex SDK backend are dropped when the store loads, and 4.x rows whose worktree was a native Codex backend worktree load without worktree metadata. `harnesses.codex.reasoningEffort` no longer defaults to `medium` (unset uses Codex's own default), and Codex execution settings come from `harnesses.codex.permissionProfile` / `approvalPolicy` / `approvalsReviewer`. When they are unset, Codex follows the host `tools.exec.mode` like OpenClaw's bundled Codex plugin; with no `tools.exec.mode` (or `full`) that is the 4.x full-access, no-prompt behavior (see [Harnesses](#harnesses)).
-- **State paths.** OCA resolves its state directory like the Gateway (`OPENCLAW_STATE_DIR`; `OPENCLAW_HOME` is the home-directory override). Output transcripts and auto-update state moved under `<stateDir>/plugin-state/openclaw-code-agent/` (see [OpenClaw Host Integration](#openclaw-host-integration)).
+- **State paths.** OCA resolves its state directory like the Gateway (`OPENCLAW_STATE_DIR`; `OPENCLAW_HOME` is the home-directory override, so state lives in `$OPENCLAW_HOME/.openclaw`). If you set `OPENCLAW_HOME` to point OCA at a state directory, set `OPENCLAW_STATE_DIR` (or `OPENCLAW_CODE_AGENT_SESSIONS_PATH` / `OPENCLAW_CODE_AGENT_GOAL_TASKS_PATH`) instead. Output transcripts moved from `/tmp/openclaw-agent-<id>.txt`, and auto-update state from `<stateDir>/openclaw-code-agent-auto-update.json`, to `<stateDir>/plugin-state/openclaw-code-agent/` (see [OpenClaw Host Integration](#openclaw-host-integration)).
+- **Minimum host.** OpenClaw `2026.9.6` is required for installation, the plugin API, the Gateway, and the peer dependency; upgrade the host first.
+- **Stricter tools.** `agent_kill` accepts only `session` and `reason`; any other parameter is rejected and nothing is stopped. Session references match an OCA session id, name, or backend conversation id, not a bare `harnessSessionId`, and Codex resume ids must be plain thread UUIDs.
+- **Removed knobs.** `OPENCLAW_WORKTREE_CLEANUP_AGE_HOURS` and the startup sweep of unmanaged `openclaw-worktree-*` directories are gone, a launch that needs a worktree outside a git repository fails instead of using the OS temp directory, and OCA no longer copies `~/.claude.json` MCP servers into Claude Code launches.
+- **In-process integrations.** `SessionManager.spawn` is `launchSession`, and the worktree, repo-policy, and branch-name helpers return promises. The full list is in the [CHANGELOG](../CHANGELOG.md).
 
 ### Host Configuration Notes
 
 - If `plugins.allow` is present, add `openclaw-code-agent`; the allowlist is exclusive. Keep the `agent_*` tools in restrictive runtime tool allowlists. OCA does not require or enable the bundled Codex or ACPX plugins.
-- OpenClaw migrates host-owned `codex/*` and `openai-codex/*` model references to `openai/*`. That does not change OCA's harness syntax: keep unprefixed Codex model names under `harnesses.codex.*`. An explicit `openai/<model>` launch alias is canonicalized to the bare model before the allowlist check; `codex/*`, `openai-codex/*`, and disallowed models are rejected. Restored sessions and explicit overrides pass through the same harness-scoped validation. New host catalog models never widen OCA's harness allowlists.
+- OpenClaw migrates host-owned `codex/*` and `openai-codex/*` model references to `openai/*`. That does not change OCA's harness syntax: keep unprefixed Codex model names under `harnesses.codex.*`. An explicit `openai/<model>` launch alias is canonicalized to the bare model before the allowlist check; `codex/*`, `openai-codex/*`, and disallowed models are rejected. Claude Code likewise accepts `anthropic/<id>` and sends the bare id (`anthropic/claude-opus-5-5` → `claude-opus-5-5`). Restored sessions and explicit overrides pass through the same harness-scoped validation. New host catalog models never widen OCA's harness allowlists.
 - Host-level agent `cwd`, `agents.defaults.cwd`, and `worktreeRoot` do not replace OCA's per-launch workdir or `worktreeDir`; do not point both worktree managers at the same directory.
 - `tools.deny` does not disable OpenClaw's `apply_patch` tool. To restrict patch edits, configure `tools.exec.applyPatch.enabled`, `tools.exec.applyPatch.workspaceOnly`, or `tools.exec.applyPatch.allowModels`.
 
@@ -79,8 +83,8 @@ openclaw gateway restart
 openclaw plugins inspect openclaw-code-agent --runtime --json
 ```
 
-OpenClaw 2026.7.1 no longer performs built-in dangerous-code blocking during
-plugin installation. Review [SECURITY.md](SECURITY.md) before installing this
+Since OpenClaw 2026.7.1, plugin installation performs no built-in
+dangerous-code blocking. Review [SECURITY.md](SECURITY.md) before installing this
 plugin because it launches local coding harnesses and git tooling. Operators
 who require a local allow/block decision should configure
 `security.installPolicy`. To replace an existing reviewed installation and pin
@@ -181,7 +185,7 @@ forced_login_method = "chatgpt"
 | `codex` | Controlled by `harnesses.codex.allowedModels` | Native Codex App Server harness with structured pending input, structured plans, approvals, steering, rewind/fork, compaction, and inline review |
 | `opencode` | Optional `provider/model`; unset uses OpenCode's configured provider default | Experimental OpenCode server harness with native pending input, OpenCode's built-in `plan`/`build` agents behind the plugin-owned plan gate, and plugin-managed worktrees |
 
-Allowed-model matching is case-insensitive substring matching. If the resolved model is not allowed, `agent_launch` fails immediately.
+Codex allowlists match the exact model id, ignoring case, after an `openai/` prefix is removed. Claude Code and OpenCode allowlists match any model whose name contains an entry (substring, ignoring case). If the resolved model is not allowed, `agent_launch` fails immediately.
 
 The built-in Codex default (`gpt-6-sol`) and allowlist are static operator policy. OCA does not substitute the `model/list` entry marked `isDefault`: the allowlist check runs before launch, when no Codex connection (and so no catalog) exists yet, and a catalog default that moves with a Codex upgrade would silently change the model new sessions use, possibly to one outside the allowlist. Set `harnesses.codex.defaultModel` to choose another default. Because OpenCode can use its own configured provider default, do not configure `harnesses.opencode.allowedModels` unless you also configure or pass an explicit OpenCode model that can be checked.
 
@@ -377,7 +381,7 @@ GitHub is the only PR provider supported in this release. OCA calls `gh` only wh
 | Strategy | Where It Is Set | Behavior |
 | --- | --- | --- |
 | `off` | Tool param or config | No worktree; session runs in the main checkout |
-| `manual` | Tool param or config | Create worktree and branch, then stop for manual follow-through |
+| `manual` | Tool param or config | Create worktree and branch, then stop for manual follow-through; the worktree is kept after the session ends (lifecycle `provisioned`, shown as `active`) |
 | `ask` | Tool param or config | Keep the branch local, notify the user, and send inline 4-button decision UI |
 | `delegate` | Tool param or config | Keep the branch local and wake the orchestrator with diff context; no user decision buttons are sent automatically |
 | `auto-merge` | Tool param or config | Merge back automatically; spawn a conflict resolver if needed |
@@ -416,8 +420,9 @@ Notes:
 - Resumed sessions keep the worktree strategy they already had.
 - Worktrees are kept alive until explicitly resolved (merge/PR/dismiss) when using non-trivial strategies.
 - Stale-decision reminders fire every 3h; users can snooze per-session for 24h.
-- Claude Code, Codex, and experimental OpenCode all use plugin-managed worktrees for isolated edits. Codex App Server has no worktree API; OCA passes the prepared worktree as the thread `cwd`. Sessions persisted by 4.x with a native Codex backend worktree load without worktree metadata so OCA never removes Codex-owned checkouts. Resuming a session whose worktree was already cleaned up fails closed for every harness unless `worktree_strategy: "off"` is chosen.
+- Claude Code, Codex, and experimental OpenCode all use plugin-managed worktrees for isolated edits. Codex App Server has no worktree API; OCA passes the prepared worktree as the thread `cwd`. Sessions persisted by 4.x with a native Codex backend worktree load without worktree metadata so OCA never removes Codex-owned checkouts. If a resumed session's worktree directory is gone, OCA recreates it from the stored `agent/*` branch; if that fails, the launch fails closed for every harness unless `worktree_strategy: "off"` is chosen.
 - `released` covers different-SHA cases where the base branch already contains the branch content after rebase, cherry-pick, or squash.
+- `agent_worktree_cleanup(mode="preview_safe")` previews what Clean all safe would remove, `mode="clean_safe"` performs it, and `mode="preview_all"` shows both safe sandboxes and retained reasons.
 
 ### Worktree Provisioning
 
@@ -429,7 +434,6 @@ New OCA worktrees follow the same repository conventions as OpenClaw managed wor
 OCA always runs the setup script for its worktrees, unlike OpenClaw core, which runs it for managed worktrees only when the caller has admin scope. Core's rule protects the `worktrees.create` Gateway method, which lower-privileged clients can reach. An OCA worktree exists only for a coding session launched in an operator-chosen repository, so running the repository's own setup script is part of trusting that repository. The script runs unsandboxed with the Gateway's privileges, which can be more than a Codex session gets inside a `:workspace` sandbox. Do not point OCA at repositories whose setup scripts you do not trust.
 
 If either step fails, the launch fails with the reason (for the setup script, the exit code or timeout plus the tail of its output), the new worktree is removed, and the new `agent/*` branch is deleted; a resumed session's existing branch is kept. Git hooks are disabled for the provisioning git calls. OCA keeps its `agent/*` branch prefix so its branches never collide with core's `openclaw/*` managed worktrees.
-- `agent_worktree_cleanup(mode="preview_safe")` previews what Clean all safe would remove, `mode="clean_safe"` performs it, and `mode="preview_all"` shows both safe sandboxes and retained reasons.
 
 ## Tool Reference
 
@@ -441,7 +445,7 @@ Launch a background coding session.
 | --- | --- | --- | --- |
 | `prompt` | `string` | Yes | Task to execute |
 | `name` | `string` | No | Short session name; auto-generated if omitted |
-| `workdir` | `string` | No | Defaults to tool workspace, plugin `defaultWorkdir`, or cwd |
+| `workdir` | `string` | No | Defaults to an existing absolute path in a leading `Workdir:` or `Repo:` prompt header line, then the tool workspace, plugin `defaultWorkdir`, or cwd |
 | `reasoning_effort` | `low \| medium \| high \| xhigh \| max` | No | Per-launch override. Otherwise retains saved resume/fork effort, then uses the harness default. Known supported settings appear as `reasoning: <level>` in session status headings; unknown/unsupported settings are omitted. |
 | `model` | `string` | No | Defaults to the selected harness default model. For experimental OpenCode, omit to use OpenCode's configured provider default or pass `provider/model` explicitly |
 | `system_prompt` | `string` | No | Extra system prompt |
@@ -449,7 +453,9 @@ Launch a background coding session.
 | `resume_session_id` | `string` | No | Resume by plugin session ID or name. Persisted backend conversation IDs still work for recovery/diagnostics, but they are not the normal operator-facing path |
 | `fork_session` | `boolean` | No | Fork instead of continuing when resuming |
 | `rewind_turns` | positive integer | No | Codex only, with `resume_session_id`: drop the latest N turns first. With `fork_session: true` the fork starts before those turns; otherwise the thread's history is reverted in place. Conversation history only; files are not reverted |
+| `force_new_session` | `boolean` | No | Start a new session even when a resumable or active session is already linked to this thread (skips resume-first protection) |
 | `permission_mode` | `default \| plan \| bypassPermissions` | No | Defaults to plugin `permissionMode` |
+| `plan_approval` | `ask \| delegate \| approve` | No | Per-session override of the plugin `planApproval` |
 | `harness` | `string` | No | Defaults to `defaultHarness` |
 | `worktree_strategy` | `off \| manual \| ask \| delegate \| auto-merge \| auto-pr` | No | Explicit per-launch value wins over plugin default; `auto-pr` attempts PR creation/update automatically |
 | `worktree_base_branch` | `string` | No | Literal Git branch name; options and revision expressions rejected. Defaults to detected base branch |
@@ -467,7 +473,7 @@ agent_launch(
 
 ### `agent_respond`
 
-Send a follow-up, redirect work, approve a plan, or escalate a `default` mode session to `bypassPermissions`.
+Send a follow-up, steer or redirect work, answer a pending question, approve a plan, or escalate a `default` mode session to `bypassPermissions`. A session that is not running is resumed first when it still has a backend conversation.
 
 | Parameter | Type | Required | Notes |
 | --- | --- | --- | --- |
@@ -476,6 +482,7 @@ Send a follow-up, redirect work, approve a plan, or escalate a `default` mode se
 | `interrupt` | `boolean` | No | Abort the current turn before sending. Without it, Codex sessions steer the message into a running turn (other harnesses queue it for the next turn) |
 | `userInitiated` | `boolean` | No | Reset the auto-respond counter |
 | `approve` | `boolean` | No | Approve a pending plan or escalate `default` mode permissions |
+| `approval_rationale` | `string` | No | Structured rationale for a direct delegated plan approval (use with `approve=true` instead of putting it in `message`) |
 
 Example:
 
@@ -489,7 +496,7 @@ agent_respond(
 
 ### `agent_session_action`
 
-Run a backend thread action on a running session. Supported by Codex only; other harnesses return an error. Actions queue behind a running turn and report through the normal turn output (`agent_output`).
+Run a backend thread action on a running session. Supported by Codex only; other harnesses and sessions that are not running return an error. Actions queue behind a running turn and report through the normal turn output (`agent_output`).
 
 | Parameter | Type | Required | Notes |
 | --- | --- | --- | --- |
@@ -511,6 +518,15 @@ Escalate a delegated plan review to the user with the normal Approve / Revise / 
 | `session` | `string` | Yes | Session waiting on a delegated plan review |
 | `summary` | `string` | Yes | Concise scope/risk summary shown with the approval prompt |
 
+### `agent_request_worktree_decision`
+
+Escalate a delegated worktree decision to the user with the state-aware worktree decision buttons (for example Merge, Open PR, Later, Discard).
+
+| Parameter | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `session` | `string` | Yes | Delegated session awaiting a worktree decision |
+| `summary` | `string` | Yes | Concise user-facing summary of scope, risk, and why a human choice is needed |
+
 ### `agent_send_plan_offer`
 
 Send a user-facing message with `Start Plan` / `Dismiss` inline buttons. `Start Plan` launches a plan-gated code-agent session from the supplied prompt while preserving the chosen route, Telegram/Discord thread, and optional worktree strategy.
@@ -531,7 +547,7 @@ Use this as the primary generic primitive for external/local automation that wan
 
 ### `agent_output`
 
-Read buffered output without changing session state.
+Read buffered output without changing session state. Where the harness reports them, the output also shows the running cost, the per-model cost, Claude Code context fill and live background tasks, and a pending Claude Code plan.
 
 | Parameter | Type | Required | Notes |
 | --- | --- | --- | --- |
@@ -563,7 +579,7 @@ Any other parameter is rejected with `Invalid parameters` and nothing is stopped
 
 ### `agent_stats`
 
-Show aggregate session counts, cost, average duration, and most expensive sessions. When a Codex session has observed account rate limits (ChatGPT login), the latest primary/secondary usage windows and reset times are appended.
+Show session counts (from the persisted store), estimated cost, average duration, and the most expensive session. When Codex ChatGPT-login sessions have observed account rate limits, each account's latest primary/secondary usage windows and reset times are appended (labelled `account N` when there are several; account ids are never shown).
 
 This tool takes no parameters.
 
@@ -592,7 +608,7 @@ Merge a worktree branch back to base.
 | `push` | `boolean` | No | Defaults to `false`; set `true` only when you want the merged base branch pushed |
 | `delete_branch` | `boolean` | No | Defaults to `true` |
 
-On conflicts, the plugin spawns a conflict-resolver session using the configured default harness.
+With `strategy: merge`, rebase conflicts are reported with manual resolution steps. Squash-merge conflicts spawn a conflict-resolver session (`bypassPermissions`) using the configured default harness.
 
 After a successful local merge, auto-merge, or local-merge-with-push-failure outcome, the plugin sends the canonical worktree status and wakes the orchestrator with `completionWakeSummaryRequired=true`. The wake carries the authoritative session origin route/thread block, including persisted route metadata when the active row no longer has it. The orchestrator must read `agent_output(session, full=true)` when available and send one short factual routed summary to that origin route; a good summary inside that output is not itself visible delivery. The generic terminal completion path must not emit a second completion follow-up for that same worktree outcome. If `push=true` fails after the local merge, that follow-up must describe the push failure and must not claim the merge reached the remote. The persisted `completionWakeSummaryRequired` bit is pending-only; it is cleared only after the routed wake transport succeeds with a non-empty final response that is not `NO_REPLY`. For PR outcomes, the canonical status is the only message that carries the raw PR URL; follow-up summaries should refer to PR number, repository, and branch instead.
 
@@ -607,6 +623,9 @@ Create or update a GitHub PR for a worktree branch.
 | `body` | `string` | No | Auto-generated if omitted |
 | `base_branch` | `string` | No | Literal Git branch name; options and revision expressions rejected. Defaults to detected base branch |
 | `force_new` | `boolean` | No | Reject instead of updating an existing PR |
+| `update_metadata` | `boolean` | No | For an open PR, refresh the title and body. By default only OpenClaw-generated bodies and fallback titles are refreshed |
+| `update_body` | `boolean` | No | Alias for `update_metadata` |
+| `target_repo` | `string` | No | Cross-repo PR target (e.g. `openai/codex`); auto-detected from the `upstream` remote |
 
 The PR path pushes the worktree branch on demand, then handles open, merged, and closed PR states instead of blindly creating duplicates. When session metadata already points at an open PR, `agent_pr` treats that PR's head branch as authoritative; a follow-up/helper worktree branch is fast-forwarded into the original PR branch when safe, and divergent branches are rejected instead of creating a sibling PR. Newly created agent-authored worktree PRs are opened as GitHub draft PRs by default so a human can review before marking them ready. Existing open PR updates preserve the PR's current draft/ready state.
 
@@ -661,6 +680,32 @@ The cleanup tool always preserves:
 
 Successful cleanup clears the tracked branch/path and persists the resolved lifecycle state plus the retained reasons used for the cleanup decision.
 
+### `agent_repo_policy`
+
+Inspect or update the repo integration policy (see [Worktree Strategies](#worktree-strategies)).
+
+| Parameter | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `workdir` | `string` | No | Repo directory; defaults to the current tool workspace. Reset also accepts a stored repo path or key |
+| `policy` | `pr-required \| pr-allowed \| never-pr \| manual` | No | Sets the policy for the repo |
+| `reset` | `boolean` | No | Removes a stored policy; also works after the repo directory was deleted |
+| `list` | `boolean` | No | Lists stored repo policies |
+| `cleanup` | `boolean` | No | Removes stored repo policies whose repo root no longer exists on disk |
+
+Examples:
+
+- `agent_repo_policy(workdir="/repo", policy="pr-required")`
+- `agent_repo_policy(workdir="/deleted/repo", reset=true)`
+- `agent_repo_policy(cleanup=true)`
+- `/agent_policy pr-allowed`
+- `/agent_policy reset /deleted/repo`
+- `/agent_policy cleanup`
+- `/agent_policy list`
+
+A stored policy is keyed by the repo root and its normalized remote URL. Reset and the status view first resolve the live repo; when the directory is gone or is no longer a git checkout, they match stored records by repo path (a path inside the deleted repo matches its deepest stored root) or by a stored key. Resetting a live repo also removes records left at the same path under an older remote. `list` marks policies whose repo directory is missing with `(missing)`.
+
+Stored policies for deleted repos are not pruned automatically: a directory can be missing only for a while (an unmounted volume, or a re-clone at the same path, which reuses the policy), and the records are small. Remove them with `reset` or `cleanup`, which also drops records whose repo now resolves to a different remote.
+
 ## Chat Commands
 
 For natural-language launches, the plugin ships with `oca` as a built-in short name for OpenClaw Code Agent. No custom local alias config is needed for these phrase shapes:
@@ -671,21 +716,21 @@ Ask oca to add tests for the billing flow.
 Have oca handle the failing dashboard smoke test.
 ```
 
-| Command | Purpose |
-| --- | --- |
-| `/agent` | Launch a session from chat |
-| `/agent_sessions` | List sessions |
-| `/agent_output` | Show recent output |
-| `/agent_respond` | Send a reply |
-| `/agent_kill` | Stop a session |
-| `/agent_stats` | Show aggregate metrics |
-| `/agent_policy` | Set or inspect repository worktree/PR policy |
-| `/agent_goal` | Launch an explicit goal task |
-| `/agent_goal_status` | Show one goal task or list all goal tasks |
-| `/agent_goal_edit` | Change the goal text for an active goal task |
-| `/agent_goal_stop` | Stop a running goal task |
+| Command | Usage | Purpose |
+| --- | --- | --- |
+| `/agent` | `/agent [--name <name>] <prompt>` | Launch a session from chat |
+| `/agent_sessions` | `/agent_sessions [--full]` | List sessions |
+| `/agent_output` | `/agent_output <id-or-name> [--full] [--lines N]` | Show recent output |
+| `/agent_respond` | `/agent_respond [--interrupt] <id-or-name> <message>` | Send a reply |
+| `/agent_kill` | `/agent_kill <name-or-id>` | Stop a session |
+| `/agent_stats` | `/agent_stats` | Show aggregate metrics |
+| `/agent_policy` | `/agent_policy [pr-required\|pr-allowed\|never-pr\|manual\|reset [repo-path]\|list\|cleanup]` | Set or inspect repository worktree/PR policy; no argument shows the current repo |
+| `/agent_goal` | `/agent_goal [--name <name>] [--workdir <dir>] [--model <model>] [--harness <name>] [--mode ralph\|verifier] [--completion-promise <text>] [--max-iterations N] [--permission-mode <mode>] [--verify <cmd> ...] <goal>` | Launch an explicit goal task |
+| `/agent_goal_status` | `/agent_goal_status [<task-id-or-name>]` | Show one goal task or list all goal tasks |
+| `/agent_goal_edit` | `/agent_goal_edit <task-id-or-name> <replacement-goal>` | Change the goal text for an active goal task |
+| `/agent_goal_stop` | `/agent_goal_stop <task-id-or-name>` | Stop a running goal task |
 
-Use `agent_sessions` to inspect resumable sessions. Continue them with `agent_respond`, or fork from prior context with `agent_launch(..., resume_session_id=..., fork_session=true)`. `agent_respond` is the only continuation primitive.
+Use `agent_sessions` to inspect resumable sessions. Continue them with `agent_respond`, or fork from prior context with `agent_launch(..., resume_session_id=..., fork_session=true)`. `agent_respond` is the normal continuation path; `agent_launch(resume_session_id=...)` without `fork_session` also continues a stopped session in place (needed for `rewind_turns`) and refuses a running one.
 
 ## Routing And Channels
 
@@ -734,11 +779,12 @@ Bare numeric Discord targets default to channel routing unless the originating s
 
 Tool launches resolve the origin channel in this order:
 
-1. `ctx.messageChannel` plus `ctx.agentAccountId`
-2. `agentChannels` match for the workspace directory
-3. raw `ctx.messageChannel` if already pipe-delimited
-4. `fallbackChannel`
-5. `"unknown"`
+1. the trusted `ctx.deliveryContext` (channel, target, and account)
+2. `ctx.messageChannel` when it is already `channel|account|target`, or combined with `ctx.agentAccountId`, the chat id, or the sender id
+3. `agentChannels` match for the workspace directory
+4. raw `ctx.messageChannel` if already pipe-delimited
+5. `fallbackChannel`
+6. `"unknown"`
 
 Thread routing is separate from channel routing. When OpenClaw provides the originating session key or thread ID, notifications return to the exact thread or topic where the session started.
 
@@ -761,7 +807,7 @@ Prefer fully routable channel strings in `fallbackChannel` and `agentChannels`. 
 | Failed | `❌` failed, with recovery guidance |
 | Idle timeout | `💤` idle kill |
 | Stopped | `⛔` stopped by user or shutdown |
-| Worktree decision in `ask` | Inline `Merge` / `Open PR` buttons |
+| Worktree decision in `ask` | Inline `Merge` / `Open PR` / `Later` / `Discard` buttons (state-aware) |
 | Worktree decision in `delegate` | Orchestrator wake only |
 
 `ask` and `delegate` suppress the normal turn-complete wake at the end of the session because the worktree decision message becomes the completion signal.
@@ -801,41 +847,15 @@ Worktree-decision reminders use in-process deadline timers that are rebuilt from
 ## Session Lifecycle
 
 - A launched session starts in `starting`, becomes active while the harness is running, and then moves into explicit review, waiting, suspended, or terminal states.
-- `agent_respond` sends follow-up messages to active sessions. It only resumes a session automatically when that session is explicitly suspended and still has resumable harness state.
+- `agent_respond` sends follow-up messages to running sessions and automatically resumes a stopped, completed, or suspended session that still has a backend conversation id; otherwise it explains how to fork or relaunch.
 - `agent_respond` is the explicit continuation path for persisted resumable sessions after GC or restart.
 - Runtime GC evicts old runtime records from memory after `sessionGcAgeMinutes`, but explicitly resumable persisted sessions remain available through `agent_sessions`.
 - Startup recovery may convert interrupted running sessions into resumable persisted entries so they can be continued intentionally.
-- Persisted session resolution accepts internal IDs, names, and harness session IDs.
-
-## Repo Policy Tool
-
-Inspect or update repo integration policy.
-
-| Parameter | Type | Required | Notes |
-| --- | --- | --- | --- |
-| `workdir` | `string` | No | Repo directory; defaults to the current tool workspace |
-| `policy` | `pr-required \| pr-allowed \| never-pr \| manual` | No | Sets the policy for the repo |
-| `reset` | `boolean` | No | Removes a stored policy; also works after the repo directory was deleted |
-| `list` | `boolean` | No | Lists stored repo policies |
-| `cleanup` | `boolean` | No | Removes stored repo policies whose repo root no longer exists on disk |
-
-Examples:
-
-- `agent_repo_policy(workdir="/repo", policy="pr-required")`
-- `agent_repo_policy(workdir="/deleted/repo", reset=true)`
-- `agent_repo_policy(cleanup=true)`
-- `/agent_policy pr-allowed`
-- `/agent_policy reset /deleted/repo`
-- `/agent_policy cleanup`
-- `/agent_policy list`
-
-A stored policy is keyed by the repo root and its normalized remote URL. Reset and the status view first resolve the live repo; when the directory is gone or is no longer a git checkout, they match stored records by repo path (a path inside the deleted repo matches its deepest stored root) or by a stored key. Resetting a live repo also removes records left at the same path under an older remote. `list` marks policies whose repo directory is missing with `(missing)`.
-
-Stored policies for deleted repos are not pruned automatically: a directory can be missing only for a while (an unmounted volume, or a re-clone at the same path, which reuses the policy), and the records are small. Remove them with `reset` or `cleanup`, which also drops records whose repo now resolves to a different remote.
+- Persisted session resolution accepts OCA session IDs, names, and backend conversation IDs.
 
 ## Troubleshooting
 
-- OCA self-update reports success but stays on the old version: OpenClaw `2026.7.1` can treat `openclaw plugins update openclaw-code-agent@<version>` as an install-record ID, print `No install record for "openclaw-code-agent@<version>".`, and exit `0`. OpenClaw `2026.9.6` resolves `<npm-package>@<version>` against npm install records, but still cannot retarget a ClawHub install (`<id>@<version>` reports "No tracked plugin or hook pack found", and a bare-id update stays on the version pinned in the recorded `clawhub:` spec). OCA therefore keeps its own exact-version reinstall: npm installs use `openclaw plugins install <recorded-npm-package>@<approved-version> --force`, ClawHub installs use `openclaw plugins install clawhub:<recorded-package>@<approved-version> --force`, and success requires the installed plugin discovery plus managed source, package, and version metadata from `plugins inspect --json` to match. The running Gateway can legitimately retain the prior loaded version until the separately confirmed restart.
+- Why OCA reinstalls itself instead of calling `openclaw plugins update`: OpenClaw `2026.9.6` resolves `<npm-package>@<version>` against npm install records, but still cannot retarget a ClawHub install (`<id>@<version>` reports "No tracked plugin or hook pack found", and a bare-id update stays on the version pinned in the recorded `clawhub:` spec). OCA therefore keeps its own exact-version reinstall: npm installs use `openclaw plugins install <recorded-npm-package>@<approved-version> --force`, ClawHub installs use `openclaw plugins install clawhub:<recorded-package>@<approved-version> --force`, and success requires the installed plugin discovery plus managed source, package, and version metadata from `plugins inspect --json` to match. The running Gateway can legitimately retain the prior loaded version until the separately confirmed restart.
 - An OCA Telegram update button spins but no action runs: temporarily enable `OPENCLAW_CODE_AGENT_BUTTON_DIAGNOSTICS=1` and inspect logs for `callback_handler_registered`, `callback_received`, `callback_token_lookup_completed`, and `callback_update_action_started`. Diagnostics contain hashes rather than callback tokens. Registration without `callback_received` means OpenClaw core did not dispatch the tap to OCA; the plugin cannot acknowledge or act on a callback it never receives.
 - No notifications: verify `fallbackChannel` or `agentChannels` use fully routable channel strings. If you changed plugin config on disk, reload or restart the gateway through your normal operator process.
 - Wrong chat receives the update: check `agentChannels` longest-prefix matches and remove ambiguous path entries.

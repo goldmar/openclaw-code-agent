@@ -88,12 +88,15 @@
     "opencode",
     "coding-agent",
     "codex",
+    "openai",
     "ai",
     "anthropic",
     "agent",
     "code-generation",
     "automation",
-    "cli",
+    "orchestration",
+    "git-worktree",
+    "pull-request",
     "background-process",
     "developer-tools"
   ],
@@ -114,7 +117,7 @@
   "engines": {
     "node": ">=24.16.0 <25 || >=26.1.0"
   },
-  "description": "An OpenClaw plugin that orchestrates coding agent sessions as managed background processes. Launch, monitor, and control coding agents (Claude Code, Codex, experimental OpenCode, and more) directly from your AI gateway.",
+  "description": "OpenClaw plugin that runs Claude Code, Codex, and experimental OpenCode as managed background coding sessions from chat, with plan approval, isolated git worktrees, and merge/PR follow-through.",
   "peerDependencies": {
     "openclaw": ">=2026.9.6"
   }

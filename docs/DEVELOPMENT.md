@@ -10,13 +10,14 @@ pnpm verify
 ```
 
 Build output is the ESM bundle at `dist/index.js`. `pnpm build` deletes `dist/` first, and `prepack` runs the build, so `npm pack` and registry publishing never ship stale chunks.
-`pnpm-lock.yaml` is the only committed JavaScript lockfile in this repo. Do not add `package-lock.json`; npm is only used for `npm publish` in release, while install, CI, and dependency resolution are all pnpm-based.
+`pnpm-lock.yaml` is the development lockfile. `npm-shrinkwrap.json` is the published consumer lockfile: generate it only with `pnpm generate:npm-shrinkwrap`; `pnpm check-static-guardrails` checks it. Do not add `package-lock.json`. Install, CI, and dependency resolution use pnpm; npm is used only for the shrinkwrap generator, `npm pack`, and `npm publish`.
 
 ## Repository Layout
 
 ```text
 openclaw-code-agent/
 ├── index.ts
+├── api.ts
 ├── openclaw.plugin.json
 ├── src/
 │   ├── actions/
@@ -38,6 +39,7 @@ openclaw-code-agent/
 │   ├── git-exec.ts
 │   ├── worktree-provisioning.ts
 │   └── worktree.ts
+├── scripts/
 ├── tests/
 ├── docs/
 └── skills/
@@ -45,7 +47,7 @@ openclaw-code-agent/
 
 ## Main Code Paths
 
-- `index.ts`: plugin registration, service lifecycle, startup cleanup
+- `index.ts`: plugin registration, lazy service start/stop, interactive handlers
 - `src/session-manager.ts`: session control plane
 - `src/session.ts`: single-session lifecycle and event model
 - `src/session-state.ts`: reducer-backed lifecycle / approval / runtime / worktree transitions
@@ -55,7 +57,7 @@ openclaw-code-agent/
 - `src/harness/codex-app-server-protocol/`: generated Codex App Server wire types (see below; never edit by hand)
 - `src/tools/*`: OpenClaw tool implementations
 - `src/commands/*`: chat command implementations
-- `src/worktree.ts`: git worktree, merge, and PR helpers (re-exports `worktree-repo`, `worktree-lifecycle`, `worktree-merge`, `worktree-pr`)
+- `src/worktree.ts`: git worktree, merge, and PR helpers (re-exports `worktree-repo`, `worktree-lifecycle`, `worktree-lifecycle-resolver`, `worktree-merge`, `worktree-pr`)
 - `src/git-exec.ts`: the async `git` / `gh` runner and per-repository lock used by the worktree layer
 - `src/worktree-provisioning.ts`: `.worktreeinclude` copies and `.openclaw/worktree-setup.sh` for new worktrees
 - `src/worktree-lifecycle-resolver.ts`: lifecycle-first cleanup and `released` detection
@@ -105,7 +107,7 @@ pnpm check-plugin-security
 
 That checker packs and installs the plugin under an isolated temporary home, runs OpenClaw's deep static code-safety audit, and accepts only the reviewed `dangerous-exec` finding documented in [SECURITY.md](SECURITY.md). It fails for missing scans, scan errors, or additional dangerous-code patterns without reading or migrating operator state.
 
-`pnpm verify` also runs `pnpm check-clawhub-scan` after the build: ClawHub's static moderation scan (vendored in `scripts/vendor/clawhub-moderation-engine.mjs`, MIT) over the exact `npm pack` file list, plus two guards (`fetch(` only in the npm release-client chunk, and no packed file that combines `process.env` with a network call). It must report no findings. The release workflow runs the same check on the exact packed tarball (`node scripts/check-clawhub-scan.mjs --tarball=<file>`), because `prepack` rebuilds `dist/` during `npm pack`. Keep fixed commands literal (`execFile("git", [...])`), never name a function or method `spawn` / `exec` / `execFile`, and add any new dynamic command to the SECURITY.md inventory. Refresh the vendored engine from a ClawHub checkout with `pnpm sync:clawhub-scan -- --clawhub <dir>` (`--check` reports drift).
+`pnpm verify` also runs `pnpm check-clawhub-scan` after the build: ClawHub's static moderation scan (vendored in `scripts/vendor/clawhub-moderation-engine.mjs`, MIT) over the exact `npm pack` file list, plus two guards (`fetch(` only in the npm release-client chunk, and no packed file that combines `process.env` with a network call). It must report no findings. The release workflow runs the same check on the exact packed tarball (`node scripts/check-clawhub-scan.mjs --tarball=<file>`), because `prepack` rebuilds `dist/` during `npm pack`. Keep fixed commands literal (`execFile("git", [...])`), never name a function or method `spawn` / `exec` / `execFile`, and add any new dynamic command to the SECURITY.md inventory. Refresh the vendored engine from a ClawHub checkout with `pnpm sync:clawhub-scan --clawhub <dir>` (`--check` reports drift).
 
 This repo currently has dev-only transitive advisories coming from upstream dependencies, so a blanket failing `pnpm audit` step is not the right merge gate until those findings are either remediated upstream or intentionally allowlisted with pnpm audit configuration.
 
@@ -117,9 +119,9 @@ pnpm run validate:release-metadata -- <version>
 
 Release checklist:
 
-1. `pnpm verify` (includes the ClawHub static scan of the packed files) and `pnpm check-plugin-security`.
+1. `pnpm verify` (includes the ClawHub static scan of the packed files), `pnpm check-plugin-security`, and `pnpm run audit:prod`. The release workflow also runs the ClawHub package inspector (`clawhub package validate --runtime`).
 2. `pnpm run validate:release-metadata -- <version>` and `pnpm verify:npm-consumer`.
-3. `pnpm sync:codex-protocol -- --check` against the Codex CLI you validate with; it must report no drift. With a live Codex environment, run `pnpm smoke:codex-live` and `pnpm smoke:codex-release`, which repeat that check first.
+3. `pnpm sync:codex-protocol --check` against the Codex CLI you validate with; it must report no drift. With a live Codex environment, run `pnpm smoke:codex-live` and `pnpm smoke:codex-release`, which repeat that check first.
 4. `npm pack --dry-run` to review the package contents (`prepack` rebuilds `dist/`).
 
 Release metadata for external plugin installs lives in `package.json` under `openclaw.compat` and `openclaw.build`, while the plugin manifest version and manifest-owned activation/setup descriptors live in `openclaw.plugin.json`. When cutting a release, keep the package/plugin versions aligned and update the manifest descriptors whenever the plugin-owned command or onboarding surface changes.
@@ -128,11 +130,11 @@ Release-prep docs should also cover behavior that changed since the previous tag
 
 Release-prep branches should stop after PR-ready changes and validation unless the maintainer explicitly asks to publish. Do not push a `v*` tag, dispatch `.github/workflows/release.yml`, or run `npm publish` / `clawhub package publish` during preparation-only work. Use `npm pack --dry-run` to check package contents without publishing.
 
-The manually dispatched release workflow verifies one selected `main` commit, packs one artifact, and publishes that exact tarball to npm and ClawHub. Both registries use Trusted Publishing through GitHub OIDC and the protected `release` environment; no npm or ClawHub publishing token is stored in GitHub.
+The manually dispatched release workflow verifies one selected `main` commit, packs one artifact, and publishes that exact tarball to npm and ClawHub from the protected `release` environment. npm uses Trusted Publishing through GitHub OIDC (`--provenance`), so no npm token is stored. ClawHub publishes with the `CLAWHUB_TOKEN` repository secret, written to a temporary private CLI config for that step.
 
 Additional smoke entry points:
 
-- `pnpm smoke:backend-parity` for the shared backend-contract surface
+- `pnpm smoke:backend` and `pnpm smoke:backend-parity` for the Codex harness, plan-mode, restore, and shared backend-contract surface
 - `pnpm smoke:codex-worktrees` for Codex plugin-managed worktree bootstrap and session restore behavior
 - `pnpm test:integ:crabbox` for deterministic Codex proof/Crabbox harness coverage; live Telegram Desktop proof stays disabled unless `OPENCLAW_RUN_LIVE_TELEGRAM_PROOF=1` and `--allow-live` are both used
 - `pnpm smoke:codex-live` for opt-in real App Server validation when a live Codex environment is available (developer instructions, resume, steering, compaction, and rewind-fork; uses `gpt-6-luna` unless `OPENCLAW_CODEX_SMOKE_MODEL` is set)
@@ -141,7 +143,7 @@ Additional smoke entry points:
 
 ### Codex App Server Protocol Types
 
-`src/harness/codex-app-server-protocol/` is generated. Do not edit it by hand. Regenerate it from the installed Codex CLI with `pnpm sync:codex-protocol` (runs `codex app-server generate-ts --experimental` and keeps only the import closure of the types the harness uses), and check drift with `pnpm sync:codex-protocol -- --check`. After a Codex upgrade, regenerate, run `pnpm typecheck`, and run the live Codex smoke. Both `pnpm smoke:codex-live` and `pnpm smoke:codex-release` start with that `--check`, so a live smoke fails when the installed Codex CLI's protocol no longer matches the vendored types.
+`src/harness/codex-app-server-protocol/` is generated. Do not edit it by hand. Regenerate it from the installed Codex CLI with `pnpm sync:codex-protocol` (runs `codex app-server generate-ts --experimental` and keeps only the import closure of the types the harness uses), and check drift with `pnpm sync:codex-protocol --check`. After a Codex upgrade, regenerate, run `pnpm typecheck`, and run the live Codex smoke. Both `pnpm smoke:codex-live` and `pnpm smoke:codex-release` start with that `--check`, so a live smoke fails when the installed Codex CLI's protocol no longer matches the vendored types.
 
 ### Live Codex Release Check
 
@@ -155,7 +157,7 @@ Before running it:
 
 ### Live OpenCode Smoke Check
 
-Use `pnpm smoke:opencode-live` only when a real OpenCode environment is available. It starts `opencode serve`, creates a trivial session, sends a prompt through the harness's OpenCode compatibility path, waits for completion, and verifies that an assistant response was produced. It intentionally stays out of `pnpm verify` because it depends on local OpenCode installation and provider auth.
+Use `pnpm smoke:opencode-live` only when a real OpenCode environment is available. It starts `opencode serve` the way the harness does (`--port 0`) and checks the classic session routes (create, messages, status, fork, `prompt_async`, abort) and the `/global/event` stream without a model call. With `OPENCLAW_RUN_LIVE_OPENCODE_COMPLETION_SMOKE=1` it also runs a trivial prompt through `OpenCodeHarness` and checks the reply, which needs provider auth. It intentionally stays out of `pnpm verify` because it depends on a local OpenCode installation.
 
 ## Extending The Plugin
 
@@ -163,16 +165,18 @@ Use `pnpm smoke:opencode-live` only when a real OpenCode environment is availabl
 
 1. Create a file in `src/tools/`.
 2. Export a `makeAgentXxxTool()` factory.
-3. Register it in `index.ts`.
-4. Add or update tests.
-5. Document it in [REFERENCE.md](REFERENCE.md).
+3. Register it in `index.ts` with `registerCodeAgentTool(..., { name })`.
+4. Add the tool name to `openclaw.plugin.json` `contracts.tools` (`tests/plugin-entry.test.ts` enforces this).
+5. Add or update tests.
+6. Document it in [REFERENCE.md](REFERENCE.md), the README tool table, and the orchestration skill when agents should use it.
 
 ### Add A Chat Command
 
 1. Create a file in `src/commands/`.
 2. Export `registerAgentXxxCommand()`.
 3. Register it in `index.ts`.
-4. Keep the behavior aligned with the corresponding tool when one exists.
+4. Add the command name to `openclaw.plugin.json` `activation.onCommands` (`tests/plugin-entry.test.ts` enforces this).
+5. Keep the behavior aligned with the corresponding tool when one exists.
 
 ### Add A Harness
 
@@ -196,12 +200,12 @@ Use `pnpm smoke:opencode-live` only when a real OpenCode environment is availabl
 - Tool parameter schemas use the TypeBox builders from `src/tool-parameter-schema.ts`, not the `typebox` root `Type` object, which would pull the whole TypeBox type system into the bundle.
 - Every `git` / `gh` call in `src/` (the worktree layer and branch-name validation) goes through the async `runGit` / `runGh` in `src/git-exec.ts`; do not add `execFileSync` anywhere in `src/`. Wrap multi-step mutating git sequences in `withRepoLock`.
 - Import only public `openclaw/plugin-sdk/*` subpaths that untrusted external plugins may use (check the host `package.json` exports and `docs/plugins/sdk-subpaths.md`; private-local and trusted-only surfaces are off limits). Type-only imports are erased; every value or dynamic import must also be listed as `--external:` in the `build` script, which `tests/plugin-entry.test.ts` enforces.
-- Log through `createLogger(...)` from `src/logger.ts` instead of `console.*`: it writes to the Gateway log via `api.runtime.logging.getChildLogger`. The build keeps `--pure:console.*` so the console fallback (tests, hosts without runtime logging) never reaches production output.
+- Log through `createLogger(...)` from `src/logger.ts` instead of `console.*`: it writes to the Gateway log via `api.runtime.logging.getChildLogger`. The console fallback is used only before plugin registration, in tests, or if the host logger throws; the build marks `console.log` / `info` / `warn` / `debug` as pure, so only `console.error` from that fallback can reach production output.
 
 ## Service Lifecycle
 
-- `start()`: load config, create `SessionManager`, bootstrap maintenance schedules (worktree retention cleanup, reminders, output-file cleanup)
-- `stop()`: kill active sessions, clear timers, drop the singleton
+- `start()` runs on Gateway startup or lazily on the first tool, command, or callback: load config, create `SessionManager` and wait for it to restore persisted sessions and reconcile the Task Flow mirror, create and start the `GoalController`, create the auto-update service when `autoUpdate` is on, and bootstrap maintenance schedules (worktree retention cleanup, reminders, output-file cleanup)
+- `stop()`: stop the goal controller, then `SessionManager.shutdown()` disposes maintenance, stops active sessions (`shutdown`), waits for in-flight launches, maintenance, and session teardown, and drains the Task Flow mirror; finally the runtime and singletons are cleared
 
 ## Docs Maintenance Checklist
 

@@ -7,7 +7,7 @@ Thank you for your interest in contributing! This guide covers everything you ne
 ## Prerequisites
 
 - **Node.js** 24.16.0+ on Node 24 or 26.1.0+ on Node 26, matching the pinned OpenClaw SDK
-- **pnpm** 10+ — install with `npm install -g pnpm`
+- **pnpm** 11 — the repo pins `pnpm@11.15.1` in `packageManager`; use `corepack enable` or `npm install -g pnpm@11.15.1`
 
 ---
 
@@ -25,7 +25,7 @@ pnpm install
 pnpm verify
 ```
 
-`pnpm verify` is the contributor and release gate. It runs typecheck, build, and the full test suite in the same order CI uses.
+`pnpm verify` is the contributor and release gate. It runs the static guardrails (including the npm-shrinkwrap check), typecheck, build, the ClawHub static scan of the packed files, and the full test suite, in the same order CI uses.
 
 For release prep, validate manifest/package version parity too:
 
@@ -44,7 +44,7 @@ pnpm run test
 ```
 
 Tests use Node's built-in test runner (`node --test`) via `tsx` for TypeScript support.
-All `*.test.ts` files under `tests/` are discovered and run automatically.
+All `*.test.ts` files under `tests/` are discovered and run automatically. `scripts/run-tests.mjs` runs each file in its own process with a temporary OpenClaw home, and every test file must start with `import "./test-env";` (enforced by `pnpm check-static-guardrails`) so no test can touch your real `~/.openclaw`.
 
 ---
 
@@ -54,9 +54,13 @@ Every PR must pass `pnpm verify` locally and in CI. The current automated checks
 
 | Check | Command | Notes |
 |-------|---------|-------|
-| Verify | `pnpm verify` | Canonical typecheck + build + test gate on Node 24.16.0 and 26.1.0 |
+| Verify | `pnpm verify` | Canonical guardrails + typecheck + build + ClawHub scan + test gate on Node 24.16.0 and 26.1.0 |
 | Bundle size | — | Complete `dist/` bundle must be <= 700 KB |
-| Lockfile integrity | — | `pnpm-lock.yaml` must be in sync with `package.json` |
+| Lockfile integrity | `pnpm verify:npm-consumer` | `pnpm-lock.yaml` must be in sync with `package.json`, and the packed npm consumer dependency graph must install |
+| Security audit | `pnpm run audit:prod` | Production dependency advisories |
+| Dependency review | — | GitHub Dependency Review of dependency changes |
+| CodeQL | — | GitHub code scanning |
+| Workflow sanity | — | Workflow files: no tabs, actionlint |
 
 If the lockfile check fails, regenerate it locally:
 
@@ -85,19 +89,21 @@ git commit -m "chore: update pnpm lockfile"
 
 ## Worktree branches (`agent/*`)
 
-Claude Code and other coding agents use branches with the `agent/` prefix when running
-in isolated git worktrees. **Do not delete these branches manually** — they are managed
-by the agent orchestration layer and cleaned up automatically when the session ends.
+OpenClaw Code Agent creates `agent/<session-name>` branches for its isolated git worktrees.
+**Do not delete these branches manually while they are in use.** OCA removes them once the
+worktree is resolved (merged, dismissed, released, or finished without changes), through its
+maintenance schedules or `agent_worktree_cleanup`; the `manual` strategy keeps them until you
+act. Remote copies exist only for branches pushed for a PR.
 
-If you see stale `agent/*` branches after a session, you can safely delete them once you
-confirm the associated agent session has completed:
+If you see stale `agent/*` branches, check `agent_worktree_status` first, then delete them
+once the associated session is confirmed finished:
 
 ```bash
 # List remote agent branches
 git branch -r | grep 'origin/agent/'
 
 # Delete a specific stale branch (only when the session is confirmed finished)
-git push origin --delete agent/<session-id>
+git push origin --delete agent/<session-name>
 ```
 
 ---
@@ -116,12 +122,12 @@ git push origin --delete agent/<session-id>
 
 Releases are handled only through a manual dispatch of the `release.yml` GitHub Actions workflow. Supply the version without a leading `v` and the full `main` commit SHA to release.
 
-The workflow verifies that the selected commit belongs to `main`, runs the full CI and security gates on Node.js 24.16.0, validates package/plugin/changelog/lockfile metadata, and packs one artifact. The protected publish job uses the same supported Node baseline and GitHub OIDC to publish that exact tarball to npm and ClawHub, create or verify the immutable `v<version>` tag, and create or update the matching GitHub release. Safe retries verify existing artifact digests before skipping a registry or release upload.
+The workflow verifies that the selected commit belongs to `main`, runs the full CI and security gates on Node.js 24.16.0, validates package/plugin/changelog/lockfile metadata, and packs one artifact. The protected publish job uses the same supported Node baseline to publish that exact tarball to npm (GitHub OIDC Trusted Publishing with provenance) and ClawHub (the `CLAWHUB_TOKEN` secret), create or verify the immutable `v<version>` tag, and create or update the matching GitHub release. Safe retries verify existing artifact digests before skipping a registry or release upload.
 
-Both registry trust relationships must match:
+The npm trust relationship must match:
 
 - repository: `goldmar/openclaw-code-agent`
 - workflow: `release.yml`
 - environment: `release`
 
-npm and ClawHub then authenticate the publish job through OIDC. Do not add `NPM_TOKEN` or `CLAWHUB_TOKEN` repository secrets.
+npm then authenticates the publish job through OIDC. Do not add an `NPM_TOKEN` secret; `CLAWHUB_TOKEN` must stay available to the `release` job.

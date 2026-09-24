@@ -71,7 +71,8 @@
     "properties": {
       "maxSessions": {
         "type": "number",
-        "default": 20
+        "default": 20,
+        "description": "Maximum concurrently active sessions; further launches are refused."
       },
       "harnesses": {
         "type": "object",
@@ -111,7 +112,7 @@
               "items": {
                 "type": "string"
               },
-              "description": "Restrict which models can be used with this harness. Empty or omitted means no restriction."
+              "description": "Models this harness may launch. When omitted, Codex and Claude Code keep their built-in allowlist, unless this entry also sets defaultModel, which clears it. An empty array means no restriction."
             },
             "reasoningEffort": {
               "type": "string",
@@ -122,7 +123,7 @@
                 "xhigh",
                 "max"
               ],
-              "description": "Harness-specific reasoning effort. Passed to Codex (as the turn effort, skipped when Codex's model/list says the model does not support it) and to Claude Code when configured. Unset for Codex means Codex's own configured/model default."
+              "description": "Harness-specific reasoning effort. Passed to Codex (as the turn effort, skipped when Codex's model/list says the model does not support it), to Claude Code as its effort, and to OpenCode as the prompt variant. Unset for Codex means Codex's own configured/model default."
             },
             "fastMode": {
               "type": "boolean",
@@ -165,7 +166,7 @@
       "idleTimeoutMinutes": {
         "type": "number",
         "default": 15,
-        "description": "Idle timeout in minutes for multi-turn sessions before auto-kill"
+        "description": "Minutes a multi-turn session may sit idle before OCA suspends it (stops the backend process; the session stays resumable with agent_respond or the Resume button)."
       },
       "sessionGcAgeMinutes": {
         "type": "number",
@@ -175,7 +176,7 @@
       "maxPersistedSessions": {
         "type": "number",
         "default": 10000,
-        "description": "Maximum number of completed sessions to keep in memory for resume. In practice, the 24h GC TTL (`sessionGcAgeMinutes`) is the primary retention control."
+        "description": "Maximum number of persisted session records kept in the session index for resume and history. Beyond this, the oldest by completion time are removed. sessionGcAgeMinutes only controls eviction of terminal sessions from memory."
       },
       "fallbackChannel": {
         "type": "string",
@@ -223,7 +224,7 @@
         "type": "string",
         "default": "delegate",
         "enum": ["off", "manual", "ask", "delegate", "auto-merge", "auto-pr"],
-        "description": "Default worktree strategy for all new sessions when agent_launch omits worktree_strategy. Repo integration policy still governs whether merge or PR follow-through is allowed. 'delegate' (default) creates an isolated worktree and wakes the orchestrator to decide follow-through autonomously. 'off' = no worktree. 'manual' = create worktree, no automatic action. 'ask' = notify the user with state-aware buttons such as Merge, Open PR, View PR, Sync PR, Later, and Discard when policy allows them. 'auto-merge' = request automatic merge to base branch on completion. 'auto-pr' = request automatic GitHub PR creation/update on completion."
+        "description": "Default worktree strategy for all new sessions when agent_launch omits worktree_strategy. Repo integration policy still governs whether merge or PR follow-through is allowed. 'delegate' (default) creates an isolated worktree and wakes the orchestrator to decide follow-through autonomously. 'off' = no worktree. 'manual' = create worktree, no automatic action; the worktree is kept after the session ends. 'ask' = notify the user with state-aware buttons such as Merge, Open PR, View PR, Sync PR, Later, and Discard when policy allows them. 'auto-merge' = request automatic merge to base branch on completion. 'auto-pr' = request automatic GitHub PR creation/update on completion."
       },
       "worktreeDir": {
         "type": "string",
@@ -239,7 +240,7 @@
   "uiHints": {
     "fallbackChannel": {
       "label": "Fallback notification channel",
-      "help": "Optional but recommended. Default channel used when no workspace-specific agentChannels entry matches the session workdir. Prefer a fully routable channel string; bare providers are only weak fallbacks.",
+      "help": "Optional but recommended. Default channel used when no workspace-specific agentChannels entry matches the session workdir. Also used for plugin update prompts. Prefer a fully routable channel string; bare providers are only weak fallbacks.",
       "placeholder": "telegram|my-bot|123456789"
     },
     "agentChannels": {
@@ -265,7 +266,7 @@
     },
     "idleTimeoutMinutes": {
       "label": "Idle timeout (minutes)",
-      "help": "Minutes a paused multi-turn session can remain idle before the plugin auto-kills it.",
+      "help": "Minutes a session waiting for input can stay idle before the plugin suspends it. A suspended session keeps its conversation and resumes on the next agent_respond.",
       "advanced": true
     },
     "defaultHarness": {
@@ -288,9 +289,29 @@
       "help": "On (default): check daily for a newer release and offer it with buttons. Installing and restarting the Gateway each need an explicit button press. Off: no update checks, installs, or restarts.",
       "advanced": true
     },
+    "worktreeDir": {
+      "label": "Worktree directory",
+      "help": "Base directory for OCA worktrees; defaults to <repoRoot>/.worktrees. OPENCLAW_WORKTREE_DIR takes precedence.",
+      "advanced": true
+    },
+    "maxAutoResponds": {
+      "label": "Maximum auto-responds",
+      "help": "Consecutive orchestrator auto-responds allowed per session before user input is required.",
+      "advanced": true
+    },
+    "sessionGcAgeMinutes": {
+      "label": "Session memory TTL (minutes)",
+      "help": "Minutes before finished sessions are evicted from memory. Persisted sessions stay resumable.",
+      "advanced": true
+    },
+    "maxPersistedSessions": {
+      "label": "Maximum persisted sessions",
+      "help": "Maximum session records kept in the session index; the oldest finished sessions are removed first.",
+      "advanced": true
+    },
     "defaultWorktreeStrategy": {
       "label": "Default worktree strategy",
-      "help": "Applies to all sessions that don't specify worktree_strategy explicitly. Repo policy can downgrade unsafe or impossible merge/PR follow-through. 'delegate' (default) creates a worktree and wakes the orchestrator to decide follow-through. 'off' disables worktrees globally. 'ask' sends state-aware inline worktree buttons such as Merge, Open PR, View PR, Sync PR, Later, and Discard when policy allows them.",
+      "help": "Applies to all sessions that don't specify worktree_strategy explicitly. Repo policy can downgrade unsafe or impossible merge/PR follow-through. 'delegate' (default) creates a worktree and wakes the orchestrator to decide follow-through. 'off' disables worktrees for sessions that don't request one. 'manual' creates a worktree and keeps it for explicit follow-through. 'ask' sends state-aware inline worktree buttons such as Merge, Open PR, View PR, Sync PR, Later, and Discard when policy allows them.",
       "advanced": true
     }
   },

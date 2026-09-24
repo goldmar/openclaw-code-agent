@@ -131,7 +131,7 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
       base_branch: Type.Optional(Type.String({ description: "Literal Git branch name to merge into; options and revision expressions are rejected (default: main)" })),
       strategy: Type.Optional(
         Type.Union([Type.Literal("merge"), Type.Literal("squash")], {
-          description: "Merge strategy: 'merge' (default, fast-forward if possible; merge commit if branches have diverged) or 'squash' (squashes all commits into one)",
+          description: "Merge strategy: 'merge' (default: rebase the branch onto base, then fast-forward) or 'squash' (squashes all commits into one)",
         }),
       ),
       push: Type.Optional(Type.Boolean({ description: "Push the base branch after successful merge (default: false)" })),
