@@ -28,6 +28,12 @@ type ExecuteOptions = {
   onStarted?: () => void;
   onSuccess?: () => void;
   onSkipped?: (reason: string) => void;
+  /**
+   * The task timed out while it may still complete (the task is not cancelled).
+   * When set, a timeout calls this instead of retrying or `onFinalFailure`, so
+   * callers never trigger a second delivery path for a send that may land later.
+   */
+  onAmbiguousResult?: () => void;
   onFinalFailure?: () => void;
   successValidator?: (stdout: string) => DispatchSuccessValidationResult;
   shouldContinue?: () => boolean;
@@ -38,8 +44,15 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+class DispatchTimeoutError extends Error {
+  constructor() {
+    super(`Dispatch timed out after ${WAKE_CLI_TIMEOUT_MS}ms`);
+    this.name = "DispatchTimeoutError";
+  }
+}
+
 function createDispatchTimeoutError(): Error {
-  return new Error(`Dispatch timed out after ${WAKE_CLI_TIMEOUT_MS}ms`);
+  return new DispatchTimeoutError();
 }
 
 export const wakeDeliveryExecutorInternals = {
@@ -315,6 +328,26 @@ export class WakeDeliveryExecutor {
         }
         const elapsedMs = Date.now() - startedAt;
         if (opts.shouldContinue?.() === false) {
+          onSettled?.();
+          return;
+        }
+        if (err instanceof DispatchTimeoutError && opts.onAmbiguousResult) {
+          this.log("error", "dispatch_failed", {
+            label: opts.label,
+            sessionId: opts.sessionId,
+            target: opts.target,
+            phase: opts.phase,
+            messageKind: opts.messageKind,
+            route: opts.routeSummary,
+            ...opts.dispatchContext,
+            attempt,
+            maxAttempts: WAKE_MAX_ATTEMPTS,
+            elapsedMs,
+            error: errorMessage(err),
+            terminal: true,
+            ambiguousResult: true,
+          });
+          opts.onAmbiguousResult();
           onSettled?.();
           return;
         }

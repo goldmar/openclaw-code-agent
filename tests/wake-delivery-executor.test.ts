@@ -100,6 +100,43 @@ describe("WakeDeliveryExecutor", () => {
     assert.ok(errors.some((line) => line.includes("\"event\":\"dispatch_retry_scheduled\"")));
   });
 
+  it("reports a timed-out promise dispatch as ambiguous without retrying or failing over", async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const executor = new WakeDeliveryExecutor();
+    const errors: string[] = [];
+    console.error = (message?: unknown, ...rest: unknown[]) => {
+      errors.push([message, ...rest].map((value) => String(value)).join(" "));
+    };
+    let attempts = 0;
+    let ambiguous = 0;
+    let finalFailures = 0;
+
+    executor.executePromise(() => {
+      attempts += 1;
+      return new Promise<void>(() => {});
+    }, {
+      label: "launch-notify",
+      sessionId: "session-durable-timeout",
+      target: "message.send",
+      phase: "notify",
+      routeSummary: "telegram|bot|123",
+      messageKind: "notify",
+      terminalOnFailure: true,
+      onAmbiguousResult: () => { ambiguous += 1; },
+      onFinalFailure: () => { finalFailures += 1; },
+    });
+
+    await Promise.resolve();
+    t.mock.timers.tick(30_000);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(attempts, 1);
+    assert.equal(ambiguous, 1);
+    assert.equal(finalFailures, 0);
+    assert.ok(errors.some((line) => line.includes("\"ambiguousResult\":true")));
+    executor.dispose();
+  });
+
   it("does not start queued ordered dispatches after dispose clears a pending retry", async () => {
     const executor = new WakeDeliveryExecutor();
     const scheduledTimers: Array<{ cleared: boolean; unref?: () => void }> = [];

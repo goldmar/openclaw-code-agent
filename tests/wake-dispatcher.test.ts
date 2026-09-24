@@ -554,6 +554,45 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
     assert.deepEqual(calls, [["system", "event", "--text", "🚀 launched", "--mode", "now"]]);
   });
 
+  it("does not resend a plain notification through a system event after an ambiguous durable-send timeout", async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const sends: string[] = [];
+    const systemEvents: string[] = [];
+    let notifyFailed = 0;
+    const dispatcher = createDispatcher({
+      directNotifications: {
+        send: async (_route, text) => {
+          sends.push(text);
+          await new Promise<void>(() => {});
+        },
+      },
+      systemEvents: {
+        enqueue: async (text) => { systemEvents.push(text); },
+      },
+    });
+    const session: FakeSession = {
+      id: "session-durable-timeout",
+      route: buildRoute(),
+      originSessionKey: "agent:main:telegram:group:-1003863755361:topic:11239",
+    };
+
+    dispatcher.dispatchSessionNotification(session as any, {
+      label: "launch",
+      userMessage: "🚀 launched",
+      notifyUser: "always",
+      hooks: { onNotifyFailed: () => { notifyFailed += 1; } },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    t.mock.timers.tick(30_000);
+    for (let i = 0; i < 5; i += 1) await Promise.resolve();
+
+    assert.deepEqual(sends, ["🚀 launched"]);
+    assert.deepEqual(systemEvents, []);
+    assert.equal(notifyFailed, 1);
+    dispatcher.dispose();
+  });
+
   it("does not system-fallback strict runtime direct notification failures", async () => {
     const sends: string[] = [];
     const dispatcher = createDispatcher({

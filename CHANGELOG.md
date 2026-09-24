@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Session output transcripts move from `/tmp/openclaw-agent-<id>.txt` to `<stateDir>/plugin-state/openclaw-code-agent/output/` (private directory and files). Existing `/tmp` transcripts stay readable through their stored paths and are aged out by the normal maintenance cleanup.
 - Auto-update state moves to `<stateDir>/plugin-state/openclaw-code-agent/auto-update.json`; the previous `openclaw-code-agent-auto-update.json` is read once as a migration source.
 - Removed the age-based startup sweep that deleted unmanaged `openclaw-worktree-*` directories (and the `OPENCLAW_WORKTREE_CLEANUP_AGE_HOURS` knob). Managed worktrees are still cleaned by the maintenance schedules and `agent_worktree_cleanup`; review and remove unmanaged directories with `git worktree remove`/`git worktree prune`.
-- Direct notifications no longer fall back to `openclaw message send`, and OCA no longer retries a failed direct send: the host durable outbound queue owns retries of an admitted send.
+- Direct notifications no longer fall back to `openclaw message send`, and OCA no longer retries a failed direct send: the host durable outbound queue owns retries of an admitted send. A send that times out with an unknown outcome is reported as failed without a system-event resend.
 - A user stop (`agent_kill`) now records a Task Flow cancel intent, so the mirrored flow ends as `cancelled` instead of `failed`.
 
 ### Changed

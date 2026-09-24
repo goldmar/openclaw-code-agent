@@ -57,6 +57,11 @@ function createTaskFlowRecorder() {
       revision += 1;
       return { applied: true, flow: { flowId: "flow-1", revision } };
     },
+    async requestCancel(params: Record<string, unknown>) {
+      calls.push({ method: "requestCancel", params });
+      revision += 1;
+      return { applied: true, flow: { flowId: "flow-1", revision, cancelRequestedAt: params.cancelRequestedAt } };
+    },
   };
   return { calls, taskFlow };
 }
@@ -282,7 +287,7 @@ describe("session task lifecycle async adapter", () => {
     assert.deepEqual(legacy.calls, []);
   });
 
-  it("fails the managed TaskFlow for failed or cancelled terminal sessions", async () => {
+  it("fails the managed TaskFlow for sessions cancelled by shutdown", async () => {
     const { calls, taskFlow } = createTaskFlowRecorder();
     setManagedTaskFlow(taskFlow);
 
@@ -291,12 +296,26 @@ describe("session task lifecycle async adapter", () => {
     });
     const session = createSession();
     await sink.create(session);
-    session.kill("user");
+    session.kill("shutdown");
     await sink.finalize(session);
 
     assert.deepEqual(calls.map((call) => call.method), ["createManaged", "fail"]);
     assert.equal((calls[1].params.stateJson as Record<string, unknown>).terminalStatus, "cancelled");
-    assert.equal(calls[1].params.blockedSummary, "Cancelled by user");
+    assert.equal(calls[1].params.blockedSummary, "Cancelled during shutdown");
+  });
+
+  it("does not mirror onto a partial runtime without requestCancel", async () => {
+    const { calls, taskFlow } = createTaskFlowRecorder();
+    const { requestCancel: _omitted, ...partial } = taskFlow;
+    setManagedTaskFlow(partial);
+
+    const sink = resolveSessionTaskLifecycle({ sessionKey: "agent:main:telegram:group:123" });
+    const session = createSession();
+    await sink.create(session);
+    session.kill("user");
+    await sink.finalize(session);
+
+    assert.deepEqual(calls, []);
   });
 
   it("warns once when terminal TaskFlow mutation is not applied and does not retry", async () => {
@@ -330,6 +349,10 @@ describe("session task lifecycle async adapter", () => {
         },
         async fail(params: Record<string, unknown>) {
           calls.push({ method: "fail", params });
+          return { applied: true, flow: { flowId: "flow-1", revision: 2 } };
+        },
+        async requestCancel(params: Record<string, unknown>) {
+          calls.push({ method: "requestCancel", params });
           return { applied: true, flow: { flowId: "flow-1", revision: 2 } };
         },
       };

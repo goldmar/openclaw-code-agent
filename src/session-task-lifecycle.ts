@@ -244,8 +244,10 @@ function buildStateJson(session: SessionTaskEvent, phase: "created" | "progress"
   };
 }
 
-type MirrorTaskFlowRuntime = Required<Pick<BoundTaskFlowRuntime, "createManaged" | "resume" | "setWaiting" | "finish" | "fail">>
-  & Pick<BoundTaskFlowRuntime, "tryCreateManaged" | "get" | "requestCancel">;
+// `requestCancel` ships with every host that has the async managed-flow binding;
+// requiring it keeps user stops recorded as cancellations, never as failures.
+type MirrorTaskFlowRuntime = Required<Pick<BoundTaskFlowRuntime, "createManaged" | "resume" | "setWaiting" | "finish" | "fail" | "requestCancel">>
+  & Pick<BoundTaskFlowRuntime, "tryCreateManaged" | "get">;
 
 function isManagedTaskFlowRuntime(value: unknown): value is MirrorTaskFlowRuntime {
   if (!value || typeof value !== "object") return false;
@@ -254,7 +256,8 @@ function isManagedTaskFlowRuntime(value: unknown): value is MirrorTaskFlowRuntim
     && typeof runtime.resume === "function"
     && typeof runtime.setWaiting === "function"
     && typeof runtime.finish === "function"
-    && typeof runtime.fail === "function";
+    && typeof runtime.fail === "function"
+    && typeof runtime.requestCancel === "function";
 }
 
 function applyMutation(
@@ -385,7 +388,7 @@ class ManagedTaskFlowSessionTaskLifecycleSink implements SessionTaskLifecycleSin
         : terminalSummary(event.status, event.killReason);
     try {
       const endedAt = event.completedAt ?? event.occurredAt;
-      if (event.status === "killed" && event.killReason === "user" && typeof this.taskFlow.requestCancel === "function") {
+      if (event.status === "killed" && event.killReason === "user") {
         // A user stop is a cancellation, not a failure: record the cancel intent and
         // let the host sweep settle the flow as `cancelled`.
         const mutation = await this.taskFlow.requestCancel({

@@ -348,6 +348,29 @@ export class WakeDispatcher {
       });
     };
 
+    // The durable send may still land after the executor's timeout, so an ambiguous
+    // result must never start a second (system-event) delivery of the same text.
+    const ambiguousHandler = () => {
+      logButtonDiagnostic("wake_notify_direct_ambiguous", {
+        sessionId: session.id,
+        sessionName: session.name,
+        label,
+        requireDirectDelivery,
+        hasInteractiveButtons,
+        channel: route.channel,
+        target: route.target,
+        accountId: route.accountId,
+        threadId: route.threadId,
+        sessionKey: route.sessionKey,
+        ...summarizeButtons(buttons),
+      });
+      log.warn(
+        `[WakeDispatcher] Direct notification "${label}" for session ${session.id} ` +
+        `timed out with an unknown outcome; reporting delivery failure without a fallback resend.`,
+      );
+      onAllFailed?.();
+    };
+
     const options = {
       label: `${label}-notify`,
       sessionId: session.id,
@@ -363,6 +386,7 @@ export class WakeDispatcher {
       }),
       orderingKey,
       onSuccess,
+      onAmbiguousResult: ambiguousHandler,
       onFinalFailure: directFailureHandler,
       // The host durable queue owns retries for an admitted send; re-sending here
       // could duplicate a notification the queue later delivers.

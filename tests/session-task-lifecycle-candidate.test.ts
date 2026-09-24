@@ -29,7 +29,7 @@ it("persists ordered OCA lifecycle writes and recovery through the candidate SQL
   const calls: Array<{ method: string; revision?: number; status: string }> = [];
   const entered = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
-  const methods = ["createManaged", "resume", "setWaiting", "finish", "fail"] as const;
+  const methods = ["createManaged", "resume", "setWaiting", "finish", "fail", "requestCancel"] as const;
   const delayed = Object.fromEntries(methods.map((method) => [method, async (params: any) => {
     if (method === "createManaged") {
       entered.resolve();

@@ -205,6 +205,36 @@ describe("RuntimeDirectNotificationTransport", () => {
   });
 });
 
+describe("presentation contract", () => {
+  it("only emits host button styles and Telegram-sized namespaced callback values", async () => {
+    // Core renders the presentation: Telegram maps styles through
+    // `toTelegramButtonStyle` (primary/success/danger; others are dropped) and
+    // sends `value` as `callback_data`, which Telegram caps at 64 bytes.
+    const hostStyles = new Set(["primary", "secondary", "success", "danger"]);
+    setPluginRuntime({}, {});
+    const { calls, transport } = recordingTransport();
+    const payload = buildWaitingForInputPayload({
+      session: { id: "contract", name: "contract", pendingPlanApproval: true, planDecisionVersion: 1 } as any,
+      preview: "Plan", originThreadLine: "", planApprovalMode: "ask",
+      planApprovalButtons: [[{ label: "Approve", callbackData: "a".repeat(21), style: "primary" },
+        { label: "Revise", callbackData: "b".repeat(21), style: "secondary" },
+        { label: "Reject", callbackData: "c".repeat(21), style: "danger" }]],
+    });
+    const last = payload.userMessages?.at(-1) ?? { text: payload.userMessage ?? "Plan", buttons: payload.buttons };
+
+    await transport.send(TOPIC_ROUTE, last.text, last.buttons);
+
+    const buttons = calls[0]?.payloads[0]?.presentation?.blocks.flatMap((block: any) => block.buttons) ?? [];
+    assert.equal(buttons.length, 3);
+    for (const button of buttons) {
+      assert.ok(button.style === undefined || hostStyles.has(button.style), `unexpected style ${button.style}`);
+      assert.match(button.value, /^code-agent:/);
+      assert.ok(Buffer.byteLength(button.value, "utf8") <= 64, `callback value too long: ${button.value}`);
+      assert.ok(button.label.trim().length > 0);
+    }
+  });
+});
+
 describe("classifyDurableSendResult", () => {
   it("never reports reached or intentionally suppressed sends as failures", () => {
     assert.deepEqual(classifyDurableSendResult(sentResult()), { delivered: true });
