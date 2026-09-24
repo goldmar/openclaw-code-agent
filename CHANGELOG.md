@@ -7,12 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [4.7.19] - 2026-09-23
+## [4.7.20] - 2026-09-24
 
 ### Added
 
 - Allow `gpt-6-luna` in the built-in Codex model allowlist alongside `gpt-6-sol` and `gpt-6-astra`, matching the Codex App Server's GPT-6 catalog. The GPT-5.6 Sol, Terra, and Luna overrides remain allowed.
 - Estimate API-key Codex charges for GPT-6 Sol ($2 input, $0.20 cached input, $10 output per 1M tokens) and GPT-6 Luna ($0.10, $0.01, $0.50) from OpenAI's published standard rates, with the existing cache-write, long-context, and Fast mode multipliers. Unlisted GPT-6 snapshots stay unpriced.
+
+## [4.7.19] - 2026-09-23
 
 ### Changed
 
@@ -769,7 +771,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Default Codex approval policy to `on-request`.
 - Raised the default session limit.
 
-[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.19...HEAD
+[Unreleased]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.20...HEAD
+[4.7.20]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.19...v4.7.20
 [4.7.19]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.18...v4.7.19
 [4.7.18]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.17...v4.7.18
 [4.7.17]: https://github.com/goldmar/openclaw-code-agent/compare/v4.7.16...v4.7.17
