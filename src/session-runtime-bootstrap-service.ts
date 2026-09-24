@@ -2,6 +2,9 @@ import type { Session } from "./session";
 import { formatHarnessModelLabel } from "./session-display";
 import { formatResumedLaunchMessage } from "./launch-summary";
 import type { SessionConfig, SessionLifecycle, SessionStatus } from "./types";
+import { createLogger } from "./logger";
+
+const log = createLogger("session-runtime-bootstrap-service");
 
 type SpawnOptions = {
   notifyLaunch?: boolean;
@@ -29,6 +32,8 @@ export class SessionRuntimeBootstrapService {
       handleTurnEnd: (session: Session, hadQuestion: boolean) => Promise<void>;
       formatLaunchWorkdirLabel: (session: Pick<Session, "workdir" | "worktreePath" | "originalWorkdir">) => string;
       notifySession: (session: Session, text: string, label?: string, idempotencyKey?: string) => void;
+      /** Stop a session whose host TaskFlow was cancelled. */
+      cancelSession?: (session: Session) => void;
     },
   ) {}
 
@@ -39,7 +44,9 @@ export class SessionRuntimeBootstrapService {
     options: SpawnOptions = {},
   ): Session {
     this.deps.hydrateSpawnedSession(session, preparedLaunch, config);
-    this.observeMirror(config.taskLifecycle?.create(session), session);
+    this.observeMirror(config.taskLifecycle?.create(session, {
+      onCancelRequested: () => this.deps.cancelSession?.(session),
+    }), session);
 
     session.on("statusChange", (_session: Session, newStatus: SessionStatus) => {
       if (newStatus === "running") {
@@ -69,7 +76,7 @@ export class SessionRuntimeBootstrapService {
         // Shutdown may terminate a queued resume while its previous writer drains.
         if (session.status === "starting") return session.start();
       }).catch((err) => {
-        console.error(`[SessionRuntimeBootstrap] deferred start threw for session ${session.id}:`, err);
+        log.error(`[SessionRuntimeBootstrap] deferred start threw for session ${session.id}:`, err);
       });
     } else {
       void session.start();
@@ -96,12 +103,12 @@ export class SessionRuntimeBootstrapService {
   }
 
   private warnMirror(session: Session, err: unknown): void {
-    console.warn(`[SessionRuntimeBootstrap] task mirror failed for session ${session.id}:`, err);
+    log.warn(`[SessionRuntimeBootstrap] task mirror failed for session ${session.id}:`, err);
   }
 
   private track(operation: Promise<void>, session: Session, action: string): void {
     const pending = operation.catch((err) => {
-      console.error(`[SessionRuntimeBootstrap] ${action} threw for session ${session.id}:`, err);
+      log.error(`[SessionRuntimeBootstrap] ${action} threw for session ${session.id}:`, err);
     }).finally(() => this.pending.delete(pending));
     this.pending.add(pending);
   }

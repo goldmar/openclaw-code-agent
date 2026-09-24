@@ -42,6 +42,7 @@ for (const file of files) {
   const env = {
     ...process.env,
     OPENCLAW_HOME: testHome,
+    OPENCLAW_STATE_DIR: join(testHome, ".openclaw"),
     OPENCLAW_CODE_AGENT_SESSIONS_PATH: join(testHome, "code-agent-sessions.json"),
   };
 

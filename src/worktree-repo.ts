@@ -4,6 +4,9 @@ import * as fs from "fs";
 import { tmpdir } from "os";
 import { dirname, join } from "path";
 import { pluginConfig } from "./config";
+import { createLogger } from "./logger";
+
+const log = createLogger("worktree-repo");
 
 let gitAvailableCache: boolean | undefined;
 let ghCliAvailableCache: boolean | undefined;
@@ -94,14 +97,14 @@ export function hasEnoughWorktreeSpace(repoDir?: string): boolean {
   try {
     const probePath = getWorktreeSpaceProbePath(repoDir);
     if (!probePath) {
-      console.warn(`[worktree] Failed to resolve free-space probe path for ${getWorktreeBaseDir(repoDir)}`);
+      log.warn(`[worktree] Failed to resolve free-space probe path for ${getWorktreeBaseDir(repoDir)}`);
       return true;
     }
     const stats = fs.statfsSync(probePath);
     const freeBytes = stats.bavail * stats.bsize;
     return hasEnoughFreeBytes(freeBytes);
   } catch (err) {
-    console.warn(`[worktree] Failed to check free space: ${err instanceof Error ? err.message : String(err)}`);
+    log.warn(`[worktree] Failed to check free space: ${err instanceof Error ? err.message : String(err)}`);
     return true;
   }
 }
@@ -217,7 +220,7 @@ export function getBranchName(worktreePath: string): string | undefined {
     );
     const branch = result.trim();
     if (branch === "HEAD") {
-      console.warn(`[worktree] Worktree ${worktreePath} is in detached HEAD state — cannot determine branch name`);
+      log.warn(`[worktree] Worktree ${worktreePath} is in detached HEAD state — cannot determine branch name`);
       return undefined;
     }
     return branch || undefined;
@@ -319,7 +322,7 @@ export function deleteBranch(repoDir: string, branch: string): boolean {
     );
     return true;
   } catch (err) {
-    console.warn(`[worktree] Failed to delete branch ${branch}: ${err instanceof Error ? err.message : String(err)}`);
+    log.warn(`[worktree] Failed to delete branch ${branch}: ${err instanceof Error ? err.message : String(err)}`);
     return false;
   }
 }

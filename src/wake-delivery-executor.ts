@@ -1,5 +1,8 @@
 import * as childProcess from "child_process";
 import { KeyedOperationQueue } from "./keyed-operation-queue";
+import { createLogger } from "./logger";
+
+const log = createLogger("wake-delivery-executor");
 
 const WAKE_CLI_TIMEOUT_MS = 30_000;
 const WAKE_RETRY_BASE_DELAY_MS = 2_000;
@@ -25,6 +28,11 @@ type ExecuteOptions = {
   onStarted?: () => void;
   onSuccess?: () => void;
   onSkipped?: (reason: string) => void;
+  /**
+   * The task timed out while it may still complete (the task is not cancelled).
+   * When set, a timeout calls this instead of retrying or `onFinalFailure`, so
+   * callers never trigger a second delivery path for a send that may land later.
+   */
   onAmbiguousResult?: () => void;
   onFinalFailure?: () => void;
   successValidator?: (stdout: string) => DispatchSuccessValidationResult;
@@ -36,19 +44,15 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-function createDispatchTimeoutError(): Error {
-  return new Error(`Dispatch timed out after ${WAKE_CLI_TIMEOUT_MS}ms`);
+class DispatchTimeoutError extends Error {
+  constructor() {
+    super(`Dispatch timed out after ${WAKE_CLI_TIMEOUT_MS}ms`);
+    this.name = "DispatchTimeoutError";
+  }
 }
 
-type ExecFileError = Error & {
-  killed?: boolean;
-  signal?: NodeJS.Signals | null;
-};
-
-function isExecFileTimeoutError(err: unknown): boolean {
-  if (!(err instanceof Error)) return false;
-  const execError = err as ExecFileError;
-  return execError.killed === true && execError.signal === "SIGKILL";
+function createDispatchTimeoutError(): Error {
+  return new DispatchTimeoutError();
 }
 
 export const wakeDeliveryExecutorInternals = {
@@ -133,8 +137,8 @@ export class WakeDeliveryExecutor {
       maxAttempts: WAKE_MAX_ATTEMPTS,
     });
 
-    // Delivery stays gateway-owned: the plugin shells out to the local OpenClaw CLI
-    // instead of implementing a separate ad hoc notification transport.
+    // chat.send wakes shell out to the local OpenClaw CLI: the in-process gateway
+    // request surface is reserved for trusted plugins.
     wakeDeliveryExecutorInternals.execFile(
       "openclaw",
       args,
@@ -207,27 +211,6 @@ export class WakeDeliveryExecutor {
 
         const stderrSuffix = stderr?.trim() ? ` | stderr: ${stderr.trim()}` : "";
         if (opts.shouldContinue?.() === false) {
-          onSettled?.();
-          return;
-        }
-        const ambiguousResult = opts.target === "message.send" && isExecFileTimeoutError(err);
-        if (ambiguousResult) {
-          this.log("error", "dispatch_failed", {
-            label: opts.label,
-            sessionId: opts.sessionId,
-            target: opts.target,
-            phase: opts.phase,
-            messageKind: opts.messageKind,
-            route: opts.routeSummary,
-            ...opts.dispatchContext,
-            attempt,
-            maxAttempts: WAKE_MAX_ATTEMPTS,
-            elapsedMs,
-            error: `${errorMessage(err)}${stderrSuffix}`,
-            terminal: true,
-            ambiguousResult: true,
-          });
-          opts.onAmbiguousResult?.();
           onSettled?.();
           return;
         }
@@ -348,6 +331,26 @@ export class WakeDeliveryExecutor {
           onSettled?.();
           return;
         }
+        if (err instanceof DispatchTimeoutError && opts.onAmbiguousResult) {
+          this.log("error", "dispatch_failed", {
+            label: opts.label,
+            sessionId: opts.sessionId,
+            target: opts.target,
+            phase: opts.phase,
+            messageKind: opts.messageKind,
+            route: opts.routeSummary,
+            ...opts.dispatchContext,
+            attempt,
+            maxAttempts: WAKE_MAX_ATTEMPTS,
+            elapsedMs,
+            error: errorMessage(err),
+            terminal: true,
+            ambiguousResult: true,
+          });
+          opts.onAmbiguousResult();
+          onSettled?.();
+          return;
+        }
         if (attempt >= WAKE_MAX_ATTEMPTS || opts.terminalOnFailure === true) {
           this.log("error", "dispatch_failed", {
             label: opts.label,
@@ -458,9 +461,10 @@ export class WakeDeliveryExecutor {
   private log(level: "info" | "error", event: string, details: Record<string, unknown>): void {
     const message = `[WakeDispatcher] ${JSON.stringify({ event, ...details })}`;
     if (level === "error") {
-      console.error(message);
+      log.error(message);
       return;
     }
-    console.info(message);
+    // Per-dispatch progress is verbose diagnostics; failures stay at error level.
+    log.debug(message);
   }
 }

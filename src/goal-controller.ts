@@ -19,6 +19,9 @@ import type {
   SessionConfig,
   SessionRoute,
 } from "./types";
+import { createLogger } from "./logger";
+
+const log = createLogger("goal-controller");
 
 const DEFAULT_MAX_ITERATIONS = 8;
 const DEFAULT_VERIFIER_TIMEOUT_MS = 10 * 60 * 1000;
@@ -385,7 +388,7 @@ export class GoalController {
     if (this.restorePromise) return;
     this.restorePromise = this.restoreRecoverableTasks()
       .catch((err: unknown) => {
-        console.warn(`[GoalController] Failed to restore recoverable tasks: ${errorMessage(err)}`);
+        log.warn(`[GoalController] Failed to restore recoverable tasks: ${errorMessage(err)}`);
       })
       .finally(() => {
         this.restorePromise = null;
@@ -743,7 +746,7 @@ export class GoalController {
       timer: setTimeout(() => {
         this.scheduledEvaluations.delete(taskId);
         void this.evaluateTask(taskId, trigger, entry.sessionId).catch((err: unknown) => {
-          console.warn(`[GoalController] evaluateTask error (${trigger}): ${errorMessage(err)}`);
+          log.warn(`[GoalController] evaluateTask error (${trigger}): ${errorMessage(err)}`);
         });
       }, 0),
       sessionId,

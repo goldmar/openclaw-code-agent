@@ -2,6 +2,9 @@ import { randomUUID } from "node:crypto";
 import type { Session } from "./session";
 import type { NotificationButton } from "./session-interactions";
 import type { SessionNotificationRequest } from "./wake-dispatcher";
+import { createLogger } from "./logger";
+
+const log = createLogger("session-question-service");
 
 /** Structured input passed by Claude Code's AskUserQuestion tool. */
 export interface AskUserQuestionInput {
@@ -124,17 +127,17 @@ export class SessionQuestionService {
   ): boolean {
     const pending = this.pendingQuestions.get(sessionId);
     if (!pending) {
-      console.warn(`[SessionQuestionService] resolveAskUserQuestion: no pending question for session "${sessionId}"`);
+      log.warn(`[SessionQuestionService] resolveAskUserQuestion: no pending question for session "${sessionId}"`);
       return false;
     }
     if (context.requestId && context.requestId !== pending.requestId) {
-      console.warn(
+      log.warn(
         `[SessionQuestionService] resolveAskUserQuestion: stale requestId for session "${sessionId}" (expected "${pending.requestId}", got "${context.requestId}")`,
       );
       return false;
     }
     if (context.questionId && context.questionId !== pending.questionId) {
-      console.warn(
+      log.warn(
         `[SessionQuestionService] resolveAskUserQuestion: stale questionId for session "${sessionId}" (expected "${pending.questionId ?? ""}", got "${context.questionId}")`,
       );
       return false;
@@ -143,7 +146,7 @@ export class SessionQuestionService {
     const options = firstQuestion.options ?? [];
     const selectedOption = options[optionIndex];
     if (!selectedOption) {
-      console.warn(
+      log.warn(
         `[SessionQuestionService] resolveAskUserQuestion: invalid option index ${optionIndex} for session "${sessionId}" (${options.length} options available)`,
       );
       return false;

@@ -12,6 +12,9 @@ import {
   isGitRepo,
   pruneWorktrees,
 } from "./worktree";
+import { createLogger } from "./logger";
+
+const log = createLogger("session-bootstrap");
 
 type Preparation = {
   actualWorkdir: string;
@@ -158,7 +161,7 @@ function restoreResumeWorktreeContext(
   }
 
   if (existsSync(persistedSession.worktreePath)) {
-    console.info(`[SessionManager] Resuming with existing worktree: ${persistedSession.worktreePath}`);
+    log.info(`[SessionManager] Resuming with existing worktree: ${persistedSession.worktreePath}`);
     return {
       actualWorkdir: persistedSession.worktreePath,
       originalWorkdir: originalWorkdir ?? persistedSession.worktreePath,
@@ -169,7 +172,7 @@ function restoreResumeWorktreeContext(
   }
 
   if (!originalWorkdir) {
-    console.warn(`[SessionManager] Worktree ${persistedSession.worktreePath} no longer exists and cannot be recreated, using original workdir`);
+    log.warn(`[SessionManager] Worktree ${persistedSession.worktreePath} no longer exists and cannot be recreated, using original workdir`);
     return {
       clearedResumeSessionId: !!config.resumeSessionId,
       clearedResumeWorktreeFrom: !!config.resumeWorktreeFrom,
@@ -183,7 +186,7 @@ function restoreResumeWorktreeContext(
       persistedSession.worktreeBranch.replace(/^agent\//, ""),
       { allowExistingBranch: true },
     );
-    console.info(`[SessionManager] Recreated worktree from branch ${persistedSession.worktreeBranch}: ${recreatedPath}`);
+    log.info(`[SessionManager] Recreated worktree from branch ${persistedSession.worktreeBranch}: ${recreatedPath}`);
     return {
       actualWorkdir: recreatedPath,
       originalWorkdir,
@@ -192,7 +195,7 @@ function restoreResumeWorktreeContext(
       worktreeParentBranch: persistedSession.worktreeParentBranch,
     };
   } catch (err) {
-    console.warn(`[SessionManager] Failed to recreate worktree for resume: ${errorMessage(err)}, using original workdir`);
+    log.warn(`[SessionManager] Failed to recreate worktree for resume: ${errorMessage(err)}, using original workdir`);
     return {
       actualWorkdir: originalWorkdir,
       originalWorkdir,
@@ -260,7 +263,7 @@ export function prepareSessionBootstrap(
       if (!worktreeBranchName) {
         throw new Error(`created worktree at ${worktreePath} but failed to resolve branch name`);
       }
-      console.log(`[SessionManager] Created worktree at ${worktreePath}`);
+      log.info(`[SessionManager] Created worktree at ${worktreePath}`);
     } catch (err) {
       throw new Error(`Cannot launch session "${name}": worktree creation failed: ${errorMessage(err)}`);
     }

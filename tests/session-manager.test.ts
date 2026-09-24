@@ -1079,10 +1079,10 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     const cleanupTimes: number[] = [];
 
     (sm as any).store.cleanupOrphanOutputFiles = () => {};
-    (sm as any).store.cleanupTmpOutputFiles = (cleanupNow: number) => {
+    (sm as any).store.cleanupSessionOutputFiles = (cleanupNow: number) => {
       cleanupTimes.push(cleanupNow);
     };
-    (sm as any).store.getNextTmpOutputCleanupAt = () => now + 30_000;
+    (sm as any).store.getNextSessionOutputCleanupAt = () => now + 30_000;
     (sm as any).maintenance.schedule = ((key: string) => {
       scheduledKeys.push(key);
     }) as any;
@@ -1162,8 +1162,8 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     Date.now = () => currentNow;
 
     try {
-      (sm as any).store.getNextTmpOutputCleanupAt = () => nextDeadlines.shift();
-      (sm as any).store.cleanupTmpOutputFiles = (cleanupNow: number) => {
+      (sm as any).store.getNextSessionOutputCleanupAt = () => nextDeadlines.shift();
+      (sm as any).store.cleanupSessionOutputFiles = (cleanupNow: number) => {
         cleanupTimes.push(cleanupNow);
       };
       (sm as any).maintenance.cancel = (() => {}) as any;
@@ -1171,7 +1171,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
         scheduled.push({ key, at, cb });
       }) as any;
 
-      (sm as any).syncTmpOutputCleanupDeadline(now);
+      (sm as any).syncSessionOutputCleanupDeadline(now);
       assert.equal(scheduled.length, 1);
       assert.equal(scheduled[0].key, "tmp-output:cleanup");
       assert.equal(scheduled[0].at, now + 60_000);
@@ -1204,8 +1204,8 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     Date.now = () => now;
 
     try {
-      (sm as any).store.getNextTmpOutputCleanupAt = () => now;
-      (sm as any).store.cleanupTmpOutputFiles = (cleanupNow: number) => {
+      (sm as any).store.getNextSessionOutputCleanupAt = () => now;
+      (sm as any).store.cleanupSessionOutputFiles = (cleanupNow: number) => {
         cleanupTimes.push(cleanupNow);
       };
       (sm as any).maintenance.cancel = (() => {}) as any;
@@ -1213,7 +1213,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
         scheduled.push({ key, at, cb });
       }) as any;
 
-      (sm as any).syncTmpOutputCleanupDeadline(now);
+      (sm as any).syncSessionOutputCleanupDeadline(now);
       assert.equal(scheduled.length, 1);
       assert.equal(scheduled[0].key, "tmp-output:cleanup");
       assert.equal(scheduled[0].at, now);
@@ -1240,8 +1240,8 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
 
     try {
       (sm as any).store.cleanupOrphanOutputFiles = () => {};
-      (sm as any).store.getNextTmpOutputCleanupAt = () => now;
-      (sm as any).store.cleanupTmpOutputFiles = (cleanupNow: number) => {
+      (sm as any).store.getNextSessionOutputCleanupAt = () => now;
+      (sm as any).store.cleanupSessionOutputFiles = (cleanupNow: number) => {
         cleanupTimes.push(cleanupNow);
       };
       (sm as any).maintenance.schedule = ((key: string, at: number) => {
@@ -1273,8 +1273,8 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     Date.now = () => currentNow;
 
     try {
-      (sm as any).store.getNextTmpOutputCleanupAt = () => nextDeadlines.shift();
-      (sm as any).store.cleanupTmpOutputFiles = (cleanupNow: number) => {
+      (sm as any).store.getNextSessionOutputCleanupAt = () => nextDeadlines.shift();
+      (sm as any).store.cleanupSessionOutputFiles = (cleanupNow: number) => {
         cleanupTimes.push(cleanupNow);
       };
       (sm as any).maintenance.cancel = (() => {}) as any;
@@ -1282,7 +1282,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
         scheduled.push({ key, at, cb });
       }) as any;
 
-      (sm as any).syncTmpOutputCleanupDeadline(now);
+      (sm as any).syncSessionOutputCleanupDeadline(now);
       assert.equal(scheduled.length, 1);
       assert.equal(scheduled[0].at, now);
 
@@ -1292,7 +1292,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
       assert.equal(scheduled.length, 1);
 
       currentNow = now + 30_000;
-      (sm as any).syncTmpOutputCleanupDeadline(currentNow);
+      (sm as any).syncSessionOutputCleanupDeadline(currentNow);
 
       assert.equal(scheduled.length, 2);
       assert.equal(scheduled[1].key, "tmp-output:cleanup");
@@ -1308,7 +1308,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     const scheduledKeys: string[] = [];
 
     (sm as any).store.cleanupOrphanOutputFiles = () => {};
-    (sm as any).store.cleanupTmpOutputFiles = () => {};
+    (sm as any).store.cleanupSessionOutputFiles = () => {};
     (sm as any).maintenance.schedule = ((key: string) => {
       scheduledKeys.push(key);
     }) as any;
@@ -1347,7 +1347,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     const scheduledKeys: string[] = [];
     let runtimeGcCallback: (() => void) | undefined;
 
-    (sm as any).store.getNextTmpOutputCleanupAt = () => undefined;
+    (sm as any).store.getNextSessionOutputCleanupAt = () => undefined;
     (sm as any).maintenance.schedule = ((key: string, _at: number, cb: () => void) => {
       scheduledKeys.push(key);
       runtimeGcCallback = cb;

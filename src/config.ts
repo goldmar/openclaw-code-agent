@@ -10,9 +10,12 @@ import type {
   SessionRoute,
 } from "./types";
 import {
-  parseThreadIdFromSessionKey as parseThreadIdFromRouteSessionKey,
+  parseThreadIdFromSessionKey,
   routeFromOriginMetadata,
 } from "./session-route";
+import { createLogger } from "./logger";
+
+const log = createLogger("config");
 
 // -- Global MCP servers from ~/.claude.json --
 
@@ -110,7 +113,7 @@ export function setPluginConfig(config: Partial<RawPluginConfig>): void {
         ? existing.allowedModels
         : config.allowedModels,
     };
-    console.warn(
+    log.warn(
       `[openclaw-code-agent] config.defaultModel is deprecated; use harnesses.${defaultHarness}.defaultModel instead.`,
     );
   }
@@ -122,7 +125,7 @@ export function setPluginConfig(config: Partial<RawPluginConfig>): void {
       defaultModel: (config.harnesses?.codex?.defaultModel ?? config.model),
       allowedModels: config.harnesses?.codex?.allowedModels !== undefined ? existing.allowedModels : config.allowedModels,
     };
-    console.warn("[openclaw-code-agent] config.model is deprecated; use harnesses.codex.defaultModel instead.");
+    log.warn("[openclaw-code-agent] config.model is deprecated; use harnesses.codex.defaultModel instead.");
   }
 
   if (config.reasoningEffort !== undefined) {
@@ -131,11 +134,11 @@ export function setPluginConfig(config: Partial<RawPluginConfig>): void {
       ...existing,
       reasoningEffort: (config.harnesses?.codex?.reasoningEffort ?? config.reasoningEffort),
     };
-    console.warn("[openclaw-code-agent] config.reasoningEffort is deprecated; use harnesses.codex.reasoningEffort instead.");
+    log.warn("[openclaw-code-agent] config.reasoningEffort is deprecated; use harnesses.codex.reasoningEffort instead.");
   }
 
   if (config.allowedModels !== undefined) {
-    console.warn("[openclaw-code-agent] config.allowedModels is deprecated; use harnesses.<name>.allowedModels instead.");
+    log.warn("[openclaw-code-agent] config.allowedModels is deprecated; use harnesses.<name>.allowedModels instead.");
     for (const [name, existing] of Object.entries(harnesses)) {
       if (config.harnesses?.[name]?.allowedModels === undefined) {
         harnesses[name] = {
@@ -253,7 +256,7 @@ function shouldAvoidTelegramSenderFallback(
   const provider = toOptionalText(ctx.deliveryContext?.channel) ?? ctx.messageChannel ?? ctx.channel;
   if (provider?.toLowerCase() !== "telegram") return false;
   return Boolean(
-    parseThreadIdFromRouteSessionKey(ctx.sessionKey)
+    parseThreadIdFromSessionKey(ctx.sessionKey)
       || toOptionalText(ctx.messageThreadId)
       || toOptionalText(ctx.deliveryContext?.threadId),
   );
@@ -395,7 +398,3 @@ export function resolveAgentChannel(workdir: string): string | undefined {
   return undefined;
 }
 
-/** Parse Telegram thread ID from sessionKey format "...:topic:THREADID". */
-export function parseThreadIdFromSessionKey(sessionKey?: string): number | undefined {
-  return parseThreadIdFromRouteSessionKey(sessionKey);
-}

@@ -9,11 +9,14 @@ import type { SessionStore } from "./session-store";
 import type { PersistedSessionInfo } from "./types";
 import { resolveWorktreeLifecycle } from "./worktree-lifecycle-resolver";
 import { removeWorktree } from "./worktree";
+import { createLogger } from "./logger";
+
+const log = createLogger("session-maintenance-service");
 
 const RESOLVED_WORKTREE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const WORKTREE_REMINDER_RETRY_BACKOFF_MS = 5 * 60 * 1000;
-const TMP_OUTPUT_CLEANUP_KEY = "tmp-output:cleanup";
-const TMP_OUTPUT_CLEANUP_RETRY_BACKOFF_MS = 60 * 1000;
+const SESSION_OUTPUT_CLEANUP_KEY = "tmp-output:cleanup";
+const SESSION_OUTPUT_CLEANUP_RETRY_BACKOFF_MS = 60 * 1000;
 
 interface SessionMaintenanceDeps {
   store: SessionStore;
@@ -33,7 +36,7 @@ function errorMessage(err: unknown): string {
 
 export class SessionMaintenanceService {
   private readonly scheduler = new KeyedDeadlineScheduler();
-  private lastTmpOutputCleanupAttemptAt: number | undefined;
+  private lastSessionOutputCleanupAttemptAt: number | undefined;
 
   constructor(private readonly deps: SessionMaintenanceDeps) {}
 
@@ -51,13 +54,13 @@ export class SessionMaintenanceService {
 
   bootstrapMaintenanceSchedules(): void {
     const now = Date.now();
-    this.runTmpOutputCleanup(now);
+    this.runSessionOutputCleanup(now);
     for (const session of this.deps.store.listPersistedSessions()) {
       this.syncPersistedSessionMaintenance(session);
     }
     this.syncActionTokenExpiryDeadline();
     this.deps.store.cleanupOrphanOutputFiles();
-    this.syncTmpOutputCleanupDeadline(now);
+    this.syncSessionOutputCleanupDeadline(now);
   }
 
   syncRuntimeGcDeadline(session: Pick<Session, "id" | "completedAt">): void {
@@ -154,7 +157,7 @@ export class SessionMaintenanceService {
         });
       }
     } catch (err) {
-      console.warn(`[SessionManager] Failed maintenance cleanup for worktree ${session.worktreePath}: ${errorMessage(err)}`);
+      log.warn(`[SessionManager] Failed maintenance cleanup for worktree ${session.worktreePath}: ${errorMessage(err)}`);
     }
   }
 
@@ -171,20 +174,20 @@ export class SessionMaintenanceService {
     });
   }
 
-  syncTmpOutputCleanupDeadline(now: number = Date.now()): void {
-    this.cancel(TMP_OUTPUT_CLEANUP_KEY);
-    const nextCleanupAt = this.deps.store.getNextTmpOutputCleanupAt(now);
+  syncSessionOutputCleanupDeadline(now: number = Date.now()): void {
+    this.cancel(SESSION_OUTPUT_CLEANUP_KEY);
+    const nextCleanupAt = this.deps.store.getNextSessionOutputCleanupAt(now);
     if (nextCleanupAt == null) {
-      this.lastTmpOutputCleanupAttemptAt = undefined;
+      this.lastSessionOutputCleanupAttemptAt = undefined;
       return;
     }
     if (nextCleanupAt > now) {
-      this.lastTmpOutputCleanupAttemptAt = undefined;
+      this.lastSessionOutputCleanupAttemptAt = undefined;
     }
-    this.schedule(TMP_OUTPUT_CLEANUP_KEY, this.getTmpOutputCleanupScheduleAt(nextCleanupAt, now), () => {
+    this.schedule(SESSION_OUTPUT_CLEANUP_KEY, this.getSessionOutputCleanupScheduleAt(nextCleanupAt, now), () => {
       const cleanupNow = Date.now();
-      this.runTmpOutputCleanup(cleanupNow);
-      this.syncTmpOutputCleanupDeadline(cleanupNow);
+      this.runSessionOutputCleanup(cleanupNow);
+      this.syncSessionOutputCleanupDeadline(cleanupNow);
     });
   }
 
@@ -221,14 +224,14 @@ export class SessionMaintenanceService {
     return (pluginConfig.sessionGcAgeMinutes ?? 1440) * 60_000;
   }
 
-  private runTmpOutputCleanup(now: number): void {
-    this.lastTmpOutputCleanupAttemptAt = now;
-    this.deps.store.cleanupTmpOutputFiles(now);
+  private runSessionOutputCleanup(now: number): void {
+    this.lastSessionOutputCleanupAttemptAt = now;
+    this.deps.store.cleanupSessionOutputFiles(now);
   }
 
-  private getTmpOutputCleanupScheduleAt(nextCleanupAt: number, now: number): number {
-    if (nextCleanupAt > now || this.lastTmpOutputCleanupAttemptAt == null) return nextCleanupAt;
-    const retryAt = this.lastTmpOutputCleanupAttemptAt + TMP_OUTPUT_CLEANUP_RETRY_BACKOFF_MS;
+  private getSessionOutputCleanupScheduleAt(nextCleanupAt: number, now: number): number {
+    if (nextCleanupAt > now || this.lastSessionOutputCleanupAttemptAt == null) return nextCleanupAt;
+    const retryAt = this.lastSessionOutputCleanupAttemptAt + SESSION_OUTPUT_CLEANUP_RETRY_BACKOFF_MS;
     return retryAt > now ? retryAt : nextCleanupAt;
   }
 

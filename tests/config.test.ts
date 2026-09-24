@@ -6,12 +6,12 @@ import {
   resolveAgentChannel,
   extractAgentId,
   resolveAgentId,
-  parseThreadIdFromSessionKey,
   resolveOriginChannel,
   resolveOriginThreadId,
   resolveSessionRoute,
   resolveToolChannel,
 } from "../src/config";
+import { parseThreadIdFromSessionKey } from "../src/session-route";
 
 beforeEach(() => {
   setPluginConfig({});
