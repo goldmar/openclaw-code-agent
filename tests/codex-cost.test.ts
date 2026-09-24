@@ -22,6 +22,19 @@ describe("Codex API cost accounting", () => {
     assert.equal(cost, 1.32);
   });
 
+  it("prices GPT-6 Sol and Luna at their standard API rates", () => {
+    const usage = {
+      inputTokens: 100_000,
+      cachedInputTokens: 20_000,
+      cacheWriteInputTokens: 0,
+      outputTokens: 10_000,
+      reasoningOutputTokens: 5_000,
+    };
+
+    assert.equal(estimateCodexApiCostUsd({ model: "gpt-6-sol", usage }), 0.264);
+    assert.equal(estimateCodexApiCostUsd({ model: "GPT-6-Luna", usage }), 0.0132);
+  });
+
   it("does not double-count reasoning tokens already included in outputTokens", () => {
     const cost = estimateCodexApiCostUsd({
       model: "gpt-5.6-sol",
@@ -74,6 +87,18 @@ describe("Codex API cost accounting", () => {
         reasoningOutputTokens: 0,
       },
     }), undefined);
+    for (const model of ["gpt-6-sol-unlisted-snapshot", "gpt-6-luna-unlisted-snapshot", "gpt-6-terra"]) {
+      assert.equal(estimateCodexApiCostUsd({
+        model,
+        usage: {
+          inputTokens: 10,
+          cachedInputTokens: 0,
+          cacheWriteInputTokens: 0,
+          outputTokens: 1,
+          reasoningOutputTokens: 0,
+        },
+      }), undefined, model);
+    }
     assert.equal(extractRawResponseUsage({
       responseId: "resp-1",
       usage: {
