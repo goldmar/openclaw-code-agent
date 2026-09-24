@@ -3,6 +3,7 @@ import { randomBytes } from "crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync } from "fs";
 import { relative, sep } from "path";
 import { branchExists, getWorktreeBaseDir, sanitizeBranchName } from "./worktree-repo";
+import { provisionWorktreeIncludes, runWorktreeSetupScript } from "./worktree-provisioning";
 import { createLogger } from "./logger";
 
 const log = createLogger("worktree-lifecycle");
@@ -15,6 +16,11 @@ export interface CreateWorktreeOptions {
   allowExistingBranch?: boolean;
 }
 
+type CreatedWorktree = {
+  worktreePath: string;
+  branchName: string;
+  branchCreated: boolean;
+};
 
 function isNodeErrorWithCode(err: unknown, code: string): boolean {
   return Boolean(err && typeof err === "object" && "code" in err && err.code === code);
@@ -57,19 +63,64 @@ async function ensureWorktreeBaseIgnored(repoDir: string, baseDir: string): Prom
   }
 }
 
-export function createWorktree(
+export async function createWorktree(
   repoDir: string,
   sessionName: string,
   options: CreateWorktreeOptions = {},
 ): Promise<string> {
-  return withRepoLock(repoDir, () => createWorktreeLocked(repoDir, sessionName, options));
+  const created = await withRepoLock(repoDir, () => createWorktreeLocked(repoDir, sessionName, options));
+  try {
+    await prepareCreatedWorktree(repoDir, created.worktreePath);
+  } catch (err) {
+    await rollbackCreatedWorktree(repoDir, created);
+    throw err;
+  }
+  return created.worktreePath;
+}
+
+/**
+ * Apply OpenClaw's managed-worktree conventions to a fresh OCA worktree:
+ * copy `.worktreeinclude` files, then run `.openclaw/worktree-setup.sh`.
+ * Runs outside the repository lock so a slow setup script does not block
+ * other worktree operations on the same repository.
+ */
+async function prepareCreatedWorktree(repoDir: string, worktreePath: string): Promise<void> {
+  const sourceRoot = (await getRepoRoot(repoDir)) ?? repoDir;
+  const provisioned = await provisionWorktreeIncludes(sourceRoot, worktreePath);
+  if (provisioned.length > 0) {
+    log.info(`[worktree] Copied ${provisioned.length} .worktreeinclude file(s) into ${worktreePath}`);
+  }
+  await runWorktreeSetupScript(sourceRoot, worktreePath);
+}
+
+async function rollbackCreatedWorktree(repoDir: string, created: CreatedWorktree): Promise<void> {
+  await withRepoLock(repoDir, async () => {
+    try {
+      await runGit(["-C", repoDir, "worktree", "remove", "--force", created.worktreePath], { timeout: 15_000 });
+    } catch (err) {
+      log.warn(`[worktree] Rollback could not remove ${created.worktreePath}: ${err instanceof Error ? err.message : String(err)}`);
+      try {
+        rmSync(created.worktreePath, { recursive: true, force: true });
+        await runGit(["-C", repoDir, "worktree", "prune"], { timeout: 10_000 });
+      } catch {
+        // best effort
+      }
+    }
+    // Only a branch this call created is deleted; a recreated resume branch keeps its commits.
+    if (!created.branchCreated) return;
+    try {
+      await runGit(["-C", repoDir, "branch", "-D", created.branchName], { timeout: 10_000 });
+    } catch (err) {
+      log.warn(`[worktree] Rollback could not delete branch ${created.branchName}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  });
 }
 
 async function createWorktreeLocked(
   repoDir: string,
   sessionName: string,
   options: CreateWorktreeOptions,
-): Promise<string> {
+): Promise<CreatedWorktree> {
   const sanitized = sanitizeBranchName(sessionName);
   const baseDir = await getWorktreeBaseDir(repoDir);
   await ensureWorktreeBaseIgnored(repoDir, baseDir);
@@ -145,7 +196,7 @@ async function createWorktreeLocked(
     throw err;
   }
 
-  return worktreePath;
+  return { worktreePath, branchName, branchCreated: !branchAlreadyExists };
 }
 
 export async function listDirtyWorktreeEntries(worktreePath: string): Promise<string[]> {

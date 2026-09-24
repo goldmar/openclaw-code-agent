@@ -32,8 +32,11 @@ The reviewed subprocess surfaces are:
   Source: `src/harness/opencode.ts`
   Rationale: experimental OpenCode support uses the current `opencode serve` HTTP/SSE API. The plugin binds to `127.0.0.1`, polls `/api/health`, and shuts down the child process with the session.
 - Git and GitHub CLI operations for worktree lifecycle, merge, and PR flows.
-  Sources: `src/worktree*.ts`, `index.ts`
+  Sources: `src/git-exec.ts` (the shared async runner), `src/worktree*.ts`, `src/repo-policy.ts`, `src/tools/agent-pr.ts`
   Rationale: worktree creation, merge, status, and PR handling are core product features.
+- Repository worktree setup scripts.
+  Source: `src/worktree-provisioning.ts`
+  Rationale: new OCA worktrees follow OpenClaw's managed-worktree convention and run an executable `.openclaw/worktree-setup.sh` from the repository, with no shell, no stdin, a 120 s timeout, and process-group termination. Repositories whose setup scripts you do not trust should not be used as OCA workdirs.
 - Goal-task verifier commands.
   Source: `src/goal-controller.ts`
   Rationale: verifier mode is explicitly a trusted-operator feature that runs user-supplied shell checks between iterations.
@@ -42,7 +45,8 @@ The reviewed subprocess surfaces are:
 
 The plugin keeps subprocess use narrow where practical:
 
-- `openclaw`, `git`, and `gh` invocations use `execFile` / `execFileSync` argument arrays rather than shell-string interpolation.
+- `openclaw`, `git`, and `gh` invocations use `execFile` argument arrays rather than shell-string interpolation. Worktree-layer `git` / `gh` calls go through the async `runGit` / `runGh` helpers in `src/git-exec.ts` (explicit per-call timeout, closed stdin, inherited Gateway environment); only the `git check-ref-format` branch-name guard stays synchronous. Mutating git sequences (worktree add/remove, checkout, merge, branch deletion) are serialized per repository.
+- Branch names and refs are validated (`src/worktree-ref-validation.ts`) and passed as `refs/heads/...` before any git command runs, so option-shaped or revision-expression names never reach git.
 - Discord delivery now uses explicit dependency injection in tests instead of a production env-var override for the sender module.
 - Goal-task verifier execution still uses `bash -lc` by design, but now strips `BASH_ENV` and `ENV` so ambient shell bootstrap hooks cannot silently rewrite verifier execution.
 
