@@ -313,12 +313,22 @@ export function remoteUrlHost(url: string): string | undefined {
  * GitHub hosts the GitHub CLI can serve: github.com, `GH_HOST`, and the hosts
  * `gh` is logged in to (top-level keys of `hosts.yml`, host names only).
  */
-export function knownGitHubHosts(env: NodeJS.ProcessEnv = process.env): Set<string> {
+/** gh's config directory, resolved the way the GitHub CLI does. */
+export function ghConfigDir(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): string {
+  const explicit = env.GH_CONFIG_DIR?.trim();
+  if (explicit) return explicit;
+  const xdg = env.XDG_CONFIG_HOME?.trim();
+  if (xdg) return join(xdg, "gh");
+  const appData = env.AppData?.trim() || env.APPDATA?.trim();
+  if (platform === "win32" && appData) return join(appData, "GitHub CLI");
+  return join(env.HOME?.trim() || homedir(), ".config", "gh");
+}
+
+export function knownGitHubHosts(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): Set<string> {
   const hosts = new Set(["github.com"]);
   const ghHost = env.GH_HOST?.trim().toLowerCase();
   if (ghHost) hosts.add(ghHost);
-  const configDir = env.GH_CONFIG_DIR?.trim()
-    || join(env.XDG_CONFIG_HOME?.trim() || join(env.HOME?.trim() || homedir(), ".config"), "gh");
+  const configDir = ghConfigDir(env, platform);
   try {
     for (const line of fs.readFileSync(join(configDir, "hosts.yml"), "utf-8").split(/\r?\n/)) {
       const match = line.match(/^([A-Za-z0-9.-]+):\s*$/);

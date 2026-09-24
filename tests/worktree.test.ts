@@ -348,6 +348,11 @@ describe("createPR", () => {
     assert.deepEqual([...knownGitHubHosts(env)].sort(), ["github.acme.internal", "github.com"]);
     assert.ok(knownGitHubHosts({ GH_HOST: "ghe.corp.example", GH_CONFIG_DIR: ghConfig } as NodeJS.ProcessEnv).has("ghe.corp.example"));
 
+    const { ghConfigDir } = await import("../src/worktree-repo.js");
+    assert.equal(ghConfigDir({ AppData: "C:\\Users\\me\\AppData\\Roaming" } as NodeJS.ProcessEnv, "win32"), join("C:\\Users\\me\\AppData\\Roaming", "GitHub CLI"));
+    assert.equal(ghConfigDir({ HOME: "/home/me" } as NodeJS.ProcessEnv, "linux"), join("/home/me", ".config", "gh"));
+    assert.equal(ghConfigDir({ GH_CONFIG_DIR: "/x", AppData: "C:\\A" } as NodeJS.ProcessEnv, "win32"), "/x");
+
     const repo = githubRepo(t, "git@github.acme.internal:team/repo.git");
     assert.equal(await hasGitHubRemote(repo, env), true);
     assert.equal(await hasGitHubRemote(repo, { GH_CONFIG_DIR: join(ghConfig, "missing") } as NodeJS.ProcessEnv), false);
