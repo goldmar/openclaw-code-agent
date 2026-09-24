@@ -15,7 +15,7 @@ export class SessionWorktreeDecisionService {
     private readonly deps: {
       getPersistedSession: (ref: string) => PersistedSessionInfo | undefined;
       resolveActiveSession: (ref: string) => WorktreeDecisionSession | undefined;
-      resolveWorktreeRepoDir: (repoDir: string | undefined, worktreePath?: string) => string | undefined;
+      resolveWorktreeRepoDir: (repoDir: string | undefined, worktreePath?: string) => string | undefined | Promise<string | undefined>;
       updatePersistedSession: (ref: string, patch: Partial<PersistedSessionInfo>) => boolean;
       dispatchNotification: (
         session: Session,
@@ -38,18 +38,18 @@ export class SessionWorktreeDecisionService {
     if (!session) return `Error: Session "${ref}" not found.`;
 
     const worktreePath = activeSession?.worktreePath ?? persistedSession?.worktreePath;
-    const repoDir = this.deps.resolveWorktreeRepoDir(activeSession?.originalWorkdir ?? persistedSession?.workdir, worktreePath);
+    const repoDir = await this.deps.resolveWorktreeRepoDir(activeSession?.originalWorkdir ?? persistedSession?.workdir, worktreePath);
     const branchName = activeSession?.worktreeBranch ?? persistedSession?.worktreeBranch;
     const sessionName = activeSession?.name ?? persistedSession?.name ?? ref;
 
     if (!repoDir) return `Error: No workdir found for session "${ref}".`;
 
     if (worktreePath && existsSync(worktreePath)) {
-      removeWorktree(repoDir, worktreePath, { destructive: true });
+      await removeWorktree(repoDir, worktreePath, { destructive: true });
     }
 
     if (branchName) {
-      deleteBranch(repoDir, branchName);
+      await deleteBranch(repoDir, branchName);
     }
 
     for (const mutationRef of getPersistedMutationRefs(activeSession ?? persistedSession)) {

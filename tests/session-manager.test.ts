@@ -1,12 +1,13 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { SessionManager } from "../src/session-manager";
 import { setPluginConfig } from "../src/config";
 import { setPluginRuntime } from "../src/runtime-store";
-import { STORE_SCHEMA_VERSION } from "../src/session-store-normalization";
+import { normalizePersistedEntry, STORE_SCHEMA_VERSION } from "../src/session-store-normalization";
 import { buildPresentation } from "../src/direct-notification-transport";
 import { SessionReminderService } from "../src/session-reminder-service";
 import { SessionNotificationService } from "../src/session-notifications";
@@ -698,10 +699,10 @@ describe("SessionManager.killAll()", () => {
 });
 
 // =========================================================================
-// resolveHarnessSessionId
+// resolveBackendConversationId
 // =========================================================================
 
-describe("SessionManager.resolveHarnessSessionId()", () => {
+describe("SessionManager.resolveBackendConversationId()", () => {
   let sm: SessionManager;
 
   beforeEach(() => {
@@ -715,7 +716,7 @@ describe("SessionManager.resolveHarnessSessionId()", () => {
       backendRef: { kind: "claude-code", conversationId: "backend-abc" },
     });
     (sm as any).sessions.set("s1", s);
-    assert.equal(sm.resolveHarnessSessionId("s1"), "backend-abc");
+    assert.equal(sm.resolveBackendConversationId("s1"), "backend-abc");
   });
 
   it("returns harnessSessionId from active session matched by name", () => {
@@ -726,40 +727,40 @@ describe("SessionManager.resolveHarnessSessionId()", () => {
       backendRef: { kind: "claude-code", conversationId: "backend-def" },
     });
     (sm as any).sessions.set("s1", s);
-    assert.equal(sm.resolveHarnessSessionId("my-session"), "backend-def");
+    assert.equal(sm.resolveBackendConversationId("my-session"), "backend-def");
   });
 
   it("looks up by idIndex when session is not active", () => {
-    (sm as any).idIndex.set("old-id", "harness-ghi");
-    (sm as any).persisted.set("harness-ghi", {
+    (sm as any).store.idIndex.set("old-id", "harness-ghi");
+    (sm as any).store.persisted.set("harness-ghi", {
       harnessSessionId: "harness-ghi",
       backendRef: { kind: "claude-code", conversationId: "backend-ghi" },
     });
-    assert.equal(sm.resolveHarnessSessionId("old-id"), "backend-ghi");
+    assert.equal(sm.resolveBackendConversationId("old-id"), "backend-ghi");
   });
 
   it("looks up latest persisted entry by name when session is not active", () => {
-    (sm as any).persisted.set("harness-jkl-old", {
+    (sm as any).store.persisted.set("harness-jkl-old", {
       harnessSessionId: "harness-jkl-old",
       backendRef: { kind: "claude-code", conversationId: "backend-jkl-old" },
       name: "old-name",
       createdAt: 100,
     });
-    (sm as any).persisted.set("harness-jkl-new", {
+    (sm as any).store.persisted.set("harness-jkl-new", {
       harnessSessionId: "harness-jkl-new",
       backendRef: { kind: "claude-code", conversationId: "backend-jkl-new" },
       name: "old-name",
       createdAt: 200,
     });
-    assert.equal(sm.resolveHarnessSessionId("old-name"), "backend-jkl-new");
+    assert.equal(sm.resolveBackendConversationId("old-name"), "backend-jkl-new");
   });
 
   it("returns ref directly if it exists in persisted map", () => {
-    (sm as any).persisted.set("direct-key", {
+    (sm as any).store.persisted.set("direct-key", {
       harnessSessionId: "direct-key",
       backendRef: { kind: "claude-code", conversationId: "backend-direct" },
     });
-    assert.equal(sm.resolveHarnessSessionId("direct-key"), "backend-direct");
+    assert.equal(sm.resolveBackendConversationId("direct-key"), "backend-direct");
   });
 
   it("resolves active sessions by backend conversation id before legacy harness id", () => {
@@ -774,11 +775,11 @@ describe("SessionManager.resolveHarnessSessionId()", () => {
 
   it("returns UUID ref as-is even when not in any index", () => {
     const uuid = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
-    assert.equal(sm.resolveHarnessSessionId(uuid), uuid);
+    assert.equal(sm.resolveBackendConversationId(uuid), uuid);
   });
 
   it("returns undefined for non-UUID unresolvable ref", () => {
-    assert.equal(sm.resolveHarnessSessionId("random-text"), undefined);
+    assert.equal(sm.resolveBackendConversationId("random-text"), undefined);
   });
 });
 
@@ -795,14 +796,14 @@ describe("SessionManager.getPersistedSession()", () => {
 
   it("returns session by direct harnessSessionId", () => {
     const info = { harnessSessionId: "h1", name: "s1" };
-    (sm as any).persisted.set("h1", info);
+    (sm as any).store.persisted.set("h1", info);
     assert.equal(sm.getPersistedSession("h1"), info);
   });
 
   it("returns session by internal session ID via idIndex", () => {
     const info = { harnessSessionId: "h2", name: "s2" };
-    (sm as any).persisted.set("h2", info);
-    (sm as any).idIndex.set("internal-id", "h2");
+    (sm as any).store.persisted.set("h2", info);
+    (sm as any).store.idIndex.set("internal-id", "h2");
     assert.equal(sm.getPersistedSession("internal-id"), info);
   });
 
@@ -812,7 +813,7 @@ describe("SessionManager.getPersistedSession()", () => {
       backendRef: { kind: "claude-code", conversationId: "backend-h3" },
       name: "s3",
     };
-    (sm as any).persisted.set("legacy-h3", info);
+    (sm as any).store.persisted.set("legacy-h3", info);
     (sm as any).store.backendIdIndex.set("backend-h3", "legacy-h3");
     assert.equal(sm.getPersistedSession("backend-h3"), info);
   });
@@ -820,8 +821,8 @@ describe("SessionManager.getPersistedSession()", () => {
   it("returns latest session by name from persisted records", () => {
     const infoOld = { harnessSessionId: "h3-old", name: "s3", createdAt: 100 };
     const infoNew = { harnessSessionId: "h3-new", name: "s3", createdAt: 200 };
-    (sm as any).persisted.set("h3-old", infoOld);
-    (sm as any).persisted.set("h3-new", infoNew);
+    (sm as any).store.persisted.set("h3-old", infoOld);
+    (sm as any).store.persisted.set("h3-new", infoNew);
     assert.equal(sm.getPersistedSession("s3"), infoNew);
   });
 
@@ -835,15 +836,15 @@ describe("SessionManager.listPersistedSessions()", () => {
 
   beforeEach(() => {
     sm = new SessionManager(5);
-    (sm as any).persisted.clear();
-    (sm as any).idIndex.clear();
-    (sm as any).nameIndex.clear();
+    (sm as any).store.persisted.clear();
+    (sm as any).store.idIndex.clear();
+    (sm as any).store.nameIndex.clear();
   });
 
   it("returns sorted by completedAt descending", () => {
-    (sm as any).persisted.set("h1", { harnessSessionId: "h1", completedAt: 1000 });
-    (sm as any).persisted.set("h2", { harnessSessionId: "h2", completedAt: 3000 });
-    (sm as any).persisted.set("h3", { harnessSessionId: "h3", completedAt: 2000 });
+    (sm as any).store.persisted.set("h1", { harnessSessionId: "h1", completedAt: 1000 });
+    (sm as any).store.persisted.set("h2", { harnessSessionId: "h2", completedAt: 3000 });
+    (sm as any).store.persisted.set("h3", { harnessSessionId: "h3", completedAt: 2000 });
     const list = sm.listPersistedSessions();
     assert.equal(list[0].harnessSessionId, "h2");
     assert.equal(list[1].harnessSessionId, "h3");
@@ -1072,7 +1073,7 @@ describe("SessionManager.debounceWaitingEvent()", () => {
 });
 
 describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
-  it("seeds persisted reminder, retention, token-expiry deadlines, and tmp-output cleanup", () => {
+  it("seeds persisted reminder, retention, token-expiry deadlines, and tmp-output cleanup", async () => {
     const sm = new SessionManager(5, 5);
     const now = Date.now();
     const scheduledKeys: string[] = [];
@@ -1128,10 +1129,10 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
       },
     };
 
-    (sm as any).persisted.set(pending.harnessSessionId, pending);
-    (sm as any).persisted.set(resolved.harnessSessionId, resolved);
-    (sm as any).idIndex.set(pending.sessionId, pending.harnessSessionId);
-    (sm as any).idIndex.set(resolved.sessionId, resolved.harnessSessionId);
+    (sm as any).store.persisted.set(pending.harnessSessionId, pending);
+    (sm as any).store.persisted.set(resolved.harnessSessionId, resolved);
+    (sm as any).store.idIndex.set(pending.sessionId, pending.harnessSessionId);
+    (sm as any).store.idIndex.set(resolved.sessionId, resolved.harnessSessionId);
     (sm as any).store.actionTokens.set("token-1", {
       id: "token-1",
       sessionId: "pending-session",
@@ -1140,7 +1141,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
       expiresAt: now + 60_000,
     });
 
-    sm.bootstrapMaintenanceSchedules();
+    await sm.bootstrapMaintenanceSchedules();
 
     assert.ok(scheduledKeys.includes("persisted:pending-session:worktree-reminder"));
     assert.ok(scheduledKeys.includes("persisted:resolved-session:worktree-retention"));
@@ -1229,7 +1230,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     }
   });
 
-  it("backs off tmp-output cleanup after bootstrap cleanup leaves an expired file", () => {
+  it("backs off tmp-output cleanup after bootstrap cleanup leaves an expired file", async () => {
     const sm = new SessionManager(5, 5);
     const originalDateNow = Date.now;
     const now = 1_700_000_000_000;
@@ -1248,7 +1249,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
         scheduled.push({ key, at });
       }) as any;
 
-      sm.bootstrapMaintenanceSchedules();
+      await sm.bootstrapMaintenanceSchedules();
 
       assert.deepEqual(cleanupTimes, [now]);
       assert.ok(scheduled.some((entry) => entry.key === "tmp-output:cleanup" && entry.at === now + 60_000));
@@ -1302,7 +1303,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     }
   });
 
-  it("seeds retention for legacy merged sessions without worktreeLifecycle metadata", () => {
+  it("seeds retention for 4.x merged sessions whose lifecycle is synthesized on load", async () => {
     const sm = new SessionManager(5, 5);
     const now = Date.now();
     const scheduledKeys: string[] = [];
@@ -1333,10 +1334,12 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
       worktreeMergedAt: new Date(now - 10_000).toISOString(),
     };
 
-    (sm as any).persisted.set(legacyResolved.harnessSessionId, legacyResolved);
-    (sm as any).idIndex.set(legacyResolved.sessionId, legacyResolved.harnessSessionId);
+    const normalized = normalizePersistedEntry({ ...legacyResolved, route: { provider: "telegram", target: "123" } });
+    assert.equal(normalized?.worktreeLifecycle?.state, "merged");
+    (sm as any).store.persisted.set(legacyResolved.harnessSessionId, normalized);
+    (sm as any).store.idIndex.set(legacyResolved.sessionId, legacyResolved.harnessSessionId);
 
-    sm.bootstrapMaintenanceSchedules();
+    await sm.bootstrapMaintenanceSchedules();
 
     assert.ok(scheduledKeys.includes("persisted:legacy-resolved-session:worktree-retention"));
   });
@@ -1472,7 +1475,121 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     assert.equal(scheduled[1].at, now + 120_000);
   });
 
-  it("backs off reminder retries after a delivery failure instead of rescheduling immediately", () => {
+  it("does not send a reminder when a snooze lands while its buttons are built", async () => {
+    const now = 1_700_000_000_000;
+    const pending: any = {
+      sessionId: "snooze-during-buttons",
+      harnessSessionId: "snooze-during-buttons-thread",
+      name: "snooze-during-buttons",
+      prompt: "p",
+      workdir: "/tmp",
+      status: "completed",
+      lifecycle: "awaiting_worktree_decision",
+      worktreeState: "pending_decision",
+      worktreeStrategy: "ask",
+      costUsd: 0,
+      pendingWorktreeDecisionSince: new Date(now - 4 * 60 * 60 * 1000).toISOString(),
+    };
+    const dispatched: unknown[] = [];
+    let current = true;
+    const reminders = new SessionReminderService(
+      (session) => ({ id: session.id ?? pending.sessionId }) as any,
+      (_session, request) => { dispatched.push(request); },
+      () => true,
+      async () => {
+        current = false; // the user snoozes while policy-aware buttons are resolved
+        return [];
+      },
+    );
+
+    assert.equal(await reminders.sendReminderIfDue(pending, now, () => current), false);
+    assert.deepEqual(dispatched, []);
+    assert.equal(pending.lastWorktreeReminderAt, undefined);
+  });
+
+  it("drops an in-flight reminder retry when a newer maintenance sync (such as a snooze) owns the schedule", async () => {
+    const sm = new SessionManager(5, 5);
+    const now = 1_700_000_000_000;
+    const originalDateNow = Date.now;
+    Date.now = () => now;
+    try {
+      const scheduled: Array<{ key: string; at: number; cb: () => void }> = [];
+      const pending = {
+        sessionId: "snoozed-session",
+        harnessSessionId: "snoozed-thread",
+        backendRef: { kind: "claude-code", conversationId: "snoozed-thread" },
+        name: "snoozed-session",
+        prompt: "test",
+        workdir: "/tmp",
+        status: "completed",
+        lifecycle: "awaiting_worktree_decision",
+        worktreeState: "pending_decision",
+        costUsd: 0,
+        pendingWorktreeDecisionSince: new Date(now - 4 * 60 * 60 * 1000).toISOString(),
+      };
+      (sm as any).store.persisted.set(pending.harnessSessionId, pending);
+      (sm as any).store.idIndex.set(pending.sessionId, pending.harnessSessionId);
+      (sm as any).maintenance.cancel = (() => {}) as any;
+      (sm as any).maintenance.schedule = ((key: string, at: number, cb: () => void) => {
+        scheduled.push({ key, at, cb });
+      }) as any;
+      let releaseSend!: (value: boolean) => void;
+      let sendStillCurrent: (() => boolean) | undefined;
+      (sm as any).maintenance.deps.reminders.sendReminderIfDue = ((_s: unknown, _n: number, stillCurrent: () => boolean) => {
+        sendStillCurrent = stillCurrent;
+        return new Promise<boolean>((resolve) => { releaseSend = resolve; });
+      }) as any;
+
+      (sm as any).maintenance.schedulePersistedWorktreeReminder(pending.sessionId, now);
+      scheduled[0].cb();
+      // A snooze while the reminder is in flight bumps the maintenance generation.
+      (sm as any).maintenance.nextPersistedSyncGeneration(pending.sessionId);
+      assert.equal(sendStillCurrent?.(), false, "the in-flight send sees it no longer owns the schedule");
+      releaseSend(false);
+      await (sm as any).maintenance.whenIdle();
+
+      assert.equal(scheduled.length, 1, "the stale callback does not reschedule over the newer deadline");
+    } finally {
+      Date.now = originalDateNow;
+      sm.dispose();
+    }
+  });
+
+  it("does not remove a worktree for retention once maintenance is disposed", async () => {
+    const repoDir = mkdtempSync(join(tmpdir(), "sm-disposed-retention-"));
+    const runGit = (...args: string[]) => execFileSync("git", ["-C", repoDir, ...args], { encoding: "utf8" }).trim();
+    const sm = new SessionManager(5, 5);
+    try {
+      runGit("init", "-q", "-b", "main");
+      runGit("config", "user.name", "Test User");
+      runGit("config", "user.email", "test@example.com");
+      writeFileSync(join(repoDir, "README.md"), "hello\n");
+      runGit("add", "README.md");
+      runGit("commit", "-qm", "init");
+      const worktreePath = join(repoDir, ".worktrees", "disposed");
+      runGit("worktree", "add", "-q", "-b", "agent/disposed", worktreePath);
+
+      sm.dispose();
+      await (sm as any).maintenance.reconcileResolvedWorktreeRetention({
+        sessionId: "disposed",
+        harnessSessionId: "disposed-thread",
+        name: "disposed",
+        prompt: "p",
+        workdir: repoDir,
+        worktreePath,
+        worktreeBranch: "agent/disposed",
+        worktreeLifecycle: { state: "merged", updatedAt: "2020-01-01T00:00:00.000Z", resolvedAt: "2020-01-01T00:00:00.000Z" },
+        status: "completed",
+        costUsd: 0,
+      }, Date.now());
+
+      assert.equal(existsSync(worktreePath), true, "a disposed maintenance service leaves the worktree for the next instance");
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it("backs off reminder retries after a delivery failure instead of rescheduling immediately", async () => {
     const sm = new SessionManager(5, 5);
     const originalDateNow = Date.now;
     const now = 1_700_000_000_000;
@@ -1499,8 +1616,8 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
         pendingWorktreeDecisionSince: new Date(now - 4 * 60 * 60 * 1000).toISOString(),
       };
 
-      (sm as any).persisted.set(pending.harnessSessionId, pending);
-      (sm as any).idIndex.set(pending.sessionId, pending.harnessSessionId);
+      (sm as any).store.persisted.set(pending.harnessSessionId, pending);
+      (sm as any).store.idIndex.set(pending.sessionId, pending.harnessSessionId);
       (sm as any).maintenance.cancel = (() => {}) as any;
       (sm as any).maintenance.schedule = ((key: string, at: number, cb: () => void) => {
         scheduled.push({ key, at, cb });
@@ -1511,6 +1628,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
       assert.equal(scheduled.filter((entry) => entry.key.endsWith(":worktree-reminder")).length, 1);
 
       scheduled[0].cb();
+      await (sm as any).maintenance.whenIdle();
 
       assert.equal(scheduled.length, 2);
       assert.equal(scheduled[1].key, "persisted:pending-session:worktree-reminder");
@@ -1534,7 +1652,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
       expected: { merge: false, openPr: false, prFollowups: false },
     },
   ] as const) {
-    it(`renders ${testCase.policy} policy-aware buttons for pending worktree reminders`, () => {
+    it(`renders ${testCase.policy} policy-aware buttons for pending worktree reminders`, async () => {
       const storeDir = mkdtempSync(join(tmpdir(), "sm-reminder-policy-store-"));
       const sm = new SessionManager(5, 5, {
         store: {
@@ -1567,8 +1685,8 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
       };
       const dispatchCalls: Array<{ request: any }> = [];
 
-      (sm as any).persisted.set(pending.harnessSessionId, pending);
-      (sm as any).idIndex.set(pending.sessionId, pending.harnessSessionId);
+      (sm as any).store.persisted.set(pending.harnessSessionId, pending);
+      (sm as any).store.idIndex.set(pending.sessionId, pending.harnessSessionId);
       (sm as any).interactions.isGitHubCliAvailable = () => true;
       (sm as any).resolveRepoPolicy = () => ({
         source: "stored",
@@ -1583,7 +1701,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
           Object.assign(pending, patch);
           return true;
         },
-        (sessionId, persistedSession) => (sm as any).getPolicyAwareWorktreeDecisionButtons(
+        async (sessionId, persistedSession) => await (sm as any).getPolicyAwareWorktreeDecisionButtons(
           sessionId,
           {},
           undefined,
@@ -1592,7 +1710,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
       );
 
       try {
-        assert.equal(reminders.sendReminderIfDue(pending, now), true);
+        assert.equal(await reminders.sendReminderIfDue(pending, now), true);
 
         const labels = buttonLabels(dispatchCalls[0]?.request.buttons);
         assert.equal(hasButton(labels, "Merge"), testCase.expected.merge);
@@ -1607,7 +1725,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     });
   }
 
-  it("keeps Open PR available for pr-required pending worktree reminders when repo dir is unavailable", () => {
+  it("keeps Open PR available for pr-required pending worktree reminders when repo dir is unavailable", async () => {
     const storeDir = mkdtempSync(join(tmpdir(), "sm-reminder-policy-unresolved-store-"));
     const sm = new SessionManager(5, 5, {
       store: {
@@ -1640,8 +1758,8 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     };
     const dispatchCalls: Array<{ request: any }> = [];
 
-    (sm as any).persisted.set(pending.harnessSessionId, pending);
-    (sm as any).idIndex.set(pending.sessionId, pending.harnessSessionId);
+    (sm as any).store.persisted.set(pending.harnessSessionId, pending);
+    (sm as any).store.idIndex.set(pending.sessionId, pending.harnessSessionId);
     (sm as any).resolveWorktreeRepoDir = () => undefined;
     (sm as any).resolveRepoPolicy = () => {
       throw new Error("resolveRepoPolicy should not run without a repo dir");
@@ -1653,7 +1771,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
         Object.assign(pending, patch);
         return true;
       },
-      (sessionId, persistedSession) => (sm as any).getPolicyAwareWorktreeDecisionButtons(
+      async (sessionId, persistedSession) => await (sm as any).getPolicyAwareWorktreeDecisionButtons(
         sessionId,
         {},
         undefined,
@@ -1662,7 +1780,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     );
 
     try {
-      assert.equal(reminders.sendReminderIfDue(pending, now), true);
+      assert.equal(await reminders.sendReminderIfDue(pending, now), true);
 
       const labels = buttonLabels(dispatchCalls[0]?.request.buttons);
       assert.equal(hasButton(labels, "Merge"), false);
@@ -1674,7 +1792,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     }
   });
 
-  it("preserves PR buttons for pending worktree reminders when policy state is unavailable", () => {
+  it("preserves PR buttons for pending worktree reminders when policy state is unavailable", async () => {
     const storeDir = mkdtempSync(join(tmpdir(), "sm-reminder-policy-missing-store-"));
     const sm = new SessionManager(5, 5, {
       store: {
@@ -1706,8 +1824,8 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     };
     const dispatchCalls: Array<{ request: any }> = [];
 
-    (sm as any).persisted.set(pending.harnessSessionId, pending);
-    (sm as any).idIndex.set(pending.sessionId, pending.harnessSessionId);
+    (sm as any).store.persisted.set(pending.harnessSessionId, pending);
+    (sm as any).store.idIndex.set(pending.sessionId, pending.harnessSessionId);
     (sm as any).interactions.isGitHubCliAvailable = () => true;
     (sm as any).resolveWorktreeRepoDir = () => undefined;
     (sm as any).resolveRepoPolicy = () => {
@@ -1720,7 +1838,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
         Object.assign(pending, patch);
         return true;
       },
-      (sessionId, persistedSession) => (sm as any).getPolicyAwareWorktreeDecisionButtons(
+      async (sessionId, persistedSession) => await (sm as any).getPolicyAwareWorktreeDecisionButtons(
         sessionId,
         {},
         undefined,
@@ -1729,7 +1847,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     );
 
     try {
-      assert.equal(reminders.sendReminderIfDue(pending, now), true);
+      assert.equal(await reminders.sendReminderIfDue(pending, now), true);
 
       const labels = buttonLabels(dispatchCalls[0]?.request.buttons);
       assert.equal(hasButton(labels, "Merge"), true);
@@ -1741,7 +1859,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     }
   });
 
-  it("does not schedule reminders when stale pending fields conflict with resolved lifecycle state", () => {
+  it("does not schedule reminders when stale pending fields conflict with resolved lifecycle state", async () => {
     const sm = new SessionManager(5, 5);
     const now = Date.now();
     const pendingSince = new Date(now - 4 * 60 * 60 * 1000).toISOString();
@@ -1756,7 +1874,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     ];
 
     for (const entry of cases) {
-      const nextReminderAt = (sm as any).maintenance.deps.reminders.getNextReminderAt({
+      const nextReminderAt = await (sm as any).maintenance.deps.reminders.getNextReminderAt({
         sessionId: `stale-${entry.label}`,
         harnessSessionId: `thread-${entry.label}`,
         name: `stale-${entry.label}`,
@@ -1776,7 +1894,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     }
   });
 
-  it("clears stale persisted reminder fields when maintenance finds a resolved decision", () => {
+  it("clears stale persisted reminder fields when maintenance finds a resolved decision", async () => {
     const sm = new SessionManager(5, 5);
     const now = Date.now();
     const scheduled: Array<{ key: string; at: number; cb: () => void }> = [];
@@ -1814,14 +1932,15 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
       },
     };
 
-    (sm as any).persisted.set(stale.harnessSessionId, stale);
-    (sm as any).idIndex.set(stale.sessionId, stale.harnessSessionId);
+    (sm as any).store.persisted.set(stale.harnessSessionId, stale);
+    (sm as any).store.idIndex.set(stale.sessionId, stale.harnessSessionId);
     (sm as any).maintenance.cancel = (() => {}) as any;
     (sm as any).maintenance.schedule = ((key: string, at: number, cb: () => void) => {
       scheduled.push({ key, at, cb });
     }) as any;
 
     (sm as any).syncPersistedSessionMaintenance(stale);
+    await (sm as any).maintenance.whenIdle();
 
     const persisted = (sm as any).store.getPersistedSession(stale.sessionId);
     assert.equal(persisted.pendingWorktreeDecisionSince, undefined);
@@ -1830,7 +1949,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     assert.equal(scheduled.some((entry) => entry.key.endsWith(":worktree-reminder")), false);
   });
 
-  it("clears orphaned resolved reminder fields without a valid pending timestamp", () => {
+  it("clears orphaned resolved reminder fields without a valid pending timestamp", async () => {
     const sm = new SessionManager(5, 5);
     const now = Date.now();
     const scheduled: Array<{ key: string; at: number; cb: () => void }> = [];
@@ -1868,14 +1987,15 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
       },
     };
 
-    (sm as any).persisted.set(stale.harnessSessionId, stale);
-    (sm as any).idIndex.set(stale.sessionId, stale.harnessSessionId);
+    (sm as any).store.persisted.set(stale.harnessSessionId, stale);
+    (sm as any).store.idIndex.set(stale.sessionId, stale.harnessSessionId);
     (sm as any).maintenance.cancel = (() => {}) as any;
     (sm as any).maintenance.schedule = ((key: string, at: number, cb: () => void) => {
       scheduled.push({ key, at, cb });
     }) as any;
 
     (sm as any).syncPersistedSessionMaintenance(stale);
+    await (sm as any).maintenance.whenIdle();
 
     const persisted = (sm as any).store.getPersistedSession(stale.sessionId);
     assert.equal(persisted.pendingWorktreeDecisionSince, undefined);
@@ -1949,7 +2069,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     }
   });
 
-  it("drops a queued stale worktree reminder after rechecking resolved persisted state", () => {
+  it("drops a queued stale worktree reminder after rechecking resolved persisted state", async () => {
     const sm = new SessionManager(5, 5);
     stubDispatch(sm);
     const originalDateNow = Date.now;
@@ -1988,8 +2108,8 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
         },
       };
 
-      (sm as any).persisted.set(pending.harnessSessionId, pending);
-      (sm as any).idIndex.set(pending.sessionId, pending.harnessSessionId);
+      (sm as any).store.persisted.set(pending.harnessSessionId, pending);
+      (sm as any).store.idIndex.set(pending.sessionId, pending.harnessSessionId);
       (sm as any).maintenance.cancel = (() => {}) as any;
       (sm as any).maintenance.schedule = ((key: string, at: number, cb: () => void) => {
         scheduled.push({ key, at, cb });
@@ -2009,6 +2129,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
       });
 
       scheduled[0].cb();
+      await (sm as any).maintenance.whenIdle();
 
       assert.equal(scheduled.filter((entry) => entry.key.endsWith(":worktree-reminder")).length, 1);
       assert.equal(((sm as any).__dispatchCalls ?? []).length, 0);
@@ -2085,6 +2206,73 @@ describe("SessionManager.notifySession()", () => {
 // =========================================================================
 
 describe("SessionManager resumed launch routing", () => {
+  it("kills active sessions before waiting for a launch that is still preparing", async () => {
+    const harness = createFakeHarness("shutdown-order-harness");
+    registerHarness(harness);
+    const sm = new SessionManager(5, 5);
+    const active = await sm.spawn({
+      prompt: "active",
+      workdir: "/tmp",
+      harness: harness.name,
+      worktreeStrategy: "off",
+      route: { provider: "telegram", target: "12345" },
+    }, { notifyLaunch: false });
+    let releasePolicy!: () => void;
+    const policyGate = new Promise<void>((resolve) => { releasePolicy = resolve; });
+    const originalCheck = sm.checkRepoPolicyForLaunch.bind(sm);
+    (sm as any).checkRepoPolicyForLaunch = async (...args: [string, any]) => {
+      await policyGate;
+      return originalCheck(...args);
+    };
+    const slowLaunch = sm.spawn({
+      prompt: "slow",
+      workdir: "/tmp",
+      harness: harness.name,
+      worktreeStrategy: "off",
+      route: { provider: "telegram", target: "12345" },
+    }, { notifyLaunch: false });
+
+    const shutdown = sm.shutdown();
+    await tick(10);
+    assert.equal(active.status, "killed", "active sessions stop while a launch is still preparing");
+    assert.equal(active.killReason, "shutdown");
+
+    releasePolicy();
+    await assert.rejects(slowLaunch, /shutting down/);
+    await shutdown;
+  });
+
+  it("does not start a launch that finished preparing after shutdown began", async () => {
+    const harness = createFakeHarness("shutdown-race-harness");
+    registerHarness(harness);
+    const sm = new SessionManager(5, 5);
+    let launches = 0;
+    const originalLaunch = harness.launch.bind(harness);
+    harness.launch = ((options: any) => { launches += 1; return originalLaunch(options); }) as any;
+    let releasePolicy!: () => void;
+    const policyGate = new Promise<void>((resolve) => { releasePolicy = resolve; });
+    const originalCheck = sm.checkRepoPolicyForLaunch.bind(sm);
+    (sm as any).checkRepoPolicyForLaunch = async (...args: [string, any]) => {
+      await policyGate;
+      return originalCheck(...args);
+    };
+
+    const launch = sm.spawn({
+      prompt: "late",
+      workdir: "/tmp",
+      harness: harness.name,
+      worktreeStrategy: "off",
+      route: { provider: "telegram", target: "12345" },
+    }, { notifyLaunch: false });
+    const shutdown = sm.shutdown();
+    releasePolicy();
+
+    await assert.rejects(launch, /shutting down/);
+    await shutdown;
+    assert.equal(launches, 0);
+    assert.deepEqual(sm.list("all"), []);
+  });
+
   it("waits for a terminal Codex owner to release its writer before starting a replacement resume", async () => {
     let launchCalls = 0;
     let releaseClose!: () => void;
@@ -2123,7 +2311,7 @@ describe("SessionManager resumed launch routing", () => {
     const route = { provider: "telegram", target: "12345" };
 
     try {
-      const owner = sm.spawn({
+      const owner = await sm.spawn({
         prompt: "first",
         workdir: "/tmp",
         name: "writer-owner",
@@ -2133,7 +2321,7 @@ describe("SessionManager resumed launch routing", () => {
       }, { notifyLaunch: false });
       await tick(20);
       assert.equal(owner.status, "running");
-      assert.throws(() => sm.spawn({
+      await assert.rejects(async () => await sm.spawn({
         prompt: "duplicate resume",
         workdir: "/tmp",
         name: "duplicate-writer",
@@ -2145,7 +2333,7 @@ describe("SessionManager resumed launch routing", () => {
       assert.equal(launchCalls, 1);
       owner.kill("user");
 
-      const replacement = sm.spawn({
+      const replacement = await sm.spawn({
         prompt: "resume after release",
         workdir: "/tmp",
         name: "writer-replacement",
@@ -2157,7 +2345,7 @@ describe("SessionManager resumed launch routing", () => {
       await tick(20);
       assert.equal(replacement.status, "starting");
       assert.equal(launchCalls, 1);
-      assert.throws(() => sm.spawn({
+      await assert.rejects(async () => await sm.spawn({
         prompt: "overlapping replacement",
         workdir: "/tmp",
         name: "overlapping-writer-replacement",
@@ -2218,7 +2406,7 @@ describe("SessionManager resumed launch routing", () => {
     const route = { provider: "telegram", target: "12345" };
 
     try {
-      const first = sm.spawn({
+      const first = await sm.spawn({
         prompt: "first owner",
         workdir: "/tmp",
         name: "first-writer-owner",
@@ -2230,7 +2418,7 @@ describe("SessionManager resumed launch routing", () => {
       assert.equal(first.status, "running");
       first.kill("user");
 
-      const second = sm.spawn({
+      const second = await sm.spawn({
         prompt: "second owner",
         workdir: "/tmp",
         name: "second-writer-owner",
@@ -2249,7 +2437,7 @@ describe("SessionManager resumed launch routing", () => {
       assert.equal(launchCalls, 2);
       second.kill("user");
 
-      const third = sm.spawn({
+      const third = await sm.spawn({
         prompt: "third owner",
         workdir: "/tmp",
         name: "third-writer-owner",
@@ -2275,7 +2463,7 @@ describe("SessionManager resumed launch routing", () => {
     }
   });
 
-  it("inherits the persisted origin route before starting a resumed system-routed launch", () => {
+  it("inherits the persisted origin route before starting a resumed system-routed launch", async () => {
     const harness = createFakeHarness("resume-route-fake-harness");
     registerHarness(harness);
     setPluginConfig({});
@@ -2287,7 +2475,7 @@ describe("SessionManager resumed launch routing", () => {
       threadId: "26",
       sessionKey: "agent:main:telegram:group:-1003863755361:topic:26",
     };
-    (sm as any).persisted.set("7dkMOGyB", {
+    (sm as any).store.persisted.set("7dkMOGyB", {
       sessionId: "fix-pr-98922-quality-codex",
       harnessSessionId: "7dkMOGyB",
       backendRef: { kind: "codex-app-server", conversationId: "7dkMOGyB" },
@@ -2302,7 +2490,7 @@ describe("SessionManager resumed launch routing", () => {
       route,
     });
 
-    const session = sm.spawn({
+    const session = await sm.spawn({
       prompt: "Compare message_sending vs reply_payload_sending.",
       workdir: "/tmp",
       name: "compare-pr-98922-hook-layer",
@@ -2345,7 +2533,7 @@ describe("SessionManager.launchPlanOffer()", () => {
     stubDispatch(sm);
   });
 
-  it("starts a plan-gated auto-pr session with preserved topic routing", () => {
+  it("starts a plan-gated auto-pr session with preserved topic routing", async () => {
     const spawnCalls: Array<Record<string, unknown>> = [];
     (sm as any).spawn = (config: Record<string, unknown>) => {
       spawnCalls.push(config);
@@ -2360,7 +2548,7 @@ describe("SessionManager.launchPlanOffer()", () => {
       sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
     } as const;
 
-    const session = sm.launchPlanOffer({
+    const session = await sm.launchPlanOffer({
       route,
       prompt: "Plan the OpenClaw v2026.5.18 plugin-readiness follow-up.",
       workdir: "/home/openclaw/workspace/openclaw-code-agent",
@@ -3473,11 +3661,11 @@ describe("SessionManager restored button parity", () => {
     return (rows ?? []).map((row) => row.map((button) => button.label));
   }
 
-  it("renders the same restored worktree action set for Telegram and Discord sessions", () => {
+  it("renders the same restored worktree action set for Telegram and Discord sessions", async () => {
     const telegramId = "h-telegram-worktree";
     const discordId = "h-discord-worktree";
 
-    sm.persisted.set(telegramId, {
+    (sm as any).store.persisted.set(telegramId, {
       harnessSessionId: telegramId,
       name: "telegram-worktree",
       prompt: "p",
@@ -3491,7 +3679,7 @@ describe("SessionManager restored button parity", () => {
       worktreePath: "/tmp/repo/.worktrees/telegram-worktree",
       worktreeBranch: "agent/telegram-worktree",
     } as any);
-    sm.persisted.set(discordId, {
+    (sm as any).store.persisted.set(discordId, {
       harnessSessionId: discordId,
       name: "discord-worktree",
       prompt: "p",
@@ -3506,8 +3694,8 @@ describe("SessionManager restored button parity", () => {
       worktreeBranch: "agent/discord-worktree",
     } as any);
 
-    const telegramButtons = (sm as any).getWorktreeDecisionButtons(telegramId);
-    const discordButtons = (sm as any).getWorktreeDecisionButtons(discordId);
+    const telegramButtons = await (sm as any).getWorktreeDecisionButtons(telegramId);
+    const discordButtons = await (sm as any).getWorktreeDecisionButtons(discordId);
 
     assert.deepEqual(buttonLabels(telegramButtons), buttonLabels(discordButtons));
     assert.deepEqual(buttonLabels(telegramButtons), [["Merge", "Open PR"], ["Later", "Discard"]]);

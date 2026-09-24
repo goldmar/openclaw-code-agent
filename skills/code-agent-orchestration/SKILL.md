@@ -161,6 +161,8 @@ Use `permission_mode: "plan"` whenever the user wants a real planning checkpoint
 
 Use worktrees as temporary task sandboxes, not as generic branch inventory.
 
+New worktrees receive the repository's `.worktreeinclude` files (for example `.env`) and run its `.openclaw/worktree-setup.sh`. If a launch fails with `worktree setup failed`, report the script output to the user instead of retrying with `worktree_strategy: "off"`.
+
 Lifecycle meanings:
 
 - `pending_decision`: still waiting for merge / PR / dismiss follow-through

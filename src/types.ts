@@ -68,11 +68,7 @@ export type KillReason = "user" | "idle-timeout" | "startup-timeout" | "shutdown
 
 /** Unified permission modes exposed by tools/commands across harnesses. */
 export type PermissionMode = "default" | "plan" | "bypassPermissions";
-/**
- * `plan-mode` is the canonical persisted plan-review context for all harnesses.
- * Legacy values like `soft-plan` and `codex-first-turn-plan` are normalized back
- * to `plan-mode` on read so new writes only use one explicit value.
- */
+/** `plan-mode` is the only persisted plan-review context; unknown values are dropped on read. */
 export type PlanApprovalContext = "plan-mode";
 export const WORKTREE_STRATEGIES = ["off", "manual", "ask", "delegate", "auto-merge", "auto-pr"] as const;
 export type WorktreeStrategy = typeof WORKTREE_STRATEGIES[number];
@@ -456,19 +452,11 @@ export interface PluginConfig {
   defaultWorktreeStrategy?: WorktreeStrategy;
   /** Override base directory for agent worktrees. Defaults to <repoRoot>/.worktrees when unset. */
   worktreeDir?: string;
-  /**
-   * Deprecated global allowed-model fallback preserved during migration from the
-   * pre-harness config shape. Matching remains case-insensitive substring-based.
-   */
-  allowedModels?: string[];
 }
 
-/** Raw plugin config as accepted from OpenClaw, including deprecated legacy keys. */
+/** Raw plugin config as accepted from OpenClaw (validated against `openclaw.plugin.json` configSchema). */
 export interface RawPluginConfig {
   maxSessions?: number;
-  defaultModel?: string;
-  model?: string;
-  reasoningEffort?: ReasoningEffort;
   defaultWorkdir?: string;
   idleTimeoutMinutes?: number;
   sessionGcAgeMinutes?: number;
@@ -479,7 +467,6 @@ export interface RawPluginConfig {
   maxAutoResponds?: number;
   planApproval?: PlanApprovalMode;
   defaultHarness?: string;
-  allowedModels?: string[];
   harnesses?: Record<string, HarnessConfig>;
   /** Default worktree strategy for new sessions. */
   defaultWorktreeStrategy?: WorktreeStrategy;

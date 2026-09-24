@@ -89,6 +89,9 @@ import type { Turn } from "./codex-app-server-protocol/v2/Turn";
 import type { TurnCompletedNotification } from "./codex-app-server-protocol/v2/TurnCompletedNotification";
 import type { TurnPlanUpdatedNotification } from "./codex-app-server-protocol/v2/TurnPlanUpdatedNotification";
 import type { TurnStartedNotification } from "./codex-app-server-protocol/v2/TurnStartedNotification";
+import { createLogger } from "../logger";
+
+const log = createLogger("codex");
 
 interface CodexHarnessDeps {
   createClient?: (settings: {
@@ -172,7 +175,7 @@ function errorMessage(error: unknown): string {
 }
 
 function logCodexHarnessDiagnostic(event: string, fields: Record<string, unknown>): void {
-  console.warn(JSON.stringify({
+  log.warn(JSON.stringify({
     component: "CodexHarness",
     event,
     at: new Date().toISOString(),
@@ -275,7 +278,7 @@ export class CodexHarness implements AgentHarness {
     const queue = new HarnessMessageQueue();
     let threadId = normalizeCodexAppServerSessionId(options.resumeSessionId);
     if (options.resumeSessionId && !threadId) {
-      console.warn("[CodexHarness] Ignoring invalid Codex App Server resume session id. Expected UUID or urn:uuid UUID.");
+      log.warn("[CodexHarness] Ignoring invalid Codex App Server resume session id. Expected UUID or urn:uuid UUID.");
     }
     let threadReady = false;
     let forkPending = options.forkSession === true && !!threadId;
@@ -471,7 +474,7 @@ export class CodexHarness implements AgentHarness {
           try {
             request = buildUserInputRequest(requestId, params as ToolRequestUserInputParams);
           } catch (error) {
-            console.warn(`[CodexHarness] ${errorMessage(error)}`);
+            log.warn(`[CodexHarness] ${errorMessage(error)}`);
             throw error;
           }
           return await awaitPendingInput(id, request);

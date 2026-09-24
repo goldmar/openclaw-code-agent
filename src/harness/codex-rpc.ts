@@ -1,5 +1,8 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import readline from "node:readline";
+import { createLogger } from "../logger";
+
+const log = createLogger("codex-rpc");
 
 export type JsonRpcId = string | number;
 export type JsonRpcEnvelope = {
@@ -55,7 +58,7 @@ function errorMessage(error: unknown): string {
 }
 
 function logCodexRpcDiagnostic(event: string, fields: Record<string, unknown>): void {
-  console.warn(JSON.stringify({
+  log.warn(JSON.stringify({
     component: "CodexAppServerRpc",
     event,
     at: new Date().toISOString(),

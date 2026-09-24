@@ -14,7 +14,7 @@ interface CommandApi {
     description: string;
     acceptsArgs: boolean;
     requireAuth: boolean;
-    handler: (ctx: AgentPolicyCommandContext) => { text: string };
+    handler: (ctx: AgentPolicyCommandContext) => Promise<{ text: string }>;
   }): void;
 }
 
@@ -28,7 +28,7 @@ export function registerAgentPolicyCommand(api: CommandApi): void {
     description: "Inspect or set the current repo integration policy. Usage: /agent_policy [pr-required|pr-allowed|never-pr|manual|reset|list|cleanup]",
     acceptsArgs: true,
     requireAuth: true,
-    handler: (ctx) => {
+    handler: async (ctx) => {
       if (!sessionManager) return { text: "Error: SessionManager not initialized. The code-agent service must be running." };
       const first = consumeFirstCommandArg((ctx.args ?? "").trim());
       const action = first?.value;
@@ -41,7 +41,7 @@ export function registerAgentPolicyCommand(api: CommandApi): void {
         };
       }
       if (action === "cleanup") {
-        const removed = sessionManager.cleanupRepoPolicies();
+        const removed = await sessionManager.cleanupRepoPolicies();
         return {
           text: removed.length === 0
             ? "No stale repo policies found."
@@ -54,18 +54,18 @@ export function registerAgentPolicyCommand(api: CommandApi): void {
       const workdir = ctx.workspaceDir;
       if (!workdir) return { text: "Error: workspaceDir is required." };
       if (action === "reset") {
-        const ok = sessionManager.resetRepoPolicy(workdir);
+        const ok = await sessionManager.resetRepoPolicy(workdir);
         return { text: ok ? `Repo policy reset for ${workdir}.` : `No stored repo policy found for ${workdir}.` };
       }
       if (action && isPolicy(action)) {
         if (typeof sessionManager.resolveRepoPolicy === "function") {
-          const resolution = sessionManager.resolveRepoPolicy(workdir);
+          const resolution = await sessionManager.resolveRepoPolicy(workdir);
           if (resolution.identity) {
             const validationError = validateRepoPolicyForPrAvailability(action, resolution.prAvailable);
             if (validationError) return { text: `Error: ${validationError}` };
           }
         }
-        const record = sessionManager.setRepoPolicy(workdir, action);
+        const record = await sessionManager.setRepoPolicy(workdir, action);
         if (!record) return { text: `Error: ${workdir} is not a git repository.` };
         const savedText = `Repo policy set to ${record.policy} for ${record.repoRoot}.`;
         try {
@@ -73,7 +73,7 @@ export function registerAgentPolicyCommand(api: CommandApi): void {
           if (typeof sessionManager.continueLaunchAfterManualRepoPolicy !== "function") {
             return { text: savedText };
           }
-          const continuation = sessionManager.continueLaunchAfterManualRepoPolicy(record.repoRoot, action);
+          const continuation = await sessionManager.continueLaunchAfterManualRepoPolicy(record.repoRoot, action);
           if (continuation.kind === "launched") {
             return { text: [savedText, "", continuation.text].join("\n") };
           }
@@ -99,7 +99,7 @@ export function registerAgentPolicyCommand(api: CommandApi): void {
         }
         return { text: savedText };
       }
-      const resolution = sessionManager.resolveRepoPolicy(workdir);
+      const resolution = await sessionManager.resolveRepoPolicy(workdir);
       if (!resolution.identity) return { text: `No git repository found for ${workdir}.` };
       const policyOptions = getRepoPolicyOptionsForPrAvailability(resolution.prAvailable)
         .map((option) => option.policy)

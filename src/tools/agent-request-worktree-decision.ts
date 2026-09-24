@@ -1,4 +1,4 @@
-import { Type } from "../tool-schema";
+import { Type } from "../tool-parameter-schema";
 import { sessionManager } from "../singletons";
 import type { OpenClawPluginToolContext } from "../types";
 
@@ -30,7 +30,7 @@ export function makeAgentRequestWorktreeDecisionTool(_ctx?: OpenClawPluginToolCo
         return { content: [{ type: "text", text: "Error: Invalid parameters. Expected { session, summary }." }] };
       }
 
-      const text = sessionManager.requestWorktreeDecisionFromUser(params.session, params.summary);
+      const text = await sessionManager.requestWorktreeDecisionFromUser(params.session, params.summary);
       return {
         isError: text.startsWith("Error:"),
         content: [{ type: "text", text }],

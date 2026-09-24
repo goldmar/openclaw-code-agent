@@ -1,5 +1,5 @@
 import { assertBranchName } from "./worktree-ref-validation";
-import { execFileSync } from "child_process";
+import { runGh, runGit } from "./git-exec";
 import { isGitHubCLIAvailable } from "./worktree-repo";
 import { createLogger } from "./logger";
 
@@ -71,8 +71,8 @@ function isExistingPullRequestError(message: string): boolean {
   return /pull request already exists/i.test(message) || (/createPullRequest/i.test(message) && /already exists/i.test(message));
 }
 
-function recoverExistingPullRequest(repoDir: string, branch: string, targetRepo?: string): PRResult | undefined {
-  const existingPr = syncWorktreePR(repoDir, branch, targetRepo);
+async function recoverExistingPullRequest(repoDir: string, branch: string, targetRepo?: string): Promise<PRResult | undefined> {
+  const existingPr = await syncWorktreePR(repoDir, branch, targetRepo);
   if (existingPr.exists && existingPr.state === "open" && existingPr.url) {
     return {
       success: true,
@@ -89,13 +89,9 @@ function recoverExistingPullRequest(repoDir: string, branch: string, targetRepo?
   return undefined;
 }
 
-function inferOriginOwner(repoDir: string): string | undefined {
+async function inferOriginOwner(repoDir: string): Promise<string | undefined> {
   try {
-    const originUrl = execFileSync("git", ["-C", repoDir, "remote", "get-url", "origin"], {
-      timeout: 5_000,
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "pipe"],
-    }).trim();
+    const originUrl = (await runGit(["-C", repoDir, "remote", "get-url", "origin"], { timeout: 5_000 })).trim();
     const match = originUrl.match(/[:/]([^/]+)\/[^/]+(?:\.git)?$/);
     return match?.[1];
   } catch {
@@ -103,15 +99,15 @@ function inferOriginOwner(repoDir: string): string | undefined {
   }
 }
 
-function resolveGhHeadArg(repoDir: string, branch: string, targetRepo?: string): string {
+async function resolveGhHeadArg(repoDir: string, branch: string, targetRepo?: string): Promise<string> {
   if (!targetRepo) {
     return branch;
   }
-  const forkOwner = inferOriginOwner(repoDir);
+  const forkOwner = await inferOriginOwner(repoDir);
   return forkOwner ? `${forkOwner}:${branch}` : branch;
 }
 
-export function createPR(
+export async function createPR(
   repoDir: string,
   branch: string,
   base: string,
@@ -119,10 +115,10 @@ export function createPR(
   body: string,
   targetRepo?: string,
   options: CreatePROptions = {},
-): PRResult {
+): Promise<PRResult> {
   assertBranchName(branch);
   assertBranchName(base);
-  if (!isGitHubCLIAvailable()) {
+  if (!(await isGitHubCLIAvailable())) {
     return { success: false, error: "GitHub CLI (gh) is not available" };
   }
 
@@ -135,25 +131,20 @@ export function createPR(
     if (targetRepo) {
       args.push("--repo", targetRepo);
     }
-    args.push("--head", resolveGhHeadArg(repoDir, branch, targetRepo));
+    args.push("--head", await resolveGhHeadArg(repoDir, branch, targetRepo));
     if (title && body) {
       args.push("--title", title, "--body", normalizeExplicitPrBody(body));
     } else {
       args.push("--fill-verbose");
     }
 
-    const result = execFileSync("gh", args, {
-      cwd: repoDir,
-      timeout: 30_000,
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "pipe"],
-    });
+    const result = await runGh(args, { cwd: repoDir, timeout: 30_000 });
     const prUrl = result.trim();
     return { success: true, prUrl };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     if (isExistingPullRequestError(msg)) {
-      return recoverExistingPullRequest(repoDir, branch, targetRepo) ?? { success: false, error: msg };
+      return (await recoverExistingPullRequest(repoDir, branch, targetRepo)) ?? { success: false, error: msg };
     }
     // Recovery: if we requested draft and the error indicates drafts are not supported or enabled
     // on the target repo, retry once without --draft so that PR creation does not regress for repos
@@ -168,18 +159,13 @@ export function createPR(
     if ((options.draft ?? true) && args && /draft/i.test(msg)) {
       try {
         const retryArgs = args.filter((a) => a !== "--draft");
-        const retryResult = execFileSync("gh", retryArgs, {
-          cwd: repoDir,
-          timeout: 30_000,
-          encoding: "utf-8",
-          stdio: ["pipe", "pipe", "pipe"],
-        });
+        const retryResult = await runGh(retryArgs, { cwd: repoDir, timeout: 30_000 });
         const retryUrl = retryResult.trim();
         return { success: true, prUrl: retryUrl, warnings: ["Target repo does not support draft PRs; created as regular (non-draft) PR instead."] };
       } catch (retryErr) {
         const retryMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
         if (isExistingPullRequestError(retryMsg)) {
-          return recoverExistingPullRequest(repoDir, branch, targetRepo)
+          return (await recoverExistingPullRequest(repoDir, branch, targetRepo))
             ?? { success: false, error: `Draft PR creation failed (${msg}); non-draft retry also failed: ${retryMsg}` };
         }
         return { success: false, error: `Draft PR creation failed (${msg}); non-draft retry also failed: ${retryMsg}` };
@@ -189,9 +175,9 @@ export function createPR(
   }
 }
 
-export function syncWorktreePR(repoDir: string, branchName: string, targetRepo?: string): PRStatus {
+export async function syncWorktreePR(repoDir: string, branchName: string, targetRepo?: string): Promise<PRStatus> {
   assertBranchName(branchName);
-  if (!isGitHubCLIAvailable()) {
+  if (!(await isGitHubCLIAvailable())) {
     return { exists: false, state: "none" };
   }
 
@@ -200,12 +186,7 @@ export function syncWorktreePR(repoDir: string, branchName: string, targetRepo?:
     if (targetRepo) {
       ghArgs.push("--repo", targetRepo);
     }
-    const result = execFileSync("gh", ghArgs, {
-      cwd: repoDir,
-      timeout: 10_000,
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "pipe"],
-    });
+    const result = await runGh(ghArgs, { cwd: repoDir, timeout: 10_000 });
 
     const prData = result.trim();
     if (!prData) {
@@ -221,7 +202,7 @@ export function syncWorktreePR(repoDir: string, branchName: string, targetRepo?:
       headRefName?: string;
       baseRefName?: string;
     }>;
-    const expectedOwner = targetRepo ? inferOriginOwner(repoDir)?.toLowerCase() : undefined;
+    const expectedOwner = targetRepo ? (await inferOriginOwner(repoDir))?.toLowerCase() : undefined;
     const pr = prs.find((candidate) => (
       candidate.headRefName === branchName
       && (!expectedOwner || candidate.headRepositoryOwner?.login?.toLowerCase() === expectedOwner)
@@ -251,8 +232,8 @@ export function syncWorktreePR(repoDir: string, branchName: string, targetRepo?:
   }
 }
 
-export function syncWorktreePRByUrl(repoDir: string, prUrl: string, targetRepo?: string): PRStatus {
-  if (!isGitHubCLIAvailable()) {
+export async function syncWorktreePRByUrl(repoDir: string, prUrl: string, targetRepo?: string): Promise<PRStatus> {
+  if (!(await isGitHubCLIAvailable())) {
     return { exists: false, state: "none" };
   }
 
@@ -261,12 +242,7 @@ export function syncWorktreePRByUrl(repoDir: string, prUrl: string, targetRepo?:
     if (targetRepo) {
       ghArgs.push("--repo", targetRepo);
     }
-    const result = execFileSync("gh", ghArgs, {
-      cwd: repoDir,
-      timeout: 10_000,
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "pipe"],
-    });
+    const result = await runGh(ghArgs, { cwd: repoDir, timeout: 10_000 });
     const pr = JSON.parse(result.trim()) as {
       url: string;
       number: number;
@@ -299,8 +275,8 @@ export type PRBodyReadResult =
   | { ok: true; body?: string }
   | { ok: false; error: string };
 
-export function getPRBody(repoDir: string, prNumberOrUrl: number | string, targetRepo?: string): PRBodyReadResult {
-  if (!isGitHubCLIAvailable()) {
+export async function getPRBody(repoDir: string, prNumberOrUrl: number | string, targetRepo?: string): Promise<PRBodyReadResult> {
+  if (!(await isGitHubCLIAvailable())) {
     return { ok: false, error: "GitHub CLI (gh) is not available" };
   }
 
@@ -309,12 +285,7 @@ export function getPRBody(repoDir: string, prNumberOrUrl: number | string, targe
     if (targetRepo) {
       ghArgs.push("--repo", targetRepo);
     }
-    const result = execFileSync("gh", ghArgs, {
-      cwd: repoDir,
-      timeout: 10_000,
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "pipe"],
-    });
+    const result = await runGh(ghArgs, { cwd: repoDir, timeout: 10_000 });
     const pr = JSON.parse(result.trim()) as { body?: string };
     return { ok: true, body: typeof pr.body === "string" ? pr.body : undefined };
   } catch (err) {
@@ -324,8 +295,8 @@ export function getPRBody(repoDir: string, prNumberOrUrl: number | string, targe
   }
 }
 
-export function updatePRBody(repoDir: string, prNumberOrUrl: number | string, body: string, targetRepo?: string): boolean {
-  if (!isGitHubCLIAvailable()) {
+export async function updatePRBody(repoDir: string, prNumberOrUrl: number | string, body: string, targetRepo?: string): Promise<boolean> {
+  if (!(await isGitHubCLIAvailable())) {
     return false;
   }
 
@@ -334,12 +305,7 @@ export function updatePRBody(repoDir: string, prNumberOrUrl: number | string, bo
     if (targetRepo) {
       ghArgs.push("--repo", targetRepo);
     }
-    execFileSync("gh", ghArgs, {
-      cwd: repoDir,
-      timeout: 30_000,
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "pipe"],
-    });
+    await runGh(ghArgs, { cwd: repoDir, timeout: 30_000 });
     return true;
   } catch (err) {
     log.warn(`[worktree] Failed to update PR body for ${prNumberOrUrl}: ${err instanceof Error ? err.message : String(err)}`);
@@ -347,8 +313,8 @@ export function updatePRBody(repoDir: string, prNumberOrUrl: number | string, bo
   }
 }
 
-export function updatePRTitle(repoDir: string, prNumberOrUrl: number | string, title: string, targetRepo?: string): boolean {
-  if (!isGitHubCLIAvailable()) {
+export async function updatePRTitle(repoDir: string, prNumberOrUrl: number | string, title: string, targetRepo?: string): Promise<boolean> {
+  if (!(await isGitHubCLIAvailable())) {
     return false;
   }
 
@@ -357,12 +323,7 @@ export function updatePRTitle(repoDir: string, prNumberOrUrl: number | string, t
     if (targetRepo) {
       ghArgs.push("--repo", targetRepo);
     }
-    execFileSync("gh", ghArgs, {
-      cwd: repoDir,
-      timeout: 30_000,
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "pipe"],
-    });
+    await runGh(ghArgs, { cwd: repoDir, timeout: 30_000 });
     return true;
   } catch (err) {
     log.warn(`[worktree] Failed to update PR title for ${prNumberOrUrl}: ${err instanceof Error ? err.message : String(err)}`);
@@ -370,8 +331,8 @@ export function updatePRTitle(repoDir: string, prNumberOrUrl: number | string, t
   }
 }
 
-export function commentOnPR(repoDir: string, prNumber: number, body: string, targetRepo?: string): boolean {
-  if (!isGitHubCLIAvailable()) {
+export async function commentOnPR(repoDir: string, prNumber: number, body: string, targetRepo?: string): Promise<boolean> {
+  if (!(await isGitHubCLIAvailable())) {
     return false;
   }
 
@@ -380,12 +341,7 @@ export function commentOnPR(repoDir: string, prNumber: number, body: string, tar
     if (targetRepo) {
       ghArgs.push("--repo", targetRepo);
     }
-    execFileSync("gh", ghArgs, {
-      cwd: repoDir,
-      timeout: 30_000,
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "pipe"],
-    });
+    await runGh(ghArgs, { cwd: repoDir, timeout: 30_000 });
     return true;
   } catch (err) {
     log.warn(`[worktree] Failed to comment on PR #${prNumber}: ${err instanceof Error ? err.message : String(err)}`);

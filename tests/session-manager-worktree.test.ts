@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { SessionManager } from "../src/session-manager";
 import type { WorktreeDecisionSummaryEvidence, WorktreeDecisionSummaryProvider } from "../src/worktree-decision-summary";
 import { createWorktree, getBranchName } from "../src/worktree";
+import { normalizePersistedEntry } from "../src/session-store-normalization";
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf-8" }).trim();
@@ -68,7 +69,7 @@ function hasButton(rows: string[][], label: string): boolean {
   return rows.some((row) => row.includes(label));
 }
 
-function createPendingDelegateDecisionFixture(policy: "pr-required" | "never-pr" | "manual"): {
+async function createPendingDelegateDecisionFixture(policy: "pr-required" | "never-pr" | "manual"): {
   sm: SessionManager;
   cleanup: () => void;
   dispatchCalls: () => any[];
@@ -82,8 +83,8 @@ function createPendingDelegateDecisionFixture(policy: "pr-required" | "never-pr"
   git(repoDir, "commit", "-m", "init");
   git(repoDir, "remote", "add", "origin", "https://github.com/example/repo.git");
 
-  const worktreePath = createWorktree(repoDir, `live-policy-${policy}`);
-  const branchName = getBranchName(worktreePath);
+  const worktreePath = await createWorktree(repoDir, `live-policy-${policy}`);
+  const branchName = await getBranchName(worktreePath);
   assert.ok(branchName, "worktree branch should exist");
 
   writeFileSync(join(worktreePath, "README.md"), `hello\n${policy}\n`, "utf-8");
@@ -94,7 +95,7 @@ function createPendingDelegateDecisionFixture(policy: "pr-required" | "never-pr"
   const sm = created.sm;
   stubDispatch(sm);
   (sm as any).interactions.isGitHubCliAvailable = () => true;
-  sm.setRepoPolicy(repoDir, policy);
+  await sm.setRepoPolicy(repoDir, policy);
   (sm as any).sessions.set(`s-live-policy-${policy}`, {
     id: `s-live-policy-${policy}`,
     name: `live-policy-${policy}`,
@@ -133,8 +134,8 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       git(repoDir, "commit", "-m", "init");
       git(repoDir, "remote", "add", "origin", "https://github.com/example/repo.git");
 
-      const worktreePath = createWorktree(repoDir, "no-change-cleanup");
-      const branchName = getBranchName(worktreePath);
+      const worktreePath = await createWorktree(repoDir, "no-change-cleanup");
+      const branchName = await getBranchName(worktreePath);
       assert.ok(branchName, "worktree branch should exist");
 
       const created = createTestSessionManager(5);
@@ -212,8 +213,8 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       git(repoDir, "add", "README.md");
       git(repoDir, "commit", "-m", "init");
 
-      const worktreePath = createWorktree(repoDir, "pr-updated-clean");
-      const branchName = getBranchName(worktreePath);
+      const worktreePath = await createWorktree(repoDir, "pr-updated-clean");
+      const branchName = await getBranchName(worktreePath);
       assert.ok(branchName, "worktree branch should exist");
 
       const created = createTestSessionManager(5);
@@ -318,8 +319,8 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       git(repoDir, "add", "README.md");
       git(repoDir, "commit", "-m", "init");
 
-      const worktreePath = createWorktree(repoDir, "pr-open-no-change");
-      const branchName = getBranchName(worktreePath);
+      const worktreePath = await createWorktree(repoDir, "pr-open-no-change");
+      const branchName = await getBranchName(worktreePath);
       assert.ok(branchName, "worktree branch should exist");
 
       const created = createTestSessionManager(5);
@@ -416,8 +417,8 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       git(repoDir, "commit", "-m", "init");
       git(repoDir, "remote", "add", "origin", "https://github.com/example/repo.git");
 
-      const worktreePath = createWorktree(repoDir, "released-duplicate");
-      const branchName = getBranchName(worktreePath);
+      const worktreePath = await createWorktree(repoDir, "released-duplicate");
+      const branchName = await getBranchName(worktreePath);
       assert.ok(branchName, "worktree branch should exist");
 
       writeFileSync(join(worktreePath, "feature.txt"), "already landed\n", "utf-8");
@@ -463,7 +464,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       assert.ok(persistedBefore);
 
       assert.equal(
-        (sm as any).maintenance.deps.reminders.sendReminderIfDue(persistedBefore, now),
+        await (sm as any).maintenance.deps.reminders.sendReminderIfDue(persistedBefore, now),
         false,
       );
       assert.equal(((sm as any).__dispatchCalls ?? []).length, 0);
@@ -512,8 +513,8 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       git(repoDir, "add", "README.md");
       git(repoDir, "commit", "-m", "init");
 
-      const worktreePath = createWorktree(repoDir, "plan-report");
-      const branchName = getBranchName(worktreePath);
+      const worktreePath = await createWorktree(repoDir, "plan-report");
+      const branchName = await getBranchName(worktreePath);
       assert.ok(branchName, "worktree branch should exist");
 
       const created = createTestSessionManager(5);
@@ -591,8 +592,8 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       git(repoDir, "add", "README.md");
       git(repoDir, "commit", "-m", "init");
 
-      const worktreePath = createWorktree(repoDir, "investigation-report");
-      const branchName = getBranchName(worktreePath);
+      const worktreePath = await createWorktree(repoDir, "investigation-report");
+      const branchName = await getBranchName(worktreePath);
       assert.ok(branchName, "worktree branch should exist");
 
       const created = createTestSessionManager(5);
@@ -652,8 +653,8 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       git(repoDir, "add", "README.md");
       git(repoDir, "commit", "-m", "init");
 
-      const worktreePath = createWorktree(repoDir, "dirty-completion");
-      const branchName = getBranchName(worktreePath);
+      const worktreePath = await createWorktree(repoDir, "dirty-completion");
+      const branchName = await getBranchName(worktreePath);
       assert.ok(branchName, "worktree branch should exist");
       writeFileSync(join(worktreePath, "new-file.txt"), "untracked\n", "utf-8");
 
@@ -727,8 +728,8 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       git(repoDir, "commit", "-m", "init");
       git(repoDir, "remote", "add", "origin", "https://github.com/example/repo.git");
 
-      const worktreePath = createWorktree(repoDir, "delegate-buttons");
-      const branchName = getBranchName(worktreePath);
+      const worktreePath = await createWorktree(repoDir, "delegate-buttons");
+      const branchName = await getBranchName(worktreePath);
       assert.ok(branchName, "worktree branch should exist");
 
       writeFileSync(join(worktreePath, "README.md"), "hello\nupdated\n", "utf-8");
@@ -739,7 +740,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       const sm = created.sm;
       cleanup = created.cleanup;
       stubDispatch(sm);
-      sm.setRepoPolicy(repoDir, "pr-allowed");
+      await sm.setRepoPolicy(repoDir, "pr-allowed");
       (sm as any).store.persisted.set("h-delegate", {
         harnessSessionId: "h-delegate",
         backendRef: { kind: "claude-code", conversationId: "h-delegate" },
@@ -804,7 +805,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       const persisted = (sm as any).store.persisted.get("h-delegate");
       assert.match(persisted.pendingWorktreeDecisionSince, /^\d{4}-\d{2}-\d{2}T/);
 
-      const response = (sm as any).requestWorktreeDecisionFromUser(
+      const response = await (sm as any).requestWorktreeDecisionFromUser(
         "delegate-session",
         [
           "PR is safer because the branch changes user-visible notification behavior.",
@@ -831,10 +832,10 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
     }
   });
 
-  it("uses live pr-required policy for explicit pending worktree decision buttons without a session snapshot", () => {
-    const fixture = createPendingDelegateDecisionFixture("pr-required");
+  it("uses live pr-required policy for explicit pending worktree decision buttons without a session snapshot", async () => {
+    const fixture = await createPendingDelegateDecisionFixture("pr-required");
     try {
-      const response = (fixture.sm as any).requestWorktreeDecisionFromUser(
+      const response = await (fixture.sm as any).requestWorktreeDecisionFromUser(
         "s-live-policy-pr-required",
         "The branch is ready for a worktree decision.",
       );
@@ -851,10 +852,10 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
   });
 
   for (const policy of ["never-pr", "manual"] as const) {
-    it(`uses live ${policy} policy for explicit pending worktree decision PR buttons without a session snapshot`, () => {
-      const fixture = createPendingDelegateDecisionFixture(policy);
+    it(`uses live ${policy} policy for explicit pending worktree decision PR buttons without a session snapshot`, async () => {
+      const fixture = await createPendingDelegateDecisionFixture(policy);
       try {
-        const response = (fixture.sm as any).requestWorktreeDecisionFromUser(
+        const response = await (fixture.sm as any).requestWorktreeDecisionFromUser(
           `s-live-policy-${policy}`,
           "The branch is ready for a worktree decision.",
         );
@@ -888,8 +889,8 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       git(repoDir, "commit", "-m", "init");
       git(repoDir, "remote", "add", "origin", "https://github.com/example/repo.git");
 
-      const worktreePath = createWorktree(repoDir, "ask-summary");
-      const branchName = getBranchName(worktreePath);
+      const worktreePath = await createWorktree(repoDir, "ask-summary");
+      const branchName = await getBranchName(worktreePath);
       assert.ok(branchName, "worktree branch should exist");
 
       writeFileSync(join(worktreePath, "README.md"), "hello\nupdated\n", "utf-8");
@@ -916,7 +917,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       cleanup = created.cleanup;
       stubDispatch(sm);
       (sm as any).interactions.isGitHubCliAvailable = () => true;
-      sm.setRepoPolicy(repoDir, "pr-allowed");
+      await sm.setRepoPolicy(repoDir, "pr-allowed");
       (sm as any).store.persisted.set("h-ask-summary", {
         harnessSessionId: "h-ask-summary",
         backendRef: { kind: "claude-code", conversationId: "h-ask-summary" },
@@ -988,7 +989,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
     }
   });
 
-  it("daily cleanup removes resolved worktrees after retention", () => {
+  it("daily cleanup removes resolved worktrees after retention", async () => {
     const repoDir = mkdtempSync(join(tmpdir(), "sm-worktree-retention-"));
     let cleanup = () => {};
     try {
@@ -999,8 +1000,8 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       git(repoDir, "add", "README.md");
       git(repoDir, "commit", "-m", "init");
 
-      const worktreePath = createWorktree(repoDir, "resolved-cleanup");
-      const branchName = getBranchName(worktreePath);
+      const worktreePath = await createWorktree(repoDir, "resolved-cleanup");
+      const branchName = await getBranchName(worktreePath);
       assert.ok(branchName, "worktree branch should exist");
 
       const created = createTestSessionManager(5);
@@ -1032,7 +1033,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
         },
       });
 
-      (sm as any).maintenance.reconcileResolvedWorktreeRetention((sm as any).store.persisted.get("h-resolved"), Date.now());
+      await (sm as any).maintenance.reconcileResolvedWorktreeRetention((sm as any).store.persisted.get("h-resolved"), Date.now());
 
       assert.equal(existsSync(worktreePath), false);
       const persisted = (sm as any).store.persisted.get("h-resolved");
@@ -1048,7 +1049,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
     }
   });
 
-  it("retention cleanup never deletes pending-decision worktrees", () => {
+  it("retention cleanup never deletes pending-decision worktrees", async () => {
     const repoDir = mkdtempSync(join(tmpdir(), "sm-worktree-pending-"));
     let cleanup = () => {};
     try {
@@ -1059,8 +1060,8 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       git(repoDir, "add", "README.md");
       git(repoDir, "commit", "-m", "init");
 
-      const worktreePath = createWorktree(repoDir, "pending-cleanup");
-      const branchName = getBranchName(worktreePath);
+      const worktreePath = await createWorktree(repoDir, "pending-cleanup");
+      const branchName = await getBranchName(worktreePath);
       assert.ok(branchName, "worktree branch should exist");
 
       const created = createTestSessionManager(5);
@@ -1085,7 +1086,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
         pendingWorktreeDecisionSince: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString(),
       });
 
-      (sm as any).maintenance.reconcileResolvedWorktreeRetention((sm as any).store.persisted.get("h-pending"), Date.now());
+      await (sm as any).maintenance.reconcileResolvedWorktreeRetention((sm as any).store.persisted.get("h-pending"), Date.now());
 
       assert.equal(existsSync(worktreePath), true);
       const persisted = (sm as any).store.persisted.get("h-pending");
@@ -1097,7 +1098,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
     }
   });
 
-  it("retention cleanup removes legacy dismissed worktrees without lifecycle metadata", () => {
+  it("retention cleanup removes 4.x dismissed worktrees whose lifecycle is synthesized on load", async () => {
     const repoDir = mkdtempSync(join(tmpdir(), "sm-worktree-legacy-dismissed-"));
     let cleanup = () => {};
     try {
@@ -1108,8 +1109,8 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       git(repoDir, "add", "README.md");
       git(repoDir, "commit", "-m", "init");
 
-      const worktreePath = createWorktree(repoDir, "legacy-dismissed-cleanup");
-      const branchName = getBranchName(worktreePath);
+      const worktreePath = await createWorktree(repoDir, "legacy-dismissed-cleanup");
+      const branchName = await getBranchName(worktreePath);
       assert.ok(branchName, "worktree branch should exist");
       writeFileSync(join(worktreePath, "branch-only.txt"), "legacy dismissed work\n", "utf-8");
       git(worktreePath, "add", "branch-only.txt");
@@ -1119,7 +1120,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       const created = createTestSessionManager(5);
       const sm = created.sm;
       cleanup = created.cleanup;
-      (sm as any).store.persisted.set("h-legacy-dismissed", {
+      (sm as any).store.persisted.set("h-legacy-dismissed", normalizePersistedEntry({
         harnessSessionId: "h-legacy-dismissed",
         backendRef: { kind: "claude-code", conversationId: "h-legacy-dismissed" },
         name: "legacy-dismissed-cleanup",
@@ -1136,9 +1137,9 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
         worktreeBranch: branchName,
         worktreeDisposition: "dismissed",
         worktreeDismissedAt: dismissedAt,
-      });
+      }));
 
-      (sm as any).maintenance.reconcileResolvedWorktreeRetention((sm as any).store.persisted.get("h-legacy-dismissed"), Date.now());
+      await (sm as any).maintenance.reconcileResolvedWorktreeRetention((sm as any).store.persisted.get("h-legacy-dismissed"), Date.now());
 
       assert.equal(existsSync(worktreePath), false);
       const persisted = (sm as any).store.persisted.get("h-legacy-dismissed");
@@ -1152,7 +1153,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
     }
   });
 
-  it("retention cleanup removes legacy merged-disposition worktrees without lifecycle metadata", () => {
+  it("retention cleanup removes 4.x merged-disposition worktrees whose lifecycle is synthesized on load", async () => {
     const repoDir = mkdtempSync(join(tmpdir(), "sm-worktree-legacy-merged-"));
     let cleanup = () => {};
     try {
@@ -1163,8 +1164,8 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       git(repoDir, "add", "README.md");
       git(repoDir, "commit", "-m", "init");
 
-      const worktreePath = createWorktree(repoDir, "legacy-merged-cleanup");
-      const branchName = getBranchName(worktreePath);
+      const worktreePath = await createWorktree(repoDir, "legacy-merged-cleanup");
+      const branchName = await getBranchName(worktreePath);
       assert.ok(branchName, "worktree branch should exist");
       writeFileSync(join(worktreePath, "branch-only.txt"), "legacy merged work\n", "utf-8");
       git(worktreePath, "add", "branch-only.txt");
@@ -1174,7 +1175,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       const created = createTestSessionManager(5);
       const sm = created.sm;
       cleanup = created.cleanup;
-      (sm as any).store.persisted.set("h-legacy-merged", {
+      (sm as any).store.persisted.set("h-legacy-merged", normalizePersistedEntry({
         harnessSessionId: "h-legacy-merged",
         backendRef: { kind: "claude-code", conversationId: "h-legacy-merged" },
         name: "legacy-merged-cleanup",
@@ -1191,9 +1192,9 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
         worktreeBranch: branchName,
         worktreeDisposition: "merged",
         worktreeMergedAt: mergedAt,
-      });
+      }));
 
-      (sm as any).maintenance.reconcileResolvedWorktreeRetention((sm as any).store.persisted.get("h-legacy-merged"), Date.now());
+      await (sm as any).maintenance.reconcileResolvedWorktreeRetention((sm as any).store.persisted.get("h-legacy-merged"), Date.now());
 
       assert.equal(existsSync(worktreePath), false);
       const persisted = (sm as any).store.persisted.get("h-legacy-merged");

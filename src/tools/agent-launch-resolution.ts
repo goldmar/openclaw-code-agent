@@ -76,7 +76,6 @@ type SessionManagerLike = {
     "harness" | "reasoningEffort" | "backendRef" | "route" | "originChannel" | "originThreadId" | "originSessionKey"
   > | undefined;
   resolveBackendConversationId?: (ref: string) => string | undefined;
-  resolveHarnessSessionId?: (ref: string) => string | undefined;
 };
 
 export type AgentLaunchResolution =
@@ -273,7 +272,7 @@ export function resolveAgentLaunchRequest(
       kind: "error",
       text: wasExplicitModel
         ? `Error: Model "${rawResolvedModel}" is not allowed. Permitted models: ${allowedModels.join(", ")}`
-        : `Error: Default model "${rawResolvedModel || "undefined"}" is not in allowedModels (${allowedModels.join(", ")}). Update your plugin config to set a compatible defaultModel.`,
+        : `Error: Default model "${rawResolvedModel || "undefined"}" is not in allowedModels (${allowedModels.join(", ")}). Update harnesses.${harness}.defaultModel or harnesses.${harness}.allowedModels in the plugin config.`,
     };
   }
   const resolvedModel = canonicalAllowedModelForHarness(harness, canonicalResolvedModel, allowedModels);
@@ -335,8 +334,7 @@ export function resolveAgentLaunchRequest(
     ? sessionManager.getPersistedSession?.(resolvedResumeId)
     : undefined;
   if (resolvedResumeId) {
-    const resolved = sessionManager.resolveBackendConversationId?.(resolvedResumeId)
-      ?? sessionManager.resolveHarnessSessionId?.(resolvedResumeId);
+    const resolved = sessionManager.resolveBackendConversationId?.(resolvedResumeId);
     if (!resolved) {
       return {
         kind: "error",

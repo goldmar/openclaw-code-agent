@@ -42,7 +42,7 @@ function initRepo(prefix: string): string {
   return repoDir;
 }
 
-function withMockGh(scriptLines: string[], run: (logPath: string) => void): void {
+async function withMockGh(scriptLines: string[], run: (logPath: string) => void | Promise<void>): Promise<void> {
   const tempDir = mkdtempSync(join(tmpdir(), "oca-crabbox-gh-"));
   const binDir = join(tempDir, "bin");
   const logPath = join(tempDir, "gh-args.log");
@@ -64,7 +64,7 @@ function withMockGh(scriptLines: string[], run: (logPath: string) => void): void
     chmodSync(ghPath, 0o755);
     process.env.PATH = `${binDir}:${process.env.PATH ?? ""}`;
     process.env.GH_ARGS_LOG = logPath;
-    run(logPath);
+    await run(logPath);
   } finally {
     process.env.PATH = originalPath;
     delete process.env.GH_ARGS_LOG;
@@ -265,7 +265,7 @@ describe("OCA Codex Crabbox integration harness", () => {
     }
   });
 
-  it("updates the original existing PR branch from follow-up work and refuses sibling divergence", () => {
+  it("updates the original existing PR branch from follow-up work and refuses sibling divergence", async () => {
     const repoDir = initRepo("oca-crabbox-existing-pr-");
     try {
       git(repoDir, "checkout", "-b", "agent/original-pr");
@@ -278,7 +278,7 @@ describe("OCA Codex Crabbox integration harness", () => {
       git(repoDir, "commit", "-m", "Address review feedback");
       const helperHead = git(repoDir, "rev-parse", "agent/review-follow-up");
 
-      const updated = resolveExistingTargetPrUpdateBranch({
+      const updated = await resolveExistingTargetPrUpdateBranch({
         repoDir,
         sourceBranch: "agent/review-follow-up",
         targetPrStatus: {
@@ -300,7 +300,7 @@ describe("OCA Codex Crabbox integration harness", () => {
       git(repoDir, "commit", "-m", "Divergent target update");
       git(repoDir, "checkout", "agent/review-follow-up");
 
-      const rejected = resolveExistingTargetPrUpdateBranch({
+      const rejected = await resolveExistingTargetPrUpdateBranch({
         repoDir,
         sourceBranch: "agent/review-follow-up",
         targetPrStatus: {
@@ -319,8 +319,8 @@ describe("OCA Codex Crabbox integration harness", () => {
     }
   });
 
-  it("reuses an existing open PR when GitHub rejects duplicate creation", () => {
-    withMockGh([
+  it("reuses an existing open PR when GitHub rejects duplicate creation", async () => {
+    await withMockGh([
       "if [ \"$1\" = \"pr\" ] && [ \"$2\" = \"create\" ]; then",
       "  echo 'GraphQL: A pull request already exists for goldmar:agent/existing-pr. (createPullRequest)' >&2",
       "  exit 1",
@@ -329,13 +329,13 @@ describe("OCA Codex Crabbox integration harness", () => {
       "  printf '%s\\n' '[{\"url\":\"https://github.com/goldmar/openclaw-code-agent/pull/331\",\"number\":331,\"title\":\"Existing\",\"state\":\"OPEN\",\"headRepositoryOwner\":{\"login\":\"goldmar\"},\"headRefName\":\"agent/existing-pr\",\"baseRefName\":\"main\"}]'",
       "  exit 0",
       "fi",
-    ], (logPath) => {
+    ], async (logPath) => {
       const repoDir = mkdtempSync(join(tmpdir(), "oca-crabbox-create-pr-existing-"));
       try {
         git(repoDir, "init", "-b", "main");
         git(repoDir, "remote", "add", "origin", "https://github.com/goldmar/openclaw-code-agent.git");
 
-        const result = createPR(
+        const result = await createPR(
           repoDir,
           "agent/existing-pr",
           "main",

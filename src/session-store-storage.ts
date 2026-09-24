@@ -119,8 +119,29 @@ export function archiveLegacySessionIndex(indexPath: string, reason: string): bo
   }
 }
 
+/**
+ * Keep a verbatim copy of a store before rows that no longer normalize are
+ * dropped, so an upgrade never discards data without a recoverable backup.
+ */
+export function backupSessionIndex(indexPath: string, rawPayload: string, reason: string): boolean {
+  try {
+    const backupPath = getAvailableArchivePath(indexPath, "legacy");
+    if (!backupPath) {
+      log.warn("[SessionStore] Failed to back up session store: no available archive path");
+      return false;
+    }
+    writeFileSync(backupPath, rawPayload, { encoding: "utf-8", mode: 0o600 });
+    log.warn(`[SessionStore] Upgrade: ${reason}. Backed up the original session store to ${backupPath}; valid sessions stay loaded.`);
+    return true;
+  } catch (err: unknown) {
+    log.warn(`[SessionStore] Failed to back up session store: ${errorMessage(err)}`);
+    return false;
+  }
+}
+
 export const sessionStoreStorageInternals = {
   archiveLegacySessionIndex,
+  backupSessionIndex,
 };
 
 export function cleanupSessionOutputFiles(now: number, maxAgeMs: number, referencedPaths: Iterable<string> = []): void {
@@ -236,6 +257,7 @@ export function loadSessionStoreIndex(args: LoadIndexArgs): void {
     let droppedLegacyCodex = 0;
     const entries: PersistedSessionInfo[] = [];
     let recoveredRunningSession = false;
+    let skippedInvalidEntries = 0;
     for (const candidate of sessionsRaw) {
       if (isRecord(candidate) && candidate.harness === "codex") {
         // 5.0.0 dropped the pre-App-Server Codex SDK backend. Rows without an
@@ -248,9 +270,9 @@ export function loadSessionStoreIndex(args: LoadIndexArgs): void {
       }
       const entry = normalizePersistedEntry(candidate);
       if (!entry) {
-        if (!archiveAndReset("invalid v4 session entry")) return;
-        saveIndex();
-        return;
+        // Drop only the unreadable row; valid sessions from the same store stay loaded.
+        skippedInvalidEntries += 1;
+        continue;
       }
       if (isRecord(candidate) && candidate.status === "running") {
         recoveredRunningSession = true;
@@ -281,9 +303,8 @@ export function loadSessionStoreIndex(args: LoadIndexArgs): void {
     for (const candidate of tokensRaw) {
       const token = normalizeActionToken(candidate);
       if (!token) {
-        if (!archiveAndReset("invalid v4 action token")) return;
-        saveIndex();
-        return;
+        skippedInvalidEntries += 1;
+        continue;
       }
       tokens.push(token);
     }
@@ -302,12 +323,22 @@ export function loadSessionStoreIndex(args: LoadIndexArgs): void {
       policies.push(policy);
     }
 
+    if (skippedInvalidEntries > 0) {
+      const reason = `dropped ${skippedInvalidEntries} unreadable session or action token entr${skippedInvalidEntries === 1 ? "y" : "ies"}`;
+      // Without a backup, fall back to archiving the whole store rather than losing rows.
+      if (!sessionStoreStorageInternals.backupSessionIndex(indexPath, raw, reason)) {
+        if (!archiveAndReset("unreadable session store entries")) return;
+        saveIndex();
+        return;
+      }
+    }
+
     for (const entry of entries) indexPersistedEntry(entry);
     for (const token of tokens) setActionToken(token);
     for (const policy of policies) setRepoPolicy(policy);
 
     if (droppedLegacyCodex > 0 || recoveredRunningSession) saveIndex();
-    if (skippedInvalidRepoPolicy) saveIndex();
+    if (skippedInvalidRepoPolicy || skippedInvalidEntries > 0) saveIndex();
 
     purgeExpiredActionTokens();
   } catch (err: unknown) {

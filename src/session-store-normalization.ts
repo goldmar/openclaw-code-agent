@@ -111,10 +111,7 @@ function toOptionalPlanApprovalMode(value: unknown): PlanApprovalMode | undefine
 }
 
 function toOptionalPlanApprovalContext(value: unknown): PlanApprovalContext | undefined {
-  if (value === "plan-mode" || value === "codex-first-turn-plan" || value === "soft-plan") {
-    return "plan-mode";
-  }
-  return undefined;
+  return value === "plan-mode" ? value : undefined;
 }
 
 function toOptionalWorktreeStrategy(value: unknown): WorktreeStrategy | undefined {
@@ -417,7 +414,7 @@ function synthesizeLegacyWorktreeLifecycle(raw: Record<string, unknown>): Persis
     ?? toOptionalString(raw.pendingWorktreeDecisionSince)
     ?? nowIso;
 
-  if (raw.worktreeMerged === true || raw.worktreeDisposition === "merged") {
+  if (raw.worktreeMerged === true || raw.worktreeDisposition === "merged" || raw.worktreeState === "merged") {
     return {
       state: "merged",
       updatedAt,
@@ -428,7 +425,7 @@ function synthesizeLegacyWorktreeLifecycle(raw: Record<string, unknown>): Persis
       pushRemote: toOptionalString(raw.worktreePushRemote),
     };
   }
-  if (raw.worktreeDisposition === "dismissed") {
+  if (raw.worktreeDisposition === "dismissed" || raw.worktreeState === "dismissed") {
     return {
       state: "dismissed",
       updatedAt,

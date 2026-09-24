@@ -500,7 +500,7 @@ export class GoalController {
 
   private async spawnManagedTaskSession(task: GoalTaskState, prompt: string, resumeRef?: string): Promise<Session> {
     const requestedResumeSessionId = resumeRef
-      ? (this.sessionManager.resolveHarnessSessionId(resumeRef) ?? resumeRef)
+      ? (this.sessionManager.resolveBackendConversationId(resumeRef) ?? resumeRef)
       : undefined;
     const resumeSessionId = requestedResumeSessionId;
 
@@ -555,10 +555,10 @@ export class GoalController {
   private resolveResumeSessionId(task: GoalTaskState): string | undefined {
     if (task.harnessSessionId) return task.harnessSessionId;
     if (task.sessionId) {
-      const resumed = this.sessionManager.resolveHarnessSessionId(task.sessionId);
+      const resumed = this.sessionManager.resolveBackendConversationId(task.sessionId);
       if (resumed) return resumed;
     }
-    const byName = this.sessionManager.resolveHarnessSessionId(task.name);
+    const byName = this.sessionManager.resolveBackendConversationId(task.name);
     if (byName) return byName;
     return undefined;
   }

@@ -80,10 +80,6 @@ export class SessionStoreQueries {
     return undefined;
   }
 
-  resolveHarnessSessionId(ref: string, activeHarnessSessionId?: string): string | undefined {
-    return this.resolveBackendConversationId(ref, activeHarnessSessionId);
-  }
-
   getPersistedSession(ref: string): PersistedSessionInfo | undefined {
     const byId = this.indexes.idIndex.get(ref);
     if (byId) return this.indexes.persisted.get(byId);

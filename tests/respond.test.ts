@@ -8,9 +8,9 @@ import { executeRespond } from "../src/actions/respond";
 
 function createStubSessionManager(sessions: Record<string, any> = {}): SessionManager {
   const sm = new SessionManager(5);
-  sm.persisted.clear();
-  sm.idIndex.clear();
-  sm.nameIndex.clear();
+  (sm as any).store.persisted.clear();
+  (sm as any).store.idIndex.clear();
+  (sm as any).store.nameIndex.clear();
   for (const [id, session] of Object.entries(sessions)) {
     (sm as any).sessions.set(id, session);
   }
@@ -179,7 +179,7 @@ describe("executeRespond", () => {
 
   it("injects plan-approval context when resuming a suspended plan session with approve=true", async () => {
     const sm = createStubSessionManager();
-    sm.persisted.set("harness-plan", {
+    (sm as any).store.persisted.set("harness-plan", {
       sessionId: "dead-plan",
       harnessSessionId: "harness-plan",
       name: "plan-session",
@@ -195,7 +195,7 @@ describe("executeRespond", () => {
       costUsd: 0.05,
       harness: "respond-resume-harness",
     } as any);
-    sm.idIndex.set("dead-plan", "harness-plan");
+    (sm as any).store.idIndex.set("dead-plan", "harness-plan");
 
     let capturedConfig: any;
     sm.spawn = (config: any) => {
@@ -222,7 +222,7 @@ describe("executeRespond", () => {
 
   it("passes a stable worktree resume ref when approving a stopped delegate worktree plan", async () => {
     const sm = createStubSessionManager();
-    sm.persisted.set("019e6c36-1321-7130-a871-7b4303e8ff32", {
+    (sm as any).store.persisted.set("019e6c36-1321-7130-a871-7b4303e8ff32", {
       sessionId: "SPhNrL4Q",
       harnessSessionId: "019e6c36-1321-7130-a871-7b4303e8ff32",
       backendRef: {
@@ -254,7 +254,7 @@ describe("executeRespond", () => {
         sessionKey: "agent:main:telegram:group:12345",
       },
     } as any);
-    sm.idIndex.set("SPhNrL4Q", "019e6c36-1321-7130-a871-7b4303e8ff32");
+    (sm as any).store.idIndex.set("SPhNrL4Q", "019e6c36-1321-7130-a871-7b4303e8ff32");
 
     let capturedConfig: any;
     sm.spawn = (config: any) => {
@@ -280,7 +280,7 @@ describe("executeRespond", () => {
 
   it("does not add a worktree resume ref for explicit off approvals", async () => {
     const sm = createStubSessionManager();
-    sm.persisted.set("harness-plan-off", {
+    (sm as any).store.persisted.set("harness-plan-off", {
       sessionId: "dead-plan-off",
       harnessSessionId: "harness-plan-off",
       name: "plan-session-off",
@@ -297,7 +297,7 @@ describe("executeRespond", () => {
       costUsd: 0.05,
       harness: "respond-resume-harness",
     } as any);
-    sm.idIndex.set("dead-plan-off", "harness-plan-off");
+    (sm as any).store.idIndex.set("dead-plan-off", "harness-plan-off");
 
     let capturedConfig: any;
     sm.spawn = (config: any) => {
@@ -378,7 +378,7 @@ describe("executeRespond", () => {
 
   it("auto-resumes a shutdown-killed pending-plan session when approve=true is sent", async () => {
     const sm = createStubSessionManager();
-    sm.persisted.set("harness-plan-shutdown", {
+    (sm as any).store.persisted.set("harness-plan-shutdown", {
       sessionId: "dead-plan-shutdown",
       harnessSessionId: "harness-plan-shutdown",
       name: "plan-session-shutdown",
@@ -394,7 +394,7 @@ describe("executeRespond", () => {
       costUsd: 0.05,
       harness: "respond-resume-harness",
     } as any);
-    sm.idIndex.set("dead-plan-shutdown", "harness-plan-shutdown");
+    (sm as any).store.idIndex.set("dead-plan-shutdown", "harness-plan-shutdown");
 
     const notifications: Array<{ text: string; label?: string; idempotencyKey?: string }> = [];
     let capturedConfig: any;
@@ -430,7 +430,7 @@ describe("executeRespond", () => {
 
   it("auto-resumes a shutdown-killed pending-plan session for revision feedback too", async () => {
     const sm = createStubSessionManager();
-    sm.persisted.set("harness-plan-revise", {
+    (sm as any).store.persisted.set("harness-plan-revise", {
       sessionId: "dead-plan-revise",
       harnessSessionId: "harness-plan-revise",
       name: "plan-session-revise",
@@ -445,7 +445,7 @@ describe("executeRespond", () => {
       costUsd: 0.05,
       harness: "respond-resume-harness",
     } as any);
-    sm.idIndex.set("dead-plan-revise", "harness-plan-revise");
+    (sm as any).store.idIndex.set("dead-plan-revise", "harness-plan-revise");
 
     let capturedConfig: any;
     sm.spawn = (config: any) => {

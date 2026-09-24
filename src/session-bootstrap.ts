@@ -106,10 +106,10 @@ function appendWorktreeSystemPrompt(
   return (systemPrompt ?? "") + worktreeSuffix;
 }
 
-function restoreResumeWorktreeContext(
+async function restoreResumeWorktreeContext(
   config: SessionConfig,
   getPersistedSession: (ref: string) => PersistedSessionInfo | undefined,
-): {
+): Promise<{
   actualWorkdir?: string;
   originalWorkdir?: string;
   worktreePath?: string;
@@ -118,18 +118,18 @@ function restoreResumeWorktreeContext(
   clearedResumeSessionId?: boolean;
   clearedResumeWorktreeFrom?: boolean;
   failedResumeWorktreeRestore?: boolean;
-} {
+}> {
   const resumeWorktreeId = config.resumeWorktreeFrom ?? config.resumeSessionId;
   if (!resumeWorktreeId) return {};
 
   const persistedSession = getPersistedSession(resumeWorktreeId);
   if (!persistedSession) return {};
-  const originalWorkdir = (() => {
+  const originalWorkdir = await (async () => {
     if (persistedSession.workdir && persistedSession.workdir !== persistedSession.worktreePath) {
       return persistedSession.workdir;
     }
     if (persistedSession.worktreePath) {
-      const recoveredRepoRoot = getPrimaryRepoRootFromWorktree(persistedSession.worktreePath);
+      const recoveredRepoRoot = await getPrimaryRepoRootFromWorktree(persistedSession.worktreePath);
       if (
         persistedSession.workdir
         && recoveredRepoRoot
@@ -180,8 +180,8 @@ function restoreResumeWorktreeContext(
   }
 
   try {
-    pruneWorktrees(originalWorkdir);
-    const recreatedPath = createWorktree(
+    await pruneWorktrees(originalWorkdir);
+    const recreatedPath = await createWorktree(
       originalWorkdir,
       persistedSession.worktreeBranch.replace(/^agent\//, ""),
       { allowExistingBranch: true },
@@ -206,11 +206,11 @@ function restoreResumeWorktreeContext(
   }
 }
 
-export function prepareSessionBootstrap(
+export async function prepareSessionBootstrap(
   config: SessionConfig,
   name: string,
   getPersistedSession: (ref: string) => PersistedSessionInfo | undefined,
-): Preparation {
+): Promise<Preparation> {
   if (config.worktreeBaseBranch !== undefined) assertBranchName(config.worktreeBaseBranch);
   preserveResumeRoutingContext(config, getPersistedSession);
 
@@ -223,7 +223,7 @@ export function prepareSessionBootstrap(
     clearedResumeSessionId,
     clearedResumeWorktreeFrom,
     failedResumeWorktreeRestore,
-  } = restoreResumeWorktreeContext(config, getPersistedSession);
+  } = await restoreResumeWorktreeContext(config, getPersistedSession);
 
   if (clearedResumeSessionId) {
     config.resumeSessionId = undefined;
@@ -237,8 +237,8 @@ export function prepareSessionBootstrap(
   const isResumedSession = !!(config.resumeSessionId ?? config.resumeWorktreeFrom);
   const strategy = config.worktreeStrategy ?? pluginConfig.defaultWorktreeStrategy;
   if (strategy) config.worktreeStrategy = strategy;
-  if (!isResumedSession && strategy && strategy !== "off" && isGitRepo(originalWorkdir)) {
-    worktreeParentBranch ??= getBranchName(originalWorkdir);
+  if (!isResumedSession && strategy && strategy !== "off" && await isGitRepo(originalWorkdir)) {
+    worktreeParentBranch ??= await getBranchName(originalWorkdir);
   }
   const shouldWorktree = !isResumedSession
     && !worktreePath
@@ -252,14 +252,14 @@ export function prepareSessionBootstrap(
     );
   }
 
-  if (shouldWorktree && isGitRepo(originalWorkdir)) {
-    if (!hasEnoughWorktreeSpace(originalWorkdir)) {
+  if (shouldWorktree && await isGitRepo(originalWorkdir)) {
+    if (!(await hasEnoughWorktreeSpace(originalWorkdir))) {
       throw new Error(`Cannot launch session "${name}": insufficient space for worktree creation.`);
     }
     try {
-      worktreePath = createWorktree(originalWorkdir, name);
+      worktreePath = await createWorktree(originalWorkdir, name);
       actualWorkdir = worktreePath;
-      worktreeBranchName = getBranchName(worktreePath);
+      worktreeBranchName = await getBranchName(worktreePath);
       if (!worktreeBranchName) {
         throw new Error(`created worktree at ${worktreePath} but failed to resolve branch name`);
       }

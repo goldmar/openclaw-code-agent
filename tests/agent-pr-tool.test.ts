@@ -193,8 +193,8 @@ describe("agent_pr existing target PR branch resolution", () => {
         "fi",
         "exit 1",
         "",
-      ].join("\n"), () => {
-        const status = discoverExistingTargetPr({
+      ].join("\n"), async () => {
+        const status = await discoverExistingTargetPr({
           repoDir,
           worktreeBranch: "agent/address-pr-104265-review",
           expectedParentBranch: "agent/fix-durable-goal-owner",
@@ -203,7 +203,7 @@ describe("agent_pr existing target PR branch resolution", () => {
         });
         assert.equal(status?.url, "https://github.com/openclaw/openclaw/pull/104265");
 
-        const resolution = resolveExistingTargetPrUpdateBranch({
+        const resolution = await resolveExistingTargetPrUpdateBranch({
           repoDir,
           sourceBranch: "agent/address-pr-104265-review",
           targetPrStatus: status!,
@@ -219,7 +219,7 @@ describe("agent_pr existing target PR branch resolution", () => {
     }
   });
 
-  it("fast-forwards the original PR branch from a follow-up helper branch", () => {
+  it("fast-forwards the original PR branch from a follow-up helper branch", async () => {
     const repoDir = initRepo("openclaw-agent-pr-target-");
     try {
       git(repoDir, "checkout", "-b", "agent/codex-telegram-proof-tests");
@@ -234,7 +234,7 @@ describe("agent_pr existing target PR branch resolution", () => {
       const helperHead = git(repoDir, "rev-parse", "agent/fix-pr-322-feedback");
       git(repoDir, "checkout", "agent/codex-telegram-proof-tests");
 
-      const result = resolveExistingTargetPrUpdateBranch({
+      const result = await resolveExistingTargetPrUpdateBranch({
         repoDir,
         sourceBranch: "agent/fix-pr-322-feedback",
         targetPrStatus: {
@@ -258,7 +258,7 @@ describe("agent_pr existing target PR branch resolution", () => {
     }
   });
 
-  it("uses the original PR branch when it already contains follow-up helper work", () => {
+  it("uses the original PR branch when it already contains follow-up helper work", async () => {
     const repoDir = initRepo("openclaw-agent-pr-represented-");
     try {
       git(repoDir, "checkout", "-b", "agent/codex-telegram-proof-tests");
@@ -275,7 +275,7 @@ describe("agent_pr existing target PR branch resolution", () => {
       git(repoDir, "checkout", "agent/codex-telegram-proof-tests");
       git(repoDir, "merge", "--ff-only", "agent/fix-pr-322-feedback");
 
-      const result = resolveExistingTargetPrUpdateBranch({
+      const result = await resolveExistingTargetPrUpdateBranch({
         repoDir,
         sourceBranch: "agent/fix-pr-322-feedback",
         targetPrStatus: {
@@ -299,7 +299,7 @@ describe("agent_pr existing target PR branch resolution", () => {
     }
   });
 
-  it("requires a push when the remote PR head cannot be verified from stale local state", () => {
+  it("requires a push when the remote PR head cannot be verified from stale local state", async () => {
     const { repoDir, remoteDir } = initRepoWithOrigin("openclaw-agent-pr-fetch-failure-");
     const rootDir = join(repoDir, "..");
     const cloneDir = join(rootDir, "remote-divergence");
@@ -327,7 +327,7 @@ describe("agent_pr existing target PR branch resolution", () => {
       git(repoDir, "merge", "--ff-only", "agent/fix-pr-322-feedback");
       git(repoDir, "remote", "set-url", "origin", join(rootDir, "missing-origin.git"));
 
-      const result = resolveExistingTargetPrUpdateBranch({
+      const result = await resolveExistingTargetPrUpdateBranch({
         repoDir,
         sourceBranch: "agent/fix-pr-322-feedback",
         targetPrStatus: {
@@ -350,7 +350,7 @@ describe("agent_pr existing target PR branch resolution", () => {
     }
   });
 
-  it("prefers the checked-out PR head over a stale internal worktree branch", () => {
+  it("prefers the checked-out PR head over a stale internal worktree branch", async () => {
     const repoDir = initRepo("openclaw-agent-pr-current-head-");
     try {
       git(repoDir, "checkout", "-b", "agent/task-flow-lifecycle-hooks");
@@ -374,12 +374,12 @@ describe("agent_pr existing target PR branch resolution", () => {
         headRefName: "agent/task-flow-lifecycle-hooks",
         baseRefName: "main",
       };
-      const sourceBranch = resolveExistingTargetPrUpdateSourceBranch({
+      const sourceBranch = await resolveExistingTargetPrUpdateSourceBranch({
         repoDir,
         fallbackBranch: "agent/pr-98910-taskflow-ci-codex",
         targetPrStatus,
       });
-      const result = resolveExistingTargetPrUpdateBranch({
+      const result = await resolveExistingTargetPrUpdateBranch({
         repoDir,
         sourceBranch,
         targetPrStatus,
@@ -396,7 +396,7 @@ describe("agent_pr existing target PR branch resolution", () => {
     }
   });
 
-  it("fast-forwards a target PR branch that is checked out in another linked worktree", () => {
+  it("fast-forwards a target PR branch that is checked out in another linked worktree", async () => {
     const repoDir = initRepo("openclaw-agent-pr-linked-worktree-");
     const linkedWorktreePath = `${repoDir}-target-worktree`;
     try {
@@ -413,7 +413,7 @@ describe("agent_pr existing target PR branch resolution", () => {
       git(repoDir, "commit", "-m", "Address PR feedback");
       const helperHead = git(repoDir, "rev-parse", "agent/fix-pr-322-feedback");
 
-      const result = resolveExistingTargetPrUpdateBranch({
+      const result = await resolveExistingTargetPrUpdateBranch({
         repoDir,
         sourceBranch: "agent/fix-pr-322-feedback",
         targetPrStatus: {
@@ -439,7 +439,7 @@ describe("agent_pr existing target PR branch resolution", () => {
     }
   });
 
-  it("rejects helper updates that omit commits from the remote PR branch", () => {
+  it("rejects helper updates that omit commits from the remote PR branch", async () => {
     const { repoDir, remoteDir } = initRepoWithOrigin("openclaw-agent-pr-stale-remote-");
     const rootDir = join(repoDir, "..");
     const cloneDir = join(rootDir, "remote-update");
@@ -464,7 +464,7 @@ describe("agent_pr existing target PR branch resolution", () => {
       git(cloneDir, "commit", "-m", "Remote PR branch update");
       git(cloneDir, "push", "origin", "agent/codex-telegram-proof-tests");
 
-      const result = resolveExistingTargetPrUpdateBranch({
+      const result = await resolveExistingTargetPrUpdateBranch({
         repoDir,
         sourceBranch: "agent/fix-pr-322-feedback",
         targetPrStatus: {
@@ -1059,8 +1059,8 @@ if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
   exit 42
 fi
 exit 1
-`, () => {
-      const result = getPRBody(process.cwd(), 343, "goldmar/openclaw-code-agent");
+`, async () => {
+      const result = await getPRBody(process.cwd(), 343, "goldmar/openclaw-code-agent");
       assert.equal(result.ok, false);
       assert.match(result.ok ? "" : result.error, /Command failed|transient GitHub failure/);
     });
@@ -1859,5 +1859,28 @@ exit 1
 
     assert.equal(result.ok, true);
     assert.equal(result.ok && result.metadata.changes.includes("`src/file-12.ts`"), true);
+  });
+});
+
+describe("existing PR branch update serialization", () => {
+  it("waits for the repository lock before inspecting or moving PR branches", async () => {
+    const { withRepoLock } = await import("../src/git-exec");
+    const repoDir = "/tmp/oca-pr-lock-serialization";
+    let releaseLock!: () => void;
+    const held = withRepoLock(repoDir, () => new Promise<void>((resolve) => { releaseLock = resolve; }));
+    let settled = false;
+    const update = resolveExistingTargetPrUpdateBranch({
+      repoDir,
+      sourceBranch: "agent/feature",
+      targetPrStatus: { exists: true, state: "closed" },
+    }).then((result) => { settled = true; return result; });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(settled, false, "the PR branch update must not run while another git sequence holds the lock");
+    releaseLock();
+    await held;
+    const result = await update;
+    assert.equal(settled, true);
+    assert.equal("error" in result && /not an open PR/.test(result.error), true);
   });
 });

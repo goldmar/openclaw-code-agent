@@ -1,4 +1,4 @@
-import { Type } from "../tool-schema";
+import { Type } from "../tool-parameter-schema";
 import { sessionManager } from "../singletons";
 import type { Session } from "../session";
 import type { OpenClawPluginToolContext, ThreadAction } from "../types";

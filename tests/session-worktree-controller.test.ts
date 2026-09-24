@@ -35,7 +35,7 @@ function installFakeGit(t: import("node:test").TestContext, scriptLines: string[
 }
 
 describe("SessionWorktreeController.getCompletionState()", () => {
-  it("fails closed when persisted branch metadata points at a sibling worktree", () => {
+  it("fails closed when persisted branch metadata points at a sibling worktree", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "session-worktree-controller-mismatch-"));
     const repoDir = join(tempDir, "repo");
     const worktreePath = join(tempDir, "worktree");
@@ -50,14 +50,14 @@ describe("SessionWorktreeController.getCompletionState()", () => {
       git(repoDir, "worktree", "add", "-b", "agent/actual-branch", worktreePath, "main");
       const controller = new SessionWorktreeController();
       assert.equal(
-        controller.getCompletionState(repoDir, worktreePath, "agent/stale-branch", "main"),
+        await controller.getCompletionState(repoDir, worktreePath, "agent/stale-branch", "main"),
         "has-commits",
       );
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
   });
-  it("classifies ahead branches with content already on base as released", () => {
+  it("classifies ahead branches with content already on base as released", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "session-worktree-controller-released-"));
     const repoDir = join(tempDir, "repo");
     const worktreePath = join(tempDir, "worktree");
@@ -81,7 +81,7 @@ describe("SessionWorktreeController.getCompletionState()", () => {
       const controller = new SessionWorktreeController();
 
       assert.equal(
-        controller.getCompletionState(repoDir, worktreePath, "agent/duplicate", "main"),
+        await controller.getCompletionState(repoDir, worktreePath, "agent/duplicate", "main"),
         "released",
       );
     } finally {
@@ -89,7 +89,7 @@ describe("SessionWorktreeController.getCompletionState()", () => {
     }
   });
 
-  it("preserves content-equivalent branches when the worktree has dirty entries", () => {
+  it("preserves content-equivalent branches when the worktree has dirty entries", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "session-worktree-controller-released-dirty-"));
     const repoDir = join(tempDir, "repo");
     const worktreePath = join(tempDir, "worktree");
@@ -114,7 +114,7 @@ describe("SessionWorktreeController.getCompletionState()", () => {
       const controller = new SessionWorktreeController();
 
       assert.equal(
-        controller.getCompletionState(repoDir, worktreePath, "agent/dirty-duplicate", "main"),
+        await controller.getCompletionState(repoDir, worktreePath, "agent/dirty-duplicate", "main"),
         "dirty-uncommitted",
       );
     } finally {
@@ -122,7 +122,7 @@ describe("SessionWorktreeController.getCompletionState()", () => {
     }
   });
 
-  it("keeps merged classification when a topology-merged worktree has dirty entries", () => {
+  it("keeps merged classification when a topology-merged worktree has dirty entries", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "session-worktree-controller-merged-dirty-"));
     const repoDir = join(tempDir, "repo");
     const worktreePath = join(tempDir, "worktree");
@@ -146,7 +146,7 @@ describe("SessionWorktreeController.getCompletionState()", () => {
       const controller = new SessionWorktreeController();
 
       assert.equal(
-        controller.getCompletionState(repoDir, worktreePath, "agent/merged-dirty", "main"),
+        await controller.getCompletionState(repoDir, worktreePath, "agent/merged-dirty", "main"),
         "merged",
       );
     } finally {
@@ -154,7 +154,7 @@ describe("SessionWorktreeController.getCompletionState()", () => {
     }
   });
 
-  it("keeps base-advanced classification when the worktree has dirty entries", (t) => {
+  it("keeps base-advanced classification when the worktree has dirty entries", async (t) => {
     const worktreePath = installFakeGit(t, [
       "count_file=\"__TEMP_DIR__/rev-list-count\"",
       "if [ \"$3\" = \"rev-list\" ]; then",
@@ -187,12 +187,12 @@ describe("SessionWorktreeController.getCompletionState()", () => {
     const controller = new SessionWorktreeController();
 
     assert.equal(
-      controller.getCompletionState("/repo", worktreePath, "feature", "main"),
+      await controller.getCompletionState("/repo", worktreePath, "feature", "main"),
       "base-advanced",
     );
   });
 
-  it("keeps the worktree pending when a missing branch makes ahead detection fail", (t) => {
+  it("keeps the worktree pending when a missing branch makes ahead detection fail", async (t) => {
     const worktreePath = installFakeGit(t, [
       "if [ \"$3\" = \"rev-list\" ]; then",
       "  exit 1",
@@ -205,12 +205,12 @@ describe("SessionWorktreeController.getCompletionState()", () => {
     const controller = new SessionWorktreeController();
 
     assert.equal(
-      controller.getCompletionState("/repo", worktreePath, "missing-branch", "main"),
+      await controller.getCompletionState("/repo", worktreePath, "missing-branch", "main"),
       "has-commits",
     );
   });
 
-  it("keeps the worktree pending when reverse topology detection fails", (t) => {
+  it("keeps the worktree pending when reverse topology detection fails", async (t) => {
     const worktreePath = installFakeGit(t, [
       "count_file=\"__TEMP_DIR__/rev-list-count\"",
       "if [ \"$3\" = \"rev-list\" ]; then",
@@ -234,7 +234,7 @@ describe("SessionWorktreeController.getCompletionState()", () => {
     const controller = new SessionWorktreeController();
 
     assert.equal(
-      controller.getCompletionState("/repo", worktreePath, "feature", "main"),
+      await controller.getCompletionState("/repo", worktreePath, "feature", "main"),
       "has-commits",
     );
   });
@@ -242,7 +242,7 @@ describe("SessionWorktreeController.getCompletionState()", () => {
 });
 
 describe("SessionWorktreeController.isResolvedWorktreeEligibleForCleanup()", () => {
-  it("preserves resumable and plan-gated worktrees", () => {
+  it("preserves resumable and plan-gated worktrees", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "session-worktree-controller-retention-"));
     const repoDir = join(tempDir, "repo");
     const worktreePath = join(tempDir, "worktree");
@@ -269,14 +269,14 @@ describe("SessionWorktreeController.isResolvedWorktreeEligibleForCleanup()", () 
         costUsd: 0,
         completedAt: Date.now() - 60_000,
       };
-      assert.equal(controller.isResolvedWorktreeEligibleForCleanup({ ...base, resumable: true }, Date.now(), 1), false);
-      assert.equal(controller.isResolvedWorktreeEligibleForCleanup({
+      assert.equal(await controller.isResolvedWorktreeEligibleForCleanup({ ...base, resumable: true }, Date.now(), 1), false);
+      assert.equal(await controller.isResolvedWorktreeEligibleForCleanup({
         ...base,
         resumable: false,
         lifecycle: "awaiting_plan_decision",
         pendingPlanApproval: true,
       }, Date.now(), 1), false);
-      assert.equal(controller.isResolvedWorktreeEligibleForCleanup({
+      assert.equal(await controller.isResolvedWorktreeEligibleForCleanup({
         ...base,
         resumable: false,
         lifecycle: "awaiting_plan_decision",

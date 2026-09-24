@@ -77,7 +77,6 @@ export class SessionStateSyncService {
     for (const session of this.deps.sessions.values()) {
       if (getPrimarySessionLookupRef(session) === ref) return session;
       if (getBackendConversationId(session) === ref) return session;
-      if (session.harnessSessionId === ref) return session; // compatibility-only lookup
       if (this.matchesExistingSession(session, existing)) return session;
     }
 

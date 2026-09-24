@@ -1,4 +1,4 @@
-import { Type } from "../tool-schema";
+import { Type } from "../tool-parameter-schema";
 import { sessionManager } from "../singletons";
 import type { OpenClawPluginToolContext } from "../types";
 import {
@@ -52,7 +52,7 @@ export function makeAgentWorktreeStatusTool(_ctx?: OpenClawPluginToolContext) {
 
       const lines: string[] = [];
       for (const target of sessionsToShow) {
-        const { persistedSession: persisted, resolvedLifecycle: resolved } = resolveWorktreeToolLifecycle(sessionManager, target);
+        const { persistedSession: persisted, resolvedLifecycle: resolved } = await resolveWorktreeToolLifecycle(sessionManager, target);
 
         const cleanup = resolved.cleanupSafe
           ? "safe now"

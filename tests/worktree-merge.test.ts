@@ -26,7 +26,7 @@ function createRepo(): string {
 }
 
 describe("mergeBranch", () => {
-  it("reports a warning when restoring an auto-stash fails after a successful squash merge", () => {
+  it("reports a warning when restoring an auto-stash fails after a successful squash merge", async () => {
     const repoDir = createRepo();
     try {
       git(repoDir, "checkout", "-b", "feature");
@@ -36,7 +36,7 @@ describe("mergeBranch", () => {
       git(repoDir, "checkout", "main");
       writeFileSync(join(repoDir, "file.txt"), "local dirty change\n", "utf-8");
 
-      const result = mergeBranch(repoDir, "feature", "main", "squash");
+      const result = await mergeBranch(repoDir, "feature", "main", "squash");
 
       assert.equal(result.success, true);
       assert.equal(result.stashed, true);
@@ -47,7 +47,7 @@ describe("mergeBranch", () => {
     }
   });
 
-  it("reports a warning when restoring an auto-stash fails after a fast-forward merge", () => {
+  it("reports a warning when restoring an auto-stash fails after a fast-forward merge", async () => {
     const repoDir = createRepo();
     const worktreePath = mkdtempSync(join(tmpdir(), "openclaw-worktree-merge-ff-worktree-"));
     rmSync(worktreePath, { recursive: true, force: true });
@@ -58,7 +58,7 @@ describe("mergeBranch", () => {
 
       writeFileSync(join(repoDir, "file.txt"), "local dirty change\n", "utf-8");
 
-      const result = mergeBranch(repoDir, "feature", "main", "merge", worktreePath);
+      const result = await mergeBranch(repoDir, "feature", "main", "merge", worktreePath);
 
       assert.equal(result.success, true);
       assert.equal(result.fastForward, true);
@@ -71,7 +71,7 @@ describe("mergeBranch", () => {
     }
   });
 
-  it("reports a recovery warning when rebase-conflict cleanup cannot restore an auto-stash", () => {
+  it("reports a recovery warning when rebase-conflict cleanup cannot restore an auto-stash", async () => {
     const repoDir = createRepo();
     try {
       git(repoDir, "checkout", "-b", "feature");
@@ -87,7 +87,7 @@ describe("mergeBranch", () => {
       git(repoDir, "checkout", "feature");
       writeFileSync(join(repoDir, "local.txt"), "local dirty change\n", "utf-8");
 
-      const result = mergeBranch(repoDir, "feature", "main");
+      const result = await mergeBranch(repoDir, "feature", "main");
 
       assert.equal(result.success, false);
       assert.equal(result.rebaseConflict, true);

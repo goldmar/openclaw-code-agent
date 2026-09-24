@@ -106,15 +106,6 @@ async function withPlanDecisionLock<T>(
   }
 }
 
-function parsePayload(payload: string): string | null {
-  const tokenId = payload.trim().replace(new RegExp(`^${CALLBACK_NAMESPACE}:`), "");
-  return tokenId ? tokenId : null;
-}
-
-function isNamespacedPayload(payload: string): boolean {
-  return payload.trim().startsWith(`${CALLBACK_NAMESPACE}:`);
-}
-
 async function clearWorktreeDecisionButtons(
   ctx: InteractiveCallbackContext,
   alreadyAcknowledged = false,
@@ -142,14 +133,7 @@ async function clearWorktreeDecisionButtons(
     }
   }
 
-  if (typeof responder.clearButtons === "function") {
-    try {
-      await responder.clearButtons();
-    } catch (err) {
-      const errText = err instanceof Error ? err.message : String(err);
-      log.warn(`[callback-handler] Failed to clear Discord worktree buttons: ${errText}`);
-    }
-  } else if (!alreadyAcknowledged && typeof responder.acknowledge === "function") {
+  if (!alreadyAcknowledged && typeof responder.acknowledge === "function") {
     await responder.acknowledge();
   }
   return false;
@@ -237,56 +221,15 @@ function validatePlanDecisionToken(
   return undefined;
 }
 
-function firstMatchingString(predicate: (value: string) => boolean, ...values: unknown[]): string | undefined {
-  return values.find((value): value is string => typeof value === "string" && predicate(value));
-}
-
-function firstNonBlankString(...values: unknown[]): string | undefined {
-  return firstMatchingString((value) => value.trim().length > 0, ...values);
-}
-
-function firstNamespacedString(...values: unknown[]): string | undefined {
-  return firstMatchingString(isNamespacedPayload, ...values);
-}
-
+/**
+ * OpenClaw's interactive dispatcher splits the button data at the first `:`,
+ * routes on the namespace, and hands the plugin the remainder as `payload`
+ * (Telegram `ctx.callback`, Discord `ctx.interaction`). OCA buttons carry
+ * `code-agent:<token id>`, so the payload is the action token id.
+ */
 function getPayload(ctx: InteractiveCallbackContext): string {
-  const callbackNativePayload = "callback" in ctx
-    ? firstNamespacedString(
-        ctx.callback?.data,
-        ctx.callback?.callback_data,
-        ctx.callback?.callbackData,
-      )
-    : undefined;
-  if (callbackNativePayload) return callbackNativePayload;
-
-  const interaction = "interaction" in ctx ? ctx.interaction : undefined;
-  const interactionNativePayload = firstNamespacedString(
-    interaction?.data,
-    interaction?.callback_data,
-    interaction?.callbackData,
-  );
-  if (interactionNativePayload) return interactionNativePayload;
-
-  const callbackPayload = "callback" in ctx
-    ? firstNonBlankString(ctx.callback?.payload)
-    : undefined;
-  if (callbackPayload) return callbackPayload;
-
-  const interactionPayload = firstNonBlankString(interaction?.payload);
-  if (interactionPayload) return interactionPayload;
-
-  const callbackNativeFallback = "callback" in ctx
-    ? firstNonBlankString(
-        ctx.callback?.data,
-        ctx.callback?.callback_data,
-        ctx.callback?.callbackData,
-      )
-    : undefined;
-  return callbackNativeFallback ?? firstNonBlankString(
-    interaction?.data,
-    interaction?.callback_data,
-    interaction?.callbackData,
-  ) ?? "";
+  const source = ctx.channel === "telegram" ? ctx.callback : ctx.interaction;
+  return source?.payload?.trim() ?? "";
 }
 
 function collectErrorText(err: unknown, seen = new Set<unknown>()): string {
@@ -371,9 +314,7 @@ async function clearInteractiveState(
         log.warn(`[callback-handler] Failed to edit Telegram button markup before clearing buttons: ${errText}`);
       }
     }
-    const callbackMessageText = "callback" in ctx && typeof ctx.callback?.messageText === "string"
-      ? ctx.callback.messageText
-      : undefined;
+    const callbackMessageText = ctx.callback?.messageText;
     if (
       forceTelegramMarkupEdit
       && typeof callbackMessageText === "string"
@@ -427,29 +368,14 @@ async function clearInteractiveState(
     try {
       await responder.editMessage({ text });
     } catch (err) {
-      if (isMessageNotModifiedError(err)) {
-        if (typeof responder.clearButtons === "function") {
-          await responder.clearButtons();
-        }
-        return { textDelivered: true };
-      }
+      if (isMessageNotModifiedError(err)) return { textDelivered: true };
       const errText = err instanceof Error ? err.message : String(err);
       log.warn(`[callback-handler] Failed to edit worktree prompt before clearing interactive state: ${errText}`);
-      if (typeof responder.clearButtons === "function") {
-        await responder.clearButtons();
-      }
       return { textDelivered: false };
-    }
-
-    if (typeof responder.clearButtons === "function") {
-      await responder.clearButtons();
     }
     return { textDelivered: true };
   }
 
-  if (typeof responder.clearButtons === "function") {
-    await responder.clearButtons();
-  }
   return { textDelivered: false };
 }
 
@@ -634,12 +560,11 @@ export function createCallbackHandler(
         return { handled: true };
       }
 
-      const payload = getPayload(ctx);
-      const tokenId = parsePayload(payload);
+      const tokenId = getPayload(ctx);
       logButtonDiagnostic("callback_received", {
         channel: ctx.channel,
         namespace: CALLBACK_NAMESPACE,
-        payloadByteLength: Buffer.byteLength(payload, "utf8"),
+        payloadByteLength: Buffer.byteLength(tokenId, "utf8"),
         tokenHash: hashDiagnosticToken(tokenId),
         isAuthorizedSender: ctx.auth.isAuthorizedSender,
       });
@@ -1141,7 +1066,7 @@ export function createCallbackHandler(
           }
           let session: { id: string; name: string };
           try {
-            session = sessionManager.launchPlanOffer({
+            session = await sessionManager.launchPlanOffer({
               route: consumedToken.route,
               prompt: consumedToken.launchPrompt,
               workdir: consumedToken.launchWorkdir,
@@ -1192,7 +1117,7 @@ export function createCallbackHandler(
             break;
           }
           if (typeof sessionManager.resolveRepoPolicy === "function") {
-            const resolution = sessionManager.resolveRepoPolicy(consumedToken.repoPolicyWorkdir);
+            const resolution = await sessionManager.resolveRepoPolicy(consumedToken.repoPolicyWorkdir);
             if (resolution.identity) {
               const validationError = validateRepoPolicyForPrAvailability(consumedToken.repoPolicy, resolution.prAvailable);
               if (validationError) {
@@ -1205,7 +1130,7 @@ export function createCallbackHandler(
               }
             }
           }
-          const record = sessionManager.setRepoPolicy(consumedToken.repoPolicyWorkdir, consumedToken.repoPolicy);
+          const record = await sessionManager.setRepoPolicy(consumedToken.repoPolicyWorkdir, consumedToken.repoPolicy);
           if (!record) {
             await clearInteractiveState(ctx, {
               alreadyAcknowledged: callbackAcknowledged,
@@ -1218,7 +1143,7 @@ export function createCallbackHandler(
 
           let launchText: string;
           try {
-            const result = sessionManager.launchAfterRepoPolicyChoice({
+            const result = await sessionManager.launchAfterRepoPolicyChoice({
               route: consumedToken.route,
               prompt: consumedToken.launchPrompt,
               workdir: consumedToken.launchWorkdir,

@@ -233,6 +233,7 @@ export class Session extends EventEmitter {
   private readonly turnRuntime: SessionTurnRuntime;
   private readonly harnessEvents: SessionHarnessEventApplier;
   private worktreeFinalizationPromptIssued = false;
+  private dirtyWorktreeEntriesAtTurnEnd: string[] | undefined;
   lifecycle: SessionLifecycle = "starting";
   approvalState: SessionApprovalState = "not_required";
   approvalExecutionState: ApprovalExecutionState = "not_plan_gated";
@@ -680,12 +681,27 @@ export class Session extends EventEmitter {
     this.applyControlEvent({ type: "input.requested" });
   }
 
-  private queueWorktreeFinalizationPrompt(): boolean {
+  private needsWorktreeFinalizationCheck(): boolean {
     if (!this.multiTurn || !this.messageStream) return false;
     if (!this.worktreePath || !this.worktreeStrategy || this.worktreeStrategy === "off") return false;
-    if (this.worktreeFinalizationPromptIssued) return false;
+    return !this.worktreeFinalizationPromptIssued;
+  }
 
-    const dirtyEntries = listDirtyWorktreeEntries(this.worktreePath);
+  /**
+   * Read the worktree's dirty entries before a run-completed event is applied,
+   * so the synchronous turn state machine can decide on the finalization prompt.
+   */
+  private async prepareWorktreeFinalizationCheck(): Promise<void> {
+    this.dirtyWorktreeEntriesAtTurnEnd = this.needsWorktreeFinalizationCheck()
+      ? await listDirtyWorktreeEntries(this.worktreePath!)
+      : undefined;
+  }
+
+  private queueWorktreeFinalizationPrompt(): boolean {
+    if (!this.needsWorktreeFinalizationCheck()) return false;
+
+    const dirtyEntries = this.dirtyWorktreeEntriesAtTurnEnd ?? [];
+    this.dirtyWorktreeEntriesAtTurnEnd = undefined;
     if (dirtyEntries.length === 0) return false;
 
     this.worktreeFinalizationPromptIssued = true;
@@ -1095,6 +1111,10 @@ export class Session extends EventEmitter {
 
       this.resetIdleTimer();
       count += 1;
+      if (msg.type === "run_completed") {
+        await this.prepareWorktreeFinalizationCheck();
+        if (!this.isActive) break;
+      }
       this.harnessEvents.applyMessage(msg, {
         pendingPlanApproval: this.pendingPlanApproval,
         currentPermissionMode: this.currentPermissionMode,

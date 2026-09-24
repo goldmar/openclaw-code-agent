@@ -1,8 +1,9 @@
-import { execFileSync } from "child_process";
+import { runGit, withRepoLock } from "./git-exec";
 import { randomBytes } from "crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync } from "fs";
 import { relative, sep } from "path";
 import { branchExists, getWorktreeBaseDir, sanitizeBranchName } from "./worktree-repo";
+import { provisionWorktreeIncludes, runWorktreeSetupScript } from "./worktree-provisioning";
 import { createLogger } from "./logger";
 
 const log = createLogger("worktree-lifecycle");
@@ -15,17 +16,19 @@ export interface CreateWorktreeOptions {
   allowExistingBranch?: boolean;
 }
 
+type CreatedWorktree = {
+  worktreePath: string;
+  branchName: string;
+  branchCreated: boolean;
+};
+
 function isNodeErrorWithCode(err: unknown, code: string): boolean {
   return Boolean(err && typeof err === "object" && "code" in err && err.code === code);
 }
 
-function getRepoRoot(repoDir: string): string | undefined {
+async function getRepoRoot(repoDir: string): Promise<string | undefined> {
   try {
-    const result = execFileSync(
-      "git",
-      ["-C", repoDir, "rev-parse", "--show-toplevel"],
-      { timeout: 5_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
-    );
+    const result = await runGit(["-C", repoDir, "rev-parse", "--show-toplevel"], { timeout: 5_000 });
     return result.trim() || undefined;
   } catch {
     return undefined;
@@ -37,8 +40,8 @@ function createRetrySuffix(attempt: number): string {
   return `-${attempt}-${randomBytes(8).toString("hex")}`;
 }
 
-function ensureWorktreeBaseIgnored(repoDir: string, baseDir: string): void {
-  const repoRoot = getRepoRoot(repoDir);
+async function ensureWorktreeBaseIgnored(repoDir: string, baseDir: string): Promise<void> {
+  const repoRoot = await getRepoRoot(repoDir);
   if (!repoRoot) return;
 
   const relativeBaseDir = relative(repoRoot, baseDir);
@@ -60,14 +63,67 @@ function ensureWorktreeBaseIgnored(repoDir: string, baseDir: string): void {
   }
 }
 
-export function createWorktree(
+export async function createWorktree(
   repoDir: string,
   sessionName: string,
   options: CreateWorktreeOptions = {},
-): string {
+): Promise<string> {
+  const created = await withRepoLock(repoDir, () => createWorktreeLocked(repoDir, sessionName, options));
+  try {
+    await prepareCreatedWorktree(repoDir, created.worktreePath);
+  } catch (err) {
+    await rollbackCreatedWorktree(repoDir, created);
+    throw err;
+  }
+  return created.worktreePath;
+}
+
+/**
+ * Apply OpenClaw's managed-worktree conventions to a fresh OCA worktree:
+ * copy `.worktreeinclude` files, then run `.openclaw/worktree-setup.sh`.
+ * Runs outside the repository lock so a slow setup script does not block
+ * other worktree operations on the same repository.
+ */
+async function prepareCreatedWorktree(repoDir: string, worktreePath: string): Promise<void> {
+  const sourceRoot = (await getRepoRoot(repoDir)) ?? repoDir;
+  const provisioned = await provisionWorktreeIncludes(sourceRoot, worktreePath);
+  if (provisioned.length > 0) {
+    log.info(`[worktree] Copied ${provisioned.length} .worktreeinclude file(s) into ${worktreePath}`);
+  }
+  await runWorktreeSetupScript(sourceRoot, worktreePath);
+}
+
+async function rollbackCreatedWorktree(repoDir: string, created: CreatedWorktree): Promise<void> {
+  await withRepoLock(repoDir, async () => {
+    try {
+      await runGit(["-C", repoDir, "worktree", "remove", "--force", created.worktreePath], { timeout: 15_000 });
+    } catch (err) {
+      log.warn(`[worktree] Rollback could not remove ${created.worktreePath}: ${err instanceof Error ? err.message : String(err)}`);
+      try {
+        rmSync(created.worktreePath, { recursive: true, force: true });
+        await runGit(["-C", repoDir, "worktree", "prune"], { timeout: 10_000 });
+      } catch {
+        // best effort
+      }
+    }
+    // Only a branch this call created is deleted; a recreated resume branch keeps its commits.
+    if (!created.branchCreated) return;
+    try {
+      await runGit(["-C", repoDir, "branch", "-D", created.branchName], { timeout: 10_000 });
+    } catch (err) {
+      log.warn(`[worktree] Rollback could not delete branch ${created.branchName}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  });
+}
+
+async function createWorktreeLocked(
+  repoDir: string,
+  sessionName: string,
+  options: CreateWorktreeOptions,
+): Promise<CreatedWorktree> {
   const sanitized = sanitizeBranchName(sessionName);
-  const baseDir = getWorktreeBaseDir(repoDir);
-  ensureWorktreeBaseIgnored(repoDir, baseDir);
+  const baseDir = await getWorktreeBaseDir(repoDir);
+  await ensureWorktreeBaseIgnored(repoDir, baseDir);
   mkdirSync(baseDir, { recursive: true });
   const allowExistingBranch = options.allowExistingBranch === true;
 
@@ -80,7 +136,7 @@ export function createWorktree(
     const suffix = createRetrySuffix(attempt);
     const candidatePath = `${baseDir}/openclaw-worktree-${sanitized}${suffix}`;
     const candidateBranch = `agent/${sanitized}${suffix}`;
-    if (!allowExistingBranch && branchExists(repoDir, candidateBranch)) {
+    if (!allowExistingBranch && await branchExists(repoDir, candidateBranch)) {
       continue;
     }
 
@@ -124,20 +180,12 @@ export function createWorktree(
     throw new Error(`Failed to create unique worktree directory and branch after ${maxRetries} attempts`);
   }
 
-  const branchAlreadyExists = branchExists(repoDir, branchName);
+  const branchAlreadyExists = await branchExists(repoDir, branchName);
   try {
     if (branchAlreadyExists) {
-      execFileSync("git", ["-C", repoDir, "worktree", "add", worktreePath, branchName], {
-        timeout: 15_000,
-        encoding: "utf-8",
-        stdio: ["pipe", "pipe", "pipe"],
-      });
+      await runGit(["-C", repoDir, "worktree", "add", worktreePath, branchName], { timeout: 15_000 });
     } else {
-      execFileSync("git", ["-C", repoDir, "worktree", "add", "-b", branchName, worktreePath], {
-        timeout: 15_000,
-        encoding: "utf-8",
-        stdio: ["pipe", "pipe", "pipe"],
-      });
+      await runGit(["-C", repoDir, "worktree", "add", "-b", branchName, worktreePath], { timeout: 15_000 });
     }
   } catch (err) {
     try {
@@ -148,38 +196,41 @@ export function createWorktree(
     throw err;
   }
 
-  return worktreePath;
+  return { worktreePath, branchName, branchCreated: !branchAlreadyExists };
 }
 
-export function listDirtyWorktreeEntries(worktreePath: string): string[] {
+export async function listDirtyWorktreeEntries(worktreePath: string): Promise<string[]> {
   if (!existsSync(worktreePath)) return [];
   try {
-    const result = execFileSync(
-      "git",
+    const result = (await runGit(
       ["-C", worktreePath, "status", "--porcelain", "--untracked-files=all"],
-      {
-        timeout: 10_000,
-        encoding: "utf-8",
-        stdio: ["pipe", "pipe", "pipe"],
-      },
-    ).trim();
+      { timeout: 10_000 },
+    )).trim();
     return result ? result.split("\n").map((line) => line.trim()).filter(Boolean) : [];
   } catch {
     return [];
   }
 }
 
-export function hasDirtyWorktreeEntries(worktreePath: string): boolean {
-  return listDirtyWorktreeEntries(worktreePath).length > 0;
+export async function hasDirtyWorktreeEntries(worktreePath: string): Promise<boolean> {
+  return (await listDirtyWorktreeEntries(worktreePath)).length > 0;
 }
 
 export function removeWorktree(
   repoDir: string,
   worktreePath: string,
   options: RemoveWorktreeOptions = {},
-): boolean {
+): Promise<boolean> {
+  return withRepoLock(repoDir, () => removeWorktreeLocked(repoDir, worktreePath, options));
+}
+
+async function removeWorktreeLocked(
+  repoDir: string,
+  worktreePath: string,
+  options: RemoveWorktreeOptions,
+): Promise<boolean> {
   const destructive = options.destructive === true;
-  const dirtyEntries = listDirtyWorktreeEntries(worktreePath);
+  const dirtyEntries = await listDirtyWorktreeEntries(worktreePath);
   if (dirtyEntries.length > 0 && !destructive) {
     log.warn(
       `[worktree] Refusing implicit cleanup for dirty worktree ${worktreePath}: ${dirtyEntries[0]}`,
@@ -188,11 +239,7 @@ export function removeWorktree(
   }
 
   try {
-    execFileSync("git", ["-C", repoDir, "worktree", "remove", ...(destructive ? ["--force"] : []), worktreePath], {
-      timeout: 15_000,
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "pipe"],
-    });
+    await runGit(["-C", repoDir, "worktree", "remove", ...(destructive ? ["--force"] : []), worktreePath], { timeout: 15_000 });
     return true;
   } catch (err) {
     log.warn(`[worktree] git worktree remove failed for ${worktreePath}: ${err instanceof Error ? err.message : String(err)}`);
@@ -208,17 +255,15 @@ export function removeWorktree(
   }
 }
 
-export function pruneWorktrees(repoDir: string): void {
-  try {
-    execFileSync(
-      "git",
-      ["-C", repoDir, "worktree", "prune"],
-      { timeout: 10_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
-    );
-  } catch (err) {
-    const reason = err instanceof Error ? err.message.split(/\r?\n/, 1)[0] : String(err);
-    log.warn(`[worktree] git worktree prune failed for ${repoDir}: ${reason}`);
-  }
+export function pruneWorktrees(repoDir: string): Promise<void> {
+  return withRepoLock(repoDir, async () => {
+    try {
+      await runGit(["-C", repoDir, "worktree", "prune"], { timeout: 10_000 });
+    } catch (err) {
+      const reason = err instanceof Error ? err.message.split(/\r?\n/, 1)[0] : String(err);
+      log.warn(`[worktree] git worktree prune failed for ${repoDir}: ${reason}`);
+    }
+  });
 }
 
 export function worktreeExists(worktreePath: string): boolean {

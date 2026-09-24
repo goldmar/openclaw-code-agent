@@ -45,8 +45,8 @@ function installFakeGh(dir: string, prsJson: string): string {
 }
 
 describe("resolveWorktreeLifecycle", () => {
-  it("treats persisted sessions without a workdir as repo missing", () => {
-    const resolved = resolveWorktreeLifecycle({
+  it("treats persisted sessions without a workdir as repo missing", async () => {
+    const resolved = await resolveWorktreeLifecycle({
       workdir: undefined,
       worktreeBranch: "agent/missing-workdir",
       worktreeLifecycle: {
@@ -61,7 +61,7 @@ describe("resolveWorktreeLifecycle", () => {
     assert.ok(resolved.reasons.includes("base_branch_missing"));
   });
 
-  it("detects topology-merged branches as merged", () => {
+  it("detects topology-merged branches as merged", async () => {
     const repoDir = initRepo("resolver-merged-");
     try {
       git(repoDir, "checkout", "-b", "agent/merged");
@@ -71,7 +71,7 @@ describe("resolveWorktreeLifecycle", () => {
       git(repoDir, "checkout", "main");
       git(repoDir, "merge", "--ff-only", "agent/merged");
 
-      const resolved = resolveWorktreeLifecycle({
+      const resolved = await resolveWorktreeLifecycle({
         workdir: repoDir,
         worktreeBranch: "agent/merged",
       });
@@ -84,7 +84,7 @@ describe("resolveWorktreeLifecycle", () => {
     }
   });
 
-  it("treats stale pending decisions as cleanup-safe after repository merge evidence", () => {
+  it("treats stale pending decisions as cleanup-safe after repository merge evidence", async () => {
     const repoDir = initRepo("resolver-pending-merged-");
     try {
       git(repoDir, "checkout", "-b", "agent/pending-merged");
@@ -94,7 +94,7 @@ describe("resolveWorktreeLifecycle", () => {
       git(repoDir, "checkout", "main");
       git(repoDir, "merge", "--ff-only", "agent/pending-merged");
 
-      const resolved = resolveWorktreeLifecycle({
+      const resolved = await resolveWorktreeLifecycle({
         workdir: repoDir,
         worktreeBranch: "agent/pending-merged",
         worktreeLifecycle: {
@@ -111,7 +111,7 @@ describe("resolveWorktreeLifecycle", () => {
     }
   });
 
-  it("does not derive merged while a matching session is still active", () => {
+  it("does not derive merged while a matching session is still active", async () => {
     const repoDir = initRepo("resolver-active-merged-");
     try {
       git(repoDir, "checkout", "-b", "agent/active-merged");
@@ -121,7 +121,7 @@ describe("resolveWorktreeLifecycle", () => {
       git(repoDir, "checkout", "main");
       git(repoDir, "merge", "--ff-only", "agent/active-merged");
 
-      const resolved = resolveWorktreeLifecycle({
+      const resolved = await resolveWorktreeLifecycle({
         workdir: repoDir,
         worktreeBranch: "agent/active-merged",
         worktreeLifecycle: {
@@ -140,7 +140,7 @@ describe("resolveWorktreeLifecycle", () => {
     }
   });
 
-  it("does not derive merged while the worktree has dirty entries", () => {
+  it("does not derive merged while the worktree has dirty entries", async () => {
     const repoDir = initRepo("resolver-dirty-merged-");
     try {
       git(repoDir, "checkout", "-b", "agent/dirty-merged");
@@ -151,7 +151,7 @@ describe("resolveWorktreeLifecycle", () => {
       git(repoDir, "merge", "--ff-only", "agent/dirty-merged");
       writeFileSync(join(repoDir, "dirty.txt"), "uncommitted\n", "utf-8");
 
-      const resolved = resolveWorktreeLifecycle({
+      const resolved = await resolveWorktreeLifecycle({
         workdir: repoDir,
         worktreePath: repoDir,
         worktreeBranch: "agent/dirty-merged",
@@ -171,7 +171,7 @@ describe("resolveWorktreeLifecycle", () => {
     }
   });
 
-  it("detects cherry-picked branch content as released", () => {
+  it("detects cherry-picked branch content as released", async () => {
     const repoDir = initRepo("resolver-released-cherry-");
     try {
       git(repoDir, "checkout", "-b", "agent/released");
@@ -186,7 +186,7 @@ describe("resolveWorktreeLifecycle", () => {
       git(repoDir, "commit", "-m", "main diverges");
       git(repoDir, "cherry-pick", branchCommit);
 
-      const resolved = resolveWorktreeLifecycle({
+      const resolved = await resolveWorktreeLifecycle({
         workdir: repoDir,
         worktreeBranch: "agent/released",
       });
@@ -200,7 +200,7 @@ describe("resolveWorktreeLifecycle", () => {
     }
   });
 
-  it("keeps released detection true when base has unrelated extra commits", () => {
+  it("keeps released detection true when base has unrelated extra commits", async () => {
     const repoDir = initRepo("resolver-released-extra-");
     try {
       git(repoDir, "checkout", "-b", "agent/released-extra");
@@ -215,7 +215,7 @@ describe("resolveWorktreeLifecycle", () => {
       git(repoDir, "add", "other.txt");
       git(repoDir, "commit", "-m", "main extra");
 
-      const resolved = resolveWorktreeLifecycle({
+      const resolved = await resolveWorktreeLifecycle({
         workdir: repoDir,
         worktreeBranch: "agent/released-extra",
       });
@@ -227,7 +227,7 @@ describe("resolveWorktreeLifecycle", () => {
     }
   });
 
-  it("does not classify partially landed content as released", () => {
+  it("does not classify partially landed content as released", async () => {
     const repoDir = initRepo("resolver-not-released-");
     try {
       git(repoDir, "checkout", "-b", "agent/not-released");
@@ -241,7 +241,7 @@ describe("resolveWorktreeLifecycle", () => {
       git(repoDir, "add", "a.txt");
       git(repoDir, "commit", "-m", "partial landing");
 
-      const resolved = resolveWorktreeLifecycle({
+      const resolved = await resolveWorktreeLifecycle({
         workdir: repoDir,
         worktreeBranch: "agent/not-released",
       });
@@ -253,7 +253,7 @@ describe("resolveWorktreeLifecycle", () => {
     }
   });
 
-  it("does not derive released from a side branch that contains helper work while base does not", () => {
+  it("does not derive released from a side branch that contains helper work while base does not", async () => {
     const repoDir = initRepo("resolver-side-branch-");
     const fakeGhDir = mkdtempSync(join(tmpdir(), "resolver-side-branch-gh-"));
     const previousPath = installFakeGh(fakeGhDir, JSON.stringify([
@@ -296,7 +296,7 @@ describe("resolveWorktreeLifecycle", () => {
       assert.throws(() => git(repoDir, "show", "main:helper.txt"), /Command failed/);
       assert.throws(() => git(repoDir, "merge-base", "--is-ancestor", "agent/helper", "main"), /Command failed/);
 
-      const resolved = resolveWorktreeLifecycle({
+      const resolved = await resolveWorktreeLifecycle({
         workdir: repoDir,
         worktreeBranch: "agent/helper",
         worktreeBaseBranch: "main",
@@ -315,7 +315,7 @@ describe("resolveWorktreeLifecycle", () => {
     }
   });
 
-  it("does not preserve stale PR state without current open PR evidence", () => {
+  it("does not preserve stale PR state without current open PR evidence", async () => {
     const repoDir = initRepo("resolver-pr-open-");
     try {
       git(repoDir, "checkout", "-b", "agent/pr-open");
@@ -330,7 +330,7 @@ describe("resolveWorktreeLifecycle", () => {
       git(repoDir, "commit", "-m", "main diverges");
       git(repoDir, "cherry-pick", branchCommit);
 
-      const resolved = resolveWorktreeLifecycle({
+      const resolved = await resolveWorktreeLifecycle({
         workdir: repoDir,
         worktreeBranch: "agent/pr-open",
         worktreePrUrl: "https://github.com/example/repo/pull/1",

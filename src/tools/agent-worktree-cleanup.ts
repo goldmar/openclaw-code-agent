@@ -1,5 +1,5 @@
 import { branchNameValidationError } from "../worktree-ref-validation";
-import { Type } from "../tool-schema";
+import { Type } from "../tool-parameter-schema";
 import type { OpenClawPluginToolContext } from "../types";
 import { sessionManager } from "../singletons";
 import { deleteBranch, removeWorktree } from "../worktree";
@@ -92,7 +92,7 @@ export function makeAgentWorktreeCleanupTool(_ctx?: OpenClawPluginToolContext) {
       const failures: string[] = [];
 
       for (const target of targets) {
-        const { persistedSession: persisted, activeSession: active, resolvedLifecycle: resolved } = resolveWorktreeToolLifecycle(sessionManager, target, {
+        const { persistedSession: persisted, activeSession: active, resolvedLifecycle: resolved } = await resolveWorktreeToolLifecycle(sessionManager, target, {
           baseBranch: params.base_branch,
         });
 
@@ -112,10 +112,10 @@ export function makeAgentWorktreeCleanupTool(_ctx?: OpenClawPluginToolContext) {
         try {
           const repoDir = target.workdir;
           if (target.worktreePath) {
-            removeWorktree(repoDir, target.worktreePath, { destructive: false });
+            await removeWorktree(repoDir, target.worktreePath, { destructive: false });
           }
           if (target.worktreeBranch) {
-            deleteBranch(repoDir, target.worktreeBranch);
+            await deleteBranch(repoDir, target.worktreeBranch);
           }
           if (persisted) {
             const nextLifecycleState = resolved.derivedState === "merged" || resolved.derivedState === "released"

@@ -1,4 +1,4 @@
-import { Type } from "../tool-schema";
+import { Type } from "../tool-parameter-schema";
 
 import { GOAL_CONTROLLER_MISSING_MESSAGE, renderGoalStatus } from "../application/goal-view";
 import { goalController, sessionManager } from "../singletons";

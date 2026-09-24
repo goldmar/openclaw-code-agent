@@ -30,9 +30,9 @@ function createRepoWithRemote(prefix: string): { repoDir: string; remoteDir: str
   return { repoDir, remoteDir };
 }
 
-function createCommittedWorktree(repoDir: string, name: string): { worktreePath: string; branchName: string } {
-  const worktreePath = createWorktree(repoDir, name);
-  const branchName = getBranchName(worktreePath);
+async function createCommittedWorktree(repoDir: string, name: string): { worktreePath: string; branchName: string } {
+  const worktreePath = await createWorktree(repoDir, name);
+  const branchName = await getBranchName(worktreePath);
   assert.ok(branchName, "worktree branch should exist");
 
   writeFileSync(join(worktreePath, "feature.txt"), `${name}\n`, "utf-8");
@@ -42,9 +42,9 @@ function createCommittedWorktree(repoDir: string, name: string): { worktreePath:
   return { worktreePath, branchName };
 }
 
-function createReadmeChangingWorktree(repoDir: string, name: string): { worktreePath: string; branchName: string } {
-  const worktreePath = createWorktree(repoDir, name);
-  const branchName = getBranchName(worktreePath);
+async function createReadmeChangingWorktree(repoDir: string, name: string): { worktreePath: string; branchName: string } {
+  const worktreePath = await createWorktree(repoDir, name);
+  const branchName = await getBranchName(worktreePath);
   assert.ok(branchName, "worktree branch should exist");
 
   writeFileSync(join(worktreePath, "README.md"), `${name}\n`, "utf-8");
@@ -218,8 +218,8 @@ describe("agent_merge push behavior", () => {
     const { repoDir, remoteDir } = createRepoWithRemote("agent-merge-dirty");
     try {
       const sessionName = "merge-dirty";
-      const worktreePath = createWorktree(repoDir, sessionName);
-      const branchName = getBranchName(worktreePath);
+      const worktreePath = await createWorktree(repoDir, sessionName);
+      const branchName = await getBranchName(worktreePath);
       assert.ok(branchName, "worktree branch should exist");
       writeFileSync(join(worktreePath, "feature.txt"), "not committed\n", "utf-8");
       installPersistedSessionStub(sessionName, repoDir, worktreePath, branchName);
@@ -240,8 +240,8 @@ describe("agent_merge push behavior", () => {
     const { repoDir, remoteDir } = createRepoWithRemote("agent-merge-dirty-unknown");
     try {
       const sessionName = "merge-dirty-unknown";
-      const worktreePath = createWorktree(repoDir, sessionName);
-      const branchName = getBranchName(worktreePath);
+      const worktreePath = await createWorktree(repoDir, sessionName);
+      const branchName = await getBranchName(worktreePath);
       assert.ok(branchName, "worktree branch should exist");
       writeFileSync(join(worktreePath, "feature.txt"), "not committed\n", "utf-8");
       installPersistedSessionStub(sessionName, repoDir, worktreePath, "missing-branch");
@@ -263,8 +263,8 @@ describe("agent_merge push behavior", () => {
     const { repoDir, remoteDir } = createRepoWithRemote("agent-merge-already-dirty");
     try {
       const sessionName = "merge-already-dirty";
-      const worktreePath = createWorktree(repoDir, sessionName);
-      const branchName = getBranchName(worktreePath);
+      const worktreePath = await createWorktree(repoDir, sessionName);
+      const branchName = await getBranchName(worktreePath);
       assert.ok(branchName, "worktree branch should exist");
       writeFileSync(join(worktreePath, "feature.txt"), "not committed\n", "utf-8");
       const persistedSession = installPersistedSessionStub(sessionName, repoDir, worktreePath, branchName);
@@ -285,7 +285,7 @@ describe("agent_merge push behavior", () => {
     const { repoDir, remoteDir } = createRepoWithRemote("agent-merge-default");
     try {
       const sessionName = "merge-default";
-      const { worktreePath, branchName } = createCommittedWorktree(repoDir, sessionName);
+      const { worktreePath, branchName } = await createCommittedWorktree(repoDir, sessionName);
       installPersistedSessionStub(sessionName, repoDir, worktreePath, branchName);
 
       const initialRemoteMain = remoteHead(repoDir, "main");
@@ -309,7 +309,7 @@ describe("agent_merge push behavior", () => {
     const { repoDir, remoteDir } = createRepoWithRemote("agent-merge-cleanup-default");
     try {
       const sessionName = "merge-cleanup-default";
-      const { worktreePath, branchName } = createCommittedWorktree(repoDir, sessionName);
+      const { worktreePath, branchName } = await createCommittedWorktree(repoDir, sessionName);
       installPersistedSessionStub(sessionName, repoDir, worktreePath, branchName);
 
       const tool = makeAgentMergeTool();
@@ -328,7 +328,7 @@ describe("agent_merge push behavior", () => {
     const { repoDir, remoteDir } = createRepoWithRemote("agent-merge-cleanup-missing-worktree");
     try {
       const sessionName = "merge-cleanup-missing-worktree";
-      const { worktreePath, branchName } = createCommittedWorktree(repoDir, sessionName);
+      const { worktreePath, branchName } = await createCommittedWorktree(repoDir, sessionName);
       const notifications: Array<{ session: unknown; outcomeLine: string; options?: any }> = [];
       installPersistedSessionStub(sessionName, repoDir, worktreePath, branchName, notifications);
       git(repoDir, "worktree", "remove", worktreePath);
@@ -351,7 +351,7 @@ describe("agent_merge push behavior", () => {
     const { repoDir, remoteDir } = createRepoWithRemote("agent-merge-wake-success");
     try {
       const sessionName = "merge-wake-success";
-      const { worktreePath, branchName } = createCommittedWorktree(repoDir, sessionName);
+      const { worktreePath, branchName } = await createCommittedWorktree(repoDir, sessionName);
       const capturedRequests: any[] = [];
       const persistedSession = installPersistedSessionWithNotificationService({
         sessionName,
@@ -393,7 +393,7 @@ describe("agent_merge push behavior", () => {
     const { repoDir, remoteDir } = createRepoWithRemote("agent-merge-wake-failure");
     try {
       const sessionName = "merge-wake-failure";
-      const { worktreePath, branchName } = createCommittedWorktree(repoDir, sessionName);
+      const { worktreePath, branchName } = await createCommittedWorktree(repoDir, sessionName);
       const capturedRequests: any[] = [];
       const persistedSession = installPersistedSessionWithNotificationService({
         sessionName,
@@ -427,7 +427,7 @@ describe("agent_merge push behavior", () => {
     const { repoDir, remoteDir } = createRepoWithRemote("agent-merge-push");
     try {
       const sessionName = "merge-push";
-      const { worktreePath, branchName } = createCommittedWorktree(repoDir, sessionName);
+      const { worktreePath, branchName } = await createCommittedWorktree(repoDir, sessionName);
       installPersistedSessionStub(sessionName, repoDir, worktreePath, branchName);
 
       const tool = makeAgentMergeTool();
@@ -445,7 +445,7 @@ describe("agent_merge push behavior", () => {
     const { repoDir, remoteDir } = createRepoWithRemote("agent-merge-push-fail");
     try {
       const sessionName = "merge-push-fail";
-      const { worktreePath, branchName } = createCommittedWorktree(repoDir, sessionName);
+      const { worktreePath, branchName } = await createCommittedWorktree(repoDir, sessionName);
       const notifications: Array<{ session: unknown; outcomeLine: string; options?: any }> = [];
       installPersistedSessionStub(sessionName, repoDir, worktreePath, branchName, notifications);
       git(repoDir, "remote", "set-url", "origin", join(tmpdir(), "missing-openclaw-remote.git"));
@@ -468,7 +468,7 @@ describe("agent_merge push behavior", () => {
     const { repoDir, remoteDir } = createRepoWithRemote("agent-merge-stash-conflict");
     try {
       const sessionName = "merge-stash-conflict";
-      const { worktreePath, branchName } = createReadmeChangingWorktree(repoDir, sessionName);
+      const { worktreePath, branchName } = await createReadmeChangingWorktree(repoDir, sessionName);
       const notifications: Array<{ session: unknown; outcomeLine: string; options?: any }> = [];
       installPersistedSessionStub(sessionName, repoDir, worktreePath, branchName, notifications);
       writeFileSync(join(repoDir, "README.md"), "local dirty base change\n", "utf-8");
@@ -494,8 +494,8 @@ describe("agent_merge push behavior", () => {
       git(repoDir, "commit", "-m", "add local file");
 
       const sessionName = "merge-rebase-warning";
-      const worktreePath = createWorktree(repoDir, sessionName);
-      const branchName = getBranchName(worktreePath);
+      const worktreePath = await createWorktree(repoDir, sessionName);
+      const branchName = await getBranchName(worktreePath);
       assert.ok(branchName, "worktree branch should exist");
 
       writeFileSync(join(worktreePath, "README.md"), "feature\n", "utf-8");

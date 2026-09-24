@@ -259,8 +259,8 @@ describe("worktree-tool-context", () => {
     });
   });
 
-  it("resolves worktree lifecycle from the shared tool helper", () => {
-    const resolved = resolveWorktreeToolLifecycle({
+  it("resolves worktree lifecycle from the shared tool helper", async () => {
+    const resolved = await resolveWorktreeToolLifecycle({
       resolve(ref: string) {
         return ref === "feature-work"
           ? { id: "active-1", name: "feature-work", status: "running" }

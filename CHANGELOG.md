@@ -7,8 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+5.0.0 makes OCA thinner on top of OpenClaw 2026.9.6: it adopts the public plugin-SDK surfaces for delivery, logging, state, and system events; moves the Claude Code, OpenCode, and Codex harnesses onto their native protocols; and removes 4.x compatibility layers. Read **Breaking changes** before upgrading; [REFERENCE.md](docs/REFERENCE.md#upgrading-from-4x) has the migration steps. OpenClaw `2026.9.6` remains the installation target and `2026.8.1` the plugin API floor.
+
 ### Breaking changes
 
+- Removed the deprecated flat config keys `defaultModel`, `model`, `reasoningEffort`, and the global `allowedModels`. They are no longer migrated: the config schema keeps `additionalProperties: false`, so OpenClaw refuses to load the plugin while they are set (`invalid config: must not have additional properties: "defaultModel"`). Move them to `harnesses.<name>.defaultModel` / `allowedModels` / `reasoningEffort` before upgrading.
+- Session store upgrade: a 4.7.x `code-agent-sessions.json` loads in place. Rows or action tokens that no longer normalize are dropped individually after OCA writes a verbatim `.legacy-<timestamp>.json` backup, instead of one bad row archiving the whole store. Retired `planApprovalContext` values (`soft-plan`, `codex-first-turn-plan`) are dropped instead of remapped to `plan-mode`. Worktree rows without `worktreeLifecycle` get it synthesized on load from `worktreeMerged`, `worktreeDisposition`, and `worktreeState`; retention cleanup no longer re-derives resolution from those legacy fields.
+- Button callbacks are read only from the payload OpenClaw's interactive dispatcher provides (`ctx.callback.payload` on Telegram, `ctx.interaction.payload` on Discord, namespace already stripped). Probing of `callback.data`, `callback_data`, `callbackData`, and `interaction.data`, the label-payload fallback, and the Discord `clearButtons` fallback are gone. OpenClaw has provided the payload this way since the `2026.8.1` API floor.
+- Worktree-layer `git` / `gh` calls are asynchronous, so `SessionManager.spawn`, repo-policy resolution, worktree lifecycle resolution, and the `src/worktree*.ts` helpers now return promises. In-process integrations that call them must `await`.
 - State paths now follow the Gateway: OCA resolves its state directory with the host's `resolveStateDir`, so `OPENCLAW_STATE_DIR` is honored and `OPENCLAW_HOME` is treated as the home-directory override (state in `$OPENCLAW_HOME/.openclaw`) instead of as the state directory itself. Operators who set `OPENCLAW_HOME` to point OCA at a state directory should set `OPENCLAW_STATE_DIR` (or `OPENCLAW_CODE_AGENT_SESSIONS_PATH` / `OPENCLAW_CODE_AGENT_GOAL_TASKS_PATH`) instead.
 - Session output transcripts move from `/tmp/openclaw-agent-<id>.txt` to `<stateDir>/plugin-state/openclaw-code-agent/output/` (private directory and files). Existing `/tmp` transcripts stay readable through their stored paths and are aged out by the normal maintenance cleanup.
 - Auto-update state moves to `<stateDir>/plugin-state/openclaw-code-agent/auto-update.json`; the previous `openclaw-code-agent-auto-update.json` is read once as a migration source.
@@ -25,10 +31,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Codex: native backend worktree restore is removed (the Codex App Server has no worktree API). `backendRef.worktreePath`/`worktreeId` and the `worktrees` backend capability no longer exist; every harness uses plugin-managed worktrees. Resuming a Codex session whose worktree was already cleaned up now fails closed like other harnesses instead of creating a new worktree. Persisted 4.x rows whose worktree was a native Codex backend worktree load without worktree metadata, so OCA merge/discard/cleanup never touches Codex-owned checkouts.
 - Codex: `harnesses.codex.reasoningEffort` no longer defaults to `medium`. Unset means Codex's own configured/model default (Codex was effectively already ignoring OCA's effort because of the payload bug below).
 - Codex: the per-session `codexApprovalPolicy` field is removed from session config, persisted rows, and repo-policy launch tokens; Codex execution settings now come from `harnesses.codex` (see Added).
-- Removed the unused Codex auth-workspace helper (`src/harness/codex-auth.ts` and `resolveCodexAuth*` path helpers).
 
 ### Added
 
+- New OCA worktrees honor OpenClaw's managed-worktree conventions: gitignored files listed in `.worktreeinclude` are copied in, and an executable `.openclaw/worktree-setup.sh` runs in the new worktree (120 s timeout, process-group kill). A failure fails the launch and removes the new worktree and branch. OCA keeps its `agent/*` branch prefix.
+- Upgrade test fixture for a representative 4.7.20 session store.
 - Claude Code: pass OCA's review workflow as `planModeInstructions`; set `projectConfigRoot` to the original checkout for worktree sessions; report structured failures from `is_error`, assistant `error` codes, `startup_failure_reason`, and `terminal_reason` (aborted turns are interrupted turns, not failures); take cost from per-model `modelUsage`; read the applied model and effort from `system/init` or `supportedModels()`; show per-model cost, context fill (`getContextUsage()`), and live background tasks in `agent_output`; consume session-state and `permission_denied` events.
 - OpenCode: multi-select question answers, reasoning effort as the prompt `variant`, and turn duration, per-model tokens, and cost from OpenCode's message records.
 - Codex approvals: `harnesses.codex.permissionProfile` (`:danger-full-access` default, `:workspace`, `:read-only`), `harnesses.codex.approvalPolicy` (`never` default, `on-request`, `untrusted`), and `harnesses.codex.approvalsReviewer` (`user` default, `auto_review`). Command, file-change, and permission requests are shown as approval buttons with typed decisions (including "Always allow `<prefix>`"); unrecognized text replies decline and are steered into the turn as feedback.
@@ -41,18 +48,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Worktree, merge, PR, repo-policy, and lifecycle-resolver `git` / `gh` calls run through an async `execFile` runner (`src/git-exec.ts`) instead of about 40 blocking `execFileSync` calls, with the same timeouts, argument arrays, and error text. Mutating git sequences are serialized per repository, launches are serialized, and maintenance applies only its latest schedule.
+- Tool parameter schemas are built with TypeBox (`typebox` 1.3.30, bundled), the schema library the plugin SDK types tool parameters with, instead of a local `Type.*` clone. Only the builders the tools use are bundled.
+- The esbuild chunk names include a content hash.
+- Release-metadata validation and the plugin-entry tests derive the OpenClaw target and compatibility floor from `package.json`, so a compatibility bump no longer needs hand-edited test literals.
+- Docs: REFERENCE's per-release upgrade notes are condensed into **Compatibility And Upgrades**; ACP-COMPARISON is refreshed for OpenClaw 2026.9.6 (acpx, the Codex plugin, the `claude-cli` backend, and managed worktrees); REFERENCE no longer claims SDK `:topic:` parsing or a `runtime.taskFlow` fallback.
 - Direct notifications use the host durable outbound queue (`sendDurableMessageBatch` from `openclaw/plugin-sdk/channel-outbound`) with a channel-agnostic button `presentation`; core renders Telegram inline keyboards and Discord components, replacing OCA's adapter loading and Telegram button repair.
 - Wake fallbacks and system notices use the in-process `api.runtime.system.enqueueSystemEvent` plus `requestHeartbeat` instead of the `openclaw system event --mode now` subprocess, and target the origin session when it is known.
 - Honor `openclaw tasks flow cancel` for mirrored sessions: a host cancel intent stops the coding session. Flow creation uses `tryCreateManaged`.
-- Plugin diagnostics are written to the Gateway log through `api.runtime.logging.getChildLogger`; per-dispatch delivery progress is logged at `debug`.
+- Plugin diagnostics, including the Codex harness and App Server RPC diagnostics, are written to the Gateway log through `api.runtime.logging.getChildLogger`; per-dispatch delivery progress is logged at `debug`. No `src/` code writes to `console.*` directly any more.
 - The session index, goal task store, and auto-update state are written through the host `json-store` helper (private files, fsync'd atomic replacement).
 - `:thread:` session-key suffixes are parsed with the public `openclaw/plugin-sdk/routing` helper; Telegram `:topic:` parsing stays local.
 - `api.runtime` is typed with the published plugin SDK `PluginRuntime`.
 - The build externalizes the public SDK subpaths `channel-outbound`, `json-store`, `routing`, and `state-paths` in addition to `plugin-entry`. All four exist in the retained OpenClaw `2026.8.1` API floor, so the compatibility floor is unchanged.
 - Update `@anthropic-ai/claude-agent-sdk` to 0.3.281 (Claude Code 2.1.281), which Claude Code requires for `claude-opus-5-5`, and use its public `startup()`/`WarmQuery` and `Query` types.
 
+### Removed
+
+- Dead code: the unreferenced `summarizeToolInput` helper (`src/notifications.ts`) and the local TypeBox clone (`src/tool-schema.ts`).
+- The unused Codex auth-workspace helper (`src/harness/codex-auth.ts` and `resolveCodexAuth*` path helpers).
+- 4.x compatibility wrappers: `SessionManager.resolveHarnessSessionId`, `SessionStore.resolveHarnessSessionId`, the `SessionManager.persisted` / `idIndex` / `nameIndex` getters, and the `harnessSessionId`-only active-session lookup. Use `resolveBackendConversationId`.
+
 ### Fixed
 
+- A single unreadable session-store row no longer discards every other session on upgrade (see Breaking changes).
 - LLM-generated worktree decision summaries, question context summaries, and PR metadata now call `api.runtime.llm.complete` with the required `messages`, `systemPrompt`, `purpose`, and `maxTokens` and parse `LlmCompleteResult.text`; previously every call failed and silently used the deterministic fallback. Speculative probing of `runtime.ai`, `runtime.model(s)`, and other nonexistent surfaces is removed. Question context summaries get a 5 s budget (previously 300 ms) and abort the host completion when it expires.
 - OpenCode multi-question requests now send one answer list per question instead of packing every answer into one string.
 - Claude Code plan mode no longer denies `ExitPlanMode` itself (since SDK 0.3.269 plan mode routes that tool through `canUseTool`), so Claude no longer sees its plan submission rejected.

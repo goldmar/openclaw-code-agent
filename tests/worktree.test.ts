@@ -233,7 +233,7 @@ describe("createPR", () => {
     const { logPath } = installMockGh(t);
     const { createPR } = await import("../src/worktree.js");
 
-    const result = createPR("/tmp", "agent/draft-default", "main", "Draft default", "Body");
+    const result = await createPR("/tmp", "agent/draft-default", "main", "Draft default", "Body");
 
     assert.deepEqual(result, { success: true, prUrl: "https://github.com/acme/repo/pull/1" });
     const calls = readFileSync(logPath, "utf-8").trim().split("\n");
@@ -244,7 +244,7 @@ describe("createPR", () => {
     const { logPath } = installMockGh(t);
     const { createPR } = await import("../src/worktree.js");
 
-    const result = createPR("/tmp", "agent/ready-pr", "main", "Ready PR", "Body", undefined, { draft: false });
+    const result = await createPR("/tmp", "agent/ready-pr", "main", "Ready PR", "Body", undefined, { draft: false });
 
     assert.deepEqual(result, { success: true, prUrl: "https://github.com/acme/repo/pull/1" });
     const calls = readFileSync(logPath, "utf-8").trim().split("\n");
@@ -255,7 +255,7 @@ describe("createPR", () => {
     const { logPath } = installMockGh(t);
     const { createPR } = await import("../src/worktree.js");
 
-    const result = createPR("/tmp", "agent/escaped-body", "main", "Escaped body", "## Summary\\n\\n- First line\\n- Second line");
+    const result = await createPR("/tmp", "agent/escaped-body", "main", "Escaped body", "## Summary\\n\\n- First line\\n- Second line");
 
     assert.equal(result.success, true);
     const call = readFileSync(logPath, "utf-8");
@@ -267,7 +267,7 @@ describe("createPR", () => {
     const { logPath } = installMockGh(t);
     const { updatePRBody } = await import("../src/worktree.js");
 
-    const updated = updatePRBody("/tmp", 350, "## Summary\\n\\n- Updated line");
+    const updated = await updatePRBody("/tmp", 350, "## Summary\\n\\n- Updated line");
 
     assert.equal(updated, true);
     const call = readFileSync(logPath, "utf-8");
@@ -289,7 +289,7 @@ describe("createPR", () => {
     const { logPath } = installMockGh(t, { failOnDraft: true });
     const { createPR } = await import("../src/worktree.js");
 
-    const result = createPR("/tmp", "agent/draft-retry", "main", "Draft PR", "Body");
+    const result = await createPR("/tmp", "agent/draft-retry", "main", "Draft PR", "Body");
 
     assert.deepEqual(result, {
       success: true,
@@ -315,7 +315,7 @@ describe("createPR", () => {
       execFileSync("git", ["init", "-b", "main"], { cwd: repoDir, stdio: "ignore" });
       execFileSync("git", ["remote", "add", "origin", "git@github.com:goldmar/repo.git"], { cwd: repoDir, stdio: "ignore" });
 
-      const result = createPR(repoDir, "agent/existing-pr", "main", "Existing PR", "Body", "goldmar/openclaw-code-agent");
+      const result = await createPR(repoDir, "agent/existing-pr", "main", "Existing PR", "Body", "goldmar/openclaw-code-agent");
 
       assert.deepEqual(result, {
         success: true,
@@ -340,7 +340,7 @@ describe("createPR", () => {
       execFileSync("git", ["init", "-b", "main"], { cwd: repoDir, stdio: "ignore" });
       execFileSync("git", ["remote", "add", "origin", "git@github.com:goldmar/repo.git"], { cwd: repoDir, stdio: "ignore" });
 
-      const result = createPR(repoDir, "agent/existing-pr", "main", "Existing PR", "Body", "goldmar/openclaw-code-agent");
+      const result = await createPR(repoDir, "agent/existing-pr", "main", "Existing PR", "Body", "goldmar/openclaw-code-agent");
 
       assert.deepEqual(result, {
         success: false,
@@ -403,7 +403,7 @@ describe("syncWorktreePR", () => {
       execFileSync("git", ["init", "-b", "main"], { cwd: repoDir, stdio: "ignore" });
       execFileSync("git", ["remote", "add", "origin", "git@github.com:me/fork.git"], { cwd: repoDir, stdio: "ignore" });
 
-      const result = syncWorktreePR(repoDir, "agent/fix-lookup", "openai/codex");
+      const result = await syncWorktreePR(repoDir, "agent/fix-lookup", "openai/codex");
 
       assert.deepEqual(result, {
         exists: true,
@@ -429,7 +429,7 @@ describe("syncWorktreePR", () => {
       execFileSync("git", ["init", "-b", "main"], { cwd: repoDir, stdio: "ignore" });
       execFileSync("git", ["remote", "add", "origin", "git@github.com:me/repo.git"], { cwd: repoDir, stdio: "ignore" });
 
-      const result = syncWorktreePR(repoDir, "agent/fix-lookup");
+      const result = await syncWorktreePR(repoDir, "agent/fix-lookup");
 
       const calls = readFileSync(logPath, "utf-8").trim().split("\n");
       assert.equal(calls.at(-1), "pr list --head agent/fix-lookup --state all --json url,number,title,state,headRepositoryOwner,headRefName,baseRefName");
@@ -448,7 +448,7 @@ describe("syncWorktreePR", () => {
       execFileSync("git", ["init", "-b", "main"], { cwd: repoDir, stdio: "ignore" });
       execFileSync("git", ["remote", "add", "origin", "git@github.com:me/repo.git"], { cwd: repoDir, stdio: "ignore" });
 
-      assert.deepEqual(syncWorktreePR(repoDir, "agent/missing"), { exists: false, state: "none" });
+      assert.deepEqual(await syncWorktreePR(repoDir, "agent/missing"), { exists: false, state: "none" });
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }
@@ -462,7 +462,7 @@ describe("syncWorktreePR", () => {
     try {
       execFileSync("git", ["init", "-b", "main"], { cwd: repoDir, stdio: "ignore" });
 
-      syncWorktreePR(repoDir, "agent/fix-lookup", "openai/codex");
+      await syncWorktreePR(repoDir, "agent/fix-lookup", "openai/codex");
 
       const calls = readFileSync(logPath, "utf-8").trim().split("\n");
       assert.equal(calls.at(-1), "pr list --head agent/fix-lookup --state all --json url,number,title,state,headRepositoryOwner,headRefName,baseRefName --repo openai/codex");
@@ -483,7 +483,7 @@ describe("worktree base dir and PR target resolution", () => {
         encoding: "utf-8",
         stdio: ["pipe", "pipe", "pipe"],
       }).trim();
-      assert.equal(getWorktreeBaseDir(repoDir), join(canonicalRoot, ".worktrees"));
+      assert.equal(await getWorktreeBaseDir(repoDir), join(canonicalRoot, ".worktrees"));
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }
@@ -501,7 +501,7 @@ describe("worktree base dir and PR target resolution", () => {
       execFileSync("git", ["add", "README.md"], { cwd: repoDir, stdio: "ignore" });
       execFileSync("git", ["commit", "-m", "init"], { cwd: repoDir, stdio: "ignore" });
 
-      createWorktree(repoDir, "exclude-default");
+      await createWorktree(repoDir, "exclude-default");
 
       const status = execFileSync("git", ["status", "--porcelain", "--untracked-files=all"], {
         cwd: repoDir,
@@ -526,7 +526,7 @@ describe("worktree base dir and PR target resolution", () => {
         encoding: "utf-8",
         stdio: ["pipe", "pipe", "pipe"],
       }).trim();
-      assert.equal(getWorktreeSpaceProbePath(repoDir), canonicalRoot);
+      assert.equal(await getWorktreeSpaceProbePath(repoDir), canonicalRoot);
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }
@@ -543,7 +543,7 @@ describe("worktree base dir and PR target resolution", () => {
       mkdirSync(existingParent);
       writeFileSync(join(existingParent, ".gitkeep"), "", { encoding: "utf-8", flag: "w" });
       process.env.OPENCLAW_WORKTREE_DIR = join(existingParent, "nested", "agent-worktrees");
-      assert.equal(getWorktreeSpaceProbePath(repoDir), existingParent);
+      assert.equal(await getWorktreeSpaceProbePath(repoDir), existingParent);
     } finally {
       if (previousWorktreeDir === undefined) {
         delete process.env.OPENCLAW_WORKTREE_DIR;
@@ -569,7 +569,7 @@ describe("worktree base dir and PR target resolution", () => {
       execFileSync("git", ["init", "-b", "main"], { cwd: repoDir, stdio: "ignore" });
       execFileSync("git", ["remote", "add", "origin", "git@github.com:me/fork.git"], { cwd: repoDir, stdio: "ignore" });
       execFileSync("git", ["remote", "add", "upstream", "git@github.com:openai/codex.git"], { cwd: repoDir, stdio: "ignore" });
-      assert.equal(resolveTargetRepo(repoDir, "custom/target"), "custom/target");
+      assert.equal(await resolveTargetRepo(repoDir, "custom/target"), "custom/target");
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }
@@ -583,7 +583,7 @@ describe("worktree base dir and PR target resolution", () => {
       execFileSync("git", ["init", "-b", "main"], { cwd: repoDir, stdio: "ignore" });
       execFileSync("git", ["remote", "add", "origin", "git@github.com:me/fork.git"], { cwd: repoDir, stdio: "ignore" });
       execFileSync("git", ["remote", "add", "upstream", "git@github.com:openai/codex.git"], { cwd: repoDir, stdio: "ignore" });
-      assert.equal(resolveTargetRepo(repoDir), "openai/codex");
+      assert.equal(await resolveTargetRepo(repoDir), "openai/codex");
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }
@@ -596,7 +596,7 @@ describe("worktree base dir and PR target resolution", () => {
     try {
       execFileSync("git", ["init", "-b", "main"], { cwd: repoDir, stdio: "ignore" });
       execFileSync("git", ["remote", "add", "upstream", "git@github.com:openai/codex.git"], { cwd: repoDir, stdio: "ignore" });
-      assert.equal(resolveTargetRepo(repoDir), "openai/codex");
+      assert.equal(await resolveTargetRepo(repoDir), "openai/codex");
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }
@@ -609,7 +609,7 @@ describe("worktree base dir and PR target resolution", () => {
     try {
       execFileSync("git", ["init", "-b", "main"], { cwd: repoDir, stdio: "ignore" });
       execFileSync("git", ["remote", "add", "origin", "git@github.com:me/fork.git"], { cwd: repoDir, stdio: "ignore" });
-      assert.equal(resolveTargetRepo(repoDir), undefined);
+      assert.equal(await resolveTargetRepo(repoDir), undefined);
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }
@@ -629,13 +629,13 @@ describe("removeWorktree", () => {
       execFileSync("git", ["add", "README.md"], { cwd: repoDir, stdio: "ignore" });
       execFileSync("git", ["commit", "-m", "init"], { cwd: repoDir, stdio: "ignore" });
 
-      const worktreePath = createWorktree(repoDir, "dirty-cleanup");
+      const worktreePath = await createWorktree(repoDir, "dirty-cleanup");
       writeFileSync(join(worktreePath, "notes.txt"), "untracked\n");
 
-      assert.equal(removeWorktree(repoDir, worktreePath), false);
+      assert.equal(await removeWorktree(repoDir, worktreePath), false);
       assert.equal(existsSync(worktreePath), true);
 
-      assert.equal(removeWorktree(repoDir, worktreePath, { destructive: true }), true);
+      assert.equal(await removeWorktree(repoDir, worktreePath, { destructive: true }), true);
       assert.equal(existsSync(worktreePath), false);
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
@@ -654,7 +654,7 @@ describe("pruneWorktrees", () => {
     });
 
     try {
-      assert.doesNotThrow(() => pruneWorktrees(repoDir));
+      await assert.doesNotReject(async () => await pruneWorktrees(repoDir));
       assert.equal(warnings.length, 1);
       assert.equal(warnings[0].startsWith(`[worktree] git worktree prune failed for ${repoDir}: `), true);
     } finally {
@@ -682,8 +682,8 @@ describe("createWorktree branch selection", () => {
       execFileSync("git", ["commit", "-m", "stale branch commit"], { cwd: repoDir, stdio: "ignore" });
       execFileSync("git", ["checkout", "main"], { cwd: repoDir, stdio: "ignore" });
 
-      const worktreePath = createWorktree(repoDir, "branch-collision");
-      const branchName = getBranchName(worktreePath);
+      const worktreePath = await createWorktree(repoDir, "branch-collision");
+      const branchName = await getBranchName(worktreePath);
 
       assert.ok(branchName);
       assert.notEqual(branchName, "agent/branch-collision");
@@ -707,12 +707,12 @@ describe("createWorktree branch selection", () => {
       execFileSync("git", ["add", "README.md"], { cwd: repoDir, stdio: "ignore" });
       execFileSync("git", ["commit", "-m", "init"], { cwd: repoDir, stdio: "ignore" });
 
-      const blockedPath = join(getWorktreeBaseDir(repoDir), "openclaw-worktree-path-collision");
+      const blockedPath = join(await getWorktreeBaseDir(repoDir), "openclaw-worktree-path-collision");
       mkdirSync(blockedPath, { recursive: true });
       writeFileSync(join(blockedPath, "leftover.txt"), "blocked default path\n");
 
-      const worktreePath = createWorktree(repoDir, "path-collision");
-      const branchName = getBranchName(worktreePath);
+      const worktreePath = await createWorktree(repoDir, "path-collision");
+      const branchName = await getBranchName(worktreePath);
 
       assert.notEqual(worktreePath, blockedPath);
       assert.equal(existsSync(join(blockedPath, "leftover.txt")), true);
@@ -742,8 +742,8 @@ describe("createWorktree branch selection", () => {
       execFileSync("git", ["commit", "-m", "resume branch commit"], { cwd: repoDir, stdio: "ignore" });
       execFileSync("git", ["checkout", "main"], { cwd: repoDir, stdio: "ignore" });
 
-      const worktreePath = createWorktree(repoDir, "resume-target", { allowExistingBranch: true });
-      const branchName = getBranchName(worktreePath);
+      const worktreePath = await createWorktree(repoDir, "resume-target", { allowExistingBranch: true });
+      const branchName = await getBranchName(worktreePath);
 
       assert.equal(branchName, "agent/resume-target");
       assert.equal(existsSync(join(worktreePath, "resume.txt")), true);
@@ -771,14 +771,14 @@ describe("createWorktree branch selection", () => {
       execFileSync("git", ["checkout", "main"], { cwd: repoDir, stdio: "ignore" });
 
       const stalePath = join(
-        getWorktreeBaseDir(repoDir),
+        await getWorktreeBaseDir(repoDir),
         "openclaw-worktree-resume-dir-collision",
       );
       mkdirSync(stalePath, { recursive: true });
       writeFileSync(join(stalePath, "leftover.txt"), "stale directory\n");
 
-      const worktreePath = createWorktree(repoDir, "resume-dir-collision", { allowExistingBranch: true });
-      const branchName = getBranchName(worktreePath);
+      const worktreePath = await createWorktree(repoDir, "resume-dir-collision", { allowExistingBranch: true });
+      const branchName = await getBranchName(worktreePath);
 
       assert.equal(worktreePath, stalePath);
       assert.equal(branchName, "agent/resume-dir-collision");

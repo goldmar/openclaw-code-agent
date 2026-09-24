@@ -116,7 +116,7 @@ describe("SessionStore getLatestPersistedByName", () => {
       completedAt: 220,
     } as any);
 
-    const resolved = store.resolveHarnessSessionId("dup");
+    const resolved = store.resolveBackendConversationId("dup");
     const persisted = store.getPersistedSession("dup");
 
     assert.equal(resolved, "thread-new");
@@ -145,7 +145,7 @@ describe("SessionStore getLatestPersistedByName", () => {
       completedAt: 300,
     } as any);
 
-    const resolved = store.resolveHarnessSessionId("legacy");
+    const resolved = store.resolveBackendConversationId("legacy");
     const persisted = store.getPersistedSession("legacy");
 
     assert.equal(resolved, "thread-latest");
@@ -649,7 +649,7 @@ describe("SessionStore path resolution", () => {
     });
 
     const persisted = reloaded.getPersistedSession("GccpSIqJ");
-    assert.equal(reloaded.resolveHarnessSessionId("GccpSIqJ"), "h-GccpSIqJ");
+    assert.equal(reloaded.resolveBackendConversationId("GccpSIqJ"), "h-GccpSIqJ");
     assert.equal(persisted?.harnessSessionId, "h-GccpSIqJ");
     assert.equal(persisted?.sessionId, "GccpSIqJ");
     assert.equal(persisted?.status, "killed");
@@ -790,8 +790,8 @@ describe("SessionStore path resolution", () => {
       env: {},
     });
 
-    assert.equal(store.resolveHarnessSessionId("backend-ref"), "backend-thread");
-    assert.equal(store.resolveHarnessSessionId("backend-thread"), "backend-thread");
+    assert.equal(store.resolveBackendConversationId("backend-ref"), "backend-thread");
+    assert.equal(store.resolveBackendConversationId("backend-thread"), "backend-thread");
     assert.equal(store.getPersistedSession("backend-thread")?.harnessSessionId, "legacy-thread");
     assert.equal(store.getPersistedSession("legacy-thread")?.sessionId, "backend-ref");
   });
@@ -896,7 +896,7 @@ describe("SessionStore path resolution", () => {
     });
   });
 
-  it("normalizes legacy plan-context values to plan-mode", () => {
+  it("drops retired plan-context values instead of remapping them", () => {
     const dir = mkdtempSync(join(tmpdir(), "openclaw-store-plan-context-"));
     const indexPath = join(dir, "sessions.json");
     writeStore(indexPath, [{
@@ -918,7 +918,8 @@ describe("SessionStore path resolution", () => {
     });
 
     const persisted = store.getPersistedSession("plan-context");
-    assert.equal(persisted?.planApprovalContext, "plan-mode");
+    assert.equal(persisted?.lifecycle, "awaiting_plan_decision");
+    assert.equal(persisted?.planApprovalContext, undefined);
   });
 
   it("preserves persisted waiting lifecycles across reload", () => {
@@ -934,7 +935,7 @@ describe("SessionStore path resolution", () => {
         status: "completed",
         lifecycle: "awaiting_plan_decision",
         pendingPlanApproval: true,
-        planApprovalContext: "codex-first-turn-plan",
+        planApprovalContext: "plan-mode",
         costUsd: 0,
       },
       {
@@ -1307,7 +1308,7 @@ describe("SessionStore path resolution", () => {
     assert.equal(store.getPersistedSession("ses_opencode")?.harness, "opencode");
   });
 
-  it("archives current-schema stores whose sessions are missing route metadata", () => {
+  it("backs up and drops current-schema sessions that are missing route metadata", () => {
     const dir = mkdtempSync(join(tmpdir(), "openclaw-store-legacy-route-"));
     const indexPath = join(dir, "sessions.json");
     writeFileSync(indexPath, JSON.stringify({
@@ -1334,7 +1335,7 @@ describe("SessionStore path resolution", () => {
     assert.equal(archived.length, 1);
   });
 
-  it("archives invalid current-schema stores to a suffixed path when the timestamp target exists", (t) => {
+  it("backs up stores with unreadable rows to a suffixed path and keeps valid sessions", (t) => {
     const dir = mkdtempSync(join(tmpdir(), "openclaw-store-invalid-archive-collision-"));
     const indexPath = join(dir, "sessions.json");
     const originalPayload = JSON.stringify({
@@ -1373,15 +1374,30 @@ describe("SessionStore path resolution", () => {
       env: {},
     });
 
-    assert.equal(store.listPersistedSessions().length, 0);
+    assert.deepEqual(store.listPersistedSessions().map((session) => session.sessionId), ["valid-route"]);
     const saved = JSON.parse(readFileSync(indexPath, "utf-8"));
     assert.equal(saved.schemaVersion, STORE_SCHEMA_VERSION);
-    assert.deepEqual(saved.sessions, []);
+    assert.deepEqual(saved.sessions.map((session: { sessionId: string }) => session.sessionId), ["valid-route"]);
     assert.deepEqual(saved.actionTokens, []);
     assert.equal(readFileSync(`${indexPath}.legacy-${now}-1.json`, "utf-8"), originalPayload);
   });
 
-  it("archives invalid action token stores to a suffixed path when the timestamp target exists", (t) => {
+  it("archives the whole store when unreadable rows cannot be backed up", (t) => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-store-invalid-no-backup-"));
+    const indexPath = join(dir, "sessions.json");
+    t.mock.method(sessionStoreStorageInternals, "backupSessionIndex", () => false);
+    writeStore(indexPath, [
+      { sessionId: "valid", harnessSessionId: "h-valid", name: "valid", prompt: "p", workdir: "/tmp", status: "completed", costUsd: 0 },
+      { sessionId: "broken", name: "broken", prompt: "p", workdir: "/tmp", status: "completed", costUsd: 0 },
+    ]);
+
+    const store = new SessionStore({ indexPath, env: {} });
+
+    assert.equal(store.listPersistedSessions().length, 0);
+    assert.equal(readdirSync(dir).filter((name) => name.startsWith("sessions.json.legacy-")).length, 1);
+  });
+
+  it("backs up stores with unreadable action tokens and keeps valid sessions", (t) => {
     const dir = mkdtempSync(join(tmpdir(), "openclaw-store-invalid-token-archive-collision-"));
     const indexPath = join(dir, "sessions.json");
     const originalPayload = JSON.stringify({
@@ -1417,16 +1433,16 @@ describe("SessionStore path resolution", () => {
       env: {},
     });
 
-    assert.equal(store.listPersistedSessions().length, 0);
+    assert.deepEqual(store.listPersistedSessions().map((session) => session.sessionId), ["valid-route"]);
     assert.equal(store.getActionToken("invalid-token"), undefined);
     const saved = JSON.parse(readFileSync(indexPath, "utf-8"));
     assert.equal(saved.schemaVersion, STORE_SCHEMA_VERSION);
-    assert.deepEqual(saved.sessions, []);
+    assert.deepEqual(saved.sessions.map((session: { sessionId: string }) => session.sessionId), ["valid-route"]);
     assert.deepEqual(saved.actionTokens, []);
     assert.equal(readFileSync(`${indexPath}.legacy-${now}-1.json`, "utf-8"), originalPayload);
   });
 
-  it("archives current-schema stores whose worktree sessions are missing worktreeBranch metadata", () => {
+  it("backs up and drops worktree sessions that are missing worktreeBranch metadata", () => {
     const dir = mkdtempSync(join(tmpdir(), "openclaw-store-legacy-branch-"));
     const indexPath = join(dir, "sessions.json");
     writeFileSync(indexPath, JSON.stringify({

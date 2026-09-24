@@ -82,51 +82,6 @@ export function setPluginConfig(config: Partial<RawPluginConfig>): void {
     harnesses[name] = next;
   }
 
-  if (config.defaultModel !== undefined) {
-    const existing = harnesses[defaultHarness] ?? {};
-    harnesses[defaultHarness] = {
-      ...existing,
-      defaultModel: (config.harnesses?.[defaultHarness]?.defaultModel ?? config.defaultModel),
-      allowedModels: config.harnesses?.[defaultHarness]?.allowedModels !== undefined
-        ? existing.allowedModels
-        : config.allowedModels,
-    };
-    log.warn(
-      `[openclaw-code-agent] config.defaultModel is deprecated; use harnesses.${defaultHarness}.defaultModel instead.`,
-    );
-  }
-
-  if (config.model !== undefined) {
-    const existing = harnesses.codex ?? {};
-    harnesses.codex = {
-      ...existing,
-      defaultModel: (config.harnesses?.codex?.defaultModel ?? config.model),
-      allowedModels: config.harnesses?.codex?.allowedModels !== undefined ? existing.allowedModels : config.allowedModels,
-    };
-    log.warn("[openclaw-code-agent] config.model is deprecated; use harnesses.codex.defaultModel instead.");
-  }
-
-  if (config.reasoningEffort !== undefined) {
-    const existing = harnesses.codex ?? {};
-    harnesses.codex = {
-      ...existing,
-      reasoningEffort: (config.harnesses?.codex?.reasoningEffort ?? config.reasoningEffort),
-    };
-    log.warn("[openclaw-code-agent] config.reasoningEffort is deprecated; use harnesses.codex.reasoningEffort instead.");
-  }
-
-  if (config.allowedModels !== undefined) {
-    log.warn("[openclaw-code-agent] config.allowedModels is deprecated; use harnesses.<name>.allowedModels instead.");
-    for (const [name, existing] of Object.entries(harnesses)) {
-      if (config.harnesses?.[name]?.allowedModels === undefined) {
-        harnesses[name] = {
-          ...existing,
-          allowedModels: undefined,
-        };
-      }
-    }
-  }
-
   pluginConfig = {
     maxSessions: config.maxSessions ?? 20,
     defaultWorkdir: config.defaultWorkdir,
@@ -140,7 +95,6 @@ export function setPluginConfig(config: Partial<RawPluginConfig>): void {
     planApproval: config.planApproval ?? "delegate",
     defaultHarness,
     harnesses,
-    allowedModels: config.allowedModels,
     defaultWorktreeStrategy: config.defaultWorktreeStrategy ?? "delegate",
     worktreeDir: config.worktreeDir,
   };
@@ -165,7 +119,7 @@ export function resolveDefaultModelForHarness(name: string): string | undefined 
 }
 
 export function resolveAllowedModelsForHarness(name: string): string[] | undefined {
-  return pluginConfig.harnesses[name]?.allowedModels ?? pluginConfig.allowedModels;
+  return pluginConfig.harnesses[name]?.allowedModels;
 }
 
 export function resolveReasoningEffortForHarness(name: string): ReasoningEffort | undefined {

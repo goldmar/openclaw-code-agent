@@ -161,25 +161,6 @@
           }
         }
       },
-      "defaultModel": {
-        "type": "string",
-        "description": "Deprecated legacy default model. Mapped to harnesses[defaultHarness].defaultModel."
-      },
-      "model": {
-        "type": "string",
-        "description": "Deprecated legacy Codex model override. Use harnesses.codex.defaultModel instead."
-      },
-      "reasoningEffort": {
-        "type": "string",
-        "enum": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "description": "Deprecated legacy Codex reasoning effort. Use harnesses.codex.reasoningEffort instead."
-      },
       "defaultWorkdir": {
         "type": "string",
         "description": "Default working directory for new sessions. Because the default worktree strategy is 'delegate', this should normally be a git repository root unless defaultWorktreeStrategy is changed to 'off'."
@@ -250,13 +231,6 @@
       "worktreeDir": {
         "type": "string",
         "description": "Base directory for agent worktrees. Defaults to <repoRoot>/.worktrees when unset. Overridden by OPENCLAW_WORKTREE_DIR env var."
-      },
-      "allowedModels": {
-        "type": "array",
-        "items": {
-          "type": "string"
-        },
-        "description": "Deprecated legacy global model restriction. Use harnesses.<name>.allowedModels instead."
       }
     }
   },

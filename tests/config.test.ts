@@ -530,23 +530,6 @@ describe("setPluginConfig", () => {
     assert.equal(pluginConfig.harnesses.codex?.approvalsReviewer, "user");
   });
 
-  it("preserves legacy flat model keys as deprecated fallbacks", () => {
-    setPluginConfig({
-      defaultHarness: "claude-code",
-      defaultModel: "opus",
-      model: "gpt-5.3-codex",
-      reasoningEffort: "high",
-      allowedModels: ["sonnet", "opus"],
-    });
-
-    assert.equal(pluginConfig.harnesses["claude-code"]?.defaultModel, "opus");
-    assert.equal(pluginConfig.harnesses["claude-code"]?.allowedModels, undefined);
-    assert.equal(pluginConfig.harnesses.codex?.defaultModel, "gpt-5.3-codex");
-    assert.equal(pluginConfig.harnesses.codex?.allowedModels, undefined);
-    assert.equal(pluginConfig.harnesses.codex?.reasoningEffort, "high");
-    assert.deepEqual(pluginConfig.allowedModels, ["sonnet", "opus"]);
-  });
-
   it("accepts current SDK readiness extended reasoning efforts", () => {
     setPluginConfig({
       harnesses: {

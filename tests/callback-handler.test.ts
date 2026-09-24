@@ -232,7 +232,7 @@ describe("createCallbackHandler()", () => {
     assert.equal(state.replies[0], "⚠️ This action is stale or has already been used.");
   });
 
-  it("runs the plugin update from native Telegram callback_data and emits action diagnostics", async (t) => {
+  it("runs the plugin update from a Telegram callback payload and emits action diagnostics", async (t) => {
     process.env.OPENCLAW_CODE_AGENT_BUTTON_DIAGNOSTICS = "1";
     const logs: string[] = [];
     t.mock.method(console, "info", ((message?: unknown) => { logs.push(String(message)); }) as typeof console.info);
@@ -261,13 +261,7 @@ describe("createCallbackHandler()", () => {
     } as any);
 
     const handler = createCallbackHandler();
-    const state = createCtx("ignored", "telegram", {
-      telegramCallback: {
-        data: undefined,
-        payload: undefined,
-        callback_data: "code-agent:native-update-token",
-      },
-    });
+    const state = createCtx("native-update-token");
     const result = await handler.handler(state.ctx as any);
 
     assert.deepEqual(result, { handled: true });
@@ -849,300 +843,6 @@ describe("createCallbackHandler()", () => {
     assert.ok(events.indexOf("sendMessage") < events.indexOf("consumeActionToken"));
   });
 
-  it("consumes v2026.5.28 Telegram callback data when payload is absent", async () => {
-    let switchedTo: string | undefined;
-    let consumed = 0;
-    const session = createStubSession({
-      pendingPlanApproval: true,
-      approvalState: "pending",
-      planDecisionVersion: 7,
-      actionablePlanDecisionVersion: 7,
-      sendMessage: async () => {},
-      switchPermissionMode: (mode: string) => { switchedTo = mode; },
-    });
-
-    setSessionManager({
-      getActionToken: (tokenId: string) => {
-        assert.equal(tokenId, "2d1bab1c-ce69-4bdb-ae5c-782504ec686e");
-        return {
-          sessionId: "test-id",
-          kind: "plan-approve",
-          planDecisionVersion: 7,
-        };
-      },
-      consumeActionToken: (tokenId: string) => {
-        consumed++;
-        assert.equal(tokenId, "2d1bab1c-ce69-4bdb-ae5c-782504ec686e");
-        return {
-          sessionId: "test-id",
-          kind: "plan-approve",
-          planDecisionVersion: 7,
-        };
-      },
-      resolve: () => session,
-      getPersistedSession: () => undefined,
-      notifySession: () => {},
-      clearPlanDecisionTokens: () => {},
-    } as any);
-
-    const handler = createCallbackHandler();
-    const state = createCtx("unused", "telegram", {
-      telegramCallback: {
-        data: "code-agent:2d1bab1c-ce69-4bdb-ae5c-782504ec686e",
-        payload: undefined,
-      },
-    });
-    const result = await handler.handler(state.ctx as any);
-
-    assert.deepEqual(result, { handled: true });
-    assert.equal(consumed, 1);
-    assert.equal(switchedTo, "bypassPermissions");
-    assert.equal(state.callbacksAcknowledged, 1);
-    assert.equal(state.buttonsCleared, 1);
-    assert.deepEqual(state.replies, []);
-  });
-
-  it("prefers namespaced Telegram callback data over conflicting payload text", async () => {
-    let switchedTo: string | undefined;
-    let consumed = 0;
-    const session = createStubSession({
-      pendingPlanApproval: true,
-      approvalState: "pending",
-      planDecisionVersion: 7,
-      actionablePlanDecisionVersion: 7,
-      sendMessage: async () => {},
-      switchPermissionMode: (mode: string) => { switchedTo = mode; },
-    });
-
-    setSessionManager({
-      getActionToken: (tokenId: string) => {
-        assert.equal(tokenId, "native-token");
-        return {
-          sessionId: "test-id",
-          kind: "plan-approve",
-          planDecisionVersion: 7,
-        };
-      },
-      consumeActionToken: (tokenId: string) => {
-        consumed++;
-        assert.equal(tokenId, "native-token");
-        return {
-          sessionId: "test-id",
-          kind: "plan-approve",
-          planDecisionVersion: 7,
-        };
-      },
-      resolve: () => session,
-      getPersistedSession: () => undefined,
-      notifySession: () => {},
-      clearPlanDecisionTokens: () => {},
-    } as any);
-
-    const handler = createCallbackHandler();
-    const state = createCtx("derived-stale-token", "telegram", {
-      telegramCallback: {
-        data: "code-agent:native-token",
-        payload: "derived-stale-token",
-      },
-    });
-    const result = await handler.handler(state.ctx as any);
-
-    assert.deepEqual(result, { handled: true });
-    assert.equal(consumed, 1);
-    assert.equal(switchedTo, "bypassPermissions");
-    assert.equal(state.buttonsCleared, 1);
-    assert.deepEqual(state.replies, []);
-  });
-
-  it("consumes native Telegram callback_data when payload and data aliases are absent", async () => {
-    let switchedTo: string | undefined;
-    let consumed = 0;
-    const session = createStubSession({
-      pendingPlanApproval: true,
-      approvalState: "pending",
-      planDecisionVersion: 1,
-      actionablePlanDecisionVersion: 1,
-      sendMessage: async () => {},
-      switchPermissionMode: (mode: string) => { switchedTo = mode; },
-    });
-
-    setSessionManager({
-      getActionToken: (tokenId: string) => {
-        assert.equal(tokenId, "4281aedb-fb15-4b05-a2c8-1b17e44ef0e4");
-        return {
-          sessionId: "test-id",
-          kind: "plan-approve",
-          planDecisionVersion: 1,
-        };
-      },
-      consumeActionToken: (tokenId: string) => {
-        consumed++;
-        assert.equal(tokenId, "4281aedb-fb15-4b05-a2c8-1b17e44ef0e4");
-        return {
-          sessionId: "test-id",
-          kind: "plan-approve",
-          planDecisionVersion: 1,
-        };
-      },
-      resolve: () => session,
-      getPersistedSession: () => undefined,
-      notifySession: () => {},
-      clearPlanDecisionTokens: () => {},
-    } as any);
-
-    const handler = createCallbackHandler();
-    const state = createCtx("unused", "telegram", {
-      telegramCallback: {
-        data: undefined,
-        payload: undefined,
-        callback_data: "code-agent:4281aedb-fb15-4b05-a2c8-1b17e44ef0e4",
-      },
-    });
-    const result = await handler.handler(state.ctx as any);
-
-    assert.deepEqual(result, { handled: true });
-    assert.equal(consumed, 1);
-    assert.equal(switchedTo, "bypassPermissions");
-    assert.equal(state.callbacksAcknowledged, 1);
-    assert.equal(state.buttonsCleared, 1);
-    assert.deepEqual(state.replies, []);
-  });
-
-  it("prefers namespaced native Telegram plan approval data over conflicting payload text", async () => {
-    let switchedTo: string | undefined;
-    let consumed = 0;
-    const lookups: string[] = [];
-    const session = createStubSession({
-      id: "k7rM7W1J",
-      name: "plan-oca-v2026-6-9-compat",
-      pendingPlanApproval: true,
-      approvalState: "pending",
-      planDecisionVersion: 1,
-      actionablePlanDecisionVersion: 1,
-      canonicalPlanPromptVersion: 1,
-      approvalPromptRequiredVersion: 1,
-      approvalPromptVersion: 1,
-      sendMessage: async () => {},
-      switchPermissionMode: (mode: string) => { switchedTo = mode; },
-    });
-
-    setSessionManager({
-      getActionToken: (tokenId: string) => {
-        lookups.push(tokenId);
-        if (tokenId !== "4281aedb-fb15-4b05-a2c8-1b17e44ef0e4") return undefined;
-        return {
-          sessionId: "k7rM7W1J",
-          kind: "plan-approve",
-          label: "Approve",
-          planDecisionVersion: 1,
-        };
-      },
-      consumeActionToken: (tokenId: string) => {
-        consumed++;
-        assert.equal(tokenId, "4281aedb-fb15-4b05-a2c8-1b17e44ef0e4");
-        return {
-          sessionId: "k7rM7W1J",
-          kind: "plan-approve",
-          label: "Approve",
-          planDecisionVersion: 1,
-        };
-      },
-      resolve: () => session,
-      getPersistedSession: () => undefined,
-      notifySession: () => {},
-      clearPlanDecisionTokens: () => {},
-    } as any);
-
-    const handler = createCallbackHandler();
-    const state = createCtx("derived-stale-token", "telegram", {
-      telegramCallback: {
-        data: "code-agent:4281aedb-fb15-4b05-a2c8-1b17e44ef0e4",
-        payload: "Approve",
-      },
-    });
-    const result = await handler.handler(state.ctx as any);
-
-    assert.deepEqual(result, { handled: true });
-    assert.deepEqual(lookups, ["4281aedb-fb15-4b05-a2c8-1b17e44ef0e4"]);
-    assert.equal(consumed, 1);
-    assert.equal(switchedTo, "bypassPermissions");
-    assert.equal(state.callbacksAcknowledged, 1);
-    assert.equal(state.buttonsCleared, 1);
-    assert.deepEqual(state.replies, []);
-  });
-
-  it("prefers namespaced native interaction plan approval data over callback payload text", async () => {
-    let switchedTo: string | undefined;
-    let consumed = 0;
-    const lookups: string[] = [];
-    const session = createStubSession({
-      id: "k7rM7W1J",
-      name: "plan-oca-v2026-6-9-compat",
-      pendingPlanApproval: true,
-      approvalState: "pending",
-      planDecisionVersion: 1,
-      actionablePlanDecisionVersion: 1,
-      canonicalPlanPromptVersion: 1,
-      approvalPromptRequiredVersion: 1,
-      approvalPromptVersion: 1,
-      sendMessage: async () => {},
-      switchPermissionMode: (mode: string) => { switchedTo = mode; },
-    });
-
-    setSessionManager({
-      getActionToken: (tokenId: string) => {
-        lookups.push(tokenId);
-        if (tokenId !== "real-approval-token") return undefined;
-        return {
-          sessionId: "k7rM7W1J",
-          kind: "plan-approve",
-          label: "Approve",
-          planDecisionVersion: 1,
-        };
-      },
-      consumeActionToken: (tokenId: string) => {
-        consumed++;
-        assert.equal(tokenId, "real-approval-token");
-        return {
-          sessionId: "k7rM7W1J",
-          kind: "plan-approve",
-          label: "Approve",
-          planDecisionVersion: 1,
-        };
-      },
-      resolve: () => session,
-      getPersistedSession: () => undefined,
-      notifySession: () => {},
-      clearPlanDecisionTokens: () => {},
-    } as any);
-
-    const replies: string[] = [];
-    let callbacksAcknowledged = 0;
-    let buttonsCleared = 0;
-    const ctx = {
-      channel: "discord" as const,
-      auth: { isAuthorizedSender: true },
-      callback: { payload: "Approve" },
-      interaction: { callback_data: "code-agent:real-approval-token" },
-      respond: {
-        acknowledge: async () => { callbacksAcknowledged++; },
-        clearButtons: async () => { buttonsCleared++; },
-        reply: async ({ text }: { text: string }) => { replies.push(text); },
-      },
-    };
-
-    const handler = createCallbackHandler("discord");
-    const result = await handler.handler(ctx as any);
-
-    assert.deepEqual(result, { handled: true });
-    assert.deepEqual(lookups, ["real-approval-token"]);
-    assert.equal(consumed, 1);
-    assert.equal(switchedTo, "bypassPermissions");
-    assert.equal(callbacksAcknowledged, 1);
-    assert.equal(buttonsCleared, 1);
-    assert.deepEqual(replies, []);
-  });
-
   it("does not consume plan approval tokens when approval fails before applying", async () => {
     let consumed = 0;
     const tokens = [
@@ -1212,7 +912,7 @@ describe("createCallbackHandler()", () => {
     ]]);
   });
 
-  it("uses namespaced retry callback_data when the retry label is present as payload", async () => {
+  it("consumes a retried plan approval token from the callback payload", async () => {
     const session = createStubSession({
       pendingPlanApproval: true,
       approvalState: "pending",
@@ -1252,13 +952,7 @@ describe("createCallbackHandler()", () => {
     } as any);
 
     const handler = createCallbackHandler();
-    const state = createCtx("Approve", "telegram", {
-      telegramCallback: {
-        data: "code-agent:approve-token",
-        callback_data: "code-agent:approve-token",
-        payload: "Approve",
-      },
-    });
+    const state = createCtx("approve-token");
     const result = await handler.handler(state.ctx as any);
 
     assert.deepEqual(result, { handled: true });
@@ -1794,7 +1488,7 @@ describe("createCallbackHandler()", () => {
     assert.equal(reject.replies[0], "⚠️ This plan decision is stale because a newer plan review state already exists.");
   });
 
-  it("accepts Discord callbacks that provide payload via callback and only expose clearButtons", async () => {
+  it("accepts Discord interaction payloads and clears components", async () => {
     let switchedTo: string | undefined;
     const session = createStubSession({
       pendingPlanApproval: true,
@@ -1808,9 +1502,9 @@ describe("createCallbackHandler()", () => {
     const ctx = {
       channel: "discord" as const,
       auth: { isAuthorizedSender: true },
-      callback: { payload: "token-approve" },
+      interaction: { kind: "button", data: "code-agent:token-approve", namespace: "code-agent", payload: "token-approve" },
       respond: {
-        clearButtons: async () => { buttonsCleared++; },
+        clearComponents: async () => { buttonsCleared++; },
         reply: async ({ text }: { text: string }) => { replies.push(text); },
       },
     };
@@ -2256,7 +1950,7 @@ describe("createCallbackHandler()", () => {
     const state = createCtx("ignored", "telegram", {
       telegramCallback: {
         data: "code-agent:",
-        payload: "stale-payload-token",
+        payload: "",
       },
     });
     const result = await handler.handler(state.ctx as any);
@@ -2267,7 +1961,6 @@ describe("createCallbackHandler()", () => {
     assert.equal(consumes, 0);
     assert.deepEqual(state.replies, ["⚠️ Unrecognized callback payload."]);
     assert.doesNotMatch(state.replies.join("\n"), /code-agent:/);
-    assert.doesNotMatch(state.replies.join("\n"), /stale-payload-token/);
   });
 
   it("resolves question-answer callbacks by session and option index", async () => {
@@ -2861,48 +2554,7 @@ describe("createCallbackHandler()", () => {
     }
   });
 
-  it("clears Discord worktree buttons when only clearButtons is available", async () => {
-    const warnings: string[] = [];
-    const originalWarn = console.warn;
-    console.warn = (message?: unknown) => { warnings.push(String(message)); };
-
-    try {
-      setSessionManager({
-        getActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
-        consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
-        resolve: () => undefined,
-        getPersistedSession: () => ({ name: "ux-fix" }),
-        snoozeWorktreeDecision: () => "⏭️ Reminder snoozed 24h for `agent/ux-fix` (session: ux-fix)",
-      } as any);
-
-      const replies: string[] = [];
-      const editedMessages: string[] = [];
-      let buttonsCleared = 0;
-      const ctx = {
-        channel: "discord" as const,
-        auth: { isAuthorizedSender: true },
-        callback: { payload: "token-snooze" },
-        respond: {
-          editMessage: async ({ text }: { text: string }) => { editedMessages.push(text); },
-          clearButtons: async () => { buttonsCleared++; },
-          reply: async ({ text }: { text: string }) => { replies.push(text); },
-        },
-      };
-
-      const handler = createCallbackHandler("discord");
-      const result = await handler.handler(ctx as any);
-
-      assert.deepEqual(result, { handled: true });
-      assert.deepEqual(editedMessages, []);
-      assert.equal(buttonsCleared, 1);
-      assert.deepEqual(replies, ["⏭️ Snoozed 24h for [ux-fix]"]);
-      assert.deepEqual(warnings, []);
-    } finally {
-      console.warn = originalWarn;
-    }
-  });
-
-  it("falls back to clearing Discord buttons when clearComponents worktree resolution fails", async () => {
+  it("still replies when clearing Discord worktree components fails", async () => {
     const warnings: string[] = [];
     const originalWarn = console.warn;
     console.warn = (message?: unknown) => { warnings.push(String(message)); };
@@ -2921,12 +2573,12 @@ describe("createCallbackHandler()", () => {
       const ctx = {
         channel: "discord" as const,
         auth: { isAuthorizedSender: true },
-        callback: { payload: "token-snooze" },
+        interaction: { kind: "button", data: "code-agent:token-snooze", namespace: "code-agent", payload: "token-snooze" },
         respond: {
           clearComponents: async () => {
+            buttonsCleared++;
             throw new Error("clearComponents failed");
           },
-          clearButtons: async () => { buttonsCleared++; },
           reply: async ({ text }: { text: string }) => { replies.push(text); },
         },
       };
@@ -2938,47 +2590,6 @@ describe("createCallbackHandler()", () => {
       assert.equal(buttonsCleared, 1);
       assert.deepEqual(replies, ["⏭️ Snoozed 24h for [ux-fix]"]);
       assert.match(warnings[0], /Failed to clear Discord worktree components: clearComponents failed/);
-    } finally {
-      console.warn = originalWarn;
-    }
-  });
-
-  it("clears Discord worktree buttons without editMessage when clearButtons is available", async () => {
-    const warnings: string[] = [];
-    const originalWarn = console.warn;
-    console.warn = (message?: unknown) => { warnings.push(String(message)); };
-
-    try {
-      setSessionManager({
-        getActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
-        consumeActionToken: () => ({ sessionId: "sess-42", kind: "worktree-decide-later" }),
-        resolve: () => undefined,
-        getPersistedSession: () => ({ name: "ux-fix" }),
-        snoozeWorktreeDecision: () => "⏭️ Reminder snoozed 24h for `agent/ux-fix` (session: ux-fix)",
-      } as any);
-
-      const replies: string[] = [];
-      let buttonsCleared = 0;
-      const ctx = {
-        channel: "discord" as const,
-        auth: { isAuthorizedSender: true },
-        callback: { payload: "token-snooze" },
-        respond: {
-          editMessage: async () => {
-            throw new Error("Message is not modified");
-          },
-          clearButtons: async () => { buttonsCleared++; },
-          reply: async ({ text }: { text: string }) => { replies.push(text); },
-        },
-      };
-
-      const handler = createCallbackHandler("discord");
-      const result = await handler.handler(ctx as any);
-
-      assert.deepEqual(result, { handled: true });
-      assert.equal(buttonsCleared, 1);
-      assert.deepEqual(replies, ["⏭️ Snoozed 24h for [ux-fix]"]);
-      assert.deepEqual(warnings, []);
     } finally {
       console.warn = originalWarn;
     }
@@ -3003,12 +2614,12 @@ describe("createCallbackHandler()", () => {
       const ctx = {
         channel: "discord" as const,
         auth: { isAuthorizedSender: true },
-        callback: { payload: "token-snooze" },
+        interaction: { kind: "button", data: "code-agent:token-snooze", namespace: "code-agent", payload: "token-snooze" },
         respond: {
           editMessage: async () => {
             throw new Error("edit failed");
           },
-          clearButtons: async () => { buttonsCleared++; },
+          clearComponents: async () => { buttonsCleared++; },
           reply: async ({ text }: { text: string }) => { replies.push(text); },
         },
       };
@@ -3045,10 +2656,10 @@ describe("createCallbackHandler()", () => {
       const ctx = {
         channel: "discord" as const,
         auth: { isAuthorizedSender: true },
-        callback: { payload: "token-snooze" },
+        interaction: { kind: "button", data: "code-agent:token-snooze", namespace: "code-agent", payload: "token-snooze" },
         respond: {
           editMessage: async ({ text }: { text: string }) => { editedMessages.push(text); },
-          clearButtons: async () => {
+          clearComponents: async () => {
             clearAttempts++;
             throw new Error("clear failed");
           },
@@ -3063,7 +2674,7 @@ describe("createCallbackHandler()", () => {
       assert.deepEqual(editedMessages, []);
       assert.equal(clearAttempts, 1);
       assert.deepEqual(replies, ["⏭️ Snoozed 24h for [ux-fix]"]);
-      assert.match(warnings[0], /Failed to clear Discord worktree buttons: clear failed/);
+      assert.match(warnings[0], /Failed to clear Discord worktree components: clear failed/);
     } finally {
       console.warn = originalWarn;
     }
@@ -3211,135 +2822,6 @@ describe("createCallbackHandler()", () => {
     assert.equal(launches[0]?.worktreeStrategy, "auto-pr");
     assert.match(state.replies[0], /Planning session started: plugin-readiness-v2026\.6\.1 \[sess-plan-661\]/);
     assert.doesNotMatch(state.replies.join("\n"), /code-agent:2d1bab1c/);
-  });
-
-  it("prefers native Telegram callback_data for Start Plan when payload is not the action token", async () => {
-    const rawCallback = "code-agent:2d1bab1c-ce69-4bdb-ae5c-782504ec686e";
-    const launches: Array<Record<string, unknown>> = [];
-    const lookups: string[] = [];
-    setSessionManager({
-      getActionToken: (tokenId: string) => {
-        lookups.push(tokenId);
-        if (tokenId !== "2d1bab1c-ce69-4bdb-ae5c-782504ec686e") return undefined;
-        return {
-          sessionId: "plugin-readiness-v2026.6.9",
-          kind: "plan-offer-start",
-          route: {
-            provider: "telegram",
-            accountId: "default",
-            target: TELEGRAM_FORUM_TARGET,
-            threadId: TELEGRAM_FORUM_THREAD_ID,
-            sessionKey: TELEGRAM_FORUM_SESSION_KEY,
-          },
-          launchName: "plugin-readiness-v2026.6.9",
-          launchPrompt: "Plan the required follow-up.",
-          launchWorkdir: "/home/openclaw/workspace/openclaw-code-agent",
-          launchWorktreeStrategy: "auto-pr",
-        };
-      },
-      consumeActionToken: (tokenId: string) => {
-        assert.equal(tokenId, "2d1bab1c-ce69-4bdb-ae5c-782504ec686e");
-        return {
-          sessionId: "plugin-readiness-v2026.6.9",
-          kind: "plan-offer-start",
-          route: {
-            provider: "telegram",
-            accountId: "default",
-            target: TELEGRAM_FORUM_TARGET,
-            threadId: TELEGRAM_FORUM_THREAD_ID,
-            sessionKey: TELEGRAM_FORUM_SESSION_KEY,
-          },
-          launchName: "plugin-readiness-v2026.6.9",
-          launchPrompt: "Plan the required follow-up.",
-          launchWorkdir: "/home/openclaw/workspace/openclaw-code-agent",
-          launchWorktreeStrategy: "auto-pr",
-        };
-      },
-      launchPlanOffer: (args: Record<string, unknown>) => {
-        launches.push(args);
-        return { id: "sess-plan-669", name: "plugin-readiness-v2026.6.9" };
-      },
-    } as any);
-
-    const handler = createCallbackHandler();
-    const state = createCtx("ignored", "telegram", {
-      telegramCallback: {
-        data: rawCallback,
-        payload: "Start Plan",
-      },
-    });
-    const result = await handler.handler(state.ctx as any);
-
-    assert.deepEqual(result, { handled: true });
-    assert.deepEqual(lookups, ["2d1bab1c-ce69-4bdb-ae5c-782504ec686e"]);
-    assert.equal(state.buttonMarkupEdits, 1);
-    assert.equal(state.buttonsCleared, 1);
-    assert.equal((launches[0]?.route as { threadId?: string })?.threadId, TELEGRAM_FORUM_THREAD_ID);
-    assert.equal((launches[0]?.route as { sessionKey?: string })?.sessionKey, TELEGRAM_FORUM_SESSION_KEY);
-    assert.equal(launches[0]?.worktreeStrategy, "auto-pr");
-    assert.match(state.replies[0], /Planning session started: plugin-readiness-v2026\.6\.9 \[sess-plan-669\]/);
-    assert.doesNotMatch(state.replies.join("\n"), /code-agent:2d1bab1c/);
-  });
-
-  it("keeps using Telegram payload tokens when callback data is a non-namespaced label", async () => {
-    const launches: Array<Record<string, unknown>> = [];
-    const lookups: string[] = [];
-    setSessionManager({
-      getActionToken: (tokenId: string) => {
-        lookups.push(tokenId);
-        return {
-          sessionId: "plugin-readiness-v2026.6.9",
-          kind: "plan-offer-start",
-          route: {
-            provider: "telegram",
-            accountId: "default",
-            target: TELEGRAM_FORUM_TARGET,
-            threadId: TELEGRAM_FORUM_THREAD_ID,
-            sessionKey: TELEGRAM_FORUM_SESSION_KEY,
-          },
-          launchName: "plugin-readiness-v2026.6.9",
-          launchPrompt: "Plan the required follow-up.",
-          launchWorkdir: "/home/openclaw/workspace/openclaw-code-agent",
-          launchWorktreeStrategy: "auto-pr",
-        };
-      },
-      consumeActionToken: (tokenId: string) => {
-        assert.equal(tokenId, "payload-token");
-        return {
-          sessionId: "plugin-readiness-v2026.6.9",
-          kind: "plan-offer-start",
-          route: {
-            provider: "telegram",
-            accountId: "default",
-            target: TELEGRAM_FORUM_TARGET,
-            threadId: TELEGRAM_FORUM_THREAD_ID,
-            sessionKey: TELEGRAM_FORUM_SESSION_KEY,
-          },
-          launchName: "plugin-readiness-v2026.6.9",
-          launchPrompt: "Plan the required follow-up.",
-          launchWorkdir: "/home/openclaw/workspace/openclaw-code-agent",
-          launchWorktreeStrategy: "auto-pr",
-        };
-      },
-      launchPlanOffer: (args: Record<string, unknown>) => {
-        launches.push(args);
-        return { id: "sess-plan-payload", name: "plugin-readiness-v2026.6.9" };
-      },
-    } as any);
-
-    const handler = createCallbackHandler();
-    const state = createCtx("ignored", "telegram", {
-      telegramCallback: {
-        data: "Start Plan",
-        payload: "payload-token",
-      },
-    });
-    const result = await handler.handler(state.ctx as any);
-
-    assert.deepEqual(result, { handled: true });
-    assert.deepEqual(lookups, ["payload-token"]);
-    assert.equal(launches.length, 1);
-    assert.match(state.replies[0], /Planning session started: plugin-readiness-v2026\.6\.9 \[sess-plan-payload\]/);
   });
 
   it("consumes Telegram forum-topic Dismiss callbacks without launching a plan", async () => {

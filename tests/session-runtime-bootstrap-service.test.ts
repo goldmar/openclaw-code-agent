@@ -17,7 +17,7 @@ describe("SessionRuntimeBootstrapService", () => {
       id: "deferred-shutdown", name: "deferred-shutdown", status: "starting",
       start: async () => { launched = true; },
     });
-    service.initializeSession(session as Session, {} as any, {} as any, {
+    await service.initializeSession(session as Session, {} as any, {} as any, {
       startAfter: previousWriter.promise, notifyLaunch: false,
     });
     session.status = "killed";
@@ -52,7 +52,7 @@ describe("SessionRuntimeBootstrapService", () => {
       name: "drained-session",
       start: async () => {},
     });
-    service.initializeSession(session as Session, {} as Parameters<typeof service.initializeSession>[1], {
+    await service.initializeSession(session as Session, {} as Parameters<typeof service.initializeSession>[1], {
       prompt: "mirror completion",
       workdir: "/repo",
       permissionMode: "plan",
@@ -94,7 +94,7 @@ describe("SessionRuntimeBootstrapService", () => {
     const session = Object.assign(new EventEmitter(), {
       id: "created-session", name: "created-session", start: async () => {},
     });
-    service.initializeSession(session as Session, {} as Parameters<typeof service.initializeSession>[1], {
+    await service.initializeSession(session as Session, {} as Parameters<typeof service.initializeSession>[1], {
       prompt: "mirror creation", workdir: "/repo", permissionMode: "plan",
       taskLifecycle: { create: () => created.promise, progress() {}, finalize() {} },
     }, { notifyLaunch: false });
@@ -125,7 +125,7 @@ describe("SessionRuntimeBootstrapService", () => {
     const session = Object.assign(new EventEmitter(), {
       id: "cancelled-session", name: "cancelled-session", start: async () => {},
     });
-    service.initializeSession(session as Session, {} as Parameters<typeof service.initializeSession>[1], {
+    await service.initializeSession(session as Session, {} as Parameters<typeof service.initializeSession>[1], {
       prompt: "mirror cancel", workdir: "/repo", permissionMode: "plan",
       taskLifecycle: {
         create(_session, createHooks) { hooks = createHooks; },
@@ -139,7 +139,31 @@ describe("SessionRuntimeBootstrapService", () => {
     assert.deepEqual(cancelled, ["cancelled-session"]);
   });
 
-  it("includes harness and model in launch notifications", () => {
+  it("does not announce a launch when the session stopped while its label was built", async () => {
+    const notifications: string[] = [];
+    let releaseLabel!: (label: string) => void;
+    const service = new SessionRuntimeBootstrapService({
+      hydrateSpawnedSession: () => {},
+      markRunning: () => {},
+      syncTaskMirror: () => {},
+      handleTerminal: async () => {},
+      handleTurnEnd: async () => {},
+      formatLaunchWorkdirLabel: () => new Promise<string>((resolve) => { releaseLabel = resolve; }),
+      notifySession: (_session, text) => { notifications.push(text); },
+    });
+    const session = Object.assign(new EventEmitter(), {
+      id: "stopped-during-label", name: "stopped-during-label", status: "starting", start: () => {},
+    });
+
+    const initializing = service.initializeSession(session as any, {} as any, {} as any);
+    session.status = "killed"; // shutdown stops the session while the workdir label awaits git
+    releaseLabel("/repo");
+    await initializing;
+
+    assert.deepEqual(notifications, []);
+  });
+
+  it("includes harness and model in launch notifications", async () => {
     const notifications: Array<{ text: string; label?: string; idempotencyKey?: string }> = [];
     const service = new SessionRuntimeBootstrapService({
       hydrateSpawnedSession: () => {},
@@ -161,7 +185,7 @@ describe("SessionRuntimeBootstrapService", () => {
       start: () => {},
     });
 
-    service.initializeSession(session as any, {} as any, {} as any);
+    await service.initializeSession(session as any, {} as any, {} as any);
 
     assert.deepEqual(notifications, [
       {
@@ -172,7 +196,7 @@ describe("SessionRuntimeBootstrapService", () => {
     ]);
   });
 
-  it("uses a resumed launch notification and cycle-specific idempotency key", () => {
+  it("uses a resumed launch notification and cycle-specific idempotency key", async () => {
     const notifications: Array<{ text: string; label?: string; idempotencyKey?: string }> = [];
     const service = new SessionRuntimeBootstrapService({
       hydrateSpawnedSession: () => {},
@@ -196,7 +220,7 @@ describe("SessionRuntimeBootstrapService", () => {
       start: () => {},
     });
 
-    service.initializeSession(session as any, {} as any, { resumeSessionId: "backend-thread-1" } as any);
+    await service.initializeSession(session as any, {} as any, { resumeSessionId: "backend-thread-1" } as any);
 
     assert.deepEqual(notifications, [
       {
@@ -207,7 +231,7 @@ describe("SessionRuntimeBootstrapService", () => {
     ]);
   });
 
-  it("shows the original session name and explicit follow-up label in resumed launch notifications", () => {
+  it("shows the original session name and explicit follow-up label in resumed launch notifications", async () => {
     const notifications: Array<{ text: string; label?: string; idempotencyKey?: string }> = [];
     const service = new SessionRuntimeBootstrapService({
       hydrateSpawnedSession: () => {},
@@ -232,7 +256,7 @@ describe("SessionRuntimeBootstrapService", () => {
       start: () => {},
     });
 
-    service.initializeSession(session as any, {} as any, { resumeSessionId: "thread-auto-update-feature" } as any);
+    await service.initializeSession(session as any, {} as any, { resumeSessionId: "thread-auto-update-feature" } as any);
 
     assert.deepEqual(notifications, [
       {

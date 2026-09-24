@@ -46,21 +46,21 @@ describe("literal worktree ref boundary", () => {
     }
   });
 
-  it("blocks unsafe persisted refs at shared helpers before any repository operation", () => {
+  it("blocks unsafe persisted refs at shared helpers before any repository operation", async () => {
     const missingRepo = "/does-not-exist/oca-ref-test";
-    assert.throws(() => mergeBranch(missingRepo, "agent/test", "--exec=touch sentinel"), /literal Git branch/);
-    assert.throws(() => pushBranch(missingRepo, "--all"), /literal Git branch/);
-    assert.throws(() => pushBranch(missingRepo, "main", "--receive-pack=command"), /literal Git branch/);
-    assert.throws(() => fetchRemoteBranchRef(missingRepo, "main:other"), /valid literal/);
-    assert.throws(() => fetchRemoteBranchRef(missingRepo, "main", "--upload-pack=command"), /literal Git branch/);
-    assert.throws(() => branchExists(missingRepo, "--help"), /literal Git branch/);
-    assert.throws(() => deleteBranch(missingRepo, "--all"), /literal Git branch/);
-    assert.throws(() => getDiffSummary(missingRepo, "main", "--output=sentinel"), /literal Git branch/);
-    assert.throws(() => getAheadBehindCounts(missingRepo, "main", "main~1"), /valid literal/);
-    assert.throws(() => prepareSessionBootstrap({ worktreeBaseBranch: "--exec=command" } as any, "test", () => undefined), /literal Git branch/);
+    await assert.rejects(async () => await mergeBranch(missingRepo, "agent/test", "--exec=touch sentinel"), /literal Git branch/);
+    await assert.rejects(async () => await pushBranch(missingRepo, "--all"), /literal Git branch/);
+    await assert.rejects(async () => await pushBranch(missingRepo, "main", "--receive-pack=command"), /literal Git branch/);
+    await assert.rejects(async () => await fetchRemoteBranchRef(missingRepo, "main:other"), /valid literal/);
+    await assert.rejects(async () => await fetchRemoteBranchRef(missingRepo, "main", "--upload-pack=command"), /literal Git branch/);
+    await assert.rejects(async () => await branchExists(missingRepo, "--help"), /literal Git branch/);
+    await assert.rejects(async () => await deleteBranch(missingRepo, "--all"), /literal Git branch/);
+    await assert.rejects(async () => await getDiffSummary(missingRepo, "main", "--output=sentinel"), /literal Git branch/);
+    await assert.rejects(async () => await getAheadBehindCounts(missingRepo, "main", "main~1"), /valid literal/);
+    await assert.rejects(async () => await prepareSessionBootstrap({ worktreeBaseBranch: "--exec=command" } as any, "test", () => undefined), /literal Git branch/);
   });
 
-  it("merges refs-prefixed local branches without accepting full refs or detaching HEAD", () => {
+  it("merges refs-prefixed local branches without accepting full refs or detaching HEAD", async () => {
     const repo = mkdtempSync(join(tmpdir(), "oca-local-refs-"));
     const git = (...args: string[]) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
     try {
@@ -79,22 +79,22 @@ describe("literal worktree ref boundary", () => {
       git("update-ref", "refs/shadow-only", base);
       git("update-ref", "refs/remotes/origin/main", base);
       git("tag", "v1", base);
-      assert.equal(branchExists(repo, "refs/shadow-only"), false);
-      assert.deepEqual(getAheadBehindCounts(repo, "refs/feature", "refs/base"), { ahead: 1, behind: 0 });
-      assert.equal(getCommitsAheadCount(repo, "refs/feature", "refs/base"), 1);
-      assert.equal(getDiffSummary(repo, "refs/feature", "refs/base")?.commits, 1);
-      assert.equal(isBranchAncestorOfBase(repo, "refs/base", "refs/feature"), true);
-      assert.equal(isBranchAncestorOfBase(repo, "refs/feature", "refs/base"), false);
-      assert.equal(wouldMergeBeNoop(repo, "refs/feature", "refs/base"), false);
+      assert.equal(await branchExists(repo, "refs/shadow-only"), false);
+      assert.deepEqual(await getAheadBehindCounts(repo, "refs/feature", "refs/base"), { ahead: 1, behind: 0 });
+      assert.equal(await getCommitsAheadCount(repo, "refs/feature", "refs/base"), 1);
+      assert.equal((await getDiffSummary(repo, "refs/feature", "refs/base"))?.commits, 1);
+      assert.equal(await isBranchAncestorOfBase(repo, "refs/base", "refs/feature"), true);
+      assert.equal(await isBranchAncestorOfBase(repo, "refs/feature", "refs/base"), false);
+      assert.equal(await wouldMergeBeNoop(repo, "refs/feature", "refs/base"), false);
       for (const fullRef of ["refs/heads/refs/base", "refs/remotes/origin/main", "refs/tags/v1"]) {
-        assert.throws(() => mergeBranch(repo, "refs/feature", fullRef), /literal Git branch/);
+        await assert.rejects(async () => await mergeBranch(repo, "refs/feature", fullRef), /literal Git branch/);
         assert.equal(git("symbolic-ref", "HEAD"), "refs/heads/refs/feature");
         assert.equal(git("rev-parse", "HEAD"), head);
         assert.equal(git("rev-parse", "refs/heads/refs/base"), base);
       }
       git("checkout", "refs/base");
-      assert.equal(branchExists(repo, "refs/feature"), true);
-      assert.equal(mergeBranch(repo, "refs/feature", "refs/base").success, true);
+      assert.equal(await branchExists(repo, "refs/feature"), true);
+      assert.equal((await mergeBranch(repo, "refs/feature", "refs/base")).success, true);
       assert.equal(git("symbolic-ref", "HEAD"), "refs/heads/refs/base");
       assert.equal(git("rev-parse", "refs/heads/refs/base"), head);
       assert.equal(git("rev-parse", "refs/feature"), base);
@@ -102,17 +102,17 @@ describe("literal worktree ref boundary", () => {
       const remote = join(repo, "remote.git");
       git("init", "--bare", remote);
       git("remote", "add", "origin", remote);
-      assert.equal(pushBranch(repo, "refs/feature"), true);
+      assert.equal(await pushBranch(repo, "refs/feature"), true);
       assert.equal(git("--git-dir", remote, "rev-parse", "refs/heads/refs/feature"), head);
       git("--git-dir", remote, "update-ref", "refs/feature", base);
-      assert.equal(fetchRemoteBranchRef(repo, "refs/feature"), "refs/remotes/origin/refs/feature");
+      assert.equal(await fetchRemoteBranchRef(repo, "refs/feature"), "refs/remotes/origin/refs/feature");
       assert.equal(git("rev-parse", "refs/remotes/origin/refs/feature"), head);
     } finally {
       rmSync(repo, { recursive: true, force: true });
     }
   });
 
-  it("merges a valid slash branch with cwd metacharacters without shell interpretation", () => {
+  it("merges a valid slash branch with cwd metacharacters without shell interpretation", async () => {
     const repo = mkdtempSync(join(tmpdir(), "oca-ref-$(literal); space-"));
     const git = (...args: string[]) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
     try {
@@ -129,11 +129,11 @@ describe("literal worktree ref boundary", () => {
       const head = git("rev-parse", "HEAD");
       // The pre-fix helper runs this as git rebase --exec, creates the marker,
       // and then reports failure when checkout rejects the bogus base branch.
-      assert.throws(() => mergeBranch(repo, "feature/security-fix", "--exec=touch oca-injection-marker"), /literal Git branch/);
+      await assert.rejects(async () => await mergeBranch(repo, "feature/security-fix", "--exec=touch oca-injection-marker"), /literal Git branch/);
       assert.equal(existsSync(join(repo, "oca-injection-marker")), false);
       assert.equal(git("rev-parse", "HEAD"), head);
       git("checkout", "main");
-      assert.equal(mergeBranch(repo, "feature/security-fix", "main").success, true);
+      assert.equal((await mergeBranch(repo, "feature/security-fix", "main")).success, true);
       assert.equal(git("rev-parse", "main"), head);
     } finally {
       rmSync(repo, { recursive: true, force: true });

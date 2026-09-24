@@ -4,7 +4,7 @@ import { createLogger } from "./logger";
 
 const log = createLogger("worktree-decision-summary");
 
-type DiffSummary = NonNullable<ReturnType<typeof getDiffSummary>>;
+type DiffSummary = NonNullable<Awaited<ReturnType<typeof getDiffSummary>>>;
 
 export interface WorktreeDecisionSummaryEvidence {
   sessionName: string;

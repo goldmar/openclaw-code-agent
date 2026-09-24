@@ -1002,7 +1002,7 @@ describe("GoalController", () => {
   it("passes persisted backend refs into resume-session selection for goal recovery", async () => {
     let capturedConfig: any;
     const controller = new GoalController({
-      resolveHarnessSessionId: () => undefined,
+      resolveBackendConversationId: () => undefined,
       resolve: () => undefined,
       getPersistedSession: () => ({
         harness: "codex",

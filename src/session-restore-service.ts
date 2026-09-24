@@ -16,7 +16,7 @@ export class SessionRestoreService {
     private readonly getPersistedSession: (ref: string) => PersistedSessionInfo | undefined,
   ) {}
 
-  prepareSpawn(config: SessionConfig, name: string): PreparedSessionLaunch {
+  prepareSpawn(config: SessionConfig, name: string): Promise<PreparedSessionLaunch> {
     return prepareSessionBootstrap(config, name, this.getPersistedSession);
   }
 

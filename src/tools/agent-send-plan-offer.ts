@@ -1,4 +1,5 @@
-import { Type, type TLiteral } from "../tool-schema";
+import { Type } from "../tool-parameter-schema";
+import type { TLiteral } from "../tool-parameter-schema";
 import { sessionManager } from "../singletons";
 import { resolveSessionRoute } from "../config";
 import { WORKTREE_STRATEGIES, WORKTREE_STRATEGY_SET } from "../types";
