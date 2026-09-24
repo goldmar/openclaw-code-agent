@@ -2,6 +2,7 @@ import { existsSync, readFileSync, renameSync } from "fs";
 import { join } from "path";
 import { saveJsonFile } from "openclaw/plugin-sdk/json-store";
 import { resolveOpenClawStateDir } from "./state-paths";
+import { assertTestSafeStatePath } from "./test-state-guard";
 
 import type { GoalTaskState, SessionRoute } from "./types";
 import { createLogger } from "./logger";
@@ -54,6 +55,7 @@ function availableGoalTaskArchivePath(path: string): string | undefined {
 }
 
 function archiveGoalTasksFile(path: string, reason: string): boolean {
+  assertTestSafeStatePath(path, "archive the goal task store");
   try {
     const archivedPath = availableGoalTaskArchivePath(path);
     if (!archivedPath) {
@@ -190,6 +192,7 @@ export class GoalTaskStore {
   }
 
   save(): void {
+    assertTestSafeStatePath(this.path, "write the goal task store");
     try {
       saveJsonFile(this.path, [...this.tasks.values()]);
     } catch (err: unknown) {

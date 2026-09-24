@@ -1,3 +1,4 @@
+import "./test-env";
 import { createHash } from "crypto";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";

@@ -1,3 +1,4 @@
+import "./test-env";
 /**
  * End-to-end plan mode test — reproduces the bug where
  * agent_respond(approve=true) returns "session has no pending plan approval"

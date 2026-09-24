@@ -10,6 +10,7 @@ import type { PersistedSessionInfo } from "./types";
 import { resolveWorktreeLifecycle } from "./worktree-lifecycle-resolver";
 import { removeWorktree } from "./worktree";
 import { createLogger } from "./logger";
+import { assertTestSafeStatePath } from "./test-state-guard";
 
 const log = createLogger("session-maintenance-service");
 
@@ -315,6 +316,7 @@ export class SessionMaintenanceService {
 
   private cleanupOutputPathIfUnreferenced(outputPath: string | undefined): void {
     if (!outputPath || this.deps.store.hasOutputPathReference(outputPath)) return;
+    assertTestSafeStatePath(outputPath, "delete the output file");
     try {
       unlinkSync(outputPath);
     } catch {

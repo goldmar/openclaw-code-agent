@@ -2,6 +2,7 @@ import { createHash } from "crypto";
 import { appendFileSync, mkdirSync } from "fs";
 import { dirname, join } from "path";
 import { resolveSessionOutputDir } from "./state-paths";
+import { assertTestSafeStatePath } from "./test-state-guard";
 
 const OUTPUT_BUFFER_MAX = 2000;
 const SAFE_SESSION_OUTPUT_ID_PATTERN = /^[A-Za-z0-9_.-]+$/;
@@ -24,6 +25,7 @@ export function getSessionOutputFilePath(sessionId: string): string {
 
 /** Create the private output directory (no-op when it already exists). */
 export function ensureSessionOutputDir(filePath: string): void {
+  assertTestSafeStatePath(filePath, "write the output file");
   mkdirSync(dirname(filePath), { recursive: true, mode: 0o700 });
 }
 
@@ -49,8 +51,9 @@ export function appendSessionOutput(outputBuffer: string[], sessionId: string, t
   if (outputBuffer.length > OUTPUT_BUFFER_MAX) {
     outputBuffer.splice(0, outputBuffer.length - OUTPUT_BUFFER_MAX);
   }
+  const outputPath = getSessionOutputFilePath(sessionId);
+  assertTestSafeStatePath(outputPath, "write the output file");
   try {
-    const outputPath = getSessionOutputFilePath(sessionId);
     ensureSessionOutputDir(outputPath);
     appendFileSync(outputPath, text, { encoding: "utf-8", mode: 0o600 });
   } catch {

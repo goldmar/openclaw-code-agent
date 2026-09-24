@@ -1,3 +1,4 @@
+import "./test-env";
 import { describe, it, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { setGoalController, setSessionManager } from "../src/singletons";

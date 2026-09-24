@@ -1,3 +1,4 @@
+import "./test-env";
 import { afterEach, describe, it, mock, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync } from "node:fs";

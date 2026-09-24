@@ -1,3 +1,4 @@
+import "./test-env";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { WakeDispatcher, validateCompletionFollowupWakeSuccess, type WakeDispatcherOptions } from "../src/wake-dispatcher";

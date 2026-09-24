@@ -1,3 +1,4 @@
+import "./test-env";
 import { beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { registerAgentPolicyCommand } from "../src/commands/agent-policy";
