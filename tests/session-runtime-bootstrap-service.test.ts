@@ -139,6 +139,30 @@ describe("SessionRuntimeBootstrapService", () => {
     assert.deepEqual(cancelled, ["cancelled-session"]);
   });
 
+  it("does not announce a launch when the session stopped while its label was built", async () => {
+    const notifications: string[] = [];
+    let releaseLabel!: (label: string) => void;
+    const service = new SessionRuntimeBootstrapService({
+      hydrateSpawnedSession: () => {},
+      markRunning: () => {},
+      syncTaskMirror: () => {},
+      handleTerminal: async () => {},
+      handleTurnEnd: async () => {},
+      formatLaunchWorkdirLabel: () => new Promise<string>((resolve) => { releaseLabel = resolve; }),
+      notifySession: (_session, text) => { notifications.push(text); },
+    });
+    const session = Object.assign(new EventEmitter(), {
+      id: "stopped-during-label", name: "stopped-during-label", status: "starting", start: () => {},
+    });
+
+    const initializing = service.initializeSession(session as any, {} as any, {} as any);
+    session.status = "killed"; // shutdown stops the session while the workdir label awaits git
+    releaseLabel("/repo");
+    await initializing;
+
+    assert.deepEqual(notifications, []);
+  });
+
   it("includes harness and model in launch notifications", async () => {
     const notifications: Array<{ text: string; label?: string; idempotencyKey?: string }> = [];
     const service = new SessionRuntimeBootstrapService({

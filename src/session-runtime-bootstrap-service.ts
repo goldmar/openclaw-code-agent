@@ -84,7 +84,11 @@ export class SessionRuntimeBootstrapService {
 
     if (options.notifyLaunch !== false) {
       const notification = await this.buildLaunchNotification(session);
-      this.deps.notifySession(session, notification.text, notification.label, notification.idempotencyKey);
+      // Building the label awaits git; a session stopped meanwhile (for example by
+      // shutdown) must not announce its launch after its stop notice.
+      if (session.status !== "killed" && session.status !== "failed" && session.status !== "completed") {
+        this.deps.notifySession(session, notification.text, notification.label, notification.idempotencyKey);
+      }
     }
 
     return session;
