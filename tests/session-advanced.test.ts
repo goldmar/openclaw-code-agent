@@ -101,21 +101,44 @@ describe("Session consumeMessages — tool_use message", () => {
     session.kill("user"); // cleanup
   });
 
-  it("sets pendingPlanApproval on ExitPlanMode tool", async () => {
-    const session = await startSession();
-    fakeHarness.pushMessage({ type: "tool_use", name: "ExitPlanMode", input: {} });
+  it("sets pendingPlanApproval when the backend raises a native plan-approval request", async () => {
+    const session = await startSession({ multiTurn: true });
+    const turnEndEvents: boolean[] = [];
+    session.on("turnEnd", (_s: any, hadQuestion: boolean) => { turnEndEvents.push(hadQuestion); });
+    fakeHarness.pushMessage({
+      type: "plan_approval_requested",
+      request: {
+        requestId: "plan-1",
+        artifact: { steps: [], markdown: "1. Do the thing" },
+        planFilePath: "/tmp/plans/plan.md",
+      },
+    });
     await tick(50);
 
     assert.equal(session.pendingPlanApproval, true);
+    assert.equal(session.planFilePath, "/tmp/plans/plan.md");
+    assert.equal(session.latestPlanArtifact?.markdown, "1. Do the thing");
+    assert.deepEqual(turnEndEvents, [true], "the waiting notification fires while the turn is held open");
     session.kill("user"); // cleanup
   });
 
-  it("sets lastTurnHadQuestion on AskUserQuestion tool", async () => {
+  it("does not treat plan-shaped tool calls as plan-approval signals", async () => {
+    const session = await startSession({ multiTurn: true, permissionMode: "bypassPermissions" });
+    fakeHarness.pushMessage({ type: "tool_use", name: "ExitPlanMode", input: {} });
+    fakeHarness.pushMessage({ type: "tool_use", name: "Write", input: { file_path: "/home/u/.claude/plans/p.md" } });
+    await tick(50);
+
+    assert.equal(session.pendingPlanApproval, false);
+    assert.equal(session.planFilePath, undefined);
+    session.kill("user"); // cleanup
+  });
+
+  it("sets lastTurnHadQuestion on structured pending input", async () => {
     const session = await startSession({ multiTurn: true });
     const turnEndEvents: boolean[] = [];
     session.on("turnEnd", (_s: any, hadQuestion: boolean) => { turnEndEvents.push(hadQuestion); });
 
-    fakeHarness.pushMessage({ type: "tool_use", name: "AskUserQuestion", input: {} });
+    fakeHarness.pushMessage({ type: "pending_input", state: { requestId: "q-1", kind: "question", options: [] } });
     await tick(50);
     // Send a result to trigger turnEnd
     fakeHarness.pushMessage({
@@ -136,9 +159,8 @@ describe("Session consumeMessages — tool_use message", () => {
     });
 
     fakeHarness.pushMessage({
-      type: "tool_use",
-      name: "AskUserQuestion",
-      input: { text: "Would you like me to merge this branch or open a PR?" },
+      type: "pending_input",
+      state: { requestId: "q-merge", kind: "question", promptText: "Would you like me to merge this branch or open a PR?", options: [] },
     });
     await tick(20);
     fakeHarness.setPromptConsumptionPaused(false);
@@ -206,6 +228,45 @@ describe("Session consumeMessages — result message (single-turn)", () => {
     assert.equal(session.error, authFailure);
     assert.equal(mapSessionTaskTerminalStatus(session), "failed");
     // No kill needed — failed already cleans up
+  });
+
+  it("trusts backends that classify outcomes themselves over the text heuristic", async () => {
+    const session = await startSession({ multiTurn: false });
+    fakeHarness.pushMessage({ type: "text", text: "Failed to authenticate. API Error: 401 Invalid bearer token" });
+    fakeHarness.pushMessage({
+      type: "result",
+      data: {
+        success: true,
+        outcome: "completed",
+        outcomeAuthoritative: true,
+        duration_ms: 5,
+        total_cost_usd: 0.3,
+        num_turns: 0,
+        session_id: session.harnessSessionId!,
+        usage: {
+          models: [{ model: "claude-opus-5-5", costUsd: 0.3, inputTokens: 1, outputTokens: 2 }],
+          backgroundTasks: 0,
+        },
+      },
+    });
+    await tick(50);
+
+    assert.equal(session.status, "completed");
+    assert.equal(session.costUsd, 0.3);
+    assert.equal(session.usage?.models?.[0]?.model, "claude-opus-5-5");
+  });
+
+  it("merges usage snapshots and records backend model facts", async () => {
+    const session = await startSession({ multiTurn: true });
+    fakeHarness.pushMessage({ type: "usage_updated", usage: { backgroundTasks: 2 } });
+    fakeHarness.pushMessage({ type: "usage_updated", usage: { contextTokens: 1000, contextWindow: 200000 } });
+    fakeHarness.pushMessage({ type: "backend_info", info: { model: "claude-opus-5-5", reasoningEffortSupported: false } });
+    await tick(50);
+
+    assert.deepEqual(session.usage, { backgroundTasks: 2, contextTokens: 1000, contextWindow: 200000 });
+    assert.equal(session.backendInfo?.model, "claude-opus-5-5");
+    assert.equal(session.backendInfo?.reasoningEffortSupported, false);
+    session.kill("user");
   });
 
   it("does not classify successful task output mentioning auth phrases as startup failure", async () => {
@@ -378,7 +439,7 @@ describe("Session consumeMessages — result message (multi-turn)", () => {
     fakeHarness.setPromptConsumptionPaused(true);
     await session.sendMessage("queued-follow-up");
 
-    fakeHarness.pushMessage({ type: "tool_use", name: "AskUserQuestion", input: { question: "Proceed?" } });
+    fakeHarness.pushMessage({ type: "pending_input", state: { requestId: "q-proceed", kind: "question", promptText: "Proceed?", options: [] } });
     await tick(20);
     fakeHarness.pushMessage({
       type: "result",

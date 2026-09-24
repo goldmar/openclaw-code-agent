@@ -17,7 +17,7 @@ import type { FakeHarness } from "./helpers";
 let fakeHarness: FakeHarness;
 
 before(() => {
-  fakeHarness = createFakeHarness("plan-e2e-harness");
+  fakeHarness = createFakeHarness("plan-e2e-harness", { nativePlanDecisions: true });
   registerHarness(fakeHarness);
   setPluginConfig({});
 });
@@ -28,6 +28,16 @@ async function startSession(config: Partial<import("../src/types").SessionConfig
   fakeHarness.pushMessage({ type: "init", session_id: `sess-${session.id}` });
   await tick(50);
   return session;
+}
+
+/** Simulate Claude's ExitPlanMode being held in canUseTool as a native plan request. */
+async function raiseNativePlanRequest(markdown = "1. Change the function\n2. Add tests"): Promise<void> {
+  fakeHarness.nativePlanRequestPending = true;
+  fakeHarness.pushMessage({
+    type: "plan_approval_requested",
+    request: { requestId: `plan-${Date.now()}`, artifact: { steps: [], markdown } },
+  });
+  await tick(20);
 }
 
 function createStubSessionManager(sessions: Record<string, any> = {}): SessionManager {
@@ -55,22 +65,10 @@ describe("Plan mode E2E: ExitPlanMode flow", () => {
     fakeHarness.pushMessage({ type: "text", text: "Here is my plan..." });
     await tick(20);
 
-    // Simulate Claude calling ExitPlanMode
-    fakeHarness.pushMessage({ type: "tool_use", name: "ExitPlanMode", input: {} });
-    await tick(20);
+    // Simulate Claude calling ExitPlanMode (held open in canUseTool)
+    await raiseNativePlanRequest();
 
     assert.equal(session.pendingPlanApproval, true, "pendingPlanApproval should be true after ExitPlanMode");
-    assert.equal(session.phase, "awaiting_plan_decision");
-
-    // Simulate turn ending with result
-    fakeHarness.pushMessage({
-      type: "result",
-      data: { success: true, duration_ms: 5000, total_cost_usd: 0.1, num_turns: 1, session_id: session.harnessSessionId! },
-    });
-    await tick(50);
-
-    // After result, pendingPlanApproval should STILL be true
-    assert.equal(session.pendingPlanApproval, true, "pendingPlanApproval should survive the result message");
     assert.equal(session.phase, "awaiting_plan_decision");
     assert.equal(session.status, "running");
 
@@ -85,6 +83,7 @@ describe("Plan mode E2E: ExitPlanMode flow", () => {
     assert.ok(!result.isError, `Should not be an error, got: ${result.text}`);
     assert.ok(!result.text.includes("no pending plan approval"), `Should not say no pending plan: ${result.text}`);
     assert.ok(result.text.includes("Plan approved for session"), `Should confirm plan approval: ${result.text}`);
+    assert.deepEqual(fakeHarness.planDecisions.at(-1), { kind: "approve", permissionMode: "bypassPermissions" });
 
     session.kill("user"); // cleanup
   });
@@ -93,8 +92,7 @@ describe("Plan mode E2E: ExitPlanMode flow", () => {
     const session = await startSession({ permissionMode: "plan", multiTurn: true });
 
     // Set pendingPlanApproval via ExitPlanMode
-    fakeHarness.pushMessage({ type: "tool_use", name: "ExitPlanMode", input: {} });
-    await tick(20);
+    await raiseNativePlanRequest();
     assert.equal(session.pendingPlanApproval, true);
 
     // Send a text message — should NOT reset pendingPlanApproval
@@ -127,31 +125,11 @@ describe("Plan mode E2E: ExitPlanMode flow", () => {
     session.kill("user");
   });
 
-  it("plan flow: AskUserQuestion in plan mode sets pendingPlanApproval", async () => {
-    const session = await startSession({ permissionMode: "plan", multiTurn: true });
-
-    fakeHarness.pushMessage({ type: "tool_use", name: "AskUserQuestion", input: { question: "Approve plan?" } });
-    await tick(20);
-
-    assert.equal(session.pendingPlanApproval, true, "AskUserQuestion in plan mode should set pendingPlanApproval");
-    assert.equal(session.phase, "awaiting_plan_decision");
-
-    session.kill("user");
-  });
-
   it("plan flow: approve clears pendingPlanApproval and switches mode", async () => {
     const session = await startSession({ permissionMode: "plan", multiTurn: true });
 
     // Set up plan approval state
-    fakeHarness.pushMessage({ type: "tool_use", name: "ExitPlanMode", input: {} });
-    await tick(20);
-
-    fakeHarness.pushMessage({
-      type: "result",
-      data: { success: true, duration_ms: 5000, total_cost_usd: 0.1, num_turns: 1, session_id: session.harnessSessionId! },
-    });
-    await tick(50);
-
+    await raiseNativePlanRequest();
     assert.equal(session.pendingPlanApproval, true);
 
     // Trigger approve flow
@@ -160,6 +138,7 @@ describe("Plan mode E2E: ExitPlanMode flow", () => {
 
     assert.equal(session.pendingPlanApproval, false, "pendingPlanApproval should be cleared after approval");
     assert.equal(session.currentPermissionMode, "bypassPermissions", "mode should switch to bypassPermissions");
+    assert.deepEqual(fakeHarness.planDecisions.at(-1), { kind: "approve", permissionMode: "bypassPermissions" });
 
     session.kill("user");
   });
@@ -168,15 +147,7 @@ describe("Plan mode E2E: ExitPlanMode flow", () => {
     const session = await startSession({ permissionMode: "plan", multiTurn: true });
 
     // Set up plan approval state
-    fakeHarness.pushMessage({ type: "tool_use", name: "ExitPlanMode", input: {} });
-    await tick(20);
-
-    fakeHarness.pushMessage({
-      type: "result",
-      data: { success: true, duration_ms: 5000, total_cost_usd: 0.1, num_turns: 1, session_id: session.harnessSessionId! },
-    });
-    await tick(50);
-
+    await raiseNativePlanRequest();
     assert.equal(session.pendingPlanApproval, true);
 
     // Send revision (no mode switch)
@@ -184,6 +155,7 @@ describe("Plan mode E2E: ExitPlanMode flow", () => {
 
     assert.equal(session.pendingPlanApproval, true, "pendingPlanApproval should remain true for revisions");
     assert.equal(session.currentPermissionMode, "plan", "mode should stay plan for revisions");
+    assert.deepEqual(fakeHarness.planDecisions.at(-1), { kind: "revise", feedback: "Please change the approach to X" });
 
     session.kill("user");
   });
@@ -191,21 +163,14 @@ describe("Plan mode E2E: ExitPlanMode flow", () => {
   it("plan flow: ignores late plan-approval signals after approval", async () => {
     const session = await startSession({ permissionMode: "plan", multiTurn: true });
 
-    fakeHarness.pushMessage({ type: "tool_use", name: "ExitPlanMode", input: {} });
-    await tick(20);
-    fakeHarness.pushMessage({
-      type: "result",
-      data: { success: true, duration_ms: 5000, total_cost_usd: 0.1, num_turns: 1, session_id: session.harnessSessionId! },
-    });
-    await tick(50);
+    await raiseNativePlanRequest();
 
     session.switchPermissionMode("bypassPermissions");
     await session.sendMessage("Approved. Go ahead.");
     assert.equal(session.pendingPlanApproval, false);
     assert.equal(session.currentPermissionMode, "bypassPermissions");
 
-    fakeHarness.pushMessage({ type: "tool_use", name: "ExitPlanMode", input: {} });
-    await tick(20);
+    await raiseNativePlanRequest();
 
     assert.equal(session.pendingPlanApproval, false, "late plan signals should be ignored after approval");
     assert.equal(session.currentPermissionMode, "bypassPermissions");
@@ -237,7 +202,7 @@ describe("Plan mode E2E: permission_mode_change flow", () => {
 // ---------------------------------------------------------------------------
 
 describe("Plan mode E2E: approve=true on idle-killed plan session (double-approval bug)", () => {
-  it("tryAutoResume forwards approve=true as bypassPermissions + system prefix when session was in plan mode", async () => {
+  it("tryAutoResume forwards approve=true as bypassPermissions + approval message when session was in plan mode", async () => {
     // Simulate a dead session that was in awaiting-plan-approval when killed.
     const deadPersistedSession = {
       sessionId: "dead-id",
@@ -294,8 +259,8 @@ describe("Plan mode E2E: approve=true on idle-killed plan session (double-approv
       "Resumed session must use bypassPermissions, not plan",
     );
     assert.ok(
-      capturedResumeConfig!.prompt?.includes("[SYSTEM: The user has approved your plan."),
-      `Prompt must contain approval system prefix, got: ${capturedResumeConfig!.prompt}`,
+      capturedResumeConfig!.prompt?.includes("The user approved your plan"),
+      `Prompt must contain the approval message, got: ${capturedResumeConfig!.prompt}`,
     );
     assert.ok(
       capturedResumeConfig!.prompt?.includes("Approved. Go ahead."),
@@ -344,7 +309,7 @@ describe("Plan mode E2E: approve=true on idle-killed plan session (double-approv
       "Non-plan session should keep its original permissionMode",
     );
     assert.ok(
-      !capturedResumeConfig!.prompt?.includes("[SYSTEM: The user has approved your plan."),
+      !capturedResumeConfig!.prompt?.includes("The user approved your plan"),
       "Non-plan session should not get the approval prefix",
     );
   });
@@ -390,7 +355,7 @@ describe("Plan mode E2E: approve=true on idle-killed plan session (double-approv
       `Should confirm resumed bypassPermissions mode: ${result.text}`,
     );
     assert.equal(capturedConfig.permissionMode, "bypassPermissions");
-    assert.match(capturedConfig.prompt, /The user has approved your plan/i);
+    assert.match(capturedConfig.prompt, /The user approved your plan/i);
     assert.match(capturedConfig.prompt, /Please change the approach and add more steps before approving\./);
   });
 });
@@ -462,8 +427,7 @@ describe("Plan mode E2E: delayed approval (race condition test)", () => {
     await tick(10);
     fakeHarness.pushMessage({ type: "text", text: "Step 2: modify the function" });
     await tick(10);
-    fakeHarness.pushMessage({ type: "tool_use", name: "ExitPlanMode", input: {} });
-    await tick(10);
+    await raiseNativePlanRequest();
     // Text might come after ExitPlanMode
     fakeHarness.pushMessage({ type: "text", text: "I've submitted the plan for approval" });
     await tick(10);
@@ -494,5 +458,90 @@ describe("Plan mode E2E: delayed approval (race condition test)", () => {
     assert.ok(!result.text.includes("no pending plan"), "should not warn about no pending plan");
 
     session.kill("user");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Native plan decisions (Claude ExitPlanMode held in canUseTool)
+// ---------------------------------------------------------------------------
+
+describe("Plan mode E2E: native plan decisions", () => {
+  function capturePushedMessages(): { texts: string[]; restore: () => void } {
+    const texts: string[] = [];
+    const original = fakeHarness.buildUserMessage;
+    fakeHarness.buildUserMessage = (text: string, sessionId: string) => {
+      texts.push(text);
+      return original(text, sessionId);
+    };
+    return { texts, restore: () => { fakeHarness.buildUserMessage = original; } };
+  }
+
+  it("delivers a bare approval only as the native permission result", async () => {
+    fakeHarness.lastSetPermissionMode = undefined;
+    const session = await startSession({ permissionMode: "plan", multiTurn: true });
+    await raiseNativePlanRequest();
+    const pushed = capturePushedMessages();
+    try {
+      session.switchPermissionMode("bypassPermissions");
+      await session.sendMessage("Approved. Go ahead.");
+      assert.deepEqual(pushed.texts, [], "the approval phrase is not replayed as a user turn");
+      assert.equal(session.planModeApproved, true);
+      assert.equal(fakeHarness.lastSetPermissionMode, undefined, "native approval sets the mode inside the permission result");
+    } finally {
+      pushed.restore();
+      session.kill("user");
+    }
+  });
+
+  it("forwards extra approval instructions without prompt-level framing", async () => {
+    const session = await startSession({ permissionMode: "plan", multiTurn: true });
+    await raiseNativePlanRequest();
+    const pushed = capturePushedMessages();
+    try {
+      session.switchPermissionMode("bypassPermissions");
+      await session.sendMessage("Approved, but keep the public API unchanged.");
+      assert.deepEqual(pushed.texts, ["Approved, but keep the public API unchanged."]);
+    } finally {
+      pushed.restore();
+      session.kill("user");
+    }
+  });
+
+  it("sends revision feedback as the native denial instead of a new user turn", async () => {
+    const session = await startSession({ permissionMode: "plan", multiTurn: true });
+    await raiseNativePlanRequest();
+    const pushed = capturePushedMessages();
+    try {
+      await session.sendMessage("Split step 2 into two commits.");
+      assert.deepEqual(pushed.texts, []);
+      assert.equal(session.approvalState, "changes_requested");
+      assert.deepEqual(fakeHarness.planDecisions.at(-1), { kind: "revise", feedback: "Split step 2 into two commits." });
+    } finally {
+      pushed.restore();
+      session.kill("user");
+    }
+  });
+
+  it("falls back to a mode switch plus the plain message when no native request is pending", async () => {
+    const session = await startSession({ permissionMode: "plan", multiTurn: true });
+    fakeHarness.pushMessage({ type: "text", text: "Here is my plan" });
+    fakeHarness.pushMessage({
+      type: "result",
+      data: { success: true, duration_ms: 10, total_cost_usd: 0, num_turns: 1, session_id: session.harnessSessionId! },
+    });
+    await tick(50);
+    assert.equal(session.pendingPlanApproval, true);
+    fakeHarness.nativePlanRequestPending = false;
+    const pushed = capturePushedMessages();
+    try {
+      session.switchPermissionMode("bypassPermissions");
+      await session.sendMessage("Approved. Go ahead.");
+      assert.equal(fakeHarness.lastSetPermissionMode, "bypassPermissions");
+      assert.deepEqual(pushed.texts, ["Approved. Go ahead."], "native-decision backends get no [SYSTEM] prefix");
+      assert.equal(session.pendingPlanApproval, false);
+    } finally {
+      pushed.restore();
+      session.kill("user");
+    }
   });
 });

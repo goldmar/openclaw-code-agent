@@ -1,21 +1,32 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
-import { ClaudeCodeHarness } from "../src/harness/claude-code";
+import { ClaudeCodeHarness, CLAUDE_PLAN_MODE_INSTRUCTIONS } from "../src/harness/claude-code";
 import { setPluginConfig } from "../src/config";
 import { resolveAgentLaunchRequest } from "../src/tools/agent-launch-resolution";
 import type { HarnessMessage } from "../src/harness/types";
 
-function createQueryHandle(messages: unknown[]) {
+type CanUseToolFn = (
+  toolName: string,
+  input: Record<string, unknown>,
+  options?: { signal?: AbortSignal; requestId?: string; toolUseID?: string },
+) => Promise<any>;
+
+function createQueryHandle(messages: unknown[], extras: Record<string, unknown> = {}) {
   const permissionModes: string[] = [];
   const streamedInputs: SDKUserMessage[][] = [];
   let interrupted = false;
+  let release: (() => void) | undefined;
+  const gate = extras.holdUntilReleased
+    ? new Promise<void>((resolve) => { release = resolve; })
+    : Promise.resolve();
 
   const handle = {
     async *[Symbol.asyncIterator](): AsyncIterable<unknown> {
       for (const message of messages) {
         yield message;
       }
+      await gate;
     },
     async setPermissionMode(mode: string): Promise<void> {
       permissionModes.push(mode);
@@ -30,6 +41,7 @@ function createQueryHandle(messages: unknown[]) {
     async interrupt(): Promise<void> {
       interrupted = true;
     },
+    ...extras,
   };
 
   return {
@@ -37,7 +49,19 @@ function createQueryHandle(messages: unknown[]) {
     permissionModes,
     streamedInputs,
     wasInterrupted: () => interrupted,
+    release: () => release?.(),
   };
+}
+
+function harnessWith(handle: unknown, seen?: (options: Record<string, unknown>) => void, deps: Record<string, unknown> = {}) {
+  return new ClaudeCodeHarness({
+    startup: async ({ options }) => {
+      seen?.(options as Record<string, unknown>);
+      return { query: () => handle as any, close: () => {} };
+    },
+    getSessionInfo: async (sessionId: string) => ({ sessionId, summary: "", lastModified: 0 }),
+    ...deps,
+  });
 }
 
 async function collectMessages(
@@ -49,6 +73,42 @@ async function collectMessages(
     if (message.type === "run_completed") break;
   }
   return out;
+}
+
+async function collectAll(session: { messages: AsyncIterable<HarnessMessage> }): Promise<HarnessMessage[]> {
+  const out: HarnessMessage[] = [];
+  for await (const message of session.messages) out.push(message);
+  return out;
+}
+
+function completions(messages: HarnessMessage[]) {
+  return messages.filter((message): message is Extract<HarnessMessage, { type: "run_completed" }> => message.type === "run_completed");
+}
+
+const OK_RESULT = { type: "result", subtype: "success", session_id: "claude-1", duration_ms: 0, total_cost_usd: 0, num_turns: 1, result: "done" };
+
+async function launchForCanUseTool(permissionMode: string, extraOptions: Record<string, unknown> = {}) {
+  const startupOptions = Promise.withResolvers<Record<string, unknown>>();
+  const query = createQueryHandle([], { holdUntilReleased: true });
+  const harness = harnessWith(query.handle, (options) => startupOptions.resolve(options));
+  const session = harness.launch({
+    prompt: "plan it",
+    cwd: "/tmp/project",
+    permissionMode,
+    canUseTool: async (_toolName, input) => ({ behavior: "allow", updatedInput: input }),
+    ...extraOptions,
+  });
+  const options = await startupOptions.promise;
+  const messages: HarnessMessage[] = [];
+  const pump = (async () => {
+    for await (const message of session.messages) messages.push(message);
+  })();
+  return {
+    session,
+    canUseTool: options.canUseTool as CanUseToolFn,
+    messages,
+    finish: async () => { query.release(); await pump; },
+  };
 }
 
 describe("ClaudeCodeHarness", () => {
@@ -63,17 +123,38 @@ describe("ClaudeCodeHarness", () => {
     if (launch.kind !== "resolved") return;
 
     let sdkOptions: Record<string, unknown> | undefined;
-    const { handle } = createQueryHandle([
-      { type: "result", subtype: "success", session_id: "claude-default-model", duration_ms: 0, total_cost_usd: 0, num_turns: 1, result: "done" },
-    ]);
-    const harness = new ClaudeCodeHarness({
-      startup: async ({ options } = {}) => {
-        sdkOptions = options;
-        return { query: () => handle as any };
-      },
-    });
+    const { handle } = createQueryHandle([OK_RESULT]);
+    const harness = harnessWith(handle, (options) => { sdkOptions = options; });
     await collectMessages(harness.launch({ prompt: "check default", cwd: "/tmp", model: launch.resolvedModel }));
     assert.equal(sdkOptions?.model, "opus");
+  });
+
+  it("configures plan-mode instructions, session-state events, and no injected MCP servers", async () => {
+    let sdkOptions: Record<string, any> | undefined;
+    const { handle } = createQueryHandle([OK_RESULT]);
+    const harness = harnessWith(handle, (options) => { sdkOptions = options; });
+    await collectMessages(harness.launch({ prompt: "plan", cwd: "/tmp/project", permissionMode: "plan" }));
+
+    assert.equal(sdkOptions?.planModeInstructions, CLAUDE_PLAN_MODE_INSTRUCTIONS);
+    assert.equal(sdkOptions?.env?.CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS, "1");
+    assert.equal(sdkOptions?.env?.CLAUDE_CODE_STARTUP_FAILURE_RESULTS, "1");
+    assert.equal(Object.hasOwn(sdkOptions ?? {}, "mcpServers"), false, "user MCP servers load through Claude settings");
+    assert.equal(typeof sdkOptions?.canUseTool, "function");
+    assert.equal(Object.hasOwn(sdkOptions ?? {}, "projectConfigRoot"), false);
+  });
+
+  it("loads project config from the original checkout for worktree sessions", async () => {
+    let sdkOptions: Record<string, any> | undefined;
+    const { handle } = createQueryHandle([OK_RESULT]);
+    const harness = harnessWith(handle, (options) => { sdkOptions = options; });
+    await collectMessages(harness.launch({
+      prompt: "work",
+      cwd: "/repo/.worktrees/agent-x",
+      originalWorkdir: "/repo",
+      worktreeStrategy: "ask",
+    }));
+    assert.equal(sdkOptions?.projectConfigRoot, "/repo");
+    assert.equal(sdkOptions?.cwd, "/repo/.worktrees/agent-x");
   });
 
   it("treats Claude AskUserQuestion questions[] as a formal multi-question contract", async () => {
@@ -81,12 +162,7 @@ describe("ClaudeCodeHarness", () => {
     const { handle } = createQueryHandle([
       { type: "result", subtype: "success", session_id: "claude-questions", duration_ms: 0, total_cost_usd: 0, num_turns: 1, result: "done" },
     ]);
-    const harness = new ClaudeCodeHarness({
-      startup: async ({ options } = {}) => {
-        startupOptions.resolve(options ?? {});
-        return { query: () => handle as any };
-      },
-    });
+    const harness = harnessWith(handle, (options) => startupOptions.resolve(options));
 
     const session = harness.launch({
       prompt: "ask",
@@ -94,7 +170,7 @@ describe("ClaudeCodeHarness", () => {
       canUseTool: async () => ({ behavior: "allow" as const, updatedInput: {} }),
     });
     const options = await startupOptions.promise;
-    const canUseTool = options.canUseTool as ((toolName: string, input: Record<string, unknown>) => Promise<unknown>);
+    const canUseTool = options.canUseTool as CanUseToolFn;
 
     await canUseTool("AskUserQuestion", {
       questions: [{
@@ -119,7 +195,7 @@ describe("ClaudeCodeHarness", () => {
           { label: "Everyone", description: "Roll out to all users." },
         ],
       }],
-    });
+    }, { signal: new AbortController().signal, requestId: "req-ask", toolUseID: "tool-ask" });
 
     const messages = await collectMessages(session);
     const pending = messages.find((message) => message.type === "pending_input") as Extract<HarnessMessage, { type: "pending_input" }> | undefined;
@@ -137,10 +213,11 @@ describe("ClaudeCodeHarness", () => {
     assert.equal(pending?.state.questions?.[1]?.allowsFreeText, true);
     assert.match(pending?.state.promptText ?? "", /Question 1 - Policy/);
     assert.doesNotMatch(pending?.state.promptText ?? "", /Question 2 - Scope/);
+    assert.ok(messages.some((message) => message.type === "pending_input_resolved"));
   });
 
-  it("pre-warms Claude Code with startup() before the first query", async () => {
-    const calls: { startup: number; query: number } = { startup: 0, query: 0 };
+  it("pre-warms Claude Code with the public startup() WarmQuery", async () => {
+    const calls = { startup: 0 };
     let promptSeen: string | AsyncIterable<SDKUserMessage> | undefined;
     let optionsSeen: Record<string, unknown> | undefined;
     const { handle } = createQueryHandle([
@@ -149,18 +226,15 @@ describe("ClaudeCodeHarness", () => {
       { type: "result", subtype: "success", session_id: "claude-session-1", duration_ms: 12, total_cost_usd: 0.1, num_turns: 1, result: "done" },
     ]);
     const harness = new ClaudeCodeHarness({
-      query: () => {
-        calls.query += 1;
-        return handle as any;
-      },
-      startup: async ({ options } = {}) => {
+      startup: async ({ options }) => {
         calls.startup += 1;
-        optionsSeen = options;
+        optionsSeen = options as Record<string, unknown>;
         return {
           query(prompt) {
             promptSeen = prompt;
             return handle as any;
           },
+          close() {},
         };
       },
     });
@@ -172,7 +246,6 @@ describe("ClaudeCodeHarness", () => {
     }));
 
     assert.equal(calls.startup, 1);
-    assert.equal(calls.query, 0);
     assert.equal(promptSeen, "ship it");
     assert.equal(optionsSeen?.cwd, "/tmp/project");
     assert.equal(optionsSeen?.permissionMode, "plan");
@@ -182,15 +255,8 @@ describe("ClaudeCodeHarness", () => {
 
   it("preserves the pre-0.3.267 custom system prompt snapshot behavior", async () => {
     let optionsSeen: Record<string, unknown> | undefined;
-    const { handle } = createQueryHandle([
-      { type: "result", subtype: "success", session_id: "claude-system-prompt", duration_ms: 0, total_cost_usd: 0, num_turns: 1, result: "done" },
-    ]);
-    const harness = new ClaudeCodeHarness({
-      startup: async ({ options } = {}) => {
-        optionsSeen = options;
-        return { query: () => handle as any };
-      },
-    });
+    const { handle } = createQueryHandle([OK_RESULT]);
+    const harness = harnessWith(handle, (options) => { optionsSeen = options; });
 
     await collectMessages(harness.launch({
       prompt: "follow the custom prompt",
@@ -206,86 +272,159 @@ describe("ClaudeCodeHarness", () => {
   });
 
   it("keeps plan-mode writes denied when the SDK routes them through canUseTool", async () => {
-    const startupOptions = Promise.withResolvers<Record<string, unknown>>();
-    const { handle } = createQueryHandle([
-      { type: "result", subtype: "success", session_id: "claude-plan-tools", duration_ms: 0, total_cost_usd: 0, num_turns: 1, result: "done" },
-    ]);
-    const harness = new ClaudeCodeHarness({
-      startup: async ({ options } = {}) => {
-        startupOptions.resolve(options ?? {});
-        return { query: () => handle as any };
-      },
-    });
+    const { session, canUseTool, finish } = await launchForCanUseTool("plan");
 
-    const session = harness.launch({
-      prompt: "plan only",
-      cwd: "/tmp/project",
-      permissionMode: "plan",
-      canUseTool: async (_toolName, input) => ({ behavior: "allow", updatedInput: input }),
-    });
-    const options = await startupOptions.promise;
-    const canUseTool = options.canUseTool as ((toolName: string, input: Record<string, unknown>) => Promise<unknown>);
-
-    assert.deepEqual(await canUseTool("Write", { file_path: "/tmp/project/output.txt" }), {
-      behavior: "deny",
-      message: "Tool use is not allowed while reviewing a plan.",
-    });
+    const denied = await canUseTool("Write", { file_path: "/tmp/project/output.txt" });
+    assert.equal(denied.behavior, "deny");
+    assert.match(denied.message, /Plan mode is active/);
 
     await session.setPermissionMode?.("bypassPermissions");
     assert.deepEqual(await canUseTool("Write", { file_path: "/tmp/project/output.txt" }), {
       behavior: "allow",
+      updatedInput: { file_path: "/tmp/project/output.txt" },
     });
-    await collectMessages(session);
+    await finish();
+  });
+
+  it("holds ExitPlanMode as a native plan request and approves it with a session mode switch", async () => {
+    const { session, canUseTool, messages, finish } = await launchForCanUseTool("plan");
+    const input = { plan: "# Plan\n1. Edit src/a.ts", planFilePath: "/home/u/.claude/plans/p.md" };
+    const decision = canUseTool("ExitPlanMode", input, {
+      signal: new AbortController().signal,
+      requestId: "req-plan-1",
+      toolUseID: "tool-plan-1",
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const request = messages.find((message) => message.type === "plan_approval_requested");
+    assert.ok(request && request.type === "plan_approval_requested");
+    assert.equal(request.request.requestId, "req-plan-1");
+    assert.equal(request.request.artifact.markdown, "# Plan\n1. Edit src/a.ts");
+    assert.equal(request.request.planFilePath, "/home/u/.claude/plans/p.md");
+
+    assert.equal(await session.resolvePlanDecision?.({ kind: "approve", permissionMode: "bypassPermissions" }), true);
+    assert.deepEqual(await decision, {
+      behavior: "allow",
+      updatedInput: input,
+      updatedPermissions: [{ type: "setMode", mode: "bypassPermissions", destination: "session" }],
+    });
+    assert.equal(await session.resolvePlanDecision?.({ kind: "approve", permissionMode: "bypassPermissions" }), false);
+
+    // After approval the harness leaves plan mode, so tools are allowed again.
+    assert.equal((await canUseTool("Write", { file_path: "a" })).behavior, "allow");
+    await finish();
+  });
+
+  it("returns plan revision feedback as the ExitPlanMode denial", async () => {
+    const { session, canUseTool, finish } = await launchForCanUseTool("plan");
+    const decision = canUseTool("ExitPlanMode", { plan: "draft" }, {
+      signal: new AbortController().signal,
+      requestId: "req-plan-2",
+      toolUseID: "tool-plan-2",
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(await session.resolvePlanDecision?.({ kind: "revise", feedback: "Add a rollback step." }), true);
+    const result = await decision;
+    assert.equal(result.behavior, "deny");
+    assert.match(result.message, /requested changes/);
+    assert.match(result.message, /User feedback:\nAdd a rollback step\./);
+    assert.match(result.message, /call ExitPlanMode again/);
+    assert.equal(result.interrupt, undefined);
+    await finish();
+  });
+
+  it("cancels a held plan request when the SDK aborts the permission prompt", async () => {
+    const { session, canUseTool, finish } = await launchForCanUseTool("plan");
+    const abort = new AbortController();
+    const decision = canUseTool("ExitPlanMode", { plan: "draft" }, { signal: abort.signal, requestId: "req-plan-3", toolUseID: "tool-plan-3" });
+    await new Promise((resolve) => setImmediate(resolve));
+    abort.abort();
+    const result = await decision;
+    assert.equal(result.behavior, "deny");
+    assert.equal(result.interrupt, true);
+    assert.equal(await session.resolvePlanDecision?.({ kind: "revise", feedback: "late" }), false);
+    await finish();
+  });
+
+  it("allows ExitPlanMode immediately outside plan mode", async () => {
+    const { canUseTool, messages, finish } = await launchForCanUseTool("bypassPermissions");
+    const result = await canUseTool("ExitPlanMode", { plan: "x" }, { signal: new AbortController().signal, requestId: "r", toolUseID: "t" });
+    assert.equal(result.behavior, "allow");
+    assert.equal(messages.some((message) => message.type === "plan_approval_requested"), false);
+    await finish();
   });
 
   it("passes configured reasoning effort to Claude Code without inventing a default", async () => {
     const seenOptions: Record<string, unknown>[] = [];
-    const { handle } = createQueryHandle([
-      { type: "result", subtype: "success", session_id: "claude-effort", duration_ms: 0, total_cost_usd: 0, num_turns: 1, result: "done" },
-    ]);
-    const harness = new ClaudeCodeHarness({
-      startup: async ({ options } = {}) => {
-        seenOptions.push(options ?? {});
-        return { query: () => handle as any };
-      },
-    });
-
-    await collectMessages(harness.launch({
+    const { handle } = createQueryHandle([OK_RESULT]);
+    await collectMessages(harnessWith(handle, (options) => seenOptions.push(options)).launch({
       prompt: "think harder",
       cwd: "/tmp/project",
       reasoningEffort: "xhigh",
     }));
-
     assert.equal(seenOptions[0]?.effort, "xhigh");
 
-    const { handle: defaultHandle } = createQueryHandle([
-      { type: "result", subtype: "success", session_id: "claude-default", duration_ms: 0, total_cost_usd: 0, num_turns: 1, result: "done" },
-    ]);
-    const defaultHarness = new ClaudeCodeHarness({
-      startup: async ({ options } = {}) => {
-        seenOptions.push(options ?? {});
-        return { query: () => defaultHandle as any };
-      },
-    });
-
-    await collectMessages(defaultHarness.launch({
+    const { handle: defaultHandle } = createQueryHandle([OK_RESULT]);
+    await collectMessages(harnessWith(defaultHandle, (options) => seenOptions.push(options)).launch({
       prompt: "use default effort",
       cwd: "/tmp/project",
     }));
-
     assert.equal(Object.hasOwn(seenOptions[1] ?? {}, "effort"), false);
   });
 
-  it("passes resume options through Claude Code startup and preserves the backend ref", async () => {
+  it("reports the effort Claude Code applies from system/init", async () => {
+    const { handle } = createQueryHandle([
+      { type: "system", subtype: "init", session_id: "claude-effort", model: "claude-opus-5-5", effort: "high" },
+      OK_RESULT,
+    ]);
+    const messages = await collectAll(harnessWith(handle).launch({ prompt: "x", cwd: "/tmp", model: "opus", reasoningEffort: "max" }));
+    const info = messages.find((message) => message.type === "backend_info");
+    assert.ok(info && info.type === "backend_info");
+    assert.deepEqual(info.info, { model: "claude-opus-5-5", reasoningEffort: "high", reasoningEffortSupported: false });
+  });
+
+  it("falls back to supportedModels() effort levels when init omits the effort", async () => {
+    const { handle } = createQueryHandle([
+      { type: "system", subtype: "init", session_id: "claude-effort", model: "claude-haiku-4-5-20251001" },
+      OK_RESULT,
+    ], {
+      supportedModels: async () => [
+        { value: "opus", resolvedModel: "claude-opus-5-5", displayName: "Opus", description: "", supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"] },
+        { value: "haiku", resolvedModel: "claude-haiku-4-5-20251001", displayName: "Haiku", description: "" },
+      ],
+    });
+    const messages = await collectAll(harnessWith(handle).launch({ prompt: "x", cwd: "/tmp", model: "haiku", reasoningEffort: "low" }));
+    const info = messages.find((message) => message.type === "backend_info");
+    assert.ok(info && info.type === "backend_info");
+    assert.equal(info.info.model, "claude-haiku-4-5-20251001");
+    assert.equal(info.info.reasoningEffortSupported, undefined, "no effort data means no claim either way");
+
+    const { handle: opusHandle } = createQueryHandle([
+      { type: "system", subtype: "init", session_id: "claude-effort", model: "claude-opus-5-5" },
+      OK_RESULT,
+    ], {
+      supportedModels: async () => [
+        { value: "opus", resolvedModel: "claude-opus-5-5", displayName: "Opus", description: "", supportedEffortLevels: ["low", "medium", "high"] },
+      ],
+    });
+    const opusMessages = await collectAll(harnessWith(opusHandle).launch({ prompt: "x", cwd: "/tmp", model: "opus", reasoningEffort: "max" }));
+    const opusInfo = opusMessages.find((message) => message.type === "backend_info");
+    assert.ok(opusInfo && opusInfo.type === "backend_info");
+    assert.equal(opusInfo.info.reasoningEffortSupported, false);
+  });
+
+  it("validates resume targets with getSessionInfo() and preserves the backend ref", async () => {
     const seenOptions: Record<string, unknown>[] = [];
+    const lookedUp: string[] = [];
     const { handle } = createQueryHandle([
       { type: "system", subtype: "init", session_id: "claude-resume-session" },
       { type: "result", subtype: "success", session_id: "claude-resume-session", duration_ms: 0, total_cost_usd: 0, num_turns: 1, result: "resumed" },
     ]);
-    const harness = new ClaudeCodeHarness({
-      startup: async ({ options } = {}) => {
-        seenOptions.push(options ?? {});
-        return { query: () => handle as any };
+    const harness = harnessWith(handle, (options) => seenOptions.push(options), {
+      getSessionInfo: async (sessionId: string) => {
+        lookedUp.push(sessionId);
+        return { sessionId, summary: "", lastModified: 0 };
       },
     });
 
@@ -295,6 +434,7 @@ describe("ClaudeCodeHarness", () => {
       resumeSessionId: "claude-resume-session",
     }));
 
+    assert.deepEqual(lookedUp, ["claude-resume-session"]);
     assert.equal(seenOptions[0]?.resume, "claude-resume-session");
     assert.equal(seenOptions[0]?.forkSession, false);
     const ref = messages.find((message) => message.type === "backend_ref");
@@ -302,11 +442,25 @@ describe("ClaudeCodeHarness", () => {
     assert.equal(ref?.ref.conversationId, "claude-resume-session");
   });
 
+  it("fails a resume clearly when the Claude transcript no longer exists", async () => {
+    let started = false;
+    const harness = new ClaudeCodeHarness({
+      startup: async () => {
+        started = true;
+        throw new Error("should not start");
+      },
+      getSessionInfo: async () => undefined,
+    });
+    const messages = await collectMessages(harness.launch({ prompt: "continue", cwd: "/tmp", resumeSessionId: "gone" }));
+    const [completion] = completions(messages);
+    assert.equal(started, false);
+    assert.equal(completion?.data.success, false);
+    assert.match(completion?.data.result ?? "", /Claude Code session gone was not found/);
+  });
+
   it("waits for startup() before forwarding control calls to the query handle", async () => {
-    let resolveStartup: ((value: { query: () => AsyncIterable<unknown> }) => void) | undefined;
-    const { handle, permissionModes, streamedInputs, wasInterrupted } = createQueryHandle([
-      { type: "result", subtype: "success", session_id: "claude-session-2", duration_ms: 0, total_cost_usd: 0, num_turns: 1, result: "done" },
-    ]);
+    let resolveStartup: ((value: { query: () => any; close: () => void }) => void) | undefined;
+    const { handle, permissionModes, streamedInputs, wasInterrupted } = createQueryHandle([OK_RESULT]);
     const harness = new ClaudeCodeHarness({
       startup: async () => await new Promise((resolve) => {
         resolveStartup = resolve;
@@ -327,9 +481,7 @@ describe("ClaudeCodeHarness", () => {
     })());
     const interruptPromise = session.interrupt?.();
 
-    resolveStartup?.({
-      query: () => handle as any,
-    });
+    resolveStartup?.({ query: () => handle as any, close: () => {} });
 
     await Promise.all([
       permissionPromise,
@@ -353,52 +505,149 @@ describe("ClaudeCodeHarness", () => {
         duration_ms: 9,
         total_cost_usd: 0,
         num_turns: 1,
+        is_error: true,
         errors: ["Tool execution failed", "Bash exited with status 1"],
       },
     ]);
-    const harness = new ClaudeCodeHarness({
-      startup: async () => ({
-        query: () => handle as any,
-      }),
-    });
+    const messages = await collectMessages(harnessWith(handle).launch({ prompt: "break it", cwd: "/tmp/project" }));
+    const [result] = completions(messages);
 
-    const messages = await collectMessages(harness.launch({
-      prompt: "break it",
-      cwd: "/tmp/project",
-    }));
-    const result = messages.find((message) => message.type === "run_completed");
-
-    assert.equal(result?.type, "run_completed");
     assert.equal(result?.data.success, false);
+    assert.equal(result?.data.outcome, "failed");
+    assert.equal(result?.data.outcomeAuthoritative, true);
     assert.equal(result?.data.result, "Tool execution failed\nBash exited with status 1");
   });
 
-  it("waits for the final result after empty background-task results", async () => {
+  it("fails success-subtype results that carry is_error and reports the assistant error code", async () => {
     const { handle } = createQueryHandle([
-      { type: "result", subtype: "success", session_id: "claude-background", duration_ms: 1, total_cost_usd: 0, num_turns: 0, result: "" },
-      { type: "assistant", message: { content: [{ type: "text", text: "Final answer" }] } },
-      { type: "result", subtype: "success", session_id: "claude-background", duration_ms: 20, total_cost_usd: 0.2, num_turns: 2, result: "Final answer" },
+      { type: "system", subtype: "init", session_id: "claude-auth" },
+      {
+        type: "assistant",
+        error: "authentication_failed",
+        message: { content: [{ type: "text", text: "Invalid API key · Please run /login" }] },
+      },
+      { type: "result", subtype: "success", is_error: true, session_id: "claude-auth", duration_ms: 1, total_cost_usd: 0, num_turns: 1, result: "Invalid API key · Please run /login" },
     ]);
-    const harness = new ClaudeCodeHarness({ startup: async () => ({ query: () => handle as any }) });
-    const messages = await collectMessages(harness.launch({ prompt: "finish", cwd: "/tmp/project" }));
-    const completions = messages.filter((message) => message.type === "run_completed");
-
-    assert.equal(completions.length, 1);
-    assert.equal(completions[0]?.data.result, "Final answer");
-    assert.equal(completions[0]?.data.num_turns, 2);
-    assert.equal(completions[0]?.data.total_cost_usd, 0.2);
+    const [result] = completions(await collectMessages(harnessWith(handle).launch({ prompt: "x", cwd: "/tmp" })));
+    assert.equal(result?.data.success, false);
+    assert.equal(result?.data.outcome, "failed");
+    assert.equal(result?.data.errorCode, "authentication_failed");
   });
 
-  it("completes when an empty zero-turn result is the only SDK result", async () => {
+  it("reports startup_failure_reason as the structured error code", async () => {
     const { handle } = createQueryHandle([
+      {
+        type: "result",
+        subtype: "error_during_execution",
+        is_error: true,
+        session_id: "claude-startup",
+        duration_ms: 0,
+        total_cost_usd: 0,
+        num_turns: 0,
+        errors: ["Working directory is unavailable"],
+        startup_failure_reason: "cwd_unavailable",
+      },
+    ]);
+    const [result] = completions(await collectMessages(harnessWith(handle).launch({ prompt: "x", cwd: "/missing" })));
+    assert.equal(result?.data.outcome, "failed");
+    assert.equal(result?.data.errorCode, "cwd_unavailable");
+  });
+
+  it("maps aborted terminal reasons to an interrupted turn", async () => {
+    const { handle } = createQueryHandle([
+      { type: "result", subtype: "error_during_execution", is_error: true, terminal_reason: "aborted_tools", session_id: "claude-int", duration_ms: 1, total_cost_usd: 0, num_turns: 3, errors: [] },
+    ]);
+    const [result] = completions(await collectMessages(harnessWith(handle).launch({ prompt: "x", cwd: "/tmp" })));
+    assert.equal(result?.data.outcome, "interrupted");
+    assert.equal(result?.data.success, false);
+    assert.equal(result?.data.errorCode, undefined);
+  });
+
+  it("defers results while queued user turns remain and reports per-model cost", async () => {
+    const { handle } = createQueryHandle([
+      { type: "result", subtype: "success", session_id: "claude-q", duration_ms: 5, total_cost_usd: 0.1, num_turns: 1, result: "first", queued_turn_count: 1 },
+      {
+        type: "result",
+        subtype: "success",
+        session_id: "claude-q",
+        duration_ms: 9,
+        total_cost_usd: 0.3,
+        num_turns: 1,
+        result: "second",
+        queued_turn_count: 0,
+        modelUsage: {
+          "claude-opus-5-5": { inputTokens: 10, outputTokens: 20, thinkingTokens: 5, cacheReadInputTokens: 100, cacheCreationInputTokens: 50, webSearchRequests: 0, costUSD: 0.25, contextWindow: 200000, maxOutputTokens: 32000, canonicalModel: "claude-opus-5-5", costBasis: "list" },
+          "claude-haiku-4-5-20251001": { inputTokens: 1, outputTokens: 2, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, webSearchRequests: 0, costUSD: 0.05, contextWindow: 200000, maxOutputTokens: 32000 },
+        },
+      },
+    ]);
+    const messages = await collectAll(harnessWith(handle).launch({ prompt: "x", cwd: "/tmp" }));
+    const done = completions(messages);
+    assert.equal(done.length, 1);
+    assert.equal(done[0]?.data.result, "second");
+    assert.equal(done[0]?.data.total_cost_usd, 0.3);
+    assert.deepEqual(done[0]?.data.usage?.models?.map((entry) => [entry.model, entry.costUsd, entry.costBasis]), [
+      ["claude-opus-5-5", 0.25, "list"],
+      ["claude-haiku-4-5-20251001", 0.05, undefined],
+    ]);
+    assert.equal(done[0]?.data.usage?.models?.[0]?.reasoningTokens, 5);
+    assert.equal(done[0]?.data.usage?.models?.[0]?.cacheReadTokens, 100);
+  });
+
+  it("skips coalesced background-task results but keeps human-origin empty results", async () => {
+    const { handle } = createQueryHandle([
+      { type: "result", subtype: "success", session_id: "claude-bg", duration_ms: 1, total_cost_usd: 0, num_turns: 0, result: "", origin: { kind: "task-notification" } },
+      { type: "assistant", message: { content: [{ type: "text", text: "Final answer" }] } },
+      { type: "result", subtype: "success", session_id: "claude-bg", duration_ms: 20, total_cost_usd: 0.2, num_turns: 2, result: "Final answer" },
+    ]);
+    const done = completions(await collectAll(harnessWith(handle).launch({ prompt: "finish", cwd: "/tmp/project" })));
+    assert.equal(done.length, 1);
+    assert.equal(done[0]?.data.result, "Final answer");
+    assert.equal(done[0]?.data.num_turns, 2);
+
+    const { handle: emptyHandle } = createQueryHandle([
       { type: "result", subtype: "success", session_id: "claude-empty", duration_ms: 1, total_cost_usd: 0, num_turns: 0, result: "" },
     ]);
-    const harness = new ClaudeCodeHarness({ startup: async () => ({ query: () => handle as any }) });
-    const messages = await collectMessages(harness.launch({ prompt: "finish", cwd: "/tmp/project" }));
+    const emptyDone = completions(await collectAll(harnessWith(emptyHandle).launch({ prompt: "/compact", cwd: "/tmp" })));
+    assert.equal(emptyDone.length, 1);
+    assert.equal(emptyDone[0]?.data.num_turns, 0);
+  });
 
-    const completion = messages.at(-1);
-    assert.equal(completion?.type, "run_completed");
-    if (completion?.type !== "run_completed") return;
-    assert.equal(completion.data.num_turns, 0);
+  it("completes with a skipped result when it is the only SDK result", async () => {
+    const { handle } = createQueryHandle([
+      { type: "result", subtype: "success", session_id: "claude-only", duration_ms: 1, total_cost_usd: 0, num_turns: 0, result: "", origin: { kind: "task-notification" } },
+    ]);
+    const done = completions(await collectAll(harnessWith(handle).launch({ prompt: "finish", cwd: "/tmp/project" })));
+    assert.equal(done.length, 1);
+    assert.equal(done[0]?.data.num_turns, 0);
+  });
+
+  it("publishes background-task counts and context usage", async () => {
+    const { handle } = createQueryHandle([
+      { type: "system", subtype: "background_tasks_changed", tasks: [
+        { task_id: "a", task_type: "local_bash", description: "dev server" },
+        { task_id: "b", task_type: "watcher", description: "watch", ambient: true },
+      ] },
+      { type: "system", subtype: "session_state_changed", state: "running" },
+      { type: "system", subtype: "permission_denied", tool_name: "Bash", tool_use_id: "t", message: "denied" },
+      OK_RESULT,
+    ], {
+      getContextUsage: async () => ({ totalTokens: 42000, maxTokens: 200000 }),
+    });
+    const messages = await collectAll(harnessWith(handle).launch({ prompt: "x", cwd: "/tmp" }));
+    const usage = messages.filter((message) => message.type === "usage_updated").map((message) => message.type === "usage_updated" ? message.usage : undefined);
+    assert.deepEqual(usage[0], { backgroundTasks: 1 });
+    assert.ok(usage.some((entry) => entry?.contextTokens === 42000 && entry.contextWindow === 200000));
+    assert.equal(completions(messages)[0]?.data.usage?.backgroundTasks, 1);
+    assert.ok(messages.filter((message) => message.type === "activity").length >= 2);
+  });
+
+  it("builds user messages without a session id", () => {
+    const message = new ClaudeCodeHarness().buildUserMessage("hello", "claude-session");
+    assert.deepEqual(message, {
+      type: "user",
+      message: { role: "user", content: "hello" },
+      parent_tool_use_id: null,
+    });
   });
 });

@@ -1,10 +1,18 @@
 import { REASONING_EFFORTS, type ReasoningEffort } from "./types";
 
-export function formatHarnessModelLabel(input: {
+/**
+ * Model/effort facts for display. `reasoningEffortSupported` is the backend's
+ * own report (Claude: system/init effort or supportedModels() levels); when it
+ * is known it overrides the static capability tables below.
+ */
+export type ReasoningDisplayInput = {
   harness?: string;
   model?: string;
   reasoningEffort?: ReasoningEffort;
-}): string | undefined {
+  reasoningEffortSupported?: boolean;
+};
+
+export function formatHarnessModelLabel(input: ReasoningDisplayInput): string | undefined {
   const harness = input.harness?.trim();
   const model = input.model?.trim();
   if (harness && model) return `${harness} | ${model}${formatReasoningSuffix(input)}`;
@@ -12,11 +20,7 @@ export function formatHarnessModelLabel(input: {
   return model;
 }
 
-export function formatHarnessModelSuffix(input: {
-  harness?: string;
-  model?: string;
-  reasoningEffort?: ReasoningEffort;
-}): string {
+export function formatHarnessModelSuffix(input: ReasoningDisplayInput): string {
   const label = formatHarnessModelLabel(input);
   return label ? ` | ${label}` : "";
 }
@@ -27,11 +31,7 @@ export function formatHarnessModelSuffix(input: {
  * that intentionally show harness/model without reasoning should continue to
  * use formatHarnessModelLabel/formatHarnessModelSuffix.
  */
-export function formatReasoningMetadataSuffix(input: {
-  harness?: string;
-  model?: string;
-  reasoningEffort?: ReasoningEffort;
-}): string {
+export function formatReasoningMetadataSuffix(input: ReasoningDisplayInput): string {
   const harness = input.harness?.trim();
   const model = input.model?.trim();
   const reasoning = formatReasoningSuffix(input);
@@ -42,13 +42,12 @@ export function formatReasoningMetadataSuffix(input: {
 /** Only describe a known setting on a model/harness that consumes named effort.
  * Never consult current plugin defaults while rendering historical sessions.
  */
-function formatReasoningSuffix(input: {
-  harness?: string;
-  model?: string;
-  reasoningEffort?: ReasoningEffort;
-}): string {
+function formatReasoningSuffix(input: ReasoningDisplayInput): string {
   const effort = input.reasoningEffort;
   if (!effort || !REASONING_EFFORTS.includes(effort)) return "";
+  if (input.harness === "claude-code" && typeof input.reasoningEffortSupported === "boolean") {
+    return input.reasoningEffortSupported ? ` | reasoning: ${effort}` : "";
+  }
   // Capability checks use the base ID consistently; display retains the exact ID.
   const model = input.model?.trim().toLowerCase()
     .replace(/^(openai|anthropic)\//, "")
@@ -60,25 +59,24 @@ function formatReasoningSuffix(input: {
     if (effort === "xhigh" && /^(gpt-5(?:-mini|-nano|-codex)?|gpt-5\.1(?:-codex(?:-mini)?)?|o[134](?:-mini)?)$/.test(model)) return "";
     if (effort === "max" && !/^(gpt-6-(?:astra|sol)|gpt-5\.6-(sol|terra|luna))$/.test(model)) return "";
   } else if (input.harness === "claude-code") {
-    // Claude Code can silently downgrade unsupported effort levels. Omit those
-    // rather than claim the requested level was applied by the backend.
+    // Before the backend reports support (launch notices, persisted history),
+    // fall back to known model capabilities. Claude Code can silently
+    // downgrade unsupported effort levels, so omit those rather than claim the
+    // requested level was applied.
     const basic = /^(?:claude-)?(?:opus|sonnet)(?:-4-[678]|-5(?:-5)?)?$/.test(model)
       || /^(?:claude-)?opus-4-5$/.test(model);
     if (!basic || !["low", "medium", "high", "xhigh", "max"].includes(effort)) return "";
     if (effort === "xhigh" && model !== "opus" && !/^(?:claude-)?(?:opus-(?:4-[78]|5(?:-5)?)|sonnet-5)$/.test(model)) return "";
     if (effort === "max" && /opus-4-5/.test(model)) return "";
   } else {
-    // OpenCode currently does not forward OCA's reasoningEffort option.
+    // OpenCode receives the effort as a model-specific `variant` and silently
+    // ignores names the model lacks, so OCA cannot claim it was applied.
     return "";
   }
   return ` | reasoning: ${effort}`;
 }
 
-export function hasDisplayableReasoning(input: {
-  harness?: string;
-  model?: string;
-  reasoningEffort?: ReasoningEffort;
-}): boolean {
+export function hasDisplayableReasoning(input: ReasoningDisplayInput): boolean {
   return Boolean(formatReasoningSuffix(input));
 }
 

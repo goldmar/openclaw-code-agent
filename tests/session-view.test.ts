@@ -473,3 +473,24 @@ describe("session-view app layer", () => {
     assert.match(text, /Session: h-123 \| Status: COMPLETED/);
   });
 });
+
+describe("formatSessionUsage", () => {
+  it("summarizes per-model cost, context fill, and background work", async () => {
+    const { formatSessionUsage } = await import("../src/application/session-view");
+    assert.equal(formatSessionUsage(undefined), undefined);
+    assert.equal(formatSessionUsage({}), undefined);
+    assert.equal(
+      formatSessionUsage({
+        models: [
+          { model: "claude-haiku-4-5", costUsd: 0.05, inputTokens: 900, outputTokens: 200 },
+          { model: "claude-opus-5-5", costUsd: 0.25, inputTokens: 12000, outputTokens: 3400, cacheReadTokens: 100000, costBasis: "unknown" },
+        ],
+        contextTokens: 42000,
+        contextWindow: 200000,
+        backgroundTasks: 2,
+      }),
+      "Usage: claude-opus-5-5 $0.2500 (estimated: no price table) (in 12k, out 3k, cache read 100k); "
+        + "claude-haiku-4-5 $0.0500 (in 900, out 200) | context 42k/200k (21%) | background tasks: 2",
+    );
+  });
+});

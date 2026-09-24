@@ -83,7 +83,7 @@ Configuration guidance for the `2026.9.6` installation target and retained `2026
 - OpenClaw wake payloads can now carry both `sessionKey` and `agentId` for multi-agent routing. This plugin already stores origin session keys and origin agent ids separately, and its wake follow-ups continue to route through the authoritative session key or system fallback.
 - Installed plugins that register host-trusted pre-tool policies must declare `contracts.trustedToolPolicies`. This plugin does not register trusted pre-tool policies, so no manifest contract is needed beyond the existing `contracts.tools` list.
 - The removed upstream sender-owner tool gating path does not replace this plugin's auth boundary. Chat commands remain auth-required, and Telegram/Discord callbacks still require authorized senders before `agent_respond`, plan approval, merge, PR, cleanup, or Start Plan actions are applied. OpenClaw's plugin write ownership checks are host-side package safety checks; OCA should not claim ownership of host or adjacent plugin package writes.
-- Legacy `defaultModel`, `model`, `reasoningEffort`, and global `allowedModels` are compatibility fields only. New configs should not use them. Existing explicit Claude Code defaults using `anthropic/claude-opus-5-5` must be changed to `opus`; that provider-qualified value is rejected at launch. Other explicit model overrides retain their existing behavior.
+- Legacy `defaultModel`, `model`, `reasoningEffort`, and global `allowedModels` are compatibility fields only. New configs should not use them. Provider-qualified Claude Code models such as `anthropic/claude-opus-5-5` are sent to Claude Code as the bare id (`claude-opus-5-5`); Claude Code does not accept the `anthropic/` prefix. Other explicit model overrides retain their existing behavior.
 - Managed external-plugin installs enforce `openclaw.install.minHostVersion`; this package sets that installation boundary to its exact OpenClaw `2026.9.6` build target. Its plugin API range, Gateway minimum, and peer dependency retain the verified OpenClaw `2026.8.1` floor. Keep `openclaw.extensions` pointing at the built `dist/index.js` artifact.
 - OpenClaw `2026.7.1` removes built-in dangerous-code blocking from plugin installs and deprecates `--dangerously-force-unsafe-install`; operators who require a host-specific allow/block decision should configure `security.installPolicy`. OCA's release smoke installs only its freshly packed artifact under an isolated temporary home and does not read or migrate operator state.
 - `tools.deny` does not disable OpenClaw's `apply_patch` tool by itself in current OpenClaw. To restrict patch edits, configure OpenClaw `tools.exec.applyPatch.enabled`, `tools.exec.applyPatch.workspaceOnly`, or `tools.exec.applyPatch.allowModels`.
@@ -166,7 +166,7 @@ The host wizard does not currently provide a plugin-specific readiness panel, so
   - Authenticated usability may still require Claude-side login/account setup when you launch the first session.
 - `opencode`
   - Experimental. Expect this to work only with local `opencode >= 1.16.2` and provider auth already configured for OpenCode.
-  - The plugin launches one `opencode serve` process per session on `127.0.0.1` and uses OpenCode's classic session lifecycle routes for prompt submission, status polling, message fetches, and replies while v2 session wait remains unavailable.
+  - The plugin lazily starts one shared `opencode serve` process on `127.0.0.1` for all OpenCode sessions and uses OpenCode's classic session routes (with `?directory=` per project) for prompt submission, message fetches, and replies. Turn completion comes from the server's event stream.
   - Leave the model unset for OpenCode's configured provider default, or pass an explicit `provider/model` string.
 
 When choosing `defaultHarness`:
@@ -224,9 +224,9 @@ forced_login_method = "chatgpt"
 
 | Harness | Models | Notes |
 | --- | --- | --- |
-| `claude-code` | Controlled by `harnesses.claude-code.allowedModels` | Native Claude Code harness with plan-mode interception |
+| `claude-code` | Controlled by `harnesses.claude-code.allowedModels` | Native Claude Code harness with native `ExitPlanMode` plan review and `AskUserQuestion` interception |
 | `codex` | Controlled by `harnesses.codex.allowedModels` | Native Codex App Server harness with structured pending input, structured plans, and native backend worktree refs |
-| `opencode` | Optional `provider/model`; unset uses OpenCode's configured provider default | Experimental OpenCode server harness with native pending input, plugin-owned plan gating, and plugin-managed worktrees |
+| `opencode` | Optional `provider/model`; unset uses OpenCode's configured provider default | Experimental OpenCode server harness with native pending input, OpenCode's built-in `plan`/`build` agents behind the plugin-owned plan gate, and plugin-managed worktrees |
 
 Allowed-model matching is case-insensitive substring matching. If the resolved model is not allowed, `agent_launch` fails immediately. Because OpenCode can use its own configured provider default, do not configure `harnesses.opencode.allowedModels` unless you also configure or pass an explicit OpenCode model that can be checked.
 
@@ -237,14 +237,32 @@ Codex harness details:
 - `harnesses.codex.fastMode: true` sends `service_tier: "fast"` on Codex App Server thread/resume/turn payloads. It is Codex-only and is ignored for Claude Code.
 - Codex execution policy remains fixed to the supported App Server path; use plugin `permissionMode` and `planApproval` for review behavior.
 
+Claude Code harness details:
+
+- Plan mode uses Claude Code's native plan protocol. When Claude calls `ExitPlanMode`, OCA holds the permission request open (Claude Code applies no deadline to permission prompts) and raises the plan for review using the tool's `plan` text and `planFilePath`. Approval answers the request with `allow` plus a session-scoped `setMode` update (normally `bypassPermissions`). Revision feedback answers it with `deny` and the user's feedback, so Claude revises and resubmits in the same turn. Any other mutating tool that Claude Code routes to OCA while in plan mode is denied.
+- If a plan waits long enough for the session to be idle-suspended, the pending request ends with the process. A later approval resumes the Claude Code session in `bypassPermissions` with a plain approval message; a revision resumes it in plan mode.
+- OCA passes its review workflow as the SDK `planModeInstructions` option instead of framing approvals and revisions as `[SYSTEM: …]` prompt text.
+- Worktree sessions set the SDK `projectConfigRoot` to the original checkout, so project settings, hooks, `.mcp.json`, and `.claude/` configuration come from the trusted checkout rather than from the branch under edit.
+- MCP servers come from Claude Code's own settings sources; OCA does not re-inject `~/.claude.json` servers.
+- Completed Claude Code sessions can be resumed with `agent_respond` or `agent_launch(resume_session_id=...)`. OCA first checks that the transcript still exists (`getSessionInfo()`) and fails with a clear message if it does not. Forks use the SDK `resume` + `forkSession` options, which report the new session id at startup.
+- Turn outcomes come from structured SDK fields: `is_error`, the assistant `error` code (for example `authentication_failed`), `startup_failure_reason`, and `terminal_reason` (aborted turns become interrupted turns). Results are deferred while `queued_turn_count` says more queued user turns follow, and empty background-task notification results (`origin.kind: "task-notification"`, zero turns) are skipped.
+- Cost is the sum of the SDK's per-model `modelUsage` entries. `agent_output` shows the per-model cost and tokens, the context window fill from `getContextUsage()`, and the number of live background tasks. OCA enables session-state events and records permission denials as diagnostics.
+- File rewind (`rewindFiles`) is not used: it needs SDK file checkpointing, the checkpoints live only in the Claude Code process, and OCA already isolates edits in git worktrees that can be reset or discarded with git.
+
 OpenCode harness details:
 
 - Experimental support targets `opencode >= 1.16.2`.
-- The plugin starts `opencode serve` in the prepared session cwd, binds it to localhost, and shuts it down when the session finishes or is interrupted.
-- Fresh launches create sessions through OpenCode's classic session-create route because the current v2 API has no create endpoint. Prompt, wait, context/message, permission reply, and question reply flows use classic `prompt_async`, session status, message, permission reply, and question reply routes because v2 session wait is not available yet.
+- The plugin lazily starts one shared `opencode serve --port 0` process on localhost and reads the bound URL from its `opencode server listening on …` output. Every request names its project with `?directory=`, so sessions in different worktrees run concurrently on the same server. The server shuts down about 30 seconds after the last OpenCode session ends.
+- One `/global/event` stream is demultiplexed by session id. A turn completes on `session.idle` (or an idle `session.status`) once the turn has shown activity; an idle event without activity is confirmed against session status and messages. Session status is polled only while the event stream is disconnected, to catch up on missed events.
+- If the server process dies, every in-flight turn fails with the exit reason, and the next turn starts a fresh server. OpenCode persists sessions, so they continue.
+- Fresh launches create sessions through OpenCode's classic session-create route. Prompts use classic `prompt_async`; message, permission reply, and question reply flows use the classic routes. Responses that are not JSON (for example the web UI's HTML shell) are rejected with a diagnostic.
+- Plan mode prompts OpenCode's built-in `plan` agent, which denies edits except its own plan files. OCA adds a session overlay that also denies `bash` and access outside the project, because the plan agent otherwise relies on instructions to keep shell commands read-only. After approval, prompts use the `build` agent; OpenCode then adds its own build-switch reminder. The plugin still owns the plan approval gate. (OpenCode's own `plan_exit` tool is only available in the OpenCode CLI.)
+- Multi-question requests are answered with one answer list per question. Multi-select questions accept several comma-separated labels or option numbers in a text reply.
+- The session's reasoning effort is sent as the prompt's `variant`. OpenCode ignores variant names that the model does not define.
+- Turn duration, per-model tokens, and cost come from OpenCode's assistant message records; the session record's cost is used when available.
 - `OPENCLAW_OPENCODE_COMMAND` can override the `opencode` executable. If `OPENCODE_SERVER_PASSWORD` is set, the plugin sends Basic Auth using `OPENCODE_SERVER_USERNAME` or `opencode` as the default username.
 - Native OpenCode worktrees are out of scope for this integration. Worktree strategies use the plugin-managed worktree path.
-- OpenCode does not emit structured OpenClaw plan artifacts in this version, so `nativePlanArtifacts` is false and the plugin owns the plan approval gate.
+- OpenCode does not emit structured OpenClaw plan artifacts in this version, so `nativePlanArtifacts` is false.
 
 Important boundary:
 
@@ -315,7 +333,7 @@ Do not use these for new setup:
 | `plan` | Present the plan first, then block implementation until approval |
 | `bypassPermissions` | Fully autonomous execution with no plan checkpoint |
 
-`plan` is the plugin default. Claude Code, Codex, and experimental OpenCode feed the same plugin-owned approval workflow. Codex supplies structured plan artifacts through the App Server backend; OpenCode support is text-only for plan review in this version.
+`plan` is the plugin default. Claude Code, Codex, and experimental OpenCode feed the same plugin-owned approval workflow. Claude Code supplies its plan through the native `ExitPlanMode` request and receives the decision as that request's answer; Codex supplies structured plan artifacts through the App Server backend; OpenCode plans are text from its built-in `plan` agent.
 
 For Codex, approval behavior is fixed to the supported execution path and is not user-configurable. Use `permissionMode` and `planApproval` to control review gates instead.
 

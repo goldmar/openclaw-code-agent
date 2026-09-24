@@ -108,7 +108,8 @@ describe("ClaudeCodeHarness properties", () => {
     const h = getHarness("claude-code");
     assertStructuredBackendContract(h);
     assert.equal(h.capabilities.nativePendingInput, false);
-    assert.equal(h.capabilities.nativePlanArtifacts, false);
+    assert.equal(h.capabilities.nativePlanArtifacts, true);
+    assert.equal(h.capabilities.nativePlanDecisions, true);
   });
 
   it("buildUserMessage returns correct structure", () => {
@@ -117,6 +118,6 @@ describe("ClaudeCodeHarness properties", () => {
     assert.equal(msg.type, "user");
     assert.equal(msg.message.role, "user");
     assert.equal(msg.message.content, "hello world");
-    assert.equal(msg.session_id, "sess-123");
+    assert.equal(Object.hasOwn(msg, "session_id"), false);
   });
 });

@@ -118,6 +118,12 @@ export interface SessionRuntimeRecoveryDiagnostics {
 export interface BackendCapabilityFlags {
   nativePendingInput: boolean;
   nativePlanArtifacts: boolean;
+  /**
+   * The backend carries plan approve/revise decisions natively (Claude
+   * ExitPlanMode permission results, OpenCode plan/build agent switching), so
+   * OCA forwards the user's words without prompt-level plan-decision framing.
+   */
+  nativePlanDecisions?: boolean;
   worktrees: BackendWorktreeCapability;
 }
 

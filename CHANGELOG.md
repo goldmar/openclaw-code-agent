@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking changes
+
+- Claude Code plan review now uses Claude Code's native `ExitPlanMode` request instead of scraping the final turn text. OCA holds the request open until the decision and answers it directly: approval is an `allow` with a session-scoped mode switch (normally `bypassPermissions`), and revision feedback is a `deny` carrying the user's words. Plans no longer appear as a finished turn; the plan-review notification fires while the turn is held. Plan text and `planFilePath` come from the tool input; the `.claude/plans/` write heuristic, `ExitPlanMode`/`set_permission_mode` tool-name signals, and `[SYSTEM: …]` approval/revision prefixes are gone for Claude Code and OpenCode (Codex keeps its prompt framing). An approval that arrives after the session was idle-suspended still resumes it in `bypassPermissions`, now with a plain approval message.
+- OCA no longer copies MCP servers from `~/.claude.json` into Claude Code launches. Claude Code loads user, project, and local MCP servers from its own settings sources.
+- Provider-qualified Claude Code models (`anthropic/claude-…`) are now sent as the bare Claude Code id instead of being rejected (`anthropic/claude-opus-5-5` → `claude-opus-5-5`). Stored `anthropic/claude-opus-5-5` defaults no longer need to be changed.
+- Completed Claude Code sessions are resumable like Codex and OpenCode sessions. OCA validates the transcript with the SDK's `getSessionInfo()` before resuming.
+- OpenCode runs on one shared, lazily started `opencode serve` process instead of one server per session, started with `--port 0` and addressed through the URL it prints. Every request carries `?directory=`, completion comes from the `/global/event` stream, and the server shuts down about 30 seconds after the last OpenCode session. `interrupt` now aborts only the in-flight OpenCode turn; closing the session stops it.
+- OpenCode plan mode uses OpenCode's built-in `plan` agent (plus a `bash`/outside-project deny overlay) and switches to the `build` agent after approval, replacing OCA's custom edit/bash/task/todowrite deny list.
+
+### Added
+
+- Claude Code: pass OCA's review workflow as `planModeInstructions`; set `projectConfigRoot` to the original checkout for worktree sessions; report structured failures from `is_error`, assistant `error` codes, `startup_failure_reason`, and `terminal_reason` (aborted turns are interrupted turns, not failures); take cost from per-model `modelUsage`; read the applied model and effort from `system/init` or `supportedModels()`; show per-model cost, context fill (`getContextUsage()`), and live background tasks in `agent_output`; consume session-state and `permission_denied` events.
+- OpenCode: multi-select question answers, reasoning effort as the prompt `variant`, and turn duration, per-model tokens, and cost from OpenCode's message records.
+
+### Fixed
+
+- OpenCode multi-question requests now send one answer list per question instead of packing every answer into one string.
+- Claude Code plan mode no longer denies `ExitPlanMode` itself (since SDK 0.3.269 plan mode routes that tool through `canUseTool`), so Claude no longer sees its plan submission rejected.
+- Claude Code results that report `is_error` on a `success` subtype are failures, and a turn aborted by `agent_respond(..., interrupt=true)` is an interrupted turn rather than a failed session.
+- Claude Code results are no longer emitted while `queued_turn_count` says more queued user turns follow, so a queued follow-up can no longer end the session early. Empty background-notification results are recognized by `origin` instead of a zero-turn heuristic.
+- Claude Code startup failures are always reported; previously a failure before the first message could be dropped when the event stream closed first.
+- OpenCode reports each tool call once, with its input, instead of on every tool-part update.
+
+### Changed
+
+- Update `@anthropic-ai/claude-agent-sdk` to 0.3.281 (Claude Code 2.1.281), which Claude Code requires for `claude-opus-5-5`, and use its public `startup()`/`WarmQuery` and `Query` types.
+
 ## [4.7.20] - 2026-09-24
 
 ### Added

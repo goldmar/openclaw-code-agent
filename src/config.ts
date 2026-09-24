@@ -1,6 +1,3 @@
-import { readFileSync } from "fs";
-import { homedir } from "os";
-import { join } from "path";
 import type {
   HarnessConfig,
   OpenClawPluginToolContext,
@@ -14,12 +11,6 @@ import {
   routeFromOriginMetadata,
 } from "./session-route";
 
-// -- Global MCP servers from ~/.claude.json --
-
-/** MCP server definitions from the user's global Claude config. */
-export type McpServerConfig = Record<string, { type: string; command: string; args?: string[]; env?: Record<string, string> }>;
-
-let cachedMcpServers: McpServerConfig | undefined;
 const DEFAULT_HARNESS = "claude-code";
 const BUILTIN_HARNESS_CONFIGS: Record<string, HarnessConfig> = {
   "claude-code": {
@@ -33,19 +24,6 @@ const BUILTIN_HARNESS_CONFIGS: Record<string, HarnessConfig> = {
   },
   opencode: {},
 };
-
-/** Load and cache global MCP server definitions from `~/.claude.json`. */
-export function getGlobalMcpServers(): McpServerConfig {
-  if (cachedMcpServers !== undefined) return cachedMcpServers;
-  try {
-    const raw = readFileSync(join(homedir(), ".claude.json"), "utf-8");
-    const parsed = JSON.parse(raw);
-    cachedMcpServers = parsed.mcpServers ?? {};
-  } catch {
-    cachedMcpServers = {};
-  }
-  return cachedMcpServers!;
-}
 
 // -- Plugin config singleton --
 

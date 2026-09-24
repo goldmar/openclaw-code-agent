@@ -43,16 +43,15 @@ describe("assessResumeCandidate()", () => {
     }
   });
 
-  it("does not widen completed-session resume to Claude Code sessions", () => {
+  it("resumes completed Claude Code sessions (transcripts are validated at launch)", () => {
     const assessment = assessResumeCandidate(completedSession("claude-code", {
       kind: "claude-code",
       conversationId: "claude-thread",
     }));
 
-    assert.deepEqual(assessment, {
-      kind: "unavailable",
-      reason: "completed",
-      stableSessionId: "claude-code-session",
-    });
+    assert.equal(assessment.kind, "resume");
+    if (assessment.kind === "resume") {
+      assert.equal(assessment.resumeSessionId, "claude-thread");
+    }
   });
 });

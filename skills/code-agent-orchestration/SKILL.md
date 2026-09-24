@@ -47,7 +47,7 @@ When a session already exists for the task, keep using it.
 - Waiting for plan approval: `agent_respond(session, message, approve=true)` or `agent_request_plan_approval(...)` if delegated approval must escalate to the user
 - Waiting for a question answer: `agent_respond(session, message)`
 - Killed/stopped by restart: `agent_respond(session, message)`
-- Completed but needs follow-up: `agent_launch(resume_session_id=session_id, prompt="...")`
+- Completed but needs follow-up: `agent_respond(session, message)` resumes the same backend conversation (Claude Code, Codex, and OpenCode), or `agent_launch(resume_session_id=session_id, prompt="...")` when you need to change launch settings
 - Fresh `agent_launch` is only for genuinely independent work
 
 Do not launch a new coding session from a wake event for the same task.

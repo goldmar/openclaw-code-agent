@@ -112,9 +112,7 @@ export function resolveGoalLaunchRequest(
   if (canonicalModel && !isModelFormatSupportedForHarness(harness, canonicalModel)) {
     return {
       kind: "error",
-      text: harness === "claude-code"
-        ? `Error: Model "${rawModel}" is not supported by Claude Code. Use the "opus" alias instead.`
-        : `Error: Model "${rawModel}" is not supported for harness "${harness}". Use a bare Codex model id such as "gpt-6-sol" or "gpt-6-astra".`,
+      text: `Error: Model "${rawModel}" is not supported for harness "${harness}". Use a bare Codex model id such as "gpt-6-sol" or "gpt-6-astra".`,
     };
   }
 

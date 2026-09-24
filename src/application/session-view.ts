@@ -3,6 +3,7 @@ import type { SessionManager } from "../session-manager";
 import type { Session } from "../session";
 import { getSessionOutputFilePath } from "../session";
 import { formatDuration, formatSessionListing } from "../format";
+import type { HarnessUsage } from "../harness";
 import type {
   ApprovalExecutionState,
   PermissionMode,
@@ -36,6 +37,7 @@ interface ActiveSessionView {
   lifecycle?: string;
   duration: number;
   costUsd: number;
+  usage?: HarnessUsage;
   error?: string;
   result?: SessionResultSummary;
 }
@@ -146,14 +148,48 @@ function readLiveOutputLines(session: ActiveSessionView, options: OutputOptions,
   }
 }
 
+function formatTokenCount(tokens: number): string {
+  return tokens >= 1000 ? `${Math.round(tokens / 1000)}k` : String(tokens);
+}
+
+/** One-line backend usage summary: per-model cost/tokens, context fill, background work. */
+export function formatSessionUsage(usage: HarnessUsage | undefined): string | undefined {
+  if (!usage) return undefined;
+  const parts: string[] = [];
+  const models = [...(usage.models ?? [])].sort((a, b) => b.costUsd - a.costUsd);
+  if (models.length > 0) {
+    parts.push(models.map((entry) => {
+      const tokens = [
+        `in ${formatTokenCount(entry.inputTokens)}`,
+        `out ${formatTokenCount(entry.outputTokens)}`,
+        ...(entry.cacheReadTokens ? [`cache read ${formatTokenCount(entry.cacheReadTokens)}`] : []),
+        ...(entry.cacheWriteTokens ? [`cache write ${formatTokenCount(entry.cacheWriteTokens)}`] : []),
+      ].join(", ");
+      const basis = entry.costBasis === "unknown" ? " (estimated: no price table)" : "";
+      return `${entry.model} $${entry.costUsd.toFixed(4)}${basis} (${tokens})`;
+    }).join("; "));
+  }
+  if (typeof usage.contextTokens === "number") {
+    const window = typeof usage.contextWindow === "number" && usage.contextWindow > 0 ? usage.contextWindow : undefined;
+    const percent = window ? ` (${Math.round((usage.contextTokens / window) * 100)}%)` : "";
+    parts.push(`context ${formatTokenCount(usage.contextTokens)}${window ? `/${formatTokenCount(window)}` : ""}${percent}`);
+  }
+  if (usage.backgroundTasks) {
+    parts.push(`background tasks: ${usage.backgroundTasks}`);
+  }
+  return parts.length > 0 ? `Usage: ${parts.join(" | ")}` : undefined;
+}
+
 /** Build a header line for active runtime sessions. */
 function outputHeaderForActiveSession(session: ActiveSessionView): string {
   const duration = formatDuration(session.duration);
   const costStr = ` | Cost: $${session.costUsd.toFixed(4)}`;
   const phaseStr = session.phase ? ` | Phase: ${session.phase}` : "";
   const lifecycleStr = session.lifecycle && session.lifecycle !== session.phase ? ` | Lifecycle: ${session.lifecycle}` : "";
+  const usageLine = formatSessionUsage(session.usage);
   return [
     `Session: ${session.name} [${session.id}] | Status: ${session.status.toUpperCase()}${phaseStr}${lifecycleStr}${costStr} | Duration: ${duration}`,
+    ...(usageLine ? [usageLine] : []),
     `${"─".repeat(60)}`,
   ].join("\n");
 }
