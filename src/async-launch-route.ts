@@ -52,8 +52,29 @@ export function resolveRequiredAsyncLaunchRoute(args: {
     kind: "error",
     text: [
       `Error: Cannot launch the asynchronous ${args.operation} because OpenClaw did not provide a trustworthy lifecycle delivery route.`,
-      `The invocation context is missing session, delivery, and workspace identity (as occurs in the standalone deferred/nested plugin-tool bridge).`,
+      describeMissingDeliveryRoute(args.ctx, route),
       `Retry from the originating chat/session or update OpenClaw so nested plugin-tool invocations preserve ToolContext routing fields. No coding session was started.`,
     ].join(" "),
   };
+}
+
+/**
+ * Name exactly what the invocation context lacks. The launch needs a direct
+ * delivery route (a channel plus a conversation target); a session key alone is
+ * not enough when it does not identify a chat conversation.
+ */
+function describeMissingDeliveryRoute(ctx: OpenClawPluginToolContext, route: SessionRoute | undefined): string {
+  const hasSessionKey = Boolean(ctx.sessionKey?.trim());
+  const channel = route?.provider && route.provider !== "system"
+    ? route.provider
+    : ctx.deliveryContext?.channel?.trim() || ctx.messageChannel?.split("|")[0]?.trim() || undefined;
+  const missingRoute = channel
+    ? `a delivery target: the "${channel}" channel was provided without a conversation to deliver to`
+    : "a delivery route: no delivery context or message channel was provided"
+      + (hasSessionKey ? ", and the session key does not identify a chat conversation" : "");
+  const present = hasSessionKey ? "The invocation context has a session key but is missing" : "The invocation context is missing a session key and";
+  const bridgeHint = hasSessionKey || channel
+    ? ""
+    : " (as occurs in the standalone deferred/nested plugin-tool bridge)";
+  return `${present} ${missingRoute}${bridgeHint}.`;
 }

@@ -274,7 +274,51 @@ describe("agent_launch tool defaults", () => {
     assert.equal(spawnCalled, false);
     const text = (result.content[0] as { text: string }).text;
     assert.match(text, /did not provide a trustworthy lifecycle delivery route/);
+    assert.match(text, /is missing a session key and a delivery route/);
     assert.match(text, /No coding session was started/);
+  });
+
+  it("names the missing delivery route when only a session key was passed", async () => {
+    let spawnCalled = false;
+    setSessionManager({
+      resolveBackendConversationId: (id: string) => id,
+      launchSession() {
+        spawnCalled = true;
+        throw new Error("must not spawn");
+      },
+    } as any);
+
+    const tool = makeAgentLaunchTool({ config: {}, sessionKey: "agent:main:main" } as any);
+    const result = await tool.execute("session-key-only", {
+      prompt: "Launch with a session key but no delivery route",
+      workdir: "/tmp",
+    });
+
+    assert.equal(spawnCalled, false);
+    const text = (result.content[0] as { text: string }).text;
+    assert.match(
+      text,
+      /has a session key but is missing a delivery route: no delivery context or message channel was provided, and the session key does not identify a chat conversation\./,
+    );
+    assert.doesNotMatch(text, /missing session, delivery, and workspace identity/);
+  });
+
+  it("names the missing delivery target when a channel has no conversation", async () => {
+    setSessionManager({
+      resolveBackendConversationId: (id: string) => id,
+      launchSession() {
+        throw new Error("must not spawn");
+      },
+    } as any);
+
+    const tool = makeAgentLaunchTool({ config: {}, sessionKey: "agent:main:main", messageChannel: "telegram" } as any);
+    const result = await tool.execute("channel-without-target", {
+      prompt: "Launch with a channel but no conversation",
+      workdir: "/tmp",
+    });
+
+    const text = (result.content[0] as { text: string }).text;
+    assert.match(text, /is missing a delivery target: the "telegram" channel was provided without a conversation to deliver to\./);
   });
 
   it("asks for repo policy with buttons before launching worktree sessions for unknown repos", async () => {
