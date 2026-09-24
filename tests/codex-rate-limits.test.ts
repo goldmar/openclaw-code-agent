@@ -44,7 +44,7 @@ describe("Codex rate-limit surfacing (B14)", () => {
       rateLimitResetCredits: null,
       accountId: null,
       rateLimitUpsell: null,
-    }, NOW - 120_000);
+    }, "fallback-1", NOW - 120_000);
     assert.deepEqual(formatCodexRateLimits(undefined, NOW), [
       "Codex usage limits (pro plan), observed 2m ago:",
       "  Primary (5h): 17% used, resets in 1h 0m",
@@ -60,7 +60,7 @@ describe("Codex rate-limit surfacing (B14)", () => {
       rateLimitResetCredits: null,
       accountId: null,
       rateLimitUpsell: null,
-    }, NOW);
+    }, "fallback-2", NOW);
     mergeCodexRateLimitsUpdate(key, snapshot({ primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: NOW / 1000 + 600 }, secondary: null, planType: null, rateLimitReachedType: "rate_limit_reached" }), NOW);
     const state = getCodexRateLimits(key);
     assert.equal(state?.snapshot.primary?.usedPercent, 100);
@@ -75,8 +75,8 @@ describe("Codex rate-limit surfacing (B14)", () => {
 
   it("keeps accounts separate and never renders account ids", () => {
     const base = { ordinaryUsageAllowed: true, rateLimitsByLimitId: null, rateLimitResetCredits: null, rateLimitUpsell: null };
-    const a = recordCodexRateLimits({ ...base, rateLimits: snapshot(), accountId: "acct-secret-a" }, NOW);
-    const b = recordCodexRateLimits({ ...base, rateLimits: snapshot({ planType: "plus" }), accountId: "acct-secret-b" }, NOW - 1);
+    const a = recordCodexRateLimits({ ...base, rateLimits: snapshot(), accountId: "acct-secret-a" }, "fb-a", NOW);
+    const b = recordCodexRateLimits({ ...base, rateLimits: snapshot({ planType: "plus" }), accountId: "acct-secret-b" }, "fb-b", NOW - 1);
     mergeCodexRateLimitsUpdate(b, snapshot({ primary: { usedPercent: 99, windowDurationMins: 300, resetsAt: NOW / 1000 + 60 } }), NOW - 1);
     assert.equal(getCodexRateLimits(a)?.snapshot.primary?.usedPercent, 17);
     assert.equal(getCodexRateLimits(b)?.snapshot.primary?.usedPercent, 99);

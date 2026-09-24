@@ -16,8 +16,16 @@ export interface CodexRateLimitState {
   observedAt: number;
 }
 
-/** Key for sessions whose account id the backend did not report. */
-export const UNKNOWN_CODEX_ACCOUNT = "unknown-account";
+let unreportedAccountCounter = 0;
+
+/**
+ * Key for a connection whose account id is unknown (read failed or the
+ * backend omitted it). Unique per connection so unknown accounts never merge.
+ */
+export function unreportedCodexAccountKey(): string {
+  unreportedAccountCounter += 1;
+  return `unreported-account-${unreportedAccountCounter}`;
+}
 
 /**
  * Snapshots per Codex account. Different sessions can run under different
@@ -26,9 +34,16 @@ export const UNKNOWN_CODEX_ACCOUNT = "unknown-account";
  */
 const byAccount = new Map<string, CodexRateLimitState>();
 
-/** Record a full `account/rateLimits/read` response; returns the account key. */
-export function recordCodexRateLimits(response: GetAccountRateLimitsResponse, now = Date.now()): string {
-  const accountKey = response.accountId?.trim() || UNKNOWN_CODEX_ACCOUNT;
+/**
+ * Record a full `account/rateLimits/read` response; returns the account key
+ * (`fallbackKey` when the backend did not report an account id).
+ */
+export function recordCodexRateLimits(
+  response: GetAccountRateLimitsResponse,
+  fallbackKey: string,
+  now = Date.now(),
+): string {
+  const accountKey = response.accountId?.trim() || fallbackKey;
   byAccount.set(accountKey, {
     snapshot: response.rateLimits,
     ordinaryUsageAllowed: response.ordinaryUsageAllowed,

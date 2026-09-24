@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { getHarness, listHarnesses } from "../src/harness/index";
 import { CodexHarness, DEFAULT_APP_SERVER_ARGS, DEFAULT_REQUEST_TIMEOUT_MS, isCodexAppServerSessionId } from "../src/harness/codex";
 import { JsonRpcResponseError, StdioJsonRpcClient, dispatchJsonRpcEnvelope, type JsonRpcId } from "../src/harness/codex-rpc";
-import { recordCodexModelCatalog, resetCodexModelCatalogForTests } from "../src/harness/codex-model-catalog";
+import { codexModelSupportsEffort, recordCodexModelCatalog, resetCodexModelCatalogForTests } from "../src/harness/codex-model-catalog";
 import { getCodexRateLimits, listCodexRateLimits, resetCodexRateLimitsForTests } from "../src/harness/codex-rate-limits";
 import { setPluginConfig } from "../src/config";
 import type { HarnessMessage, HarnessSession } from "../src/harness/types";
@@ -582,6 +582,33 @@ describe("CodexHarness launch settings", () => {
     assert.equal(getCodexRateLimits("acct-a")?.snapshot.primary?.usedPercent, 64);
     assert.equal(getCodexRateLimits("acct-b")?.snapshot.primary?.usedPercent, 5);
     assert.equal(listCodexRateLimits().length, 2);
+  });
+
+  it("keeps tracking rate-limit updates when the initial read fails, without merging unknown accounts", async () => {
+    const client = new MockCodexClient({ accountType: "chatgpt", holdTurns: true });
+    const originalRequest = client.request.bind(client);
+    client.request = async (method: string, params?: unknown, timeoutMs?: number) => {
+      if (method === "account/rateLimits/read") throw new Error("temporarily unavailable");
+      return originalRequest(method, params, timeoutMs);
+    };
+    const session = launch(client);
+    const iter = session.messages[Symbol.asyncIterator]();
+    await nextOfType(iter, "run_started");
+    const update = {
+      limitId: "codex", limitName: null, normalModelSlug: null,
+      primary: { usedPercent: 81, windowDurationMins: 300, resetsAt: 4_000_000_000 },
+      secondary: null, credits: null, individualLimit: null, spendControlReached: null, planType: null, rateLimitReachedType: null,
+    };
+    await client.notificationHandler("account/rateLimits/updated", { rateLimits: update });
+    assert.deepEqual(listCodexRateLimits().map((state) => state.snapshot.primary?.usedPercent), [81]);
+    await client.completeTurn();
+    await nextOfType(iter, "run_completed");
+  });
+
+  it("keeps a validated effort displayable after another connection reports fewer efforts", async () => {
+    await collectMessages(launch(new MockCodexClient({ models: [codexCatalogModel("gpt-5.5", ["low", "high"])] })));
+    await collectMessages(launch(new MockCodexClient({ models: [codexCatalogModel("gpt-5.5", ["low"])] })));
+    assert.equal(codexModelSupportsEffort("gpt-5.5", "high"), true);
   });
 
   it("refreshes model/list on every connection instead of trusting another server's catalog", async () => {

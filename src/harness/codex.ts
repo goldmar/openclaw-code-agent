@@ -63,7 +63,7 @@ import {
   type CodexPendingRequest,
 } from "./codex-protocol";
 import { refreshCodexModelCatalog, type CodexModelInfo } from "./codex-model-catalog";
-import { describeCodexLimitReset, mergeCodexRateLimitsUpdate, recordCodexRateLimits } from "./codex-rate-limits";
+import { describeCodexLimitReset, mergeCodexRateLimitsUpdate, recordCodexRateLimits, unreportedCodexAccountKey } from "./codex-rate-limits";
 import type { ThreadForkResponse, ThreadResumeResponse, ThreadStartResponse } from "./codex-app-server-protocol";
 import type { AccountRateLimitsUpdatedNotification } from "./codex-app-server-protocol/v2/AccountRateLimitsUpdatedNotification";
 import type { AgentMessageDeltaNotification } from "./codex-app-server-protocol/v2/AgentMessageDeltaNotification";
@@ -520,8 +520,12 @@ export class CodexHarness implements AgentHarness {
       }
       if (accountType === "chatgpt") {
         await codexRequest(client, "account/rateLimits/read", undefined, auxTimeoutMs)
-          .then((limits) => { rateLimitAccountKey = recordCodexRateLimits(limits); })
-          .catch((error: unknown) => logCodexHarnessDiagnostic("rate_limits.read.unavailable", { error: errorMessage(error) }));
+          .then((limits) => { rateLimitAccountKey = recordCodexRateLimits(limits, unreportedCodexAccountKey()); })
+          .catch((error: unknown) => {
+            // Still track this connection's rolling updates under its own key.
+            rateLimitAccountKey = unreportedCodexAccountKey();
+            logCodexHarnessDiagnostic("rate_limits.read.unavailable", { error: errorMessage(error) });
+          });
       }
       logCodexHarnessDiagnostic("client.initialize.done", {
         hasResumeSessionId: Boolean(options.resumeSessionId),

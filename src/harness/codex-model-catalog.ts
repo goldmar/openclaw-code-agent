@@ -42,8 +42,25 @@ function toInfo(model: Model): CodexModelInfo {
   };
 }
 
+/**
+ * Merge one connection's `model/list` into the process-wide display catalog.
+ * Efforts are unioned per model so a session validated against its own
+ * connection keeps its `reasoning:` label when another connection (other
+ * CODEX_HOME/account/version) reports a narrower set.
+ */
 export function recordCodexModelCatalog(models: Model[], now = Date.now()): void {
-  catalog = { models: models.map(toInfo), fetchedAt: now };
+  const merged = new Map((catalog?.models ?? []).map((entry) => [entry.id.toLowerCase(), entry]));
+  for (const info of models.map(toInfo)) {
+    const previous = merged.get(info.id.toLowerCase());
+    merged.set(info.id.toLowerCase(), previous
+      ? {
+          ...info,
+          supportedReasoningEfforts: [...new Set([...previous.supportedReasoningEfforts, ...info.supportedReasoningEfforts])],
+          serviceTiers: [...new Set([...previous.serviceTiers, ...info.serviceTiers])],
+        }
+      : info);
+  }
+  catalog = { models: [...merged.values()], fetchedAt: now };
 }
 
 export function hasCodexModelCatalog(): boolean {
@@ -83,7 +100,8 @@ export async function refreshCodexModelCatalog(client: JsonRpcClient, timeoutMs:
     if (!cursor) break;
   }
   recordCodexModelCatalog(models);
-  return catalog!.models;
+  // Return this connection's own list; the shared catalog is a display union.
+  return models.map(toInfo);
 }
 
 export function resetCodexModelCatalogForTests(): void {
