@@ -1,7 +1,10 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
-import { ClaudeCodeHarness, CLAUDE_PLAN_MODE_INSTRUCTIONS } from "../src/harness/claude-code";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { ClaudeCodeHarness, CLAUDE_PLAN_MODE_INSTRUCTIONS, trustedPlanFilePath } from "../src/harness/claude-code";
 import { setPluginConfig } from "../src/config";
 import { resolveAgentLaunchRequest } from "../src/tools/agent-launch-resolution";
 import type { HarnessMessage } from "../src/harness/types";
@@ -287,8 +290,13 @@ describe("ClaudeCodeHarness", () => {
   });
 
   it("holds ExitPlanMode as a native plan request and approves it with a session mode switch", async () => {
+    const configDir = mkdtempSync(join(tmpdir(), "oca-claude-config-"));
+    mkdirSync(join(configDir, "plans"));
+    const previousConfigDir = process.env.CLAUDE_CONFIG_DIR;
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const planPath = join(configDir, "plans", "p.md");
     const { session, canUseTool, messages, finish } = await launchForCanUseTool("plan");
-    const input = { plan: "# Plan\n1. Edit src/a.ts", planFilePath: "/home/u/.claude/plans/p.md" };
+    const input = { plan: "# Plan\n1. Edit src/a.ts", planFilePath: planPath };
     const decision = canUseTool("ExitPlanMode", input, {
       signal: new AbortController().signal,
       requestId: "req-plan-1",
@@ -300,7 +308,7 @@ describe("ClaudeCodeHarness", () => {
     assert.ok(request && request.type === "plan_approval_requested");
     assert.equal(request.request.requestId, "req-plan-1");
     assert.equal(request.request.artifact.markdown, "# Plan\n1. Edit src/a.ts");
-    assert.equal(request.request.planFilePath, "/home/u/.claude/plans/p.md");
+    assert.equal(request.request.planFilePath, planPath);
 
     assert.equal(await session.resolvePlanDecision?.({ kind: "approve", permissionMode: "bypassPermissions" }), true);
     assert.deepEqual(await decision, {
@@ -313,6 +321,57 @@ describe("ClaudeCodeHarness", () => {
     // After approval the harness leaves plan mode, so tools are allowed again.
     assert.equal((await canUseTool("Write", { file_path: "a" })).behavior, "allow");
     await finish();
+    if (previousConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = previousConfigDir;
+    rmSync(configDir, { recursive: true, force: true });
+  });
+
+  it("only reads and publishes plan files inside Claude plans directories", async () => {
+    const configDir = mkdtempSync(join(tmpdir(), "oca-claude-config-"));
+    const project = mkdtempSync(join(tmpdir(), "oca-claude-project-"));
+    const previousConfigDir = process.env.CLAUDE_CONFIG_DIR;
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    try {
+      mkdirSync(join(configDir, "plans"));
+      mkdirSync(join(project, ".claude", "plans"), { recursive: true });
+      writeFileSync(join(configDir, "plans", "user.md"), "# User plan");
+      writeFileSync(join(project, ".claude", "plans", "project.md"), "# Project plan");
+      writeFileSync(join(project, "secret.md"), "TOKEN=abc");
+      symlinkSync(join(project, "secret.md"), join(configDir, "plans", "escape.md"));
+
+      assert.ok(trustedPlanFilePath(join(configDir, "plans", "user.md"), [project]));
+      assert.ok(trustedPlanFilePath(join(project, ".claude", "plans", "project.md"), [project]));
+      assert.equal(trustedPlanFilePath(join(project, "secret.md"), [project]), undefined);
+      assert.equal(trustedPlanFilePath(join(configDir, "plans", "escape.md"), [project]), undefined, "symlinks cannot escape");
+      assert.equal(trustedPlanFilePath(join(configDir, "plans", "..", "settings.md"), [project]), undefined);
+      assert.equal(trustedPlanFilePath("/etc/passwd", [project]), undefined);
+      assert.equal(trustedPlanFilePath("plans/p.md", [project]), undefined, "relative paths are rejected");
+
+      const { canUseTool, messages, session, finish } = await launchForCanUseTool("plan", { cwd: project });
+      void canUseTool("ExitPlanMode", { plan: "", planFilePath: join(project, "secret.md") }, {
+        signal: new AbortController().signal, requestId: "req-untrusted", toolUseID: "tool-untrusted",
+      });
+      await new Promise((resolve) => setImmediate(resolve));
+      const untrusted = messages.find((message) => message.type === "plan_approval_requested");
+      assert.ok(untrusted && untrusted.type === "plan_approval_requested");
+      assert.equal(untrusted.request.artifact.markdown, "", "untrusted file contents are never read");
+      assert.equal(untrusted.request.planFilePath, undefined);
+
+      await session.resolvePlanDecision?.({ kind: "revise", feedback: "again" });
+      void canUseTool("ExitPlanMode", { plan: "", planFilePath: join(project, ".claude", "plans", "project.md") }, {
+        signal: new AbortController().signal, requestId: "req-trusted", toolUseID: "tool-trusted",
+      });
+      await new Promise((resolve) => setImmediate(resolve));
+      const trusted = messages.filter((message) => message.type === "plan_approval_requested").at(-1);
+      assert.ok(trusted && trusted.type === "plan_approval_requested");
+      assert.equal(trusted.request.artifact.markdown, "# Project plan");
+      await finish();
+    } finally {
+      if (previousConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = previousConfigDir;
+      rmSync(configDir, { recursive: true, force: true });
+      rmSync(project, { recursive: true, force: true });
+    }
   });
 
   it("returns plan revision feedback as the ExitPlanMode denial", async () => {
@@ -632,7 +691,11 @@ describe("ClaudeCodeHarness", () => {
       { type: "system", subtype: "permission_denied", tool_name: "Bash", tool_use_id: "t", message: "denied" },
       OK_RESULT,
     ], {
-      getContextUsage: async () => ({ totalTokens: 42000, maxTokens: 200000 }),
+      // Resolves after the stream has ended: must still reach consumers.
+      getContextUsage: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        return { totalTokens: 42000, maxTokens: 200000 };
+      },
     });
     const messages = await collectAll(harnessWith(handle).launch({ prompt: "x", cwd: "/tmp" }));
     const usage = messages.filter((message) => message.type === "usage_updated").map((message) => message.type === "usage_updated" ? message.usage : undefined);

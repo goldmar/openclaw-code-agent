@@ -3,7 +3,9 @@
  * plugin's structured backend/run event model.
  */
 
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
+import { homedir } from "node:os";
+import { isAbsolute, join, relative, resolve as resolvePath } from "node:path";
 import {
   getSessionInfo as sdkGetSessionInfo,
   startup as sdkStartup,
@@ -137,6 +139,37 @@ function isCoalescedBackgroundResult(msg: SDKResultMessage): boolean {
     && !resolveResultText(msg);
 }
 
+function isInside(root: string, candidate: string): boolean {
+  const rel = relative(root, candidate);
+  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+}
+
+function realpathOrSelf(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return resolvePath(path);
+  }
+}
+
+/**
+ * `planFilePath` comes from model-authored tool input. Only accept Markdown
+ * files inside a Claude plans directory (the user config dir or the project's
+ * `.claude/plans`), after resolving symlinks, so a plan request can never
+ * surface an arbitrary local file in chat or session output.
+ */
+export function trustedPlanFilePath(path: string | undefined, projectDirs: Array<string | undefined>): string | undefined {
+  const trimmed = path?.trim();
+  if (!trimmed || !isAbsolute(trimmed) || !trimmed.toLowerCase().endsWith(".md")) return undefined;
+  const configDir = process.env.CLAUDE_CONFIG_DIR?.trim() || join(homedir(), ".claude");
+  const roots = [
+    join(configDir, "plans"),
+    ...projectDirs.filter((dir): dir is string => !!dir).map((dir) => join(dir, ".claude", "plans")),
+  ].map(realpathOrSelf);
+  const resolved = realpathOrSelf(trimmed);
+  return roots.some((root) => isInside(root, resolved)) ? resolved : undefined;
+}
+
 function readPlanFile(path: string | undefined): string | undefined {
   if (!path) return undefined;
   try {
@@ -244,9 +277,10 @@ export class ClaudeCodeHarness implements AgentHarness {
       signal: AbortSignal,
     ): Promise<PermissionResult> => {
       settlePendingPlan({ behavior: "deny", message: "Superseded by a newer plan submission." });
-      const planFilePath = typeof input.planFilePath === "string" && input.planFilePath.trim()
-        ? input.planFilePath.trim()
-        : undefined;
+      const planFilePath = trustedPlanFilePath(
+        typeof input.planFilePath === "string" ? input.planFilePath : undefined,
+        [options.cwd, options.originalWorkdir],
+      );
       const inlinePlan = typeof input.plan === "string" ? input.plan.trim() : "";
       const artifact: PlanArtifact = {
         explanation: undefined,
@@ -372,8 +406,16 @@ export class ClaudeCodeHarness implements AgentHarness {
       }
     })();
 
+    // Advisory reporting calls; awaited before the queue closes so late
+    // updates from short sessions still reach consumers.
+    const reporting = new Set<Promise<void>>();
+    const track = (task: Promise<void>): void => {
+      reporting.add(task);
+      void task.finally(() => reporting.delete(task));
+    };
+
     const publishContextUsage = (q: Query): void => {
-      void (async () => {
+      track((async () => {
         try {
           const context = await q.getContextUsage({ detail: "summary" });
           if (!Number.isFinite(context?.totalTokens)) return;
@@ -387,11 +429,11 @@ export class ClaudeCodeHarness implements AgentHarness {
         } catch {
           // Context usage is advisory; older CLIs and closed queries lack it.
         }
-      })();
+      })());
     };
 
     const publishBackendInfo = (q: Query, initModel: string | undefined, initEffort: ReasoningEffort | null | undefined): void => {
-      void (async () => {
+      track((async () => {
         let models: ModelInfo[] | undefined;
         if (options.reasoningEffort && initEffort === undefined) {
           try {
@@ -410,7 +452,7 @@ export class ClaudeCodeHarness implements AgentHarness {
         if (Object.keys(info).length > 0) {
           queue.enqueue({ type: "backend_info", info });
         }
-      })();
+      })());
     };
 
     void (async () => {
@@ -544,6 +586,7 @@ export class ClaudeCodeHarness implements AgentHarness {
       } finally {
         closed = true;
         settlePendingPlan({ behavior: "deny", message: "The session ended before the plan was reviewed.", interrupt: true });
+        await Promise.allSettled([...reporting]);
         queue.close();
       }
     })();

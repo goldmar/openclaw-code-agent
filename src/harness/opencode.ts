@@ -649,6 +649,8 @@ class OpenCodeServerManager {
   private current?: SharedServer;
   private starting?: Promise<SharedServer>;
   private idleTimer?: NodeJS.Timeout;
+  /** Launches currently waiting for the server to start. */
+  private waiting = 0;
 
   constructor(private readonly deps: OpenCodeHarnessDeps) {}
 
@@ -658,14 +660,25 @@ class OpenCodeServerManager {
       this.idleTimer = undefined;
     }
     const startup = this.ensureServer();
-    const server = signal
-      ? await boundedPromise(startup, {
-          timeoutMs: (this.deps.startupTimeoutMs ?? STARTUP_TIMEOUT_MS) + 5_000,
-          timeoutMessage: "Timed out waiting for the shared OpenCode server.",
-          signal,
-          abortMessage: "OpenCode startup was interrupted before session creation.",
-        })
-      : await startup;
+    this.waiting += 1;
+    let server: SharedServer;
+    try {
+      server = signal
+        ? await boundedPromise(startup, {
+            timeoutMs: (this.deps.startupTimeoutMs ?? STARTUP_TIMEOUT_MS) + 5_000,
+            timeoutMessage: "Timed out waiting for the shared OpenCode server.",
+            signal,
+            abortMessage: "OpenCode startup was interrupted before session creation.",
+          })
+        : await startup;
+    } catch (error) {
+      this.waiting -= 1;
+      // The launch gave up, but startup may still finish: never leave a server
+      // that nobody holds running without an idle-shutdown timer.
+      startup.then((started) => this.releaseIfUnused(started), (): undefined => undefined);
+      throw error;
+    }
+    this.waiting -= 1;
     server.leases += 1;
     await boundedPromise(server.streamReady, {
       timeoutMs: STREAM_READY_TIMEOUT_MS,
@@ -694,19 +707,24 @@ class OpenCodeServerManager {
         if (released) return;
         released = true;
         server.leases -= 1;
-        if (server.leases > 0 || server !== this.current) return;
-        const idleMs = this.deps.serverIdleShutdownMs ?? SERVER_IDLE_SHUTDOWN_MS;
-        if (idleMs <= 0) {
-          await this.shutdown(server);
-          return;
-        }
-        this.idleTimer = setTimeout(() => {
-          this.idleTimer = undefined;
-          if (server.leases === 0 && server === this.current) void this.shutdown(server);
-        }, idleMs);
-        this.idleTimer.unref?.();
+        await this.releaseIfUnused(server);
       },
     };
+  }
+
+  /** Shut down (now or after the idle window) a server that no session holds or awaits. */
+  private async releaseIfUnused(server: SharedServer): Promise<void> {
+    if (server.leases > 0 || this.waiting > 0 || server !== this.current || this.idleTimer) return;
+    const idleMs = this.deps.serverIdleShutdownMs ?? SERVER_IDLE_SHUTDOWN_MS;
+    if (idleMs <= 0) {
+      await this.shutdown(server);
+      return;
+    }
+    this.idleTimer = setTimeout(() => {
+      this.idleTimer = undefined;
+      if (server.leases === 0 && this.waiting === 0 && server === this.current) void this.shutdown(server);
+    }, idleMs);
+    this.idleTimer.unref?.();
   }
 
   private async ensureServer(): Promise<SharedServer> {

@@ -748,6 +748,32 @@ describe("OpenCodeHarness shared server lifecycle", () => {
     if (completion) assert.equal(completion.data.success, false);
   });
 
+  it("shuts down a server whose only waiting launch was cancelled during startup", async () => {
+    const mock = new MockOpenCodeServer();
+    const serverRequested = Promise.withResolvers<void>();
+    let releaseServer!: () => void;
+    const serverGate = new Promise<void>((resolve) => { releaseServer = resolve; });
+    const abortController = new AbortController();
+    const harness = new OpenCodeHarness({
+      createServer: async () => {
+        serverRequested.resolve();
+        await serverGate;
+        return mock.handle();
+      },
+      fetch: mock.fetch,
+      serverIdleShutdownMs: 0,
+    });
+    const { stream, collector } = launch(harness, { abortController });
+    stream.push("go");
+    await serverRequested.promise;
+    abortController.abort();
+    stream.end();
+    await collector.done;
+    releaseServer();
+    await waitFor(() => mock.closed, "orphaned server shutdown");
+    assert.equal(mock.createCount, 1);
+  });
+
   it("reports the OpenCode route that times out during session creation", async () => {
     const mock = new MockOpenCodeServer();
     mock.failRoute = (method, path) => (method === "POST" && path === "/session"
