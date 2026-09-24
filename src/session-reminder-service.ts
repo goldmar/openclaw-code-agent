@@ -50,15 +50,15 @@ export class SessionReminderService {
     private readonly getWorktreeDecisionButtons: (
       sessionId: string,
       session: PersistedSessionInfo,
-    ) => NotificationButton[][] | undefined,
+    ) => NotificationButton[][] | undefined | Promise<NotificationButton[][] | undefined>,
   ) {}
 
   static readonly REMINDER_THRESHOLD_MS = 3 * 60 * 60 * 1000;
   static readonly REMINDER_INTERVAL_MS = 3 * 60 * 60 * 1000;
 
-  getNextReminderAt(session: PersistedSessionInfo): number | undefined {
+  async getNextReminderAt(session: PersistedSessionInfo): Promise<number | undefined> {
     const pendingSince = new Date(session.pendingWorktreeDecisionSince).getTime();
-    if (this.getWorktreeDecisionReminderStatus(session, pendingSince) !== "pending") return undefined;
+    if ((await this.getWorktreeDecisionReminderStatus(session, pendingSince)) !== "pending") return undefined;
 
     const candidates = [pendingSince + SessionReminderService.REMINDER_THRESHOLD_MS];
     if (session.worktreeDecisionSnoozedUntil) {
@@ -74,18 +74,18 @@ export class SessionReminderService {
     return Math.max(...candidates);
   }
 
-  sendReminderIfDue(
+  async sendReminderIfDue(
     session: PersistedSessionInfo,
     now: number = Date.now(),
-  ): boolean {
-    this.clearResolvedReminderState(session);
-    const nextReminderAt = this.getNextReminderAt(session);
+  ): Promise<boolean> {
+    await this.clearResolvedReminderState(session);
+    const nextReminderAt = await this.getNextReminderAt(session);
     if (nextReminderAt == null || nextReminderAt > now) return false;
 
     const pendingMs = now - new Date(session.pendingWorktreeDecisionSince!).getTime();
     const pendingHours = Math.floor(Math.max(0, pendingMs) / (60 * 60 * 1000));
     try {
-      this.sendReminderNotification(session, pendingHours);
+      await this.sendReminderNotification(session, pendingHours);
     } catch (err) {
       log.warn(
         `[SessionReminderService] Failed to send stale-decision reminder for session ${session.name}: ${err instanceof Error ? err.message : String(err)}`,
@@ -101,7 +101,7 @@ export class SessionReminderService {
     return true;
   }
 
-  private sendReminderNotification(session: PersistedSessionInfo, pendingHours: number): void {
+  private async sendReminderNotification(session: PersistedSessionInfo, pendingHours: number): Promise<void> {
     const routingProxy = this.buildRoutingProxy({
       id: session.sessionId ?? session.name ?? getBackendConversationId(session) ?? session.harnessSessionId,
       sessionId: session.sessionId,
@@ -130,18 +130,18 @@ export class SessionReminderService {
       label: `worktree-stale-reminder-${session.name}`,
       userMessage: text,
       notifyUser: "always",
-      buttons: this.getWorktreeDecisionButtons(
+      buttons: await this.getWorktreeDecisionButtons(
         getPrimarySessionLookupRef(session) ?? session.harnessSessionId,
         session,
       ),
     });
   }
 
-  clearResolvedReminderState(session: PersistedSessionInfo): boolean {
+  async clearResolvedReminderState(session: PersistedSessionInfo): Promise<boolean> {
     if (!session.pendingWorktreeDecisionSince && !session.lastWorktreeReminderAt && !session.worktreeDecisionSnoozedUntil) {
       return false;
     }
-    if (!this.isResolvedWorktreeDecision(session)) return false;
+    if (!(await this.isResolvedWorktreeDecision(session))) return false;
 
     let updated = false;
     for (const mutationRef of getPersistedMutationRefs(session)) {
@@ -154,10 +154,10 @@ export class SessionReminderService {
     return updated;
   }
 
-  private getWorktreeDecisionReminderStatus(
+  private async getWorktreeDecisionReminderStatus(
     session: PersistedSessionInfo,
     pendingSince?: number,
-  ): WorktreeDecisionReminderStatus {
+  ): Promise<WorktreeDecisionReminderStatus> {
     if (this.hasResolvedWorktreeDecisionMarker(session)) return "resolved";
     if (!session.pendingWorktreeDecisionSince) return "inactive";
     const parsedPendingSince = pendingSince ?? new Date(session.pendingWorktreeDecisionSince).getTime();
@@ -175,17 +175,17 @@ export class SessionReminderService {
       && !session.worktreePrUrl;
     if (!explicitlyPending && !unresolvedWithoutExplicitState) return "inactive";
 
-    const resolved = resolveWorktreeLifecycle(session, {
+    const resolved = await resolveWorktreeLifecycle(session, {
       activeSession: false,
       includePrSync: false,
     });
     return this.isResolvedDerivedWorktreeState(resolved.derivedState) ? "resolved" : "pending";
   }
 
-  private isResolvedWorktreeDecision(session: PersistedSessionInfo): boolean {
+  private async isResolvedWorktreeDecision(session: PersistedSessionInfo): Promise<boolean> {
     if (this.hasResolvedWorktreeDecisionMarker(session)) return true;
 
-    const resolved = resolveWorktreeLifecycle(session, {
+    const resolved = await resolveWorktreeLifecycle(session, {
       activeSession: false,
       includePrSync: false,
     });

@@ -147,19 +147,19 @@ export function resolveWorktreeToolSessions(
   return { activeSession, persistedSession };
 }
 
-export function resolveWorktreeToolLifecycle(
+export async function resolveWorktreeToolLifecycle(
   sessionManager: SessionManager,
   target: WorktreeToolListingTarget,
   options: {
     baseBranch?: string;
   } = {},
-): {
+): Promise<{
   activeSession?: Session;
   persistedSession?: PersistedSessionInfo;
   resolvedLifecycle: ResolvedWorktreeLifecycle;
-} {
+}> {
   const { activeSession, persistedSession } = resolveWorktreeToolSessions(sessionManager, target);
-  const resolvedLifecycle = resolveWorktreeLifecycle({
+  const resolvedLifecycle = await resolveWorktreeLifecycle({
     workdir: target.workdir,
     worktreePath: target.worktreePath,
     worktreeBranch: target.worktreeBranch,

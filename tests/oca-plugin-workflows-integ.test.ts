@@ -323,7 +323,7 @@ describe("OCA plugin workflow integration coverage", () => {
     }
   });
 
-  it("builds worktree ask/delegate notifications with policy-aware buttons and routed source-material rules", () => {
+  it("builds worktree ask/delegate notifications with policy-aware buttons and routed source-material rules", async () => {
     const { sm, cleanup } = createWorkflowManager();
     try {
       const session = createStubSession({
@@ -345,7 +345,7 @@ describe("OCA plugin workflow integration coverage", () => {
           { hash: "def5678", message: "Tighten notification assertions", author: "OCA" },
         ],
       };
-      const buttons = (sm as any).getWorktreeDecisionButtons(session.id, { allowDelegate: true }, {
+      const buttons = await (sm as any).getWorktreeDecisionButtons(session.id, { allowDelegate: true }, {
         merge: true,
         pr: false,
       });

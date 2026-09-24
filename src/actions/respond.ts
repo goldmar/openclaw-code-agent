@@ -371,7 +371,7 @@ async function tryAutoResume(
         text: `Plan approved for session ${resumed.name} [${resumed.id}]. Session resumed in bypassPermissions mode. Use agent_output to see the response.`,
       };
     }
-    sm.notifyResumedLaunch(resumed);
+    await sm.notifyResumedLaunch(resumed);
     return { text: `Resume started for session ${resumed.name} [${resumed.id}]. Use agent_output to see the response.` };
   } catch (err: unknown) {
     return formatResumeUnavailable(session, "missing_backend_state", `Backend resume failed: ${errorMessage(err)}`);

@@ -1,6 +1,6 @@
 import { branchNameValidationError } from "../worktree-ref-validation";
 import { REASONING_EFFORTS, type ReasoningEffort } from "../types";
-import { Type } from "typebox";
+import { Type } from "../tool-parameter-schema";
 import { sessionManager } from "../singletons";
 import { formatLaunchSummaryFromSession, type LaunchSummarySessionLike } from "../launch-summary";
 import {
@@ -55,11 +55,13 @@ function hasFormatLaunchResult(value: unknown): value is {
     && typeof (value as { formatLaunchResult?: unknown }).formatLaunchResult === "function";
 }
 
+type RepoPolicyLaunchCheck = { ok: true; resolution: unknown } | { ok: false; text: string };
+
 function hasRequestRepoPolicyForLaunch(value: unknown): value is {
   checkRepoPolicyForLaunch: (
     workdir: string,
     requestedStrategy?: "off" | "manual" | "ask" | "delegate" | "auto-merge" | "auto-pr",
-  ) => { ok: true; resolution: unknown } | { ok: false; text: string };
+  ) => RepoPolicyLaunchCheck | Promise<RepoPolicyLaunchCheck>;
   requestRepoPolicyForLaunch: (args: {
     route?: Record<string, unknown>;
     prompt: string;
@@ -84,7 +86,7 @@ function hasRequestRepoPolicyForLaunch(value: unknown): value is {
     worktreeBaseBranch?: string;
     worktreePrTargetRepo?: string;
     originAgentId?: string;
-  }) => string;
+  }) => string | Promise<string>;
 } {
   return !!value
     && typeof value === "object"
@@ -231,12 +233,12 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
           ? buildResumedPlanState(resumeTarget, permissionMode)
           : { permissionMode, approvalApplied: false, patch: {} };
         if (launchWorktreeStrategy !== "off" && hasRequestRepoPolicyForLaunch(sessionManager)) {
-          const policyCheck = sessionManager.checkRepoPolicyForLaunch(workdir, params.worktree_strategy);
+          const policyCheck = await sessionManager.checkRepoPolicyForLaunch(workdir, params.worktree_strategy);
           if (policyCheck.ok === false) {
             return {
               content: [{
                 type: "text",
-                text: sessionManager.requestRepoPolicyForLaunch({
+                text: await sessionManager.requestRepoPolicyForLaunch({
                   route,
                   prompt: params.prompt,
                   workdir,
@@ -266,7 +268,7 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
           }
         }
 
-        const session = sessionManager.spawn({
+        const session = await sessionManager.spawn({
           prompt: params.prompt,
           sessionIdOverride: launchSessionIdOverride,
           name: launchName,

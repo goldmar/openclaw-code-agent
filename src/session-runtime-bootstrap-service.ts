@@ -11,7 +11,7 @@ type SpawnOptions = {
   startAfter?: Promise<void>;
 };
 
-type PreparedLaunch = ReturnType<import("./session-restore-service").SessionRestoreService["prepareSpawn"]>;
+type PreparedLaunch = Awaited<ReturnType<import("./session-restore-service").SessionRestoreService["prepareSpawn"]>>;
 type LaunchNotificationSession = Pick<
   Session,
   "id" | "name" | "workdir" | "worktreePath" | "originalWorkdir" | "harnessName" | "model" | "reasoningEffort" | "startedAt" | "resumeSessionId" | "resumedFromSessionName"
@@ -30,19 +30,19 @@ export class SessionRuntimeBootstrapService {
       syncTaskMirror: (session: Session) => void;
       handleTerminal: (session: Session) => Promise<void>;
       handleTurnEnd: (session: Session, hadQuestion: boolean) => Promise<void>;
-      formatLaunchWorkdirLabel: (session: Pick<Session, "workdir" | "worktreePath" | "originalWorkdir">) => string;
+      formatLaunchWorkdirLabel: (session: Pick<Session, "workdir" | "worktreePath" | "originalWorkdir">) => string | Promise<string>;
       notifySession: (session: Session, text: string, label?: string, idempotencyKey?: string) => void;
       /** Stop a session whose host TaskFlow was cancelled. */
       cancelSession?: (session: Session) => void;
     },
   ) {}
 
-  initializeSession(
+  async initializeSession(
     session: Session,
     preparedLaunch: PreparedLaunch,
     config: SessionConfig,
     options: SpawnOptions = {},
-  ): Session {
+  ): Promise<Session> {
     this.deps.hydrateSpawnedSession(session, preparedLaunch, config);
     this.observeMirror(config.taskLifecycle?.create(session, {
       onCancelRequested: () => this.deps.cancelSession?.(session),
@@ -83,7 +83,7 @@ export class SessionRuntimeBootstrapService {
     }
 
     if (options.notifyLaunch !== false) {
-      const notification = this.buildLaunchNotification(session);
+      const notification = await this.buildLaunchNotification(session);
       this.deps.notifySession(session, notification.text, notification.label, notification.idempotencyKey);
     }
 
@@ -113,12 +113,12 @@ export class SessionRuntimeBootstrapService {
     this.pending.add(pending);
   }
 
-  private buildLaunchNotification(session: LaunchNotificationSession): {
+  private async buildLaunchNotification(session: LaunchNotificationSession): Promise<{
     text: string;
     label: string;
     idempotencyKey?: string;
-  } {
-    const workdirLabel = this.deps.formatLaunchWorkdirLabel(session);
+  }> {
+    const workdirLabel = await this.deps.formatLaunchWorkdirLabel(session);
     const harnessLabel = formatHarnessModelLabel({
       harness: session.harnessName,
       model: session.model,

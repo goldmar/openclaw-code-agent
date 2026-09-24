@@ -11,44 +11,44 @@ export type WorktreeCompletionState =
   | "has-commits";
 
 export class SessionWorktreeController {
-  getCompletionState(
+  async getCompletionState(
     repoDir: string,
     worktreePath: string,
     branchName: string,
     baseBranch: string,
-  ): WorktreeCompletionState {
+  ): Promise<WorktreeCompletionState> {
     // Never classify or clean a worktree whose checked-out branch does not
     // match the session's persisted association. This can happen after a
     // stale resume/recovery row points at a sibling replacement worktree.
-    if (getBranchName(worktreePath) !== branchName) return "has-commits";
-    const branchAheadCount = getCommitsAheadCount(repoDir, branchName, baseBranch);
+    if ((await getBranchName(worktreePath)) !== branchName) return "has-commits";
+    const branchAheadCount = await getCommitsAheadCount(repoDir, branchName, baseBranch);
     if (branchAheadCount === undefined) return "has-commits";
     if (branchAheadCount === 0) {
-      const baseAheadCount = getCommitsAheadCount(repoDir, baseBranch, branchName);
+      const baseAheadCount = await getCommitsAheadCount(repoDir, baseBranch, branchName);
       if (baseAheadCount === undefined) return "has-commits";
       if (baseAheadCount > 0) {
-        if (isBranchAncestorOfBase(repoDir, branchName, baseBranch)) return "merged";
+        if (await isBranchAncestorOfBase(repoDir, branchName, baseBranch)) return "merged";
         return "base-advanced";
       }
-      if (hasDirtyWorktreeEntries(worktreePath)) return "dirty-uncommitted";
+      if (await hasDirtyWorktreeEntries(worktreePath)) return "dirty-uncommitted";
       return "no-change";
     }
-    if (hasDirtyWorktreeEntries(worktreePath)) return "dirty-uncommitted";
-    if (wouldMergeBeNoop(repoDir, branchName, baseBranch)) return "released";
+    if (await hasDirtyWorktreeEntries(worktreePath)) return "dirty-uncommitted";
+    if (await wouldMergeBeNoop(repoDir, branchName, baseBranch)) return "released";
     return "has-commits";
   }
 
-  isResolvedWorktreeEligibleForCleanup(
+  async isResolvedWorktreeEligibleForCleanup(
     session: PersistedSessionInfo,
     now: number,
     retentionMs: number,
-  ): boolean {
+  ): Promise<boolean> {
     if (!session.worktreePath || !session.workdir) return false;
     if (!existsSync(session.worktreePath)) return false;
     if (session.pendingWorktreeDecisionSince) return false;
     if (session.worktreeState === "pending_decision") return false;
     if (session.pendingPlanApproval || session.resumable) return false;
-    if (session.worktreeBranch && getBranchName(session.worktreePath) !== session.worktreeBranch) return false;
+    if (session.worktreeBranch && (await getBranchName(session.worktreePath)) !== session.worktreeBranch) return false;
 
     const resolvedAtIso =
       session.worktreeMergedAt

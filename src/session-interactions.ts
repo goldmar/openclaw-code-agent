@@ -38,7 +38,7 @@ function shortenQuestionButtonLabel(label: string): string {
 export class SessionInteractionService {
   constructor(
     private readonly actionTokens: SessionActionTokenStore,
-    private readonly isGitHubCliAvailable: () => boolean,
+    private readonly isGitHubCliAvailable: () => boolean | Promise<boolean>,
   ) {}
 
   createActionToken(
@@ -119,19 +119,20 @@ export class SessionInteractionService {
     }
   }
 
-  getWorktreeDecisionButtons(
+  async getWorktreeDecisionButtons(
     sessionId: string,
     session: Pick<PersistedSessionInfo, "worktreePrUrl"> | ButtonSource | undefined,
     allowedActions: { merge: boolean; pr: boolean } = { merge: true, pr: true },
-  ): NotificationButton[][] {
+  ): Promise<NotificationButton[][]> {
     if (!session) return [];
 
+    const prButtons = allowedActions.pr && await this.isGitHubCliAvailable();
     const rows: NotificationButton[][] = [];
     const primaryRow: NotificationButton[] = [];
     if (allowedActions.merge) {
       primaryRow.push(this.makeActionButton(sessionId, "worktree-merge", "Merge"));
     }
-    if (allowedActions.pr && this.isGitHubCliAvailable()) {
+    if (prButtons) {
       if (session.worktreePrUrl) {
         primaryRow.push(this.makeActionButton(sessionId, "worktree-view-pr", "View PR", {
           targetUrl: session.worktreePrUrl,

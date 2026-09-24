@@ -1066,7 +1066,7 @@ export function createCallbackHandler(
           }
           let session: { id: string; name: string };
           try {
-            session = sessionManager.launchPlanOffer({
+            session = await sessionManager.launchPlanOffer({
               route: consumedToken.route,
               prompt: consumedToken.launchPrompt,
               workdir: consumedToken.launchWorkdir,
@@ -1117,7 +1117,7 @@ export function createCallbackHandler(
             break;
           }
           if (typeof sessionManager.resolveRepoPolicy === "function") {
-            const resolution = sessionManager.resolveRepoPolicy(consumedToken.repoPolicyWorkdir);
+            const resolution = await sessionManager.resolveRepoPolicy(consumedToken.repoPolicyWorkdir);
             if (resolution.identity) {
               const validationError = validateRepoPolicyForPrAvailability(consumedToken.repoPolicy, resolution.prAvailable);
               if (validationError) {
@@ -1130,7 +1130,7 @@ export function createCallbackHandler(
               }
             }
           }
-          const record = sessionManager.setRepoPolicy(consumedToken.repoPolicyWorkdir, consumedToken.repoPolicy);
+          const record = await sessionManager.setRepoPolicy(consumedToken.repoPolicyWorkdir, consumedToken.repoPolicy);
           if (!record) {
             await clearInteractiveState(ctx, {
               alreadyAcknowledged: callbackAcknowledged,
@@ -1143,7 +1143,7 @@ export function createCallbackHandler(
 
           let launchText: string;
           try {
-            const result = sessionManager.launchAfterRepoPolicyChoice({
+            const result = await sessionManager.launchAfterRepoPolicyChoice({
               route: consumedToken.route,
               prompt: consumedToken.launchPrompt,
               workdir: consumedToken.launchWorkdir,

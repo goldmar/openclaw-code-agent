@@ -19,7 +19,7 @@ describe("prepareSessionBootstrap()", () => {
     setPluginConfig({});
   });
 
-  it("preserves the original direct route for resumed sessions when launch routing is system-only", () => {
+  it("preserves the original direct route for resumed sessions when launch routing is system-only", async () => {
     const config: SessionConfig = {
       prompt: "Compare the completed implementation against another hook layer.",
       workdir: "/tmp",
@@ -32,7 +32,7 @@ describe("prepareSessionBootstrap()", () => {
       },
     };
 
-    const bootstrap = prepareSessionBootstrap(
+    const bootstrap = await prepareSessionBootstrap(
       config,
       "compare-pr-98922-hook-layer",
       (ref): PersistedSessionInfo | undefined => {
@@ -70,7 +70,7 @@ describe("prepareSessionBootstrap()", () => {
     assert.equal(config.originSessionKey, "agent:main:telegram:group:-1003863755361:topic:26");
   });
 
-  it("recovers the original repo dir for resumed worktree sessions with legacy self-referential metadata", () => {
+  it("recovers the original repo dir for resumed worktree sessions with legacy self-referential metadata", async () => {
     const repoDir = mkdtempSync(join(tmpdir(), "session-bootstrap-"));
     try {
       git(repoDir, "init", "-b", "main");
@@ -80,8 +80,8 @@ describe("prepareSessionBootstrap()", () => {
       git(repoDir, "add", "README.md");
       git(repoDir, "commit", "-m", "init");
 
-      const worktreePath = createWorktree(repoDir, "resume-self-reference");
-      const branchName = getBranchName(worktreePath);
+      const worktreePath = await createWorktree(repoDir, "resume-self-reference");
+      const branchName = await getBranchName(worktreePath);
       assert.ok(branchName, "worktree branch should exist");
 
       const config: SessionConfig = {
@@ -96,7 +96,7 @@ describe("prepareSessionBootstrap()", () => {
         },
       };
 
-      const bootstrap = prepareSessionBootstrap(
+      const bootstrap = await prepareSessionBootstrap(
         config,
         "resume-self-reference",
         (_ref): PersistedSessionInfo | undefined => ({
@@ -128,7 +128,7 @@ describe("prepareSessionBootstrap()", () => {
     }
   });
 
-  it("uses resumeWorktreeFrom instead of backend resume id when restoring worktree context", () => {
+  it("uses resumeWorktreeFrom instead of backend resume id when restoring worktree context", async () => {
     const repoDir = mkdtempSync(join(tmpdir(), "session-bootstrap-resume-worktree-from-"));
     try {
       git(repoDir, "init", "-b", "main");
@@ -138,8 +138,8 @@ describe("prepareSessionBootstrap()", () => {
       git(repoDir, "add", "README.md");
       git(repoDir, "commit", "-m", "init");
 
-      const worktreePath = createWorktree(repoDir, "resume-worktree-from");
-      const branchName = getBranchName(worktreePath);
+      const worktreePath = await createWorktree(repoDir, "resume-worktree-from");
+      const branchName = await getBranchName(worktreePath);
       assert.ok(branchName, "worktree branch should exist");
 
       const config: SessionConfig = {
@@ -156,7 +156,7 @@ describe("prepareSessionBootstrap()", () => {
         },
       };
 
-      const bootstrap = prepareSessionBootstrap(
+      const bootstrap = await prepareSessionBootstrap(
         config,
         "resume-worktree-from",
         (ref): PersistedSessionInfo | undefined => {
@@ -185,7 +185,7 @@ describe("prepareSessionBootstrap()", () => {
     }
   });
 
-  it("defaults resumed PR-open worktrees to auto-pr follow-through", () => {
+  it("defaults resumed PR-open worktrees to auto-pr follow-through", async () => {
     const repoDir = mkdtempSync(join(tmpdir(), "session-bootstrap-pr-open-followup-"));
     try {
       git(repoDir, "init", "-b", "main");
@@ -195,8 +195,8 @@ describe("prepareSessionBootstrap()", () => {
       git(repoDir, "add", "README.md");
       git(repoDir, "commit", "-m", "init");
 
-      const worktreePath = createWorktree(repoDir, "pr-open-followup");
-      const branchName = getBranchName(worktreePath);
+      const worktreePath = await createWorktree(repoDir, "pr-open-followup");
+      const branchName = await getBranchName(worktreePath);
       assert.ok(branchName, "worktree branch should exist");
 
       const config: SessionConfig = {
@@ -211,7 +211,7 @@ describe("prepareSessionBootstrap()", () => {
         },
       };
 
-      const bootstrap = prepareSessionBootstrap(
+      const bootstrap = await prepareSessionBootstrap(
         config,
         "pr-open-followup",
         (ref): PersistedSessionInfo | undefined => {
@@ -244,7 +244,7 @@ describe("prepareSessionBootstrap()", () => {
     }
   });
 
-  it("creates a plugin-managed worktree for fresh Codex worktree launches", () => {
+  it("creates a plugin-managed worktree for fresh Codex worktree launches", async () => {
     const repoDir = mkdtempSync(join(tmpdir(), "session-bootstrap-codex-native-"));
     try {
       git(repoDir, "init", "-b", "main");
@@ -267,7 +267,7 @@ describe("prepareSessionBootstrap()", () => {
         },
       };
 
-      const bootstrap = prepareSessionBootstrap(config, "codex-native", () => undefined);
+      const bootstrap = await prepareSessionBootstrap(config, "codex-native", () => undefined);
 
       assert.equal(bootstrap.originalWorkdir, repoDir);
       assert.ok(bootstrap.worktreePath, "fresh Codex ask launch should create a plugin-managed worktree");
@@ -283,7 +283,7 @@ describe("prepareSessionBootstrap()", () => {
     }
   });
 
-  it("uses the delegated plugin worktree default when no strategy is provided", () => {
+  it("uses the delegated plugin worktree default when no strategy is provided", async () => {
     const repoDir = mkdtempSync(join(tmpdir(), "session-bootstrap-default-delegate-"));
     try {
       git(repoDir, "init", "-b", "main");
@@ -305,7 +305,7 @@ describe("prepareSessionBootstrap()", () => {
         },
       };
 
-      const bootstrap = prepareSessionBootstrap(config, "default-delegate", () => undefined);
+      const bootstrap = await prepareSessionBootstrap(config, "default-delegate", () => undefined);
 
       assert.equal(config.worktreeStrategy, "delegate");
       assert.equal(bootstrap.originalWorkdir, repoDir);
@@ -318,7 +318,7 @@ describe("prepareSessionBootstrap()", () => {
     }
   });
 
-  it("fails closed when a requested native Codex resume worktree is missing", () => {
+  it("fails closed when a requested native Codex resume worktree is missing", async () => {
     const repoDir = mkdtempSync(join(tmpdir(), "session-bootstrap-codex-resume-"));
     const missingWorktreePath = join(repoDir, ".codex", "worktrees", "abcd", "openclaw");
     try {
@@ -343,8 +343,8 @@ describe("prepareSessionBootstrap()", () => {
         },
       };
 
-      assert.throws(
-        () => prepareSessionBootstrap(
+      await assert.rejects(
+        async () => await prepareSessionBootstrap(
           config,
           "codex-native-resume",
           (_ref): PersistedSessionInfo | undefined => ({
@@ -380,7 +380,7 @@ describe("prepareSessionBootstrap()", () => {
     }
   });
 
-  it("creates a new plugin-managed worktree for Codex resume launches without a persisted worktree path", () => {
+  it("creates a new plugin-managed worktree for Codex resume launches without a persisted worktree path", async () => {
     const repoDir = mkdtempSync(join(tmpdir(), "session-bootstrap-codex-resume-no-worktree-"));
     try {
       git(repoDir, "init", "-b", "main");
@@ -405,7 +405,7 @@ describe("prepareSessionBootstrap()", () => {
         },
       };
 
-      const bootstrap = prepareSessionBootstrap(
+      const bootstrap = await prepareSessionBootstrap(
         config,
         "codex-resume-managed-worktree",
         (_ref): PersistedSessionInfo | undefined => ({
@@ -442,7 +442,7 @@ describe("prepareSessionBootstrap()", () => {
     }
   });
 
-  it("fails closed for non-Codex resumes without persisted worktree metadata when a worktree strategy is requested", () => {
+  it("fails closed for non-Codex resumes without persisted worktree metadata when a worktree strategy is requested", async () => {
     const repoDir = mkdtempSync(join(tmpdir(), "session-bootstrap-claude-resume-no-worktree-"));
     try {
       git(repoDir, "init", "-b", "main");
@@ -466,8 +466,8 @@ describe("prepareSessionBootstrap()", () => {
         },
       };
 
-      assert.throws(
-        () => prepareSessionBootstrap(
+      await assert.rejects(
+        async () => await prepareSessionBootstrap(
           config,
           "claude-resume-no-managed-worktree",
           (_ref): PersistedSessionInfo | undefined => ({
@@ -500,7 +500,7 @@ describe("prepareSessionBootstrap()", () => {
     }
   });
 
-  it("fails closed for legacy Claude resumes without worktree metadata even when Codex is the default harness", () => {
+  it("fails closed for legacy Claude resumes without worktree metadata even when Codex is the default harness", async () => {
     const repoDir = mkdtempSync(join(tmpdir(), "session-bootstrap-legacy-claude-resume-no-worktree-"));
     try {
       git(repoDir, "init", "-b", "main");
@@ -525,8 +525,8 @@ describe("prepareSessionBootstrap()", () => {
         },
       };
 
-      assert.throws(
-        () => prepareSessionBootstrap(
+      await assert.rejects(
+        async () => await prepareSessionBootstrap(
           config,
           "legacy-claude-resume-no-managed-worktree",
           (_ref): PersistedSessionInfo | undefined => ({
@@ -554,7 +554,7 @@ describe("prepareSessionBootstrap()", () => {
     }
   });
 
-  it("fails closed when a requested plugin-managed resume worktree is missing and cannot be recreated", () => {
+  it("fails closed when a requested plugin-managed resume worktree is missing and cannot be recreated", async () => {
     const missingRepoDir = join(tmpdir(), `session-bootstrap-missing-${Date.now()}`);
     const missingWorktreePath = join(missingRepoDir, ".worktrees", "missing", "openclaw");
     try {
@@ -573,8 +573,8 @@ describe("prepareSessionBootstrap()", () => {
         },
       };
 
-      assert.throws(
-        () => prepareSessionBootstrap(
+      await assert.rejects(
+        async () => await prepareSessionBootstrap(
           config,
           "missing-plugin-worktree",
           (_ref): PersistedSessionInfo | undefined => ({
@@ -608,7 +608,7 @@ describe("prepareSessionBootstrap()", () => {
     }
   });
 
-  it("does not replace a failed plugin-managed resume worktree restore with a fresh unrelated worktree", () => {
+  it("does not replace a failed plugin-managed resume worktree restore with a fresh unrelated worktree", async () => {
     const repoDir = mkdtempSync(join(tmpdir(), "session-bootstrap-recreate-fails-"));
     const occupiedWorktreeDir = mkdtempSync(join(tmpdir(), "session-bootstrap-occupied-worktree-"));
     const occupiedWorktreePath = join(occupiedWorktreeDir, "checkout");
@@ -638,8 +638,8 @@ describe("prepareSessionBootstrap()", () => {
         },
       };
 
-      assert.throws(
-        () => prepareSessionBootstrap(
+      await assert.rejects(
+        async () => await prepareSessionBootstrap(
           config,
           "missing-plugin-worktree",
           (_ref): PersistedSessionInfo | undefined => ({
@@ -674,7 +674,7 @@ describe("prepareSessionBootstrap()", () => {
     }
   });
 
-  it("allows explicit off to clear stale resume state when a missing plugin-managed worktree cannot be recreated", () => {
+  it("allows explicit off to clear stale resume state when a missing plugin-managed worktree cannot be recreated", async () => {
     const missingRepoDir = join(tmpdir(), `session-bootstrap-missing-${Date.now()}`);
     const missingWorktreePath = join(missingRepoDir, ".worktrees", "missing", "openclaw");
     try {
@@ -693,7 +693,7 @@ describe("prepareSessionBootstrap()", () => {
         },
       };
 
-      const bootstrap = prepareSessionBootstrap(
+      const bootstrap = await prepareSessionBootstrap(
         config,
         "missing-plugin-worktree",
         (_ref): PersistedSessionInfo | undefined => ({

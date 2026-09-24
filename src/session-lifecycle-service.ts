@@ -140,7 +140,7 @@ export class SessionLifecycleService {
       persistSession: (session: Session) => void;
       clearWaitingTimestamp: (sessionId: string) => void;
       handleWorktreeStrategy: (session: Session) => Promise<WorktreeStrategyResult>;
-      resolveWorktreeRepoDir: (repoDir: string | undefined, worktreePath?: string) => string | undefined;
+      resolveWorktreeRepoDir: (repoDir: string | undefined, worktreePath?: string) => string | undefined | Promise<string | undefined>;
       updatePersistedSession: (ref: string, patch: Partial<PersistedSessionInfo>) => boolean;
       dispatchSessionNotification: DispatchNotification;
       notifySession: (session: Session, text: string, label?: string, idempotencyKey?: string) => void;
@@ -321,7 +321,7 @@ export class SessionLifecycleService {
       session.costUsd === 0 &&
       session.duration < 30_000
     ) {
-      const repoDir = this.deps.resolveWorktreeRepoDir(session.originalWorkdir, session.worktreePath);
+      const repoDir = await this.deps.resolveWorktreeRepoDir(session.originalWorkdir, session.worktreePath);
       const branchName = session.worktreeBranch;
       const nativeBackendWorktree = usesNativeBackendWorktree(session);
       log.info(
@@ -331,11 +331,11 @@ export class SessionLifecycleService {
 
       let removedWorktree = false;
       if (repoDir && !nativeBackendWorktree) {
-        removedWorktree = removeWorktree(repoDir, session.worktreePath);
+        removedWorktree = await removeWorktree(repoDir, session.worktreePath);
       }
 
       if (repoDir && branchName && !nativeBackendWorktree && removedWorktree) {
-        deleteBranch(repoDir, branchName);
+        await deleteBranch(repoDir, branchName);
       }
 
       if (removedWorktree) {
@@ -352,7 +352,7 @@ export class SessionLifecycleService {
     const nonTrivialWorktreeStrategy = session.worktreeStrategy &&
       session.worktreeStrategy !== "off" && session.worktreeStrategy !== "manual";
     if (!worktreeAutoCleaned && session.worktreePath && session.originalWorkdir) {
-      const repoDir = this.deps.resolveWorktreeRepoDir(session.originalWorkdir, session.worktreePath);
+      const repoDir = await this.deps.resolveWorktreeRepoDir(session.originalWorkdir, session.worktreePath);
       const nativeBackendWorktree = usesNativeBackendWorktree(session);
       if (worktreeResult.worktreeRemoved) {
         log.info(
@@ -363,7 +363,7 @@ export class SessionLifecycleService {
           `[SessionManager] Keeping worktree alive for "${session.name}" (strategy=${session.worktreeStrategy}) — will be cleaned up on explicit resolution.`,
         );
       } else if (repoDir && !nativeBackendWorktree) {
-        removeWorktree(repoDir, session.worktreePath);
+        await removeWorktree(repoDir, session.worktreePath);
       }
     }
 

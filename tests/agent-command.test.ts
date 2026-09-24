@@ -5,7 +5,7 @@ import { registerAgentCommand } from "../src/commands/agent";
 import { setPluginConfig } from "../src/config";
 import { setSessionManager } from "../src/singletons";
 
-type AgentCommandHandler = (ctx: Record<string, unknown>) => { text: string };
+type AgentCommandHandler = (ctx: Record<string, unknown>) => Promise<{ text: string }>;
 
 function captureAgentCommand(): AgentCommandHandler {
   let handler: AgentCommandHandler | undefined;
@@ -24,7 +24,7 @@ describe("agent command", () => {
     setSessionManager(null);
   });
 
-  it("uses the shared launch resolver for routing and policy defaults", () => {
+  it("uses the shared launch resolver for routing and policy defaults", async () => {
     let spawnConfig: Record<string, unknown> | undefined;
     setSessionManager({
       list: () => [],
@@ -45,7 +45,7 @@ describe("agent command", () => {
     } as any);
 
     const handler = captureAgentCommand();
-    const result = handler({
+    const result = await handler({
       args: '--name "agent command" Fix the auth bug',
       workspaceDir: "/tmp",
       sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
@@ -66,7 +66,7 @@ describe("agent command", () => {
     assert.equal((spawnConfig?.route as { accountId?: string } | undefined)?.accountId, "bot1");
   });
 
-  it("applies resume-first protection for linked chat sessions", () => {
+  it("applies resume-first protection for linked chat sessions", async () => {
     let spawnCalled = false;
     setSessionManager({
       list: () => [{
@@ -84,7 +84,7 @@ describe("agent command", () => {
     } as any);
 
     const handler = captureAgentCommand();
-    const result = handler({
+    const result = await handler({
       args: "Continue work",
       workspaceDir: "/tmp",
       messageChannel: "telegram",

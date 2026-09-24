@@ -736,14 +736,14 @@ describe("plugin entry source", () => {
       await entered.promise;
       assert.equal(restarted, false);
       assert.equal(sessionManager, previous);
-      const lateLaunch = () => previous.spawn({
+      const lateLaunch = async () => await previous.spawn({
         prompt: "Launch prepared before shutdown",
         workdir: rootDir,
         permissionMode: "plan",
         worktreeStrategy: "off",
         route: { provider: "system", target: "system" },
       });
-      assert.throws(lateLaunch, /service is shutting down/);
+      await assert.rejects(lateLaunch, /service is shutting down/);
       assert.equal(launch.mock.callCount(), 0);
       assert.deepEqual(previous.list(), []);
       drained.resolve();
@@ -751,7 +751,7 @@ describe("plugin entry source", () => {
       await restart;
       assert.notEqual(sessionManager, previous);
       assert.equal(start.mock.callCount(), 2);
-      assert.throws(lateLaunch, /service is shutting down/);
+      await assert.rejects(lateLaunch, /service is shutting down/);
     } finally {
       drained.resolve();
       await Promise.allSettled([stopping, restart]);

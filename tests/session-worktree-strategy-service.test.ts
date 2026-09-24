@@ -13,7 +13,7 @@ function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }).trim();
 }
 
-function createConflictedWorktree(name: string): {
+async function createConflictedWorktree(name: string): {
   repoDir: string;
   worktreePath: string;
   branchName: string;
@@ -26,8 +26,8 @@ function createConflictedWorktree(name: string): {
   git(repoDir, "add", "README.md");
   git(repoDir, "commit", "-m", "init");
 
-  const worktreePath = createWorktree(repoDir, name);
-  const branchName = getBranchName(worktreePath);
+  const worktreePath = await createWorktree(repoDir, name);
+  const branchName = await getBranchName(worktreePath);
   assert.ok(branchName, "worktree branch should exist");
 
   writeFileSync(join(worktreePath, "README.md"), "feature\n", "utf-8");
@@ -41,7 +41,7 @@ function createConflictedWorktree(name: string): {
   return { repoDir, worktreePath, branchName };
 }
 
-function createMergeableWorktree(name: string): {
+async function createMergeableWorktree(name: string): {
   repoDir: string;
   worktreePath: string;
   branchName: string;
@@ -54,8 +54,8 @@ function createMergeableWorktree(name: string): {
   git(repoDir, "add", "README.md");
   git(repoDir, "commit", "-m", "init");
 
-  const worktreePath = createWorktree(repoDir, name);
-  const branchName = getBranchName(worktreePath);
+  const worktreePath = await createWorktree(repoDir, name);
+  const branchName = await getBranchName(worktreePath);
   assert.ok(branchName, "worktree branch should exist");
 
   writeFileSync(join(worktreePath, "feature.txt"), "feature\n", "utf-8");
@@ -197,8 +197,8 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       git(repoDir, "add", "README.md");
       git(repoDir, "commit", "-m", "init");
       git(repoDir, "checkout", "-b", "agent/intended-pr");
-      const worktreePath = createWorktree(repoDir, "unrelated-parent-helper");
-      const branchName = getBranchName(worktreePath);
+      const worktreePath = await createWorktree(repoDir, "unrelated-parent-helper");
+      const branchName = await getBranchName(worktreePath);
       assert.ok(branchName);
       writeFileSync(join(worktreePath, "review.txt"), "review fix\n", "utf-8");
       git(worktreePath, "add", "review.txt");
@@ -425,8 +425,8 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       writeFileSync(join(repoDir, "README.md"), "base\n", "utf-8");
       git(repoDir, "add", "README.md");
       git(repoDir, "commit", "-m", "init");
-      const worktreePath = createWorktree(repoDir, "verified-open-pr-no-change");
-      const branchName = getBranchName(worktreePath);
+      const worktreePath = await createWorktree(repoDir, "verified-open-pr-no-change");
+      const branchName = await getBranchName(worktreePath);
       assert.ok(branchName, "worktree branch should exist");
 
       const service = new SessionWorktreeStrategyService({
@@ -492,7 +492,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
   });
 
   it("allows delegate sessions to receive decision buttons when repo policy blocks follow-through", async () => {
-    const { repoDir, worktreePath, branchName } = createMergeableWorktree("delegate-policy-blocked");
+    const { repoDir, worktreePath, branchName } = await createMergeableWorktree("delegate-policy-blocked");
     const notifications: Array<Record<string, unknown>> = [];
     const policyButtons = [[{ label: "Later", callbackData: "later" }]];
     let policyButtonOptions: { allowDelegate?: boolean } | undefined;
@@ -557,7 +557,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
   });
 
   it("keeps policy-blocked worktree keys stable when completedAt is populated later", async () => {
-    const { repoDir, worktreePath, branchName } = createMergeableWorktree("policy-blocked-completed-at");
+    const { repoDir, worktreePath, branchName } = await createMergeableWorktree("policy-blocked-completed-at");
     const notifications: Array<Record<string, unknown>> = [];
     try {
       const service = new SessionWorktreeStrategyService({
@@ -615,7 +615,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
   });
 
   it("runs auto-pr follow-through for completed PR-open worktree follow-up sessions", async () => {
-    const { repoDir, worktreePath, branchName } = createMergeableWorktree("pr-open-auto");
+    const { repoDir, worktreePath, branchName } = await createMergeableWorktree("pr-open-auto");
     const notifications: Array<Record<string, unknown>> = [];
     let autoPrCalled = false;
     try {
@@ -678,7 +678,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
   });
 
   it("updates an existing open PR branch under never-pr policy without prompting for a worktree decision", async () => {
-    const { repoDir, worktreePath, branchName } = createMergeableWorktree("existing-pr-never-pr");
+    const { repoDir, worktreePath, branchName } = await createMergeableWorktree("existing-pr-never-pr");
     const notifications: Array<Record<string, unknown>> = [];
     const patches: Array<Record<string, unknown>> = [];
     let autoPrCalled = false;
@@ -767,7 +767,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
   });
 
   it("updates a recorded open PR under missing repo policy without prompting for merge", async () => {
-    const { repoDir, worktreePath, branchName } = createMergeableWorktree("existing-pr-missing-policy");
+    const { repoDir, worktreePath, branchName } = await createMergeableWorktree("existing-pr-missing-policy");
     const notifications: Array<Record<string, unknown>> = [];
     const patches: Array<Record<string, unknown>> = [];
     let autoPrCalled = false;
@@ -863,7 +863,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
   });
 
   it("does not bypass a never-pr policy for a recorded PR targeting a different base", async () => {
-    const { repoDir, worktreePath, branchName } = createMergeableWorktree("recorded-pr-wrong-base");
+    const { repoDir, worktreePath, branchName } = await createMergeableWorktree("recorded-pr-wrong-base");
     const notifications: Array<Record<string, unknown>> = [];
     let autoPrCalled = false;
     try {
@@ -933,7 +933,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
   });
 
   it("downgrades stale pr-open lifecycle under never-pr before starting auto-pr", async () => {
-    const { repoDir, worktreePath, branchName } = createMergeableWorktree("stale-pr-open-never-pr");
+    const { repoDir, worktreePath, branchName } = await createMergeableWorktree("stale-pr-open-never-pr");
     const notifications: Array<Record<string, unknown>> = [];
     let autoPrCalled = false;
     let openPrLookupCount = 0;
@@ -1021,8 +1021,8 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       git(repoDir, "add", "README.md");
       git(repoDir, "commit", "-m", "Fix OCA 4.4.1 session lifecycle regression");
 
-      const worktreePath = createWorktree(repoDir, "address-pr-194-comments");
-      const branchName = getBranchName(worktreePath);
+      const worktreePath = await createWorktree(repoDir, "address-pr-194-comments");
+      const branchName = await getBranchName(worktreePath);
       assert.ok(branchName, "worktree branch should exist");
       assert.equal(branchName, "agent/address-pr-194-comments");
 
@@ -1043,8 +1043,8 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         shouldRunWorktreeStrategy: () => true,
         isAlreadyMerged: () => false,
         resolveWorktreeRepoDir: (dir) => dir,
-        getWorktreeCompletionState: (repo, worktree, branch, base) => (
-          new SessionWorktreeController().getCompletionState(repo, worktree, branch, base)
+        getWorktreeCompletionState: async (repo, worktree, branch, base) => (
+          await new SessionWorktreeController().getCompletionState(repo, worktree, branch, base)
         ),
         updatePersistedSession: (_ref, patch) => {
           Object.assign(session, patch);
@@ -1126,8 +1126,8 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       writeFileSync(join(repoDir, "pr.txt"), "existing PR\n", "utf-8");
       git(repoDir, "add", "pr.txt");
       git(repoDir, "commit", "-m", "Existing PR work");
-      const worktreePath = createWorktree(repoDir, "fetch-failure-helper");
-      const branchName = getBranchName(worktreePath);
+      const worktreePath = await createWorktree(repoDir, "fetch-failure-helper");
+      const branchName = await getBranchName(worktreePath);
       assert.ok(branchName);
       writeFileSync(join(worktreePath, "review.txt"), "review fix\n", "utf-8");
       git(worktreePath, "add", "review.txt");
@@ -1215,8 +1215,8 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       git(repoDir, "add", "session-store.txt");
       git(repoDir, "commit", "-m", "Fix test session store isolation");
 
-      const worktreePath = createWorktree(repoDir, "pr-314-comments-cleanup");
-      const branchName = getBranchName(worktreePath);
+      const worktreePath = await createWorktree(repoDir, "pr-314-comments-cleanup");
+      const branchName = await getBranchName(worktreePath);
       assert.ok(branchName, "worktree branch should exist");
       assert.equal(branchName, "agent/pr-314-comments-cleanup");
 
@@ -1233,8 +1233,8 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         shouldRunWorktreeStrategy: () => true,
         isAlreadyMerged: () => false,
         resolveWorktreeRepoDir: (dir) => dir,
-        getWorktreeCompletionState: (repo, worktree, branch, base) => (
-          new SessionWorktreeController().getCompletionState(repo, worktree, branch, base)
+        getWorktreeCompletionState: async (repo, worktree, branch, base) => (
+          await new SessionWorktreeController().getCompletionState(repo, worktree, branch, base)
         ),
         updatePersistedSession: (_ref, patch) => {
           Object.assign(session, patch);
@@ -1315,8 +1315,8 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       git(repoDir, "add", "intended.txt");
       git(repoDir, "commit", "-m", "Intended PR work");
 
-      const worktreePath = createWorktree(repoDir, "helper-staging");
-      const branchName = getBranchName(worktreePath);
+      const worktreePath = await createWorktree(repoDir, "helper-staging");
+      const branchName = await getBranchName(worktreePath);
       assert.ok(branchName, "worktree branch should exist");
       writeFileSync(join(worktreePath, "helper.txt"), "helper\n", "utf-8");
       git(worktreePath, "add", "helper.txt");
@@ -1406,8 +1406,8 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       git(repoDir, "add", "intended.txt");
       git(repoDir, "commit", "-m", "Intended PR work");
 
-      const worktreePath = createWorktree(repoDir, "helper-remove-fails");
-      const branchName = getBranchName(worktreePath);
+      const worktreePath = await createWorktree(repoDir, "helper-remove-fails");
+      const branchName = await getBranchName(worktreePath);
       assert.ok(branchName, "worktree branch should exist");
       writeFileSync(join(worktreePath, "helper.txt"), "helper\n", "utf-8");
       git(worktreePath, "add", "helper.txt");
@@ -1491,7 +1491,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
   });
 
   it("requests a routed follow-up summary after auto-merge succeeds", async () => {
-    const { repoDir, worktreePath, branchName } = createMergeableWorktree("summary-success");
+    const { repoDir, worktreePath, branchName } = await createMergeableWorktree("summary-success");
     const warn = mock.method(console, "warn", () => {});
     try {
       const notifications: Array<Record<string, unknown>> = [];
@@ -1526,7 +1526,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         worktreePushRemote: undefined,
       };
 
-      const diffSummary = getDiffSummary(repoDir, branchName, "main");
+      const diffSummary = await getDiffSummary(repoDir, branchName, "main");
       assert.ok(diffSummary, "diff summary should be available");
 
       const worktreeRemoved = await (service as any).handleAutoMergeStrategy(
@@ -1561,7 +1561,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
 
   it("preserves a dirty merged worktree without blocking a same-name follow-up worktree", async () => {
     const name = "summary-cleanup-fails";
-    const { repoDir, worktreePath, branchName } = createMergeableWorktree(name);
+    const { repoDir, worktreePath, branchName } = await createMergeableWorktree(name);
     try {
       writeFileSync(join(worktreePath, "late-dirty.txt"), "preserve me\n", "utf-8");
       const service = new SessionWorktreeStrategyService({
@@ -1590,7 +1590,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         harnessSessionId: "h-summary-cleanup-fails",
         worktreePath,
       };
-      const diffSummary = getDiffSummary(repoDir, branchName, "main");
+      const diffSummary = await getDiffSummary(repoDir, branchName, "main");
       assert.ok(diffSummary, "diff summary should be available");
 
       const worktreeRemoved = await (service as any).handleAutoMergeStrategy(
@@ -1609,16 +1609,16 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
       assert.equal(git(repoDir, "rev-parse", "--verify", branchName).length > 0, true);
       assert.equal(git(worktreePath, "status", "--short"), "?? late-dirty.txt");
 
-      const followUpPath = createWorktree(repoDir, name);
+      const followUpPath = await createWorktree(repoDir, name);
       assert.notEqual(followUpPath, worktreePath);
-      assert.notEqual(getBranchName(followUpPath), branchName);
+      assert.notEqual(await getBranchName(followUpPath), branchName);
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }
   });
 
   it("marks 0-ahead ancestry-merged auto-merge worktrees as merged without suppressing the generic terminal wake", async () => {
-    const { repoDir, worktreePath, branchName } = createMergeableWorktree("already-merged");
+    const { repoDir, worktreePath, branchName } = await createMergeableWorktree("already-merged");
     const notifications: Array<Record<string, unknown>> = [];
     const controller = new SessionWorktreeController();
     try {
@@ -1631,8 +1631,8 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         shouldRunWorktreeStrategy: () => true,
         isAlreadyMerged: () => false,
         resolveWorktreeRepoDir: (dir) => dir,
-        getWorktreeCompletionState: (repo, worktree, branch, base) => (
-          controller.getCompletionState(repo, worktree, branch, base)
+        getWorktreeCompletionState: async (repo, worktree, branch, base) => (
+          await controller.getCompletionState(repo, worktree, branch, base)
         ),
         updatePersistedSession: (_ref, patch) => {
           Object.assign(session, patch);
@@ -1831,7 +1831,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
   });
 
   it("spawns a resolver session and marks the worktree as conflict-resolving on first rebase conflict", async () => {
-    const { repoDir, worktreePath, branchName } = createConflictedWorktree("resolver-first");
+    const { repoDir, worktreePath, branchName } = await createConflictedWorktree("resolver-first");
     try {
       const patches: Array<Record<string, unknown>> = [];
       const notifications: Array<Record<string, unknown>> = [];
@@ -1871,7 +1871,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
         worktreePushRemote: undefined,
       };
 
-      const diffSummary = getDiffSummary(repoDir, branchName, "main");
+      const diffSummary = await getDiffSummary(repoDir, branchName, "main");
       assert.ok(diffSummary, "diff summary should be available");
 
       await (service as any).handleAutoMergeStrategy(
@@ -1898,7 +1898,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
   });
 
   it("renders policy-aware buttons when conflict resolver spawn fails", async () => {
-    const { repoDir, worktreePath, branchName } = createConflictedWorktree("resolver-spawn-policy");
+    const { repoDir, worktreePath, branchName } = await createConflictedWorktree("resolver-spawn-policy");
     try {
       const notifications: Array<Record<string, unknown>> = [];
       let policyAllowedActions: { merge: boolean; pr: boolean } | undefined;
@@ -1966,7 +1966,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
   });
 
   it("falls back to merge buttons when PR-only fallback buttons are blocked", async () => {
-    const { repoDir, worktreePath, branchName } = createConflictedWorktree("resolver-spawn-merge-fallback");
+    const { repoDir, worktreePath, branchName } = await createConflictedWorktree("resolver-spawn-merge-fallback");
     try {
       const notifications: Array<Record<string, unknown>> = [];
       const service = new SessionWorktreeStrategyService({
@@ -2030,7 +2030,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
   });
 
   it("escalates after the retry budget is exhausted instead of spawning another resolver", async () => {
-    const { repoDir, worktreePath, branchName } = createConflictedWorktree("resolver-exhausted");
+    const { repoDir, worktreePath, branchName } = await createConflictedWorktree("resolver-exhausted");
     try {
       const notifications: Array<Record<string, unknown>> = [];
       let policyAllowedActions: { merge: boolean; pr: boolean } | undefined;
@@ -2109,7 +2109,7 @@ describe("SessionWorktreeStrategyService auto-merge conflict flow", () => {
   });
 
   it("renders policy-aware decision buttons when auto-pr fails", async () => {
-    const { repoDir, worktreePath, branchName } = createMergeableWorktree("auto-pr-failure-policy");
+    const { repoDir, worktreePath, branchName } = await createMergeableWorktree("auto-pr-failure-policy");
     const notifications: Array<Record<string, unknown>> = [];
     const patches: Array<Record<string, unknown>> = [];
     let policyAllowedActions: { merge: boolean; pr: boolean } | undefined;

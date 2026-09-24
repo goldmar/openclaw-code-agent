@@ -1,4 +1,4 @@
-import { Type } from "typebox";
+import { Type } from "../tool-parameter-schema";
 import { sessionManager } from "../singletons";
 import type { OpenClawPluginToolContext, RepoIntegrationPolicy, RepoPolicyRecord } from "../types";
 import { validateRepoPolicyForPrAvailability } from "../repo-policy";
@@ -48,7 +48,7 @@ export function makeAgentRepoPolicyTool(ctx?: OpenClawPluginToolContext) {
       }
       const input = params && typeof params === "object" ? params as AgentRepoPolicyParams : {};
       if (input.cleanup === true) {
-        const removed = sessionManager.cleanupRepoPolicies();
+        const removed = await sessionManager.cleanupRepoPolicies();
         const text = removed.length === 0
           ? "No stale repo policies found."
           : [
@@ -71,7 +71,7 @@ export function makeAgentRepoPolicyTool(ctx?: OpenClawPluginToolContext) {
       }
 
       if (input.reset === true) {
-        const ok = sessionManager.resetRepoPolicy(workdir);
+        const ok = await sessionManager.resetRepoPolicy(workdir);
         return { content: [{ type: "text", text: ok ? `Repo policy reset for ${workdir}.` : `No stored repo policy found for ${workdir}.` }] };
       }
 
@@ -80,21 +80,21 @@ export function makeAgentRepoPolicyTool(ctx?: OpenClawPluginToolContext) {
           return { content: [{ type: "text", text: "Error: policy must be one of pr-required, pr-allowed, never-pr, manual." }] };
         }
         if (typeof sessionManager.resolveRepoPolicy === "function") {
-          const resolution = sessionManager.resolveRepoPolicy(workdir);
+          const resolution = await sessionManager.resolveRepoPolicy(workdir);
           if (resolution.identity) {
             const validationError = validateRepoPolicyForPrAvailability(input.policy, resolution.prAvailable);
             if (validationError) return { content: [{ type: "text", text: `Error: ${validationError}` }] };
           }
         }
-        const record = sessionManager.setRepoPolicy(workdir, input.policy);
+        const record = await sessionManager.setRepoPolicy(workdir, input.policy);
         if (!record) {
           return { content: [{ type: "text", text: `Error: ${workdir} is not a git repository.` }] };
         }
-        let continuation: ReturnType<NonNullable<typeof sessionManager>["continueLaunchAfterManualRepoPolicy"]> | { kind: "none" };
+        let continuation: Awaited<ReturnType<NonNullable<typeof sessionManager>["continueLaunchAfterManualRepoPolicy"]>> | { kind: "none" };
         try {
           // Guard is intentional: tests and older plugin-injected managers may not have this newer method.
           continuation = typeof sessionManager.continueLaunchAfterManualRepoPolicy === "function"
-            ? sessionManager.continueLaunchAfterManualRepoPolicy(record.repoRoot, input.policy)
+            ? await sessionManager.continueLaunchAfterManualRepoPolicy(record.repoRoot, input.policy)
             : { kind: "none" as const };
         } catch (err) {
           const errText = err instanceof Error ? err.message : String(err);
@@ -137,7 +137,7 @@ export function makeAgentRepoPolicyTool(ctx?: OpenClawPluginToolContext) {
         return { content: [{ type: "text", text: formatPolicy(record) }] };
       }
 
-      const resolution = sessionManager.resolveRepoPolicy(workdir);
+      const resolution = await sessionManager.resolveRepoPolicy(workdir);
       if (!resolution.identity) {
         return { content: [{ type: "text", text: `No git repository found for ${workdir}.` }] };
       }

@@ -24,9 +24,9 @@ function initRepo(prefix: string): string {
   return repoDir;
 }
 
-function createCommittedWorktree(repoDir: string, name: string, fileName = "feature.txt", contents = `${name}\n`) {
-  const worktreePath = createWorktree(repoDir, name);
-  const branchName = getBranchName(worktreePath);
+async function createCommittedWorktree(repoDir: string, name: string, fileName = "feature.txt", contents = `${name}\n`) {
+  const worktreePath = await createWorktree(repoDir, name);
+  const branchName = await getBranchName(worktreePath);
   assert.ok(branchName, "worktree branch should exist");
   writeFileSync(join(worktreePath, fileName), contents, "utf-8");
   git(worktreePath, "add", fileName);
@@ -91,7 +91,7 @@ describe("agent_worktree_status", () => {
   it("renders derived released lifecycle details from repository evidence", async () => {
     const repoDir = initRepo("status-released-");
     try {
-      const released = createCommittedWorktree(repoDir, "released-status", "feature.txt", "released\n");
+      const released = await createCommittedWorktree(repoDir, "released-status", "feature.txt", "released\n");
       const releasedCommit = git(released.worktreePath, "rev-parse", "HEAD");
       git(repoDir, "checkout", "main");
       writeFileSync(join(repoDir, "main-only.txt"), "main first\n", "utf-8");
@@ -146,7 +146,7 @@ describe("agent_worktree_status", () => {
   it("renders merge-conflict-resolving worktrees as preserved conflict resolution state", async () => {
     const repoDir = initRepo("status-conflict-resolving-");
     try {
-      const conflicted = createCommittedWorktree(repoDir, "conflict-resolving-status", "feature.txt", "resolver\n");
+      const conflicted = await createCommittedWorktree(repoDir, "conflict-resolving-status", "feature.txt", "resolver\n");
 
       const persisted = {
         sessionId: "s-conflict-resolving",
@@ -219,7 +219,7 @@ describe("agent_worktree_status", () => {
       git(repoDir, "add", "session-store.txt");
       git(repoDir, "commit", "-m", "Fix test session store isolation");
 
-      const helper = createCommittedWorktree(repoDir, "pr-314-comments-cleanup", "cleanup.txt", "commit 7f50458\n");
+      const helper = await createCommittedWorktree(repoDir, "pr-314-comments-cleanup", "cleanup.txt", "commit 7f50458\n");
       const helperCommit = git(helper.worktreePath, "rev-parse", "HEAD");
       git(repoDir, "checkout", "fix-test-session-store-isolation");
       git(repoDir, "merge", "--ff-only", helperCommit);
@@ -300,7 +300,7 @@ describe("agent_worktree_cleanup", () => {
   it("preview_all reports safe released worktrees and kept unresolved worktrees with reasons", async () => {
     const repoDir = initRepo("cleanup-preview-");
     try {
-      const released = createCommittedWorktree(repoDir, "released-branch", "feature.txt", "released\n");
+      const released = await createCommittedWorktree(repoDir, "released-branch", "feature.txt", "released\n");
       const releasedCommit = git(released.worktreePath, "rev-parse", "HEAD");
       git(repoDir, "checkout", "main");
       writeFileSync(join(repoDir, "main-only.txt"), "main first\n", "utf-8");
@@ -308,7 +308,7 @@ describe("agent_worktree_cleanup", () => {
       git(repoDir, "commit", "-m", "main diverges");
       git(repoDir, "cherry-pick", releasedCommit);
 
-      const unique = createCommittedWorktree(repoDir, "unique-branch", "unique.txt");
+      const unique = await createCommittedWorktree(repoDir, "unique-branch", "unique.txt");
       git(repoDir, "checkout", "main");
 
       const persisted = [
@@ -381,7 +381,7 @@ describe("agent_worktree_cleanup", () => {
   it("clean_safe removes merged worktrees and preserves legacy merged resolved timestamps", async () => {
     const repoDir = initRepo("cleanup-exec-");
     try {
-      const merged = createCommittedWorktree(repoDir, "merged-clean", "feature.txt", "merged\n");
+      const merged = await createCommittedWorktree(repoDir, "merged-clean", "feature.txt", "merged\n");
       git(repoDir, "checkout", "main");
       git(repoDir, "merge", "--ff-only", merged.branchName);
       const legacyResolvedAt = "2024-02-03T04:05:06.000Z";
@@ -457,7 +457,7 @@ describe("agent_worktree_cleanup", () => {
   it("clean_safe removes released worktrees and clears persisted worktree metadata", async () => {
     const repoDir = initRepo("cleanup-released-");
     try {
-      const released = createCommittedWorktree(repoDir, "released-clean", "feature.txt", "released\n");
+      const released = await createCommittedWorktree(repoDir, "released-clean", "feature.txt", "released\n");
       const releasedCommit = git(released.worktreePath, "rev-parse", "HEAD");
       git(repoDir, "checkout", "main");
       writeFileSync(join(repoDir, "main-only.txt"), "main first\n", "utf-8");
@@ -533,7 +533,7 @@ describe("agent_worktree_cleanup", () => {
   it("clean_safe preserves legacy dismissed timestamps only for dismissed cleanup", async () => {
     const repoDir = initRepo("cleanup-dismissed-");
     try {
-      const dismissed = createCommittedWorktree(repoDir, "dismissed-clean", "feature.txt", "dismissed\n");
+      const dismissed = await createCommittedWorktree(repoDir, "dismissed-clean", "feature.txt", "dismissed\n");
       const legacyMergedAt = "2024-01-02T03:04:05.000Z";
       const legacyDismissedAt = "2024-02-03T04:05:06.000Z";
 

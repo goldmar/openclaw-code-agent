@@ -153,7 +153,8 @@ export function register(api: OpenClawPluginApi): void {
       // Worktree cleanup is owned by the maintenance schedules (resolved/merged
       // worktrees after their retention window) and `agent_worktree_cleanup`;
       // there is no age-based startup sweep of unmanaged worktree directories.
-      sm.bootstrapMaintenanceSchedules();
+      // Reminder/retention deadlines need git evidence; they settle in the background.
+      void sm.bootstrapMaintenanceSchedules();
       started = true;
       maybeCheckForAutoUpdate();
     });

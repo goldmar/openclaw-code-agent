@@ -26,7 +26,7 @@ function repoPolicyButtonTokenIds(request: { buttons: Array<Array<{ callbackData
   return request.buttons.flatMap((row) => row.map((button) => button.callbackData));
 }
 
-function createRepoWithWorktree(name: string) {
+async function createRepoWithWorktree(name: string) {
   const repoDir = mkdtempSync(join(tmpdir(), `openclaw-policy-${name}-`));
   git(repoDir, "init", "-b", "main");
   git(repoDir, "config", "user.name", "Test User");
@@ -34,8 +34,8 @@ function createRepoWithWorktree(name: string) {
   writeFileSync(join(repoDir, "README.md"), "base\n", "utf-8");
   git(repoDir, "add", "README.md");
   git(repoDir, "commit", "-m", "init");
-  const worktreePath = createWorktree(repoDir, name);
-  const branchName = getBranchName(worktreePath);
+  const worktreePath = await createWorktree(repoDir, name);
+  const branchName = await getBranchName(worktreePath);
   assert.ok(branchName);
   writeFileSync(join(worktreePath, "feature.txt"), "feature\n", "utf-8");
   git(worktreePath, "add", "feature.txt");
@@ -54,13 +54,13 @@ describe("repo policy resolution", () => {
     assert.equal(detectRepoProvider("https://gitlab.com/example/repo"), "unsupported");
   });
 
-  it("blocks first worktree launch when repo policy is unknown", () => {
+  it("blocks first worktree launch when repo policy is unknown", async () => {
     const repoDir = mkdtempSync(join(tmpdir(), "openclaw-policy-unknown-"));
     const storeDir = mkdtempSync(join(tmpdir(), "openclaw-policy-store-"));
     try {
       git(repoDir, "init", "-b", "main");
       const sm = new SessionManager(1, 10, { store: { indexPath: join(storeDir, "sessions.json") } });
-      const result = sm.checkRepoPolicyForLaunch(repoDir, "delegate");
+      const result = await sm.checkRepoPolicyForLaunch(repoDir, "delegate");
       assert.equal(result.ok, false);
       if (!result.ok) {
         assert.match(result.text, /Repo integration policy is not set/);
@@ -75,7 +75,7 @@ describe("repo policy resolution", () => {
     }
   });
 
-  it("omits PR policy choices when PR automation is unavailable", () => {
+  it("omits PR policy choices when PR automation is unavailable", async () => {
     const repoDir = mkdtempSync(join(tmpdir(), "openclaw-policy-unsupported-buttons-"));
     const storeDir = mkdtempSync(join(tmpdir(), "openclaw-policy-unsupported-buttons-store-"));
     const dispatchCalls: any[] = [];
@@ -89,7 +89,7 @@ describe("repo policy resolution", () => {
         dispose: () => {},
       };
 
-      const result = sm.requestRepoPolicyForLaunch({
+      const result = await sm.requestRepoPolicyForLaunch({
         route: {
           provider: "telegram",
           target: "12345",
@@ -124,7 +124,7 @@ describe("repo policy resolution", () => {
     }
   });
 
-  it("delivers short repo-policy buttons with opaque callback tokens before continuing launch", () => {
+  it("delivers short repo-policy buttons with opaque callback tokens before continuing launch", async () => {
     const repoDir = mkdtempSync(join(tmpdir(), "openclaw-policy-buttons-"));
     const storeDir = mkdtempSync(join(tmpdir(), "openclaw-policy-buttons-store-"));
     const dispatchCalls: any[] = [];
@@ -137,7 +137,7 @@ describe("repo policy resolution", () => {
         dispose: () => {},
       };
 
-      const result = sm.requestRepoPolicyForLaunch({
+      const result = await sm.requestRepoPolicyForLaunch({
         route: {
           provider: "telegram",
           target: "12345",
@@ -192,7 +192,7 @@ describe("repo policy resolution", () => {
     }
   });
 
-  it("scopes repo-policy prompt idempotency to the deferred launch context", () => {
+  it("scopes repo-policy prompt idempotency to the deferred launch context", async () => {
     const repoDir = mkdtempSync(join(tmpdir(), "openclaw-policy-idempotency-"));
     const storeDir = mkdtempSync(join(tmpdir(), "openclaw-policy-idempotency-store-"));
     const dispatchCalls: any[] = [];
@@ -222,13 +222,13 @@ describe("repo policy resolution", () => {
         allowedTools: ["Shell(git status)", "Shell(pnpm test)"],
       };
 
-      sm.requestRepoPolicyForLaunch(baseLaunch);
-      sm.requestRepoPolicyForLaunch(baseLaunch);
-      sm.requestRepoPolicyForLaunch({
+      await sm.requestRepoPolicyForLaunch(baseLaunch);
+      await sm.requestRepoPolicyForLaunch(baseLaunch);
+      await sm.requestRepoPolicyForLaunch({
         ...baseLaunch,
         allowedTools: ["Shell(pnpm test)", "Shell(git status)"],
       });
-      sm.requestRepoPolicyForLaunch({
+      await sm.requestRepoPolicyForLaunch({
         ...baseLaunch,
         prompt: "Implement launch B",
         name: "launch-b",
@@ -255,7 +255,7 @@ describe("repo policy resolution", () => {
     }
   });
 
-  it("forwards stored session ID override when continuing after repo-policy choice", () => {
+  it("forwards stored session ID override when continuing after repo-policy choice", async () => {
     const storeDir = mkdtempSync(join(tmpdir(), "openclaw-policy-launch-store-"));
     try {
       const sm = new SessionManager(1, 10, { store: { indexPath: join(storeDir, "sessions.json") } });
@@ -270,7 +270,7 @@ describe("repo policy resolution", () => {
         };
       };
 
-      const result = sm.launchAfterRepoPolicyChoice({
+      const result = await sm.launchAfterRepoPolicyChoice({
         route: { provider: "telegram", target: "12345" },
         prompt: "Ship isolated changes",
         workdir: "/repo",
@@ -293,7 +293,7 @@ describe("repo policy resolution", () => {
     }
   });
 
-  it("continues a deferred launch after manually setting the matching repo policy", () => {
+  it("continues a deferred launch after manually setting the matching repo policy", async () => {
     const repoDir = mkdtempSync(join(tmpdir(), "openclaw-policy-manual-continue-"));
     const storeDir = mkdtempSync(join(tmpdir(), "openclaw-policy-manual-continue-store-"));
     const dispatchCalls: any[] = [];
@@ -316,7 +316,7 @@ describe("repo policy resolution", () => {
         };
       };
 
-      sm.requestRepoPolicyForLaunch({
+      await sm.requestRepoPolicyForLaunch({
         route: { provider: "telegram", target: "12345" },
         prompt: "Continue after manual policy",
         workdir: repoDir,
@@ -325,8 +325,8 @@ describe("repo policy resolution", () => {
       });
       const policyTokenId = dispatchCalls[0][1].buttons[0][0].callbackData;
 
-      sm.setRepoPolicy(repoDir, "never-pr");
-      const continuation = sm.continueLaunchAfterManualRepoPolicy(repoDir, "never-pr");
+      await sm.setRepoPolicy(repoDir, "never-pr");
+      const continuation = await sm.continueLaunchAfterManualRepoPolicy(repoDir, "never-pr");
 
       assert.equal(continuation.kind, "launched");
       if (continuation.kind === "launched") {
@@ -344,7 +344,7 @@ describe("repo policy resolution", () => {
     }
   });
 
-  it("preserves config-derived worktree strategy across deferred repo-policy continuation", () => {
+  it("preserves config-derived worktree strategy across deferred repo-policy continuation", async () => {
     const repoDir = mkdtempSync(join(tmpdir(), "openclaw-policy-default-strategy-"));
     const storeDir = mkdtempSync(join(tmpdir(), "openclaw-policy-default-strategy-store-"));
     const dispatchCalls: any[] = [];
@@ -368,7 +368,7 @@ describe("repo policy resolution", () => {
         };
       };
 
-      sm.requestRepoPolicyForLaunch({
+      await sm.requestRepoPolicyForLaunch({
         route: { provider: "telegram", target: "12345" },
         prompt: "Continue with original default strategy",
         workdir: repoDir,
@@ -378,8 +378,8 @@ describe("repo policy resolution", () => {
       assert.equal(sm.getActionToken(policyTokenId)?.launchWorktreeStrategy, "auto-merge");
 
       setPluginConfig({ defaultWorktreeStrategy: "off" });
-      sm.setRepoPolicy(repoDir, "never-pr");
-      const continuation = sm.continueLaunchAfterManualRepoPolicy(repoDir, "never-pr");
+      await sm.setRepoPolicy(repoDir, "never-pr");
+      const continuation = await sm.continueLaunchAfterManualRepoPolicy(repoDir, "never-pr");
 
       assert.equal(continuation.kind, "launched");
       assert.equal(spawnConfig?.prompt, "Continue with original default strategy");
@@ -392,7 +392,7 @@ describe("repo policy resolution", () => {
     }
   });
 
-  it("deduplicates repeated delivery tokens for the same deferred manual policy launch", () => {
+  it("deduplicates repeated delivery tokens for the same deferred manual policy launch", async () => {
     const repoDir = mkdtempSync(join(tmpdir(), "openclaw-policy-manual-dedupe-"));
     const storeDir = mkdtempSync(join(tmpdir(), "openclaw-policy-manual-dedupe-store-"));
     const dispatchCalls: any[] = [];
@@ -426,16 +426,16 @@ describe("repo policy resolution", () => {
         worktreeStrategy: "delegate" as const,
       };
 
-      sm.requestRepoPolicyForLaunch(launch);
-      sm.requestRepoPolicyForLaunch({
+      await sm.requestRepoPolicyForLaunch(launch);
+      await sm.requestRepoPolicyForLaunch({
         ...launch,
         allowedTools: ["Shell(pnpm test)", "Shell(git status)"],
       });
       const firstPolicyTokenId = dispatchCalls[0][1].buttons[0][0].callbackData;
       const secondPolicyTokenId = dispatchCalls[1][1].buttons[0][0].callbackData;
 
-      sm.setRepoPolicy(repoDir, "never-pr");
-      const continuation = sm.continueLaunchAfterManualRepoPolicy(repoDir, "never-pr");
+      await sm.setRepoPolicy(repoDir, "never-pr");
+      const continuation = await sm.continueLaunchAfterManualRepoPolicy(repoDir, "never-pr");
 
       assert.equal(continuation.kind, "launched");
       assert.equal(spawnCount, 1);
@@ -451,7 +451,7 @@ describe("repo policy resolution", () => {
     }
   });
 
-  it("keeps the deferred launch token retryable when manual policy continuation fails", () => {
+  it("keeps the deferred launch token retryable when manual policy continuation fails", async () => {
     const repoDir = mkdtempSync(join(tmpdir(), "openclaw-policy-manual-failure-"));
     const storeDir = mkdtempSync(join(tmpdir(), "openclaw-policy-manual-failure-store-"));
     const dispatchCalls: any[] = [];
@@ -467,7 +467,7 @@ describe("repo policy resolution", () => {
         throw new Error("launch capacity unavailable");
       };
 
-      sm.requestRepoPolicyForLaunch({
+      await sm.requestRepoPolicyForLaunch({
         route: { provider: "telegram", target: "12345" },
         prompt: "Retry after manual policy",
         workdir: repoDir,
@@ -475,9 +475,9 @@ describe("repo policy resolution", () => {
       });
       const policyTokenId = dispatchCalls[0][1].buttons[0][0].callbackData;
 
-      sm.setRepoPolicy(repoDir, "never-pr");
-      assert.throws(
-        () => sm.continueLaunchAfterManualRepoPolicy(repoDir, "never-pr"),
+      await sm.setRepoPolicy(repoDir, "never-pr");
+      await assert.rejects(
+        async () => await sm.continueLaunchAfterManualRepoPolicy(repoDir, "never-pr"),
         /launch capacity unavailable/,
       );
       assert.equal(sm.getActionToken(policyTokenId)?.id, policyTokenId);
@@ -488,7 +488,7 @@ describe("repo policy resolution", () => {
     }
   });
 
-  it("clears stale manual policy prompt tokens when no matching deferred launch remains", () => {
+  it("clears stale manual policy prompt tokens when no matching deferred launch remains", async () => {
     const repoDir = mkdtempSync(join(tmpdir(), "openclaw-policy-manual-no-match-"));
     const storeDir = mkdtempSync(join(tmpdir(), "openclaw-policy-manual-no-match-store-"));
     const dispatchCalls: any[] = [];
@@ -504,7 +504,7 @@ describe("repo policy resolution", () => {
         throw new Error("spawn should not run without a matching policy token");
       };
 
-      sm.requestRepoPolicyForLaunch({
+      await sm.requestRepoPolicyForLaunch({
         route: { provider: "telegram", target: "12345" },
         prompt: "No matching policy token remains",
         workdir: repoDir,
@@ -517,8 +517,8 @@ describe("repo policy resolution", () => {
       assert.ok(neverPrTokenId);
       sm.consumeActionToken(neverPrTokenId);
 
-      sm.setRepoPolicy(repoDir, "never-pr");
-      const continuation = sm.continueLaunchAfterManualRepoPolicy(repoDir, "never-pr");
+      await sm.setRepoPolicy(repoDir, "never-pr");
+      const continuation = await sm.continueLaunchAfterManualRepoPolicy(repoDir, "never-pr");
 
       assert.deepEqual(continuation, { kind: "none" });
       for (const tokenId of policyTokenIds) {
@@ -531,7 +531,7 @@ describe("repo policy resolution", () => {
     }
   });
 
-  it("does not guess which launch to continue when multiple manual policy matches exist", () => {
+  it("does not guess which launch to continue when multiple manual policy matches exist", async () => {
     const repoDir = mkdtempSync(join(tmpdir(), "openclaw-policy-manual-ambiguous-"));
     const storeDir = mkdtempSync(join(tmpdir(), "openclaw-policy-manual-ambiguous-store-"));
     const dispatchCalls: any[] = [];
@@ -549,13 +549,13 @@ describe("repo policy resolution", () => {
         throw new Error("spawn should not run for ambiguous manual policy continuation");
       };
 
-      sm.requestRepoPolicyForLaunch({
+      await sm.requestRepoPolicyForLaunch({
         route: { provider: "telegram", target: "12345" },
         prompt: "First pending launch",
         workdir: repoDir,
         worktreeStrategy: "delegate",
       });
-      sm.requestRepoPolicyForLaunch({
+      await sm.requestRepoPolicyForLaunch({
         route: { provider: "telegram", target: "12345" },
         prompt: "Second pending launch",
         workdir: repoDir,
@@ -564,8 +564,8 @@ describe("repo policy resolution", () => {
       const firstPolicyTokenIds = repoPolicyButtonTokenIds(dispatchCalls[0][1]);
       const secondPolicyTokenIds = repoPolicyButtonTokenIds(dispatchCalls[1][1]);
 
-      sm.setRepoPolicy(repoDir, "never-pr");
-      const continuation = sm.continueLaunchAfterManualRepoPolicy(repoDir, "never-pr");
+      await sm.setRepoPolicy(repoDir, "never-pr");
+      const continuation = await sm.continueLaunchAfterManualRepoPolicy(repoDir, "never-pr");
 
       assert.deepEqual(continuation, { kind: "ambiguous", count: 2 });
       assert.equal(spawnCalled, false);
@@ -580,12 +580,12 @@ describe("repo policy resolution", () => {
     }
   });
 
-  it("seeds openclaw-code-agent as PR-required", () => {
+  it("seeds openclaw-code-agent as PR-required", async () => {
     const repoDir = mkdtempSync(join(tmpdir(), "openclaw-policy-seed-"));
     try {
       git(repoDir, "init", "-b", "main");
       git(repoDir, "remote", "add", "origin", "https://github.com/goldmar/openclaw-code-agent.git/");
-      const identity = resolveRepoIdentity(repoDir);
+      const identity = await resolveRepoIdentity(repoDir);
       assert.ok(identity);
       assert.equal(identity.remoteUrl, "https://github.com/goldmar/openclaw-code-agent");
       assert.equal(seededRepoPolicy(identity), "pr-required");
@@ -594,7 +594,7 @@ describe("repo policy resolution", () => {
     }
   });
 
-  it("cleans up stored repo policies when the repo identity changes at the same path", () => {
+  it("cleans up stored repo policies when the repo identity changes at the same path", async () => {
     const repoDir = mkdtempSync(join(tmpdir(), "openclaw-policy-identity-cleanup-"));
     const secondRepoDir = mkdtempSync(join(tmpdir(), "openclaw-policy-identity-cleanup-second-"));
     const storeDir = mkdtempSync(join(tmpdir(), "openclaw-policy-identity-cleanup-store-"));
@@ -606,8 +606,8 @@ describe("repo policy resolution", () => {
       git(secondRepoDir, "remote", "add", "origin", "https://github.com/example/second-old.git");
       sm = new SessionManager(1, 10, { store: { indexPath: join(storeDir, "sessions.json") } });
 
-      const oldRecord = sm.setRepoPolicy(repoDir, "pr-required");
-      const secondOldRecord = sm.setRepoPolicy(secondRepoDir, "never-pr");
+      const oldRecord = await sm.setRepoPolicy(repoDir, "pr-required");
+      const secondOldRecord = await sm.setRepoPolicy(secondRepoDir, "never-pr");
       assert.ok(oldRecord);
       assert.ok(secondOldRecord);
       const store = (sm as any).store as { saveIndex: () => void };
@@ -620,7 +620,7 @@ describe("repo policy resolution", () => {
       git(repoDir, "remote", "set-url", "origin", "https://github.com/example/new.git");
       git(secondRepoDir, "remote", "set-url", "origin", "https://github.com/example/second-new.git");
 
-      const removed = sm.cleanupRepoPolicies();
+      const removed = await sm.cleanupRepoPolicies();
 
       assert.deepEqual(removed.map((record) => record.key).sort(), [oldRecord.key, secondOldRecord.key].sort());
       assert.equal(cleanupSaveCount, 1);
@@ -721,7 +721,7 @@ describe("SessionWorktreeActionService repo policy planning", () => {
   });
 
   it("turns auto-merge into auto-pr for PR-required repos when PRs are available", async () => {
-    const { repoDir, worktreePath, branchName } = createRepoWithWorktree("auto-pr-required");
+    const { repoDir, worktreePath, branchName } = await createRepoWithWorktree("auto-pr-required");
     try {
       const service = new SessionWorktreeActionService({
         shouldRunWorktreeStrategy: () => true,
@@ -755,7 +755,7 @@ describe("SessionWorktreeActionService repo policy planning", () => {
   });
 
   it("uses live repo policy when an in-flight session has no policy snapshot", async () => {
-    const { repoDir, worktreePath, branchName } = createRepoWithWorktree("live-policy-fallback");
+    const { repoDir, worktreePath, branchName } = await createRepoWithWorktree("live-policy-fallback");
     try {
       const service = new SessionWorktreeActionService({
         shouldRunWorktreeStrategy: () => true,
@@ -800,7 +800,7 @@ describe("SessionWorktreeActionService repo policy planning", () => {
   });
 
   it("blocks auto-merge for PR-required repos when PRs are unavailable", async () => {
-    const { repoDir, worktreePath, branchName } = createRepoWithWorktree("pr-unavailable");
+    const { repoDir, worktreePath, branchName } = await createRepoWithWorktree("pr-unavailable");
     try {
       const service = new SessionWorktreeActionService({
         shouldRunWorktreeStrategy: () => true,
@@ -834,7 +834,7 @@ describe("SessionWorktreeActionService repo policy planning", () => {
   });
 
   it("does not treat a stale persisted PR URL as an existing open PR", async () => {
-    const { repoDir, worktreePath, branchName } = createRepoWithWorktree("stale-pr-url");
+    const { repoDir, worktreePath, branchName } = await createRepoWithWorktree("stale-pr-url");
     try {
       const service = new SessionWorktreeActionService({
         shouldRunWorktreeStrategy: () => true,
@@ -870,7 +870,7 @@ describe("SessionWorktreeActionService repo policy planning", () => {
   });
 
   it("does not treat stale pr-open lifecycle as an existing open PR while planning", async () => {
-    const { repoDir, worktreePath, branchName } = createRepoWithWorktree("stale-lifecycle-open-pr");
+    const { repoDir, worktreePath, branchName } = await createRepoWithWorktree("stale-lifecycle-open-pr");
     try {
       const service = new SessionWorktreeActionService({
         shouldRunWorktreeStrategy: () => true,

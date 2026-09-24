@@ -25,7 +25,7 @@ interface SessionMaintenanceDeps {
   removeRuntimeSession: (sessionId: string, reason?: string) => void;
   persistSession: (session: Session, options?: { scheduleRuntimeGc?: boolean }) => void;
   clearRuntimeSessionState: (sessionId: string) => void;
-  resolveWorktreeRepoDir: (repoDir: string | undefined, worktreePath?: string) => string | undefined;
+  resolveWorktreeRepoDir: (repoDir: string | undefined, worktreePath?: string) => string | undefined | Promise<string | undefined>;
   updatePersistedSession: (ref: string, patch: Partial<PersistedSessionInfo>) => boolean;
   getMaxPersistedSessions: () => number;
 }
@@ -37,6 +37,9 @@ function errorMessage(err: unknown): string {
 export class SessionMaintenanceService {
   private readonly scheduler = new KeyedDeadlineScheduler();
   private lastSessionOutputCleanupAttemptAt: number | undefined;
+  /** Latest sync request per persisted ref; older in-flight syncs must not apply their schedule. */
+  private readonly persistedSyncGenerations = new Map<string, number>();
+  private readonly pendingWork = new Set<Promise<void>>();
 
   constructor(private readonly deps: SessionMaintenanceDeps) {}
 
@@ -89,26 +92,63 @@ export class SessionMaintenanceService {
   ): void {
     const ref = this.persistedMaintenanceRef(session);
     if (!ref) return;
+    this.nextPersistedSyncGeneration(ref);
     this.cancelPrefix(`persisted:${ref}:`);
   }
 
+  /**
+   * Recompute a persisted session's reminder and retention deadlines. Deciding
+   * them needs git evidence, so the work runs asynchronously; only the most
+   * recent request for a ref applies its schedule.
+   */
   syncPersistedSessionMaintenance(session: PersistedSessionInfo): void {
     const ref = this.persistedMaintenanceRef(session);
     if (!ref) return;
+    const generation = this.nextPersistedSyncGeneration(ref);
+    this.track(this.syncPersistedSessionMaintenanceNow(session, ref, generation), `maintenance sync for ${ref}`);
+  }
 
+  /** Resolve once every maintenance sync and scheduled callback started so far has settled. */
+  async whenIdle(): Promise<void> {
+    while (this.pendingWork.size > 0) {
+      await Promise.all([...this.pendingWork]);
+    }
+  }
+
+  private nextPersistedSyncGeneration(ref: string): number {
+    const generation = (this.persistedSyncGenerations.get(ref) ?? 0) + 1;
+    this.persistedSyncGenerations.set(ref, generation);
+    return generation;
+  }
+
+  private isCurrentPersistedSync(ref: string, generation: number): boolean {
+    return this.persistedSyncGenerations.get(ref) === generation;
+  }
+
+  private track(work: Promise<void>, description: string): void {
+    const pending = work
+      .catch((err) => log.warn(`[SessionManager] ${description} failed: ${errorMessage(err)}`))
+      .finally(() => this.pendingWork.delete(pending));
+    this.pendingWork.add(pending);
+  }
+
+  private async syncPersistedSessionMaintenanceNow(session: PersistedSessionInfo, ref: string, generation: number): Promise<void> {
+    const nextReminderAt = await this.deps.reminders.getNextReminderAt(session);
+    if (!this.isCurrentPersistedSync(ref, generation)) return;
     this.cancel(this.persistedMaintenanceKey(ref, "worktree-reminder"));
-    const nextReminderAt = this.deps.reminders.getNextReminderAt(session);
     if (nextReminderAt != null) {
       this.schedulePersistedWorktreeReminder(ref, nextReminderAt);
     } else {
-      this.deps.reminders.clearResolvedReminderState(session);
+      await this.deps.reminders.clearResolvedReminderState(session);
+      if (!this.isCurrentPersistedSync(ref, generation)) return;
     }
 
-    this.cancel(this.persistedMaintenanceKey(ref, "worktree-retention"));
-    const resolved = resolveWorktreeLifecycle(session, {
+    const resolved = await resolveWorktreeLifecycle(session, {
       activeSession: false,
       includePrSync: session.worktreeLifecycle?.state === "pr_open" || Boolean(session.worktreePrUrl),
     });
+    if (!this.isCurrentPersistedSync(ref, generation)) return;
+    this.cancel(this.persistedMaintenanceKey(ref, "worktree-retention"));
     const resolvedAtIso = this.resolvedAtIso(session);
     if (resolved.cleanupSafe && typeof resolvedAtIso === "string") {
       const resolvedAt = new Date(resolvedAtIso).getTime();
@@ -116,14 +156,14 @@ export class SessionMaintenanceService {
         this.schedule(this.persistedMaintenanceKey(ref, "worktree-retention"), resolvedAt + RESOLVED_WORKTREE_RETENTION_MS, () => {
           const latest = this.deps.store.getPersistedSession(ref);
           if (!latest) return;
-          this.reconcileResolvedWorktreeRetention(latest, Date.now());
+          this.track(this.reconcileResolvedWorktreeRetention(latest, Date.now()), `worktree retention for ${ref}`);
         });
       }
     }
   }
 
-  reconcileResolvedWorktreeRetention(session: PersistedSessionInfo, now: number): void {
-    const resolved = resolveWorktreeLifecycle(session, {
+  async reconcileResolvedWorktreeRetention(session: PersistedSessionInfo, now: number): Promise<void> {
+    const resolved = await resolveWorktreeLifecycle(session, {
       activeSession: false,
       includePrSync: session.worktreeLifecycle?.state === "pr_open" || Boolean(session.worktreePrUrl),
     });
@@ -133,11 +173,11 @@ export class SessionMaintenanceService {
 
     try {
       if (!session.worktreePath && !usesNativeBackendWorktree(session)) return;
-      const repoDir = this.deps.resolveWorktreeRepoDir(session.workdir, session.worktreePath);
+      const repoDir = await this.deps.resolveWorktreeRepoDir(session.workdir, session.worktreePath);
       if (!repoDir) return;
       const removed = usesNativeBackendWorktree(session)
         ? false
-        : removeWorktree(repoDir, session.worktreePath!);
+        : await removeWorktree(repoDir, session.worktreePath!);
       if (!usesNativeBackendWorktree(session) && !removed) return;
       for (const mutationRef of getPersistedMutationRefs(session)) {
         this.deps.updatePersistedSession(mutationRef, {
@@ -241,15 +281,17 @@ export class SessionMaintenanceService {
     this.schedule(key, at, () => {
       const latest = this.deps.store.getPersistedSession(ref);
       if (!latest) return;
-      const delivered = this.deps.reminders.sendReminderIfDue(latest, Date.now());
-      if (delivered) return;
+      this.track((async () => {
+        const delivered = await this.deps.reminders.sendReminderIfDue(latest, Date.now());
+        if (delivered) return;
 
-      const nextReminderAt = this.deps.reminders.getNextReminderAt(latest);
-      if (nextReminderAt == null) return;
-      this.schedulePersistedWorktreeReminder(
-        ref,
-        Math.max(nextReminderAt, Date.now() + WORKTREE_REMINDER_RETRY_BACKOFF_MS),
-      );
+        const nextReminderAt = await this.deps.reminders.getNextReminderAt(latest);
+        if (nextReminderAt == null) return;
+        this.schedulePersistedWorktreeReminder(
+          ref,
+          Math.max(nextReminderAt, Date.now() + WORKTREE_REMINDER_RETRY_BACKOFF_MS),
+        );
+      })(), `worktree reminder for ${ref}`);
     });
   }
 

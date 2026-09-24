@@ -1,5 +1,5 @@
 import { assertBranchName, branchOrRemoteTrackingRef, localBranchRef } from "./worktree-ref-validation";
-import { execFileSync } from "child_process";
+import { runGit, runGh, withRepoLock } from "./git-exec";
 import * as fs from "fs";
 import { tmpdir } from "os";
 import { dirname, join } from "path";
@@ -8,27 +8,23 @@ import { createLogger } from "./logger";
 
 const log = createLogger("worktree-repo");
 
-let gitAvailableCache: boolean | undefined;
-let ghCliAvailableCache: boolean | undefined;
+let gitAvailableCache: Promise<boolean> | undefined;
+let ghCliAvailableCache: Promise<boolean> | undefined;
 
-function getRepoRoot(dir: string): string | undefined {
+async function getRepoRoot(dir: string): Promise<string | undefined> {
   try {
-    const result = execFileSync(
-      "git",
-      ["rev-parse", "--show-toplevel"],
-      { cwd: dir, timeout: 5_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
-    );
+    const result = await runGit(["rev-parse", "--show-toplevel"], { cwd: dir, timeout: 5_000 });
     return result.trim() || undefined;
   } catch {
     return undefined;
   }
 }
 
-function getWorktreeBaseDir(repoDir?: string): string {
+async function getWorktreeBaseDir(repoDir?: string): Promise<string> {
   if (process.env.OPENCLAW_WORKTREE_DIR) return process.env.OPENCLAW_WORKTREE_DIR;
   if (pluginConfig.worktreeDir) return pluginConfig.worktreeDir;
   if (repoDir) {
-    const root = getRepoRoot(repoDir);
+    const root = await getRepoRoot(repoDir);
     if (root) return join(root, ".worktrees");
   }
   return tmpdir();
@@ -45,13 +41,12 @@ export function sanitizeBranchName(name: string): string {
   return sanitized || "session";
 }
 
-export function getPrimaryRepoRootFromWorktree(worktreePath: string): string | undefined {
+export async function getPrimaryRepoRootFromWorktree(worktreePath: string): Promise<string | undefined> {
   try {
-    const commonDir = execFileSync(
-      "git",
+    const commonDir = (await runGit(
       ["-C", worktreePath, "rev-parse", "--git-common-dir"],
-      { cwd: worktreePath, timeout: 5_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
-    ).trim();
+      { cwd: worktreePath, timeout: 5_000 },
+    )).trim();
     if (!commonDir) return undefined;
     return commonDir.endsWith("/.git") ? dirname(commonDir) : undefined;
   } catch {
@@ -59,45 +54,34 @@ export function getPrimaryRepoRootFromWorktree(worktreePath: string): string | u
   }
 }
 
-export function isGitAvailable(): boolean {
-  if (gitAvailableCache !== undefined) return gitAvailableCache;
-  try {
-    execFileSync("git", ["--version"], { timeout: 5_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
-    gitAvailableCache = true;
-    return true;
-  } catch {
-    gitAvailableCache = false;
-    return false;
-  }
+/** Probe `git --version` once per process; concurrent callers share the probe. */
+export function isGitAvailable(): Promise<boolean> {
+  gitAvailableCache ??= runGit(["--version"], { timeout: 5_000 }).then(() => true, () => false);
+  return gitAvailableCache;
 }
 
-export function isGitHubCLIAvailable(): boolean {
-  if (ghCliAvailableCache !== undefined) return ghCliAvailableCache;
-  try {
-    execFileSync("gh", ["--version"], { timeout: 5_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
-    ghCliAvailableCache = true;
-    return true;
-  } catch {
-    ghCliAvailableCache = false;
-    return false;
-  }
+/** Probe `gh --version` once per process; concurrent callers share the probe. */
+export function isGitHubCLIAvailable(): Promise<boolean> {
+  ghCliAvailableCache ??= runGh(["--version"], { timeout: 5_000 }).then(() => true, () => false);
+  return ghCliAvailableCache;
 }
 
-export function isGitRepo(dir: string): boolean {
-  if (!isGitAvailable()) return false;
+export async function isGitRepo(dir: string): Promise<boolean> {
+  if (!(await isGitAvailable())) return false;
   try {
-    execFileSync("git", ["rev-parse", "--git-dir"], { cwd: dir, timeout: 5_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
+    await runGit(["rev-parse", "--git-dir"], { cwd: dir, timeout: 5_000 });
     return true;
   } catch {
     return false;
   }
 }
 
-export function hasEnoughWorktreeSpace(repoDir?: string): boolean {
+export async function hasEnoughWorktreeSpace(repoDir?: string): Promise<boolean> {
   try {
-    const probePath = getWorktreeSpaceProbePath(repoDir);
+    const baseDir = await getWorktreeBaseDir(repoDir);
+    const probePath = resolveExistingAncestorPath(baseDir);
     if (!probePath) {
-      log.warn(`[worktree] Failed to resolve free-space probe path for ${getWorktreeBaseDir(repoDir)}`);
+      log.warn(`[worktree] Failed to resolve free-space probe path for ${baseDir}`);
       return true;
     }
     const stats = fs.statfsSync(probePath);
@@ -109,15 +93,11 @@ export function hasEnoughWorktreeSpace(repoDir?: string): boolean {
   }
 }
 
-export function branchExists(repoDir: string, branchName: string): boolean {
+export async function branchExists(repoDir: string, branchName: string): Promise<boolean> {
   assertBranchName(branchName);
 
   try {
-    execFileSync(
-      "git",
-      ["-C", repoDir, "rev-parse", "--verify", localBranchRef(branchName)],
-      { timeout: 5_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
-    );
+    await runGit(["-C", repoDir, "rev-parse", "--verify", localBranchRef(branchName)], { timeout: 5_000 });
     return true;
   } catch {
     return false;
@@ -125,22 +105,14 @@ export function branchExists(repoDir: string, branchName: string): boolean {
 }
 
 /** Fetch a single branch into a remote-tracking ref without changing a checkout. */
-export function fetchRemoteBranchRef(repoDir: string, branchName: string, remote = "origin"): string | undefined {
+export async function fetchRemoteBranchRef(repoDir: string, branchName: string, remote = "origin"): Promise<string | undefined> {
   assertBranchName(branchName);
   assertBranchName(remote);
 
   const remoteRef = `refs/remotes/${remote}/${branchName}`;
   try {
-    execFileSync(
-      "git",
-      ["-C", repoDir, "fetch", remote, `+${localBranchRef(branchName)}:${remoteRef}`],
-      { timeout: 30_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
-    );
-    execFileSync(
-      "git",
-      ["-C", repoDir, "rev-parse", "--verify", remoteRef],
-      { timeout: 5_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
-    );
+    await runGit(["-C", repoDir, "fetch", remote, `+${localBranchRef(branchName)}:${remoteRef}`], { timeout: 30_000 });
+    await runGit(["-C", repoDir, "rev-parse", "--verify", remoteRef], { timeout: 5_000 });
     return remoteRef;
   } catch {
     return undefined;
@@ -157,8 +129,8 @@ function resolveExistingAncestorPath(targetPath: string): string | undefined {
   }
 }
 
-export function getWorktreeSpaceProbePath(repoDir?: string): string | undefined {
-  return resolveExistingAncestorPath(getWorktreeBaseDir(repoDir));
+export async function getWorktreeSpaceProbePath(repoDir?: string): Promise<string | undefined> {
+  return resolveExistingAncestorPath(await getWorktreeBaseDir(repoDir));
 }
 
 export function hasEnoughFreeBytes(freeBytes: number): boolean {
@@ -166,7 +138,7 @@ export function hasEnoughFreeBytes(freeBytes: number): boolean {
   return freeBytes >= minBytes;
 }
 
-export function detectDefaultBranch(repoDir: string): string {
+export async function detectDefaultBranch(repoDir: string): Promise<string> {
   const envBranch = process.env.OPENCLAW_WORKTREE_BASE_BRANCH;
   if (envBranch !== undefined) {
     assertBranchName(envBranch);
@@ -174,11 +146,7 @@ export function detectDefaultBranch(repoDir: string): string {
   }
 
   try {
-    const result = execFileSync(
-      "git",
-      ["-C", repoDir, "rev-parse", "--abbrev-ref", "origin/HEAD"],
-      { timeout: 5_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
-    );
+    const result = await runGit(["-C", repoDir, "rev-parse", "--abbrev-ref", "origin/HEAD"], { timeout: 5_000 });
     const branch = result.trim().replace(/^origin\//, "");
     if (branch) {
       assertBranchName(branch);
@@ -189,35 +157,23 @@ export function detectDefaultBranch(repoDir: string): string {
   }
 
   try {
-    execFileSync(
-      "git",
-      ["-C", repoDir, "rev-parse", "--verify", localBranchRef("main")],
-      { timeout: 5_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
-    );
+    await runGit(["-C", repoDir, "rev-parse", "--verify", localBranchRef("main")], { timeout: 5_000 });
     return "main";
   } catch {
     // fall through
   }
 
   try {
-    execFileSync(
-      "git",
-      ["-C", repoDir, "rev-parse", "--verify", localBranchRef("master")],
-      { timeout: 5_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
-    );
+    await runGit(["-C", repoDir, "rev-parse", "--verify", localBranchRef("master")], { timeout: 5_000 });
     return "master";
   } catch {
     return "main";
   }
 }
 
-export function getBranchName(worktreePath: string): string | undefined {
+export async function getBranchName(worktreePath: string): Promise<string | undefined> {
   try {
-    const result = execFileSync(
-      "git",
-      ["-C", worktreePath, "rev-parse", "--abbrev-ref", "HEAD"],
-      { timeout: 5_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
-    );
+    const result = await runGit(["-C", worktreePath, "rev-parse", "--abbrev-ref", "HEAD"], { timeout: 5_000 });
     const branch = result.trim();
     if (branch === "HEAD") {
       log.warn(`[worktree] Worktree ${worktreePath} is in detached HEAD state — cannot determine branch name`);
@@ -229,15 +185,14 @@ export function getBranchName(worktreePath: string): string | undefined {
   }
 }
 
-export function getCommitsAheadCount(repoDir: string, branch: string, base: string): number | undefined {
+export async function getCommitsAheadCount(repoDir: string, branch: string, base: string): Promise<number | undefined> {
   assertBranchName(branch);
   assertBranchName(base);
 
   try {
-    const result = execFileSync(
-      "git",
+    const result = await runGit(
       ["-C", repoDir, "rev-list", "--count", `${localBranchRef(base)}..${localBranchRef(branch)}`],
-      { timeout: 10_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
+      { timeout: 10_000 },
     );
     const count = parseInt(result.trim(), 10);
     return Number.isFinite(count) ? count : undefined;
@@ -246,24 +201,23 @@ export function getCommitsAheadCount(repoDir: string, branch: string, base: stri
   }
 }
 
-export function hasCommitsAhead(repoDir: string, branch: string, base: string): boolean {
-  return (getCommitsAheadCount(repoDir, branch, base) ?? 0) > 0;
+export async function hasCommitsAhead(repoDir: string, branch: string, base: string): Promise<boolean> {
+  return ((await getCommitsAheadCount(repoDir, branch, base)) ?? 0) > 0;
 }
 
-export function getAheadBehindCounts(
+export async function getAheadBehindCounts(
   repoDir: string,
   branch: string,
   base: string,
-): { ahead: number; behind: number } | undefined {
+): Promise<{ ahead: number; behind: number } | undefined> {
   assertBranchName(branch);
   assertBranchName(base);
 
   try {
-    const result = execFileSync(
-      "git",
+    const result = (await runGit(
       ["-C", repoDir, "rev-list", "--left-right", "--count", `${localBranchRef(branch)}...${localBranchRef(base)}`],
-      { timeout: 10_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
-    ).trim();
+      { timeout: 10_000 },
+    )).trim();
     const [aheadRaw, behindRaw] = result.split(/\s+/);
     return {
       ahead: parseInt(aheadRaw ?? "0", 10) || 0,
@@ -274,77 +228,61 @@ export function getAheadBehindCounts(
   }
 }
 
-export function isBranchAncestorOfBase(repoDir: string, branch: string, base: string): boolean {
+export async function isBranchAncestorOfBase(repoDir: string, branch: string, base: string): Promise<boolean> {
   const branchRef = branchOrRemoteTrackingRef(branch);
   const baseRef = branchOrRemoteTrackingRef(base);
 
   try {
-    execFileSync(
-      "git",
-      ["-C", repoDir, "merge-base", "--is-ancestor", branchRef, baseRef],
-      { timeout: 10_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
-    );
+    await runGit(["-C", repoDir, "merge-base", "--is-ancestor", branchRef, baseRef], { timeout: 10_000 });
     return true;
   } catch {
     return false;
   }
 }
 
-export function wouldMergeBeNoop(repoDir: string, branch: string, base: string): boolean {
+export async function wouldMergeBeNoop(repoDir: string, branch: string, base: string): Promise<boolean> {
   assertBranchName(branch);
   assertBranchName(base);
 
   try {
-    const mergedTree = execFileSync(
-      "git",
+    const mergedTree = (await runGit(
       ["-C", repoDir, "merge-tree", "--write-tree", localBranchRef(base), localBranchRef(branch)],
-      { timeout: 15_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
-    ).trim();
-    const baseTree = execFileSync(
-      "git",
+      { timeout: 15_000 },
+    )).trim();
+    const baseTree = (await runGit(
       ["-C", repoDir, "rev-parse", `${localBranchRef(base)}^{tree}`],
-      { timeout: 10_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
-    ).trim();
+      { timeout: 10_000 },
+    )).trim();
     return Boolean(mergedTree) && mergedTree === baseTree;
   } catch {
     return false;
   }
 }
 
-export function deleteBranch(repoDir: string, branch: string): boolean {
+export async function deleteBranch(repoDir: string, branch: string): Promise<boolean> {
   assertBranchName(branch);
 
-  try {
-    execFileSync(
-      "git",
-      ["-C", repoDir, "branch", "-D", branch],
-      { timeout: 10_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
-    );
-    return true;
-  } catch (err) {
-    log.warn(`[worktree] Failed to delete branch ${branch}: ${err instanceof Error ? err.message : String(err)}`);
-    return false;
-  }
+  return withRepoLock(repoDir, async () => {
+    try {
+      await runGit(["-C", repoDir, "branch", "-D", branch], { timeout: 10_000 });
+      return true;
+    } catch (err) {
+      log.warn(`[worktree] Failed to delete branch ${branch}: ${err instanceof Error ? err.message : String(err)}`);
+      return false;
+    }
+  });
 }
 
-export function resolveTargetRepo(repoDir: string, explicitRepo?: string): string | undefined {
+export async function resolveTargetRepo(repoDir: string, explicitRepo?: string): Promise<string | undefined> {
   if (explicitRepo) return explicitRepo;
   let origin: string | undefined;
   try {
-    origin = execFileSync("git", ["-C", repoDir, "remote", "get-url", "origin"], {
-      timeout: 5_000,
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "pipe"],
-    }).trim() || undefined;
+    origin = (await runGit(["-C", repoDir, "remote", "get-url", "origin"], { timeout: 5_000 })).trim() || undefined;
   } catch {
     // no origin remote
   }
   try {
-    const upstream = execFileSync("git", ["-C", repoDir, "remote", "get-url", "upstream"], {
-      timeout: 5_000,
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "pipe"],
-    }).trim();
+    const upstream = (await runGit(["-C", repoDir, "remote", "get-url", "upstream"], { timeout: 5_000 })).trim();
     if (upstream && upstream !== origin) {
       const match = upstream.match(/[:/]([^/]+\/[^/]+?)(?:\.git)?$/);
       if (match) return match[1];

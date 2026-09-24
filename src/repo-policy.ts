@@ -1,4 +1,4 @@
-import { execFileSync } from "child_process";
+import { runGit } from "./git-exec";
 import type {
   RepoIntegrationPolicy,
   RepoPolicyRecord,
@@ -102,14 +102,9 @@ export function resolveAllowedWorktreeActions(args: {
   };
 }
 
-function runGit(cwd: string, args: string[]): string | undefined {
+async function readGit(cwd: string, args: string[]): Promise<string | undefined> {
   try {
-    const result = execFileSync("git", args, {
-      cwd,
-      timeout: 5_000,
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "pipe"],
-    }).trim();
+    const result = (await runGit(args, { cwd, timeout: 5_000 })).trim();
     return result || undefined;
   } catch {
     return undefined;
@@ -131,12 +126,12 @@ export function detectRepoProvider(remoteUrl: string | undefined): RepoProviderK
   return normalized?.startsWith("https://github.com/") ? "github" : "unsupported";
 }
 
-export function resolveRepoIdentity(workdir: string): RepoIdentity | undefined {
-  const repoRoot = runGit(workdir, ["rev-parse", "--show-toplevel"]);
+export async function resolveRepoIdentity(workdir: string): Promise<RepoIdentity | undefined> {
+  const repoRoot = await readGit(workdir, ["rev-parse", "--show-toplevel"]);
   if (!repoRoot) return undefined;
   const remoteUrl =
-    runGit(repoRoot, ["remote", "get-url", "origin"])
-    ?? runGit(repoRoot, ["remote", "get-url", "upstream"]);
+    (await readGit(repoRoot, ["remote", "get-url", "origin"]))
+    ?? (await readGit(repoRoot, ["remote", "get-url", "upstream"]));
   const normalizedRemote = normalizeRemoteUrl(remoteUrl);
   const provider = detectRepoProvider(normalizedRemote);
   return {
@@ -172,8 +167,8 @@ export function createRepoPolicyRecord(
   };
 }
 
-export function isPrAvailableForResolution(resolution: Pick<RepoPolicyResolution, "provider">): boolean {
-  return resolution.provider === "github" && isGitHubCLIAvailable();
+export async function isPrAvailableForResolution(resolution: Pick<RepoPolicyResolution, "provider">): Promise<boolean> {
+  return resolution.provider === "github" && await isGitHubCLIAvailable();
 }
 
 export function resolveWorktreePolicyDecision(args: {

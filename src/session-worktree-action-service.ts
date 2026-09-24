@@ -10,7 +10,7 @@ import { createLogger } from "./logger";
 
 const log = createLogger("session-worktree-action-service");
 
-type DiffSummary = NonNullable<ReturnType<typeof getDiffSummary>>;
+type DiffSummary = NonNullable<Awaited<ReturnType<typeof getDiffSummary>>>;
 
 const RESOLVED_WORKTREE_STATES = new Set([
   "merged",
@@ -78,15 +78,15 @@ export class SessionWorktreeActionService {
     private readonly deps: {
       shouldRunWorktreeStrategy: (session: Session) => boolean;
       isAlreadyMerged: (ref: string | undefined) => boolean;
-      resolveWorktreeRepoDir: (repoDir: string | undefined, worktreePath?: string) => string | undefined;
+      resolveWorktreeRepoDir: (repoDir: string | undefined, worktreePath?: string) => string | undefined | Promise<string | undefined>;
       getWorktreeCompletionState: (
         repoDir: string,
         worktreePath: string,
         branchName: string,
         baseBranch: string,
-      ) => WorktreeCompletionState;
-      isPrAvailable: (repoDir: string) => boolean;
-      resolveRepoPolicy?: (repoDir: string) => RepoPolicyResolution;
+      ) => WorktreeCompletionState | Promise<WorktreeCompletionState>;
+      isPrAvailable: (repoDir: string) => boolean | Promise<boolean>;
+      resolveRepoPolicy?: (repoDir: string) => RepoPolicyResolution | Promise<RepoPolicyResolution>;
     },
   ) {}
 
@@ -120,7 +120,7 @@ export class SessionWorktreeActionService {
     }
 
     const worktreePath = session.worktreePath!;
-    const repoDir = this.deps.resolveWorktreeRepoDir(session.originalWorkdir, worktreePath);
+    const repoDir = await this.deps.resolveWorktreeRepoDir(session.originalWorkdir, worktreePath);
     const branchName = session.worktreeBranch;
     if (!repoDir) {
       return {
@@ -148,8 +148,8 @@ export class SessionWorktreeActionService {
       };
     }
 
-    const baseBranch = session.worktreeBaseBranch ?? detectDefaultBranch(repoDir);
-    const completionState = this.deps.getWorktreeCompletionState(repoDir, worktreePath, branchName, baseBranch);
+    const baseBranch = session.worktreeBaseBranch ?? await detectDefaultBranch(repoDir);
+    const completionState = await this.deps.getWorktreeCompletionState(repoDir, worktreePath, branchName, baseBranch);
 
     if (completionState === "no-change") {
       return {
@@ -195,17 +195,17 @@ export class SessionWorktreeActionService {
       };
     }
 
-    const diffSummary = getDiffSummary(repoDir, branchName, baseBranch);
+    const diffSummary = await getDiffSummary(repoDir, branchName, baseBranch);
     if (!diffSummary) {
       log.warn(`[SessionManager] Failed to get diff summary for ${branchName}, skipping merge-back`);
       return { kind: "skip", result: { notificationSent: false, worktreeRemoved: false } };
     }
 
-    const livePolicy = session.repoIntegrationPolicy ? undefined : this.deps.resolveRepoPolicy?.(repoDir);
+    const livePolicy = session.repoIntegrationPolicy ? undefined : await this.deps.resolveRepoPolicy?.(repoDir);
     const effectivePolicy = session.repoIntegrationPolicy ?? livePolicy?.policy;
     const prAvailable = session.repoIntegrationPolicy
-      ? this.deps.isPrAvailable(repoDir)
-      : livePolicy?.prAvailable ?? this.deps.isPrAvailable(repoDir);
+      ? await this.deps.isPrAvailable(repoDir)
+      : livePolicy?.prAvailable ?? await this.deps.isPrAvailable(repoDir);
     const policyDecision = resolveWorktreePolicyDecision({
       requestedStrategy: strategy,
       policy: effectivePolicy,

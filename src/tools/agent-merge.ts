@@ -1,5 +1,5 @@
 import { branchNameValidationError } from "../worktree-ref-validation";
-import { Type } from "typebox";
+import { Type } from "../tool-parameter-schema";
 import { existsSync } from "fs";
 import { getDefaultHarnessName } from "../config";
 import { sessionManager } from "../singletons";
@@ -39,7 +39,7 @@ function isAgentMergeParams(value: unknown): value is AgentMergeParams {
 }
 
 function buildStashOutcomeDetailLines(args: {
-  mergeResult: ReturnType<typeof mergeBranch>;
+  mergeResult: Awaited<ReturnType<typeof mergeBranch>>;
   repoDir: string;
   baseBranch: string;
 }): string[] {
@@ -179,12 +179,12 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
         return { content: [{ type: "text", text: `Error: originalWorkdir "${originalWorkdir}" does not exist.` }] };
       }
 
-      const resolvedBaseBranch = params.base_branch ?? detectDefaultBranch(effectiveWorkdir);
+      const resolvedBaseBranch = params.base_branch ?? await detectDefaultBranch(effectiveWorkdir);
       const baseBranch = resolvedBaseBranch;
       const strategy = params.strategy ?? "merge";
       const shouldPush = params.push === true; // Default false
       const shouldCleanup = params.delete_branch !== false; // Default true
-      const repoPolicy = sessionManager.resolveRepoPolicy(effectiveWorkdir);
+      const repoPolicy = await sessionManager.resolveRepoPolicy(effectiveWorkdir);
       if (repoPolicy?.policy === "pr-required") {
         return {
           content: [{
@@ -200,9 +200,9 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
       }
 
       const branchAheadCount = existsSync(worktreePath)
-        ? getCommitsAheadCount(effectiveWorkdir, branchName, baseBranch)
+        ? await getCommitsAheadCount(effectiveWorkdir, branchName, baseBranch)
         : undefined;
-      if (branchAheadCount === 0 && hasDirtyWorktreeEntries(worktreePath)) {
+      if (branchAheadCount === 0 && await hasDirtyWorktreeEntries(worktreePath)) {
         return {
           content: [{
             type: "text",
@@ -229,10 +229,10 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
         }
 
         // Get diff summary before merging for outcome notification
-        const diffSummary = getDiffSummary(effectiveWorkdir, branchName, resolvedBaseBranch);
+        const diffSummary = await getDiffSummary(effectiveWorkdir, branchName, resolvedBaseBranch);
 
         // Attempt merge — pass worktreePath so rebase runs there when the worktree still exists
-        const mergeResult = mergeBranch(effectiveWorkdir, branchName, baseBranch, strategy, worktreePath);
+        const mergeResult = await mergeBranch(effectiveWorkdir, branchName, baseBranch, strategy, worktreePath);
         const warningDetailLines = buildMergeWarningLines(mergeResult);
 
         if (mergeResult.success) {
@@ -244,7 +244,7 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
 
           // Push base branch if requested
           if (shouldPush) {
-            if (!pushBranch(effectiveWorkdir, baseBranch)) {
+            if (!(await pushBranch(effectiveWorkdir, baseBranch))) {
               const pushFailedText = `⚠️ Merged ${branchName} → ${baseBranch} locally, but failed to push ${baseBranch}`;
               sessionManager.notifyWorktreeOutcome(
                 target.notificationTarget!,
@@ -269,10 +269,10 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
           const worktreeAlreadyAbsent = !existsSync(worktreePath);
           worktreeCleanedUp = worktreeAlreadyAbsent
             ? true
-            : removeWorktree(effectiveWorkdir, worktreePath);
-          pruneWorktrees(effectiveWorkdir);
+            : await removeWorktree(effectiveWorkdir, worktreePath);
+          await pruneWorktrees(effectiveWorkdir);
           if (shouldCleanup) {
-            branchDeleted = deleteBranch(effectiveWorkdir, branchName);
+            branchDeleted = await deleteBranch(effectiveWorkdir, branchName);
           }
           const cleanupOutcome = formatCleanupOutcome({
             deleteBranchRequested: shouldCleanup,
@@ -351,7 +351,7 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
           ].join("\n");
 
           try {
-            const conflictSession = sessionManager.spawn({
+            const conflictSession = await sessionManager.spawn({
               prompt: conflictPrompt,
               workdir: effectiveWorkdir,
               name: `${params.session}-conflict-resolver`,

@@ -20,7 +20,7 @@ function git(cwd: string, ...args: string[]): string {
 }
 
 describe("SessionRestoreService", () => {
-  it("prepares and hydrates resumed worktree sessions from persisted metadata", () => {
+  it("prepares and hydrates resumed worktree sessions from persisted metadata", async () => {
     const repoDir = mkdtempSync(join(tmpdir(), "session-restore-"));
     const worktreePath = join(repoDir, ".worktrees", "openclaw-worktree-resume");
     mkdirSync(worktreePath, { recursive: true });
@@ -50,7 +50,7 @@ describe("SessionRestoreService", () => {
       worktreePrTargetRepo: "openclaw/openclaw",
     };
 
-    const prepared = service.prepareSpawn(config, "resume-target");
+    const prepared = await service.prepareSpawn(config, "resume-target");
     assert.equal(prepared.actualWorkdir, worktreePath);
     assert.equal(prepared.originalWorkdir, repoDir);
     assert.equal(prepared.worktreePath, worktreePath);
@@ -75,7 +75,7 @@ describe("SessionRestoreService", () => {
     assert.equal(liveSession.worktreePrTargetRepo, "openclaw/openclaw");
   });
 
-  it("hydrates plugin-managed worktree metadata for fresh Codex worktree strategies", () => {
+  it("hydrates plugin-managed worktree metadata for fresh Codex worktree strategies", async () => {
     const repoDir = mkdtempSync(join(tmpdir(), "session-restore-native-codex-"));
     git(repoDir, "init", "-b", "main");
     git(repoDir, "config", "user.name", "Test User");
@@ -92,7 +92,7 @@ describe("SessionRestoreService", () => {
       worktreePrTargetRepo: "openclaw/openclaw",
     };
 
-    const prepared = service.prepareSpawn(config, "codex-native");
+    const prepared = await service.prepareSpawn(config, "codex-native");
     const liveSession = {
       worktreePath: undefined,
       originalWorkdir: undefined,

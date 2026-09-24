@@ -35,7 +35,7 @@ interface CommandApi {
     description: string;
     acceptsArgs: boolean;
     requireAuth: boolean;
-    handler: (ctx: AgentCommandContext) => { text: string };
+    handler: (ctx: AgentCommandContext) => Promise<{ text: string }>;
   }): void;
 }
 
@@ -64,7 +64,7 @@ export function registerAgentCommand(api: CommandApi): void {
     description: "Launch a coding agent session. Usage: /agent [--name <name>] <prompt>",
     acceptsArgs: true,
     requireAuth: true,
-    handler: (ctx: AgentCommandContext) => {
+    handler: async (ctx: AgentCommandContext) => {
       if (!sessionManager) {
         return { text: "Error: SessionManager not initialized. The code-agent service must be running." };
       }
@@ -85,7 +85,7 @@ export function registerAgentCommand(api: CommandApi): void {
           return { text: resolution.text };
         }
 
-        const session = sessionManager.spawn({
+        const session = await sessionManager.spawn({
           prompt,
           name,
           workdir: resolution.workdir,

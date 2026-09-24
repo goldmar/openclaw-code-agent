@@ -238,6 +238,7 @@ export class SessionManager {
   private lastTurnCompleteMarkers: Map<string, string> = new Map();
   private lastTerminalWakeMarkers: Map<string, string> = new Map();
   private readonly mergeQueue = new KeyedOperationQueue();
+  private spawnTail: Promise<void> = Promise.resolve();
   /** Pending AskUserQuestion intercepts awaiting user button selection. */
   private pendingAskUserQuestions: Map<string, PendingAskUserQuestion> = new Map();
   private readonly store: SessionStore;
@@ -340,9 +341,9 @@ export class SessionManager {
         manager.getWorktreeDecisionButtons(sessionId, options, allowedActions)
       ),
       makeOpenPrButton: (sessionId) => manager.makeActionButton(sessionId, "worktree-create-pr", "Open PR"),
-      isPrAvailable: (repoDir) => manager.resolveRepoPolicy(repoDir).prAvailable,
-      hasOpenPrForBranch: (repoDir, branchName, targetRepo) => {
-        const status = syncWorktreePR(repoDir, branchName, targetRepo);
+      isPrAvailable: async (repoDir) => (await manager.resolveRepoPolicy(repoDir)).prAvailable,
+      hasOpenPrForBranch: async (repoDir, branchName, targetRepo) => {
+        const status = await syncWorktreePR(repoDir, branchName, targetRepo);
         return status.exists && status.state === "open";
       },
       getPrStatusForBranch: (repoDir, branchName, targetRepo) => syncWorktreePR(repoDir, branchName, targetRepo),
@@ -543,16 +544,30 @@ export class SessionManager {
     this.maintenance.enforcePersistedRetention();
   }
 
-  bootstrapMaintenanceSchedules(): void {
+  /** Seed maintenance deadlines; resolves once the git-backed schedule checks have settled. */
+  bootstrapMaintenanceSchedules(): Promise<void> {
     this.maintenance.bootstrapMaintenanceSchedules();
+    return this.maintenance.whenIdle();
   }
 
   private disposeMaintenance(): void {
     this.maintenance.dispose();
   }
 
-  /** Spawn and start a new session, wiring lifecycle listeners and launch notification. */
-  spawn(config: SessionConfig, options: SpawnOptions = {}): Session {
+  /**
+   * Spawn and start a new session, wiring lifecycle listeners and launch notification.
+   *
+   * Launches run one at a time. Preparation (repo policy lookup, worktree
+   * creation) is asynchronous, and the next launch's max-session, unique-name,
+   * and session-id checks must see the previous launch already registered.
+   */
+  spawn(config: SessionConfig, options: SpawnOptions = {}): Promise<Session> {
+    const launch = this.spawnTail.then((): Promise<Session> => this.spawnSerialized(config, options));
+    this.spawnTail = launch.then((): void => undefined, (): void => undefined);
+    return launch;
+  }
+
+  private async spawnSerialized(config: SessionConfig, options: SpawnOptions): Promise<Session> {
     if (this.shuttingDown) {
       throw new Error("Cannot launch a session: the code-agent service is shutting down.");
     }
@@ -633,7 +648,7 @@ export class SessionManager {
       log.warn(`[SessionManager] Name conflict: "${baseName}" → "${name}" (active session with same name exists)`);
     }
 
-    const launchPolicy = this.checkRepoPolicyForLaunch(config.workdir, config.worktreeStrategy);
+    const launchPolicy = await this.checkRepoPolicyForLaunch(config.workdir, config.worktreeStrategy);
     if (!launchPolicy.ok) {
       const blocked = launchPolicy as { ok: false; text: string };
       throw new Error(blocked.text);
@@ -642,7 +657,7 @@ export class SessionManager {
     config.repoIntegrationPolicySource = launchPolicy.resolution.source === "none" ? undefined : launchPolicy.resolution.source;
     config.repoProvider = launchPolicy.resolution.provider;
 
-    const preparedLaunch = this.restore.prepareSpawn(config, name);
+    const preparedLaunch = await this.restore.prepareSpawn(config, name);
 
     if (!config.route?.provider || !config.route.target) {
       throw new Error(`Cannot launch session "${name}": missing explicit route metadata.`);
@@ -674,7 +689,7 @@ export class SessionManager {
     this.registry.add(session);
     this.metrics.incrementLaunched();
     try {
-      return this.runtimeBootstrap.initializeSession(session, preparedLaunch, config, {
+      return await this.runtimeBootstrap.initializeSession(session, preparedLaunch, config, {
         ...options,
         startAfter,
       });
@@ -686,7 +701,7 @@ export class SessionManager {
 
   /** Spawn a session and wait until it is truly running or fails before startup. */
   async spawnAndAwaitRunning(config: SessionConfig, options: SpawnOptions = {}): Promise<Session> {
-    const session = this.spawn(config, options);
+    const session = await this.spawn(config, options);
     await this.waitForRunningSession(session);
     return session;
   }
@@ -765,8 +780,8 @@ export class SessionManager {
     return true;
   }
 
-  resolveRepoPolicy(workdir: string): RepoPolicyResolution {
-    const identity = resolveRepoIdentity(workdir);
+  async resolveRepoPolicy(workdir: string): Promise<RepoPolicyResolution> {
+    const identity = await resolveRepoIdentity(workdir);
     if (!identity) {
       return { source: "none", provider: "unsupported", prAvailable: false };
     }
@@ -777,7 +792,7 @@ export class SessionManager {
         policy: stored.policy,
         source: "stored" as const,
         provider: identity.provider,
-        prAvailable: identity.provider === "github" && isGitHubCLIAvailable(),
+        prAvailable: identity.provider === "github" && await isGitHubCLIAvailable(),
         record: stored,
       };
       return resolution;
@@ -790,7 +805,7 @@ export class SessionManager {
         policy: seeded,
         source: "seeded",
         provider: identity.provider,
-        prAvailable: isPrAvailableForResolution({ provider: identity.provider }),
+        prAvailable: await isPrAvailableForResolution({ provider: identity.provider }),
         record,
       };
     }
@@ -798,13 +813,13 @@ export class SessionManager {
       identity,
       source: "unknown",
       provider: identity.provider,
-      prAvailable: isPrAvailableForResolution({ provider: identity.provider }),
+      prAvailable: await isPrAvailableForResolution({ provider: identity.provider }),
     };
   }
 
-  checkRepoPolicyForLaunch(workdir: string, requestedStrategy?: WorktreeStrategy): { ok: true; resolution: RepoPolicyResolution } | { ok: false; text: string } {
+  async checkRepoPolicyForLaunch(workdir: string, requestedStrategy?: WorktreeStrategy): Promise<{ ok: true; resolution: RepoPolicyResolution } | { ok: false; text: string }> {
     const strategy = requestedStrategy ?? pluginConfig.defaultWorktreeStrategy ?? "off";
-    const resolution = this.resolveRepoPolicy(workdir);
+    const resolution = await this.resolveRepoPolicy(workdir);
     if (strategy === "off") return { ok: true, resolution };
     if (resolution.source === "none") return { ok: true, resolution };
     if (resolution.source === "unknown" && resolution.identity) {
@@ -813,8 +828,8 @@ export class SessionManager {
     return { ok: true, resolution };
   }
 
-  getRepoPolicyRecordForWorkdir(workdir: string): RepoPolicyRecord | undefined {
-    const resolution = this.resolveRepoPolicy(workdir);
+  async getRepoPolicyRecordForWorkdir(workdir: string): Promise<RepoPolicyRecord | undefined> {
+    const resolution = await this.resolveRepoPolicy(workdir);
     return resolution.record;
   }
 
@@ -822,11 +837,11 @@ export class SessionManager {
     return this.store.listRepoPolicies();
   }
 
-  cleanupRepoPolicies(): RepoPolicyRecord[] {
+  async cleanupRepoPolicies(): Promise<RepoPolicyRecord[]> {
     const removed = [...this.store.cleanupRepoPolicies()];
     const staleIdentityKeys: string[] = [];
     for (const record of this.store.listRepoPolicies()) {
-      const currentIdentity = resolveRepoIdentity(record.repoRoot);
+      const currentIdentity = await resolveRepoIdentity(record.repoRoot);
       if (!currentIdentity || currentIdentity.key === record.key) continue;
       staleIdentityKeys.push(record.key);
     }
@@ -834,20 +849,20 @@ export class SessionManager {
     return removed.sort((a, b) => a.repoRoot.localeCompare(b.repoRoot) || a.key.localeCompare(b.key));
   }
 
-  setRepoPolicy(workdir: string, policy: RepoIntegrationPolicy): RepoPolicyRecord | undefined {
-    const identity = resolveRepoIdentity(workdir);
+  async setRepoPolicy(workdir: string, policy: RepoIntegrationPolicy): Promise<RepoPolicyRecord | undefined> {
+    const identity = await resolveRepoIdentity(workdir);
     if (!identity) return undefined;
     return this.store.setRepoPolicy(createRepoPolicyRecord(identity, policy, "stored"));
   }
 
-  resetRepoPolicy(workdir: string): boolean {
-    const identity = resolveRepoIdentity(workdir);
+  async resetRepoPolicy(workdir: string): Promise<boolean> {
+    const identity = await resolveRepoIdentity(workdir);
     return identity ? this.store.resetRepoPolicy(identity.key) : false;
   }
 
-  requestRepoPolicyForLaunch(args: RepoPolicyLaunchArgs): string {
+  async requestRepoPolicyForLaunch(args: RepoPolicyLaunchArgs): Promise<string> {
     const strategy = args.worktreeStrategy ?? pluginConfig.defaultWorktreeStrategy ?? "off";
-    const resolution = this.resolveRepoPolicy(args.workdir);
+    const resolution = await this.resolveRepoPolicy(args.workdir);
     if (!resolution.identity) {
       return `Error: ${args.workdir} is not a git repository.`;
     }
@@ -922,7 +937,7 @@ export class SessionManager {
     ].join(" ");
   }
 
-  launchAfterRepoPolicyChoice(args: RepoPolicyLaunchArgs): { session: Session; text: string } {
+  async launchAfterRepoPolicyChoice(args: RepoPolicyLaunchArgs): Promise<{ session: Session; text: string }> {
     const route = args.route;
     if (!route?.provider || !route.target) {
       throw new Error("missing route metadata for stored launch");
@@ -930,7 +945,7 @@ export class SessionManager {
     const harness = args.harness ?? getDefaultHarnessName();
     const permissionMode = args.permissionMode ?? pluginConfig.permissionMode;
     const planApproval = args.planApproval ?? pluginConfig.planApproval;
-    const session = this.spawn({
+    const session = await this.spawn({
       prompt: args.prompt,
       workdir: args.workdir,
       sessionIdOverride: args.sessionIdOverride,
@@ -975,11 +990,11 @@ export class SessionManager {
     };
   }
 
-  continueLaunchAfterManualRepoPolicy(
+  async continueLaunchAfterManualRepoPolicy(
     workdir: string,
     policy: RepoIntegrationPolicy,
-  ): { kind: "none" } | { kind: "ambiguous"; count: number } | { kind: "launched"; session: Session; text: string } {
-    const resolution = this.resolveRepoPolicy(workdir);
+  ): Promise<{ kind: "none" } | { kind: "ambiguous"; count: number } | { kind: "launched"; session: Session; text: string }> {
+    const resolution = await this.resolveRepoPolicy(workdir);
     if (!resolution.identity) return { kind: "none" };
 
     const repoPolicyTokens = this.interactions.listActiveActionTokens("repo-policy-set")
@@ -1016,7 +1031,7 @@ export class SessionManager {
     const token = [...candidatesByLaunch.values()][0];
     if (!token.launchPrompt || !token.launchWorkdir) return { kind: "none" };
 
-    const result = this.launchAfterRepoPolicyChoice({
+    const result = await this.launchAfterRepoPolicyChoice({
       route: token.route,
       prompt: token.launchPrompt,
       workdir: token.launchWorkdir,
@@ -1142,29 +1157,29 @@ export class SessionManager {
     });
   }
 
-  private getWorktreeDecisionButtons(
+  private async getWorktreeDecisionButtons(
     sessionId: string,
     options: { allowDelegate?: boolean } = {},
     allowedActions: { merge: boolean; pr: boolean } = { merge: true, pr: true },
-  ): NotificationButton[][] | undefined {
+  ): Promise<NotificationButton[][] | undefined> {
     const session = this.resolve(sessionId) ?? this.getPersistedSession(sessionId);
     if (!session || (session.worktreeStrategy === "delegate" && options.allowDelegate !== true)) return undefined;
     return this.interactions.getWorktreeDecisionButtons(sessionId, session, allowedActions);
   }
 
-  private getPolicyAwareWorktreeDecisionButtons(
+  private async getPolicyAwareWorktreeDecisionButtons(
     sessionId: string,
     options: { allowDelegate?: boolean } = {},
     session?: Session,
     persistedSession?: PersistedSessionInfo,
-  ): NotificationButton[][] | undefined {
+  ): Promise<NotificationButton[][] | undefined> {
     const activeSession = session ?? this.resolve(sessionId);
     const persisted = persistedSession ?? this.getPersistedSession(sessionId);
-    const repoDir = this.resolveWorktreeRepoDir(
+    const repoDir = await this.resolveWorktreeRepoDir(
       activeSession?.originalWorkdir ?? persisted?.workdir,
       activeSession?.worktreePath ?? persisted?.worktreePath,
     );
-    const policyResolution = repoDir ? this.resolveRepoPolicy(repoDir) : undefined;
+    const policyResolution = repoDir ? await this.resolveRepoPolicy(repoDir) : undefined;
     const sessionPolicy = activeSession?.repoIntegrationPolicy
       ?? persisted?.repoIntegrationPolicy;
     const effectivePolicy = sessionPolicy
@@ -1182,7 +1197,7 @@ export class SessionManager {
     worktreePath: string,
     branchName: string,
     baseBranch: string,
-  ): WorktreeCompletionState {
+  ): Promise<WorktreeCompletionState> {
     return this.worktrees.getCompletionState(repoDir, worktreePath, branchName, baseBranch);
   }
 
@@ -1336,7 +1351,7 @@ export class SessionManager {
     ].join(" ");
   }
 
-  requestWorktreeDecisionFromUser(ref: string, summary: string): string {
+  async requestWorktreeDecisionFromUser(ref: string, summary: string): Promise<string> {
     const trimmedSummary = summary.trim();
     if (!trimmedSummary) return "Error: summary must not be empty.";
 
@@ -1361,7 +1376,7 @@ export class SessionManager {
     const sessionId = getPrimarySessionLookupRef(activeSession ?? persistedSession ?? { id: ref }) ?? ref;
     const worktreePath = activeSession?.worktreePath ?? persistedSession?.worktreePath;
     const branchName = activeSession?.worktreeBranch ?? persistedSession?.worktreeBranch;
-    const repoDir = this.resolveWorktreeRepoDir(
+    const repoDir = await this.resolveWorktreeRepoDir(
       activeSession?.originalWorkdir ?? persistedSession?.workdir,
       worktreePath,
     );
@@ -1371,13 +1386,13 @@ export class SessionManager {
 
     const baseBranch = activeSession?.worktreeBaseBranch
       ?? persistedSession?.worktreeBaseBranch
-      ?? detectDefaultBranch(repoDir);
-    const diffSummary = getDiffSummary(repoDir, branchName, baseBranch);
+      ?? await detectDefaultBranch(repoDir);
+    const diffSummary = await getDiffSummary(repoDir, branchName, baseBranch);
     if (!diffSummary) {
       return `Error: Could not compute worktree diff summary for session "${ref}".`;
     }
 
-    const buttons = this.getPolicyAwareWorktreeDecisionButtons(
+    const buttons = await this.getPolicyAwareWorktreeDecisionButtons(
       sessionId,
       { allowDelegate: true },
       activeSession,
@@ -1439,15 +1454,15 @@ export class SessionManager {
     } as Session;
   }
 
-  private resolveWorktreeRepoDir(repoDir: string | undefined, worktreePath?: string): string | undefined {
+  private async resolveWorktreeRepoDir(repoDir: string | undefined, worktreePath?: string): Promise<string | undefined> {
     if (repoDir && (!worktreePath || !pathsReferToSameLocation(repoDir, worktreePath))) return repoDir;
     if (!worktreePath) return repoDir;
-    return getPrimaryRepoRootFromWorktree(worktreePath) ?? repoDir;
+    return (await getPrimaryRepoRootFromWorktree(worktreePath)) ?? repoDir;
   }
 
-  private formatLaunchWorkdirLabel(session: Pick<Session, "workdir" | "worktreePath" | "originalWorkdir">): string {
+  private async formatLaunchWorkdirLabel(session: Pick<Session, "workdir" | "worktreePath" | "originalWorkdir">): Promise<string> {
     if (!session.worktreePath) return session.workdir;
-    const repoDir = this.resolveWorktreeRepoDir(session.originalWorkdir, session.worktreePath);
+    const repoDir = await this.resolveWorktreeRepoDir(session.originalWorkdir, session.worktreePath);
     if (!repoDir || repoDir === session.worktreePath) return session.worktreePath;
     return `${session.worktreePath} (worktree of ${repoDir})`;
   }
@@ -1539,7 +1554,7 @@ export class SessionManager {
           ? `The resolver finished, but the original session could not be resumed for the merge retry.`
           : `Resolver session ${session.name} ended with status=${session.status}.`,
       ].join("\n"),
-      buttons: this.getPolicyAwareWorktreeDecisionButtons(
+      buttons: await this.getPolicyAwareWorktreeDecisionButtons(
         parentRef,
         { allowDelegate: true },
         parentSession,
@@ -1596,9 +1611,9 @@ export class SessionManager {
     });
   }
 
-  notifyResumedLaunch(session: Session): void {
+  async notifyResumedLaunch(session: Session): Promise<void> {
     if (!session.resumeSessionId) return;
-    const workdirLabel = this.formatLaunchWorkdirLabel(session);
+    const workdirLabel = await this.formatLaunchWorkdirLabel(session);
     const harnessLabel = formatHarnessModelLabel({
       harness: session.harnessName,
       model: session.model,
@@ -1715,7 +1730,7 @@ export class SessionManager {
     workdir: string;
     name?: string;
     worktreeStrategy?: WorktreeStrategy;
-  }): Session {
+  }): Promise<Session> {
     const route = args.route ?? { provider: "system", target: "system" };
     return this.spawn({
       prompt: args.prompt,

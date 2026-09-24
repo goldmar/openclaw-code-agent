@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { registerAgentPolicyCommand } from "../src/commands/agent-policy";
 import { setSessionManager } from "../src/singletons";
 
-type Handler = (ctx: { args?: string; workspaceDir?: string }) => { text: string };
+type Handler = (ctx: { args?: string; workspaceDir?: string }) => Promise<{ text: string }>;
 
 function captureHandler(): Handler {
   let handler: Handler | undefined;
@@ -33,7 +33,7 @@ describe("/agent_policy command", () => {
     setSessionManager(null);
   });
 
-  it("continues a matching deferred launch after setting policy", () => {
+  it("continues a matching deferred launch after setting policy", async () => {
     setSessionManager({
       setRepoPolicy: (workdir: string, policy: string) => {
         assert.equal(workdir, "/repo");
@@ -51,47 +51,47 @@ describe("/agent_policy command", () => {
       },
     } as any);
 
-    const result = captureHandler()({ args: "pr-required", workspaceDir: "/repo" });
+    const result = await captureHandler()({ args: "pr-required", workspaceDir: "/repo" });
 
     assert.match(result.text, /Repo policy set to pr-required for \/repo\./);
     assert.match(result.text, /Session launched successfully/);
     assert.match(result.text, /ID: sess-1/);
   });
 
-  it("does not guess when several deferred launches match the policy", () => {
+  it("does not guess when several deferred launches match the policy", async () => {
     setSessionManager({
       setRepoPolicy: () => policyRecord(),
       continueLaunchAfterManualRepoPolicy: () => ({ kind: "ambiguous", count: 2 }),
     } as any);
 
-    const result = captureHandler()({ args: "pr-required", workspaceDir: "/repo" });
+    const result = await captureHandler()({ args: "pr-required", workspaceDir: "/repo" });
 
     assert.match(result.text, /Repo policy set to pr-required for \/repo\./);
     assert.match(result.text, /2 pending launches match this policy/);
   });
 
-  it("returns only the saved policy message when no deferred launch matches", () => {
+  it("returns only the saved policy message when no deferred launch matches", async () => {
     setSessionManager({
       setRepoPolicy: () => policyRecord(),
       continueLaunchAfterManualRepoPolicy: () => ({ kind: "none" }),
     } as any);
 
-    const result = captureHandler()({ args: "pr-required", workspaceDir: "/repo" });
+    const result = await captureHandler()({ args: "pr-required", workspaceDir: "/repo" });
 
     assert.equal(result.text, "Repo policy set to pr-required for /repo.");
   });
 
-  it("keeps older injected managers on the saved policy path", () => {
+  it("keeps older injected managers on the saved policy path", async () => {
     setSessionManager({
       setRepoPolicy: () => policyRecord(),
     } as any);
 
-    const result = captureHandler()({ args: "pr-required", workspaceDir: "/repo" });
+    const result = await captureHandler()({ args: "pr-required", workspaceDir: "/repo" });
 
     assert.equal(result.text, "Repo policy set to pr-required for /repo.");
   });
 
-  it("reports deferred launch failures without losing the saved policy message", () => {
+  it("reports deferred launch failures without losing the saved policy message", async () => {
     setSessionManager({
       setRepoPolicy: () => policyRecord(),
       continueLaunchAfterManualRepoPolicy: () => {
@@ -99,14 +99,14 @@ describe("/agent_policy command", () => {
       },
     } as any);
 
-    const result = captureHandler()({ args: "pr-required", workspaceDir: "/repo" });
+    const result = await captureHandler()({ args: "pr-required", workspaceDir: "/repo" });
 
     assert.match(result.text, /Repo policy set to pr-required for \/repo\./);
     assert.match(result.text, /Repo policy saved, but the deferred launch failed: launch capacity unavailable/);
     assert.match(result.text, /pending launch context was kept/);
   });
 
-  it("rejects PR policies when PR automation is unavailable", () => {
+  it("rejects PR policies when PR automation is unavailable", async () => {
     setSessionManager({
       resolveRepoPolicy: () => ({
         identity: { key: "/repo", repoRoot: "/repo", provider: "unsupported" },
@@ -119,13 +119,13 @@ describe("/agent_policy command", () => {
       },
     } as any);
 
-    const result = captureHandler()({ args: "pr-allowed", workspaceDir: "/repo" });
+    const result = await captureHandler()({ args: "pr-allowed", workspaceDir: "/repo" });
 
     assert.match(result.text, /Error: Policy pr-allowed requires PR automation/);
     assert.match(result.text, /Choose never-pr or manual/);
   });
 
-  it("only advertises non-PR policies when PR automation is unavailable", () => {
+  it("only advertises non-PR policies when PR automation is unavailable", async () => {
     setSessionManager({
       resolveRepoPolicy: () => ({
         identity: { key: "/repo", repoRoot: "/repo", provider: "unsupported" },
@@ -135,7 +135,7 @@ describe("/agent_policy command", () => {
       }),
     } as any);
 
-    const result = captureHandler()({ workspaceDir: "/repo" });
+    const result = await captureHandler()({ workspaceDir: "/repo" });
 
     assert.match(result.text, /Provider: unsupported \(PR automation unavailable\)/);
     assert.match(result.text, /Set with \/agent_policy never-pr, manual\./);

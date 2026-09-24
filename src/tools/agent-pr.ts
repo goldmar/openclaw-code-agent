@@ -1,6 +1,6 @@
 import { assertBranchName, branchNameValidationError, localBranchRef } from "../worktree-ref-validation";
-import { Type } from "typebox";
-import { execFileSync } from "child_process";
+import { Type } from "../tool-parameter-schema";
+import { runGit } from "../git-exec";
 import { existsSync } from "fs";
 import { sessionManager } from "../singletons";
 import type { OpenClawPluginToolContext, PersistedSessionInfo } from "../types";
@@ -83,13 +83,9 @@ export function normalizeForceNewReplacementPrStatus(
   return prStatus;
 }
 
-function getWorktreePathForBranch(repoDir: string, branch: string): string | undefined {
+async function getWorktreePathForBranch(repoDir: string, branch: string): Promise<string | undefined> {
   try {
-    const result = execFileSync(
-      "git",
-      ["-C", repoDir, "worktree", "list", "--porcelain"],
-      { timeout: 10_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
-    );
+    const result = await runGit(["-C", repoDir, "worktree", "list", "--porcelain"], { timeout: 10_000 });
     let worktreePath: string | undefined;
     for (const line of result.split(/\r?\n/)) {
       if (line.startsWith("worktree ")) {
@@ -109,33 +105,21 @@ function getWorktreePathForBranch(repoDir: string, branch: string): string | und
   return undefined;
 }
 
-function moveBranchFastForward(repoDir: string, targetBranch: string, sourceRef: string): ExistingTargetPrBranchResolution {
+async function moveBranchFastForward(repoDir: string, targetBranch: string, sourceRef: string): Promise<ExistingTargetPrBranchResolution> {
   assertBranchName(targetBranch);
   assertBranchName(sourceRef);
   try {
-    const targetWorktreePath = getWorktreePathForBranch(repoDir, targetBranch);
+    const targetWorktreePath = await getWorktreePathForBranch(repoDir, targetBranch);
     if (targetWorktreePath) {
-      execFileSync(
-        "git",
-        ["-C", targetWorktreePath, "merge", "--ff-only", localBranchRef(sourceRef)],
-        { timeout: 30_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
-      );
+      await runGit(["-C", targetWorktreePath, "merge", "--ff-only", localBranchRef(sourceRef)], { timeout: 30_000 });
       return { success: true, branchName: targetBranch, alreadyRepresented: false };
     }
 
-    const currentBranch = getBranchName(repoDir);
+    const currentBranch = await getBranchName(repoDir);
     if (currentBranch === targetBranch) {
-      execFileSync(
-        "git",
-        ["-C", repoDir, "merge", "--ff-only", localBranchRef(sourceRef)],
-        { timeout: 30_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
-      );
+      await runGit(["-C", repoDir, "merge", "--ff-only", localBranchRef(sourceRef)], { timeout: 30_000 });
     } else {
-      execFileSync(
-        "git",
-        ["-C", repoDir, "branch", "-f", targetBranch, localBranchRef(sourceRef)],
-        { timeout: 10_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
-      );
+      await runGit(["-C", repoDir, "branch", "-f", targetBranch, localBranchRef(sourceRef)], { timeout: 10_000 });
     }
     return { success: true, branchName: targetBranch, alreadyRepresented: false };
   } catch (err) {
@@ -146,11 +130,11 @@ function moveBranchFastForward(repoDir: string, targetBranch: string, sourceRef:
   }
 }
 
-export function resolveExistingTargetPrUpdateBranch(args: {
+export async function resolveExistingTargetPrUpdateBranch(args: {
   repoDir: string;
   sourceBranch: string;
   targetPrStatus: PRStatus;
-}): ExistingTargetPrBranchResolution {
+}): Promise<ExistingTargetPrBranchResolution> {
   const { repoDir, sourceBranch, targetPrStatus } = args;
   assertBranchName(sourceBranch);
   if (!targetPrStatus.exists || targetPrStatus.state !== "open" || !targetPrStatus.headRefName) {
@@ -159,21 +143,21 @@ export function resolveExistingTargetPrUpdateBranch(args: {
 
   const targetBranch = targetPrStatus.headRefName;
   assertBranchName(targetBranch);
-  const remoteTargetRef = fetchRemoteBranchRef(repoDir, targetBranch);
+  const remoteTargetRef = await fetchRemoteBranchRef(repoDir, targetBranch);
   const authoritativeTargetRef = remoteTargetRef ?? targetBranch;
   if (targetBranch === sourceBranch && !remoteTargetRef) {
     return { success: true, branchName: sourceBranch, alreadyRepresented: false };
   }
-  if (!branchExists(repoDir, targetBranch) && !remoteTargetRef) {
+  if (!(await branchExists(repoDir, targetBranch)) && !remoteTargetRef) {
     return { success: false, error: `Target PR branch ${targetBranch} is not available locally. Fetch it before updating the PR.` };
   }
-  if (isBranchAncestorOfBase(repoDir, sourceBranch, authoritativeTargetRef)) {
+  if (await isBranchAncestorOfBase(repoDir, sourceBranch, authoritativeTargetRef)) {
     if (
       remoteTargetRef
-      && !isBranchAncestorOfBase(repoDir, remoteTargetRef, targetBranch)
-      && isBranchAncestorOfBase(repoDir, targetBranch, remoteTargetRef)
+      && !(await isBranchAncestorOfBase(repoDir, remoteTargetRef, targetBranch))
+      && await isBranchAncestorOfBase(repoDir, targetBranch, remoteTargetRef)
     ) {
-      const synced = moveBranchFastForward(repoDir, targetBranch, remoteTargetRef);
+      const synced = await moveBranchFastForward(repoDir, targetBranch, remoteTargetRef);
       if ("error" in synced) return synced;
     }
     // Local ancestry can select the branch, but only a fetched remote ref proves
@@ -185,13 +169,13 @@ export function resolveExistingTargetPrUpdateBranch(args: {
   // while the managed worktree still records its temporary helper branch. Prefer that
   // checked-out head only when it safely contains both the remote PR head and helper work.
   if (
-    getBranchName(repoDir) === targetBranch
-    && isBranchAncestorOfBase(repoDir, authoritativeTargetRef, targetBranch)
-    && isBranchAncestorOfBase(repoDir, sourceBranch, targetBranch)
+    (await getBranchName(repoDir)) === targetBranch
+    && await isBranchAncestorOfBase(repoDir, authoritativeTargetRef, targetBranch)
+    && await isBranchAncestorOfBase(repoDir, sourceBranch, targetBranch)
   ) {
     return { success: true, branchName: targetBranch, alreadyRepresented: false };
   }
-  if (!isBranchAncestorOfBase(repoDir, authoritativeTargetRef, sourceBranch)) {
+  if (!(await isBranchAncestorOfBase(repoDir, authoritativeTargetRef, sourceBranch))) {
     return {
       success: false,
       error: `Refusing to create a sibling PR: target PR branch ${targetBranch} and follow-up branch ${sourceBranch} have diverged. Reconcile them manually, then run agent_pr again.`,
@@ -201,16 +185,16 @@ export function resolveExistingTargetPrUpdateBranch(args: {
   return moveBranchFastForward(repoDir, targetBranch, sourceBranch);
 }
 
-export function discoverExistingTargetPr(args: {
+export async function discoverExistingTargetPr(args: {
   repoDir: string;
   worktreeBranch: string;
   expectedParentBranch?: string;
   baseBranch: string;
   targetRepo?: string;
-}): PRStatus | undefined {
-  const parentBranch = getBranchName(args.repoDir);
+}): Promise<PRStatus | undefined> {
+  const parentBranch = await getBranchName(args.repoDir);
   if (!parentBranch || parentBranch !== args.expectedParentBranch || parentBranch === args.worktreeBranch || parentBranch === args.baseBranch) return undefined;
-  const status = syncWorktreePR(args.repoDir, parentBranch, args.targetRepo);
+  const status = await syncWorktreePR(args.repoDir, parentBranch, args.targetRepo);
   return status.exists
     && status.state === "open"
     && status.headRefName === parentBranch
@@ -219,17 +203,17 @@ export function discoverExistingTargetPr(args: {
     : undefined;
 }
 
-export function resolveExistingTargetPrUpdateSourceBranch(args: {
+export async function resolveExistingTargetPrUpdateSourceBranch(args: {
   repoDir: string;
   fallbackBranch: string;
   targetPrStatus: PRStatus;
-}): string {
+}): Promise<string> {
   const targetBranch = args.targetPrStatus.headRefName;
   if (!targetBranch || targetBranch === args.fallbackBranch) {
     return args.fallbackBranch;
   }
 
-  const currentBranch = getBranchName(args.repoDir);
+  const currentBranch = await getBranchName(args.repoDir);
   if (currentBranch === targetBranch) {
     return currentBranch;
   }
@@ -299,9 +283,9 @@ type MetadataRefreshResult =
   | { status: "failed"; reason: string };
 
 type MetadataRefreshOperations = {
-  getBody?: (repoDir: string, prNumberOrUrl: number | string, targetRepo?: string) => PRBodyReadResult;
-  updateBody?: (repoDir: string, prNumberOrUrl: number | string, body: string, targetRepo?: string) => boolean;
-  updateTitle?: (repoDir: string, prNumberOrUrl: number | string, title: string, targetRepo?: string) => boolean;
+  getBody?: (repoDir: string, prNumberOrUrl: number | string, targetRepo?: string) => PRBodyReadResult | Promise<PRBodyReadResult>;
+  updateBody?: (repoDir: string, prNumberOrUrl: number | string, body: string, targetRepo?: string) => boolean | Promise<boolean>;
+  updateTitle?: (repoDir: string, prNumberOrUrl: number | string, title: string, targetRepo?: string) => boolean | Promise<boolean>;
 };
 
 export async function refreshOpenPrMetadata(args: {
@@ -328,14 +312,14 @@ export async function refreshOpenPrMetadata(args: {
   if (args.explicitTitle !== undefined || args.explicitBody !== undefined) {
     const updatedTitle = args.explicitTitle === undefined
       ? false
-      : writeTitle(args.repoDir, prIdentity, args.explicitTitle, args.targetRepo);
+      : await writeTitle(args.repoDir, prIdentity, args.explicitTitle, args.targetRepo);
     if (args.explicitTitle !== undefined && !updatedTitle) {
       return { status: "failed", reason: "failed to update explicit PR title" };
     }
 
     const updatedBody = args.explicitBody === undefined
       ? false
-      : writeBody(args.repoDir, prIdentity, args.explicitBody, args.targetRepo);
+      : await writeBody(args.repoDir, prIdentity, args.explicitBody, args.targetRepo);
     if (args.explicitBody !== undefined && !updatedBody) {
       return { status: "failed", reason: "failed to update explicit PR body" };
     }
@@ -343,7 +327,7 @@ export async function refreshOpenPrMetadata(args: {
     return { status: "updated", updatedTitle, updatedBody, reason: "explicit" };
   }
 
-  const currentBodyResult = readBody(args.repoDir, prIdentity, args.targetRepo);
+  const currentBodyResult = await readBody(args.repoDir, prIdentity, args.targetRepo);
   if (currentBodyResult.ok === false) {
     return { status: "failed", reason: `failed to read PR body: ${currentBodyResult.error}` };
   }
@@ -381,7 +365,7 @@ export async function refreshOpenPrMetadata(args: {
   const shouldRefreshTitle = args.forceRefresh || isOcaGeneratedPrTitle(args.prStatus.title);
   let updatedTitle = false;
   if (shouldRefreshTitle && args.prStatus.title?.trim() !== metadataResult.metadata.title.trim()) {
-    updatedTitle = writeTitle(args.repoDir, prIdentity, metadataResult.metadata.title, args.targetRepo);
+    updatedTitle = await writeTitle(args.repoDir, prIdentity, metadataResult.metadata.title, args.targetRepo);
     if (!updatedTitle) return { status: "failed", reason: "failed to update generated PR title" };
   }
 
@@ -391,7 +375,7 @@ export async function refreshOpenPrMetadata(args: {
       : { status: "skipped", reason: "unchanged" };
   }
 
-  const updatedBody = writeBody(args.repoDir, prIdentity, nextBody, args.targetRepo);
+  const updatedBody = await writeBody(args.repoDir, prIdentity, nextBody, args.targetRepo);
   if (!updatedBody) return { status: "failed", reason: "failed to update generated PR body" };
 
   return { status: "updated", updatedTitle, updatedBody, reason: args.forceRefresh ? "forced" : "generated" };
@@ -450,7 +434,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
       }
 
       // Check if gh CLI is available
-      if (!isGitHubCLIAvailable()) {
+      if (!(await isGitHubCLIAvailable())) {
         return { content: [{ type: "text", text: "Error: GitHub CLI (gh) is not available. Install it and authenticate to create PRs." }], meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
       }
 
@@ -477,7 +461,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
         log.info(`[agent_pr] Worktree directory ${worktreePath} no longer exists; proceeding with branch "${branchName}" via originalWorkdir (${originalWorkdir})`);
       }
 
-      const baseBranch = params.base_branch ?? detectDefaultBranch(originalWorkdir);
+      const baseBranch = params.base_branch ?? await detectDefaultBranch(originalWorkdir);
       const metadataProvider = options.metadataProvider ?? createRuntimePrMetadataProvider();
       const persistPrOpen = (args: {
         prUrl: string;
@@ -505,10 +489,10 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
       };
 
       // Resolve target repository for cross-repo PRs
-      const targetRepo = resolveTargetRepo(originalWorkdir, params.target_repo ?? persistedSession?.worktreePrTargetRepo);
+      const targetRepo = await resolveTargetRepo(originalWorkdir, params.target_repo ?? persistedSession?.worktreePrTargetRepo);
       const explicitTargetPrUrl = persistedSession?.worktreePrUrl ?? targetSession?.worktreePrUrl;
       const explicitTargetPrStatus = explicitTargetPrUrl
-        ? syncWorktreePRByUrl(originalWorkdir, explicitTargetPrUrl, targetRepo)
+        ? await syncWorktreePRByUrl(originalWorkdir, explicitTargetPrUrl, targetRepo)
         : undefined;
       if (explicitTargetPrUrl && !explicitTargetPrStatus?.exists) {
         return {
@@ -522,7 +506,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
       const forceNewIgnoresClosedTargetPr = shouldIgnoreClosedTargetPrForForceNew(params.force_new, explicitTargetPrStatus);
       const effectiveTargetPrUrl = forceNewIgnoresClosedTargetPr ? undefined : explicitTargetPrUrl;
       const discoveredTargetPrStatus = !explicitTargetPrUrl && !params.force_new
-        ? discoverExistingTargetPr({
+        ? await discoverExistingTargetPr({
             repoDir: originalWorkdir,
             worktreeBranch: branchName,
             expectedParentBranch: persistedSession?.worktreeParentBranch ?? targetSession?.worktreeParentBranch,
@@ -536,12 +520,12 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
       const resolvedTargetPrUrl = effectiveTargetPrUrl ?? discoveredTargetPrStatus?.url;
       let targetBranchAlreadyRepresented = false;
       if (effectiveTargetPrStatus?.exists && effectiveTargetPrStatus.state === "open") {
-        const sourceBranch = resolveExistingTargetPrUpdateSourceBranch({
+        const sourceBranch = await resolveExistingTargetPrUpdateSourceBranch({
           repoDir: originalWorkdir,
           fallbackBranch: branchName,
           targetPrStatus: effectiveTargetPrStatus,
         });
-        const branchResolution = resolveExistingTargetPrUpdateBranch({
+        const branchResolution = await resolveExistingTargetPrUpdateBranch({
           repoDir: originalWorkdir,
           sourceBranch,
           targetPrStatus: effectiveTargetPrStatus,
@@ -555,11 +539,11 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
         branchName = branchResolution.branchName;
         targetBranchAlreadyRepresented = branchResolution.alreadyRepresented;
       }
-      const repoPolicy = sessionManager.resolveRepoPolicy(originalWorkdir);
+      const repoPolicy = await sessionManager.resolveRepoPolicy(originalWorkdir);
       const existingPrBeforePush = normalizeForceNewReplacementPrStatus(
         effectiveTargetPrStatus?.exists
           ? effectiveTargetPrStatus
-          : syncWorktreePR(originalWorkdir, branchName, targetRepo),
+          : await syncWorktreePR(originalWorkdir, branchName, targetRepo),
         explicitTargetPrStatus,
         { forceNewIgnoresClosedTargetPr },
       );
@@ -573,15 +557,15 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
 
       // Push branch first for open PR updates and new PR creation.
       const shouldPushBranch = !effectiveTargetPrStatus || effectiveTargetPrStatus.state === "open";
-      if (shouldPushBranch && !targetBranchAlreadyRepresented && !pushBranch(originalWorkdir, branchName)) {
+      if (shouldPushBranch && !targetBranchAlreadyRepresented && !(await pushBranch(originalWorkdir, branchName))) {
         return { content: [{ type: "text", text: `❌ Failed to push ${branchName} — cannot create/update PR` }], meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
       }
 
       // Sync PR state from GitHub
       const prStatus = normalizeForceNewReplacementPrStatus(
         resolvedTargetPrUrl
-          ? syncWorktreePRByUrl(originalWorkdir, resolvedTargetPrUrl, targetRepo)
-          : syncWorktreePR(originalWorkdir, branchName, targetRepo),
+          ? await syncWorktreePRByUrl(originalWorkdir, resolvedTargetPrUrl, targetRepo)
+          : await syncWorktreePR(originalWorkdir, branchName, targetRepo),
         explicitTargetPrStatus,
         { forceNewIgnoresClosedTargetPr },
       );
@@ -602,7 +586,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
       // PR Lifecycle Handling
       if (prStatus.exists && prStatus.state === "open") {
         // Case: Open PR exists
-        const diffSummary = getDiffSummary(originalWorkdir, branchName, baseBranch);
+        const diffSummary = await getDiffSummary(originalWorkdir, branchName, baseBranch);
         const metadataRefresh = await refreshOpenPrMetadata({
           repoDir: originalWorkdir,
           prStatus,
@@ -638,7 +622,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
             `🤖 [openclaw-code-agent](https://github.com/goldmar/openclaw-code-agent)`,
           ].join("\n");
 
-          const commented = commentOnPR(originalWorkdir, prStatus.number!, commentBody, targetRepo);
+          const commented = await commentOnPR(originalWorkdir, prStatus.number!, commentBody, targetRepo);
 
           if (commented) {
             // Update persisted metadata
@@ -761,7 +745,7 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
           return { content: [{ type: "text", text: `Error: Repo policy forbids PR creation for ${repoPolicy.identity?.repoRoot ?? originalWorkdir}.` }], meta: { success: false, state: "error" } } satisfies AgentPrExecuteResult;
         }
         const diffSummary = (!params.title || !params.body)
-          ? getDiffSummary(originalWorkdir, branchName, baseBranch)
+          ? await getDiffSummary(originalWorkdir, branchName, baseBranch)
           : undefined;
         let generatedMetadata: PrMetadata | undefined;
         if (!params.title || !params.body) {
@@ -794,11 +778,11 @@ export function makeAgentPrTool(_ctx?: OpenClawPluginToolContext, options: { met
         }
 
         // Open the PR after title/body generation is complete.
-        const prResult = createPR(originalWorkdir, branchName, baseBranch, prTitle, prBody, targetRepo, { draft: true });
+        const prResult = await createPR(originalWorkdir, branchName, baseBranch, prTitle, prBody, targetRepo, { draft: true });
 
         if (prResult.success && prResult.prUrl) {
           // Sync again to get PR number
-          const newPrStatus = syncWorktreePR(originalWorkdir, branchName, targetRepo);
+          const newPrStatus = await syncWorktreePR(originalWorkdir, branchName, targetRepo);
 
           // Persist PR URL and number
           persistPrOpen({

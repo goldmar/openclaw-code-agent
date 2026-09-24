@@ -1,5 +1,5 @@
 import { assertBranchName, localBranchRef } from "./worktree-ref-validation";
-import { execFileSync } from "child_process";
+import { runGit, withRepoLock } from "./git-exec";
 import { existsSync } from "fs";
 import { createLogger } from "./logger";
 
@@ -43,25 +43,17 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-export function getDiffSummary(repoDir: string, branch: string, base: string): DiffSummary | undefined {
+export async function getDiffSummary(repoDir: string, branch: string, base: string): Promise<DiffSummary | undefined> {
   assertBranchName(branch);
   assertBranchName(base);
   const branchRef = localBranchRef(branch);
   const baseRef = localBranchRef(base);
 
   try {
-    const countResult = execFileSync(
-      "git",
-      ["-C", repoDir, "rev-list", "--count", `${baseRef}..${branchRef}`],
-      { timeout: 10_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
-    );
+    const countResult = await runGit(["-C", repoDir, "rev-list", "--count", `${baseRef}..${branchRef}`], { timeout: 10_000 });
     const commits = parseInt(countResult.trim(), 10);
 
-    const diffStatResult = execFileSync(
-      "git",
-      ["-C", repoDir, "diff", "--shortstat", `${baseRef}...${branchRef}`],
-      { timeout: 10_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
-    );
+    const diffStatResult = await runGit(["-C", repoDir, "diff", "--shortstat", `${baseRef}...${branchRef}`], { timeout: 10_000 });
     const diffStat = diffStatResult.trim();
 
     let filesChanged = 0;
@@ -77,22 +69,14 @@ export function getDiffSummary(repoDir: string, branch: string, base: string): D
     const deletionsMatch = diffStat.match(/(\d+)\s+deletions?\(/);
     if (deletionsMatch) deletions = parseInt(deletionsMatch[1], 10);
 
-    const changedFilesResult = execFileSync(
-      "git",
-      ["-C", repoDir, "diff", "--name-only", "--diff-filter=ACMR", `${baseRef}...${branchRef}`],
-      { timeout: 10_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
-    );
+    const changedFilesResult = await runGit(["-C", repoDir, "diff", "--name-only", "--diff-filter=ACMR", `${baseRef}...${branchRef}`], { timeout: 10_000 });
     const changedFiles = changedFilesResult
       .trim()
       .split("\n")
       .map((line) => line.trim())
       .filter(Boolean);
 
-    const logResult = execFileSync(
-      "git",
-      ["-C", repoDir, "log", `${baseRef}..${branchRef}`, "--format=%h|%s|%an", "-n", "5"],
-      { timeout: 10_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
-    );
+    const logResult = await runGit(["-C", repoDir, "log", `${baseRef}..${branchRef}`, "--format=%h|%s|%an", "-n", "5"], { timeout: 10_000 });
 
     const commitMessages = logResult
       .trim()
@@ -110,17 +94,13 @@ export function getDiffSummary(repoDir: string, branch: string, base: string): D
   }
 }
 
-export function pushBranch(repoDir: string, branch: string, remote: string = "origin"): boolean {
+export async function pushBranch(repoDir: string, branch: string, remote: string = "origin"): Promise<boolean> {
   assertBranchName(branch);
   assertBranchName(remote);
   const branchRef = localBranchRef(branch);
 
   try {
-    execFileSync(
-      "git",
-      ["-C", repoDir, "push", remote, `${branchRef}:${branchRef}`],
-      { timeout: 60_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
-    );
+    await runGit(["-C", repoDir, "push", remote, `${branchRef}:${branchRef}`], { timeout: 60_000 });
     return true;
   } catch (err) {
     log.warn(`[worktree] Failed to push branch ${branch}: ${err instanceof Error ? err.message : String(err)}`);
@@ -128,13 +108,9 @@ export function pushBranch(repoDir: string, branch: string, remote: string = "or
   }
 }
 
-export function checkDirtyTracked(repoDir: string): boolean {
+export async function checkDirtyTracked(repoDir: string): Promise<boolean> {
   try {
-    const status = execFileSync("git", ["-C", repoDir, "status", "--porcelain"], {
-      timeout: 5_000,
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "pipe"],
-    });
+    const status = await runGit(["-C", repoDir, "status", "--porcelain"], { timeout: 5_000 });
     return status.split("\n").some(
       (line) => line.length > 0 && !line.startsWith("??") && !line.startsWith("!!"),
     );
@@ -149,7 +125,17 @@ export function mergeBranch(
   base: string,
   strategy: "merge" | "squash" = "merge",
   worktreePath?: string,
-): MergeResult {
+): Promise<MergeResult> {
+  return withRepoLock(repoDir, () => mergeBranchLocked(repoDir, branch, base, strategy, worktreePath));
+}
+
+async function mergeBranchLocked(
+  repoDir: string,
+  branch: string,
+  base: string,
+  strategy: "merge" | "squash",
+  worktreePath: string | undefined,
+): Promise<MergeResult> {
   assertBranchName(branch);
   assertBranchName(base);
   const branchRef = localBranchRef(branch);
@@ -167,10 +153,10 @@ export function mergeBranch(
     warnings.push(`${message}: ${errorMessage(err)}`);
   };
 
-  const tryPopStash = (dir: string) => {
+  const tryPopStash = async (dir: string) => {
     if (!stashed) return;
     try {
-      execFileSync("git", ["-C", dir, "stash", "pop"], { timeout: 10_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
+      await runGit(["-C", dir, "stash", "pop"], { timeout: 10_000 });
     } catch (err) {
       warnRecovery("Failed to pop auto-stash during recovery", err);
     }
@@ -178,16 +164,12 @@ export function mergeBranch(
 
   try {
     if (strategy === "squash") {
-      execFileSync("git", ["-C", repoDir, "checkout", base], { timeout: 15_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
+      await runGit(["-C", repoDir, "checkout", base], { timeout: 15_000 });
 
-      if (checkDirtyTracked(repoDir)) {
+      if (await checkDirtyTracked(repoDir)) {
         let stashOutput: string;
         try {
-          stashOutput = execFileSync(
-            "git",
-            ["-C", repoDir, "stash", "push", "-m", `pre-merge stash before ${branch}`],
-            { timeout: 10_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
-          );
+          stashOutput = await runGit(["-C", repoDir, "stash", "push", "-m", `pre-merge stash before ${branch}`], { timeout: 10_000 });
         } catch (stashErr) {
           return withWarnings({
             success: false,
@@ -198,24 +180,20 @@ export function mergeBranch(
         if (!stashOutput.includes("No local changes to save")) {
           stashed = true;
           try {
-            stashRef = execFileSync("git", ["-C", repoDir, "stash", "list", "--format=%gd", "-n", "1"], {
-              timeout: 5_000,
-              encoding: "utf-8",
-              stdio: ["pipe", "pipe", "pipe"],
-            }).trim() || undefined;
+            stashRef = (await runGit(["-C", repoDir, "stash", "list", "--format=%gd", "-n", "1"], { timeout: 5_000 })).trim() || undefined;
           } catch (err) {
             warnRecovery("Failed to determine auto-stash ref", err);
           }
         }
       }
 
-      execFileSync("git", ["-C", repoDir, "merge", "--squash", branchRef], { timeout: 30_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
-      execFileSync("git", ["-C", repoDir, "commit", "-m", `Squash merge ${branch}`], { timeout: 10_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
+      await runGit(["-C", repoDir, "merge", "--squash", branchRef], { timeout: 30_000 });
+      await runGit(["-C", repoDir, "commit", "-m", `Squash merge ${branch}`], { timeout: 10_000 });
 
       let stashPopConflict = false;
       if (stashed) {
         try {
-          execFileSync("git", ["-C", repoDir, "stash", "pop"], { timeout: 10_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
+          await runGit(["-C", repoDir, "stash", "pop"], { timeout: 10_000 });
         } catch (err) {
           stashPopConflict = true;
           warnRecovery("Failed to pop auto-stash after merge", err);
@@ -229,20 +207,16 @@ export function mergeBranch(
     const rebaseDir = useWorktree ? worktreePath : repoDir;
 
     if (!useWorktree) {
-      execFileSync("git", ["-C", repoDir, "checkout", branch], { timeout: 15_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
+      await runGit(["-C", repoDir, "checkout", branch], { timeout: 15_000 });
     }
 
-    if (checkDirtyTracked(repoDir)) {
+    if (await checkDirtyTracked(repoDir)) {
       let stashOutput: string;
       try {
-        stashOutput = execFileSync(
-          "git",
-          ["-C", repoDir, "stash", "push", "-m", `pre-merge stash before ${branch}`],
-          { timeout: 10_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
-        );
+        stashOutput = await runGit(["-C", repoDir, "stash", "push", "-m", `pre-merge stash before ${branch}`], { timeout: 10_000 });
       } catch (stashErr) {
         try {
-          execFileSync("git", ["-C", repoDir, "checkout", base], { timeout: 15_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
+          await runGit(["-C", repoDir, "checkout", base], { timeout: 15_000 });
         } catch (err) {
           warnRecovery(`Failed to check out ${base} after auto-stash failure`, err);
         }
@@ -255,11 +229,7 @@ export function mergeBranch(
       if (!stashOutput.includes("No local changes to save")) {
         stashed = true;
         try {
-          stashRef = execFileSync("git", ["-C", repoDir, "stash", "list", "--format=%gd", "-n", "1"], {
-            timeout: 5_000,
-            encoding: "utf-8",
-            stdio: ["pipe", "pipe", "pipe"],
-          }).trim() || undefined;
+          stashRef = (await runGit(["-C", repoDir, "stash", "list", "--format=%gd", "-n", "1"], { timeout: 5_000 })).trim() || undefined;
         } catch (err) {
           warnRecovery("Failed to determine auto-stash ref", err);
         }
@@ -267,19 +237,19 @@ export function mergeBranch(
     }
 
     try {
-      execFileSync("git", ["-C", rebaseDir, "rebase", baseRef], { timeout: 60_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
+      await runGit(["-C", rebaseDir, "rebase", baseRef], { timeout: 60_000 });
     } catch {
       try {
-        execFileSync("git", ["-C", rebaseDir, "rebase", "--abort"], { timeout: 15_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
+        await runGit(["-C", rebaseDir, "rebase", "--abort"], { timeout: 15_000 });
       } catch (err) {
         warnRecovery("Failed to abort rebase during recovery", err);
       }
       try {
-        execFileSync("git", ["-C", repoDir, "checkout", base], { timeout: 15_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
+        await runGit(["-C", repoDir, "checkout", base], { timeout: 15_000 });
       } catch (err) {
         warnRecovery(`Failed to check out ${base} during recovery`, err);
       }
-      tryPopStash(repoDir);
+      await tryPopStash(repoDir);
       return withWarnings({
         success: false,
         rebaseConflict: true,
@@ -298,13 +268,13 @@ export function mergeBranch(
       });
     }
 
-    execFileSync("git", ["-C", repoDir, "checkout", base], { timeout: 15_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
-    execFileSync("git", ["-C", repoDir, "merge", "--ff-only", branchRef], { timeout: 30_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
+    await runGit(["-C", repoDir, "checkout", base], { timeout: 15_000 });
+    await runGit(["-C", repoDir, "merge", "--ff-only", branchRef], { timeout: 30_000 });
 
     let stashPopConflict = false;
     if (stashed) {
       try {
-        execFileSync("git", ["-C", repoDir, "stash", "pop"], { timeout: 10_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
+        await runGit(["-C", repoDir, "stash", "pop"], { timeout: 10_000 });
       } catch (err) {
         stashPopConflict = true;
         warnRecovery("Failed to pop auto-stash after merge", err);
@@ -320,11 +290,11 @@ export function mergeBranch(
     });
   } catch (err) {
     try {
-      execFileSync("git", ["-C", repoDir, "checkout", base], { timeout: 15_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
+      await runGit(["-C", repoDir, "checkout", base], { timeout: 15_000 });
     } catch (checkoutErr) {
       warnRecovery(`Failed to check out ${base} during recovery`, checkoutErr);
     }
-    tryPopStash(repoDir);
+    await tryPopStash(repoDir);
     return withWarnings({
       success: false,
       error: errorMessage(err),

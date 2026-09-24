@@ -113,7 +113,7 @@ describe("notification reasoning visibility", () => {
   });
 
   for (const resumed of [false, true]) {
-    it(`renders the effective level at ${resumed ? "resumed" : "initial"} launch and terminal delivery once`, () => {
+    it(`renders the effective level at ${resumed ? "resumed" : "initial"} launch and terminal delivery once`, async () => {
       const session = makeSession();
       if (resumed) Object.assign(session, { resumeSessionId: "backend-thread", resumedFromSessionName: "original" });
       // No backend invocation is needed to exercise the real bootstrap renderer.
@@ -124,7 +124,7 @@ describe("notification reasoning visibility", () => {
         handleTurnEnd: async () => {}, formatLaunchWorkdirLabel: () => "/tmp",
         notifySession: (target, text, label) => service.dispatch(target, { label: label!, userMessage: text }),
       });
-      bootstrap.initializeSession(session, {} as any, {} as any);
+      await bootstrap.initializeSession(session, {} as any, {} as any);
       assert.equal(requests[0]?.userMessage,
         `${resumed ? "▶️ [original] Resumed | Follow-up label: reasoning-test" : "🚀 [reasoning-test] Launched"} | /tmp | codex | gpt-6-sol | reasoning: medium`);
       setPluginConfig({ harnesses: { codex: { reasoningEffort: "high" } } });

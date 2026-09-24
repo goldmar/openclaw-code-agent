@@ -1072,7 +1072,7 @@ describe("SessionManager.debounceWaitingEvent()", () => {
 });
 
 describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
-  it("seeds persisted reminder, retention, token-expiry deadlines, and tmp-output cleanup", () => {
+  it("seeds persisted reminder, retention, token-expiry deadlines, and tmp-output cleanup", async () => {
     const sm = new SessionManager(5, 5);
     const now = Date.now();
     const scheduledKeys: string[] = [];
@@ -1140,7 +1140,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
       expiresAt: now + 60_000,
     });
 
-    sm.bootstrapMaintenanceSchedules();
+    await sm.bootstrapMaintenanceSchedules();
 
     assert.ok(scheduledKeys.includes("persisted:pending-session:worktree-reminder"));
     assert.ok(scheduledKeys.includes("persisted:resolved-session:worktree-retention"));
@@ -1229,7 +1229,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     }
   });
 
-  it("backs off tmp-output cleanup after bootstrap cleanup leaves an expired file", () => {
+  it("backs off tmp-output cleanup after bootstrap cleanup leaves an expired file", async () => {
     const sm = new SessionManager(5, 5);
     const originalDateNow = Date.now;
     const now = 1_700_000_000_000;
@@ -1248,7 +1248,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
         scheduled.push({ key, at });
       }) as any;
 
-      sm.bootstrapMaintenanceSchedules();
+      await sm.bootstrapMaintenanceSchedules();
 
       assert.deepEqual(cleanupTimes, [now]);
       assert.ok(scheduled.some((entry) => entry.key === "tmp-output:cleanup" && entry.at === now + 60_000));
@@ -1302,7 +1302,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     }
   });
 
-  it("seeds retention for 4.x merged sessions whose lifecycle is synthesized on load", () => {
+  it("seeds retention for 4.x merged sessions whose lifecycle is synthesized on load", async () => {
     const sm = new SessionManager(5, 5);
     const now = Date.now();
     const scheduledKeys: string[] = [];
@@ -1338,7 +1338,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     (sm as any).store.persisted.set(legacyResolved.harnessSessionId, normalized);
     (sm as any).store.idIndex.set(legacyResolved.sessionId, legacyResolved.harnessSessionId);
 
-    sm.bootstrapMaintenanceSchedules();
+    await sm.bootstrapMaintenanceSchedules();
 
     assert.ok(scheduledKeys.includes("persisted:legacy-resolved-session:worktree-retention"));
   });
@@ -1474,7 +1474,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     assert.equal(scheduled[1].at, now + 120_000);
   });
 
-  it("backs off reminder retries after a delivery failure instead of rescheduling immediately", () => {
+  it("backs off reminder retries after a delivery failure instead of rescheduling immediately", async () => {
     const sm = new SessionManager(5, 5);
     const originalDateNow = Date.now;
     const now = 1_700_000_000_000;
@@ -1513,6 +1513,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
       assert.equal(scheduled.filter((entry) => entry.key.endsWith(":worktree-reminder")).length, 1);
 
       scheduled[0].cb();
+      await (sm as any).maintenance.whenIdle();
 
       assert.equal(scheduled.length, 2);
       assert.equal(scheduled[1].key, "persisted:pending-session:worktree-reminder");
@@ -1536,7 +1537,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
       expected: { merge: false, openPr: false, prFollowups: false },
     },
   ] as const) {
-    it(`renders ${testCase.policy} policy-aware buttons for pending worktree reminders`, () => {
+    it(`renders ${testCase.policy} policy-aware buttons for pending worktree reminders`, async () => {
       const storeDir = mkdtempSync(join(tmpdir(), "sm-reminder-policy-store-"));
       const sm = new SessionManager(5, 5, {
         store: {
@@ -1585,7 +1586,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
           Object.assign(pending, patch);
           return true;
         },
-        (sessionId, persistedSession) => (sm as any).getPolicyAwareWorktreeDecisionButtons(
+        async (sessionId, persistedSession) => await (sm as any).getPolicyAwareWorktreeDecisionButtons(
           sessionId,
           {},
           undefined,
@@ -1594,7 +1595,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
       );
 
       try {
-        assert.equal(reminders.sendReminderIfDue(pending, now), true);
+        assert.equal(await reminders.sendReminderIfDue(pending, now), true);
 
         const labels = buttonLabels(dispatchCalls[0]?.request.buttons);
         assert.equal(hasButton(labels, "Merge"), testCase.expected.merge);
@@ -1609,7 +1610,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     });
   }
 
-  it("keeps Open PR available for pr-required pending worktree reminders when repo dir is unavailable", () => {
+  it("keeps Open PR available for pr-required pending worktree reminders when repo dir is unavailable", async () => {
     const storeDir = mkdtempSync(join(tmpdir(), "sm-reminder-policy-unresolved-store-"));
     const sm = new SessionManager(5, 5, {
       store: {
@@ -1655,7 +1656,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
         Object.assign(pending, patch);
         return true;
       },
-      (sessionId, persistedSession) => (sm as any).getPolicyAwareWorktreeDecisionButtons(
+      async (sessionId, persistedSession) => await (sm as any).getPolicyAwareWorktreeDecisionButtons(
         sessionId,
         {},
         undefined,
@@ -1664,7 +1665,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     );
 
     try {
-      assert.equal(reminders.sendReminderIfDue(pending, now), true);
+      assert.equal(await reminders.sendReminderIfDue(pending, now), true);
 
       const labels = buttonLabels(dispatchCalls[0]?.request.buttons);
       assert.equal(hasButton(labels, "Merge"), false);
@@ -1676,7 +1677,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     }
   });
 
-  it("preserves PR buttons for pending worktree reminders when policy state is unavailable", () => {
+  it("preserves PR buttons for pending worktree reminders when policy state is unavailable", async () => {
     const storeDir = mkdtempSync(join(tmpdir(), "sm-reminder-policy-missing-store-"));
     const sm = new SessionManager(5, 5, {
       store: {
@@ -1722,7 +1723,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
         Object.assign(pending, patch);
         return true;
       },
-      (sessionId, persistedSession) => (sm as any).getPolicyAwareWorktreeDecisionButtons(
+      async (sessionId, persistedSession) => await (sm as any).getPolicyAwareWorktreeDecisionButtons(
         sessionId,
         {},
         undefined,
@@ -1731,7 +1732,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     );
 
     try {
-      assert.equal(reminders.sendReminderIfDue(pending, now), true);
+      assert.equal(await reminders.sendReminderIfDue(pending, now), true);
 
       const labels = buttonLabels(dispatchCalls[0]?.request.buttons);
       assert.equal(hasButton(labels, "Merge"), true);
@@ -1743,7 +1744,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     }
   });
 
-  it("does not schedule reminders when stale pending fields conflict with resolved lifecycle state", () => {
+  it("does not schedule reminders when stale pending fields conflict with resolved lifecycle state", async () => {
     const sm = new SessionManager(5, 5);
     const now = Date.now();
     const pendingSince = new Date(now - 4 * 60 * 60 * 1000).toISOString();
@@ -1758,7 +1759,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     ];
 
     for (const entry of cases) {
-      const nextReminderAt = (sm as any).maintenance.deps.reminders.getNextReminderAt({
+      const nextReminderAt = await (sm as any).maintenance.deps.reminders.getNextReminderAt({
         sessionId: `stale-${entry.label}`,
         harnessSessionId: `thread-${entry.label}`,
         name: `stale-${entry.label}`,
@@ -1778,7 +1779,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     }
   });
 
-  it("clears stale persisted reminder fields when maintenance finds a resolved decision", () => {
+  it("clears stale persisted reminder fields when maintenance finds a resolved decision", async () => {
     const sm = new SessionManager(5, 5);
     const now = Date.now();
     const scheduled: Array<{ key: string; at: number; cb: () => void }> = [];
@@ -1824,6 +1825,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     }) as any;
 
     (sm as any).syncPersistedSessionMaintenance(stale);
+    await (sm as any).maintenance.whenIdle();
 
     const persisted = (sm as any).store.getPersistedSession(stale.sessionId);
     assert.equal(persisted.pendingWorktreeDecisionSince, undefined);
@@ -1832,7 +1834,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     assert.equal(scheduled.some((entry) => entry.key.endsWith(":worktree-reminder")), false);
   });
 
-  it("clears orphaned resolved reminder fields without a valid pending timestamp", () => {
+  it("clears orphaned resolved reminder fields without a valid pending timestamp", async () => {
     const sm = new SessionManager(5, 5);
     const now = Date.now();
     const scheduled: Array<{ key: string; at: number; cb: () => void }> = [];
@@ -1878,6 +1880,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     }) as any;
 
     (sm as any).syncPersistedSessionMaintenance(stale);
+    await (sm as any).maintenance.whenIdle();
 
     const persisted = (sm as any).store.getPersistedSession(stale.sessionId);
     assert.equal(persisted.pendingWorktreeDecisionSince, undefined);
@@ -1951,7 +1954,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     }
   });
 
-  it("drops a queued stale worktree reminder after rechecking resolved persisted state", () => {
+  it("drops a queued stale worktree reminder after rechecking resolved persisted state", async () => {
     const sm = new SessionManager(5, 5);
     stubDispatch(sm);
     const originalDateNow = Date.now;
@@ -2011,6 +2014,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
       });
 
       scheduled[0].cb();
+      await (sm as any).maintenance.whenIdle();
 
       assert.equal(scheduled.filter((entry) => entry.key.endsWith(":worktree-reminder")).length, 1);
       assert.equal(((sm as any).__dispatchCalls ?? []).length, 0);
@@ -2126,7 +2130,7 @@ describe("SessionManager resumed launch routing", () => {
     const route = { provider: "telegram", target: "12345" };
 
     try {
-      const owner = sm.spawn({
+      const owner = await sm.spawn({
         prompt: "first",
         workdir: "/tmp",
         name: "writer-owner",
@@ -2136,7 +2140,7 @@ describe("SessionManager resumed launch routing", () => {
       }, { notifyLaunch: false });
       await tick(20);
       assert.equal(owner.status, "running");
-      assert.throws(() => sm.spawn({
+      await assert.rejects(async () => await sm.spawn({
         prompt: "duplicate resume",
         workdir: "/tmp",
         name: "duplicate-writer",
@@ -2148,7 +2152,7 @@ describe("SessionManager resumed launch routing", () => {
       assert.equal(launchCalls, 1);
       owner.kill("user");
 
-      const replacement = sm.spawn({
+      const replacement = await sm.spawn({
         prompt: "resume after release",
         workdir: "/tmp",
         name: "writer-replacement",
@@ -2160,7 +2164,7 @@ describe("SessionManager resumed launch routing", () => {
       await tick(20);
       assert.equal(replacement.status, "starting");
       assert.equal(launchCalls, 1);
-      assert.throws(() => sm.spawn({
+      await assert.rejects(async () => await sm.spawn({
         prompt: "overlapping replacement",
         workdir: "/tmp",
         name: "overlapping-writer-replacement",
@@ -2222,7 +2226,7 @@ describe("SessionManager resumed launch routing", () => {
     const route = { provider: "telegram", target: "12345" };
 
     try {
-      const first = sm.spawn({
+      const first = await sm.spawn({
         prompt: "first owner",
         workdir: "/tmp",
         name: "first-writer-owner",
@@ -2234,7 +2238,7 @@ describe("SessionManager resumed launch routing", () => {
       assert.equal(first.status, "running");
       first.kill("user");
 
-      const second = sm.spawn({
+      const second = await sm.spawn({
         prompt: "second owner",
         workdir: "/tmp",
         name: "second-writer-owner",
@@ -2253,7 +2257,7 @@ describe("SessionManager resumed launch routing", () => {
       assert.equal(launchCalls, 2);
       second.kill("user");
 
-      const third = sm.spawn({
+      const third = await sm.spawn({
         prompt: "third owner",
         workdir: "/tmp",
         name: "third-writer-owner",
@@ -2279,7 +2283,7 @@ describe("SessionManager resumed launch routing", () => {
     }
   });
 
-  it("inherits the persisted origin route before starting a resumed system-routed launch", () => {
+  it("inherits the persisted origin route before starting a resumed system-routed launch", async () => {
     const harness = createFakeHarness("resume-route-fake-harness");
     registerHarness(harness);
     setPluginConfig({});
@@ -2306,7 +2310,7 @@ describe("SessionManager resumed launch routing", () => {
       route,
     });
 
-    const session = sm.spawn({
+    const session = await sm.spawn({
       prompt: "Compare message_sending vs reply_payload_sending.",
       workdir: "/tmp",
       name: "compare-pr-98922-hook-layer",
@@ -2349,7 +2353,7 @@ describe("SessionManager.launchPlanOffer()", () => {
     stubDispatch(sm);
   });
 
-  it("starts a plan-gated auto-pr session with preserved topic routing", () => {
+  it("starts a plan-gated auto-pr session with preserved topic routing", async () => {
     const spawnCalls: Array<Record<string, unknown>> = [];
     (sm as any).spawn = (config: Record<string, unknown>) => {
       spawnCalls.push(config);
@@ -2364,7 +2368,7 @@ describe("SessionManager.launchPlanOffer()", () => {
       sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
     } as const;
 
-    const session = sm.launchPlanOffer({
+    const session = await sm.launchPlanOffer({
       route,
       prompt: "Plan the OpenClaw v2026.5.18 plugin-readiness follow-up.",
       workdir: "/home/openclaw/workspace/openclaw-code-agent",
@@ -3477,7 +3481,7 @@ describe("SessionManager restored button parity", () => {
     return (rows ?? []).map((row) => row.map((button) => button.label));
   }
 
-  it("renders the same restored worktree action set for Telegram and Discord sessions", () => {
+  it("renders the same restored worktree action set for Telegram and Discord sessions", async () => {
     const telegramId = "h-telegram-worktree";
     const discordId = "h-discord-worktree";
 
@@ -3510,8 +3514,8 @@ describe("SessionManager restored button parity", () => {
       worktreeBranch: "agent/discord-worktree",
     } as any);
 
-    const telegramButtons = (sm as any).getWorktreeDecisionButtons(telegramId);
-    const discordButtons = (sm as any).getWorktreeDecisionButtons(discordId);
+    const telegramButtons = await (sm as any).getWorktreeDecisionButtons(telegramId);
+    const discordButtons = await (sm as any).getWorktreeDecisionButtons(discordId);
 
     assert.deepEqual(buttonLabels(telegramButtons), buttonLabels(discordButtons));
     assert.deepEqual(buttonLabels(telegramButtons), [["Merge", "Open PR"], ["Later", "Discard"]]);

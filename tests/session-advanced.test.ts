@@ -28,7 +28,7 @@ function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }).trim();
 }
 
-function createRepoWithWorktree(name: string): { repoDir: string; worktreePath: string; branchName: string } {
+async function createRepoWithWorktree(name: string): { repoDir: string; worktreePath: string; branchName: string } {
   const repoDir = mkdtempSync(join(tmpdir(), `openclaw-session-${name}-`));
   git(repoDir, "init", "-b", "main");
   git(repoDir, "config", "user.name", "Test User");
@@ -36,8 +36,8 @@ function createRepoWithWorktree(name: string): { repoDir: string; worktreePath: 
   writeFileSync(join(repoDir, "README.md"), "base\n", "utf-8");
   git(repoDir, "add", "README.md");
   git(repoDir, "commit", "-m", "init");
-  const worktreePath = createWorktree(repoDir, name);
-  const branchName = getBranchName(worktreePath);
+  const worktreePath = await createWorktree(repoDir, name);
+  const branchName = await getBranchName(worktreePath);
   assert.ok(branchName, "worktree branch should exist");
   return { repoDir, worktreePath, branchName };
 }
@@ -321,7 +321,7 @@ describe("Session consumeMessages — result message (multi-turn)", () => {
   });
 
   it("keeps a dirty worktree session running and queues a finalization prompt before completing", async () => {
-    const { repoDir, worktreePath, branchName } = createRepoWithWorktree("dirty-finalization");
+    const { repoDir, worktreePath, branchName } = await createRepoWithWorktree("dirty-finalization");
     try {
       const session = await startSession({
         multiTurn: true,
@@ -485,16 +485,18 @@ describe("Session consumeMessages — result message (multi-turn)", () => {
   });
 
   it("keeps session alive when heartbeat activity messages arrive during idle gaps", async () => {
-    setPluginConfig({ idleTimeoutMinutes: 0.001, sessionGcAgeMinutes: 1440 });
+    // 300 ms idle timeout with heartbeats every ~100 ms: the heartbeats span
+    // longer than one timeout window, and the margins tolerate coarse timers.
+    setPluginConfig({ idleTimeoutMinutes: 0.005, sessionGcAgeMinutes: 1440 });
     const session = await startSession({ multiTurn: true, permissionMode: "bypassPermissions" });
 
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < 5; i++) {
       fakeHarness.pushMessage({ type: "activity" });
-      await tick(30);
+      await tick(100);
     }
 
     assert.equal(session.status, "running", "heartbeat should prevent idle timeout");
-    await tick(90);
+    await tick(600);
     assert.equal(session.status, "killed", "without heartbeat, idle timeout should trigger");
     assert.equal(session.killReason, "idle-timeout");
 

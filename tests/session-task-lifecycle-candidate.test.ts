@@ -99,7 +99,7 @@ it("persists ordered OCA lifecycle writes and recovery through the candidate SQL
     const manager = new SessionManager(5);
     await manager.ready;
     t.mock.method((manager as any).notifications, "dispatch", async () => {});
-    const active = manager.spawn({
+    const active = await manager.spawn({
       prompt: "Shutdown persistence", workdir: stateDir, permissionMode: "plan",
       worktreeStrategy: "off", route: { provider: "system", target: "system", sessionKey },
       taskLifecycle: resolveSessionTaskLifecycle({ sessionKey }),
@@ -109,7 +109,7 @@ it("persists ordered OCA lifecycle writes and recovery through the candidate SQL
     try {
       await terminalEntered.promise;
       assert.equal(stopped, false);
-      assert.throws(() => manager.spawn({ prompt: "Late launch", workdir: stateDir, permissionMode: "plan" }), /shutting down/);
+      await assert.rejects(async () => manager.spawn({ prompt: "Late launch", workdir: stateDir, permissionMode: "plan" }), /shutting down/);
       terminalRelease.resolve();
       await stop;
       const saved = manager.getPersistedSession(active.id)!;
