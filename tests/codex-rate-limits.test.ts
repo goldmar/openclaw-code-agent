@@ -45,7 +45,7 @@ describe("Codex rate-limit surfacing (B14)", () => {
       accountId: null,
       rateLimitUpsell: null,
     }, NOW - 120_000);
-    assert.deepEqual(formatCodexRateLimits(getCodexRateLimits(), NOW), [
+    assert.deepEqual(formatCodexRateLimits(undefined, NOW), [
       "Codex usage limits (pro plan), observed 2m ago:",
       "  Primary (5h): 17% used, resets in 1h 0m",
       "  Secondary (weekly): 42% used, resets in 3d 0h",
@@ -53,7 +53,7 @@ describe("Codex rate-limit surfacing (B14)", () => {
   });
 
   it("merges sparse updates without clearing previously observed values", () => {
-    recordCodexRateLimits({
+    const key = recordCodexRateLimits({
       ordinaryUsageAllowed: false,
       rateLimits: snapshot(),
       rateLimitsByLimitId: null,
@@ -61,14 +61,29 @@ describe("Codex rate-limit surfacing (B14)", () => {
       accountId: null,
       rateLimitUpsell: null,
     }, NOW);
-    mergeCodexRateLimitsUpdate(snapshot({ primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: NOW / 1000 + 600 }, secondary: null, planType: null, rateLimitReachedType: "rate_limit_reached" }), NOW);
-    const state = getCodexRateLimits();
+    mergeCodexRateLimitsUpdate(key, snapshot({ primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: NOW / 1000 + 600 }, secondary: null, planType: null, rateLimitReachedType: "rate_limit_reached" }), NOW);
+    const state = getCodexRateLimits(key);
     assert.equal(state?.snapshot.primary?.usedPercent, 100);
     assert.equal(state?.snapshot.secondary?.usedPercent, 42.4);
     assert.equal(state?.snapshot.planType, "pro");
     assert.equal(state?.ordinaryUsageAllowed, false);
-    assert.match(formatCodexRateLimits(state, NOW).join("\n"), /Limit reached: rate limit reached/);
-    assert.match(describeCodexLimitReset(NOW) ?? "", /^Codex usage limit resets in 10m/);
+    assert.match(formatCodexRateLimits([state!], NOW).join("\n"), /Limit reached: rate limit reached/);
+    assert.match(describeCodexLimitReset(key, NOW) ?? "", /^Codex usage limit resets in 10m/);
+    assert.equal(describeCodexLimitReset(key, NOW + 3_600_000), undefined, "expired windows are not reported");
+    assert.doesNotMatch(formatCodexRateLimits([state!], NOW + 3_600_000).join("\n"), /Primary/);
+  });
+
+  it("keeps accounts separate and never renders account ids", () => {
+    const base = { ordinaryUsageAllowed: true, rateLimitsByLimitId: null, rateLimitResetCredits: null, rateLimitUpsell: null };
+    const a = recordCodexRateLimits({ ...base, rateLimits: snapshot(), accountId: "acct-secret-a" }, NOW);
+    const b = recordCodexRateLimits({ ...base, rateLimits: snapshot({ planType: "plus" }), accountId: "acct-secret-b" }, NOW - 1);
+    mergeCodexRateLimitsUpdate(b, snapshot({ primary: { usedPercent: 99, windowDurationMins: 300, resetsAt: NOW / 1000 + 60 } }), NOW - 1);
+    assert.equal(getCodexRateLimits(a)?.snapshot.primary?.usedPercent, 17);
+    assert.equal(getCodexRateLimits(b)?.snapshot.primary?.usedPercent, 99);
+    const text = formatCodexRateLimits(undefined, NOW).join("\n");
+    assert.match(text, /\[account 1\]/);
+    assert.match(text, /\[account 2\]/);
+    assert.doesNotMatch(text, /acct-secret/);
   });
 
   it("appends the snapshot to agent_stats output", () => {

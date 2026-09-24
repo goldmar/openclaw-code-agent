@@ -62,7 +62,7 @@ import {
   type CodexApprovalChoice,
   type CodexPendingRequest,
 } from "./codex-protocol";
-import { codexModelSupportsEffort, isCodexModelCatalogFresh, refreshCodexModelCatalog } from "./codex-model-catalog";
+import { refreshCodexModelCatalog, type CodexModelInfo } from "./codex-model-catalog";
 import { describeCodexLimitReset, mergeCodexRateLimitsUpdate, recordCodexRateLimits } from "./codex-rate-limits";
 import type { ThreadForkResponse, ThreadResumeResponse, ThreadStartResponse } from "./codex-app-server-protocol";
 import type { AccountRateLimitsUpdatedNotification } from "./codex-app-server-protocol/v2/AccountRateLimitsUpdatedNotification";
@@ -283,6 +283,11 @@ export class CodexHarness implements AgentHarness {
     let effectiveModel = runtimeModel;
     let serviceTier: string | null | undefined;
     let accountType: CodexAccountType | undefined;
+    // Rate limits are account-scoped; updates on this connection belong to it.
+    let rateLimitAccountKey: string | undefined;
+    // This connection's own model/list result: another app server (other
+    // CODEX_HOME, account, or version) may support different efforts.
+    let connectionModels: CodexModelInfo[] | undefined;
     let currentPendingInput: CodexPendingInput | undefined;
     let activeTurn: ActiveTurn | undefined;
     let runCounter = 0;
@@ -388,7 +393,9 @@ export class CodexHarness implements AgentHarness {
           priceTokenUsage(params as ThreadTokenUsageUpdatedNotification);
           return;
         case "account/rateLimits/updated":
-          mergeCodexRateLimitsUpdate((params as AccountRateLimitsUpdatedNotification).rateLimits);
+          if (rateLimitAccountKey) {
+            mergeCodexRateLimitsUpdate(rateLimitAccountKey, (params as AccountRateLimitsUpdatedNotification).rateLimits);
+          }
           return;
         case "turn/plan/updated": {
           const update = params as TurnPlanUpdatedNotification;
@@ -497,10 +504,15 @@ export class CodexHarness implements AgentHarness {
       }, timeoutMs);
       await client.notify("initialized", {});
       const auxTimeoutMs = Math.min(timeoutMs, AUXILIARY_READ_TIMEOUT_MS);
-      const [account] = await Promise.allSettled([
+      const [account, models] = await Promise.allSettled([
         codexRequest(client, "account/read", { refreshToken: false }, auxTimeoutMs),
-        isCodexModelCatalogFresh() ? Promise.resolve() : refreshCodexModelCatalog(client, auxTimeoutMs),
+        refreshCodexModelCatalog(client, auxTimeoutMs),
       ]);
+      if (models.status === "fulfilled") {
+        connectionModels = models.value;
+      } else {
+        logCodexHarnessDiagnostic("model.list.unavailable", { error: errorMessage(models.reason) });
+      }
       if (account.status === "fulfilled") {
         accountType = codexAccountType(account.value);
       } else {
@@ -508,7 +520,7 @@ export class CodexHarness implements AgentHarness {
       }
       if (accountType === "chatgpt") {
         await codexRequest(client, "account/rateLimits/read", undefined, auxTimeoutMs)
-          .then((limits) => recordCodexRateLimits(limits))
+          .then((limits) => { rateLimitAccountKey = recordCodexRateLimits(limits); })
           .catch((error: unknown) => logCodexHarnessDiagnostic("rate_limits.read.unavailable", { error: errorMessage(error) }));
       }
       logCodexHarnessDiagnostic("client.initialize.done", {
@@ -532,19 +544,31 @@ export class CodexHarness implements AgentHarness {
       execution,
     });
 
-    /** Resolve the turn id that starts the last `count` turns of a thread. */
+    /**
+     * Resolve the turn id that starts the last `count` completed turns of a
+     * thread, paging past any in-progress turn.
+     */
     const resolveRewindBeforeTurnId = async (sourceThreadId: string, count: number): Promise<string> => {
-      const page = await codexRequest(client, "thread/turns/list", {
-        threadId: sourceThreadId,
-        limit: count,
-        sortDirection: "desc",
-        itemsView: "notLoaded",
-      }, timeoutMs);
-      const turns = page.data.filter((turn) => turn.status !== "inProgress");
-      if (turns.length < count) {
-        throw new Error(`Cannot rewind ${count} turn(s): the Codex thread only has ${turns.length} completed turn(s).`);
+      const finished: string[] = [];
+      let cursor: string | null = null;
+      for (let page = 0; page < 20 && finished.length < count; page += 1) {
+        const response = await codexRequest(client, "thread/turns/list", {
+          threadId: sourceThreadId,
+          limit: count + 1,
+          sortDirection: "desc",
+          itemsView: "notLoaded",
+          ...(cursor ? { cursor } : {}),
+        }, timeoutMs);
+        for (const turn of response.data) {
+          if (turn.status !== "inProgress") finished.push(turn.id);
+        }
+        cursor = response.nextCursor;
+        if (!cursor) break;
       }
-      return turns[count - 1].id;
+      if (finished.length < count) {
+        throw new Error(`Cannot rewind ${count} turn(s): the Codex thread only has ${finished.length} completed turn(s).`);
+      }
+      return finished[count - 1];
     };
 
     const ensureThread = async (): Promise<void> => {
@@ -599,7 +623,9 @@ export class CodexHarness implements AgentHarness {
     const resolveTurnEffort = (model: string): string | undefined => {
       const effort = options.reasoningEffort;
       if (!effort) return undefined;
-      if (codexModelSupportsEffort(model, effort) === false) {
+      const wanted = model.toLowerCase();
+      const info = connectionModels?.find((entry) => entry.id.toLowerCase() === wanted || entry.model.toLowerCase() === wanted);
+      if (info && !info.supportedReasoningEfforts.includes(effort)) {
         logCodexHarnessDiagnostic("turn.effort.unsupported", { model, effort });
         return undefined;
       }
@@ -642,7 +668,7 @@ export class CodexHarness implements AgentHarness {
         let resultText = turnErrorMessage(turn.terminal);
         const errorInfo = turn.terminal?.error?.codexErrorInfo;
         if (errorInfo === "usageLimitExceeded" || errorInfo === "rateLimitExceeded") {
-          const resetHint = describeCodexLimitReset();
+          const resetHint = rateLimitAccountKey ? describeCodexLimitReset(rateLimitAccountKey) : undefined;
           if (resetHint) resultText = resultText ? `${resultText}\n${resetHint}` : resetHint;
         }
         logCodexHarnessDiagnostic("turn.terminal", {

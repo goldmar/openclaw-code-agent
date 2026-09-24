@@ -67,6 +67,7 @@ import type { PermissionsRequestApprovalResponse } from "./codex-app-server-prot
 import type { ReviewTarget } from "./codex-app-server-protocol/v2/ReviewTarget";
 import type { ToolRequestUserInputParams } from "./codex-app-server-protocol/v2/ToolRequestUserInputParams";
 import type { Turn } from "./codex-app-server-protocol/v2/Turn";
+import type { FileSystemPath } from "./codex-app-server-protocol/v2/FileSystemPath";
 import type { TurnPlanStep } from "./codex-app-server-protocol/v2/TurnPlanStep";
 import type { UserInput } from "./codex-app-server-protocol/v2/UserInput";
 
@@ -323,6 +324,11 @@ export type CodexApprovalChoice = {
   label: string;
   decision: PendingInputDecision;
   response: unknown;
+  /**
+   * Choices that also persist a policy change (exec-policy or network
+   * amendments). Free-text replies never select these implicitly.
+   */
+  amendment?: true;
 };
 
 export type CodexPendingRequest =
@@ -336,13 +342,14 @@ function commandDecisionChoice(decision: CommandExecutionApprovalDecision): Code
   if (decision === "cancel") return { label: "Decline and stop turn", decision: "cancel", response: { decision } };
   if ("acceptWithExecpolicyAmendment" in decision) {
     const prefix = decision.acceptWithExecpolicyAmendment.execpolicy_amendment.join(" ");
-    return { label: `Always allow \`${prefix}\``, decision: "acceptForSession", response: { decision } };
+    return { label: `Always allow \`${prefix}\``, decision: "acceptForSession", response: { decision }, amendment: true };
   }
   const amendment = decision.applyNetworkPolicyAmendment.network_policy_amendment;
   return {
     label: `${amendment.action === "allow" ? "Always allow" : "Always deny"} host ${amendment.host}`,
     decision: amendment.action === "allow" ? "acceptForSession" : "decline",
     response: { decision },
+    amendment: true,
   };
 }
 
@@ -397,6 +404,17 @@ export function buildFileChangeApprovalRequest(requestId: string, params: FileCh
   return { kind: "approval", state: approvalState(requestId, promptText, choices), choices, declineResponse: { decision: "decline" } };
 }
 
+function describeFileSystemPath(path: FileSystemPath): string {
+  if (path.type === "path") return path.path;
+  if (path.type === "glob_pattern") return `glob ${path.pattern}`;
+  const special = path.value;
+  if (special.kind === "project_roots") return special.subpath ? `project roots/${special.subpath}` : "project roots";
+  if (special.kind === "unknown") return special.subpath ? `${special.path}/${special.subpath}` : special.path;
+  if (special.kind === "slash_tmp") return "/tmp";
+  if (special.kind === "root") return "/ (entire filesystem)";
+  return special.kind;
+}
+
 export function buildPermissionsApprovalRequest(requestId: string, params: PermissionsRequestApprovalParams): CodexPendingRequest {
   const granted: PermissionsRequestApprovalResponse["permissions"] = {
     ...(params.permissions.network ? { network: params.permissions.network } : {}),
@@ -414,6 +432,10 @@ export function buildPermissionsApprovalRequest(requestId: string, params: Permi
     params.permissions.network?.enabled ? "Network access" : undefined,
     fileSystem?.write?.length ? `Write access: ${fileSystem.write.join(", ")}` : undefined,
     fileSystem?.read?.length ? `Read access: ${fileSystem.read.join(", ")}` : undefined,
+    // `entries` supersedes read/write; every requested entry must be visible
+    // because granting forwards the full filesystem request.
+    ...(fileSystem?.entries ?? []).map((entry) => `Filesystem ${entry.access}: ${describeFileSystemPath(entry.path)}`),
+    fileSystem?.globScanMaxDepth != null ? `Glob scan depth: ${fileSystem.globScanMaxDepth}` : undefined,
     `Directory: ${params.cwd}`,
     params.reason ? `Reason: ${params.reason}` : undefined,
   ]);
@@ -474,5 +496,7 @@ export function matchApprovalChoiceFromText(choices: CodexApprovalChoice[], text
   else if (/^(?:approve|allow|accept|yes)(?: for)?(?: this)? session$|^always(?: allow)?$/.test(normalized)) wanted = "acceptForSession";
   else if (/^(?:deny|denied|decline|declined|reject|rejected|no|n|block)$/.test(normalized)) wanted = "decline";
   else if (/^(?:cancel|abort|stop)$/.test(normalized)) wanted = "cancel";
-  return wanted ? choices.find((choice) => choice.decision === wanted) : undefined;
+  // Plain decisions only: "no" must never select a persistent deny rule and
+  // "always" must never select a persistent allow amendment by accident.
+  return wanted ? choices.find((choice) => choice.decision === wanted && !choice.amendment) : undefined;
 }

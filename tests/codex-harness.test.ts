@@ -7,11 +7,12 @@ import { getHarness, listHarnesses } from "../src/harness/index";
 import { CodexHarness, DEFAULT_APP_SERVER_ARGS, DEFAULT_REQUEST_TIMEOUT_MS, isCodexAppServerSessionId } from "../src/harness/codex";
 import { JsonRpcResponseError, StdioJsonRpcClient, dispatchJsonRpcEnvelope, type JsonRpcId } from "../src/harness/codex-rpc";
 import { recordCodexModelCatalog, resetCodexModelCatalogForTests } from "../src/harness/codex-model-catalog";
-import { getCodexRateLimits, resetCodexRateLimitsForTests } from "../src/harness/codex-rate-limits";
+import { getCodexRateLimits, listCodexRateLimits, resetCodexRateLimitsForTests } from "../src/harness/codex-rate-limits";
 import { setPluginConfig } from "../src/config";
 import type { HarnessMessage, HarnessSession } from "../src/harness/types";
 import type { TokenUsageBreakdown } from "../src/harness/codex-app-server-protocol/v2/TokenUsageBreakdown";
 import type { Model } from "../src/harness/codex-app-server-protocol/v2/Model";
+import { codexCatalogModel } from "./codex-model-catalog-fixture";
 
 type NotificationHandler = (method: string, params: unknown) => Promise<void> | void;
 type RequestHandler = (method: string, params: unknown, id: JsonRpcId) => Promise<unknown>;
@@ -43,6 +44,10 @@ type MockOptions = {
   turnsList?: string[];
   models?: Model[];
   rateLimitsUsedPercent?: number;
+  rateLimitsResetsAt?: number;
+  accountId?: string | null;
+  /** Turns returned by thread/turns/list pages (newest first), chunked per page. */
+  turnsPages?: Array<Array<{ id: string; status?: string }>>;
   steerError?: string;
 };
 
@@ -123,7 +128,7 @@ class MockCodexClient {
             limitId: "codex",
             limitName: null,
             normalModelSlug: null,
-            primary: { usedPercent: this.options.rateLimitsUsedPercent ?? 12, windowDurationMins: 300, resetsAt: 1_900_000_000 },
+            primary: { usedPercent: this.options.rateLimitsUsedPercent ?? 12, windowDurationMins: 300, resetsAt: this.options.rateLimitsResetsAt ?? 4_000_000_000 },
             secondary: null,
             credits: null,
             individualLimit: null,
@@ -133,7 +138,7 @@ class MockCodexClient {
           },
           rateLimitsByLimitId: null,
           rateLimitResetCredits: null,
-          accountId: null,
+          accountId: this.options.accountId ?? null,
           rateLimitUpsell: null,
         };
       case "model/list":
@@ -145,12 +150,22 @@ class MockCodexClient {
         return this.threadResponse(record, record.threadId as string);
       case "thread/fork":
         return this.threadResponse(record, FORKED_THREAD_ID);
-      case "thread/turns/list":
+      case "thread/turns/list": {
+        if (this.options.turnsPages) {
+          const index = record.cursor ? Number(record.cursor) : 0;
+          const page = this.options.turnsPages[index] ?? [];
+          return {
+            data: page.map((turn) => turnPayload(turn.id, turn.status ?? "completed")),
+            nextCursor: index + 1 < this.options.turnsPages.length ? String(index + 1) : null,
+            backwardsCursor: null,
+          };
+        }
         return {
           data: (this.options.turnsList ?? []).map((id) => turnPayload(id, "completed")),
           nextCursor: null,
           backwardsCursor: null,
         };
+      }
       case "thread/revert":
         return { thread: { id: record.threadId }, turnsBackwardsCursor: null, itemsBackwardsCursor: null };
       case "turn/interrupt":
@@ -561,9 +576,22 @@ describe("CodexHarness launch settings", () => {
     assert.equal(turn.collaborationMode.settings.reasoning_effort, null);
   });
 
-  it("records ChatGPT account rate limits for agent_stats (B14)", async () => {
-    await collectMessages(launch(new MockCodexClient({ accountType: "chatgpt", rateLimitsUsedPercent: 64 })));
-    assert.equal(getCodexRateLimits()?.snapshot.primary?.usedPercent, 64);
+  it("records ChatGPT account rate limits per account for agent_stats (B14)", async () => {
+    await collectMessages(launch(new MockCodexClient({ accountType: "chatgpt", rateLimitsUsedPercent: 64, accountId: "acct-a" })));
+    await collectMessages(launch(new MockCodexClient({ accountType: "chatgpt", rateLimitsUsedPercent: 5, accountId: "acct-b" })));
+    assert.equal(getCodexRateLimits("acct-a")?.snapshot.primary?.usedPercent, 64);
+    assert.equal(getCodexRateLimits("acct-b")?.snapshot.primary?.usedPercent, 5);
+    assert.equal(listCodexRateLimits().length, 2);
+  });
+
+  it("refreshes model/list on every connection instead of trusting another server's catalog", async () => {
+    const first = new MockCodexClient({ models: [codexCatalogModel("gpt-5.5", ["low"])] });
+    await collectMessages(launch(first, { model: "gpt-5.5", reasoningEffort: "high" }));
+    assert.equal("effort" in first.requestsFor("turn/start")[0], false);
+    const second = new MockCodexClient({ models: [codexCatalogModel("gpt-5.5", ["low", "high"])] });
+    await collectMessages(launch(second, { model: "gpt-5.5", reasoningEffort: "high" }));
+    assert.equal(second.requestsFor("model/list").length, 1);
+    assert.equal(second.requestsFor("turn/start")[0].effort, "high");
   });
 });
 
@@ -595,6 +623,17 @@ describe("CodexHarness turns", () => {
     const interrupted = runCompleted(await collectMessages(launch(new MockCodexClient({ turnStatus: "interrupted" }))));
     assert.equal(interrupted?.data.outcome, "interrupted");
     assert.equal(interrupted?.data.success, false);
+  });
+
+  it("does not report an already-expired reset time on usage-limit failures", async () => {
+    const result = runCompleted(await collectMessages(launch(new MockCodexClient({
+      accountType: "chatgpt",
+      rateLimitsUsedPercent: 100,
+      rateLimitsResetsAt: 1_000,
+      turnStatus: "failed",
+      turnError: { message: "You've hit your usage limit.", codexErrorInfo: "usageLimitExceeded" },
+    }))));
+    assert.equal(result?.data.result, "You've hit your usage limit.");
   });
 
   it("appends the rate-limit reset time to usage-limit failures", async () => {
@@ -692,9 +731,20 @@ describe("CodexHarness resume and fork", () => {
   it("forks before the last N turns when rewinding (B11)", async () => {
     const client = new MockCodexClient({ threadId: FORKED_THREAD_ID, turnsList: ["turn-c", "turn-b", "turn-a"] });
     await collectMessages(launch(client, { resumeSessionId: VALID_THREAD_ID, forkSession: true, rewindTurns: 2 }));
-    assert.deepEqual(client.requestsFor("thread/turns/list")[0], { threadId: VALID_THREAD_ID, limit: 2, sortDirection: "desc", itemsView: "notLoaded" });
+    assert.deepEqual(client.requestsFor("thread/turns/list")[0], { threadId: VALID_THREAD_ID, limit: 3, sortDirection: "desc", itemsView: "notLoaded" });
     assert.equal(client.requestsFor("thread/fork")[0].beforeTurnId, "turn-b");
     assert.equal(client.requestsFor("thread/revert").length, 0);
+  });
+
+  it("pages past an in-progress turn to find enough completed turns to rewind", async () => {
+    const client = new MockCodexClient({
+      threadId: FORKED_THREAD_ID,
+      turnsPages: [[{ id: "turn-live", status: "inProgress" }, { id: "turn-3" }], [{ id: "turn-2" }, { id: "turn-1" }]],
+    });
+    await collectMessages(launch(client, { resumeSessionId: VALID_THREAD_ID, forkSession: true, rewindTurns: 2 }));
+    assert.equal(client.requestsFor("thread/turns/list").length, 2);
+    assert.equal(client.requestsFor("thread/turns/list")[1].cursor, "1");
+    assert.equal(client.requestsFor("thread/fork")[0].beforeTurnId, "turn-2");
   });
 
   it("reverts the resumed thread in place when rewinding without a fork (B11)", async () => {

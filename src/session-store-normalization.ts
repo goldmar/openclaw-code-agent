@@ -489,8 +489,32 @@ function normalizeStatus(value: unknown): SessionStatus | undefined {
   return value === "running" ? "killed" : (value as SessionStatus);
 }
 
-export function normalizePersistedEntry(raw: unknown): PersistedSessionInfo | undefined {
-  if (!isRecord(raw)) return undefined;
+/**
+ * 4.x Codex sessions could persist a backend-owned native Codex worktree
+ * (`backendRef.worktreePath`) as the session worktree. OCA no longer manages
+ * those directories, so their worktree metadata is dropped on load: plugin
+ * cleanup, merge, and discard must never touch a Codex-owned checkout.
+ */
+function withoutNativeBackendWorktree(raw: Record<string, unknown>): Record<string, unknown> {
+  const backendRef = isRecord(raw.backendRef) ? raw.backendRef : undefined;
+  const nativePath = toOptionalString(backendRef?.worktreePath);
+  const nativeId = toOptionalString(backendRef?.worktreeId);
+  if (!nativePath && !nativeId) return raw;
+  const worktreePath = toOptionalString(raw.worktreePath);
+  if (worktreePath && nativePath && worktreePath !== nativePath) return raw;
+  return {
+    ...raw,
+    worktreePath: undefined,
+    worktreeBranch: undefined,
+    worktreeState: undefined,
+    worktreeLifecycle: undefined,
+    pendingWorktreeDecisionSince: undefined,
+  };
+}
+
+export function normalizePersistedEntry(input: unknown): PersistedSessionInfo | undefined {
+  if (!isRecord(input)) return undefined;
+  const raw = withoutNativeBackendWorktree(input);
 
   const harnessSessionId = toNonEmptyString(raw.harnessSessionId);
   if (!harnessSessionId) return undefined;

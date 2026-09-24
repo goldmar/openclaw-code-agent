@@ -3,9 +3,11 @@
  *
  * Codex reports, per model, the supported reasoning efforts, the default
  * effort, and the available service tiers. OCA uses that instead of
- * hand-maintained model regex tables. The catalog is refreshed by Codex
- * harness sessions after `initialize`; until the first successful refresh the
- * helpers return `undefined` and callers fall back to conservative behavior.
+ * hand-maintained model regex tables. Every Codex connection refreshes it
+ * after `initialize` and validates efforts against its own result; this
+ * process-wide copy (the most recent refresh) only feeds status rendering.
+ * Until the first successful refresh the helpers return `undefined` and
+ * callers fall back to conservative behavior.
  */
 
 import type { JsonRpcClient } from "./codex-rpc";
@@ -23,7 +25,6 @@ export interface CodexModelInfo {
   hidden: boolean;
 }
 
-const CATALOG_MAX_AGE_MS = 30 * 60_000;
 const MAX_PAGES = 10;
 
 let catalog: { models: CodexModelInfo[]; fetchedAt: number } | undefined;
@@ -47,10 +48,6 @@ export function recordCodexModelCatalog(models: Model[], now = Date.now()): void
 
 export function hasCodexModelCatalog(): boolean {
   return !!catalog && catalog.models.length > 0;
-}
-
-export function isCodexModelCatalogFresh(now = Date.now()): boolean {
-  return !!catalog && now - catalog.fetchedAt < CATALOG_MAX_AGE_MS;
 }
 
 /** Look up a model by catalog id or model slug (case-insensitive). */

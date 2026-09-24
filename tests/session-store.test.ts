@@ -1171,6 +1171,50 @@ describe("SessionStore path resolution", () => {
     assert.equal(readFileSync(join(dir, archived[0]!), "utf-8"), originalPayload);
   });
 
+  it("drops native Codex backend worktree metadata so plugin cleanup never touches Codex-owned checkouts (B6)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-store-native-worktree-"));
+    const indexPath = join(dir, "sessions.json");
+    writeStore(indexPath, [
+      {
+        sessionId: "native-codex",
+        harnessSessionId: "h-native",
+        backendRef: { kind: "codex-app-server", conversationId: "h-native", worktreeId: "abcd", worktreePath: "/home/u/.codex/worktrees/abcd/repo" },
+        name: "native-codex",
+        prompt: "p",
+        workdir: "/repo",
+        status: "completed",
+        lifecycle: "terminal",
+        costUsd: 0,
+        harness: "codex",
+        worktreePath: "/home/u/.codex/worktrees/abcd/repo",
+        worktreeBranch: "codex/abcd",
+        worktreeState: "pending_decision",
+      },
+      {
+        sessionId: "managed-codex",
+        harnessSessionId: "h-managed",
+        backendRef: { kind: "codex-app-server", conversationId: "h-managed" },
+        name: "managed-codex",
+        prompt: "p",
+        workdir: "/repo",
+        status: "completed",
+        lifecycle: "terminal",
+        costUsd: 0,
+        harness: "codex",
+        worktreePath: "/repo/.worktrees/openclaw-worktree-managed",
+        worktreeBranch: "agent/managed",
+      },
+    ]);
+
+    const store = new SessionStore({ indexPath, env: {} });
+    const native = store.getPersistedSession("native-codex");
+    assert.equal(native?.worktreePath, undefined);
+    assert.equal(native?.worktreeBranch, undefined);
+    assert.equal(native?.worktreeLifecycle, undefined);
+    assert.deepEqual(native?.backendRef, { kind: "codex-app-server", conversationId: "h-native", runId: undefined });
+    assert.equal(store.getPersistedSession("managed-codex")?.worktreePath, "/repo/.worktrees/openclaw-worktree-managed");
+  });
+
   it("drops legacy Codex SDK session rows without archiving and keeps App Server-backed sessions (B7)", () => {
     const dir = mkdtempSync(join(tmpdir(), "openclaw-store-codex-upgrade-"));
     const indexPath = join(dir, "sessions.json");

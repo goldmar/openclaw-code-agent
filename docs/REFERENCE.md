@@ -249,7 +249,8 @@ Codex harness details:
 - Follow-ups sent with `agent_respond` while a Codex turn is running are steered into that turn (`turn/steer` with `expectedTurnId`). With `interrupt: true` the turn is interrupted instead and the message starts a new turn. If Codex rejects the steer (the turn just ended), the message is queued as the next turn.
 - `agent_launch(resume_session_id=..., rewind_turns=N)` drops the latest N turns: with `fork_session: true` the fork is created before those turns (`thread/fork` with `beforeTurnId`); without it the thread's history is reverted in place (`thread/revert`). Files changed by those turns are not reverted.
 - `agent_session_action` runs `compact` (`thread/compact/start`) or an inline `review` (`review/start`) on a running Codex session.
-- Rate limits: ChatGPT-login sessions read `account/rateLimits/read` at startup and track `account/rateLimits/updated`; the latest snapshot appears in `agent_stats`, and usage-limit turn failures include the reset time.
+- Rate limits: ChatGPT-login sessions read `account/rateLimits/read` at startup and track `account/rateLimits/updated`. Snapshots are kept per account (never merged across accounts; account ids are not displayed); `agent_stats` shows each account's current windows, and usage-limit turn failures include the reset time unless it already passed.
+- Permission approval prompts list every requested filesystem entry (path or glob and access mode) and network access before a grant is offered. Plain free-text replies (`yes`, `no`, `always`) never select an "Always allow/deny" policy amendment; use its button or option number.
 - Goals: OCA keeps its own cross-harness goal loop (`agent_goal_*`, verifier-driven) and does not map it onto Codex's native `thread/goal/*`, which is Codex-only and judges completion by the model rather than by verifier commands.
 
 OpenCode harness details:
@@ -427,7 +428,7 @@ Notes:
 - Resumed sessions keep the worktree strategy they already had.
 - Worktrees are kept alive until explicitly resolved (merge/PR/dismiss) when using non-trivial strategies.
 - Stale-decision reminders fire every 3h; users can snooze per-session for 24h.
-- Claude Code, Codex, and experimental OpenCode all use plugin-managed worktrees for isolated edits. Codex App Server has no worktree API; OCA passes the prepared worktree as the thread `cwd`. Resuming a session whose worktree was already cleaned up fails closed for every harness unless `worktree_strategy: "off"` is chosen.
+- Claude Code, Codex, and experimental OpenCode all use plugin-managed worktrees for isolated edits. Codex App Server has no worktree API; OCA passes the prepared worktree as the thread `cwd`. Sessions persisted by 4.x with a native Codex backend worktree load without worktree metadata so OCA never removes Codex-owned checkouts. Resuming a session whose worktree was already cleaned up fails closed for every harness unless `worktree_strategy: "off"` is chosen.
 - `released` covers different-SHA cases where the base branch already contains the branch content after rebase, cherry-pick, or squash.
 - `agent_worktree_cleanup(mode="preview_safe")` previews what Clean all safe would remove, `mode="clean_safe"` performs it, and `mode="preview_all"` shows both safe sandboxes and retained reasons.
 

@@ -221,6 +221,34 @@ describe("codex protocol server requests", () => {
     assert.match(request.state.promptText ?? "", /Network access/);
   });
 
+  it("shows every requested filesystem entry before offering a grant", () => {
+    const request = buildPermissionsApprovalRequest("11", {
+      threadId: "t",
+      turnId: "u",
+      itemId: "i",
+      environmentId: null,
+      startedAtMs: 0,
+      cwd: "/repo",
+      reason: null,
+      permissions: {
+        network: null,
+        fileSystem: {
+          read: null,
+          write: null,
+          entries: [
+            { path: { type: "path", path: "/home/user/.ssh" }, access: "write" },
+            { path: { type: "glob_pattern", pattern: "/etc/**" }, access: "read" },
+            { path: { type: "special", value: { kind: "root" } }, access: "read" },
+          ],
+        },
+      },
+    });
+    const prompt = request.state.promptText ?? "";
+    assert.match(prompt, /Filesystem write: \/home\/user\/\.ssh/);
+    assert.match(prompt, /Filesystem read: glob \/etc\/\*\*/);
+    assert.match(prompt, /Filesystem read: \/ \(entire filesystem\)/);
+  });
+
   it("maps request_user_input questions into a wizard", () => {
     const request = buildUserInputRequest("11", {
       threadId: "t",
@@ -249,6 +277,23 @@ describe("codex protocol server requests", () => {
     assert.throws(() => buildUserInputRequest("12", {
       threadId: "t", turnId: "u", itemId: "i", isBlocking: true, autoResolutionMs: null, questions: [],
     }), /expected non-empty questions/);
+  });
+
+  it("never maps a plain free-text yes/no onto a persistent policy amendment", () => {
+    const request = buildCommandApprovalRequest("9", {
+      ...commandParams,
+      availableDecisions: [
+        { applyNetworkPolicyAmendment: { network_policy_amendment: { host: "evil.test", action: "deny" } } },
+        { acceptWithExecpolicyAmendment: { execpolicy_amendment: ["curl"] } },
+        "accept",
+        "decline",
+      ],
+    });
+    if (request.kind !== "approval") throw new Error("expected approval");
+    assert.deepEqual(matchApprovalChoiceFromText(request.choices, "no")?.response, { decision: "decline" });
+    assert.deepEqual(matchApprovalChoiceFromText(request.choices, "yes")?.response, { decision: "accept" });
+    assert.equal(matchApprovalChoiceFromText(request.choices, "always"), undefined);
+    assert.deepEqual(matchApprovalChoiceFromText(request.choices, "1")?.response, request.choices[0].response, "explicit numeric choice still works");
   });
 
   it("matches free-text approval replies without guessing at arbitrary text", () => {

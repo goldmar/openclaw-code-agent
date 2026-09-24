@@ -16,41 +16,56 @@ export interface CodexRateLimitState {
   observedAt: number;
 }
 
-let latest: CodexRateLimitState | undefined;
+/** Key for sessions whose account id the backend did not report. */
+export const UNKNOWN_CODEX_ACCOUNT = "unknown-account";
 
-export function recordCodexRateLimits(response: GetAccountRateLimitsResponse, now = Date.now()): void {
-  latest = {
+/**
+ * Snapshots per Codex account. Different sessions can run under different
+ * ChatGPT accounts, so updates never merge across accounts. Account ids stay
+ * in memory only and are never rendered.
+ */
+const byAccount = new Map<string, CodexRateLimitState>();
+
+/** Record a full `account/rateLimits/read` response; returns the account key. */
+export function recordCodexRateLimits(response: GetAccountRateLimitsResponse, now = Date.now()): string {
+  const accountKey = response.accountId?.trim() || UNKNOWN_CODEX_ACCOUNT;
+  byAccount.set(accountKey, {
     snapshot: response.rateLimits,
     ordinaryUsageAllowed: response.ordinaryUsageAllowed,
     observedAt: now,
-  };
+  });
+  return accountKey;
 }
 
 /**
- * Merge a sparse rolling update. Null fields mean "unavailable in this update"
- * and keep the previously observed value, per the protocol contract.
+ * Merge a sparse rolling update for one account. Null fields mean
+ * "unavailable in this update" and keep the previously observed value.
  */
-export function mergeCodexRateLimitsUpdate(update: RateLimitSnapshot, now = Date.now()): void {
-  const previous = latest?.snapshot;
-  const merged = { ...(previous ?? update) } as RateLimitSnapshot;
+export function mergeCodexRateLimitsUpdate(accountKey: string, update: RateLimitSnapshot, now = Date.now()): void {
+  const previous = byAccount.get(accountKey);
+  const merged = { ...(previous?.snapshot ?? update) } as RateLimitSnapshot;
   for (const [key, value] of Object.entries(update) as Array<[keyof RateLimitSnapshot, unknown]>) {
     if (value !== null && value !== undefined) {
       (merged as Record<string, unknown>)[key] = value;
     }
   }
-  latest = {
+  byAccount.set(accountKey, {
     snapshot: merged,
-    ordinaryUsageAllowed: latest?.ordinaryUsageAllowed ?? null,
+    ordinaryUsageAllowed: previous?.ordinaryUsageAllowed ?? null,
     observedAt: now,
-  };
+  });
 }
 
-export function getCodexRateLimits(): CodexRateLimitState | undefined {
-  return latest;
+export function getCodexRateLimits(accountKey: string): CodexRateLimitState | undefined {
+  return byAccount.get(accountKey);
+}
+
+export function listCodexRateLimits(): CodexRateLimitState[] {
+  return [...byAccount.values()].sort((a, b) => b.observedAt - a.observedAt);
 }
 
 export function resetCodexRateLimitsForTests(): void {
-  latest = undefined;
+  byAccount.clear();
 }
 
 function formatDuration(ms: number): string {
@@ -75,14 +90,12 @@ function formatWindow(label: string, window: RateLimitWindow | null, now: number
   return `${label} (${formatWindowName(window)}): ${Math.round(window.usedPercent)}% used${reset}`;
 }
 
-/** Human-readable lines for `agent_stats`. Empty when nothing was observed yet. */
-export function formatCodexRateLimits(state: CodexRateLimitState | undefined = latest, now = Date.now()): string[] {
-  if (!state) return [];
+function formatAccountLines(state: CodexRateLimitState, now: number, label: string): string[] {
   const { snapshot } = state;
   const plan = snapshot.planType && snapshot.planType !== "unknown" ? ` (${snapshot.planType} plan)` : "";
-  const lines = [`Codex usage limits${plan}, observed ${formatDuration(now - state.observedAt)} ago:`];
-  const primary = formatWindow("  Primary", snapshot.primary, now);
-  const secondary = formatWindow("  Secondary", snapshot.secondary, now);
+  const lines = [`Codex usage limits${plan}${label}, observed ${formatDuration(now - state.observedAt)} ago:`];
+  const primary = formatWindow("  Primary", activeWindow(snapshot.primary, now), now);
+  const secondary = formatWindow("  Secondary", activeWindow(snapshot.secondary, now), now);
   if (primary) lines.push(primary);
   if (secondary) lines.push(secondary);
   if (snapshot.credits && !snapshot.credits.unlimited && snapshot.credits.hasCredits) {
@@ -96,11 +109,28 @@ export function formatCodexRateLimits(state: CodexRateLimitState | undefined = l
   return lines.length > 1 ? lines : [];
 }
 
-/** Short reset hint appended to usage-limit turn failures. */
-export function describeCodexLimitReset(now = Date.now()): string | undefined {
-  const snapshot = latest?.snapshot;
+/** A window whose reset time already passed no longer describes current usage. */
+function activeWindow(window: RateLimitWindow | null, now: number): RateLimitWindow | null {
+  if (!window) return null;
+  return window.resetsAt && window.resetsAt * 1000 <= now ? null : window;
+}
+
+/**
+ * Human-readable lines for `agent_stats`, one block per observed account.
+ * Empty when nothing was observed yet.
+ */
+export function formatCodexRateLimits(states: CodexRateLimitState[] = listCodexRateLimits(), now = Date.now()): string[] {
+  return states.flatMap((state, index) => formatAccountLines(state, now, states.length > 1 ? ` [account ${index + 1}]` : ""));
+}
+
+/** Short reset hint appended to usage-limit failures for one account. */
+export function describeCodexLimitReset(accountKey: string, now = Date.now()): string | undefined {
+  const snapshot = byAccount.get(accountKey)?.snapshot;
   const windows = [snapshot?.primary, snapshot?.secondary]
-    .filter((window): window is RateLimitWindow => !!window && window.usedPercent >= 100 && !!window.resetsAt);
+    .filter((window): window is RateLimitWindow => !!window
+      && window.usedPercent >= 100
+      && !!window.resetsAt
+      && window.resetsAt * 1000 > now);
   if (windows.length === 0) return undefined;
   const resetsAt = Math.max(...windows.map((window) => window.resetsAt!));
   return `Codex usage limit resets in ${formatDuration(resetsAt * 1000 - now)} (${new Date(resetsAt * 1000).toISOString()}).`;
