@@ -1,7 +1,8 @@
 import { Type } from "../tool-parameter-schema";
 import { sessionManager } from "../singletons";
 import type { OpenClawPluginToolContext, RepoIntegrationPolicy, RepoPolicyRecord } from "../types";
-import { validateRepoPolicyForPrAvailability } from "../repo-policy";
+import { formatStoredRepoPolicyLine, validateRepoPolicyForPrAvailability } from "../repo-policy";
+import { quoteCommandArg } from "../commands/args";
 
 interface AgentRepoPolicyParams {
   workdir?: string;
@@ -26,12 +27,45 @@ function formatPolicy(record: RepoPolicyRecord | undefined): string {
   ].join("\n");
 }
 
+type RepoPolicySurface = "tool" | "command";
+
+/** Result text for a reset; lists the removed records when they differ from the reference. */
+export function formatRepoPolicyReset(
+  ref: string,
+  removed: readonly RepoPolicyRecord[],
+  surface: RepoPolicySurface = "tool",
+): string {
+  if (removed.length === 0) {
+    return `No stored repo policy found for ${ref}. See ${surface === "tool" ? "agent_repo_policy(list=true)" : "/agent_policy list"} for stored repo paths.`;
+  }
+  if (removed.length === 1 && removed[0].repoRoot === ref) return `Repo policy reset for ${ref}.`;
+  return [`Repo policy reset for ${ref}. Removed:`, ...removed.map((record) => formatStoredRepoPolicyLine(record, { includeRemote: true }))].join("\n");
+}
+
+/** Status text when the workdir is not a git repository (for example it was deleted). */
+export function formatUnresolvedRepoPolicy(
+  ref: string,
+  stored: readonly RepoPolicyRecord[],
+  surface: RepoPolicySurface = "tool",
+): string {
+  if (stored.length === 0) return `No git repository found for ${ref}.`;
+  const quoted = quoteCommandArg(ref);
+  const resetHint = surface === "tool"
+    ? `agent_repo_policy(workdir=${JSON.stringify(ref)}, reset=true)`
+    : quoted ? `/agent_policy reset ${quoted}` : "agent_repo_policy(reset=true) with this workdir";
+  return [
+    ...stored.flatMap((record, index) => [...(index > 0 ? [""] : []), formatPolicy(record)]),
+    ``,
+    `No git repository found for ${ref}; reset with ${resetHint}.`,
+  ].join("\n");
+}
+
 export function makeAgentRepoPolicyTool(ctx?: OpenClawPluginToolContext) {
   return {
     name: "agent_repo_policy",
     description: "Inspect or set the repository integration policy that governs OpenClaw Code Agent worktree merge/PR follow-through.",
     parameters: Type.Object({
-      workdir: Type.Optional(Type.String({ description: "Repository workdir. Defaults to the current workspace directory." })),
+      workdir: Type.Optional(Type.String({ description: "Repository workdir. Defaults to the current workspace directory. Reset also accepts a stored path or key." })),
       policy: Type.Optional(Type.Union([
         Type.Literal("pr-required"),
         Type.Literal("pr-allowed"),
@@ -53,7 +87,7 @@ export function makeAgentRepoPolicyTool(ctx?: OpenClawPluginToolContext) {
           ? "No stale repo policies found."
           : [
               `Removed ${removed.length} stale repo ${removed.length === 1 ? "policy" : "policies"}.`,
-              ...removed.map((record) => `${record.policy} | ${record.provider} | ${record.repoRoot}`),
+              ...removed.map((record) => formatStoredRepoPolicyLine(record)),
             ].join("\n");
         return { content: [{ type: "text", text }] };
       }
@@ -61,7 +95,7 @@ export function makeAgentRepoPolicyTool(ctx?: OpenClawPluginToolContext) {
         const records = sessionManager.listRepoPolicies();
         const text = records.length === 0
           ? "No stored repo policies."
-          : records.map((record) => `${record.policy} | ${record.provider} | ${record.repoRoot}${record.remoteUrl ? ` | ${record.remoteUrl}` : ""}`).join("\n");
+          : records.map((record) => formatStoredRepoPolicyLine(record, { includeRemote: true })).join("\n");
         return { content: [{ type: "text", text }] };
       }
 
@@ -71,8 +105,8 @@ export function makeAgentRepoPolicyTool(ctx?: OpenClawPluginToolContext) {
       }
 
       if (input.reset === true) {
-        const ok = await sessionManager.resetRepoPolicy(workdir);
-        return { content: [{ type: "text", text: ok ? `Repo policy reset for ${workdir}.` : `No stored repo policy found for ${workdir}.` }] };
+        const removed = await sessionManager.resetRepoPolicy(workdir);
+        return { content: [{ type: "text", text: formatRepoPolicyReset(workdir, removed) }] };
       }
 
       if (input.policy !== undefined) {
@@ -139,7 +173,7 @@ export function makeAgentRepoPolicyTool(ctx?: OpenClawPluginToolContext) {
 
       const resolution = await sessionManager.resolveRepoPolicy(workdir);
       if (!resolution.identity) {
-        return { content: [{ type: "text", text: `No git repository found for ${workdir}.` }] };
+        return { content: [{ type: "text", text: formatUnresolvedRepoPolicy(workdir, sessionManager.findStoredRepoPolicies(workdir)) }] };
       }
       const record = resolution.record;
       if (record) {

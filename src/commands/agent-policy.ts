@@ -1,7 +1,8 @@
 import { sessionManager } from "../singletons";
 import type { RepoIntegrationPolicy } from "../types";
 import { consumeFirstCommandArg } from "./args";
-import { getRepoPolicyOptionsForPrAvailability, validateRepoPolicyForPrAvailability } from "../repo-policy";
+import { formatStoredRepoPolicyLine, getRepoPolicyOptionsForPrAvailability, validateRepoPolicyForPrAvailability } from "../repo-policy";
+import { formatRepoPolicyReset, formatUnresolvedRepoPolicy } from "../tools/agent-repo-policy";
 
 interface AgentPolicyCommandContext {
   args?: string;
@@ -25,7 +26,7 @@ function isPolicy(value: string): value is RepoIntegrationPolicy {
 export function registerAgentPolicyCommand(api: CommandApi): void {
   api.registerCommand({
     name: "agent_policy",
-    description: "Inspect or set the current repo integration policy. Usage: /agent_policy [pr-required|pr-allowed|never-pr|manual|reset|list|cleanup]",
+    description: "Inspect or set the current repo integration policy. Usage: /agent_policy [pr-required|pr-allowed|never-pr|manual|reset [repo-path]|list|cleanup]",
     acceptsArgs: true,
     requireAuth: true,
     handler: async (ctx) => {
@@ -37,7 +38,7 @@ export function registerAgentPolicyCommand(api: CommandApi): void {
         return {
           text: records.length === 0
             ? "No stored repo policies."
-            : records.map((record) => `${record.policy} | ${record.provider} | ${record.repoRoot}`).join("\n"),
+            : records.map((record) => formatStoredRepoPolicyLine(record)).join("\n"),
         };
       }
       if (action === "cleanup") {
@@ -47,16 +48,19 @@ export function registerAgentPolicyCommand(api: CommandApi): void {
             ? "No stale repo policies found."
             : [
                 `Removed ${removed.length} stale repo ${removed.length === 1 ? "policy" : "policies"}.`,
-                ...removed.map((record) => `${record.policy} | ${record.provider} | ${record.repoRoot}`),
+                ...removed.map((record) => formatStoredRepoPolicyLine(record)),
               ].join("\n"),
         };
       }
+      if (action === "reset") {
+        // `/agent_policy reset <path>` also targets a stored repo whose directory is gone.
+        const target = (first?.rest ? consumeFirstCommandArg(first.rest)?.value : undefined) ?? ctx.workspaceDir;
+        if (!target) return { text: "Error: workspaceDir is required. Usage: /agent_policy reset [repo-path]" };
+        const removed = await sessionManager.resetRepoPolicy(target);
+        return { text: formatRepoPolicyReset(target, removed, "command") };
+      }
       const workdir = ctx.workspaceDir;
       if (!workdir) return { text: "Error: workspaceDir is required." };
-      if (action === "reset") {
-        const ok = await sessionManager.resetRepoPolicy(workdir);
-        return { text: ok ? `Repo policy reset for ${workdir}.` : `No stored repo policy found for ${workdir}.` };
-      }
       if (action && isPolicy(action)) {
         if (typeof sessionManager.resolveRepoPolicy === "function") {
           const resolution = await sessionManager.resolveRepoPolicy(workdir);
@@ -100,7 +104,7 @@ export function registerAgentPolicyCommand(api: CommandApi): void {
         return { text: savedText };
       }
       const resolution = await sessionManager.resolveRepoPolicy(workdir);
-      if (!resolution.identity) return { text: `No git repository found for ${workdir}.` };
+      if (!resolution.identity) return { text: formatUnresolvedRepoPolicy(workdir, sessionManager.findStoredRepoPolicies(workdir), "command") };
       const policyOptions = getRepoPolicyOptionsForPrAvailability(resolution.prAvailable)
         .map((option) => option.policy)
         .join(", ");

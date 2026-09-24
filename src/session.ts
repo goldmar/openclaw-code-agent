@@ -443,8 +443,9 @@ export class Session extends EventEmitter {
           is_error: outcome === "failed",
           session_id: data.session_id,
         };
-        this.costUsd = data.total_cost_usd;
         if (data.usage) this.mergeUsage(data.usage);
+        // The turn total is authoritative over any running cost reported mid-turn.
+        this.costUsd = data.total_cost_usd;
 
         const isInterruptedTurn = this.multiTurn && this.messageStream && outcome === "interrupted";
         const isMultiTurnEndOfTurn = this.multiTurn && this.messageStream && outcome === "completed";
@@ -1052,9 +1053,11 @@ export class Session extends EventEmitter {
   }
 
   private mergeUsage(usage: HarnessUsage): void {
+    const { costUsd, ...rest } = usage;
+    if (typeof costUsd === "number" && Number.isFinite(costUsd) && costUsd >= 0) this.costUsd = costUsd;
     this.usage = {
       ...this.usage,
-      ...Object.fromEntries(Object.entries(usage).filter(([, value]) => value !== undefined)),
+      ...Object.fromEntries(Object.entries(rest).filter(([, value]) => value !== undefined)),
     };
   }
 

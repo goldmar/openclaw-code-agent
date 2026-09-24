@@ -1209,6 +1209,8 @@ export class OpenCodeHarness implements AgentHarness {
         const part = isRecord(event.properties.part) ? event.properties.part : undefined;
         if (event.type === "message.part.updated" && part?.type !== "tool") {
           queue.enqueue({ type: "activity" });
+          // A finished step is when OpenCode adds its cost to the session.
+          if (part?.type === "step-finish") refreshRunningUsage();
           return;
         }
         // Tool parts are re-sent on every state change; report each call once,
@@ -1254,6 +1256,7 @@ export class OpenCodeHarness implements AgentHarness {
           state,
         };
         queue.enqueue(createPendingInputEvent(state));
+        refreshRunningUsage();
         return;
       }
       if (event.type === "permission.replied") {
@@ -1271,6 +1274,7 @@ export class OpenCodeHarness implements AgentHarness {
           state,
         };
         queue.enqueue(createPendingInputEvent(state));
+        refreshRunningUsage();
         return;
       }
       if (event.type === "question.replied" || event.type === "question.rejected") {
@@ -1384,6 +1388,66 @@ export class OpenCodeHarness implements AgentHarness {
       return sessionId;
     };
 
+    /** Cumulative session usage and cost as OpenCode currently reports them. */
+    const readUsageSnapshot = async (id: string): Promise<{
+      records: AssistantRecord[];
+      usage: HarnessUsage;
+      costUsd?: number;
+    }> => {
+      const [messages, session] = await Promise.all([
+        fetchMessages(id).catch((): undefined => undefined),
+        client().request<OpenCodeSession>("GET", `/session/${encodeURIComponent(id)}`, undefined, {
+          timeoutMs: Math.min(deps.requestTimeoutMs ?? REQUEST_TIMEOUT_MS, SESSION_COST_TIMEOUT_MS),
+        }).catch((): undefined => undefined),
+      ]);
+      const records = extractAssistantRecords(messages);
+      const models = summarizeModelUsage(records);
+      const contextTokens = latestContextTokens(records);
+      return {
+        records,
+        usage: {
+          ...(models ? { models } : {}),
+          ...(contextTokens !== undefined ? { contextTokens } : {}),
+        },
+        costUsd: sessionCostUsd(session)
+          ?? (models ? models.reduce((sum, entry) => sum + entry.costUsd, 0) : undefined),
+      };
+    };
+
+    let usageRefresh: Promise<void> | undefined;
+    let usageRefreshQueued = false;
+    /**
+     * Report the running session cost mid-turn. OpenCode prices a step only
+     * when it finishes, so this runs after each finished step and when the turn
+     * starts waiting on the user; a step that is itself blocked on a question
+     * or permission is priced once it resumes and finishes.
+     */
+    const refreshRunningUsage = (): void => {
+      if (usageRefresh) {
+        usageRefreshQueued = true;
+        return;
+      }
+      const turn = activeTurn;
+      const id = sessionId;
+      if (!turn || !id || !lease?.alive || closed) return;
+      usageRefresh = (async () => {
+        try {
+          const snapshot = await readUsageSnapshot(id);
+          // Once the turn settles, run_completed carries the authoritative total.
+          if (closed || activeTurn !== turn || turn.waiter?.settled || snapshot.costUsd === undefined) return;
+          queue.enqueue({ type: "usage_updated", usage: { ...snapshot.usage, costUsd: snapshot.costUsd } });
+        } catch {
+          // Usage is advisory; the turn result reports the final total.
+        } finally {
+          usageRefresh = undefined;
+          if (usageRefreshQueued) {
+            usageRefreshQueued = false;
+            refreshRunningUsage();
+          }
+        }
+      })();
+    };
+
     const completeTurn = async (args: {
       outcome: "completed" | "failed" | "interrupted";
       result?: string;
@@ -1395,22 +1459,11 @@ export class OpenCodeHarness implements AgentHarness {
       let durationMs: number | undefined;
       let usage: HarnessUsage | undefined;
       if (lease?.alive && sessionId) {
-        const [messages, session] = await Promise.all([
-          fetchMessages(sessionId).catch((): undefined => undefined),
-          client().request<OpenCodeSession>("GET", `/session/${encodeURIComponent(sessionId)}`, undefined, {
-            timeoutMs: Math.min(deps.requestTimeoutMs ?? REQUEST_TIMEOUT_MS, SESSION_COST_TIMEOUT_MS),
-          }).catch((): undefined => undefined),
-        ]);
-        const records = extractAssistantRecords(messages);
+        const snapshot = await readUsageSnapshot(sessionId);
+        const records = snapshot.records;
         const turnRecords = records.slice(turnBaselineAssistantCount);
-        const models = summarizeModelUsage(records);
-        const contextTokens = latestContextTokens(records);
-        usage = {
-          ...(models ? { models } : {}),
-          ...(contextTokens !== undefined ? { contextTokens } : {}),
-        };
-        totalCostUsd = sessionCostUsd(session)
-          ?? (models ? models.reduce((sum, entry) => sum + entry.costUsd, 0) : 0);
+        usage = snapshot.usage;
+        totalCostUsd = snapshot.costUsd ?? 0;
         durationMs = recordDurationMs(turnRecords);
         const lastRecord = turnRecords.at(-1);
         if (outcome === "completed") {

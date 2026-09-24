@@ -422,6 +422,26 @@ describe("Session consumeMessages — result message (single-turn)", () => {
     session.kill("user");
   });
 
+  it("tracks the running cost from usage snapshots until the turn total replaces it", async () => {
+    const session = await startSession({ multiTurn: true });
+    fakeHarness.pushMessage({ type: "usage_updated", usage: { costUsd: 0.04, contextTokens: 900 } });
+    await tick(50);
+    assert.equal(session.costUsd, 0.04);
+    assert.deepEqual(session.usage, { contextTokens: 900 }, "the running cost is not kept as a usage field");
+
+    fakeHarness.pushMessage({ type: "usage_updated", usage: { costUsd: Number.NaN } });
+    await tick(20);
+    assert.equal(session.costUsd, 0.04, "non-finite costs are ignored");
+
+    fakeHarness.pushMessage({
+      type: "result",
+      data: { success: true, duration_ms: 5, total_cost_usd: 0.05, num_turns: 1, session_id: session.harnessSessionId!, usage: { costUsd: 9 } },
+    });
+    await tick(50);
+    assert.equal(session.costUsd, 0.05, "the turn total is authoritative");
+    session.kill("user");
+  });
+
   it("does not classify successful task output mentioning auth phrases as startup failure", async () => {
     const session = await startSession({ multiTurn: false });
 

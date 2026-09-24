@@ -1,3 +1,6 @@
+import { statSync } from "node:fs";
+import { resolve as resolvePath, sep as pathSeparator } from "node:path";
+
 import { runGit } from "./git-exec";
 import type {
   RepoIntegrationPolicy,
@@ -140,6 +143,50 @@ export async function resolveRepoIdentity(workdir: string): Promise<RepoIdentity
     remoteUrl: normalizedRemote,
     provider,
   };
+}
+
+/**
+ * Find stored policy records for a reference without consulting git.
+ *
+ * A stored key combines the repo root and the live remote URL, so a repo whose
+ * directory was deleted can no longer be resolved to its key. This matches the
+ * reference against what the record itself stores instead: an exact stored key,
+ * the stored repo root, or (for a path inside a deleted repo) the deepest stored
+ * repo root that contains it.
+ */
+export function findStoredRepoPolicies(records: readonly RepoPolicyRecord[], ref: string): RepoPolicyRecord[] {
+  const byKey = records.filter((record) => record.key === ref);
+  if (byKey.length > 0) return byKey;
+  const target = resolvePath(ref);
+  const byRoot = records.filter((record) => resolvePath(record.repoRoot) === target);
+  if (byRoot.length > 0) return byRoot;
+  let deepest: string | undefined;
+  for (const record of records) {
+    const root = resolvePath(record.repoRoot);
+    if (!target.startsWith(root.endsWith(pathSeparator) ? root : `${root}${pathSeparator}`)) continue;
+    if (!deepest || root.length > deepest.length) deepest = root;
+  }
+  return deepest ? records.filter((record) => resolvePath(record.repoRoot) === deepest) : [];
+}
+
+/** False when a stored policy's repo root is gone (or no longer a directory). */
+export function storedRepoRootExists(record: Pick<RepoPolicyRecord, "repoRoot">): boolean {
+  try {
+    return statSync(record.repoRoot).isDirectory();
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    return code !== "ENOENT" && code !== "ENOTDIR";
+  }
+}
+
+/** One-line listing entry for a stored policy; marks repos whose directory is gone. */
+export function formatStoredRepoPolicyLine(record: RepoPolicyRecord, options: { includeRemote?: boolean } = {}): string {
+  return [
+    record.policy,
+    record.provider,
+    `${record.repoRoot}${storedRepoRootExists(record) ? "" : " (missing)"}`,
+    ...(options.includeRemote && record.remoteUrl ? [record.remoteUrl] : []),
+  ].join(" | ");
 }
 
 export function seededRepoPolicy(identity: RepoIdentity | undefined): RepoIntegrationPolicy | undefined {
