@@ -716,4 +716,79 @@ describe("session task lifecycle async adapter", () => {
     assert.equal(await reconcilePersistedSessionTaskMirror(session), undefined);
     assert.deepEqual(calls, []);
   });
+
+  it("retries a user-stop cancel intent rejected by a concurrent host revision", async () => {
+    const { calls, taskFlow } = createTaskFlowRecorder();
+    let cancelAttempts = 0;
+    setManagedTaskFlow({
+      ...taskFlow,
+      async requestCancel(params: Record<string, unknown>) {
+        calls.push({ method: "requestCancel", params });
+        cancelAttempts += 1;
+        if (cancelAttempts === 1) {
+          return { applied: false, code: "revision_conflict", current: { flowId: "flow-1", revision: 7, status: "running" } };
+        }
+        return { applied: true, flow: { flowId: "flow-1", revision: 8, status: "running", cancelRequestedAt: params.cancelRequestedAt } };
+      },
+    });
+
+    const sink = resolveSessionTaskLifecycle({ sessionKey: "agent:main:telegram:group:123" });
+    const session = createSession();
+    await sink.create(session);
+    session.kill("user");
+    await sink.finalize(session);
+
+    assert.deepEqual(calls.map((call) => call.method), ["createManaged", "requestCancel", "requestCancel"]);
+    assert.equal(calls[2].params.expectedRevision, 7);
+    assert.equal(session.taskFlowMirror?.revision, 8);
+    assert.equal(typeof session.taskFlowMirror?.cancelRequestedAt, "number");
+  });
+
+  it("does not fail a flow whose rejected cancel reports the host already cancelled it", async () => {
+    const { calls, taskFlow } = createTaskFlowRecorder();
+    setManagedTaskFlow({
+      ...taskFlow,
+      async requestCancel(params: Record<string, unknown>) {
+        calls.push({ method: "requestCancel", params });
+        return { applied: false, code: "revision_conflict", current: { flowId: "flow-1", revision: 4, status: "cancelled" } };
+      },
+    });
+
+    const sink = resolveSessionTaskLifecycle({ sessionKey: "agent:main:telegram:group:123" });
+    const session = createSession();
+    await sink.create(session);
+    session.kill("user");
+    await sink.finalize(session);
+
+    assert.deepEqual(calls.map((call) => call.method), ["createManaged", "requestCancel"]);
+    assert.equal(session.taskFlowMirror?.status, "cancelled");
+  });
+
+  it("reconciles an unrecorded user stop as a cancel intent instead of a failure", async () => {
+    const { calls, taskFlow } = createTaskFlowRecorder();
+    setManagedTaskFlow(taskFlow);
+    const session = {
+      sessionId: "session-user-stop",
+      harnessSessionId: "h-user-stop",
+      backendRef: { kind: "codex-app-server", conversationId: "h-user-stop" },
+      name: "user-stop",
+      prompt: "p",
+      workdir: "/tmp",
+      status: "killed",
+      killReason: "user",
+      lifecycle: "terminal",
+      runtimeState: "stopped",
+      completedAt: 500,
+      costUsd: 0,
+      route: { provider: "telegram", target: "123", sessionKey: "agent:main:telegram:group:123" },
+      taskFlowMirror: { flowId: "flow-1", revision: 5, status: "running" },
+    } satisfies PersistedSessionInfo;
+
+    const reconciled = await reconcilePersistedSessionTaskMirror(session);
+
+    assert.deepEqual(calls.map((call) => call.method), ["requestCancel"]);
+    assert.equal(calls[0].params.expectedRevision, 5);
+    assert.equal(calls[0].params.cancelRequestedAt, 500);
+    assert.equal(reconciled?.cancelRequestedAt, 500);
+  });
 });

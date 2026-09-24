@@ -11,6 +11,7 @@ const CONTROLLER_ID = "openclaw-code-agent";
 const TITLE_MAX_LENGTH = 160;
 /** How often a live mirror re-reads its flow to honor `openclaw tasks flow cancel`. */
 export const TASK_FLOW_CANCEL_POLL_INTERVAL_MS = 15_000;
+const USER_CANCEL_MAX_ATTEMPTS = 3;
 
 // Mirroring remains optional when the host has no async managed-flow surface.
 
@@ -391,15 +392,7 @@ class ManagedTaskFlowSessionTaskLifecycleSink implements SessionTaskLifecycleSin
       if (event.status === "killed" && event.killReason === "user") {
         // A user stop is a cancellation, not a failure: record the cancel intent and
         // let the host sweep settle the flow as `cancelled`.
-        const mutation = await this.taskFlow.requestCancel({
-          flowId: this.flow.flowId,
-          expectedRevision: this.flow.revision,
-          cancelRequestedAt: endedAt,
-        });
-        warnLifecycleMutationSkipped("finalize-cancel", mutation);
-        this.flow = applyMutation(this.flow, mutation);
-        if (this.flow) session.taskFlowMirror = this.flow;
-        this.finalized = true;
+        this.finalized = await this.recordUserCancel(session, endedAt);
         return;
       }
       const stateJson = {
@@ -431,6 +424,35 @@ class ManagedTaskFlowSessionTaskLifecycleSink implements SessionTaskLifecycleSin
     } catch (err) {
       warnLifecycleError("finalize", err);
     }
+  }
+
+  /**
+   * Record the cancel intent, retrying against the host's current revision when a
+   * concurrent host update rejected the first attempt. Returns true once the flow
+   * carries a cancel intent or is already terminal; otherwise the mirror stays
+   * unfinalized so a later finalize can retry.
+   */
+  private async recordUserCancel(session: Session, cancelRequestedAt: number): Promise<boolean> {
+    for (let attempt = 0; attempt < USER_CANCEL_MAX_ATTEMPTS && this.flow; attempt += 1) {
+      const mutation = await this.taskFlow.requestCancel({
+        flowId: this.flow.flowId,
+        expectedRevision: this.flow.revision,
+        cancelRequestedAt,
+      });
+      this.flow = applyMutation(this.flow, mutation);
+      if (this.flow) session.taskFlowMirror = this.flow;
+      if (mutation.applied || isTaskFlowCancelRequested(this.flow) || isTerminalMirrorStatus(this.flow?.status)) {
+        return true;
+      }
+      // Only a revision conflict with a newer current record is worth retrying.
+      if (mutation.applied === true) return true;
+      if (mutation.code !== "revision_conflict" || !mutation.current) {
+        warnLifecycleMutationSkipped("finalize-cancel", mutation);
+        return false;
+      }
+    }
+    log.warn("[SessionTaskLifecycle] finalize-cancel mutation was not applied after retries");
+    return false;
   }
 
   private startCancelPoll(session: Session): void {
@@ -483,7 +505,7 @@ function isTerminalMirrorStatus(status: ManagedTaskFlowStatus | undefined): bool
 
 function bindTaskFlowRuntimeForSessionKey(
   sessionKey: string | undefined,
-): Required<Pick<BoundTaskFlowRuntime, "setWaiting" | "finish" | "fail">> | undefined {
+): (Required<Pick<BoundTaskFlowRuntime, "setWaiting" | "finish" | "fail">> & Pick<BoundTaskFlowRuntime, "requestCancel">) | undefined {
   if (!sessionKey?.trim()) return undefined;
   const fromToolContext = getManagedTaskFlowRuntime()?.fromToolContext;
   if (typeof fromToolContext !== "function") return undefined;
@@ -501,6 +523,7 @@ function bindTaskFlowRuntimeForSessionKey(
     setWaiting: runtime.setWaiting,
     finish: runtime.finish,
     fail: runtime.fail,
+    ...(typeof runtime.requestCancel === "function" ? { requestCancel: runtime.requestCancel } : {}),
   };
 }
 
@@ -549,6 +572,23 @@ export async function reconcilePersistedSessionTaskMirror(
       updatedAt: now,
     });
     warnLifecycleMutationSkipped("reconcile-waiting", mutation);
+    return applyMutation(flow, mutation);
+  }
+
+  const endedAtForCancel = session.completedAt ?? now;
+  if (
+    session.status === "killed"
+    && session.killReason === "user"
+    && session.runtimeRecovery?.reason !== "persisted-running-without-runtime"
+    && typeof taskFlow.requestCancel === "function"
+  ) {
+    // A user stop whose live cancel intent was not recorded is still a cancellation.
+    const mutation = await taskFlow.requestCancel({
+      flowId: flow.flowId,
+      expectedRevision: flow.revision,
+      cancelRequestedAt: endedAtForCancel,
+    });
+    warnLifecycleMutationSkipped("reconcile-cancel", mutation);
     return applyMutation(flow, mutation);
   }
 
