@@ -717,6 +717,30 @@ describe("session task lifecycle async adapter", () => {
     assert.deepEqual(calls, []);
   });
 
+  it("cancels a user-stopped session that was waiting on a decision instead of re-opening it as waiting", async () => {
+    const { calls, taskFlow } = createTaskFlowRecorder();
+    setManagedTaskFlow(taskFlow);
+    const session = {
+      sessionId: "session-stopped-while-waiting",
+      harnessSessionId: "h-wait",
+      backendRef: { kind: "claude-code", conversationId: "h-wait" },
+      name: "stopped-while-waiting",
+      prompt: "p",
+      workdir: "/tmp",
+      status: "killed",
+      killReason: "user",
+      lifecycle: "awaiting_plan_decision",
+      pendingPlanApproval: true,
+      runtimeState: "stopped",
+      costUsd: 0,
+      route: { provider: "telegram", target: "123", sessionKey: "agent:main:telegram:group:123" },
+      taskFlowMirror: { flowId: "flow-1", revision: 5, status: "waiting" },
+    } satisfies PersistedSessionInfo;
+
+    await reconcilePersistedSessionTaskMirror(session);
+    assert.deepEqual(calls.map((call) => call.method), ["requestCancel"]);
+  });
+
   it("retries a user-stop cancel intent rejected by a concurrent host revision", async () => {
     const { calls, taskFlow } = createTaskFlowRecorder();
     let cancelAttempts = 0;
