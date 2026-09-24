@@ -198,6 +198,7 @@ export class WakeDispatcher {
         label: `${label}-system`,
         phase,
         messageKind: "wake",
+        wakeNow: true,
         onSuccess,
         onFinalFailure,
         shouldContinue,
@@ -229,6 +230,7 @@ export class WakeDispatcher {
             label: `${label}-fallback`,
             phase,
             messageKind: "wake",
+            wakeNow: true,
             sessionKey,
             onSuccess,
             onFinalFailure,
@@ -248,6 +250,7 @@ export class WakeDispatcher {
     onSuccess?: () => void,
     requireDirectDelivery: boolean = false,
     shouldDispatch?: () => boolean,
+    wakeFollows: boolean = false,
   ): void {
     if (shouldDispatch?.() === false) return;
     const hasInteractiveButtons = Boolean(buttons?.some((row) => Array.isArray(row) && row.length > 0));
@@ -298,6 +301,7 @@ export class WakeDispatcher {
         label: `${label}-notify-system`,
         phase: "notify",
         messageKind: "notify",
+        wakeNow: !wakeFollows,
         buttons,
         orderingKey,
         onSuccess,
@@ -341,6 +345,7 @@ export class WakeDispatcher {
         label: `${label}-notify-fallback`,
         phase: "notify",
         messageKind: "notify",
+        wakeNow: !wakeFollows,
         orderingKey,
         onSuccess,
         onFinalFailure: onAllFailed,
@@ -432,6 +437,12 @@ export class WakeDispatcher {
       label: string;
       phase: DispatchPhase;
       messageKind: "notify" | "wake";
+      /**
+       * Request an immediate host heartbeat. Every host heartbeat runs the agent's
+       * full heartbeat routine, so a notice skips it when an OCA wake for the same
+       * dispatch follows: that `chat.send` turn drains the queued notice.
+       */
+      wakeNow: boolean;
       sessionKey?: string;
       buttons?: Array<Array<{ label: string; callbackData: string }>>;
       orderingKey?: string;
@@ -457,9 +468,7 @@ export class WakeDispatcher {
       () => this.systemEvents.enqueue(text, {
         sessionKey,
         contextKey: `openclaw-code-agent:${session.id}`,
-        // Only a wake needs the orchestrator now; a notice waits for the next turn
-        // instead of starting a full heartbeat run (see RuntimeSystemEventTransport).
-        wakeNow: opts.messageKind === "wake",
+        wakeNow: opts.wakeNow,
       }),
       {
         label: opts.label,
@@ -489,6 +498,7 @@ export class WakeDispatcher {
     onSuccess?: () => void,
     requireDirectDelivery: boolean = false,
     shouldDispatch?: () => boolean,
+    wakeFollows: boolean = false,
   ): void {
     const normalizedMessages = messages
       .map((message) => ({
@@ -553,6 +563,7 @@ export class WakeDispatcher {
         () => sendAt(index + 1),
         requireDirectDelivery,
         shouldDispatch,
+        wakeFollows,
       );
     };
 
@@ -640,6 +651,8 @@ export class WakeDispatcher {
           onSuccess,
           request.requireDirectUserNotification === true,
           shouldDispatch,
+          // A system-event fallback counts as notify success, which dispatches the success wake.
+          Boolean(wakeOnSuccess),
         );
       } else {
         onFailed();
@@ -665,6 +678,7 @@ export class WakeDispatcher {
         },
         request.requireDirectUserNotification === true,
         shouldDispatch,
+        Boolean(wakeMessage),
       );
     }
 
@@ -690,6 +704,7 @@ export class WakeDispatcher {
         },
         false,
         shouldDispatch,
+        true,
       );
     }
 

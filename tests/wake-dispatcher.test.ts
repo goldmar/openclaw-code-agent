@@ -469,10 +469,53 @@ describe("WakeDispatcher", () => {
     assert.equal(calls.length, 2);
     assert.equal(asDurableSend(calls[0]).text, "🚀 launched");
     assert.deepEqual(calls[1], systemEvent("🚀 launched", "session-launch-timeout"));
-    // A text-only notice waits for the origin session's next turn; it must not
-    // start a full host heartbeat run just to be relayed.
-    assert.deepEqual(heartbeats, []);
+    // No OCA wake follows this notify-only dispatch, so the notice needs a heartbeat to be seen.
+    assert.deepEqual(heartbeats, [{ source: "notifications-event", intent: "immediate", reason: "wake", sessionKey: ORIGIN_SESSION_KEY }]);
     assert.ok(!errorLogs.some((line) => line.includes("\"event\":\"dispatch_retry_scheduled\"")));
+  });
+
+  it("enqueues a failed notice without a heartbeat when a wake for the same dispatch follows", async () => {
+    chatSendStdout = "Relayed.\n";
+    const dispatcher = createDispatcher();
+    const session: FakeSession = {
+      id: "session-notice-with-wake",
+      route: buildRoute(),
+      originSessionKey: ORIGIN_SESSION_KEY,
+    };
+    rules.push({ match: (call) => call.kind === "durable-send", outcome: "failed", error: "chat not found" });
+
+    dispatcher.dispatchSessionNotification(session as any, {
+      label: "stopped",
+      userMessage: "Session stopped",
+      wakeMessage: "Coding agent session stopped.",
+      notifyUser: "always",
+    });
+
+    await waitFor(() => calls.some((call) => call.kind === "system-event") && calls.some((call) => call.kind === "chat-send"), "notice fallback and wake");
+    assert.deepEqual(findCall("system-event"), systemEvent("Session stopped", "session-notice-with-wake"));
+    // The chat.send wake turn drains the queued notice, so no full heartbeat run is started.
+    assert.deepEqual(heartbeats, []);
+  });
+
+  it("wakes the origin session for a failed notice when the conditional success wake is absent", async () => {
+    const dispatcher = createDispatcher();
+    const session: FakeSession = {
+      id: "session-notice-conditional",
+      route: buildRoute(),
+      originSessionKey: ORIGIN_SESSION_KEY,
+    };
+    rules.push({ match: (call) => call.kind === "durable-send", outcome: "failed", error: "chat not found" });
+
+    dispatcher.dispatchSessionNotification(session as any, {
+      label: "question",
+      userMessage: "Session needs input",
+      wakeMessageOnNotifyFailed: "Tell the user the session needs input.",
+    });
+
+    await waitFor(() => calls.some((call) => call.kind === "system-event"), "notice fallback");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(calls.some((call) => call.kind === "chat-send"), false);
+    assert.deepEqual(heartbeats, [{ source: "notifications-event", intent: "immediate", reason: "wake", sessionKey: ORIGIN_SESSION_KEY }]);
   });
 
   it("hands Telegram topic direct notifications to the host durable outbound queue", async () => {

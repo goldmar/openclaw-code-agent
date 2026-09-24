@@ -70,12 +70,12 @@ export interface SystemEventTransport {
  * completions and `cron:` events get a dedicated event-only prompt, and those
  * belong to their host producers. `intent: "event"` uses the same prompt plus
  * cooldown gating, and is not admitted for agents without a heartbeat
- * schedule. So OCA requests an immediate `notifications-event` wake only for
- * wakes (the orchestrator must act: a failed `chat.send` or a session without a
- * chat route). Text-only user notices that could not be sent directly are
- * enqueued without a wake: they are informational, and the host prepends them
- * to the origin session's next turn (the user's next message, an OCA
- * `chat.send` wake, or the next scheduled heartbeat).
+ * schedule. So OCA requests an immediate `notifications-event` wake for wake
+ * fallbacks (the orchestrator must act: a failed `chat.send` or a session
+ * without a chat route) and for text-only user notices that could not be sent
+ * directly when nothing else would surface them. A notice whose dispatch also
+ * sends an OCA wake is only enqueued: the host prepends it to that wake's
+ * `chat.send` turn, so no heartbeat run is needed.
  *
  * A session key the host refuses is an error; it is never rerouted to another
  * session.
