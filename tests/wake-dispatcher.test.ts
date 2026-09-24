@@ -3,7 +3,9 @@ import assert from "node:assert/strict";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { WakeDispatcher, validateCompletionFollowupWakeSuccess } from "../src/wake-dispatcher";
+import { WakeDispatcher, validateCompletionFollowupWakeSuccess, type WakeDispatcherOptions } from "../src/wake-dispatcher";
+import { buildPresentation, type DirectNotificationTransport } from "../src/direct-notification-transport";
+import type { SystemEventTransport } from "../src/wake-transport";
 import { buildWaitingForInputPayload } from "../src/session-notification-builders/waiting";
 import { wakeDeliveryExecutorInternals } from "../src/wake-delivery-executor";
 
@@ -32,6 +34,56 @@ function buildRoute(overrides: Partial<NonNullable<FakeSession["route"]>> = {}):
     sessionKey: "agent:main:telegram:group:-1003863755361:topic:11239",
     ...overrides,
   };
+}
+
+/**
+ * Test transports that record each delivery as the equivalent `openclaw` CLI argv
+ * through the (mockable) executor execFile hook, so tests can keep asserting on the
+ * fake-CLI call log and inject failures per call.
+ */
+function runRecordedOpenClaw(args: string[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    wakeDeliveryExecutorInternals.execFile("openclaw", args, { timeout: 30_000, killSignal: "SIGKILL" }, (err, _stdout, stderr) => {
+      if (err) {
+        const suffix = stderr?.toString().trim() ? ` | stderr: ${stderr.toString().trim()}` : "";
+        reject(Object.assign(err, { message: `${err.message}${suffix}` }));
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
+const recordedDirectNotifications: DirectNotificationTransport = {
+  send: async (route, text, buttons) => {
+    const presentation = buildPresentation(buttons);
+    await runRecordedOpenClaw([
+      "message", "send",
+      "--channel", route.channel,
+      "--target", route.target,
+      "--message", text,
+      ...(route.accountId ? ["--account", route.accountId] : []),
+      ...(route.threadId ? ["--thread-id", route.threadId] : []),
+      ...(presentation ? ["--presentation", JSON.stringify(presentation)] : []),
+    ]);
+  },
+};
+
+const recordedSystemEvents: SystemEventTransport = {
+  enqueue: async (text, options) => {
+    await runRecordedOpenClaw([
+      "system", "event", "--text", text, "--mode", "now",
+      ...(options?.sessionKey ? ["--session-key", options.sessionKey] : []),
+    ]);
+  },
+};
+
+function createDispatcher(options: WakeDispatcherOptions = {}) {
+  return new WakeDispatcher({
+    directNotifications: recordedDirectNotifications,
+    systemEvents: recordedSystemEvents,
+    ...options,
+  });
 }
 
 const WAIT_STEP_MS = 25;
@@ -93,6 +145,7 @@ describe("WakeDispatcher", () => {
   const originalPath = process.env.PATH ?? "";
   const originalLogPath = process.env.OPENCLAW_TEST_LOG;
   const originalConsoleInfo = console.info;
+  const originalConsoleDebug = console.debug;
   const originalConsoleError = console.error;
   const originalSetTimeout = global.setTimeout;
   const originalClearTimeout = global.clearTimeout;
@@ -146,6 +199,7 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
 
   afterEach(() => {
     console.info = originalConsoleInfo;
+    console.debug = originalConsoleDebug;
     console.error = originalConsoleError;
     global.setTimeout = originalSetTimeout;
     global.clearTimeout = originalClearTimeout;
@@ -161,10 +215,6 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
     delete process.env.OPENCLAW_CODE_AGENT_BUTTON_DIAGNOSTICS;
     rmSync(tempDir, { recursive: true, force: true });
   });
-
-  function createDispatcher() {
-    return new WakeDispatcher({ directNotifications: null });
-  }
 
   it("does not accept NO_REPLY even when a completion marker appears elsewhere in the payload", () => {
     const failure = validateCompletionFollowupWakeSuccess(JSON.stringify({
@@ -203,7 +253,7 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
       originSessionKey: "agent:main:telegram:group:-1003863755361:topic:11239",
     };
     const infoLogs: string[] = [];
-    console.info = (message?: unknown, ...rest: unknown[]) => {
+    console.debug = (message?: unknown, ...rest: unknown[]) => {
       infoLogs.push([message, ...rest].map((value) => String(value)).join(" "));
     };
 
@@ -228,7 +278,7 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
     assert.ok(infoLogs.some((line) => line.includes("\"route\":\"telegram|bot|-1003863755361#11239\"")));
   });
 
-  it("preserves direct notification order when an earlier delivery retries", async () => {
+  it("keeps direct notification order when an earlier delivery falls back", async () => {
     process.env.OPENCLAW_TEST_FAIL_ONCE_FOR = JSON.stringify({
       match: "🚀 launched",
       delayMs: 50,
@@ -255,13 +305,18 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
       notifyUser: "always",
     });
 
+    // Direct sends are never retried by OCA (the host durable queue owns retries);
+    // later notifications keep their order and the failed plain notification is
+    // re-queued on the same route lane as a system-event fallback.
     const calls = await waitForCalls(logPath, 3);
-    const messages = calls.map((call) => parseMessageSendArgs(call).message);
-    assert.deepEqual(messages, ["🚀 launched", "🚀 launched", "✅ completed"]);
+    assert.deepEqual(calls.map((call) => call.slice(0, 2).join(" ")), ["message send", "message send", "system event"]);
+    assert.equal(parseMessageSendArgs(calls[0]!).message, "🚀 launched");
+    assert.equal(parseMessageSendArgs(calls[1]!).message, "✅ completed");
+    assert.equal(calls[2]![3], "🚀 launched");
   });
 
   it("defers conditional worktree wakes until after the notification turn yields", async () => {
-    const dispatcher = new WakeDispatcher({
+    const dispatcher = createDispatcher({
       directNotifications: {
         send: async () => {},
       } as any,
@@ -294,9 +349,7 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
   });
 
   it("honors an explicit conditional wake grace delay", async (t) => {
-    const dispatcher = new WakeDispatcher({
-      directNotifications: null,
-    });
+    const dispatcher = createDispatcher();
     const session: FakeSession = {
       id: "session-worktree-grace-delay",
       route: buildRoute({ threadId: "13832", sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832" }),
@@ -308,10 +361,11 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
 
     global.setTimeout = (((fn: (...args: any[]) => void, delay?: number) => {
       delays.push(delay ?? 0);
+      // Only the grace delay is fast-forwarded; dispatch timeouts keep real timers.
+      if (delay !== 2000) return originalSetTimeout(fn, delay);
       queueMicrotask(() => fn());
       return { fake: true, unref() { return this; } } as any;
     }) as typeof setTimeout);
-    global.clearTimeout = ((() => {}) as typeof clearTimeout);
     t.mock.method(wakeDeliveryExecutorInternals, "execFile", ((_file, args, _options, callback) => {
       writeFileSync(logPath, `${JSON.stringify(args)}\n`, { flag: "a" });
       callback?.(null, "COMPLETION_FOLLOWUP_DELIVERED", "");
@@ -374,7 +428,7 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
     assert.equal(parseMessageSendArgs(calls[0] ?? []).message, "Plan v1 needs your decision");
   });
 
-  it("falls back and does not retry a direct launch notification after an ambiguous timeout", async (t) => {
+  it("falls back and does not retry a direct launch notification after a failed send", async (t) => {
     const dispatcher = createDispatcher();
     const session: FakeSession = {
       id: "session-launch-timeout",
@@ -410,8 +464,8 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
     });
 
     await waitFor(
-      () => errorLogs.some((line) => line.includes("\"ambiguousResult\":true")),
-      "ambiguous timeout log",
+      () => errorLogs.some((line) => line.includes("\"terminalReason\":\"non_retryable\"")),
+      "terminal direct-send failure log",
     );
 
     const calls = await waitForCalls(logPath, 2);
@@ -423,7 +477,7 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
 
   it("uses in-process runtime delivery for Telegram topic direct notifications", async () => {
     const sends: Array<Record<string, unknown>> = [];
-    const dispatcher = new WakeDispatcher({
+    const dispatcher = createDispatcher({
       directNotifications: {
         send: async (route, text) => {
           sends.push({ route, text });
@@ -438,7 +492,7 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
       originSessionKey: "agent:main:telegram:group:-1003863755361:topic:28",
     };
     const infoLogs: string[] = [];
-    console.info = (message?: unknown, ...rest: unknown[]) => {
+    console.debug = (message?: unknown, ...rest: unknown[]) => {
       infoLogs.push([message, ...rest].map((value) => String(value)).join(" "));
     };
 
@@ -467,7 +521,7 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
 
   it("falls back on unavailable in-process direct notify without blocking the route lane", async () => {
     const sends: string[] = [];
-    const dispatcher = new WakeDispatcher({
+    const dispatcher = createDispatcher({
       directNotifications: {
         send: async (_route, text) => {
           sends.push(text);
@@ -500,9 +554,48 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
     assert.deepEqual(calls, [["system", "event", "--text", "🚀 launched", "--mode", "now"]]);
   });
 
+  it("does not resend a plain notification through a system event after an ambiguous durable-send timeout", async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const sends: string[] = [];
+    const systemEvents: string[] = [];
+    let notifyFailed = 0;
+    const dispatcher = createDispatcher({
+      directNotifications: {
+        send: async (_route, text) => {
+          sends.push(text);
+          await new Promise<void>(() => {});
+        },
+      },
+      systemEvents: {
+        enqueue: async (text) => { systemEvents.push(text); },
+      },
+    });
+    const session: FakeSession = {
+      id: "session-durable-timeout",
+      route: buildRoute(),
+      originSessionKey: "agent:main:telegram:group:-1003863755361:topic:11239",
+    };
+
+    dispatcher.dispatchSessionNotification(session as any, {
+      label: "launch",
+      userMessage: "🚀 launched",
+      notifyUser: "always",
+      hooks: { onNotifyFailed: () => { notifyFailed += 1; } },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    t.mock.timers.tick(30_000);
+    for (let i = 0; i < 5; i += 1) await Promise.resolve();
+
+    assert.deepEqual(sends, ["🚀 launched"]);
+    assert.deepEqual(systemEvents, []);
+    assert.equal(notifyFailed, 1);
+    dispatcher.dispose();
+  });
+
   it("does not system-fallback strict runtime direct notification failures", async () => {
     const sends: string[] = [];
-    const dispatcher = new WakeDispatcher({
+    const dispatcher = createDispatcher({
       directNotifications: {
         send: async (_route, text) => {
           sends.push(text);
@@ -534,7 +627,7 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
     assert.equal(wakeParams.message, "Canonical worktree status delivered to user: no");
   });
 
-  it("reports strict completion notification ambiguity as delivery failure before waking", async (t) => {
+  it("reports a strict completion notification send failure before waking", async (t) => {
     const dispatcher = createDispatcher();
     const session: FakeSession = {
       id: "session-completion-strict",
@@ -581,7 +674,7 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
     const wakeParams = parseChatSendParams(calls[1] ?? []);
     assert.equal(wakeParams.message, "Canonical completion status delivered to user: no");
     assert.equal(wakeParams.sessionKey, "agent:main:telegram:group:-1003863755361:topic:26");
-    assert.ok(errorLogs.some((line) => line.includes("\"ambiguousResult\":true")));
+    assert.ok(errorLogs.some((line) => line.includes("\"terminal\":true") && line.includes("\"target\":\"message.send\"")));
   });
 
   it("does not count system fallback as strict completion notification success", async (t) => {
@@ -594,11 +687,6 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
       originSessionKey: "agent:main:telegram:group:-1003863755361:topic:26",
     };
 
-    global.setTimeout = (((fn: (...args: any[]) => void, _delay?: number) => {
-      queueMicrotask(() => fn());
-      return { fake: true, unref() { return this; } } as any;
-    }) as typeof setTimeout);
-    global.clearTimeout = ((() => {}) as typeof clearTimeout);
     t.mock.method(wakeDeliveryExecutorInternals, "execFile", ((_file, args, _options, callback) => {
       writeFileSync(logPath, `${JSON.stringify(args)}\n`, { flag: "a" });
       if ((args as string[])[0] === "message") {
@@ -618,8 +706,9 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
       notifyUser: "always",
     });
 
-    const calls = await waitForCalls(logPath, 5);
-    assert.equal(calls.filter((call) => call[0] === "message").length, 4);
+    // One direct attempt: the host durable queue, not OCA, owns send retries.
+    const calls = await waitForCalls(logPath, 2);
+    assert.equal(calls.filter((call) => call[0] === "message").length, 1);
     assert.equal(calls.some((call) => call[0] === "system"), false);
     const wakeCall = calls.find((call) => call[0] === "gateway");
     assert.ok(wakeCall, "expected failed-delivery wake");
@@ -639,11 +728,6 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
     let notifySucceeded = 0;
     let notifyFailed = 0;
 
-    global.setTimeout = (((fn: (...args: any[]) => void, _delay?: number) => {
-      queueMicrotask(() => fn());
-      return { fake: true, unref() { return this; } } as any;
-    }) as typeof setTimeout);
-    global.clearTimeout = ((() => {}) as typeof clearTimeout);
     t.mock.method(wakeDeliveryExecutorInternals, "execFile", ((_file, args, _options, callback) => {
       writeFileSync(logPath, `${JSON.stringify(args)}\n`, { flag: "a" });
       if ((args as string[])[0] === "message") {
@@ -667,7 +751,7 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
 
     await waitFor(() => notifyFailed === 1, "strict notify-only failure");
     const calls = readCalls(logPath);
-    assert.equal(calls.filter((call) => call[0] === "message").length, 4);
+    assert.equal(calls.filter((call) => call[0] === "message").length, 1);
     assert.equal(calls.some((call) => call[0] === "system"), false);
     assert.equal(calls.some((call) => call[0] === "gateway"), false);
     assert.equal(notifySucceeded, 0);
@@ -870,11 +954,11 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
     });
 
     await waitFor(
-      () => errorLogs.some((line) => line.includes("\"event\":\"dispatch_retry_scheduled\"")),
+      () => errorLogs.some((line) => line.includes("\"event\":\"dispatch_failed\"")),
       "interactive failure log",
     );
 
-    const failureLog = errorLogs.find((line) => line.includes("\"event\":\"dispatch_retry_scheduled\"")) ?? "";
+    const failureLog = errorLogs.find((line) => line.includes("\"event\":\"dispatch_failed\"")) ?? "";
     assert.match(failureLog, /"buttonsPresent":true/);
     assert.match(failureLog, /"buttonCount":3/);
     assert.match(failureLog, /"buttonLabels":\["Approve","Revise","Reject"\]/);
@@ -1213,11 +1297,11 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
     });
 
     await waitFor(
-      () => errorLogs.some((line) => line.includes("\"event\":\"dispatch_retry_scheduled\"")),
+      () => errorLogs.some((line) => line.includes("\"event\":\"dispatch_failed\"")),
       "discord interactive failure log",
     );
 
-    const failureLog = errorLogs.find((line) => line.includes("\"event\":\"dispatch_retry_scheduled\"")) ?? "";
+    const failureLog = errorLogs.find((line) => line.includes("\"event\":\"dispatch_failed\"")) ?? "";
     assert.match(failureLog, /"target":"message\.send"/);
     assert.match(failureLog, /"transportChannel":"discord"/);
     assert.match(failureLog, /"transportAccountId":"bot-account"/);
@@ -1280,7 +1364,7 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
     t.mock.method(console, "info", (message?: unknown, ...rest: unknown[]) => {
       infoLogs.push([message, ...rest].map((value) => String(value)).join(" "));
     });
-    const dispatcher = new WakeDispatcher({
+    const dispatcher = createDispatcher({
       directNotifications: {
         send: async () => {},
       },
@@ -1582,7 +1666,7 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
     assert.equal(params["thread-id"], "13832");
   });
 
-  it("does not mark completion follow-up wakes successful when the final response is NO_REPLY", async () => {
+  it("does not accept a NO_REPLY completion follow-up wake and falls back to a session system event", async () => {
     process.env.OPENCLAW_TEST_STDOUT = "NO_REPLY\n";
     const dispatcher = createDispatcher();
     const session: FakeSession = {
@@ -1603,11 +1687,16 @@ if (process.env.OPENCLAW_TEST_STDOUT) {
       },
     });
 
-    await waitForCalls(logPath, 1);
-    await waitFor(() => wakeFailed === 1, "completion follow-up wake validation failure");
+    const calls = await waitForCalls(logPath, 2);
+    await waitFor(() => wakeSucceeded === 1, "system event fallback after NO_REPLY");
 
-    assert.equal(wakeSucceeded, 0);
-    assert.equal(wakeFailed, 1);
+    assert.equal(calls[0]?.[0], "gateway");
+    assert.deepEqual(calls[1], [
+      "system", "event", "--text", "Coding agent session completed. Send the user a short factual completion summary.",
+      "--mode", "now", "--session-key", "agent:main:telegram:group:-1003863755361:topic:11239",
+    ]);
+    assert.equal(calls.filter((call) => call[0] === "gateway").length, 1);
+    assert.equal(wakeFailed, 0);
   });
 
   it("marks completion follow-up wakes successful after normal marker-free final text", async () => {

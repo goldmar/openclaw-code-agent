@@ -1,7 +1,6 @@
 import { existsSync } from "fs";
 import {
   getDefaultHarnessName,
-  parseThreadIdFromSessionKey,
   pluginConfig,
   resolveAgentChannel,
   resolveAllowedModelsForHarness,
@@ -13,6 +12,7 @@ import {
   resolveSessionRoute,
   resolveToolChannel,
 } from "../config";
+import { parseThreadIdFromSessionKey } from "../session-route";
 import {
   canonicalAllowedModelForHarness,
   canonicalizeModelForHarness,

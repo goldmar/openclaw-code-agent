@@ -1,6 +1,9 @@
 import { createHash } from "crypto";
 
 import { CALLBACK_NAMESPACE } from "./interactive-constants";
+import { createLogger } from "./logger";
+
+const log = createLogger("button-diagnostics");
 
 type ButtonLike = {
   label?: unknown;
@@ -143,7 +146,7 @@ export function logButtonDiagnostic(event: string, fields: Record<string, unknow
   const sanitized = Object.fromEntries(
     Object.entries(fields).filter(([, value]) => value !== undefined),
   );
-  console.info(`[CodeAgentButtonDiagnostics] ${JSON.stringify({
+  log.info(`[CodeAgentButtonDiagnostics] ${JSON.stringify({
     event,
     callbackNamespace: CALLBACK_NAMESPACE,
     ...sanitized,

@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking changes
 
+- State paths now follow the Gateway: OCA resolves its state directory with the host's `resolveStateDir`, so `OPENCLAW_STATE_DIR` is honored and `OPENCLAW_HOME` is treated as the home-directory override (state in `$OPENCLAW_HOME/.openclaw`) instead of as the state directory itself. Operators who set `OPENCLAW_HOME` to point OCA at a state directory should set `OPENCLAW_STATE_DIR` (or `OPENCLAW_CODE_AGENT_SESSIONS_PATH` / `OPENCLAW_CODE_AGENT_GOAL_TASKS_PATH`) instead.
+- Session output transcripts move from `/tmp/openclaw-agent-<id>.txt` to `<stateDir>/plugin-state/openclaw-code-agent/output/` (private directory and files). Existing `/tmp` transcripts stay readable through their stored paths and are aged out by the normal maintenance cleanup.
+- Auto-update state moves to `<stateDir>/plugin-state/openclaw-code-agent/auto-update.json`; the previous `openclaw-code-agent-auto-update.json` is read once as a migration source.
+- Removed the age-based startup sweep that deleted unmanaged `openclaw-worktree-*` directories (and the `OPENCLAW_WORKTREE_CLEANUP_AGE_HOURS` knob). Managed worktrees are still cleaned by the maintenance schedules and `agent_worktree_cleanup`; review and remove unmanaged directories with `git worktree remove`/`git worktree prune`.
+- Direct notifications no longer fall back to `openclaw message send`, and OCA no longer retries a failed direct send: the host durable outbound queue owns retries of an admitted send. A send that times out with an unknown outcome is reported as failed without a system-event resend.
+- A user stop (`agent_kill`) now records a Task Flow cancel intent, so the mirrored flow ends as `cancelled` instead of `failed`.
 - Claude Code plan review now uses Claude Code's native `ExitPlanMode` request instead of scraping the final turn text. OCA holds the request open until the decision and answers it directly: approval is an `allow` with a session-scoped mode switch (normally `bypassPermissions`), and revision feedback is a `deny` carrying the user's words. Plans no longer appear as a finished turn; the plan-review notification fires while the turn is held. Plan text and `planFilePath` come from the tool input; the `.claude/plans/` write heuristic, `ExitPlanMode`/`set_permission_mode` tool-name signals, and `[SYSTEM: …]` approval/revision prefixes are gone for Claude Code and OpenCode (Codex keeps its prompt framing). An approval that arrives after the session was idle-suspended still resumes it in `bypassPermissions`, now with a plain approval message.
 - OCA no longer copies MCP servers from `~/.claude.json` into Claude Code launches. Claude Code loads user, project, and local MCP servers from its own settings sources.
 - Provider-qualified Claude Code models (`anthropic/claude-…`) are now sent as the bare Claude Code id instead of being rejected (`anthropic/claude-opus-5-5` → `claude-opus-5-5`). Stored `anthropic/claude-opus-5-5` defaults no longer need to be changed.
@@ -21,18 +27,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Claude Code: pass OCA's review workflow as `planModeInstructions`; set `projectConfigRoot` to the original checkout for worktree sessions; report structured failures from `is_error`, assistant `error` codes, `startup_failure_reason`, and `terminal_reason` (aborted turns are interrupted turns, not failures); take cost from per-model `modelUsage`; read the applied model and effort from `system/init` or `supportedModels()`; show per-model cost, context fill (`getContextUsage()`), and live background tasks in `agent_output`; consume session-state and `permission_denied` events.
 - OpenCode: multi-select question answers, reasoning effort as the prompt `variant`, and turn duration, per-model tokens, and cost from OpenCode's message records.
 
+### Changed
+
+- Direct notifications use the host durable outbound queue (`sendDurableMessageBatch` from `openclaw/plugin-sdk/channel-outbound`) with a channel-agnostic button `presentation`; core renders Telegram inline keyboards and Discord components, replacing OCA's adapter loading and Telegram button repair.
+- Wake fallbacks and system notices use the in-process `api.runtime.system.enqueueSystemEvent` plus `requestHeartbeat` instead of the `openclaw system event --mode now` subprocess, and target the origin session when it is known.
+- Honor `openclaw tasks flow cancel` for mirrored sessions: a host cancel intent stops the coding session. Flow creation uses `tryCreateManaged`.
+- Plugin diagnostics are written to the Gateway log through `api.runtime.logging.getChildLogger`; per-dispatch delivery progress is logged at `debug`.
+- The session index, goal task store, and auto-update state are written through the host `json-store` helper (private files, fsync'd atomic replacement).
+- `:thread:` session-key suffixes are parsed with the public `openclaw/plugin-sdk/routing` helper; Telegram `:topic:` parsing stays local.
+- `api.runtime` is typed with the published plugin SDK `PluginRuntime`.
+- The build externalizes the public SDK subpaths `channel-outbound`, `json-store`, `routing`, and `state-paths` in addition to `plugin-entry`. All four exist in the retained OpenClaw `2026.8.1` API floor, so the compatibility floor is unchanged.
+- Update `@anthropic-ai/claude-agent-sdk` to 0.3.281 (Claude Code 2.1.281), which Claude Code requires for `claude-opus-5-5`, and use its public `startup()`/`WarmQuery` and `Query` types.
+
 ### Fixed
 
+- LLM-generated worktree decision summaries, question context summaries, and PR metadata now call `api.runtime.llm.complete` with the required `messages`, `systemPrompt`, `purpose`, and `maxTokens` and parse `LlmCompleteResult.text`; previously every call failed and silently used the deterministic fallback. Speculative probing of `runtime.ai`, `runtime.model(s)`, and other nonexistent surfaces is removed. Question context summaries get a 5 s budget (previously 300 ms) and abort the host completion when it expires.
 - OpenCode multi-question requests now send one answer list per question instead of packing every answer into one string.
 - Claude Code plan mode no longer denies `ExitPlanMode` itself (since SDK 0.3.269 plan mode routes that tool through `canUseTool`), so Claude no longer sees its plan submission rejected.
 - Claude Code results that report `is_error` on a `success` subtype are failures, and a turn aborted by `agent_respond(..., interrupt=true)` is an interrupted turn rather than a failed session.
 - Claude Code results are no longer emitted while `queued_turn_count` says more queued user turns follow, so a queued follow-up can no longer end the session early. Empty background-notification results are recognized by `origin` instead of a zero-turn heuristic.
 - Claude Code startup failures are always reported; previously a failure before the first message could be dropped when the event stream closed first.
 - OpenCode reports each tool call once, with its input, instead of on every tool-part update.
-
-### Changed
-
-- Update `@anthropic-ai/claude-agent-sdk` to 0.3.281 (Claude Code 2.1.281), which Claude Code requires for `claude-opus-5-5`, and use its public `startup()`/`WarmQuery` and `Query` types.
 
 ## [4.7.20] - 2026-09-24
 

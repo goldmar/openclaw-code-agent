@@ -6,6 +6,9 @@ import { detectDefaultBranch, getDiffSummary } from "./worktree";
 import { resolveWorktreePolicyDecision } from "./repo-policy";
 import type { RepoPolicyResolution } from "./repo-policy";
 import type { RepoIntegrationPolicy } from "./types";
+import { createLogger } from "./logger";
+
+const log = createLogger("session-worktree-action-service");
 
 type DiffSummary = NonNullable<ReturnType<typeof getDiffSummary>>;
 
@@ -90,7 +93,7 @@ export class SessionWorktreeActionService {
   async plan(session: Session): Promise<PlannedWorktreeAction> {
     const sessionRef = getPrimarySessionLookupRef(session) ?? session.harnessSessionId;
     if (this.deps.isAlreadyMerged(sessionRef)) {
-      console.info(`[SessionManager] handleWorktreeStrategy: session "${session.name}" already merged — skipping strategy handling`);
+      log.info(`[SessionManager] handleWorktreeStrategy: session "${session.name}" already merged — skipping strategy handling`);
       return { kind: "skip", result: { notificationSent: true, worktreeRemoved: false } };
     }
     const resolvedWorktreeState =
@@ -100,14 +103,14 @@ export class SessionWorktreeActionService {
           ? session.worktreeLifecycle.state
           : undefined);
     if (resolvedWorktreeState && !(resolvedWorktreeState === "pr_open" && session.worktreeStrategy === "auto-pr")) {
-      console.info(`[SessionManager] handleWorktreeStrategy: session "${session.name}" worktree is ${session.worktreeLifecycle?.state ?? session.worktreeState} — skipping strategy handling`);
+      log.info(`[SessionManager] handleWorktreeStrategy: session "${session.name}" worktree is ${session.worktreeLifecycle?.state ?? session.worktreeState} — skipping strategy handling`);
       return { kind: "skip", result: { notificationSent: true, worktreeRemoved: false } };
     }
     if (session.status !== "completed") {
       return { kind: "skip", result: { notificationSent: false, worktreeRemoved: false } };
     }
     if (!this.deps.shouldRunWorktreeStrategy(session)) {
-      console.info(`[SessionManager] handleWorktreeStrategy: skipping — session "${session.name}" is in phase "${session.phase}"`);
+      log.info(`[SessionManager] handleWorktreeStrategy: skipping — session "${session.name}" is in phase "${session.phase}"`);
       return { kind: "skip", result: { notificationSent: false, worktreeRemoved: false } };
     }
 
@@ -194,7 +197,7 @@ export class SessionWorktreeActionService {
 
     const diffSummary = getDiffSummary(repoDir, branchName, baseBranch);
     if (!diffSummary) {
-      console.warn(`[SessionManager] Failed to get diff summary for ${branchName}, skipping merge-back`);
+      log.warn(`[SessionManager] Failed to get diff summary for ${branchName}, skipping merge-back`);
       return { kind: "skip", result: { notificationSent: false, worktreeRemoved: false } };
     }
 

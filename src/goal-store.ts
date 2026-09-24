@@ -1,8 +1,12 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "fs";
-import { homedir } from "os";
-import { dirname, join } from "path";
+import { existsSync, readFileSync, renameSync } from "fs";
+import { join } from "path";
+import { saveJsonFile } from "openclaw/plugin-sdk/json-store";
+import { resolveOpenClawStateDir } from "./state-paths";
 
 import type { GoalTaskState, SessionRoute } from "./types";
+import { createLogger } from "./logger";
+
+const log = createLogger("goal-store");
 
 const GOAL_TASK_STATUSES: ReadonlySet<GoalTaskState["status"]> = new Set([
   "running",
@@ -13,16 +17,10 @@ const GOAL_TASK_STATUSES: ReadonlySet<GoalTaskState["status"]> = new Set([
   "stopped",
 ]);
 
-function resolveOpenclawHomeDir(env: NodeJS.ProcessEnv): string {
-  const explicit = env.OPENCLAW_HOME?.trim();
-  if (explicit) return explicit;
-  return join(homedir(), ".openclaw");
-}
-
 function resolveGoalTasksPath(env: NodeJS.ProcessEnv): string {
   const explicit = env.OPENCLAW_CODE_AGENT_GOAL_TASKS_PATH?.trim();
   if (explicit) return explicit;
-  return join(resolveOpenclawHomeDir(env), "code-agent-goal-tasks.json");
+  return join(resolveOpenClawStateDir(env), "code-agent-goal-tasks.json");
 }
 
 function errorMessage(err: unknown): string {
@@ -60,15 +58,15 @@ function archiveGoalTasksFile(path: string, reason: string): boolean {
     const archivedPath = availableGoalTaskArchivePath(path);
     if (!archivedPath) {
       if (existsSync(path)) {
-        console.warn("[GoalTaskStore] Failed to archive goal task store: no available archive path");
+        log.warn("[GoalTaskStore] Failed to archive goal task store: no available archive path");
       }
       return false;
     }
     renameSync(path, archivedPath);
-    console.warn(`[GoalTaskStore] Archived ${reason} goal task store to ${archivedPath}.`);
+    log.warn(`[GoalTaskStore] Archived ${reason} goal task store to ${archivedPath}.`);
     return true;
   } catch (err: unknown) {
-    console.warn(`[GoalTaskStore] Failed to archive goal task store: ${errorMessage(err)}`);
+    log.warn(`[GoalTaskStore] Failed to archive goal task store: ${errorMessage(err)}`);
     return false;
   }
 }
@@ -193,12 +191,9 @@ export class GoalTaskStore {
 
   save(): void {
     try {
-      mkdirSync(dirname(this.path), { recursive: true });
-      const tmpPath = `${this.path}.tmp`;
-      writeFileSync(tmpPath, JSON.stringify([...this.tasks.values()], null, 2), "utf8");
-      renameSync(tmpPath, this.path);
+      saveJsonFile(this.path, [...this.tasks.values()]);
     } catch (err: unknown) {
-      console.warn(`[GoalTaskStore] Failed to save ${this.path}: ${errorMessage(err)}`);
+      log.warn(`[GoalTaskStore] Failed to save ${this.path}: ${errorMessage(err)}`);
     }
   }
 

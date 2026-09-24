@@ -50,119 +50,7 @@ describe("WakeDeliveryExecutor", () => {
     assert.ok(errors.some((line) => line.includes("Dispatch timed out after 30000ms")));
   });
 
-  it("treats direct message.send timeouts as terminal ambiguous results without retrying", async (t) => {
-    const executor = new WakeDeliveryExecutor();
-    const errors: string[] = [];
-    let attempts = 0;
-    let killSignal: unknown;
-    let ambiguousResultCount = 0;
-    let finalFailureCount = 0;
-
-    console.error = (message?: unknown, ...rest: unknown[]) => {
-      errors.push([message, ...rest].map((value) => String(value)).join(" "));
-    };
-
-    t.mock.method(wakeDeliveryExecutorInternals, "execFile", ((_file, _args, options, callback) => {
-      attempts += 1;
-      killSignal = options?.killSignal;
-      const error = new Error("Command failed: openclaw message send --channel telegram --target 123") as Error & {
-        killed: boolean;
-        signal: NodeJS.Signals;
-      };
-      error.killed = true;
-      error.signal = "SIGKILL";
-      callback?.(error, "", "");
-      return {} as any;
-    }) as typeof wakeDeliveryExecutorInternals.execFile);
-
-    executor.execute(
-      ["message", "send", "--channel", "telegram", "--target", "123", "--message", "🚀 launched"],
-      {
-        label: "launch-notify",
-        sessionId: "session-direct-timeout",
-        target: "message.send",
-        phase: "notify",
-        routeSummary: "telegram|bot|123",
-        messageKind: "notify",
-        dispatchContext: {
-          transportChannel: "telegram",
-          transportTarget: "123",
-          transportThreadId: "28",
-          buttonsPresent: true,
-          buttonCount: 3,
-          maxCallbackDataLength: 48,
-        },
-        onAmbiguousResult: () => {
-          ambiguousResultCount += 1;
-        },
-        onFinalFailure: () => {
-          finalFailureCount += 1;
-        },
-      },
-    );
-
-    await new Promise((resolve) => setImmediate(resolve));
-
-    assert.equal(attempts, 1);
-    assert.equal(killSignal, "SIGKILL");
-    assert.equal(ambiguousResultCount, 1);
-    assert.equal(finalFailureCount, 0);
-    assert.ok(errors.some((line) => line.includes("\"ambiguousResult\":true")));
-    assert.ok(errors.some((line) => line.includes("\"buttonsPresent\":true")));
-    assert.ok(errors.some((line) => line.includes("\"transportThreadId\":\"28\"")));
-    assert.ok(!errors.some((line) => line.includes("\"event\":\"dispatch_retry_scheduled\"")));
-  });
-
-  it("does not classify ordinary process failures as ambiguous direct-send timeouts", async (t) => {
-    const executor = new WakeDeliveryExecutor();
-    const errors: string[] = [];
-    let attempts = 0;
-    let ambiguousResultCount = 0;
-    let finalFailureCount = 0;
-
-    global.setTimeout = (((fn: (...args: any[]) => void, _delay?: number) => {
-      queueMicrotask(() => fn());
-      return { fake: true, unref() { return this; } } as any;
-    }) as typeof setTimeout);
-    global.clearTimeout = ((() => {}) as typeof clearTimeout);
-    console.error = (message?: unknown, ...rest: unknown[]) => {
-      errors.push([message, ...rest].map((value) => String(value)).join(" "));
-    };
-
-    t.mock.method(wakeDeliveryExecutorInternals, "execFile", ((_file, _args, _options, callback) => {
-      attempts += 1;
-      callback?.(new Error("Command failed: openclaw message send --channel telegram --target 123"), "", "forced failure");
-      return {} as any;
-    }) as typeof wakeDeliveryExecutorInternals.execFile);
-
-    executor.execute(
-      ["message", "send", "--channel", "telegram", "--target", "123", "--message", "🚀 launched"],
-      {
-        label: "launch-notify",
-        sessionId: "session-direct-sigkill",
-        target: "message.send",
-        phase: "notify",
-        routeSummary: "telegram|bot|123",
-        messageKind: "notify",
-        onAmbiguousResult: () => {
-          ambiguousResultCount += 1;
-        },
-        onFinalFailure: () => {
-          finalFailureCount += 1;
-        },
-      },
-    );
-
-    await new Promise((resolve) => setImmediate(resolve));
-    await new Promise((resolve) => setImmediate(resolve));
-
-    assert.equal(attempts, 4);
-    assert.equal(ambiguousResultCount, 0);
-    assert.equal(finalFailureCount, 1);
-    assert.ok(errors.some((line) => line.includes("\"event\":\"dispatch_retry_scheduled\"")));
-  });
-
-  it("keeps retrying non-timeout direct message.send failures", async (t) => {
+  it("retries failed chat.send CLI dispatches, including killed timeouts, up to the attempt limit", async (t) => {
     const executor = new WakeDeliveryExecutor();
     const errors: string[] = [];
     let attempts = 0;
@@ -179,19 +67,25 @@ describe("WakeDeliveryExecutor", () => {
 
     t.mock.method(wakeDeliveryExecutorInternals, "execFile", ((_file, _args, _options, callback) => {
       attempts += 1;
-      callback?.(new Error("gateway unavailable"), "", "forced failure");
+      const error = new Error(attempts === 1 ? "Command timed out" : "gateway unavailable") as Error & { killed?: boolean; signal?: NodeJS.Signals };
+      if (attempts === 1) {
+        // chat.send carries an idempotency key, so a killed attempt is safe to retry.
+        error.killed = true;
+        error.signal = "SIGKILL";
+      }
+      callback?.(error, "", "forced failure");
       return {} as any;
     }) as typeof wakeDeliveryExecutorInternals.execFile);
 
     executor.execute(
-      ["message", "send", "--channel", "telegram", "--target", "123", "--message", "🚀 launched"],
+      ["gateway", "call", "chat.send", "--expect-final", "--timeout", "30000", "--params", "{}"],
       {
         label: "launch-notify",
         sessionId: "session-direct-failure",
-        target: "message.send",
-        phase: "notify",
-        routeSummary: "telegram|bot|123",
-        messageKind: "notify",
+        target: "chat.send",
+        phase: "wake",
+        routeSummary: "session:agent:main:main",
+        messageKind: "wake",
         onFinalFailure: () => {
           finalFailureCount += 1;
         },
@@ -204,7 +98,43 @@ describe("WakeDeliveryExecutor", () => {
     assert.equal(attempts, 4);
     assert.equal(finalFailureCount, 1);
     assert.ok(errors.some((line) => line.includes("\"event\":\"dispatch_retry_scheduled\"")));
-    assert.ok(!errors.some((line) => line.includes("\"ambiguousResult\":true")));
+  });
+
+  it("reports a timed-out promise dispatch as ambiguous without retrying or failing over", async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const executor = new WakeDeliveryExecutor();
+    const errors: string[] = [];
+    console.error = (message?: unknown, ...rest: unknown[]) => {
+      errors.push([message, ...rest].map((value) => String(value)).join(" "));
+    };
+    let attempts = 0;
+    let ambiguous = 0;
+    let finalFailures = 0;
+
+    executor.executePromise(() => {
+      attempts += 1;
+      return new Promise<void>(() => {});
+    }, {
+      label: "launch-notify",
+      sessionId: "session-durable-timeout",
+      target: "message.send",
+      phase: "notify",
+      routeSummary: "telegram|bot|123",
+      messageKind: "notify",
+      terminalOnFailure: true,
+      onAmbiguousResult: () => { ambiguous += 1; },
+      onFinalFailure: () => { finalFailures += 1; },
+    });
+
+    await Promise.resolve();
+    t.mock.timers.tick(30_000);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(attempts, 1);
+    assert.equal(ambiguous, 1);
+    assert.equal(finalFailures, 0);
+    assert.ok(errors.some((line) => line.includes("\"ambiguousResult\":true")));
+    executor.dispose();
   });
 
   it("does not start queued ordered dispatches after dispose clears a pending retry", async () => {

@@ -573,16 +573,24 @@ describe("agent_pr existing target PR branch resolution", () => {
 });
 
 describe("agent_pr generated PR metadata", () => {
-  it("uses runtime PR metadata providers when agent_pr does not inject a test provider", async () => {
+  it("uses runtime.llm.complete for PR metadata when agent_pr does not inject a test provider", async () => {
+    const calls: Array<Record<string, unknown>> = [];
     setPluginRuntime({
-      prMetadata: {
-        async generatePrMetadata() {
+      llm: {
+        async complete(params: Record<string, unknown>) {
+          calls.push(params);
           return {
-            title: "Refresh generated PR body",
-            summary: ["Refreshes generated PR descriptions from runtime metadata."],
-            changes: ["`src/tools/agent-pr.ts`", "`src/worktree-pr-metadata.ts`", "`tests/agent-pr-tool.test.ts`"],
-            validation: ["pnpm test:file tests/agent-pr-tool.test.ts"],
-            notes: ["Does not expose raw prompts or private paths."],
+            text: JSON.stringify({
+              title: "Refresh generated PR body",
+              summary: ["Refreshes generated PR descriptions from runtime metadata."],
+              changes: ["`src/tools/agent-pr.ts`", "`src/worktree-pr-metadata.ts`", "`tests/agent-pr-tool.test.ts`"],
+              validation: ["pnpm test:file tests/agent-pr-tool.test.ts"],
+              notes: ["Does not expose raw prompts or private paths."],
+            }),
+            provider: "openai",
+            model: "gpt-test",
+            agentId: "main",
+            usage: {},
           };
         },
       },
@@ -607,22 +615,34 @@ describe("agent_pr generated PR metadata", () => {
 
       assert.equal(result.ok, true);
       assert.equal(result.ok && result.metadata.title, "Refresh generated PR body");
+      assert.equal(result.ok && result.fallbackReason, undefined);
+      assert.equal(calls.length, 1);
+      assert.equal(calls[0]?.purpose, "openclaw-code-agent.pr-metadata");
+      const messages = calls[0]?.messages as Array<{ role: string; content: string }>;
+      assert.equal(messages[0]?.role, "user");
+      assert.doesNotMatch(messages[0]?.content ?? "", /ghp_1234567890/);
     } finally {
       setPluginRuntime(undefined);
     }
   });
 
-  it("accepts JSON text from generic runtime metadata providers", async () => {
+  it("does not probe speculative runtime metadata surfaces", () => {
+    setPluginRuntime({
+      prMetadata: { async generatePrMetadata() { return {}; } },
+      ai: { async generateText() { return "{}"; } },
+    });
+    try {
+      assert.equal(createRuntimePrMetadataProvider(), undefined);
+    } finally {
+      setPluginRuntime(undefined);
+    }
+  });
+
+  it("falls back to deterministic metadata when runtime.llm.complete fails", async () => {
     setPluginRuntime({
       llm: {
-        async generateText() {
-          return JSON.stringify({
-            title: "Use generic runtime metadata",
-            summary: ["Parses JSON returned by a generic runtime text provider."],
-            changes: ["`src/worktree-pr-metadata.ts`", "`tests/agent-pr-tool.test.ts`"],
-            validation: ["pnpm test:file tests/agent-pr-tool.test.ts"],
-            notes: ["Keeps provider output behind metadata validation."],
-          });
+        async complete() {
+          throw Object.assign(new Error("No model configured"), { code: "LLM_COMPLETION_FAILED" });
         },
       },
     });
@@ -644,7 +664,7 @@ describe("agent_pr generated PR metadata", () => {
       });
 
       assert.equal(result.ok, true);
-      assert.equal(result.ok && result.metadata.title, "Use generic runtime metadata");
+      assert.equal(result.ok && result.fallbackReason, "provider-failed");
     } finally {
       setPluginRuntime(undefined);
     }

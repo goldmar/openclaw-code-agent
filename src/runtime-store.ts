@@ -1,77 +1,21 @@
-type TaskFlowHandle = {
-  id?: string;
-  lookupKey?: string;
-  flowId?: string;
-  revision?: number;
-  [key: string]: unknown;
-};
+import type { OpenClawPluginApi } from "../api";
 
-type TaskFlowRuntime = {
-  fromToolContext?: (ctx: { sessionKey?: string; deliveryContext?: unknown }) => unknown;
-  get?: (lookup: string) => Promise<TaskFlowHandle | undefined>;
-  lookup?: (lookup: string) => Promise<TaskFlowHandle | undefined>;
-  show?: (lookup: string) => Promise<TaskFlowHandle | undefined>;
-  [key: string]: unknown;
-};
+/**
+ * Published OpenClaw plugin runtime surface (`api.runtime`).
+ *
+ * The type comes from the host's public `openclaw/plugin-sdk/plugin-entry`
+ * declarations (type-only import; nothing is bundled). Tests and partial hosts
+ * may still install a subset, so every consumer keeps optional chaining and
+ * runtime `typeof` checks before calling a host method.
+ */
+export type PluginRuntime = OpenClawPluginApi["runtime"];
+export type ManagedTaskFlowRuntime = PluginRuntime["tasks"]["async"]["managedFlows"];
 
-type RuntimeTasks = {
-  async?: {
-    managedFlows?: TaskFlowRuntime;
-  };
-  [key: string]: unknown;
-};
-
-type RuntimeChannelOutboundAdapter = {
-  sendText?: (ctx: {
-    cfg: unknown;
-    to: string;
-    text: string;
-    accountId?: string | null;
-    threadId?: string | number | null;
-  }) => Promise<unknown>;
-  sendPayload?: (ctx: {
-    cfg: unknown;
-    to: string;
-    text: string;
-    payload: unknown;
-    accountId?: string | null;
-    threadId?: string | number | null;
-  }) => Promise<unknown>;
-  renderPresentation?: (params: {
-    payload: unknown;
-    presentation: unknown;
-    ctx: {
-      cfg: unknown;
-      to: string;
-      text: string;
-      payload: unknown;
-      accountId?: string | null;
-      threadId?: string | number | null;
-    };
-  }) => Promise<unknown> | unknown;
-};
-
-type RuntimeChannel = {
-  outbound?: {
-    loadAdapter?: (channelId: string) => Promise<RuntimeChannelOutboundAdapter | undefined>;
-  };
-};
-
-type RuntimeConfigStore = {
-  current?: () => unknown;
-};
-
-export interface PluginRuntimeStore {
-  channel?: RuntimeChannel;
-  config?: RuntimeConfigStore;
-  tasks?: RuntimeTasks;
-}
-
-let pluginRuntime: PluginRuntimeStore | undefined;
+let pluginRuntime: PluginRuntime | undefined;
 let runtimeConfig: unknown;
 let runtimeConfigLoaded = false;
 
-function loadCurrentRuntimeConfig(runtime: PluginRuntimeStore | undefined): unknown {
+function loadCurrentRuntimeConfig(runtime: PluginRuntime | undefined): unknown {
   try {
     return runtime?.config?.current?.();
   } catch {
@@ -81,7 +25,7 @@ function loadCurrentRuntimeConfig(runtime: PluginRuntimeStore | undefined): unkn
 
 export function setPluginRuntime(runtime: unknown, config?: unknown): void {
   if (runtime && typeof runtime === "object") {
-    pluginRuntime = runtime as PluginRuntimeStore;
+    pluginRuntime = runtime as PluginRuntime;
     if (arguments.length >= 2) {
       runtimeConfig = config;
       runtimeConfigLoaded = true;
@@ -96,11 +40,11 @@ export function setPluginRuntime(runtime: unknown, config?: unknown): void {
   runtimeConfigLoaded = false;
 }
 
-export function getPluginRuntime(): PluginRuntimeStore | undefined {
+export function getPluginRuntime(): PluginRuntime | undefined {
   return pluginRuntime;
 }
 
-export function getManagedTaskFlowRuntime(): TaskFlowRuntime | undefined {
+export function getManagedTaskFlowRuntime(): ManagedTaskFlowRuntime | undefined {
   return pluginRuntime?.tasks?.async?.managedFlows;
 }
 

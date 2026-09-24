@@ -1,6 +1,9 @@
 import { assertBranchName } from "./worktree-ref-validation";
 import { execFileSync } from "child_process";
 import { isGitHubCLIAvailable } from "./worktree-repo";
+import { createLogger } from "./logger";
+
+const log = createLogger("worktree-pr");
 
 export interface PRResult {
   success: boolean;
@@ -243,7 +246,7 @@ export function syncWorktreePR(repoDir: string, branchName: string, targetRepo?:
     }
     return status;
   } catch (err) {
-    console.warn(`[worktree] Failed to sync PR status for ${branchName}: ${err instanceof Error ? err.message : String(err)}`);
+    log.warn(`[worktree] Failed to sync PR status for ${branchName}: ${err instanceof Error ? err.message : String(err)}`);
     return { exists: false, state: "none" };
   }
 }
@@ -287,7 +290,7 @@ export function syncWorktreePRByUrl(repoDir: string, prUrl: string, targetRepo?:
     }
     return status;
   } catch (err) {
-    console.warn(`[worktree] Failed to sync PR status for ${prUrl}: ${err instanceof Error ? err.message : String(err)}`);
+    log.warn(`[worktree] Failed to sync PR status for ${prUrl}: ${err instanceof Error ? err.message : String(err)}`);
     return { exists: false, state: "none" };
   }
 }
@@ -316,7 +319,7 @@ export function getPRBody(repoDir: string, prNumberOrUrl: number | string, targe
     return { ok: true, body: typeof pr.body === "string" ? pr.body : undefined };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    console.warn(`[worktree] Failed to read PR body for ${prNumberOrUrl}: ${message}`);
+    log.warn(`[worktree] Failed to read PR body for ${prNumberOrUrl}: ${message}`);
     return { ok: false, error: message };
   }
 }
@@ -339,7 +342,7 @@ export function updatePRBody(repoDir: string, prNumberOrUrl: number | string, bo
     });
     return true;
   } catch (err) {
-    console.warn(`[worktree] Failed to update PR body for ${prNumberOrUrl}: ${err instanceof Error ? err.message : String(err)}`);
+    log.warn(`[worktree] Failed to update PR body for ${prNumberOrUrl}: ${err instanceof Error ? err.message : String(err)}`);
     return false;
   }
 }
@@ -362,7 +365,7 @@ export function updatePRTitle(repoDir: string, prNumberOrUrl: number | string, t
     });
     return true;
   } catch (err) {
-    console.warn(`[worktree] Failed to update PR title for ${prNumberOrUrl}: ${err instanceof Error ? err.message : String(err)}`);
+    log.warn(`[worktree] Failed to update PR title for ${prNumberOrUrl}: ${err instanceof Error ? err.message : String(err)}`);
     return false;
   }
 }
@@ -385,7 +388,7 @@ export function commentOnPR(repoDir: string, prNumber: number, body: string, tar
     });
     return true;
   } catch (err) {
-    console.warn(`[worktree] Failed to comment on PR #${prNumber}: ${err instanceof Error ? err.message : String(err)}`);
+    log.warn(`[worktree] Failed to comment on PR #${prNumber}: ${err instanceof Error ? err.message : String(err)}`);
     return false;
   }
 }

@@ -50,6 +50,9 @@ import {
   createToolCallEvent,
   HarnessMessageQueue,
 } from "./harness-events";
+import { createLogger } from "../logger";
+
+const log = createLogger("claude-code");
 
 /** The part of the SDK's public `WarmQuery` the harness uses. */
 type ClaudeWarmQuery = {
@@ -523,13 +526,11 @@ export class ClaudeCodeHarness implements AgentHarness {
           }
 
           if (msg.type === "system" && msg.subtype === "permission_denied") {
-            console.warn(JSON.stringify({
-              component: "ClaudeCodeHarness",
-              event: "tool.permission_denied",
+            log.warn("tool.permission_denied", {
               tool: msg.tool_name,
               reasonType: msg.decision_reason_type,
               hasSessionId: Boolean(currentSessionId),
-            }));
+            });
             queue.enqueue({ type: "activity" });
             continue;
           }

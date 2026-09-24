@@ -26,6 +26,9 @@ import {
   buildQuestionContextMicroSummary,
   type QuestionContextSummaryProvider,
 } from "./question-context-summary";
+import { createLogger } from "./logger";
+
+const log = createLogger("session-lifecycle-service");
 
 type WorktreeStrategyResult = {
   notificationSent: boolean;
@@ -230,7 +233,7 @@ export class SessionLifecycleService {
     canonicalStatusDelivered?: boolean;
     followupSummaryRequired: boolean;
   }): void {
-    console.info(JSON.stringify({
+    log.info(JSON.stringify({
       event: args.event,
       sessionId: args.session.id,
       sessionName: args.session.name,
@@ -253,7 +256,7 @@ export class SessionLifecycleService {
 
   async handleTurnEnd(session: Session, hadQuestion: boolean): Promise<void> {
     if (session.status !== "running") {
-      console.info(
+      log.info(
         `[SessionManager] Suppressing turn-end wake for session ${session.id} ` +
         `(status=${session.status}) — terminal notification owns the completion path.`,
       );
@@ -270,7 +273,7 @@ export class SessionLifecycleService {
     }
 
     if (session.worktreeStrategy === "ask" || session.worktreeStrategy === "delegate") {
-      console.info(
+      log.info(
         `[SessionManager] Suppressing turn-complete wake for session ${session.id} ` +
         `(worktreeStrategy=${session.worktreeStrategy}) — worktree notification will follow.`,
       );
@@ -321,7 +324,7 @@ export class SessionLifecycleService {
       const repoDir = this.deps.resolveWorktreeRepoDir(session.originalWorkdir, session.worktreePath);
       const branchName = session.worktreeBranch;
       const nativeBackendWorktree = usesNativeBackendWorktree(session);
-      console.info(
+      log.info(
         `[SessionManager] Early startup failure for "${session.name}" — auto-cleaning worktree ` +
         `(cost=$${session.costUsd.toFixed(2)}, duration=${session.duration}ms)`,
       );
@@ -352,11 +355,11 @@ export class SessionLifecycleService {
       const repoDir = this.deps.resolveWorktreeRepoDir(session.originalWorkdir, session.worktreePath);
       const nativeBackendWorktree = usesNativeBackendWorktree(session);
       if (worktreeResult.worktreeRemoved) {
-        console.info(
+        log.info(
           `[SessionManager] Worktree already removed for "${session.name}" during strategy handling.`,
         );
       } else if (nonTrivialWorktreeStrategy) {
-        console.info(
+        log.info(
           `[SessionManager] Keeping worktree alive for "${session.name}" (strategy=${session.worktreeStrategy}) — will be cleaned up on explicit resolution.`,
         );
       } else if (repoDir && !nativeBackendWorktree) {
@@ -365,7 +368,7 @@ export class SessionLifecycleService {
     }
 
     if (worktreeResult.notificationSent) {
-      console.info(
+      log.info(
         `[SessionManager] Suppressing generic terminal notification for session ${session.id} ` +
         "because worktree strategy handling already sent the authoritative outcome notification.",
       );
@@ -686,7 +689,7 @@ export class SessionLifecycleService {
   }
 
   emitTurnComplete(session: Session): void {
-    console.info(
+    log.info(
       `[SessionManager] turn-complete wake dispatching for session ${session.id} ` +
       `(turns=${session.result?.num_turns ?? 0}, strategy=${session.worktreeStrategy ?? "none"})`,
     );
@@ -703,7 +706,7 @@ export class SessionLifecycleService {
       wakeMessage: payload.wakeMessage,
       notifyUser: "always",
       onUserNotifyFailed: () => {
-        console.warn(
+        log.warn(
           `[SessionManager] turn-complete delivery failed for session ${session.id} — firing terminal notification as fallback`,
         );
         if (!this.deps.shouldEmitTerminalWake(session)) return;

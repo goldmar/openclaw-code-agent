@@ -1,13 +1,13 @@
 import { afterEach, describe, it, mock } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import {
   normalizeOpenClawTargetVersion,
   validateReleaseMetadata,
 } from "../scripts/validate-release-metadata.mjs";
-import { register, routeFromInteractiveContext, uniquePersistedWorkdirs } from "../index";
+import { register, routeFromInteractiveContext } from "../index";
 import { goalController, sessionManager, setGoalController, setSessionManager } from "../src/singletons";
 import { SessionManager } from "../src/session-manager";
 import { Session } from "../src/session";
@@ -69,16 +69,6 @@ describe("plugin entry source", () => {
     }
     setGoalController(null);
     setSessionManager(null);
-  });
-
-  it("deduplicates persisted workdirs before synchronous Git discovery", () => {
-    assert.deepEqual(uniquePersistedWorkdirs([
-      { workdir: "/repo/a" },
-      { workdir: "/repo/a" },
-      {},
-      { workdir: "" },
-      { workdir: "/repo/b" },
-    ]), ["/repo/a", "/repo/b"]);
   });
 
   it("keeps package and plugin manifest versions in sync", () => {
@@ -549,7 +539,7 @@ describe("plugin entry source", () => {
     assert.doesNotMatch(harnessSources, /agentRuntime\.id/);
   });
 
-  it("externalizes only the canonical OpenClaw plugin SDK entry helper", () => {
+  it("externalizes exactly the public OpenClaw plugin SDK subpaths the source imports", () => {
     const packageJson = JSON.parse(readFileSync(join(rootDir, "package.json"), "utf8")) as {
       scripts?: Record<string, string>;
     };
@@ -558,8 +548,34 @@ describe("plugin entry source", () => {
     assert.doesNotMatch(buildScript, /--external:openclaw(?:\s|$)/);
     assert.doesNotMatch(buildScript, /--external:openclaw\/plugin-sdk(?:\s|$)/);
     assert.doesNotMatch(buildScript, /--external:openclaw\/plugin-sdk\/\*(?:\s|$)/);
-    assert.match(buildScript, /--external:openclaw\/plugin-sdk\/plugin-entry/);
     assert.match(buildScript, /--external:@anthropic-ai\/claude-agent-sdk/);
+
+    const externals = [...buildScript.matchAll(/--external:(openclaw\/plugin-sdk\/[a-z-]+)/g)].map((match) => match[1]).sort();
+    const sources = [
+      "api.ts",
+      "index.ts",
+      ...(readdirSync(join(rootDir, "src"), { recursive: true }) as string[])
+        .filter((file) => file.endsWith(".ts"))
+        .map((file) => join("src", file)),
+    ];
+    const runtimeImports = new Set<string>();
+    for (const file of sources) {
+      const source = readFileSync(join(rootDir, file), "utf8");
+      // Value imports/re-exports and dynamic imports need a host module at runtime;
+      // `import type` / `typeof import(...)` are erased by the build.
+      for (const match of source.matchAll(/(?:^|\n)(?:import|export)\s+(?!type\b)[^;]*?from\s+"(openclaw\/plugin-sdk\/[a-z-]+)"|await import\("(openclaw\/plugin-sdk\/[a-z-]+)"\)/g)) {
+        runtimeImports.add(match[1] ?? match[2]!);
+      }
+    }
+    assert.deepEqual(externals, [...runtimeImports].sort());
+
+    // Every externalized subpath must be a public export of the minimum supported host.
+    const hostPackage = JSON.parse(readFileSync(join(rootDir, "node_modules", "openclaw", "package.json"), "utf8")) as {
+      exports?: Record<string, unknown>;
+    };
+    for (const subpath of externals) {
+      assert.ok(hostPackage.exports?.[`./${subpath.slice("openclaw/".length)}`], `${subpath} is not exported by openclaw`);
+    }
   });
 
   it("registers interactive handlers and does not register plugin HTTP routes", () => {

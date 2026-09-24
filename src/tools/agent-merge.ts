@@ -20,6 +20,9 @@ import {
 } from "../worktree";
 import { buildMergedPatch } from "../worktree-session-patches";
 import { getPersistedTargetMutationRefs, resolveWorktreeToolTarget } from "./worktree-tool-context";
+import { createLogger } from "../logger";
+
+const log = createLogger("agent-merge");
 
 interface AgentMergeParams {
   session: string;
@@ -168,7 +171,7 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
       // A removed worktree path is fine here; mergeBranch operates on
       // originalWorkdir and the persisted branch name.
       if (!existsSync(worktreePath)) {
-        console.info(`[agent_merge] Worktree directory ${worktreePath} no longer exists; proceeding with merge via originalWorkdir (${originalWorkdir})`);
+        log.info(`[agent_merge] Worktree directory ${worktreePath} no longer exists; proceeding with merge via originalWorkdir (${originalWorkdir})`);
       }
 
       let effectiveWorkdir = originalWorkdir;

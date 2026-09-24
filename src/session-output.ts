@@ -1,7 +1,7 @@
 import { createHash } from "crypto";
-import { appendFileSync } from "fs";
-import { tmpdir } from "os";
-import { join } from "path";
+import { appendFileSync, mkdirSync } from "fs";
+import { dirname, join } from "path";
+import { resolveSessionOutputDir } from "./state-paths";
 
 const OUTPUT_BUFFER_MAX = 2000;
 const SAFE_SESSION_OUTPUT_ID_PATTERN = /^[A-Za-z0-9_.-]+$/;
@@ -11,8 +11,20 @@ function getPathSafeSessionOutputId(sessionId: string): string {
   return `hashed+${createHash("sha256").update(sessionId, "utf8").digest("hex")}`;
 }
 
+export const SESSION_OUTPUT_FILE_PREFIX = "openclaw-agent-";
+export const SESSION_OUTPUT_FILE_SUFFIX = ".txt";
+
+/** `<stateDir>/plugin-state/openclaw-code-agent/output/openclaw-agent-<id>.txt` */
 export function getSessionOutputFilePath(sessionId: string): string {
-  return join(tmpdir(), `openclaw-agent-${getPathSafeSessionOutputId(sessionId)}.txt`);
+  return join(
+    resolveSessionOutputDir(),
+    `${SESSION_OUTPUT_FILE_PREFIX}${getPathSafeSessionOutputId(sessionId)}${SESSION_OUTPUT_FILE_SUFFIX}`,
+  );
+}
+
+/** Create the private output directory (no-op when it already exists). */
+export function ensureSessionOutputDir(filePath: string): void {
+  mkdirSync(dirname(filePath), { recursive: true, mode: 0o700 });
 }
 
 function appendTextToOutputBuffer(outputBuffer: string[], text: string): void {
@@ -38,7 +50,9 @@ export function appendSessionOutput(outputBuffer: string[], sessionId: string, t
     outputBuffer.splice(0, outputBuffer.length - OUTPUT_BUFFER_MAX);
   }
   try {
-    appendFileSync(getSessionOutputFilePath(sessionId), text, "utf-8");
+    const outputPath = getSessionOutputFilePath(sessionId);
+    ensureSessionOutputDir(outputPath);
+    appendFileSync(outputPath, text, { encoding: "utf-8", mode: 0o600 });
   } catch {
     // best-effort; don't let disk errors interrupt the session
   }

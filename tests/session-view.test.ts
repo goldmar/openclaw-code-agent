@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import { fileURLToPath } from "url";
 import { getSessionsListingText, getSessionOutputText } from "../src/application/session-view";
 import { getSessionOutputFilePath } from "../src/session";
@@ -436,6 +437,7 @@ describe("session-view app layer", () => {
 
   it("reads live output from the streaming temp file for active sessions", () => {
     const outputPath = getSessionOutputFilePath("live-123");
+    mkdirSync(dirname(outputPath), { recursive: true });
     writeFileSync(outputPath, "older line\nlatest line\n", "utf-8");
 
     try {

@@ -1,3 +1,4 @@
+import { parseThreadSessionSuffix } from "openclaw/plugin-sdk/routing";
 import type { SessionRoute } from "./types";
 
 export interface SessionRouteSource {
@@ -109,19 +110,29 @@ function routeToChannelString(route?: SessionRoute): string | undefined {
     : `${route.provider}|${route.target}`;
 }
 
+/**
+ * Split a conversation id from its thread suffix.
+ *
+ * `:thread:` uses the host's public `parseThreadSessionSuffix`
+ * (`openclaw/plugin-sdk/routing`), which preserves opaque peer-id case.
+ * Telegram forum `:topic:` suffixes stay local: the host's topic grammar lives
+ * in the Telegram channel plugin and the private-local `channel-route` helpers,
+ * and `parseAgentSessionKey` lower-cases peer ids (for example Slack `C0…`
+ * channel ids), so it cannot recover a deliverable target.
+ */
 function parseThreadSuffix(value: string): { id: string; threadId?: string } {
-  const normalizedValue = value.toLowerCase();
-  const markers = [":thread:", ":topic:"];
-
-  for (const marker of markers) {
-    const index = normalizedValue.lastIndexOf(marker);
-    if (index === -1) continue;
-    const id = value.slice(0, index).trim();
-    const threadId = value.slice(index + marker.length).trim() || undefined;
-    return { id: id || value, threadId };
+  const thread = parseThreadSessionSuffix(value);
+  if (thread.threadId !== undefined || (thread.baseSessionKey !== undefined && thread.baseSessionKey !== value.trim())) {
+    const id = thread.baseSessionKey?.trim();
+    return { id: id || value, threadId: thread.threadId };
   }
 
-  return { id: value };
+  const marker = ":topic:";
+  const index = value.toLowerCase().lastIndexOf(marker);
+  if (index === -1) return { id: value };
+  const id = value.slice(0, index).trim();
+  const threadId = value.slice(index + marker.length).trim() || undefined;
+  return { id: id || value, threadId };
 }
 
 function parseSessionConversationRef(

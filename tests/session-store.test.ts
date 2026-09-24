@@ -5,7 +5,7 @@ import { archiveLegacySessionIndex, sessionStoreStorageInternals } from "../src/
 import { getSessionOutputFilePath } from "../src/session";
 import { STORE_SCHEMA_VERSION } from "../src/session-store-normalization";
 import { formatLaunchSummaryFromSession } from "../src/launch-summary";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 
@@ -543,13 +543,13 @@ describe("SessionStore path resolution", () => {
     assert.equal(homeJson.sessions.length, 0);
   });
 
-  it("uses OPENCLAW_HOME when explicit sessions path is absent", () => {
-    const dir = mkdtempSync(join(tmpdir(), "openclaw-home-"));
+  it("uses the host state dir (OPENCLAW_STATE_DIR) when explicit sessions path is absent", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-state-"));
     const sessionsPath = join(dir, "code-agent-sessions.json");
     writeStore(sessionsPath, []);
 
     const store = new SessionStore({
-      env: { OPENCLAW_HOME: dir },
+      env: { OPENCLAW_STATE_DIR: dir },
     });
     markRunningAt(store, "home");
 
@@ -557,6 +557,22 @@ describe("SessionStore path resolution", () => {
     assert.equal(persisted.schemaVersion, STORE_SCHEMA_VERSION);
     assert.equal(persisted.sessions.length, 1);
     assert.equal(persisted.sessions[0].sessionId, "home");
+  });
+
+  it("resolves OPENCLAW_HOME as the home directory like the Gateway", () => {
+    const home = mkdtempSync(join(tmpdir(), "openclaw-home-"));
+    const sessionsPath = join(home, ".openclaw", "code-agent-sessions.json");
+    mkdirSync(join(home, ".openclaw"), { recursive: true });
+    writeStore(sessionsPath, []);
+
+    const store = new SessionStore({
+      env: { OPENCLAW_HOME: home },
+    });
+    markRunningAt(store, "home");
+
+    const persisted = JSON.parse(readFileSync(sessionsPath, "utf-8"));
+    assert.equal(persisted.sessions[0].sessionId, "home");
+    assert.equal(statSync(sessionsPath).mode & 0o777, 0o600);
   });
 
   it("allows constructor indexPath override for deterministic callers", () => {

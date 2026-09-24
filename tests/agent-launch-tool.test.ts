@@ -188,6 +188,7 @@ describe("agent_launch tool defaults", () => {
                 async setWaiting() { return { applied: true, flow: { flowId: "flow-1", revision: 2 } }; },
                 async finish() { return { applied: true, flow: { flowId: "flow-1", revision: 2 } }; },
                 async fail() { return { applied: true, flow: { flowId: "flow-1", revision: 2 } }; },
+                async requestCancel() { return { applied: true, flow: { flowId: "flow-1", revision: 2 } }; },
               };
             },
           },
