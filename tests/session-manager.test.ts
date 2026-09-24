@@ -1475,6 +1475,38 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     assert.equal(scheduled[1].at, now + 120_000);
   });
 
+  it("does not send a reminder when a snooze lands while its buttons are built", async () => {
+    const now = 1_700_000_000_000;
+    const pending: any = {
+      sessionId: "snooze-during-buttons",
+      harnessSessionId: "snooze-during-buttons-thread",
+      name: "snooze-during-buttons",
+      prompt: "p",
+      workdir: "/tmp",
+      status: "completed",
+      lifecycle: "awaiting_worktree_decision",
+      worktreeState: "pending_decision",
+      worktreeStrategy: "ask",
+      costUsd: 0,
+      pendingWorktreeDecisionSince: new Date(now - 4 * 60 * 60 * 1000).toISOString(),
+    };
+    const dispatched: unknown[] = [];
+    let current = true;
+    const reminders = new SessionReminderService(
+      (session) => ({ id: session.id ?? pending.sessionId }) as any,
+      (_session, request) => { dispatched.push(request); },
+      () => true,
+      async () => {
+        current = false; // the user snoozes while policy-aware buttons are resolved
+        return [];
+      },
+    );
+
+    assert.equal(await reminders.sendReminderIfDue(pending, now, () => current), false);
+    assert.deepEqual(dispatched, []);
+    assert.equal(pending.lastWorktreeReminderAt, undefined);
+  });
+
   it("drops an in-flight reminder retry when a newer maintenance sync (such as a snooze) owns the schedule", async () => {
     const sm = new SessionManager(5, 5);
     const now = 1_700_000_000_000;
@@ -2174,6 +2206,37 @@ describe("SessionManager.notifySession()", () => {
 // =========================================================================
 
 describe("SessionManager resumed launch routing", () => {
+  it("does not start a launch that finished preparing after shutdown began", async () => {
+    const harness = createFakeHarness("shutdown-race-harness");
+    registerHarness(harness);
+    const sm = new SessionManager(5, 5);
+    let launches = 0;
+    const originalLaunch = harness.launch.bind(harness);
+    harness.launch = ((options: any) => { launches += 1; return originalLaunch(options); }) as any;
+    let releasePolicy!: () => void;
+    const policyGate = new Promise<void>((resolve) => { releasePolicy = resolve; });
+    const originalCheck = sm.checkRepoPolicyForLaunch.bind(sm);
+    (sm as any).checkRepoPolicyForLaunch = async (...args: [string, any]) => {
+      await policyGate;
+      return originalCheck(...args);
+    };
+
+    const launch = sm.spawn({
+      prompt: "late",
+      workdir: "/tmp",
+      harness: harness.name,
+      worktreeStrategy: "off",
+      route: { provider: "telegram", target: "12345" },
+    }, { notifyLaunch: false });
+    const shutdown = sm.shutdown();
+    releasePolicy();
+
+    await assert.rejects(launch, /shutting down/);
+    await shutdown;
+    assert.equal(launches, 0);
+    assert.deepEqual(sm.list("all"), []);
+  });
+
   it("waits for a terminal Codex owner to release its writer before starting a replacement resume", async () => {
     let launchCalls = 0;
     let releaseClose!: () => void;

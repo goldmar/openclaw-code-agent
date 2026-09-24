@@ -88,7 +88,7 @@ export class SessionReminderService {
     const pendingMs = now - new Date(session.pendingWorktreeDecisionSince!).getTime();
     const pendingHours = Math.floor(Math.max(0, pendingMs) / (60 * 60 * 1000));
     try {
-      await this.sendReminderNotification(session, pendingHours);
+      if (!(await this.sendReminderNotification(session, pendingHours, stillCurrent))) return false;
     } catch (err) {
       log.warn(
         `[SessionReminderService] Failed to send stale-decision reminder for session ${session.name}: ${err instanceof Error ? err.message : String(err)}`,
@@ -104,7 +104,12 @@ export class SessionReminderService {
     return true;
   }
 
-  private async sendReminderNotification(session: PersistedSessionInfo, pendingHours: number): Promise<void> {
+  /** @returns false when the schedule moved (for example a snooze) before the reminder could be sent. */
+  private async sendReminderNotification(
+    session: PersistedSessionInfo,
+    pendingHours: number,
+    stillCurrent: () => boolean,
+  ): Promise<boolean> {
     const routingProxy = this.buildRoutingProxy({
       id: session.sessionId ?? session.name ?? getBackendConversationId(session) ?? session.harnessSessionId,
       sessionId: session.sessionId,
@@ -119,7 +124,7 @@ export class SessionReminderService {
         wakeMessage: buildDelegateReminderWakeMessage(session, pendingHours),
         notifyUser: "never",
       });
-      return;
+      return true;
     }
 
     const text = [
@@ -129,15 +134,19 @@ export class SessionReminderService {
       `agent_merge(session="${session.name}") or agent_pr(session="${session.name}") or agent_worktree_cleanup() to resolve.`,
     ].join("\n");
 
+    const buttons = await this.getWorktreeDecisionButtons(
+      getPrimarySessionLookupRef(session) ?? session.harnessSessionId,
+      session,
+    );
+    // Building policy-aware buttons awaits git; a snooze may have landed meanwhile.
+    if (!stillCurrent()) return false;
     this.dispatchNotification(routingProxy, {
       label: `worktree-stale-reminder-${session.name}`,
       userMessage: text,
       notifyUser: "always",
-      buttons: await this.getWorktreeDecisionButtons(
-        getPrimarySessionLookupRef(session) ?? session.harnessSessionId,
-        session,
-      ),
+      buttons,
     });
+    return true;
   }
 
   async clearResolvedReminderState(session: PersistedSessionInfo): Promise<boolean> {

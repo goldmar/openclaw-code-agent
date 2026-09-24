@@ -222,3 +222,12 @@ describe("worktree provisioning (.openclaw/worktree-setup.sh)", () => {
     assert.equal(processAlive(childPid), false, "background child in the script's process group is killed");
   });
 });
+
+describe("git runner stdin", () => {
+  it("rejects instead of crashing when git exits before reading its input", async () => {
+    const { runGit } = await import("../src/git-exec");
+    // `git --version` never reads stdin; a large payload forces EPIPE on write.
+    const output = await runGit(["--version"], { timeout: 10_000, input: "x".repeat(4 * 1024 * 1024) });
+    assert.match(output, /git version/);
+  });
+});

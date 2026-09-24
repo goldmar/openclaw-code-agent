@@ -75,6 +75,8 @@ import {
   mergeBranch,
   syncWorktreePR,
   syncWorktreePRByUrl,
+  deleteBranch,
+  removeWorktree,
 } from "./worktree";
 import { KeyedOperationQueue } from "./keyed-operation-queue";
 import { SessionMaintenanceService } from "./session-maintenance-service";
@@ -658,6 +660,15 @@ export class SessionManager {
     config.repoProvider = launchPolicy.resolution.provider;
 
     const preparedLaunch = await this.restore.prepareSpawn(config, name);
+    // Repo-policy lookup and worktree preparation await git; shutdown may have
+    // started meanwhile, and a session registered now would outlive it.
+    if (this.shuttingDown) {
+      if (preparedLaunch.worktreePath && !config.resumeSessionId && !config.resumeWorktreeFrom) {
+        await removeWorktree(preparedLaunch.originalWorkdir, preparedLaunch.worktreePath, { destructive: true });
+        if (preparedLaunch.worktreeBranchName) await deleteBranch(preparedLaunch.originalWorkdir, preparedLaunch.worktreeBranchName);
+      }
+      throw new Error("Cannot launch a session: the code-agent service is shutting down.");
+    }
 
     if (!config.route?.provider || !config.route.target) {
       throw new Error(`Cannot launch session "${name}": missing explicit route metadata.`);
@@ -2005,6 +2016,9 @@ export class SessionManager {
       this.disposeMaintenance();
       // Disposal stops new maintenance work; wait for git-backed work already in flight.
       await this.maintenance.whenIdle();
+      // Launches still preparing fail at their post-preparation shutdown check;
+      // wait for them so none registers after the kill below.
+      await this.spawnTail;
       const sessions = [...this.sessions.values()];
       this.killAll("shutdown");
       await Promise.all(sessions.map((session) => session.waitForTeardown()));

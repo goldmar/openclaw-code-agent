@@ -48,6 +48,9 @@ function runCommand(file: "git" | "gh", args: readonly string[], options: Comman
         reject(failure);
       },
     );
+    // A command can exit before reading its input; the resulting EPIPE must not
+    // become an unhandled stream error. The exit status still reports the failure.
+    child.stdin?.on("error", () => {});
     child.stdin?.end(options.input);
   });
 }
