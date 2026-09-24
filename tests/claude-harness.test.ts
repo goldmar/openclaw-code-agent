@@ -372,4 +372,33 @@ describe("ClaudeCodeHarness", () => {
     assert.equal(result?.data.success, false);
     assert.equal(result?.data.result, "Tool execution failed\nBash exited with status 1");
   });
+
+  it("waits for the final result after empty background-task results", async () => {
+    const { handle } = createQueryHandle([
+      { type: "result", subtype: "success", session_id: "claude-background", duration_ms: 1, total_cost_usd: 0, num_turns: 0, result: "" },
+      { type: "assistant", message: { content: [{ type: "text", text: "Final answer" }] } },
+      { type: "result", subtype: "success", session_id: "claude-background", duration_ms: 20, total_cost_usd: 0.2, num_turns: 2, result: "Final answer" },
+    ]);
+    const harness = new ClaudeCodeHarness({ startup: async () => ({ query: () => handle as any }) });
+    const messages = await collectMessages(harness.launch({ prompt: "finish", cwd: "/tmp/project" }));
+    const completions = messages.filter((message) => message.type === "run_completed");
+
+    assert.equal(completions.length, 1);
+    assert.equal(completions[0]?.data.result, "Final answer");
+    assert.equal(completions[0]?.data.num_turns, 2);
+    assert.equal(completions[0]?.data.total_cost_usd, 0.2);
+  });
+
+  it("completes when an empty zero-turn result is the only SDK result", async () => {
+    const { handle } = createQueryHandle([
+      { type: "result", subtype: "success", session_id: "claude-empty", duration_ms: 1, total_cost_usd: 0, num_turns: 0, result: "" },
+    ]);
+    const harness = new ClaudeCodeHarness({ startup: async () => ({ query: () => handle as any }) });
+    const messages = await collectMessages(harness.launch({ prompt: "finish", cwd: "/tmp/project" }));
+
+    const completion = messages.at(-1);
+    assert.equal(completion?.type, "run_completed");
+    if (completion?.type !== "run_completed") return;
+    assert.equal(completion.data.num_turns, 0);
+  });
 });

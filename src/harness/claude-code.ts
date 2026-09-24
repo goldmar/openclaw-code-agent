@@ -204,6 +204,8 @@ export class ClaudeCodeHarness implements AgentHarness {
     void (async () => {
       try {
         const q = await qPromise;
+        let deferredEmptyResult: ClaudeMessageEnvelope | undefined;
+        let emittedCompletion = false;
         for await (const raw of q) {
           const msg = raw as ClaudeMessageEnvelope;
           if (msg.type === "system" && msg.subtype === "init") {
@@ -246,6 +248,13 @@ export class ClaudeCodeHarness implements AgentHarness {
           }
 
           if (msg.type === "result") {
+            // Background tasks can produce empty, zero-turn success results before
+            // the query's final result. Do not close the managed run on those.
+            if (msg.subtype === "success" && msg.num_turns === 0 && !resolveResultText(msg)) {
+              deferredEmptyResult = msg;
+              continue;
+            }
+            deferredEmptyResult = undefined;
             const finalizedPlanText = currentTurnText.trim();
             if (
               finalizedPlanText &&
@@ -267,10 +276,21 @@ export class ClaudeCodeHarness implements AgentHarness {
               result: resolveResultText(msg),
               session_id: msg.session_id ?? currentSessionId,
             }));
+            emittedCompletion = true;
             currentTurnText = "";
             sawPlanGateSignal = false;
             sawRunOutput = false;
           }
+        }
+        // An empty result may also be the only result of a completed query.
+        if (deferredEmptyResult && !emittedCompletion) {
+          queue.enqueue(createRunCompletedEvent({
+            success: true,
+            duration_ms: deferredEmptyResult.duration_ms ?? 0,
+            total_cost_usd: deferredEmptyResult.total_cost_usd ?? 0,
+            num_turns: 0,
+            session_id: deferredEmptyResult.session_id ?? currentSessionId,
+          }));
         }
       } finally {
         queue.close();
