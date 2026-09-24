@@ -80,7 +80,7 @@ export class SessionStore {
     });
 
     if (env.OPENCLAW_DEBUG_SESSION_STORE === "1") {
-      log.warn(`[SessionStore] index path: ${this.indexPath}`);
+      log.info(`[SessionStore] index path: ${this.indexPath}`);
     }
     this.loadIndex();
   }
@@ -310,11 +310,6 @@ export class SessionStore {
     assertNewSchemaEntry(stub);
     this.indexPersistedEntry(stub);
     this.saveIndex();
-  }
-
-  /** True when this internal session id was already indexed in persisted storage. */
-  hasRecordedSession(sessionId: string): boolean {
-    return this.queries.hasRecordedSession(sessionId);
   }
 
   /** Persist terminal session metadata and write a best-effort tmp output snapshot. */

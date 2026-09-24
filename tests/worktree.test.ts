@@ -143,6 +143,14 @@ describe("formatWorktreeOutcomeLine", () => {
 });
 
 describe("createPR", () => {
+  function githubRepo(t: import("node:test").TestContext, remote = "git@github.com:acme/repo.git"): string {
+    const repoDir = mkdtempSync(join(tmpdir(), "openclaw-worktree-create-pr-"));
+    execFileSync("git", ["init", "-b", "main"], { cwd: repoDir, stdio: "ignore" });
+    if (remote) execFileSync("git", ["remote", "add", "origin", remote], { cwd: repoDir, stdio: "ignore" });
+    t.after(() => rmSync(repoDir, { recursive: true, force: true }));
+    return repoDir;
+  }
+
   function installMockGh(t: import("node:test").TestContext, options: { failOnDraft?: boolean; failExisting?: boolean; existingState?: "OPEN" | "CLOSED" | "MERGED" } = {}) {
     const tempDir = mkdtempSync(join(tmpdir(), "openclaw-gh-"));
     const binDir = join(tempDir, "bin");
@@ -233,7 +241,7 @@ describe("createPR", () => {
     const { logPath } = installMockGh(t);
     const { createPR } = await import("../src/worktree.js");
 
-    const result = await createPR("/tmp", "agent/draft-default", "main", "Draft default", "Body");
+    const result = await createPR(githubRepo(t), "agent/draft-default", "main", "Draft default", "Body");
 
     assert.deepEqual(result, { success: true, prUrl: "https://github.com/acme/repo/pull/1" });
     const calls = readFileSync(logPath, "utf-8").trim().split("\n");
@@ -244,7 +252,7 @@ describe("createPR", () => {
     const { logPath } = installMockGh(t);
     const { createPR } = await import("../src/worktree.js");
 
-    const result = await createPR("/tmp", "agent/ready-pr", "main", "Ready PR", "Body", undefined, { draft: false });
+    const result = await createPR(githubRepo(t), "agent/ready-pr", "main", "Ready PR", "Body", undefined, { draft: false });
 
     assert.deepEqual(result, { success: true, prUrl: "https://github.com/acme/repo/pull/1" });
     const calls = readFileSync(logPath, "utf-8").trim().split("\n");
@@ -255,7 +263,7 @@ describe("createPR", () => {
     const { logPath } = installMockGh(t);
     const { createPR } = await import("../src/worktree.js");
 
-    const result = await createPR("/tmp", "agent/escaped-body", "main", "Escaped body", "## Summary\\n\\n- First line\\n- Second line");
+    const result = await createPR(githubRepo(t), "agent/escaped-body", "main", "Escaped body", "## Summary\\n\\n- First line\\n- Second line");
 
     assert.equal(result.success, true);
     const call = readFileSync(logPath, "utf-8");
@@ -289,7 +297,7 @@ describe("createPR", () => {
     const { logPath } = installMockGh(t, { failOnDraft: true });
     const { createPR } = await import("../src/worktree.js");
 
-    const result = await createPR("/tmp", "agent/draft-retry", "main", "Draft PR", "Body");
+    const result = await createPR(githubRepo(t), "agent/draft-retry", "main", "Draft PR", "Body");
 
     assert.deepEqual(result, {
       success: true,
@@ -304,6 +312,19 @@ describe("createPR", () => {
     const lastCall = calls.at(-1)!;
     assert.ok(!lastCall.includes("--draft"), "retry call must not include --draft");
     assert.ok(lastCall.includes("pr create --base main --head agent/draft-retry"));
+  });
+
+  it("skips gh entirely when the repository has no GitHub remote", async (t) => {
+    const { logPath } = installMockGh(t);
+    const { createPR, syncWorktreePR } = await import("../src/worktree.js");
+    const localOnly = githubRepo(t, "");
+    execFileSync("git", ["remote", "add", "origin", "https://gitlab.example.com/acme/repo.git"], { cwd: localOnly, stdio: "ignore" });
+
+    assert.deepEqual(await syncWorktreePR(localOnly, "agent/no-github"), { exists: false, state: "none" });
+    const created = await createPR(localOnly, "agent/no-github", "main", "Title", "Body");
+    assert.equal(created.success, false);
+    assert.match(created.error ?? "", /no GitHub remote/);
+    assert.equal(existsSync(logPath) ? readFileSync(logPath, "utf-8").trim() : "", "", "gh must not be called");
   });
 
   it("reuses the existing open PR when create reports a duplicate", async (t) => {
@@ -506,6 +527,31 @@ describe("worktree base dir and PR target resolution", () => {
       if (previousEnv === undefined) delete process.env.OPENCLAW_WORKTREE_DIR;
       else process.env.OPENCLAW_WORKTREE_DIR = previousEnv;
       rmSync(plainDir, { recursive: true, force: true });
+    }
+  });
+
+  it("treats a missing worktree and an already-deleted branch as removed", async () => {
+    const { createWorktree, deleteBranch, getBranchName, getPrimaryRepoRootFromWorktree, removeWorktree } = await import("../src/worktree.js");
+    const repoDir = mkdtempSync(join(tmpdir(), "openclaw-worktree-gone-"));
+    try {
+      execFileSync("git", ["init", "-b", "main"], { cwd: repoDir, stdio: "ignore" });
+      execFileSync("git", ["-c", "user.name=T", "-c", "user.email=t@example.com", "commit", "--allow-empty", "-m", "init"], { cwd: repoDir, stdio: "ignore" });
+      const worktreePath = await createWorktree(repoDir, "gone");
+      const branch = await getBranchName(worktreePath);
+      const canonicalRoot = execFileSync("git", ["-C", repoDir, "rev-parse", "--show-toplevel"], { encoding: "utf-8" }).trim();
+      rmSync(worktreePath, { recursive: true, force: true });
+
+      // The repository is found from the default <repo>/.worktrees layout.
+      assert.equal(await getPrimaryRepoRootFromWorktree(worktreePath), canonicalRoot);
+      assert.equal(await removeWorktree(repoDir, worktreePath), true);
+      // Even with the worktree itself as the "repo" (no git -C into a missing dir).
+      assert.equal(await removeWorktree(worktreePath, worktreePath), true);
+      assert.doesNotMatch(execFileSync("git", ["-C", repoDir, "worktree", "list"], { encoding: "utf-8" }), /\.worktrees\/openclaw-worktree-gone/);
+
+      assert.equal(await deleteBranch(repoDir, branch!), true);
+      assert.equal(await deleteBranch(repoDir, branch!), true, "an already-deleted branch is not a failure");
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
     }
   });
 

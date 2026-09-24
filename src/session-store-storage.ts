@@ -25,7 +25,9 @@ function errorMessage(err: unknown): string {
 }
 
 function logSessionStoreDiagnostic(event: string, fields: Record<string, unknown>): void {
-  log.warn(JSON.stringify({
+  // Routine lifecycle diagnostics log at info; failure events stay at warn.
+  const level = /(?:error|fail)/i.test(event) ? "warn" : "info";
+  log[level](JSON.stringify({
     component: "SessionStore",
     event,
     at: new Date().toISOString(),

@@ -24,7 +24,16 @@ export interface MergeResult {
   stashPopConflict?: boolean;
   dirtyError?: boolean;
   fastForward?: boolean;
+  /** The branch landed as one squash commit (`git merge --squash`). */
+  squash?: boolean;
   rebaseConflict?: boolean;
+}
+
+/** How a successful merge landed: "fast-forward", "squash commit", or "merge commit". */
+export function describeMergeType(result: Pick<MergeResult, "fastForward" | "squash">): "fast-forward" | "squash commit" | "merge commit" {
+  if (result.fastForward) return "fast-forward";
+  if (result.squash) return "squash commit";
+  return "merge commit";
 }
 
 export function buildMergeWarningLines(mergeResult: MergeResult): string[] {
@@ -200,7 +209,7 @@ async function mergeBranchLocked(
         }
       }
 
-      return withWarnings({ success: true, stashed: stashed || undefined, stashRef, stashPopConflict: stashPopConflict || undefined });
+      return withWarnings({ success: true, squash: true, stashed: stashed || undefined, stashRef, stashPopConflict: stashPopConflict || undefined });
     }
 
     const useWorktree = worktreePath && existsSync(worktreePath);

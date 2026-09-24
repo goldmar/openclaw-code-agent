@@ -15,10 +15,6 @@ type SessionStoreIndexes = {
 export class SessionStoreQueries {
   constructor(private readonly indexes: SessionStoreIndexes) {}
 
-  hasRecordedSession(sessionId: string): boolean {
-    return this.indexes.idIndex.has(sessionId);
-  }
-
   getLatestPersistedByName(name: string): PersistedSessionInfo | undefined {
     let winner: PersistedSessionInfo | undefined;
     let winnerCreatedAt = Number.NEGATIVE_INFINITY;

@@ -299,6 +299,115 @@ describe("Session consumeMessages — result message (single-turn)", () => {
     assert.equal(session.error, "Backend error: cwd_unavailable");
   });
 
+  it("keeps a multi-turn session running while background tasks outlive the turn", async () => {
+    const session = await startSession({ multiTurn: true, permissionMode: "bypassPermissions" });
+    fakeHarness.setPromptConsumptionPaused(false);
+    await tick(10);
+    const result = (numTurns: number) => ({
+      type: "result" as const,
+      data: { success: true, duration_ms: 5, total_cost_usd: 0, num_turns: numTurns, session_id: session.harnessSessionId! },
+    });
+    fakeHarness.pushMessage({ type: "usage_updated", usage: { backgroundTasks: 1 } });
+    fakeHarness.pushMessage(result(1));
+    await tick(50);
+    assert.equal(session.status, "running", "live background tasks keep the session open");
+
+    // The tasks finish and Claude Code reports them in a new turn.
+    fakeHarness.pushMessage({ type: "usage_updated", usage: { backgroundTasks: 0 } });
+    fakeHarness.pushMessage({ type: "run_started" });
+    fakeHarness.pushMessage({ type: "text", text: "Background build finished." });
+    fakeHarness.pushMessage(result(2));
+    await tick(50);
+    assert.equal(session.status, "completed");
+  });
+
+  it("finishes a held turn when background tasks end without a report turn", async (t) => {
+    const session = await startSession({ multiTurn: true, permissionMode: "bypassPermissions" });
+    fakeHarness.setPromptConsumptionPaused(false);
+    await tick(10);
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    try {
+      fakeHarness.pushMessage({ type: "usage_updated", usage: { backgroundTasks: 2 } });
+      fakeHarness.pushMessage({
+        type: "result",
+        data: { success: true, duration_ms: 5, total_cost_usd: 0, num_turns: 1, session_id: session.harnessSessionId! },
+      });
+      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(session.status, "running");
+
+      fakeHarness.pushMessage({ type: "usage_updated", usage: { backgroundTasks: 0 } });
+      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(session.status, "running", "waits for a possible report turn");
+      t.mock.timers.tick(5_000);
+      assert.equal(session.status, "completed");
+    } finally {
+      t.mock.timers.reset();
+      if (session.status === "running") session.kill("user");
+    }
+  });
+
+  it("separates output after a tool call and across turns without doubling blank lines", async () => {
+    const session = await startSession({ multiTurn: true, permissionMode: "bypassPermissions" });
+    fakeHarness.pushMessage({ type: "text", text: "First message." });
+    fakeHarness.pushMessage({ type: "tool_use", name: "Bash", input: { command: "ls" } });
+    fakeHarness.pushMessage({ type: "text", text: "Second " });
+    fakeHarness.pushMessage({ type: "text", text: "message." });
+    fakeHarness.pushMessage({
+      type: "result",
+      data: { success: true, duration_ms: 5, total_cost_usd: 0, num_turns: 1, session_id: session.harnessSessionId! },
+    });
+    fakeHarness.pushMessage({ type: "text", text: "Next turn." });
+    fakeHarness.pushMessage({ type: "tool_use", name: "Bash", input: { command: "ls" } });
+    fakeHarness.pushMessage({ type: "text", text: "\n\nAlready separated." });
+    await tick(50);
+    assert.equal(
+      session.getOutput().join("\n"),
+      "First message.\n\nSecond message.\n\nNext turn.\n\nAlready separated.",
+    );
+    session.kill("user");
+  });
+
+  it("signals a fully answered pending question so the button wait can be dropped", async () => {
+    const session = await startSession({ multiTurn: true });
+    fakeHarness.pushMessage({
+      type: "pending_input",
+      state: {
+        requestId: "ask-7",
+        kind: "question",
+        options: ["A", "B"],
+        allowsFreeText: true,
+        questions: [
+          { id: "q1", question: "First?", options: [{ label: "A" }, { label: "B" }] },
+          { id: "q2", question: "Second?", options: [{ label: "A" }, { label: "B" }] },
+        ],
+        activeQuestionIndex: 0,
+      },
+    } as any);
+    await tick(20);
+    (session as any).harnessHandle.submitPendingInputText = async () => true;
+    const answered: Array<string | undefined> = [];
+    session.on("pendingInputAnswered", (_s: unknown, requestId: string | undefined) => { answered.push(requestId); });
+
+    assert.equal(await session.submitPendingInputText("A"), true);
+    assert.deepEqual(answered, [], "more questions remain");
+    (session as any).pendingInputState = { ...(session as any).pendingInputState, activeQuestionIndex: 1 };
+    assert.equal(await session.submitPendingInputText("B"), true);
+    assert.deepEqual(answered, ["ask-7"]);
+    session.kill("user");
+  });
+
+  it("treats an aborted interrupt during teardown as expected", async (t) => {
+    const session = await startSession({ multiTurn: true });
+    const warnings: string[] = [];
+    t.mock.method(console, "warn", (...args: unknown[]) => { warnings.push(args.map(String).join(" ")); });
+    (session as any).harnessHandle.interrupt = async () => { throw new Error("Operation aborted"); };
+    session.kill("user");
+    await tick(20);
+    assert.equal(warnings.some((line) => line.includes("interrupt during teardown")), false);
+  });
+
   it("merges usage snapshots and records backend model facts", async () => {
     const session = await startSession({ multiTurn: true });
     fakeHarness.pushMessage({ type: "usage_updated", usage: { backgroundTasks: 2 } });

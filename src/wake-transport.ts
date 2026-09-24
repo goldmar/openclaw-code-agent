@@ -37,17 +37,20 @@ export class WakeTransport {
 }
 
 export interface SystemEventWakeOptions {
-  /** Target session; omitted means the default agent's main session. */
-  sessionKey?: string;
+  /**
+   * Target session: the origin session that owns the OCA session. Required;
+   * there is no implicit fallback to the default agent's `main` session, which
+   * multi-agent hosts reject and single-agent hosts would route to the user's
+   * direct-message session.
+   */
+  sessionKey: string;
   /** Host de-duplication context for repeated events from the same source. */
   contextKey?: string;
 }
 
 export interface SystemEventTransport {
-  enqueue(text: string, options?: SystemEventWakeOptions): Promise<void>;
+  enqueue(text: string, options: SystemEventWakeOptions): Promise<void>;
 }
-
-const MAIN_SESSION_ALIAS = "main";
 
 /**
  * In-process system-event wake through the public plugin runtime
@@ -55,31 +58,24 @@ const MAIN_SESSION_ALIAS = "main";
  *
  * This replaces the former `openclaw system event --mode now` subprocess and
  * mirrors the Gateway `wake` method: enqueue the event, then request an
- * immediate heartbeat for the same session.
+ * immediate heartbeat for the same session. A session key the host refuses is
+ * an error; it is never rerouted to another session.
  */
 export class RuntimeSystemEventTransport implements SystemEventTransport {
-  async enqueue(text: string, options: SystemEventWakeOptions = {}): Promise<void> {
+  async enqueue(text: string, options: SystemEventWakeOptions): Promise<void> {
     const system = getPluginRuntime()?.system;
     if (!system) throw new Error("OpenClaw runtime system events are unavailable before plugin registration");
-    const targetSessionKey = options.sessionKey?.trim() || undefined;
+    const sessionKey = options.sessionKey?.trim();
+    if (!sessionKey) throw new Error("System event wake requires the origin session key");
     const contextKey = options.contextKey?.trim() || undefined;
-    let sessionKey = targetSessionKey ?? MAIN_SESSION_ALIAS;
-    try {
-      system.enqueueSystemEvent(text, { sessionKey, ...(contextKey ? { contextKey } : {}) });
-    } catch (err) {
-      // A targeted key the host refuses (for example a harness/subagent key) falls back
-      // to the main session, matching the former CLI fallback target.
-      if (!targetSessionKey) throw err;
-      sessionKey = MAIN_SESSION_ALIAS;
-      system.enqueueSystemEvent(text, { sessionKey, ...(contextKey ? { contextKey } : {}) });
-    }
+    system.enqueueSystemEvent(text, { sessionKey, ...(contextKey ? { contextKey } : {}) });
     // `enqueueSystemEvent` returns false for an identical pending event; the wake is
     // still requested so the queued copy is processed.
     system.requestHeartbeat({
       source: "notifications-event",
       intent: "immediate",
       reason: "wake",
-      ...(sessionKey !== MAIN_SESSION_ALIAS ? { sessionKey } : {}),
+      sessionKey,
     });
   }
 }

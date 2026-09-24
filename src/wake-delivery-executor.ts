@@ -235,7 +235,7 @@ export class WakeDeliveryExecutor {
         }
 
         const delay = this.retryDelayMs(attempt);
-        this.log("error", "dispatch_retry_scheduled", {
+        this.log("warn", "dispatch_retry_scheduled", {
           label: opts.label,
           sessionId: opts.sessionId,
           target: opts.target,
@@ -373,7 +373,7 @@ export class WakeDeliveryExecutor {
         }
 
         const delay = this.retryDelayMs(attempt);
-        this.log("error", "dispatch_retry_scheduled", {
+        this.log("warn", "dispatch_retry_scheduled", {
           label: opts.label,
           sessionId: opts.sessionId,
           target: opts.target,
@@ -458,10 +458,15 @@ export class WakeDeliveryExecutor {
     });
   }
 
-  private log(level: "info" | "error", event: string, details: Record<string, unknown>): void {
+  private log(level: "info" | "warn" | "error", event: string, details: Record<string, unknown>): void {
     const message = `[WakeDispatcher] ${JSON.stringify({ event, ...details })}`;
     if (level === "error") {
       log.error(message);
+      return;
+    }
+    // A scheduled retry is transient; only the terminal failure is an error.
+    if (level === "warn") {
+      log.warn(message);
       return;
     }
     // Per-dispatch progress is verbose diagnostics; failures stay at error level.

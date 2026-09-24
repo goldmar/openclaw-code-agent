@@ -57,8 +57,12 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** Routine transport events log at debug; failures and anomalies at warn. */
+const WARN_DIAGNOSTIC_EVENTS = new Set(["process.error", "request.timeout", "process.force_kill", "pending.flush", "stdin.error", "line.failed"]);
+
 function logCodexRpcDiagnostic(event: string, fields: Record<string, unknown>): void {
-  log.warn(JSON.stringify({
+  const emit = WARN_DIAGNOSTIC_EVENTS.has(event) ? log.warn : log.debug;
+  emit(JSON.stringify({
     component: "CodexAppServerRpc",
     event,
     at: new Date().toISOString(),
@@ -178,7 +182,16 @@ export class StdioJsonRpcClient implements JsonRpcClient {
     this.process = child;
     const reader = readline.createInterface({ input: child.stdout });
     reader.on("line", (line) => {
-      void this.handleLine(line);
+      // A failing handler (or a response write after the pipe closed) must never
+      // become an unhandled rejection in the Gateway process.
+      this.handleLine(line).catch((error: unknown) => {
+        logCodexRpcDiagnostic("line.failed", { pid: child.pid, error: errorMessage(error) });
+      });
+    });
+    // EPIPE and similar stdin errors surface as stream 'error' events; without a
+    // listener Node would throw them as uncaught exceptions.
+    child.stdin.on("error", (error) => {
+      logCodexRpcDiagnostic("stdin.error", { pid: child.pid, error: errorMessage(error) });
     });
     child.stderr.on("data", (chunk: Buffer) => {
       this.stderrTail = `${this.stderrTail}${chunk.toString("utf8")}`.slice(-4_000);
@@ -239,7 +252,12 @@ export class StdioJsonRpcClient implements JsonRpcClient {
 
   async request(method: string, params?: unknown, timeoutMs?: number): Promise<unknown> {
     const id = `rpc-${++this.counter}`;
-    const result = new Promise<unknown>((resolve, reject) => {
+    // Write before registering the pending entry: a write that throws (for
+    // example after the transport closed) must not leave an orphaned pending
+    // promise that a later close() rejects with nobody listening. Responses are
+    // read asynchronously, so none can arrive before the entry is registered.
+    this.write({ jsonrpc: "2.0", id, method, params: params ?? {} });
+    return await new Promise<unknown>((resolve, reject) => {
       const effectiveTimeoutMs = Math.max(100, timeoutMs ?? this.requestTimeoutMs);
       const timer = setTimeout(() => {
         this.pending.delete(id);
@@ -255,8 +273,6 @@ export class StdioJsonRpcClient implements JsonRpcClient {
       timer.unref?.();
       this.pending.set(id, { resolve, reject, timer });
     });
-    this.write({ jsonrpc: "2.0", id, method, params: params ?? {} });
-    return await result;
   }
 
   private write(payload: JsonRpcEnvelope): void {

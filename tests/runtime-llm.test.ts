@@ -1,5 +1,6 @@
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { AsyncLocalStorage } from "node:async_hooks";
 
 import { setPluginRuntime } from "../src/runtime-store";
 import {
@@ -18,6 +19,30 @@ afterEach(() => {
 });
 
 describe("runtime.llm completion adapter", () => {
+  it("runs the completion outside a closed request work scope inherited from an earlier tool call", async () => {
+    // Stand-in for the host's per-request async work scope: session events keep
+    // the ALS context of the tool call that started the session, and the host
+    // rejects work admitted into a scope that has already closed.
+    const workScope = new AsyncLocalStorage<{ closed: boolean }>();
+    const complete = async () => {
+      if (workScope.getStore()?.closed) throw new Error("Async work scope is closed");
+      return { text: "ok" } as never;
+    };
+    const scope = { closed: false };
+    const inherited = await workScope.run(scope, () => new Promise<() => Promise<string>>((resolve) => {
+      // A later session event scheduled from inside the tool call.
+      setTimeout(() => resolve(() => completeRuntimeLlmText(complete, {
+        purpose: "openclaw-code-agent.test",
+        systemPrompt: "s",
+        prompt: "p",
+        maxTokens: 10,
+      })), 1);
+    }));
+    scope.closed = true;
+    const text = await workScope.run(scope, () => inherited());
+    assert.equal(text, "ok");
+  });
+
   it("sends the host LlmCompleteParams shape and returns LlmCompleteResult.text", async () => {
     const calls: Array<Record<string, unknown>> = [];
     const complete = async (params: Record<string, unknown>) => {

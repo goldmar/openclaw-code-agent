@@ -1,7 +1,7 @@
 import { assertBranchName, branchOrRemoteTrackingRef, localBranchRef } from "./worktree-ref-validation";
 import { runGit, runGh, withRepoLock } from "./git-exec";
 import * as fs from "fs";
-import { dirname, join } from "path";
+import { basename, dirname, join } from "path";
 import { pluginConfig } from "./config";
 import { createLogger } from "./logger";
 
@@ -44,16 +44,30 @@ export function sanitizeBranchName(name: string): string {
 }
 
 export async function getPrimaryRepoRootFromWorktree(worktreePath: string): Promise<string | undefined> {
-  try {
-    const commonDir = (await runGit(
-      ["-C", worktreePath, "rev-parse", "--git-common-dir"],
-      { cwd: worktreePath, timeout: 5_000 },
-    )).trim();
-    if (!commonDir) return undefined;
-    return commonDir.endsWith("/.git") ? dirname(commonDir) : undefined;
-  } catch {
-    return undefined;
+  if (fs.existsSync(worktreePath)) {
+    try {
+      const commonDir = (await runGit(
+        ["-C", worktreePath, "rev-parse", "--git-common-dir"],
+        { cwd: worktreePath, timeout: 5_000 },
+      )).trim();
+      if (commonDir.endsWith("/.git")) return dirname(commonDir);
+    } catch {
+      // Fall through to the layout-based lookup.
+    }
   }
+  return primaryRepoRootFromDefaultLayout(worktreePath);
+}
+
+/**
+ * A worktree that no longer exists cannot tell git where its repository is.
+ * OCA's default layout is `<repoRoot>/.worktrees/<name>`, so use that when the
+ * candidate root is still a git checkout.
+ */
+function primaryRepoRootFromDefaultLayout(worktreePath: string): string | undefined {
+  const parent = dirname(worktreePath);
+  if (basename(parent) !== ".worktrees") return undefined;
+  const root = dirname(parent);
+  return fs.existsSync(join(root, ".git")) ? root : undefined;
 }
 
 /** Probe `git --version` once per process; concurrent callers share the probe. */
@@ -272,10 +286,30 @@ export async function deleteBranch(repoDir: string, branch: string): Promise<boo
       await runGit(["-C", repoDir, "branch", "-D", branch], { timeout: 10_000 });
       return true;
     } catch (err) {
+      const stderr = (err as { stderr?: unknown }).stderr;
+      const detail = `${typeof stderr === "string" ? stderr : ""}\n${err instanceof Error ? err.message : String(err)}`;
+      if (/branch '[^']*' not found/i.test(detail)) {
+        // Already deleted (for example by a squash-merge PR or by hand): the goal is met.
+        log.debug(`[worktree] Branch ${branch} was already deleted`);
+        return true;
+      }
       log.warn(`[worktree] Failed to delete branch ${branch}: ${err instanceof Error ? err.message : String(err)}`);
       return false;
     }
   });
+}
+
+/**
+ * Whether any remote of the repository points at github.com. Without one, the
+ * GitHub CLI cannot find a pull request for the branch, so callers skip `gh`.
+ */
+export async function hasGitHubRemote(repoDir: string): Promise<boolean> {
+  try {
+    const remotes = await runGit(["-C", repoDir, "remote", "-v"], { timeout: 5_000 });
+    return /(?:^|[\s@/])github\.com[:/]/im.test(remotes);
+  } catch {
+    return false;
+  }
 }
 
 export async function resolveTargetRepo(repoDir: string, explicitRepo?: string): Promise<string | undefined> {

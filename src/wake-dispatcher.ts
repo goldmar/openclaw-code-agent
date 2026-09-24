@@ -411,6 +411,20 @@ export class WakeDispatcher {
     );
   }
 
+  /** The session key of the conversation that owns this OCA session, if known. */
+  private originSessionKey(session: Session): string | undefined {
+    const candidates = [
+      this.routes.resolve(session)?.sessionKey,
+      session.originSessionKey,
+      session.route?.sessionKey,
+    ];
+    for (const candidate of candidates) {
+      const trimmed = candidate?.trim();
+      if (trimmed) return trimmed;
+    }
+    return undefined;
+  }
+
   private sendSystemEvent(
     session: Session,
     text: string,
@@ -426,10 +440,22 @@ export class WakeDispatcher {
       shouldContinue?: () => boolean;
     },
   ): void {
-    const routeSummary = opts.sessionKey ? `system:${opts.sessionKey}` : "system";
+    const sessionKey = opts.sessionKey?.trim() || this.originSessionKey(session);
+    if (!sessionKey) {
+      // Without an origin session there is nowhere safe to deliver the event:
+      // the bare `main` alias is rejected on multi-agent hosts and lands in the
+      // user's direct-message session on single-agent hosts.
+      log.warn(
+        `[WakeDispatcher] Dropping system-event fallback "${opts.label}" for session ${session.id}: ` +
+        "the session has no origin session key.",
+      );
+      if (opts.shouldContinue?.() !== false) opts.onFinalFailure?.();
+      return;
+    }
+    const routeSummary = `system:${sessionKey}`;
     this.executor.executePromise(
       () => this.systemEvents.enqueue(text, {
-        ...(opts.sessionKey ? { sessionKey: opts.sessionKey } : {}),
+        sessionKey,
         contextKey: `openclaw-code-agent:${session.id}`,
       }),
       {

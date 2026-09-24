@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { mergeBranch } from "../src/worktree-merge";
+import { describeMergeType, mergeBranch } from "../src/worktree-merge";
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", ["-C", cwd, ...args], {
@@ -39,6 +39,8 @@ describe("mergeBranch", () => {
       const result = await mergeBranch(repoDir, "feature", "main", "squash");
 
       assert.equal(result.success, true);
+      assert.equal(result.squash, true);
+      assert.equal(describeMergeType(result), "squash commit");
       assert.equal(result.stashed, true);
       assert.equal(result.stashPopConflict, true);
       assert.ok(result.warnings?.some((warning) => warning.includes("Failed to pop auto-stash after merge")));
@@ -96,5 +98,13 @@ describe("mergeBranch", () => {
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("describeMergeType", () => {
+  it("names fast-forward, squash, and merge-commit outcomes", () => {
+    assert.equal(describeMergeType({ fastForward: true }), "fast-forward");
+    assert.equal(describeMergeType({ squash: true }), "squash commit");
+    assert.equal(describeMergeType({}), "merge commit");
   });
 });

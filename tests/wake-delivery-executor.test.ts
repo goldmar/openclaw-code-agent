@@ -71,9 +71,13 @@ describe("WakeDeliveryExecutor", () => {
       return { fake: true, unref() { return this; } } as any;
     }) as typeof setTimeout);
     global.clearTimeout = ((() => {}) as typeof clearTimeout);
+    const warnings: string[] = [];
     console.error = (message?: unknown, ...rest: unknown[]) => {
       errors.push([message, ...rest].map((value) => String(value)).join(" "));
     };
+    t.mock.method(console, "warn", (message?: unknown, ...rest: unknown[]) => {
+      warnings.push([message, ...rest].map((value) => String(value)).join(" "));
+    });
 
     const attemptedArgs: string[][] = [];
     t.mock.method(wakeDeliveryExecutorInternals, "execFile", ((file, args, _options, callback) => {
@@ -112,7 +116,10 @@ describe("WakeDeliveryExecutor", () => {
     // Every retry re-sends the identical argv, so the chat.send idempotency key is stable.
     assert.ok(attemptedArgs.every((args) => JSON.stringify(args) === JSON.stringify(chatSendArgs("launch wake"))));
     assert.equal(finalFailureCount, 1);
-    assert.ok(errors.some((line) => line.includes("\"event\":\"dispatch_retry_scheduled\"")));
+    // Scheduled retries are transient (warn); only the terminal failure is an error.
+    assert.ok(warnings.some((line) => line.includes("\"event\":\"dispatch_retry_scheduled\"")));
+    assert.ok(!errors.some((line) => line.includes("\"event\":\"dispatch_retry_scheduled\"")));
+    assert.ok(errors.some((line) => line.includes("\"event\":\"dispatch_failed\"")));
   });
 
   it("reports a timed-out promise dispatch as ambiguous without retrying or failing over", async (t) => {

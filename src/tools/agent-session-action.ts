@@ -98,7 +98,14 @@ export function makeAgentSessionActionTool(_ctx?: OpenClawPluginToolContext) {
       }
       const session = sessionManager.resolve(params.session);
       if (!session) {
-        return { content: [{ type: "text", text: `Error: Session "${params.session}" is not active. Resume it with agent_respond first.` }] };
+        return { isError: true, content: [{ type: "text", text: `Error: Session "${params.session}" is not active. Resume it with agent_respond first.` }] };
+      }
+      // A finished session has no live backend; an action would never run.
+      if (session.status !== "running") {
+        return {
+          isError: true,
+          content: [{ type: "text", text: `Error: Session ${session.name} [${session.id}] is ${session.status}, not running, so the ${params.action} was not queued. Resume it with agent_respond first.` }],
+        };
       }
       let action: ThreadAction = { kind: "compact" };
       if (params.action === "review") {
@@ -109,7 +116,7 @@ export function makeAgentSessionActionTool(_ctx?: OpenClawPluginToolContext) {
       try {
         session.requestThreadAction(action);
       } catch (err: unknown) {
-        return { content: [{ type: "text", text: `Error: ${err instanceof Error ? err.message : String(err)}` }] };
+        return { isError: true, content: [{ type: "text", text: `Error: ${err instanceof Error ? err.message : String(err)}` }] };
       }
       return {
         content: [{

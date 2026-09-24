@@ -353,6 +353,25 @@ describe("CodexHarness static properties", () => {
 });
 
 describe("Codex App Server RPC transport", () => {
+  it("never leaves an orphaned pending request when a write fails (Gateway crash regression)", async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown): void => { unhandled.push(reason); };
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      const client = new StdioJsonRpcClient("codex", DEFAULT_APP_SERVER_ARGS, 1_000);
+      // Not connected (as after the session closed the transport): the write throws.
+      await assert.rejects(() => client.request("review/start", { threadId: VALID_THREAD_ID }), /stdio not connected/);
+      assert.equal((client as unknown as { pending: Map<string, unknown> }).pending.size, 0);
+      // Closing afterwards must not reject anything nobody is listening to.
+      await client.close();
+      await new Promise<void>((resolve) => { setImmediate(resolve); });
+      await new Promise<void>((resolve) => { setTimeout(resolve, 10); });
+      assert.deepEqual(unhandled, []);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
+
   it("passes the JSON-RPC id to request handlers and maps typed errors to their code", async () => {
     const frames: unknown[] = [];
     const seenIds: JsonRpcId[] = [];
@@ -380,7 +399,10 @@ describe("Codex App Server RPC transport", () => {
   it("redacts raw process command arguments from spawn diagnostics", async () => {
     const warnings: string[] = [];
     const originalWarn = console.warn;
+    const originalDebug = console.debug;
     console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(" ")); };
+    // Routine transport events (spawn, close) log at debug.
+    console.debug = (...args: unknown[]) => { warnings.push(args.map(String).join(" ")); };
     try {
       const client = new StdioJsonRpcClient("true", ["--token", "secret-token"], 1234);
       let closed = 0;
@@ -397,6 +419,7 @@ describe("Codex App Server RPC transport", () => {
       assert.equal(closed, 1, "close handler fires when the child exits");
     } finally {
       console.warn = originalWarn;
+      console.debug = originalDebug;
     }
   });
 
@@ -408,7 +431,9 @@ describe("Codex App Server RPC transport", () => {
     chmodSync(fixturePath, 0o755);
     const warnings: string[] = [];
     const originalWarn = console.warn;
+    const originalDebug = console.debug;
     console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(" ")); };
+    console.debug = (...args: unknown[]) => { warnings.push(args.map(String).join(" ")); };
     try {
       const client = new StdioJsonRpcClient(fixturePath, [], 1_000, 10);
       await client.connect();
@@ -423,6 +448,7 @@ describe("Codex App Server RPC transport", () => {
       assert.ok(events.findIndex((entry) => entry.event === "process.close") > forceKillIndex);
     } finally {
       console.warn = originalWarn;
+      console.debug = originalDebug;
       rmSync(fixtureDir, { recursive: true, force: true });
     }
   });
@@ -507,9 +533,9 @@ describe("CodexHarness launch settings", () => {
       model: "gpt-6-astra",
       serviceTier: "priority",
       developerInstructions: "You are working in a git worktree.",
-      permissions: ":danger-full-access",
-      approvalPolicy: "never",
-      approvalsReviewer: "user",
+      permissions: ":workspace",
+      approvalPolicy: "on-request",
+      approvalsReviewer: "auto_review",
     });
     assert.deepEqual(client.requestsFor("turn/start")[0], {
       threadId: VALID_THREAD_ID,
@@ -533,13 +559,14 @@ describe("CodexHarness launch settings", () => {
   });
 
   it("applies configured Codex permission profile, approval policy, and reviewer (B5)", async () => {
-    setPluginConfig({ harnesses: { codex: { permissionProfile: ":workspace", approvalPolicy: "on-request", approvalsReviewer: "auto_review" } } });
+    // Restoring the pre-5.0 full-access, no-prompt behavior is an explicit opt-in.
+    setPluginConfig({ harnesses: { codex: { permissionProfile: ":danger-full-access", approvalPolicy: "never", approvalsReviewer: "user" } } });
     const client = new MockCodexClient();
     await collectMessages(launch(client, { permissionMode: "bypassPermissions" }));
     const start = client.requestsFor("thread/start")[0];
-    assert.equal(start.permissions, ":workspace");
-    assert.equal(start.approvalPolicy, "on-request");
-    assert.equal(start.approvalsReviewer, "auto_review");
+    assert.equal(start.permissions, ":danger-full-access");
+    assert.equal(start.approvalPolicy, "never");
+    assert.equal(start.approvalsReviewer, "user");
     assert.equal("sandbox" in start, false);
   });
 
@@ -1029,6 +1056,72 @@ describe("CodexHarness server requests (A6, B5)", () => {
 });
 
 describe("CodexHarness steering, interrupts, and thread actions", () => {
+  it("refuses a queued review after the session closed instead of writing to a closed transport", async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown): void => { unhandled.push(reason); };
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      const client = new MockCodexClient({ holdTurns: true });
+      const harness = new CodexHarness({ createClient: () => client });
+      const prompts = pushableStream();
+      prompts.push({ type: "user", text: "work" });
+      const session = harness.launch({ prompt: prompts.stream, cwd: "/tmp" });
+      const iter = session.messages[Symbol.asyncIterator]();
+      await nextOfType(iter, "run_started");
+      await new Promise<void>((resolve) => { setTimeout(resolve, 10); });
+      // The session goes terminal and closes while a review is queued behind the turn.
+      await session.close?.();
+      prompts.push(harness.buildThreadActionMessage({ kind: "review", target: { type: "uncommittedChanges" } }));
+      await client.completeTurn();
+      for (let i = 0; i < 40; i += 1) {
+        const next = await iter.next();
+        if (next.done) break;
+      }
+      assert.equal(client.requestsFor("review/start").length, 0);
+      assert.equal(await session.steer?.("late"), false);
+      await new Promise<void>((resolve) => { setTimeout(resolve, 10); });
+      assert.deepEqual(unhandled, []);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
+
+  it("starts the next turn for a follow-up queued during a running turn instead of dropping it", async () => {
+    const client = new MockCodexClient({ holdTurns: true, assistantText: "done" });
+    const prompts = pushableStream();
+    prompts.push({ type: "user", text: "first" });
+    const session = launch(client, { prompt: prompts.stream });
+    const iter = session.messages[Symbol.asyncIterator]();
+    await nextOfType(iter, "run_started");
+    await new Promise<void>((resolve) => { setTimeout(resolve, 10); });
+    // Queued while the first turn runs (steer unavailable here).
+    prompts.push({ type: "user", text: "second" });
+    await client.completeTurn();
+    // The first turn's result is carried by the queued turn, so the session never
+    // sees an idle turn end while the follow-up is still pending.
+    const seen: HarnessMessage[] = [];
+    await nextOfType(iter, "run_started", seen);
+    assert.equal(seen.some((message) => message.type === "run_completed"), false);
+    for (let i = 0; i < 20 && client.requestsFor("turn/start").length < 2; i += 1) {
+      await new Promise<void>((resolve) => { setTimeout(resolve, 5); });
+    }
+    assert.equal(client.requestsFor("turn/start").length, 2);
+    await client.completeTurn();
+    const completed = await nextOfType(iter, "run_completed");
+    assert.equal(completed.data.success, true);
+    prompts.end();
+  });
+
+  it("separates consecutive agent messages in the output", async () => {
+    const client = new MockCodexClient({ assistantText: "first message", agentMessageSnapshot: "second message" });
+    const messages = await collectMessages(launch(client));
+    const text = messages
+      .filter((message): message is Extract<HarnessMessage, { type: "text_delta" }> => message.type === "text_delta")
+      .map((message) => message.text)
+      .join("");
+    assert.equal(text, "first message\n\nsecond message");
+  });
+
   it("steers the running turn with expectedTurnId (B10)", async () => {
     const client = new MockCodexClient({ holdTurns: true });
     const session = launch(client);
@@ -1084,14 +1177,13 @@ describe("CodexHarness steering, interrupts, and thread actions", () => {
     prompts.push(harness.buildThreadActionMessage({ kind: "review", target: { type: "baseBranch", branch: "main" } }));
     const session = harness.launch({ prompt: prompts.stream, cwd: "/tmp" });
     const iter = session.messages[Symbol.asyncIterator]();
-    await nextOfType(iter, "run_completed");
-    const compactSeen: HarnessMessage[] = [];
-    const compacted = await nextOfType(iter, "run_completed", compactSeen);
-    assert.equal(compacted.data.success, true);
-    assert.ok(compactSeen.some((message) => message.type === "text_delta" && /compacted/.test(message.text)));
-    const reviewSeen: HarnessMessage[] = [];
-    await nextOfType(iter, "run_completed", reviewSeen);
-    assert.ok(reviewSeen.some((message) => message.type === "text_delta" && message.text === "No findings."));
+    // Queued actions carry the turn result forward: one run_completed after the last.
+    const seen: HarnessMessage[] = [];
+    const completed = await nextOfType(iter, "run_completed", seen);
+    assert.equal(completed.data.success, true);
+    assert.equal(seen.filter((message) => message.type === "run_started").length, 3);
+    assert.ok(seen.some((message) => message.type === "text_delta" && /compacted/.test(message.text)));
+    assert.ok(seen.some((message) => message.type === "text_delta" && message.text === "No findings."));
     prompts.end();
     assert.deepEqual(client.requestsFor("thread/compact/start")[0], { threadId: VALID_THREAD_ID });
     assert.deepEqual(client.requestsFor("review/start")[0], { threadId: VALID_THREAD_ID, target: { type: "baseBranch", branch: "main" }, delivery: "inline" });

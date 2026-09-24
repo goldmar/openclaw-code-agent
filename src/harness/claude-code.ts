@@ -3,7 +3,7 @@
  * plugin's structured backend/run event model.
  */
 
-import { readFileSync, realpathSync } from "node:fs";
+import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve as resolvePath } from "node:path";
 import {
@@ -21,6 +21,7 @@ import {
   type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import type {
+  PendingInputQuestion,
   PendingInputState,
   PlanArtifact,
   ReasoningEffort,
@@ -161,16 +162,48 @@ function realpathOrSelf(path: string): string {
  * `.claude/plans`), after resolving symlinks, so a plan request can never
  * surface an arbitrary local file in chat or session output.
  */
-export function trustedPlanFilePath(path: string | undefined, projectDirs: Array<string | undefined>): string | undefined {
-  const trimmed = path?.trim();
-  if (!trimmed || !isAbsolute(trimmed) || !trimmed.toLowerCase().endsWith(".md")) return undefined;
+function trustedPlanRoots(projectDirs: Array<string | undefined>): string[] {
   const configDir = process.env.CLAUDE_CONFIG_DIR?.trim() || join(homedir(), ".claude");
-  const roots = [
+  return [
     join(configDir, "plans"),
     ...projectDirs.filter((dir): dir is string => !!dir).map((dir) => join(dir, ".claude", "plans")),
   ].map(realpathOrSelf);
+}
+
+export function trustedPlanFilePath(path: string | undefined, projectDirs: Array<string | undefined>): string | undefined {
+  const trimmed = path?.trim();
+  if (!trimmed || !isAbsolute(trimmed) || !trimmed.toLowerCase().endsWith(".md")) return undefined;
   const resolved = realpathOrSelf(trimmed);
-  return roots.some((root) => isInside(root, resolved)) ? resolved : undefined;
+  return trustedPlanRoots(projectDirs).some((root) => isInside(root, resolved)) ? resolved : undefined;
+}
+
+/**
+ * Fallback when `ExitPlanMode` carries neither `plan` nor a trusted
+ * `planFilePath`: the newest Markdown file written to a trusted plans directory
+ * since `sinceMs` (the session launch), so the pending plan is still reviewable.
+ */
+export function newestPlanFileSince(projectDirs: Array<string | undefined>, sinceMs: number): string | undefined {
+  let newest: { path: string; mtimeMs: number } | undefined;
+  for (const root of trustedPlanRoots(projectDirs)) {
+    let names: string[];
+    try {
+      names = readdirSync(root);
+    } catch {
+      continue;
+    }
+    for (const name of names) {
+      if (!name.toLowerCase().endsWith(".md")) continue;
+      const path = join(root, name);
+      try {
+        const stat = statSync(path);
+        if (!stat.isFile() || stat.mtimeMs < sinceMs) continue;
+        if (!newest || stat.mtimeMs > newest.mtimeMs) newest = { path, mtimeMs: stat.mtimeMs };
+      } catch {
+        // Unreadable or vanished entries are skipped.
+      }
+    }
+  }
+  return newest ? trustedPlanFilePath(newest.path, projectDirs) : undefined;
 }
 
 function readPlanFile(path: string | undefined): string | undefined {
@@ -202,8 +235,76 @@ function buildPendingInputState(
     options,
     ...(questions.length > 0 ? { questions } : {}),
     ...(activeQuestionIndex != null ? { activeQuestionIndex } : {}),
-    allowsFreeText: activeQuestion?.allowsFreeText === true || options.length === 0,
+    // Claude Code's AskUserQuestion always accepts a free-text answer ("Other"),
+    // and agent_respond submits text answers (option numbers, labels, or free
+    // text) through submitPendingInputText.
+    allowsFreeText: true,
   };
+}
+
+function updateClaudeWizardState(
+  base: PendingInputState,
+  activeQuestionIndex: number,
+  answers: Record<string, { answers: string[] }>,
+): PendingInputState {
+  const questions = base.questions ?? [];
+  const question = questions[activeQuestionIndex];
+  return {
+    ...base,
+    promptText: question
+      ? formatPendingInputWizardQuestion(question, activeQuestionIndex, questions.length)
+      : base.promptText,
+    options: question?.options.map((option) => option.label) ?? [],
+    activeQuestionIndex,
+    answers,
+    allowsFreeText: true,
+  };
+}
+
+/**
+ * Map a text answer onto a question's options: option numbers ("2") and labels
+ * (case-insensitive) select that option; anything else is a free-text answer.
+ * Multi-select questions take comma- or newline-separated entries.
+ */
+export function resolveClaudeQuestionAnswer(question: PendingInputQuestion | undefined, text: string): string {
+  const trimmed = text.trim();
+  if (!question || question.options.length === 0) return trimmed;
+  const match = (entry: string): string => {
+    const index = /^\d+$/.test(entry) ? Number.parseInt(entry, 10) - 1 : -1;
+    const option = (index >= 0 ? question.options[index] : undefined)
+      ?? question.options.find((candidate) => candidate.label.toLowerCase() === entry.toLowerCase());
+    return option?.label ?? entry;
+  };
+  if (!question.multiSelect) return match(trimmed);
+  return trimmed
+    .split(/[,\n]/)
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map(match)
+    .join(", ");
+}
+
+/** Subtract a fork's inherited usage so the fork reports only its own spend. */
+function subtractBaselineUsage(
+  models: HarnessModelUsage[] | undefined,
+  baseline: HarnessLaunchOptions["forkBaselineUsage"],
+): HarnessModelUsage[] | undefined {
+  if (!models || !baseline?.models?.length) return models;
+  const clamp = (value: number | undefined, minus: number | undefined): number | undefined =>
+    value === undefined ? undefined : Math.max(0, value - (minus ?? 0));
+  return models.map((entry) => {
+    const base = baseline.models!.find((candidate) => candidate.model === entry.model);
+    if (!base) return entry;
+    return {
+      ...entry,
+      costUsd: clamp(entry.costUsd, base.costUsd) ?? 0,
+      inputTokens: clamp(entry.inputTokens, base.inputTokens) ?? 0,
+      outputTokens: clamp(entry.outputTokens, base.outputTokens) ?? 0,
+      ...(entry.reasoningTokens !== undefined ? { reasoningTokens: clamp(entry.reasoningTokens, base.reasoningTokens) } : {}),
+      ...(entry.cacheReadTokens !== undefined ? { cacheReadTokens: clamp(entry.cacheReadTokens, base.cacheReadTokens) } : {}),
+      ...(entry.cacheWriteTokens !== undefined ? { cacheWriteTokens: clamp(entry.cacheWriteTokens, base.cacheWriteTokens) } : {}),
+    };
+  });
 }
 
 function resolveBackendInfo(args: {
@@ -234,6 +335,13 @@ function resolveBackendInfo(args: {
   return info;
 }
 
+type PendingQuestionRequest = {
+  state: PendingInputState;
+  input: Record<string, unknown>;
+  answers: Record<string, { answers: string[] }>;
+  resolve: (result: PermissionResult) => void;
+};
+
 type PendingPlanRequest = {
   requestId: string;
   input: Record<string, unknown>;
@@ -258,13 +366,54 @@ export class ClaudeCodeHarness implements AgentHarness {
 
   /** Launch a Claude Code session and adapt SDK messages into structured events. */
   launch(options: HarnessLaunchOptions): HarnessSession {
+    // Plan files written before this launch never count as this session's plan (slack for coarse mtimes).
+    const launchedAtMs = Date.now() - 2_000;
     const queue = new HarnessMessageQueue();
     let sawRunOutput = false;
     let requestCounter = 0;
     let currentSessionId = options.resumeSessionId ?? "";
     let currentPermissionMode = options.permissionMode;
     let pendingPlan: PendingPlanRequest | undefined;
+    let pendingQuestion: PendingQuestionRequest | undefined;
     let closed = false;
+    const forkBaseline = options.forkSession && options.resumeSessionId ? options.forkBaselineUsage : undefined;
+
+    /** Record an answer for the active question; resolves the tool call after the last one. */
+    const answerPendingQuestion = (answer: string, questionId?: string): boolean => {
+      const pending = pendingQuestion;
+      if (!pending || !answer.trim()) return false;
+      const questions = pending.state.questions ?? [];
+      const activeIndex = pending.state.activeQuestionIndex ?? 0;
+      const question = questions[activeIndex];
+      if (questionId && questionId !== question?.id) return false;
+      if (!question) {
+        // Unstructured input: answer every raw question text with the same reply.
+        pendingQuestion = undefined;
+        const raw = Array.isArray(pending.input.questions) ? pending.input.questions : [];
+        const answers: Record<string, string> = {};
+        for (const entry of raw) {
+          const text = entry && typeof entry === "object" ? (entry as { question?: unknown }).question : undefined;
+          if (typeof text === "string" && text.trim()) answers[text] = answer.trim();
+        }
+        pending.resolve({ behavior: "allow", updatedInput: { ...pending.input, answers } });
+        return true;
+      }
+      pending.answers = { ...pending.answers, [question.id]: { answers: [answer] } };
+      const nextIndex = activeIndex + 1;
+      if (nextIndex < questions.length) {
+        pending.state = updateClaudeWizardState(pending.state, nextIndex, pending.answers);
+        queue.enqueue(createPendingInputEvent(pending.state));
+        return true;
+      }
+      pendingQuestion = undefined;
+      const answers: Record<string, string> = {};
+      for (const entry of questions) {
+        const value = pending.answers[entry.id]?.answers[0];
+        if (value) answers[entry.question] = value;
+      }
+      pending.resolve({ behavior: "allow", updatedInput: { ...pending.input, answers } });
+      return true;
+    };
 
     const settlePendingPlan = (result: PermissionResult): PendingPlanRequest | undefined => {
       const pending = pendingPlan;
@@ -279,11 +428,13 @@ export class ClaudeCodeHarness implements AgentHarness {
       signal: AbortSignal,
     ): Promise<PermissionResult> => {
       settlePendingPlan({ behavior: "deny", message: "Superseded by a newer plan submission." });
-      const planFilePath = trustedPlanFilePath(
-        typeof input.planFilePath === "string" ? input.planFilePath : undefined,
-        [options.cwd, options.originalWorkdir],
-      );
       const inlinePlan = typeof input.plan === "string" ? input.plan.trim() : "";
+      const suppliedPlanPath = typeof input.planFilePath === "string" && input.planFilePath.trim()
+        ? input.planFilePath
+        : undefined;
+      const planFilePath = suppliedPlanPath
+        ? trustedPlanFilePath(suppliedPlanPath, [options.cwd, options.originalWorkdir])
+        : (inlinePlan ? undefined : newestPlanFileSince([options.cwd, options.originalWorkdir], launchedAtMs));
       const artifact: PlanArtifact = {
         explanation: undefined,
         steps: [],
@@ -325,10 +476,27 @@ export class ClaudeCodeHarness implements AgentHarness {
           return { behavior: "deny", message: "No interactive user is attached to this session; proceed with your best judgment." };
         }
         const state = buildPendingInputState(currentSessionId, ++requestCounter, input);
+        // Answers arrive either through the session's question service (button
+        // callbacks) or directly through submitPendingInputText/Option.
+        const direct = new Promise<PermissionResult>((resolve) => {
+          pendingQuestion = { state, input, answers: {}, resolve };
+        });
         queue.enqueue(createPendingInputEvent(state));
+        const viaService = askUserQuestion(toolName, input);
+        const onAbort = (): void => {
+          if (pendingQuestion?.state.requestId !== state.requestId) return;
+          const pending = pendingQuestion;
+          pendingQuestion = undefined;
+          pending.resolve({ behavior: "deny", message: "The question was cancelled.", interrupt: true });
+        };
+        toolOptions.signal.addEventListener("abort", onAbort, { once: true });
         try {
-          return await askUserQuestion(toolName, input);
+          // Promise.race observes both: a later rejection of the losing side
+          // (for example the service timeout) is never unhandled.
+          return await Promise.race([viaService, direct]);
         } finally {
+          toolOptions.signal.removeEventListener("abort", onAbort);
+          if (pendingQuestion?.state.requestId === state.requestId) pendingQuestion = undefined;
           queue.enqueue(createPendingInputResolvedEvent(state.requestId));
         }
       }
@@ -413,7 +581,9 @@ export class ClaudeCodeHarness implements AgentHarness {
     const reporting = new Set<Promise<void>>();
     const track = (task: Promise<void>): void => {
       reporting.add(task);
-      void task.finally(() => reporting.delete(task));
+      const forget = (): void => { reporting.delete(task); };
+      // Both branches handled: a failing advisory task never becomes an unhandled rejection.
+      void task.then(forget, forget);
     };
 
     const publishContextUsage = (q: Query): void => {
@@ -475,8 +645,9 @@ export class ClaudeCodeHarness implements AgentHarness {
           const errorCode = outcome === "failed"
             ? ("startup_failure_reason" in msg && msg.startup_failure_reason) || lastAssistantError
             : undefined;
+          const ownModels = subtractBaselineUsage(models, forkBaseline);
           const usage: HarnessUsage = {
-            ...(models ? { models } : {}),
+            ...(ownModels ? { models: ownModels } : {}),
             backgroundTasks,
           };
           queue.enqueue(createRunCompletedEvent({
@@ -485,7 +656,9 @@ export class ClaudeCodeHarness implements AgentHarness {
             outcomeAuthoritative: true,
             ...(errorCode ? { errorCode } : {}),
             duration_ms: msg.duration_ms ?? 0,
-            total_cost_usd: resolveTotalCostUsd(msg, models),
+            total_cost_usd: forkBaseline && !forkBaseline.models?.length && forkBaseline.costUsd
+              ? Math.max(0, resolveTotalCostUsd(msg, models) - forkBaseline.costUsd)
+              : resolveTotalCostUsd(msg, ownModels),
             num_turns: msg.num_turns ?? 0,
             result: resolveResultText(msg),
             session_id: msg.session_id ?? currentSessionId,
@@ -586,6 +759,11 @@ export class ClaudeCodeHarness implements AgentHarness {
       } finally {
         closed = true;
         settlePendingPlan({ behavior: "deny", message: "The session ended before the plan was reviewed.", interrupt: true });
+        if (pendingQuestion) {
+          const pending = pendingQuestion;
+          pendingQuestion = undefined;
+          pending.resolve({ behavior: "deny", message: "The session ended before the question was answered.", interrupt: true });
+        }
         await Promise.allSettled([...reporting]);
         queue.close();
       }
@@ -620,6 +798,26 @@ export class ClaudeCodeHarness implements AgentHarness {
         return true;
       },
 
+      async submitPendingInputText(text: string): Promise<boolean> {
+        const pending = pendingQuestion;
+        if (!pending) return false;
+        const question = pending.state.questions?.[pending.state.activeQuestionIndex ?? 0];
+        return answerPendingQuestion(resolveClaudeQuestionAnswer(question, text));
+      },
+
+      async submitPendingInputOption(
+        index: number,
+        context: { requestId?: string; questionId?: string } = {},
+      ): Promise<boolean> {
+        const pending = pendingQuestion;
+        if (!pending) return false;
+        if (context.requestId && context.requestId !== pending.state.requestId) return false;
+        const question = pending.state.questions?.[pending.state.activeQuestionIndex ?? 0];
+        const option = question?.options[index];
+        if (!option) return false;
+        return answerPendingQuestion(option.label, context.questionId);
+      },
+
       async streamInput(input: AsyncIterable<unknown>): Promise<void> {
         const q = await qPromise;
         await q.streamInput(input as AsyncIterable<SDKUserMessage>);
@@ -627,7 +825,17 @@ export class ClaudeCodeHarness implements AgentHarness {
 
       async interrupt(): Promise<void> {
         const q = await qPromise;
-        await q.interrupt();
+        try {
+          await q.interrupt();
+        } catch (error) {
+          // Interrupting a query that is already shutting down (teardown after
+          // close or abort) fails with "Operation aborted"; that is expected.
+          if (closed || options.abortController?.signal.aborted || /\babort/i.test(error instanceof Error ? error.message : String(error))) {
+            log.debug(`[ClaudeCodeHarness] interrupt after shutdown ignored: ${error instanceof Error ? error.message : String(error)}`);
+            return;
+          }
+          throw error;
+        }
       },
     };
   }

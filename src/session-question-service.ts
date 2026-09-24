@@ -120,6 +120,20 @@ export class SessionQuestionService {
     });
   }
 
+  /**
+   * Drop a pending AskUserQuestion that the backend already resolved another
+   * way (direct text/option submission). Its promise is left unsettled: the
+   * harness raced it against the direct answer and no longer awaits it.
+   */
+  discardAskUserQuestion(sessionId: string, requestId?: string): boolean {
+    const pending = this.pendingQuestions.get(sessionId);
+    if (!pending) return false;
+    if (requestId && pending.requestId !== requestId) return false;
+    clearTimeout(pending.timeoutHandle);
+    this.pendingQuestions.delete(sessionId);
+    return true;
+  }
+
   resolveAskUserQuestion(
     sessionId: string,
     optionIndex: number,

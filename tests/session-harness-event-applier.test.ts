@@ -13,6 +13,7 @@ describe("SessionHarnessEventApplier", () => {
       clearStartupTimer: () => { events.push("clear-startup"); },
       assignBackendRef: (ref) => { events.push(`backend:${ref.conversationId}`); },
       noteRunStarted: (runId) => { events.push(`run:${runId}`); },
+      notePromptSettled: () => { events.push("settled"); },
       transitionRunning: () => { events.push("running"); },
       noteTextDelta: (text) => { events.push(`text:${text}`); },
       noteToolCall: ({ name }) => { events.push(`tool:${name}`); },

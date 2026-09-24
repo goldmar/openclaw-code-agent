@@ -1,5 +1,6 @@
 export type { OpenClawPluginToolContext } from "../api";
 import type { SessionTaskLifecycleSink } from "./session-task-lifecycle";
+import type { HarnessLaunchOptions } from "./harness/types";
 
 // Plugin types
 
@@ -398,6 +399,12 @@ export interface SessionConfig {
    * inherit the persisted worktree context. */
   resumeWorktreeFrom?: string;
   forkSession?: boolean;
+  /**
+   * Usage the fork inherits from its parent conversation, so the fork reports
+   * only its own spend. Set by SessionManager for forks; harnesses that count
+   * inherited usage (Claude Code) subtract it.
+   */
+  forkBaselineUsage?: HarnessLaunchOptions["forkBaselineUsage"];
   /** Codex only: drop the latest N turns of the resumed/forked thread before continuing. */
   rewindTurns?: number;
   multiTurn?: boolean;

@@ -22,7 +22,9 @@ type ApplyState = {
 type SessionHarnessEventApplierDeps = {
   clearStartupTimer: () => void;
   assignBackendRef: (ref: SessionBackendRef) => void;
-  noteRunStarted: (runId: string) => void;
+  noteRunStarted: (runId: string | undefined) => void;
+  /** A pulled prompt settled without starting a turn. */
+  notePromptSettled: () => void;
   transitionRunning: () => void;
   noteTextDelta: (text: string, pendingPlanApproval: boolean) => void;
   noteToolCall: (args: { name: string; input: unknown }) => void;
@@ -61,7 +63,12 @@ export class SessionHarnessEventApplier {
     }
 
     if (msg.type === "run_started") {
-      if (msg.runId) this.deps.noteRunStarted(msg.runId);
+      this.deps.noteRunStarted(msg.runId);
+      return;
+    }
+
+    if (msg.type === "prompt_settled") {
+      this.deps.notePromptSettled();
       return;
     }
 

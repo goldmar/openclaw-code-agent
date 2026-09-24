@@ -37,7 +37,7 @@ These run a configurable command or a repository-provided file, so the executabl
 
 | Command | Source | Notes |
 | --- | --- | --- |
-| Codex App Server | `src/harness/codex-rpc.ts` | `codex app-server --listen stdio://` (override with `OPENCLAW_CODEX_APP_SERVER_COMMAND` / `OPENCLAW_CODEX_APP_SERVER_ARGS`). JSON-RPC over stdio; one process per Codex session. |
+| Codex App Server | `src/harness/codex-rpc.ts` | `codex app-server --listen stdio://` (override with `OPENCLAW_CODEX_APP_SERVER_COMMAND` / `OPENCLAW_CODEX_APP_SERVER_ARGS`). JSON-RPC over stdio; one process per Codex session. By default Codex runs in its `:workspace` sandbox (writes inside the workspace, no network) with `on-request` escalations reviewed by Codex's `auto_review` subagent; see [Codex sandbox](#codex-sandbox). |
 | OpenCode server | `src/harness/opencode.ts` | One shared `opencode serve --hostname 127.0.0.1 --port 0 --print-logs` (override the binary with `OPENCLAW_OPENCODE_COMMAND`). Started lazily for the first OpenCode session, addressed through the URL it prints, and shut down about 30 seconds after the last OpenCode session ends. Binds to localhost only. |
 | Worktree setup script | `src/worktree-provisioning.ts` | The repository's executable `.openclaw/worktree-setup.sh`, run directly (no shell, no stdin) in each new OCA worktree with a 120 s timeout and process-group termination. See [Worktree setup script](#worktree-setup-script). |
 | Goal verifier | `src/goal-controller.ts` | `bash -lc <command>` for operator-supplied verifier commands in `agent_goal_launch(verifier...)`. `BASH_ENV` and `ENV` are removed from its environment so shell bootstrap hooks cannot rewrite verifier execution. Verifier commands are trusted operator input; do not expose goal launches to untrusted users. |
@@ -49,6 +49,10 @@ These run a configurable command or a repository-provided file, so the executabl
 - LLM summaries: `api.runtime.llm.complete` against the default agent's model (`src/runtime-llm.ts`); OCA never requests a model, agent, or auth-profile override.
 - Logging: `api.runtime.logging.getChildLogger` (`src/logger.ts`).
 - Task Flow mirroring: `api.runtime.tasks.async.managedFlows` (`src/session-task-lifecycle.ts`).
+
+## Codex Sandbox
+
+Under `:workspace`, Codex may write only inside the workspace and has no network access. A command that needs more (network, for example `git push`, package installs, or API calls; or writes outside the workspace) is an escalation: with `on-request` Codex asks, and `auto_review` has Codex's reviewer subagent approve or deny it based on the task and its risk, usually within seconds and without a chat prompt. Denied requests fail back to the model. Set `approvalsReviewer: "user"` to get approval buttons in chat instead, or `[sandbox_workspace_write] network_access = true` in `~/.codex/config.toml` to allow network inside the sandbox. Claude Code and OpenCode have no equivalent OCA-managed sandbox: after plan approval they run with the permissions their permission mode grants (`bypassPermissions` by default). To give Codex the 4.x full access, set `harnesses.codex.permissionProfile: ":danger-full-access"` and `approvalPolicy: "never"`.
 
 ## Network
 
@@ -67,7 +71,7 @@ Update buttons are single-use action tokens bound to the approved version.
 
 ## Worktree Setup Script
 
-OpenClaw core runs `.openclaw/worktree-setup.sh` for its managed worktrees only when the caller has admin scope, because the `worktrees.create` Gateway method can be reached by lower-privileged clients. OCA always runs it for its own worktrees. An OCA worktree is created only for a coding session that the orchestrator launched in an operator-chosen repository, and the coding agent then runs in that same checkout with write and command access (full access by default after plan approval). The setup script therefore grants nothing the session does not already have. Do not use repositories whose setup scripts you do not trust as OCA workdirs.
+OpenClaw core runs `.openclaw/worktree-setup.sh` for its managed worktrees only when the caller has admin scope, because the `worktrees.create` Gateway method can be reached by lower-privileged clients. OCA always runs it for its own worktrees. An OCA worktree is created only for a coding session that the orchestrator launched in an operator-chosen repository, and the operator who chose that repository is already trusting its code and tooling. The script runs unsandboxed with the Gateway's privileges. That matches Claude Code and OpenCode sessions, which run with full access after plan approval by default, but it is more access than a default Codex session has inside its `:workspace` sandbox. Do not use repositories whose setup scripts you do not trust as OCA workdirs.
 
 ## Data Locations
 

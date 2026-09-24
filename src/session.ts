@@ -65,6 +65,8 @@ import { createLogger } from "./logger";
 const log = createLogger("session");
 
 const STARTUP_TIMEOUT_MS = 2 * 60 * 1000; // 2 minutes
+/** Grace period after background tasks finish for Claude Code to start its report turn. */
+const BACKGROUND_TASK_SETTLE_MS = 5_000;
 
 /** Approval phrases that carry no instructions beyond the approval itself. */
 const BARE_APPROVAL_MESSAGES = new Set([
@@ -87,12 +89,19 @@ const PLAN_REVISION_PROMPT_PREFIX =
   "[SYSTEM: The user wants changes to your plan. Revise the plan based on their feedback below, then re-submit your revised plan for approval. Do NOT start implementing yet.]\n\n";
 export { getSessionOutputFilePath } from "./session-output";
 
+function isAbortError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  return err.name === "AbortError" || /\babort(?:ed)?\b/i.test(err.message);
+}
+
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
 function logSessionDiagnostic(event: string, fields: Record<string, unknown>): void {
-  log.warn(JSON.stringify({
+  // Routine lifecycle diagnostics log at info; failure events stay at warn.
+  const level = /(?:error|fail)/i.test(event) ? "warn" : "info";
+  log[level](JSON.stringify({
     component: "Session",
     event,
     at: new Date().toISOString(),
@@ -151,6 +160,7 @@ export class Session extends EventEmitter {
   readonly resumeSessionId?: string;
   readonly resumedFromSessionName?: string;
   readonly forkSession?: boolean;
+  private readonly forkBaselineUsage?: SessionConfig["forkBaselineUsage"];
   private readonly rewindTurns?: number;
 
   // Worktree
@@ -180,6 +190,14 @@ export class Session extends EventEmitter {
   readonly multiTurn: boolean;
   readonly goalTaskId?: string;
   private messageStream?: MessageStream;
+  /** A finished turn kept open only because a pulled prompt had not started its turn yet. */
+  private turnHeldForOutstandingPrompt = false;
+  /** `run_started` and `prompt_settled` events seen since launch (paired with prompt-stream pulls). */
+  private runsStarted = 0;
+  /** Separate the next output from earlier text (new turn, or text after a tool call). */
+  private separateNextOutput = false;
+  /** A finished turn is held open because backend background tasks are still live. */
+  private awaitingBackgroundTasks = false;
 
   // State
   private _status: SessionStatus = "starting";
@@ -296,6 +314,7 @@ export class Session extends EventEmitter {
     this.resumeSessionId = config.resumeSessionId;
     this.resumedFromSessionName = config.resumedFromSessionName;
     this.forkSession = config.forkSession;
+    this.forkBaselineUsage = config.forkBaselineUsage;
     this.rewindTurns = config.rewindTurns;
     this.multiTurn = config.multiTurn ?? true;
     this.goalTaskId = config.goalTaskId;
@@ -321,7 +340,7 @@ export class Session extends EventEmitter {
     this.startedAt = Date.now();
     this.abortController = new AbortController();
     this.turnRuntime = new SessionTurnRuntime({
-      appendOutput: (text) => appendSessionOutput(this.outputBuffer, this.id, text),
+      appendOutput: (text) => this.appendOutput(text),
       emitOutput: (text) => this.emit("output", this, text),
       emitToolUse: (name, input) => this.emit("toolUse", this, name, input),
       emitTurnEnd: (hadQuestion) => this.emit("turnEnd", this, hadQuestion),
@@ -348,8 +367,14 @@ export class Session extends EventEmitter {
         this.backendRef = ref;
         this.harnessSessionId = ref.conversationId;
       },
+      notePromptSettled: () => {
+        this.runsStarted += 1;
+        this.finishTurnHeldForSettledPrompt();
+      },
       noteRunStarted: (runId) => {
-        if (this.backendRef) {
+        this.runsStarted += 1;
+        this.turnHeldForOutstandingPrompt = false;
+        if (runId && this.backendRef) {
           this.backendRef = { ...this.backendRef, runId };
         }
       },
@@ -359,7 +384,10 @@ export class Session extends EventEmitter {
         }
       },
       noteTextDelta: (text, pendingPlanApproval) => this.turnRuntime.noteTextDelta(text, pendingPlanApproval),
-      noteToolCall: (args) => this.turnRuntime.noteToolCall(args),
+      noteToolCall: (args) => {
+        this.separateNextOutput = true;
+        this.turnRuntime.noteToolCall(args);
+      },
       notePlanApprovalRequest: (request, planModeApproved) => this.turnRuntime.notePlanApprovalRequest({
         artifact: request.artifact,
         planFilePath: request.planFilePath,
@@ -374,7 +402,10 @@ export class Session extends EventEmitter {
           });
         }
       },
-      noteUsage: (usage) => this.mergeUsage(usage),
+      noteUsage: (usage) => {
+        this.mergeUsage(usage);
+        this.maybeFinishAfterBackgroundTasks();
+      },
       setPendingInputState: (state) => this.setPendingInputState(state),
       notePendingInput: (state) => this.turnRuntime.notePendingInput(state),
       clearResolvedPendingInput: (requestId, currentState) => (
@@ -387,6 +418,7 @@ export class Session extends EventEmitter {
         this.applyControlEvent({ type: "permission.mode_changed", currentPermissionMode: mode });
       },
       handleRunCompleted: (data) => {
+        this.separateNextOutput = true;
         const reportedOutcome = data.outcome ?? (data.success ? "completed" : "failed");
         // Backends with structured failure reporting classify outcomes
         // themselves; the text heuristic only covers the others.
@@ -416,10 +448,15 @@ export class Session extends EventEmitter {
 
         const isInterruptedTurn = this.multiTurn && this.messageStream && outcome === "interrupted";
         const isMultiTurnEndOfTurn = this.multiTurn && this.messageStream && outcome === "completed";
+        const hasPendingMessages = this.hasOutstandingPrompts();
+        // Claude Code keeps background tasks (for example background shells)
+        // alive after a turn; the session is not done until they finish.
+        const backgroundTasksLive = isMultiTurnEndOfTurn && (this.usage?.backgroundTasks ?? 0) > 0;
+        this.awaitingBackgroundTasks = backgroundTasksLive && !hasPendingMessages;
 
         if (isInterruptedTurn) {
           this.resetIdleTimer();
-          this.turnRuntime.finishInterruptedTurn(this.messageStream?.hasPending() === true);
+          this.turnRuntime.finishInterruptedTurn(hasPendingMessages);
         } else if (isMultiTurnEndOfTurn) {
           this.resetIdleTimer();
           this.turnRuntime.finishSuccessfulTurn({
@@ -428,8 +465,9 @@ export class Session extends EventEmitter {
             pendingPlanApproval: this.pendingPlanApproval,
             planModeApproved: this.planModeApproved,
             pendingInputState: this.pendingInputState,
-            hasPendingMessages: this.messageStream?.hasPending() === true,
+            hasPendingMessages: hasPendingMessages || backgroundTasksLive,
           });
+          this.turnHeldForOutstandingPrompt = hasPendingMessages && !backgroundTasksLive;
         } else {
           this.turnRuntime.finishTerminalTurn();
           const failureText = outcome === "failed" ? withErrorCode(resultText, data.errorCode) : undefined;
@@ -690,6 +728,55 @@ export class Session extends EventEmitter {
     this.applyControlEvent({ type: "input.requested" });
   }
 
+  /**
+   * Whether a follow-up prompt or thread action is still waiting for its turn.
+   *
+   * The queue covers prompts the harness has not pulled yet. Codex and OpenCode
+   * run one turn per pulled prompt and emit `run_started` for it, but they can
+   * pull the next prompt before this session applies the previous turn's
+   * `run_completed`; a pulled prompt without its `run_started` is therefore
+   * still outstanding. Claude Code's SDK pulls the stream eagerly and itself
+   * defers results while queued turns remain (`queued_turn_count`), so only the
+   * queue counts there.
+   */
+  /**
+   * The prompt a finished turn was waiting for settled without a turn (for
+   * example it answered pending input): finish the held turn now instead of
+   * waiting for an idle timeout.
+   */
+  private finishTurnHeldForSettledPrompt(): void {
+    if (!this.turnHeldForOutstandingPrompt || this.hasOutstandingPrompts()) return;
+    this.turnHeldForOutstandingPrompt = false;
+    if (this._status !== "running" || !this.turnInProgress) return;
+    this.turnRuntime.finishSuccessfulTurn({
+      currentPermissionMode: this.currentPermissionMode,
+      permissionMode: this.permissionMode,
+      pendingPlanApproval: this.pendingPlanApproval,
+      planModeApproved: this.planModeApproved,
+      pendingInputState: this.pendingInputState,
+      hasPendingMessages: false,
+    });
+  }
+
+  private hasOutstandingPrompts(): boolean {
+    const stream = this.messageStream;
+    if (!stream) return false;
+    if (stream.hasPending()) return true;
+    if (this.harness.backendKind === "claude-code") return false;
+    return stream.consumedCount > this.runsStarted;
+  }
+
+  private appendOutput(text: string): void {
+    if (!text) return;
+    let chunk = text;
+    if (this.separateNextOutput) {
+      this.separateNextOutput = false;
+      const last = this.outputBuffer.at(-1);
+      if (last !== undefined && last.trim() && !/^\s/.test(chunk)) chunk = `\n\n${chunk}`;
+    }
+    appendSessionOutput(this.outputBuffer, this.id, chunk);
+  }
+
   private needsWorktreeFinalizationCheck(): boolean {
     if (!this.multiTurn || !this.messageStream) return false;
     if (!this.worktreePath || !this.worktreeStrategy || this.worktreeStrategy === "off") return false;
@@ -772,6 +859,7 @@ export class Session extends EventEmitter {
         allowedTools: this.allowedTools,
         resumeSessionId: this.resumeSessionId,
         forkSession: this.forkSession,
+        ...(this.forkSession && this.forkBaselineUsage ? { forkBaselineUsage: this.forkBaselineUsage } : {}),
         rewindTurns: this.rewindTurns,
         worktreeStrategy: this.worktreeStrategy,
         originalWorkdir: this.originalWorkdir ?? this.workdir,
@@ -941,6 +1029,28 @@ export class Session extends EventEmitter {
     }
   }
 
+  /**
+   * Background tasks that outlived their turn have finished. Claude Code usually
+   * reports their results in a new turn, which ends the session normally; if no
+   * turn starts within the grace period, finish the held turn here.
+   */
+  private maybeFinishAfterBackgroundTasks(): void {
+    if (!this.awaitingBackgroundTasks || (this.usage?.backgroundTasks ?? 0) > 0) return;
+    this.awaitingBackgroundTasks = false;
+    const runsAtIdle = this.runsStarted;
+    this.setTimer("background-tasks", BACKGROUND_TASK_SETTLE_MS, () => {
+      if (this._status !== "running" || this.runsStarted !== runsAtIdle || !this.turnInProgress) return;
+      this.turnRuntime.finishSuccessfulTurn({
+        currentPermissionMode: this.currentPermissionMode,
+        permissionMode: this.permissionMode,
+        pendingPlanApproval: this.pendingPlanApproval,
+        planModeApproved: this.planModeApproved,
+        pendingInputState: this.pendingInputState,
+        hasPendingMessages: this.hasOutstandingPrompts(),
+      });
+    });
+  }
+
   private mergeUsage(usage: HarnessUsage): void {
     this.usage = {
       ...this.usage,
@@ -967,13 +1077,9 @@ export class Session extends EventEmitter {
     }
     const activeQuestionIndex = this.pendingInputState.activeQuestionIndex;
     const questionCount = this.pendingInputState.questions?.length;
+    const requestId = this.pendingInputState.requestId;
     const submitted = await this.harnessHandle.submitPendingInputOption(optionIndex, context);
-    if (submitted) {
-      this.lastPendingInputSubmissionRequiresMore = activeQuestionIndex != null
-        && questionCount != null
-        && activeQuestionIndex + 1 < questionCount;
-      this.waitingForInputFired = false;
-    }
+    if (submitted) this.notePendingInputSubmitted(requestId, activeQuestionIndex, questionCount);
     return submitted;
   }
 
@@ -998,14 +1104,24 @@ export class Session extends EventEmitter {
     }
     const activeQuestionIndex = this.pendingInputState.activeQuestionIndex;
     const questionCount = this.pendingInputState.questions?.length;
+    const requestId = this.pendingInputState.requestId;
     const submitted = await this.harnessHandle.submitPendingInputText(text);
-    if (submitted) {
-      this.lastPendingInputSubmissionRequiresMore = activeQuestionIndex != null
-        && questionCount != null
-        && activeQuestionIndex + 1 < questionCount;
-      this.waitingForInputFired = false;
-    }
+    if (submitted) this.notePendingInputSubmitted(requestId, activeQuestionIndex, questionCount);
     return submitted;
+  }
+
+  private notePendingInputSubmitted(
+    requestId: string | undefined,
+    activeQuestionIndex: number | undefined,
+    questionCount: number | undefined,
+  ): void {
+    this.lastPendingInputSubmissionRequiresMore = activeQuestionIndex != null
+      && questionCount != null
+      && activeQuestionIndex + 1 < questionCount;
+    this.waitingForInputFired = false;
+    if (!this.lastPendingInputSubmissionRequiresMore) {
+      this.emit("pendingInputAnswered", this, requestId);
+    }
   }
 
   /** Queue a permission mode switch to apply on the next user message. */
@@ -1064,6 +1180,11 @@ export class Session extends EventEmitter {
     if (this.messageStream) this.messageStream.end();
     if (this.harnessHandle?.interrupt) {
       void this.harnessHandle.interrupt().catch((err: unknown) => {
+        // Teardown aborts the backend, so an aborted interrupt is expected.
+        if (isAbortError(err)) {
+          log.debug(`[Session ${this.id}] interrupt during teardown aborted: ${errorMessage(err)}`);
+          return;
+        }
         log.warn(`[Session ${this.id}] interrupt during teardown failed: ${errorMessage(err)}`);
       });
     }

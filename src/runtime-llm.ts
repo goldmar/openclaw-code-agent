@@ -1,3 +1,4 @@
+import { AsyncResource } from "node:async_hooks";
 import { getPluginRuntime, type PluginRuntime } from "./runtime-store";
 
 type RuntimeLlmComplete = PluginRuntime["llm"]["complete"];
@@ -26,12 +27,33 @@ export function getRuntimeLlmComplete(): RuntimeLlmComplete | undefined {
   return getPluginRuntime()?.llm.complete;
 }
 
+/**
+ * Async context captured when this module is first evaluated (plugin load),
+ * before any tool call or Gateway request runs plugin code.
+ *
+ * OCA's summaries run from session events: harness output loops started inside
+ * an earlier tool call (for example `agent_launch`) keep that call's async
+ * context, including the host's per-request async work scope. Once the tool
+ * call returned, the host closes that scope, and `runtime.llm.complete` then
+ * rejects with "Async work scope is closed" because it admits its work into
+ * the caller's scope. Running the call inside this detached resource restores
+ * the load-time context instead, so the completion is owned by no finished
+ * request. (The host uses the same pattern for its own background work; there
+ * is no public plugin-SDK helper for it on 2026.9.6.)
+ */
+const detachedLlmContext = new AsyncResource("openclaw-code-agent.runtime-llm");
+
+/** Run `fn` outside the async context (and request work scope) of the caller. */
+export function runDetachedFromRequestScope<T>(fn: () => T): T {
+  return detachedLlmContext.runInAsyncScope(fn);
+}
+
 /** Returns the completion text, or throws the host error (with its stable `code`). */
 export async function completeRuntimeLlmText(
   complete: RuntimeLlmComplete,
   request: RuntimeLlmTextRequest,
 ): Promise<string> {
-  const result = await complete({
+  const result = await runDetachedFromRequestScope(() => complete({
     messages: [{ role: "user", content: request.prompt }],
     systemPrompt: request.systemPrompt,
     purpose: request.purpose,
@@ -39,7 +61,7 @@ export async function completeRuntimeLlmText(
     // Short structured summaries; "low" is accepted by every current reasoning model.
     reasoning: "low",
     ...(request.signal ? { signal: request.signal } : {}),
-  });
+  }));
   const text = typeof result?.text === "string" ? result.text : "";
   return stripJsonCodeFence(text);
 }

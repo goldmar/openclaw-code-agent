@@ -542,7 +542,52 @@ describe("OpenCodeHarness turns on the shared server", () => {
     const tools = collector.messages.filter((message) => message.type === "tool_call");
     assert.deepEqual(tools, [{ type: "tool_call", name: "bash", input: { command: "ls" } }]);
     const texts = collector.messages.filter((message) => message.type === "text_delta").map((message) => message.type === "text_delta" ? message.text : "");
-    assert.deepEqual(texts, ["visible", "Final."]);
+    // Text from different parts/messages is separated for agent_output.
+    assert.deepEqual(texts, ["visible", "\n\n", "Final."]);
+    stream.end();
+    await collector.done;
+  });
+
+  it("separates text parts but not deltas of the same part", async () => {
+    const mock = new MockOpenCodeServer();
+    mock.autoComplete = false;
+    const { stream, collector } = launch(harnessFor(mock));
+    stream.push("go");
+    await waitFor(() => mock.requestsTo("POST", /\/prompt_async$/).length === 1, "prompt");
+    const delta = (partID: string, text: string) => ({
+      type: "message.part.delta",
+      properties: { sessionID: "ses_1", messageID: "msg_1", partID, field: "text", delta: text },
+    });
+    mock.emit(delta("prt_1", "Hello "));
+    mock.emit(delta("prt_1", "world."));
+    mock.emit(delta("prt_2", "Second part."));
+    await collector.until((messages) => messages.some((message) => message.type === "text_delta" && message.text === "Second part."), "second part");
+    const texts = collector.messages.filter((message) => message.type === "text_delta").map((message) => message.type === "text_delta" ? message.text : "");
+    assert.equal(texts.join(""), "Hello world.\n\nSecond part.");
+    mock.completeTurn("ses_1");
+    await collector.untilCompletions(1);
+    stream.end();
+    await collector.done;
+  });
+
+  it("sends a follow-up queued during a running turn as the next turn instead of dropping it", async () => {
+    const mock = new MockOpenCodeServer();
+    mock.autoComplete = false;
+    const { stream, collector } = launch(harnessFor(mock));
+    stream.push("first");
+    await waitFor(() => mock.requestsTo("POST", /\/prompt_async$/).length === 1, "first prompt");
+    stream.push("second");
+    await new Promise<void>((resolve) => { setTimeout(resolve, 20); });
+    mock.completeTurn("ses_1");
+    // The first turn's result is deferred to the queued turn, so the session
+    // never sees an idle end while the follow-up is pending.
+    await waitFor(() => mock.requestsTo("POST", /\/prompt_async$/).length === 2, "follow-up prompt");
+    assert.equal(collector.completions().length, 0);
+    const prompts = mock.requestsTo("POST", /\/prompt_async$/);
+    assert.match(JSON.stringify(prompts[1]?.body), /second/);
+    mock.completeTurn("ses_1");
+    await collector.untilCompletions(1);
+    assert.equal(collector.completions()[0]?.data.success, true);
     stream.end();
     await collector.done;
   });

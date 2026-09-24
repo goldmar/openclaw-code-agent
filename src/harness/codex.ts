@@ -32,10 +32,12 @@ import {
   createPendingInputResolvedEvent,
   createPlanArtifactEvent,
   createRunCompletedEvent,
+  createPromptSettledEvent,
   createRunStartedEvent,
   createSettingsChangedEvent,
   createTextDeltaEvent,
   HarnessMessageQueue,
+  PromptReader,
 } from "./harness-events";
 import { formatPendingInputWizardQuestion } from "../pending-input-normalization";
 import { canonicalizeModelForHarness, isModelFormatSupportedForHarness } from "../harness-models";
@@ -174,8 +176,21 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** Lifecycle events log at debug; declines, failures, and anomalies at warn. */
+const WARN_HARNESS_EVENTS = new Set([
+  "pending_input.concurrent_declined",
+  "server_request.unsupported",
+  "model.list.unavailable",
+  "account.read.unavailable",
+  "rate_limits.read.unavailable",
+  "turn.error",
+  "session.error",
+  "action.rejected",
+]);
+
 function logCodexHarnessDiagnostic(event: string, fields: Record<string, unknown>): void {
-  log.warn(JSON.stringify({
+  const emit = WARN_HARNESS_EVENTS.has(event) ? log.warn : log.debug;
+  emit(JSON.stringify({
     component: "CodexHarness",
     event,
     at: new Date().toISOString(),
@@ -306,6 +321,15 @@ export class CodexHarness implements AgentHarness {
     let planExplanation = "";
     let planSteps: PlanArtifactStep[] = [];
     const streamedAgentItemIds = new Set<string>();
+    // Set once the handle or the app server closed: nothing may start afterwards.
+    let closed = false;
+    const promptIterable = typeof options.prompt === "string"
+      ? (async function* (): AsyncGenerator<unknown> {
+          yield { type: "user", text: options.prompt };
+        })()
+      : options.prompt;
+    const prompts = new PromptReader(promptIterable);
+    let emittedText = false;
 
     const emitBackendRef = (): void => {
       if (!threadId) return;
@@ -322,6 +346,11 @@ export class CodexHarness implements AgentHarness {
         lastTurnId = turnId;
         emitBackendRef();
       }
+    };
+
+    /** Separate consecutive agent messages so agent_output does not run them together. */
+    const emitMessageSeparator = (): void => {
+      if (emittedText) queue.enqueue(createTextDeltaEvent("\n\n"));
     };
 
     const finishActiveTurn = (update: { terminal?: Turn; failure?: string }): void => {
@@ -356,6 +385,7 @@ export class CodexHarness implements AgentHarness {
     };
 
     client.setCloseHandler?.(() => {
+      closed = true;
       finishActiveTurn({ failure: "Codex App Server exited before the turn completed." });
     });
 
@@ -416,7 +446,11 @@ export class CodexHarness implements AgentHarness {
         case "item/agentMessage/delta": {
           const delta = params as AgentMessageDeltaNotification;
           if (!delta.delta) return;
-          streamedAgentItemIds.add(delta.itemId);
+          if (!streamedAgentItemIds.has(delta.itemId)) {
+            streamedAgentItemIds.add(delta.itemId);
+            emitMessageSeparator();
+          }
+          emittedText = true;
           queue.enqueue(createTextDeltaEvent(delta.delta));
           return;
         }
@@ -430,8 +464,12 @@ export class CodexHarness implements AgentHarness {
             };
             queue.enqueue(createPlanArtifactEvent(artifact, true));
           } else if (item.type === "agentMessage" && item.text && !streamedAgentItemIds.has(item.id)) {
+            emitMessageSeparator();
+            emittedText = true;
             queue.enqueue(createTextDeltaEvent(item.text));
           } else if (item.type === "contextCompaction") {
+            emitMessageSeparator();
+            emittedText = true;
             queue.enqueue(createTextDeltaEvent("[Codex] Conversation context compacted."));
           }
           return;
@@ -704,6 +742,7 @@ export class CodexHarness implements AgentHarness {
           kind,
           outcome,
         });
+        if (await deferResultToQueuedPrompt(outcome === "failed" ? resultText : undefined)) return;
         queue.enqueue(createRunCompletedEvent({
           success: outcome === "completed",
           outcome,
@@ -719,6 +758,7 @@ export class CodexHarness implements AgentHarness {
           kind,
           error: errorMessage(error),
         });
+        if (await deferResultToQueuedPrompt(errorMessage(error))) return;
         queue.enqueue(createRunCompletedEvent({
           success: false,
           duration_ms: 0,
@@ -737,7 +777,30 @@ export class CodexHarness implements AgentHarness {
       }
     };
 
+    /**
+     * When the next prompt is already queued, report this turn through the next
+     * one instead (see PromptReader); a failure stays visible in the output.
+     */
+    const deferResultToQueuedPrompt = async (failure: string | undefined): Promise<boolean> => {
+      if (closed || !(await prompts.hasQueued())) return false;
+      if (failure) {
+        emitMessageSeparator();
+        emittedText = true;
+        queue.enqueue(createTextDeltaEvent(`[Codex] Turn failed: ${failure}`));
+      }
+      logCodexHarnessDiagnostic("turn.result.deferred", threadDiagnosticFields({ threadId, turnId: lastTurnId }));
+      return true;
+    };
+
+    const assertOpen = (what: string): void => {
+      if (closed) {
+        logCodexHarnessDiagnostic("action.rejected", { what, ...threadDiagnosticFields({ threadId, turnId: lastTurnId }) });
+        throw new Error(`Codex session has ended; cannot run ${what}. Resume the session or start a new one first.`);
+      }
+    };
+
     const runUserTurn = async (prompt: string): Promise<void> => {
+      assertOpen("a new turn");
       await ensureThread();
       const model = resolveTurnModel();
       await runTrackedTurn("user", async () => {
@@ -753,6 +816,7 @@ export class CodexHarness implements AgentHarness {
     };
 
     const runThreadAction = async (action: ThreadAction): Promise<void> => {
+      assertOpen(action.kind === "compact" ? "compact" : "review");
       await ensureThread();
       if (action.kind === "compact") {
         await runTrackedTurn("compact", async () => {
@@ -769,7 +833,7 @@ export class CodexHarness implements AgentHarness {
 
     const steer = async (text: string): Promise<boolean> => {
       const turn = activeTurn;
-      if (!turn || turn.kind !== "user" || !turn.turnId || turn.interruptRequested || turn.terminal || !threadId) {
+      if (closed || !turn || turn.kind !== "user" || !turn.turnId || turn.interruptRequested || turn.terminal || !threadId) {
         return false;
       }
       try {
@@ -852,25 +916,31 @@ export class CodexHarness implements AgentHarness {
       return answerQuestion(pending, question.id, option.value ?? option.label);
     };
 
-    const promptIterable = typeof options.prompt === "string"
-      ? (async function* (): AsyncGenerator<unknown> {
-          yield { type: "user", text: options.prompt };
-        })()
-      : options.prompt;
-
+    // The session loop owns every failure: it reports errors as a failed run and
+    // always closes the client, so this detached promise never rejects.
     void (async () => {
       try {
         await initialize();
-        for await (const rawMessage of promptIterable) {
+        while (true) {
+          const next = await prompts.next();
+          if (next.done) break;
+          const rawMessage = next.value;
+          if (closed) {
+            // The session ended (handle or app server closed) with this prompt
+            // still queued: never start work on a closed transport.
+            logCodexHarnessDiagnostic("action.rejected", { what: "queued prompt after close", ...threadDiagnosticFields({ threadId, turnId: lastTurnId }) });
+            break;
+          }
           const control = asThreadActionMessage(rawMessage);
           if (control) {
             await runThreadAction(control.action);
             continue;
           }
           const text = extractPromptText(rawMessage).trim();
-          if (!text) continue;
-          const handledPending = await submitPendingInputText(text);
-          if (handledPending) continue;
+          if (!text || await submitPendingInputText(text)) {
+            queue.enqueue(createPromptSettledEvent());
+            continue;
+          }
           await runUserTurn(text);
         }
       } catch (error) {
@@ -918,13 +988,14 @@ export class CodexHarness implements AgentHarness {
 
       async interrupt(): Promise<void> {
         const turn = activeTurn;
-        if (!threadId || !turn?.turnId) return;
+        if (closed || !threadId || !turn?.turnId) return;
         turn.interruptRequested = true;
         await codexRequest(client, "turn/interrupt", { threadId, turnId: turn.turnId }, timeoutMs)
           .catch((): undefined => undefined);
       },
 
       async close(): Promise<void> {
+        closed = true;
         await client.close();
       },
     };

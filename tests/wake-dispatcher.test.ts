@@ -194,7 +194,11 @@ function findCall<K extends DeliveryCall["kind"]>(kind: K): Extract<DeliveryCall
   return calls.find((call) => call.kind === kind) as Extract<DeliveryCall, { kind: K }> | undefined;
 }
 
-function systemEvent(text: string, sessionId: string, sessionKey = "main"): SystemEventCall {
+const ORIGIN_SESSION_KEY = "agent:main:telegram:group:-1003863755361:topic:11239";
+/** An origin session with no deliverable chat route (for example a cron or CLI-launched agent turn). */
+const NON_ROUTABLE_ORIGIN_SESSION_KEY = "agent:ops:main";
+
+function systemEvent(text: string, sessionId: string, sessionKey = ORIGIN_SESSION_KEY): SystemEventCall {
   return { kind: "system-event", text, sessionKey, contextKey: `openclaw-code-agent:${sessionId}` };
 }
 
@@ -321,7 +325,7 @@ describe("WakeDispatcher", () => {
     assert.deepEqual(calls.map((call) => call.kind), ["durable-send", "durable-send", "system-event"]);
     assert.equal(asDurableSend(calls[0]).text, "🚀 launched");
     assert.equal(asDurableSend(calls[1]).text, "✅ completed");
-    // The notify fallback has no wake session, so it targets the main session.
+    // The notify fallback targets the session's origin conversation, never `main`.
     assert.deepEqual(calls[2], systemEvent("🚀 launched", "session-ordering"));
   });
 
@@ -464,7 +468,7 @@ describe("WakeDispatcher", () => {
     assert.equal(calls.length, 2);
     assert.equal(asDurableSend(calls[0]).text, "🚀 launched");
     assert.deepEqual(calls[1], systemEvent("🚀 launched", "session-launch-timeout"));
-    assert.deepEqual(heartbeats, [{ source: "notifications-event", intent: "immediate", reason: "wake" }]);
+    assert.deepEqual(heartbeats, [{ source: "notifications-event", intent: "immediate", reason: "wake", sessionKey: ORIGIN_SESSION_KEY }]);
     assert.ok(!errorLogs.some((line) => line.includes("\"event\":\"dispatch_retry_scheduled\"")));
   });
 
@@ -535,7 +539,7 @@ describe("WakeDispatcher", () => {
     assert.deepEqual(calls.map((call) => call.kind), ["durable-send", "durable-send", "system-event"]);
     assert.equal(asDurableSend(calls[0]).text, "🚀 launched");
     assert.equal(asDurableSend(calls[1]).text, "✅ completed");
-    assert.deepEqual(calls[2], systemEvent("🚀 launched", "session-runtime-direct-unavailable"));
+    assert.deepEqual(calls[2], systemEvent("🚀 launched", "session-runtime-direct-unavailable", "agent:main:telegram:group:-1003863755361:topic:28"));
   });
 
   it("does not resend a plain notification through a system event after an ambiguous durable-send timeout", async (t) => {
@@ -703,6 +707,7 @@ describe("WakeDispatcher", () => {
       route: {
         provider: "system",
         target: "system",
+        sessionKey: NON_ROUTABLE_ORIGIN_SESSION_KEY,
       },
     };
 
@@ -714,7 +719,7 @@ describe("WakeDispatcher", () => {
     const calls = await waitForCalls(1);
 
     assert.equal(calls.length, 1);
-    assert.deepEqual(calls[0], systemEvent("🚀 launched", "session-system-route"));
+    assert.deepEqual(calls[0], systemEvent("🚀 launched", "session-system-route", NON_ROUTABLE_ORIGIN_SESSION_KEY));
   });
 
   it("recovers a direct Telegram notification route from degraded persisted metadata", async () => {
@@ -907,8 +912,12 @@ describe("WakeDispatcher", () => {
     dispatcher.dispose();
   });
 
-  it("falls back to a direct user notification plus system event when the wake target is unavailable", async () => {
+  it("falls back to a direct user notification and skips the system event when no origin session key exists", async () => {
     const dispatcher = createDispatcher();
+    const warnings: string[] = [];
+    console.warn = (message?: unknown, ...rest: unknown[]) => {
+      warnings.push([message, ...rest].map((value) => String(value)).join(" "));
+    };
     const session: FakeSession = {
       id: "session-3",
       route: buildRoute({ sessionKey: undefined }),
@@ -920,21 +929,20 @@ describe("WakeDispatcher", () => {
       wakeMessage: "Session is waiting for input.",
       notifyUser: "on-wake-fallback",
     });
-    const calls = await waitForCalls(2);
+    await waitForCalls(1);
+    await waitFor(() => warnings.some((line) => line.includes("no origin session key")), "dropped system-event warning");
 
-    assert.equal(calls.length, 2);
-    const notifyCall = calls.find((call) => call.kind === "durable-send");
-    const systemCall = calls.find((call) => call.kind === "system-event");
-    assert.ok(notifyCall, "expected a durable-send notification");
-    assert.ok(systemCall, "expected a system-event fallback");
-    assert.equal(asDurableSend(notifyCall).text, "🔔 waiting");
-    assert.deepEqual(systemCall, systemEvent("Session is waiting for input.", "session-3"));
+    // The user still hears about it directly; the wake is not sent to a `main` alias.
+    assert.deepEqual(calls.map((call) => call.kind), ["durable-send"]);
+    assert.equal(asDurableSend(calls[0]).text, "🔔 waiting");
+    assert.deepEqual(heartbeats, []);
   });
 
   it("does not silently downgrade interactive notifications to system text when direct routing is unavailable", async () => {
     const dispatcher = createDispatcher();
     const session: FakeSession = {
       id: "session-interactive-no-route",
+      originSessionKey: NON_ROUTABLE_ORIGIN_SESSION_KEY,
     };
 
     dispatcher.dispatchSessionNotification(session as any, {
@@ -950,7 +958,7 @@ describe("WakeDispatcher", () => {
     const calls = await waitForCalls(1);
 
     assert.equal(calls.length, 1);
-    assert.deepEqual(calls[0], systemEvent("Interactive delivery failed; no buttons were sent.", "session-interactive-no-route"));
+    assert.deepEqual(calls[0], systemEvent("Interactive delivery failed; no buttons were sent.", "session-interactive-no-route", NON_ROUTABLE_ORIGIN_SESSION_KEY));
   });
 
   it("prefers the structured route over legacy originChannel fields for new-schema sessions", async () => {
@@ -978,8 +986,9 @@ describe("WakeDispatcher", () => {
     assert.equal(params.to, "channel:999");
   });
 
-  it("uses the wake/system fallback only once when originSessionKey is missing", async () => {
+  it("sends the user notification but no main-session system event when originSessionKey is missing", async () => {
     const dispatcher = createDispatcher();
+    let wakeFailed = 0;
     const session: FakeSession = { id: "session-4", route: buildRoute({ sessionKey: undefined }) };
 
     dispatcher.dispatchSessionNotification(session as any, {
@@ -987,16 +996,14 @@ describe("WakeDispatcher", () => {
       userMessage: "✅ completed",
       wakeMessage: "Coding agent session completed.",
       notifyUser: "always",
+      hooks: { onWakeFailed: () => { wakeFailed += 1; } },
     });
-    const calls = await waitForCalls(2);
+    await waitForCalls(1);
+    await waitFor(() => wakeFailed === 1, "wake reported as failed");
 
-    assert.equal(calls.length, 2);
-    const notifyCall = calls.find((call) => call.kind === "durable-send");
-    const systemCall = calls.find((call) => call.kind === "system-event");
-    assert.ok(notifyCall, "expected a durable-send notification");
-    assert.ok(systemCall, "expected a system-event fallback");
-    assert.equal(asDurableSend(notifyCall).text, "✅ completed");
-    assert.deepEqual(systemCall, systemEvent("Coding agent session completed.", "session-4"));
+    assert.deepEqual(calls.map((call) => call.kind), ["durable-send"]);
+    assert.equal(asDurableSend(calls[0]).text, "✅ completed");
+    assert.deepEqual(heartbeats, []);
   });
 
   it("does not send a direct notify fallback when wake routing is recoverable from originSessionKey", async () => {
@@ -1025,7 +1032,12 @@ describe("WakeDispatcher", () => {
 
   it("uses system event for notify-only sessions when originSessionKey is missing", async () => {
     const dispatcher = createDispatcher();
-    const session: FakeSession = { id: "session-5" };
+    // An explicit system route is not directly deliverable; its session key
+    // still identifies the origin conversation for the system event.
+    const session: FakeSession = {
+      id: "session-5",
+      route: { provider: "system", target: "system", sessionKey: NON_ROUTABLE_ORIGIN_SESSION_KEY },
+    };
 
     dispatcher.dispatchSessionNotification(session as any, {
       label: "launch",
@@ -1034,7 +1046,7 @@ describe("WakeDispatcher", () => {
     });
     const calls = await waitForCalls(1);
 
-    assert.deepEqual(calls, [systemEvent("🚀 launched", "session-5")]);
+    assert.deepEqual(calls, [systemEvent("🚀 launched", "session-5", NON_ROUTABLE_ORIGIN_SESSION_KEY)]);
   });
 
   it("routes explicit Discord channel targets through message.send", async () => {
@@ -1503,8 +1515,11 @@ describe("WakeDispatcher", () => {
 
   it("falls back to system notify when no explicit route is present", async () => {
     const dispatcher = createDispatcher();
+    // An explicit system route is not directly deliverable; its session key
+    // still identifies the origin conversation for the system event.
     const session: FakeSession = {
       id: "session-8",
+      route: { provider: "system", target: "system", sessionKey: NON_ROUTABLE_ORIGIN_SESSION_KEY },
     };
 
     dispatcher.dispatchSessionNotification(session as any, {
@@ -1514,7 +1529,7 @@ describe("WakeDispatcher", () => {
     });
     const calls = await waitForCalls(1);
 
-    assert.deepEqual(calls, [systemEvent("🚀 launched", "session-8")]);
+    assert.deepEqual(calls, [systemEvent("🚀 launched", "session-8", NON_ROUTABLE_ORIGIN_SESSION_KEY)]);
   });
 
   it("preserves existing Telegram routing when Discord sessions are added", async () => {
@@ -1715,8 +1730,11 @@ describe("WakeDispatcher", () => {
 
   it("treats empty button rows as a plain direct notification instead of an interactive failure", async () => {
     const dispatcher = createDispatcher();
+    // An explicit system route is not directly deliverable; its session key
+    // still identifies the origin conversation for the system event.
     const session: FakeSession = {
       id: "session-empty-button-rows",
+      route: { provider: "system", target: "system", sessionKey: NON_ROUTABLE_ORIGIN_SESSION_KEY },
     };
 
     dispatcher.dispatchSessionNotification(session as any, {
@@ -1727,6 +1745,6 @@ describe("WakeDispatcher", () => {
     });
     const calls = await waitForCalls(1);
 
-    assert.deepEqual(calls, [systemEvent("🚀 launched", "session-empty-button-rows")]);
+    assert.deepEqual(calls, [systemEvent("🚀 launched", "session-empty-button-rows", NON_ROUTABLE_ORIGIN_SESSION_KEY)]);
   });
 });

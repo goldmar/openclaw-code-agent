@@ -7,7 +7,9 @@ const log = createLogger("session-runtime-registry");
 const ACTIVE_NAME_STATUSES = new Set<SessionStatus>(["starting", "running"]);
 
 function logRegistryDiagnostic(event: string, fields: Record<string, unknown>): void {
-  log.warn(JSON.stringify({
+  // Routine lifecycle diagnostics log at info; failure events stay at warn.
+  const level = /(?:error|fail)/i.test(event) ? "warn" : "info";
+  log[level](JSON.stringify({
     component: "SessionRuntimeRegistry",
     event,
     at: new Date().toISOString(),

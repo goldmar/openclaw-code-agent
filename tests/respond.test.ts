@@ -618,7 +618,8 @@ describe("executeRespond", () => {
     assert.equal(patches[0].patch.approvalState, "changes_requested");
   });
 
-  it("routes plain-text Reject during pending plan approval to terminal rejection", async () => {
+  for (const userInitiated of [true, false]) {
+  it(`routes plain-text Reject during pending plan approval to terminal rejection (userInitiated=${userInitiated})`, async () => {
     let sentMessage: string | undefined;
     let killed: { id: string; reason: string } | undefined;
     const patches: Array<{ ref: string; patch: Record<string, unknown> }> = [];
@@ -655,7 +656,7 @@ describe("executeRespond", () => {
     const result = await executeRespond(sm, {
       session: "test-id",
       message: "Reject",
-      userInitiated: true,
+      userInitiated,
     });
 
     assert.equal(result.isError, undefined);
@@ -673,6 +674,7 @@ describe("executeRespond", () => {
     assert.equal(patches[0].patch.approvalState, "rejected");
     assert.equal(patches[0].patch.planDecisionVersion, 9);
   });
+  }
 
   it("keeps only the delegated approval thumbs-up fallback for active sessions", async () => {
     const notifications: Array<{ text: string; label?: string }> = [];
