@@ -20,7 +20,7 @@ SessionManager
   -> WakeDispatcher
   -> openclaw/plugin-sdk/channel-outbound sendDurableMessageBatch (direct notifications)
   -> openclaw gateway call chat.send (orchestrator wakes)
-  -> api.runtime.system.enqueueSystemEvent + requestHeartbeat (wake fallback)
+  -> api.runtime.system.enqueueSystemEvent (+ requestHeartbeat for wake fallbacks only)
 
 Interactive callbacks (Telegram / Discord)
   -> CallbackHandler
@@ -138,7 +138,7 @@ Boundary note:
 
 - direct user-notification path: the host durable outbound queue (`sendDurableMessageBatch` from `openclaw/plugin-sdk/channel-outbound`)
 - wake path: `openclaw gateway call chat.send`
-- fallback path: in-process `api.runtime.system.enqueueSystemEvent` plus an immediate `requestHeartbeat`
+- fallback path: in-process `api.runtime.system.enqueueSystemEvent`; wake fallbacks add an immediate `requestHeartbeat`, while notice fallbacks wait for the origin session's next turn (see REFERENCE "OpenClaw Host Integration" for why: every host heartbeat runs the agent's full heartbeat routine)
 - bounded retries for `chat.send` and system events; direct sends are single-attempt because the host queue owns retry of an admitted send
 - per-session retry timers
 - structured delivery logs
@@ -283,7 +283,7 @@ The notification pipeline is intentionally centralized:
 2. `WakeDispatcher` decides whether it is notify-only, wake-only, or both.
 3. Direct user notifications go through the host durable outbound queue; Telegram and Discord interactive notifications attach buttons as a `presentation`.
 4. Wakes use `chat.send` because it targets the originating runtime session precisely.
-5. An in-process system event (targeting the origin session when known) is the recovery path when a wake fails or the session has no deliverable route. A text-only notification whose durable send definitively failed is also handed to the agent session as a system event; notifications with buttons or that require direct delivery are reported as failed instead, and a send with an unknown outcome (timeout) is never followed by a system event.
+5. An in-process system event (targeting the origin session when known) is the recovery path when a wake fails or the session has no deliverable route. A text-only notification whose durable send definitively failed is also handed to the agent session as a system event; notifications with buttons or that require direct delivery are reported as failed instead, and a send with an unknown outcome (timeout) is never followed by a system event. Only a wake fallback requests an immediate host heartbeat. The host has no lighter wake: a heartbeat for a generic system event runs the agent's configured heartbeat prompt and routine. A notice fallback is therefore only enqueued and reaches the orchestrator on the origin session's next turn.
 
 The design goal is deterministic wakes with the fewest possible duplicate pings.
 

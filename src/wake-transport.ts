@@ -46,6 +46,12 @@ export interface SystemEventWakeOptions {
   sessionKey: string;
   /** Host de-duplication context for repeated events from the same source. */
   contextKey?: string;
+  /**
+   * Whether the orchestrator must act on the event now. `true` requests an
+   * immediate host heartbeat for the origin session; `false` only enqueues, and
+   * the host prepends the event to that session's next turn.
+   */
+  wakeNow: boolean;
 }
 
 export interface SystemEventTransport {
@@ -53,13 +59,26 @@ export interface SystemEventTransport {
 }
 
 /**
- * In-process system-event wake through the public plugin runtime
- * (`api.runtime.system.enqueueSystemEvent` + `requestHeartbeat`).
+ * In-process system-event delivery through the public plugin runtime
+ * (`api.runtime.system.enqueueSystemEvent`, plus `requestHeartbeat` when the
+ * event must be handled now).
  *
- * This replaces the former `openclaw system event --mode now` subprocess and
- * mirrors the Gateway `wake` method: enqueue the event, then request an
- * immediate heartbeat for the same session. A session key the host refuses is
- * an error; it is never rerouted to another session.
+ * Wake cost: OpenClaw 2026.9.6 has no plugin-usable wake that processes a
+ * generic system event without the heartbeat routine. Any `requestHeartbeat`
+ * (every intent) runs the agent's configured heartbeat prompt
+ * (`HEARTBEAT.md` checklist) with the queued events attached; only exec
+ * completions and `cron:` events get a dedicated event-only prompt, and those
+ * belong to their host producers. `intent: "event"` uses the same prompt plus
+ * cooldown gating, and is not admitted for agents without a heartbeat
+ * schedule. So OCA requests an immediate `notifications-event` wake only for
+ * wakes (the orchestrator must act: a failed `chat.send` or a session without a
+ * chat route). Text-only user notices that could not be sent directly are
+ * enqueued without a wake: they are informational, and the host prepends them
+ * to the origin session's next turn (the user's next message, an OCA
+ * `chat.send` wake, or the next scheduled heartbeat).
+ *
+ * A session key the host refuses is an error; it is never rerouted to another
+ * session.
  */
 export class RuntimeSystemEventTransport implements SystemEventTransport {
   async enqueue(text: string, options: SystemEventWakeOptions): Promise<void> {
@@ -69,6 +88,7 @@ export class RuntimeSystemEventTransport implements SystemEventTransport {
     if (!sessionKey) throw new Error("System event wake requires the origin session key");
     const contextKey = options.contextKey?.trim() || undefined;
     system.enqueueSystemEvent(text, { sessionKey, ...(contextKey ? { contextKey } : {}) });
+    if (!options.wakeNow) return;
     // `enqueueSystemEvent` returns false for an identical pending event; the wake is
     // still requested so the queued copy is processed.
     system.requestHeartbeat({

@@ -469,7 +469,9 @@ describe("WakeDispatcher", () => {
     assert.equal(calls.length, 2);
     assert.equal(asDurableSend(calls[0]).text, "🚀 launched");
     assert.deepEqual(calls[1], systemEvent("🚀 launched", "session-launch-timeout"));
-    assert.deepEqual(heartbeats, [{ source: "notifications-event", intent: "immediate", reason: "wake", sessionKey: ORIGIN_SESSION_KEY }]);
+    // A text-only notice waits for the origin session's next turn; it must not
+    // start a full host heartbeat run just to be relayed.
+    assert.deepEqual(heartbeats, []);
     assert.ok(!errorLogs.some((line) => line.includes("\"event\":\"dispatch_retry_scheduled\"")));
   });
 

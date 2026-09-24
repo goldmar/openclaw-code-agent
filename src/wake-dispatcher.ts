@@ -457,6 +457,9 @@ export class WakeDispatcher {
       () => this.systemEvents.enqueue(text, {
         sessionKey,
         contextKey: `openclaw-code-agent:${session.id}`,
+        // Only a wake needs the orchestrator now; a notice waits for the next turn
+        // instead of starting a full heartbeat run (see RuntimeSystemEventTransport).
+        wakeNow: opts.messageKind === "wake",
       }),
       {
         label: opts.label,
