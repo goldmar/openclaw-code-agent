@@ -517,30 +517,26 @@ describe("plugin entry source", () => {
     assert.doesNotMatch(apiSource, /openclaw\/plugin-sdk\/discord/);
   });
 
-  it("documents the 2026.9.6 compatibility and ownership boundaries", () => {
+  it("documents the compatibility floor and ownership boundaries", () => {
     const reference = readFileSync(join(rootDir, "docs", "REFERENCE.md"), "utf8");
     const readme = readFileSync(join(rootDir, "README.md"), "utf8");
-    const changelog = readFileSync(join(rootDir, "CHANGELOG.md"), "utf8");
+    const target = escapeRegExp(openclawTarget);
+    const floor = escapeRegExp(openclawFloor);
 
-    assert.match(reference, /OpenClaw 2026\.9\.6 SDK Readiness/);
-    assert.match(reference, /requires, is built against, and is validated against OpenClaw `2026\.9\.6`/);
-    assert.match(readme, /requires, is built against, and is validated against OpenClaw `2026\.9\.6`/);
-    assert.match(reference, /Package installation therefore requires `2026\.9\.6`/);
-    assert.match(changelog, /against OpenClaw `2026\.9\.6`/i);
-    assert.match(changelog, /Telegram\/topic callbacks, completion and cron\/session wake delivery/);
+    assert.match(reference, /## Compatibility And Upgrades/);
+    assert.match(reference, new RegExp(`requires, is built against, and is validated against OpenClaw \`${target}\``));
+    assert.match(readme, new RegExp(`requires, is built against, and is validated against OpenClaw \`${target}\``));
+    assert.match(reference, new RegExp(`Package installation therefore requires \`${target}\``));
+    assert.match(reference, new RegExp(`keep the verified \`${floor}\` compatibility floor`));
     assert.match(readme, /callback ownership, and namespaced tool allowlists remain under the same plugin contracts/);
     assert.match(reference, /pnpm-workspace\.yaml/);
-    assert.doesNotMatch(reference, /2026\.5\.8/);
-    assert.doesNotMatch(readme, /openclaw@2026\.6\.8/);
-    assert.doesNotMatch(reference, /E404/);
     assert.match(reference, /plugins\.allow/);
-    assert.match(reference, /openclaw-code-agent/);
     assert.match(reference, /No host config migration is performed by this package/);
     assert.match(reference, /host-owned `codex\/\*` and `openai-codex\/\*` model references to `openai\/\*`/);
     assert.match(reference, /Restored sessions and explicit overrides pass through the same harness-scoped validation/);
     assert.match(reference, /Start Plan/);
     assert.match(reference, /thread `<topic-id>`/);
-    assert.match(reference, /callback_data/);
+    assert.match(reference, /ctx\.callback\.payload/);
     assert.match(reference, /apply-then-consume token semantics/);
     assert.match(reference, /token remains retryable/);
     assert.match(reference, /treated as terminal/);
@@ -548,6 +544,9 @@ describe("plugin entry source", () => {
     assert.match(reference, /PR update completion summaries/);
     assert.match(reference, /tools\.exec\.applyPatch/);
     assert.match(reference, /tools\.deny/);
+    assert.match(reference, /Upgrading from 4\.x/);
+    assert.doesNotMatch(reference, /callback_data/);
+    assert.doesNotMatch(reference, /### Deprecated Compatibility Fields/);
   });
 
   it("documents the generic plan-offer tool", () => {

@@ -298,6 +298,9 @@ Worktree terminal outcomes use a two-step UX contract. The plugin first delivers
 - PR creation and updates via `gh`
 - stale worktree cleanup
 - diff summary generation for delegated decisions
+- new-worktree provisioning (`src/worktree-provisioning.ts`): `.worktreeinclude` gitignored-file copies and the repository's `.openclaw/worktree-setup.sh`, with rollback of the worktree and new branch on failure
+
+Every `git` / `gh` call in this layer is asynchronous and goes through `src/git-exec.ts` (argument arrays, per-call timeouts, closed stdin). Because the calls no longer block the event loop, multi-step mutating sequences (worktree add/remove, checkout plus merge, branch deletion) are serialized per repository, session launches are serialized in `SessionManager.spawn`, and persisted-session maintenance applies only the latest schedule computed for a session.
 
 `src/worktree-lifecycle-resolver.ts` sits above those helpers and produces:
 
@@ -350,6 +353,6 @@ The architecture is most sensitive to these config settings:
 See [REFERENCE.md](REFERENCE.md) for the operator-facing meaning of those settings.
 ## Breaking Schema Policy
 
-The current persisted-session store is new-schema-only. On startup, any older or invalid store is archived to a timestamped `.legacy-*.json` backup and replaced with a fresh index. Legacy rows are not migrated or repaired in place.
+The persisted-session store is loaded row by row. A store with an older schema version (or a pre-schema array store, or a wrongly shaped collection) is archived whole to a timestamped `.legacy-*.json` backup and replaced with a fresh index. Within a current-schema store, rows or action tokens that no longer normalize are dropped individually after a verbatim `.legacy-*.json` backup is written, so valid sessions survive an upgrade; if the backup cannot be written, the whole store is archived instead. Unknown enum values normalize to `undefined`, and worktree rows without `worktreeLifecycle` get one synthesized from the older `worktreeMerged` / `worktreeDisposition` / `worktreeState` fields.
 
 New persisted sessions must carry explicit `route` metadata, and any persisted worktree session must carry `worktreeBranch`. Runtime control flow treats a direct persisted route as canonical, repairs degraded notification routes from `originChannel` / `originSessionKey` when needed, and does not infer branch state from worktree paths.
