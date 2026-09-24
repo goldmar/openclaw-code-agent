@@ -8,7 +8,7 @@ const rootDir = dirname(dirname(scriptPath));
 const requiredSecurityVersions = {
   "@hono/node-server": "2.1.1",
   "express-rate-limit": "8.7.0",
-  "fast-uri": "3.1.7",
+  "fast-uri": "3.1.8",
   hono: "4.13.7",
   "ip-address": "10.7.2",
   qs: "6.16.0",

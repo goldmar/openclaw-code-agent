@@ -98,7 +98,7 @@ try {
   );
   requireDependency(mcp, "@hono/node-server", "2.1.1", "@modelcontextprotocol/sdk");
   requireDependency(mcp, "hono", "4.13.7", "@modelcontextprotocol/sdk");
-  requireDependency(ajv, "fast-uri", "3.1.7", "ajv");
+  requireDependency(ajv, "fast-uri", "3.1.8", "ajv");
   requireDependency(plugin, "qs", "6.16.0", packageJson.name);
   requireDependency(plugin, "ip-address", "10.7.2", packageJson.name);
 

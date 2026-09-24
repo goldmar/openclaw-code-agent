@@ -23,7 +23,7 @@ overrides:
   path-to-regexp@>=8.0.0 <8.4.0: ">=8.4.0"
   "@anthropic-ai/sdk@<0.93.0": 0.93.0
   ip-address@<10.7.2: 10.7.2
-  fast-uri@<3.1.7: 3.1.7
+  fast-uri@<3.1.8: 3.1.8
   qs@<6.16.0: 6.16.0
   hono@<4.13.5: 4.13.7
   "@hono/node-server@<2.0.10": 2.0.10
