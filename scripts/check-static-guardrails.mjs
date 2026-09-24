@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, readFileSync } from "fs";
-import { basename, join, relative } from "path";
+import { basename, dirname, join, relative, sep } from "path";
 
 const root = process.cwd();
 const srcDir = join(root, "src");
@@ -237,6 +237,35 @@ if (
   && !notificationSource.includes("OPENCLAW_CODE_AGENT_NOTIFICATION_DIAGNOSTICS")
 ) {
   failures.push("src/session-notifications.ts writes notification diagnostics without the notification diagnostics gate");
+}
+
+// Hermetic tests: every test file must import tests/test-env.ts before anything
+// else, so running a file directly (node --test, tsx, an IDE) can never resolve
+// the real ~/.openclaw state. See docs/DEVELOPMENT.md "Test isolation".
+const testEnvModule = join(testsDir, "test-env");
+for (const path of testFiles.filter((file) => file.endsWith(".test.ts"))) {
+  const source = stripComments(readFileSync(path, "utf8")).trimStart();
+  let specifier = relative(dirname(path), testEnvModule).split(sep).join("/");
+  if (!specifier.startsWith(".")) specifier = `./${specifier}`;
+  const firstStatement = /^import\s*(["'])([^"']+)\1\s*;?/.exec(source);
+  const imported = firstStatement?.[2]?.replace(/\.(?:ts|js|mjs)$/, "");
+  if (imported !== specifier) {
+    failures.push(`${rel(path)} must start with \`import "${specifier}";\` so tests never touch real OpenClaw state`);
+  }
+}
+
+// Scripts (e2e/proof helpers) run outside the test harness, so they must not
+// load OCA's state-owning modules (session/goal stores, output files). They
+// may drive a harness directly, which keeps no plugin state.
+const scriptsDir = join(root, "scripts");
+const scriptFiles = collectFiles(scriptsDir, (path) => /\.(?:ts|mjs|js)$/.test(path) && !path.includes(`${sep}vendor${sep}`));
+for (const path of scriptFiles) {
+  const source = stripComments(readFileSync(path, "utf8"));
+  for (const match of source.matchAll(/(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s+)(["'])([^"']+)\1/g)) {
+    const specifier = match[2];
+    if (!/(?:^|\/)src\//.test(specifier) || /(?:^|\/)src\/harness\//.test(specifier)) continue;
+    failures.push(`${rel(path)} imports ${specifier}; scripts may import only src/harness/** so they never open OCA state stores`);
+  }
 }
 
 for (const path of testFiles) {

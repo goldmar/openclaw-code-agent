@@ -1,3 +1,4 @@
+import "./test-env";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";

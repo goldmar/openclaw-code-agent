@@ -1,3 +1,4 @@
+import "./test-env";
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { makeAgentSessionActionTool, resolveReviewTarget } from "../src/tools/agent-session-action";

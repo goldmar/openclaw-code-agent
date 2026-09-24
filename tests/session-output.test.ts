@@ -1,3 +1,4 @@
+import "./test-env";
 import { afterEach, describe, it, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";

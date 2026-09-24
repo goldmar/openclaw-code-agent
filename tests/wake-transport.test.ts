@@ -1,3 +1,4 @@
+import "./test-env";
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 
@@ -100,7 +101,7 @@ describe("RuntimeSystemEventTransport", () => {
     const { events, heartbeats } = installSystem();
 
     await assert.rejects(
-      () => new RuntimeSystemEventTransport().enqueue("Session finished", { sessionKey: " ", contextKey: "openclaw-code-agent:s1" }),
+      () => new RuntimeSystemEventTransport().enqueue("Session finished", { sessionKey: " ", contextKey: "openclaw-code-agent:s1", wakeNow: true }),
       /requires the origin session key/,
     );
 
@@ -112,10 +113,24 @@ describe("RuntimeSystemEventTransport", () => {
     const { events, heartbeats } = installSystem();
     const sessionKey = "agent:main:telegram:group:-1003863755361:topic:13832";
 
-    await new RuntimeSystemEventTransport().enqueue("Wake", { sessionKey });
+    await new RuntimeSystemEventTransport().enqueue("Wake", { sessionKey, wakeNow: true });
 
     assert.deepEqual(events, [{ text: "Wake", options: { sessionKey } }]);
     assert.deepEqual(heartbeats, [{ source: "notifications-event", intent: "immediate", reason: "wake", sessionKey }]);
+  });
+
+  it("enqueues a notice for the next turn without requesting a heartbeat", async () => {
+    const { events, heartbeats } = installSystem();
+    const sessionKey = "agent:main:telegram:group:-1003863755361:topic:13832";
+
+    await new RuntimeSystemEventTransport().enqueue("Session started", {
+      sessionKey,
+      contextKey: "openclaw-code-agent:s1",
+      wakeNow: false,
+    });
+
+    assert.deepEqual(events, [{ text: "Session started", options: { sessionKey, contextKey: "openclaw-code-agent:s1" } }]);
+    assert.deepEqual(heartbeats, []);
   });
 
   it("does not reroute a refused session key to the main session", async () => {
@@ -128,7 +143,7 @@ describe("RuntimeSystemEventTransport", () => {
     });
 
     await assert.rejects(
-      () => new RuntimeSystemEventTransport().enqueue("Wake", { sessionKey: "agent:main:subagent:x" }),
+      () => new RuntimeSystemEventTransport().enqueue("Wake", { sessionKey: "agent:main:subagent:x", wakeNow: true }),
       /no explicit owner/,
     );
 
@@ -139,7 +154,7 @@ describe("RuntimeSystemEventTransport", () => {
   it("rejects when the runtime system surface is unavailable", async () => {
     setPluginRuntime({});
     await assert.rejects(
-      () => new RuntimeSystemEventTransport().enqueue("Wake", { sessionKey: "agent:main:main" }),
+      () => new RuntimeSystemEventTransport().enqueue("Wake", { sessionKey: "agent:main:main", wakeNow: true }),
       /runtime system events are unavailable/,
     );
   });

@@ -1,3 +1,4 @@
+import "./test-env";
 import { beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { makeAgentRepoPolicyTool } from "../src/tools/agent-repo-policy";

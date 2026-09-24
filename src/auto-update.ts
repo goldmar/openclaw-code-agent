@@ -9,6 +9,7 @@ import type { SessionActionKind, SessionActionToken, SessionRoute } from "./type
 import type { NotificationButton } from "./session-interactions";
 import type { NotificationRoute } from "./wake-route-resolver";
 import { createLogger } from "./logger";
+import { assertTestSafeStatePath } from "./test-state-guard";
 
 const log = createLogger("auto-update");
 
@@ -529,6 +530,7 @@ export class AutoUpdateService {
   }
 
   private writeState(state: AutoUpdateState): void {
+    assertTestSafeStatePath(this.statePath, "write the auto-update state");
     saveJsonFile(this.statePath, state);
   }
 }

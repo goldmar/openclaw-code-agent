@@ -21,6 +21,13 @@ function isAgentWorktreeStatusParams(value: unknown): value is AgentWorktreeStat
   return session === undefined || typeof session === "string";
 }
 
+const STATUS_LABEL_WIDTH = "Lifecycle:".length;
+
+/** One indented `Label: value` row; values share a column and always follow a space. */
+function statusField(label: string, value: string): string {
+  return `  ${`${label}:`.padEnd(STATUS_LABEL_WIDTH)} ${value}`;
+}
+
 export function makeAgentWorktreeStatusTool(_ctx?: OpenClawPluginToolContext) {
   return {
     name: "agent_worktree_status",
@@ -59,20 +66,20 @@ export function makeAgentWorktreeStatusTool(_ctx?: OpenClawPluginToolContext) {
           : (resolved.preserve ? "preserve" : "blocked");
 
         lines.push(`Session: ${target.name} [${target.id}]`);
-        lines.push(`  Branch:   ${target.worktreeBranch ?? "(unknown)"} → ${resolved.lifecycle.baseBranch ?? persisted?.worktreeBaseBranch ?? "main"}`);
-        lines.push(`  Repo:     ${target.workdir}`);
-        lines.push(`  Lifecycle:${formatWorktreeLifecycleState(resolved.lifecycle.state)}`);
+        lines.push(statusField("Branch", `${target.worktreeBranch ?? "(unknown)"} → ${resolved.lifecycle.baseBranch ?? persisted?.worktreeBaseBranch ?? "main"}`));
+        lines.push(statusField("Repo", target.workdir));
+        lines.push(statusField("Lifecycle", formatWorktreeLifecycleState(resolved.lifecycle.state)));
         if (resolved.derivedState !== resolved.lifecycle.state) {
-          lines.push(`  Derived:  ${formatWorktreeLifecycleState(resolved.derivedState)}`);
+          lines.push(statusField("Derived", formatWorktreeLifecycleState(resolved.derivedState)));
         }
-        lines.push(`  Cleanup:  ${cleanup}`);
+        lines.push(statusField("Cleanup", cleanup));
         if (resolved.evidence.prUrl) {
-          lines.push(`  PR:       ${resolved.evidence.prUrl} (${resolved.evidence.prState ?? "unknown"})`);
+          lines.push(statusField("PR", `${resolved.evidence.prUrl} (${resolved.evidence.prState ?? "unknown"})`));
         }
         if (resolved.evidence.branchAheadCount != null || resolved.evidence.baseAheadCount != null) {
-          lines.push(`  Ahead:    ${resolved.evidence.branchAheadCount ?? 0} ahead / ${resolved.evidence.baseAheadCount ?? 0} behind`);
+          lines.push(statusField("Ahead", `${resolved.evidence.branchAheadCount ?? 0} ahead / ${resolved.evidence.baseAheadCount ?? 0} behind`));
         }
-        lines.push(`  Reasons:  ${resolved.reasons.length > 0 ? resolved.reasons.map(formatWorktreePreserveReason).join(", ") : "none"}`);
+        lines.push(statusField("Reasons", resolved.reasons.length > 0 ? resolved.reasons.map(formatWorktreePreserveReason).join(", ") : "none"));
         lines.push("");
       }
 

@@ -1,3 +1,4 @@
+import "./test-env";
 import { beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 
@@ -235,6 +236,10 @@ describe("agent_goal_launch tool", () => {
     assert.match(
       (result.content[0] as { text: string }).text,
       /did not provide a trustworthy lifecycle delivery route/,
+    );
+    assert.match(
+      (result.content[0] as { text: string }).text,
+      /is missing a session key and a delivery route/,
     );
   });
 

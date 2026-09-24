@@ -1,3 +1,4 @@
+import "./test-env";
 import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { Session } from "../src/session";

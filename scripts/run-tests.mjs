@@ -44,6 +44,8 @@ for (const file of files) {
     OPENCLAW_HOME: testHome,
     OPENCLAW_STATE_DIR: join(testHome, ".openclaw"),
     OPENCLAW_CODE_AGENT_SESSIONS_PATH: join(testHome, "code-agent-sessions.json"),
+    // tests/test-env.ts reuses only a home named here (see src/test-state-guard.ts).
+    OPENCLAW_CODE_AGENT_TEST_HOME: testHome,
   };
 
   let result;

@@ -13,6 +13,7 @@ import {
   type SessionStoreSchema,
 } from "./session-store-normalization";
 import { createLogger } from "./logger";
+import { assertTestSafeStatePath } from "./test-state-guard";
 
 const log = createLogger("session-store-storage");
 
@@ -90,6 +91,7 @@ export function saveSessionStoreIndex(
   actionTokens: SessionActionToken[],
   repoPolicies: RepoPolicyRecord[] = [],
 ): void {
+  assertTestSafeStatePath(indexPath, "write the session store");
   try {
     const payload: SessionStoreSchema = {
       schemaVersion: STORE_SCHEMA_VERSION,
@@ -105,6 +107,7 @@ export function saveSessionStoreIndex(
 }
 
 export function archiveLegacySessionIndex(indexPath: string, reason: string): boolean {
+  assertTestSafeStatePath(indexPath, "archive the session store");
   try {
     if (!existsSync(indexPath)) return false;
     const archivedPath = getAvailableArchivePath(indexPath, "legacy");
@@ -126,6 +129,7 @@ export function archiveLegacySessionIndex(indexPath: string, reason: string): bo
  * dropped, so an upgrade never discards data without a recoverable backup.
  */
 function backupSessionIndex(indexPath: string, rawPayload: string, reason: string): boolean {
+  assertTestSafeStatePath(indexPath, "back up the session store");
   try {
     const backupPath = getAvailableArchivePath(indexPath, "legacy");
     if (!backupPath) {
@@ -147,6 +151,7 @@ export const sessionStoreStorageInternals = {
 };
 
 export function cleanupSessionOutputFiles(now: number, maxAgeMs: number, referencedPaths: Iterable<string> = []): void {
+  assertTestSafeStatePath(resolveSessionOutputDir(), "clean up output files in");
   try {
     const referenced = new Set(referencedPaths);
     for (const filePath of getSessionOutputFilePaths()) {
@@ -186,6 +191,7 @@ export function getNextSessionOutputCleanupAt(now: number, maxAgeMs: number, ref
 }
 
 export function cleanupOrphanOutputFiles(referencedPaths: Iterable<string>): void {
+  assertTestSafeStatePath(resolveSessionOutputDir(), "clean up output files in");
   try {
     const referenced = new Set(referencedPaths);
     for (const filePath of getSessionOutputFilePaths()) {

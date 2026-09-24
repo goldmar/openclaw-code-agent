@@ -1,3 +1,4 @@
+import "./test-env";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { SessionHarnessEventApplier } from "../src/session-harness-event-applier";
