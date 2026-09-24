@@ -27,14 +27,13 @@ export type PluginInteractiveTelegramHandlerContext = {
   isGroup?: boolean;
   isForum?: boolean;
   auth: { isAuthorizedSender: boolean };
-  callback?: {
-    data?: string;
-    callback_data?: string;
-    callbackData?: string;
-    namespace?: string;
-    payload?: string;
-    messageId?: number;
-    chatId?: string;
+  /** `data` is the full button data; `payload` is the part after `<namespace>:`. */
+  callback: {
+    data: string;
+    namespace: string;
+    payload: string;
+    messageId: number;
+    chatId: string;
     messageText?: string;
   };
   respond: {
@@ -50,13 +49,19 @@ export type PluginInteractiveTelegramHandlerContext = {
 export type PluginInteractiveDiscordHandlerContext = {
   channel: "discord";
   auth: { isAuthorizedSender: boolean };
-  interaction?: { payload?: string; data?: string; callback_data?: string; callbackData?: string };
-  callback?: { data?: string; callback_data?: string; callbackData?: string; namespace?: string; payload?: string };
+  /** `data` is the full component callback data; `payload` is the part after `<namespace>:`. */
+  interaction: {
+    kind: "button" | "select" | "modal";
+    data: string;
+    namespace: string;
+    payload: string;
+    messageId?: string;
+    values?: string[];
+  };
   respond: {
     acknowledge?: () => Promise<void>;
     reply: (params: { text: string; ephemeral?: boolean }) => Promise<void>;
     editMessage?: (params: { text?: string; components?: unknown }) => Promise<void>;
-    clearButtons?: () => Promise<void>;
     clearComponents?: (params?: { text?: string }) => Promise<void>;
     followUp?: (params: { text: string; ephemeral?: boolean }) => Promise<void>;
   };
