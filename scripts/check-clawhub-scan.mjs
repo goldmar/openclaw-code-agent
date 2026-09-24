@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 // Runs ClawHub's static moderation scan (vendored from openclaw/clawhub, see
 // scripts/vendor/clawhub-moderation-engine.mjs) against the exact file set
-// `npm pack` would publish, and fails on any finding. dist/ must already be
-// built: the pack listing uses --ignore-scripts so it never rebuilds.
+// `npm pack` would publish, and fails on any finding. By default dist/ must
+// already be built (the pack listing uses --ignore-scripts so it never
+// rebuilds); `--tarball=<file>` scans an already packed artifact instead,
+// which the release workflow uses on the exact tarball it publishes.
 //
 // Two explicit guards back the scan up, independent of its heuristics:
 // - `fetch(` may appear only in the npm release-client chunk;
@@ -10,8 +12,9 @@
 //   combination was flagged as env_credential_access before 4.7.7).
 
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runStaticModerationScan } from "./vendor/clawhub-moderation-engine.mjs";
 
@@ -83,7 +86,54 @@ export function checkPackedFiles(fileContents, metadata) {
   return { scan, problems };
 }
 
+function listFilesRecursive(dir) {
+  return readdirSync(dir).flatMap((name) => {
+    const path = join(dir, name);
+    return statSync(path).isDirectory() ? listFilesRecursive(path) : [path];
+  });
+}
+
+/**
+ * Extract a packed tarball (`npm pack` output) and return its file paths
+ * relative to the package root, plus the extracted root and a cleanup hook.
+ */
+export function extractPackedTarball(tarballPath) {
+  const tempDir = mkdtempSync(join(tmpdir(), "oca-clawhub-scan-"));
+  execFileSync("tar", ["-xzf", resolve(tarballPath), "-C", tempDir], { stdio: ["ignore", "pipe", "pipe"] });
+  const packageDir = join(tempDir, "package");
+  return {
+    packageDir,
+    paths: listFilesRecursive(packageDir).map((path) => relative(packageDir, path).split("\\").join("/")),
+    cleanup: () => rmSync(tempDir, { recursive: true, force: true }),
+  };
+}
+
+function reportAndExit(scan, problems, fileCount, label) {
+  if (problems.length > 0) {
+    console.error(`ClawHub static scan (${scan.engineVersion}) found problems in ${label}:`);
+    for (const problem of problems) console.error(`- ${problem}`);
+    process.exitCode = 1;
+    return;
+  }
+  console.log(`ClawHub static scan (${scan.engineVersion}) is clean for ${fileCount} files in ${label}.`);
+}
+
 function main() {
+  const tarballArg = process.argv.slice(2).find((arg) => arg.startsWith("--tarball="))?.slice("--tarball=".length);
+  if (tarballArg) {
+    // Release mode: scan the exact artifact that will be published.
+    const extracted = extractPackedTarball(tarballArg);
+    try {
+      const packageJson = JSON.parse(readFileSync(join(extracted.packageDir, "package.json"), "utf8"));
+      const pluginManifest = JSON.parse(readFileSync(join(extracted.packageDir, "openclaw.plugin.json"), "utf8"));
+      const fileContents = readPackedTextFiles(extracted.paths, extracted.packageDir);
+      const { scan, problems } = checkPackedFiles(fileContents, { packageJson, pluginManifest });
+      reportAndExit(scan, problems, fileContents.length, tarballArg);
+    } finally {
+      extracted.cleanup();
+    }
+    return;
+  }
   const packageJson = JSON.parse(readFileSync(join(rootDir, "package.json"), "utf8"));
   const pluginManifest = JSON.parse(readFileSync(join(rootDir, "openclaw.plugin.json"), "utf8"));
   const paths = listPackedFiles();
@@ -92,13 +142,7 @@ function main() {
   }
   const fileContents = readPackedTextFiles(paths);
   const { scan, problems } = checkPackedFiles(fileContents, { packageJson, pluginManifest });
-  if (problems.length > 0) {
-    console.error(`ClawHub static scan (${scan.engineVersion}) found problems in the packed plugin:`);
-    for (const problem of problems) console.error(`- ${problem}`);
-    process.exitCode = 1;
-    return;
-  }
-  console.log(`ClawHub static scan (${scan.engineVersion}) is clean for ${fileContents.length} packed files.`);
+  reportAndExit(scan, problems, fileContents.length, "the packed plugin");
 }
 
 if (process.argv[1] === scriptPath) {

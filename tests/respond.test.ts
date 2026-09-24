@@ -142,7 +142,6 @@ describe("executeRespond", () => {
       lifecycle: "terminal",
       killReason: "done",
       harnessSessionId: "thread-codex-complete",
-      backendRef: { kind: "claude-code", conversationId: "thread-codex-complete" },
       harnessName: "codex",
       backendRef: { kind: "codex-app-server", conversationId: "thread-codex-complete" },
       name: "codex-complete",

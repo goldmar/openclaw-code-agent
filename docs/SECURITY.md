@@ -85,7 +85,7 @@ JSON stores are written as private (`0600`) files. [REFERENCE.md](REFERENCE.md#o
 
 ## Release Gates
 
-- `pnpm check-clawhub-scan` (part of `pnpm verify`) runs ClawHub's static moderation scan, vendored from the ClawHub repository with its MIT license in `scripts/vendor/clawhub-moderation-engine.mjs`, over the exact packed file list. Any finding fails the gate. It also requires that `fetch(` appears only in the npm release-client chunk and that no packed file combines `process.env` with a network call. Refresh the vendored engine with `pnpm sync:clawhub-scan -- --clawhub <checkout>`.
+- `pnpm check-clawhub-scan` (part of `pnpm verify`) runs ClawHub's static moderation scan, vendored from the ClawHub repository with its MIT license in `scripts/vendor/clawhub-moderation-engine.mjs`, over the exact packed file list. Any finding fails the gate. The release workflow repeats the scan on the exact tarball it publishes (`--tarball=<file>`), after `prepack` has rebuilt `dist/`. It also requires that `fetch(` appears only in the npm release-client chunk and that no packed file combines `process.env` with a network call. Refresh the vendored engine with `pnpm sync:clawhub-scan -- --clawhub <checkout>`.
 - `pnpm check-plugin-security` packs and installs the plugin under an isolated temporary home and runs OpenClaw's deep static code-safety audit. It accepts only the reviewed `dangerous-exec` finding (`Shell command execution detected (child_process)`), which maps to the subprocess inventory above. Missing scans, scan errors, and any other finding fail the gate.
 
 OpenClaw no longer blocks dangerous code during plugin installation. Operators who need a host-specific install decision should configure `security.installPolicy` after reviewing the inventory above.

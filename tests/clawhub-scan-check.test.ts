@@ -1,7 +1,12 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   checkPackedFiles,
+  extractPackedTarball,
   findNetworkGuardViolations,
 } from "../scripts/check-clawhub-scan.mjs";
 
@@ -15,6 +20,25 @@ function check(files: Array<{ path: string; content: string }>) {
 }
 
 describe("ClawHub static scan gate", () => {
+  it("lists every file of a packed tarball relative to the package root", () => {
+    const dir = mkdtempSync(join(tmpdir(), "oca-clawhub-tarball-"));
+    try {
+      mkdirSync(join(dir, "package", "dist", "chunks"), { recursive: true });
+      writeFileSync(join(dir, "package", "package.json"), "{}\n");
+      writeFileSync(join(dir, "package", "dist", "chunks", "a.js"), "export {};\n");
+      const tarball = join(dir, "pkg.tgz");
+      execFileSync("tar", ["-czf", tarball, "-C", dir, "package"]);
+      const extracted = extractPackedTarball(tarball);
+      try {
+        assert.deepEqual([...extracted.paths].sort(), ["dist/chunks/a.js", "package.json"]);
+      } finally {
+        extracted.cleanup();
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("passes a clean packed file set", () => {
     const { scan, problems } = check([
       { path: "dist/index.js", content: "export function add(a, b) { return a + b; }\n" },
