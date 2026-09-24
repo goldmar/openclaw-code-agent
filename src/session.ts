@@ -17,7 +17,6 @@ import type {
   PermissionMode,
   KillReason,
   ReasoningEffort,
-  CodexApprovalPolicy,
   WorktreeStrategy,
   CanUseToolCallback,
   PlanApprovalMode,
@@ -36,6 +35,7 @@ import type {
   RepoIntegrationPolicy,
   RepoProviderKind,
   PersistedTaskFlowMirror,
+  ThreadAction,
 } from "./types";
 import {
   pluginConfig,
@@ -58,7 +58,7 @@ import { appendSessionOutput } from "./session-output";
 import { SessionTimerRegistry } from "./session-timer-registry";
 import { SessionTurnRuntime } from "./session-turn-runtime";
 import { SessionHarnessEventApplier } from "./session-harness-event-applier";
-import { getBranchName, listDirtyWorktreeEntries } from "./worktree";
+import { listDirtyWorktreeEntries } from "./worktree";
 import { isHarnessStartupFailureOutput, summarizeHarnessStartupFailure } from "./harness-startup-failure";
 import { createLogger } from "./logger";
 
@@ -106,8 +106,6 @@ function backendRefDiagnosticFields(backendRef: SessionBackendRef | undefined): 
     backendRefKind: backendRef.kind,
     hasBackendConversationId: Boolean(backendRef.conversationId),
     hasBackendRunId: Boolean(backendRef.runId),
-    hasBackendWorktreeId: Boolean(backendRef.worktreeId),
-    hasBackendWorktreePath: Boolean(backendRef.worktreePath),
   };
 }
 
@@ -138,7 +136,6 @@ export class Session extends EventEmitter {
   private readonly permissionMode: PermissionMode;
   readonly requestedPermissionMode: PermissionMode;
   readonly planApproval: PlanApprovalMode;
-  readonly codexApprovalPolicy?: CodexApprovalPolicy;
   currentPermissionMode: PermissionMode;
   private pendingModeSwitch?: PermissionMode;
 
@@ -146,6 +143,7 @@ export class Session extends EventEmitter {
   readonly resumeSessionId?: string;
   readonly resumedFromSessionName?: string;
   readonly forkSession?: boolean;
+  private readonly rewindTurns?: number;
 
   // Worktree
   worktreePath?: string;
@@ -276,9 +274,6 @@ export class Session extends EventEmitter {
     this.permissionMode = config.permissionMode ?? pluginConfig.permissionMode;
     this.requestedPermissionMode = config.requestedPermissionMode ?? this.permissionMode;
     this.planApproval = config.planApproval ?? pluginConfig.planApproval;
-    this.codexApprovalPolicy = this.harness.name === "codex"
-      ? "never"
-      : undefined;
     // Keep currentPermissionMode in sync with permissionMode for all harnesses.
     // The structured backend contract still uses plugin-owned plan state so
     // Approve/Revise/Reject buttons fire consistently across backends.
@@ -292,6 +287,7 @@ export class Session extends EventEmitter {
     this.resumeSessionId = config.resumeSessionId;
     this.resumedFromSessionName = config.resumedFromSessionName;
     this.forkSession = config.forkSession;
+    this.rewindTurns = config.rewindTurns;
     this.multiTurn = config.multiTurn ?? true;
     this.goalTaskId = config.goalTaskId;
     this.worktreeStrategy = config.worktreeStrategy;
@@ -342,14 +338,6 @@ export class Session extends EventEmitter {
       assignBackendRef: (ref) => {
         this.backendRef = ref;
         this.harnessSessionId = ref.conversationId;
-        if (ref.worktreePath) {
-          this.worktreePath = ref.worktreePath;
-          this.originalWorkdir ??= this.workdir;
-          this.worktreeBranch ??= getBranchName(ref.worktreePath);
-          if (this.worktreeStrategy && this.worktreeStrategy !== "off") {
-            this.applyControlEvent({ type: "worktree.state_set", worktreeState: "provisioned" });
-          }
-        }
       },
       noteRunStarted: (runId) => {
         if (this.backendRef) {
@@ -521,7 +509,6 @@ export class Session extends EventEmitter {
     | "approvalPromptDeliveredAt"
     | "approvalPromptFailedAt"
     | "planApproval"
-    | "codexApprovalPolicy"
   > & { planModeApproved: boolean } {
     return {
       requestedPermissionMode: this.requestedPermissionMode,
@@ -543,7 +530,6 @@ export class Session extends EventEmitter {
       approvalPromptDeliveredAt: this.approvalPromptDeliveredAt,
       approvalPromptFailedAt: this.approvalPromptFailedAt,
       planApproval: this.planApproval,
-      codexApprovalPolicy: this.codexApprovalPolicy,
     };
   }
 
@@ -757,12 +743,11 @@ export class Session extends EventEmitter {
         reasoningEffort: this.reasoningEffort,
         fastMode: this.fastMode,
         permissionMode: this.permissionMode,
-        codexApprovalPolicy: this.codexApprovalPolicy,
         systemPrompt: this.systemPrompt,
         allowedTools: this.allowedTools,
         resumeSessionId: this.resumeSessionId,
         forkSession: this.forkSession,
-        backendRef: this.backendRef,
+        rewindTurns: this.rewindTurns,
         worktreeStrategy: this.worktreeStrategy,
         originalWorkdir: this.originalWorkdir ?? this.workdir,
         abortController: this.abortController,
@@ -796,13 +781,28 @@ export class Session extends EventEmitter {
     });
   }
 
-  /** Send a follow-up user message to a running multi-turn session. */
-  async sendMessage(text: string): Promise<void> {
+  /**
+   * Send a follow-up user message to a running multi-turn session.
+   *
+   * While a turn is running on a harness that supports steering (Codex), the
+   * message is injected into that turn (`"steered"`). Otherwise it is queued
+   * as the next turn (`"queued"`).
+   */
+  async sendMessage(text: string): Promise<"steered" | "queued"> {
     if (this._status !== "running") {
       throw new Error(`Session is not running (status: ${this._status})`);
     }
 
     this.resetIdleTimer();
+    const planDecisionPending = !!this.pendingModeSwitch
+      || ((this.pendingPlanApproval || this.approvalState === "changes_requested") && !this.planModeApproved);
+    if (this.turnInProgress && !planDecisionPending && this.harnessHandle?.steer) {
+      if (await this.harnessHandle.steer(text)) {
+        this.logDiagnostic("turn.steered", { chars: text.length });
+        return "steered";
+      }
+    }
+
     this.turnRuntime.beginUserTurn();
     this.applyControlEvent({ type: "turn.started" });
 
@@ -815,7 +815,7 @@ export class Session extends EventEmitter {
         // (Claude: ExitPlanMode allow + setMode). Forward only extra words.
         this.pendingModeSwitch = undefined;
         this.applyApprovedPermissionMode(newMode);
-        if (isBareApprovalMessage(text)) return;
+        if (isBareApprovalMessage(text)) return "queued";
       } else if (this.harnessHandle?.setPermissionMode) {
         try {
           await this.harnessHandle.setPermissionMode(newMode);
@@ -844,7 +844,7 @@ export class Session extends EventEmitter {
       }
       // Native backends receive the feedback as the plan request's denial
       // (Claude: ExitPlanMode deny message) and keep planning in the same turn.
-      if (await this.resolveNativePlanDecision({ kind: "revise", feedback: text })) return;
+      if (await this.resolveNativePlanDecision({ kind: "revise", feedback: text })) return "queued";
       if (!nativePlanDecisions) effectiveText = `${PLAN_REVISION_PROMPT_PREFIX}${text}`;
 
       // Re-assert plan mode at the backend level so revision stays read-only.
@@ -870,6 +870,29 @@ export class Session extends EventEmitter {
     } else {
       throw new Error("Session does not support follow-up messages (launched in single-turn mode).");
     }
+    return "queued";
+  }
+
+  /**
+   * Queue a backend thread action (compact, review) behind any running turn.
+   * Only harnesses that list the action in `capabilities.threadActions` and
+   * build control messages support it.
+   */
+  requestThreadAction(action: ThreadAction): void {
+    if (this._status !== "running") {
+      throw new Error(`Session is not running (status: ${this._status})`);
+    }
+    const supported = this.harness.capabilities.threadActions ?? [];
+    if (!supported.includes(action.kind) || !this.harness.buildThreadActionMessage) {
+      throw new Error(`The ${this.harness.name} harness does not support the "${action.kind}" thread action.`);
+    }
+    if (!this.multiTurn || !this.messageStream) {
+      throw new Error("Session does not support follow-up actions (launched in single-turn mode).");
+    }
+    this.resetIdleTimer();
+    this.turnRuntime.beginUserTurn();
+    this.applyControlEvent({ type: "turn.started" });
+    this.messageStream.push(this.harness.buildThreadActionMessage(action));
   }
 
   private async resolveNativePlanDecision(

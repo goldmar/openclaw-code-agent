@@ -2,7 +2,7 @@ import { unlinkSync } from "fs";
 
 import { pluginConfig } from "./config";
 import { KeyedDeadlineScheduler } from "./keyed-deadline-scheduler";
-import { getPersistedMutationRefs, getBackendConversationId, usesNativeBackendWorktree } from "./session-backend-ref";
+import { getPersistedMutationRefs, getBackendConversationId } from "./session-backend-ref";
 import type { Session } from "./session";
 import type { SessionReminderService } from "./session-reminder-service";
 import type { SessionStore } from "./session-store";
@@ -134,13 +134,10 @@ export class SessionMaintenanceService {
     if ((!resolved.cleanupSafe && !legacyResolvedState) || !resolvedAtIso || !Number.isFinite(resolvedAt) || now - resolvedAt < RESOLVED_WORKTREE_RETENTION_MS) return;
 
     try {
-      if (!session.worktreePath && !usesNativeBackendWorktree(session)) return;
+      if (!session.worktreePath) return;
       const repoDir = this.deps.resolveWorktreeRepoDir(session.workdir, session.worktreePath);
       if (!repoDir) return;
-      const removed = usesNativeBackendWorktree(session)
-        ? false
-        : removeWorktree(repoDir, session.worktreePath!);
-      if (!usesNativeBackendWorktree(session) && !removed) return;
+      if (!removeWorktree(repoDir, session.worktreePath)) return;
       for (const mutationRef of getPersistedMutationRefs(session)) {
         this.deps.updatePersistedSession(mutationRef, {
           worktreePath: undefined,

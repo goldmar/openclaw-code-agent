@@ -1232,7 +1232,7 @@ export function createCallbackHandler(
               resumedFromSessionName: consumedToken.launchResumedFromSessionName,
               resumeWorktreeFrom: consumedToken.launchResumeWorktreeFrom,
               sessionIdOverride: consumedToken.launchSessionIdOverride,
-              clearedPersistedCodexResume: consumedToken.launchClearedPersistedCodexResume,
+              rewindTurns: consumedToken.launchRewindTurns,
               forkSession: consumedToken.launchForkSession,
               forceNewSession: consumedToken.launchForceNewSession,
               permissionMode: consumedToken.launchPermissionMode,

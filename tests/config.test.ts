@@ -505,18 +505,29 @@ describe("setPluginConfig", () => {
     assert.equal(pluginConfig.planApproval, "ask");
   });
 
-  it("ignores removed Codex approval-policy config keys", () => {
+  it("applies Codex execution settings and ignores the removed top-level codexApprovalPolicy key", () => {
     setPluginConfig({
       harnesses: {
         codex: {
-          approvalPolicy: "on-request" as any,
-        } as any,
+          approvalPolicy: "on-request",
+          permissionProfile: ":workspace",
+          approvalsReviewer: "auto_review",
+        },
       },
       codexApprovalPolicy: "on-request" as any,
     } as any);
 
-    assert.equal("approvalPolicy" in (pluginConfig.harnesses.codex ?? {}), false);
+    assert.equal(pluginConfig.harnesses.codex?.approvalPolicy, "on-request");
+    assert.equal(pluginConfig.harnesses.codex?.permissionProfile, ":workspace");
+    assert.equal(pluginConfig.harnesses.codex?.approvalsReviewer, "auto_review");
     assert.equal("codexApprovalPolicy" in pluginConfig, false);
+  });
+
+  it("defaults Codex to full access without approval prompts", () => {
+    setPluginConfig({});
+    assert.equal(pluginConfig.harnesses.codex?.permissionProfile, ":danger-full-access");
+    assert.equal(pluginConfig.harnesses.codex?.approvalPolicy, "never");
+    assert.equal(pluginConfig.harnesses.codex?.approvalsReviewer, "user");
   });
 
   it("preserves legacy flat model keys as deprecated fallbacks", () => {
@@ -563,7 +574,7 @@ describe("setPluginConfig", () => {
     assert.deepEqual(pluginConfig.harnesses["claude-code"]?.allowedModels, ["sonnet", "opus"]);
     assert.equal(pluginConfig.harnesses.codex?.defaultModel, "gpt-6-sol");
     assert.deepEqual(pluginConfig.harnesses.codex?.allowedModels, ["gpt-6-sol", "gpt-6-astra", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]);
-    assert.equal(pluginConfig.harnesses.codex?.reasoningEffort, "medium");
+    assert.equal(pluginConfig.harnesses.codex?.reasoningEffort, undefined);
     assert.equal(pluginConfig.harnesses.codex?.fastMode, undefined);
     assert.deepEqual(pluginConfig.harnesses.opencode, {});
   });
@@ -666,7 +677,7 @@ describe("pluginConfig singleton", () => {
     assert.deepEqual(pluginConfig.harnesses["claude-code"]?.allowedModels, ["sonnet", "opus"]);
     assert.equal(pluginConfig.harnesses.codex?.defaultModel, "gpt-6-sol");
     assert.deepEqual(pluginConfig.harnesses.codex?.allowedModels, ["gpt-6-sol", "gpt-6-astra", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]);
-    assert.equal(pluginConfig.harnesses.codex?.reasoningEffort, "medium");
+    assert.equal(pluginConfig.harnesses.codex?.reasoningEffort, undefined);
     assert.equal(pluginConfig.harnesses.codex?.fastMode, undefined);
     assert.deepEqual(pluginConfig.harnesses.opencode, {});
   });

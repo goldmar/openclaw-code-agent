@@ -43,7 +43,6 @@ export class SessionWorktreeMessageService {
       | "model"
       | "reasoningEffort"
     >;
-    nativeBackendWorktree: boolean;
     cleanupSucceeded: boolean;
     worktreePath: string;
     worktreeBranch?: string;
@@ -54,7 +53,6 @@ export class SessionWorktreeMessageService {
   }): SessionNotificationRequest {
     const {
       session,
-      nativeBackendWorktree,
       cleanupSucceeded,
       worktreePath,
       worktreeBranch,
@@ -70,9 +68,7 @@ export class SessionWorktreeMessageService {
       session.startedAt,
     ].join(":");
     const cleanupSummary = preservedSummary ?? (cleanupSucceeded
-      ? nativeBackendWorktree
-        ? "native backend worktree released for backend cleanup"
-        : "worktree cleaned up"
+      ? "worktree cleaned up"
       : `cleanup failed; worktree still exists at ${worktreePath}`);
     const statSuffix = formatSessionStatsSuffix({
       costUsd: session.costUsd,
@@ -110,9 +106,7 @@ export class SessionWorktreeMessageService {
       userMessage: preservedSummary
         ? `ℹ️ [${session.name}] ${completedSummary} — ${preservedSummary}${statSuffix}`
         : cleanupSucceeded
-        ? nativeBackendWorktree
-          ? `ℹ️ [${session.name}] ${completedSummary} — native backend worktree released for backend cleanup${statSuffix}`
-          : `ℹ️ [${session.name}] ${completedSummary} — worktree cleaned up${statSuffix}`
+        ? `ℹ️ [${session.name}] ${completedSummary} — worktree cleaned up${statSuffix}`
         : `⚠️ [${session.name}] ${failedSummary}, but worktree cleanup failed. Worktree still exists at ${worktreePath}${statSuffix}`,
       wakeMessage: buildNoChangeWakeMessage({
         sessionName: session.name,

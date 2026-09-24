@@ -27,8 +27,6 @@ function sessionFields(session: Session): Record<string, unknown> {
     backendRefKind: session.backendRef?.kind,
     hasBackendConversationId: Boolean(session.backendRef?.conversationId),
     hasBackendRunId: Boolean(session.backendRef?.runId),
-    hasBackendWorktreeId: Boolean(session.backendRef?.worktreeId),
-    hasBackendWorktreePath: Boolean(session.backendRef?.worktreePath),
   };
 }
 

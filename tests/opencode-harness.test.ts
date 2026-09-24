@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -8,6 +8,7 @@ import {
   openCodeAgentForMode,
   parseMultiSelectAnswer,
   permissionRulesForMode,
+  resolveCommandPath,
   startOpenCodeServer,
   type OpenCodeServerHandle,
 } from "../src/harness/opencode";
@@ -319,8 +320,8 @@ describe("OpenCodeHarness static properties", () => {
     assert.deepEqual([...h.supportedPermissionModes], ["default", "plan", "bypassPermissions"]);
     assert.equal(h.capabilities.nativePendingInput, true);
     assert.equal(h.capabilities.nativePlanArtifacts, false);
+    assert.equal(Object.hasOwn(h.capabilities, "worktrees"), false);
     assert.equal(h.capabilities.nativePlanDecisions, true);
-    assert.equal(h.capabilities.worktrees, "plugin-managed");
   });
 
   it("builds user messages without a session id", () => {
@@ -967,6 +968,21 @@ describe("OpenCodeHarness pending input", () => {
 });
 
 describe("startOpenCodeServer", () => {
+  it("resolves relative OpenCode command overrides against the Gateway cwd, not the server's temp cwd", () => {
+    const base = mkdtempSync(join(tmpdir(), "openclaw-opencode-relative-"));
+    try {
+      const binDir = join(base, "bin");
+      const command = installFakeOpenCodeServer("", binDir);
+      assert.equal(resolveCommandPath("./bin/opencode", "", base), `${base}/./bin/opencode`);
+      assert.equal(realpathSync(resolveCommandPath("./bin/opencode", "", base)), realpathSync(command));
+      assert.equal(realpathSync(resolveCommandPath("opencode", "bin", base)), realpathSync(command));
+      assert.equal(resolveCommandPath("/abs/link/../opencode", "", base), "/abs/link/../opencode", "absolute overrides are not normalized");
+      assert.equal(resolveCommandPath("missing-opencode", "", base), "missing-opencode");
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
   it("starts `opencode serve --port 0` and reads the bound URL from stdout", async () => {
     const command = installFakeOpenCodeServer(`
 console.log("Warning: OPENCODE_SERVER_PASSWORD is not set; server is unsecured.");

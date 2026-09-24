@@ -19,7 +19,6 @@ import {
   isModelAllowedForHarness,
   isModelFormatSupportedForHarness,
 } from "../harness-models";
-import { decideResumeSessionId } from "../resume-policy";
 import { resolveRequiredAsyncLaunchRoute } from "../async-launch-route";
 import { getBackendConversationId, getPrimarySessionLookupRef } from "../session-backend-ref";
 import type { OpenClawPluginToolContext, PersistedSessionInfo } from "../types";
@@ -34,6 +33,7 @@ export interface AgentLaunchParams {
   allowed_tools?: string[];
   resume_session_id?: string;
   fork_session?: boolean;
+  rewind_turns?: number;
   force_new_session?: boolean;
   permission_mode?: "default" | "plan" | "bypassPermissions";
   plan_approval?: "ask" | "delegate" | "approve";
@@ -95,7 +95,7 @@ export type AgentLaunchResolution =
       route: ReturnType<typeof resolveSessionRoute>;
       resumeSessionId?: string;
       resolvedResumeId?: string;
-      clearedPersistedCodexResume: boolean;
+      rewindTurns?: number;
       reasoningEffort?: ReturnType<typeof resolveReasoningEffortForHarness>;
       fastMode?: boolean;
     };
@@ -233,6 +233,17 @@ export function resolveAgentLaunchRequest(
   }
 
   const harness = params.harness ?? getDefaultHarnessName();
+  if (params.rewind_turns !== undefined) {
+    if (!Number.isSafeInteger(params.rewind_turns) || params.rewind_turns < 1) {
+      return { kind: "error", text: "Error: rewind_turns must be a positive integer." };
+    }
+    if (!params.resume_session_id) {
+      return { kind: "error", text: "Error: rewind_turns requires resume_session_id (optionally with fork_session=true)." };
+    }
+    if (harness !== "codex") {
+      return { kind: "error", text: `Error: rewind_turns is only supported by the Codex harness (got "${harness}").` };
+    }
+  }
   const defaultModel = resolveDefaultModelForHarness(harness);
   const rawResolvedModel = params.model ?? defaultModel;
   const canonicalResolvedModel = canonicalizeModelForHarness(harness, rawResolvedModel);
@@ -335,15 +346,7 @@ export function resolveAgentLaunchRequest(
     resolvedResumeId = resolved;
   }
 
-  const { resumeSessionId, clearedPersistedCodexResume } = decideResumeSessionId({
-    requestedResumeSessionId: resolvedResumeId,
-    activeSession: activeResumeSession
-      ? { harnessSessionId: activeResumeSession.backendConversationId ?? activeResumeSession.harnessSessionId }
-      : undefined,
-    persistedSession: persistedResumeSession
-      ? { harness: persistedResumeSession.harness, backendRef: persistedResumeSession.backendRef }
-      : undefined,
-  });
+  const resumeSessionId = resolvedResumeId;
 
   const permissionMode = params.permission_mode ?? pluginConfig.permissionMode;
   const planApproval = params.plan_approval ?? pluginConfig.planApproval;
@@ -373,7 +376,7 @@ export function resolveAgentLaunchRequest(
     route,
     resumeSessionId,
     resolvedResumeId,
-    clearedPersistedCodexResume,
+    ...(params.rewind_turns !== undefined ? { rewindTurns: params.rewind_turns } : {}),
     reasoningEffort: params.reasoning_effort
       ?? (activeResumeSession?.harnessName === harness ? activeResumeSession.reasoningEffort : undefined)
       ?? (persistedResumeSession?.harness === harness ? persistedResumeSession.reasoningEffort : undefined)

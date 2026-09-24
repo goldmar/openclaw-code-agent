@@ -1,7 +1,7 @@
 import { existsSync } from "fs";
 import type { Session } from "./session";
 import type { WorktreeCompletionState } from "./session-worktree-controller";
-import { getPrimarySessionLookupRef, usesNativeBackendWorktree } from "./session-backend-ref";
+import { getPrimarySessionLookupRef } from "./session-backend-ref";
 import { detectDefaultBranch, getDiffSummary } from "./worktree";
 import { resolveWorktreePolicyDecision } from "./repo-policy";
 import type { RepoPolicyResolution } from "./repo-policy";
@@ -34,21 +34,18 @@ export type PlannedWorktreeAction =
       repoDir: string;
       worktreePath: string;
       branchName: string;
-      nativeBackendWorktree: boolean;
     }
   | {
       kind: "merged";
       repoDir: string;
       worktreePath: string;
       branchName: string;
-      nativeBackendWorktree: boolean;
     }
   | {
       kind: "released";
       repoDir: string;
       worktreePath: string;
       branchName: string;
-      nativeBackendWorktree: boolean;
       reasons: string[];
     }
   | {
@@ -137,17 +134,6 @@ export class SessionWorktreeActionService {
       };
     }
 
-    const nativeBackendWorktree = usesNativeBackendWorktree(session);
-    if (nativeBackendWorktree && !existsSync(worktreePath)) {
-      return {
-        kind: "no-change",
-        repoDir,
-        worktreePath,
-        branchName,
-        nativeBackendWorktree,
-      };
-    }
-
     const baseBranch = session.worktreeBaseBranch ?? detectDefaultBranch(repoDir);
     const completionState = this.deps.getWorktreeCompletionState(repoDir, worktreePath, branchName, baseBranch);
 
@@ -157,7 +143,6 @@ export class SessionWorktreeActionService {
         repoDir,
         worktreePath,
         branchName,
-        nativeBackendWorktree,
       };
     }
     if (completionState === "merged") {
@@ -166,7 +151,6 @@ export class SessionWorktreeActionService {
         repoDir,
         worktreePath,
         branchName,
-        nativeBackendWorktree,
       };
     }
     if (completionState === "released") {
@@ -175,7 +159,6 @@ export class SessionWorktreeActionService {
         repoDir,
         worktreePath,
         branchName,
-        nativeBackendWorktree,
         reasons: ["merge_noop_content_already_on_base"],
       };
     }

@@ -22,8 +22,7 @@ type ScenarioName =
   | "fail"
   | "interrupted"
   | "pending-question"
-  | "plan"
-  | "worktree";
+  | "plan";
 
 type Scenario = {
   assistantText?: string;
@@ -35,15 +34,13 @@ type Scenario = {
   plan?: {
     explanation: string;
     markdown: string;
-    steps: Array<{ status: "completed" | "in_progress" | "pending"; step: string }>;
+    steps: Array<{ status: "completed" | "inProgress" | "pending"; step: string }>;
   };
-  terminalStatus: "cancelled" | "completed" | "failed" | "interrupted";
-  worktreePath?: string;
+  terminalStatus: "completed" | "failed" | "interrupted";
 };
 
 const THREAD_ID = "123e4567-e89b-12d3-a456-426614174000";
 const TURN_ID_PREFIX = "oca-proof-turn";
-const DEFAULT_WORKTREE_PATH = "/tmp/oca-proof/worktrees/native-codex/openclaw-code-agent";
 
 export function scenarioByName(name: string | undefined): Scenario {
   const scenario = (name || "basic").trim() as ScenarioName;
@@ -51,27 +48,15 @@ export function scenarioByName(name: string | undefined): Scenario {
     case "approval":
       return {
         pendingInput: {
-          method: "turn/requestApproval",
+          method: "item/commandExecution/requestApproval",
           params: {
-            requestId: "req-approval",
-            question: "Allow command?",
-            availableDecisions: ["Approve", "Decline"],
-            actions: [
-              {
-                kind: "approval",
-                label: "Approve",
-                responseDecision: "approve",
-                proposedExecpolicyAmendment: {
-                  approvalPolicy: "never",
-                  sandbox: "danger-full-access",
-                },
-              },
-              {
-                kind: "approval",
-                label: "Decline",
-                responseDecision: "decline",
-              },
-            ],
+            kind: "command",
+            itemId: "item-approval",
+            startedAtMs: 0,
+            environmentId: null,
+            command: "echo proof",
+            reason: "Allow command?",
+            availableDecisions: ["accept", "decline"],
           },
         },
         assistantText: "OPENCLAW_OCA_CODEX_APPROVAL_OK",
@@ -90,14 +75,18 @@ export function scenarioByName(name: string | undefined): Scenario {
     case "pending-question":
       return {
         pendingInput: {
-          method: "turn/requestUserInput",
+          method: "item/tool/requestUserInput",
           params: {
-            requestId: "req-question",
+            itemId: "item-question",
+            isBlocking: true,
+            autoResolutionMs: null,
             questions: [
               {
                 id: "environment",
                 header: "Environment",
                 question: "Choose an environment",
+                isOther: false,
+                isSecret: false,
                 options: [
                   { label: "Staging (Recommended)", description: "Use disposable proof settings." },
                   { label: "Production", description: "Use production credentials." },
@@ -125,12 +114,6 @@ export function scenarioByName(name: string | undefined): Scenario {
           ].join("\n"),
         },
         terminalStatus: "completed",
-      };
-    case "worktree":
-      return {
-        assistantText: "OPENCLAW_OCA_CODEX_WORKTREE_OK",
-        terminalStatus: "completed",
-        worktreePath: process.env.OCA_CODEX_PROOF_WORKTREE_PATH || DEFAULT_WORKTREE_PATH,
       };
     case "basic":
       return {
@@ -234,25 +217,29 @@ class ProofServer {
     }
   }
 
+  // Response shapes follow the vendored `codex app-server generate-ts` types
+  // (src/harness/codex-app-server-protocol), trimmed to what OCA reads.
   private async route(method: string, params: unknown): Promise<unknown> {
     switch (method) {
       case "initialize":
         this.initialized = true;
-        return { capabilities: { experimentalApi: true } };
+        return { userAgent: "oca-codex-proof", codexHome: "/tmp/oca-codex-proof", platformFamily: "unix", platformOs: "linux" };
+      case "account/read":
+        return { account: null, requiresOpenaiAuth: false, workspaceRouting: null };
+      case "model/list":
+        return { data: [], nextCursor: null };
       case "thread/start":
-      case "thread/new":
-        this.requireInitialized();
-        return this.threadState(params);
       case "thread/resume":
+      case "thread/fork":
         this.requireInitialized();
-        return this.threadState(params);
+        return this.threadResponse(params);
       case "turn/start":
         this.requireInitialized();
-        return await this.startTurn(params);
+        return this.startTurn();
       case "turn/interrupt":
         return {};
       default:
-        return {};
+        throw new Error(`fake Codex proof server does not implement ${method}`);
     }
   }
 
@@ -262,41 +249,60 @@ class ProofServer {
     }
   }
 
-  private threadState(params: unknown): Record<string, unknown> {
+  private threadResponse(params: unknown): Record<string, unknown> {
     const record = params && typeof params === "object" ? params as Record<string, unknown> : {};
+    const cwd = typeof record.cwd === "string" ? record.cwd : "/tmp";
     return {
-      threadId: typeof record.threadId === "string" ? record.threadId : THREAD_ID,
-      ...(this.scenario.worktreePath ? { cwd: this.scenario.worktreePath } : {}),
+      thread: { id: typeof record.threadId === "string" ? record.threadId : THREAD_ID, turns: [] },
+      model: typeof record.model === "string" ? record.model : "gpt-6-sol",
+      modelProvider: "openai",
+      serviceTier: null,
+      cwd,
+      approvalPolicy: "never",
+      approvalsReviewer: "user",
+      sandbox: { type: "dangerFullAccess" },
+      activePermissionProfile: { id: ":danger-full-access", extends: null },
+      reasoningEffort: null,
     };
   }
 
-  private async startTurn(params: unknown): Promise<unknown> {
+  private turn(turnId: string, status: string, errorMessage?: string): Record<string, unknown> {
+    return {
+      id: turnId,
+      items: [],
+      itemsView: "notLoaded",
+      status,
+      error: errorMessage
+        ? { message: errorMessage, codexErrorInfo: null, additionalDetails: null, misalignment: null }
+        : null,
+      startedAt: null,
+      completedAt: null,
+      durationMs: null,
+    };
+  }
+
+  private startTurn(): unknown {
     this.turnCounter += 1;
     const turnId = `${TURN_ID_PREFIX}-${this.turnCounter}`;
     queueMicrotask(() => {
-      void this.emitTurn(turnId, params);
+      void this.emitTurn(turnId);
     });
-    return { threadId: THREAD_ID, turnId };
+    return { turn: this.turn(turnId, "inProgress") };
   }
 
-  private async emitTurn(turnId: string, params: unknown): Promise<void> {
-    const base = {
-      threadId: THREAD_ID,
-      turnId,
-      ...(this.scenario.worktreePath ? { thread: { id: THREAD_ID, cwd: this.scenario.worktreePath } } : {}),
-    };
+  private async emitTurn(turnId: string): Promise<void> {
+    const base = { threadId: THREAD_ID, turnId };
+    writeFrame({ jsonrpc: "2.0", method: "turn/started", params: { threadId: THREAD_ID, turn: this.turn(turnId, "inProgress") } });
 
     if (this.scenario.pendingInput) {
-      const requestId = this.scenario.pendingInput.params.requestId ?? `req-${this.turnCounter}`;
-      await this.sendRequest(this.scenario.pendingInput.method, {
+      const { id } = await this.sendRequest(this.scenario.pendingInput.method, {
         ...base,
         ...this.scenario.pendingInput.params,
-        requestId,
       });
       writeFrame({
         jsonrpc: "2.0",
-        method: "serverrequest/resolved",
-        params: { ...base, requestId },
+        method: "serverRequest/resolved",
+        params: { threadId: THREAD_ID, requestId: id },
       });
     }
 
@@ -306,10 +312,8 @@ class ProofServer {
         method: "turn/plan/updated",
         params: {
           ...base,
-          plan: {
-            explanation: this.scenario.plan.explanation,
-            steps: this.scenario.plan.steps,
-          },
+          explanation: this.scenario.plan.explanation,
+          plan: this.scenario.plan.steps,
         },
       });
       writeFrame({
@@ -317,6 +321,7 @@ class ProofServer {
         method: "item/completed",
         params: {
           ...base,
+          completedAtMs: 0,
           item: {
             id: `plan-${turnId}`,
             type: "plan",
@@ -329,46 +334,37 @@ class ProofServer {
     if (this.scenario.assistantText) {
       writeFrame({
         jsonrpc: "2.0",
-        method: "item/agentmessage/delta",
+        method: "item/agentMessage/delta",
         params: {
           ...base,
-          item: {
-            id: `assistant-${turnId}`,
-            type: "agentMessage",
-            delta: this.scenario.assistantText,
-          },
+          itemId: `assistant-${turnId}`,
+          delta: this.scenario.assistantText,
         },
       });
     }
 
-    const failed = this.scenario.terminalStatus === "failed";
-    const cancelled = this.scenario.terminalStatus === "cancelled";
     writeFrame({
       jsonrpc: "2.0",
-      method: failed ? "turn/failed" : cancelled ? "turn/cancelled" : "turn/completed",
+      method: "turn/completed",
       params: {
-        ...base,
-        turn: {
-          id: turnId,
-          status: this.scenario.terminalStatus,
-          ...(this.scenario.failureMessage ? { error: { message: this.scenario.failureMessage } } : {}),
-        },
+        threadId: THREAD_ID,
+        turn: this.turn(turnId, this.scenario.terminalStatus, this.scenario.failureMessage),
       },
     });
   }
 
-  private sendRequest(method: string, params: unknown): Promise<unknown> {
-    const id = `server-req-${++this.requestCounter}`;
+  private sendRequest(method: string, params: unknown): Promise<{ id: number; result: unknown }> {
+    const id = ++this.requestCounter;
     writeFrame({ jsonrpc: "2.0", id, method, params });
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
-        this.pendingServerRequests.delete(id);
-        resolve({ timedOut: true });
+        this.pendingServerRequests.delete(String(id));
+        resolve({ id, result: { timedOut: true } });
       }, 30_000);
       timer.unref?.();
-      this.pendingServerRequests.set(id, (value) => {
+      this.pendingServerRequests.set(String(id), (value) => {
         clearTimeout(timer);
-        resolve(value);
+        resolve({ id, result: value });
       });
     });
   }

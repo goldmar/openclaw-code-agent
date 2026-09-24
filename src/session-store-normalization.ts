@@ -12,7 +12,6 @@ import type {
   KillReason,
   ReasoningEffort,
   PermissionMode,
-  CodexApprovalPolicy,
   PlanApprovalMode,
   PlanApprovalContext,
   SessionLifecycle,
@@ -95,17 +94,13 @@ function toOptionalReasoningEffort(value: unknown): ReasoningEffort | undefined 
     : undefined;
 }
 
+function toOptionalPositiveInteger(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
+}
+
 function toOptionalPermissionMode(value: unknown): PermissionMode | undefined {
   return value === "default" || value === "plan" || value === "bypassPermissions"
     ? value
-    : undefined;
-}
-
-function toOptionalCodexApprovalPolicy(value: unknown): CodexApprovalPolicy | undefined {
-  // Legacy persisted rows may still contain "on-request". Normalize them to
-  // the only supported App Server execution policy so reload remains safe.
-  return value === "never" || value === "on-request"
-    ? "never"
     : undefined;
 }
 
@@ -377,8 +372,6 @@ function normalizeBackendRef(
         kind,
         conversationId,
         runId: toOptionalString(raw.runId),
-        worktreeId: toOptionalString(raw.worktreeId),
-        worktreePath: toOptionalString(raw.worktreePath),
       };
     }
   }
@@ -502,8 +495,32 @@ function normalizeStatus(value: unknown): SessionStatus | undefined {
   return value === "running" ? "killed" : (value as SessionStatus);
 }
 
-export function normalizePersistedEntry(raw: unknown): PersistedSessionInfo | undefined {
-  if (!isRecord(raw)) return undefined;
+/**
+ * 4.x Codex sessions could persist a backend-owned native Codex worktree
+ * (`backendRef.worktreePath`) as the session worktree. OCA no longer manages
+ * those directories, so their worktree metadata is dropped on load: plugin
+ * cleanup, merge, and discard must never touch a Codex-owned checkout.
+ */
+function withoutNativeBackendWorktree(raw: Record<string, unknown>): Record<string, unknown> {
+  const backendRef = isRecord(raw.backendRef) ? raw.backendRef : undefined;
+  const nativePath = toOptionalString(backendRef?.worktreePath);
+  const nativeId = toOptionalString(backendRef?.worktreeId);
+  if (!nativePath && !nativeId) return raw;
+  const worktreePath = toOptionalString(raw.worktreePath);
+  if (worktreePath && nativePath && worktreePath !== nativePath) return raw;
+  return {
+    ...raw,
+    worktreePath: undefined,
+    worktreeBranch: undefined,
+    worktreeState: undefined,
+    worktreeLifecycle: undefined,
+    pendingWorktreeDecisionSince: undefined,
+  };
+}
+
+export function normalizePersistedEntry(input: unknown): PersistedSessionInfo | undefined {
+  if (!isRecord(input)) return undefined;
+  const raw = withoutNativeBackendWorktree(input);
 
   const harnessSessionId = toNonEmptyString(raw.harnessSessionId);
   if (!harnessSessionId) return undefined;
@@ -598,7 +615,6 @@ export function normalizePersistedEntry(raw: unknown): PersistedSessionInfo | un
     approvalPromptDeliveredAt: toOptionalString(raw.approvalPromptDeliveredAt),
     approvalPromptFailedAt: toOptionalString(raw.approvalPromptFailedAt),
     planApproval: toOptionalPlanApprovalMode(raw.planApproval),
-    codexApprovalPolicy: toOptionalCodexApprovalPolicy(raw.codexApprovalPolicy),
     worktreePath,
     worktreeBranch: persistedWorktreeBranch,
     worktreeStrategy: toOptionalWorktreeStrategy(raw.worktreeStrategy),
@@ -686,7 +702,7 @@ export function normalizeActionToken(raw: unknown): SessionActionToken | undefin
     launchResumedFromSessionName: toOptionalString(raw.launchResumedFromSessionName),
     launchResumeWorktreeFrom: toOptionalString(raw.launchResumeWorktreeFrom),
     launchSessionIdOverride: toOptionalString(raw.launchSessionIdOverride),
-    launchClearedPersistedCodexResume: raw.launchClearedPersistedCodexResume === true ? true : undefined,
+    launchRewindTurns: toOptionalPositiveInteger(raw.launchRewindTurns),
     launchForkSession: typeof raw.launchForkSession === "boolean" ? raw.launchForkSession : undefined,
     launchForceNewSession: typeof raw.launchForceNewSession === "boolean" ? raw.launchForceNewSession : undefined,
     launchPermissionMode: toOptionalPermissionMode(raw.launchPermissionMode),

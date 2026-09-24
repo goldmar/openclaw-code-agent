@@ -232,7 +232,7 @@ describe("OCA Codex Telegram proof runner", () => {
       const summary = await runLocalSmoke(parseArgs([
         "local-smoke",
         "--scenario",
-        "worktree",
+        "basic",
         "--output-dir",
         outputDir,
       ]));
@@ -247,7 +247,7 @@ describe("OCA Codex Telegram proof runner", () => {
       assert.equal(existsSync(summaryPath), true);
       assert.equal(existsSync(join(repoRoot, outputDir, "public-artifacts", "summary.json")), true);
       const summaryText = readFileSync(summaryPath, "utf8");
-      assert.match(summaryText, /worktree/);
+      assert.match(summaryText, /"scenario": "basic"/);
       assert.doesNotMatch(summaryText, /\/(?:home|tmp)\/[^"]+/);
     } finally {
       rmSync(temp, { recursive: true, force: true });

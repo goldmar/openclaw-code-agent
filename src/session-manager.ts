@@ -117,7 +117,7 @@ type RepoPolicyLaunchArgs = {
   resumedFromSessionName?: string;
   resumeWorktreeFrom?: string;
   sessionIdOverride?: string;
-  clearedPersistedCodexResume?: boolean;
+  rewindTurns?: number;
   forkSession?: boolean;
   forceNewSession?: boolean;
   permissionMode?: SessionConfig["permissionMode"];
@@ -150,7 +150,7 @@ function digestRepoPolicyLaunchContext(args: RepoPolicyLaunchArgs, strategy: Wor
     resumedFromSessionName: args.resumedFromSessionName,
     resumeWorktreeFrom: args.resumeWorktreeFrom,
     sessionIdOverride: args.sessionIdOverride,
-    clearedPersistedCodexResume: args.clearedPersistedCodexResume,
+    rewindTurns: args.rewindTurns,
     forkSession: args.forkSession,
     forceNewSession: args.forceNewSession,
     permissionMode: args.permissionMode,
@@ -185,7 +185,7 @@ function digestRepoPolicyTokenLaunchContext(token: SessionActionToken): string {
     resumedFromSessionName: token.launchResumedFromSessionName,
     resumeWorktreeFrom: token.launchResumeWorktreeFrom,
     sessionIdOverride: token.launchSessionIdOverride,
-    clearedPersistedCodexResume: token.launchClearedPersistedCodexResume,
+    rewindTurns: token.launchRewindTurns,
     forkSession: token.launchForkSession,
     forceNewSession: token.launchForceNewSession,
     permissionMode: token.launchPermissionMode,
@@ -747,7 +747,7 @@ export class SessionManager {
     resumeSessionId?: string;
     resumeSessionName?: string;
     forkSession?: boolean;
-    clearedPersistedCodexResume?: boolean;
+    rewindTurns?: number;
   }, session: Session): string {
     return formatLaunchSummaryFromSession({
       prompt: config.prompt,
@@ -759,7 +759,7 @@ export class SessionManager {
       resumeSessionName: config.resumeSessionName,
       forkSession: config.forkSession,
       forceNewSession: config.forceNewSession,
-      clearedPersistedCodexResume: config.clearedPersistedCodexResume,
+      rewindTurns: config.rewindTurns,
     }, session);
   }
 
@@ -878,7 +878,7 @@ export class SessionManager {
       launchResumedFromSessionName: args.resumedFromSessionName,
       launchResumeWorktreeFrom: args.resumeWorktreeFrom,
       launchSessionIdOverride: args.sessionIdOverride,
-      launchClearedPersistedCodexResume: args.clearedPersistedCodexResume,
+      launchRewindTurns: args.rewindTurns,
       launchForkSession: args.forkSession,
       launchForceNewSession: args.forceNewSession,
       launchPermissionMode: args.permissionMode,
@@ -949,10 +949,10 @@ export class SessionManager {
       resumedFromSessionName: args.resumedFromSessionName,
       resumeWorktreeFrom: args.resumeWorktreeFrom,
       forkSession: args.resumeSessionId ? args.forkSession : false,
+      rewindTurns: args.resumeSessionId ? args.rewindTurns : undefined,
       multiTurn: true,
       permissionMode,
       planApproval,
-      codexApprovalPolicy: harness === "codex" ? "never" : undefined,
       originChannel: this.originChannelFromRoute(route),
       originThreadId: route.threadId,
       originAgentId: args.originAgentId,
@@ -975,7 +975,7 @@ export class SessionManager {
         resumeSessionId: args.resumeSessionId,
         resumeSessionName: args.resumedFromSessionName,
         forkSession: args.forkSession,
-        clearedPersistedCodexResume: args.clearedPersistedCodexResume,
+        rewindTurns: args.rewindTurns,
       }, session),
     };
   }
@@ -1035,7 +1035,7 @@ export class SessionManager {
       resumedFromSessionName: token.launchResumedFromSessionName,
       resumeWorktreeFrom: token.launchResumeWorktreeFrom,
       sessionIdOverride: token.launchSessionIdOverride,
-      clearedPersistedCodexResume: token.launchClearedPersistedCodexResume,
+      rewindTurns: token.launchRewindTurns,
       forkSession: token.launchForkSession,
       forceNewSession: token.launchForceNewSession,
       permissionMode: token.launchPermissionMode,

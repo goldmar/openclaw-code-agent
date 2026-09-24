@@ -66,7 +66,6 @@ describe("harness registry — custom registration", () => {
     capabilities: {
       nativePendingInput: false,
       nativePlanArtifacts: false,
-      worktrees: "plugin-managed",
     },
     launch() { return { messages: (async function*() {})() }; },
     buildUserMessage(text: string, sessionId: string) { return { text, sessionId }; },

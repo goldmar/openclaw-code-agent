@@ -51,6 +51,7 @@ openclaw-code-agent/
 - `src/session-interactions.ts`: action-token creation and state-driven button sets
 - `src/session-notifications.ts`: delivery-state-aware wrapper around lifecycle notifications
 - `src/harness/*`: Claude Code, Codex, and experimental OpenCode integrations
+- `src/harness/codex-app-server-protocol/`: generated Codex App Server wire types (see below; never edit by hand)
 - `src/tools/*`: OpenClaw tool implementations
 - `src/commands/*`: chat command implementations
 - `src/worktree.ts`: git worktree, merge, and PR helpers
@@ -110,11 +111,15 @@ The manually dispatched release workflow verifies one selected `main` commit, pa
 Additional smoke entry points:
 
 - `pnpm smoke:backend-parity` for the shared backend-contract surface
-- `pnpm smoke:codex-worktrees` for Codex plugin-managed worktree bootstrap and backend restore behavior
+- `pnpm smoke:codex-worktrees` for Codex plugin-managed worktree bootstrap and session restore behavior
 - `pnpm test:integ:crabbox` for deterministic Codex proof/Crabbox harness coverage; live Telegram Desktop proof stays disabled unless `OPENCLAW_RUN_LIVE_TELEGRAM_PROOF=1` and `--allow-live` are both used
-- `pnpm smoke:codex-live` for opt-in real App Server validation when a live Codex environment is available
-- `pnpm smoke:codex-release` for the fuller opt-in operator/release check covering launch, `agent_respond`-style resume, structured plan delivery, restart/resume, and worktree restore behavior
+- `pnpm smoke:codex-live` for opt-in real App Server validation when a live Codex environment is available (developer instructions, resume, steering, compaction, and rewind-fork; uses `gpt-6-luna` unless `OPENCLAW_CODEX_SMOKE_MODEL` is set)
+- `pnpm smoke:codex-release` for the opt-in release check covering structured plan delivery and resume after a plan turn
 - `pnpm smoke:opencode-live` for opt-in real OpenCode server validation when `opencode >= 1.16.2` is available. Add `OPENCLAW_RUN_LIVE_OPENCODE_COMPLETION_SMOKE=1` to run a real prompt (needs provider auth), `OPENCLAW_OPENCODE_SMOKE_MODEL=provider/model` to pick its model, and `OPENCLAW_OPENCODE_COMMAND` to test a different `opencode` binary
+
+### Codex App Server Protocol Types
+
+`src/harness/codex-app-server-protocol/` is generated. Do not edit it by hand. Regenerate it from the installed Codex CLI with `pnpm sync:codex-protocol` (runs `codex app-server generate-ts --experimental` and keeps only the import closure of the types the harness uses), and check drift with `pnpm sync:codex-protocol -- --check`. After a Codex upgrade, regenerate, run `pnpm typecheck`, and run the live Codex smoke.
 
 ### Live Codex Release Check
 
@@ -123,7 +128,7 @@ Use `pnpm smoke:codex-release` only when you have a real Codex App Server enviro
 Before running it:
 
 1. Make sure the local Codex App Server environment is configured and reachable.
-2. Run it from a workspace where creating plugin-managed worktrees and restoring Codex backend refs is acceptable.
+2. Run it from a workspace where short-lived Codex threads in temporary directories are acceptable.
 3. Treat failures as operator/runtime regressions first, not just test flakes.
 
 ### Live OpenCode Smoke Check

@@ -81,25 +81,38 @@ export const REPO_INTEGRATION_POLICIES = ["pr-required", "pr-allowed", "never-pr
 export type RepoIntegrationPolicy = typeof REPO_INTEGRATION_POLICIES[number];
 export const REPO_INTEGRATION_POLICY_SET: ReadonlySet<RepoIntegrationPolicy> = new Set(REPO_INTEGRATION_POLICIES);
 export type RepoProviderKind = "github" | "unsupported";
-/**
- * Codex App Server execution policy is fixed to `never`.
- * OpenClaw owns the plan-review and approval UX through `permissionMode`
- * and `planApproval` instead of Codex-side approval prompts.
- */
-export type CodexApprovalPolicy = "never";
+/** Built-in Codex permission profiles (`permissionProfile/list`). */
+export const CODEX_PERMISSION_PROFILES = [":read-only", ":workspace", ":danger-full-access"] as const;
+export type CodexPermissionProfile = typeof CODEX_PERMISSION_PROFILES[number];
+/** Codex `AskForApproval` string values OCA exposes. */
+export const CODEX_APPROVAL_POLICIES = ["never", "on-request", "untrusted"] as const;
+export type CodexApprovalPolicy = typeof CODEX_APPROVAL_POLICIES[number];
+/** Codex `ApprovalsReviewer` values OCA exposes. */
+export const CODEX_APPROVALS_REVIEWERS = ["user", "auto_review"] as const;
+export type CodexApprovalsReviewer = typeof CODEX_APPROVALS_REVIEWERS[number];
 export const REASONING_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 export type ReasoningEffort = typeof REASONING_EFFORTS[number];
 export const REASONING_EFFORT_SET: ReadonlySet<ReasoningEffort> = new Set(REASONING_EFFORTS);
 export type SessionBackendKind = "claude-code" | "codex-app-server" | "opencode-server";
-export type BackendWorktreeCapability = "plugin-managed" | "native-execution" | "native-restore";
 
 export interface SessionBackendRef {
   kind: SessionBackendKind;
   conversationId: string;
   runId?: string;
-  worktreeId?: string;
-  worktreePath?: string;
 }
+
+/** Backend thread maintenance actions exposed through `agent_session_action`. */
+export type ThreadAction =
+  | { kind: "compact" }
+  | {
+      kind: "review";
+      target:
+        | { type: "uncommittedChanges" }
+        | { type: "baseBranch"; branch: string }
+        | { type: "commit"; sha: string }
+        | { type: "custom"; instructions: string };
+    };
+export type ThreadActionKind = ThreadAction["kind"];
 
 export interface SessionRuntimeRecoveryDiagnostics {
   reason: SessionRuntimeRecoveryReason;
@@ -118,13 +131,14 @@ export interface SessionRuntimeRecoveryDiagnostics {
 export interface BackendCapabilityFlags {
   nativePendingInput: boolean;
   nativePlanArtifacts: boolean;
+  /** Backend thread actions supported while the session is live. */
+  threadActions?: readonly ThreadActionKind[];
   /**
    * The backend carries plan approve/revise decisions natively (Claude
    * ExitPlanMode permission results, OpenCode plan/build agent switching), so
    * OCA forwards the user's words without prompt-level plan-decision framing.
    */
   nativePlanDecisions?: boolean;
-  worktrees: BackendWorktreeCapability;
 }
 
 export type PendingInputDecision =
@@ -139,8 +153,6 @@ export type PendingInputAction =
       label: string;
       decision: PendingInputDecision;
       responseDecision: string;
-      proposedExecpolicyAmendment?: Record<string, unknown>;
-      sessionPrefix?: string;
     }
   | {
       kind: "option";
@@ -291,7 +303,7 @@ export interface SessionActionToken {
   launchResumedFromSessionName?: string;
   launchResumeWorktreeFrom?: string;
   launchSessionIdOverride?: string;
-  launchClearedPersistedCodexResume?: boolean;
+  launchRewindTurns?: number;
   launchForkSession?: boolean;
   launchForceNewSession?: boolean;
   launchPermissionMode?: PermissionMode;
@@ -329,6 +341,12 @@ export interface HarnessConfig {
   allowedModels?: string[];
   reasoningEffort?: ReasoningEffort;
   fastMode?: boolean;
+  /** Codex only: named permission profile sent as `permissions`. */
+  permissionProfile?: CodexPermissionProfile;
+  /** Codex only: when Codex asks before acting. */
+  approvalPolicy?: CodexApprovalPolicy;
+  /** Codex only: who reviews Codex approval requests. */
+  approvalsReviewer?: CodexApprovalsReviewer;
 }
 
 /** Tool-intercept callback type for harnesses that support it. */
@@ -359,7 +377,6 @@ export interface SessionConfig {
   permissionMode?: PermissionMode;
   requestedPermissionMode?: PermissionMode;
   planApproval?: PlanApprovalMode;
-  codexApprovalPolicy?: CodexApprovalPolicy;
   approvalExecutionState?: ApprovalExecutionState;
   approvalRationale?: string;
   planModeApproved?: boolean;
@@ -385,6 +402,8 @@ export interface SessionConfig {
    * inherit the persisted worktree context. */
   resumeWorktreeFrom?: string;
   forkSession?: boolean;
+  /** Codex only: drop the latest N turns of the resumed/forked thread before continuing. */
+  rewindTurns?: number;
   multiTurn?: boolean;
   /** Optional goal-task owner for explicit iterative loop orchestration. */
   goalTaskId?: string;
@@ -530,7 +549,6 @@ export interface PersistedSessionInfo {
   approvalPromptDeliveredAt?: string;
   approvalPromptFailedAt?: string;
   planApproval?: PlanApprovalMode;
-  codexApprovalPolicy?: CodexApprovalPolicy;
   /** Path to the worktree if one was created. */
   worktreePath?: string;
   /** Branch name of the worktree. */

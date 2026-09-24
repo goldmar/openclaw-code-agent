@@ -1,4 +1,4 @@
-import { afterEach, describe, it } from "node:test";
+import { afterEach, beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -20,6 +20,8 @@ import { makeAgentLaunchTool } from "../src/tools/agent-launch";
 import { setSessionManager } from "../src/singletons";
 import type { SessionNotificationRequest } from "../src/wake-dispatcher";
 import type { PersistedSessionInfo, ReasoningEffort } from "../src/types";
+import { resetCodexModelCatalogForTests } from "../src/harness/codex-model-catalog";
+import { seedCodexModelCatalog } from "./codex-model-catalog-fixture";
 
 const LIFECYCLE_NOTIFICATION_VARIANTS = [
   "launch", "resumed-launch", "progress", "running", "completed", "failed", "cancelled",
@@ -47,14 +49,28 @@ function recorder(persisted?: PersistedSessionInfo) {
 }
 
 describe("notification reasoning visibility", () => {
-  afterEach(() => { setPluginConfig({}); setSessionManager(null); });
+  beforeEach(() => { seedCodexModelCatalog(); });
+  afterEach(() => { setPluginConfig({}); setSessionManager(null); resetCodexModelCatalogForTests(); });
 
-  it("uses explicit launch effort ahead of configured and built-in defaults", () => {
+  it("uses explicit launch effort ahead of configured defaults and leaves unset Codex effort to Codex", () => {
     setPluginConfig({ harnesses: { codex: { reasoningEffort: "high" } } });
     assert.equal(makeSession().reasoningEffort, "high");
     assert.equal(makeSession("low").reasoningEffort, "low");
     setPluginConfig({});
-    assert.equal(makeSession().reasoningEffort, "medium");
+    assert.equal(makeSession().reasoningEffort, undefined);
+  });
+
+  it("prefers the Codex session's own reported effort support over the shared catalog", () => {
+    assert.equal(formatHarnessModelLabel({ harness: "codex", model: "gpt-6-sol", reasoningEffort: "max", reasoningEffortSupported: false }), "codex | gpt-6-sol");
+    assert.equal(formatHarnessModelLabel({ harness: "codex", model: "custom-model", reasoningEffort: "high", reasoningEffortSupported: true }), "codex | custom-model | reasoning: high");
+  });
+
+  it("uses Codex model/list efforts and falls back to universal levels before the catalog loads", () => {
+    assert.equal(formatHarnessModelLabel({ harness: "codex", model: "gpt-6-luna", reasoningEffort: "max" }), "codex | gpt-6-luna | reasoning: max");
+    assert.equal(formatHarnessModelLabel({ harness: "codex", model: "gpt-5.5", reasoningEffort: "max" }), "codex | gpt-5.5");
+    resetCodexModelCatalogForTests();
+    assert.equal(formatHarnessModelLabel({ harness: "codex", model: "gpt-6-luna", reasoningEffort: "high" }), "codex | gpt-6-luna | reasoning: high");
+    assert.equal(formatHarnessModelLabel({ harness: "codex", model: "gpt-6-luna", reasoningEffort: "max" }), "codex | gpt-6-luna");
   });
 
   for (const input of [
@@ -114,7 +130,7 @@ describe("notification reasoning visibility", () => {
 
   for (const resumed of [false, true]) {
     it(`renders the effective level at ${resumed ? "resumed" : "initial"} launch and terminal delivery once`, () => {
-      const session = makeSession();
+      const session = makeSession("medium");
       if (resumed) Object.assign(session, { resumeSessionId: "backend-thread", resumedFromSessionName: "original" });
       // No backend invocation is needed to exercise the real bootstrap renderer.
       session.start = async () => {};
@@ -167,7 +183,7 @@ describe("notification reasoning visibility", () => {
     assert.ok(pages.every((page) => page.requiredForSequenceSuccess));
     assert.equal(pages[2].text, "Continuation body without a heading");
     const noChange = new SessionWorktreeMessageService().buildNoChangeNotification({
-      session, nativeBackendWorktree: false, cleanupSucceeded: true, worktreePath: "/tmp/wt", preview: "Done",
+      session, cleanupSucceeded: true, worktreePath: "/tmp/wt", preview: "Done",
     });
     assert.match(noChange.userMessage!, /reasoning: high$/);
   });

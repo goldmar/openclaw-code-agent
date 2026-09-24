@@ -190,7 +190,7 @@ export function usageText(): string {
     "  node --import tsx scripts/e2e/oca-codex-telegram-proof.ts run [--dry-run]",
     "",
     "Options:",
-    "  --scenario <name>             basic, plan, pending-question, approval, worktree, fail, interrupted.",
+    "  --scenario <name>             basic, plan, pending-question, approval, fail, interrupted.",
     "  --output-dir <path>           Artifact directory under .artifacts/qa-e2e/oca-codex-telegram.",
     "  --crabbox-bin <path>          Crabbox binary. Default: OPENCLAW_TELEGRAM_USER_CRABBOX_BIN or crabbox.",
     "  --provider <name>             Crabbox provider. Default: OPENCLAW_TELEGRAM_USER_CRABBOX_PROVIDER or local-container.",
@@ -1607,8 +1607,6 @@ export async function runLocalSmoke(opts: Options): Promise<Record<string, unkno
       cwd: REPO_ROOT,
       permissionMode: opts.scenario === "plan" ? "plan" : "default",
       prompt: "Run the OCA Codex proof scenario and stop.",
-      worktreeStrategy: opts.scenario === "worktree" ? "ask" : "off",
-      originalWorkdir: REPO_ROOT,
     });
     const messages = await collectUntilCompleted(launched, opts.timeoutMs);
     const terminal = messages.find((message): message is Extract<HarnessMessage, { type: "run_completed" }> => (

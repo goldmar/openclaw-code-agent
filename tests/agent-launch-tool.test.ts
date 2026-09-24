@@ -15,7 +15,7 @@ describe("agent_launch tool defaults", () => {
     setSessionManager(null);
   });
 
-  it("uses built-in Codex model and reasoningEffort defaults when no model is provided", async () => {
+  it("uses the built-in Codex model and leaves reasoning effort to Codex when no model is provided", async () => {
     let spawnConfig: Record<string, unknown> | undefined;
     setPluginConfig({ defaultHarness: "codex" });
 
@@ -27,7 +27,6 @@ describe("agent_launch tool defaults", () => {
           id: "sess-1",
           name: "codex-defaults",
           model: config.model,
-          codexApprovalPolicy: config.codexApprovalPolicy,
         };
       },
     } as any);
@@ -38,9 +37,9 @@ describe("agent_launch tool defaults", () => {
     assert.ok(spawnConfig, "spawn should be called");
     assert.equal(spawnConfig?.harness, "codex");
     assert.equal(spawnConfig?.model, "gpt-6-sol");
-    assert.equal(spawnConfig?.reasoningEffort, "medium");
+    assert.equal(spawnConfig?.reasoningEffort, undefined);
     assert.equal(spawnConfig?.fastMode, undefined);
-    assert.equal(spawnConfig?.codexApprovalPolicy, "never");
+    assert.equal("codexApprovalPolicy" in (spawnConfig ?? {}), false);
     const text = (result.content[0] as { text: string }).text;
     assert.match(text, /Harness: codex/);
     assert.match(text, /Permission mode: plan/);
@@ -49,7 +48,7 @@ describe("agent_launch tool defaults", () => {
     assert.match(text, /Model: gpt-6-sol/);
   });
 
-  it("prefers an explicit model while keeping the plugin Codex approval policy", async () => {
+  it("prefers an explicit model and the configured Codex reasoning effort", async () => {
     let spawnConfig: Record<string, unknown> | undefined;
     setPluginConfig({
       defaultHarness: "codex",
@@ -70,7 +69,6 @@ describe("agent_launch tool defaults", () => {
           id: "sess-2",
           name: "codex-explicit",
           model: config.model,
-          codexApprovalPolicy: config.codexApprovalPolicy,
         };
       },
     } as any);
@@ -81,7 +79,6 @@ describe("agent_launch tool defaults", () => {
     assert.ok(spawnConfig, "spawn should be called");
     assert.equal(spawnConfig?.model, "gpt-5.5");
     assert.equal(spawnConfig?.reasoningEffort, "high");
-    assert.equal(spawnConfig?.codexApprovalPolicy, "never");
   });
 
   it("passes the resolved permission mode into spawn when the caller omits permission_mode", async () => {
@@ -340,8 +337,8 @@ describe("agent_launch tool defaults", () => {
     }
   });
 
-  it("preserves cleared Codex resume state through the repo-policy prompt", async () => {
-    const workdir = mkdtempSync(join(tmpdir(), "agent-launch-policy-codex-resume-"));
+  it("carries rewind_turns through the repo-policy prompt", async () => {
+    const workdir = mkdtempSync(join(tmpdir(), "agent-launch-policy-codex-rewind-"));
     let policyLaunchArgs: Record<string, unknown> | undefined;
 
     try {
@@ -367,19 +364,21 @@ describe("agent_launch tool defaults", () => {
         prompt: "Continue after restart",
         resume_session_id: "old-thread",
         fork_session: true,
+        rewind_turns: 2,
         worktree_strategy: "delegate",
         harness: "codex",
       });
 
       assert.equal((result.content[0] as { text: string }).text, `Repo policy choice prompt sent for ${workdir}.`);
-      assert.equal(policyLaunchArgs?.clearedPersistedCodexResume, true);
-      assert.equal(policyLaunchArgs?.resumeSessionId, undefined);
+      assert.equal(policyLaunchArgs?.rewindTurns, 2);
+      assert.equal(policyLaunchArgs?.resumeSessionId, "resolved-old-thread");
+      assert.equal(policyLaunchArgs?.forkSession, true);
     } finally {
       rmSync(workdir, { recursive: true, force: true });
     }
   });
 
-  it("clears persisted Codex resume state before spawn", async () => {
+  it("resumes persisted Codex App Server threads without clearing them (B7)", async () => {
     let spawnConfig: Record<string, unknown> | undefined;
 
     setSessionManager({
@@ -402,14 +401,31 @@ describe("agent_launch tool defaults", () => {
       harness: "codex",
       resume_session_id: "old-thread",
       fork_session: true,
+      rewind_turns: 1,
     });
 
     assert.ok(spawnConfig, "spawn should be called");
     assert.equal(spawnConfig?.model, "gpt-6-sol");
-    assert.equal(spawnConfig?.reasoningEffort, "medium");
-    assert.equal(spawnConfig?.resumeSessionId, undefined);
-    assert.equal(spawnConfig?.forkSession, false);
-    assert.match((result.content[0] as { text: string }).text, /historical Codex state cleared/);
+    assert.equal(spawnConfig?.resumeSessionId, "resolved-old-thread");
+    assert.equal(spawnConfig?.forkSession, true);
+    assert.equal(spawnConfig?.rewindTurns, 1);
+    assert.match((result.content[0] as { text: string }).text, /Rewind: forking before the last 1 turn/);
+  });
+
+  it("rejects rewind_turns without a resume target, for other harnesses, or with invalid counts", async () => {
+    setSessionManager({
+      resolve: () => undefined,
+      getPersistedSession: () => undefined,
+      resolveHarnessSessionId: (id: string) => id,
+      spawn() {
+        throw new Error("spawn should not run");
+      },
+    } as any);
+    const tool = makeAgentLaunchTool({ workspaceDir: "/tmp", oneShotCliRun: true });
+    const text = async (params: Record<string, unknown>) => ((await tool.execute("tool-id", { prompt: "x", ...params })).content[0] as { text: string }).text;
+    assert.match(await text({ harness: "codex", rewind_turns: 1 }), /rewind_turns requires resume_session_id/);
+    assert.match(await text({ harness: "claude-code", resume_session_id: "a", rewind_turns: 1 }), /only supported by the Codex harness/);
+    assert.match(await text({ harness: "codex", resume_session_id: "a", rewind_turns: 1.5 }), /positive integer/);
   });
 
   it("keeps active Codex resume state before spawn", async () => {
@@ -438,7 +454,6 @@ describe("agent_launch tool defaults", () => {
 
     assert.ok(spawnConfig, "spawn should be called");
     assert.equal(spawnConfig?.model, "gpt-6-sol");
-    assert.equal(spawnConfig?.reasoningEffort, "medium");
     assert.equal(spawnConfig?.resumeSessionId, "resolved-old-thread");
   });
 

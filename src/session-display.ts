@@ -1,8 +1,12 @@
+import { codexModelSupportsEffort, hasCodexModelCatalog } from "./harness/codex-model-catalog";
 import { REASONING_EFFORTS, type ReasoningEffort } from "./types";
+
+const CODEX_UNIVERSAL_EFFORTS: ReadonlySet<string> = new Set(["low", "medium", "high"]);
 
 /**
  * Model/effort facts for display. `reasoningEffortSupported` is the backend's
- * own report (Claude: system/init effort or supportedModels() levels); when it
+ * own report (Claude: system/init effort or supportedModels() levels; Codex:
+ * the session's own connection's model/list); when it
  * is known it overrides the static capability tables below.
  */
 export type ReasoningDisplayInput = {
@@ -45,7 +49,7 @@ export function formatReasoningMetadataSuffix(input: ReasoningDisplayInput): str
 function formatReasoningSuffix(input: ReasoningDisplayInput): string {
   const effort = input.reasoningEffort;
   if (!effort || !REASONING_EFFORTS.includes(effort)) return "";
-  if (input.harness === "claude-code" && typeof input.reasoningEffortSupported === "boolean") {
+  if ((input.harness === "claude-code" || input.harness === "codex") && typeof input.reasoningEffortSupported === "boolean") {
     return input.reasoningEffortSupported ? ` | reasoning: ${effort}` : "";
   }
   // Capability checks use the base ID consistently; display retains the exact ID.
@@ -54,10 +58,14 @@ function formatReasoningSuffix(input: ReasoningDisplayInput): string {
     .replace(/-(?:\d{4}-\d{2}-\d{2}|\d{8})$/, "");
   if (!model) return "";
   if (input.harness === "codex") {
-    // Exclude chat/non-reasoning variants and unknown custom provider models.
-    if (!/^(gpt-6-(?:astra|sol)|gpt-5\.6-(sol|terra|luna)|gpt-5(?:\.[1-5])?(?:-codex(?:-max|-mini)?|-mini|-nano)?|o[134](?:-mini)?)$/.test(model)) return "";
-    if (effort === "xhigh" && /^(gpt-5(?:-mini|-nano|-codex)?|gpt-5\.1(?:-codex(?:-mini)?)?|o[134](?:-mini)?)$/.test(model)) return "";
-    if (effort === "max" && !/^(gpt-6-(?:astra|sol)|gpt-5\.6-(sol|terra|luna))$/.test(model)) return "";
+    // Codex's model/list catalog is authoritative: omit efforts it rejects and
+    // models it does not list. Before any Codex session has loaded the catalog,
+    // only claim the levels every Codex reasoning model accepts.
+    if (hasCodexModelCatalog()) {
+      if (codexModelSupportsEffort(model, effort) !== true) return "";
+    } else if (!CODEX_UNIVERSAL_EFFORTS.has(effort)) {
+      return "";
+    }
   } else if (input.harness === "claude-code") {
     // Before the backend reports support (launch notices, persisted history),
     // fall back to known model capabilities. Claude Code can silently

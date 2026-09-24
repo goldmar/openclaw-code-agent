@@ -223,7 +223,7 @@ describe("Session diagnostics", () => {
         backendRef: {
           kind: "codex-app-server",
           conversationId: "conversation-secret-456",
-          worktreePath: "/private/backend/worktree",
+          runId: "run-secret-789",
         },
       }, "diagnostic-test");
 
@@ -235,7 +235,7 @@ describe("Session diagnostics", () => {
       assert.doesNotMatch(joined, /private\/repo\/path/);
       assert.doesNotMatch(joined, /thread-secret-123/);
       assert.doesNotMatch(joined, /conversation-secret-456/);
-      assert.doesNotMatch(joined, /private\/backend\/worktree/);
+      assert.doesNotMatch(joined, /run-secret-789/);
 
       const launchStart = warnings
         .map((warning) => JSON.parse(warning) as Record<string, unknown>)
@@ -246,7 +246,8 @@ describe("Session diagnostics", () => {
       assert.equal(launchStart?.hasBackendRef, true);
       assert.equal(launchStart?.backendRefKind, "codex-app-server");
       assert.equal(launchStart?.hasBackendConversationId, true);
-      assert.equal(launchStart?.hasBackendWorktreePath, true);
+      assert.equal(launchStart?.hasBackendRunId, true);
+      assert.equal(Object.hasOwn(launchStart ?? {}, "hasBackendWorktreePath"), false);
       assert.equal(Object.hasOwn(launchStart ?? {}, "backendRef"), false);
       assert.equal(Object.hasOwn(launchStart ?? {}, "harnessSessionId"), false);
     } finally {

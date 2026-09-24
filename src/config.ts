@@ -23,7 +23,11 @@ const BUILTIN_HARNESS_CONFIGS: Record<string, HarnessConfig> = {
   codex: {
     defaultModel: "gpt-6-sol",
     allowedModels: ["gpt-6-sol", "gpt-6-astra", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
-    reasoningEffort: "medium",
+    // No builtin reasoningEffort: Codex applies its own configured/model
+    // default (see model/list `defaultReasoningEffort`) unless one is set.
+    permissionProfile: ":danger-full-access",
+    approvalPolicy: "never",
+    approvalsReviewer: "user",
   },
   opencode: {},
 };
@@ -66,6 +70,9 @@ export function setPluginConfig(config: Partial<RawPluginConfig>): void {
       defaultModel: value.defaultModel ?? existing.defaultModel,
       reasoningEffort: value.reasoningEffort ?? existing.reasoningEffort,
       fastMode: value.fastMode ?? existing.fastMode,
+      permissionProfile: value.permissionProfile ?? existing.permissionProfile,
+      approvalPolicy: value.approvalPolicy ?? existing.approvalPolicy,
+      approvalsReviewer: value.approvalsReviewer ?? existing.approvalsReviewer,
     };
     if (value.allowedModels !== undefined) {
       next.allowedModels = value.allowedModels ? [...value.allowedModels] : value.allowedModels;

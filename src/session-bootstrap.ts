@@ -1,13 +1,8 @@
 import { assertBranchName } from "./worktree-ref-validation";
 import { existsSync } from "fs";
-import { getDefaultHarnessName, pluginConfig } from "./config";
+import { pluginConfig } from "./config";
 import { pathsReferToSameLocation } from "./path-utils";
 import { canonicalizeSessionRoute, isDirectSessionRoute } from "./session-route";
-import {
-  getBackendWorktreeCapability,
-  supportsNativeBackendWorktreeExecution,
-  supportsNativeBackendWorktreeRestore,
-} from "./session-backend-ref";
 import type { PersistedSessionInfo, SessionConfig } from "./types";
 import {
   createWorktree,
@@ -30,7 +25,6 @@ type Preparation = {
   worktreeParentBranch?: string;
   clearedResumeSessionId?: boolean;
   clearedResumeWorktreeFrom?: boolean;
-  restoredMissingNativeBackendWorktree?: boolean;
   failedResumeWorktreeRestore?: boolean;
 };
 
@@ -82,16 +76,6 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-function prefersNativeCodexWorktrees(config: SessionConfig): boolean {
-  const strategy = config.worktreeStrategy ?? pluginConfig.defaultWorktreeStrategy;
-  return !!strategy
-    && strategy !== "off"
-    && supportsNativeBackendWorktreeExecution(getBackendWorktreeCapability({
-      harnessName: config.harness ?? getDefaultHarnessName(),
-      backendRef: config.backendRef,
-    }));
-}
-
 function appendWorktreeSystemPrompt(
   systemPrompt: string | undefined,
   originalWorkdir: string,
@@ -133,8 +117,6 @@ function restoreResumeWorktreeContext(
   worktreeParentBranch?: string;
   clearedResumeSessionId?: boolean;
   clearedResumeWorktreeFrom?: boolean;
-  restoredMissingNativeBackendWorktree?: boolean;
-  canCreateManagedWorktreeForResumeWithoutPersistedPath?: boolean;
   failedResumeWorktreeRestore?: boolean;
 } {
   const resumeWorktreeId = config.resumeWorktreeFrom ?? config.resumeSessionId;
@@ -142,7 +124,6 @@ function restoreResumeWorktreeContext(
 
   const persistedSession = getPersistedSession(resumeWorktreeId);
   if (!persistedSession) return {};
-  const hasPersistedBackendIdentity = !!persistedSession.harness || !!persistedSession.backendRef;
   const originalWorkdir = (() => {
     if (persistedSession.workdir && persistedSession.workdir !== persistedSession.worktreePath) {
       return persistedSession.workdir;
@@ -173,27 +154,11 @@ function restoreResumeWorktreeContext(
   }
 
   if (!persistedSession.worktreePath) {
-    const canCreateManagedWorktreeForResumeWithoutPersistedPath =
-      hasPersistedBackendIdentity
-      && supportsNativeBackendWorktreeRestore(getBackendWorktreeCapability({
-        persistedHarness: persistedSession.harness,
-        backendRef: persistedSession.backendRef,
-      }));
-    return {
-      originalWorkdir,
-      canCreateManagedWorktreeForResumeWithoutPersistedPath,
-    };
+    return { originalWorkdir };
   }
   if (!persistedSession.worktreeBranch) {
     throw new Error(`Cannot resume session "${resumeWorktreeId}": persisted worktree metadata is missing worktreeBranch.`);
   }
-
-  const usesNativeCodexWorktree =
-    supportsNativeBackendWorktreeRestore(getBackendWorktreeCapability({
-      persistedHarness: persistedSession.harness,
-      backendRef: persistedSession.backendRef,
-    }))
-    && !!persistedSession.backendRef?.worktreePath;
 
   if (existsSync(persistedSession.worktreePath)) {
     log.info(`[SessionManager] Resuming with existing worktree: ${persistedSession.worktreePath}`);
@@ -211,20 +176,6 @@ function restoreResumeWorktreeContext(
     return {
       clearedResumeSessionId: !!config.resumeSessionId,
       clearedResumeWorktreeFrom: !!config.resumeWorktreeFrom,
-    };
-  }
-
-  if (usesNativeCodexWorktree) {
-    log.info(
-      `[SessionManager] Native Codex worktree ${persistedSession.worktreePath} is missing; resuming from original workdir and letting the backend restore thread state.`,
-    );
-    return {
-      actualWorkdir: originalWorkdir,
-      originalWorkdir,
-      worktreeBranchName: persistedSession.worktreeBranch,
-      worktreeParentBranch: persistedSession.worktreeParentBranch,
-      clearedResumeWorktreeFrom: !!config.resumeWorktreeFrom,
-      restoredMissingNativeBackendWorktree: true,
     };
   }
 
@@ -271,8 +222,6 @@ export function prepareSessionBootstrap(
     worktreeParentBranch,
     clearedResumeSessionId,
     clearedResumeWorktreeFrom,
-    restoredMissingNativeBackendWorktree,
-    canCreateManagedWorktreeForResumeWithoutPersistedPath,
     failedResumeWorktreeRestore,
   } = restoreResumeWorktreeContext(config, getPersistedSession);
 
@@ -291,24 +240,16 @@ export function prepareSessionBootstrap(
   if (!isResumedSession && strategy && strategy !== "off" && isGitRepo(originalWorkdir)) {
     worktreeParentBranch ??= getBranchName(originalWorkdir);
   }
-  const useNativeCodexWorktree = prefersNativeCodexWorktrees(config);
-  const canCreateWorktreeForThisLaunch = !isResumedSession || !!canCreateManagedWorktreeForResumeWithoutPersistedPath;
-  const shouldWorktree = canCreateWorktreeForThisLaunch
-    && !restoredMissingNativeBackendWorktree
+  const shouldWorktree = !isResumedSession
     && !worktreePath
     && strategy
-    && strategy !== "off"
-    && !useNativeCodexWorktree;
+    && strategy !== "off";
 
   if (failedResumeWorktreeRestore && strategy && strategy !== "off") {
     throw new Error(
       `Cannot launch session "${name}": worktree strategy "${strategy}" was requested, but no isolated worktree was prepared. ` +
       `Launch with worktree_strategy "off" only when running in the base checkout is intentional.`,
     );
-  }
-
-  if (useNativeCodexWorktree && !isGitRepo(originalWorkdir)) {
-    throw new Error(`Cannot launch session "${name}": worktree strategy "${strategy}" requires a git worktree, but "${originalWorkdir}" is not a git repository.`);
   }
 
   if (shouldWorktree && isGitRepo(originalWorkdir)) {
@@ -352,7 +293,6 @@ export function prepareSessionBootstrap(
     worktreeParentBranch,
     clearedResumeSessionId,
     clearedResumeWorktreeFrom,
-    restoredMissingNativeBackendWorktree,
     failedResumeWorktreeRestore,
   };
 }
