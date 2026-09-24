@@ -1,6 +1,7 @@
 import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { Session } from "../src/session";
+import { setPluginConfig } from "../src/config";
 import { registerHarness } from "../src/harness/index";
 import { createFakeHarness } from "./helpers";
 import type { SessionConfig } from "../src/types";
@@ -16,6 +17,20 @@ describe("Session state machine", () => {
 
   beforeEach(() => {
     session = new Session(BASE_CONFIG, "test");
+  });
+
+  it("rejects the known-bad Claude default for internal session launches", () => {
+    setPluginConfig({ harnesses: { "claude-code": {
+      defaultModel: "anthropic/claude-opus-5-5",
+      allowedModels: ["sonnet", "opus"],
+    } } });
+    try {
+      assert.throws(() => new Session(BASE_CONFIG, "internal"), /not supported by Claude Code.*"opus" alias/);
+      assert.throws(() => new Session({ ...BASE_CONFIG, model: "anthropic/claude-opus-5-5" }, "internal"), /not supported by Claude Code.*"opus" alias/);
+      assert.equal(new Session({ ...BASE_CONFIG, model: "opus" }, "internal").model, "opus");
+    } finally {
+      setPluginConfig({});
+    }
   });
 
   it("starts in 'starting' status", () => {

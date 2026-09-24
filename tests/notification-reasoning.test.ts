@@ -80,8 +80,15 @@ describe("notification reasoning visibility", () => {
 
   it("formats known Codex and Claude effort without altering provider IDs", () => {
     for (const [harness, model, effort] of [
+      ["codex", "gpt-6-sol", "medium"],
+      ["codex", "gpt-6-sol", "max"],
       ["codex", "gpt-6-astra", "medium"],
       ["codex", "openai/gpt-5.6-sol", "max"],
+      ["claude-code", "opus", "medium"],
+      ["claude-code", "opus", "xhigh"],
+      ["claude-code", "anthropic/claude-opus-5-5", "medium"],
+      ["claude-code", "anthropic/claude-opus-5-5", "xhigh"],
+      ["claude-code", "anthropic/claude-opus-5-5", "max"],
       ["claude-code", "anthropic/claude-sonnet-4-7", "high"],
       ["claude-code", "claude-opus-4-7", "xhigh"],
       ["codex", "openai/gpt-6-astra-2026-09-01", "max"],
@@ -119,7 +126,7 @@ describe("notification reasoning visibility", () => {
       });
       bootstrap.initializeSession(session, {} as any, {} as any);
       assert.equal(requests[0]?.userMessage,
-        `${resumed ? "▶️ [original] Resumed | Follow-up label: reasoning-test" : "🚀 [reasoning-test] Launched"} | /tmp | codex | gpt-6-astra | reasoning: medium`);
+        `${resumed ? "▶️ [original] Resumed | Follow-up label: reasoning-test" : "🚀 [reasoning-test] Launched"} | /tmp | codex | gpt-6-sol | reasoning: medium`);
       setPluginConfig({ harnesses: { codex: { reasoningEffort: "high" } } });
       for (const [label, payload] of [
         ["completed", buildCompletedPayload({ session, preview: "Done", originThreadLine: "" })],
@@ -140,12 +147,12 @@ describe("notification reasoning visibility", () => {
     for (const label of LIFECYCLE_NOTIFICATION_VARIANTS) {
       service.dispatch(session, { label, userMessage: `📋 [reasoning-test] ${label}\n\n**Keep markup** https://example.com/pr/1`, buttons });
       const request = requests.at(-1)!;
-      assert.equal(request.userMessage, `📋 [reasoning-test] ${label} | codex | gpt-6-astra | reasoning: high\n\n**Keep markup** https://example.com/pr/1`);
+      assert.equal(request.userMessage, `📋 [reasoning-test] ${label} | codex | gpt-6-sol | reasoning: high\n\n**Keep markup** https://example.com/pr/1`);
       assert.equal(request.buttons, buttons);
     }
     const payload = buildWaitingForInputPayload({ session, preview: "Question?", originThreadLine: "" });
     service.dispatch(session, payload);
-    assert.match(requests.at(-1)!.userMessage!, /Question waiting for reply: \| codex \| gpt-6-astra \| reasoning: high\n/);
+    assert.match(requests.at(-1)!.userMessage!, /Question waiting for reply: \| codex \| gpt-6-sol \| reasoning: high\n/);
     service.dispatch(session, {
       label: "plan-approval", userMessages: [
         { text: "📋 [reasoning-test] Plan (1/2):\nBody one", requiredForSequenceSuccess: true },
@@ -203,7 +210,7 @@ describe("notification reasoning visibility", () => {
       assert.equal(target.notificationTarget?.reasoningEffort, "low");
       for (const outcome of ["✅ PR opened: https://example.com/pr/1", "✅ Merged task → main"]) {
         service.notifyWorktreeOutcome(target.notificationTarget as any, outcome, { summaryWakeRequired: false });
-        assert.match(requests.at(-1)!.userMessage!, /codex \| gpt-6-astra \| reasoning: low$/);
+        assert.match(requests.at(-1)!.userMessage!, /codex \| gpt-6-sol \| reasoning: low$/);
       }
       // Old records without effort remain unknown even when today's config knows a default.
       delete restored.reasoningEffort;
@@ -244,7 +251,7 @@ describe("notification reasoning visibility", () => {
         model: "gpt-6-astra", reasoningEffort: "high", createdAt: Date.now(),
       }],
     } as any, "all");
-    assert.match(text, /gpt-6-astra \| reasoning: low/);
+    assert.match(text, /gpt-6-sol \| reasoning: low/);
     assert.match(text, /gpt-6-astra \| reasoning: high/);
   });
 
