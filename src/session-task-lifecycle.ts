@@ -271,6 +271,37 @@ function applyMutation(
   return current;
 }
 
+/**
+ * Record a cancel intent, retrying against the host's current revision when a
+ * concurrent host update rejected the attempt (`revision_conflict`). `recorded`
+ * is true once the flow carries a cancel intent or is already terminal.
+ */
+async function requestCancelWithRetry(
+  requestCancel: NonNullable<BoundTaskFlowRuntime["requestCancel"]>,
+  initial: ManagedTaskFlowRecord,
+  cancelRequestedAt: number,
+  action: string,
+): Promise<{ flow: ManagedTaskFlowRecord; recorded: boolean }> {
+  let flow = initial;
+  for (let attempt = 0; attempt < USER_CANCEL_MAX_ATTEMPTS; attempt += 1) {
+    const mutation = await requestCancel({
+      flowId: flow.flowId,
+      expectedRevision: flow.revision,
+      cancelRequestedAt,
+    });
+    flow = applyMutation(flow, mutation) ?? flow;
+    if (mutation.applied === true || isTaskFlowCancelRequested(flow) || isTerminalMirrorStatus(flow.status)) {
+      return { flow, recorded: true };
+    }
+    if (mutation.code !== "revision_conflict" || !mutation.current) {
+      warnLifecycleMutationSkipped(action, mutation);
+      return { flow, recorded: false };
+    }
+  }
+  log.warn(`[SessionTaskLifecycle] ${action} mutation was not applied after ${USER_CANCEL_MAX_ATTEMPTS} attempts`);
+  return { flow, recorded: false };
+}
+
 /** The host recorded a cancel intent (or already cancelled the flow). */
 export function isTaskFlowCancelRequested(flow: Pick<ManagedTaskFlowRecord, "status" | "cancelRequestedAt"> | undefined): boolean {
   return Boolean(flow && (flow.cancelRequestedAt != null || flow.status === "cancelled"));
@@ -426,33 +457,12 @@ class ManagedTaskFlowSessionTaskLifecycleSink implements SessionTaskLifecycleSin
     }
   }
 
-  /**
-   * Record the cancel intent, retrying against the host's current revision when a
-   * concurrent host update rejected the first attempt. Returns true once the flow
-   * carries a cancel intent or is already terminal; otherwise the mirror stays
-   * unfinalized so a later finalize can retry.
-   */
   private async recordUserCancel(session: Session, cancelRequestedAt: number): Promise<boolean> {
-    for (let attempt = 0; attempt < USER_CANCEL_MAX_ATTEMPTS && this.flow; attempt += 1) {
-      const mutation = await this.taskFlow.requestCancel({
-        flowId: this.flow.flowId,
-        expectedRevision: this.flow.revision,
-        cancelRequestedAt,
-      });
-      this.flow = applyMutation(this.flow, mutation);
-      if (this.flow) session.taskFlowMirror = this.flow;
-      if (mutation.applied || isTaskFlowCancelRequested(this.flow) || isTerminalMirrorStatus(this.flow?.status)) {
-        return true;
-      }
-      // Only a revision conflict with a newer current record is worth retrying.
-      if (mutation.applied === true) return true;
-      if (mutation.code !== "revision_conflict" || !mutation.current) {
-        warnLifecycleMutationSkipped("finalize-cancel", mutation);
-        return false;
-      }
-    }
-    log.warn("[SessionTaskLifecycle] finalize-cancel mutation was not applied after retries");
-    return false;
+    if (!this.flow) return false;
+    const result = await requestCancelWithRetry(this.taskFlow.requestCancel, this.flow, cancelRequestedAt, "finalize-cancel");
+    this.flow = result.flow;
+    if (this.flow) session.taskFlowMirror = this.flow;
+    return result.recorded;
   }
 
   private startCancelPoll(session: Session): void {
@@ -583,13 +593,7 @@ export async function reconcilePersistedSessionTaskMirror(
     && typeof taskFlow.requestCancel === "function"
   ) {
     // A user stop whose live cancel intent was not recorded is still a cancellation.
-    const mutation = await taskFlow.requestCancel({
-      flowId: flow.flowId,
-      expectedRevision: flow.revision,
-      cancelRequestedAt: endedAtForCancel,
-    });
-    warnLifecycleMutationSkipped("reconcile-cancel", mutation);
-    return applyMutation(flow, mutation);
+    return (await requestCancelWithRetry(taskFlow.requestCancel, flow, endedAtForCancel, "reconcile-cancel")).flow;
   }
 
   const terminalStatus = mapSessionTaskTerminalStatus({

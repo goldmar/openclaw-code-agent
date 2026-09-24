@@ -791,4 +791,41 @@ describe("session task lifecycle async adapter", () => {
     assert.equal(calls[0].params.cancelRequestedAt, 500);
     assert.equal(reconciled?.cancelRequestedAt, 500);
   });
+
+  it("retries a reconciled user-stop cancel intent after a stale-revision conflict", async () => {
+    const { calls, taskFlow } = createTaskFlowRecorder();
+    let attempts = 0;
+    setManagedTaskFlow({
+      ...taskFlow,
+      async requestCancel(params: Record<string, unknown>) {
+        calls.push({ method: "requestCancel", params });
+        attempts += 1;
+        return attempts === 1
+          ? { applied: false, code: "revision_conflict", current: { flowId: "flow-1", revision: 9, status: "running" } }
+          : { applied: true, flow: { flowId: "flow-1", revision: 10, status: "running", cancelRequestedAt: params.cancelRequestedAt } };
+      },
+    });
+    const session = {
+      sessionId: "session-user-stop-stale",
+      harnessSessionId: "h-stale",
+      backendRef: { kind: "codex-app-server", conversationId: "h-stale" },
+      name: "user-stop-stale",
+      prompt: "p",
+      workdir: "/tmp",
+      status: "killed",
+      killReason: "user",
+      lifecycle: "terminal",
+      runtimeState: "stopped",
+      completedAt: 700,
+      costUsd: 0,
+      route: { provider: "telegram", target: "123", sessionKey: "agent:main:telegram:group:123" },
+      taskFlowMirror: { flowId: "flow-1", revision: 5, status: "running" },
+    } satisfies PersistedSessionInfo;
+
+    const reconciled = await reconcilePersistedSessionTaskMirror(session);
+
+    assert.deepEqual(calls.map((call) => call.params.expectedRevision), [5, 9]);
+    assert.equal(reconciled?.revision, 10);
+    assert.equal(reconciled?.cancelRequestedAt, 700);
+  });
 });
