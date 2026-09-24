@@ -1,4 +1,4 @@
-import { describe, it, beforeEach, afterEach } from "node:test";
+import { describe, it, beforeEach, afterEach, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -12,9 +12,15 @@ import { buildPresentation } from "../src/direct-notification-transport";
 import { SessionReminderService } from "../src/session-reminder-service";
 import { SessionNotificationService } from "../src/session-notifications";
 import { SessionWorktreeDecisionService } from "../src/session-worktree-decision-service";
-import { SessionMetricsRecorder } from "../src/session-metrics";
+import { computeSessionMetrics } from "../src/session-metrics";
 import { registerHarness } from "../src/harness";
-import { createFakeHarness, tick } from "./helpers";
+import { createFakeHarness, TEST_RUNTIME_LLM, tick } from "./helpers";
+import { setGitHubCliAvailabilityForTests } from "../src/worktree-repo";
+
+// PR buttons depend on GitHub CLI availability; never probe the host `gh` (a slow
+// cold start used to hit the probe timeout and flip these tests).
+before(() => setGitHubCliAvailabilityForTests(true));
+after(() => setGitHubCliAvailabilityForTests(undefined));
 
 afterEach(() => {
   setPluginRuntime(undefined);
@@ -131,6 +137,7 @@ describe("SessionManager TaskFlow mirror reconciliation", () => {
 
       const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
       setPluginRuntime({
+        llm: TEST_RUNTIME_LLM,
         tasks: {
           async: {
             managedFlows: {
@@ -205,6 +212,7 @@ describe("SessionManager TaskFlow mirror reconciliation", () => {
 
       const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
       setPluginRuntime({
+        llm: TEST_RUNTIME_LLM,
         tasks: {
           async: {
             managedFlows: {
@@ -268,6 +276,7 @@ describe("SessionManager TaskFlow mirror reconciliation", () => {
       })));
       const calls: string[] = [];
       setPluginRuntime({
+        llm: TEST_RUNTIME_LLM,
         tasks: {
           async: {
             managedFlows: {
@@ -948,70 +957,48 @@ describe("SessionManager.updatePersistedSession()", () => {
 // SessionMetricsRecorder
 // =========================================================================
 
-describe("SessionMetricsRecorder.recordSession()", () => {
-  let recorder: SessionMetricsRecorder;
+describe("computeSessionMetrics()", () => {
+  const persistedRow = (overrides: Record<string, unknown>) => ({
+    harnessSessionId: `h-${overrides.sessionId}`,
+    name: String(overrides.sessionId),
+    prompt: "p",
+    workdir: "/tmp",
+    costUsd: 0,
+    ...overrides,
+  }) as any;
 
-  beforeEach(() => {
-    recorder = new SessionMetricsRecorder();
+  it("counts retained persisted sessions by status, so completions survive restarts", () => {
+    const metrics = computeSessionMetrics([
+      persistedRow({ sessionId: "a", status: "completed", costUsd: 0.5, createdAt: 1000, completedAt: 11000 }),
+      persistedRow({ sessionId: "b", status: "failed", costUsd: 1.2, createdAt: 1000, completedAt: 2000 }),
+      persistedRow({ sessionId: "c", status: "killed", createdAt: 1000 }),
+    ], []);
+    assert.equal(metrics.totalLaunched, 3);
+    assert.deepEqual(metrics.sessionsByStatus, { completed: 1, failed: 1, killed: 1 });
+    assert.equal(metrics.totalCostUsd, 1.7);
+    assert.equal(metrics.totalDurationMs, 11000);
+    assert.equal(metrics.sessionsWithDuration, 2);
+    assert.equal(metrics.mostExpensive?.name, "b");
+    assert.equal(metrics.costPerDay.get(new Date(11000).toISOString().slice(0, 10)), 1.7);
   });
 
-  it("accumulates totalCostUsd", () => {
-    const s1 = fakeSession({ costUsd: 0.5, status: "completed", completedAt: Date.now(), startedAt: Date.now() - 10000 });
-    const s2 = fakeSession({ costUsd: 1.2, status: "completed", completedAt: Date.now(), startedAt: Date.now() - 20000 });
-    recorder.recordSession(s1);
-    recorder.recordSession(s2);
-    assert.equal(recorder.getMetrics().totalCostUsd, 1.7);
+  it("lets a live session override its persisted row", () => {
+    const live = fakeSession({ id: "a", name: "a", status: "running", costUsd: 2, startedAt: 1000 });
+    const metrics = computeSessionMetrics([
+      persistedRow({ sessionId: "a", status: "completed", costUsd: 0.5 }),
+    ], [live]);
+    assert.equal(metrics.totalLaunched, 1);
+    assert.deepEqual(metrics.sessionsByStatus, { completed: 0, failed: 0, killed: 0 });
+    assert.equal(metrics.totalCostUsd, 2);
   });
 
-  it("tracks costPerDay correctly", () => {
-    const now = Date.now();
-    const s = fakeSession({ costUsd: 0.3, status: "completed", completedAt: now, startedAt: now - 5000 });
-    recorder.recordSession(s);
-    const dateKey = new Date(now).toISOString().slice(0, 10);
-    assert.equal(recorder.getMetrics().costPerDay.get(dateKey), 0.3);
-  });
-
-  it("increments sessionsByStatus counters", () => {
-    recorder.recordSession(fakeSession({ status: "completed", costUsd: 0, startedAt: 1000, completedAt: 2000 }));
-    recorder.recordSession(fakeSession({ status: "failed", costUsd: 0, startedAt: 1000, completedAt: 2000 }));
-    recorder.recordSession(fakeSession({ status: "killed", costUsd: 0, startedAt: 1000, completedAt: 2000 }));
-    const metrics = recorder.getMetrics();
-    assert.equal(metrics.sessionsByStatus.completed, 1);
-    assert.equal(metrics.sessionsByStatus.failed, 1);
-    assert.equal(metrics.sessionsByStatus.killed, 1);
-  });
-
-  it("tracks duration when completedAt is set", () => {
-    const s = fakeSession({ costUsd: 0, status: "completed", startedAt: 1000, completedAt: 11000 });
-    recorder.recordSession(s);
-    assert.equal(recorder.getMetrics().totalDurationMs, 10000);
-    assert.equal(recorder.getMetrics().sessionsWithDuration, 1);
-  });
-
-  it("tracks mostExpensive session", () => {
-    const s1 = fakeSession({ id: "cheap", name: "cheap", costUsd: 0.1, status: "completed", prompt: "a", startedAt: 1000, completedAt: 2000 });
-    const s2 = fakeSession({ id: "expensive", name: "expensive", costUsd: 5.0, status: "completed", prompt: "b", startedAt: 1000, completedAt: 2000 });
-    recorder.recordSession(s1);
-    recorder.recordSession(s2);
-    const most = recorder.getMetrics().mostExpensive;
-    assert.ok(most);
-    assert.equal(most!.name, "expensive");
-    assert.equal(most!.costUsd, 5.0);
-  });
-
-  it("returns a defensive copy from getMetrics()", () => {
-    const s = fakeSession({ costUsd: 1.0, status: "completed", startedAt: 1000, completedAt: 2000 });
-    recorder.recordSession(s);
-
-    const snapshot = recorder.getMetrics();
-    snapshot.totalCostUsd = 999;
-    snapshot.costPerDay.set("2099-01-01", 50);
-    snapshot.sessionsByStatus.completed = 999;
-
-    const fresh = recorder.getMetrics();
-    assert.equal(fresh.totalCostUsd, 1.0);
-    assert.equal(fresh.costPerDay.has("2099-01-01"), false);
-    assert.equal(fresh.sessionsByStatus.completed, 1);
+  it("reports a completion from SessionManager.getMetrics() without runtime bookkeeping", () => {
+    const sm = new SessionManager(5);
+    (sm as any).store.listPersistedSessions = () => [
+      persistedRow({ sessionId: "done", status: "completed", createdAt: 1000, completedAt: 3000 }),
+    ];
+    assert.equal(sm.getMetrics().sessionsByStatus.completed, 1);
+    sm.dispose();
   });
 });
 
@@ -1356,7 +1343,6 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
       runtimeGcCallback = cb;
     }) as any;
     (sm as any).store.shouldGcActiveSession = () => true;
-    (sm as any).store.hasRecordedSession = () => true;
     (sm as any).store.persistTerminal = () => {};
     (sm as any).store.getPersistedSession = () => undefined;
     (sm as any).registry.remove = () => {};
@@ -2210,7 +2196,7 @@ describe("SessionManager resumed launch routing", () => {
     const harness = createFakeHarness("shutdown-order-harness");
     registerHarness(harness);
     const sm = new SessionManager(5, 5);
-    const active = await sm.spawn({
+    const active = await sm.launchSession({
       prompt: "active",
       workdir: "/tmp",
       harness: harness.name,
@@ -2224,7 +2210,7 @@ describe("SessionManager resumed launch routing", () => {
       await policyGate;
       return originalCheck(...args);
     };
-    const slowLaunch = sm.spawn({
+    const slowLaunch = sm.launchSession({
       prompt: "slow",
       workdir: "/tmp",
       harness: harness.name,
@@ -2257,7 +2243,7 @@ describe("SessionManager resumed launch routing", () => {
       return originalCheck(...args);
     };
 
-    const launch = sm.spawn({
+    const launch = sm.launchSession({
       prompt: "late",
       workdir: "/tmp",
       harness: harness.name,
@@ -2311,7 +2297,7 @@ describe("SessionManager resumed launch routing", () => {
     const route = { provider: "telegram", target: "12345" };
 
     try {
-      const owner = await sm.spawn({
+      const owner = await sm.launchSession({
         prompt: "first",
         workdir: "/tmp",
         name: "writer-owner",
@@ -2321,7 +2307,7 @@ describe("SessionManager resumed launch routing", () => {
       }, { notifyLaunch: false });
       await tick(20);
       assert.equal(owner.status, "running");
-      await assert.rejects(async () => await sm.spawn({
+      await assert.rejects(async () => await sm.launchSession({
         prompt: "duplicate resume",
         workdir: "/tmp",
         name: "duplicate-writer",
@@ -2333,7 +2319,7 @@ describe("SessionManager resumed launch routing", () => {
       assert.equal(launchCalls, 1);
       owner.kill("user");
 
-      const replacement = await sm.spawn({
+      const replacement = await sm.launchSession({
         prompt: "resume after release",
         workdir: "/tmp",
         name: "writer-replacement",
@@ -2345,7 +2331,7 @@ describe("SessionManager resumed launch routing", () => {
       await tick(20);
       assert.equal(replacement.status, "starting");
       assert.equal(launchCalls, 1);
-      await assert.rejects(async () => await sm.spawn({
+      await assert.rejects(async () => await sm.launchSession({
         prompt: "overlapping replacement",
         workdir: "/tmp",
         name: "overlapping-writer-replacement",
@@ -2406,7 +2392,7 @@ describe("SessionManager resumed launch routing", () => {
     const route = { provider: "telegram", target: "12345" };
 
     try {
-      const first = await sm.spawn({
+      const first = await sm.launchSession({
         prompt: "first owner",
         workdir: "/tmp",
         name: "first-writer-owner",
@@ -2418,7 +2404,7 @@ describe("SessionManager resumed launch routing", () => {
       assert.equal(first.status, "running");
       first.kill("user");
 
-      const second = await sm.spawn({
+      const second = await sm.launchSession({
         prompt: "second owner",
         workdir: "/tmp",
         name: "second-writer-owner",
@@ -2437,7 +2423,7 @@ describe("SessionManager resumed launch routing", () => {
       assert.equal(launchCalls, 2);
       second.kill("user");
 
-      const third = await sm.spawn({
+      const third = await sm.launchSession({
         prompt: "third owner",
         workdir: "/tmp",
         name: "third-writer-owner",
@@ -2459,6 +2445,54 @@ describe("SessionManager resumed launch routing", () => {
       await tick(20);
     } finally {
       for (const releaseClose of closeReleases) releaseClose();
+      sm.dispose();
+    }
+  });
+
+  it("passes the parent's usage as the fork baseline so a fork reports only its own cost", async () => {
+    const harness = createFakeHarness("fork-baseline-fake-harness");
+    registerHarness(harness);
+    setPluginConfig({});
+    const sm = new SessionManager(5);
+    const route = { provider: "telegram", target: "12345", sessionKey: "agent:main:telegram:group:12345" };
+    (sm as any).store.persisted.set("parent-conv", {
+      sessionId: "parent-session",
+      harnessSessionId: "parent-conv",
+      backendRef: { kind: "claude-code", conversationId: "parent-conv" },
+      name: "parent",
+      prompt: "Parent task.",
+      workdir: "/tmp",
+      status: "completed",
+      costUsd: 1.25,
+      route,
+    });
+
+    const fork = await sm.launchSession({
+      prompt: "Try the alternative.",
+      workdir: "/tmp",
+      name: "fork",
+      harness: harness.name,
+      resumeSessionId: "parent-conv",
+      forkSession: true,
+      worktreeStrategy: "off",
+      route,
+    }, { notifyLaunch: false });
+    const resumed = await sm.launchSession({
+      prompt: "Continue.",
+      workdir: "/tmp",
+      name: "resume",
+      harness: harness.name,
+      resumeSessionId: "parent-conv",
+      worktreeStrategy: "off",
+      route,
+    }, { notifyLaunch: false });
+
+    try {
+      assert.equal(fork.forkSession, true);
+      assert.deepEqual((fork as any).forkBaselineUsage, { costUsd: 1.25 });
+      assert.equal((resumed as any).forkBaselineUsage, undefined);
+    } finally {
+      harness.endMessages();
       sm.dispose();
     }
   });
@@ -2490,7 +2524,7 @@ describe("SessionManager resumed launch routing", () => {
       route,
     });
 
-    const session = await sm.spawn({
+    const session = await sm.launchSession({
       prompt: "Compare message_sending vs reply_payload_sending.",
       workdir: "/tmp",
       name: "compare-pr-98922-hook-layer",
@@ -2535,7 +2569,7 @@ describe("SessionManager.launchPlanOffer()", () => {
 
   it("starts a plan-gated auto-pr session with preserved topic routing", async () => {
     const spawnCalls: Array<Record<string, unknown>> = [];
-    (sm as any).spawn = (config: Record<string, unknown>) => {
+    (sm as any).launchSession = (config: Record<string, unknown>) => {
       spawnCalls.push(config);
       return { id: "sess-plan", name: config.name };
     };
@@ -4508,6 +4542,28 @@ describe("SessionManager.handleAskUserQuestion()", () => {
   beforeEach(() => {
     sm = new SessionManager(5);
     stubDispatch(sm);
+  });
+
+  it("drops a question the harness already answered directly without rejecting it", async () => {
+    const session = fakeSession({
+      id: "s-cc-direct",
+      name: "cc-direct",
+      pendingInputState: { requestId: "claude-ask-1", kind: "question", options: ["A", "B"], allowsFreeText: true },
+    });
+    (sm as any).sessions.set(session.id, session);
+    let settled = false;
+    void sm.handleAskUserQuestion(session.id, {
+      questions: [{ question: "Pick one", options: [{ label: "A" }, { label: "B" }] }],
+    }).then(() => { settled = true; }, () => { settled = true; });
+
+    const questions = (sm as any).questions;
+    assert.equal(questions.discardAskUserQuestion(session.id, "other-request"), false);
+    assert.equal((sm as any).pendingAskUserQuestions.has(session.id), true);
+    assert.equal(questions.discardAskUserQuestion(session.id, "claude-ask-1"), true);
+    assert.equal((sm as any).pendingAskUserQuestions.has(session.id), false);
+    await tick(5);
+    assert.equal(settled, false, "the discarded wait must not reject into the harness");
+    assert.equal(sm.resolveAskUserQuestion(session.id, 0), false);
   });
 
   it("renders explicit question options as buttons without bypassing them", async () => {

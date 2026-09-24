@@ -9,8 +9,10 @@
  * actions (compact, review).
  */
 
-import packageJson from "../../package.json";
+// Named import: the bundler keeps only `version`, not the whole package.json.
+import { version as packageVersion } from "../../package.json";
 import { getHarnessConfig } from "../config";
+import { getPluginRuntime, getRuntimeConfig } from "../runtime-store";
 import type { PendingInputState, PlanArtifact, PlanArtifactStep, ThreadAction } from "../types";
 import type {
   AgentHarness,
@@ -32,10 +34,12 @@ import {
   createPendingInputResolvedEvent,
   createPlanArtifactEvent,
   createRunCompletedEvent,
+  createPromptSettledEvent,
   createRunStartedEvent,
   createSettingsChangedEvent,
   createTextDeltaEvent,
   HarnessMessageQueue,
+  PromptReader,
 } from "./harness-events";
 import { formatPendingInputWizardQuestion } from "../pending-input-normalization";
 import { canonicalizeModelForHarness, isModelFormatSupportedForHarness } from "../harness-models";
@@ -58,6 +62,7 @@ import {
   codexRequest,
   mapTurnPlanSteps,
   matchApprovalChoiceFromText,
+  readOpenClawExecMode,
   resolveCodexExecutionSettings,
   turnErrorMessage,
   type CodexApprovalChoice,
@@ -128,7 +133,7 @@ const AUXILIARY_READ_TIMEOUT_MS = 5_000;
 const OPENCLAW_CODEX_APP_SERVER_COMMAND_ENV = "OPENCLAW_CODEX_APP_SERVER_COMMAND";
 const OPENCLAW_CODEX_APP_SERVER_ARGS_ENV = "OPENCLAW_CODEX_APP_SERVER_ARGS";
 const OPENCLAW_CODEX_APP_SERVER_TIMEOUT_MS_ENV = "OPENCLAW_CODEX_APP_SERVER_TIMEOUT_MS";
-const CODEX_APP_SERVER_SESSION_ID_RE = /^(?:urn:uuid:)?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+const CODEX_APP_SERVER_SESSION_ID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
 /**
  * High-volume notifications OCA never consumes. Opting out keeps the stdio
@@ -143,6 +148,20 @@ const OPTED_OUT_NOTIFICATIONS = [
   "item/plan/delta",
   "command/exec/outputDelta",
 ];
+
+/**
+ * The host `tools.exec.mode` at launch time: the live config when the runtime
+ * exposes it, else the snapshot taken at service start.
+ */
+function readHostExecMode(): ReturnType<typeof readOpenClawExecMode> {
+  let config: unknown;
+  try {
+    config = getPluginRuntime()?.config.current();
+  } catch {
+    config = undefined;
+  }
+  return readOpenClawExecMode(config ?? getRuntimeConfig());
+}
 
 function normalizeCodexAppServerSessionId(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
@@ -165,7 +184,7 @@ function parseRequestTimeoutMs(value: string | undefined): number {
     : DEFAULT_REQUEST_TIMEOUT_MS;
 }
 
-export function parseCsvEnv(value: string | undefined): string[] {
+function parseCsvEnv(value: string | undefined): string[] {
   if (!value) return [];
   return value.split(",").map((entry) => entry.trim()).filter(Boolean);
 }
@@ -174,8 +193,21 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** Lifecycle events log at debug; declines, failures, and anomalies at warn. */
+const WARN_HARNESS_EVENTS = new Set([
+  "pending_input.concurrent_declined",
+  "server_request.unsupported",
+  "model.list.unavailable",
+  "account.read.unavailable",
+  "rate_limits.read.unavailable",
+  "turn.error",
+  "session.error",
+  "action.rejected",
+]);
+
 function logCodexHarnessDiagnostic(event: string, fields: Record<string, unknown>): void {
-  log.warn(JSON.stringify({
+  const emit = WARN_HARNESS_EVENTS.has(event) ? log.warn : log.debug;
+  emit(JSON.stringify({
     component: "CodexHarness",
     event,
     at: new Date().toISOString(),
@@ -273,12 +305,12 @@ export class CodexHarness implements AgentHarness {
         clientSettings.args,
         clientSettings.requestTimeoutMs,
       );
-    const execution = resolveCodexExecutionSettings(getHarnessConfig("codex"));
+    const execution = resolveCodexExecutionSettings(getHarnessConfig("codex"), readHostExecMode());
 
     const queue = new HarnessMessageQueue();
     let threadId = normalizeCodexAppServerSessionId(options.resumeSessionId);
     if (options.resumeSessionId && !threadId) {
-      log.warn("[CodexHarness] Ignoring invalid Codex App Server resume session id. Expected UUID or urn:uuid UUID.");
+      log.warn("[CodexHarness] Ignoring invalid Codex App Server resume session id. Expected a Codex thread UUID.");
     }
     let threadReady = false;
     let forkPending = options.forkSession === true && !!threadId;
@@ -306,6 +338,15 @@ export class CodexHarness implements AgentHarness {
     let planExplanation = "";
     let planSteps: PlanArtifactStep[] = [];
     const streamedAgentItemIds = new Set<string>();
+    // Set once the handle or the app server closed: nothing may start afterwards.
+    let closed = false;
+    const promptIterable = typeof options.prompt === "string"
+      ? (async function* (): AsyncGenerator<unknown> {
+          yield { type: "user", text: options.prompt };
+        })()
+      : options.prompt;
+    const prompts = new PromptReader(promptIterable);
+    let emittedText = false;
 
     const emitBackendRef = (): void => {
       if (!threadId) return;
@@ -322,6 +363,11 @@ export class CodexHarness implements AgentHarness {
         lastTurnId = turnId;
         emitBackendRef();
       }
+    };
+
+    /** Separate consecutive agent messages so agent_output does not run them together. */
+    const emitMessageSeparator = (): void => {
+      if (emittedText) queue.enqueue(createTextDeltaEvent("\n\n"));
     };
 
     const finishActiveTurn = (update: { terminal?: Turn; failure?: string }): void => {
@@ -356,6 +402,7 @@ export class CodexHarness implements AgentHarness {
     };
 
     client.setCloseHandler?.(() => {
+      closed = true;
       finishActiveTurn({ failure: "Codex App Server exited before the turn completed." });
     });
 
@@ -416,7 +463,11 @@ export class CodexHarness implements AgentHarness {
         case "item/agentMessage/delta": {
           const delta = params as AgentMessageDeltaNotification;
           if (!delta.delta) return;
-          streamedAgentItemIds.add(delta.itemId);
+          if (!streamedAgentItemIds.has(delta.itemId)) {
+            streamedAgentItemIds.add(delta.itemId);
+            emitMessageSeparator();
+          }
+          emittedText = true;
           queue.enqueue(createTextDeltaEvent(delta.delta));
           return;
         }
@@ -430,8 +481,12 @@ export class CodexHarness implements AgentHarness {
             };
             queue.enqueue(createPlanArtifactEvent(artifact, true));
           } else if (item.type === "agentMessage" && item.text && !streamedAgentItemIds.has(item.id)) {
+            emitMessageSeparator();
+            emittedText = true;
             queue.enqueue(createTextDeltaEvent(item.text));
           } else if (item.type === "contextCompaction") {
+            emitMessageSeparator();
+            emittedText = true;
             queue.enqueue(createTextDeltaEvent("[Codex] Conversation context compacted."));
           }
           return;
@@ -505,7 +560,7 @@ export class CodexHarness implements AgentHarness {
       });
       await client.connect();
       await codexRequest(client, "initialize", {
-        clientInfo: { name: "openclaw-code-agent", title: "OpenClaw Code Agent", version: packageJson.version },
+        clientInfo: { name: "openclaw-code-agent", title: "OpenClaw Code Agent", version: packageVersion },
         capabilities: {
           experimentalApi: true,
           requestAttestation: false,
@@ -704,6 +759,7 @@ export class CodexHarness implements AgentHarness {
           kind,
           outcome,
         });
+        if (await deferResultToQueuedPrompt(outcome === "failed" ? resultText : undefined)) return;
         queue.enqueue(createRunCompletedEvent({
           success: outcome === "completed",
           outcome,
@@ -719,6 +775,7 @@ export class CodexHarness implements AgentHarness {
           kind,
           error: errorMessage(error),
         });
+        if (await deferResultToQueuedPrompt(errorMessage(error))) return;
         queue.enqueue(createRunCompletedEvent({
           success: false,
           duration_ms: 0,
@@ -737,7 +794,30 @@ export class CodexHarness implements AgentHarness {
       }
     };
 
+    /**
+     * When the next prompt is already queued, report this turn through the next
+     * one instead (see PromptReader); a failure stays visible in the output.
+     */
+    const deferResultToQueuedPrompt = async (failure: string | undefined): Promise<boolean> => {
+      if (closed || !(await prompts.hasQueued())) return false;
+      if (failure) {
+        emitMessageSeparator();
+        emittedText = true;
+        queue.enqueue(createTextDeltaEvent(`[Codex] Turn failed: ${failure}`));
+      }
+      logCodexHarnessDiagnostic("turn.result.deferred", threadDiagnosticFields({ threadId, turnId: lastTurnId }));
+      return true;
+    };
+
+    const assertOpen = (what: string): void => {
+      if (closed) {
+        logCodexHarnessDiagnostic("action.rejected", { what, ...threadDiagnosticFields({ threadId, turnId: lastTurnId }) });
+        throw new Error(`Codex session has ended; cannot run ${what}. Resume the session or start a new one first.`);
+      }
+    };
+
     const runUserTurn = async (prompt: string): Promise<void> => {
+      assertOpen("a new turn");
       await ensureThread();
       const model = resolveTurnModel();
       await runTrackedTurn("user", async () => {
@@ -753,6 +833,7 @@ export class CodexHarness implements AgentHarness {
     };
 
     const runThreadAction = async (action: ThreadAction): Promise<void> => {
+      assertOpen(action.kind === "compact" ? "compact" : "review");
       await ensureThread();
       if (action.kind === "compact") {
         await runTrackedTurn("compact", async () => {
@@ -769,7 +850,7 @@ export class CodexHarness implements AgentHarness {
 
     const steer = async (text: string): Promise<boolean> => {
       const turn = activeTurn;
-      if (!turn || turn.kind !== "user" || !turn.turnId || turn.interruptRequested || turn.terminal || !threadId) {
+      if (closed || !turn || turn.kind !== "user" || !turn.turnId || turn.interruptRequested || turn.terminal || !threadId) {
         return false;
       }
       try {
@@ -852,25 +933,31 @@ export class CodexHarness implements AgentHarness {
       return answerQuestion(pending, question.id, option.value ?? option.label);
     };
 
-    const promptIterable = typeof options.prompt === "string"
-      ? (async function* (): AsyncGenerator<unknown> {
-          yield { type: "user", text: options.prompt };
-        })()
-      : options.prompt;
-
+    // The session loop owns every failure: it reports errors as a failed run and
+    // always closes the client, so this detached promise never rejects.
     void (async () => {
       try {
         await initialize();
-        for await (const rawMessage of promptIterable) {
+        while (true) {
+          const next = await prompts.next();
+          if (next.done) break;
+          const rawMessage = next.value;
+          if (closed) {
+            // The session ended (handle or app server closed) with this prompt
+            // still queued: never start work on a closed transport.
+            logCodexHarnessDiagnostic("action.rejected", { what: "queued prompt after close", ...threadDiagnosticFields({ threadId, turnId: lastTurnId }) });
+            break;
+          }
           const control = asThreadActionMessage(rawMessage);
           if (control) {
             await runThreadAction(control.action);
             continue;
           }
           const text = extractPromptText(rawMessage).trim();
-          if (!text) continue;
-          const handledPending = await submitPendingInputText(text);
-          if (handledPending) continue;
+          if (!text || await submitPendingInputText(text)) {
+            queue.enqueue(createPromptSettledEvent());
+            continue;
+          }
           await runUserTurn(text);
         }
       } catch (error) {
@@ -918,13 +1005,14 @@ export class CodexHarness implements AgentHarness {
 
       async interrupt(): Promise<void> {
         const turn = activeTurn;
-        if (!threadId || !turn?.turnId) return;
+        if (closed || !threadId || !turn?.turnId) return;
         turn.interruptRequested = true;
         await codexRequest(client, "turn/interrupt", { threadId, turnId: turn.turnId }, timeoutMs)
           .catch((): undefined => undefined);
       },
 
       async close(): Promise<void> {
+        closed = true;
         await client.close();
       },
     };

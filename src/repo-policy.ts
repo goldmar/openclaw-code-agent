@@ -32,7 +32,7 @@ export type RepoPolicyOption = {
   description: string;
 };
 
-export const REPO_POLICY_OPTIONS: readonly RepoPolicyOption[] = [
+const REPO_POLICY_OPTIONS: readonly RepoPolicyOption[] = [
   {
     policy: "pr-required",
     label: "Require PR",

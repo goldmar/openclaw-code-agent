@@ -43,6 +43,7 @@ describe("agent_session_action tool (B12, B13)", () => {
         name: "fix-auth",
         worktreeBranch: "agent/fix-auth",
         worktreeBaseBranch: "main",
+        status: "running",
         requestThreadAction: (action: unknown) => { requested.push(action); },
       }),
     } as any);
@@ -55,10 +56,22 @@ describe("agent_session_action tool (B12, B13)", () => {
     ]);
   });
 
+  it("refuses an action on a finished session instead of reporting it queued", async () => {
+    let requested = 0;
+    setSessionManager({
+      resolve: () => ({ id: "s2", name: "done", status: "completed", requestThreadAction: () => { requested += 1; } }),
+    } as any);
+    const result = await makeAgentSessionActionTool().execute("id", { session: "done", action: "review" }) as any;
+    assert.equal(result.isError, true);
+    assert.match(text(result), /is completed, not running, so the review was not queued/);
+    assert.doesNotMatch(text(result), /queued for session/);
+    assert.equal(requested, 0);
+  });
+
   it("reports unsupported harnesses, inactive sessions, and invalid parameters", async () => {
     setSessionManager({
       resolve: (ref: string) => ref === "claude"
-        ? { id: "c", name: "claude", requestThreadAction: () => { throw new Error('The claude-code harness does not support the "compact" thread action.'); } }
+        ? { id: "c", name: "claude", status: "running", requestThreadAction: () => { throw new Error('The claude-code harness does not support the "compact" thread action.'); } }
         : undefined,
     } as any);
     const tool = makeAgentSessionActionTool();

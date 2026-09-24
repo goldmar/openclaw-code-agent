@@ -171,7 +171,10 @@ describe("formatSessionListing", () => {
   });
 
   it("shows session ID when present", () => {
-    const result = formatSessionListing(makeSession({ harnessSessionId: "session-123" }));
+    const result = formatSessionListing(makeSession({
+      harnessSessionId: "session-123",
+      backendRef: { kind: "claude-code", conversationId: "session-123" },
+    }));
     assert.ok(result.includes("session-123"));
   });
 

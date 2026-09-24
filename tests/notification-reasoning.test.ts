@@ -287,7 +287,7 @@ describe("notification reasoning visibility", () => {
   it("passes explicit tool overrides to spawn and rejects invalid effort before launching", async () => {
     const configs: any[] = [];
     setPluginConfig({ defaultHarness: "codex" });
-    setSessionManager({ spawn: (config: any) => { configs.push(config); return { ...config, id: "launch", name: "launch" }; } } as any);
+    setSessionManager({ launchSession: (config: any) => { configs.push(config); return { ...config, id: "launch", name: "launch" }; } } as any);
     const tool = makeAgentLaunchTool({ workspaceDir: "/tmp", oneShotCliRun: true });
     await tool.execute("valid", { prompt: "Task", reasoning_effort: "high" });
     assert.equal(configs[0]?.reasoningEffort, "high");

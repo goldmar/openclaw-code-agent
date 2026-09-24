@@ -87,6 +87,8 @@ export interface HarnessBackendInfo {
 export type HarnessMessage =
   | { type: "backend_ref"; ref: SessionBackendRef }
   | { type: "run_started"; runId?: string }
+  /** A pulled prompt was consumed without starting a turn (for example it answered pending input). */
+  | { type: "prompt_settled" }
   | { type: "activity" }
   | { type: "text_delta"; text: string }
   | { type: "tool_call"; name: string; input: unknown }
@@ -132,6 +134,13 @@ export interface HarnessLaunchOptions {
   abortController?: AbortController;
   /** Optional tool-intercept callback (CC sessions only). */
   canUseTool?: CanUseToolCallback;
+  /**
+   * Usage the resumed conversation had already accumulated (Claude Code only).
+   * Claude Code restores a resumed transcript's cumulative cost, so a fork
+   * would otherwise report its parent's spend as its own; with this baseline
+   * a fork reports only its own delta.
+   */
+  forkBaselineUsage?: { costUsd?: number; models?: HarnessModelUsage[] };
 }
 
 // ---------------------------------------------------------------------------

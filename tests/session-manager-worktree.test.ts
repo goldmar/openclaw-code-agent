@@ -54,7 +54,11 @@ function createTestSessionManager(
 function stubDispatch(sm: SessionManager): void {
   (sm as any).__dispatchCalls = [];
   (sm as any).notifications = {
-    dispatch: (...args: any[]) => { ((sm as any).__dispatchCalls ??= []).push(args); },
+    dispatch: (...args: any[]) => {
+      ((sm as any).__dispatchCalls ??= []).push(args);
+      // Tools that report delivery wait for the result; simulate a delivered prompt.
+      if (args[1]?.label === "worktree-merge-ask") args[1].hooks?.onNotifySucceeded?.();
+    },
     notifyWorktreeOutcome: (...args: any[]) => { ((sm as any).__dispatchCalls ??= []).push(args); },
     dispose: () => {},
   };
@@ -166,6 +170,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
         status: "completed",
         phase: "implementing",
         harnessSessionId: "h-no-change",
+        backendRef: { kind: "claude-code", conversationId: "h-no-change" },
         prompt: "test",
         originalWorkdir: repoDir,
         worktreePath,
@@ -269,6 +274,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
         status: "completed",
         phase: "implementing",
         harnessSessionId: "h-pr-updated-clean",
+        backendRef: { kind: "claude-code", conversationId: "h-pr-updated-clean" },
         prompt: "address comments on the existing PR",
         originalWorkdir: repoDir,
         worktreePath,
@@ -360,6 +366,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
         status: "completed",
         phase: "implementing",
         harnessSessionId: "h-pr-open-no-change",
+        backendRef: { kind: "claude-code", conversationId: "h-pr-open-no-change" },
         prompt: "address comments on the existing PR",
         originalWorkdir: repoDir,
         worktreePath,
@@ -477,6 +484,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
         status: "completed",
         phase: "implementing",
         harnessSessionId: "h-released-duplicate",
+        backendRef: { kind: "claude-code", conversationId: "h-released-duplicate" },
         prompt: "make the duplicate change",
         originalWorkdir: repoDir,
         worktreePath,
@@ -545,6 +553,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
         status: "completed",
         phase: "implementing",
         harnessSessionId: "h-plan-report",
+        backendRef: { kind: "claude-code", conversationId: "h-plan-report" },
         prompt: "Investigate the issue and write a plan before making any code changes.",
         originalWorkdir: repoDir,
         worktreePath,
@@ -606,6 +615,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
         status: "completed",
         phase: "implementing",
         harnessSessionId: "h-investigation-report",
+        backendRef: { kind: "claude-code", conversationId: "h-investigation-report" },
         prompt: "Investigate why the callback is skipped and report the root cause.",
         originalWorkdir: repoDir,
         worktreePath,
@@ -686,6 +696,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
         status: "completed",
         phase: "implementing",
         harnessSessionId: "h-dirty-completion",
+        backendRef: { kind: "claude-code", conversationId: "h-dirty-completion" },
         prompt: "create a file",
         originalWorkdir: repoDir,
         worktreePath,
@@ -765,6 +776,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
         status: "completed",
         phase: "implementing",
         harnessSessionId: "h-delegate",
+        backendRef: { kind: "claude-code", conversationId: "h-delegate" },
         prompt: "update the readme",
         originalWorkdir: repoDir,
         worktreePath,
@@ -942,6 +954,7 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
         status: "completed",
         phase: "implementing",
         harnessSessionId: "h-ask-summary",
+        backendRef: { kind: "claude-code", conversationId: "h-ask-summary" },
         prompt: "fix the worktree decision prompt",
         originalWorkdir: repoDir,
         worktreePath,
@@ -1043,6 +1056,63 @@ describe("SessionManager.handleWorktreeStrategy()", () => {
       assert.equal(persisted.lastWorktreeReminderAt, undefined);
       assert.equal(persisted.worktreeDecisionSnoozedUntil, undefined);
       assert.equal(persisted.worktreeLifecycle?.state, "merged");
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+      cleanup();
+    }
+  });
+
+  it("retention cleanup clears metadata for a resolved worktree that is already gone", async () => {
+    const repoDir = mkdtempSync(join(tmpdir(), "sm-worktree-gone-"));
+    let cleanup = () => {};
+    try {
+      git(repoDir, "init", "-b", "main");
+      git(repoDir, "config", "user.name", "Test User");
+      git(repoDir, "config", "user.email", "test@example.com");
+      writeFileSync(join(repoDir, "README.md"), "hello\n", "utf-8");
+      git(repoDir, "add", "README.md");
+      git(repoDir, "commit", "-m", "init");
+
+      const worktreePath = await createWorktree(repoDir, "already-gone");
+      const branchName = await getBranchName(worktreePath);
+      // Removed by hand; git still has the registration.
+      rmSync(worktreePath, { recursive: true, force: true });
+
+      const created = createTestSessionManager(5);
+      const sm = created.sm;
+      cleanup = created.cleanup;
+      (sm as any).store.persisted.set("h-gone", {
+        harnessSessionId: "h-gone",
+        backendRef: { kind: "claude-code", conversationId: "h-gone" },
+        name: "already-gone",
+        prompt: "test",
+        // Rows written by worktree sessions can carry the worktree as their workdir.
+        workdir: worktreePath,
+        route: {
+          provider: "telegram",
+          target: "12345",
+          sessionKey: "agent:main:telegram:group:12345",
+        },
+        status: "completed",
+        costUsd: 0,
+        worktreePath,
+        worktreeBranch: branchName,
+        worktreeState: "merged",
+        worktreeMergedAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString(),
+        worktreeLifecycle: {
+          state: "merged",
+          updatedAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString(),
+          resolvedAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString(),
+        },
+      });
+
+      await (sm as any).maintenance.reconcileResolvedWorktreeRetention((sm as any).store.persisted.get("h-gone"), Date.now());
+
+      const persisted = (sm as any).store.persisted.get("h-gone");
+      assert.equal(persisted.worktreePath, undefined);
+      assert.equal(persisted.worktreeState, "none");
+      // git's stale registration was pruned through the primary checkout.
+      assert.doesNotMatch(git(repoDir, "worktree", "list"), /already-gone/);
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
       cleanup();

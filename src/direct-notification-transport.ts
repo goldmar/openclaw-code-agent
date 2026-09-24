@@ -32,10 +32,6 @@ async function loadSendDurableMessageBatch(): Promise<SendDurableMessageBatch> {
   return mod.sendDurableMessageBatch;
 }
 
-export const directNotificationTransportInternals = {
-  loadSendDurableMessageBatch,
-};
-
 /**
  * Direct user notifications through the host's durable outbound queue
  * (`openclaw/plugin-sdk/channel-outbound` `sendDurableMessageBatch`).
@@ -47,8 +43,7 @@ export const directNotificationTransportInternals = {
  */
 export class RuntimeDirectNotificationTransport implements DirectNotificationTransport {
   constructor(
-    private readonly loadSender: () => Promise<SendDurableMessageBatch> =
-      () => directNotificationTransportInternals.loadSendDurableMessageBatch(),
+    private readonly loadSender: () => Promise<SendDurableMessageBatch> = loadSendDurableMessageBatch,
   ) {}
 
   async send(

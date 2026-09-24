@@ -51,7 +51,7 @@ export function createRuntimeWorktreeDecisionSummaryProvider(): WorktreeDecision
   };
 }
 
-export function buildFallbackWorktreeDecisionSummary(diffSummary: {
+function buildFallbackWorktreeDecisionSummary(diffSummary: {
   changedFiles: string[];
   commitMessages: Array<{ message: string }>;
 }, outputPreview?: string): string[] {
@@ -275,7 +275,7 @@ const WORKTREE_DECISION_SUMMARY_SYSTEM_PROMPT = [
   `Do not mention that you are summarizing. Do not invent changes not supported by the evidence.`,
 ].join("\n");
 
-export function buildWorktreeDecisionSummaryPrompt(evidence: WorktreeDecisionSummaryEvidence): string {
+function buildWorktreeDecisionSummaryPrompt(evidence: WorktreeDecisionSummaryEvidence): string {
   return [
     `Evidence:`,
     JSON.stringify(evidence, null, 2),

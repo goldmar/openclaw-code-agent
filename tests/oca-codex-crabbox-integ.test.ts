@@ -15,6 +15,7 @@ import { resolveExistingTargetPrUpdateBranch } from "../src/tools/agent-pr";
 import { createPR, formatWorktreeOutcomeLine } from "../src/worktree";
 import { reconcilePersistedSessionTaskMirror } from "../src/session-task-lifecycle";
 import { setPluginRuntime } from "../src/runtime-store";
+import { TEST_RUNTIME_LLM } from "./helpers";
 import { SessionNotificationService } from "../src/session-notifications";
 import { SessionWorktreeMessageService } from "../src/session-worktree-message-service";
 import { buildCompletedPayload } from "../src/session-notification-builder";
@@ -520,6 +521,7 @@ describe("OCA Codex Crabbox integration harness", () => {
   it("reconciles orphan running TaskFlow mirrors after runtime recovery", async () => {
     const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
     setPluginRuntime({
+      llm: TEST_RUNTIME_LLM,
       tasks: {
         async: {
           managedFlows: {
@@ -609,6 +611,7 @@ describe("OCA Codex Crabbox integration harness", () => {
         repoPolicies: [],
       }));
       setPluginRuntime({
+        llm: TEST_RUNTIME_LLM,
         tasks: {
           async: {
             managedFlows: {

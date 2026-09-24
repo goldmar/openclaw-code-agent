@@ -17,6 +17,7 @@ import {
   hasDirtyWorktreeEntries,
   buildMergeWarningLines,
   appendMergeWarnings,
+  describeMergeType,
 } from "../worktree";
 import { buildMergedPatch } from "../worktree-session-patches";
 import { getPersistedTargetMutationRefs, resolveWorktreeToolTarget } from "./worktree-tool-context";
@@ -145,7 +146,7 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
       }
 
       if (params.base_branch !== undefined) {
-        const branchError = branchNameValidationError(params.base_branch);
+        const branchError = await branchNameValidationError(params.base_branch);
         if (branchError) return { content: [{ type: "text", text: `Error: ${branchError}` }] };
       }
 
@@ -318,7 +319,7 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
             outcomeLine,
             {
               detailLines: [
-                mergeResult.fastForward ? "Merge type: fast-forward." : "Merge type: merge commit.",
+                `Merge type: ${describeMergeType(mergeResult)}.`,
                 shouldPush ? `Pushed ${baseBranch}.` : `Did not push ${baseBranch}; push was not requested.`,
                 cleanupOutcome.detailLine,
                 ...stashDetailLines,
@@ -327,7 +328,9 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
             },
           );
 
-          const mergeTypeMsg = mergeResult.fastForward ? "⚡ Fast-forward" : "🔀 Merge commit";
+          const mergeTypeMsg = mergeResult.fastForward
+            ? "⚡ Fast-forward"
+            : mergeResult.squash ? "🗜️ Squash commit" : "🔀 Merge commit";
           const pushMsg = shouldPush ? " Pushed." : "";
           let successText = `✅ ${mergeTypeMsg}: ${branchName} → ${baseBranch}.${pushMsg}${cleanupOutcome.summaryFragment}`;
           if (mergeResult.stashPopConflict) {
@@ -351,7 +354,7 @@ export function makeAgentMergeTool(_ctx?: OpenClawPluginToolContext) {
           ].join("\n");
 
           try {
-            const conflictSession = await sessionManager.spawn({
+            const conflictSession = await sessionManager.launchSession({
               prompt: conflictPrompt,
               workdir: effectiveWorkdir,
               name: `${params.session}-conflict-resolver`,

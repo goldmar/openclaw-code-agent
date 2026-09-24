@@ -1,4 +1,4 @@
-import { getPluginRuntime } from "./runtime-store";
+import { getPluginRuntime, type PluginRuntime } from "./runtime-store";
 
 type LogLevel = "debug" | "info" | "warn" | "error";
 type LogMethod = (message: string, ...details: unknown[]) => void;
@@ -10,20 +10,15 @@ export interface CodeAgentLogger {
   error: LogMethod;
 }
 
-type HostLogger = {
-  debug?: (message: string, meta?: Record<string, unknown>) => void;
-  info: (message: string, meta?: Record<string, unknown>) => void;
-  warn: (message: string, meta?: Record<string, unknown>) => void;
-  error: (message: string, meta?: Record<string, unknown>) => void;
-};
+type HostLogger = ReturnType<PluginRuntime["logging"]["getChildLogger"]>;
 
 const PLUGIN_ID = "openclaw-code-agent";
 const hostLoggers = new WeakMap<object, Map<string, HostLogger | null>>();
 
 function resolveHostLogger(subsystem: string): HostLogger | undefined {
+  // Before registration (and in unit tests) there is no runtime: use the console.
   const runtime = getPluginRuntime();
-  const getChildLogger = runtime?.logging?.getChildLogger;
-  if (!runtime || typeof getChildLogger !== "function") return undefined;
+  if (!runtime) return undefined;
   let bySubsystem = hostLoggers.get(runtime);
   if (!bySubsystem) {
     bySubsystem = new Map();
@@ -32,8 +27,9 @@ function resolveHostLogger(subsystem: string): HostLogger | undefined {
   if (!bySubsystem.has(subsystem)) {
     let logger: HostLogger | null = null;
     try {
-      logger = getChildLogger({ plugin: PLUGIN_ID, subsystem }) as HostLogger;
+      logger = runtime.logging.getChildLogger({ plugin: PLUGIN_ID, subsystem });
     } catch {
+      // A test runtime without `logging` (or a throwing host logger) uses the console.
       logger = null;
     }
     bySubsystem.set(subsystem, logger);
@@ -47,7 +43,7 @@ function formatDetail(detail: unknown): unknown {
 }
 
 function writeConsole(level: LogLevel, message: string, details: unknown[]): void {
-  // Fallback for tests and hosts without `runtime.logging`. The production bundle
+  // Fallback before registration and in tests. The production bundle
   // strips console.log/info/warn/debug through esbuild `--pure`, so only the host
   // logger (or console.error) is observable there.
   if (level === "error") console.error(message, ...details);

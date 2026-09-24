@@ -95,52 +95,6 @@ export function summarizePresentation(value: unknown): Record<string, unknown> {
   };
 }
 
-export function summarizeRenderedPayload(value: unknown): Record<string, unknown> {
-  const record = toRecord(value);
-  const interactive = record?.interactive;
-  const channelData = toRecord(record?.channelData);
-  const telegramData = toRecord(channelData?.telegram);
-  const telegramButtons = Array.isArray(telegramData?.buttons)
-    ? telegramData.buttons as ButtonRows
-    : undefined;
-
-  return {
-    renderedPayloadKeys: record ? Object.keys(record).sort() : undefined,
-    interactiveBlockTypes: collectBlockTypes(interactive),
-    ...prefixKeys("interactive", summarizeButtons(collectInteractiveButtons(interactive))),
-    ...prefixKeys("telegramChannelData", summarizeButtons(telegramButtons)),
-    hasPresentation: Boolean(record?.presentation),
-    hasInteractive: Boolean(interactive),
-    hasTelegramChannelDataButtons: Boolean(telegramButtons?.some((row) => row.length > 0)),
-  };
-}
-
-export function summarizeSendResult(value: unknown): Record<string, unknown> {
-  const record = toRecord(value);
-  if (!record) return { sendResultType: typeof value };
-  return {
-    sendResultKeys: Object.keys(record).sort(),
-    messageId: stringOrNumber(record.messageId),
-    chatId: stringOrNumber(record.chatId),
-    telegramThreadId: stringOrNumber(record.messageThreadId ?? record.threadId),
-    channel: typeof record.channel === "string" ? record.channel : undefined,
-  };
-}
-
-function stringOrNumber(value: unknown): string | number | undefined {
-  return typeof value === "string" || typeof value === "number" ? value : undefined;
-}
-
-function prefixKeys(prefix: string, values: Record<string, unknown>): Record<string, unknown> {
-  const prefixed: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(values)) {
-    if (value !== undefined) {
-      prefixed[`${prefix}${key.charAt(0).toUpperCase()}${key.slice(1)}`] = value;
-    }
-  }
-  return prefixed;
-}
-
 export function logButtonDiagnostic(event: string, fields: Record<string, unknown>): void {
   if (!areButtonDiagnosticsEnabled()) return;
   const sanitized = Object.fromEntries(

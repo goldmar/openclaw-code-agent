@@ -174,6 +174,27 @@ export class SessionLifecycleService {
     },
   ) {}
 
+  /**
+   * `manual` sessions keep their worktree for the user to merge. Record a current
+   * `provisioned` lifecycle (with a real timestamp) so status views report the
+   * kept worktree instead of synthesizing one from missing fields.
+   */
+  private recordManualWorktreeKept(session: Session): void {
+    if (session.worktreeState !== "none" && session.worktreeState !== "provisioned") return;
+    const now = new Date().toISOString();
+    for (const mutationRef of getPersistedMutationRefs(session)) {
+      this.deps.updatePersistedSession(mutationRef, {
+        worktreeState: "provisioned",
+        worktreeLifecycle: {
+          state: "provisioned",
+          updatedAt: now,
+          ...(session.worktreeBaseBranch ? { baseBranch: session.worktreeBaseBranch } : {}),
+          notes: ["manual strategy: worktree kept for manual follow-up"],
+        },
+      });
+    }
+  }
+
   private dispatchPlanApprovalFallback(session: Session, planDecisionVersion: number | undefined, summary: string): void {
     const now = new Date().toISOString();
     this.deps.dispatchSessionNotification(session, {
@@ -348,20 +369,22 @@ export class SessionLifecycleService {
       }
     }
 
-    const nonTrivialWorktreeStrategy = session.worktreeStrategy &&
-      session.worktreeStrategy !== "off" && session.worktreeStrategy !== "manual";
+    // Every strategy except `off` keeps its worktree until an explicit resolution;
+    // `manual` in particular exists so the user can merge the branch by hand.
+    const keepsWorktree = Boolean(session.worktreeStrategy && session.worktreeStrategy !== "off");
     if (!worktreeAutoCleaned && session.worktreePath && session.originalWorkdir) {
-      const repoDir = await this.deps.resolveWorktreeRepoDir(session.originalWorkdir, session.worktreePath);
       if (worktreeResult.worktreeRemoved) {
         log.info(
           `[SessionManager] Worktree already removed for "${session.name}" during strategy handling.`,
         );
-      } else if (nonTrivialWorktreeStrategy) {
+      } else if (keepsWorktree) {
         log.info(
           `[SessionManager] Keeping worktree alive for "${session.name}" (strategy=${session.worktreeStrategy}) — will be cleaned up on explicit resolution.`,
         );
-      } else if (repoDir) {
-        await removeWorktree(repoDir, session.worktreePath);
+        if (session.worktreeStrategy === "manual") this.recordManualWorktreeKept(session);
+      } else {
+        const repoDir = await this.deps.resolveWorktreeRepoDir(session.originalWorkdir, session.worktreePath);
+        if (repoDir) await removeWorktree(repoDir, session.worktreePath);
       }
     }
 

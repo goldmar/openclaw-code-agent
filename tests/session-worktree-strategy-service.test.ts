@@ -1,4 +1,4 @@
-import { describe, it, mock } from "node:test";
+import { describe, it, mock, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -8,6 +8,12 @@ import { SessionWorktreeMessageService } from "../src/session-worktree-message-s
 import { SessionWorktreeController } from "../src/session-worktree-controller";
 import { SessionWorktreeStrategyService } from "../src/session-worktree-strategy-service";
 import { createWorktree, getBranchName, getDiffSummary, mergeBranch } from "../src/worktree";
+import { setGitHubCliAvailabilityForTests } from "../src/worktree-repo";
+
+// PR buttons depend on GitHub CLI availability; never probe the host `gh` (a slow
+// cold start used to hit the probe timeout and flip these tests).
+before(() => setGitHubCliAvailabilityForTests(true));
+after(() => setGitHubCliAvailabilityForTests(undefined));
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }).trim();

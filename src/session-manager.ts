@@ -31,7 +31,7 @@ import type {
 } from "./types";
 import { SessionStore } from "./session-store";
 import type { SessionStoreOptions } from "./session-store";
-import { SessionMetricsRecorder } from "./session-metrics";
+import { computeSessionMetrics } from "./session-metrics";
 import { WakeDispatcher, type SessionNotificationRequest } from "./wake-dispatcher";
 import { SessionInteractionService, type NotificationButton } from "./session-interactions";
 import { SessionNotificationService } from "./session-notifications";
@@ -101,7 +101,7 @@ const KILLABLE_STATUSES = new Set<SessionStatus>(["starting", "running"]);
 const WAITING_EVENT_DEBOUNCE_MS = 5_000;
 
 
-type SpawnOptions = {
+type LaunchOptions = {
   notifyLaunch?: boolean;
 };
 
@@ -210,7 +210,6 @@ interface SessionManagerServiceBundle {
   registry: SessionRuntimeRegistry;
   sessions: Map<string, Session>;
   store: SessionStore;
-  metrics: SessionMetricsRecorder;
   wakeDispatcher: WakeDispatcher;
   interactions: SessionInteractionService;
   notifications: SessionNotificationService;
@@ -244,10 +243,11 @@ export class SessionManager {
   /** Pending AskUserQuestion intercepts awaiting user button selection. */
   private pendingAskUserQuestions: Map<string, PendingAskUserQuestion> = new Map();
   private readonly store: SessionStore;
-  private readonly metrics: SessionMetricsRecorder;
   private readonly wakeDispatcher: WakeDispatcher;
   private readonly interactions: SessionInteractionService;
   private readonly notifications: SessionNotificationService;
+  /** How long a tool waits for a prompt's direct delivery result before reporting it as in progress. */
+  userDeliveryResultWaitMs = 10_000;
   private readonly worktrees: SessionWorktreeController;
   private readonly questions: SessionQuestionService;
   private readonly lifecycle: SessionLifecycleService;
@@ -278,7 +278,6 @@ export class SessionManager {
     this.registry = services.registry;
     this.sessions = services.sessions;
     this.store = services.store;
-    this.metrics = services.metrics;
     this.wakeDispatcher = services.wakeDispatcher;
     this.interactions = services.interactions;
     this.notifications = services.notifications;
@@ -307,7 +306,6 @@ export class SessionManager {
     const registry = new SessionRuntimeRegistry();
     const sessions = registry.sessions;
     const store = new SessionStore(options.store);
-    const metrics = new SessionMetricsRecorder();
     const wakeDispatcher = new WakeDispatcher();
     const interactions = new SessionInteractionService(store.actionTokenStore, isGitHubCLIAvailable);
     const references = new SessionReferenceService(sessions, store);
@@ -356,7 +354,7 @@ export class SessionManager {
       enqueueMerge: (repoDir, fn, onQueued) => manager.enqueueMerge(repoDir, fn, onQueued),
       mergeBranch,
       spawnConflictResolver: async ({ session, worktreePath, prompt }) => {
-        return manager.spawn({
+        return manager.launchSession({
           prompt,
           workdir: worktreePath,
           name: `${session.name}-conflict-resolver`,
@@ -498,7 +496,6 @@ export class SessionManager {
       registry,
       sessions,
       store,
-      metrics,
       wakeDispatcher,
       interactions,
       notifications,
@@ -563,13 +560,13 @@ export class SessionManager {
    * creation) is asynchronous, and the next launch's max-session, unique-name,
    * and session-id checks must see the previous launch already registered.
    */
-  spawn(config: SessionConfig, options: SpawnOptions = {}): Promise<Session> {
-    const launch = this.spawnTail.then((): Promise<Session> => this.spawnSerialized(config, options));
+  launchSession(config: SessionConfig, options: LaunchOptions = {}): Promise<Session> {
+    const launch = this.spawnTail.then((): Promise<Session> => this.launchSerialized(config, options));
     this.spawnTail = launch.then((): void => undefined, (): void => undefined);
     return launch;
   }
 
-  private async spawnSerialized(config: SessionConfig, options: SpawnOptions): Promise<Session> {
+  private async launchSerialized(config: SessionConfig, options: LaunchOptions): Promise<Session> {
     if (this.shuttingDown) {
       throw new Error("Cannot launch a session: the code-agent service is shutting down.");
     }
@@ -589,11 +586,9 @@ export class SessionManager {
       const resumeOwners = this.registry.list().filter((candidate) => (
         candidate.backendKind === "codex-app-server"
         && (
-          candidate.harnessSessionId === config.resumeSessionId
-          || candidate.backendRef?.conversationId === config.resumeSessionId
+          candidate.backendRef?.conversationId === config.resumeSessionId
           || (
-            !candidate.harnessSessionId
-            && !candidate.backendRef?.conversationId
+            !candidate.backendRef?.conversationId
             && candidate.resumeSessionId === config.resumeSessionId
           )
         )
@@ -647,7 +642,7 @@ export class SessionManager {
     const baseName = config.name || generateSessionName(config.prompt);
     const name = this.uniqueName(baseName);
     if (name !== baseName) {
-      log.warn(`[SessionManager] Name conflict: "${baseName}" → "${name}" (active session with same name exists)`);
+      log.info(`[SessionManager] Name conflict: "${baseName}" → "${name}" (active session with same name exists)`);
     }
 
     const launchPolicy = await this.checkRepoPolicyForLaunch(config.workdir, config.worktreeStrategy);
@@ -692,13 +687,20 @@ export class SessionManager {
       workdir: preparedLaunch.actualWorkdir,
       systemPrompt: preparedLaunch.effectiveSystemPrompt,
       canUseTool,
+      ...(config.forkSession && config.resumeSessionId && !config.forkBaselineUsage
+        ? { forkBaselineUsage: this.resolveForkBaselineUsage(config.resumeSessionId) }
+        : {}),
     }, name);
     sessionIdRef = session.id; // bind late — canUseTool closure captures this ref
+    // A question answered directly through the harness (agent_respond text or an
+    // option) no longer needs the button-callback wait held by the question service.
+    session.on("pendingInputAnswered", (answered: Session, requestId: string | undefined) => {
+      this.questions.discardAskUserQuestion(answered.id, requestId);
+    });
     if (pendingPlanResumeClaim) {
       this.pendingPlanResumeClaims.set(session.id, pendingPlanResumeClaim);
     }
     this.registry.add(session);
-    this.metrics.incrementLaunched();
     try {
       return await this.runtimeBootstrap.initializeSession(session, preparedLaunch, config, {
         ...options,
@@ -710,9 +712,24 @@ export class SessionManager {
     }
   }
 
+  /**
+   * The parent's usage at fork time. A Claude Code fork's SDK totals include the
+   * parent conversation, so the harness subtracts this to report the fork's own spend.
+   */
+  private resolveForkBaselineUsage(parentRef: string): SessionConfig["forkBaselineUsage"] {
+    const active = [...this.sessions.values()].find((candidate) => (
+      getBackendConversationId(candidate) === parentRef || candidate.id === parentRef
+    ));
+    if (active) {
+      return { costUsd: active.costUsd, ...(active.usage?.models ? { models: active.usage.models } : {}) };
+    }
+    const persisted = this.getPersistedSession(parentRef);
+    return persisted ? { costUsd: persisted.costUsd } : undefined;
+  }
+
   /** Spawn a session and wait until it is truly running or fails before startup. */
-  async spawnAndAwaitRunning(config: SessionConfig, options: SpawnOptions = {}): Promise<Session> {
-    const session = await this.spawn(config, options);
+  async launchAndAwaitRunning(config: SessionConfig, options: LaunchOptions = {}): Promise<Session> {
+    const session = await this.launchSession(config, options);
     await this.waitForRunningSession(session);
     return session;
   }
@@ -913,7 +930,7 @@ export class SessionManager {
     });
     const launchContextDigest = digestRepoPolicyLaunchContext(args, strategy);
 
-    this.notifications.dispatch(
+    const delivery = await this.dispatchAndAwaitUserDelivery(
       this.buildRoutingProxy({
         id: choiceId,
         name: "repo-policy",
@@ -939,8 +956,18 @@ export class SessionManager {
       },
     );
 
+    if (delivery === "failed") {
+      return [
+        `Error: The repo policy choice prompt for ${resolution.identity.repoRoot} could not be delivered to the user.`,
+        message,
+      ].join("\n\n");
+    }
     return [
-      `Repo policy choice prompt sent for ${resolution.identity.repoRoot}.`,
+      delivery === "pending"
+        ? `Repo policy choice prompt is being delivered for ${resolution.identity.repoRoot}.`
+        : delivery === "skipped"
+          ? `A repo policy choice prompt was already sent for ${resolution.identity.repoRoot}.`
+          : `Repo policy choice prompt sent for ${resolution.identity.repoRoot}.`,
       resolution.prAvailable
         ? `Wait for the user's Require PR, Merge or PR, No PR, or Manual response.`
         : `Wait for the user's No PR or Manual response.`,
@@ -956,7 +983,7 @@ export class SessionManager {
     const harness = args.harness ?? getDefaultHarnessName();
     const permissionMode = args.permissionMode ?? pluginConfig.permissionMode;
     const planApproval = args.planApproval ?? pluginConfig.planApproval;
-    const session = await this.spawn({
+    const session = await this.launchSession({
       prompt: args.prompt,
       workdir: args.workdir,
       sessionIdOverride: args.sessionIdOverride,
@@ -1418,7 +1445,7 @@ export class SessionManager {
       .map((line) => line.replace(/^[-*]\s+/, "").trim())
       .filter((line) => line.length > 0);
 
-    this.notifications.dispatch(
+    const delivery = await this.dispatchAndAwaitUserDelivery(
       this.buildRoutingProxy({
         id: sessionId,
         name: session.name,
@@ -1441,11 +1468,61 @@ export class SessionManager {
       }),
     );
 
+    if (delivery === "failed") {
+      return [
+        `Error: The worktree decision prompt for session ${session.name} [${sessionId}] could not be delivered to the user.`,
+        `Ask the user in plain text whether to merge, open a PR, keep the branch for later, or discard it, then act with agent_merge, agent_pr, or agent_worktree_cleanup.`,
+      ].join(" ");
+    }
     return [
-      `Canonical worktree decision prompt sent for session ${session.name} [${sessionId}].`,
+      delivery === "pending"
+        ? `Canonical worktree decision prompt is being delivered for session ${session.name} [${sessionId}].`
+        : delivery === "skipped"
+          ? `A canonical worktree decision prompt was already sent for session ${session.name} [${sessionId}].`
+          : `Canonical worktree decision prompt sent for session ${session.name} [${sessionId}].`,
       `Wait for the user's Merge, Open PR, Later, or Discard response.`,
       `Do not send a separate plain-text worktree decision message.`,
     ].join(" ");
+  }
+
+  /**
+   * Dispatch a user-facing prompt and wait (bounded) for the direct delivery
+   * result, so tools report what actually happened instead of "sent".
+   */
+  private dispatchAndAwaitUserDelivery(
+    session: Parameters<SessionNotificationService["dispatch"]>[0],
+    request: SessionNotificationRequest,
+  ): Promise<"delivered" | "failed" | "skipped" | "pending"> {
+    return new Promise((resolve) => {
+      let settled = false;
+      const settle = (result: "delivered" | "failed" | "skipped" | "pending") => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(result);
+      };
+      const timer = setTimeout(() => settle("pending"), this.userDeliveryResultWaitMs);
+      timer.unref?.();
+      const hooks = request.hooks;
+      this.notifications.dispatch(session, {
+        ...request,
+        hooks: {
+          ...hooks,
+          onNotifySucceeded: () => {
+            hooks?.onNotifySucceeded?.();
+            settle("delivered");
+          },
+          onNotifyFailed: () => {
+            hooks?.onNotifyFailed?.();
+            settle("failed");
+          },
+          onDuplicateSkipped: (reason) => {
+            hooks?.onDuplicateSkipped?.(reason);
+            settle("skipped");
+          },
+        },
+      });
+    });
   }
 
   private buildRoutingProxy(session: {
@@ -1576,12 +1653,6 @@ export class SessionManager {
 
   private persistSession(session: Session, options: { scheduleRuntimeGc?: boolean } = {}): void {
     const scheduleRuntimeGc = options.scheduleRuntimeGc ?? true;
-    // Record metrics once
-    const alreadyPersisted = this.store.hasRecordedSession(session.id);
-    if (!alreadyPersisted) {
-      this.metrics.recordSession(session);
-    }
-
     this.store.persistTerminal(session);
     if (scheduleRuntimeGc) {
       this.syncRuntimeGcDeadline(session);
@@ -1609,7 +1680,10 @@ export class SessionManager {
     }
   }
 
-  getMetrics(): SessionMetrics { return this.metrics.getMetrics(); }
+  /** Usage metrics derived from the persisted index plus live sessions. */
+  getMetrics(): SessionMetrics {
+    return computeSessionMetrics(this.store.listPersistedSessions(), [...this.sessions.values()]);
+  }
 
   // -- Wake / notification delivery --
 
@@ -1743,7 +1817,7 @@ export class SessionManager {
     worktreeStrategy?: WorktreeStrategy;
   }): Promise<Session> {
     const route = args.route ?? { provider: "system", target: "system" };
-    return this.spawn({
+    return this.launchSession({
       prompt: args.prompt,
       workdir: args.workdir,
       name: args.name,

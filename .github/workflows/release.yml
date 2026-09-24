@@ -94,6 +94,11 @@ jobs:
           echo "tarball=$tarball" >> "$GITHUB_OUTPUT"
           echo "sha256=$sha256" >> "$GITHUB_OUTPUT"
 
+      - name: ClawHub static scan of the exact artifact
+        env:
+          TARBALL: ${{ steps.pack.outputs.tarball }}
+        run: node scripts/check-clawhub-scan.mjs "--tarball=artifact/$TARBALL"
+
       - name: Test exact artifact in an isolated OpenClaw home
         env:
           TARBALL: ${{ steps.pack.outputs.tarball }}

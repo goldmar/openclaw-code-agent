@@ -123,6 +123,9 @@ async function createWorktreeLocked(
 ): Promise<CreatedWorktree> {
   const sanitized = sanitizeBranchName(sessionName);
   const baseDir = await getWorktreeBaseDir(repoDir);
+  if (!baseDir) {
+    throw new Error(`Cannot create a worktree for ${repoDir}: it is not inside a git repository. Launch from a repository root, or set worktree_strategy "off".`);
+  }
   await ensureWorktreeBaseIgnored(repoDir, baseDir);
   mkdirSync(baseDir, { recursive: true });
   const allowExistingBranch = options.allowExistingBranch === true;
@@ -230,6 +233,20 @@ async function removeWorktreeLocked(
   options: RemoveWorktreeOptions,
 ): Promise<boolean> {
   const destructive = options.destructive === true;
+  if (!existsSync(worktreePath)) {
+    // Already gone (removed by hand or by an earlier cleanup): drop git's stale
+    // registration when the repository is reachable and report it as removed,
+    // so callers clear the metadata instead of retrying forever.
+    if (repoDir !== worktreePath && existsSync(repoDir)) {
+      try {
+        await runGit(["-C", repoDir, "worktree", "prune"], { timeout: 10_000 });
+      } catch (err) {
+        log.debug(`[worktree] git worktree prune after missing ${worktreePath} failed: ${err instanceof Error ? err.message.split(/\r?\n/, 1)[0] : String(err)}`);
+      }
+    }
+    log.info(`[worktree] Worktree ${worktreePath} is already gone; treating it as removed`);
+    return true;
+  }
   const dirtyEntries = await listDirtyWorktreeEntries(worktreePath);
   if (dirtyEntries.length > 0 && !destructive) {
     log.warn(

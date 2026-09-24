@@ -1,6 +1,6 @@
 import { execFile } from "child_process";
 import { createHash } from "crypto";
-import { nanoid } from "nanoid";
+import { shortId } from "./short-id";
 
 import { executeRespond } from "./actions/respond";
 import { buildGoalIterationSummary } from "./goal-format";
@@ -114,7 +114,7 @@ function textFingerprint(text: string): string {
   return createHash("sha1").update(summarizeLines(text, 24)).digest("hex");
 }
 
-export function classifyGoalAutoReply(text: string): string | undefined {
+function classifyGoalAutoReply(text: string): string | undefined {
   const normalized = text.toLowerCase().replace(/\s+/g, " ").trim();
   if (!normalized) return undefined;
 
@@ -209,7 +209,7 @@ function buildRestartPrompt(task: GoalTaskState): string {
   ].join("\n");
 }
 
-export function buildRepairPrompt(task: GoalTaskState, verifier: GoalVerifierRunResult): string {
+function buildRepairPrompt(task: GoalTaskState, verifier: GoalVerifierRunResult): string {
   const failedSteps = verifier.steps
     .filter((step) => !step.ok)
     .map((step) => [
@@ -418,7 +418,7 @@ export class GoalController {
       throw new Error(zeroVerifierFailureReason());
     }
 
-    const id = nanoid(8);
+    const id = shortId(8);
     const task: GoalTaskState = {
       id,
       name: normalizeName(config.name ?? config.goal),
@@ -527,7 +527,7 @@ export class GoalController {
       // Goal loops intentionally own terminal handling and disable worktree flows.
       worktreeStrategy: "off",
     };
-    const session = await this.sessionManager.spawnAndAwaitRunning(config, { notifyLaunch: false });
+    const session = await this.sessionManager.launchAndAwaitRunning(config, { notifyLaunch: false });
     // Pin resolved settings for later iterations and restart recovery.
     task.harness = session.harnessName ?? task.harness;
     task.model = session.model ?? task.model;

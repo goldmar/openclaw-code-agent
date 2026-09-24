@@ -21,7 +21,7 @@ describe("agent_launch tool defaults", () => {
 
     setSessionManager({
       resolveBackendConversationId: (id: string) => id,
-      spawn(config: Record<string, unknown>) {
+      launchSession(config: Record<string, unknown>) {
         spawnConfig = config;
         return {
           id: "sess-1",
@@ -63,7 +63,7 @@ describe("agent_launch tool defaults", () => {
 
     setSessionManager({
       resolveBackendConversationId: (id: string) => id,
-      spawn(config: Record<string, unknown>) {
+      launchSession(config: Record<string, unknown>) {
         spawnConfig = config;
         return {
           id: "sess-2",
@@ -89,7 +89,7 @@ describe("agent_launch tool defaults", () => {
 
     setSessionManager({
       resolveBackendConversationId: (id: string) => id,
-      spawn(config: Record<string, unknown>) {
+      launchSession(config: Record<string, unknown>) {
         spawnConfig = config;
         return {
           id: "sess-permission-mode",
@@ -111,7 +111,7 @@ describe("agent_launch tool defaults", () => {
 
     setSessionManager({
       resolveBackendConversationId: (id: string) => id,
-      spawn(config: Record<string, unknown>) {
+      launchSession(config: Record<string, unknown>) {
         spawnConfig = config;
         return {
           id: "sess-3",
@@ -139,7 +139,7 @@ describe("agent_launch tool defaults", () => {
 
     setSessionManager({
       resolveBackendConversationId: (id: string) => id,
-      spawn(config: Record<string, unknown>) {
+      launchSession(config: Record<string, unknown>) {
         spawnConfig = config;
         return {
           id: "sess-delivery-context",
@@ -177,10 +177,11 @@ describe("agent_launch tool defaults", () => {
           managedFlows: {
             fromToolContext() {
               return {
-                async createManaged(params: Record<string, unknown>) {
+                async tryCreateManaged(params: Record<string, unknown>) {
                   createManagedCalls.push(params);
                   return { flowId: "flow-1", revision: 1 };
                 },
+                async get(flowId: string) { return { flowId, revision: 1, status: "running" }; },
                 async resume() { return { applied: true, flow: { flowId: "flow-1", revision: 2 } }; },
                 async setWaiting() { return { applied: true, flow: { flowId: "flow-1", revision: 2 } }; },
                 async finish() { return { applied: true, flow: { flowId: "flow-1", revision: 2 } }; },
@@ -195,7 +196,7 @@ describe("agent_launch tool defaults", () => {
 
     setSessionManager({
       resolveBackendConversationId: (id: string) => id,
-      spawn(config: Record<string, unknown>) {
+      launchSession(config: Record<string, unknown>) {
         spawnConfig = config;
         const session = {
           id: "sess-task-lifecycle",
@@ -232,7 +233,7 @@ describe("agent_launch tool defaults", () => {
 
     setSessionManager({
       resolveBackendConversationId: (id: string) => id,
-      spawn(config: Record<string, unknown>) {
+      launchSession(config: Record<string, unknown>) {
         spawnConfig = config;
         return {
           id: "sess-system-route",
@@ -255,7 +256,7 @@ describe("agent_launch tool defaults", () => {
     let spawnCalled = false;
     setSessionManager({
       resolveBackendConversationId: (id: string) => id,
-      spawn() {
+      launchSession() {
         spawnCalled = true;
         throw new Error("must not spawn");
       },
@@ -301,7 +302,7 @@ describe("agent_launch tool defaults", () => {
           policyLaunchArgs = args;
           return `Repo policy choice prompt sent for ${workdir}.`;
         },
-        spawn() {
+        launchSession() {
           spawnCalled = true;
           throw new Error("spawn should not run before policy selection");
         },
@@ -353,7 +354,7 @@ describe("agent_launch tool defaults", () => {
           policyLaunchArgs = args;
           return `Repo policy choice prompt sent for ${workdir}.`;
         },
-        spawn() {
+        launchSession() {
           throw new Error("spawn should not run before policy selection");
         },
       } as any);
@@ -384,7 +385,7 @@ describe("agent_launch tool defaults", () => {
       resolve: () => undefined,
       getPersistedSession: () => ({ harness: "codex" }),
       resolveBackendConversationId: (id: string) => `resolved-${id}`,
-      spawn(config: Record<string, unknown>) {
+      launchSession(config: Record<string, unknown>) {
         spawnConfig = config;
         return {
           id: "sess-4",
@@ -416,7 +417,7 @@ describe("agent_launch tool defaults", () => {
       resolve: () => undefined,
       getPersistedSession: () => undefined,
       resolveHarnessSessionId: (id: string) => id,
-      spawn() {
+      launchSession() {
         throw new Error("spawn should not run");
       },
     } as any);
@@ -431,10 +432,10 @@ describe("agent_launch tool defaults", () => {
     let spawnConfig: Record<string, unknown> | undefined;
 
     setSessionManager({
-      resolve: () => ({ harnessSessionId: "resolved-old-thread" }),
+      resolve: () => ({ harnessSessionId: "resolved-old-thread", backendRef: { kind: "codex-app-server", conversationId: "resolved-old-thread" } }),
       getPersistedSession: () => ({ harness: "codex" }),
       resolveBackendConversationId: (id: string) => `resolved-${id}`,
-      spawn(config: Record<string, unknown>) {
+      launchSession(config: Record<string, unknown>) {
         spawnConfig = config;
         return {
           id: "sess-5",
@@ -471,7 +472,7 @@ describe("agent_launch tool defaults", () => {
         backendRef: { kind: "codex-app-server", conversationId: "resolved-old-thread" },
       }),
       resolveBackendConversationId: (id: string) => `resolved-${id}`,
-      spawn(config: Record<string, unknown>) {
+      launchSession(config: Record<string, unknown>) {
         spawnConfig = config;
         return {
           id: "sess-stable",
@@ -520,7 +521,7 @@ describe("agent_launch tool defaults", () => {
       resolve: () => undefined,
       getPersistedSession: () => pendingPlan,
       resolveBackendConversationId: () => "thread-plan",
-      spawn(config: Record<string, unknown>) {
+      launchSession(config: Record<string, unknown>) {
         spawnConfig = config;
         return { id: "sess-plan", name: "pending-plan", model: config.model };
       },
@@ -560,7 +561,7 @@ describe("agent_launch tool defaults", () => {
         actionablePlanDecisionVersion: 4,
       }),
       resolveBackendConversationId: () => "thread-plan",
-      spawn(config: Record<string, unknown>) {
+      launchSession(config: Record<string, unknown>) {
         spawnConfig = config;
         return { id: "sess-plan", name: "pending-plan", model: config.model };
       },
@@ -597,7 +598,7 @@ describe("agent_launch tool defaults", () => {
         backendRef: { kind: "codex-app-server", conversationId: "thread-auto-update-feature" },
       }),
       resolveBackendConversationId: (id: string) => id,
-      spawn(config: Record<string, unknown>) {
+      launchSession(config: Record<string, unknown>) {
         spawnConfig = config;
         return {
           id: config.sessionIdOverride,
@@ -638,7 +639,7 @@ describe("agent_launch tool defaults", () => {
         backendRef: { kind: "codex-app-server", conversationId: "thread-auto-update-feature" },
       }),
       resolveBackendConversationId: (id: string) => id,
-      spawn(config: Record<string, unknown>) {
+      launchSession(config: Record<string, unknown>) {
         spawnConfig = config;
         return {
           id: config.sessionIdOverride,
@@ -681,7 +682,7 @@ describe("agent_launch tool defaults", () => {
         backendRef: { kind: "codex-app-server", conversationId: "thread-auto-update-feature" },
       }),
       resolveBackendConversationId: (id: string) => id,
-      spawn(config: Record<string, unknown>) {
+      launchSession(config: Record<string, unknown>) {
         spawnConfig = config;
         return {
           id: config.sessionIdOverride,
@@ -723,7 +724,7 @@ describe("agent_launch tool defaults", () => {
         backendRef: { kind: "codex-app-server", conversationId: "resolved-old-thread" },
       }),
       resolveBackendConversationId: (id: string) => `resolved-${id}`,
-      spawn(config: Record<string, unknown>) {
+      launchSession(config: Record<string, unknown>) {
         spawnConfig = config;
         return {
           id: "sess-done",
@@ -756,7 +757,7 @@ describe("agent_launch tool defaults", () => {
 
     setSessionManager({
       resolveBackendConversationId: (id: string) => id,
-      spawn(config: Record<string, unknown>) {
+      launchSession(config: Record<string, unknown>) {
         spawnConfig = config;
         return {
           id: "sess-6",
@@ -782,7 +783,7 @@ describe("agent_launch tool defaults", () => {
     try {
       setSessionManager({
         resolveBackendConversationId: (id: string) => id,
-        spawn(config: Record<string, unknown>) {
+        launchSession(config: Record<string, unknown>) {
           spawnConfig = config;
           return {
             id: "sess-workdir",
@@ -811,7 +812,7 @@ describe("agent_launch tool defaults", () => {
     try {
       setSessionManager({
         resolveBackendConversationId: (id: string) => id,
-        spawn(config: Record<string, unknown>) {
+        launchSession(config: Record<string, unknown>) {
           spawnConfig = config;
           return {
             id: "sess-body-workdir",
@@ -851,7 +852,7 @@ describe("agent_launch tool defaults", () => {
         originSessionKey: "agent:main:telegram:group:123:topic:42",
         resumable: true,
       }],
-      spawn() {
+      launchSession() {
         spawnCalled = true;
         return { id: "should-not-spawn", name: "bad" };
       },
@@ -890,7 +891,7 @@ describe("agent_launch tool defaults", () => {
         originSessionKey: "agent:main:telegram:group:123:topic:42",
         resumable: true,
       }],
-      spawn(config: Record<string, unknown>) {
+      launchSession(config: Record<string, unknown>) {
         spawnConfig = config;
         return {
           id: "sess-7",
@@ -936,7 +937,7 @@ describe("agent_launch allowedModels validation", () => {
     });
     setSessionManager({
       resolveBackendConversationId: (id: string) => id,
-      spawn(config: Record<string, unknown>) {
+      launchSession(config: Record<string, unknown>) {
         spawnConfig = config;
         return { id: "sess-1", name: "test", model: config.model };
       },
@@ -962,7 +963,7 @@ describe("agent_launch allowedModels validation", () => {
     });
     setSessionManager({
       resolveBackendConversationId: (id: string) => id,
-      spawn(config: Record<string, unknown>) {
+      launchSession(config: Record<string, unknown>) {
         spawnConfig = config;
         return { id: "sess-1", name: "test", model: config.model };
       },
@@ -981,7 +982,7 @@ describe("agent_launch allowedModels validation", () => {
     setPluginConfig({ harnesses: { "claude-code": { allowedModels: ["sonnet", "opus"] } } });
     setSessionManager({
       resolveBackendConversationId: (id: string) => id,
-      spawn(config: Record<string, unknown>) {
+      launchSession(config: Record<string, unknown>) {
         spawnConfig = config;
         return { id: "sess-1", name: "test", model: config.model };
       },
@@ -1000,7 +1001,7 @@ describe("agent_launch allowedModels validation", () => {
     setPluginConfig({ harnesses: { "claude-code": { allowedModels: ["sonnet"] } } });
     setSessionManager({
       resolveBackendConversationId: (id: string) => id,
-      spawn(config: Record<string, unknown>) {
+      launchSession(config: Record<string, unknown>) {
         spawnConfig = config;
         return { id: "sess-1", name: "test", model: config.model };
       },
@@ -1074,7 +1075,7 @@ describe("agent_launch allowedModels validation", () => {
     });
     setSessionManager({
       resolveBackendConversationId: (id: string) => id,
-      spawn(config: Record<string, unknown>) {
+      launchSession(config: Record<string, unknown>) {
         spawnConfig = config;
         return { id: "sess-1", name: "test", model: config.model };
       },
@@ -1101,7 +1102,7 @@ describe("agent_launch allowedModels validation", () => {
     });
     setSessionManager({
       resolveBackendConversationId: (id: string) => id,
-      spawn(config: Record<string, unknown>) {
+      launchSession(config: Record<string, unknown>) {
         spawnConfig = config;
         return { id: "sess-1", name: "test", model: config.model };
       },
@@ -1163,7 +1164,7 @@ describe("agent_launch allowedModels validation", () => {
     setPluginConfig({ harnesses: { "claude-code": { allowedModels: ["SONNET"] } } });
     setSessionManager({
       resolveBackendConversationId: (id: string) => id,
-      spawn(config: Record<string, unknown>) {
+      launchSession(config: Record<string, unknown>) {
         spawnConfig = config;
         return { id: "sess-1", name: "test", model: config.model };
       },
@@ -1183,7 +1184,7 @@ describe("agent_launch allowedModels validation", () => {
     setPluginConfig({ harnesses: { "claude-code": { allowedModels: ["claude-son"] } } });
     setSessionManager({
       resolveBackendConversationId: (id: string) => id,
-      spawn(config: Record<string, unknown>) {
+      launchSession(config: Record<string, unknown>) {
         spawnConfig = config;
         return { id: "sess-1", name: "test", model: config.model };
       },

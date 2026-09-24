@@ -69,7 +69,7 @@ export type GoalLaunchResolution =
       verifierCommands: GoalVerifierSpec[];
     };
 
-export function normalizeGoalVerifiers(commands: string[] = []): GoalVerifierSpec[] {
+function normalizeGoalVerifiers(commands: string[] = []): GoalVerifierSpec[] {
   return commands
     .map((command, index) => ({
       label: `check-${index + 1}`,

@@ -68,14 +68,10 @@ export function hasCodexModelCatalog(): boolean {
 }
 
 /** Look up a model by catalog id or model slug (case-insensitive). */
-export function getCodexModelInfo(model: string | undefined): CodexModelInfo | undefined {
+function getCodexModelInfo(model: string | undefined): CodexModelInfo | undefined {
   const wanted = model?.trim().toLowerCase();
   if (!wanted || !catalog) return undefined;
   return catalog.models.find((entry) => entry.id.toLowerCase() === wanted || entry.model.toLowerCase() === wanted);
-}
-
-export function getDefaultCodexModelInfo(): CodexModelInfo | undefined {
-  return catalog?.models.find((entry) => entry.isDefault);
 }
 
 /**

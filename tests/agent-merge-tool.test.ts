@@ -144,7 +144,7 @@ function installPersistedSessionWithNotificationService(args: {
     notifyWorktreeOutcome(session: unknown, outcomeLine: string, options?: unknown) {
       notificationService.notifyWorktreeOutcome(session as any, outcomeLine, options as any);
     },
-    spawn() {
+    launchSession() {
       throw new Error("conflict resolver should not be spawned in this test");
     },
   } as any);
@@ -190,7 +190,7 @@ function installPersistedSessionStub(
     notifyWorktreeOutcome(session: unknown, outcomeLine: string, options?: unknown) {
       notifications.push({ session, outcomeLine, options });
     },
-    spawn() {
+    launchSession() {
       throw new Error("conflict resolver should not be spawned in this test");
     },
   } as any);
@@ -275,6 +275,28 @@ describe("agent_merge push behavior", () => {
 
       assert.match((result.content[0] as { text: string }).text, /already merged/i);
       assert.doesNotMatch((result.content[0] as { text: string }).text, /Merge blocked/i);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+      rmSync(remoteDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports a squash merge as a squash commit, not a merge commit", async () => {
+    const { repoDir, remoteDir } = createRepoWithRemote("agent-merge-squash");
+    try {
+      const sessionName = "merge-squash";
+      const { worktreePath, branchName } = await createCommittedWorktree(repoDir, sessionName);
+      const notifications: Array<{ session: unknown; outcomeLine: string; options?: unknown }> = [];
+      installPersistedSessionStub(sessionName, repoDir, worktreePath, branchName, notifications);
+
+      const tool = makeAgentMergeTool();
+      const result = await tool.execute("tool-id", { session: sessionName, strategy: "squash", delete_branch: false });
+      const text = (result.content[0] as { text: string }).text;
+
+      assert.match(text, /Squash commit/);
+      assert.doesNotMatch(text, /Merge commit/);
+      const detail = (notifications[0]?.options as { detailLines?: string[] } | undefined)?.detailLines ?? [];
+      assert.ok(detail.includes("Merge type: squash commit."), detail.join(" | "));
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
       rmSync(remoteDir, { recursive: true, force: true });

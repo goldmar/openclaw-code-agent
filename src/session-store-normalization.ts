@@ -406,13 +406,21 @@ function normalizeWorktreeLifecycle(raw: unknown): PersistedWorktreeLifecycle | 
   };
 }
 
+/** ISO timestamp from an ISO string or epoch milliseconds. */
+function toIsoTimestamp(value: unknown): string | undefined {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) return new Date(value).toISOString();
+  if (typeof value === "string" && value.trim() && Number.isFinite(Date.parse(value))) return new Date(Date.parse(value)).toISOString();
+  return undefined;
+}
+
 function synthesizeLegacyWorktreeLifecycle(raw: Record<string, unknown>): PersistedWorktreeLifecycle | undefined {
-  const nowIso = new Date(0).toISOString();
   const updatedAt =
     toOptionalString(raw.worktreeMergedAt)
     ?? toOptionalString(raw.worktreeDismissedAt)
     ?? toOptionalString(raw.pendingWorktreeDecisionSince)
-    ?? nowIso;
+    ?? toIsoTimestamp(raw.completedAt)
+    ?? toIsoTimestamp(raw.createdAt)
+    ?? new Date().toISOString();
 
   if (raw.worktreeMerged === true || raw.worktreeDisposition === "merged" || raw.worktreeState === "merged") {
     return {

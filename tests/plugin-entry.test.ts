@@ -1,4 +1,4 @@
-import { afterEach, describe, it, mock } from "node:test";
+import { afterEach, describe, it, mock, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -8,10 +8,17 @@ import {
   validateReleaseMetadata,
 } from "../scripts/validate-release-metadata.mjs";
 import { register, routeFromInteractiveContext } from "../index";
-import { goalController, sessionManager, setGoalController, setSessionManager } from "../src/singletons";
+import { autoUpdateService, goalController, sessionManager, setGoalController, setSessionManager } from "../src/singletons";
 import { SessionManager } from "../src/session-manager";
 import { Session } from "../src/session";
 import { GoalController } from "../src/goal-controller";
+import { TEST_RUNTIME_LLM } from "./helpers";
+import { setGitHubCliAvailabilityForTests } from "../src/worktree-repo";
+
+// PR buttons depend on GitHub CLI availability; never probe the host `gh` (a slow
+// cold start used to hit the probe timeout and flip these tests).
+before(() => setGitHubCliAvailabilityForTests(true));
+after(() => setGitHubCliAvailabilityForTests(undefined));
 
 const rootDir = join(import.meta.dirname, "..");
 
@@ -67,6 +74,7 @@ function createPluginApi(pluginConfig: Record<string, unknown> = {}) {
       config: {
         current: () => runtimeConfig,
       },
+      llm: TEST_RUNTIME_LLM,
     },
     registerTool(factory: CapturedTool["factory"], options?: { name?: string }) {
       tools.push({ factory, options });
@@ -247,6 +255,19 @@ describe("plugin entry source", () => {
     assert.doesNotMatch(skill, /system prompt|developer instruction|higher-priority/i);
   });
 
+  it("requires verification before orchestrator plan approval in the skill", () => {
+    const skill = readFileSync(
+      join(rootDir, "skills", "code-agent-orchestration", "SKILL.md"),
+      "utf8",
+    );
+    const approveSection = skill.split('### `planApproval: "approve"`')[1]?.split("\n## ")[0] ?? "";
+
+    assert.doesNotMatch(skill, /auto-approve/i);
+    assert.match(approveSection, /only after it verifies the plan/);
+    assert.match(approveSection, /agent_output\(session, full=true\)/);
+    assert.match(approveSection, /agent_request_plan_approval/);
+  });
+
   it("keeps orchestration skill install metadata in plain YAML frontmatter", () => {
     const skill = readFileSync(
       join(rootDir, "skills", "code-agent-orchestration", "SKILL.md"),
@@ -424,9 +445,9 @@ describe("plugin entry source", () => {
     assert.match(pluginManifest.uiHints?.harnesses?.help ?? "", /"defaultModel":"opus"/);
     assert.equal(pluginManifest.configSchema?.properties?.harnesses?.default?.codex?.fastMode, false);
     assert.equal(pluginManifest.configSchema?.properties?.harnesses?.default?.codex?.reasoningEffort, undefined);
-    assert.equal(pluginManifest.configSchema?.properties?.harnesses?.default?.codex?.permissionProfile, ":danger-full-access");
-    assert.equal(pluginManifest.configSchema?.properties?.harnesses?.default?.codex?.approvalPolicy, "never");
-    assert.equal(pluginManifest.configSchema?.properties?.harnesses?.default?.codex?.approvalsReviewer, "user");
+    assert.equal(pluginManifest.configSchema?.properties?.harnesses?.default?.codex?.permissionProfile, undefined, "unset so it follows tools.exec.mode");
+    assert.equal(pluginManifest.configSchema?.properties?.harnesses?.default?.codex?.approvalPolicy, undefined);
+    assert.equal(pluginManifest.configSchema?.properties?.harnesses?.default?.codex?.approvalsReviewer, undefined);
     assert.deepEqual(pluginManifest.configSchema?.properties?.harnesses?.additionalProperties?.properties?.permissionProfile?.enum, [
       ":read-only",
       ":workspace",
@@ -722,6 +743,17 @@ describe("plugin entry source", () => {
     assert.equal(sessionManager, null);
   });
 
+  it("does not create the self-updater when autoUpdate is false", async () => {
+    const { api, services } = createPluginApi({ autoUpdate: false });
+    register(api as any);
+
+    await services[0]?.start({ config: { gateway: true } });
+    assert.ok(sessionManager, "expected a started SessionManager");
+    assert.equal(autoUpdateService, null);
+
+    await stopCapturedServices(services);
+  });
+
   it("shares concurrent startup and waits for drainage before a lazy restart", async () => {
     const entered = Promise.withResolvers<void>();
     const drained = Promise.withResolvers<void>();
@@ -754,7 +786,7 @@ describe("plugin entry source", () => {
       await entered.promise;
       assert.equal(restarted, false);
       assert.equal(sessionManager, previous);
-      const lateLaunch = async () => await previous.spawn({
+      const lateLaunch = async () => await previous.launchSession({
         prompt: "Launch prepared before shutdown",
         workdir: rootDir,
         permissionMode: "plan",

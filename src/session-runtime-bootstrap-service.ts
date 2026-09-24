@@ -6,7 +6,7 @@ import { createLogger } from "./logger";
 
 const log = createLogger("session-runtime-bootstrap-service");
 
-type SpawnOptions = {
+type LaunchOptions = {
   notifyLaunch?: boolean;
   startAfter?: Promise<void>;
 };
@@ -41,7 +41,7 @@ export class SessionRuntimeBootstrapService {
     session: Session,
     preparedLaunch: PreparedLaunch,
     config: SessionConfig,
-    options: SpawnOptions = {},
+    options: LaunchOptions = {},
   ): Promise<Session> {
     this.deps.hydrateSpawnedSession(session, preparedLaunch, config);
     this.observeMirror(config.taskLifecycle?.create(session, {

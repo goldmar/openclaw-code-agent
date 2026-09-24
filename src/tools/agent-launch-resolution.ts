@@ -109,7 +109,7 @@ function stripOptionalQuotes(value: string): string {
   return value.trim().replace(/^['"`](.*)['"`]$/s, "$1").trim();
 }
 
-export function extractPromptDeclaredWorkdir(prompt: string): string | undefined {
+function extractPromptDeclaredWorkdir(prompt: string): string | undefined {
   const headerBlock = prompt
     .split(/\n\s*\n/, 1)[0]
     ?.split("\n")

@@ -8,6 +8,13 @@ const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 const workflow = readFileSync(join(repoRoot, ".github", "workflows", "release.yml"), "utf8");
 
 describe("release workflow", () => {
+  it("runs the ClawHub static scan on the exact packed artifact", () => {
+    assert.match(
+      workflow,
+      /npm pack --json --pack-destination artifact[\s\S]*node scripts\/check-clawhub-scan\.mjs "--tarball=artifact\/\$TARBALL"/,
+    );
+  });
+
   it("waits for definitive ClawHub publication before verifying the artifact", () => {
     assert.match(workflow, /CLAWHUB_INSPECTOR_VERSION: "0\.23\.1"/);
     assert.match(workflow, /CLAWHUB_CLI_VERSION: "0\.23\.3"/);

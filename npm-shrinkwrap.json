@@ -24,7 +24,7 @@
         "node": ">=24.16.0 <25 || >=26.1.0"
       },
       "peerDependencies": {
-        "openclaw": ">=2026.8.1"
+        "openclaw": ">=2026.9.6"
       }
     },
     "node_modules/@anthropic-ai/claude-agent-sdk": {

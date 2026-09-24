@@ -4,7 +4,7 @@ import { copyFileSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionStore } from "../src/session-store";
-import { STORE_SCHEMA_VERSION } from "../src/session-store-normalization";
+import { normalizePersistedEntry, STORE_SCHEMA_VERSION } from "../src/session-store-normalization";
 
 const FIXTURE = join(import.meta.dirname, "fixtures", "session-store-4.7.20.json");
 
@@ -46,6 +46,27 @@ describe("session store upgrade from 4.7.x", () => {
     const dismissed = store.getPersistedSession("docs-cleanup");
     assert.equal(dismissed?.worktreeLifecycle?.state, "dismissed");
     assert.equal(dismissed?.worktreeLifecycle?.resolvedAt, "2026-09-22T12:00:00.000Z");
+  });
+
+  it("dates a synthesized worktree lifecycle from the row instead of the Unix epoch", () => {
+    const entry = normalizePersistedEntry({
+      sessionId: "wt-no-dates",
+      harnessSessionId: "h-wt-no-dates",
+      name: "wt-no-dates",
+      prompt: "p",
+      workdir: "/repo",
+      status: "completed",
+      harness: "claude-code",
+      route: { provider: "telegram", target: "1", sessionKey: "agent:main:telegram:group:1" },
+      worktreePath: "/repo/.worktrees/wt-no-dates",
+      worktreeBranch: "agent/wt-no-dates",
+      worktreeDisposition: "no-change-cleaned",
+      createdAt: 1790000000000,
+      completedAt: 1790000600000,
+    });
+    assert.ok(entry?.worktreeLifecycle, "lifecycle is synthesized");
+    assert.equal(entry.worktreeLifecycle.updatedAt, new Date(1790000600000).toISOString());
+    assert.notEqual(entry.worktreeLifecycle.updatedAt, new Date(0).toISOString());
   });
 
   it("skips unreadable rows and retired action token kinds while keeping valid ones", (t) => {

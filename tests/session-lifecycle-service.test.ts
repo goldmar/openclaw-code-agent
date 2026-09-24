@@ -1,5 +1,10 @@
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createWorktree } from "../src/worktree";
 
 import { SessionLifecycleService } from "../src/session-lifecycle-service";
 import { createStubSession } from "./helpers";
@@ -59,6 +64,64 @@ describe("SessionLifecycleService", () => {
 
     assert.equal(worktreeCalls, 0);
     assert.deepEqual(clearedRetryTimers, ["session-1"]);
+  });
+
+  it("keeps a manual-strategy worktree at completion and records a current lifecycle", async () => {
+    const repoDir = mkdtempSync(join(tmpdir(), "oca-manual-worktree-"));
+    try {
+      execFileSync("git", ["init", "-b", "main"], { cwd: repoDir, stdio: "ignore" });
+      execFileSync("git", ["-c", "user.name=T", "-c", "user.email=t@example.com", "commit", "--allow-empty", "-m", "init"], { cwd: repoDir, stdio: "ignore" });
+      const worktreePath = await createWorktree(repoDir, "manual-keep");
+      const patches: Array<{ ref: string; patch: Record<string, any> }> = [];
+      const before = Date.now();
+
+      const service = new SessionLifecycleService({
+        persistSession: () => {},
+        clearWaitingTimestamp: () => {},
+        handleWorktreeStrategy: async () => ({ notificationSent: false, worktreeRemoved: false }),
+        resolveWorktreeRepoDir: () => repoDir,
+        updatePersistedSession: (ref: string, patch: Record<string, any>) => {
+          patches.push({ ref, patch });
+          return true;
+        },
+        dispatchSessionNotification: () => {},
+        notifySession: () => {},
+        clearRetryTimersForSession: () => {},
+        hasTurnCompleteWakeMarker: () => false,
+        shouldEmitTurnCompleteWake: () => true,
+        shouldEmitTerminalWake: () => false,
+        resolvePlanApprovalMode: () => "ask",
+        getPlanApprovalButtons: () => [],
+        getResumeButtons: () => [],
+        getQuestionButtons: () => undefined,
+        extractLastOutputLine: () => undefined,
+        getOutputPreview: () => "",
+        originThreadLine: () => "",
+        debounceWaitingEvent: () => true,
+        isAlreadyMerged: () => false,
+      });
+
+      const session = createStubSession({
+        id: "session-manual",
+        name: "manual-keep",
+        status: "completed",
+        worktreeStrategy: "manual",
+        worktreeState: "provisioned",
+        worktreePath,
+        worktreeBaseBranch: "main",
+        originalWorkdir: repoDir,
+      });
+
+      await service.handleSessionTerminal(session);
+
+      assert.equal(existsSync(worktreePath), true, "manual worktrees stay for the user to merge");
+      const lifecycle = patches.find(({ patch }) => patch.worktreeLifecycle)?.patch.worktreeLifecycle;
+      assert.equal(lifecycle?.state, "provisioned");
+      assert.ok(Date.parse(lifecycle?.updatedAt) >= before, "lifecycle timestamp is current, not the epoch");
+      assert.equal(patches.some(({ patch }) => "worktreePath" in patch && patch.worktreePath === undefined), false);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
   });
 
   it("emits completion wakes with an explicit follow-up contract and success diagnostics", () => {

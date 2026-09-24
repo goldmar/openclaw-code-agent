@@ -1,5 +1,6 @@
 import { join } from "path";
-import packageJson from "./package.json";
+// Named import: the bundler keeps only `version`, not the whole package.json.
+import { version as packageVersion } from "./package.json";
 
 import { AutoUpdateService } from "./src/auto-update";
 import { makeAgentLaunchTool } from "./src/tools/agent-launch";
@@ -140,12 +141,17 @@ export function register(api: OpenClawPluginApi): void {
       });
       await sm.ready;
       gc = new GoalController(sm);
-      autoUpdate = new AutoUpdateService({
-        ...autoUpdateStateOptions(ctx),
-        currentVersion: api.version ?? (packageJson as { version?: string }).version ?? "0.0.0",
-        actionButtonFactory: (sessionId, kind, label, options) =>
-          sm!.makePluginActionButton(sessionId, kind, label, options),
-      });
+      // `autoUpdate: false` disables the self-updater entirely: no update checks,
+      // no installs, no Gateway restarts. When enabled, installs and restarts
+      // run only after the user presses the matching update button.
+      autoUpdate = pluginConfig.autoUpdate
+        ? new AutoUpdateService({
+            ...autoUpdateStateOptions(ctx),
+            currentVersion: api.version ?? packageVersion ?? "0.0.0",
+            actionButtonFactory: (sessionId, kind, label, options) =>
+              sm!.makePluginActionButton(sessionId, kind, label, options),
+          })
+        : null;
       setSessionManager(sm);
       setGoalController(gc);
       setAutoUpdateService(autoUpdate);

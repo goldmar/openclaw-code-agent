@@ -13,9 +13,10 @@ it("persists ordered OCA lifecycle writes and recovery through the candidate SQL
   timeout: 180_000,
 }, async (t) => {
   const stateDir = mkdtempSync(join(tmpdir(), "oca-taskflow-candidate-"));
-  const previousHome = process.env.OPENCLAW_HOME;
+  // OPENCLAW_STATE_DIR is the state directory (OPENCLAW_HOME is the home-directory override).
+  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
   const previousSessionsPath = process.env.OPENCLAW_CODE_AGENT_SESSIONS_PATH;
-  process.env.OPENCLAW_HOME = stateDir;
+  process.env.OPENCLAW_STATE_DIR = stateDir;
   process.env.OPENCLAW_CODE_AGENT_SESSIONS_PATH = join(stateDir, "sessions.json");
   const source = (path: string) => import(pathToFileURL(join(candidate!, path)).href);
   const { createRuntimeAsyncTasks } = await source("src/plugins/runtime/runtime-tasks-async.ts");
@@ -29,18 +30,20 @@ it("persists ordered OCA lifecycle writes and recovery through the candidate SQL
   const calls: Array<{ method: string; revision?: number; status: string }> = [];
   const entered = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
-  const methods = ["createManaged", "resume", "setWaiting", "finish", "fail", "requestCancel"] as const;
+  const methods = ["tryCreateManaged", "resume", "setWaiting", "finish", "fail", "requestCancel"] as const;
   const delayed = Object.fromEntries(methods.map((method) => [method, async (params: any) => {
-    if (method === "createManaged") {
+    if (method === "tryCreateManaged") {
       entered.resolve();
       await release.promise;
     }
     const result = await bound[method](params);
-    assert.ok(method === "createManaged" || result.applied, `${method} must commit`);
+    assert.ok(method === "tryCreateManaged" ? result?.flowId : result.applied, `${method} must commit`);
     calls.push({ method, revision: params.expectedRevision, status: (result.flow ?? result).status });
     return result;
   }]));
-  setPluginRuntime({ tasks: { async: { managedFlows: { fromToolContext: () => delayed } } } });
+  // The live mirror also polls `get` to honor host cancels.
+  const binding = { ...delayed, get: (flowId: string) => bound.get(flowId) };
+  setPluginRuntime({ tasks: { async: { managedFlows: { fromToolContext: () => binding } } } });
   try {
     const session = new Session({ prompt: "Candidate lifecycle", workdir: stateDir, permissionMode: "plan" }, "candidate");
     const sink = resolveSessionTaskLifecycle({ sessionKey });
@@ -57,7 +60,7 @@ it("persists ordered OCA lifecycle writes and recovery through the candidate SQL
     release.resolve();
     await Promise.all([creation, running, waiting, terminal]);
     assert.deepEqual(calls, [
-      { method: "createManaged", revision: undefined, status: "running" },
+      { method: "tryCreateManaged", revision: undefined, status: "running" },
       { method: "resume", revision: 0, status: "running" },
       { method: "setWaiting", revision: 1, status: "blocked" },
       { method: "finish", revision: 2, status: "succeeded" },
@@ -99,7 +102,7 @@ it("persists ordered OCA lifecycle writes and recovery through the candidate SQL
     const manager = new SessionManager(5);
     await manager.ready;
     t.mock.method((manager as any).notifications, "dispatch", async () => {});
-    const active = await manager.spawn({
+    const active = await manager.launchSession({
       prompt: "Shutdown persistence", workdir: stateDir, permissionMode: "plan",
       worktreeStrategy: "off", route: { provider: "system", target: "system", sessionKey },
       taskLifecycle: resolveSessionTaskLifecycle({ sessionKey }),
@@ -109,7 +112,7 @@ it("persists ordered OCA lifecycle writes and recovery through the candidate SQL
     try {
       await terminalEntered.promise;
       assert.equal(stopped, false);
-      await assert.rejects(async () => manager.spawn({ prompt: "Late launch", workdir: stateDir, permissionMode: "plan" }), /shutting down/);
+      await assert.rejects(async () => manager.launchSession({ prompt: "Late launch", workdir: stateDir, permissionMode: "plan" }), /shutting down/);
       terminalRelease.resolve();
       await stop;
       const saved = manager.getPersistedSession(active.id)!;
@@ -133,8 +136,8 @@ it("persists ordered OCA lifecycle writes and recovery through the candidate SQL
     release.resolve();
     setPluginRuntime(undefined);
     await drainGlobalSingletonLifecycleState("close");
-    if (previousHome === undefined) delete process.env.OPENCLAW_HOME;
-    else process.env.OPENCLAW_HOME = previousHome;
+    if (previousStateDir === undefined) delete process.env.OPENCLAW_STATE_DIR;
+    else process.env.OPENCLAW_STATE_DIR = previousStateDir;
     if (previousSessionsPath === undefined) delete process.env.OPENCLAW_CODE_AGENT_SESSIONS_PATH;
     else process.env.OPENCLAW_CODE_AGENT_SESSIONS_PATH = previousSessionsPath;
     rmSync(stateDir, { recursive: true, force: true });

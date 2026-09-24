@@ -100,6 +100,31 @@ describe("session-view app layer", () => {
     assert.equal(text, 'Error: Session "unknown" not found.');
   });
 
+  it("shows the pending plan in agent_output when it never reached the output buffer", () => {
+    const session: any = {
+      id: "plan-1",
+      name: "cc-plan",
+      status: "running",
+      phase: "awaiting_plan_decision",
+      duration: 1000,
+      costUsd: 0,
+      pendingPlanApproval: true,
+      latestPlanArtifact: { steps: [], markdown: "# Plan\n- Add mul to calc.py" },
+      latestPlanArtifactVersion: 1,
+      getOutput: () => [],
+    };
+    const sm: any = { resolve: () => session, getPersistedSession: () => undefined };
+
+    for (const full of [false, true]) {
+      const text = getSessionOutputText(sm, "plan-1", { full });
+      assert.match(text, /Pending plan \(v1\):/);
+      assert.match(text, /- Add mul to calc\.py/);
+    }
+
+    session.getOutput = () => ["# Plan", "- Add mul to calc.py"];
+    assert.doesNotMatch(getSessionOutputText(sm, "plan-1", { full: true }), /Pending plan/);
+  });
+
   it("prefers listing only requested channel when provided", () => {
     const sm: any = {
       list: () => [

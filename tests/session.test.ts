@@ -209,8 +209,8 @@ describe("Session diagnostics", () => {
     const harness = createFakeHarness("session-diagnostics-redaction");
     registerHarness(harness);
     const warnings: string[] = [];
-    const originalWarn = console.warn;
-    console.warn = (...args: unknown[]) => {
+    const originalInfo = console.info;
+    console.info = (...args: unknown[]) => {
       warnings.push(args.map(String).join(" "));
     };
     try {
@@ -251,7 +251,7 @@ describe("Session diagnostics", () => {
       assert.equal(Object.hasOwn(launchStart ?? {}, "backendRef"), false);
       assert.equal(Object.hasOwn(launchStart ?? {}, "harnessSessionId"), false);
     } finally {
-      console.warn = originalWarn;
+      console.info = originalInfo;
     }
   });
 });

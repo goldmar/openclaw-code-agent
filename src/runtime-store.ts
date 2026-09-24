@@ -4,9 +4,9 @@ import type { OpenClawPluginApi } from "../api";
  * Published OpenClaw plugin runtime surface (`api.runtime`).
  *
  * The type comes from the host's public `openclaw/plugin-sdk/plugin-entry`
- * declarations (type-only import; nothing is bundled). Tests and partial hosts
- * may still install a subset, so every consumer keeps optional chaining and
- * runtime `typeof` checks before calling a host method.
+ * declarations (type-only import; nothing is bundled). Every surface OCA calls
+ * exists on the supported OpenClaw floor (2026.9.6), so consumers call it
+ * directly; the runtime itself is absent only before registration.
  */
 export type PluginRuntime = OpenClawPluginApi["runtime"];
 export type ManagedTaskFlowRuntime = PluginRuntime["tasks"]["async"]["managedFlows"];
@@ -45,7 +45,7 @@ export function getPluginRuntime(): PluginRuntime | undefined {
 }
 
 export function getManagedTaskFlowRuntime(): ManagedTaskFlowRuntime | undefined {
-  return pluginRuntime?.tasks?.async?.managedFlows;
+  return pluginRuntime?.tasks.async.managedFlows;
 }
 
 export function getRuntimeConfig(): unknown {

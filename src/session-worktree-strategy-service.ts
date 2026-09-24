@@ -29,6 +29,7 @@ import {
   formatWorktreeOutcomeLine,
   buildMergeWarningLines,
   appendMergeWarnings,
+  describeMergeType,
   fetchRemoteBranchRef,
   resolveTargetRepo,
   syncWorktreePR,
@@ -603,7 +604,7 @@ export class SessionWorktreeStrategyService {
     successMsg = appendMergeWarnings(successMsg, mergeResult);
     const warningDetailLines = buildMergeWarningLines(mergeResult);
     const outcomeDetailLines = [
-      mergeResult.fastForward ? "Merge type: fast-forward." : "Merge type: merge commit.",
+      `Merge type: ${describeMergeType(mergeResult)}.`,
       `Auto-merge landed ${branchName} into ${baseBranch}.`,
       "Local worktree branch cleanup was requested.",
       ...(mergeResult.stashPopConflict

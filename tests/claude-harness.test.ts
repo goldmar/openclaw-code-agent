@@ -1,10 +1,10 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ClaudeCodeHarness, CLAUDE_PLAN_MODE_INSTRUCTIONS, trustedPlanFilePath } from "../src/harness/claude-code";
+import { ClaudeCodeHarness, CLAUDE_PLAN_MODE_INSTRUCTIONS, planFileWrittenByTool, trustedPlanFilePath } from "../src/harness/claude-code";
 import { setPluginConfig } from "../src/config";
 import { resolveAgentLaunchRequest } from "../src/tools/agent-launch-resolution";
 import type { HarnessMessage } from "../src/harness/types";
@@ -90,9 +90,9 @@ function completions(messages: HarnessMessage[]) {
 
 const OK_RESULT = { type: "result", subtype: "success", session_id: "claude-1", duration_ms: 0, total_cost_usd: 0, num_turns: 1, result: "done" };
 
-async function launchForCanUseTool(permissionMode: string, extraOptions: Record<string, unknown> = {}) {
+async function launchForCanUseTool(permissionMode: string, extraOptions: Record<string, unknown> = {}, sdkMessages: unknown[] = []) {
   const startupOptions = Promise.withResolvers<Record<string, unknown>>();
-  const query = createQueryHandle([], { holdUntilReleased: true });
+  const query = createQueryHandle(sdkMessages, { holdUntilReleased: true });
   const harness = harnessWith(query.handle, (options) => startupOptions.resolve(options));
   const session = harness.launch({
     prompt: "plan it",
@@ -219,6 +219,143 @@ describe("ClaudeCodeHarness", () => {
     assert.ok(messages.some((message) => message.type === "pending_input_resolved"));
   });
 
+  it("answers AskUserQuestion through submitPendingInputText/Option (numbers, labels, multi-select, free text)", async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown): void => { unhandled.push(reason); };
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      // The session's question service never answers here (no button press) and
+      // later times out: the direct answer must win and the timeout stay handled.
+      const serviceTimeout = (): Promise<never> => new Promise((_, reject) => {
+        setTimeout(() => reject(new Error("AskUserQuestion timed out")), 150);
+      });
+      const { session, canUseTool, messages, finish } = await launchForCanUseTool("default", {
+        canUseTool: serviceTimeout,
+      });
+      const questions = [{
+        id: "policy_source",
+        question: "Which policy source should I use?",
+        options: [{ label: "Plugin store" }, { label: "Local override" }],
+      }, {
+        id: "scope",
+        question: "How broad should the rollout be?",
+        multiSelect: true,
+        options: [{ label: "Canary" }, { label: "Everyone" }, { label: "Staff" }],
+      }, {
+        id: "note",
+        question: "Anything else?",
+        options: [{ label: "No" }],
+      }];
+      const decision = canUseTool("AskUserQuestion", { questions }, { signal: new AbortController().signal, requestId: "r", toolUseID: "t" });
+      await new Promise<void>((resolve) => { setImmediate(resolve); });
+      const first = messages.find((message) => message.type === "pending_input") as Extract<HarnessMessage, { type: "pending_input" }>;
+      assert.equal(first.state.allowsFreeText, true, "agent_respond text replies must reach the harness");
+
+      // Stale context is refused; option index answers the first question.
+      assert.equal(await session.submitPendingInputOption?.(0, { requestId: "other" }), false);
+      assert.equal(await session.submitPendingInputOption?.(1, { requestId: first.state.requestId }), true);
+      await new Promise<void>((resolve) => { setImmediate(resolve); });
+      const second = messages.filter((message) => message.type === "pending_input").at(-1) as Extract<HarnessMessage, { type: "pending_input" }>;
+      assert.equal(second.state.activeQuestionIndex, 1);
+      assert.deepEqual(second.state.options, ["Canary", "Everyone", "Staff"]);
+      // Multi-select: numbers and case-insensitive labels, comma separated.
+      assert.equal(await session.submitPendingInputText?.("1, everyone"), true);
+      // Free text that matches no option is passed through as the answer.
+      assert.equal(await session.submitPendingInputText?.("Ship it on Friday"), true);
+
+      assert.deepEqual(await decision, {
+        behavior: "allow",
+        updatedInput: {
+          questions,
+          answers: {
+            "Which policy source should I use?": "Local override",
+            "How broad should the rollout be?": "Canary, Everyone",
+            "Anything else?": "Ship it on Friday",
+          },
+        },
+      });
+      assert.equal(await session.submitPendingInputText?.("late"), false);
+      await new Promise<void>((resolve) => { setImmediate(resolve); });
+      assert.ok(messages.some((message) => message.type === "pending_input_resolved"));
+      // Let the service-side timeout fire after the direct answer won.
+      await new Promise<void>((resolve) => { setTimeout(resolve, 200); });
+      assert.deepEqual(unhandled, []);
+      await finish();
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
+
+  it("maps a single-select text reply by option number and by label", async () => {
+    const { session, canUseTool, finish } = await launchForCanUseTool("default", {
+      canUseTool: () => new Promise(() => {}),
+    });
+    const questions = [{ question: "Pick one", options: [{ label: "Alpha" }, { label: "Beta" }] }];
+    const byNumber = canUseTool("AskUserQuestion", { questions }, { signal: new AbortController().signal, requestId: "r1", toolUseID: "t1" });
+    await new Promise<void>((resolve) => { setImmediate(resolve); });
+    assert.equal(await session.submitPendingInputText?.("2"), true);
+    assert.deepEqual((await byNumber).updatedInput.answers, { "Pick one": "Beta" });
+    const byLabel = canUseTool("AskUserQuestion", { questions }, { signal: new AbortController().signal, requestId: "r2", toolUseID: "t2" });
+    await new Promise<void>((resolve) => { setImmediate(resolve); });
+    assert.equal(await session.submitPendingInputText?.("alpha"), true);
+    assert.deepEqual((await byLabel).updatedInput.answers, { "Pick one": "Alpha" });
+    await finish();
+  });
+
+  it("reports only a fork's own usage when given the parent's baseline", async () => {
+    const modelUsage = (inputTokens: number, outputTokens: number, costUSD: number) => ({
+      "claude-sonnet-5": { inputTokens, outputTokens, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, webSearchRequests: 0, costUSD, contextWindow: 200000, maxOutputTokens: 32000 },
+    });
+    const { handle } = createQueryHandle([
+      // Claude Code restores the resumed transcript's cumulative usage.
+      { ...OK_RESULT, session_id: "claude-fork", total_cost_usd: 1.25, modelUsage: modelUsage(1_100, 900, 1.25) },
+    ]);
+    const messages = await collectAll(harnessWith(handle).launch({
+      prompt: "x",
+      cwd: "/tmp",
+      resumeSessionId: "claude-parent",
+      forkSession: true,
+      forkBaselineUsage: { costUsd: 1, models: [{ model: "claude-sonnet-5", costUsd: 1, inputTokens: 1_000, outputTokens: 800 }] },
+    }));
+    const done = completions(messages)[0];
+    assert.equal(done?.data.total_cost_usd, 0.25);
+    assert.deepEqual(done?.data.usage?.models?.map((entry) => [entry.model, entry.costUsd, entry.inputTokens, entry.outputTokens]), [
+      ["claude-sonnet-5", 0.25, 100, 100],
+    ]);
+  });
+
+  it("omits the per-model breakdown when only the parent's total cost is known", async () => {
+    const { handle } = createQueryHandle([
+      {
+        ...OK_RESULT,
+        session_id: "claude-fork",
+        total_cost_usd: 1.25,
+        modelUsage: {
+          "claude-sonnet-5": { inputTokens: 1_100, outputTokens: 900, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, webSearchRequests: 0, costUSD: 1.25, contextWindow: 200000, maxOutputTokens: 32000 },
+        },
+      },
+    ]);
+    const messages = await collectAll(harnessWith(handle).launch({
+      prompt: "x",
+      cwd: "/tmp",
+      resumeSessionId: "claude-parent",
+      forkSession: true,
+      forkBaselineUsage: { costUsd: 1 },
+    }));
+    const done = completions(messages)[0];
+    assert.equal(done?.data.total_cost_usd, 0.25);
+    assert.equal(done?.data.usage?.models, undefined, "parent tokens must not be attributed to the fork");
+  });
+
+  it("ignores an interrupt that fails because the query already shut down", async () => {
+    const { handle } = createQueryHandle([OK_RESULT], {
+      async interrupt(): Promise<void> { throw new Error("Operation aborted"); },
+    });
+    const session = harnessWith(handle).launch({ prompt: "x", cwd: "/tmp" });
+    await collectAll(session);
+    await assert.doesNotReject(async () => await session.interrupt?.());
+  });
+
   it("pre-warms Claude Code with the public startup() WarmQuery", async () => {
     const calls = { startup: 0 };
     let promptSeen: string | AsyncIterable<SDKUserMessage> | undefined;
@@ -324,6 +461,74 @@ describe("ClaudeCodeHarness", () => {
     if (previousConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
     else process.env.CLAUDE_CONFIG_DIR = previousConfigDir;
     rmSync(configDir, { recursive: true, force: true });
+  });
+
+  it("falls back to the plan file this session wrote when ExitPlanMode carries no plan", async () => {
+    const configDir = mkdtempSync(join(tmpdir(), "oca-claude-config-"));
+    const project = mkdtempSync(join(tmpdir(), "oca-claude-project-"));
+    const previousConfigDir = process.env.CLAUDE_CONFIG_DIR;
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    try {
+      mkdirSync(join(configDir, "plans"));
+      const ownPlan = join(configDir, "plans", "own.md");
+      writeFileSync(ownPlan, "# Own plan");
+      assert.equal(planFileWrittenByTool("Write", { file_path: ownPlan }, [project]), realpathSync(ownPlan));
+      assert.equal(planFileWrittenByTool("Read", { file_path: ownPlan }, [project]), undefined);
+      assert.equal(planFileWrittenByTool("Write", { file_path: join(project, "notes.md") }, [project]), undefined);
+
+      const { canUseTool, messages, finish } = await launchForCanUseTool("plan", { cwd: project }, [
+        { type: "assistant", message: { content: [{ type: "tool_use", id: "t1", name: "Write", input: { file_path: ownPlan, content: "# Own plan" } }] } },
+        { type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: "ok" }] } },
+      ]);
+      // A concurrent session writes a newer plan into the shared plans directory.
+      writeFileSync(join(configDir, "plans", "other-session.md"), "# Someone else's plan");
+      for (let i = 0; i < 5; i += 1) await new Promise((resolve) => setImmediate(resolve));
+      void canUseTool("ExitPlanMode", {}, {
+        signal: new AbortController().signal, requestId: "req-fallback", toolUseID: "tool-fallback",
+      });
+      await new Promise((resolve) => setImmediate(resolve));
+      const request = messages.find((message) => message.type === "plan_approval_requested");
+      assert.ok(request && request.type === "plan_approval_requested");
+      assert.equal(request.request.artifact.markdown, "# Own plan");
+      await finish();
+    } finally {
+      if (previousConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = previousConfigDir;
+      rmSync(configDir, { recursive: true, force: true });
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  it("does not fall back to an older plan file when the plan revision write failed", async () => {
+    const configDir = mkdtempSync(join(tmpdir(), "oca-claude-config-"));
+    const project = mkdtempSync(join(tmpdir(), "oca-claude-project-"));
+    const previousConfigDir = process.env.CLAUDE_CONFIG_DIR;
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    try {
+      mkdirSync(join(configDir, "plans"));
+      const plan = join(configDir, "plans", "plan.md");
+      writeFileSync(plan, "# Stale plan v1");
+      const { canUseTool, messages, finish } = await launchForCanUseTool("plan", { cwd: project }, [
+        { type: "assistant", message: { content: [{ type: "tool_use", id: "w1", name: "Write", input: { file_path: plan, content: "# v1" } }] } },
+        { type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "w1", content: "ok" }] } },
+        { type: "assistant", message: { content: [{ type: "tool_use", id: "w2", name: "Edit", input: { file_path: plan, old_string: "v1", new_string: "v2" } }] } },
+        { type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "w2", content: "String not found", is_error: true }] } },
+      ]);
+      for (let i = 0; i < 5; i += 1) await new Promise((resolve) => setImmediate(resolve));
+      void canUseTool("ExitPlanMode", {}, {
+        signal: new AbortController().signal, requestId: "req-failed-write", toolUseID: "tool-failed-write",
+      });
+      await new Promise((resolve) => setImmediate(resolve));
+      const request = messages.find((message) => message.type === "plan_approval_requested");
+      assert.ok(request && request.type === "plan_approval_requested");
+      assert.equal(request.request.artifact.markdown, "", "a failed revision must not surface the stale plan");
+      await finish();
+    } finally {
+      if (previousConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = previousConfigDir;
+      rmSync(configDir, { recursive: true, force: true });
+      rmSync(project, { recursive: true, force: true });
+    }
   });
 
   it("only reads and publishes plan files inside Claude plans directories", async () => {

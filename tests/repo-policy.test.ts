@@ -75,6 +75,43 @@ describe("repo policy resolution", () => {
     }
   });
 
+  it("reports undelivered and in-flight repo policy prompts truthfully", async () => {
+    const repoDir = mkdtempSync(join(tmpdir(), "openclaw-policy-delivery-"));
+    const storeDir = mkdtempSync(join(tmpdir(), "openclaw-policy-delivery-store-"));
+    try {
+      git(repoDir, "init", "-b", "main");
+      const sm = new SessionManager(1, 10, { store: { indexPath: join(storeDir, "sessions.json") } });
+      let outcome: "failed" | "none" = "failed";
+      (sm as any).notifications = {
+        dispatch: (_session: unknown, request: any) => {
+          if (outcome === "failed") request.hooks?.onNotifyFailed?.();
+        },
+        notifyWorktreeOutcome: () => {},
+        dispose: () => {},
+      };
+      const launch = {
+        route: { provider: "telegram", target: "12345", sessionKey: "agent:main:telegram:group:12345" },
+        prompt: "Ship isolated changes",
+        workdir: repoDir,
+        harness: "codex",
+        worktreeStrategy: "delegate" as const,
+      };
+
+      const failed = await sm.requestRepoPolicyForLaunch(launch);
+      assert.match(failed, /^Error: The repo policy choice prompt for .* could not be delivered to the user\./);
+      assert.doesNotMatch(failed, /prompt sent/);
+
+      outcome = "none";
+      sm.userDeliveryResultWaitMs = 5;
+      const pending = await sm.requestRepoPolicyForLaunch({ ...launch, prompt: "Another launch" });
+      assert.match(pending, /Repo policy choice prompt is being delivered/);
+      sm.dispose();
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+      rmSync(storeDir, { recursive: true, force: true });
+    }
+  });
+
   it("omits PR policy choices when PR automation is unavailable", async () => {
     const repoDir = mkdtempSync(join(tmpdir(), "openclaw-policy-unsupported-buttons-"));
     const storeDir = mkdtempSync(join(tmpdir(), "openclaw-policy-unsupported-buttons-store-"));
@@ -84,7 +121,10 @@ describe("repo policy resolution", () => {
       git(repoDir, "remote", "add", "origin", "https://gitlab.com/example/repo.git");
       const sm = new SessionManager(1, 10, { store: { indexPath: join(storeDir, "sessions.json") } });
       (sm as any).notifications = {
-        dispatch: (...args: any[]) => { dispatchCalls.push(args); },
+        dispatch: (...args: any[]) => {
+          dispatchCalls.push(args);
+          if (args[1]?.label === "repo-policy-choice") args[1].hooks?.onNotifySucceeded?.();
+        },
         notifyWorktreeOutcome: () => {},
         dispose: () => {},
       };
@@ -132,7 +172,10 @@ describe("repo policy resolution", () => {
       git(repoDir, "init", "-b", "main");
       const sm = new SessionManager(1, 10, { store: { indexPath: join(storeDir, "sessions.json") } });
       (sm as any).notifications = {
-        dispatch: (...args: any[]) => { dispatchCalls.push(args); },
+        dispatch: (...args: any[]) => {
+          dispatchCalls.push(args);
+          if (args[1]?.label === "repo-policy-choice") args[1].hooks?.onNotifySucceeded?.();
+        },
         notifyWorktreeOutcome: () => {},
         dispose: () => {},
       };
@@ -200,7 +243,10 @@ describe("repo policy resolution", () => {
       git(repoDir, "init", "-b", "main");
       const sm = new SessionManager(1, 10, { store: { indexPath: join(storeDir, "sessions.json") } });
       (sm as any).notifications = {
-        dispatch: (...args: any[]) => { dispatchCalls.push(args); },
+        dispatch: (...args: any[]) => {
+          dispatchCalls.push(args);
+          if (args[1]?.label === "repo-policy-choice") args[1].hooks?.onNotifySucceeded?.();
+        },
         notifyWorktreeOutcome: () => {},
         dispose: () => {},
       };
@@ -260,7 +306,7 @@ describe("repo policy resolution", () => {
     try {
       const sm = new SessionManager(1, 10, { store: { indexPath: join(storeDir, "sessions.json") } });
       let spawnConfig: Record<string, unknown> | undefined;
-      (sm as any).spawn = (config: Record<string, unknown>) => {
+      (sm as any).launchSession = (config: Record<string, unknown>) => {
         spawnConfig = config;
         return {
           id: "stable-session-1",
@@ -303,12 +349,15 @@ describe("repo policy resolution", () => {
       git(repoDir, "init", "-b", "main");
       const sm = new SessionManager(1, 10, { store: { indexPath: join(storeDir, "sessions.json") } });
       (sm as any).notifications = {
-        dispatch: (...args: any[]) => { dispatchCalls.push(args); },
+        dispatch: (...args: any[]) => {
+          dispatchCalls.push(args);
+          if (args[1]?.label === "repo-policy-choice") args[1].hooks?.onNotifySucceeded?.();
+        },
         notifyWorktreeOutcome: () => {},
         dispose: () => {},
       };
       let spawnConfig: Record<string, unknown> | undefined;
-      (sm as any).spawn = (config: Record<string, unknown>) => {
+      (sm as any).launchSession = (config: Record<string, unknown>) => {
         spawnConfig = config;
         return {
           id: "manual-policy-session",
@@ -355,12 +404,15 @@ describe("repo policy resolution", () => {
       git(repoDir, "init", "-b", "main");
       const sm = new SessionManager(1, 10, { store: { indexPath: join(storeDir, "sessions.json") } });
       (sm as any).notifications = {
-        dispatch: (...args: any[]) => { dispatchCalls.push(args); },
+        dispatch: (...args: any[]) => {
+          dispatchCalls.push(args);
+          if (args[1]?.label === "repo-policy-choice") args[1].hooks?.onNotifySucceeded?.();
+        },
         notifyWorktreeOutcome: () => {},
         dispose: () => {},
       };
       let spawnConfig: Record<string, unknown> | undefined;
-      (sm as any).spawn = (config: Record<string, unknown>) => {
+      (sm as any).launchSession = (config: Record<string, unknown>) => {
         spawnConfig = config;
         return {
           id: "manual-policy-default-strategy",
@@ -402,13 +454,16 @@ describe("repo policy resolution", () => {
       git(repoDir, "init", "-b", "main");
       const sm = new SessionManager(1, 10, { store: { indexPath: join(storeDir, "sessions.json") } });
       (sm as any).notifications = {
-        dispatch: (...args: any[]) => { dispatchCalls.push(args); },
+        dispatch: (...args: any[]) => {
+          dispatchCalls.push(args);
+          if (args[1]?.label === "repo-policy-choice") args[1].hooks?.onNotifySucceeded?.();
+        },
         notifyWorktreeOutcome: () => {},
         dispose: () => {},
       };
       let spawnCount = 0;
       let spawnConfig: Record<string, unknown> | undefined;
-      (sm as any).spawn = (config: Record<string, unknown>) => {
+      (sm as any).launchSession = (config: Record<string, unknown>) => {
         spawnCount++;
         spawnConfig = config;
         return {
@@ -461,11 +516,14 @@ describe("repo policy resolution", () => {
       git(repoDir, "init", "-b", "main");
       const sm = new SessionManager(1, 10, { store: { indexPath: join(storeDir, "sessions.json") } });
       (sm as any).notifications = {
-        dispatch: (...args: any[]) => { dispatchCalls.push(args); },
+        dispatch: (...args: any[]) => {
+          dispatchCalls.push(args);
+          if (args[1]?.label === "repo-policy-choice") args[1].hooks?.onNotifySucceeded?.();
+        },
         notifyWorktreeOutcome: () => {},
         dispose: () => {},
       };
-      (sm as any).spawn = () => {
+      (sm as any).launchSession = () => {
         throw new Error("launch capacity unavailable");
       };
 
@@ -498,11 +556,14 @@ describe("repo policy resolution", () => {
       git(repoDir, "init", "-b", "main");
       const sm = new SessionManager(1, 10, { store: { indexPath: join(storeDir, "sessions.json") } });
       (sm as any).notifications = {
-        dispatch: (...args: any[]) => { dispatchCalls.push(args); },
+        dispatch: (...args: any[]) => {
+          dispatchCalls.push(args);
+          if (args[1]?.label === "repo-policy-choice") args[1].hooks?.onNotifySucceeded?.();
+        },
         notifyWorktreeOutcome: () => {},
         dispose: () => {},
       };
-      (sm as any).spawn = () => {
+      (sm as any).launchSession = () => {
         throw new Error("spawn should not run without a matching policy token");
       };
 
@@ -541,12 +602,15 @@ describe("repo policy resolution", () => {
       git(repoDir, "init", "-b", "main");
       const sm = new SessionManager(1, 10, { store: { indexPath: join(storeDir, "sessions.json") } });
       (sm as any).notifications = {
-        dispatch: (...args: any[]) => { dispatchCalls.push(args); },
+        dispatch: (...args: any[]) => {
+          dispatchCalls.push(args);
+          if (args[1]?.label === "repo-policy-choice") args[1].hooks?.onNotifySucceeded?.();
+        },
         notifyWorktreeOutcome: () => {},
         dispose: () => {},
       };
       let spawnCalled = false;
-      (sm as any).spawn = () => {
+      (sm as any).launchSession = () => {
         spawnCalled = true;
         throw new Error("spawn should not run for ambiguous manual policy continuation");
       };

@@ -1,15 +1,13 @@
 import { assertBranchName, branchOrRemoteTrackingRef, localBranchRef } from "./worktree-ref-validation";
 import { runGit, runGh, withRepoLock } from "./git-exec";
 import * as fs from "fs";
-import { tmpdir } from "os";
-import { dirname, join } from "path";
+import { homedir } from "os";
+import { basename, dirname, join } from "path";
 import { pluginConfig } from "./config";
 import { createLogger } from "./logger";
 
 const log = createLogger("worktree-repo");
 
-let gitAvailableCache: Promise<boolean> | undefined;
-let ghCliAvailableCache: Promise<boolean> | undefined;
 
 async function getRepoRoot(dir: string): Promise<string | undefined> {
   try {
@@ -20,14 +18,17 @@ async function getRepoRoot(dir: string): Promise<string | undefined> {
   }
 }
 
-async function getWorktreeBaseDir(repoDir?: string): Promise<string> {
+/**
+ * Base directory for new worktrees: `OPENCLAW_WORKTREE_DIR`, then `worktreeDir`,
+ * then `<repoRoot>/.worktrees`. Without an override and outside a git repository
+ * there is no base directory (worktrees are never created in the OS temp dir).
+ */
+async function getWorktreeBaseDir(repoDir?: string): Promise<string | undefined> {
   if (process.env.OPENCLAW_WORKTREE_DIR) return process.env.OPENCLAW_WORKTREE_DIR;
   if (pluginConfig.worktreeDir) return pluginConfig.worktreeDir;
-  if (repoDir) {
-    const root = await getRepoRoot(repoDir);
-    if (root) return join(root, ".worktrees");
-  }
-  return tmpdir();
+  if (!repoDir) return undefined;
+  const root = await getRepoRoot(repoDir);
+  return root ? join(root, ".worktrees") : undefined;
 }
 
 export function sanitizeBranchName(name: string): string {
@@ -42,28 +43,89 @@ export function sanitizeBranchName(name: string): string {
 }
 
 export async function getPrimaryRepoRootFromWorktree(worktreePath: string): Promise<string | undefined> {
-  try {
-    const commonDir = (await runGit(
-      ["-C", worktreePath, "rev-parse", "--git-common-dir"],
-      { cwd: worktreePath, timeout: 5_000 },
-    )).trim();
-    if (!commonDir) return undefined;
-    return commonDir.endsWith("/.git") ? dirname(commonDir) : undefined;
-  } catch {
-    return undefined;
+  if (fs.existsSync(worktreePath)) {
+    try {
+      const commonDir = (await runGit(
+        ["-C", worktreePath, "rev-parse", "--git-common-dir"],
+        { cwd: worktreePath, timeout: 5_000 },
+      )).trim();
+      if (commonDir.endsWith("/.git")) return dirname(commonDir);
+    } catch {
+      // Fall through to the layout-based lookup.
+    }
   }
+  return primaryRepoRootFromDefaultLayout(worktreePath);
 }
 
-/** Probe `git --version` once per process; concurrent callers share the probe. */
+/**
+ * A worktree that no longer exists cannot tell git where its repository is.
+ * OCA's default layout is `<repoRoot>/.worktrees/<name>`, so use that when the
+ * candidate root is still a git checkout.
+ */
+function primaryRepoRootFromDefaultLayout(worktreePath: string): string | undefined {
+  const parent = dirname(worktreePath);
+  if (basename(parent) !== ".worktrees") return undefined;
+  const root = dirname(parent);
+  return fs.existsSync(join(root, ".git")) ? root : undefined;
+}
+
+/** How long a timed-out probe result is trusted before probing again. */
+const PROBE_TIMEOUT_RETRY_MS = 60_000;
+const PROBE_TIMEOUT_MS = 5_000;
+
+type ProbeState = { result: Promise<boolean>; expiresAt?: number };
+
+/**
+ * Cache a CLI availability probe. A success or a definitive failure (missing
+ * binary, non-zero exit) is cached for the process; a probe that timed out (for
+ * example a slow first start on a cold host) is cached only briefly, so a slow
+ * probe never disables the CLI for the whole process.
+ */
+function cachedProbe(
+  state: ProbeState | undefined,
+  run: () => Promise<unknown>,
+  now: () => number = Date.now,
+): ProbeState {
+  if (state && (state.expiresAt === undefined || now() < state.expiresAt)) return state;
+  const next: ProbeState = {
+    result: run().then(
+      () => true,
+      (err: unknown) => {
+        const failure = err as { killed?: boolean; signal?: unknown };
+        if (failure?.killed && failure.signal) next.expiresAt = now() + PROBE_TIMEOUT_RETRY_MS;
+        return false;
+      },
+    ),
+  };
+  return next;
+}
+
+let gitProbe: ProbeState | undefined;
+let ghProbe: ProbeState | undefined;
+let ghAvailabilityOverride: boolean | undefined;
+
+/** Probe `git --version`; concurrent callers share the probe. */
 export function isGitAvailable(): Promise<boolean> {
-  gitAvailableCache ??= runGit(["--version"], { timeout: 5_000 }).then(() => true, () => false);
-  return gitAvailableCache;
+  gitProbe = cachedProbe(gitProbe, () => runGit(["--version"], { timeout: PROBE_TIMEOUT_MS }));
+  return gitProbe.result;
 }
 
-/** Probe `gh --version` once per process; concurrent callers share the probe. */
+/** Probe `gh --version`; concurrent callers share the probe. */
 export function isGitHubCLIAvailable(): Promise<boolean> {
-  ghCliAvailableCache ??= runGh(["--version"], { timeout: 5_000 }).then(() => true, () => false);
-  return ghCliAvailableCache;
+  if (ghAvailabilityOverride !== undefined) return Promise.resolve(ghAvailabilityOverride);
+  ghProbe = cachedProbe(ghProbe, () => runGh(["--version"], { timeout: PROBE_TIMEOUT_MS }));
+  return ghProbe.result;
+}
+
+export const worktreeRepoInternals = { cachedProbe, PROBE_TIMEOUT_RETRY_MS };
+
+/**
+ * Test seam: pin GitHub CLI availability (`undefined` restores the real probe
+ * and clears its cache) so tests never depend on the host's `gh` binary.
+ */
+export function setGitHubCliAvailabilityForTests(value: boolean | undefined): void {
+  ghAvailabilityOverride = value;
+  ghProbe = undefined;
 }
 
 export async function isGitRepo(dir: string): Promise<boolean> {
@@ -79,6 +141,8 @@ export async function isGitRepo(dir: string): Promise<boolean> {
 export async function hasEnoughWorktreeSpace(repoDir?: string): Promise<boolean> {
   try {
     const baseDir = await getWorktreeBaseDir(repoDir);
+    // No base directory means worktree creation fails with its own clear error.
+    if (!baseDir) return true;
     const probePath = resolveExistingAncestorPath(baseDir);
     if (!probePath) {
       log.warn(`[worktree] Failed to resolve free-space probe path for ${baseDir}`);
@@ -94,10 +158,10 @@ export async function hasEnoughWorktreeSpace(repoDir?: string): Promise<boolean>
 }
 
 export async function branchExists(repoDir: string, branchName: string): Promise<boolean> {
-  assertBranchName(branchName);
+  await assertBranchName(branchName);
 
   try {
-    await runGit(["-C", repoDir, "rev-parse", "--verify", localBranchRef(branchName)], { timeout: 5_000 });
+    await runGit(["-C", repoDir, "rev-parse", "--verify", await localBranchRef(branchName)], { timeout: 5_000 });
     return true;
   } catch {
     return false;
@@ -106,12 +170,12 @@ export async function branchExists(repoDir: string, branchName: string): Promise
 
 /** Fetch a single branch into a remote-tracking ref without changing a checkout. */
 export async function fetchRemoteBranchRef(repoDir: string, branchName: string, remote = "origin"): Promise<string | undefined> {
-  assertBranchName(branchName);
-  assertBranchName(remote);
+  await assertBranchName(branchName);
+  await assertBranchName(remote);
 
   const remoteRef = `refs/remotes/${remote}/${branchName}`;
   try {
-    await runGit(["-C", repoDir, "fetch", remote, `+${localBranchRef(branchName)}:${remoteRef}`], { timeout: 30_000 });
+    await runGit(["-C", repoDir, "fetch", remote, `+${await localBranchRef(branchName)}:${remoteRef}`], { timeout: 30_000 });
     await runGit(["-C", repoDir, "rev-parse", "--verify", remoteRef], { timeout: 5_000 });
     return remoteRef;
   } catch {
@@ -130,7 +194,8 @@ function resolveExistingAncestorPath(targetPath: string): string | undefined {
 }
 
 export async function getWorktreeSpaceProbePath(repoDir?: string): Promise<string | undefined> {
-  return resolveExistingAncestorPath(await getWorktreeBaseDir(repoDir));
+  const baseDir = await getWorktreeBaseDir(repoDir);
+  return baseDir ? resolveExistingAncestorPath(baseDir) : undefined;
 }
 
 export function hasEnoughFreeBytes(freeBytes: number): boolean {
@@ -141,7 +206,7 @@ export function hasEnoughFreeBytes(freeBytes: number): boolean {
 export async function detectDefaultBranch(repoDir: string): Promise<string> {
   const envBranch = process.env.OPENCLAW_WORKTREE_BASE_BRANCH;
   if (envBranch !== undefined) {
-    assertBranchName(envBranch);
+    await assertBranchName(envBranch);
     return envBranch;
   }
 
@@ -149,7 +214,7 @@ export async function detectDefaultBranch(repoDir: string): Promise<string> {
     const result = await runGit(["-C", repoDir, "rev-parse", "--abbrev-ref", "origin/HEAD"], { timeout: 5_000 });
     const branch = result.trim().replace(/^origin\//, "");
     if (branch) {
-      assertBranchName(branch);
+      await assertBranchName(branch);
       return branch;
     }
   } catch {
@@ -157,14 +222,14 @@ export async function detectDefaultBranch(repoDir: string): Promise<string> {
   }
 
   try {
-    await runGit(["-C", repoDir, "rev-parse", "--verify", localBranchRef("main")], { timeout: 5_000 });
+    await runGit(["-C", repoDir, "rev-parse", "--verify", await localBranchRef("main")], { timeout: 5_000 });
     return "main";
   } catch {
     // fall through
   }
 
   try {
-    await runGit(["-C", repoDir, "rev-parse", "--verify", localBranchRef("master")], { timeout: 5_000 });
+    await runGit(["-C", repoDir, "rev-parse", "--verify", await localBranchRef("master")], { timeout: 5_000 });
     return "master";
   } catch {
     return "main";
@@ -186,12 +251,12 @@ export async function getBranchName(worktreePath: string): Promise<string | unde
 }
 
 export async function getCommitsAheadCount(repoDir: string, branch: string, base: string): Promise<number | undefined> {
-  assertBranchName(branch);
-  assertBranchName(base);
+  await assertBranchName(branch);
+  await assertBranchName(base);
 
   try {
     const result = await runGit(
-      ["-C", repoDir, "rev-list", "--count", `${localBranchRef(base)}..${localBranchRef(branch)}`],
+      ["-C", repoDir, "rev-list", "--count", `${await localBranchRef(base)}..${await localBranchRef(branch)}`],
       { timeout: 10_000 },
     );
     const count = parseInt(result.trim(), 10);
@@ -210,12 +275,12 @@ export async function getAheadBehindCounts(
   branch: string,
   base: string,
 ): Promise<{ ahead: number; behind: number } | undefined> {
-  assertBranchName(branch);
-  assertBranchName(base);
+  await assertBranchName(branch);
+  await assertBranchName(base);
 
   try {
     const result = (await runGit(
-      ["-C", repoDir, "rev-list", "--left-right", "--count", `${localBranchRef(branch)}...${localBranchRef(base)}`],
+      ["-C", repoDir, "rev-list", "--left-right", "--count", `${await localBranchRef(branch)}...${await localBranchRef(base)}`],
       { timeout: 10_000 },
     )).trim();
     const [aheadRaw, behindRaw] = result.split(/\s+/);
@@ -229,8 +294,8 @@ export async function getAheadBehindCounts(
 }
 
 export async function isBranchAncestorOfBase(repoDir: string, branch: string, base: string): Promise<boolean> {
-  const branchRef = branchOrRemoteTrackingRef(branch);
-  const baseRef = branchOrRemoteTrackingRef(base);
+  const branchRef = await branchOrRemoteTrackingRef(branch);
+  const baseRef = await branchOrRemoteTrackingRef(base);
 
   try {
     await runGit(["-C", repoDir, "merge-base", "--is-ancestor", branchRef, baseRef], { timeout: 10_000 });
@@ -241,16 +306,16 @@ export async function isBranchAncestorOfBase(repoDir: string, branch: string, ba
 }
 
 export async function wouldMergeBeNoop(repoDir: string, branch: string, base: string): Promise<boolean> {
-  assertBranchName(branch);
-  assertBranchName(base);
+  await assertBranchName(branch);
+  await assertBranchName(base);
 
   try {
     const mergedTree = (await runGit(
-      ["-C", repoDir, "merge-tree", "--write-tree", localBranchRef(base), localBranchRef(branch)],
+      ["-C", repoDir, "merge-tree", "--write-tree", await localBranchRef(base), await localBranchRef(branch)],
       { timeout: 15_000 },
     )).trim();
     const baseTree = (await runGit(
-      ["-C", repoDir, "rev-parse", `${localBranchRef(base)}^{tree}`],
+      ["-C", repoDir, "rev-parse", `${await localBranchRef(base)}^{tree}`],
       { timeout: 10_000 },
     )).trim();
     return Boolean(mergedTree) && mergedTree === baseTree;
@@ -260,16 +325,84 @@ export async function wouldMergeBeNoop(repoDir: string, branch: string, base: st
 }
 
 export async function deleteBranch(repoDir: string, branch: string): Promise<boolean> {
-  assertBranchName(branch);
+  await assertBranchName(branch);
 
   return withRepoLock(repoDir, async () => {
     try {
       await runGit(["-C", repoDir, "branch", "-D", branch], { timeout: 10_000 });
       return true;
     } catch (err) {
+      const stderr = (err as { stderr?: unknown }).stderr;
+      const detail = `${typeof stderr === "string" ? stderr : ""}\n${err instanceof Error ? err.message : String(err)}`;
+      if (/branch '[^']*' not found/i.test(detail)) {
+        // Already deleted (for example by a squash-merge PR or by hand): the goal is met.
+        log.debug(`[worktree] Branch ${branch} was already deleted`);
+        return true;
+      }
       log.warn(`[worktree] Failed to delete branch ${branch}: ${err instanceof Error ? err.message : String(err)}`);
       return false;
     }
+  });
+}
+
+/** Host of a git remote URL (`https://host/...`, `ssh://user@host/...`, scp-style `user@host:path`). */
+export function remoteUrlHost(url: string): string | undefined {
+  const scheme = url.match(/^(?:https?|ssh|git):\/\/(?:[^@/]+@)?([^/:]+)/i);
+  if (scheme) return scheme[1]!.toLowerCase();
+  const scp = url.match(/^(?:[^/\\:@\s]+@)?([^/\\:\s]+):(?!\/\/)/);
+  // A bare `C:` drive letter is a local path, not a host.
+  return scp && scp[1]!.length > 1 ? scp[1]!.toLowerCase() : undefined;
+}
+
+/**
+ * GitHub hosts the GitHub CLI can serve: github.com, `GH_HOST`, and the hosts
+ * `gh` is logged in to (top-level keys of `hosts.yml`, host names only).
+ */
+/** gh's config directory, resolved the way the GitHub CLI does. */
+export function ghConfigDir(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): string {
+  const explicit = env.GH_CONFIG_DIR?.trim();
+  if (explicit) return explicit;
+  const xdg = env.XDG_CONFIG_HOME?.trim();
+  if (xdg) return join(xdg, "gh");
+  const appData = env.AppData?.trim() || env.APPDATA?.trim();
+  if (platform === "win32" && appData) return join(appData, "GitHub CLI");
+  return join(env.HOME?.trim() || homedir(), ".config", "gh");
+}
+
+export function knownGitHubHosts(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): Set<string> {
+  const hosts = new Set(["github.com"]);
+  const ghHost = env.GH_HOST?.trim().toLowerCase();
+  if (ghHost) hosts.add(ghHost);
+  const configDir = ghConfigDir(env, platform);
+  try {
+    for (const line of fs.readFileSync(join(configDir, "hosts.yml"), "utf-8").split(/\r?\n/)) {
+      const match = line.match(/^([A-Za-z0-9.-]+):\s*$/);
+      if (match) hosts.add(match[1]!.toLowerCase());
+    }
+  } catch {
+    // gh not configured: only github.com and GH_HOST.
+  }
+  return hosts;
+}
+
+/**
+ * Whether any remote points at a GitHub host `gh` can serve (github.com, a
+ * GitHub Enterprise host from `GH_HOST`, or a host `gh` is logged in to).
+ * Callers skip `gh` otherwise: local-path remotes and other providers (GitLab,
+ * Bitbucket, ...) cannot have GitHub pull requests.
+ */
+export async function hasGitHubRemote(repoDir: string, env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
+  let remotes: string;
+  try {
+    remotes = await runGit(["-C", repoDir, "remote", "-v"], { timeout: 5_000 });
+  } catch {
+    return false;
+  }
+  const hosts = knownGitHubHosts(env);
+  return remotes.split(/\r?\n/).some((line) => {
+    const url = line.split(/\s+/)[1];
+    const host = url ? remoteUrlHost(url) : undefined;
+    return host !== undefined && hosts.has(host);
   });
 }
 

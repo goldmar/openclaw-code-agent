@@ -24,12 +24,17 @@ import {
   createPendingInputEvent,
   createPendingInputResolvedEvent,
   createRunCompletedEvent,
+  createPromptSettledEvent,
   createRunStartedEvent,
   createSettingsChangedEvent,
   createTextDeltaEvent,
+  PromptReader,
   createToolCallEvent,
   HarnessMessageQueue,
 } from "./harness-events";
+import { createLogger } from "../logger";
+
+const log = createLogger("opencode-harness");
 
 type FetchLike = typeof fetch;
 
@@ -1102,6 +1107,11 @@ export class OpenCodeHarness implements AgentHarness {
     let lastBackendRefConversationId: string | undefined;
     let activeTurn: { waiter?: TurnWaiter; abort: AbortController; interrupted: boolean } | undefined;
     const emittedToolCalls = new Set<string>();
+    const prompts = new PromptReader(typeof options.prompt === "string"
+      ? (async function* (): AsyncGenerator<unknown> {
+          yield { type: "user", text: options.prompt };
+        })()
+      : options.prompt);
     const resolvedPendingInputRequestIds = new Set<string>();
 
     const emitBackendRef = (): void => {
@@ -1172,6 +1182,8 @@ export class OpenCodeHarness implements AgentHarness {
       fn(waiter);
     };
 
+    let lastTextPartKey: string | undefined;
+
     const handleEvent = (event: NormalizedEvent): void => {
       if (closed) return;
       const waiter = activeTurn?.waiter;
@@ -1181,6 +1193,14 @@ export class OpenCodeHarness implements AgentHarness {
         && typeof event.properties.delta === "string"
       ) {
         if (waiter) waiter.sawActivity = true;
+        // Separate consecutive text parts/messages so agent_output does not run them together.
+        const partKey = [event.properties.messageID, event.properties.partID ?? event.properties.id]
+          .filter((value) => typeof value === "string")
+          .join(":") || undefined;
+        if (lastTextPartKey !== undefined && partKey !== lastTextPartKey) {
+          queue.enqueue(createTextDeltaEvent("\n\n"));
+        }
+        lastTextPartKey = partKey ?? lastTextPartKey ?? "";
         queue.enqueue(createTextDeltaEvent(event.properties.delta));
         return;
       }
@@ -1402,6 +1422,14 @@ export class OpenCodeHarness implements AgentHarness {
           }
         }
       }
+      if (!closed && await prompts.hasQueued()) {
+        // A follow-up was queued during this turn: report the result through the
+        // next turn so the session does not end with the follow-up dropped.
+        if (outcome === "failed" && finalResult) {
+          queue.enqueue(createTextDeltaEvent(`\n\n[OpenCode] Turn failed: ${finalResult}`));
+        }
+        return;
+      }
       queue.enqueue(createRunCompletedEvent({
         success: outcome === "completed",
         outcome,
@@ -1511,12 +1539,6 @@ export class OpenCodeHarness implements AgentHarness {
       return true;
     };
 
-    const promptIterable = typeof options.prompt === "string"
-      ? (async function* (): AsyncGenerator<unknown> {
-          yield { type: "user", text: options.prompt };
-        })()
-      : options.prompt;
-
     const shutdown = async (): Promise<void> => {
       closed = true;
       settleWaiter((pending) => pending.reject(new Error("closed")));
@@ -1524,17 +1546,29 @@ export class OpenCodeHarness implements AgentHarness {
       unsubscribe = undefined;
       const heldLease = lease;
       lease = undefined;
-      await heldLease?.release();
+      // Shutdown runs from fire-and-forget paths (abort, close); never reject.
+      await heldLease?.release().catch((error: unknown) => {
+        log.debug(`[OpenCodeHarness] lease release failed during shutdown: ${errorMessage(error)}`);
+      });
     };
 
+    // Owns every failure (reported as a failed run) and always shuts down, so
+    // this detached promise never rejects.
     void (async () => {
       try {
-        for await (const rawMessage of promptIterable) {
+        while (true) {
+          const next = await prompts.next();
+          if (next.done) break;
+          const rawMessage = next.value;
           if (closed) break;
           const text = extractPromptText(rawMessage).trim();
-          if (!text) continue;
+          if (!text) {
+            queue.enqueue(createPromptSettledEvent());
+            continue;
+          }
           if (currentPendingInput?.kind === "question") {
             await answerPendingQuestion(text);
+            queue.enqueue(createPromptSettledEvent());
             continue;
           }
           await runTurn(text);

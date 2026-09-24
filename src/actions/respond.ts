@@ -114,7 +114,7 @@ async function spawnFreshRelaunch(
       planApproval: session.planApproval,
       harness: "harnessName" in session ? session.harnessName : session.harness,
     };
-    const relaunched = await sm.spawnAndAwaitRunning(freshConfig, { notifyLaunch: false });
+    const relaunched = await sm.launchAndAwaitRunning(freshConfig, { notifyLaunch: false });
     sm.notifySession(
       relaunched,
       `▶️ [${relaunched.name}] Relaunched fresh`,
@@ -355,7 +355,7 @@ async function tryAutoResume(
         : {}),
       harness: "harnessName" in session ? session.harnessName : session.harness,
     };
-    const resumed = await sm.spawnAndAwaitRunning(resumeConfig, { notifyLaunch: false });
+    const resumed = await sm.launchAndAwaitRunning(resumeConfig, { notifyLaunch: false });
     if (isPlanApproval) {
       sm.notifySession(
         resumed,
@@ -393,13 +393,16 @@ export async function executeRespond(
   const target = session ?? persisted!;
   const resumeAssessment = target.status === "running" ? { kind: "direct" as const } : assessResumeCandidate(target);
 
-  const textPlanDecision =
+  const replyDecision =
     !params.approve
     && target.lifecycle === "awaiting_plan_decision"
     && target.pendingPlanApproval
-    && params.userInitiated
       ? normalizePlanReplyDecision(params.message)
       : undefined;
+  // "Reject" always closes the plan decision, whoever sends it; forwarding it
+  // as revision feedback would keep a rejected plan alive. Text approve/revise
+  // shortcuts stay user-only (the orchestrator approves with approve=true).
+  const textPlanDecision = replyDecision === "reject" || params.userInitiated ? replyDecision : undefined;
   if (textPlanDecision === "approve") {
     return executeRespond(sm, {
       ...params,

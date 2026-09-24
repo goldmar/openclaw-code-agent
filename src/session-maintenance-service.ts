@@ -1,4 +1,4 @@
-import { unlinkSync } from "fs";
+import { existsSync, unlinkSync } from "fs";
 
 import { pluginConfig } from "./config";
 import { KeyedDeadlineScheduler } from "./keyed-deadline-scheduler";
@@ -179,9 +179,19 @@ export class SessionMaintenanceService {
 
     try {
       if (!session.worktreePath) return;
-      const repoDir = await this.deps.resolveWorktreeRepoDir(session.workdir, session.worktreePath);
-      if (!repoDir || this.disposed) return;
-      if (!(await removeWorktree(repoDir, session.worktreePath))) return;
+      // A worktree that is already gone only needs its metadata cleared; without
+      // this, every maintenance tick retried (and warned about) the removal.
+      if (existsSync(session.worktreePath)) {
+        const repoDir = await this.deps.resolveWorktreeRepoDir(session.workdir, session.worktreePath);
+        if (!repoDir || this.disposed) return;
+        if (!(await removeWorktree(repoDir, session.worktreePath))) return;
+      } else {
+        const repoDir = await this.deps.resolveWorktreeRepoDir(session.workdir, session.worktreePath);
+        if (this.disposed) return;
+        // Best effort: drop git's stale registration when the repository is known.
+        if (repoDir && repoDir !== session.worktreePath) await removeWorktree(repoDir, session.worktreePath);
+        log.info(`[SessionManager] Worktree ${session.worktreePath} is already gone; clearing its metadata`);
+      }
       for (const mutationRef of getPersistedMutationRefs(session)) {
         this.deps.updatePersistedSession(mutationRef, {
           worktreePath: undefined,

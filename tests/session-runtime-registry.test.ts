@@ -33,8 +33,8 @@ describe("SessionRuntimeRegistry", () => {
 
   it("redacts backend identifiers from runtime add and remove diagnostics", () => {
     const warnings: string[] = [];
-    const originalWarn = console.warn;
-    console.warn = (...args: unknown[]) => {
+    const originalInfo = console.info;
+    console.info = (...args: unknown[]) => {
       warnings.push(args.map(String).join(" "));
     };
     try {
@@ -65,7 +65,7 @@ describe("SessionRuntimeRegistry", () => {
       assert.equal(added?.hasBackendConversationId, true);
       assert.equal(added?.hasBackendRunId, true);
     } finally {
-      console.warn = originalWarn;
+      console.info = originalInfo;
     }
   });
 });

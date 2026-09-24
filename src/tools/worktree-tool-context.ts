@@ -118,12 +118,11 @@ export interface WorktreeToolListingTarget {
   worktreeMergedAt?: string;
   worktreePrUrl?: string;
   backendConversationId?: string;
-  harnessSessionId?: string;
 }
 
 export function resolveWorktreeToolSessions(
   sessionManager: SessionManager,
-  target: Pick<WorktreeToolListingTarget, "id" | "name" | "backendConversationId" | "harnessSessionId">,
+  target: Pick<WorktreeToolListingTarget, "id" | "name" | "backendConversationId">,
 ): {
   activeSession?: Session;
   persistedSession?: PersistedSessionInfo;
@@ -131,7 +130,6 @@ export function resolveWorktreeToolSessions(
   const refs = [
     target.id,
     target.backendConversationId,
-    target.harnessSessionId,
     target.name,
   ];
 
@@ -190,10 +188,10 @@ export function listWorktreeToolTargets(sessionManager: SessionManager): Worktre
   for (const p of persistedSessions) {
     if (!p.worktreePath) continue;
     const backendConversationId = getBackendConversationId(p);
-    const key = p.sessionId ?? backendConversationId ?? p.harnessSessionId;
+    const key = p.sessionId ?? backendConversationId;
     if (!key) continue;
     sessionMap.set(key, {
-      id: p.sessionId ?? backendConversationId ?? p.harnessSessionId,
+      id: key,
       name: p.name,
       worktreePath: p.worktreePath,
       worktreeBranch: p.worktreeBranch,
@@ -203,7 +201,6 @@ export function listWorktreeToolTargets(sessionManager: SessionManager): Worktre
       worktreeMergedAt: p.worktreeMergedAt,
       worktreePrUrl: p.worktreePrUrl,
       backendConversationId,
-      harnessSessionId: p.harnessSessionId,
     });
   }
 
@@ -220,7 +217,6 @@ export function listWorktreeToolTargets(sessionManager: SessionManager): Worktre
       worktreeMergedAt: undefined,
       worktreePrUrl: undefined,
       backendConversationId: getBackendConversationId(s),
-      harnessSessionId: s.harnessSessionId,
     });
   }
 
@@ -228,13 +224,12 @@ export function listWorktreeToolTargets(sessionManager: SessionManager): Worktre
 }
 
 export function matchesWorktreeToolRef(
-  target: Pick<WorktreeToolListingTarget, "id" | "name" | "backendConversationId" | "harnessSessionId">,
+  target: Pick<WorktreeToolListingTarget, "id" | "name" | "backendConversationId">,
   ref: string,
 ): boolean {
   return target.id === ref
     || target.name === ref
-    || target.backendConversationId === ref
-    || target.harnessSessionId === ref;
+    || target.backendConversationId === ref;
 }
 
 export function formatWorktreeLifecycleState(state: string): string {

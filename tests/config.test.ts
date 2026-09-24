@@ -523,8 +523,15 @@ describe("setPluginConfig", () => {
     assert.equal("codexApprovalPolicy" in pluginConfig, false);
   });
 
-  it("defaults Codex to full access without approval prompts", () => {
+  it("leaves Codex execution keys unset so they follow the host tools.exec.mode", () => {
     setPluginConfig({});
+    assert.equal(pluginConfig.harnesses.codex?.permissionProfile, undefined);
+    assert.equal(pluginConfig.harnesses.codex?.approvalPolicy, undefined);
+    assert.equal(pluginConfig.harnesses.codex?.approvalsReviewer, undefined);
+  });
+
+  it("keeps explicitly configured Codex execution keys", () => {
+    setPluginConfig({ harnesses: { codex: { permissionProfile: ":danger-full-access", approvalPolicy: "never", approvalsReviewer: "user" } } });
     assert.equal(pluginConfig.harnesses.codex?.permissionProfile, ":danger-full-access");
     assert.equal(pluginConfig.harnesses.codex?.approvalPolicy, "never");
     assert.equal(pluginConfig.harnesses.codex?.approvalsReviewer, "user");
@@ -671,5 +678,16 @@ describe("pluginConfig singleton", () => {
     // Reset for other tests
     setPluginConfig({});
     assert.equal(pluginConfig.maxSessions, 20);
+  });
+});
+
+describe("autoUpdate config", () => {
+  it("defaults to enabled and honors an explicit false", () => {
+    setPluginConfig({});
+    assert.equal(pluginConfig.autoUpdate, true);
+    setPluginConfig({ autoUpdate: false });
+    assert.equal(pluginConfig.autoUpdate, false);
+    setPluginConfig({ autoUpdate: true });
+    assert.equal(pluginConfig.autoUpdate, true);
   });
 });

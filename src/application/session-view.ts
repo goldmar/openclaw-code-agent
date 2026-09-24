@@ -276,16 +276,23 @@ export function getSessionOutputText(
 
   // When awaiting plan approval, append the plan file contents so the
   // orchestrator can read the full plan without having to know the file path.
+  const divider = "─".repeat(60);
   if (session.pendingPlanApproval && session.planFilePath) {
     try {
       if (existsSync(session.planFilePath)) {
         const planContent = readFileSync(session.planFilePath, "utf-8");
-        const divider = "─".repeat(60);
         return `${body}\n${divider}\nPlan file: ${session.planFilePath}\n${divider}\n${planContent}`;
       }
     } catch {
       // best-effort: if the file can't be read, return normal output
     }
+  }
+  // The pending plan must always be readable, even when it never reached the
+  // output buffer (for example a plan submitted before any assistant text).
+  const pendingPlan = session.pendingPlanApproval ? session.latestPlanArtifact?.markdown?.trim() : undefined;
+  if (pendingPlan && !outputLines.join("\n").includes(pendingPlan)) {
+    const version = session.latestPlanArtifactVersion;
+    return `${body}\n${divider}\nPending plan${version ? ` (v${version})` : ""}:\n${divider}\n${pendingPlan}`;
   }
   return body;
 }

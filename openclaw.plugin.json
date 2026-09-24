@@ -87,10 +87,7 @@
               "gpt-5.6-terra",
               "gpt-5.6-luna"
             ],
-            "fastMode": false,
-            "permissionProfile": ":danger-full-access",
-            "approvalPolicy": "never",
-            "approvalsReviewer": "user"
+            "fastMode": false
           },
           "claude-code": {
             "defaultModel": "opus",
@@ -139,7 +136,7 @@
                 ":workspace",
                 ":danger-full-access"
               ],
-              "description": "Codex-only built-in permission profile sent as the thread `permissions`. Default ':danger-full-access' keeps OCA's historical full-access behavior; ':workspace' sandboxes writes to the workspace; ':read-only' blocks writes."
+              "description": "Codex-only built-in permission profile sent as the thread `permissions`. Unset follows the host tools.exec.mode like OpenClaw's bundled Codex plugin: ':workspace' for 'auto' and 'ask', ':danger-full-access' when tools.exec.mode is 'full' or unset; 'deny' and 'allowlist' block Codex unless this is set. ':workspace' allows writes inside the workspace with network off; ':read-only' blocks writes; ':danger-full-access' disables the sandbox. An explicit value always wins over tools.exec.mode."
             },
             "approvalPolicy": {
               "type": "string",
@@ -148,7 +145,7 @@
                 "on-request",
                 "untrusted"
               ],
-              "description": "Codex-only approval policy. Default 'never' (no Codex-side prompts; OCA's plan approval still applies). 'on-request' / 'untrusted' let Codex ask before escalating; requests are routed to the chat as approval buttons."
+              "description": "Codex-only approval policy. Unset follows the host tools.exec.mode: 'on-request' for 'auto' and 'ask', 'never' when tools.exec.mode is 'full' or unset. 'on-request' asks before escalating out of the sandbox (for example network access or writes outside the workspace); the request goes to approvalsReviewer. 'untrusted' also asks before commands Codex does not consider safe. 'never' never asks."
             },
             "approvalsReviewer": {
               "type": "string",
@@ -156,7 +153,7 @@
                 "user",
                 "auto_review"
               ],
-              "description": "Codex-only reviewer for approval requests: 'user' (default, routed to chat) or 'auto_review' (Codex's reviewer subagent decides)."
+              "description": "Codex-only reviewer for approval requests: 'user' (requests are sent to the chat as approval buttons) or 'auto_review' (opt-in; Codex's reviewer subagent approves or denies each request based on the task and its risk). Unset follows the host tools.exec.mode: 'auto_review' for 'auto', 'user' otherwise."
             }
           }
         }
@@ -192,7 +189,7 @@
           "plan",
           "bypassPermissions"
         ],
-        "description": "Default plugin orchestration mode for coding-agent sessions. This controls OpenClaw plan/default/bypass behavior and is separate from the fixed Codex execution policy."
+        "description": "Default plugin orchestration mode for coding-agent sessions. This controls OpenClaw plan/default/bypass behavior. The Codex sandbox and approval prompts are configured separately with harnesses.codex.permissionProfile, approvalPolicy, and approvalsReviewer."
       },
       "agentChannels": {
         "type": "object",
@@ -214,7 +211,7 @@
           "ask",
           "delegate"
         ],
-        "description": "Plan approval behavior. 'delegate' (default): orchestrator must review the full plan, then approve low-risk plans or escalate to the user. 'ask': always forwards plans to the user for approval. 'approve': orchestrator can auto-approve after verification."
+        "description": "Plan approval behavior. 'delegate' (default): orchestrator must review the full plan, then approve low-risk plans or escalate to the user. 'ask': always forwards plans to the user for approval. 'approve': orchestrator may approve without asking the user, but only after verifying the full plan; destructive or out-of-scope plans still go to the user."
       },
       "defaultHarness": {
         "type": "string",
@@ -231,6 +228,11 @@
       "worktreeDir": {
         "type": "string",
         "description": "Base directory for agent worktrees. Defaults to <repoRoot>/.worktrees when unset. Overridden by OPENCLAW_WORKTREE_DIR env var."
+      },
+      "autoUpdate": {
+        "type": "boolean",
+        "default": true,
+        "description": "Check daily for a newer OpenClaw Code Agent release and offer it with Update now / Remind later / Dismiss buttons. The plugin reinstalls itself (openclaw plugins install <exact version> --force) only after a user presses Update now, and restarts the Gateway (openclaw gateway restart) only after a separate Restart Gateway press. false disables update checks, installs, and restarts entirely."
       }
     }
   },
@@ -253,7 +255,7 @@
     },
     "harnesses": {
       "label": "Harness configuration",
-      "help": "Per-harness defaults and model restrictions. Set harnesses.codex.fastMode=true to request Codex's priority (fast) service tier. harnesses.codex.permissionProfile / approvalPolicy / approvalsReviewer control the Codex sandbox and approval prompts (default: full access, no prompts). OpenCode is experimental; leave harnesses.opencode.defaultModel unset to use OpenCode's provider default, or pass provider/model explicitly. Default: {\"codex\":{\"defaultModel\":\"gpt-6-sol\",\"allowedModels\":[\"gpt-6-sol\",\"gpt-6-astra\",\"gpt-6-luna\",\"gpt-5.6-sol\",\"gpt-5.6-terra\",\"gpt-5.6-luna\"],\"fastMode\":false,\"permissionProfile\":\":danger-full-access\",\"approvalPolicy\":\"never\",\"approvalsReviewer\":\"user\"},\"claude-code\":{\"defaultModel\":\"opus\",\"allowedModels\":[\"sonnet\",\"opus\"]},\"opencode\":{}}.",
+      "help": "Per-harness defaults and model restrictions. Set harnesses.codex.fastMode=true to request Codex's priority (fast) service tier. harnesses.codex.permissionProfile / approvalPolicy / approvalsReviewer control the Codex sandbox and approval prompts; when unset they follow the host tools.exec.mode like OpenClaw's bundled Codex plugin ('full' or unset: full access, no prompts; 'auto': ':workspace' + 'on-request' + 'auto_review'; 'ask': the same with approvals in chat), and explicit values always win. OpenCode is experimental; leave harnesses.opencode.defaultModel unset to use OpenCode's provider default, or pass provider/model explicitly. Default: {\"codex\":{\"defaultModel\":\"gpt-6-sol\",\"allowedModels\":[\"gpt-6-sol\",\"gpt-6-astra\",\"gpt-6-luna\",\"gpt-5.6-sol\",\"gpt-5.6-terra\",\"gpt-5.6-luna\"],\"fastMode\":false},\"claude-code\":{\"defaultModel\":\"opus\",\"allowedModels\":[\"sonnet\",\"opus\"]},\"opencode\":{}}.",
       "advanced": true
     },
     "maxSessions": {
@@ -273,12 +275,17 @@
     },
     "permissionMode": {
       "label": "Default permission mode",
-      "help": "Default plugin orchestration mode used when new coding-agent sessions are launched. Use this for plan/default/bypass behavior; Codex execution stays fixed to 'never'.",
+      "help": "Default plugin orchestration mode used when new coding-agent sessions are launched. Use this for plan/default/bypass behavior; the Codex sandbox and approval prompts come from harnesses.codex.permissionProfile, approvalPolicy, and approvalsReviewer.",
       "advanced": true
     },
     "planApproval": {
       "label": "Plan approval policy",
-      "help": "Choose whether plans are delegated to the orchestrator for full-plan review first (`delegate`, default), always sent to the user with Approve/Revise/Reject buttons, or auto-approved.",
+      "help": "Choose whether plans are delegated to the orchestrator for full-plan review first (`delegate`, default), always sent to the user with Approve/Revise/Reject buttons, or approved by the orchestrator after it verifies the plan (`approve`).",
+      "advanced": true
+    },
+    "autoUpdate": {
+      "label": "Plugin self-update",
+      "help": "On (default): check daily for a newer release and offer it with buttons. Installing and restarting the Gateway each need an explicit button press. Off: no update checks, installs, or restarts.",
       "advanced": true
     },
     "defaultWorktreeStrategy": {

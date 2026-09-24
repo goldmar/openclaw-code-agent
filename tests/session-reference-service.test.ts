@@ -35,8 +35,8 @@ describe("SessionReferenceService", () => {
 
   it("falls back to the newest matching session when no active sessions match", () => {
     const sessions = new Map<string, Session>([
-      ["older", makeSession({ id: "older", harnessSessionId: "legacy-1", startedAt: 10 })],
-      ["newer", makeSession({ id: "newer", harnessSessionId: "legacy-1", startedAt: 20 })],
+      ["older", makeSession({ id: "older", backendRef: { kind: "codex-app-server", conversationId: "conv-1" }, startedAt: 10 })],
+      ["newer", makeSession({ id: "newer", backendRef: { kind: "codex-app-server", conversationId: "conv-1" }, startedAt: 20 })],
     ]);
     const store = {
       getPersistedSession: () => undefined,
@@ -45,10 +45,10 @@ describe("SessionReferenceService", () => {
 
     const service = new SessionReferenceService(sessions, store);
 
-    assert.equal(service.resolveActive("legacy-1")?.id, "newer");
+    assert.equal(service.resolveActive("conv-1")?.id, "newer");
   });
 
-  it("prefers the newest active session when backend and legacy refs share a value", () => {
+  it("does not match a session by a bare harnessSessionId without a backend ref", () => {
     const sessions = new Map<string, Session>([
       ["backend", makeSession({
         id: "backend",

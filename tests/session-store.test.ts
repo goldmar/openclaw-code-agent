@@ -737,8 +737,8 @@ describe("SessionStore path resolution", () => {
     }]);
 
     const warnings: string[] = [];
-    const originalWarn = console.warn;
-    console.warn = (...args: unknown[]) => {
+    const originalInfo = console.info;
+    console.info = (...args: unknown[]) => {
       warnings.push(args.map(String).join(" "));
     };
     try {
@@ -747,7 +747,7 @@ describe("SessionStore path resolution", () => {
         env: {},
       });
     } finally {
-      console.warn = originalWarn;
+      console.info = originalInfo;
     }
 
     const joined = warnings.join("\n");

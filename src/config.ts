@@ -10,9 +10,6 @@ import {
   parseThreadIdFromSessionKey,
   routeFromOriginMetadata,
 } from "./session-route";
-import { createLogger } from "./logger";
-
-const log = createLogger("config");
 
 const DEFAULT_HARNESS = "claude-code";
 const BUILTIN_HARNESS_CONFIGS: Record<string, HarnessConfig> = {
@@ -25,9 +22,8 @@ const BUILTIN_HARNESS_CONFIGS: Record<string, HarnessConfig> = {
     allowedModels: ["gpt-6-sol", "gpt-6-astra", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
     // No builtin reasoningEffort: Codex applies its own configured/model
     // default (see model/list `defaultReasoningEffort`) unless one is set.
-    permissionProfile: ":danger-full-access",
-    approvalPolicy: "never",
-    approvalsReviewer: "user",
+    // No builtin permissionProfile / approvalPolicy / approvalsReviewer either:
+    // unset values follow the host tools.exec.mode (see resolveCodexExecutionSettings).
   },
   opencode: {},
 };
@@ -43,6 +39,7 @@ export let pluginConfig: PluginConfig = {
   permissionMode: "plan",
   planApproval: "delegate",
   defaultWorktreeStrategy: "delegate",
+  autoUpdate: true,
   harnesses: {
     "claude-code": { ...BUILTIN_HARNESS_CONFIGS["claude-code"] },
     codex: { ...BUILTIN_HARNESS_CONFIGS.codex },
@@ -97,6 +94,7 @@ export function setPluginConfig(config: Partial<RawPluginConfig>): void {
     harnesses,
     defaultWorktreeStrategy: config.defaultWorktreeStrategy ?? "delegate",
     worktreeDir: config.worktreeDir,
+    autoUpdate: config.autoUpdate ?? true,
   };
 }
 
