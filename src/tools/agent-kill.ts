@@ -22,7 +22,7 @@ function isAgentKillParams(value: unknown): value is AgentKillParams {
 export function makeAgentKillTool(_ctx?: OpenClawPluginToolContext) {
   return {
     name: "agent_kill",
-    description: "Terminate or complete a running coding agent session by name or ID. Use reason='completed' to mark a session as successfully completed instead of killed. Use forget=true to delete a finished session's stored record.",
+    description: "Terminate or complete a running coding agent session by name or ID. Use reason='completed' to mark a session as successfully completed instead of killed. forget=true deletes a finished session's record.",
     parameters: Type.Object({
       session: Type.String({ description: "Session name or ID to terminate" }),
       reason: Type.Optional(
@@ -32,7 +32,7 @@ export function makeAgentKillTool(_ctx?: OpenClawPluginToolContext) {
         ),
       ),
       forget: Type.Optional(Type.Boolean({
-        description: "Delete the stored record and output of a finished session instead of killing it. Refused for running or suspended sessions, sessions with an unsettled worktree, and sessions a running goal loop owns.",
+        description: "Delete a finished session's stored record instead of killing it.",
       })),
     }),
     async execute(_id: string, params: unknown) {
@@ -43,7 +43,7 @@ export function makeAgentKillTool(_ctx?: OpenClawPluginToolContext) {
         return { content: [{ type: "text", text: "Error: Invalid parameters. Expected { session, reason?, forget? }." }] };
       }
       if (params.forget === true) {
-        return { content: [{ type: "text", text: getForgetSessionText(sessionManager, params.session, goalController) }] };
+        return { content: [{ type: "text", text: await getForgetSessionText(sessionManager, params.session, goalController) }] };
       }
 
       const text = getKillSessionText(sessionManager, params.session, params.reason);

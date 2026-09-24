@@ -45,43 +45,30 @@ export function getKillSessionText(
   return `Session ${session.name} [${session.id}] has been terminated.`;
 }
 
-/**
- * Remove a finished session's stored record (`agent_kill(forget=true)`).
- * Sessions a live goal loop still owns are kept: the loop resumes them
- * between iterations.
- */
-export function getForgetSessionText(
+/** `agent_kill(forget=true)`: remove a finished session's stored record. */
+export async function getForgetSessionText(
   sm: SessionManager,
   ref: string,
   goals?: { listTasks(): GoalTaskState[] } | null,
-): string {
+): Promise<string> {
   const target = sm.resolve(ref) ?? sm.getPersistedSession(ref);
   const targetId = target ? ("id" in target ? target.id : target.sessionId) : undefined;
-  const owningGoal = targetId
+  // A live goal loop resumes its session between iterations.
+  const goal = targetId
     ? goals?.listTasks().find((task) => task.sessionId === targetId && !TERMINAL_GOAL_STATUSES.has(task.status))
     : undefined;
-  if (target && owningGoal) {
-    return `Session ${target.name} is owned by goal task ${owningGoal.name} (${owningGoal.status}); stop the goal first with agent_goal_stop.`;
-  }
+  if (target && goal) return `Session ${target.name} is owned by goal ${goal.name} (${goal.status}); stop the goal first.`;
 
-  const outcome = sm.forgetSession(ref);
-  if (outcome.ok) {
-    return `Session ${outcome.name}${outcome.id ? ` [${outcome.id}]` : ""} forgotten: its stored record and output were removed.`;
-  }
-  const result = outcome as Extract<ForgetSessionResult, { ok: false }>;
-  const label = result.name ? `Session ${result.name}${result.id ? ` [${result.id}]` : ""}` : `Session "${ref}"`;
-  switch (result.reason) {
-    case "not_found":
-      return `Error: Session "${ref}" not found.`;
-    case "running":
-      return `${label} is still running. Stop it with agent_kill first, then forget it.`;
-    case "not_persisted":
-      return `${label} has no stored record yet. Try again once it has finished.`;
-    case "suspended":
-      return `${label} is not finished (${result.detail ?? "suspended"}). Resume it with agent_respond, or dismiss it with agent_kill first.`;
-    case "worktree":
-      return `${label} still has an unsettled worktree (${result.detail ?? "unknown"}). Merge it, open a PR, dismiss it, or remove it with agent_worktree_cleanup first.`;
-    case "delivery":
-      return `${label} is still delivering its final notification (${result.detail ?? "in progress"}). Try again shortly.`;
-  }
+  const outcome = await sm.forgetSession(ref);
+  const label = outcome.name ? `Session ${outcome.name}${outcome.id ? ` [${outcome.id}]` : ""}` : `Session "${ref}"`;
+  if (outcome.ok) return `${label} forgotten.`;
+  const { reason, detail } = outcome as Extract<ForgetSessionResult, { ok: false }>;
+  if (reason === "not_found") return `Error: Session "${ref}" not found.`;
+  const why = {
+    running: "is still running or not yet stored; stop it first",
+    suspended: `is not finished (${detail}); resume or kill it first`,
+    worktree: `has unsettled worktree work (${detail}); merge, dismiss, or clean it up first`,
+    delivery: `is still delivering its notification (${detail}); retry shortly`,
+  }[reason];
+  return `Cannot forget: ${label} ${why}.`;
 }

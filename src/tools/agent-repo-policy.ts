@@ -2,6 +2,7 @@ import { Type } from "../tool-parameter-schema";
 import { sessionManager } from "../singletons";
 import type { OpenClawPluginToolContext, RepoIntegrationPolicy, RepoPolicyRecord } from "../types";
 import { formatStoredRepoPolicyLine, validateRepoPolicyForPrAvailability } from "../repo-policy";
+import { quoteCommandArg } from "../commands/args";
 
 interface AgentRepoPolicyParams {
   workdir?: string;
@@ -28,21 +29,17 @@ function formatPolicy(record: RepoPolicyRecord | undefined): string {
 
 type RepoPolicySurface = "tool" | "command";
 
-/** Result text for a reset; names the removed records when they differ from the reference. */
+/** Result text for a reset; lists the removed records when they differ from the reference. */
 export function formatRepoPolicyReset(
   ref: string,
   removed: readonly RepoPolicyRecord[],
   surface: RepoPolicySurface = "tool",
 ): string {
   if (removed.length === 0) {
-    const listHint = surface === "tool" ? "agent_repo_policy(list=true)" : "/agent_policy list";
-    return `No stored repo policy found for ${ref}. List stored policies with ${listHint}; reset accepts a listed repo path.`;
+    return `No stored repo policy found for ${ref}. See ${surface === "tool" ? "agent_repo_policy(list=true)" : "/agent_policy list"} for stored repo paths.`;
   }
   if (removed.length === 1 && removed[0].repoRoot === ref) return `Repo policy reset for ${ref}.`;
-  return [
-    `Repo policy reset for ${ref}. Removed:`,
-    ...removed.map((record) => formatStoredRepoPolicyLine(record, { includeRemote: true })),
-  ].join("\n");
+  return [`Repo policy reset for ${ref}. Removed:`, ...removed.map((record) => formatStoredRepoPolicyLine(record, { includeRemote: true }))].join("\n");
 }
 
 /** Status text when the workdir is not a git repository (for example it was deleted). */
@@ -52,14 +49,14 @@ export function formatUnresolvedRepoPolicy(
   surface: RepoPolicySurface = "tool",
 ): string {
   if (stored.length === 0) return `No git repository found for ${ref}.`;
-  const [resetHint, cleanupHint] = surface === "tool"
-    ? [`agent_repo_policy(workdir="${ref}", reset=true)`, "agent_repo_policy(cleanup=true)"]
-    : [`/agent_policy reset ${JSON.stringify(ref)}`, "/agent_policy cleanup"];
+  const quoted = quoteCommandArg(ref);
+  const resetHint = surface === "tool"
+    ? `agent_repo_policy(workdir=${JSON.stringify(ref)}, reset=true)`
+    : quoted ? `/agent_policy reset ${quoted}` : "agent_repo_policy(reset=true) with this workdir";
   return [
     ...stored.flatMap((record, index) => [...(index > 0 ? [""] : []), formatPolicy(record)]),
     ``,
-    `No git repository found for ${ref}; the stored ${stored.length === 1 ? "policy is" : "policies are"} kept until reset.`,
-    `Remove with ${resetHint}, or remove every policy whose repo is gone with ${cleanupHint}.`,
+    `No git repository found for ${ref}; reset with ${resetHint}.`,
   ].join("\n");
 }
 
@@ -68,14 +65,14 @@ export function makeAgentRepoPolicyTool(ctx?: OpenClawPluginToolContext) {
     name: "agent_repo_policy",
     description: "Inspect or set the repository integration policy that governs OpenClaw Code Agent worktree merge/PR follow-through.",
     parameters: Type.Object({
-      workdir: Type.Optional(Type.String({ description: "Repository workdir. Defaults to the current workspace directory. With reset, a stored repo path or key from list also works when the repo directory no longer exists." })),
+      workdir: Type.Optional(Type.String({ description: "Repository workdir. Defaults to the current workspace directory. Reset also accepts a stored path or key." })),
       policy: Type.Optional(Type.Union([
         Type.Literal("pr-required"),
         Type.Literal("pr-allowed"),
         Type.Literal("never-pr"),
         Type.Literal("manual"),
       ], { description: "Policy to set for this repo." })),
-      reset: Type.Optional(Type.Boolean({ description: "Remove the stored policy for this repo, including one whose directory was deleted." })),
+      reset: Type.Optional(Type.Boolean({ description: "Remove the stored policy for this repo." })),
       list: Type.Optional(Type.Boolean({ description: "List all stored repo policies." })),
       cleanup: Type.Optional(Type.Boolean({ description: "Remove stored repo policies whose repoRoot no longer exists on disk." })),
     }),

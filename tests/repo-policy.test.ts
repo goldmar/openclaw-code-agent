@@ -730,8 +730,7 @@ describe("repo policy resolution", () => {
 
       const status = await text({ workdir: repoDir });
       assert.match(status, /Repo policy: never-pr/);
-      assert.match(status, /kept until reset/);
-      assert.match(status, /reset=true/);
+      assert.match(status, /reset with agent_repo_policy\(workdir=".*", reset=true\)/);
       assert.match(await text({ list: true }), new RegExp(`never-pr \\| github \\| ${repoDir} \\(missing\\)`));
 
       // A path inside the deleted repo resolves to the deepest stored root.

@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { createHash } from "crypto";
 import { Session } from "./session";
 import { pluginConfig, getDefaultHarnessName } from "./config";
@@ -107,7 +108,7 @@ export type ForgetSessionResult =
   | { ok: true; name: string; id?: string }
   | {
     ok: false;
-    reason: "not_found" | "running" | "not_persisted" | "suspended" | "worktree" | "delivery";
+    reason: "not_found" | "running" | "suspended" | "worktree" | "delivery";
     detail?: string;
     name?: string;
     id?: string;
@@ -2019,35 +2020,47 @@ export class SessionManager {
   }
 
   /**
-   * Remove a finished session's stored record, its schedules, action tokens,
-   * and output file. Refuses anything that could still need the record: a
-   * running or suspended (resumable) session, an unsettled worktree (a
-   * worktree directory still on disk, a pending decision, a merge or PR in
-   * progress, or an open PR), or an undelivered terminal notification.
-   * Callers check goal-loop ownership (see `getForgetSessionText`).
+   * Remove a finished session's stored record, schedules, action tokens, and
+   * output file. Refuses anything that may still need the record: running or
+   * suspended sessions, unsettled worktrees, a PR not confirmed merged or
+   * closed, and in-flight terminal delivery. Callers check goal ownership.
    */
-  forgetSession(ref: string): ForgetSessionResult {
+  async forgetSession(ref: string): Promise<ForgetSessionResult> {
     const active = this.resolve(ref);
     if (active && !TERMINAL_STATUSES.has(active.status)) {
       return { ok: false, reason: "running", name: active.name, id: active.id };
     }
     const persisted = active ? this.store.getPersistedSession(active.id) : this.getPersistedSession(ref);
     if (!persisted) {
-      return active
-        ? { ok: false, reason: "not_persisted", name: active.name, id: active.id }
-        : { ok: false, reason: "not_found" };
+      return active ? { ok: false, reason: "running", name: active.name, id: active.id } : { ok: false, reason: "not_found" };
     }
     const id = persisted.sessionId ?? persisted.harnessSessionId;
     const blocked = forgetBlockReason(persisted);
-    if (blocked) return { ok: false, reason: blocked.reason, detail: blocked.detail, name: persisted.name, id };
-
-    if (active) {
-      this.registry.remove(active.id, "forget");
-      this.clearWaitingTimestampsForSession(active.id);
-      this.lastTurnCompleteMarkers.delete(active.id);
-      this.lastTerminalWakeMarkers.delete(active.id);
+    if (blocked) return { ok: false, ...blocked, name: persisted.name, id };
+    const prUrl = persisted.worktreePrUrl;
+    if (prUrl) {
+      // A released worktree can still be represented by an open PR; keep the
+      // record unless GitHub confirms the PR is finished.
+      const cwd = persisted.workdir && existsSync(persisted.workdir) ? persisted.workdir : tmpdir();
+      const pr = await syncWorktreePRByUrl(cwd, prUrl, persisted.worktreePrTargetRepo);
+      if (pr.state !== "merged" && pr.state !== "closed") {
+        return { ok: false, reason: "worktree", detail: `PR ${prUrl} is ${pr.state === "none" ? "not confirmed closed" : pr.state}`, name: persisted.name, id };
+      }
     }
-    const removed = this.store.removePersistedSession(persisted.sessionId ?? ref);
+    // The PR check awaited: re-read so a concurrent resume or update wins.
+    const latest = this.store.getPersistedSession(persisted.sessionId ?? ref);
+    const current = this.resolve(ref);
+    if (!latest || (current && !TERMINAL_STATUSES.has(current.status)) || forgetBlockReason(latest)) {
+      return { ok: false, reason: "running", name: persisted.name, id };
+    }
+
+    if (current) {
+      this.registry.remove(current.id, "forget");
+      this.clearWaitingTimestampsForSession(current.id);
+      this.lastTurnCompleteMarkers.delete(current.id);
+      this.lastTerminalWakeMarkers.delete(current.id);
+    }
+    const removed = this.store.removePersistedSession(latest.sessionId ?? ref);
     if (!removed) return { ok: false, reason: "not_found" };
     if (removed.sessionId) this.store.deleteActionTokensForSession(removed.sessionId);
     this.maintenance.forgetPersistedSession(removed);

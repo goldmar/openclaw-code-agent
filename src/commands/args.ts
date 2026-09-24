@@ -43,3 +43,15 @@ function stripWrappingQuotes(token: string): string {
   }
   return token;
 }
+
+/**
+ * Quote a value so `tokenizeCommandArgs` reads it back unchanged. The tokenizer
+ * strips one pair of wrapping quotes and has no escapes, so a value containing
+ * whitespace and both quote characters cannot be expressed; it returns undefined.
+ */
+export function quoteCommandArg(value: string): string | undefined {
+  if (value && !/[\s"']/.test(value)) return value;
+  if (!value.includes("\"")) return `"${value}"`;
+  if (!value.includes("'")) return `'${value}'`;
+  return undefined;
+}

@@ -3,6 +3,8 @@ import { beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { registerAgentPolicyCommand } from "../src/commands/agent-policy";
 import { setSessionManager } from "../src/singletons";
+import { formatUnresolvedRepoPolicy } from "../src/tools/agent-repo-policy";
+import { tokenizeCommandArgs } from "../src/commands/args";
 
 type Handler = (ctx: { args?: string; workspaceDir?: string }) => Promise<{ text: string }>;
 
@@ -157,12 +159,24 @@ describe("/agent_policy command", () => {
     const handler = captureHandler();
 
     assert.equal((await handler({ args: "reset \"/gone/repo\"", workspaceDir: "/elsewhere" })).text, "Repo policy reset for /gone/repo.");
-    assert.match((await handler({ args: "reset", workspaceDir: "/elsewhere" })).text, /No stored repo policy found for \/elsewhere\. List stored policies with \/agent_policy list/);
+    assert.match((await handler({ args: "reset", workspaceDir: "/elsewhere" })).text, /No stored repo policy found for \/elsewhere\. See \/agent_policy list/);
     assert.deepEqual(resetRefs, ["/gone/repo", "/elsewhere"]);
 
     const status = await handler({ workspaceDir: "/gone/repo" });
     assert.match(status.text, /Repo policy: never-pr/);
-    assert.match(status.text, /Remove with \/agent_policy reset "\/gone\/repo", or remove every policy whose repo is gone with \/agent_policy cleanup\./);
+    assert.match(status.text, /reset with \/agent_policy reset \/gone\/repo\.$/);
     assert.equal((await handler({ workspaceDir: "/not-a-repo" })).text, "No git repository found for /not-a-repo.");
+  });
+
+  it("quotes reset hints so the command parser reads the path back", async () => {
+    const stored = (repoRoot: string) => [{ ...policyRecord("never-pr"), repoRoot }];
+    for (const path of ["/gone/my repo", "/gone/a\"b c", "/gone/it's here", "/gone/back\\slash"]) {
+      const text = formatUnresolvedRepoPolicy(path, stored(path), "command");
+      const hint = /reset with \/agent_policy reset (.+)\.$/.exec(text)?.[1];
+      assert.ok(hint, text);
+      assert.deepEqual(tokenizeCommandArgs(hint), [path]);
+    }
+    assert.match(formatUnresolvedRepoPolicy(`/gone/a"b c'd`, stored(`/gone/a"b c'd`), "command"), /reset with agent_repo_policy\(reset=true\) with this workdir\.$/);
+    assert.match(formatUnresolvedRepoPolicy('/gone/a"b', stored('/gone/a"b')), /agent_repo_policy\(workdir="\/gone\/a\\"b", reset=true\)/);
   });
 });
