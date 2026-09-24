@@ -89,6 +89,9 @@ import {
   seededRepoPolicy,
   type RepoPolicyResolution,
 } from "./repo-policy";
+import { createLogger } from "./logger";
+
+const log = createLogger("session-manager");
 
 
 const TERMINAL_STATUSES = new Set<SessionStatus>(["completed", "failed", "killed"]);
@@ -482,6 +485,10 @@ export class SessionManager {
       handleTurnEnd: (session, hadQuestion) => lifecycle.handleTurnEnd(session, hadQuestion),
       formatLaunchWorkdirLabel: (session) => manager.formatLaunchWorkdirLabel(session),
       notifySession: (session, text, label, idempotencyKey) => manager.notifySession(session, text, label, idempotencyKey),
+      cancelSession: (session) => {
+        if (sessions.get(session.id) !== session || !KILLABLE_STATUSES.has(session.status)) return;
+        manager.kill(session.id, "user");
+      },
     });
 
     return {
@@ -533,8 +540,8 @@ export class SessionManager {
     this.maintenance.syncActionTokenExpiryDeadline();
   }
 
-  private syncTmpOutputCleanupDeadline(now: number = Date.now()): void {
-    this.maintenance.syncTmpOutputCleanupDeadline(now);
+  private syncSessionOutputCleanupDeadline(now: number = Date.now()): void {
+    this.maintenance.syncSessionOutputCleanupDeadline(now);
   }
 
   private enforcePersistedRetention(): void {
@@ -628,7 +635,7 @@ export class SessionManager {
     const baseName = config.name || generateSessionName(config.prompt);
     const name = this.uniqueName(baseName);
     if (name !== baseName) {
-      console.warn(`[SessionManager] Name conflict: "${baseName}" → "${name}" (active session with same name exists)`);
+      log.warn(`[SessionManager] Name conflict: "${baseName}" → "${name}" (active session with same name exists)`);
     }
 
     const launchPolicy = this.checkRepoPolicyForLaunch(config.workdir, config.worktreeStrategy);
@@ -1496,7 +1503,7 @@ export class SessionManager {
       : undefined);
 
     if (!parentRoutingTarget) {
-      console.warn(
+      log.warn(
         `[SessionManager] Auto-merge resolver ${session.id} completed, but original session ${parentRef} could not be found.`,
       );
       return;
@@ -1559,7 +1566,7 @@ export class SessionManager {
       this.syncRuntimeGcDeadline(session);
     }
     this.onPersistedSessionChanged(this.store.getPersistedSession(session.id));
-    this.syncTmpOutputCleanupDeadline();
+    this.syncSessionOutputCleanupDeadline();
   }
 
   private async reconcilePersistedTaskFlowMirrors(): Promise<void> {
@@ -1569,7 +1576,7 @@ export class SessionManager {
       try {
         reconciled = await reconcilePersistedSessionTaskMirror(session);
       } catch (err) {
-        console.warn(`[SessionTaskLifecycle] reconciliation failed for session ${session.sessionId}:`, err);
+        log.warn(`[SessionTaskLifecycle] reconciliation failed for session ${session.sessionId}:`, err);
         continue;
       }
       if (!reconciled) continue;
@@ -1783,7 +1790,7 @@ export class SessionManager {
     const marker = `${session.startedAt ?? 0}|${session.result?.session_id ?? ""}|${session.result?.num_turns ?? 0}`;
     const prev = this.lastTurnCompleteMarkers.get(session.id);
     if (prev === marker) {
-      console.info(
+      log.info(
         `[SessionManager] shouldEmitTurnCompleteWake: debounced for session ${session.id} ` +
         `(marker unchanged: ${marker})`,
       );

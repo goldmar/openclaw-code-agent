@@ -8,7 +8,15 @@ import {
   type DispatchSuccessValidationResult,
 } from "./wake-delivery-executor";
 import { WakeRouteResolver } from "./wake-route-resolver";
-import { WakeTransport, type WakeTransportOptions } from "./wake-transport";
+import {
+  RuntimeSystemEventTransport,
+  WakeTransport,
+  type SystemEventTransport,
+  type WakeTransportOptions,
+} from "./wake-transport";
+import { createLogger } from "./logger";
+
+const log = createLogger("wake-dispatcher");
 
 export type SessionNotificationPolicy = "always" | "on-wake-fallback" | "never";
 
@@ -108,20 +116,21 @@ function extractJsonFinalText(value: unknown): string {
 export interface WakeDispatcherOptions {
   transport?: WakeTransport;
   transportOptions?: WakeTransportOptions;
-  directNotifications?: DirectNotificationTransport | null;
+  directNotifications?: DirectNotificationTransport;
+  systemEvents?: SystemEventTransport;
 }
 
 export class WakeDispatcher {
   private readonly routes = new WakeRouteResolver();
   private readonly transport: WakeTransport;
-  private readonly directNotifications: DirectNotificationTransport | null;
+  private readonly directNotifications: DirectNotificationTransport;
+  private readonly systemEvents: SystemEventTransport;
   private readonly executor = new WakeDeliveryExecutor();
 
   constructor(options: WakeDispatcherOptions = {}) {
     this.transport = options.transport ?? new WakeTransport(options.transportOptions);
-    this.directNotifications = options.directNotifications === undefined
-      ? new RuntimeDirectNotificationTransport()
-      : options.directNotifications;
+    this.directNotifications = options.directNotifications ?? new RuntimeDirectNotificationTransport();
+    this.systemEvents = options.systemEvents ?? new RuntimeSystemEventTransport();
   }
 
   clearPendingRetries(): void {
@@ -185,26 +194,14 @@ export class WakeDispatcher {
     if (shouldContinue?.() === false) return;
     const sessionKey = route?.sessionKey?.trim();
     if (!sessionKey) {
-      this.executor.execute(
-        this.transport.buildSystemEventArgs(text),
-        {
-          label: `${label}-system`,
-          sessionId: session.id,
-          target: "system.event",
-          phase,
-          routeSummary: "system",
-          messageKind: "wake",
-          dispatchContext: this.buildDispatchContext({
-            routeSummary: "system",
-            text,
-          }),
-          onSuccess,
-          onSkipped,
-          onFinalFailure,
-          successValidator,
-          shouldContinue,
-        },
-      );
+      this.sendSystemEvent(session, text, {
+        label: `${label}-system`,
+        phase,
+        messageKind: "wake",
+        onSuccess,
+        onFinalFailure,
+        shouldContinue,
+      });
       return;
     }
 
@@ -228,26 +225,15 @@ export class WakeDispatcher {
         shouldContinue,
         onFinalFailure: () => {
           if (shouldContinue?.() === false) return;
-          this.executor.execute(
-            this.transport.buildSystemEventArgs(text),
-            {
-              label: `${label}-fallback`,
-              sessionId: session.id,
-              target: "system.event",
-              phase,
-              routeSummary: "system",
-              messageKind: "wake",
-              dispatchContext: this.buildDispatchContext({
-                routeSummary: "system",
-                text,
-              }),
-              onSuccess,
-              onSkipped,
-              onFinalFailure,
-              successValidator,
-              shouldContinue,
-            },
-          );
+          this.sendSystemEvent(session, text, {
+            label: `${label}-fallback`,
+            phase,
+            messageKind: "wake",
+            sessionKey,
+            onSuccess,
+            onFinalFailure,
+            shouldContinue,
+          });
         },
       },
     );
@@ -272,7 +258,6 @@ export class WakeDispatcher {
       label,
       messageTextLength: text.length,
       requireDirectDelivery,
-      hasDirectNotificationTransport: Boolean(this.directNotifications),
       routeSummary: route ? this.routes.summary(route) : "system",
       channel: route?.channel,
       target: route?.target,
@@ -294,7 +279,7 @@ export class WakeDispatcher {
         ...summarizeButtons(buttons),
       });
       if (requireDirectDelivery) {
-        console.warn(
+        log.warn(
           `[WakeDispatcher] Direct notification "${label}" for session ${session.id} ` +
           `has no direct route; reporting delivery failure instead of using system fallback.`,
         );
@@ -302,33 +287,23 @@ export class WakeDispatcher {
         return;
       }
       if (hasInteractiveButtons) {
-        console.warn(
+        log.warn(
           `[WakeDispatcher] Interactive notification "${label}" for session ${session.id} ` +
           `has no direct route; refusing text-only fallback because buttons would be lost.`,
         );
         onAllFailed?.();
         return;
       }
-      this.executor.execute(
-        this.transport.buildSystemEventArgs(text),
-        {
-          label: `${label}-notify-system`,
-          sessionId: session.id,
-          target: "system.event",
-          phase: "notify",
-          routeSummary: "system",
-          messageKind: "notify",
-          dispatchContext: this.buildDispatchContext({
-            routeSummary: "system",
-            text,
-            buttons,
-          }),
-          orderingKey,
-          onSuccess,
-          onFinalFailure: onAllFailed,
-          shouldContinue: shouldDispatch,
-        },
-      );
+      this.sendSystemEvent(session, text, {
+        label: `${label}-notify-system`,
+        phase: "notify",
+        messageKind: "notify",
+        buttons,
+        orderingKey,
+        onSuccess,
+        onFinalFailure: onAllFailed,
+        shouldContinue: shouldDispatch,
+      });
       return;
     }
 
@@ -347,7 +322,7 @@ export class WakeDispatcher {
         ...summarizeButtons(buttons),
       });
       if (requireDirectDelivery) {
-        console.warn(
+        log.warn(
           `[WakeDispatcher] Direct notification "${label}" for session ${session.id} ` +
           `failed direct delivery; reporting delivery failure instead of using system fallback.`,
         );
@@ -355,32 +330,22 @@ export class WakeDispatcher {
         return;
       }
       if (hasInteractiveButtons) {
-        console.warn(
+        log.warn(
           `[WakeDispatcher] Interactive notification "${label}" for session ${session.id} ` +
           `failed direct delivery; refusing text-only fallback because buttons would be lost.`,
         );
         onAllFailed?.();
         return;
       }
-      this.executor.execute(
-        this.transport.buildSystemEventArgs(text),
-        {
-          label: `${label}-notify-fallback`,
-          sessionId: session.id,
-          target: "system.event",
-          phase: "notify",
-          routeSummary: "system",
-          messageKind: "notify",
-          dispatchContext: this.buildDispatchContext({
-            routeSummary: "system",
-            text,
-          }),
-          orderingKey,
-          onSuccess,
-          onFinalFailure: onAllFailed,
-          shouldContinue: shouldDispatch,
-        },
-      );
+      this.sendSystemEvent(session, text, {
+        label: `${label}-notify-fallback`,
+        phase: "notify",
+        messageKind: "notify",
+        orderingKey,
+        onSuccess,
+        onFinalFailure: onAllFailed,
+        shouldContinue: shouldDispatch,
+      });
     };
 
     const options = {
@@ -398,32 +363,14 @@ export class WakeDispatcher {
       }),
       orderingKey,
       onSuccess,
-      onAmbiguousResult: directFailureHandler,
       onFinalFailure: directFailureHandler,
-      terminalOnFailure: this.directNotifications ? true : undefined,
+      // The host durable queue owns retries for an admitted send; re-sending here
+      // could duplicate a notification the queue later delivers.
+      terminalOnFailure: true,
       shouldContinue: shouldDispatch,
     } as const;
 
-    if (this.directNotifications) {
-      logButtonDiagnostic("wake_notify_dispatching_direct_runtime", {
-        sessionId: session.id,
-        sessionName: session.name,
-        label,
-        channel: route.channel,
-        target: route.target,
-        accountId: route.accountId,
-        threadId: route.threadId,
-        sessionKey: route.sessionKey,
-        ...summarizeButtons(buttons),
-      });
-      this.executor.executePromise(
-        () => this.directNotifications!.send(route, text, buttons),
-        options,
-      );
-      return;
-    }
-
-    logButtonDiagnostic("wake_notify_dispatching_cli_message_send", {
+    logButtonDiagnostic("wake_notify_dispatching_direct_runtime", {
       sessionId: session.id,
       sessionName: session.name,
       label,
@@ -434,9 +381,50 @@ export class WakeDispatcher {
       sessionKey: route.sessionKey,
       ...summarizeButtons(buttons),
     });
-    this.executor.execute(
-      this.transport.buildDirectNotificationArgs(route, text, buttons),
+    this.executor.executePromise(
+      () => this.directNotifications.send(route, text, buttons),
       options,
+    );
+  }
+
+  private sendSystemEvent(
+    session: Session,
+    text: string,
+    opts: {
+      label: string;
+      phase: DispatchPhase;
+      messageKind: "notify" | "wake";
+      sessionKey?: string;
+      buttons?: Array<Array<{ label: string; callbackData: string }>>;
+      orderingKey?: string;
+      onSuccess?: () => void;
+      onFinalFailure?: () => void;
+      shouldContinue?: () => boolean;
+    },
+  ): void {
+    const routeSummary = opts.sessionKey ? `system:${opts.sessionKey}` : "system";
+    this.executor.executePromise(
+      () => this.systemEvents.enqueue(text, {
+        ...(opts.sessionKey ? { sessionKey: opts.sessionKey } : {}),
+        contextKey: `openclaw-code-agent:${session.id}`,
+      }),
+      {
+        label: opts.label,
+        sessionId: session.id,
+        target: "system.event",
+        phase: opts.phase,
+        routeSummary,
+        messageKind: opts.messageKind,
+        dispatchContext: this.buildDispatchContext({
+          routeSummary,
+          text,
+          buttons: opts.buttons,
+        }),
+        orderingKey: opts.orderingKey,
+        onSuccess: opts.onSuccess,
+        onFinalFailure: opts.onFinalFailure,
+        shouldContinue: opts.shouldContinue,
+      },
     );
   }
 

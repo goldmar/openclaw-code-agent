@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking changes
+
+- State paths now follow the Gateway: OCA resolves its state directory with the host's `resolveStateDir`, so `OPENCLAW_STATE_DIR` is honored and `OPENCLAW_HOME` is treated as the home-directory override (state in `$OPENCLAW_HOME/.openclaw`) instead of as the state directory itself. Operators who set `OPENCLAW_HOME` to point OCA at a state directory should set `OPENCLAW_STATE_DIR` (or `OPENCLAW_CODE_AGENT_SESSIONS_PATH` / `OPENCLAW_CODE_AGENT_GOAL_TASKS_PATH`) instead.
+- Session output transcripts move from `/tmp/openclaw-agent-<id>.txt` to `<stateDir>/plugin-state/openclaw-code-agent/output/` (private directory and files). Existing `/tmp` transcripts stay readable through their stored paths and are aged out by the normal maintenance cleanup.
+- Auto-update state moves to `<stateDir>/plugin-state/openclaw-code-agent/auto-update.json`; the previous `openclaw-code-agent-auto-update.json` is read once as a migration source.
+- Removed the age-based startup sweep that deleted unmanaged `openclaw-worktree-*` directories (and the `OPENCLAW_WORKTREE_CLEANUP_AGE_HOURS` knob). Managed worktrees are still cleaned by the maintenance schedules and `agent_worktree_cleanup`; review and remove unmanaged directories with `git worktree remove`/`git worktree prune`.
+- Direct notifications no longer fall back to `openclaw message send`, and OCA no longer retries a failed direct send: the host durable outbound queue owns retries of an admitted send.
+- A user stop (`agent_kill`) now records a Task Flow cancel intent, so the mirrored flow ends as `cancelled` instead of `failed`.
+
+### Changed
+
+- Direct notifications use the host durable outbound queue (`sendDurableMessageBatch` from `openclaw/plugin-sdk/channel-outbound`) with a channel-agnostic button `presentation`; core renders Telegram inline keyboards and Discord components, replacing OCA's adapter loading and Telegram button repair.
+- Wake fallbacks and system notices use the in-process `api.runtime.system.enqueueSystemEvent` plus `requestHeartbeat` instead of the `openclaw system event --mode now` subprocess, and target the origin session when it is known.
+- Honor `openclaw tasks flow cancel` for mirrored sessions: a host cancel intent stops the coding session. Flow creation uses `tryCreateManaged`.
+- Plugin diagnostics are written to the Gateway log through `api.runtime.logging.getChildLogger`; per-dispatch delivery progress is logged at `debug`.
+- The session index, goal task store, and auto-update state are written through the host `json-store` helper (private files, fsync'd atomic replacement).
+- `:thread:` session-key suffixes are parsed with the public `openclaw/plugin-sdk/routing` helper; Telegram `:topic:` parsing stays local.
+- `api.runtime` is typed with the published plugin SDK `PluginRuntime`.
+- The build externalizes the public SDK subpaths `channel-outbound`, `json-store`, `routing`, and `state-paths` in addition to `plugin-entry`. All four exist in the retained OpenClaw `2026.8.1` API floor, so the compatibility floor is unchanged.
+
+### Fixed
+
+- LLM-generated worktree decision summaries, question context summaries, and PR metadata now call `api.runtime.llm.complete` with the required `messages`, `systemPrompt`, `purpose`, and `maxTokens` and parse `LlmCompleteResult.text`; previously every call failed and silently used the deterministic fallback. Speculative probing of `runtime.ai`, `runtime.model(s)`, and other nonexistent surfaces is removed. Question context summaries get a 5 s budget (previously 300 ms) and abort the host completion when it expires.
+
 ## [4.7.20] - 2026-09-24
 
 ### Added

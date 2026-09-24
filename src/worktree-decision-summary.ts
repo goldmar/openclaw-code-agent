@@ -1,5 +1,8 @@
 import type { getDiffSummary } from "./worktree";
-import { getPluginRuntime } from "./runtime-store";
+import { completeRuntimeLlmText, describeRuntimeLlmError, getRuntimeLlmComplete } from "./runtime-llm";
+import { createLogger } from "./logger";
+
+const log = createLogger("worktree-decision-summary");
 
 type DiffSummary = NonNullable<ReturnType<typeof getDiffSummary>>;
 
@@ -30,46 +33,20 @@ const MAX_SUMMARY_LINE_LENGTH = 180;
 const MAX_OUTPUT_PREVIEW_LENGTH = 4_000;
 const OPAQUE_TOKEN_MIN_LENGTH = 32;
 
-type RuntimeSummaryCandidate = {
-  generateWorktreeDecisionSummary?: (evidence: WorktreeDecisionSummaryEvidence) => Promise<unknown> | unknown;
-  summarizeWorktreeDecision?: (evidence: WorktreeDecisionSummaryEvidence) => Promise<unknown> | unknown;
-  generateObject?: (params: Record<string, unknown>) => Promise<unknown> | unknown;
-  generateText?: (params: Record<string, unknown> | string) => Promise<unknown> | unknown;
-  complete?: (params: Record<string, unknown> | string) => Promise<unknown> | unknown;
-};
+const SUMMARY_MAX_TOKENS = 400;
 
 export function createRuntimeWorktreeDecisionSummaryProvider(): WorktreeDecisionSummaryProvider | undefined {
-  const runtime = getPluginRuntime() as Record<string, unknown> | undefined;
-  const candidate = findRuntimeSummaryCandidate(runtime);
-  if (!candidate) return undefined;
+  const complete = getRuntimeLlmComplete();
+  if (!complete) return undefined;
 
   return {
     async generateWorktreeDecisionSummary(evidence) {
-      if (typeof candidate.generateWorktreeDecisionSummary === "function") {
-        return await candidate.generateWorktreeDecisionSummary(evidence);
-      }
-      if (typeof candidate.summarizeWorktreeDecision === "function") {
-        return await candidate.summarizeWorktreeDecision(evidence);
-      }
-
-      const prompt = buildWorktreeDecisionSummaryPrompt(evidence);
-      if (typeof candidate.generateObject === "function") {
-        return await candidate.generateObject({
-          task: "openclaw-code-agent.worktree-decision-summary",
-          prompt,
-          input: evidence,
-        });
-      }
-      if (typeof candidate.generateText === "function") {
-        return await candidate.generateText({
-          task: "openclaw-code-agent.worktree-decision-summary",
-          prompt,
-        });
-      }
-      if (typeof candidate.complete === "function") {
-        return await candidate.complete({ prompt });
-      }
-      return undefined;
+      return await completeRuntimeLlmText(complete, {
+        purpose: "openclaw-code-agent.worktree-decision-summary",
+        systemPrompt: WORKTREE_DECISION_SUMMARY_SYSTEM_PROMPT,
+        prompt: buildWorktreeDecisionSummaryPrompt(evidence),
+        maxTokens: SUMMARY_MAX_TOKENS,
+      });
     },
   };
 }
@@ -219,8 +196,7 @@ export async function buildWorktreeDecisionWorkSummary(args: {
       error: "LLM-generated worktree summary failed schema validation.",
     };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.warn(`[worktree_decision_summary] LLM summary provider failed: ${message}`);
+    log.warn(`[worktree_decision_summary] LLM summary provider failed: ${describeRuntimeLlmError(err)}`);
     return {
       source: "fallback",
       lines: fallback,
@@ -292,32 +268,15 @@ function normalizeGeneratedSummaryPayload(generated: unknown): unknown {
   }
 }
 
-function findRuntimeSummaryCandidate(runtime: Record<string, unknown> | undefined): RuntimeSummaryCandidate | undefined {
-  const candidates = [
-    runtime?.worktreeDecisionSummary,
-    runtime?.llm,
-    runtime?.ai,
-    runtime?.model,
-    runtime?.models,
-  ];
-  return candidates.find((candidate): candidate is RuntimeSummaryCandidate =>
-    Boolean(candidate && typeof candidate === "object" && (
-      typeof (candidate as RuntimeSummaryCandidate).generateWorktreeDecisionSummary === "function"
-      || typeof (candidate as RuntimeSummaryCandidate).summarizeWorktreeDecision === "function"
-      || typeof (candidate as RuntimeSummaryCandidate).generateObject === "function"
-      || typeof (candidate as RuntimeSummaryCandidate).generateText === "function"
-      || typeof (candidate as RuntimeSummaryCandidate).complete === "function"
-    )),
-  );
-}
+const WORKTREE_DECISION_SUMMARY_SYSTEM_PROMPT = [
+  `You summarize completed OpenClaw Code Agent work for a worktree decision notification.`,
+  `Return only JSON with shape {"summary":["..."]}.`,
+  `Write 1-3 concise, user-facing bullets that help a human choose Merge, Open PR, Later, or Discard.`,
+  `Do not mention that you are summarizing. Do not invent changes not supported by the evidence.`,
+].join("\n");
 
-function buildWorktreeDecisionSummaryPrompt(evidence: WorktreeDecisionSummaryEvidence): string {
+export function buildWorktreeDecisionSummaryPrompt(evidence: WorktreeDecisionSummaryEvidence): string {
   return [
-    `Summarize the completed OpenClaw Code Agent work for a worktree decision notification.`,
-    `Return only JSON with shape {"summary":["..."]}.`,
-    `Write 1-3 concise, user-facing bullets that help a human choose Merge, Open PR, Later, or Discard.`,
-    `Do not mention that you are summarizing. Do not invent changes not supported by the evidence.`,
-    ``,
     `Evidence:`,
     JSON.stringify(evidence, null, 2),
   ].join("\n");

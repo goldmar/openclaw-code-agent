@@ -80,7 +80,13 @@ function toOptionalTaskFlowMirror(value: unknown): PersistedTaskFlowMirror | und
   const status = typeof value.status === "string" && VALID_TASK_FLOW_MIRROR_STATUSES.has(value.status as PersistedTaskFlowMirror["status"])
     ? value.status as PersistedTaskFlowMirror["status"]
     : undefined;
-  return { flowId, revision, ...(status ? { status } : {}) };
+  const cancelRequestedAt = toOptionalNumber(value.cancelRequestedAt);
+  return {
+    flowId,
+    revision,
+    ...(status ? { status } : {}),
+    ...(cancelRequestedAt !== undefined ? { cancelRequestedAt } : {}),
+  };
 }
 
 function toOptionalReasoningEffort(value: unknown): ReasoningEffort | undefined {

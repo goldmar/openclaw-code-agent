@@ -5,6 +5,9 @@ import type { ManagedWorktreeLifecycleState, PersistedSessionInfo } from "./type
 import type { Session } from "./session";
 import { getBackendConversationId, getPersistedMutationRefs, getPrimarySessionLookupRef } from "./session-backend-ref";
 import { resolveWorktreeLifecycle } from "./worktree-lifecycle-resolver";
+import { createLogger } from "./logger";
+
+const log = createLogger("session-reminder-service");
 
 type RoutingProxyBuilder = (session: {
   id?: string;
@@ -84,7 +87,7 @@ export class SessionReminderService {
     try {
       this.sendReminderNotification(session, pendingHours);
     } catch (err) {
-      console.warn(
+      log.warn(
         `[SessionReminderService] Failed to send stale-decision reminder for session ${session.name}: ${err instanceof Error ? err.message : String(err)}`,
       );
       return false;

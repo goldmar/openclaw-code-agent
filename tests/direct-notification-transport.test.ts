@@ -1,11 +1,38 @@
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+  classifyDurableSendResult,
+  DirectNotificationDeliveryError,
   RuntimeDirectNotificationTransport,
-  directNotificationTransportInternals,
+  type DurableMessageBatchSendResult,
 } from "../src/direct-notification-transport";
 import { buildWaitingForInputPayload } from "../src/session-notification-builders/waiting";
 import { getRuntimeConfig, setPluginRuntime } from "../src/runtime-store";
+
+type SendCall = Record<string, any>;
+
+const TOPIC_ROUTE = {
+  channel: "telegram",
+  accountId: "default",
+  target: "-1003863755361",
+  threadId: "28",
+  sessionKey: "agent:main:telegram:group:-1003863755361:topic:28",
+};
+
+function sentResult(): DurableMessageBatchSendResult {
+  return { status: "sent", results: [], receipt: {} } as unknown as DurableMessageBatchSendResult;
+}
+
+function recordingTransport(
+  result: DurableMessageBatchSendResult | (() => Promise<DurableMessageBatchSendResult>) = sentResult(),
+) {
+  const calls: SendCall[] = [];
+  const transport = new RuntimeDirectNotificationTransport(async () => (async (params: SendCall) => {
+    calls.push(params);
+    return typeof result === "function" ? await result() : result;
+  }) as never);
+  return { calls, transport };
+}
 
 describe("RuntimeDirectNotificationTransport", () => {
   afterEach(() => {
@@ -13,97 +40,36 @@ describe("RuntimeDirectNotificationTransport", () => {
     delete process.env.OPENCLAW_CODE_AGENT_BUTTON_DIAGNOSTICS;
   });
 
-  function telegramButtons(payload: unknown): Array<Array<Record<string, unknown>>> {
-    return ((payload as any).channelData.telegram.buttons ?? []) as Array<Array<Record<string, unknown>>>;
-  }
+  it("sends Telegram topic text through the host durable outbound queue", async () => {
+    const cfg = { channels: { telegram: { enabled: true } } };
+    setPluginRuntime({}, cfg);
+    const { calls, transport } = recordingTransport();
 
-  function assertNoInvalidTelegramStyle(payload: unknown): void {
-    const allowed = new Set(["primary", "success", "danger"]);
-    for (const row of telegramButtons(payload)) {
-      for (const button of row) {
-        assert.ok(
-          button.style === undefined || allowed.has(String(button.style)),
-          `invalid Telegram button style emitted: ${String(button.style)}`,
-        );
-      }
-    }
-  }
-
-  it("sends Telegram topic text through the in-process outbound adapter", async () => {
-    const calls: Array<Record<string, unknown>> = [];
-    setPluginRuntime({
-      channel: {
-        outbound: {
-          loadAdapter: async (channelId: string) => {
-            assert.equal(channelId, "telegram");
-            return {
-              sendText: async (ctx: Record<string, unknown>) => {
-                calls.push(ctx);
-              },
-            };
-          },
-        },
-      },
-    }, { channels: { telegram: { enabled: true } } });
-
-    await new RuntimeDirectNotificationTransport().send(
-      {
-        channel: "telegram",
-        accountId: "default",
-        target: "-1003863755361",
-        threadId: "28",
-        sessionKey: "agent:main:telegram:group:-1003863755361:topic:28",
-      },
-      "🚀 launched",
-    );
+    await transport.send(TOPIC_ROUTE, "🚀 launched");
 
     assert.equal(calls.length, 1);
-    assert.equal(calls[0]?.to, "-1003863755361");
-    assert.equal(calls[0]?.text, "🚀 launched");
-    assert.equal(calls[0]?.accountId, "default");
-    assert.equal(calls[0]?.threadId, "28");
+    assert.deepEqual(calls[0], {
+      cfg,
+      channel: "telegram",
+      to: "-1003863755361",
+      accountId: "default",
+      threadId: "28",
+      payloads: [{ text: "🚀 launched" }],
+      durability: "required",
+    });
   });
 
   it("uses runtime.config.current when no service config snapshot is stored", async () => {
-    const calls: Array<Record<string, unknown>> = [];
     const cfg = { channels: { telegram: { enabled: true } }, source: "runtime-current" };
-    setPluginRuntime({
-      config: {
-        current: () => cfg,
-      },
-      channel: {
-        outbound: {
-          loadAdapter: async (channelId: string) => {
-            assert.equal(channelId, "telegram");
-            return {
-              sendText: async (ctx: Record<string, unknown>) => {
-                calls.push(ctx);
-              },
-            };
-          },
-        },
-      },
-    });
+    setPluginRuntime({ config: { current: () => cfg } });
+    const { calls, transport } = recordingTransport();
 
-    await new RuntimeDirectNotificationTransport().send(
-      {
-        channel: "telegram",
-        accountId: "default",
-        target: "-1003863755361",
-        threadId: "28",
-        sessionKey: "agent:main:telegram:group:-1003863755361:topic:28",
-      },
-      "🚀 launched",
-    );
+    await transport.send(TOPIC_ROUTE, "🚀 launched");
 
-    assert.equal(calls.length, 1);
     assert.equal(calls[0]?.cfg, cfg);
-    assert.equal(calls[0]?.to, "-1003863755361");
-    assert.equal(calls[0]?.accountId, "default");
-    assert.equal(calls[0]?.threadId, "28");
   });
 
-  it("caches a null runtime.config.current result", async () => {
+  it("caches a null runtime.config.current result", () => {
     let runtimeConfigReads = 0;
     setPluginRuntime({
       config: {
@@ -120,904 +86,144 @@ describe("RuntimeDirectNotificationTransport", () => {
   });
 
   it("preserves the service config when a later runtime-only registration occurs", async () => {
-    const calls: Array<Record<string, unknown>> = [];
-    const serviceCfg = { channels: { telegram: { enabled: true } }, source: "service-start" };
-    const runtimeCfg = { channels: { telegram: { enabled: true } }, source: "register" };
+    const serviceCfg = { source: "service-start" };
     let runtimeConfigReads = 0;
     const runtime = {
       config: {
         current: () => {
           runtimeConfigReads += 1;
-          return runtimeCfg;
-        },
-      },
-      channel: {
-        outbound: {
-          loadAdapter: async () => ({
-            sendText: async (ctx: Record<string, unknown>) => {
-              calls.push(ctx);
-            },
-          }),
+          return { source: "register" };
         },
       },
     };
-
     setPluginRuntime(runtime, serviceCfg);
     setPluginRuntime(runtime);
+    const { calls, transport } = recordingTransport();
 
-    await new RuntimeDirectNotificationTransport().send(
-      {
-        channel: "telegram",
-        accountId: "default",
-        target: "-1003863755361",
-        threadId: "28",
-        sessionKey: "agent:main:telegram:group:-1003863755361:topic:28",
-      },
-      "✅ completed",
-    );
+    await transport.send(TOPIC_ROUTE, "✅ completed");
 
-    assert.equal(calls.length, 1);
     assert.equal(calls[0]?.cfg, serviceCfg);
     assert.equal(runtimeConfigReads, 0);
   });
 
-  it("preserves interactive buttons through presentation payload delivery", async () => {
-    const payloads: unknown[] = [];
-    setPluginRuntime({
-      channel: {
-        outbound: {
-          loadAdapter: async () => ({
-            renderPresentation: ({ payload }: { payload: unknown }) => ({
-              ...(payload as Record<string, unknown>),
-              channelData: { rendered: true },
-            }),
-            sendPayload: async (ctx: { payload: unknown }) => {
-              payloads.push(ctx.payload);
-            },
-          }),
-        },
-      },
-    }, { channels: { telegram: { enabled: true } } });
+  it("omits absent account and thread ids", async () => {
+    setPluginRuntime({}, {});
+    const { calls, transport } = recordingTransport();
 
-    await new RuntimeDirectNotificationTransport().send(
-      {
-        channel: "telegram",
-        accountId: "default",
-        target: "-1003863755361",
-        threadId: "28",
-      },
-      "Plan needs approval",
-      [[{ label: "Approve", callbackData: "token-approve", style: "success" }]],
-    );
+    await transport.send({ channel: "discord", target: "channel:123" }, "Plain notification");
 
-    assert.deepEqual(payloads, [
-      {
-        text: "Plan needs approval",
-        presentation: {
-          blocks: [
-            {
-              type: "buttons",
-              buttons: [
-                {
-                  label: "Approve",
-                  value: "code-agent:token-approve",
-                  style: "success",
-                },
-              ],
-            },
-          ],
-        },
-        interactive: {
-          blocks: [
-            {
-              type: "buttons",
-              buttons: [
-                {
-                  label: "Approve",
-                  value: "code-agent:token-approve",
-                  style: "success",
-                },
-              ],
-            },
-          ],
-        },
-        channelData: {
-          rendered: true,
-          telegram: {
-            buttons: [[
-              {
-                text: "Approve",
-                callback_data: "code-agent:token-approve",
-                style: "success",
-              },
-            ]],
-          },
-        },
-      },
-    ]);
+    assert.equal("accountId" in (calls[0] ?? {}), false);
+    assert.equal("threadId" in (calls[0] ?? {}), false);
+    assert.deepEqual(calls[0]?.payloads, [{ text: "Plain notification" }]);
   });
 
-  it("adds interactive buttons when the runtime adapter sends payloads without rendering presentation", async () => {
-    const payloads: unknown[] = [];
-    setPluginRuntime({
-      channel: {
-        outbound: {
-          loadAdapter: async () => ({
-            sendPayload: async (ctx: { payload: unknown }) => {
-              payloads.push(ctx.payload);
-            },
-          }),
-        },
-      },
-    }, { channels: { telegram: { enabled: true } } });
+  it("delivers interactive buttons as a channel-agnostic presentation for core rendering", async () => {
+    setPluginRuntime({}, {});
+    const { calls, transport } = recordingTransport();
 
-    await new RuntimeDirectNotificationTransport().send(
-      {
-        channel: "telegram",
-        accountId: "default",
-        target: "-1003863755361",
-        threadId: "28",
-      },
-      "Plan needs approval",
-      [[
-        { label: "Approve", callbackData: "approve-token", style: "primary" },
-        { label: "Revise", callbackData: "revise-token", style: "secondary" },
-        { label: "Reject", callbackData: "reject-token", style: "danger" },
-      ]],
-    );
+    await transport.send(TOPIC_ROUTE, "Plan ready", [[
+      { label: "Approve", callbackData: "token-approve", style: "success" },
+      { label: "Revise", callbackData: "code-agent:token-revise", style: "secondary" },
+    ], [], [
+      { label: "Reject", callbackData: "token-reject", style: "danger" },
+    ]]);
 
-    assert.deepEqual(payloads[0], {
-      text: "Plan needs approval",
+    assert.deepEqual(calls[0]?.payloads, [{
+      text: "Plan ready",
       presentation: {
         blocks: [
           {
             type: "buttons",
             buttons: [
-              { label: "Approve", value: "code-agent:approve-token", style: "primary" },
-              { label: "Revise", value: "code-agent:revise-token", style: "secondary" },
-              { label: "Reject", value: "code-agent:reject-token", style: "danger" },
+              { label: "Approve", value: "code-agent:token-approve", style: "success" },
+              { label: "Revise", value: "code-agent:token-revise", style: "secondary" },
             ],
           },
-        ],
-      },
-      interactive: {
-        blocks: [
           {
             type: "buttons",
-            buttons: [
-              { label: "Approve", value: "code-agent:approve-token", style: "primary" },
-              { label: "Revise", value: "code-agent:revise-token", style: "secondary" },
-              { label: "Reject", value: "code-agent:reject-token", style: "danger" },
-            ],
+            buttons: [{ label: "Reject", value: "code-agent:token-reject", style: "danger" }],
           },
         ],
       },
-      channelData: {
-        telegram: {
-          buttons: [[
-            { text: "Approve", callback_data: "code-agent:approve-token", style: "primary" },
-            { text: "Revise", callback_data: "code-agent:revise-token" },
-            { text: "Reject", callback_data: "code-agent:reject-token", style: "danger" },
-          ]],
-        },
-      },
-    });
-    assertNoInvalidTelegramStyle(payloads[0]);
+    }]);
   });
 
-  it("sanitizes rendered Telegram button styles while preserving native button delivery fields", async () => {
-    const payloads: unknown[] = [];
-    setPluginRuntime({
-      channel: {
-        outbound: {
-          loadAdapter: async () => ({
-            renderPresentation: ({ payload }: { payload: unknown }) => ({
-              ...(payload as Record<string, unknown>),
-              channelData: {
-                telegram: {
-                  buttons: [[
-                    {
-                      text: "Approve",
-                      callback_data: "code-agent:approve-token",
-                      style: " SUCCESS ",
-                    },
-                    {
-                      text: "Docs",
-                      url: "https://example.test/docs",
-                      style: "secondary",
-                    },
-                    {
-                      text: "Reject",
-                      callback_data: "code-agent:reject-token",
-                      style: "destructive",
-                    },
-                  ]],
-                },
-              },
-            }),
-            sendPayload: async (ctx: { payload: unknown }) => {
-              payloads.push(ctx.payload);
-            },
-          }),
-        },
-      },
-    }, { channels: { telegram: { enabled: true } } });
-
-    await new RuntimeDirectNotificationTransport().send(
-      {
-        channel: "telegram",
-        accountId: "default",
-        target: "-1003863755361",
-        threadId: "28",
-      },
-      "Plan needs approval",
-      [[
-        { label: "Approve", callbackData: "approve-token", style: "success" },
-        { label: "Reject", callbackData: "reject-token", style: "danger" },
-      ]],
-    );
-
-    assert.deepEqual(telegramButtons(payloads[0]), [[
-      { text: "Approve", callback_data: "code-agent:approve-token", style: "success" },
-      { text: "Docs", url: "https://example.test/docs" },
-      { text: "Reject", callback_data: "code-agent:reject-token", style: "danger" },
-    ]]);
-    assertNoInvalidTelegramStyle(payloads[0]);
-  });
-
-  it("drops rendered Telegram buttons without required text", async () => {
-    const payloads: unknown[] = [];
-    setPluginRuntime({
-      channel: {
-        outbound: {
-          loadAdapter: async () => ({
-            renderPresentation: ({ payload }: { payload: unknown }) => ({
-              ...(payload as Record<string, unknown>),
-              channelData: {
-                telegram: {
-                  buttons: [[
-                    {
-                      callback_data: "code-agent:missing-text",
-                      style: "danger",
-                    },
-                    {
-                      text: "",
-                      callback_data: "code-agent:empty-text",
-                      style: "success",
-                    },
-                    {
-                      text: "Open",
-                      url: "https://example.test/open",
-                      style: "primary",
-                    },
-                  ]],
-                },
-              },
-            }),
-            sendPayload: async (ctx: { payload: unknown }) => {
-              payloads.push(ctx.payload);
-            },
-          }),
-        },
-      },
-    }, { channels: { telegram: { enabled: true } } });
-
-    await new RuntimeDirectNotificationTransport().send(
-      {
-        channel: "telegram",
-        accountId: "default",
-        target: "-1003863755361",
-        threadId: "28",
-      },
-      "Plan needs approval",
-      [[
-        { label: "Approve", callbackData: "approve-token", style: "success" },
-      ]],
-    );
-
-    assert.deepEqual(telegramButtons(payloads[0]), [[
-      { text: "Open", url: "https://example.test/open", style: "primary" },
-    ]]);
-    assertNoInvalidTelegramStyle(payloads[0]);
-  });
-
-  it("drops rendered Telegram buttons with invalid callback data", async () => {
-    const payloads: unknown[] = [];
-    const overlongCallbackData = `code-agent:${"x".repeat(70)}`;
-    setPluginRuntime({
-      channel: {
-        outbound: {
-          loadAdapter: async () => ({
-            renderPresentation: ({ payload }: { payload: unknown }) => ({
-              ...(payload as Record<string, unknown>),
-              channelData: {
-                telegram: {
-                  buttons: [[
-                    {
-                      text: "Approve",
-                      callback_data: "code-agent:approve-token",
-                      style: "success",
-                    },
-                    {
-                      text: "Too Long",
-                      callback_data: overlongCallbackData,
-                      style: "danger",
-                    },
-                    {
-                      text: "Blank",
-                      callback_data: "   ",
-                      style: "primary",
-                    },
-                    {
-                      text: "Wrong Type",
-                      callback_data: 42,
-                      style: "danger",
-                    },
-                    {
-                      text: "Open",
-                      url: "https://example.test/open",
-                      style: "primary",
-                    },
-                  ]],
-                },
-              },
-            }),
-            sendPayload: async (ctx: { payload: unknown }) => {
-              payloads.push(ctx.payload);
-            },
-          }),
-        },
-      },
-    }, { channels: { telegram: { enabled: true } } });
-
-    await new RuntimeDirectNotificationTransport().send(
-      {
-        channel: "telegram",
-        accountId: "default",
-        target: "-1003863755361",
-        threadId: "28",
-      },
-      "Plan needs approval",
-      [[
-        { label: "Approve", callbackData: "approve-token", style: "success" },
-      ]],
-    );
-
-    assert.deepEqual(telegramButtons(payloads[0]), [[
-      { text: "Approve", callback_data: "code-agent:approve-token", style: "success" },
-      { text: "Open", url: "https://example.test/open", style: "primary" },
-    ]]);
-    assertNoInvalidTelegramStyle(payloads[0]);
-  });
-
-  it("drops rendered Telegram buttons without an action field", async () => {
-    const payloads: unknown[] = [];
-    setPluginRuntime({
-      channel: {
-        outbound: {
-          loadAdapter: async () => ({
-            renderPresentation: ({ payload }: { payload: unknown }) => ({
-              ...(payload as Record<string, unknown>),
-              channelData: {
-                telegram: {
-                  buttons: [[
-                    {
-                      text: "Plain",
-                    },
-                    {
-                      text: "Styled",
-                      style: "success",
-                    },
-                    {
-                      text: "Tracked",
-                      analyticsId: "button-1",
-                    },
-                    {
-                      text: "Search",
-                      switch_inline_query: "",
-                    },
-                    {
-                      text: "Search Here",
-                      switch_inline_query_current_chat: "",
-                    },
-                    {
-                      text: "Open",
-                      url: "https://example.test/open",
-                      style: "primary",
-                    },
-                  ]],
-                },
-              },
-            }),
-            sendPayload: async (ctx: { payload: unknown }) => {
-              payloads.push(ctx.payload);
-            },
-          }),
-        },
-      },
-    }, { channels: { telegram: { enabled: true } } });
-
-    await new RuntimeDirectNotificationTransport().send(
-      {
-        channel: "telegram",
-        accountId: "default",
-        target: "-1003863755361",
-        threadId: "28",
-      },
-      "Plan needs approval",
-      [[
-        { label: "Approve", callbackData: "approve-token", style: "success" },
-      ]],
-    );
-
-    assert.deepEqual(telegramButtons(payloads[0]), [[
-      { text: "Search", switch_inline_query: "" },
-      { text: "Search Here", switch_inline_query_current_chat: "" },
-      { text: "Open", url: "https://example.test/open", style: "primary" },
-    ]]);
-    assertNoInvalidTelegramStyle(payloads[0]);
-  });
-
-  it("rebuilds Telegram buttons from presentation when rendered buttons are all text-only", async () => {
-    const payloads: unknown[] = [];
-    setPluginRuntime({
-      channel: {
-        outbound: {
-          loadAdapter: async () => ({
-            renderPresentation: ({ payload }: { payload: unknown }) => ({
-              ...(payload as Record<string, unknown>),
-              channelData: {
-                telegram: {
-                  buttons: [[
-                    {
-                      text: "Plain",
-                    },
-                    {
-                      text: "Styled",
-                      style: "success",
-                    },
-                    {
-                      text: "Metadata",
-                      analyticsId: "metadata-only",
-                    },
-                  ]],
-                },
-              },
-            }),
-            sendPayload: async (ctx: { payload: unknown }) => {
-              payloads.push(ctx.payload);
-            },
-          }),
-        },
-      },
-    }, { channels: { telegram: { enabled: true } } });
-
-    await new RuntimeDirectNotificationTransport().send(
-      {
-        channel: "telegram",
-        accountId: "default",
-        target: "-1003863755361",
-        threadId: "28",
-      },
-      "Plan needs approval",
-      [[
-        { label: "Approve", callbackData: "approve-token", style: "success" },
+  it("sends generated plan-brief pages as text and keeps final controls on the last page", async () => {
+    setPluginRuntime({}, {});
+    const { calls, transport } = recordingTransport();
+    const brief = buildWaitingForInputPayload({
+      session: { id: "brief", name: "brief", pendingPlanApproval: true, planDecisionVersion: 1 } as any,
+      preview: "", originThreadLine: "", planApprovalMode: "ask",
+      planArtifact: { steps: [], markdown: "## Scope\n| File | Decision |\n|---|---|\n| video.ts | Local decoding |\n## Risks\n" + "Private frames may leak. ".repeat(250) },
+      planApprovalButtons: [[{ label: "Approve", callbackData: "approve-token", style: "primary" },
         { label: "Revise", callbackData: "revise-token", style: "secondary" },
-      ]],
-    );
-
-    assert.deepEqual(telegramButtons(payloads[0]), [[
-      { text: "Approve", callback_data: "code-agent:approve-token", style: "success" },
-      { text: "Revise", callback_data: "code-agent:revise-token" },
-    ]]);
-    assertNoInvalidTelegramStyle(payloads[0]);
-  });
-
-  for (const channel of ["telegram", "discord"]) {
-    it(`preserves generated decision fields and final controls through ${channel} presentation`, async () => {
-      const payloads: any[] = [];
-      const textPages: string[] = [];
-      setPluginRuntime({ channel: { outbound: { loadAdapter: async () => ({
-        sendText: async (ctx: { text: string }) => { textPages.push(ctx.text); },
-        renderPresentation: ({ payload }: { payload: unknown }) => payload,
-        sendPayload: async (ctx: { payload: unknown }) => { payloads.push(ctx.payload); },
-      }) } } }, { channels: { [channel]: { enabled: true } } });
-      const brief = buildWaitingForInputPayload({
-        session: { id: "brief", name: "brief", pendingPlanApproval: true, planDecisionVersion: 1 } as any,
-        preview: "", originThreadLine: "", planApprovalMode: "ask",
-        planArtifact: { steps: [], markdown: "## Scope\n| File | Decision |\n|---|---|\n| video.ts | Local decoding |\n## Risks\n" + "Private frames may leak. ".repeat(250) },
-        planApprovalButtons: [[{ label: "Approve", callbackData: "approve-token", style: "primary" },
-          { label: "Revise", callbackData: "revise-token", style: "secondary" },
-          { label: "Reject", callbackData: "reject-token", style: "danger" }]],
-      });
-      const transport = new RuntimeDirectNotificationTransport();
-      for (const message of brief.userMessages!) {
-        await transport.send({ channel, target: "test-target", accountId: "default" }, message.text, message.buttons);
-      }
-      assert.deepEqual(textPages, brief.userMessages!.slice(0, -1).map((message) => message.text));
-      assert.equal(payloads.length, 1);
-      assert.equal(payloads[0].text, brief.userMessages!.at(-1)!.text);
-      assert.match(textPages.join("\n"), /File: video.ts; Decision: Local decoding/);
-      assert.doesNotMatch(textPages.join("\n"), /- \||\|---/);
-      assert.deepEqual(payloads[0].interactive.blocks[0].buttons.map((button: any) => button.label), ["Approve", "Revise", "Reject"]);
-      if (channel === "telegram") assert.equal(telegramButtons(payloads[0])[0].length, 3);
-      else assert.equal(payloads[0].channelData, undefined);
+        { label: "Reject", callbackData: "reject-token", style: "danger" }]],
     });
-  }
 
-  it("does not sanitize shared presentation styles for non-Telegram transports", async () => {
-    const payloads: unknown[] = [];
-    setPluginRuntime({
-      channel: {
-        outbound: {
-          loadAdapter: async () => ({
-            sendPayload: async (ctx: { payload: unknown }) => {
-              payloads.push(ctx.payload);
-            },
-          }),
-        },
-      },
-    }, { channels: { discord: { enabled: true } } });
+    for (const message of brief.userMessages!) {
+      await transport.send({ channel: "telegram", target: "test-target", accountId: "default" }, message.text, message.buttons);
+    }
 
-    await new RuntimeDirectNotificationTransport().send(
-      {
-        channel: "discord",
-        accountId: "default",
-        target: "12345",
-      },
-      "Plan needs approval",
-      [[
-        { label: "Approve", callbackData: "approve-token", style: "primary" },
-        { label: "Revise", callbackData: "revise-token", style: "secondary" },
-      ]],
+    const payloads = calls.map((call) => call.payloads[0]);
+    assert.equal(payloads.length, brief.userMessages!.length);
+    assert.ok(payloads.slice(0, -1).every((payload) => payload.presentation === undefined));
+    assert.match(payloads.map((payload) => payload.text).join("\n"), /File: video.ts; Decision: Local decoding/);
+    assert.deepEqual(
+      payloads.at(-1).presentation.blocks[0].buttons.map((button: any) => button.label),
+      ["Approve", "Revise", "Reject"],
     );
-
-    assert.deepEqual((payloads[0] as any).interactive.blocks[0].buttons, [
-      { label: "Approve", value: "code-agent:approve-token", style: "primary" },
-      { label: "Revise", value: "code-agent:revise-token", style: "secondary" },
-    ]);
-    assert.equal((payloads[0] as any).channelData, undefined);
   });
 
-  it("repairs rendered payloads that accidentally drop interactive button data", async () => {
-    const payloads: unknown[] = [];
-    setPluginRuntime({
-      channel: {
-        outbound: {
-          loadAdapter: async () => ({
-            renderPresentation: ({ payload }: { payload: unknown }) => {
-              const { interactive: _interactive, ...rest } = payload as Record<string, unknown>;
-              return { ...rest, channelData: { telegram: {} } };
-            },
-            sendPayload: async (ctx: { payload: unknown }) => {
-              payloads.push(ctx.payload);
-            },
-          }),
-        },
-      },
-    }, { channels: { telegram: { enabled: true } } });
+  it("fails before sending when no runtime config snapshot is available", async () => {
+    const { calls, transport } = recordingTransport();
 
-    await new RuntimeDirectNotificationTransport().send(
-      {
-        channel: "telegram",
-        accountId: "default",
-        target: "-1003863755361",
-        threadId: "28",
-      },
-      "Plan needs approval",
-      [[{ label: "Reject", callbackData: "reject-token", style: "danger" }]],
-    );
-
-    assert.deepEqual((payloads[0] as any).interactive, {
-      blocks: [
-        {
-          type: "buttons",
-          buttons: [
-            { label: "Reject", value: "code-agent:reject-token", style: "danger" },
-          ],
-        },
-      ],
-    });
-    assert.deepEqual(telegramButtons(payloads[0]), [[
-      { text: "Reject", callback_data: "code-agent:reject-token", style: "danger" },
-    ]]);
-    assertNoInvalidTelegramStyle(payloads[0]);
+    await assert.rejects(() => transport.send(TOPIC_ROUTE, "text"), DirectNotificationDeliveryError);
+    assert.equal(calls.length, 0);
   });
 
-  it("repairs rendered payloads that initialize Telegram buttons to an empty array", async () => {
-    const payloads: unknown[] = [];
-    setPluginRuntime({
-      channel: {
-        outbound: {
-          loadAdapter: async () => ({
-            renderPresentation: ({ payload }: { payload: unknown }) => ({
-              ...(payload as Record<string, unknown>),
-              channelData: { telegram: { buttons: [] } },
-            }),
-            sendPayload: async (ctx: { payload: unknown }) => {
-              payloads.push(ctx.payload);
-            },
-          }),
-        },
-      },
-    }, { channels: { telegram: { enabled: true } } });
-
-    await new RuntimeDirectNotificationTransport().send(
-      {
-        channel: "telegram",
-        accountId: "default",
-        target: "-1003863755361",
-        threadId: "28",
-      },
-      "Plan needs approval",
-      [[{ label: "Approve", callbackData: "approve-token", style: "primary" }]],
-    );
-
-    assert.deepEqual(telegramButtons(payloads[0]), [[
-      { text: "Approve", callback_data: "code-agent:approve-token", style: "primary" },
-    ]]);
-  });
-
-  it("omits generated Telegram callback buttons that exceed the 64-byte callback_data limit", async () => {
-    const payloads: unknown[] = [];
-    setPluginRuntime({
-      channel: {
-        outbound: {
-          loadAdapter: async () => ({
-            sendPayload: async (ctx: { payload: unknown }) => {
-              payloads.push(ctx.payload);
-            },
-          }),
-        },
-      },
-    }, { channels: { telegram: { enabled: true } } });
-
-    await new RuntimeDirectNotificationTransport().send(
-      {
-        channel: "telegram",
-        accountId: "default",
-        target: "-1003863755361",
-        threadId: "28",
-      },
-      "Plan needs approval",
-      [[
-        { label: "Approve", callbackData: "a".repeat(53), style: "primary" },
-        { label: "Too long", callbackData: "b".repeat(54), style: "secondary" },
-      ]],
-    );
-
-    assert.deepEqual(telegramButtons(payloads[0]), [[
-      { text: "Approve", callback_data: `code-agent:${"a".repeat(53)}`, style: "primary" },
-    ]]);
-    assertNoInvalidTelegramStyle(payloads[0]);
-  });
-
-  it("sends Telegram plan-offer buttons as native callback_data, not text payload buttons", async () => {
-    const payloads: unknown[] = [];
-    setPluginRuntime({
-      channel: {
-        outbound: {
-          loadAdapter: async () => ({
-            renderPresentation: ({ payload }: { payload: unknown }) => payload,
-            sendPayload: async (ctx: { payload: unknown }) => {
-              payloads.push(ctx.payload);
-            },
-          }),
-        },
-      },
-    }, { channels: { telegram: { enabled: true } } });
-
-    await new RuntimeDirectNotificationTransport().send(
-      {
-        channel: "telegram",
-        accountId: "default",
-        target: "-1003863755361",
-        threadId: "13832",
-      },
-      "Release monitor plan offer",
-      [[
-        { label: "Start Plan", callbackData: "26620ba6-719b-491e-bbe3-9b9f49ce293c", style: "primary" },
-        { label: "Dismiss", callbackData: "9c26cebd-caf4-4551-bc9e-f52146a328dc", style: "secondary" },
-      ]],
-    );
-
-    assert.deepEqual(telegramButtons(payloads[0]), [[
-      {
-        text: "Start Plan",
-        callback_data: "code-agent:26620ba6-719b-491e-bbe3-9b9f49ce293c",
-        style: "primary",
-      },
-      {
-        text: "Dismiss",
-        callback_data: "code-agent:9c26cebd-caf4-4551-bc9e-f52146a328dc",
-      },
-    ]]);
-    assertNoInvalidTelegramStyle(payloads[0]);
-  });
-
-  it("emits privacy-safe diagnostics for the runtime presentation path", async (t) => {
-    process.env.OPENCLAW_CODE_AGENT_BUTTON_DIAGNOSTICS = "1";
-    const logs: string[] = [];
-    t.mock.method(console, "info", ((message?: unknown) => {
-      logs.push(String(message));
-    }) as typeof console.info);
-    setPluginRuntime({
-      channel: {
-        outbound: {
-          loadAdapter: async () => ({
-            renderPresentation: ({ payload, presentation }: { payload: unknown; presentation: unknown }) => ({
-              ...(payload as Record<string, unknown>),
-              interactive: presentation,
-            }),
-            sendPayload: async () => ({
-              channel: "telegram",
-              messageId: "123",
-              chatId: "-1003863755361",
-              messageThreadId: "13832",
-            }),
-          }),
-        },
-      },
-    }, { channels: { telegram: { enabled: true } } });
-
-    await new RuntimeDirectNotificationTransport().send(
-      {
-        channel: "telegram",
-        accountId: "default",
-        target: "-1003863755361",
-        threadId: "13832",
-        sessionKey: "agent:main:telegram:group:-1003863755361:topic:13832",
-      },
-      "Plan needs approval",
-      [[{ label: "Approve", callbackData: "secret-token-approve", style: "primary" }]],
-    );
-
-    assert.ok(logs.some((line) => line.includes('"event":"presentation_render_completed"')));
-    assert.ok(logs.some((line) => line.includes('"event":"presentation_send_payload_completed"')));
-    const joined = logs.join("\n");
-    assert.match(joined, /"threadId":"13832"/);
-    assert.match(joined, /"buttonLabels":\["Approve"\]/);
-    assert.match(joined, /"callbackHashes":\["[a-f0-9]{12}"\]/);
-    assert.match(joined, /"messageId":"123"/);
-    assert.doesNotMatch(joined, /secret-token-approve/);
-    assert.doesNotMatch(joined, /Plan needs approval/);
-  });
-
-  it("fails clearly when runtime delivery cannot preserve buttons", async () => {
-    setPluginRuntime({
-      channel: {
-        outbound: {
-          loadAdapter: async () => ({
-            sendText: async () => {},
-          }),
-        },
-      },
-    }, { channels: { telegram: { enabled: true } } });
+  it("reports a failed durable send as a delivery error", async () => {
+    setPluginRuntime({}, {});
+    const { transport } = recordingTransport({
+      status: "failed",
+      error: new Error("chat not found"),
+      stage: "platform_send",
+    } as unknown as DurableMessageBatchSendResult);
 
     await assert.rejects(
-      () => new RuntimeDirectNotificationTransport().send(
-        {
-          channel: "telegram",
-          target: "-1003863755361",
-          threadId: "28",
-        },
-        "Plan needs approval",
-        [[{ label: "Approve", callbackData: "token-approve" }]],
-      ),
-      /cannot preserve interactive presentation/,
+      () => transport.send(TOPIC_ROUTE, "text"),
+      /durable delivery to telegram failed: chat not found \(platform_send\)/,
     );
   });
 
-  it("falls back to a bounded CLI send when the runtime outbound surface is missing", async (t) => {
-    const calls: Array<{ file: string; args: string[]; timeout?: number }> = [];
-    setPluginRuntime({ version: "2026.4.21", channel: {} }, { channels: { telegram: { enabled: true } } });
-    t.mock.method(directNotificationTransportInternals, "execFile", ((file, args, options, callback) => {
-      calls.push({ file, args: args as string[], timeout: options?.timeout });
-      callback?.(null, "", "");
-      return {} as any;
-    }) as typeof directNotificationTransportInternals.execFile);
-
-    await new RuntimeDirectNotificationTransport().send(
-      {
-        channel: "telegram",
-        accountId: "default",
-        target: "-1003863755361",
-        threadId: "28",
-      },
-      "🚀 launched",
-    );
-
-    assert.equal(calls.length, 1);
-    assert.equal(calls[0]?.file, "openclaw");
-    assert.equal(calls[0]?.timeout, 5_000);
-    assert.deepEqual(calls[0]?.args, [
-      "message",
-      "send",
-      "--channel",
-      "telegram",
-      "--target",
-      "-1003863755361",
-      "--message",
-      "🚀 launched",
-      "--account",
-      "default",
-      "--thread-id",
-      "28",
-    ]);
-  });
-
-  it("includes the precise missing runtime capability when the bounded fallback fails", async (t) => {
-    setPluginRuntime({ version: "2026.4.21", channel: {} }, { channels: { telegram: { enabled: true } } });
-    t.mock.method(directNotificationTransportInternals, "execFile", ((_file, _args, _options, callback) => {
-      callback?.(new Error("Command timed out after 5000ms"), "", "timeout");
-      return {} as any;
-    }) as typeof directNotificationTransportInternals.execFile);
-
-    await assert.rejects(
-      () => new RuntimeDirectNotificationTransport().send(
-        {
-          channel: "telegram",
-          target: "-1003863755361",
-          threadId: "28",
-        },
-        "🚀 launched",
-      ),
-      /channel outbound surface is unavailable.*runtimeVersion=2026\.4\.21.*bounded openclaw message send fallback failed within 5000ms timeout/s,
-    );
-  });
-
-  it("reports absent plugin runtime before missing runtime config", async (t) => {
-    setPluginRuntime(undefined);
-    t.mock.method(directNotificationTransportInternals, "execFile", ((_file, _args, _options, callback) => {
-      callback?.(new Error("spawn openclaw ENOENT"), "", "");
-      return {} as any;
-    }) as typeof directNotificationTransportInternals.execFile);
-
-    await assert.rejects(
-      () => new RuntimeDirectNotificationTransport().send(
-        {
-          channel: "telegram",
-          target: "-1003863755361",
-          threadId: "28",
-        },
-        "🚀 launched",
-      ),
-      /OpenClaw plugin runtime is unavailable for direct notification delivery.*fallback failed within 5000ms timeout/s,
-    );
-  });
-
-  it("uses the lazily injected plugin runtime proxy from the runtime store", async () => {
-    const calls: Array<Record<string, unknown>> = [];
-    let channelAccesses = 0;
-    const runtime = new Proxy({ version: "2026.4.29" }, {
-      get(target, prop, receiver) {
-        if (prop !== "channel") return Reflect.get(target, prop, receiver);
-        channelAccesses += 1;
-        return {
-          outbound: {
-            loadAdapter: async () => ({
-              sendText: async (ctx: Record<string, unknown>) => {
-                calls.push(ctx);
-              },
-            }),
-          },
-        };
-      },
+  it("propagates sender exceptions", async () => {
+    setPluginRuntime({}, {});
+    const { transport } = recordingTransport(async () => {
+      throw new Error("Reply delivery runtime could not load before dispatch");
     });
-    setPluginRuntime(runtime, { channels: { telegram: { enabled: true } } });
 
-    await new RuntimeDirectNotificationTransport().send(
-      {
-        channel: "telegram",
-        accountId: "default",
-        target: "-1003863755361",
-        threadId: "28",
-      },
-      "✅ completed",
-    );
+    await assert.rejects(() => transport.send(TOPIC_ROUTE, "text"), /could not load before dispatch/);
+  });
+});
 
-    assert.equal(channelAccesses > 0, true);
-    assert.equal(calls.length, 1);
-    assert.equal(calls[0]?.threadId, "28");
+describe("classifyDurableSendResult", () => {
+  it("never reports reached or intentionally suppressed sends as failures", () => {
+    assert.deepEqual(classifyDurableSendResult(sentResult()), { delivered: true });
+    assert.equal(classifyDurableSendResult({
+      status: "partial_failed",
+      results: [],
+      receipt: {},
+      error: new Error("second chunk failed"),
+      sentBeforeError: true,
+    } as unknown as DurableMessageBatchSendResult).delivered, true);
+    assert.deepEqual(classifyDurableSendResult({
+      status: "suppressed",
+      results: [],
+      receipt: {},
+      reason: "cancelled_by_message_sending_hook",
+    } as unknown as DurableMessageBatchSendResult), { delivered: true, reason: "suppressed: cancelled_by_message_sending_hook" });
+    assert.equal(classifyDurableSendResult({
+      status: "failed",
+      error: new Error("x"),
+    } as unknown as DurableMessageBatchSendResult).delivered, false);
   });
 });

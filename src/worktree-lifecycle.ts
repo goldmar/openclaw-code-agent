@@ -3,6 +3,9 @@ import { randomBytes } from "crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync } from "fs";
 import { relative, sep } from "path";
 import { branchExists, getWorktreeBaseDir, sanitizeBranchName } from "./worktree-repo";
+import { createLogger } from "./logger";
+
+const log = createLogger("worktree-lifecycle");
 
 export interface RemoveWorktreeOptions {
   destructive?: boolean;
@@ -53,7 +56,7 @@ function ensureWorktreeBaseIgnored(repoDir: string, baseDir: string): void {
       appendFileSync(excludePath, `${existing.endsWith("\n") || existing.length === 0 ? "" : "\n"}${normalizedPattern}\n`, "utf-8");
     }
   } catch (err) {
-    console.warn(`[worktree] Failed to add ${normalizedPattern} to ${excludePath}: ${err instanceof Error ? err.message : String(err)}`);
+    log.warn(`[worktree] Failed to add ${normalizedPattern} to ${excludePath}: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
@@ -178,7 +181,7 @@ export function removeWorktree(
   const destructive = options.destructive === true;
   const dirtyEntries = listDirtyWorktreeEntries(worktreePath);
   if (dirtyEntries.length > 0 && !destructive) {
-    console.warn(
+    log.warn(
       `[worktree] Refusing implicit cleanup for dirty worktree ${worktreePath}: ${dirtyEntries[0]}`,
     );
     return false;
@@ -192,14 +195,14 @@ export function removeWorktree(
     });
     return true;
   } catch (err) {
-    console.warn(`[worktree] git worktree remove failed for ${worktreePath}: ${err instanceof Error ? err.message : String(err)}`);
+    log.warn(`[worktree] git worktree remove failed for ${worktreePath}: ${err instanceof Error ? err.message : String(err)}`);
     if (!destructive) return false;
     try {
       rmSync(worktreePath, { recursive: true, force: true });
-      console.info(`[worktree] Fallback rmSync succeeded for ${worktreePath}`);
+      log.info(`[worktree] Fallback rmSync succeeded for ${worktreePath}`);
       return true;
     } catch (fallbackErr) {
-      console.error(`[worktree] Both git worktree remove and rmSync failed for ${worktreePath}: ${fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr)}`);
+      log.error(`[worktree] Both git worktree remove and rmSync failed for ${worktreePath}: ${fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr)}`);
       return false;
     }
   }
@@ -214,7 +217,7 @@ export function pruneWorktrees(repoDir: string): void {
     );
   } catch (err) {
     const reason = err instanceof Error ? err.message.split(/\r?\n/, 1)[0] : String(err);
-    console.warn(`[worktree] git worktree prune failed for ${repoDir}: ${reason}`);
+    log.warn(`[worktree] git worktree prune failed for ${repoDir}: ${reason}`);
   }
 }
 

@@ -1,5 +1,3 @@
-import { readdirSync, statSync, rmSync } from "fs";
-import { execFileSync } from "child_process";
 import { join } from "path";
 import packageJson from "./package.json";
 
@@ -40,97 +38,10 @@ import { setAutoUpdateService, setGoalController, setSessionManager } from "./sr
 import { setPluginRuntime } from "./src/runtime-store";
 import { createRuntimeWorktreeDecisionSummaryProvider } from "./src/worktree-decision-summary";
 import { setPluginConfig, pluginConfig } from "./src/config";
-import { resolveOpenclawHomeDir } from "./src/openclaw-paths";
+import { resolveCodeAgentStateDir, resolveOpenClawStateDir } from "./src/state-paths";
 import { routeFromOriginMetadata } from "./src/session-route";
 import type { SessionRoute } from "./src/types";
 import { definePluginEntry, type OpenClawPluginApi, type OpenClawPluginServiceContext, type OpenClawPluginToolContext } from "./api";
-
-export function uniquePersistedWorkdirs(
-  sessions: Array<{ workdir?: string }>,
-): string[] {
-  return [...new Set(
-    sessions
-      .map((session) => session.workdir)
-      .filter((workdir): workdir is string => typeof workdir === "string" && workdir.length > 0),
-  )];
-}
-
-/**
- * Startup orphan cleanup: scan worktree base dir(s) for old worktrees and clean them up.
- * For each dir matching openclaw-worktree-* older than the cleanup age:
- * - Use rmSync directly (orphaned worktrees are already detached, no git cleanup needed)
- *
- * Base dir resolution priority:
- * 1. OPENCLAW_WORKTREE_DIR env var or pluginConfig.worktreeDir (single fixed dir)
- * 2. When no fixed dir is configured, derive <repoRoot>/.worktrees for each unique repo
- *    root found in persisted session workdirs — so cleanup works without any explicit config.
- */
-function cleanupOrphanedWorktrees(sm: SessionManager): void {
-  const cleanupAgeHours = parseInt(process.env.OPENCLAW_WORKTREE_CLEANUP_AGE_HOURS ?? "168", 10) || 168;
-  const cleanupAgeMs = cleanupAgeHours * 60 * 60 * 1000;
-  const cutoffTime = Date.now() - cleanupAgeMs;
-  const managedWorktrees = new Set(
-    sm.listPersistedSessions()
-      .map((session) => session.worktreePath)
-      .filter((path): path is string => typeof path === "string" && path.length > 0),
-  );
-
-  // Build the set of base dirs to scan
-  const dirsToScan = new Set<string>();
-
-  const fixedBaseDir = process.env.OPENCLAW_WORKTREE_DIR ?? pluginConfig.worktreeDir;
-  if (fixedBaseDir) {
-    dirsToScan.add(fixedBaseDir);
-  } else {
-    // Resolve each distinct workdir once. Persisted history commonly contains
-    // hundreds of sessions but only a handful of repository roots, and running
-    // a synchronous Git process per session blocks plugin startup/tool listing.
-    for (const workdir of uniquePersistedWorkdirs(sm.listPersistedSessions())) {
-      try {
-        const root = execFileSync(
-          "git", ["rev-parse", "--show-toplevel"],
-          { cwd: workdir, timeout: 5_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
-        ).trim();
-        if (root) dirsToScan.add(join(root, ".worktrees"));
-      } catch {
-        // workdir may no longer exist or not be a git repo — skip
-      }
-    }
-  }
-
-  if (dirsToScan.size === 0) return;
-
-  let removed = 0;
-  for (const baseDir of dirsToScan) {
-    try {
-      const entries = readdirSync(baseDir);
-      for (const entry of entries) {
-        if (!entry.startsWith("openclaw-worktree-")) continue;
-
-        const fullPath = join(baseDir, entry);
-        try {
-          const stats = statSync(fullPath);
-          if (!stats.isDirectory()) continue;
-          if (stats.mtimeMs > cutoffTime) continue;
-          if (managedWorktrees.has(fullPath)) continue;
-
-          // Only delete unmanaged old worktrees.
-          rmSync(fullPath, { recursive: true, force: true });
-          removed++;
-        } catch (err) {
-          // Best effort, skip this one
-          console.warn(`[index] Failed to clean up orphaned worktree ${fullPath}: ${err instanceof Error ? err.message : String(err)}`);
-        }
-      }
-    } catch {
-      // baseDir doesn't exist yet (no worktrees ever created here) — skip silently
-    }
-  }
-
-  if (removed > 0) {
-    console.info(`[index] Cleaned up ${removed} orphaned worktree(s) at startup (age > ${cleanupAgeHours}h)`);
-  }
-}
 
 export function routeFromInteractiveContext(ctx: unknown): SessionRoute | undefined {
   if (!ctx || typeof ctx !== "object") return undefined;
@@ -169,7 +80,17 @@ export function register(api: OpenClawPluginApi): void {
   ) => void;
   setPluginRuntime(api.runtime);
 
-  const defaultStateDir = (): string => join(resolveOpenclawHomeDir(process.env), "plugin-state", "openclaw-code-agent");
+  const autoUpdateStateOptions = (ctx?: OpenClawPluginServiceContext) => {
+    const openclawStateDir = ctx?.stateDir ?? resolveOpenClawStateDir(process.env);
+    const stateDir = resolveCodeAgentStateDir(process.env, openclawStateDir);
+    return {
+      stateDir,
+      legacyStatePaths: [
+        join(openclawStateDir, "openclaw-code-agent-auto-update.json"),
+        join(stateDir, "openclaw-code-agent-auto-update.json"),
+      ],
+    };
+  };
 
   const routeFromToolContext = (ctx: OpenClawPluginToolContext): SessionRoute | undefined => {
     const delivery = ctx.deliveryContext;
@@ -219,7 +140,7 @@ export function register(api: OpenClawPluginApi): void {
       await sm.ready;
       gc = new GoalController(sm);
       autoUpdate = new AutoUpdateService({
-        stateDir: ctx?.stateDir ?? defaultStateDir(),
+        ...autoUpdateStateOptions(ctx),
         currentVersion: api.version ?? (packageJson as { version?: string }).version ?? "0.0.0",
         actionButtonFactory: (sessionId, kind, label, options) =>
           sm!.makePluginActionButton(sessionId, kind, label, options),
@@ -229,7 +150,9 @@ export function register(api: OpenClawPluginApi): void {
       setAutoUpdateService(autoUpdate);
       gc.start();
 
-      cleanupOrphanedWorktrees(sm);
+      // Worktree cleanup is owned by the maintenance schedules (resolved/merged
+      // worktrees after their retention window) and `agent_worktree_cleanup`;
+      // there is no age-based startup sweep of unmanaged worktree directories.
       sm.bootstrapMaintenanceSchedules();
       started = true;
       maybeCheckForAutoUpdate();

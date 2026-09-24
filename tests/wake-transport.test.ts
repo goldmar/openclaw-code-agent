@@ -1,7 +1,9 @@
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-import { WakeTransport } from "../src/wake-transport";
+import { buildPresentation } from "../src/direct-notification-transport";
+import { setPluginRuntime } from "../src/runtime-store";
+import { RuntimeSystemEventTransport, WakeTransport } from "../src/wake-transport";
 
 afterEach(() => {
   delete process.env.OPENCLAW_TEST_DISCORD_LOG;
@@ -34,31 +36,14 @@ describe("WakeTransport", () => {
     assert.equal(payload.threadId, undefined);
   });
 
-  it("encodes interactive notifications through shared presentation blocks", () => {
-    const transport = new WakeTransport();
-    const args = transport.buildDirectNotificationArgs({
-      channel: "telegram",
-      target: "-1003863755361",
-      threadId: "28",
-    } as any, "Plan ready", [[
+});
+
+describe("buildPresentation", () => {
+  it("encodes Telegram and Discord buttons as shared presentation blocks", () => {
+    assert.deepEqual(buildPresentation([[
       { label: "Approve", callbackData: "token-approve", style: "primary" },
       { label: "Reject", callbackData: "token-reject", style: "danger" },
-    ]]);
-
-    assert.deepEqual(args.slice(0, 8), [
-      "message",
-      "send",
-      "--channel",
-      "telegram",
-      "--target",
-      "-1003863755361",
-      "--message",
-      "Plan ready",
-    ]);
-    assert.equal(args[8], "--thread-id");
-    assert.equal(args[9], "28");
-    assert.equal(args[10], "--presentation");
-    assert.deepEqual(JSON.parse(args[11] ?? "{}"), {
+    ]]), {
       blocks: [{
         type: "buttons",
         buttons: [
@@ -69,114 +54,88 @@ describe("WakeTransport", () => {
     });
   });
 
-  it("uses the same presentation payload shape for Discord interactive notifications", () => {
-    const transport = new WakeTransport();
-    const args = transport.buildDirectNotificationArgs({
-      channel: "discord",
-      target: "channel:123",
-      accountId: "bot-account",
-      threadId: "456",
-    } as any, "Decision needed", [[
-      { label: "Resume", callbackData: "token-resume", style: "success" },
-      { label: "Later", callbackData: "token-later", style: "secondary" },
-    ]]);
-
-    assert.equal(args[8], "--account");
-    assert.equal(args[9], "bot-account");
-    assert.equal(args[10], "--thread-id");
-    assert.equal(args[11], "456");
-    assert.equal(args[12], "--presentation");
-    assert.deepEqual(JSON.parse(args[13] ?? "{}"), {
-      blocks: [{
-        type: "buttons",
-        buttons: [
-          { label: "Resume", value: "code-agent:token-resume", style: "success" },
-          { label: "Later", value: "code-agent:token-later", style: "secondary" },
-        ],
-      }],
-    });
-  });
-
-  it("omits presentation for non-interactive direct notifications", () => {
-    const transport = new WakeTransport();
-    const args = transport.buildDirectNotificationArgs({
-      channel: "discord",
-      target: "channel:123",
-    } as any, "Plain notification");
-
-    assert.deepEqual(args, [
-      "message",
-      "send",
-      "--channel",
-      "discord",
-      "--target",
-      "channel:123",
-      "--message",
-      "Plain notification",
-    ]);
-  });
-
   it("prefixes callback values once even when the token is already namespaced", () => {
-    const transport = new WakeTransport();
-    const args = transport.buildDirectNotificationArgs({
-      channel: "telegram",
-      target: "-1003863755361",
-    } as any, "Plan ready", [[
+    assert.deepEqual(buildPresentation([[
       { label: "Approve", callbackData: "code-agent:token-approve", style: "primary" },
-    ]]);
-
-    assert.deepEqual(JSON.parse(args[9] ?? "{}"), {
-      blocks: [{
-        type: "buttons",
-        buttons: [
-          { label: "Approve", value: "code-agent:token-approve", style: "primary" },
-        ],
-      }],
+    ]])?.blocks[0], {
+      type: "buttons",
+      buttons: [{ label: "Approve", value: "code-agent:token-approve", style: "primary" }],
     });
   });
 
-  it("drops empty button rows instead of sending empty presentation blocks", () => {
-    const transport = new WakeTransport();
-    const args = transport.buildDirectNotificationArgs({
-      channel: "discord",
-      target: "channel:123",
-      threadId: "456",
-    } as any, "Decision needed", [
+  it("drops empty rows and omits presentation when no buttons remain", () => {
+    assert.deepEqual(buildPresentation([
       [],
       [{ label: "Resume", callbackData: "token-resume", style: "success" }],
       [],
-    ]);
+    ])?.blocks.length, 1);
+    assert.equal(buildPresentation([[], []]), undefined);
+    assert.equal(buildPresentation(undefined), undefined);
+  });
+});
 
-    assert.equal(args[10], "--presentation");
-    assert.deepEqual(JSON.parse(args[11] ?? "{}"), {
-      blocks: [{
-        type: "buttons",
-        buttons: [
-          { label: "Resume", value: "code-agent:token-resume", style: "success" },
-        ],
-      }],
+describe("RuntimeSystemEventTransport", () => {
+  function installSystem(overrides: { enqueueSystemEvent?: (text: string, options: Record<string, unknown>) => boolean } = {}) {
+    const events: Array<{ text: string; options: Record<string, unknown> }> = [];
+    const heartbeats: Array<Record<string, unknown>> = [];
+    setPluginRuntime({
+      system: {
+        enqueueSystemEvent: overrides.enqueueSystemEvent ?? ((text: string, options: Record<string, unknown>) => {
+          events.push({ text, options });
+          return true;
+        }),
+        requestHeartbeat: (options: Record<string, unknown>) => {
+          heartbeats.push(options);
+        },
+      },
     });
+    return { events, heartbeats };
+  }
+
+  afterEach(() => {
+    setPluginRuntime(undefined);
   });
 
-  it("omits presentation entirely when button rows are structurally empty", () => {
-    const transport = new WakeTransport();
-    const args = transport.buildDirectNotificationArgs({
-      channel: "telegram",
-      target: "-1003863755361",
-      threadId: "28",
-    } as any, "Plan ready", [[], []]);
+  it("enqueues to the main session and requests an immediate wake like `system event --mode now`", async () => {
+    const { events, heartbeats } = installSystem();
 
-    assert.deepEqual(args, [
-      "message",
-      "send",
-      "--channel",
-      "telegram",
-      "--target",
-      "-1003863755361",
-      "--message",
-      "Plan ready",
-      "--thread-id",
-      "28",
-    ]);
+    await new RuntimeSystemEventTransport().enqueue("Session finished", { contextKey: "openclaw-code-agent:s1" });
+
+    assert.deepEqual(events, [{ text: "Session finished", options: { sessionKey: "main", contextKey: "openclaw-code-agent:s1" } }]);
+    assert.deepEqual(heartbeats, [{ source: "notifications-event", intent: "immediate", reason: "wake" }]);
+  });
+
+  it("targets the origin session when a session key is known", async () => {
+    const { events, heartbeats } = installSystem();
+    const sessionKey = "agent:main:telegram:group:-1003863755361:topic:13832";
+
+    await new RuntimeSystemEventTransport().enqueue("Wake", { sessionKey });
+
+    assert.deepEqual(events, [{ text: "Wake", options: { sessionKey } }]);
+    assert.deepEqual(heartbeats, [{ source: "notifications-event", intent: "immediate", reason: "wake", sessionKey }]);
+  });
+
+  it("falls back to the main session when the host rejects the targeted key", async () => {
+    const events: Array<Record<string, unknown>> = [];
+    const { heartbeats } = installSystem({
+      enqueueSystemEvent: (_text, options) => {
+        if (options.sessionKey !== "main") throw new Error("system events require an agent-qualified sessionKey");
+        events.push(options);
+        return true;
+      },
+    });
+
+    await new RuntimeSystemEventTransport().enqueue("Wake", { sessionKey: "agent:main:subagent:x" });
+
+    assert.deepEqual(events, [{ sessionKey: "main" }]);
+    assert.deepEqual(heartbeats, [{ source: "notifications-event", intent: "immediate", reason: "wake" }]);
+  });
+
+  it("rejects when the runtime system surface is unavailable", async () => {
+    setPluginRuntime({});
+    await assert.rejects(
+      () => new RuntimeSystemEventTransport().enqueue("Wake"),
+      /runtime system events are unavailable/,
+    );
   });
 });

@@ -109,6 +109,36 @@ describe("SessionRuntimeBootstrapService", () => {
     }
   });
 
+  it("routes a host TaskFlow cancel intent to the session cancel hook", async () => {
+    const cancelled: string[] = [];
+    let hooks: { onCancelRequested?: () => void } | undefined;
+    const service = new SessionRuntimeBootstrapService({
+      hydrateSpawnedSession: () => {},
+      markRunning: () => {},
+      syncTaskMirror: () => {},
+      handleTerminal: async () => {},
+      handleTurnEnd: async () => {},
+      formatLaunchWorkdirLabel: () => "/repo",
+      notifySession: () => {},
+      cancelSession: (session) => { cancelled.push(session.id); },
+    });
+    const session = Object.assign(new EventEmitter(), {
+      id: "cancelled-session", name: "cancelled-session", start: async () => {},
+    });
+    service.initializeSession(session as Session, {} as Parameters<typeof service.initializeSession>[1], {
+      prompt: "mirror cancel", workdir: "/repo", permissionMode: "plan",
+      taskLifecycle: {
+        create(_session, createHooks) { hooks = createHooks; },
+        progress() {},
+        finalize() {},
+      },
+    }, { notifyLaunch: false });
+
+    hooks?.onCancelRequested?.();
+    await service.drain();
+    assert.deepEqual(cancelled, ["cancelled-session"]);
+  });
+
   it("includes harness and model in launch notifications", () => {
     const notifications: Array<{ text: string; label?: string; idempotencyKey?: string }> = [];
     const service = new SessionRuntimeBootstrapService({

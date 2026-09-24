@@ -8,14 +8,15 @@ import type {
 } from "./types";
 import type { Session } from "./session";
 import { getSessionOutputFilePath } from "./session";
+import { ensureSessionOutputDir } from "./session-output";
 import { canonicalizeSessionRoute } from "./session-route";
 import { SessionActionTokenStore } from "./session-action-token-store";
 import { getBackendConversationId, resolveHarnessName } from "./session-backend-ref";
 import { SessionStoreQueries } from "./session-store-queries";
 import {
   cleanupOrphanOutputFiles,
-  cleanupTmpOutputFiles,
-  getNextTmpOutputCleanupAt,
+  cleanupSessionOutputFiles,
+  getNextSessionOutputCleanupAt,
   loadSessionStoreIndex,
   resolveSessionIndexPath,
   saveSessionStoreIndex,
@@ -23,9 +24,12 @@ import {
 import {
   assertNewSchemaEntry,
 } from "./session-store-normalization";
+import { createLogger } from "./logger";
+
+const log = createLogger("session-store");
 
 const TERMINAL_STATUSES = new Set<SessionStatus>(["completed", "failed", "killed"]);
-const TMP_OUTPUT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const SESSION_OUTPUT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 export interface SessionStoreOptions {
   env?: NodeJS.ProcessEnv;
@@ -66,7 +70,7 @@ export class SessionStore {
   constructor(options: SessionStoreOptions = {}) {
     const env = options.env ?? process.env;
     this.indexPath = options.indexPath ?? resolveSessionIndexPath(env);
-    this.actionTokenStore = new SessionActionTokenStore(() => this.saveIndex(), TMP_OUTPUT_MAX_AGE_MS);
+    this.actionTokenStore = new SessionActionTokenStore(() => this.saveIndex(), SESSION_OUTPUT_MAX_AGE_MS);
     this.actionTokens = this.actionTokenStore.tokens;
     this.queries = new SessionStoreQueries({
       persisted: this.persisted,
@@ -76,7 +80,7 @@ export class SessionStore {
     });
 
     if (env.OPENCLAW_DEBUG_SESSION_STORE === "1") {
-      console.warn(`[SessionStore] index path: ${this.indexPath}`);
+      log.warn(`[SessionStore] index path: ${this.indexPath}`);
     }
     this.loadIndex();
   }
@@ -344,12 +348,13 @@ export class SessionStore {
         // so write the in-memory buffer as a best-effort snapshot.
         const fullOutput = session.getOutput().join("\n");
         if (fullOutput.length > 0) {
-          writeFileSync(outputFile, fullOutput, "utf-8");
+          ensureSessionOutputDir(outputFile);
+          writeFileSync(outputFile, fullOutput, { encoding: "utf-8", mode: 0o600 });
           outputPath = outputFile;
         }
       }
     } catch (err: unknown) {
-      console.warn(`[SessionStore] Failed to write output file for session ${session.id}: ${errorMessage(err)}`);
+      log.warn(`[SessionStore] Failed to write output file for session ${session.id}: ${errorMessage(err)}`);
     }
 
     const info: PersistedSessionInfo = {
@@ -524,13 +529,13 @@ export class SessionStore {
   }
 
   /** Best-effort cleanup for stale tmp output files written by persistTerminal. */
-  cleanupTmpOutputFiles(now: number): void {
+  cleanupSessionOutputFiles(now: number): void {
     this.actionTokenStore.purgeExpiredActionTokens(now);
-    cleanupTmpOutputFiles(now, TMP_OUTPUT_MAX_AGE_MS, this.getReferencedOutputPaths());
+    cleanupSessionOutputFiles(now, SESSION_OUTPUT_MAX_AGE_MS, this.getReferencedOutputPaths());
   }
 
-  getNextTmpOutputCleanupAt(now: number): number | undefined {
-    return getNextTmpOutputCleanupAt(now, TMP_OUTPUT_MAX_AGE_MS, this.getReferencedOutputPaths());
+  getNextSessionOutputCleanupAt(now: number): number | undefined {
+    return getNextSessionOutputCleanupAt(now, SESSION_OUTPUT_MAX_AGE_MS, this.getReferencedOutputPaths());
   }
 
   /** Enforce max persisted session retention by evicting oldest records and indexes. */

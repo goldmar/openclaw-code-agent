@@ -1,6 +1,9 @@
 import { assertBranchName, localBranchRef } from "./worktree-ref-validation";
 import { execFileSync } from "child_process";
 import { existsSync } from "fs";
+import { createLogger } from "./logger";
+
+const log = createLogger("worktree-merge");
 
 export interface DiffSummary {
   commits: number;
@@ -102,7 +105,7 @@ export function getDiffSummary(repoDir: string, branch: string, base: string): D
 
     return { commits, filesChanged, insertions, deletions, changedFiles, commitMessages };
   } catch (err) {
-    console.warn(`[worktree] Failed to get diff summary: ${err instanceof Error ? err.message : String(err)}`);
+    log.warn(`[worktree] Failed to get diff summary: ${err instanceof Error ? err.message : String(err)}`);
     return undefined;
   }
 }
@@ -120,7 +123,7 @@ export function pushBranch(repoDir: string, branch: string, remote: string = "or
     );
     return true;
   } catch (err) {
-    console.warn(`[worktree] Failed to push branch ${branch}: ${err instanceof Error ? err.message : String(err)}`);
+    log.warn(`[worktree] Failed to push branch ${branch}: ${err instanceof Error ? err.message : String(err)}`);
     return false;
   }
 }

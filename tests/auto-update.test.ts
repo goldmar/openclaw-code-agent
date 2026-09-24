@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AutoUpdateService, autoUpdateInternals, isNewerStableVersion } from "../src/auto-update";
@@ -23,6 +23,7 @@ function writeState(dir: string, state: Record<string, unknown>): void {
 
 function createService(options: {
   stateDir?: string;
+  legacyStatePaths?: string[];
   currentVersion?: string;
   latestVersion?: string;
   now?: () => number;
@@ -37,6 +38,7 @@ function createService(options: {
   const installSource = options.installSource ?? "npm";
   const service = new AutoUpdateService({
     stateDir: options.stateDir ?? tempStateDir(),
+    legacyStatePaths: options.legacyStatePaths,
     currentVersion: options.currentVersion ?? "4.6.0",
     now: options.now,
     actionButtonFactory: (_sessionId, kind, label, actionOptions) => ({
@@ -314,6 +316,37 @@ describe("AutoUpdateService", () => {
     assert.doesNotMatch(harness.sends[0]?.text ?? "", /\bOCA\b/);
     assert.equal(readState(stateDir).promptedVersion, "4.6.1");
     assert.equal(readState(stateDir).lastPromptedAt, new Date(now).toISOString());
+  });
+
+  it("carries pre-5.0 auto-update state into the plugin state dir", async () => {
+    setPluginConfig({});
+    const now = Date.parse("2026-07-15T12:00:00.000Z");
+    const root = tempStateDir();
+    const stateDir = join(root, "plugin-state", "openclaw-code-agent");
+    const legacyPath = join(root, autoUpdateInternals.LEGACY_UPDATE_STATE_FILE);
+    writeFileSync(legacyPath, JSON.stringify({
+      lastCheckedAt: "2026-07-15T00:00:00.000Z",
+      latestVersion: "4.6.1",
+      dismissedVersion: "4.6.1",
+      lastDismissedAt: "2026-07-14T12:00:00.000Z",
+    }), "utf8");
+    const harness = createService({
+      stateDir,
+      legacyStatePaths: [legacyPath],
+      latestVersion: "4.6.1",
+      now: () => now,
+    });
+
+    harness.service.maybeCheckForUpdate({ route: ROUTE });
+    await harness.service.waitForIdle();
+
+    // The legacy dismissal is honored (no prompt, no re-fetch within a day).
+    assert.equal(harness.sends.length, 0);
+    assert.equal(harness.fetchCount, 0);
+    assert.equal(harness.service.dismiss("4.6.1"), "Dismissed OpenClaw Code Agent 4.6.1 update reminder.");
+    assert.equal(readState(stateDir).dismissedVersion, "4.6.1");
+    assert.equal(readState(stateDir).latestVersion, "4.6.1");
+    assert.equal(statSync(join(stateDir, autoUpdateInternals.UPDATE_STATE_FILE)).mode & 0o777, 0o600);
   });
 
   it("re-prompts a dismissed release only after the weekly reminder window", async () => {
