@@ -558,6 +558,19 @@ export async function reconcilePersistedSessionTaskMirror(
   if (!taskFlow) return undefined;
 
   const now = Date.now();
+  // A user stop is final even when the session was stopped while waiting (for
+  // example on a pending plan or worktree decision): cancel before any
+  // wait-state reconciliation could re-open the flow as waiting.
+  if (
+    session.status === "killed"
+    && session.killReason === "user"
+    && session.runtimeRecovery?.reason !== "persisted-running-without-runtime"
+    && typeof taskFlow.requestCancel === "function"
+  ) {
+    // A user stop whose live cancel intent was not recorded is still a cancellation.
+    return (await requestCancelWithRetry(taskFlow.requestCancel, flow, session.completedAt ?? now, "reconcile-cancel")).flow;
+  }
+
   if (hasActionableWaitState(session)) {
     const summary = mapSessionLifecycleProgress({
       status: session.status,
@@ -583,17 +596,6 @@ export async function reconcilePersistedSessionTaskMirror(
     });
     warnLifecycleMutationSkipped("reconcile-waiting", mutation);
     return applyMutation(flow, mutation);
-  }
-
-  const endedAtForCancel = session.completedAt ?? now;
-  if (
-    session.status === "killed"
-    && session.killReason === "user"
-    && session.runtimeRecovery?.reason !== "persisted-running-without-runtime"
-    && typeof taskFlow.requestCancel === "function"
-  ) {
-    // A user stop whose live cancel intent was not recorded is still a cancellation.
-    return (await requestCancelWithRetry(taskFlow.requestCancel, flow, endedAtForCancel, "reconcile-cancel")).flow;
   }
 
   const terminalStatus = mapSessionTaskTerminalStatus({

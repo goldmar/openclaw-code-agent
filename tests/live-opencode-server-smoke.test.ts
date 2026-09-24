@@ -1,15 +1,16 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createServer } from "node:net";
-import { OpenCodeHarness } from "../src/harness/opencode";
+import { OpenCodeHarness, startOpenCodeServer } from "../src/harness/opencode";
 import type { HarnessMessage } from "../src/harness/types";
 
 const RUN_LIVE = process.env.OPENCLAW_RUN_LIVE_OPENCODE_SMOKE === "1";
 const RUN_COMPLETION = process.env.OPENCLAW_RUN_LIVE_OPENCODE_COMPLETION_SMOKE === "1";
+/** Optional `provider/model` for the completion smoke (e.g. a free OpenCode Zen model). */
+const SMOKE_MODEL = process.env.OPENCLAW_OPENCODE_SMOKE_MODEL?.trim() || undefined;
 
 type LiveServer = {
   baseUrl: string;
@@ -17,81 +18,23 @@ type LiveServer = {
   close(): Promise<void>;
 };
 
-async function getFreePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = createServer();
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      server.close(() => {
-        if (address && typeof address === "object") {
-          resolve(address.port);
-        } else {
-          reject(new Error("Could not allocate OpenCode smoke test port."));
-        }
-      });
-    });
-  });
-}
-
+/** Start the real server exactly as the harness does (`--port 0`, URL from stdout). */
 async function startLiveServer(): Promise<LiveServer> {
   const cwd = await mkdtemp(join(tmpdir(), "openclaw-opencode-smoke-"));
-  const port = await getFreePort();
-  const child = spawn("opencode", [
-    "serve",
-    "--hostname",
-    "127.0.0.1",
-    "--port",
-    String(port),
-  ], {
-    cwd,
-    stdio: ["ignore", "pipe", "pipe"],
-  }) as ChildProcessWithoutNullStreams;
-  const baseUrl = `http://127.0.0.1:${port}`;
-  let output = "";
-  child.stdout.on("data", (chunk) => {
-    output += String(chunk);
-  });
-  child.stderr.on("data", (chunk) => {
-    output += String(chunk);
-  });
-
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < 10_000) {
-    if (child.exitCode !== null) {
-      throw new Error(`OpenCode server exited before route smoke readiness: ${output.trim()}`);
-    }
-    try {
-      const response = await fetch(`${baseUrl}/api/health`, { signal: AbortSignal.timeout(1_000) });
-      if (response.ok) {
-        return {
-          baseUrl,
-          cwd,
-          async close(): Promise<void> {
-            if (child.exitCode === null) child.kill("SIGTERM");
-            await new Promise<void>((resolve) => {
-              const timeout = setTimeout(() => {
-                if (child.exitCode === null) child.kill("SIGKILL");
-                resolve();
-              }, 2_000);
-              child.once("exit", () => {
-                clearTimeout(timeout);
-                resolve();
-              });
-            });
-            await rm(cwd, { recursive: true, force: true });
-          },
-        };
-      }
-    } catch {
-      // Keep polling until the bounded readiness deadline.
-    }
-    await new Promise((resolve) => setTimeout(resolve, 100));
+  try {
+    const handle = await startOpenCodeServer({ startupTimeoutMs: 20_000 });
+    return {
+      baseUrl: handle.baseUrl,
+      cwd,
+      async close(): Promise<void> {
+        await handle.close();
+        await rm(cwd, { recursive: true, force: true });
+      },
+    };
+  } catch (error) {
+    await rm(cwd, { recursive: true, force: true });
+    throw error;
   }
-
-  child.kill("SIGTERM");
-  await rm(cwd, { recursive: true, force: true });
-  throw new Error(`Timed out waiting for OpenCode server route smoke readiness: ${output.trim()}`);
 }
 
 async function requestJson<T>(
@@ -151,7 +94,8 @@ async function collectUntilCompleted(session: { messages: AsyncIterable<HarnessM
 }
 
 function assertOpenCodeVersion(): void {
-  const version = execFileSync("opencode", ["--version"], { encoding: "utf8" }).trim();
+  const command = process.env.OPENCLAW_OPENCODE_COMMAND?.trim() || "opencode";
+  const version = execFileSync(command, ["--version"], { encoding: "utf8" }).trim();
   const [major, minor] = version.split(".").map((part) => Number.parseInt(part, 10));
   assert.ok(major > 1 || (major === 1 && minor >= 16), `expected opencode >= 1.16, got ${version}`);
 }
@@ -161,17 +105,15 @@ describe("OpenCode live server smoke", { skip: !RUN_LIVE }, () => {
     assertOpenCodeVersion();
     const server = await startLiveServer();
     try {
-      const invalidApiCreate = await fetch(`${server.baseUrl}/api/session`, {
+      // `/api/*` is OpenCode's v2 surface: the web-app HTML shell on 1.16.x, a
+      // separate v2 JSON API on 1.18+. The harness uses the classic routes.
+      const apiCreate = await fetch(`${server.baseUrl}/api/session`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ metadata: { client: "openclaw-code-agent" } }),
         signal: AbortSignal.timeout(5_000),
       });
-      assert.match(
-        invalidApiCreate.headers.get("content-type") ?? "",
-        /text\/html/,
-        "POST /api/session should not be treated as the OpenCode lifecycle JSON create route",
-      );
+      await apiCreate.body?.cancel();
 
       const permission = [
         { permission: "edit", pattern: "*", action: "ask" },
@@ -200,6 +142,11 @@ describe("OpenCode live server smoke", { skip: !RUN_LIVE }, () => {
 
       const abort = await requestJson<boolean>(server, "POST", `/session/${created.data.id}/abort`);
       assert.equal(abort.data, true);
+
+      // The harness demultiplexes one shared stream for every project directory.
+      const events = await fetch(`${server.baseUrl}/global/event`, { signal: AbortSignal.timeout(5_000) });
+      assert.match(events.headers.get("content-type") ?? "", /text\/event-stream/);
+      await events.body?.cancel();
     } finally {
       await server.close();
     }
@@ -208,11 +155,12 @@ describe("OpenCode live server smoke", { skip: !RUN_LIVE }, () => {
   it("runs a trivial prompt through opencode serve", { skip: !RUN_COMPLETION }, async () => {
     assertOpenCodeVersion();
 
-    const harness = new OpenCodeHarness({ requestTimeoutMs: 45_000 });
+    const harness = new OpenCodeHarness({ requestTimeoutMs: 45_000, serverIdleShutdownMs: 0 });
     const messages = await collectUntilCompleted(harness.launch({
       prompt: "Reply with exactly: OPENCLAW_OPENCODE_SMOKE",
       cwd: process.cwd(),
       permissionMode: "default",
+      ...(SMOKE_MODEL ? { model: SMOKE_MODEL } : {}),
     }));
 
     const result = messages.find((message) => message.type === "run_completed") as Extract<HarnessMessage, { type: "run_completed" }> | undefined;

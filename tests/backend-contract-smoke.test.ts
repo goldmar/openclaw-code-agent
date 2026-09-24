@@ -20,12 +20,14 @@ describe("backend contract smoke", () => {
 
     assert.equal(claude.backendKind, "claude-code");
     assert.equal(claude.capabilities.nativePendingInput, false);
-    assert.equal(claude.capabilities.nativePlanArtifacts, false);
+    assert.equal(claude.capabilities.nativePlanArtifacts, true);
+    assert.equal(claude.capabilities.nativePlanDecisions, true);
     assert.equal(claude.capabilities.worktrees, "plugin-managed");
 
     assert.equal(opencode.backendKind, "opencode-server");
     assert.equal(opencode.capabilities.nativePendingInput, true);
     assert.equal(opencode.capabilities.nativePlanArtifacts, false);
+    assert.equal(opencode.capabilities.nativePlanDecisions, true);
     assert.equal(opencode.capabilities.worktrees, "plugin-managed");
   });
 });

@@ -327,6 +327,9 @@ export class SessionNotificationService {
       harness: sessionHarness ?? persistedSession?.harness,
       model: session.model ?? persistedSession?.model,
       reasoningEffort: session.reasoningEffort ?? persistedSession?.reasoningEffort,
+      reasoningEffortSupported: "backendInfo" in session
+        ? (session as Pick<Session, "backendInfo">).backendInfo?.reasoningEffortSupported
+        : undefined,
     });
     this.wakeDispatcher.dispatchSessionNotification(session as Session, {
       ...dispatchRequest,

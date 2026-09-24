@@ -19,14 +19,14 @@ describe("Session state machine", () => {
     session = new Session(BASE_CONFIG, "test");
   });
 
-  it("rejects the known-bad Claude default for internal session launches", () => {
+  it("canonicalizes provider-qualified Claude models for internal session launches", () => {
     setPluginConfig({ harnesses: { "claude-code": {
       defaultModel: "anthropic/claude-opus-5-5",
       allowedModels: ["sonnet", "opus"],
     } } });
     try {
-      assert.throws(() => new Session(BASE_CONFIG, "internal"), /not supported by Claude Code.*"opus" alias/);
-      assert.throws(() => new Session({ ...BASE_CONFIG, model: "anthropic/claude-opus-5-5" }, "internal"), /not supported by Claude Code.*"opus" alias/);
+      assert.equal(new Session(BASE_CONFIG, "internal").model, "claude-opus-5-5");
+      assert.equal(new Session({ ...BASE_CONFIG, model: "anthropic/claude-opus-5-5" }, "internal").model, "claude-opus-5-5");
       assert.equal(new Session({ ...BASE_CONFIG, model: "opus" }, "internal").model, "opus");
     } finally {
       setPluginConfig({});

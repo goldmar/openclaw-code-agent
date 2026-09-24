@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { constants as fsConstants, accessSync } from "node:fs";
-import { createServer } from "node:net";
+import { tmpdir } from "node:os";
 import { delimiter, dirname, join, sep } from "node:path";
 import type {
   PendingInputAction,
@@ -15,7 +15,9 @@ import {
 import type {
   AgentHarness,
   HarnessLaunchOptions,
+  HarnessModelUsage,
   HarnessSession,
+  HarnessUsage,
 } from "./types";
 import {
   createBackendRefEvent,
@@ -31,17 +33,32 @@ import {
 
 type FetchLike = typeof fetch;
 
-interface OpenCodeServerHandle {
+/** A running `opencode serve` process (or a test double). */
+export interface OpenCodeServerHandle {
   baseUrl: string;
   close(): Promise<void>;
+  /** Register a listener for an unexpected server exit. */
+  onExit?(listener: (reason: string) => void): void;
+}
+
+export interface OpenCodeServerStartOptions {
+  fetch?: FetchLike;
+  requestTimeoutMs?: number;
+  startupTimeoutMs?: number;
 }
 
 interface OpenCodeHarnessDeps {
-  createServer?: (options: { cwd: string; signal?: AbortSignal; fetch?: FetchLike; requestTimeoutMs?: number; startupTimeoutMs?: number }) => Promise<OpenCodeServerHandle>;
+  createServer?: (options: OpenCodeServerStartOptions) => Promise<OpenCodeServerHandle>;
   fetch?: FetchLike;
   requestTimeoutMs?: number;
   startupTimeoutMs?: number;
   turnTimeoutMs?: number;
+  /** How long the shared server outlives its last session (default 30s). */
+  serverIdleShutdownMs?: number;
+  /** Poll interval used only while the event stream is disconnected. */
+  fallbackPollIntervalMs?: number;
+  /** Delay before reconnecting a dropped event stream. */
+  streamReconnectDelayMs?: number;
 }
 
 interface OpenCodeSession {
@@ -59,11 +76,18 @@ type OpenCodePendingInput = {
   answers?: Record<string, { answers: string[] }>;
 };
 
+type NormalizedEvent = { type?: string; properties: Record<string, unknown> };
+
 const OPENCODE_COMMAND_ENV = "OPENCLAW_OPENCODE_COMMAND";
 const STARTUP_TIMEOUT_MS = 15_000;
 const REQUEST_TIMEOUT_MS = 60_000;
 const SESSION_COST_TIMEOUT_MS = 250;
 const TURN_TIMEOUT_MS = 15 * 60_000;
+const SERVER_IDLE_SHUTDOWN_MS = 30_000;
+const FALLBACK_POLL_INTERVAL_MS = 500;
+const STREAM_RECONNECT_DELAY_MS = 1_000;
+const STREAM_READY_TIMEOUT_MS = 2_000;
+const LISTENING_LINE = /opencode server listening on (https?:\/\/\S+)/;
 const MUTATION_PERMISSIONS = [
   "edit",
   "bash",
@@ -118,10 +142,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
-function sessionCostUsd(session: OpenCodeSession | undefined): number {
-  return typeof session?.cost === "number" && Number.isFinite(session.cost) && session.cost >= 0
-    ? session.cost
-    : 0;
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function sessionCostUsd(session: OpenCodeSession | undefined): number | undefined {
+  const cost = finiteNumber(session?.cost);
+  return cost !== undefined && cost >= 0 ? cost : undefined;
 }
 
 function extractPromptText(message: unknown): string {
@@ -146,13 +173,31 @@ function toOpenCodeModel(model: string | undefined): { id: string; providerID: s
   return parsed ? { id: parsed.modelID, providerID: parsed.providerID } : undefined;
 }
 
-function permissionRulesForMode(mode: string | undefined): Array<{ permission: string; pattern: string; action: "allow" | "deny" | "ask" }> {
+/** OpenCode's built-in agent for a permission mode (plan agent is read-only). */
+export function openCodeAgentForMode(mode: string | undefined): "plan" | "build" {
+  return mode === "plan" ? "plan" : "build";
+}
+
+/**
+ * Session permission overlay for a permission mode. Session rules are
+ * evaluated after the agent's own rules, so they override them.
+ *
+ * - plan: the built-in `plan` agent already denies edits (except its own plan
+ *   files) and general subagents. It allows shell commands and only asks the
+ *   model to keep them read-only, so OCA keeps `bash` hard-denied and blocks
+ *   paths outside the project to preserve the read-only guarantee.
+ * - default: mutating tools ask, and OCA routes the prompts to the user.
+ * - bypassPermissions: mutating tools are allowed without prompts.
+ */
+export function permissionRulesForMode(mode: string | undefined): Array<{ permission: string; pattern: string; action: "allow" | "deny" | "ask" }> {
   const effective = mode ?? "default";
-  const action = effective === "plan"
-    ? "deny"
-    : effective === "bypassPermissions"
-      ? "allow"
-      : "ask";
+  if (effective === "plan") {
+    return [
+      { permission: "bash", pattern: "*", action: "deny" },
+      { permission: "external_directory", pattern: "*", action: "deny" },
+    ];
+  }
+  const action = effective === "bypassPermissions" ? "allow" : "ask";
   return MUTATION_PERMISSIONS.map((permission) => ({
     permission,
     pattern: "*",
@@ -167,23 +212,6 @@ function authHeader(): Record<string, string> {
   return {
     Authorization: `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}`,
   };
-}
-
-async function getFreePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = createServer();
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      server.close(() => {
-        if (address && typeof address === "object") {
-          resolve(address.port);
-        } else {
-          reject(new Error("Could not allocate local OpenCode server port."));
-        }
-      });
-    });
-  });
 }
 
 async function delay(ms: number): Promise<void> {
@@ -233,7 +261,7 @@ async function boundedPromise<T>(
 }
 
 async function terminateChild(child: ChildProcessWithoutNullStreams): Promise<void> {
-  if (child.exitCode !== null) return;
+  if (child.exitCode !== null || child.signalCode !== null) return;
   await new Promise<void>((resolve) => {
     let killTimeout: NodeJS.Timeout | undefined;
     const forceTimeout = setTimeout(() => {
@@ -247,6 +275,94 @@ async function terminateChild(child: ChildProcessWithoutNullStreams): Promise<vo
     });
     child.kill("SIGTERM");
   });
+}
+
+/**
+ * Start `opencode serve` on an OS-chosen port and read the bound URL from its
+ * `opencode server listening on <url>` stdout line. With `--port 0` OpenCode
+ * tries 4096 first and falls back to any free port, so the printed URL is the
+ * only reliable address.
+ */
+export async function startOpenCodeServer(options: OpenCodeServerStartOptions = {}): Promise<OpenCodeServerHandle> {
+  const requestedCommand = process.env[OPENCODE_COMMAND_ENV]?.trim() || "opencode";
+  const command = resolveCommandPath(requestedCommand);
+  const args = ["serve", "--hostname", "127.0.0.1", "--port", "0", "--print-logs"];
+  const startupTimeoutMs = options.startupTimeoutMs ?? STARTUP_TIMEOUT_MS;
+  // The server resolves a project instance per request (`?directory=`), so its
+  // own working directory is irrelevant; keep it out of any repository.
+  const serverCwd = tmpdir();
+  const child = spawn(command, args, {
+    cwd: serverCwd,
+    stdio: ["ignore", "pipe", "pipe"],
+  }) as ChildProcessWithoutNullStreams;
+  let stdout = "";
+  let stderr = "";
+  const appendOutput = (current: string, chunk: unknown): string => {
+    const next = current + String(chunk);
+    return next.length > 8_000 ? next.slice(-8_000) : next;
+  };
+  const describeLaunch = (): string => {
+    const commandDescription = requestedCommand === command ? command : `${command} (resolved from ${requestedCommand})`;
+    const output = [stdout.trim(), stderr.trim()].filter(Boolean).join("\n").trim();
+    return ` Command: ${commandDescription} ${args.join(" ")}. PATH: ${process.env.PATH ?? ""}.${output ? ` Output:\n${output}` : ""}`;
+  };
+
+  const exitListeners: Array<(reason: string) => void> = [];
+  let closing = false;
+  let listening = false;
+
+  const baseUrl = await new Promise<string>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      void terminateChild(child);
+      reject(new Error(`Timed out waiting for OpenCode server readiness after ${startupTimeoutMs}ms.${describeLaunch()}`));
+    }, startupTimeoutMs);
+    child.stdout.on("data", (chunk) => {
+      stdout = appendOutput(stdout, chunk);
+      if (listening) return;
+      const match = LISTENING_LINE.exec(stdout);
+      if (match) {
+        listening = true;
+        clearTimeout(timeout);
+        resolve(match[1].replace(/\/+$/, ""));
+      }
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr = appendOutput(stderr, chunk);
+    });
+    child.once("error", (error) => {
+      clearTimeout(timeout);
+      reject(new Error(`OpenCode server failed to start: ${error.message}${describeLaunch()}`));
+    });
+    child.once("exit", (code, signal) => {
+      if (!listening) {
+        clearTimeout(timeout);
+        reject(new Error(`OpenCode server exited before readiness (${signal ?? `code ${code}`}).${describeLaunch()}`));
+        return;
+      }
+      if (closing) return;
+      const reason = `OpenCode server exited unexpectedly (${signal ?? `code ${code}`}).${describeLaunch()}`;
+      for (const listener of exitListeners) listener(reason);
+    });
+  });
+
+  // The shared server can outlive its last session for a short idle window;
+  // never leave it running after the Gateway process itself exits.
+  const killOnParentExit = (): void => {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
+  };
+  process.once("exit", killOnParentExit);
+  child.once("exit", () => process.removeListener("exit", killOnParentExit));
+
+  return {
+    baseUrl,
+    close: async () => {
+      closing = true;
+      await terminateChild(child);
+    },
+    onExit(listener) {
+      exitListeners.push(listener);
+    },
+  };
 }
 
 class OpenCodeHttpError extends Error {
@@ -279,12 +395,21 @@ function unexpectedJsonResponseMessage(method: string, path: string, contentType
   return `OpenCode ${method} ${path} expected JSON API response but received ${typeDescription}${htmlHint}${body ? `: ${body}` : ""}`;
 }
 
-function classicPromptBody(text: string, model: string | undefined, systemPrompt: string | undefined): Record<string, unknown> {
-  const parsed = parseModel(model);
+function classicPromptBody(args: {
+  text: string;
+  model: string | undefined;
+  systemPrompt: string | undefined;
+  agent: string;
+  variant: string | undefined;
+}): Record<string, unknown> {
+  const parsed = parseModel(args.model);
   return {
     ...(parsed ? { model: { providerID: parsed.providerID, modelID: parsed.modelID } } : {}),
-    ...(systemPrompt?.trim() ? { system: systemPrompt.trim() } : {}),
-    parts: [{ type: "text", text }],
+    agent: args.agent,
+    // Model-specific reasoning variant; OpenCode ignores names the model lacks.
+    ...(args.variant ? { variant: args.variant } : {}),
+    ...(args.systemPrompt?.trim() ? { system: args.systemPrompt.trim() } : {}),
+    parts: [{ type: "text", text: args.text }],
   };
 }
 
@@ -295,183 +420,37 @@ function isIdleSessionStatus(statuses: unknown, sessionId: string): boolean {
   return isRecord(status) && status.type === "idle";
 }
 
-function eventIndicatesSessionIdle(event: { type?: string; properties: Record<string, unknown> }): boolean {
+function eventStatusType(event: NormalizedEvent): string | undefined {
+  const status = event.properties.status;
+  if (isRecord(status) && typeof status.type === "string") return status.type;
+  if (typeof status === "string") return status;
+  return typeof event.properties.type === "string" ? event.properties.type : undefined;
+}
+
+function eventIndicatesSessionIdle(event: NormalizedEvent): boolean {
   if (event.type === "session.idle") return true;
-  if (event.type !== "session.status") return false;
-  const status = event.properties.status ?? event.properties.type;
-  return status === "idle";
+  return event.type === "session.status" && eventStatusType(event) === "idle";
 }
 
-// Serialize OpenCode server startup (spawn + readiness probe) to avoid
-// SQLite lock contention on the shared global DB at
-// ~/.local/share/opencode/opencode.db when multiple harness sessions
-// (different worktrees) start concurrently inside the same OpenClaw process.
-//
-// This is a per-process promise-chain mutex. It sequences *startup* only;
-// once a server is ready and the client/handle is obtained, sessions run
-// independently (multiple concurrent OpenCode servers are expected and desired).
-// A single global server would kill parallelism across worktrees.
-let openCodeStartupMutex: Promise<void> = Promise.resolve();
-
-function withOpenCodeStartupMutex<T>(fn: () => Promise<T>): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const next = openCodeStartupMutex.then(() => fn().then(resolve, reject));
-    openCodeStartupMutex = next.catch((): void => undefined);
-  });
-}
-
-async function startOpenCodeServerOnce(options: { cwd: string; signal?: AbortSignal; fetch?: FetchLike; requestTimeoutMs?: number; startupTimeoutMs?: number }): Promise<OpenCodeServerHandle> {
-  return withOpenCodeStartupMutex(async () => {
-    const port = await getFreePort();
-    const requestedCommand = process.env[OPENCODE_COMMAND_ENV]?.trim() || "opencode";
-    const command = resolveCommandPath(requestedCommand);
-    const args = [
-      "serve",
-      "--hostname",
-      "127.0.0.1",
-      "--port",
-      String(port),
-      "--print-logs",
-    ];
-    const fetchImpl = options.fetch ?? fetch;
-    const readinessRequestTimeoutMs = Math.min(options.requestTimeoutMs ?? REQUEST_TIMEOUT_MS, 10_000);
-    const startupTimeoutMs = options.startupTimeoutMs ?? STARTUP_TIMEOUT_MS;
-    const child = spawn(command, args, {
-      cwd: options.cwd,
-      stdio: ["ignore", "pipe", "pipe"],
-    }) as ChildProcessWithoutNullStreams;
-    const baseUrl = `http://127.0.0.1:${port}`;
-    let stdout = "";
-    let stderr = "";
-    let spawnError: Error | undefined;
-    const appendOutput = (current: string, chunk: unknown): string => {
-      const next = current + String(chunk);
-      return next.length > 8_000 ? next.slice(-8_000) : next;
-    };
-    child.stdout.on("data", (chunk) => {
-      stdout = appendOutput(stdout, chunk);
-  });
-  child.stderr.on("data", (chunk) => {
-    stderr = appendOutput(stderr, chunk);
-  });
-  child.once("error", (error) => {
-    spawnError = error;
-  });
-  const launchDescription = (): string => {
-    const commandDescription = requestedCommand === command ? command : `${command} (resolved from ${requestedCommand})`;
-    return ` Command: ${commandDescription} ${args.join(" ")}. Cwd: ${options.cwd}. Port: ${port}. PATH: ${process.env.PATH ?? ""}.`;
-  };
-  const outputSuffix = (): string => {
-    const output = [stdout.trim(), stderr.trim()].filter(Boolean).join("\n").trim();
-    return `${launchDescription()}${output ? ` Output:\n${output}` : ""}`;
-  };
-  const abortStartup = (): void => {
-    void terminateChild(child);
-  };
-  if (options.signal?.aborted) {
-    await terminateChild(child);
-    throw new Error(`OpenCode server startup aborted before readiness.${outputSuffix()}`);
-  }
-  options.signal?.addEventListener("abort", abortStartup, { once: true });
-
-  try {
-    const startedAt = Date.now();
-    while (Date.now() - startedAt < startupTimeoutMs) {
-      if (options.signal?.aborted) {
-        await terminateChild(child);
-        throw new Error(`OpenCode server startup aborted before readiness.${outputSuffix()}`);
-      }
-      if (spawnError) {
-        throw new Error(`OpenCode server failed to start: ${spawnError.message}${outputSuffix()}`);
-      }
-      if (child.exitCode !== null) {
-        throw new Error(`OpenCode server exited before readiness.${outputSuffix()}`);
-      }
-      try {
-        const ready = await probeOpenCodeHealth({
-          baseUrl,
-          fetchImpl,
-          requestTimeoutMs: readinessRequestTimeoutMs,
-          startupSignal: options.signal,
-          timeoutMessage: `OpenCode GET /api/health timed out after ${readinessRequestTimeoutMs}ms during server readiness.${outputSuffix()}`,
-          abortMessage: `OpenCode server startup aborted before readiness.${outputSuffix()}`,
-        });
-        if (ready) {
-          return {
-            baseUrl,
-            close: async () => {
-              await terminateChild(child);
-            },
-          };
-        }
-      } catch (error) {
-        if (options.signal?.aborted) {
-          await terminateChild(child);
-          throw new Error(`OpenCode server startup aborted before readiness.${outputSuffix()}`);
-        }
-        // Retry until the process exits or the startup deadline is reached.
-      }
-      await delay(100);
-    }
-
-    await terminateChild(child);
-    throw new Error(`Timed out waiting for OpenCode server readiness.${outputSuffix()}`);
-  } finally {
-    options.signal?.removeEventListener("abort", abortStartup);
-  }
-  });
-}
-
-async function defaultCreateServer(options: { cwd: string; signal?: AbortSignal; fetch?: FetchLike; requestTimeoutMs?: number; startupTimeoutMs?: number }): Promise<OpenCodeServerHandle> {
-  for (let attempt = 1; ; attempt += 1) {
-    try {
-      return await startOpenCodeServerOnce(options);
-    } catch (error) {
-      if (attempt >= 3 || !/EADDRINUSE|address already in use|bind: address already in use/i.test(errorMessage(error))) {
-        throw error;
-      }
-    }
-  }
-}
-
-async function probeOpenCodeHealth(args: {
-  baseUrl: string;
-  fetchImpl: FetchLike;
-  requestTimeoutMs: number;
-  startupSignal?: AbortSignal;
-  timeoutMessage: string;
-  abortMessage: string;
-}): Promise<boolean> {
-  const controller = new AbortController();
-  const abortController = (): void => controller.abort();
-  if (args.startupSignal?.aborted) {
-    controller.abort();
-  } else {
-    args.startupSignal?.addEventListener("abort", abortController, { once: true });
-  }
-  try {
-    const response = await boundedPromise(
-      args.fetchImpl(`${args.baseUrl}/api/health`, { headers: authHeader(), signal: controller.signal }),
-      {
-        timeoutMs: args.requestTimeoutMs,
-        timeoutMessage: args.timeoutMessage,
-        signal: args.startupSignal,
-        abortMessage: args.abortMessage,
-        onTimeout: () => controller.abort(),
-      },
-    );
-    return response.ok;
-  } finally {
-    args.startupSignal?.removeEventListener("abort", abortController);
-  }
-}
-
+/** Directory-scoped HTTP client for the classic OpenCode API. */
 class OpenCodeClient {
   constructor(
     private readonly baseUrl: string,
     private readonly fetchImpl: FetchLike,
     private readonly requestTimeoutMs = REQUEST_TIMEOUT_MS,
+    private readonly directory?: string,
   ) {}
+
+  /** A client whose every request targets `directory` on the shared server. */
+  forDirectory(directory: string): OpenCodeClient {
+    return new OpenCodeClient(this.baseUrl, this.fetchImpl, this.requestTimeoutMs, directory);
+  }
+
+  private url(path: string): string {
+    if (!this.directory) return `${this.baseUrl}${path}`;
+    const separator = path.includes("?") ? "&" : "?";
+    return `${this.baseUrl}${path}${separator}directory=${encodeURIComponent(this.directory)}`;
+  }
 
   async request<T>(
     method: string,
@@ -495,52 +474,32 @@ class OpenCodeClient {
     } else {
       options.signal?.addEventListener("abort", abortFromCaller, { once: true });
     }
+    const bounded = <V>(promise: Promise<V>): Promise<V> => boundedPromise(promise, {
+      timeoutMs,
+      timeoutMessage,
+      signal: options.signal,
+      abortMessage,
+      onTimeout: () => {
+        timedOut = true;
+        controller.abort();
+      },
+    });
     try {
-      const response = await boundedPromise(
-        this.fetchImpl(`${this.baseUrl}${path}`, {
-          method,
-          headers: {
-            ...authHeader(),
-            ...(body === undefined ? {} : { "content-type": "application/json" }),
-          },
-          body: body === undefined ? undefined : JSON.stringify(body),
-          signal: controller.signal,
-        }),
-        {
-          timeoutMs,
-          timeoutMessage,
-          signal: options.signal,
-          abortMessage,
-          onTimeout: () => {
-            timedOut = true;
-            controller.abort();
-          },
+      const response = await bounded(this.fetchImpl(this.url(path), {
+        method,
+        headers: {
+          ...authHeader(),
+          ...(body === undefined ? {} : { "content-type": "application/json" }),
         },
-      );
+        body: body === undefined ? undefined : JSON.stringify(body),
+        signal: controller.signal,
+      }));
       if (!response.ok) {
-        const text = await boundedPromise(response.text(), {
-          timeoutMs,
-          timeoutMessage,
-          signal: options.signal,
-          abortMessage,
-          onTimeout: () => {
-            timedOut = true;
-            controller.abort();
-          },
-        }).catch(() => "");
+        const text = await bounded(response.text()).catch(() => "");
         throw new OpenCodeHttpError(method, path, response.status, previewResponseBody(text));
       }
       if (response.status === 204) return undefined as T;
-      const text = await boundedPromise(response.text(), {
-        timeoutMs,
-        timeoutMessage,
-        signal: options.signal,
-        abortMessage,
-        onTimeout: () => {
-          timedOut = true;
-          controller.abort();
-        },
-      });
+      const text = await bounded(response.text());
       if (!text) return undefined as T;
       const contentType = responseContentType(response);
       if (!contentType.includes("application/json") && !contentType.includes("+json")) {
@@ -567,23 +526,27 @@ class OpenCodeClient {
     }
   }
 
+  /** Consume an SSE stream until it ends. `onOpen` fires once the stream is connected. */
   async streamEvents(
-    onEvent: (event: unknown) => void | Promise<void>,
+    path: string,
+    onEvent: (event: unknown) => void,
     signal: AbortSignal,
+    onOpen?: () => void,
   ): Promise<void> {
-    const response = await this.fetchImpl(`${this.baseUrl}/event`, {
+    const response = await this.fetchImpl(this.url(path), {
       headers: authHeader(),
       signal,
     });
     if (!response.ok) {
       throw new Error(`OpenCode event stream failed with ${response.status}`);
     }
+    onOpen?.();
     if (!response.body) return;
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
-    const flushFrame = async (frame: string): Promise<void> => {
+    const flushFrame = (frame: string): void => {
       const data = frame
         .split(/\r?\n/)
         .filter((line) => line.startsWith("data:"))
@@ -591,7 +554,11 @@ class OpenCodeClient {
         .join("\n")
         .trim();
       if (!data || data === "[DONE]") return;
-      await onEvent(JSON.parse(data));
+      try {
+        onEvent(JSON.parse(data));
+      } catch {
+        // A malformed frame must not tear down the shared stream.
+      }
     };
 
     while (true) {
@@ -602,16 +569,20 @@ class OpenCodeClient {
       while (separator) {
         const frame = buffer.slice(0, separator.index);
         buffer = buffer.slice(separator.index + separator[0].length);
-        await flushFrame(frame);
+        flushFrame(frame);
         separator = /\r?\n\r?\n/.exec(buffer);
       }
     }
     const tail = buffer.trim();
-    if (tail) await flushFrame(tail);
+    if (tail) flushFrame(tail);
   }
 }
 
-function normalizeEvent(raw: unknown): { type?: string; properties: Record<string, unknown> } {
+/**
+ * Normalize classic (`{type, properties}`), global (`{directory, payload}`)
+ * and v2 sync (`{type:"sync", name, data}`) event envelopes.
+ */
+function normalizeEvent(raw: unknown): NormalizedEvent {
   const wrapped = isRecord(raw) && isRecord(raw.payload) ? raw.payload : raw;
   if (!isRecord(wrapped)) return { properties: {} };
   if (wrapped.type === "sync") {
@@ -628,7 +599,221 @@ function normalizeEvent(raw: unknown): { type?: string; properties: Record<strin
 }
 
 function sessionIdFromProperties(properties: Record<string, unknown>): string | undefined {
-  return typeof properties.sessionID === "string" ? properties.sessionID : undefined;
+  if (typeof properties.sessionID === "string") return properties.sessionID;
+  const info = isRecord(properties.info) ? properties.info : undefined;
+  if (typeof info?.sessionID === "string") return info.sessionID;
+  const part = isRecord(properties.part) ? properties.part : undefined;
+  return typeof part?.sessionID === "string" ? part.sessionID : undefined;
+}
+
+type SessionEventListener = {
+  onEvent(event: NormalizedEvent): void;
+  /** The shared event stream dropped; events may have been missed. */
+  onStreamGap(): void;
+  /** The shared server process died. */
+  onServerExit(reason: string): void;
+};
+
+type SharedServer = {
+  handle: OpenCodeServerHandle;
+  client: OpenCodeClient;
+  alive: boolean;
+  exitReason?: string;
+  leases: number;
+  listeners: Map<string, Set<SessionEventListener>>;
+  streamAbort: AbortController;
+  streamConnected: boolean;
+  streamReady: Promise<void>;
+};
+
+interface OpenCodeServerLease {
+  /** Directory-scoped client for this session's project. */
+  client: OpenCodeClient;
+  readonly alive: boolean;
+  readonly exitReason: string | undefined;
+  readonly streamConnected: boolean;
+  subscribe(sessionId: string, listener: SessionEventListener): () => void;
+  release(): Promise<void>;
+}
+
+/**
+ * One lazily started `opencode serve` process shared by every OpenCode
+ * session of this plugin. OpenCode serves any project through the
+ * `?directory=` parameter, and sessions run concurrently on one server, so
+ * per-session processes and a startup mutex are unnecessary. A single
+ * `/global/event` stream is demultiplexed by session id. If the process dies,
+ * every in-flight turn fails with the exit reason and the next turn starts a
+ * fresh server (OpenCode persists sessions, so they continue).
+ */
+class OpenCodeServerManager {
+  private current?: SharedServer;
+  private starting?: Promise<SharedServer>;
+  private idleTimer?: NodeJS.Timeout;
+  /** Launches currently waiting for the server to start. */
+  private waiting = 0;
+
+  constructor(private readonly deps: OpenCodeHarnessDeps) {}
+
+  async acquire(directory: string, signal?: AbortSignal): Promise<OpenCodeServerLease> {
+    if (this.idleTimer) {
+      clearTimeout(this.idleTimer);
+      this.idleTimer = undefined;
+    }
+    const startup = this.ensureServer();
+    this.waiting += 1;
+    let server: SharedServer;
+    try {
+      server = signal
+        ? await boundedPromise(startup, {
+            timeoutMs: (this.deps.startupTimeoutMs ?? STARTUP_TIMEOUT_MS) + 5_000,
+            timeoutMessage: "Timed out waiting for the shared OpenCode server.",
+            signal,
+            abortMessage: "OpenCode startup was interrupted before session creation.",
+          })
+        : await startup;
+    } catch (error) {
+      this.waiting -= 1;
+      // The launch gave up, but startup may still finish: never leave a server
+      // that nobody holds running without an idle-shutdown timer.
+      startup.then((started) => this.releaseIfUnused(started), (): undefined => undefined);
+      throw error;
+    }
+    this.waiting -= 1;
+    server.leases += 1;
+    await boundedPromise(server.streamReady, {
+      timeoutMs: STREAM_READY_TIMEOUT_MS,
+      timeoutMessage: "event stream not ready",
+    }).catch((): undefined => undefined);
+    let released = false;
+    return {
+      client: server.client.forDirectory(directory),
+      get alive() { return server.alive; },
+      get exitReason() { return server.exitReason; },
+      get streamConnected() { return server.streamConnected; },
+      subscribe: (sessionId, listener) => {
+        let set = server.listeners.get(sessionId);
+        if (!set) {
+          set = new Set();
+          server.listeners.set(sessionId, set);
+        }
+        set.add(listener);
+        return () => {
+          const listeners = server.listeners.get(sessionId);
+          listeners?.delete(listener);
+          if (listeners?.size === 0) server.listeners.delete(sessionId);
+        };
+      },
+      release: async () => {
+        if (released) return;
+        released = true;
+        server.leases -= 1;
+        await this.releaseIfUnused(server);
+      },
+    };
+  }
+
+  /** Shut down (now or after the idle window) a server that no session holds or awaits. */
+  private async releaseIfUnused(server: SharedServer): Promise<void> {
+    if (server.leases > 0 || this.waiting > 0 || server !== this.current || this.idleTimer) return;
+    const idleMs = this.deps.serverIdleShutdownMs ?? SERVER_IDLE_SHUTDOWN_MS;
+    if (idleMs <= 0) {
+      await this.shutdown(server);
+      return;
+    }
+    this.idleTimer = setTimeout(() => {
+      this.idleTimer = undefined;
+      if (server.leases === 0 && this.waiting === 0 && server === this.current) void this.shutdown(server);
+    }, idleMs);
+    this.idleTimer.unref?.();
+  }
+
+  private async ensureServer(): Promise<SharedServer> {
+    if (this.current?.alive) return this.current;
+    this.starting ??= this.start().finally(() => {
+      this.starting = undefined;
+    });
+    return await this.starting;
+  }
+
+  private async start(): Promise<SharedServer> {
+    const fetchImpl = this.deps.fetch ?? fetch;
+    const handle = await (this.deps.createServer ?? startOpenCodeServer)({
+      fetch: fetchImpl,
+      requestTimeoutMs: this.deps.requestTimeoutMs,
+      startupTimeoutMs: this.deps.startupTimeoutMs,
+    });
+    let markReady!: () => void;
+    const server: SharedServer = {
+      handle,
+      client: new OpenCodeClient(handle.baseUrl, fetchImpl, this.deps.requestTimeoutMs),
+      alive: true,
+      leases: 0,
+      listeners: new Map(),
+      streamAbort: new AbortController(),
+      streamConnected: false,
+      streamReady: new Promise<void>((resolve) => { markReady = resolve; }),
+    };
+    handle.onExit?.((reason) => this.handleExit(server, reason));
+    this.current = server;
+    void this.runEventStream(server, markReady);
+    return server;
+  }
+
+  private dispatch(server: SharedServer, raw: unknown): void {
+    const event = normalizeEvent(raw);
+    const sessionId = sessionIdFromProperties(event.properties);
+    if (!sessionId) return;
+    for (const listener of [...(server.listeners.get(sessionId) ?? [])]) {
+      listener.onEvent(event);
+    }
+  }
+
+  private notifyAll(server: SharedServer, fn: (listener: SessionEventListener) => void): void {
+    for (const listeners of [...server.listeners.values()]) {
+      for (const listener of [...listeners]) fn(listener);
+    }
+  }
+
+  private async runEventStream(server: SharedServer, markReady: () => void): Promise<void> {
+    let everConnected = false;
+    while (server.alive && !server.streamAbort.signal.aborted) {
+      try {
+        await server.client.streamEvents("/global/event", (raw) => this.dispatch(server, raw), server.streamAbort.signal, () => {
+          server.streamConnected = true;
+          if (everConnected) {
+            // Reconnected: events during the gap are lost, so let sessions
+            // reconcile their turns against the session status/messages.
+            this.notifyAll(server, (listener) => listener.onStreamGap());
+          }
+          everConnected = true;
+          markReady();
+        });
+      } catch {
+        // Handled below as a gap.
+      }
+      server.streamConnected = false;
+      markReady();
+      if (!server.alive || server.streamAbort.signal.aborted) return;
+      this.notifyAll(server, (listener) => listener.onStreamGap());
+      await delay(this.deps.streamReconnectDelayMs ?? STREAM_RECONNECT_DELAY_MS);
+    }
+  }
+
+  private handleExit(server: SharedServer, reason: string): void {
+    if (!server.alive) return;
+    server.alive = false;
+    server.exitReason = reason;
+    server.streamAbort.abort();
+    if (this.current === server) this.current = undefined;
+    this.notifyAll(server, (listener) => listener.onServerExit(reason));
+  }
+
+  private async shutdown(server: SharedServer): Promise<void> {
+    server.alive = false;
+    server.streamAbort.abort();
+    if (this.current === server) this.current = undefined;
+    await server.handle.close().catch((): undefined => undefined);
+  }
 }
 
 function buildPermissionPendingInput(request: Record<string, unknown>): PendingInputState {
@@ -655,6 +840,22 @@ function buildPermissionPendingInput(request: Record<string, unknown>): PendingI
   };
 }
 
+/** OpenCode question fields: `multiple` (multi-select) and `custom` (free text, default on). */
+function applyOpenCodeQuestionFlags(questions: PendingInputQuestion[], request: Record<string, unknown>): PendingInputQuestion[] {
+  const rawQuestions = Array.isArray(request.questions) ? request.questions : [];
+  return questions.map((question, index) => {
+    const raw = isRecord(rawQuestions[index]) ? rawQuestions[index] : undefined;
+    if (!raw) return question;
+    const multiSelect = question.multiSelect === true || raw.multiple === true;
+    const allowsFreeText = raw.custom === false ? multiSelect : true;
+    return {
+      ...question,
+      ...(multiSelect ? { multiSelect: true } : {}),
+      ...(allowsFreeText ? { allowsFreeText: true } : {}),
+    };
+  });
+}
+
 function buildQuestionPendingInput(request: Record<string, unknown>): PendingInputState {
   const requestId = typeof request.id === "string" ? request.id : "opencode-question";
   const promptText = typeof request.question === "string"
@@ -662,7 +863,7 @@ function buildQuestionPendingInput(request: Record<string, unknown>): PendingInp
     : typeof request.prompt === "string"
       ? request.prompt
       : "OpenCode is asking for input.";
-  const normalizedQuestions = extractPendingInputQuestions(request);
+  const normalizedQuestions = applyOpenCodeQuestionFlags(extractPendingInputQuestions(request), request);
   const topLevelOptions = extractPendingInputOptions(request);
   const questions: PendingInputQuestion[] = normalizedQuestions.length > 0
     ? normalizedQuestions
@@ -707,47 +908,150 @@ function updateOpenCodeWizardState(
   };
 }
 
-function formatOpenCodeCombinedAnswers(
-  questions: PendingInputQuestion[],
-  answers: Record<string, { answers: string[] }>,
-): string {
-  if (questions.length === 1) {
-    return answers[questions[0].id]?.answers.join(", ") ?? "";
-  }
-  return questions
-    .map((question, index) => {
-      const answer = answers[question.id]?.answers.join(", ") ?? "";
-      return `Q${index + 1}: ${question.question}\nA${index + 1}: ${answer}`;
-    })
-    .join("\n\n");
+/**
+ * Parse a free-text answer for a multi-select question into option labels:
+ * comma/newline separated, accepting option numbers or labels.
+ */
+export function parseMultiSelectAnswer(question: PendingInputQuestion, text: string): string[] {
+  return text
+    .split(/[,\n]/)
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map((entry) => {
+      const index = /^\d+$/.test(entry) ? Number.parseInt(entry, 10) - 1 : -1;
+      const byIndex = index >= 0 ? question.options[index] : undefined;
+      const byLabel = question.options.find((option) => option.label.toLowerCase() === entry.toLowerCase());
+      const option = byIndex ?? byLabel;
+      return option ? (option.value ?? option.label) : entry;
+    });
 }
 
-function extractAssistantResult(messages: unknown): string | undefined {
-  return extractAssistantMessageState(messages).result;
+type AssistantRecord = {
+  id?: string;
+  text?: string;
+  error?: string;
+  cost?: number;
+  providerID?: string;
+  modelID?: string;
+  created?: number;
+  completed?: number;
+  tokens?: {
+    total?: number;
+    input: number;
+    output: number;
+    reasoning: number;
+    cacheRead: number;
+    cacheWrite: number;
+  };
+};
+
+function assistantErrorMessage(error: unknown): string | undefined {
+  if (!isRecord(error)) return undefined;
+  const data = isRecord(error.data) ? error.data : undefined;
+  if (typeof data?.message === "string" && data.message) return data.message;
+  if (typeof error.message === "string" && error.message) return error.message;
+  return typeof error.name === "string" ? error.name : undefined;
 }
 
-function extractAssistantMessageState(messages: unknown): { count: number; result?: string } {
-  const records = Array.isArray(messages)
+function parseAssistantTokens(value: unknown): AssistantRecord["tokens"] {
+  if (!isRecord(value)) return undefined;
+  const cache = isRecord(value.cache) ? value.cache : {};
+  return {
+    ...(finiteNumber(value.total) !== undefined ? { total: finiteNumber(value.total) } : {}),
+    input: finiteNumber(value.input) ?? 0,
+    output: finiteNumber(value.output) ?? 0,
+    reasoning: finiteNumber(value.reasoning) ?? 0,
+    cacheRead: finiteNumber(cache.read) ?? 0,
+    cacheWrite: finiteNumber(cache.write) ?? 0,
+  };
+}
+
+/** Assistant messages from `GET /session/{id}/message` in order (classic and current shapes). */
+function extractAssistantRecords(messages: unknown): AssistantRecord[] {
+  const entries = Array.isArray(messages)
     ? messages
     : isRecord(messages) && Array.isArray(messages.messages)
       ? messages.messages
       : isRecord(messages) && Array.isArray(messages.items)
         ? messages.items
         : [];
-  const texts: string[] = [];
-  for (const entry of records) {
-    const message = isRecord(entry) && isRecord(entry.info) ? entry.info : entry;
-    if (!isRecord(message)) continue;
-    const role = typeof message.role === "string" ? message.role : message.type;
+  const records: AssistantRecord[] = [];
+  for (const entry of entries) {
+    const info = isRecord(entry) && isRecord(entry.info) ? entry.info : entry;
+    if (!isRecord(info)) continue;
+    const role = typeof info.role === "string" ? info.role : info.type;
     if (role !== "assistant") continue;
-    const content = Array.isArray(message.content) ? message.content : [];
+    const content = Array.isArray(info.content) ? info.content : [];
     const parts = isRecord(entry) && Array.isArray(entry.parts) ? entry.parts : [];
-    for (const part of [...content, ...parts]) {
-      if (isRecord(part) && part.type === "text" && typeof part.text === "string") texts.push(part.text);
-    }
+    const texts = [...content, ...parts]
+      .filter((part): part is Record<string, unknown> => isRecord(part) && part.type === "text" && typeof part.text === "string" && part.synthetic !== true)
+      .map((part) => part.text as string);
+    const time = isRecord(info.time) ? info.time : {};
+    records.push({
+      ...(typeof info.id === "string" ? { id: info.id } : {}),
+      ...(texts.length > 0 ? { text: texts.at(-1) } : {}),
+      ...(assistantErrorMessage(info.error) ? { error: assistantErrorMessage(info.error) } : {}),
+      ...(finiteNumber(info.cost) !== undefined ? { cost: finiteNumber(info.cost) } : {}),
+      ...(typeof info.providerID === "string" ? { providerID: info.providerID } : {}),
+      ...(typeof info.modelID === "string" ? { modelID: info.modelID } : {}),
+      ...(finiteNumber(time.created) !== undefined ? { created: finiteNumber(time.created) } : {}),
+      ...(finiteNumber(time.completed) !== undefined ? { completed: finiteNumber(time.completed) } : {}),
+      ...(parseAssistantTokens(info.tokens) ? { tokens: parseAssistantTokens(info.tokens) } : {}),
+    });
   }
-  return { count: texts.length, result: texts.at(-1) };
+  return records;
 }
+
+/** Cumulative per-model usage over every assistant message in the session. */
+function summarizeModelUsage(records: AssistantRecord[]): HarnessModelUsage[] | undefined {
+  const byModel = new Map<string, HarnessModelUsage>();
+  for (const record of records) {
+    if (!record.tokens && record.cost === undefined) continue;
+    const model = record.providerID && record.modelID
+      ? `${record.providerID}/${record.modelID}`
+      : record.modelID ?? "unknown";
+    const entry = byModel.get(model) ?? {
+      model,
+      costUsd: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      reasoningTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    };
+    entry.costUsd += record.cost ?? 0;
+    entry.inputTokens += record.tokens?.input ?? 0;
+    entry.outputTokens += record.tokens?.output ?? 0;
+    entry.reasoningTokens = (entry.reasoningTokens ?? 0) + (record.tokens?.reasoning ?? 0);
+    entry.cacheReadTokens = (entry.cacheReadTokens ?? 0) + (record.tokens?.cacheRead ?? 0);
+    entry.cacheWriteTokens = (entry.cacheWriteTokens ?? 0) + (record.tokens?.cacheWrite ?? 0);
+    byModel.set(model, entry);
+  }
+  return byModel.size > 0 ? [...byModel.values()] : undefined;
+}
+
+/** Context size of the latest request: its total tokens (prompt + cache + output). */
+function latestContextTokens(records: AssistantRecord[]): number | undefined {
+  const tokens = [...records].reverse().find((record) => record.tokens)?.tokens;
+  if (!tokens) return undefined;
+  return tokens.total ?? tokens.input + tokens.cacheRead + tokens.cacheWrite + tokens.output;
+}
+
+/** Turn duration from the turn's assistant records (first created → last completed). */
+function recordDurationMs(records: AssistantRecord[]): number | undefined {
+  const created = records.map((record) => record.created).filter((value): value is number => value !== undefined);
+  const completed = records.map((record) => record.completed ?? record.created).filter((value): value is number => value !== undefined);
+  if (created.length === 0 || completed.length === 0) return undefined;
+  const duration = Math.max(...completed) - Math.min(...created);
+  return duration >= 0 ? duration : undefined;
+}
+
+type TurnWaiter = {
+  sawActivity: boolean;
+  settled: boolean;
+  resolve(): void;
+  reject(error: Error): void;
+};
 
 export class OpenCodeHarness implements AgentHarness {
   readonly name = "opencode";
@@ -760,17 +1064,25 @@ export class OpenCodeHarness implements AgentHarness {
   readonly capabilities = {
     nativePendingInput: true,
     nativePlanArtifacts: false,
+    // Plan/build agent switching carries plan decisions; OpenCode injects its
+    // own build-switch reminder when a plan-agent session moves to `build`.
+    nativePlanDecisions: true,
     worktrees: "plugin-managed",
   } as const;
 
-  constructor(private readonly deps: OpenCodeHarnessDeps = {}) {}
+  private readonly servers: OpenCodeServerManager;
+
+  constructor(private readonly deps: OpenCodeHarnessDeps = {}) {
+    this.servers = new OpenCodeServerManager(deps);
+  }
 
   launch(options: HarnessLaunchOptions): HarnessSession {
     const queue = new HarnessMessageQueue();
-    const fetchImpl = this.deps.fetch ?? fetch;
-    let server: OpenCodeServerHandle | undefined;
-    let client: OpenCodeClient | undefined;
-    let clientPromise: Promise<OpenCodeClient> | undefined;
+    const deps = this.deps;
+    const servers = this.servers;
+    let lease: OpenCodeServerLease | undefined;
+    let leasePromise: Promise<OpenCodeServerLease> | undefined;
+    let unsubscribe: (() => void) | undefined;
     let sessionId = options.resumeSessionId;
     let runCounter = 0;
     let currentPermissionMode = options.permissionMode ?? "default";
@@ -778,38 +1090,11 @@ export class OpenCodeHarness implements AgentHarness {
     let sessionValidated = !options.resumeSessionId;
     let sessionForked = false;
     let systemPromptInjected = false;
-    const streamController = new AbortController();
-    let activeWaitController: AbortController | undefined;
-    let streamStarted = false;
-    let turnInProgress = false;
-    let turnWaitCompleted = false;
-    let turnCompletionEmitted = false;
-    let turnCompletionPromise: Promise<void> | undefined;
-    let sessionInterrupted = false;
-    let turnSawSseIdle = false;
+    let closed = false;
     let lastBackendRefConversationId: string | undefined;
+    let activeTurn: { waiter?: TurnWaiter; abort: AbortController; interrupted: boolean } | undefined;
+    const emittedToolCalls = new Set<string>();
     const resolvedPendingInputRequestIds = new Set<string>();
-
-    const emitRunCompleted = (data: Parameters<typeof createRunCompletedEvent>[0]): boolean => {
-      if (turnCompletionEmitted) return false;
-      turnCompletionEmitted = true;
-      queue.enqueue(createRunCompletedEvent(data));
-      return true;
-    };
-    const finishTurn = (
-      success: boolean,
-      outcome: "completed" | "failed" | "interrupted",
-      result?: string,
-      totalCostUsd = 0,
-    ): boolean => emitRunCompleted({
-      success,
-      outcome,
-      duration_ms: 0,
-      total_cost_usd: totalCostUsd,
-      num_turns: runCounter,
-      result,
-      session_id: sessionId ?? "",
-    });
 
     const emitBackendRef = (): void => {
       if (!sessionId) return;
@@ -829,90 +1114,106 @@ export class OpenCodeHarness implements AgentHarness {
       }
     };
 
-    const ensureClient = async (): Promise<OpenCodeClient> => {
-      if (client) return client;
-      clientPromise ??= (async () => {
-        const handle = await (this.deps.createServer ?? defaultCreateServer)({
-          cwd: options.cwd,
-          signal: options.abortController?.signal,
-          fetch: fetchImpl,
-          requestTimeoutMs: this.deps.requestTimeoutMs,
-          startupTimeoutMs: this.deps.startupTimeoutMs,
-        });
-        if (sessionInterrupted || options.abortController?.signal.aborted) {
-          await handle.close().catch((): undefined => undefined);
+    const ensureLease = async (): Promise<OpenCodeServerLease> => {
+      if (lease?.alive) return lease;
+      if (lease && !lease.alive) {
+        // The shared server died since the last turn: detach and start anew.
+        unsubscribe?.();
+        unsubscribe = undefined;
+        await lease.release();
+        lease = undefined;
+      }
+      leasePromise ??= (async () => {
+        const acquired = await servers.acquire(options.cwd, options.abortController?.signal);
+        if (closed || options.abortController?.signal.aborted) {
+          await acquired.release();
           throw new Error("OpenCode startup was interrupted before session creation.");
         }
-        server = handle;
-        client = new OpenCodeClient(handle.baseUrl, fetchImpl, this.deps.requestTimeoutMs);
-        return client;
+        lease = acquired;
+        return acquired;
       })();
       try {
-        return await clientPromise;
-      } catch (error) {
-        clientPromise = undefined;
-        throw error;
+        return await leasePromise;
+      } finally {
+        leasePromise = undefined;
       }
     };
 
+    const client = (): OpenCodeClient => {
+      if (!lease) throw new Error("OpenCode server is not connected.");
+      return lease.client;
+    };
+
     const replyPermission = async (requestId: string, response: string): Promise<void> => {
-      if (!client || !sessionId) return;
-      await client.request("POST", `/permission/${encodeURIComponent(requestId)}/reply`, {
+      if (!lease || !sessionId) return;
+      await client().request("POST", `/permission/${encodeURIComponent(requestId)}/reply`, {
         reply: response,
       });
     };
 
-    const replyQuestion = async (requestId: string, answer: string): Promise<void> => {
-      if (!client || !sessionId) return;
-      await client.request("POST", `/question/${encodeURIComponent(requestId)}/reply`, {
-        answers: [[answer]],
-      });
+    /** One answer array per question, in question order (multi-select ready). */
+    const replyQuestion = async (requestId: string, answers: string[][]): Promise<void> => {
+      if (!lease || !sessionId) return;
+      await client().request("POST", `/question/${encodeURIComponent(requestId)}/reply`, { answers });
     };
 
-    const handleEvent = async (raw: unknown): Promise<void> => {
-      const event = normalizeEvent(raw);
-      const eventSessionId = sessionIdFromProperties(event.properties);
-      if (eventSessionId && eventSessionId !== sessionId) return;
+    const settleWaiter = (fn: (waiter: TurnWaiter) => void): void => {
+      const waiter = activeTurn?.waiter;
+      if (!waiter || waiter.settled) return;
+      waiter.settled = true;
+      fn(waiter);
+    };
 
+    const handleEvent = (event: NormalizedEvent): void => {
+      if (closed) return;
+      const waiter = activeTurn?.waiter;
       if (
         (event.type === "session.next.text.delta" || event.type === "message.part.delta")
         && event.properties.field !== "reasoning"
         && typeof event.properties.delta === "string"
       ) {
+        if (waiter) waiter.sawActivity = true;
         queue.enqueue(createTextDeltaEvent(event.properties.delta));
         return;
       }
       if (event.type === "session.next.tool.called" || event.type === "message.part.updated") {
+        if (waiter) waiter.sawActivity = true;
         const part = isRecord(event.properties.part) ? event.properties.part : undefined;
         if (event.type === "message.part.updated" && part?.type !== "tool") {
           queue.enqueue({ type: "activity" });
           return;
         }
+        // Tool parts are re-sent on every state change; report each call once,
+        // when its input is known (not while it is still `pending`).
+        const state = isRecord(part?.state) ? part.state : undefined;
+        const callId = typeof part?.callID === "string"
+          ? part.callID
+          : typeof event.properties.callID === "string" ? event.properties.callID : undefined;
+        if ((callId && emittedToolCalls.has(callId)) || state?.status === "pending") {
+          queue.enqueue({ type: "activity" });
+          return;
+        }
+        if (callId) emittedToolCalls.add(callId);
         const tool = typeof event.properties.tool === "string"
           ? event.properties.tool
           : typeof part?.tool === "string"
             ? part.tool
             : "tool";
-        queue.enqueue(createToolCallEvent(tool, event.properties.input));
+        queue.enqueue(createToolCallEvent(tool, event.properties.input ?? state?.input));
         return;
       }
       if (event.type === "session.next.step.failed" || event.type === "session.error") {
-        const reason = isRecord(event.properties.error)
-          && typeof event.properties.error.message === "string"
-          ? event.properties.error.message
-          : `${event.type} failed`;
-        if (turnInProgress && !turnWaitCompleted) {
-          activeWaitController?.abort();
-          await completeTurn(false, reason);
-        }
+        const reason = assistantErrorMessage(event.properties.error) ?? `${event.type} failed`;
+        settleWaiter((pending) => pending.reject(new Error(reason)));
         return;
       }
       if (event.type === "permission.asked") {
         if (currentPermissionMode === "bypassPermissions") {
           const requestId = typeof event.properties.id === "string" ? event.properties.id : undefined;
           if (requestId) {
-            await replyPermission(requestId, "once").catch((): undefined => undefined);
-            resolvePendingInput(requestId);
+            void replyPermission(requestId, "once")
+              .catch((): undefined => undefined)
+              .finally(() => resolvePendingInput(requestId));
           }
           return;
         }
@@ -949,197 +1250,218 @@ export class OpenCodeHarness implements AgentHarness {
         resolvePendingInput(requestId);
         return;
       }
+      if (eventIndicatesSessionIdle(event)) {
+        queue.enqueue({ type: "activity" });
+        if (!waiter || waiter.settled) return;
+        if (waiter.sawActivity) {
+          settleWaiter((pending) => pending.resolve());
+          return;
+        }
+        // An idle with no activity for this turn may be stale; confirm it.
+        void confirmIdleTurn();
+        return;
+      }
       if (
         event.type?.startsWith("session.next.")
         || event.type?.startsWith("message.")
         || event.type === "session.status"
-        || event.type === "session.idle"
       ) {
-        if (eventIndicatesSessionIdle(event)) {
-          turnSawSseIdle = true;
+        if (waiter && (event.type !== "session.status" || eventStatusType(event) === "busy")) {
+          waiter.sawActivity = true;
         }
         queue.enqueue({ type: "activity" });
       }
     };
 
-    const startEventStream = (): void => {
-      if (streamStarted || !client) return;
-      streamStarted = true;
-      void client.streamEvents(handleEvent, streamController.signal)
-        .catch(async (error) => {
-          if (!streamController.signal.aborted && turnInProgress && !turnWaitCompleted) {
-            activeWaitController?.abort();
-            await completeTurn(false, errorMessage(error));
-          }
-        })
-        .finally(() => {
-          streamStarted = false;
+    let turnBaselineAssistantCount = 0;
+
+    const fetchMessages = async (id: string, signal?: AbortSignal): Promise<unknown> => {
+      return await client().request<unknown>("GET", `/session/${encodeURIComponent(id)}/message`, undefined, { signal });
+    };
+
+    /** Resolve the turn when the session is idle and produced a new assistant message. */
+    const confirmIdleTurn = async (): Promise<void> => {
+      const waiter = activeTurn?.waiter;
+      const id = sessionId;
+      if (!waiter || waiter.settled || !id || !lease?.alive) return;
+      try {
+        const statuses = await client().request<unknown>("GET", "/session/status", undefined, {
+          timeoutMs: Math.min(deps.requestTimeoutMs ?? REQUEST_TIMEOUT_MS, 10_000),
         });
+        if (!isIdleSessionStatus(statuses, id)) return;
+        const records = extractAssistantRecords(await fetchMessages(id));
+        if (records.length > turnBaselineAssistantCount) {
+          settleWaiter((pending) => pending.resolve());
+        }
+      } catch {
+        // Status is best-effort; SSE or the next poll decides.
+      }
     };
 
-    const fetchSessionMessages = async (http: OpenCodeClient, id: string): Promise<unknown> => {
-      return await http.request<unknown>("GET", `/session/${encodeURIComponent(id)}/message`);
+    const listener: SessionEventListener = {
+      onEvent: handleEvent,
+      onStreamGap: () => {
+        const turn = activeTurn;
+        if (!turn?.waiter || turn.waiter.settled) return;
+        void pollUntilSettled(turn.waiter, turn.abort.signal);
+      },
+      onServerExit: (reason) => {
+        settleWaiter((pending) => pending.reject(new Error(`${reason} The in-flight OpenCode turn failed; the session can continue in a new turn.`)));
+      },
     };
 
-    const fetchSession = async (http: OpenCodeClient, id: string): Promise<OpenCodeSession> => {
-      return await http.request<OpenCodeSession>("GET", `/session/${encodeURIComponent(id)}`, undefined, {
-        timeoutMs: Math.min(this.deps.requestTimeoutMs ?? REQUEST_TIMEOUT_MS, SESSION_COST_TIMEOUT_MS),
-      });
-    };
-
-    const sendPrompt = async (http: OpenCodeClient, id: string, text: string, promptSystemPrompt: string | undefined, signal: AbortSignal): Promise<void> => {
-      await http.request("POST", `/session/${encodeURIComponent(id)}/prompt_async`, classicPromptBody(text, options.model, promptSystemPrompt), { signal });
-    };
-
-    const waitForTurn = async (http: OpenCodeClient, id: string, baselineAssistantCount: number, signal: AbortSignal): Promise<void> => {
-      const startedAt = Date.now();
-      let observedBusy = false;
-      let lastAssistantCount = baselineAssistantCount;
-      let lastAssistantResult: string | undefined;
-      let stableAssistantPolls = 0;
-      let lastStatusError: string | undefined;
-      const turnTimeoutMs = this.deps.turnTimeoutMs ?? TURN_TIMEOUT_MS;
-      while (true) {
-        if (signal.aborted) throw new Error("wait aborted");
-        const messages = await fetchSessionMessages(http, id).catch((): undefined => undefined);
-        const assistantState = extractAssistantMessageState(messages);
-        const hasNewAssistantResult = assistantState.count > baselineAssistantCount && Boolean(assistantState.result);
-        if (hasNewAssistantResult && assistantState.count === lastAssistantCount && assistantState.result === lastAssistantResult) {
-          stableAssistantPolls += 1;
-        } else {
-          stableAssistantPolls = hasNewAssistantResult ? 1 : 0;
-          lastAssistantCount = assistantState.count;
-          lastAssistantResult = assistantState.result;
-        }
-
-        let idle = false;
-        try {
-          const statuses = await http.request<unknown>("GET", "/session/status", undefined, {
-            signal,
-            timeoutMs: Math.min(this.deps.requestTimeoutMs ?? REQUEST_TIMEOUT_MS, 10_000),
-          });
-          idle = isIdleSessionStatus(statuses, id);
-          lastStatusError = undefined;
-          if (!idle) {
-            observedBusy = true;
-          }
-        } catch (error) {
-          if (signal.aborted) throw new Error("wait aborted");
-          lastStatusError = errorMessage(error);
-        }
-
-        if (idle && (observedBusy || assistantState.count > baselineAssistantCount)) {
-          return;
-        }
-        if (turnSawSseIdle && assistantState.count > baselineAssistantCount) {
-          return;
-        }
-        if (stableAssistantPolls >= 2 && lastStatusError) {
-          return;
-        }
-        if (Date.now() - startedAt > turnTimeoutMs) {
-          const statusSuffix = lastStatusError ? ` Last status error: ${lastStatusError}` : "";
-          throw new Error(`Timed out waiting for OpenCode session ${id} to become idle after ${turnTimeoutMs}ms.${statusSuffix}`);
-        }
-        await delay(250);
+    /** Polling fallback, used only while the shared event stream is disconnected. */
+    const pollUntilSettled = async (waiter: TurnWaiter, signal: AbortSignal): Promise<void> => {
+      const interval = deps.fallbackPollIntervalMs ?? FALLBACK_POLL_INTERVAL_MS;
+      while (!waiter.settled && !signal.aborted && !closed) {
+        await confirmIdleTurn();
+        if (waiter.settled || lease?.streamConnected) return;
+        await delay(interval);
       }
     };
 
     const ensureSession = async (): Promise<string> => {
-      const http = await ensureClient();
+      const serverLease = await ensureLease();
+      if (!unsubscribe && sessionId) {
+        unsubscribe = serverLease.subscribe(sessionId, listener);
+      }
       if (sessionId) {
         if (options.forkSession && !sessionForked) {
-          const forked = await http.request<OpenCodeSession>("POST", `/session/${encodeURIComponent(sessionId)}/fork`, {});
-          if (!forked.id) throw new Error("OpenCode fork did not return a session id.");
+          const forked = await client().request<OpenCodeSession>("POST", `/session/${encodeURIComponent(sessionId)}/fork`, {});
+          if (!forked?.id) throw new Error("OpenCode fork did not return a session id.");
+          unsubscribe?.();
           sessionId = forked.id;
+          unsubscribe = serverLease.subscribe(sessionId, listener);
           sessionForked = true;
           sessionValidated = true;
         } else if (!sessionValidated) {
-          await fetchSessionMessages(http, sessionId);
+          await fetchMessages(sessionId);
           sessionValidated = true;
         }
         emitBackendRef();
-        startEventStream();
         return sessionId;
       }
 
       const model = toOpenCodeModel(options.model);
-      const created = await http.request<OpenCodeSession>("POST", "/session", {
+      const created = await client().request<OpenCodeSession>("POST", "/session", {
         ...(model ? { model } : {}),
         metadata: { client: "openclaw-code-agent" },
         permission: permissionRulesForMode(currentPermissionMode),
       });
-      if (!created.id) throw new Error("OpenCode did not return a session id.");
+      if (!created?.id) throw new Error("OpenCode did not return a session id.");
       sessionId = created.id;
+      unsubscribe = serverLease.subscribe(sessionId, listener);
       sessionValidated = true;
       emitBackendRef();
-      startEventStream();
       return sessionId;
     };
 
-    const completeTurn = (success: boolean, result?: string, outcome: "completed" | "failed" | "interrupted" = success ? "completed" : "failed"): Promise<void> => {
-      turnCompletionPromise ??= (async () => {
-        let finalResult = result;
-        let totalCostUsd = 0;
-        if (client && sessionId) {
-          const [messages, session] = await Promise.all([
-            success
-              ? fetchSessionMessages(client, sessionId).catch((): undefined => undefined)
-              : Promise.resolve(undefined),
-            fetchSession(client, sessionId).catch((): undefined => undefined),
-          ]);
-          finalResult = finalResult ?? extractAssistantResult(messages);
-          totalCostUsd = sessionCostUsd(session);
+    const completeTurn = async (args: {
+      outcome: "completed" | "failed" | "interrupted";
+      result?: string;
+      startedAt: number;
+    }): Promise<void> => {
+      let outcome = args.outcome;
+      let finalResult = args.result;
+      let totalCostUsd = 0;
+      let durationMs: number | undefined;
+      let usage: HarnessUsage | undefined;
+      if (lease?.alive && sessionId) {
+        const [messages, session] = await Promise.all([
+          fetchMessages(sessionId).catch((): undefined => undefined),
+          client().request<OpenCodeSession>("GET", `/session/${encodeURIComponent(sessionId)}`, undefined, {
+            timeoutMs: Math.min(deps.requestTimeoutMs ?? REQUEST_TIMEOUT_MS, SESSION_COST_TIMEOUT_MS),
+          }).catch((): undefined => undefined),
+        ]);
+        const records = extractAssistantRecords(messages);
+        const turnRecords = records.slice(turnBaselineAssistantCount);
+        const models = summarizeModelUsage(records);
+        const contextTokens = latestContextTokens(records);
+        usage = {
+          ...(models ? { models } : {}),
+          ...(contextTokens !== undefined ? { contextTokens } : {}),
+        };
+        totalCostUsd = sessionCostUsd(session)
+          ?? (models ? models.reduce((sum, entry) => sum + entry.costUsd, 0) : 0);
+        durationMs = recordDurationMs(turnRecords);
+        const lastRecord = turnRecords.at(-1);
+        if (outcome === "completed") {
+          if (lastRecord?.error) {
+            outcome = "failed";
+            finalResult = lastRecord.error;
+          } else {
+            finalResult = finalResult ?? [...turnRecords].reverse().find((record) => record.text)?.text;
+          }
         }
-        if (sessionInterrupted) {
-          finishTurn(false, "interrupted", undefined, totalCostUsd);
-        } else {
-          finishTurn(success, outcome, finalResult, totalCostUsd);
-        }
-      })();
-      return turnCompletionPromise;
+      }
+      queue.enqueue(createRunCompletedEvent({
+        success: outcome === "completed",
+        outcome,
+        duration_ms: durationMs ?? Math.max(0, Date.now() - args.startedAt),
+        total_cost_usd: totalCostUsd,
+        num_turns: runCounter,
+        result: outcome === "interrupted" ? undefined : finalResult,
+        session_id: sessionId ?? "",
+        ...(usage && Object.keys(usage).length > 0 ? { usage } : {}),
+      }));
     };
 
     const runTurn = async (text: string): Promise<void> => {
-      turnInProgress = true;
-      turnWaitCompleted = false;
-      turnCompletionEmitted = false;
-      turnCompletionPromise = undefined;
-      turnSawSseIdle = false;
+      const startedAt = Date.now();
+      const turn: NonNullable<typeof activeTurn> = { abort: new AbortController(), interrupted: false };
+      activeTurn = turn;
+      emittedToolCalls.clear();
+      let turnTimeout: NodeJS.Timeout | undefined;
       try {
-        const http = await ensureClient();
-        if (sessionInterrupted) return;
         const id = await ensureSession();
-        if (sessionInterrupted) return;
+        if (turn.interrupted || closed) {
+          await completeTurn({ outcome: "interrupted", startedAt });
+          return;
+        }
         queue.enqueue(createRunStartedEvent());
         runCounter += 1;
+        const baseline = await fetchMessages(id).catch((): undefined => undefined);
+        turnBaselineAssistantCount = extractAssistantRecords(baseline).length;
+
+        const done = new Promise<void>((resolve, reject) => {
+          turn.waiter = { sawActivity: false, settled: false, resolve, reject };
+        });
+        const turnTimeoutMs = deps.turnTimeoutMs ?? TURN_TIMEOUT_MS;
+        turnTimeout = setTimeout(() => {
+          settleWaiter((pending) => pending.reject(new Error(`Timed out waiting for OpenCode session ${id} to become idle after ${turnTimeoutMs}ms.`)));
+        }, turnTimeoutMs);
+        const onAbort = (): void => settleWaiter((pending) => pending.reject(new Error("interrupted")));
+        turn.abort.signal.addEventListener("abort", onAbort, { once: true });
+
         const promptSystemPrompt = systemPromptInjected ? undefined : options.systemPrompt;
-        const baselineMessages = await fetchSessionMessages(http, id).catch((): undefined => undefined);
-        const baselineAssistantCount = extractAssistantMessageState(baselineMessages).count;
-        const waitController = new AbortController();
-        activeWaitController = waitController;
-        await sendPrompt(http, id, text, promptSystemPrompt, waitController.signal);
+        await client().request("POST", `/session/${encodeURIComponent(id)}/prompt_async`, classicPromptBody({
+          text,
+          model: options.model,
+          systemPrompt: promptSystemPrompt,
+          agent: openCodeAgentForMode(currentPermissionMode),
+          variant: options.reasoningEffort,
+        }), { signal: turn.abort.signal });
         systemPromptInjected = true;
-        await waitForTurn(http, id, baselineAssistantCount, waitController.signal);
-        activeWaitController = undefined;
-        turnWaitCompleted = true;
-        await completeTurn(true);
+        if (!lease?.streamConnected && turn.waiter) {
+          void pollUntilSettled(turn.waiter, turn.abort.signal);
+        }
+        await done;
+        await completeTurn({ outcome: "completed", startedAt });
       } catch (error) {
-        activeWaitController = undefined;
-        if (sessionInterrupted) {
-          await completeTurn(false, undefined, "interrupted");
+        if (turn.interrupted) {
+          await completeTurn({ outcome: "interrupted", startedAt });
         } else {
-          await completeTurn(false, errorMessage(error));
+          await completeTurn({ outcome: "failed", result: errorMessage(error), startedAt });
         }
       } finally {
-        turnInProgress = false;
-        turnWaitCompleted = false;
+        if (turnTimeout) clearTimeout(turnTimeout);
+        if (activeTurn === turn) activeTurn = undefined;
       }
     };
 
     const answerPendingQuestion = async (
       answer: string,
-      context: { requestId?: string; questionId?: string } = {},
+      context: { requestId?: string; questionId?: string; optionValue?: string } = {},
     ): Promise<boolean> => {
       const pending = currentPendingInput;
       if (!pending || pending.kind !== "question") return false;
@@ -1148,42 +1470,59 @@ export class OpenCodeHarness implements AgentHarness {
       if (!trimmed) return false;
 
       const questions = pending.state?.questions ?? [];
-      if (questions.length > 0) {
-        const activeQuestionIndex = pending.state?.activeQuestionIndex ?? 0;
-        const question = questions[activeQuestionIndex];
-        if (!question) return false;
-        if (context.questionId && context.questionId !== question.id) return false;
-        pending.answers = {
-          ...pending.answers,
-          [question.id]: { answers: [trimmed] },
-        };
-        const nextIndex = activeQuestionIndex + 1;
-        if (nextIndex < questions.length) {
-          pending.state = updateOpenCodeWizardState(pending.state!, nextIndex, pending.answers);
-          pending.options = pending.state.options;
-          queue.enqueue(createPendingInputEvent(pending.state));
-          return true;
-        }
-        await replyQuestion(pending.requestId, formatOpenCodeCombinedAnswers(questions, pending.answers));
+      if (questions.length === 0) {
+        await replyQuestion(pending.requestId, [[trimmed]]);
         resolvePendingInput(pending.requestId);
         return true;
       }
-
-      await replyQuestion(pending.requestId, trimmed);
+      const activeQuestionIndex = pending.state?.activeQuestionIndex ?? 0;
+      const question = questions[activeQuestionIndex];
+      if (!question) return false;
+      if (context.questionId && context.questionId !== question.id) return false;
+      const selected = context.optionValue !== undefined
+        ? [context.optionValue]
+        : question.multiSelect
+          ? parseMultiSelectAnswer(question, trimmed)
+          : [trimmed];
+      pending.answers = {
+        ...pending.answers,
+        [question.id]: { answers: selected },
+      };
+      const nextIndex = activeQuestionIndex + 1;
+      if (nextIndex < questions.length) {
+        pending.state = updateOpenCodeWizardState(pending.state!, nextIndex, pending.answers);
+        pending.options = pending.state.options;
+        queue.enqueue(createPendingInputEvent(pending.state));
+        return true;
+      }
+      await replyQuestion(
+        pending.requestId,
+        questions.map((entry) => pending.answers?.[entry.id]?.answers ?? []),
+      );
       resolvePendingInput(pending.requestId);
       return true;
     };
 
     const promptIterable = typeof options.prompt === "string"
       ? (async function* (): AsyncGenerator<unknown> {
-          yield { type: "user", text: options.prompt, session_id: options.resumeSessionId ?? "" };
+          yield { type: "user", text: options.prompt };
         })()
       : options.prompt;
+
+    const shutdown = async (): Promise<void> => {
+      closed = true;
+      settleWaiter((pending) => pending.reject(new Error("closed")));
+      unsubscribe?.();
+      unsubscribe = undefined;
+      const heldLease = lease;
+      lease = undefined;
+      await heldLease?.release();
+    };
 
     void (async () => {
       try {
         for await (const rawMessage of promptIterable) {
-          if (sessionInterrupted) break;
+          if (closed) break;
           const text = extractPromptText(rawMessage).trim();
           if (!text) continue;
           if (currentPendingInput?.kind === "question") {
@@ -1191,33 +1530,37 @@ export class OpenCodeHarness implements AgentHarness {
             continue;
           }
           await runTurn(text);
-          if (sessionInterrupted) break;
         }
       } catch (error) {
-        if (!sessionInterrupted) {
-          if (!turnInProgress) {
-            turnCompletionEmitted = false;
-            turnCompletionPromise = undefined;
-          }
-          await completeTurn(false, errorMessage(error));
+        if (!closed) {
+          await completeTurn({ outcome: "failed", result: errorMessage(error), startedAt: Date.now() });
         }
       } finally {
-        streamController.abort();
-        await server?.close().catch((): undefined => undefined);
+        await shutdown();
         queue.close();
       }
     })();
+
+    const abortSignal = options.abortController?.signal;
+    abortSignal?.addEventListener("abort", () => {
+      if (activeTurn) {
+        activeTurn.interrupted = true;
+        activeTurn.abort.abort();
+      }
+      void shutdown();
+    }, { once: true });
 
     return {
       messages: queue.messages(),
 
       async setPermissionMode(mode: string): Promise<void> {
-        if (sessionId) {
-          const http = await ensureClient();
-          await http.request("PATCH", `/session/${encodeURIComponent(sessionId)}`, {
+        if (sessionId && lease?.alive) {
+          await client().request("PATCH", `/session/${encodeURIComponent(sessionId)}`, {
             permission: permissionRulesForMode(mode),
           });
         }
+        // The next prompt also switches agent (plan → build), which makes
+        // OpenCode inject its own build-switch reminder.
         currentPermissionMode = mode;
         queue.enqueue(createSettingsChangedEvent(mode));
       },
@@ -1242,39 +1585,43 @@ export class OpenCodeHarness implements AgentHarness {
         const structuredQuestion = questions[activeQuestionIndex];
         if (context.questionId && context.questionId !== structuredQuestion?.id) return false;
         const structuredOption = structuredQuestion?.options[index];
-        const answer = structuredOption?.value ?? structuredOption?.label ?? pending.options[index];
-        return answer ? await answerPendingQuestion(answer, context) : false;
+        const label = structuredOption?.label ?? pending.options[index];
+        if (!label) return false;
+        return await answerPendingQuestion(label, {
+          ...context,
+          optionValue: structuredOption?.value ?? label,
+        });
       },
 
       async submitPendingInputText(text: string): Promise<boolean> {
         return await answerPendingQuestion(text);
       },
 
+      /** Abort the in-flight turn; the session keeps accepting prompts. */
       async interrupt(): Promise<void> {
-        sessionInterrupted = true;
-        streamController.abort();
-        activeWaitController?.abort();
-        if (!turnInProgress) {
-          turnCompletionEmitted = false;
-          turnCompletionPromise = undefined;
+        const turn = activeTurn;
+        if (!turn) return;
+        turn.interrupted = true;
+        turn.abort.abort();
+        if (sessionId && lease?.alive) {
+          await client().request("POST", `/session/${encodeURIComponent(sessionId)}/abort`).catch((): undefined => undefined);
         }
-        if (!client) {
-          finishTurn(false, "interrupted");
-          await server?.close().catch((): undefined => undefined);
-          return;
+      },
+
+      async close(): Promise<void> {
+        const turn = activeTurn;
+        if (turn) {
+          turn.interrupted = true;
+          turn.abort.abort();
         }
-        if (!sessionId) {
-          finishTurn(false, "interrupted");
-          return;
-        }
-        const abortRequest = client.request("POST", `/session/${encodeURIComponent(sessionId)}/abort`).catch((): undefined => undefined);
-        await abortRequest;
-        await completeTurn(false, undefined, "interrupted");
+        await shutdown();
+        // Consumers stop even if the caller's prompt stream stays open.
+        queue.close();
       },
     };
   }
 
-  buildUserMessage(text: string, sessionId: string): unknown {
-    return { type: "user", text, session_id: sessionId };
+  buildUserMessage(text: string, _sessionId: string): unknown {
+    return { type: "user", text };
   }
 }

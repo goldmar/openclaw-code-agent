@@ -13,17 +13,17 @@ describe("agent_goal_launch tool", () => {
     setGoalController(null);
   });
 
-  it("rejects a legacy provider-qualified Claude default before starting a goal", () => {
+  it("canonicalizes a provider-qualified Claude default before starting a goal", () => {
     setPluginConfig({ harnesses: { "claude-code": {
       defaultModel: "anthropic/claude-opus-5-5",
       allowedModels: ["sonnet", "opus"],
     } } });
     const result = resolveGoalLaunchRequest(
       { goal: "Check the default" },
-      { workspaceDir: "/tmp" } as any,
+      { workspaceDir: "/tmp", sessionKey: "agent:main:discord:channel:123456789", messageChannel: "discord" } as any,
     );
-    assert.equal(result.kind, "error");
-    if (result.kind === "error") assert.match(result.text, /not supported by Claude Code.*"opus" alias/);
+    assert.equal(result.kind, "resolved");
+    if (result.kind === "resolved") assert.equal(result.model, "claude-opus-5-5");
   });
 
   it("uses harness-scoped defaults and origin routing when launching a goal task", async () => {

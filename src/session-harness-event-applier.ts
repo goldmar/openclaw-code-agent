@@ -1,4 +1,10 @@
-import type { HarnessMessage, HarnessResult } from "./harness";
+import type {
+  HarnessBackendInfo,
+  HarnessMessage,
+  HarnessPlanApprovalRequest,
+  HarnessResult,
+  HarnessUsage,
+} from "./harness";
 import type {
   PendingInputState,
   PermissionMode,
@@ -19,13 +25,7 @@ type SessionHarnessEventApplierDeps = {
   noteRunStarted: (runId: string) => void;
   transitionRunning: () => void;
   noteTextDelta: (text: string, pendingPlanApproval: boolean) => void;
-  noteToolCall: (args: {
-    name: string;
-    input: unknown;
-    currentPermissionMode: PermissionMode;
-    permissionMode: PermissionMode;
-    planModeApproved: boolean;
-  }) => void;
+  noteToolCall: (args: { name: string; input: unknown }) => void;
   setPendingInputState: (state: PendingInputState | undefined) => void;
   notePendingInput: (state: PendingInputState) => void;
   clearResolvedPendingInput: (
@@ -33,6 +33,9 @@ type SessionHarnessEventApplierDeps = {
     currentState?: PendingInputState,
   ) => PendingInputState | undefined;
   notePlanArtifact: (artifact: HarnessMessage & { type: "plan_artifact" }) => void;
+  notePlanApprovalRequest: (request: HarnessPlanApprovalRequest, planModeApproved: boolean) => void;
+  noteBackendInfo: (info: HarnessBackendInfo) => void;
+  noteUsage: (usage: HarnessUsage) => void;
   noteSettingsChanged: (args: {
     oldMode: PermissionMode;
     permissionMode?: string;
@@ -68,13 +71,7 @@ export class SessionHarnessEventApplier {
     }
 
     if (msg.type === "tool_call") {
-      this.deps.noteToolCall({
-        name: msg.name,
-        input: msg.input,
-        currentPermissionMode: state.currentPermissionMode,
-        permissionMode: state.permissionMode,
-        planModeApproved: state.planModeApproved,
-      });
+      this.deps.noteToolCall({ name: msg.name, input: msg.input });
       return;
     }
 
@@ -93,6 +90,21 @@ export class SessionHarnessEventApplier {
 
     if (msg.type === "plan_artifact") {
       this.deps.notePlanArtifact(msg);
+      return;
+    }
+
+    if (msg.type === "plan_approval_requested") {
+      this.deps.notePlanApprovalRequest(msg.request, state.planModeApproved);
+      return;
+    }
+
+    if (msg.type === "backend_info") {
+      this.deps.noteBackendInfo(msg.info);
+      return;
+    }
+
+    if (msg.type === "usage_updated") {
+      this.deps.noteUsage(msg.usage);
       return;
     }
 

@@ -50,33 +50,29 @@ export class SessionTurnRuntime {
     this.deps.emitOutput(text);
   }
 
-  noteToolCall(args: {
-    name: string;
-    input: unknown;
-    currentPermissionMode: PermissionMode;
-    permissionMode: PermissionMode;
+  noteToolCall(args: { name: string; input: unknown }): void {
+    this.deps.emitToolUse(args.name, args.input);
+  }
+
+  /**
+   * A backend raised a native plan-approval request mid-turn (Claude
+   * ExitPlanMode held in canUseTool). The turn stays open until the decision
+   * resolves, so the waiting notification fires now rather than at turn end.
+   */
+  notePlanApprovalRequest(args: {
+    artifact: PlanArtifact;
+    planFilePath?: string;
     planModeApproved: boolean;
   }): void {
-    const { name, input, currentPermissionMode, permissionMode, planModeApproved } = args;
-    if (name === "Write") {
-      const writeInput = input as Record<string, unknown>;
-      if (typeof writeInput?.file_path === "string" && writeInput.file_path.includes("/.claude/plans/")) {
-        this.deps.setPlanFilePath(writeInput.file_path);
-      }
+    if (args.planFilePath) this.deps.setPlanFilePath(args.planFilePath);
+    this.notePlanArtifact(args.artifact, true);
+    if (args.planModeApproved) return;
+    this.lastTurnHadQuestion = true;
+    this.deps.markPendingPlanApproval("plan-mode");
+    if (!this.waitingForInputFired) {
+      this.waitingForInputFired = true;
+      this.deps.emitTurnEnd(true);
     }
-
-    if (name === "AskUserQuestion") {
-      this.lastTurnHadQuestion = true;
-      this.deps.applyInputRequested();
-      if ((currentPermissionMode === "plan" || permissionMode === "plan") && !planModeApproved) {
-        this.deps.markPendingPlanApproval("plan-mode");
-      }
-    } else if ((name === "ExitPlanMode" || name === "set_permission_mode") && !planModeApproved) {
-      this.lastTurnHadQuestion = true;
-      this.deps.markPendingPlanApproval("plan-mode");
-    }
-
-    this.deps.emitToolUse(name, input);
   }
 
   notePendingInput(state?: PendingInputState): void {

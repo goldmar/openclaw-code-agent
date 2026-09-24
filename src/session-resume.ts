@@ -41,9 +41,20 @@ export function isCompletedByDefault(session: ResumableSessionLike): boolean {
   return session.status === "completed" || session.killReason === "done";
 }
 
+/**
+ * Backends whose completed conversations can be continued. Claude Code
+ * transcripts are validated with the SDK's getSessionInfo() when the resumed
+ * harness starts, so a missing transcript fails with a clear reason.
+ */
+const RESUMABLE_COMPLETED_BACKENDS: ReadonlySet<string> = new Set([
+  "claude-code",
+  "codex-app-server",
+  "opencode-server",
+]);
+
 function canResumeCompletedSession(session: ResumableSessionLike): boolean {
   if (!isCompletedByDefault(session) || !getBackendConversationId(session)) return false;
-  return session.backendRef?.kind === "codex-app-server" || session.backendRef?.kind === "opencode-server";
+  return RESUMABLE_COMPLETED_BACKENDS.has(session.backendRef?.kind ?? "");
 }
 
 export function isNeverStartedRelaunch(session: ResumableSessionLike): boolean {
