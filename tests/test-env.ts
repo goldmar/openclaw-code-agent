@@ -12,7 +12,7 @@
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { assertTestSafeStatePath, canonicalizePath, isPathInside, TEST_ISOLATION_ENV } from "../src/test-state-guard";
+import { assertTestSafeStatePath, canonicalizePath, isPathInside, TEST_HOME_ENV, TEST_ISOLATION_ENV } from "../src/test-state-guard";
 
 const env = process.env;
 const systemTempDir = canonicalizePath(tmpdir());
@@ -24,15 +24,27 @@ function isInsideSystemTempDir(value: string | undefined): boolean {
   return candidate !== systemTempDir && isPathInside(systemTempDir, candidate);
 }
 
-// `scripts/run-tests.mjs` already gives each file a fresh temp home; keep it so
-// the runner can remove it. Anything else (unset, or pointing at a real home)
-// gets a fresh temp home that is removed when the process exits.
+// `scripts/run-tests.mjs` gives each file a fresh temp home and names it in
+// TEST_HOME_ENV; keep exactly that home so the runner can remove it. Anything
+// else, including a live Gateway configured under the OS temp dir, gets a fresh
+// temp home that is removed when the process exits.
+function isRunnerOwnedHome(home: string | undefined): home is string {
+  const marker = env[TEST_HOME_ENV]?.trim();
+  if (!home || !marker || !isInsideSystemTempDir(home)) return false;
+  const canonicalHome = canonicalizePath(home);
+  const stateDir = env.OPENCLAW_STATE_DIR?.trim();
+  return canonicalizePath(marker) === canonicalHome
+    && Boolean(stateDir)
+    && isPathInside(canonicalHome, canonicalizePath(stateDir as string));
+}
+
 function ensureHermeticHome(): string {
   const existing = env.OPENCLAW_HOME?.trim();
-  if (existing && isInsideSystemTempDir(existing) && isInsideSystemTempDir(env.OPENCLAW_STATE_DIR)) return existing;
+  if (isRunnerOwnedHome(existing)) return existing;
   const created = mkdtempSync(join(tmpdir(), "openclaw-code-agent-test-home-"));
   env.OPENCLAW_HOME = created;
   env.OPENCLAW_STATE_DIR = join(created, ".openclaw");
+  env[TEST_HOME_ENV] = created;
   process.once("exit", () => {
     rmSync(created, { recursive: true, force: true });
   });
@@ -41,9 +53,10 @@ function ensureHermeticHome(): string {
 
 const testHome = ensureHermeticHome();
 
-// Explicit OCA store paths outside the temp dir would bypass OPENCLAW_STATE_DIR.
+// Explicit OCA store paths outside the test home would bypass OPENCLAW_STATE_DIR.
 for (const name of ["OPENCLAW_CODE_AGENT_SESSIONS_PATH", "OPENCLAW_CODE_AGENT_GOAL_TASKS_PATH"] as const) {
-  if (env[name]?.trim() && !isInsideSystemTempDir(env[name])) delete env[name];
+  const value = env[name]?.trim();
+  if (value && !isPathInside(canonicalizePath(testHome), canonicalizePath(value))) delete env[name];
 }
 
 // Output cleanup also scans the OS temp dir for pre-5.0 output files, which

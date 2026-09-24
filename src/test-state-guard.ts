@@ -10,6 +10,14 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from "node:pat
 export const TEST_ISOLATION_ENV = "OPENCLAW_CODE_AGENT_TEST_ISOLATION";
 
 /**
+ * The temporary home `scripts/run-tests.mjs` (or `tests/test-env.ts`) created
+ * for this test run. `tests/test-env.ts` reuses an `OPENCLAW_HOME` only when it
+ * matches this marker, never a pre-existing state dir that merely lives in the
+ * OS temp dir.
+ */
+export const TEST_HOME_ENV = "OPENCLAW_CODE_AGENT_TEST_HOME";
+
+/**
  * True only while running under `node:test`: a `node --test` child
  * (`NODE_TEST_CONTEXT`), an in-process `--test` run, or a process that loaded
  * `tests/test-env.ts`. The Gateway never sets any of these, so production
