@@ -2003,6 +2003,8 @@ export class SessionManager {
     this.shuttingDown = true;
     try {
       this.disposeMaintenance();
+      // Disposal stops new maintenance work; wait for git-backed work already in flight.
+      await this.maintenance.whenIdle();
       const sessions = [...this.sessions.values()];
       this.killAll("shutdown");
       await Promise.all(sessions.map((session) => session.waitForTeardown()));

@@ -91,6 +91,29 @@ async function listIncludedIgnoredFiles(sourceRoot: string, includePath: string)
   return ignored;
 }
 
+/**
+ * Keep only the paths the destination worktree also ignores. A recreated
+ * worktree can check out a branch whose ignore rules differ from the source
+ * checkout; copying a file it does not ignore would let the agent commit it.
+ */
+async function filterIgnoredInWorktree(worktreePath: string, paths: string[]): Promise<Set<string>> {
+  const ignored = new Set<string>();
+  for (const batch of pathspecBatches(paths)) {
+    let output = "";
+    try {
+      output = await runGit(
+        [...HARDENED_GIT_CONFIG, "check-ignore", "--no-index", "--stdin", "-z"],
+        { cwd: worktreePath, timeout: PROVISION_GIT_TIMEOUT_MS, input: `${batch.join("\0")}\0` },
+      );
+    } catch (err) {
+      // Exit status 1 means none of the batch is ignored; anything else is a real failure.
+      if ((err as { code?: unknown }).code !== 1) throw err;
+    }
+    for (const path of splitNul(output)) ignored.add(path);
+  }
+  return ignored;
+}
+
 async function copyProvisionedFile(sourceRoot: string, worktreePath: string, relativePath: string): Promise<boolean> {
   const normalized = normalizeProvisionedRelativePath(relativePath);
   if (!normalized) return false;
@@ -131,8 +154,11 @@ export async function provisionWorktreeIncludes(sourceRoot: string, worktreePath
   if (!includeStat) return [];
   if (!includeStat.isFile()) throw new Error(`${WORKTREE_INCLUDE_FILE} must resolve to a regular file`);
 
+  const candidates = await listIncludedIgnoredFiles(sourceRoot, includePath);
+  const ignoredInWorktree = candidates.length > 0 ? await filterIgnoredInWorktree(worktreePath, candidates) : new Set<string>();
   const copied: string[] = [];
-  for (const relativePath of await listIncludedIgnoredFiles(sourceRoot, includePath)) {
+  for (const relativePath of candidates) {
+    if (!ignoredInWorktree.has(relativePath)) continue;
     if (await copyProvisionedFile(sourceRoot, worktreePath, relativePath)) copied.push(relativePath);
   }
   return copied.sort();

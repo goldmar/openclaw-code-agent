@@ -1,6 +1,6 @@
 import { assertBranchName, branchNameValidationError, localBranchRef } from "../worktree-ref-validation";
 import { Type } from "../tool-parameter-schema";
-import { runGit } from "../git-exec";
+import { runGit, withRepoLock } from "../git-exec";
 import { existsSync } from "fs";
 import { sessionManager } from "../singletons";
 import type { OpenClawPluginToolContext, PersistedSessionInfo } from "../types";
@@ -130,7 +130,21 @@ async function moveBranchFastForward(repoDir: string, targetBranch: string, sour
   }
 }
 
-export async function resolveExistingTargetPrUpdateBranch(args: {
+/**
+ * Select (and fast-forward when needed) the branch an existing open PR should be
+ * updated from. The ref checks and branch writes run under the repository lock
+ * so they cannot interleave with a concurrent merge, checkout, or worktree
+ * change on the same checkout.
+ */
+export function resolveExistingTargetPrUpdateBranch(args: {
+  repoDir: string;
+  sourceBranch: string;
+  targetPrStatus: PRStatus;
+}): Promise<ExistingTargetPrBranchResolution> {
+  return withRepoLock(args.repoDir, () => resolveExistingTargetPrUpdateBranchLocked(args));
+}
+
+async function resolveExistingTargetPrUpdateBranchLocked(args: {
   repoDir: string;
   sourceBranch: string;
   targetPrStatus: PRStatus;

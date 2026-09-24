@@ -6,7 +6,8 @@ import { execFile } from "node:child_process";
  * Commands always run from an argument array (never a shell string), with an
  * explicit timeout, UTF-8 output, and the Gateway's inherited environment, the
  * same contract the previous `execFileSync` calls had. stdin is closed right
- * away so a command that unexpectedly reads it sees EOF instead of hanging.
+ * away (after an optional `input` payload) so a command that unexpectedly
+ * reads it sees EOF instead of hanging.
  * A non-zero exit rejects with Node's `Command failed: <cmd>\n<stderr>` error;
  * a timeout rejects with a `timed out` error after the child is killed.
  */
@@ -15,6 +16,8 @@ export interface CommandOptions {
   cwd?: string;
   /** Hard timeout in milliseconds. */
   timeout: number;
+  /** Optional stdin payload; otherwise stdin is closed immediately. */
+  input?: string;
 }
 
 export type CommandError = Error & {
@@ -45,7 +48,7 @@ function runCommand(file: "git" | "gh", args: readonly string[], options: Comman
         reject(failure);
       },
     );
-    child.stdin?.end();
+    child.stdin?.end(options.input);
   });
 }
 

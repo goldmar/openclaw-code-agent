@@ -1,6 +1,7 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { SessionManager } from "../src/session-manager";
@@ -1472,6 +1473,88 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     assert.equal(scheduled.length, 2);
     assert.equal(scheduled[1].key, "tokens:expiry");
     assert.equal(scheduled[1].at, now + 120_000);
+  });
+
+  it("drops an in-flight reminder retry when a newer maintenance sync (such as a snooze) owns the schedule", async () => {
+    const sm = new SessionManager(5, 5);
+    const now = 1_700_000_000_000;
+    const originalDateNow = Date.now;
+    Date.now = () => now;
+    try {
+      const scheduled: Array<{ key: string; at: number; cb: () => void }> = [];
+      const pending = {
+        sessionId: "snoozed-session",
+        harnessSessionId: "snoozed-thread",
+        backendRef: { kind: "claude-code", conversationId: "snoozed-thread" },
+        name: "snoozed-session",
+        prompt: "test",
+        workdir: "/tmp",
+        status: "completed",
+        lifecycle: "awaiting_worktree_decision",
+        worktreeState: "pending_decision",
+        costUsd: 0,
+        pendingWorktreeDecisionSince: new Date(now - 4 * 60 * 60 * 1000).toISOString(),
+      };
+      (sm as any).store.persisted.set(pending.harnessSessionId, pending);
+      (sm as any).store.idIndex.set(pending.sessionId, pending.harnessSessionId);
+      (sm as any).maintenance.cancel = (() => {}) as any;
+      (sm as any).maintenance.schedule = ((key: string, at: number, cb: () => void) => {
+        scheduled.push({ key, at, cb });
+      }) as any;
+      let releaseSend!: (value: boolean) => void;
+      let sendStillCurrent: (() => boolean) | undefined;
+      (sm as any).maintenance.deps.reminders.sendReminderIfDue = ((_s: unknown, _n: number, stillCurrent: () => boolean) => {
+        sendStillCurrent = stillCurrent;
+        return new Promise<boolean>((resolve) => { releaseSend = resolve; });
+      }) as any;
+
+      (sm as any).maintenance.schedulePersistedWorktreeReminder(pending.sessionId, now);
+      scheduled[0].cb();
+      // A snooze while the reminder is in flight bumps the maintenance generation.
+      (sm as any).maintenance.nextPersistedSyncGeneration(pending.sessionId);
+      assert.equal(sendStillCurrent?.(), false, "the in-flight send sees it no longer owns the schedule");
+      releaseSend(false);
+      await (sm as any).maintenance.whenIdle();
+
+      assert.equal(scheduled.length, 1, "the stale callback does not reschedule over the newer deadline");
+    } finally {
+      Date.now = originalDateNow;
+      sm.dispose();
+    }
+  });
+
+  it("does not remove a worktree for retention once maintenance is disposed", async () => {
+    const repoDir = mkdtempSync(join(tmpdir(), "sm-disposed-retention-"));
+    const runGit = (...args: string[]) => execFileSync("git", ["-C", repoDir, ...args], { encoding: "utf8" }).trim();
+    const sm = new SessionManager(5, 5);
+    try {
+      runGit("init", "-q", "-b", "main");
+      runGit("config", "user.name", "Test User");
+      runGit("config", "user.email", "test@example.com");
+      writeFileSync(join(repoDir, "README.md"), "hello\n");
+      runGit("add", "README.md");
+      runGit("commit", "-qm", "init");
+      const worktreePath = join(repoDir, ".worktrees", "disposed");
+      runGit("worktree", "add", "-q", "-b", "agent/disposed", worktreePath);
+
+      sm.dispose();
+      await (sm as any).maintenance.reconcileResolvedWorktreeRetention({
+        sessionId: "disposed",
+        harnessSessionId: "disposed-thread",
+        name: "disposed",
+        prompt: "p",
+        workdir: repoDir,
+        worktreePath,
+        worktreeBranch: "agent/disposed",
+        worktreeLifecycle: { state: "merged", updatedAt: "2020-01-01T00:00:00.000Z", resolvedAt: "2020-01-01T00:00:00.000Z" },
+        status: "completed",
+        costUsd: 0,
+      }, Date.now());
+
+      assert.equal(existsSync(worktreePath), true, "a disposed maintenance service leaves the worktree for the next instance");
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
   });
 
   it("backs off reminder retries after a delivery failure instead of rescheduling immediately", async () => {

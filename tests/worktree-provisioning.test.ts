@@ -85,8 +85,10 @@ describe("worktree provisioning (.worktreeinclude)", () => {
 
   it("does nothing without .worktreeinclude and never overwrites or follows symlinks", async () => {
     const repoDir = createRepo("oca-provision-skip-");
-    const worktreeDir = mkdtempSync(join(tmpdir(), "oca-provision-target-"));
-    tempDirs.push(worktreeDir);
+    const worktreeParent = mkdtempSync(join(tmpdir(), "oca-provision-target-"));
+    tempDirs.push(worktreeParent);
+    const worktreeDir = join(worktreeParent, "wt");
+    git(repoDir, "worktree", "add", "-q", "-b", "agent/skip", worktreeDir);
     assert.deepEqual(await provisionWorktreeIncludes(repoDir, worktreeDir), []);
 
     writeFileSync(join(repoDir, ".env"), "SOURCE=1\n");
@@ -98,6 +100,25 @@ describe("worktree provisioning (.worktreeinclude)", () => {
     assert.deepEqual(await provisionWorktreeIncludes(repoDir, worktreeDir), []);
     assert.equal(readFileSync(join(worktreeDir, ".env"), "utf8"), "EXISTING=1\n");
     assert.equal(existsSync(join(worktreeDir, "cache.bin")), false);
+  });
+
+  it("does not copy files the recreated branch does not ignore", async () => {
+    const repoDir = createRepo("oca-provision-branch-ignore-");
+    // The agent branch stops ignoring .env; recreating its worktree must not
+    // copy the source checkout's ignored .env into a place it could be committed.
+    git(repoDir, "checkout", "-q", "-b", "agent/unignored");
+    writeFileSync(join(repoDir, ".gitignore"), ["config/local.json", ""].join("\n"));
+    git(repoDir, "commit", "-qam", "stop ignoring .env");
+    git(repoDir, "checkout", "-q", "main");
+    writeFileSync(join(repoDir, ".env"), "SECRET=1\n");
+    mkdirSync(join(repoDir, "config"));
+    writeFileSync(join(repoDir, "config", "local.json"), "{}\n");
+    writeFileSync(join(repoDir, ".worktreeinclude"), ".env\nconfig/local.json\n");
+
+    const worktreePath = await createWorktree(repoDir, "unignored", { allowExistingBranch: true });
+
+    assert.equal(existsSync(join(worktreePath, ".env")), false);
+    assert.equal(readFileSync(join(worktreePath, "config", "local.json"), "utf8"), "{}\n");
   });
 
   it("rejects unsafe relative paths", () => {

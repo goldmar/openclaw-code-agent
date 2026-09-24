@@ -40,6 +40,7 @@ export class SessionMaintenanceService {
   /** Latest sync request per persisted ref; older in-flight syncs must not apply their schedule. */
   private readonly persistedSyncGenerations = new Map<string, number>();
   private readonly pendingWork = new Set<Promise<void>>();
+  private disposed = false;
 
   constructor(private readonly deps: SessionMaintenanceDeps) {}
 
@@ -126,6 +127,7 @@ export class SessionMaintenanceService {
   }
 
   private track(work: Promise<void>, description: string): void {
+    if (this.disposed) return;
     const pending = work
       .catch((err) => log.warn(`[SessionManager] ${description} failed: ${errorMessage(err)}`))
       .finally(() => this.pendingWork.delete(pending));
@@ -163,10 +165,14 @@ export class SessionMaintenanceService {
   }
 
   async reconcileResolvedWorktreeRetention(session: PersistedSessionInfo, now: number): Promise<void> {
+    if (this.disposed) return;
     const resolved = await resolveWorktreeLifecycle(session, {
       activeSession: false,
       includePrSync: session.worktreeLifecycle?.state === "pr_open" || Boolean(session.worktreePrUrl),
     });
+    // Shutdown may have started while git evidence was collected; never remove a
+    // worktree that a restarted instance could already be resuming.
+    if (this.disposed) return;
     const resolvedAtIso = this.resolvedAtIso(session);
     const resolvedAt = resolvedAtIso ? new Date(resolvedAtIso).getTime() : 0;
     if (!resolved.cleanupSafe || !resolvedAtIso || !Number.isFinite(resolvedAt) || now - resolvedAt < RESOLVED_WORKTREE_RETENTION_MS) return;
@@ -174,7 +180,7 @@ export class SessionMaintenanceService {
     try {
       if (!session.worktreePath) return;
       const repoDir = await this.deps.resolveWorktreeRepoDir(session.workdir, session.worktreePath);
-      if (!repoDir) return;
+      if (!repoDir || this.disposed) return;
       if (!(await removeWorktree(repoDir, session.worktreePath))) return;
       for (const mutationRef of getPersistedMutationRefs(session)) {
         this.deps.updatePersistedSession(mutationRef, {
@@ -241,6 +247,7 @@ export class SessionMaintenanceService {
   }
 
   dispose(): void {
+    this.disposed = true;
     this.scheduler.dispose();
   }
 
@@ -278,12 +285,16 @@ export class SessionMaintenanceService {
     this.schedule(key, at, () => {
       const latest = this.deps.store.getPersistedSession(ref);
       if (!latest) return;
+      const generation = this.persistedSyncGenerations.get(ref) ?? 0;
+      // A newer maintenance sync (for example a snooze) owns the reminder key once
+      // the generation moves; this callback must then neither send nor reschedule.
+      const stillCurrent = (): boolean => !this.disposed && (this.persistedSyncGenerations.get(ref) ?? 0) === generation;
       this.track((async () => {
-        const delivered = await this.deps.reminders.sendReminderIfDue(latest, Date.now());
-        if (delivered) return;
+        const delivered = await this.deps.reminders.sendReminderIfDue(latest, Date.now(), stillCurrent);
+        if (delivered || !stillCurrent()) return;
 
         const nextReminderAt = await this.deps.reminders.getNextReminderAt(latest);
-        if (nextReminderAt == null) return;
+        if (nextReminderAt == null || !stillCurrent()) return;
         this.schedulePersistedWorktreeReminder(
           ref,
           Math.max(nextReminderAt, Date.now() + WORKTREE_REMINDER_RETRY_BACKOFF_MS),

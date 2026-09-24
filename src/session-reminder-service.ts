@@ -77,10 +77,13 @@ export class SessionReminderService {
   async sendReminderIfDue(
     session: PersistedSessionInfo,
     now: number = Date.now(),
+    stillCurrent: () => boolean = () => true,
   ): Promise<boolean> {
     await this.clearResolvedReminderState(session);
     const nextReminderAt = await this.getNextReminderAt(session);
     if (nextReminderAt == null || nextReminderAt > now) return false;
+    // The resolution checks above await git; drop the send if the schedule moved meanwhile.
+    if (!stillCurrent()) return false;
 
     const pendingMs = now - new Date(session.pendingWorktreeDecisionSince!).getTime();
     const pendingHours = Math.floor(Math.max(0, pendingMs) / (60 * 60 * 1000));

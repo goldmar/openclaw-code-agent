@@ -1861,3 +1861,26 @@ exit 1
     assert.equal(result.ok && result.metadata.changes.includes("`src/file-12.ts`"), true);
   });
 });
+
+describe("existing PR branch update serialization", () => {
+  it("waits for the repository lock before inspecting or moving PR branches", async () => {
+    const { withRepoLock } = await import("../src/git-exec");
+    const repoDir = "/tmp/oca-pr-lock-serialization";
+    let releaseLock!: () => void;
+    const held = withRepoLock(repoDir, () => new Promise<void>((resolve) => { releaseLock = resolve; }));
+    let settled = false;
+    const update = resolveExistingTargetPrUpdateBranch({
+      repoDir,
+      sourceBranch: "agent/feature",
+      targetPrStatus: { exists: true, state: "closed" },
+    }).then((result) => { settled = true; return result; });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(settled, false, "the PR branch update must not run while another git sequence holds the lock");
+    releaseLock();
+    await held;
+    const result = await update;
+    assert.equal(settled, true);
+    assert.equal("error" in result && /not an open PR/.test(result.error), true);
+  });
+});
