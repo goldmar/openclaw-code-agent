@@ -9,7 +9,8 @@
  * actions (compact, review).
  */
 
-import packageJson from "../../package.json";
+// Named import: the bundler keeps only `version`, not the whole package.json.
+import { version as packageVersion } from "../../package.json";
 import { getHarnessConfig } from "../config";
 import { getPluginRuntime, getRuntimeConfig } from "../runtime-store";
 import type { PendingInputState, PlanArtifact, PlanArtifactStep, ThreadAction } from "../types";
@@ -559,7 +560,7 @@ export class CodexHarness implements AgentHarness {
       });
       await client.connect();
       await codexRequest(client, "initialize", {
-        clientInfo: { name: "openclaw-code-agent", title: "OpenClaw Code Agent", version: packageJson.version },
+        clientInfo: { name: "openclaw-code-agent", title: "OpenClaw Code Agent", version: packageVersion },
         capabilities: {
           experimentalApi: true,
           requestAttestation: false,

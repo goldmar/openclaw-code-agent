@@ -1,6 +1,6 @@
 import { execFile } from "child_process";
 import { createHash } from "crypto";
-import { nanoid } from "nanoid";
+import { shortId } from "./short-id";
 
 import { executeRespond } from "./actions/respond";
 import { buildGoalIterationSummary } from "./goal-format";
@@ -418,7 +418,7 @@ export class GoalController {
       throw new Error(zeroVerifierFailureReason());
     }
 
-    const id = nanoid(8);
+    const id = shortId(8);
     const task: GoalTaskState = {
       id,
       name: normalizeName(config.name ?? config.goal),

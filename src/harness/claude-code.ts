@@ -257,7 +257,7 @@ function updateClaudeWizardState(
  * (case-insensitive) select that option; anything else is a free-text answer.
  * Multi-select questions take comma- or newline-separated entries.
  */
-export function resolveClaudeQuestionAnswer(question: PendingInputQuestion | undefined, text: string): string {
+function resolveClaudeQuestionAnswer(question: PendingInputQuestion | undefined, text: string): string {
   const trimmed = text.trim();
   if (!question || question.options.length === 0) return trimmed;
   const match = (entry: string): string => {

@@ -1,5 +1,5 @@
 import { EventEmitter } from "events";
-import { nanoid } from "nanoid";
+import { shortId } from "./short-id";
 import { getDefaultHarness, getHarness } from "./harness";
 import type {
   AgentHarness,
@@ -281,7 +281,7 @@ export class Session extends EventEmitter {
 
   constructor(config: SessionConfig, name: string) {
     super();
-    this.id = config.sessionIdOverride ?? nanoid(8);
+    this.id = config.sessionIdOverride ?? shortId(8);
     this.name = name;
     this.harness = config.harness ? getHarness(config.harness) : getDefaultHarness();
     this.prompt = config.prompt;

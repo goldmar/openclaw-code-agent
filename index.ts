@@ -1,5 +1,6 @@
 import { join } from "path";
-import packageJson from "./package.json";
+// Named import: the bundler keeps only `version`, not the whole package.json.
+import { version as packageVersion } from "./package.json";
 
 import { AutoUpdateService } from "./src/auto-update";
 import { makeAgentLaunchTool } from "./src/tools/agent-launch";
@@ -146,7 +147,7 @@ export function register(api: OpenClawPluginApi): void {
       autoUpdate = pluginConfig.autoUpdate
         ? new AutoUpdateService({
             ...autoUpdateStateOptions(ctx),
-            currentVersion: api.version ?? (packageJson as { version?: string }).version ?? "0.0.0",
+            currentVersion: api.version ?? packageVersion ?? "0.0.0",
             actionButtonFactory: (sessionId, kind, label, options) =>
               sm!.makePluginActionButton(sessionId, kind, label, options),
           })

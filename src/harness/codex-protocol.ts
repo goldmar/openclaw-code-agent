@@ -175,7 +175,7 @@ function postureForExecMode(mode: OpenClawExecMode | undefined): CodexExecutionS
   }
 }
 
-export class CodexExecModeBlockedError extends Error {
+class CodexExecModeBlockedError extends Error {
   constructor(mode: OpenClawExecMode) {
     super(
       `Codex sessions are unavailable because the host's tools.exec.mode is "${mode}", which blocks Codex local execution `
