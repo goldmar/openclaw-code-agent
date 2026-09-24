@@ -22,9 +22,9 @@ const BUILTIN_HARNESS_CONFIGS: Record<string, HarnessConfig> = {
     allowedModels: ["gpt-6-sol", "gpt-6-astra", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
     // No builtin reasoningEffort: Codex applies its own configured/model
     // default (see model/list `defaultReasoningEffort`) unless one is set.
-    permissionProfile: ":danger-full-access",
-    approvalPolicy: "never",
-    approvalsReviewer: "user",
+    permissionProfile: ":workspace",
+    approvalPolicy: "on-request",
+    approvalsReviewer: "auto_review",
   },
   opencode: {},
 };

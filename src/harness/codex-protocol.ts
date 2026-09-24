@@ -124,13 +124,16 @@ export interface CodexExecutionSettings {
 }
 
 /**
- * OCA's historical behavior: full access, no Codex-side prompts. OCA owns plan
- * review through its own permission modes, so this stays the default.
+ * Default Codex execution: the `:workspace` sandbox (writes inside the
+ * workspace, network off) with `on-request` approvals decided by Codex's
+ * `auto_review` subagent, so escalations (writes outside the workspace,
+ * network, sandbox escapes) are reviewed without prompting the user.
+ * Restore the pre-5.0 behavior with `:danger-full-access` + `never`.
  */
 export const DEFAULT_CODEX_EXECUTION_SETTINGS: CodexExecutionSettings = {
-  permissionProfile: ":danger-full-access",
-  approvalPolicy: "never",
-  approvalsReviewer: "user",
+  permissionProfile: ":workspace",
+  approvalPolicy: "on-request",
+  approvalsReviewer: "auto_review",
 };
 
 export function resolveCodexExecutionSettings(config: {

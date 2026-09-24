@@ -35,9 +35,9 @@ describe("codex protocol thread payloads", () => {
       model: "gpt-6-sol",
       serviceTier: "priority",
       developerInstructions: "Follow the worktree rules.",
-      permissions: ":danger-full-access",
-      approvalPolicy: "never",
-      approvalsReviewer: "user",
+      permissions: ":workspace",
+      approvalPolicy: "on-request",
+      approvalsReviewer: "auto_review",
     });
     assert.equal("reasoningEffort" in params, false);
     assert.equal("service_tier" in params, false);
@@ -67,16 +67,21 @@ describe("codex protocol thread payloads", () => {
   });
 
   it("applies configured execution settings and rejects unknown values", () => {
-    const settings = resolveCodexExecutionSettings({
+    assert.deepEqual(DEFAULT_CODEX_EXECUTION_SETTINGS, {
       permissionProfile: ":workspace",
       approvalPolicy: "on-request",
       approvalsReviewer: "auto_review",
     });
+    const settings = resolveCodexExecutionSettings({
+      permissionProfile: ":danger-full-access",
+      approvalPolicy: "never",
+      approvalsReviewer: "user",
+    });
     assert.deepEqual(buildThreadStartParams({ cwd: "/r", execution: settings }), {
       cwd: "/r",
-      permissions: ":workspace",
-      approvalPolicy: "on-request",
-      approvalsReviewer: "auto_review",
+      permissions: ":danger-full-access",
+      approvalPolicy: "never",
+      approvalsReviewer: "user",
     });
     assert.deepEqual(
       resolveCodexExecutionSettings({ permissionProfile: "root", approvalPolicy: "sometimes", approvalsReviewer: "bob" }),

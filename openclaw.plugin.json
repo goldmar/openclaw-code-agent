@@ -88,9 +88,9 @@
               "gpt-5.6-luna"
             ],
             "fastMode": false,
-            "permissionProfile": ":danger-full-access",
-            "approvalPolicy": "never",
-            "approvalsReviewer": "user"
+            "permissionProfile": ":workspace",
+            "approvalPolicy": "on-request",
+            "approvalsReviewer": "auto_review"
           },
           "claude-code": {
             "defaultModel": "opus",
@@ -139,7 +139,7 @@
                 ":workspace",
                 ":danger-full-access"
               ],
-              "description": "Codex-only built-in permission profile sent as the thread `permissions`. Default ':danger-full-access' keeps OCA's historical full-access behavior; ':workspace' sandboxes writes to the workspace; ':read-only' blocks writes."
+              "description": "Codex-only built-in permission profile sent as the thread `permissions`. Default ':workspace' allows writes inside the workspace with network off; anything beyond that is an escalation that goes through approvalPolicy. ':read-only' blocks writes; ':danger-full-access' disables the sandbox (the pre-5.0 default)."
             },
             "approvalPolicy": {
               "type": "string",
@@ -148,7 +148,7 @@
                 "on-request",
                 "untrusted"
               ],
-              "description": "Codex-only approval policy. Default 'never' (no Codex-side prompts; OCA's plan approval still applies). 'on-request' / 'untrusted' let Codex ask before escalating; requests are routed to the chat as approval buttons."
+              "description": "Codex-only approval policy. Default 'on-request': Codex asks before escalating out of the sandbox (for example network access or writes outside the workspace); the request goes to approvalsReviewer. 'untrusted' also asks before commands Codex does not consider safe. 'never' never asks (failures go back to the model); use it with ':danger-full-access' to restore the pre-5.0 behavior."
             },
             "approvalsReviewer": {
               "type": "string",
@@ -156,7 +156,7 @@
                 "user",
                 "auto_review"
               ],
-              "description": "Codex-only reviewer for approval requests: 'user' (default, routed to chat) or 'auto_review' (Codex's reviewer subagent decides)."
+              "description": "Codex-only reviewer for approval requests: 'auto_review' (default; Codex's reviewer subagent approves or denies each request based on the task and its risk) or 'user' (requests are sent to the chat as approval buttons)."
             }
           }
         }
@@ -258,7 +258,7 @@
     },
     "harnesses": {
       "label": "Harness configuration",
-      "help": "Per-harness defaults and model restrictions. Set harnesses.codex.fastMode=true to request Codex's priority (fast) service tier. harnesses.codex.permissionProfile / approvalPolicy / approvalsReviewer control the Codex sandbox and approval prompts (default: full access, no prompts). OpenCode is experimental; leave harnesses.opencode.defaultModel unset to use OpenCode's provider default, or pass provider/model explicitly. Default: {\"codex\":{\"defaultModel\":\"gpt-6-sol\",\"allowedModels\":[\"gpt-6-sol\",\"gpt-6-astra\",\"gpt-6-luna\",\"gpt-5.6-sol\",\"gpt-5.6-terra\",\"gpt-5.6-luna\"],\"fastMode\":false,\"permissionProfile\":\":danger-full-access\",\"approvalPolicy\":\"never\",\"approvalsReviewer\":\"user\"},\"claude-code\":{\"defaultModel\":\"opus\",\"allowedModels\":[\"sonnet\",\"opus\"]},\"opencode\":{}}.",
+      "help": "Per-harness defaults and model restrictions. Set harnesses.codex.fastMode=true to request Codex's priority (fast) service tier. harnesses.codex.permissionProfile / approvalPolicy / approvalsReviewer control the Codex sandbox and approval prompts (default: ':workspace' sandbox, 'on-request' escalations reviewed by Codex's 'auto_review' subagent; set ':danger-full-access' + 'never' for the pre-5.0 full-access behavior). OpenCode is experimental; leave harnesses.opencode.defaultModel unset to use OpenCode's provider default, or pass provider/model explicitly. Default: {\"codex\":{\"defaultModel\":\"gpt-6-sol\",\"allowedModels\":[\"gpt-6-sol\",\"gpt-6-astra\",\"gpt-6-luna\",\"gpt-5.6-sol\",\"gpt-5.6-terra\",\"gpt-5.6-luna\"],\"fastMode\":false,\"permissionProfile\":\":workspace\",\"approvalPolicy\":\"on-request\",\"approvalsReviewer\":\"auto_review\"},\"claude-code\":{\"defaultModel\":\"opus\",\"allowedModels\":[\"sonnet\",\"opus\"]},\"opencode\":{}}.",
       "advanced": true
     },
     "maxSessions": {
