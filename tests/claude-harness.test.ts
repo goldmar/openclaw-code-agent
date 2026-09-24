@@ -1,10 +1,10 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ClaudeCodeHarness, CLAUDE_PLAN_MODE_INSTRUCTIONS, newestPlanFileSince, trustedPlanFilePath } from "../src/harness/claude-code";
+import { ClaudeCodeHarness, CLAUDE_PLAN_MODE_INSTRUCTIONS, planFileWrittenByTool, trustedPlanFilePath } from "../src/harness/claude-code";
 import { setPluginConfig } from "../src/config";
 import { resolveAgentLaunchRequest } from "../src/tools/agent-launch-resolution";
 import type { HarnessMessage } from "../src/harness/types";
@@ -90,9 +90,9 @@ function completions(messages: HarnessMessage[]) {
 
 const OK_RESULT = { type: "result", subtype: "success", session_id: "claude-1", duration_ms: 0, total_cost_usd: 0, num_turns: 1, result: "done" };
 
-async function launchForCanUseTool(permissionMode: string, extraOptions: Record<string, unknown> = {}) {
+async function launchForCanUseTool(permissionMode: string, extraOptions: Record<string, unknown> = {}, sdkMessages: unknown[] = []) {
   const startupOptions = Promise.withResolvers<Record<string, unknown>>();
-  const query = createQueryHandle([], { holdUntilReleased: true });
+  const query = createQueryHandle(sdkMessages, { holdUntilReleased: true });
   const harness = harnessWith(query.handle, (options) => startupOptions.resolve(options));
   const session = harness.launch({
     prompt: "plan it",
@@ -324,6 +324,29 @@ describe("ClaudeCodeHarness", () => {
     ]);
   });
 
+  it("omits the per-model breakdown when only the parent's total cost is known", async () => {
+    const { handle } = createQueryHandle([
+      {
+        ...OK_RESULT,
+        session_id: "claude-fork",
+        total_cost_usd: 1.25,
+        modelUsage: {
+          "claude-sonnet-5": { inputTokens: 1_100, outputTokens: 900, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, webSearchRequests: 0, costUSD: 1.25, contextWindow: 200000, maxOutputTokens: 32000 },
+        },
+      },
+    ]);
+    const messages = await collectAll(harnessWith(handle).launch({
+      prompt: "x",
+      cwd: "/tmp",
+      resumeSessionId: "claude-parent",
+      forkSession: true,
+      forkBaselineUsage: { costUsd: 1 },
+    }));
+    const done = completions(messages)[0];
+    assert.equal(done?.data.total_cost_usd, 0.25);
+    assert.equal(done?.data.usage?.models, undefined, "parent tokens must not be attributed to the fork");
+  });
+
   it("ignores an interrupt that fails because the query already shut down", async () => {
     const { handle } = createQueryHandle([OK_RESULT], {
       async interrupt(): Promise<void> { throw new Error("Operation aborted"); },
@@ -440,28 +463,32 @@ describe("ClaudeCodeHarness", () => {
     rmSync(configDir, { recursive: true, force: true });
   });
 
-  it("falls back to the newest plan file written this session when ExitPlanMode carries no plan", async () => {
+  it("falls back to the plan file this session wrote when ExitPlanMode carries no plan", async () => {
     const configDir = mkdtempSync(join(tmpdir(), "oca-claude-config-"));
     const project = mkdtempSync(join(tmpdir(), "oca-claude-project-"));
     const previousConfigDir = process.env.CLAUDE_CONFIG_DIR;
     process.env.CLAUDE_CONFIG_DIR = configDir;
     try {
       mkdirSync(join(configDir, "plans"));
-      const old = join(configDir, "plans", "old.md");
-      writeFileSync(old, "# Old plan");
-      const past = new Date(Date.now() - 60_000);
-      utimesSync(old, past, past);
-      assert.equal(newestPlanFileSince([project], Date.now() - 2_000), undefined, "plans older than the session are ignored");
+      const ownPlan = join(configDir, "plans", "own.md");
+      writeFileSync(ownPlan, "# Own plan");
+      assert.equal(planFileWrittenByTool("Write", { file_path: ownPlan }, [project]), realpathSync(ownPlan));
+      assert.equal(planFileWrittenByTool("Read", { file_path: ownPlan }, [project]), undefined);
+      assert.equal(planFileWrittenByTool("Write", { file_path: join(project, "notes.md") }, [project]), undefined);
 
-      const { canUseTool, messages, finish } = await launchForCanUseTool("plan", { cwd: project });
-      writeFileSync(join(configDir, "plans", "fresh.md"), "# Fresh plan");
+      const { canUseTool, messages, finish } = await launchForCanUseTool("plan", { cwd: project }, [
+        { type: "assistant", message: { content: [{ type: "tool_use", id: "t1", name: "Write", input: { file_path: ownPlan, content: "# Own plan" } }] } },
+      ]);
+      // A concurrent session writes a newer plan into the shared plans directory.
+      writeFileSync(join(configDir, "plans", "other-session.md"), "# Someone else's plan");
+      for (let i = 0; i < 5; i += 1) await new Promise((resolve) => setImmediate(resolve));
       void canUseTool("ExitPlanMode", {}, {
         signal: new AbortController().signal, requestId: "req-fallback", toolUseID: "tool-fallback",
       });
       await new Promise((resolve) => setImmediate(resolve));
       const request = messages.find((message) => message.type === "plan_approval_requested");
       assert.ok(request && request.type === "plan_approval_requested");
-      assert.equal(request.request.artifact.markdown, "# Fresh plan");
+      assert.equal(request.request.artifact.markdown, "# Own plan");
       await finish();
     } finally {
       if (previousConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;

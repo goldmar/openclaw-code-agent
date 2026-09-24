@@ -314,17 +314,30 @@ describe("createPR", () => {
     assert.ok(lastCall.includes("pr create --base main --head agent/draft-retry"));
   });
 
-  it("skips gh entirely when the repository has no GitHub remote", async (t) => {
+  it("skips gh entirely when the repository only has local-path remotes", async (t) => {
     const { logPath } = installMockGh(t);
     const { createPR, syncWorktreePR } = await import("../src/worktree.js");
     const localOnly = githubRepo(t, "");
-    execFileSync("git", ["remote", "add", "origin", "https://gitlab.example.com/acme/repo.git"], { cwd: localOnly, stdio: "ignore" });
+    const bare = mkdtempSync(join(tmpdir(), "openclaw-local-remote-"));
+    t.after(() => rmSync(bare, { recursive: true, force: true }));
+    execFileSync("git", ["remote", "add", "origin", bare], { cwd: localOnly, stdio: "ignore" });
 
-    assert.deepEqual(await syncWorktreePR(localOnly, "agent/no-github"), { exists: false, state: "none" });
-    const created = await createPR(localOnly, "agent/no-github", "main", "Title", "Body");
+    assert.deepEqual(await syncWorktreePR(localOnly, "agent/no-hosted"), { exists: false, state: "none" });
+    const created = await createPR(localOnly, "agent/no-hosted", "main", "Title", "Body");
     assert.equal(created.success, false);
-    assert.match(created.error ?? "", /no GitHub remote/);
+    assert.match(created.error ?? "", /no hosted remote/);
     assert.equal(existsSync(logPath) ? readFileSync(logPath, "utf-8").trim() : "", "", "gh must not be called");
+  });
+
+  it("still asks gh about a GitHub Enterprise remote", async (t) => {
+    const { hasHostedRemote } = await import("../src/worktree-repo.js");
+    const repo = githubRepo(t, "");
+    execFileSync("git", ["remote", "add", "origin", "git@github.acme.internal:team/repo.git"], { cwd: repo, stdio: "ignore" });
+    assert.equal(await hasHostedRemote(repo), true);
+    execFileSync("git", ["remote", "set-url", "origin", "https://ghe.acme.internal/team/repo.git"], { cwd: repo, stdio: "ignore" });
+    assert.equal(await hasHostedRemote(repo), true);
+    execFileSync("git", ["remote", "set-url", "origin", "file:///srv/git/repo.git"], { cwd: repo, stdio: "ignore" });
+    assert.equal(await hasHostedRemote(repo), false);
   });
 
   it("reuses the existing open PR when create reports a duplicate", async (t) => {

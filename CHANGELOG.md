@@ -97,9 +97,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The `manual` worktree strategy no longer deletes the worktree when the session completes; it keeps it with a `provisioned` lifecycle and a real timestamp. Legacy rows synthesized without timestamps are dated from the row instead of 1970-01-01.
 - Maintenance treats a worktree directory that is already gone as removed and clears its metadata, instead of warning on every tick; repo-root resolution for a missing worktree no longer runs git inside the missing path.
 - Claude Code sessions stay running while SDK background tasks are still live after a turn.
-- Deleting a branch that is already gone counts as success; squash merges are reported as squash commits; `auto-pr` and PR sync skip `gh` when the repository has no GitHub remote.
+- Deleting a branch that is already gone counts as success; squash merges are reported as squash commits; `auto-pr` and PR sync skip `gh` when the repository only has local-path remotes (hosted remotes, including GitHub Enterprise, still go through `gh`).
 - Tools that send a user prompt (repo policy, worktree decision) report whether it was delivered instead of always saying it was sent.
-- `agent_goal_status(name)` shows only the matching goal; `agent_stats` counts sessions from the persisted store instead of per-process counters; a Claude fork reports only its own cost; `agent_output` separates consecutive Codex and OpenCode messages and shows a pending Claude plan (read from the newest plan file when `ExitPlanMode` carries no plan text).
+- `agent_goal_status(name)` shows only the matching goal; `agent_stats` counts sessions from the persisted store instead of per-process counters; a Claude fork reports only its own cost; `agent_output` separates consecutive Codex and OpenCode messages and shows a pending Claude plan (read from the plan file the session itself wrote when `ExitPlanMode` carries no plan text).
 - A plain "Reject" on a pending plan always rejects it, also when sent by the orchestrator without `userInitiated`.
 - Routine lifecycle and Codex RPC diagnostics log at info/debug instead of warn, and an interrupt that fails because teardown already aborted the query is no longer reported.
 - A single unreadable session-store row no longer discards every other session on upgrade (see Breaking changes).

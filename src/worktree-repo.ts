@@ -300,16 +300,25 @@ export async function deleteBranch(repoDir: string, branch: string): Promise<boo
 }
 
 /**
- * Whether any remote of the repository points at github.com. Without one, the
- * GitHub CLI cannot find a pull request for the branch, so callers skip `gh`.
+ * Whether any remote is hosted on a network host (`https://host/...`,
+ * `ssh://host/...`, or scp-style `user@host:path`). Local-path and `file://`
+ * remotes cannot have pull requests, so callers skip `gh` for repositories
+ * whose remotes are all local. Any hosted remote qualifies, which keeps GitHub
+ * Enterprise hosts (resolved by `gh` itself) working.
  */
-export async function hasGitHubRemote(repoDir: string): Promise<boolean> {
+export async function hasHostedRemote(repoDir: string): Promise<boolean> {
+  let remotes: string;
   try {
-    const remotes = await runGit(["-C", repoDir, "remote", "-v"], { timeout: 5_000 });
-    return /(?:^|[\s@/])github\.com[:/]/im.test(remotes);
+    remotes = await runGit(["-C", repoDir, "remote", "-v"], { timeout: 5_000 });
   } catch {
     return false;
   }
+  return remotes.split(/\r?\n/).some((line) => {
+    const url = line.split(/\s+/)[1];
+    if (!url) return false;
+    if (/^(?:https?|ssh|git):\/\/[^/]+/i.test(url)) return true;
+    return /^[^/\\:@\s]+@[^/\\:\s]+:/.test(url);
+  });
 }
 
 export async function resolveTargetRepo(repoDir: string, explicitRepo?: string): Promise<string | undefined> {

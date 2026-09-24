@@ -3,7 +3,7 @@
  * plugin's structured backend/run event model.
  */
 
-import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve as resolvePath } from "node:path";
 import {
@@ -177,33 +177,24 @@ export function trustedPlanFilePath(path: string | undefined, projectDirs: Array
   return trustedPlanRoots(projectDirs).some((root) => isInside(root, resolved)) ? resolved : undefined;
 }
 
+/** Tools whose `file_path` input writes a file. */
+const FILE_WRITE_TOOLS = new Set(["Write", "Edit", "MultiEdit"]);
+
 /**
- * Fallback when `ExitPlanMode` carries neither `plan` nor a trusted
- * `planFilePath`: the newest Markdown file written to a trusted plans directory
- * since `sinceMs` (the session launch), so the pending plan is still reviewable.
+ * The trusted plan file a `Write` / `Edit` / `MultiEdit` tool call of this
+ * session targets, if any. Used as the fallback when `ExitPlanMode` carries
+ * neither `plan` nor `planFilePath`: only files this session itself wrote are
+ * considered, so a concurrent session's plan in a shared plans directory can
+ * never be surfaced.
  */
-export function newestPlanFileSince(projectDirs: Array<string | undefined>, sinceMs: number): string | undefined {
-  let newest: { path: string; mtimeMs: number } | undefined;
-  for (const root of trustedPlanRoots(projectDirs)) {
-    let names: string[];
-    try {
-      names = readdirSync(root);
-    } catch {
-      continue;
-    }
-    for (const name of names) {
-      if (!name.toLowerCase().endsWith(".md")) continue;
-      const path = join(root, name);
-      try {
-        const stat = statSync(path);
-        if (!stat.isFile() || stat.mtimeMs < sinceMs) continue;
-        if (!newest || stat.mtimeMs > newest.mtimeMs) newest = { path, mtimeMs: stat.mtimeMs };
-      } catch {
-        // Unreadable or vanished entries are skipped.
-      }
-    }
-  }
-  return newest ? trustedPlanFilePath(newest.path, projectDirs) : undefined;
+export function planFileWrittenByTool(
+  toolName: string,
+  input: unknown,
+  projectDirs: Array<string | undefined>,
+): string | undefined {
+  if (!FILE_WRITE_TOOLS.has(toolName) || !input || typeof input !== "object") return undefined;
+  const filePath = (input as { file_path?: unknown }).file_path;
+  return typeof filePath === "string" ? trustedPlanFilePath(filePath, projectDirs) : undefined;
 }
 
 function readPlanFile(path: string | undefined): string | undefined {
@@ -289,7 +280,11 @@ function subtractBaselineUsage(
   models: HarnessModelUsage[] | undefined,
   baseline: HarnessLaunchOptions["forkBaselineUsage"],
 ): HarnessModelUsage[] | undefined {
-  if (!models || !baseline?.models?.length) return models;
+  if (!models || !baseline) return models;
+  // Only a total is known for the parent (for example a persisted parent that is
+  // no longer live): per-model entries would attribute the parent's tokens and
+  // spend to the fork, so the breakdown is omitted and only the cost delta is kept.
+  if (!baseline.models?.length) return baseline.costUsd ? undefined : models;
   const clamp = (value: number | undefined, minus: number | undefined): number | undefined =>
     value === undefined ? undefined : Math.max(0, value - (minus ?? 0));
   return models.map((entry) => {
@@ -366,8 +361,8 @@ export class ClaudeCodeHarness implements AgentHarness {
 
   /** Launch a Claude Code session and adapt SDK messages into structured events. */
   launch(options: HarnessLaunchOptions): HarnessSession {
-    // Plan files written before this launch never count as this session's plan (slack for coarse mtimes).
-    const launchedAtMs = Date.now() - 2_000;
+    // Last trusted plan file this session wrote (fallback for an ExitPlanMode without plan text).
+    let lastPlanFileWritten: string | undefined;
     const queue = new HarnessMessageQueue();
     let sawRunOutput = false;
     let requestCounter = 0;
@@ -434,7 +429,7 @@ export class ClaudeCodeHarness implements AgentHarness {
         : undefined;
       const planFilePath = suppliedPlanPath
         ? trustedPlanFilePath(suppliedPlanPath, [options.cwd, options.originalWorkdir])
-        : (inlinePlan ? undefined : newestPlanFileSince([options.cwd, options.originalWorkdir], launchedAtMs));
+        : (inlinePlan ? undefined : lastPlanFileWritten);
       const artifact: PlanArtifact = {
         explanation: undefined,
         steps: [],
@@ -724,6 +719,8 @@ export class ClaudeCodeHarness implements AgentHarness {
                 continue;
               }
               if (block.type === "tool_use" && block.name !== "AskUserQuestion") {
+                lastPlanFileWritten = planFileWrittenByTool(block.name, block.input, [options.cwd, options.originalWorkdir])
+                  ?? lastPlanFileWritten;
                 queue.enqueue(createToolCallEvent(block.name, block.input));
               }
             }
