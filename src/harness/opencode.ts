@@ -1,7 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { constants as fsConstants, accessSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, dirname, join, sep } from "node:path";
+import { delimiter, dirname, isAbsolute, join, sep } from "node:path";
 import type {
   PendingInputAction,
   PendingInputQuestion,
@@ -129,10 +129,19 @@ function candidateSearchPaths(envPath: string | undefined): string[] {
   return [...new Set(expanded)];
 }
 
-function resolveCommandPath(command: string, envPath = process.env.PATH): string {
-  if (commandHasPathSeparator(command)) return command;
+/**
+ * Resolve the OpenCode executable to an absolute path against the Gateway's
+ * working directory. The server is spawned with `cwd: tmpdir()`, so a relative
+ * override such as `./bin/opencode` (or a relative PATH entry) would otherwise
+ * be looked up from the temp directory.
+ */
+export function resolveCommandPath(command: string, envPath = process.env.PATH, baseDir = process.cwd()): string {
+  // Prefix relative paths without normalizing: `..` must still be resolved by
+  // the OS after symlinks, and absolute overrides pass through unchanged.
+  const anchor = (path: string): string => (isAbsolute(path) ? path : `${baseDir}${sep}${path}`);
+  if (commandHasPathSeparator(command)) return anchor(command);
   for (const entry of candidateSearchPaths(envPath)) {
-    const candidate = join(entry, command);
+    const candidate = isAbsolute(entry) ? join(entry, command) : `${anchor(entry)}${sep}${command}`;
     if (isExecutable(candidate)) return candidate;
   }
   return command;
@@ -1067,7 +1076,6 @@ export class OpenCodeHarness implements AgentHarness {
     // Plan/build agent switching carries plan decisions; OpenCode injects its
     // own build-switch reminder when a plan-agent session moves to `build`.
     nativePlanDecisions: true,
-    worktrees: "plugin-managed",
   } as const;
 
   private readonly servers: OpenCodeServerManager;

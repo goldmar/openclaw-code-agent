@@ -6,7 +6,7 @@ import type { SessionNotificationRequest } from "./wake-dispatcher";
 import type { PRStatus } from "./worktree-pr";
 import type { WorktreeCompletionState } from "./session-worktree-controller";
 import { SessionWorktreeMessageService } from "./session-worktree-message-service";
-import { getPersistedMutationRefs, getPrimarySessionLookupRef, usesNativeBackendWorktree } from "./session-backend-ref";
+import { getPersistedMutationRefs, getPrimarySessionLookupRef } from "./session-backend-ref";
 import { SessionWorktreeActionService } from "./session-worktree-action-service";
 import {
   buildMergeConflictResolvingPatch,
@@ -273,23 +273,18 @@ export class SessionWorktreeStrategyService {
         action.repoDir,
         action.worktreePath,
         action.branchName,
-        action.nativeBackendWorktree,
       );
     }
 
     if (action.kind === "merged") {
-      const removed = action.nativeBackendWorktree
-        ? true
-        : await removeWorktree(action.repoDir, action.worktreePath);
+      const removed = await removeWorktree(action.repoDir, action.worktreePath);
       await deleteBranch(action.repoDir, action.branchName);
       this.markMerged(session);
       return { notificationSent: false, worktreeRemoved: removed };
     }
 
     if (action.kind === "released") {
-      const removed = action.nativeBackendWorktree
-        ? true
-        : await removeWorktree(action.repoDir, action.worktreePath);
+      const removed = await removeWorktree(action.repoDir, action.worktreePath);
       await deleteBranch(action.repoDir, action.branchName);
       this.markReleased(session, action.reasons);
       return { notificationSent: false, worktreeRemoved: removed };
@@ -362,7 +357,6 @@ export class SessionWorktreeStrategyService {
     repoDir: string,
     worktreePath: string,
     branchName: string,
-    nativeBackendWorktree: boolean = usesNativeBackendWorktree(session),
   ): Promise<WorktreeStrategyResult> {
     if (await this.hasCurrentlyOpenPrForBranch(session, repoDir, branchName)) {
       const updatedAt = new Date().toISOString();
@@ -384,7 +378,6 @@ export class SessionWorktreeStrategyService {
       });
       this.deps.dispatchSessionNotification(session, this.deps.worktreeMessages.buildNoChangeNotification({
         session,
-        nativeBackendWorktree,
         cleanupSucceeded: true,
         worktreePath,
         worktreeBranch: branchName,
@@ -396,9 +389,7 @@ export class SessionWorktreeStrategyService {
     }
 
     const remoteOutcome = this.getDeliveredRemoteOutcome(session);
-    const removed = nativeBackendWorktree
-      ? true
-      : await removeWorktree(repoDir, worktreePath);
+    const removed = await removeWorktree(repoDir, worktreePath);
     if (removed) {
       session.worktreePath = undefined;
       this.updatePersistedSessionFor(session, {
@@ -417,7 +408,6 @@ export class SessionWorktreeStrategyService {
       });
       this.deps.dispatchSessionNotification(session, this.deps.worktreeMessages.buildNoChangeNotification({
         session,
-        nativeBackendWorktree,
         cleanupSucceeded: true,
         worktreePath,
         worktreeBranch: branchName,
@@ -428,7 +418,6 @@ export class SessionWorktreeStrategyService {
     } else {
       this.deps.dispatchSessionNotification(session, this.deps.worktreeMessages.buildNoChangeNotification({
         session,
-        nativeBackendWorktree,
         cleanupSucceeded: false,
         worktreePath,
         worktreeBranch: branchName,
@@ -588,14 +577,12 @@ export class SessionWorktreeStrategyService {
     diffSummary: DiffSummary,
     mergeResult: Awaited<ReturnType<typeof mergeBranch>>,
   ): Promise<boolean> {
-    const nativeBackendWorktree = usesNativeBackendWorktree(session);
-    const removed = nativeBackendWorktree
-      || !worktreeExists(worktreePath)
+    const removed = !worktreeExists(worktreePath)
       || await removeWorktree(repoDir, worktreePath);
     if (removed) {
       session.worktreePath = undefined;
       this.updatePersistedSessionFor(session, { worktreePath: undefined });
-      if (!nativeBackendWorktree) await deleteBranch(repoDir, branchName);
+      await deleteBranch(repoDir, branchName);
     }
     this.markMerged(session);
 
@@ -901,9 +888,7 @@ export class SessionWorktreeStrategyService {
     );
     if (!representedByTargetPrBranch) return undefined;
 
-    const removed = usesNativeBackendWorktree(session)
-      ? true
-      : await removeWorktree(repoDir, worktreePath);
+    const removed = await removeWorktree(repoDir, worktreePath);
     if (!removed) {
       this.markPendingDecision(session, {
         notes: [`represented_by_branch:${targetBranch}`, "represented_worktree_cleanup_failed"],

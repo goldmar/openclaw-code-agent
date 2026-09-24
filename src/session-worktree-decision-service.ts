@@ -2,7 +2,7 @@ import { existsSync } from "fs";
 
 import type { PersistedSessionInfo } from "./types";
 import type { Session } from "./session";
-import { getBackendConversationId, getPersistedMutationRefs, getPrimarySessionLookupRef, usesNativeBackendWorktree } from "./session-backend-ref";
+import { getBackendConversationId, getPersistedMutationRefs, getPrimarySessionLookupRef } from "./session-backend-ref";
 import { deleteBranch, removeWorktree } from "./worktree";
 
 type WorktreeDecisionSession = Pick<
@@ -44,8 +44,7 @@ export class SessionWorktreeDecisionService {
 
     if (!repoDir) return `Error: No workdir found for session "${ref}".`;
 
-    const nativeBackendWorktree = usesNativeBackendWorktree(session);
-    if (!nativeBackendWorktree && worktreePath && existsSync(worktreePath)) {
+    if (worktreePath && existsSync(worktreePath)) {
       await removeWorktree(repoDir, worktreePath, { destructive: true });
     }
 
@@ -74,9 +73,7 @@ export class SessionWorktreeDecisionService {
       } as Partial<PersistedSessionInfo>);
     }
 
-    const msg = nativeBackendWorktree
-      ? `🗑️ [${sessionName}] Branch \`${branchName ?? "unknown"}\` dismissed. Native backend worktree released for backend cleanup.`
-      : `🗑️ [${sessionName}] Branch \`${branchName ?? "unknown"}\` dismissed and permanently deleted.`;
+    const msg = `🗑️ [${sessionName}] Branch \`${branchName ?? "unknown"}\` dismissed and permanently deleted.`;
     this.deps.dispatchNotification(
       this.deps.buildRoutingProxy({
         id: getPrimarySessionLookupRef(activeSession ?? persistedSession ?? { id: ref }) ?? ref,

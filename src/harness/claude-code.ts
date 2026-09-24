@@ -254,7 +254,6 @@ export class ClaudeCodeHarness implements AgentHarness {
     nativePendingInput: false,
     nativePlanArtifacts: true,
     nativePlanDecisions: true,
-    worktrees: "plugin-managed",
   } as const;
 
   /** Launch a Claude Code session and adapt SDK messages into structured events. */

@@ -46,8 +46,7 @@ describe("SessionRuntimeRegistry", () => {
         backendRef: {
           kind: "codex-app-server",
           conversationId: "conv-secret-456",
-          worktreeId: "worktree-secret-789",
-          worktreePath: "/private/backend/worktree",
+          runId: "run-secret-789",
         },
       }));
       registry.remove("secret-session", "test");
@@ -55,8 +54,7 @@ describe("SessionRuntimeRegistry", () => {
       const joined = warnings.join("\n");
       assert.doesNotMatch(joined, /harness-session-secret-123/);
       assert.doesNotMatch(joined, /conv-secret-456/);
-      assert.doesNotMatch(joined, /worktree-secret-789/);
-      assert.doesNotMatch(joined, /private\/backend\/worktree/);
+      assert.doesNotMatch(joined, /run-secret-789/);
       assert.doesNotMatch(joined, /"backendRef"/);
       assert.doesNotMatch(joined, /"harnessSessionId"/);
 
@@ -65,8 +63,7 @@ describe("SessionRuntimeRegistry", () => {
       assert.equal(added?.hasHarnessSessionId, true);
       assert.equal(added?.backendRefKind, "codex-app-server");
       assert.equal(added?.hasBackendConversationId, true);
-      assert.equal(added?.hasBackendWorktreeId, true);
-      assert.equal(added?.hasBackendWorktreePath, true);
+      assert.equal(added?.hasBackendRunId, true);
     } finally {
       console.warn = originalWarn;
     }

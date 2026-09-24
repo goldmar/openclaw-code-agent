@@ -113,13 +113,15 @@ The opt-in `tests/session-task-lifecycle-candidate.test.ts` exercises actual asy
 `src/harness/types.ts` defines the `AgentHarness` interface. The built-in harnesses are:
 
 - `claude-code`: native Claude Code harness. `canUseTool` intercepts `AskUserQuestion` (structured pending input) and holds `ExitPlanMode` open as a native plan-approval request that approve/revise decisions answer directly
-- `codex`: native Codex App Server harness with structured pending input, structured plan artifacts, backend refs, and native worktree thread state
+- `codex`: native Codex App Server harness (typed against vendored `codex app-server generate-ts` output in `src/harness/codex-app-server-protocol/`) with structured pending input and approvals, structured plan artifacts, backend refs, steering, rewind/fork, and compact/review thread actions
 - `opencode`: experimental OpenCode server harness using one lazily started, shared local `opencode serve` process, classic session routes with `?directory=` for prompts/messages/replies, event-stream turn completion, OpenCode's built-in `plan`/`build` agents, native pending input, plugin-managed worktrees, and no native OpenClaw plan artifacts
 
 Important mapping detail:
 
 - Claude Code maps plugin `permissionMode` directly to the SDK modes. Plan approval leaves plan mode through the `ExitPlanMode` permission result (`setMode`), not through a prompt.
-- Codex runs through the Codex App Server transport. Plugin `plan` mode remains a plugin-owned approval workflow even when the backend exposes structured plan artifacts. Fresh Codex worktree launches use the plugin-managed worktree cwd, while persisted backend refs can restore Codex backend worktree context during resume.
+- Codex runs through the Codex App Server transport. Plugin `plan` mode maps to Codex's `plan` collaboration mode and remains a plugin-owned approval workflow even when the backend exposes structured plan artifacts; the session system prompt travels as thread `developerInstructions`. Codex's sandbox/approval settings come from `harnesses.codex` and do not change with the OCA permission mode. Codex worktree launches use the plugin-managed worktree as the thread cwd (the App Server has no worktree API).
+- Codex follow-ups during a running turn are steered into it; `compact` and `review` thread actions travel through the same ordered prompt stream as user messages so they never overlap a turn.
+- OCA keeps its own verifier-driven goal loop for every harness instead of Codex's native `thread/goal/*`, which is Codex-only and model-judged.
 - OpenCode runs through one shared localhost OpenCode server. Fresh prompts use classic `prompt_async`; completion comes from the demultiplexed `/global/event` stream (`session.idle`), with session-status polling only while that stream is disconnected. Message/result fetches, permission/question replies, session create, fork, abort, and permission-rule updates use classic routes. Plan mode prompts the built-in `plan` agent; approved plans continue on the `build` agent. If the server dies, in-flight turns fail and the next turn starts a new server.
 - `agent_respond` is the only continuation primitive across built-in backends; fork flows still go through `agent_launch(..., resume_session_id=..., fork_session=true)`.
 
@@ -247,7 +249,7 @@ This avoids treating “ahead of main” as the only truth source for cleanup.
 - `agent_respond(..., interrupt=true)` aborts the current turn in place and sends a redirect notification
 - `agent_respond` is the only continuation primitive for active and explicitly suspended sessions
 - sessions found in `running` state during startup recovery are normalized into resumable persisted entries instead of being implicitly restarted
-- persisted Codex and OpenCode resume state is restored through the backend thread ref, not through SDK-era harness session guessing
+- persisted Codex and OpenCode resume state is restored through the backend thread ref; Codex resumes with `excludeTurns: true`, and `rewind_turns` forks before or reverts the latest turns
 
 ## Persistence Model
 
@@ -271,7 +273,7 @@ Stored data includes:
 - backend conversation ID for diagnostics and recovery
 - output stubs and persisted stream references
 
-`backendRef` is required for all new-schema sessions. Codex SDK-era persisted sessions are archived and not loaded; that legacy cleanup is Codex-specific and does not apply to OpenCode backend refs.
+`backendRef` is required for all new-schema sessions. Pre-App-Server Codex SDK rows (Codex sessions without a `codex-app-server` backend ref) are dropped on load; there is no legacy migration path.
 
 ## Notification Pipeline
 
@@ -312,7 +314,7 @@ Every `git` / `gh` call in this layer is asynchronous and goes through `src/git-
 Important constraints:
 
 - worktree creation only happens for git repos
-- fresh Codex and OpenCode worktree launches use plugin-managed worktrees, while persisted Codex backend refs can restore native backend worktree context during resume
+- every harness uses plugin-managed worktrees; there is no backend-native worktree restore
 - push and PR flows need a configured remote
 - the main checkout is not modified during isolated worktree execution
 - cleanup is lifecycle-driven: safe cleanup applies only to `merged`, `released`, `dismissed`, and `no_change`
@@ -320,7 +322,7 @@ Important constraints:
 Backend capabilities intentionally differ:
 
 - Claude Code: plugin-managed worktree substrate
-- Codex App Server: plugin-managed fresh worktrees plus native backend worktree restore refs
+- Codex App Server: plugin-managed worktree substrate (the worktree is the thread cwd)
 - OpenCode: plugin-managed worktree substrate
 - User-facing worktree strategy and decision UX remain identical above all built-in harnesses
 

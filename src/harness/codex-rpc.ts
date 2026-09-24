@@ -1,5 +1,8 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import readline from "node:readline";
+import { createLogger } from "../logger";
+
+const log = createLogger("codex-rpc");
 
 export type JsonRpcId = string | number;
 export type JsonRpcEnvelope = {
@@ -22,7 +25,22 @@ type PendingRequest = {
 };
 
 export type JsonRpcNotificationHandler = (method: string, params: unknown) => Promise<void> | void;
-export type JsonRpcRequestHandler = (method: string, params: unknown) => Promise<unknown>;
+export type JsonRpcRequestHandler = (method: string, params: unknown, id: JsonRpcId) => Promise<unknown>;
+
+/** Standard JSON-RPC error codes used for server-initiated requests OCA cannot serve. */
+export const JSON_RPC_METHOD_NOT_FOUND = -32601;
+export const JSON_RPC_INTERNAL_ERROR = -32603;
+
+/**
+ * Throw from a request handler to answer a server request with a specific
+ * JSON-RPC error code instead of the generic internal-error response.
+ */
+export class JsonRpcResponseError extends Error {
+  constructor(readonly code: number, message: string) {
+    super(message);
+    this.name = "JsonRpcResponseError";
+  }
+}
 
 export type JsonRpcClient = {
   connect: () => Promise<void>;
@@ -31,6 +49,8 @@ export type JsonRpcClient = {
   request: (method: string, params?: unknown, timeoutMs?: number) => Promise<unknown>;
   setNotificationHandler: (handler: JsonRpcNotificationHandler) => void;
   setRequestHandler: (handler: JsonRpcRequestHandler) => void;
+  /** Called once when the transport closes unexpectedly or on shutdown. */
+  setCloseHandler?: (handler: () => void) => void;
 };
 
 function errorMessage(error: unknown): string {
@@ -38,7 +58,7 @@ function errorMessage(error: unknown): string {
 }
 
 function logCodexRpcDiagnostic(event: string, fields: Record<string, unknown>): void {
-  console.warn(JSON.stringify({
+  log.warn(JSON.stringify({
     component: "CodexAppServerRpc",
     event,
     at: new Date().toISOString(),
@@ -95,14 +115,14 @@ export async function dispatchJsonRpcEnvelope(
   }
 
   try {
-    const result = await params.onRequest(method, payload.params);
+    const result = await params.onRequest(method, payload.params, payload.id);
     params.respond({ jsonrpc: "2.0", id: payload.id, result: result ?? {} });
   } catch (error) {
     params.respond({
       jsonrpc: "2.0",
       id: payload.id,
       error: {
-        code: -32603,
+        code: error instanceof JsonRpcResponseError ? error.code : JSON_RPC_INTERNAL_ERROR,
         message: errorMessage(error),
       },
     });
@@ -115,7 +135,10 @@ export class StdioJsonRpcClient implements JsonRpcClient {
   private stderrTail = "";
   private counter = 0;
   private onNotification: JsonRpcNotificationHandler = () => undefined;
-  private onRequest: JsonRpcRequestHandler = async () => ({});
+  private onClose: () => void = () => undefined;
+  private onRequest: JsonRpcRequestHandler = async (method) => {
+    throw new JsonRpcResponseError(JSON_RPC_METHOD_NOT_FOUND, `unsupported server request: ${method}`);
+  };
 
   constructor(
     private readonly command: string,
@@ -130,6 +153,10 @@ export class StdioJsonRpcClient implements JsonRpcClient {
 
   setRequestHandler(handler: JsonRpcRequestHandler): void {
     this.onRequest = handler;
+  }
+
+  setCloseHandler(handler: () => void): void {
+    this.onClose = handler;
   }
 
   async connect(): Promise<void> {
@@ -172,6 +199,7 @@ export class StdioJsonRpcClient implements JsonRpcClient {
       });
       this.flushPending(new Error("codex app server stdio closed"));
       this.process = null;
+      this.onClose();
     });
   }
 

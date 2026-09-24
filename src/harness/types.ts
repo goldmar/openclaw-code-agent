@@ -7,12 +7,12 @@
 
 import type {
   BackendCapabilityFlags,
-  CodexApprovalPolicy,
   PendingInputState,
   PlanArtifact,
   ReasoningEffort,
   SessionBackendRef,
   SessionBackendKind,
+  ThreadAction,
   WorktreeStrategy,
 } from "../types";
 
@@ -115,13 +115,19 @@ export interface HarnessLaunchOptions {
   reasoningEffort?: ReasoningEffort;
   fastMode?: boolean;
   permissionMode?: string;
-  codexApprovalPolicy?: CodexApprovalPolicy;
   systemPrompt?: string;
   allowedTools?: string[];
   resumeSessionId?: string;
   forkSession?: boolean;
-  backendRef?: SessionBackendRef;
+  /**
+   * Drop the latest N backend turns before continuing (Codex only). With
+   * `forkSession` the fork is created before those turns; without it the
+   * resumed thread's history is reverted in place. Files are not reverted.
+   */
+  rewindTurns?: number;
+  /** Worktree strategy of the session (Claude Code uses it for `projectConfigRoot`). */
   worktreeStrategy?: WorktreeStrategy;
+  /** The repository checkout the session's worktree was created from. */
   originalWorkdir?: string;
   abortController?: AbortController;
   /** Optional tool-intercept callback (CC sessions only). */
@@ -141,6 +147,13 @@ export interface HarnessSession {
 
   /** Feed additional user messages into a running session. */
   streamInput?(input: AsyncIterable<unknown>): Promise<void>;
+
+  /**
+   * Inject a user message into the currently running turn. Resolves `false`
+   * when no steerable turn is active (or it is being interrupted), in which
+   * case the caller queues the message as a new turn instead.
+   */
+  steer?(text: string): Promise<boolean>;
 
   /** Resolve an active structured pending-input request via option index. */
   submitPendingInputOption?(index: number, context?: { requestId?: string; questionId?: string }): Promise<boolean>;
@@ -177,6 +190,13 @@ export interface AgentHarness {
 
   /** Build a user-message payload suitable for the harness's multi-turn protocol. */
   buildUserMessage(text: string, sessionId: string): unknown;
+
+  /**
+   * Build a queued control message for a backend thread action (see
+   * `capabilities.threadActions`). Control messages travel through the same
+   * ordered prompt stream as user messages so they never overlap a turn.
+   */
+  buildThreadActionMessage?(action: ThreadAction): unknown;
 
   /** Permission modes supported by this harness. */
   readonly supportedPermissionModes: readonly string[];

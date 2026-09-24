@@ -39,8 +39,6 @@ function backendRefDiagnosticFields(raw: unknown): Record<string, unknown> {
     backendRefKind: typeof raw.kind === "string" ? raw.kind : undefined,
     hasBackendConversationId: typeof raw.conversationId === "string" && raw.conversationId.length > 0,
     hasBackendRunId: typeof raw.runId === "string" && raw.runId.length > 0,
-    hasBackendWorktreeId: typeof raw.worktreeId === "string" && raw.worktreeId.length > 0,
-    hasBackendWorktreePath: typeof raw.worktreePath === "string" && raw.worktreePath.length > 0,
   };
 }
 
@@ -145,21 +143,6 @@ export const sessionStoreStorageInternals = {
   archiveLegacySessionIndex,
   backupSessionIndex,
 };
-
-export function archiveLegacyCodexEntries(indexPath: string, entries: unknown[]): void {
-  try {
-    if (entries.length === 0) return;
-    const archivedPath = getAvailableArchivePath(indexPath, "codex-sdk-legacy");
-    if (!archivedPath) {
-      log.warn("[SessionStore] Failed to archive legacy Codex SDK sessions: no available archive path");
-      return;
-    }
-    writeFileSync(archivedPath, JSON.stringify(entries, null, 2), "utf-8");
-    log.warn(`[SessionStore] Breaking Codex transport upgrade: archived ${entries.length} legacy Codex SDK session(s) to ${archivedPath}. They are not loaded by the App Server backend.`);
-  } catch (err: unknown) {
-    log.warn(`[SessionStore] Failed to archive legacy Codex SDK sessions: ${errorMessage(err)}`);
-  }
-}
 
 export function cleanupSessionOutputFiles(now: number, maxAgeMs: number, referencedPaths: Iterable<string> = []): void {
   try {
@@ -271,16 +254,17 @@ export function loadSessionStoreIndex(args: LoadIndexArgs): void {
 
     const sessionsRaw = readCollection("sessions", "invalid sessions collection");
     if (sessionsRaw === undefined) return;
-    const archivedLegacyCodex: unknown[] = [];
+    let droppedLegacyCodex = 0;
     const entries: PersistedSessionInfo[] = [];
     let recoveredRunningSession = false;
     let skippedInvalidEntries = 0;
     for (const candidate of sessionsRaw) {
       if (isRecord(candidate) && candidate.harness === "codex") {
+        // 5.0.0 dropped the pre-App-Server Codex SDK backend. Rows without an
+        // App Server backend ref cannot be resumed, so they are not loaded.
         const backendRef = isRecord(candidate.backendRef) ? candidate.backendRef : undefined;
-        const backendKind = typeof backendRef?.kind === "string" ? backendRef.kind : undefined;
-        if (backendKind !== "codex-app-server") {
-          archivedLegacyCodex.push(candidate);
+        if (backendRef?.kind !== "codex-app-server") {
+          droppedLegacyCodex += 1;
           continue;
         }
       }
@@ -309,8 +293,8 @@ export function loadSessionStoreIndex(args: LoadIndexArgs): void {
       entries.push(entry);
     }
 
-    if (archivedLegacyCodex.length > 0) {
-      archiveLegacyCodexEntries(indexPath, archivedLegacyCodex);
+    if (droppedLegacyCodex > 0) {
+      log.warn(`[SessionStore] Dropped ${droppedLegacyCodex} legacy Codex SDK session(s); only Codex App Server sessions are supported.`);
     }
 
     const tokensRaw = readCollection("actionTokens", "invalid action token collection");
@@ -353,7 +337,7 @@ export function loadSessionStoreIndex(args: LoadIndexArgs): void {
     for (const token of tokens) setActionToken(token);
     for (const policy of policies) setRepoPolicy(policy);
 
-    if (archivedLegacyCodex.length > 0 || recoveredRunningSession) saveIndex();
+    if (droppedLegacyCodex > 0 || recoveredRunningSession) saveIndex();
     if (skippedInvalidRepoPolicy || skippedInvalidEntries > 0) saveIndex();
 
     purgeExpiredActionTokens();

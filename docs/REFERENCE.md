@@ -10,8 +10,11 @@ Canonical operator reference for `openclaw-code-agent`: install, configuration, 
 | `harnesses.claude-code.defaultModel` | `opus` |
 | `harnesses.codex.defaultModel` | `gpt-6-sol` |
 | `harnesses.codex.allowedModels` | `["gpt-6-sol", "gpt-6-astra", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]` |
-| `harnesses.codex.reasoningEffort` | `medium` |
+| `harnesses.codex.reasoningEffort` | unset; Codex applies its configured/model default |
 | `harnesses.codex.fastMode` | `false` |
+| `harnesses.codex.permissionProfile` | `:danger-full-access` |
+| `harnesses.codex.approvalPolicy` | `never` |
+| `harnesses.codex.approvalsReviewer` | `user` |
 | `harnesses.opencode.defaultModel` | unset; OpenCode uses its configured provider default |
 | `permissionMode` | `plan` |
 | `planApproval` | `delegate` |
@@ -49,6 +52,7 @@ The current `openclaw-code-agent` package requires, is built against, and is val
   ```
 
   Place these fields under `plugins.entries.openclaw-code-agent.config`. An empty `allowedModels: []` removes that harness restriction; omission keeps the built-in list, but setting a custom `defaultModel` without an explicit list drops the built-in restriction.
+- **Codex sessions.** Rows from the pre-App-Server Codex SDK backend are dropped when the store loads, and 4.x rows whose worktree was a native Codex backend worktree load without worktree metadata. `harnesses.codex.reasoningEffort` no longer defaults to `medium` (unset uses Codex's own default), and Codex execution settings come from `harnesses.codex.permissionProfile` / `approvalPolicy` / `approvalsReviewer` (see [Harnesses](#harnesses)).
 - **State paths.** OCA resolves its state directory like the Gateway (`OPENCLAW_STATE_DIR`; `OPENCLAW_HOME` is the home-directory override). Output transcripts and auto-update state moved under `<stateDir>/plugin-state/openclaw-code-agent/` (see [OpenClaw Host Integration](#openclaw-host-integration)).
 
 ### Host Configuration Notes
@@ -146,7 +150,6 @@ Add this under `plugins.entries["openclaw-code-agent"]` in `~/.openclaw/openclaw
       "codex": {
         "defaultModel": "gpt-6-sol",
         "allowedModels": ["gpt-6-sol", "gpt-6-astra", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
-        "reasoningEffort": "medium",
         "fastMode": false
       },
       "opencode": {}
@@ -174,17 +177,31 @@ forced_login_method = "chatgpt"
 | Harness | Models | Notes |
 | --- | --- | --- |
 | `claude-code` | Controlled by `harnesses.claude-code.allowedModels` | Native Claude Code harness with native `ExitPlanMode` plan review and `AskUserQuestion` interception |
-| `codex` | Controlled by `harnesses.codex.allowedModels` | Native Codex App Server harness with structured pending input, structured plans, and native backend worktree refs |
+| `codex` | Controlled by `harnesses.codex.allowedModels` | Native Codex App Server harness with structured pending input, structured plans, approvals, steering, rewind/fork, compaction, and inline review |
 | `opencode` | Optional `provider/model`; unset uses OpenCode's configured provider default | Experimental OpenCode server harness with native pending input, OpenCode's built-in `plan`/`build` agents behind the plugin-owned plan gate, and plugin-managed worktrees |
 
 Allowed-model matching is case-insensitive substring matching. If the resolved model is not allowed, `agent_launch` fails immediately. Because OpenCode can use its own configured provider default, do not configure `harnesses.opencode.allowedModels` unless you also configure or pass an explicit OpenCode model that can be checked.
 
 Codex harness details:
 
-- Fresh Codex App Server threads, resumed threads, and turn starts receive the configured model when present.
-- Configured Codex reasoning effort is sent as `reasoningEffort` on thread/resume payloads and inside turn-start collaboration settings.
-- `harnesses.codex.fastMode: true` sends `service_tier: "fast"` on Codex App Server thread/resume/turn payloads. It is Codex-only and is ignored for Claude Code.
-- Codex execution policy remains fixed to the supported App Server path; use plugin `permissionMode` and `planApproval` for review behavior.
+- Wire types are vendored from `codex app-server generate-ts --experimental` into `src/harness/codex-app-server-protocol/` (regenerate with `pnpm sync:codex-protocol`; currently Codex CLI 0.156.1). Each OCA session owns one `codex app-server` stdio process.
+- The session system prompt, including the worktree preamble, is sent as thread-level `developerInstructions` on `thread/start`, `thread/resume`, and `thread/fork`. Every `turn/start` carries the model, the top-level `effort`, and a `collaborationMode` (`plan` for OCA plan mode, otherwise `default`) whose snake_case settings repeat the model and `reasoning_effort` and leave `developer_instructions: null` so Codex's built-in mode instructions stay active.
+- Reasoning effort: `harnesses.codex.reasoningEffort` (or the launch `reasoning_effort`) is sent when set. There is no built-in default; unset means Codex's own configured/model default. When the session's own Codex connection (`model/list`) says a model does not support the requested effort, the harness omits it rather than failing the turn and reports that to the session, so status lines only show efforts that are actually applied (before the first Codex session loads the catalog, only `low`/`medium`/`high` are shown).
+- `harnesses.codex.fastMode: true` requests `serviceTier: "priority"` (Codex's fast tier). API-key cost estimates apply the fast multiplier only when Codex reports `priority` as the thread's effective tier.
+- Resume sends `excludeTurns: true`; OCA never hydrates full thread history.
+- Cost: for API-key accounts the harness prices each `thread/tokenUsage/updated` response (`last` breakdown) against the built-in price table. ChatGPT-login sessions stay unpriced.
+- Permissions and approvals are configured per operator, identically for every OCA permission mode (OCA permission modes only select Codex's `plan` vs `default` collaboration mode):
+  - `harnesses.codex.permissionProfile`: `:danger-full-access` (default, historical behavior), `:workspace`, or `:read-only`. Sent as the thread `permissions` profile.
+  - `harnesses.codex.approvalPolicy`: `never` (default; no Codex prompts), `on-request`, or `untrusted`.
+  - `harnesses.codex.approvalsReviewer`: `user` (default) or `auto_review` (Codex's reviewer subagent decides).
+  - Command, file-change, and permission approval requests appear as pending-input approvals with buttons (for example `Approve once`, `Approve for session`, `Always allow \`<prefix>\``, `Decline`, `Decline and stop turn`). Plain-text replies such as `yes`, `approve for session`, `no`, or `cancel` also work; any other text declines the request and is steered into the turn as feedback.
+- Server requests OCA cannot serve are answered explicitly: MCP elicitations are declined, dynamic tool calls return `success: false`, and ChatGPT token refresh / unknown requests get a JSON-RPC method-not-found error.
+- Follow-ups sent with `agent_respond` while a Codex turn is running are steered into that turn (`turn/steer` with `expectedTurnId`). With `interrupt: true` the turn is interrupted instead and the message starts a new turn. If Codex rejects the steer (the turn just ended), the message is queued as the next turn.
+- `agent_launch(resume_session_id=..., rewind_turns=N)` drops the latest N turns: with `fork_session: true` the fork is created before those turns (`thread/fork` with `beforeTurnId`); without it the thread's history is reverted in place (`thread/revert`). Files changed by those turns are not reverted.
+- `agent_session_action` runs `compact` (`thread/compact/start`) or an inline `review` (`review/start`) on a running Codex session.
+- Rate limits: ChatGPT-login sessions read `account/rateLimits/read` at startup and track `account/rateLimits/updated`. Snapshots are kept per account (never merged across accounts; account ids are not displayed; a connection whose account id is unknown keeps its own snapshot only while it is open); `agent_stats` shows each account's current windows, and usage-limit turn failures include the reset time unless it already passed.
+- Permission approval prompts list every requested filesystem entry (path or glob and access mode) and network access before a grant is offered. Plain free-text replies (`yes`, `no`, `always`) never select an "Always allow/deny" policy amendment; use its button or option number.
+- Goals: OCA keeps its own cross-harness goal loop (`agent_goal_*`, verifier-driven) and does not map it onto Codex's native `thread/goal/*`, which is Codex-only and judges completion by the model rather than by verifier commands.
 
 Claude Code harness details:
 
@@ -273,13 +290,13 @@ These should remain manual or follow-up configuration:
 
 | Mode | Meaning |
 | --- | --- |
-| `default` | Plugin-managed interactive execution. The session can ask questions or pause between turns, but Codex-side approval prompts stay disabled |
+| `default` | Plugin-managed interactive execution. The session can ask questions or pause between turns. Codex-side approval prompts follow `harnesses.codex.approvalPolicy` (off by default) |
 | `plan` | Present the plan first, then block implementation until approval |
 | `bypassPermissions` | Fully autonomous execution with no plan checkpoint |
 
 `plan` is the plugin default. Claude Code, Codex, and experimental OpenCode feed the same plugin-owned approval workflow. Claude Code supplies its plan through the native `ExitPlanMode` request and receives the decision as that request's answer; Codex supplies structured plan artifacts through the App Server backend; OpenCode plans are text from its built-in `plan` agent.
 
-For Codex, approval behavior is fixed to the supported execution path and is not user-configurable. Use `permissionMode` and `planApproval` to control review gates instead.
+For Codex, `permissionMode` selects Codex's `plan` or `default` collaboration mode; the Codex sandbox and approval prompts come from `harnesses.codex.permissionProfile`, `approvalPolicy`, and `approvalsReviewer` and do not change when a plan is approved. Use `permissionMode` and `planApproval` to control plan review gates.
 
 ### `planApproval`
 
@@ -374,7 +391,7 @@ Notes:
 - Resumed sessions keep the worktree strategy they already had.
 - Worktrees are kept alive until explicitly resolved (merge/PR/dismiss) when using non-trivial strategies.
 - Stale-decision reminders fire every 3h; users can snooze per-session for 24h.
-- Claude Code, experimental OpenCode, and fresh Codex `ask` / `delegate` launches use plugin-managed worktrees for isolated edits. Persisted Codex App Server backend refs can still restore native backend worktree context when resuming an existing thread.
+- Claude Code, Codex, and experimental OpenCode all use plugin-managed worktrees for isolated edits. Codex App Server has no worktree API; OCA passes the prepared worktree as the thread `cwd`. Sessions persisted by 4.x with a native Codex backend worktree load without worktree metadata so OCA never removes Codex-owned checkouts. Resuming a session whose worktree was already cleaned up fails closed for every harness unless `worktree_strategy: "off"` is chosen.
 - `released` covers different-SHA cases where the base branch already contains the branch content after rebase, cherry-pick, or squash.
 
 ### Worktree Provisioning
@@ -404,6 +421,7 @@ Launch a background coding session.
 | `allowed_tools` | `string[]` | No | Harness tool allowlist |
 | `resume_session_id` | `string` | No | Resume by plugin session ID or name. Persisted backend conversation IDs still work for recovery/diagnostics, but they are not the normal operator-facing path |
 | `fork_session` | `boolean` | No | Fork instead of continuing when resuming |
+| `rewind_turns` | positive integer | No | Codex only, with `resume_session_id`: drop the latest N turns first. With `fork_session: true` the fork starts before those turns; otherwise the thread's history is reverted in place. Conversation history only; files are not reverted |
 | `permission_mode` | `default \| plan \| bypassPermissions` | No | Defaults to plugin `permissionMode` |
 | `harness` | `string` | No | Defaults to `defaultHarness` |
 | `worktree_strategy` | `off \| manual \| ask \| delegate \| auto-merge \| auto-pr` | No | Explicit per-launch value wins over plugin default; `auto-pr` attempts PR creation/update automatically |
@@ -428,7 +446,7 @@ Send a follow-up, redirect work, approve a plan, or escalate a `default` mode se
 | --- | --- | --- | --- |
 | `session` | `string` | Yes | Prefer the plugin session ID or name. Persisted backend conversation IDs are accepted only for recovery/diagnostics |
 | `message` | `string` | Yes | Follow-up text |
-| `interrupt` | `boolean` | No | Abort the current turn before sending |
+| `interrupt` | `boolean` | No | Abort the current turn before sending. Without it, Codex sessions steer the message into a running turn (other harnesses queue it for the next turn) |
 | `userInitiated` | `boolean` | No | Reset the auto-respond counter |
 | `approve` | `boolean` | No | Approve a pending plan or escalate `default` mode permissions |
 
@@ -441,6 +459,21 @@ agent_respond(
   approve: true
 )
 ```
+
+### `agent_session_action`
+
+Run a backend thread action on a running session. Supported by Codex only; other harnesses return an error. Actions queue behind a running turn and report through the normal turn output (`agent_output`).
+
+| Parameter | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `session` | `string` | Yes | Running session name or ID |
+| `action` | `compact \| review` | Yes | `compact` summarizes the conversation to free context (`thread/compact/start`). `review` runs Codex's built-in reviewer inline (`review/start`) |
+| `review_target` | `uncommitted \| base_branch \| commit \| custom` | No | Defaults to `base_branch` (the session's worktree base) for worktree sessions, otherwise `uncommitted` |
+| `base_branch` | `string` | No | Branch to diff against for `base_branch` |
+| `commit_sha` | `string` | No | Commit for `commit` |
+| `instructions` | `string` | No | Reviewer instructions for `custom` |
+
+A pre-PR review is an explicit orchestrator step: call `agent_session_action(session, action: "review")` before `agent_pr` when a review pass is wanted. OCA does not insert reviews automatically into worktree PR flows.
 
 ### `agent_request_plan_approval`
 
@@ -501,7 +534,7 @@ Terminate a running session or mark it complete.
 
 ### `agent_stats`
 
-Show aggregate session counts, cost, average duration, and most expensive sessions.
+Show aggregate session counts, cost, average duration, and most expensive sessions. When a Codex session has observed account rate limits (ChatGPT login), the latest primary/secondary usage windows and reset times are appended.
 
 This tool takes no parameters.
 

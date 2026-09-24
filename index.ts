@@ -7,6 +7,7 @@ import { makeAgentSessionsTool } from "./src/tools/agent-sessions";
 import { makeAgentKillTool } from "./src/tools/agent-kill";
 import { makeAgentOutputTool } from "./src/tools/agent-output";
 import { makeAgentRespondTool } from "./src/tools/agent-respond";
+import { makeAgentSessionActionTool } from "./src/tools/agent-session-action";
 import { makeAgentRequestPlanApprovalTool } from "./src/tools/agent-request-plan-approval";
 import { makeAgentRequestWorktreeDecisionTool } from "./src/tools/agent-request-worktree-decision";
 import { makeAgentSendPlanOfferTool } from "./src/tools/agent-send-plan-offer";
@@ -254,6 +255,7 @@ export function register(api: OpenClawPluginApi): void {
   registerCodeAgentTool((ctx: OpenClawPluginToolContext) => makeAgentKillTool(ctx), { optional: false, name: "agent_kill" });
   registerCodeAgentTool((ctx: OpenClawPluginToolContext) => makeAgentOutputTool(ctx), { optional: false, name: "agent_output" });
   registerCodeAgentTool((ctx: OpenClawPluginToolContext) => makeAgentRespondTool(ctx), { optional: false, name: "agent_respond" });
+  registerCodeAgentTool((ctx: OpenClawPluginToolContext) => makeAgentSessionActionTool(ctx), { optional: false, name: "agent_session_action" });
   registerCodeAgentTool((ctx: OpenClawPluginToolContext) => makeAgentRequestPlanApprovalTool(ctx), { optional: false, name: "agent_request_plan_approval" });
   registerCodeAgentTool((ctx: OpenClawPluginToolContext) => makeAgentRequestWorktreeDecisionTool(ctx), { optional: false, name: "agent_request_worktree_decision" });
   registerCodeAgentTool((ctx: OpenClawPluginToolContext) => makeAgentSendPlanOfferTool(ctx), { optional: false, name: "agent_send_plan_offer" });

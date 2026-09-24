@@ -5,7 +5,6 @@ import { nanoid } from "nanoid";
 import { executeRespond } from "./actions/respond";
 import { buildGoalIterationSummary } from "./goal-format";
 import { GoalTaskStore } from "./goal-store";
-import { decideResumeSessionId } from "./resume-policy";
 import type { Session } from "./session";
 import type { SessionManager } from "./session-manager";
 import { routeFromOriginMetadata } from "./session-route";
@@ -503,22 +502,7 @@ export class GoalController {
     const requestedResumeSessionId = resumeRef
       ? (this.sessionManager.resolveBackendConversationId(resumeRef) ?? resumeRef)
       : undefined;
-    const activeResumeSession = resumeRef ? this.sessionManager.resolve(resumeRef) : undefined;
-    const persistedResumeSession = requestedResumeSessionId
-      ? (this.sessionManager.getPersistedSession(requestedResumeSessionId) ?? this.sessionManager.getPersistedSession(resumeRef ?? requestedResumeSessionId))
-      : undefined;
-    const { resumeSessionId } = decideResumeSessionId({
-      requestedResumeSessionId,
-      activeSession: activeResumeSession
-        ? { harnessSessionId: activeResumeSession.harnessSessionId }
-        : undefined,
-      persistedSession: persistedResumeSession
-        ? {
-            harness: persistedResumeSession.harness,
-            backendRef: persistedResumeSession.backendRef,
-          }
-        : undefined,
-    });
+    const resumeSessionId = requestedResumeSessionId;
 
     const config: SessionConfig = {
       prompt,

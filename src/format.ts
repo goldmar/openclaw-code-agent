@@ -18,6 +18,7 @@ import type {
   SessionWorktreeState,
 } from "./types";
 import { getBackendConversationId } from "./session-backend-ref";
+import { formatCodexRateLimits } from "./harness/codex-rate-limits";
 import { formatHarnessModelLabel } from "./session-display";
 
 /** Session shape needed by list formatting utilities. */
@@ -197,8 +198,15 @@ export function formatSessionListing(session: SessionListRenderable): string {
   return lines.join("\n");
 }
 
-/** Render aggregate in-memory usage metrics for `agent_stats`. */
-export function formatStats(metrics: SessionMetrics, runningCount: number): string {
+/**
+ * Render aggregate in-memory usage metrics for `agent_stats`, plus the latest
+ * Codex account rate-limit snapshot observed by any Codex session.
+ */
+export function formatStats(
+  metrics: SessionMetrics,
+  runningCount: number,
+  backendUsageLines: string[] = formatCodexRateLimits(),
+): string {
   const avgDurationMs =
     metrics.sessionsWithDuration > 0
       ? metrics.totalDurationMs / metrics.sessionsWithDuration
@@ -229,6 +237,10 @@ export function formatStats(metrics: SessionMetrics, runningCount: number): stri
       `   💵 $${me.costUsd.toFixed(2)}`,
       `   📝 "${me.prompt}"`,
     );
+  }
+
+  if (backendUsageLines.length > 0) {
+    lines.push(``, `📈 ${backendUsageLines[0]}`, ...backendUsageLines.slice(1).map((line) => ` ${line}`));
   }
 
   return lines.join("\n");

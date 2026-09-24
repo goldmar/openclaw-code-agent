@@ -152,7 +152,7 @@ describe("repo policy resolution", () => {
         fastMode: true,
         resumeWorktreeFrom: "stable-session-1",
         sessionIdOverride: "stable-session-1",
-        clearedPersistedCodexResume: true,
+        rewindTurns: 2,
         worktreeStrategy: "delegate",
       });
 
@@ -184,7 +184,7 @@ describe("repo policy resolution", () => {
       assert.equal(token?.launchFastMode, true);
       assert.equal(token?.launchResumeWorktreeFrom, "stable-session-1");
       assert.equal(token?.launchSessionIdOverride, "stable-session-1");
-      assert.equal(token?.launchClearedPersistedCodexResume, true);
+      assert.equal(token?.launchRewindTurns, 2);
       sm.dispose();
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
@@ -278,15 +278,17 @@ describe("repo policy resolution", () => {
         resumeSessionId: "backend-session-1",
         resumeWorktreeFrom: "stable-session-1",
         sessionIdOverride: "stable-session-1",
-        clearedPersistedCodexResume: true,
+        forkSession: true,
+        rewindTurns: 2,
         worktreeStrategy: "delegate",
       });
 
       assert.equal(spawnConfig?.sessionIdOverride, "stable-session-1");
+      assert.equal(spawnConfig?.rewindTurns, 2);
       assert.equal(spawnConfig?.resumeSessionId, "backend-session-1");
       assert.equal(spawnConfig?.resumeWorktreeFrom, "stable-session-1");
       assert.match(result.text, /ID: stable-session-1/);
-      assert.match(result.text, /historical Codex state cleared/);
+      assert.match(result.text, /Rewind: forking before the last 2 turn/);
       sm.dispose();
     } finally {
       rmSync(storeDir, { recursive: true, force: true });
@@ -675,51 +677,6 @@ describe("repo policy resolution", () => {
 });
 
 describe("SessionWorktreeActionService repo policy planning", () => {
-  it("releases absent native backend worktrees without inspecting completion topology", async () => {
-    const repoDir = mkdtempSync(join(tmpdir(), "openclaw-policy-native-absent-"));
-    const worktreePath = join(repoDir, ".worktrees", "native-absent");
-    try {
-      const service = new SessionWorktreeActionService({
-        shouldRunWorktreeStrategy: () => true,
-        isAlreadyMerged: () => false,
-        resolveWorktreeRepoDir: () => repoDir,
-        getWorktreeCompletionState: () => {
-          throw new Error("absent native backend worktrees should release before topology inspection");
-        },
-        isPrAvailable: () => true,
-      });
-
-      const action = await service.plan({
-        id: "s-native-absent",
-        name: "native-absent",
-        status: "completed",
-        lifecycle: "active",
-        phase: "implementing",
-        worktreePath,
-        worktreeBranch: "agent/native-absent",
-        worktreeStrategy: "ask",
-        originalWorkdir: repoDir,
-        harnessSessionId: "h-native-absent",
-        backendRef: {
-          kind: "codex-app-server",
-          conversationId: "codex-native-absent",
-          worktreeId: "wt-native-absent",
-          worktreePath,
-        },
-      } as any);
-
-      assert.deepEqual(action, {
-        kind: "no-change",
-        repoDir,
-        worktreePath,
-        branchName: "agent/native-absent",
-        nativeBackendWorktree: true,
-      });
-    } finally {
-      rmSync(repoDir, { recursive: true, force: true });
-    }
-  });
-
   it("turns auto-merge into auto-pr for PR-required repos when PRs are available", async () => {
     const { repoDir, worktreePath, branchName } = await createRepoWithWorktree("auto-pr-required");
     try {

@@ -55,6 +55,11 @@ export interface FakeHarness extends AgentHarness {
   lastStreamInput: AsyncIterable<any> | undefined;
   interruptCalled: boolean;
   setPromptConsumptionPaused: (paused: boolean) => void;
+  /** Prompt-stream messages the fake harness consumed, in order. */
+  consumedPrompts: unknown[];
+  /** When set, the session handle exposes `steer()` returning this value. */
+  steerResult?: boolean;
+  steerCalls: string[];
   /** Native plan decisions resolved through resolvePlanDecision (nativePlanDecisions harnesses only). */
   planDecisions: HarnessPlanDecision[];
   /** Whether a native plan-approval request is pending in the fake backend. */
@@ -79,10 +84,11 @@ export function createFakeHarness(
       nativePendingInput: false,
       nativePlanArtifacts: false,
       ...(nativePlanDecisions ? { nativePlanDecisions: true } : {}),
-      worktrees: "plugin-managed",
     },
     planDecisions: [],
     nativePlanRequestPending: false,
+    consumedPrompts: [],
+    steerCalls: [],
     lastLaunchOptions: undefined,
     lastSetPermissionMode: undefined,
     lastStreamInput: undefined,
@@ -117,8 +123,9 @@ export function createFakeHarness(
             while (promptConsumptionPaused) {
               await new Promise<void>((r) => { resumePromptConsumption = r; });
             }
-            const { done: promptDone } = await it.next();
+            const { done: promptDone, value } = await it.next();
             if (promptDone) break;
+            harness.consumedPrompts.push(value);
           }
         })().catch(() => {
           // Best-effort only for test scaffolding.
@@ -160,6 +167,14 @@ export function createFakeHarness(
         async interrupt(): Promise<void> {
           harness.interruptCalled = true;
         },
+        ...(harness.steerResult !== undefined
+          ? {
+              async steer(text: string): Promise<boolean> {
+                harness.steerCalls.push(text);
+                return harness.steerResult === true;
+              },
+            }
+          : {}),
       };
     },
 

@@ -26,7 +26,7 @@ They share substrates (Codex App Server, Claude Code, git worktrees) but solve d
 | --- | --- | --- | --- | --- |
 | Harnesses | ~20 ACP aliases, including `claude`, `codex`, `opencode` | Codex | Claude Code | Claude Code, Codex, OpenCode |
 | Plan review before coding | No (`/acp set-mode plan` has no review UX) | No; turns are forced to Codex `default` collaboration mode | No; Claude Code runs in its default permission mode | Yes: native plan gates, Approve / Revise / Reject buttons, plain-text fallback |
-| Approvals | Blanket `permissionMode` (`approve-all` / `approve-reads` / `deny-all`) plus `/acp permissions` | YOLO by default (`approvalPolicy: "never"`); `guardian` mode uses Codex auto-review | Per-call Allow once / Allow always / Deny relay for native tools | Plan approval is the gate; after approval the session runs with its harness permission mode |
+| Approvals | Blanket `permissionMode` (`approve-all` / `approve-reads` / `deny-all`) plus `/acp permissions` | YOLO by default (`approvalPolicy: "never"`); `guardian` mode uses Codex auto-review | Per-call Allow once / Allow always / Deny relay for native tools | Plan approval gate for every harness; Codex adds `harnesses.codex.permissionProfile` / `approvalPolicy` / `approvalsReviewer`, with Codex approval requests shown as chat buttons |
 | Fork a session | No | Native snapshot fork for supervised Codex sessions | No | Yes (`fork_session`) |
 | Worktrees | No (ACP spawns cannot use managed worktrees) | Runs inside a core managed worktree when placed there | No | Plugin-managed `agent/*` worktrees per session |
 | Merge / PR finish line | No | No | No | Yes: `ask`, `delegate`, `auto-merge`, `auto-pr`, repo policy, `agent_merge` / `agent_pr`, buttons |

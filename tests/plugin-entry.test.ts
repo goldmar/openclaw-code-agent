@@ -423,6 +423,24 @@ describe("plugin entry source", () => {
     assert.equal(pluginManifest.configSchema?.properties?.harnesses?.default?.["claude-code"]?.defaultModel, "opus");
     assert.match(pluginManifest.uiHints?.harnesses?.help ?? "", /"defaultModel":"opus"/);
     assert.equal(pluginManifest.configSchema?.properties?.harnesses?.default?.codex?.fastMode, false);
+    assert.equal(pluginManifest.configSchema?.properties?.harnesses?.default?.codex?.reasoningEffort, undefined);
+    assert.equal(pluginManifest.configSchema?.properties?.harnesses?.default?.codex?.permissionProfile, ":danger-full-access");
+    assert.equal(pluginManifest.configSchema?.properties?.harnesses?.default?.codex?.approvalPolicy, "never");
+    assert.equal(pluginManifest.configSchema?.properties?.harnesses?.default?.codex?.approvalsReviewer, "user");
+    assert.deepEqual(pluginManifest.configSchema?.properties?.harnesses?.additionalProperties?.properties?.permissionProfile?.enum, [
+      ":read-only",
+      ":workspace",
+      ":danger-full-access",
+    ]);
+    assert.deepEqual(pluginManifest.configSchema?.properties?.harnesses?.additionalProperties?.properties?.approvalPolicy?.enum, [
+      "never",
+      "on-request",
+      "untrusted",
+    ]);
+    assert.deepEqual(pluginManifest.configSchema?.properties?.harnesses?.additionalProperties?.properties?.approvalsReviewer?.enum, [
+      "user",
+      "auto_review",
+    ]);
     assert.deepEqual(pluginManifest.configSchema?.properties?.harnesses?.default?.opencode, {});
     assert.match(pluginManifest.uiHints?.harnesses?.help ?? "", /harnesses\.codex\.fastMode=true/);
     assert.match(pluginManifest.uiHints?.harnesses?.help ?? "", /OpenCode is experimental/);
@@ -435,6 +453,7 @@ describe("plugin entry source", () => {
       "agent_kill",
       "agent_output",
       "agent_respond",
+      "agent_session_action",
       "agent_request_plan_approval",
       "agent_request_worktree_decision",
       "agent_send_plan_offer",

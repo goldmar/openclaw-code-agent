@@ -130,7 +130,7 @@ describe("OCA Codex proof fake App Server", () => {
         for await (const message of session.messages) {
           messages.push(message);
           if (message.type === "pending_input") {
-            assert.deepEqual(message.state.options, ["Approve", "Decline"]);
+            assert.deepEqual(message.state.options, ["Approve once", "Decline"]);
             await session.submitPendingInputOption?.(0, { requestId: message.state.requestId });
           }
           if (message.type === "run_completed") break;

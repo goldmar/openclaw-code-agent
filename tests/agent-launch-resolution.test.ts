@@ -575,7 +575,7 @@ describe("resolveAgentLaunchRequest", () => {
     if (result.kind === "resolved") {
       assert.equal(result.resumeSessionId, "backend-thread-1");
       assert.equal(result.resolvedResumeId, "backend-thread-1");
-      assert.equal(result.clearedPersistedCodexResume, false);
+      assert.equal(result.rewindTurns, undefined);
     }
   });
 });

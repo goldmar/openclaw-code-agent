@@ -699,7 +699,6 @@ describe("Session.kill() teardown", () => {
       capabilities: {
         nativePendingInput: false,
         nativePlanArtifacts: false,
-        worktrees: "plugin-managed",
       },
       launch(_options: HarnessLaunchOptions): HarnessSession {
         async function* messages() {
@@ -749,7 +748,6 @@ describe("Session.kill() teardown", () => {
       capabilities: {
         nativePendingInput: true,
         nativePlanArtifacts: true,
-        worktrees: "plugin-managed",
       },
       launch(): HarnessSession {
         async function* messages() {
@@ -790,7 +788,6 @@ describe("Session.kill() teardown", () => {
       capabilities: {
         nativePendingInput: true,
         nativePlanArtifacts: true,
-        worktrees: "plugin-managed",
       },
       launch(): HarnessSession {
         async function* messages() {
@@ -833,7 +830,6 @@ describe("Session.kill() teardown", () => {
       capabilities: {
         nativePendingInput: true,
         nativePlanArtifacts: true,
-        worktrees: "plugin-managed",
       },
       launch(): HarnessSession {
         async function* messages() {
@@ -929,5 +925,86 @@ describe("Session result recording", () => {
     assert.equal(session.result!.session_id, session.harnessSessionId);
     assert.equal(session.result!.is_error, false);
     // Completed — no kill needed
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Steering and thread actions (Codex B10/B12/B13 session plumbing)
+// ---------------------------------------------------------------------------
+
+describe("Session steering and thread actions", () => {
+  async function startWith(harness: FakeHarness, config: Partial<import("../src/types").SessionConfig> = {}): Promise<Session> {
+    registerHarness(harness);
+    const session = new Session(makeSessionConfig({ harness: harness.name, multiTurn: true, permissionMode: "bypassPermissions", ...config }), "steer");
+    await session.start();
+    harness.pushMessage({ type: "init", session_id: `sess-${session.id}` });
+    await tick(20);
+    return session;
+  }
+
+  it("steers a follow-up into the running turn instead of queueing it", async () => {
+    const harness = createFakeHarness("steer-harness-accepts");
+    harness.steerResult = true;
+    const session = await startWith(harness);
+    try {
+      const delivery = await session.sendMessage("also cover the edge case");
+      assert.equal(delivery, "steered");
+      assert.deepEqual(harness.steerCalls, ["also cover the edge case"]);
+      assert.equal(harness.consumedPrompts.length, 1, "only the initial prompt reached the prompt stream");
+    } finally {
+      session.kill("user");
+    }
+  });
+
+  it("queues the follow-up when the harness declines to steer", async () => {
+    const harness = createFakeHarness("steer-harness-declines");
+    harness.steerResult = false;
+    const session = await startWith(harness);
+    try {
+      assert.equal(await session.sendMessage("queue me"), "queued");
+      assert.deepEqual(harness.steerCalls, ["queue me"]);
+      await tick(20);
+      assert.equal(harness.consumedPrompts.length, 2);
+    } finally {
+      session.kill("user");
+    }
+  });
+
+  it("never steers plan-decision messages", async () => {
+    const harness = createFakeHarness("steer-harness-plan");
+    harness.steerResult = true;
+    const session = await startWith(harness, { permissionMode: "plan" });
+    try {
+      session.pendingPlanApproval = true;
+      assert.equal(await session.sendMessage("revise step 2"), "queued");
+      assert.deepEqual(harness.steerCalls, []);
+    } finally {
+      session.kill("user");
+    }
+  });
+
+  it("queues thread actions through the prompt stream only for harnesses that support them", async () => {
+    const plain = createFakeHarness("thread-action-unsupported");
+    const plainSession = await startWith(plain);
+    try {
+      assert.throws(() => plainSession.requestThreadAction({ kind: "compact" }), /does not support the "compact" thread action/);
+    } finally {
+      plainSession.kill("user");
+    }
+
+    const capable = createFakeHarness("thread-action-supported");
+    Object.assign(capable, {
+      capabilities: { ...capable.capabilities, threadActions: ["compact", "review"] },
+      buildThreadActionMessage: (action: unknown) => ({ type: "control", action }),
+    });
+    const session = await startWith(capable);
+    try {
+      session.requestThreadAction({ kind: "review", target: { type: "baseBranch", branch: "main" } });
+      await tick(20);
+      assert.deepEqual(capable.consumedPrompts.at(-1), { type: "control", action: { kind: "review", target: { type: "baseBranch", branch: "main" } } });
+    } finally {
+      session.kill("user");
+    }
+    assert.throws(() => session.requestThreadAction({ kind: "compact" }), /Session is not running/);
   });
 });

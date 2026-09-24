@@ -1,10 +1,5 @@
 import { getDefaultHarnessName } from "./config";
-import { getHarness } from "./harness";
-import type {
-  BackendWorktreeCapability,
-  PersistedSessionInfo,
-  SessionBackendRef,
-} from "./types";
+import type { SessionBackendRef } from "./types";
 
 type SessionIdentity = {
   id?: string;
@@ -38,37 +33,4 @@ export function getPersistedMutationRefs(session: SessionIdentity): string[] {
 
 export function resolveHarnessName(session: { harnessName?: string; persistedHarness?: string }): string {
   return session.harnessName ?? session.persistedHarness ?? getDefaultHarnessName();
-}
-
-export function getBackendWorktreeCapability(
-  session: { harnessName?: string; persistedHarness?: string; backendRef?: SessionBackendRef },
-): BackendWorktreeCapability {
-  if (session.backendRef?.kind === "codex-app-server") return "native-restore";
-  try {
-    return getHarness(resolveHarnessName(session)).capabilities.worktrees;
-  } catch {
-    return "plugin-managed";
-  }
-}
-
-export function supportsNativeBackendWorktreeExecution(capability: BackendWorktreeCapability): boolean {
-  return capability === "native-execution";
-}
-
-export function supportsNativeBackendWorktreeRestore(capability: BackendWorktreeCapability): boolean {
-  return capability === "native-restore";
-}
-
-export function hasNativeBackendWorktreeRef(
-  session: Pick<PersistedSessionInfo, "backendRef"> | Pick<SessionIdentity, "backendRef">,
-): boolean {
-  return Boolean(session.backendRef?.worktreePath || session.backendRef?.worktreeId);
-}
-
-export function usesNativeBackendWorktree(
-  session: { harnessName?: string; persistedHarness?: string; backendRef?: SessionBackendRef },
-): boolean {
-  const capability = getBackendWorktreeCapability(session);
-  return (supportsNativeBackendWorktreeExecution(capability) || supportsNativeBackendWorktreeRestore(capability))
-    && hasNativeBackendWorktreeRef(session);
 }

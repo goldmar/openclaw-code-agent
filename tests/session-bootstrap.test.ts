@@ -318,69 +318,7 @@ describe("prepareSessionBootstrap()", () => {
     }
   });
 
-  it("fails closed when a requested native Codex resume worktree is missing", async () => {
-    const repoDir = mkdtempSync(join(tmpdir(), "session-bootstrap-codex-resume-"));
-    const missingWorktreePath = join(repoDir, ".codex", "worktrees", "abcd", "openclaw");
-    try {
-      git(repoDir, "init", "-b", "main");
-      git(repoDir, "config", "user.name", "Test User");
-      git(repoDir, "config", "user.email", "test@example.com");
-      writeFileSync(join(repoDir, "README.md"), "hello\n", "utf-8");
-      git(repoDir, "add", "README.md");
-      git(repoDir, "commit", "-m", "init");
-
-      const config: SessionConfig = {
-        prompt: "Resume the Codex session",
-        workdir: repoDir,
-        harness: "codex",
-        resumeSessionId: "thread-1",
-        worktreeStrategy: "ask",
-        multiTurn: true,
-        route: {
-          provider: "telegram",
-          target: "12345",
-          sessionKey: "agent:main:telegram:group:12345",
-        },
-      };
-
-      await assert.rejects(
-        async () => await prepareSessionBootstrap(
-          config,
-          "codex-native-resume",
-          (_ref): PersistedSessionInfo | undefined => ({
-            sessionId: "session-1",
-            harnessSessionId: "thread-1",
-            backendRef: {
-              kind: "codex-app-server",
-              conversationId: "thread-1",
-              worktreeId: "abcd",
-              worktreePath: missingWorktreePath,
-            },
-            name: "codex-native-resume",
-            prompt: "Resume the Codex session",
-            workdir: repoDir,
-            status: "killed",
-            lifecycle: "suspended",
-            runtimeState: "stopped",
-            costUsd: 0,
-            route: {
-              provider: "telegram",
-              target: "12345",
-              sessionKey: "agent:main:telegram:group:12345",
-            },
-            worktreePath: missingWorktreePath,
-            worktreeBranch: "agent/codex-native-resume",
-            worktreeStrategy: "ask",
-          }),
-        ),
-        /worktree strategy "ask" was requested, but no isolated worktree was prepared/,
-      );
-    } finally {
-      rmSync(repoDir, { recursive: true, force: true });
-    }
-  });
-
-  it("creates a new plugin-managed worktree for Codex resume launches without a persisted worktree path", async () => {
+  it("fails closed for Codex resumes without persisted worktree metadata, like every other harness", async () => {
     const repoDir = mkdtempSync(join(tmpdir(), "session-bootstrap-codex-resume-no-worktree-"));
     try {
       git(repoDir, "init", "-b", "main");
@@ -405,7 +343,7 @@ describe("prepareSessionBootstrap()", () => {
         },
       };
 
-      const bootstrap = await prepareSessionBootstrap(
+      await assert.rejects(async () => prepareSessionBootstrap(
         config,
         "codex-resume-managed-worktree",
         (_ref): PersistedSessionInfo | undefined => ({
@@ -429,20 +367,15 @@ describe("prepareSessionBootstrap()", () => {
           },
           worktreeStrategy: "ask",
         }),
+      ),
+        /worktree strategy "ask" was requested, but no isolated worktree was prepared/,
       );
-
-      assert.equal(bootstrap.originalWorkdir, repoDir);
-      assert.ok(bootstrap.worktreePath, "Codex resume without persisted worktree should create a managed worktree");
-      assert.equal(bootstrap.actualWorkdir, bootstrap.worktreePath);
-      assert.ok(bootstrap.worktreeBranchName, "managed resume worktree should have a branch");
-      assert.match(bootstrap.effectiveSystemPrompt ?? "", /You are working in a git worktree/);
-      assert.equal(config.resumeSessionId, "thread-no-worktree");
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }
   });
 
-  it("fails closed for non-Codex resumes without persisted worktree metadata when a worktree strategy is requested", async () => {
+  it("fails closed for Claude resumes without persisted worktree metadata when a worktree strategy is requested", async () => {
     const repoDir = mkdtempSync(join(tmpdir(), "session-bootstrap-claude-resume-no-worktree-"));
     try {
       git(repoDir, "init", "-b", "main");
