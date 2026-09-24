@@ -605,10 +605,27 @@ describe("CodexHarness launch settings", () => {
     await nextOfType(iter, "run_completed");
   });
 
-  it("keeps a validated effort displayable after another connection reports fewer efforts", async () => {
-    await collectMessages(launch(new MockCodexClient({ models: [codexCatalogModel("gpt-5.5", ["low", "high"])] })));
-    await collectMessages(launch(new MockCodexClient({ models: [codexCatalogModel("gpt-5.5", ["low"])] })));
-    assert.equal(codexModelSupportsEffort("gpt-5.5", "high"), true);
+  it("reports the effort its own connection applies as backend info", async () => {
+    const rejected = await collectMessages(launch(new MockCodexClient({ models: [codexCatalogModel("gpt-5.5", ["low"])] }), { model: "gpt-5.5", reasoningEffort: "high" }));
+    assert.deepEqual(rejected.find((message) => message.type === "backend_info"), {
+      type: "backend_info",
+      info: { model: "gpt-5.5", reasoningEffort: null, reasoningEffortSupported: false },
+    });
+    const applied = await collectMessages(launch(new MockCodexClient({ models: [codexCatalogModel("gpt-5.5", ["low", "high"])] }), { model: "gpt-5.5", reasoningEffort: "high" }));
+    assert.deepEqual(applied.find((message) => message.type === "backend_info"), {
+      type: "backend_info",
+      info: { model: "gpt-5.5", reasoningEffort: "high", reasoningEffortSupported: true },
+    });
+    assert.equal(codexModelSupportsEffort("gpt-5.5", "high"), true, "the shared display catalog is a union fallback");
+  });
+
+  it("releases connection-scoped rate-limit snapshots when the connection closes", async () => {
+    await collectMessages(launch(new MockCodexClient({ accountType: "chatgpt", accountId: null })));
+    await new Promise<void>((resolve) => { setTimeout(resolve, 10); });
+    assert.equal(listCodexRateLimits().length, 0);
+    await collectMessages(launch(new MockCodexClient({ accountType: "chatgpt", accountId: "acct-kept" })));
+    await new Promise<void>((resolve) => { setTimeout(resolve, 10); });
+    assert.equal(getCodexRateLimits("acct-kept")?.snapshot.primary?.usedPercent, 12);
   });
 
   it("refreshes model/list on every connection instead of trusting another server's catalog", async () => {

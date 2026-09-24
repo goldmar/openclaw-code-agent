@@ -60,6 +60,11 @@ describe("notification reasoning visibility", () => {
     assert.equal(makeSession().reasoningEffort, undefined);
   });
 
+  it("prefers the Codex session's own reported effort support over the shared catalog", () => {
+    assert.equal(formatHarnessModelLabel({ harness: "codex", model: "gpt-6-sol", reasoningEffort: "max", reasoningEffortSupported: false }), "codex | gpt-6-sol");
+    assert.equal(formatHarnessModelLabel({ harness: "codex", model: "custom-model", reasoningEffort: "high", reasoningEffortSupported: true }), "codex | custom-model | reasoning: high");
+  });
+
   it("uses Codex model/list efforts and falls back to universal levels before the catalog loads", () => {
     assert.equal(formatHarnessModelLabel({ harness: "codex", model: "gpt-6-luna", reasoningEffort: "max" }), "codex | gpt-6-luna | reasoning: max");
     assert.equal(formatHarnessModelLabel({ harness: "codex", model: "gpt-5.5", reasoningEffort: "max" }), "codex | gpt-5.5");

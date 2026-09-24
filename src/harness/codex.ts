@@ -14,6 +14,7 @@ import { getHarnessConfig } from "../config";
 import type { PendingInputState, PlanArtifact, PlanArtifactStep, ThreadAction } from "../types";
 import type {
   AgentHarness,
+  HarnessBackendInfo,
   HarnessLaunchOptions,
   HarnessSession,
 } from "./types";
@@ -63,7 +64,13 @@ import {
   type CodexPendingRequest,
 } from "./codex-protocol";
 import { refreshCodexModelCatalog, type CodexModelInfo } from "./codex-model-catalog";
-import { describeCodexLimitReset, mergeCodexRateLimitsUpdate, recordCodexRateLimits, unreportedCodexAccountKey } from "./codex-rate-limits";
+import {
+  describeCodexLimitReset,
+  mergeCodexRateLimitsUpdate,
+  recordCodexRateLimits,
+  releaseCodexRateLimits,
+  unreportedCodexAccountKey,
+} from "./codex-rate-limits";
 import type { ThreadForkResponse, ThreadResumeResponse, ThreadStartResponse } from "./codex-app-server-protocol";
 import type { AccountRateLimitsUpdatedNotification } from "./codex-app-server-protocol/v2/AccountRateLimitsUpdatedNotification";
 import type { AgentMessageDeltaNotification } from "./codex-app-server-protocol/v2/AgentMessageDeltaNotification";
@@ -624,12 +631,26 @@ export class CodexHarness implements AgentHarness {
       return model;
     };
 
+    let reportedBackendInfo: string | undefined;
     const resolveTurnEffort = (model: string): string | undefined => {
       const effort = options.reasoningEffort;
-      if (!effort) return undefined;
       const wanted = model.toLowerCase();
       const info = connectionModels?.find((entry) => entry.id.toLowerCase() === wanted || entry.model.toLowerCase() === wanted);
-      if (info && !info.supportedReasoningEfforts.includes(effort)) {
+      const supported = effort && info ? info.supportedReasoningEfforts.includes(effort) : undefined;
+      // Report what this connection actually applies so status lines never
+      // claim an effort its own server rejected.
+      const backendInfo: HarnessBackendInfo = {
+        model,
+        ...(effort ? { reasoningEffort: supported === false ? null : effort } : {}),
+        ...(supported !== undefined ? { reasoningEffortSupported: supported } : {}),
+      };
+      const serialized = JSON.stringify(backendInfo);
+      if (serialized !== reportedBackendInfo) {
+        reportedBackendInfo = serialized;
+        queue.enqueue({ type: "backend_info", info: backendInfo });
+      }
+      if (!effort) return undefined;
+      if (supported === false) {
         logCodexHarnessDiagnostic("turn.effort.unsupported", { model, effort });
         return undefined;
       }
@@ -865,6 +886,7 @@ export class CodexHarness implements AgentHarness {
       } finally {
         logCodexHarnessDiagnostic("client.close.start", threadDiagnosticFields({ threadId, turnId: lastTurnId }));
         await client.close().catch((): undefined => undefined);
+        if (rateLimitAccountKey) releaseCodexRateLimits(rateLimitAccountKey);
         logCodexHarnessDiagnostic("client.close.done", threadDiagnosticFields({ threadId, turnId: lastTurnId }));
         queue.close();
       }

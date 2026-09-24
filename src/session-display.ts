@@ -5,7 +5,8 @@ const CODEX_UNIVERSAL_EFFORTS: ReadonlySet<string> = new Set(["low", "medium", "
 
 /**
  * Model/effort facts for display. `reasoningEffortSupported` is the backend's
- * own report (Claude: system/init effort or supportedModels() levels); when it
+ * own report (Claude: system/init effort or supportedModels() levels; Codex:
+ * the session's own connection's model/list); when it
  * is known it overrides the static capability tables below.
  */
 export type ReasoningDisplayInput = {
@@ -48,7 +49,7 @@ export function formatReasoningMetadataSuffix(input: ReasoningDisplayInput): str
 function formatReasoningSuffix(input: ReasoningDisplayInput): string {
   const effort = input.reasoningEffort;
   if (!effort || !REASONING_EFFORTS.includes(effort)) return "";
-  if (input.harness === "claude-code" && typeof input.reasoningEffortSupported === "boolean") {
+  if ((input.harness === "claude-code" || input.harness === "codex") && typeof input.reasoningEffortSupported === "boolean") {
     return input.reasoningEffortSupported ? ` | reasoning: ${effort}` : "";
   }
   // Capability checks use the base ID consistently; display retains the exact ID.

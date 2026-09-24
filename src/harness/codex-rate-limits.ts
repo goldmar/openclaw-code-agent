@@ -17,6 +17,7 @@ export interface CodexRateLimitState {
 }
 
 let unreportedAccountCounter = 0;
+const UNREPORTED_PREFIX = "unreported-account-";
 
 /**
  * Key for a connection whose account id is unknown (read failed or the
@@ -24,7 +25,7 @@ let unreportedAccountCounter = 0;
  */
 export function unreportedCodexAccountKey(): string {
   unreportedAccountCounter += 1;
-  return `unreported-account-${unreportedAccountCounter}`;
+  return `${UNREPORTED_PREFIX}${unreportedAccountCounter}`;
 }
 
 /**
@@ -69,6 +70,15 @@ export function mergeCodexRateLimitsUpdate(accountKey: string, update: RateLimit
     ordinaryUsageAllowed: previous?.ordinaryUsageAllowed ?? null,
     observedAt: now,
   });
+}
+
+/**
+ * Drop a connection-scoped snapshot when its connection closes. Snapshots for
+ * reported account ids stay (bounded by the number of distinct accounts);
+ * unreported keys are per connection and would otherwise accumulate.
+ */
+export function releaseCodexRateLimits(accountKey: string): void {
+  if (accountKey.startsWith(UNREPORTED_PREFIX)) byAccount.delete(accountKey);
 }
 
 export function getCodexRateLimits(accountKey: string): CodexRateLimitState | undefined {

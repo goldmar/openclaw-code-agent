@@ -44,9 +44,9 @@ function toInfo(model: Model): CodexModelInfo {
 
 /**
  * Merge one connection's `model/list` into the process-wide display catalog.
- * Efforts are unioned per model so a session validated against its own
- * connection keeps its `reasoning:` label when another connection (other
- * CODEX_HOME/account/version) reports a narrower set.
+ * Efforts are unioned per model. This union is only a fallback for rendering
+ * before a live session reports its own connection's verdict (the harness
+ * emits `backend_info.reasoningEffortSupported`, which display prefers).
  */
 export function recordCodexModelCatalog(models: Model[], now = Date.now()): void {
   const merged = new Map((catalog?.models ?? []).map((entry) => [entry.id.toLowerCase(), entry]));
