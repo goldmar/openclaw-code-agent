@@ -10,11 +10,11 @@
       "license": "MIT",
       "dependencies": {
         "@anthropic-ai/claude-agent-sdk": "0.3.278",
-        "@anthropic-ai/sdk": "0.125.0",
+        "@anthropic-ai/sdk": "0.127.0",
         "@hono/node-server": "2.1.1",
         "@modelcontextprotocol/sdk": "1.30.0",
         "express-rate-limit": "8.7.0",
-        "fast-uri": "3.1.7",
+        "fast-uri": "3.1.8",
         "hono": "4.13.7",
         "ip-address": "10.7.0",
         "qs": "6.16.0",
@@ -168,9 +168,9 @@
       ]
     },
     "node_modules/@anthropic-ai/sdk": {
-      "version": "0.125.0",
-      "resolved": "https://registry.npmjs.org/@anthropic-ai/sdk/-/sdk-0.125.0.tgz",
-      "integrity": "sha512-Hq5wYlXupzJ9M1Fzqjqa3hObcuigEXVZJqSYDgeZGM3wF4qrNERM5Z1OOAeoT9rlod8awJ3uYyJjbQXp1ckIGg==",
+      "version": "0.127.0",
+      "resolved": "https://registry.npmjs.org/@anthropic-ai/sdk/-/sdk-0.127.0.tgz",
+      "integrity": "sha512-OKiVbG9LHCxjn4fBJZJFy/Bz3hqE1RYpwaeSEDNheQnvz0XNKmGT/Lhkz2Sf1a27Ldt3vVv+BkU81I0U/8EpoQ==",
       "license": "MIT",
       "dependencies": {
         "json-schema-to-ts": "^3.1.1",
@@ -643,9 +643,9 @@
       "license": "Unlicense"
     },
     "node_modules/fast-uri": {
-      "version": "3.1.7",
-      "resolved": "https://registry.npmjs.org/fast-uri/-/fast-uri-3.1.7.tgz",
-      "integrity": "sha512-dOvZVzjdZdz7phd9v6jCbwxrBW3fK6n8Rc0CtdmM4bumzMnxywBYhuph6J819RRw/ku+rLbelwfMunktuzVVHg==",
+      "version": "3.1.8",
+      "resolved": "https://registry.npmjs.org/fast-uri/-/fast-uri-3.1.8.tgz",
+      "integrity": "sha512-GZMtZUTNRpOVIECoXwLNZS5xUGE+mVNbTB8h/7Rwh2TFWcBQiPzTgyZi05BF9UMZKkLJv8XBRJTlU7zg8+ZfMg==",
       "funding": [
         {
           "type": "github",
