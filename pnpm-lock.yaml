@@ -15,7 +15,7 @@ overrides:
   brace-expansion@>=4.0.0 <5.0.7: '>=5.0.7'
   path-to-regexp@>=8.0.0 <8.4.0: '>=8.4.0'
   '@anthropic-ai/sdk@<0.93.0': 0.93.0
-  ip-address@<10.3.1: 10.3.1
+  ip-address@<10.7.2: 10.7.2
   fast-uri@<3.1.7: 3.1.7
   qs@<6.16.0: 6.16.0
   hono@<4.13.5: 4.13.7
@@ -1332,10 +1332,6 @@ packages:
 
   inherits@2.0.4:
     resolution: {integrity: sha512-k/vGaX4/Yla3WzyMCvTQOXYeIHvqOKtnqBduzTHpzpQZzAskKMhZ2K+EnBiSM9zGSoIFeMpXKxa4dYeZIQqewQ==}
-
-  ip-address@10.3.1:
-    resolution: {integrity: sha512-1e9d3kb97NHJTIJDZW9rKqW2h6+dFa50Dy0fpPSMQp2ADje5gvKsXmdiK6dwY5t76TaTt5+P5N1Y/LoToIxP6g==}
-    engines: {node: '>= 12'}
 
   ip-address@10.7.2:
     resolution: {integrity: sha512-7H/2gFSIitxc0hG3nOI1glS8QLo/EHBFFLk8vEUjXY/xu0AdL8jZ9U1IzO2PUm0d2D/ofQcAifb0g6OBkt8U7w==}
@@ -2886,7 +2882,7 @@ snapshots:
     dependencies:
       debug: 4.4.3
       express: 5.2.1
-      ip-address: 10.3.1
+      ip-address: 10.7.2
     transitivePeerDependencies:
       - supports-color
 
@@ -3111,8 +3107,6 @@ snapshots:
   import-meta-resolve@4.2.0: {}
 
   inherits@2.0.4: {}
-
-  ip-address@10.3.1: {}
 
   ip-address@10.7.2: {}
 
