@@ -15,6 +15,9 @@ import {
 } from "./agent-launch-resolution";
 import { resolveSessionTaskLifecycle } from "../session-task-lifecycle";
 import { buildResumedPlanState } from "../plan-decision-state";
+import { createLogger } from "../logger";
+
+const log = createLogger("agent-launch");
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -161,7 +164,7 @@ export function makeAgentLaunchTool(ctx: OpenClawPluginToolContext) {
       // Guard: agentId is NOT a valid parameter for agent_launch. It belongs to sessions_spawn (OpenClaw sub-agents).
       // If present in params, it was passed by mistake — log a warning and ignore it.
       if (params.agentId) {
-        console.warn(`[agent_launch] ⚠️ agentId="${params.agentId}" was passed as a parameter — this is WRONG. agentId is only for sessions_spawn (OpenClaw sub-agents), not agent_launch (CC sessions). The field is being ignored. ctx.agentId="${ctx.agentId}" will be used for origin routing instead.`);
+        log.warn(`[agent_launch] ⚠️ agentId="${params.agentId}" was passed as a parameter — this is WRONG. agentId is only for sessions_spawn (OpenClaw sub-agents), not agent_launch (CC sessions). The field is being ignored. ctx.agentId="${ctx.agentId}" will be used for origin routing instead.`);
       }
 
       try {

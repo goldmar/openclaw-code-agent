@@ -1,8 +1,10 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "fs";
+import { existsSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
-import { dirname, join } from "path";
+import { join } from "path";
+import { saveJsonFile } from "openclaw/plugin-sdk/json-store";
 import type { PersistedSessionInfo, RepoPolicyRecord, SessionActionToken } from "./types";
-import { resolveOpenclawHomeDir } from "./openclaw-paths";
+import { SESSION_OUTPUT_FILE_PREFIX, SESSION_OUTPUT_FILE_SUFFIX } from "./session-output";
+import { resolveOpenClawStateDir, resolveSessionOutputDir } from "./state-paths";
 import {
   normalizeActionToken,
   normalizePersistedEntry,
@@ -10,6 +12,9 @@ import {
   STORE_SCHEMA_VERSION,
   type SessionStoreSchema,
 } from "./session-store-normalization";
+import { createLogger } from "./logger";
+
+const log = createLogger("session-store-storage");
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object";
@@ -20,7 +25,7 @@ function errorMessage(err: unknown): string {
 }
 
 function logSessionStoreDiagnostic(event: string, fields: Record<string, unknown>): void {
-  console.warn(JSON.stringify({
+  log.warn(JSON.stringify({
     component: "SessionStore",
     event,
     at: new Date().toISOString(),
@@ -49,17 +54,34 @@ function getAvailableArchivePath(indexPath: string, archivePrefix: string, now: 
   return undefined;
 }
 
-function getTmpOutputFilePaths(): string[] {
-  const tmpDir = tmpdir();
-  return readdirSync(tmpDir)
-    .filter((file) => file.startsWith("openclaw-agent-") && file.endsWith(".txt"))
-    .map((file) => join(tmpDir, file));
+function listSessionOutputFiles(dir: string): string[] {
+  try {
+    return readdirSync(dir)
+      .filter((file) => file.startsWith(SESSION_OUTPUT_FILE_PREFIX) && file.endsWith(SESSION_OUTPUT_FILE_SUFFIX))
+      .map((file) => join(dir, file));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Output files live in the plugin state dir. Releases before 5.0.0 wrote them to
+ * the OS temp dir; those legacy files are still honored by stored `outputPath`
+ * references and are aged out by the same maintenance cleanup.
+ */
+function getSessionOutputFilePaths(): string[] {
+  const outputDir = resolveSessionOutputDir();
+  const legacyTmpDir = tmpdir();
+  return [
+    ...listSessionOutputFiles(outputDir),
+    ...(legacyTmpDir === outputDir ? [] : listSessionOutputFiles(legacyTmpDir)),
+  ];
 }
 
 export function resolveSessionIndexPath(env: NodeJS.ProcessEnv): string {
   const explicit = env.OPENCLAW_CODE_AGENT_SESSIONS_PATH?.trim();
   if (explicit) return explicit;
-  return join(resolveOpenclawHomeDir(env), "code-agent-sessions.json");
+  return join(resolveOpenClawStateDir(env), "code-agent-sessions.json");
 }
 
 export function saveSessionStoreIndex(
@@ -69,18 +91,16 @@ export function saveSessionStoreIndex(
   repoPolicies: RepoPolicyRecord[] = [],
 ): void {
   try {
-    mkdirSync(dirname(indexPath), { recursive: true });
-    const tmp = indexPath + ".tmp";
     const payload: SessionStoreSchema = {
       schemaVersion: STORE_SCHEMA_VERSION,
       sessions,
       actionTokens,
       repoPolicies,
     };
-    writeFileSync(tmp, JSON.stringify(payload, null, 2), "utf-8");
-    renameSync(tmp, indexPath);
+    // Host json-store: private (0600) file, fsync'd temp write, atomic rename.
+    saveJsonFile(indexPath, payload);
   } catch (err: unknown) {
-    console.warn(`[SessionStore] Failed to save session index: ${errorMessage(err)}`);
+    log.warn(`[SessionStore] Failed to save session index: ${errorMessage(err)}`);
   }
 }
 
@@ -89,14 +109,14 @@ export function archiveLegacySessionIndex(indexPath: string, reason: string): bo
     if (!existsSync(indexPath)) return false;
     const archivedPath = getAvailableArchivePath(indexPath, "legacy");
     if (!archivedPath) {
-      console.warn("[SessionStore] Failed to archive legacy session store: no available archive path");
+      log.warn("[SessionStore] Failed to archive legacy session store: no available archive path");
       return false;
     }
     renameSync(indexPath, archivedPath);
-    console.warn(`[SessionStore] Breaking upgrade: archived ${reason} session store to ${archivedPath}. Legacy sessions are not loaded by this release.`);
+    log.warn(`[SessionStore] Breaking upgrade: archived ${reason} session store to ${archivedPath}. Legacy sessions are not loaded by this release.`);
     return true;
   } catch (err: unknown) {
-    console.warn(`[SessionStore] Failed to archive legacy session store: ${errorMessage(err)}`);
+    log.warn(`[SessionStore] Failed to archive legacy session store: ${errorMessage(err)}`);
     return false;
   }
 }
@@ -110,20 +130,20 @@ export function archiveLegacyCodexEntries(indexPath: string, entries: unknown[])
     if (entries.length === 0) return;
     const archivedPath = getAvailableArchivePath(indexPath, "codex-sdk-legacy");
     if (!archivedPath) {
-      console.warn("[SessionStore] Failed to archive legacy Codex SDK sessions: no available archive path");
+      log.warn("[SessionStore] Failed to archive legacy Codex SDK sessions: no available archive path");
       return;
     }
     writeFileSync(archivedPath, JSON.stringify(entries, null, 2), "utf-8");
-    console.warn(`[SessionStore] Breaking Codex transport upgrade: archived ${entries.length} legacy Codex SDK session(s) to ${archivedPath}. They are not loaded by the App Server backend.`);
+    log.warn(`[SessionStore] Breaking Codex transport upgrade: archived ${entries.length} legacy Codex SDK session(s) to ${archivedPath}. They are not loaded by the App Server backend.`);
   } catch (err: unknown) {
-    console.warn(`[SessionStore] Failed to archive legacy Codex SDK sessions: ${errorMessage(err)}`);
+    log.warn(`[SessionStore] Failed to archive legacy Codex SDK sessions: ${errorMessage(err)}`);
   }
 }
 
-export function cleanupTmpOutputFiles(now: number, maxAgeMs: number, referencedPaths: Iterable<string> = []): void {
+export function cleanupSessionOutputFiles(now: number, maxAgeMs: number, referencedPaths: Iterable<string> = []): void {
   try {
     const referenced = new Set(referencedPaths);
-    for (const filePath of getTmpOutputFilePaths()) {
+    for (const filePath of getSessionOutputFilePaths()) {
       if (referenced.has(filePath)) continue;
       try {
         const mtime = statSync(filePath).mtimeMs;
@@ -139,11 +159,11 @@ export function cleanupTmpOutputFiles(now: number, maxAgeMs: number, referencedP
   }
 }
 
-export function getNextTmpOutputCleanupAt(now: number, maxAgeMs: number, referencedPaths: Iterable<string> = []): number | undefined {
+export function getNextSessionOutputCleanupAt(now: number, maxAgeMs: number, referencedPaths: Iterable<string> = []): number | undefined {
   try {
     const referenced = new Set(referencedPaths);
     let nextCleanupAt: number | undefined;
-    for (const filePath of getTmpOutputFilePaths()) {
+    for (const filePath of getSessionOutputFilePaths()) {
       if (referenced.has(filePath)) continue;
       try {
         const expiresAt = statSync(filePath).mtimeMs + maxAgeMs;
@@ -162,7 +182,7 @@ export function getNextTmpOutputCleanupAt(now: number, maxAgeMs: number, referen
 export function cleanupOrphanOutputFiles(referencedPaths: Iterable<string>): void {
   try {
     const referenced = new Set(referencedPaths);
-    for (const filePath of getTmpOutputFilePaths()) {
+    for (const filePath of getSessionOutputFilePaths()) {
       if (referenced.has(filePath)) continue;
       try {
         unlinkSync(filePath);
@@ -292,7 +312,7 @@ export function loadSessionStoreIndex(args: LoadIndexArgs): void {
       const policy = normalizeRepoPolicyRecord(candidate);
       if (!policy) {
         skippedInvalidRepoPolicy = true;
-        console.warn("[SessionStore] Skipping invalid repo policy entry while loading session store.");
+        log.warn("[SessionStore] Skipping invalid repo policy entry while loading session store.");
         continue;
       }
       policies.push(policy);

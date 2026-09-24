@@ -15,6 +15,9 @@ import type { PersistedSessionInfo, SessionActionKind, SessionActionToken } from
 import { getRepoPolicyOption, validateRepoPolicyForPrAvailability } from "./repo-policy";
 import { assessResumeCandidate } from "./session-resume";
 import { resolveCurrentPlanDecisionVersion, tokenMatchesAppliedPlanApproval } from "./plan-decision-state";
+import { createLogger } from "./logger";
+
+const log = createLogger("callback-handler");
 
 type InteractiveChannel = "telegram" | "discord";
 type InteractiveCallbackContext = PluginInteractiveTelegramHandlerContext | PluginInteractiveDiscordHandlerContext;
@@ -75,7 +78,7 @@ async function waitForPlanDecisionOperation(operation: Promise<unknown>): Promis
     await operation;
   } catch (err) {
     const errText = err instanceof Error ? err.message : String(err);
-    console.warn(`[callback-handler] Prior plan decision callback failed while another callback was waiting: ${errText}`);
+    log.warn(`[callback-handler] Prior plan decision callback failed while another callback was waiting: ${errText}`);
   }
 }
 
@@ -122,7 +125,7 @@ async function clearWorktreeDecisionButtons(
       return result.textDelivered;
     } catch (err) {
       const errText = err instanceof Error ? err.message : String(err);
-      console.warn(`[callback-handler] Failed to clear Telegram worktree prompt buttons: ${errText}`);
+      log.warn(`[callback-handler] Failed to clear Telegram worktree prompt buttons: ${errText}`);
       return false;
     }
   }
@@ -135,7 +138,7 @@ async function clearWorktreeDecisionButtons(
     } catch (err) {
       if (isMessageNotModifiedError(err)) return false;
       const errText = err instanceof Error ? err.message : String(err);
-      console.warn(`[callback-handler] Failed to clear Discord worktree components: ${errText}`);
+      log.warn(`[callback-handler] Failed to clear Discord worktree components: ${errText}`);
     }
   }
 
@@ -144,7 +147,7 @@ async function clearWorktreeDecisionButtons(
       await responder.clearButtons();
     } catch (err) {
       const errText = err instanceof Error ? err.message : String(err);
-      console.warn(`[callback-handler] Failed to clear Discord worktree buttons: ${errText}`);
+      log.warn(`[callback-handler] Failed to clear Discord worktree buttons: ${errText}`);
     }
   } else if (!alreadyAcknowledged && typeof responder.acknowledge === "function") {
     await responder.acknowledge();
@@ -351,7 +354,7 @@ async function clearInteractiveState(
           return { textDelivered: true };
         }
         const errText = err instanceof Error ? err.message : String(err);
-        console.warn(`[callback-handler] Failed to edit Telegram worktree prompt before clearing buttons: ${errText}`);
+        log.warn(`[callback-handler] Failed to edit Telegram worktree prompt before clearing buttons: ${errText}`);
       }
     }
     if (forceTelegramMarkupEdit && typeof responder.editButtons === "function") {
@@ -365,7 +368,7 @@ async function clearInteractiveState(
           return { textDelivered: false };
         }
         const errText = err instanceof Error ? err.message : String(err);
-        console.warn(`[callback-handler] Failed to edit Telegram button markup before clearing buttons: ${errText}`);
+        log.warn(`[callback-handler] Failed to edit Telegram button markup before clearing buttons: ${errText}`);
       }
     }
     const callbackMessageText = "callback" in ctx && typeof ctx.callback?.messageText === "string"
@@ -386,7 +389,7 @@ async function clearInteractiveState(
           return { textDelivered: false };
         }
         const errText = err instanceof Error ? err.message : String(err);
-        console.warn(`[callback-handler] Failed to edit Telegram message markup before clearing buttons: ${errText}`);
+        log.warn(`[callback-handler] Failed to edit Telegram message markup before clearing buttons: ${errText}`);
       }
     }
     await clearTelegramButtons(responder);
@@ -409,13 +412,13 @@ async function clearInteractiveState(
           return { textDelivered: false };
         }
         if (typeof text !== "string" && typeof responder.acknowledge !== "function") {
-          console.warn("[callback-handler] clearComponents failed with empty-message error and no acknowledge fallback available");
+          log.warn("[callback-handler] clearComponents failed with empty-message error and no acknowledge fallback available");
         }
       } else if (typeof text !== "string") {
         throw err;
       } else {
         const errText = err instanceof Error ? err.message : String(err);
-        console.warn(`[callback-handler] clearComponents failed before text fallback: ${errText}`);
+        log.warn(`[callback-handler] clearComponents failed before text fallback: ${errText}`);
       }
     }
   }
@@ -431,7 +434,7 @@ async function clearInteractiveState(
         return { textDelivered: true };
       }
       const errText = err instanceof Error ? err.message : String(err);
-      console.warn(`[callback-handler] Failed to edit worktree prompt before clearing interactive state: ${errText}`);
+      log.warn(`[callback-handler] Failed to edit worktree prompt before clearing interactive state: ${errText}`);
       if (typeof responder.clearButtons === "function") {
         await responder.clearButtons();
       }
@@ -459,7 +462,7 @@ async function acknowledgeCallback(ctx: InteractiveCallbackContext): Promise<boo
     return true;
   } catch (err) {
     const errText = err instanceof Error ? err.message : String(err);
-    console.warn(`[callback-handler] Failed to acknowledge callback before processing: ${errText}`);
+    log.warn(`[callback-handler] Failed to acknowledge callback before processing: ${errText}`);
     return false;
   }
 }
@@ -482,13 +485,13 @@ async function rejectStaleAction(
     await clear();
   } catch (err) {
     const errText = err instanceof Error ? err.message : String(err);
-    console.warn(`[callback-handler] Failed to clear stale callback controls: ${errText}`);
+    log.warn(`[callback-handler] Failed to clear stale callback controls: ${errText}`);
   }
   try {
     await replyText(ctx, staleActionMessage);
   } catch (err) {
     const errText = err instanceof Error ? err.message : String(err);
-    console.warn(`[callback-handler] Failed to report stale callback: ${errText}`);
+    log.warn(`[callback-handler] Failed to report stale callback: ${errText}`);
   }
 }
 
@@ -503,7 +506,7 @@ async function clearUpdateActionButtons(
     });
   } catch (err) {
     const errText = err instanceof Error ? err.message : String(err);
-    console.warn(`[callback-handler] Failed to clear update action buttons; continuing approved action: ${errText}`);
+    log.warn(`[callback-handler] Failed to clear update action buttons; continuing approved action: ${errText}`);
   }
 }
 
@@ -740,7 +743,7 @@ export function createCallbackHandler(
           }
         } catch (err) {
           const errText = err instanceof Error ? err.message : String(err);
-          console.warn(`[callback-handler] Failed to submit question-answer callback: ${errText}`);
+          log.warn(`[callback-handler] Failed to submit question-answer callback: ${errText}`);
           await replyText(ctx, retryableQuestionAnswerFailureMessage);
           return { handled: true };
         } finally {
@@ -1028,7 +1031,7 @@ export function createCallbackHandler(
               tokenHash: hashDiagnosticToken(tokenId),
               reason: "reply_failed",
             });
-            console.warn(`[callback-handler] OpenClaw Code Agent update succeeded, but the confirmation reply failed: ${err instanceof Error ? err.message : String(err)}`);
+            log.warn(`[callback-handler] OpenClaw Code Agent update succeeded, but the confirmation reply failed: ${err instanceof Error ? err.message : String(err)}`);
           }
           break;
         }

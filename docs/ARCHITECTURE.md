@@ -18,9 +18,9 @@ SessionManager
   -> SessionInteractionService
   -> SessionWorktreeController
   -> WakeDispatcher
-  -> OpenClaw runtime channel outbound adapter
-  -> openclaw gateway call chat.send
-  -> openclaw system event --mode now
+  -> openclaw/plugin-sdk/channel-outbound sendDurableMessageBatch (direct notifications)
+  -> openclaw gateway call chat.send (orchestrator wakes)
+  -> api.runtime.system.enqueueSystemEvent + requestHeartbeat (wake fallback)
 
 Interactive callbacks (Telegram / Discord)
   -> CallbackHandler
@@ -61,7 +61,7 @@ The overlap is substrate, not responsibility. Both the core bundled `codex` plug
 - the shared interactive callback handlers for Telegram and Discord
 - the background session service
 
-Service startup loads config, instantiates `SessionManager`, restores persisted state, and runs orphan worktree cleanup.
+Service startup loads config, instantiates `SessionManager`, restores persisted state, and bootstraps the maintenance schedules (worktree retention cleanup, reminders, output-file cleanup). There is no startup sweep of unmanaged worktree directories.
 
 ### `SessionManager`
 
@@ -102,7 +102,7 @@ Plan-gated sessions also persist deterministic approval/execution context:
 - the current effective permission mode
 - an explicit approval/execution state such as `awaiting_approval`, `approved_then_implemented`, `implemented_without_required_approval`, or `not_plan_gated`
 
-When the OpenClaw runtime exposes `api.runtime.tasks.async.managedFlows`, sessions also mirror high-level lifecycle progress into a gateway-owned flow record. The adapter captures each lifecycle event and serializes its asynchronous mutations per session, using the latest completed flow revision. It does not fall back to the deprecated synchronous task API. Mirroring remains opportunistic when the async surface is absent or a mutation fails.
+When the OpenClaw runtime exposes `api.runtime.tasks.async.managedFlows`, sessions also mirror high-level lifecycle progress into a gateway-owned flow record. The adapter captures each lifecycle event and serializes its asynchronous mutations per session, using the latest completed flow revision. It does not fall back to the deprecated synchronous task API. Mirroring remains opportunistic when the async surface is absent or a mutation fails. Flows are created with `tryCreateManaged`; a user stop records `requestCancel` so the host settles the flow as `cancelled`. The mirror also honors host-side cancellation (`openclaw tasks flow cancel`): it re-reads the flow every 15 s and inspects every mutation result, and a cancel intent stops the session through `SessionManager.kill`.
 
 Service startup joins persisted mirror reconciliation before exposing the session manager or starting maintenance. Terminal persistence waits for mirror finalization, and service shutdown drains pending mirror and terminal work before disposing the manager and clearing the runtime. Synchronous plugin registration and session construction remain unchanged. Published OpenClaw 2026.9.4 remains supported without the optional mirror; no synchronous or legacy mirror surface is consulted.
 
@@ -134,10 +134,10 @@ Boundary note:
 
 `src/wake-dispatcher.ts` owns outbound lifecycle delivery:
 
-- direct user-notification path: OpenClaw runtime channel outbound adapters
+- direct user-notification path: the host durable outbound queue (`sendDurableMessageBatch` from `openclaw/plugin-sdk/channel-outbound`)
 - wake path: `openclaw gateway call chat.send`
-- fallback path: `openclaw system event --mode now`
-- bounded retries
+- fallback path: in-process `api.runtime.system.enqueueSystemEvent` plus an immediate `requestHeartbeat`
+- bounded retries for `chat.send` and system events; direct sends are single-attempt because the host queue owns retry of an admitted send
 - per-session retry timers
 - structured delivery logs
 - no per-instance process signal hooks
@@ -146,8 +146,8 @@ Boundary note:
 
 Security boundary note:
 
-- direct notifications use the gateway-owned in-process outbound adapter instead of shelling back into `openclaw message send`, avoiding service re-entry while preserving account and topic/thread routing
-- Telegram and Discord interactive direct notifications share the same gateway-owned presentation contract; only callback/routing details remain provider-specific
+- direct notifications use the gateway-owned durable outbound queue in-process instead of shelling back into `openclaw message send`, avoiding service re-entry while preserving account and topic/thread routing
+- Telegram and Discord interactive direct notifications send the same channel-agnostic `presentation`; core renders the native buttons, and only callback/routing details remain provider-specific
 
 ### Notification Idempotency
 
@@ -256,8 +256,9 @@ Persisted session storage exists to make sessions recoverable and observable aft
 Path precedence:
 
 1. `OPENCLAW_CODE_AGENT_SESSIONS_PATH`
-2. `$OPENCLAW_HOME/code-agent-sessions.json`
-3. `~/.openclaw/code-agent-sessions.json`
+2. `<stateDir>/code-agent-sessions.json`, where `<stateDir>` comes from the host's public `resolveStateDir` (`OPENCLAW_STATE_DIR`, else `$OPENCLAW_HOME/.openclaw`, else `~/.openclaw`)
+
+The index is written with the host `json-store` helper (private file, fsync'd temp write, atomic rename). Full session output transcripts live in `<stateDir>/plugin-state/openclaw-code-agent/output/`.
 
 Stored data includes:
 
@@ -278,9 +279,9 @@ The notification pipeline is intentionally centralized:
 
 1. `SessionManager` builds one notification request per event.
 2. `WakeDispatcher` decides whether it is notify-only, wake-only, or both.
-3. Direct user notifications use `message.send`; Telegram and Discord interactive notifications attach buttons through `--presentation`.
+3. Direct user notifications go through the host durable outbound queue; Telegram and Discord interactive notifications attach buttons as a `presentation`.
 4. Wakes use `chat.send` because it targets the originating runtime session precisely.
-5. `system event` is the recovery path when richer routing metadata is missing or delivery fails repeatedly.
+5. An in-process system event (targeting the origin session when known) is the recovery path when richer routing metadata is missing or delivery fails repeatedly.
 
 The design goal is deterministic wakes with the fewest possible duplicate pings.
 
@@ -323,9 +324,9 @@ Backend capabilities intentionally differ:
 ## Design Decisions
 
 1. The plugin treats coding sessions as managed background jobs, not as inline chat completions.
-2. Notification transport is gateway-owned. Direct notifications use runtime channel adapters, and wake/fallback paths use OpenClaw gateway/system event surfaces instead of a plugin-owned transport.
+2. Notification transport is gateway-owned. Direct notifications use the host durable outbound queue, wakes use `chat.send`, and fallbacks use runtime system events instead of a plugin-owned transport.
 3. `Session` is an event emitter, not a callback bucket. This keeps the lifecycle model explicit.
-4. Subprocess use is an accepted part of the architecture, but it should stay limited to backend launch, worktree/PR operations, gateway-owned delivery, and explicit verifier commands.
+4. Subprocess use is an accepted part of the architecture, but it should stay limited to backend launch, worktree/PR operations, the `chat.send` wake (in-process gateway requests are trusted-only), plugin self-update, and explicit verifier commands.
 5. Runtime GC and persisted resume are separate concerns. Eviction from memory does not mean losing the session.
 6. Worktree decisions are first-class orchestration states, not afterthoughts bolted on after completion.
 7. Codex, Claude Code, and experimental OpenCode share the same session-centric control plane even though their backend transports differ.

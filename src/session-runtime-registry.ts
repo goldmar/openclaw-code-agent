@@ -1,10 +1,13 @@
 import type { Session } from "./session";
 import type { SessionStatus } from "./types";
+import { createLogger } from "./logger";
+
+const log = createLogger("session-runtime-registry");
 
 const ACTIVE_NAME_STATUSES = new Set<SessionStatus>(["starting", "running"]);
 
 function logRegistryDiagnostic(event: string, fields: Record<string, unknown>): void {
-  console.warn(JSON.stringify({
+  log.warn(JSON.stringify({
     component: "SessionRuntimeRegistry",
     event,
     at: new Date().toISOString(),

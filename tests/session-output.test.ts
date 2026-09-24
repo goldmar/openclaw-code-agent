@@ -1,11 +1,12 @@
 import { afterEach, describe, it, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { getSessionOutputText } from "../src/application/session-view";
 import { appendSessionOutput, getSessionOutputFilePath } from "../src/session-output";
-import { cleanupOrphanOutputFiles, cleanupTmpOutputFiles, getNextTmpOutputCleanupAt } from "../src/session-store-storage";
+import { cleanupOrphanOutputFiles, cleanupSessionOutputFiles, getNextSessionOutputCleanupAt } from "../src/session-store-storage";
+import { resolveSessionOutputDir } from "../src/state-paths";
 
 const TEMP_ENV_KEYS = ["TMPDIR", "TEMP", "TMP"] as const;
 
@@ -28,48 +29,76 @@ function redirectTmpDir(t: TestContext, dir: string): void {
   });
 }
 
-function useIsolatedTmpDir(t: TestContext): string {
-  const dir = mkdtempSync(join(tmpdir(), "openclaw-output-cleanup-test-"));
-  redirectTmpDir(t, dir);
+/** Isolates both the plugin output dir (via OPENCLAW_STATE_DIR) and the legacy OS temp dir. */
+function useIsolatedOutputDirs(t: TestContext): { outputDir: string; legacyTmpDir: string } {
+  const root = mkdtempSync(join(tmpdir(), "openclaw-output-state-test-"));
+  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+  process.env.OPENCLAW_STATE_DIR = join(root, "state");
+  const legacyTmpDir = join(root, "tmp");
+  mkdirSync(legacyTmpDir, { recursive: true });
+  redirectTmpDir(t, legacyTmpDir);
+  const outputDir = resolveSessionOutputDir();
+  mkdirSync(outputDir, { recursive: true });
   t.after(() => {
-    rmSync(dir, { recursive: true, force: true });
+    if (previousStateDir == null) delete process.env.OPENCLAW_STATE_DIR;
+    else process.env.OPENCLAW_STATE_DIR = previousStateDir;
+    rmSync(root, { recursive: true, force: true });
   });
-  return dir;
+  return { outputDir, legacyTmpDir };
 }
 
 describe("session output file paths", () => {
-  it("keeps nanoid-safe session IDs compatible with the existing filename format", () => {
+  it("stores output files in the plugin state dir with the existing filename format", () => {
     const sessionId = "GccpSIqJ_-stable.123";
 
     assert.equal(
       getSessionOutputFilePath(sessionId),
-      join(tmpdir(), "openclaw-agent-GccpSIqJ_-stable.123.txt"),
+      join(resolveSessionOutputDir(), "openclaw-agent-GccpSIqJ_-stable.123.txt"),
     );
+    assert.match(resolveSessionOutputDir(), /plugin-state[\\/]openclaw-code-agent[\\/]output$/);
+    assert.notEqual(dirname(getSessionOutputFilePath(sessionId)), tmpdir());
   });
 
-  it("maps unsafe path-like session IDs to a deterministic filename under tmpdir", (t) => {
-    const dir = useIsolatedTmpDir(t);
+  it("maps unsafe path-like session IDs to a deterministic filename in the output dir", (t) => {
+    const { outputDir } = useIsolatedOutputDirs(t);
     const sessionId = "../escape\\session:name*?";
     const expectedFilename = "openclaw-agent-hashed+bcbf2e65c6cd70c9a169c787417be7aafd1644fe94a0776ebdc212404ed52d76.txt";
     const outputPath = getSessionOutputFilePath(sessionId);
 
-    assert.equal(dirname(outputPath), dir);
+    assert.equal(dirname(outputPath), outputDir);
     assert.equal(basename(outputPath), expectedFilename);
-    assert.equal(outputPath, join(dir, expectedFilename));
     assert.doesNotMatch(basename(outputPath), /[<>:"\/\\|?*\x00-\x1F]/u);
   });
 
   it("keeps old unsafe-hash-looking safe IDs distinct from unsafe hashed IDs", (t) => {
-    const dir = useIsolatedTmpDir(t);
+    const { outputDir } = useIsolatedOutputDirs(t);
     const unsafeSessionId = "../escape\\session:name*?";
     const digest = "bcbf2e65c6cd70c9a169c787417be7aafd1644fe94a0776ebdc212404ed52d76";
     const rawSafeSessionId = `unsafe-${digest}`;
     const rawSafeOutputPath = getSessionOutputFilePath(rawSafeSessionId);
     const unsafeOutputPath = getSessionOutputFilePath(unsafeSessionId);
 
-    assert.equal(rawSafeOutputPath, join(dir, `openclaw-agent-${rawSafeSessionId}.txt`));
-    assert.equal(unsafeOutputPath, join(dir, `openclaw-agent-hashed+${digest}.txt`));
+    assert.equal(rawSafeOutputPath, join(outputDir, `openclaw-agent-${rawSafeSessionId}.txt`));
+    assert.equal(unsafeOutputPath, join(outputDir, `openclaw-agent-hashed+${digest}.txt`));
     assert.notEqual(rawSafeOutputPath, unsafeOutputPath);
+  });
+
+  it("creates the private output dir on first append", (t) => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-output-create-test-"));
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = join(root, "state");
+    t.after(() => {
+      if (previousStateDir == null) delete process.env.OPENCLAW_STATE_DIR;
+      else process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      rmSync(root, { recursive: true, force: true });
+    });
+
+    appendSessionOutput([], "fresh-session", "hello");
+
+    const outputPath = getSessionOutputFilePath("fresh-session");
+    assert.equal(readFileSync(outputPath, "utf-8"), "hello");
+    assert.equal(statSync(dirname(outputPath)).mode & 0o777, 0o700);
+    assert.equal(statSync(outputPath).mode & 0o777, 0o600);
   });
 });
 
@@ -130,9 +159,9 @@ describe("session output buffering", () => {
   });
 });
 
-describe("session output temp cleanup", () => {
-  it("discovers only temp output txt files for cleanup operations", (t) => {
-    const dir = useIsolatedTmpDir(t);
+describe("session output cleanup", () => {
+  it("discovers only output txt files for cleanup operations", (t) => {
+    const dir = useIsolatedOutputDirs(t).outputDir;
     const referenced = join(dir, "openclaw-agent-referenced.txt");
     const orphan = join(dir, "openclaw-agent-orphan.txt");
     const ignoredPrefix = join(dir, "not-openclaw-agent-old.txt");
@@ -149,7 +178,7 @@ describe("session output temp cleanup", () => {
     utimesSync(ignoredPrefix, new Date(1_000), new Date(1_000));
     utimesSync(ignoredSuffix, new Date(1_000), new Date(1_000));
 
-    assert.equal(getNextTmpOutputCleanupAt(now, maxAgeMs), statSync(referenced).mtimeMs + maxAgeMs);
+    assert.equal(getNextSessionOutputCleanupAt(now, maxAgeMs), statSync(referenced).mtimeMs + maxAgeMs);
 
     cleanupOrphanOutputFiles([referenced]);
     assert.equal(existsSync(referenced), true);
@@ -157,14 +186,14 @@ describe("session output temp cleanup", () => {
     assert.equal(existsSync(ignoredPrefix), true);
     assert.equal(existsSync(ignoredSuffix), true);
 
-    cleanupTmpOutputFiles(200_000, maxAgeMs);
+    cleanupSessionOutputFiles(200_000, maxAgeMs);
     assert.equal(existsSync(referenced), false);
     assert.equal(existsSync(ignoredPrefix), true);
     assert.equal(existsSync(ignoredSuffix), true);
   });
 
-  it("does not age out temp output files still referenced by persisted sessions", (t) => {
-    const dir = useIsolatedTmpDir(t);
+  it("does not age out output files still referenced by persisted sessions", (t) => {
+    const dir = useIsolatedOutputDirs(t).outputDir;
     const referenced = join(dir, "openclaw-agent-referenced.txt");
     const orphan = join(dir, "openclaw-agent-orphan.txt");
 
@@ -176,20 +205,37 @@ describe("session output temp cleanup", () => {
     const now = 100_000;
     const maxAgeMs = 10_000;
 
-    assert.equal(getNextTmpOutputCleanupAt(now, maxAgeMs, [referenced]), now);
-    cleanupTmpOutputFiles(now, maxAgeMs, [referenced]);
+    assert.equal(getNextSessionOutputCleanupAt(now, maxAgeMs, [referenced]), now);
+    cleanupSessionOutputFiles(now, maxAgeMs, [referenced]);
 
     assert.equal(existsSync(referenced), true);
     assert.equal(existsSync(orphan), false);
-    assert.equal(getNextTmpOutputCleanupAt(now, maxAgeMs, [referenced]), undefined);
+    assert.equal(getNextSessionOutputCleanupAt(now, maxAgeMs, [referenced]), undefined);
+  });
+
+  it("also ages out legacy pre-5.0 output files left in the OS temp dir", (t) => {
+    const { outputDir, legacyTmpDir } = useIsolatedOutputDirs(t);
+    const current = join(outputDir, "openclaw-agent-current.txt");
+    const legacyReferenced = join(legacyTmpDir, "openclaw-agent-legacy-referenced.txt");
+    const legacyOrphan = join(legacyTmpDir, "openclaw-agent-legacy-orphan.txt");
+    for (const filePath of [current, legacyReferenced, legacyOrphan]) {
+      writeFileSync(filePath, "output\n", "utf-8");
+      utimesSync(filePath, new Date(1_000), new Date(1_000));
+    }
+
+    cleanupSessionOutputFiles(100_000, 10_000, [legacyReferenced]);
+
+    assert.equal(existsSync(current), false);
+    assert.equal(existsSync(legacyReferenced), true);
+    assert.equal(existsSync(legacyOrphan), false);
   });
 
   it("keeps temp output discovery failures non-fatal", (t) => {
     const missingTmpDir = join(tmpdir(), `openclaw-output-cleanup-missing-${process.pid}-${Date.now()}`);
     redirectTmpDir(t, missingTmpDir);
 
-    assert.doesNotThrow(() => cleanupTmpOutputFiles(100_000, 10_000));
-    assert.equal(getNextTmpOutputCleanupAt(100_000, 10_000), undefined);
+    assert.doesNotThrow(() => cleanupSessionOutputFiles(100_000, 10_000));
+    assert.equal(getNextSessionOutputCleanupAt(100_000, 10_000), undefined);
     assert.doesNotThrow(() => cleanupOrphanOutputFiles([]));
   });
 });

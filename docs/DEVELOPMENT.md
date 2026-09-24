@@ -166,10 +166,12 @@ Use `pnpm smoke:opencode-live` only when a real OpenCode environment is availabl
 - Keep first-run onboarding narrow. `uiHints` without `advanced: true` are what OpenClaw's plugin-config wizard prompts by default, so only genuinely first-run fields should remain non-advanced.
 - Treat `fallbackChannel` as routing metadata, not a secret. Multi-workspace maps like `agentChannels` should stay advanced/manual because the generic wizard cannot collect them well.
 - Do not re-surface deprecated legacy model keys in onboarding. New setup should point operators at `defaultHarness` and `harnesses.*` instead.
+- Import only public `openclaw/plugin-sdk/*` subpaths that untrusted external plugins may use (check the host `package.json` exports and `docs/plugins/sdk-subpaths.md`; private-local and trusted-only surfaces are off limits). Type-only imports are erased; every value or dynamic import must also be listed as `--external:` in the `build` script, which `tests/plugin-entry.test.ts` enforces.
+- Log through `createLogger(...)` from `src/logger.ts` instead of `console.*`: it writes to the Gateway log via `api.runtime.logging.getChildLogger`. The build keeps `--pure:console.*` so the console fallback (tests, hosts without runtime logging) never reaches production output.
 
 ## Service Lifecycle
 
-- `start()`: load config, create `SessionManager`, run orphan worktree cleanup, start periodic cleanup
+- `start()`: load config, create `SessionManager`, bootstrap maintenance schedules (worktree retention cleanup, reminders, output-file cleanup)
 - `stop()`: kill active sessions, clear timers, drop the singleton
 
 ## Docs Maintenance Checklist

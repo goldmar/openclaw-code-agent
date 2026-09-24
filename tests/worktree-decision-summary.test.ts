@@ -192,12 +192,26 @@ describe("worktree decision work summaries", () => {
     ]);
   });
 
-  it("adapts OpenClaw runtime summary hooks when available", async () => {
+  it("calls runtime.llm.complete with messages and parses LlmCompleteResult.text", async () => {
+    const calls: Array<Record<string, unknown>> = [];
     try {
       setPluginRuntime({
+        llm: {
+          async complete(params: Record<string, unknown>) {
+            calls.push(params);
+            return {
+              text: "```json\n{\"summary\":[\"Runtime-generated work summary.\"]}\n```",
+              provider: "openai",
+              model: "gpt-test",
+              agentId: "main",
+              usage: {},
+            };
+          },
+        },
+        // Former speculative surfaces are no longer probed.
         worktreeDecisionSummary: {
           async generateWorktreeDecisionSummary() {
-            return { summary: ["Runtime-generated work summary."] };
+            throw new Error("must not be called");
           },
         },
       });
@@ -212,6 +226,43 @@ describe("worktree decision work summaries", () => {
 
       assert.equal(result.source, "llm");
       assert.deepEqual(result.lines, ["Runtime-generated work summary."]);
+      assert.equal(calls.length, 1);
+      const call = calls[0]!;
+      assert.equal(call.purpose, "openclaw-code-agent.worktree-decision-summary");
+      assert.equal(typeof call.systemPrompt, "string");
+      assert.equal(typeof call.maxTokens, "number");
+      assert.equal(call.model, undefined);
+      assert.equal(call.agentId, undefined);
+      const messages = call.messages as Array<{ role: string; content: string }>;
+      assert.equal(messages.length, 1);
+      assert.equal(messages[0]?.role, "user");
+      assert.match(messages[0]?.content ?? "", /"sessionName": "runtime-summary"/);
+    } finally {
+      setPluginRuntime(undefined);
+    }
+  });
+
+  it("returns no provider without runtime.llm and falls back when the host denies completion", async () => {
+    try {
+      setPluginRuntime({ worktreeDecisionSummary: { generateWorktreeDecisionSummary: async () => ({ summary: ["x"] }) } });
+      assert.equal(createRuntimeWorktreeDecisionSummaryProvider(), undefined);
+
+      setPluginRuntime({
+        llm: {
+          async complete() {
+            throw Object.assign(new Error("Plugin LLM completion denied"), { code: "LLM_COMPLETION_NOT_AUTHORIZED" });
+          },
+        },
+      });
+      const provider = createRuntimeWorktreeDecisionSummaryProvider();
+      assert.ok(provider);
+      const result = await buildWorktreeDecisionWorkSummary({
+        sessionName: "runtime-denied",
+        diffSummary,
+        provider,
+      });
+      assert.equal(result.source, "fallback");
+      assert.ok(result.lines.length > 0);
     } finally {
       setPluginRuntime(undefined);
     }

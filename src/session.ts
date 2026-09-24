@@ -55,6 +55,9 @@ import { SessionTurnRuntime } from "./session-turn-runtime";
 import { SessionHarnessEventApplier } from "./session-harness-event-applier";
 import { getBranchName, listDirtyWorktreeEntries } from "./worktree";
 import { isHarnessStartupFailureOutput, summarizeHarnessStartupFailure } from "./harness-startup-failure";
+import { createLogger } from "./logger";
+
+const log = createLogger("session");
 
 const STARTUP_TIMEOUT_MS = 2 * 60 * 1000; // 2 minutes
 export { getSessionOutputFilePath } from "./session-output";
@@ -64,7 +67,7 @@ function errorMessage(err: unknown): string {
 }
 
 function logSessionDiagnostic(event: string, fields: Record<string, unknown>): void {
-  console.warn(JSON.stringify({
+  log.warn(JSON.stringify({
     component: "Session",
     event,
     at: new Date().toISOString(),
@@ -740,7 +743,7 @@ export class Session extends EventEmitter {
       const message = err instanceof Error ? err.message : String(err);
       const stack = err instanceof Error ? err.stack : undefined;
       this.logDiagnostic("harness.stream.error", { error: message });
-      console.error(`[Session ${this.id}] consumeMessages error: ${message}`, stack);
+      log.error(`[Session ${this.id}] consumeMessages error: ${message}`, stack);
       if (this.isActive) {
         this.transitionToTerminal("failed", { error: message });
       }
@@ -771,7 +774,7 @@ export class Session extends EventEmitter {
           appliedApprovalPath = true;
           shouldInjectPrefix = true;
         } catch (err: unknown) {
-          console.error(`[Session ${this.id}] setPermissionMode(${newMode}) FAILED: ${errorMessage(err)}`);
+          log.error(`[Session ${this.id}] setPermissionMode(${newMode}) FAILED: ${errorMessage(err)}`);
           // Preserve the pending approval state so callers can retry cleanly.
           this.markPendingPlanApproval(this.planApprovalContext ?? "plan-mode");
           throw new Error(`Failed to switch permission mode to ${newMode}: ${errorMessage(err)}`);
@@ -781,7 +784,7 @@ export class Session extends EventEmitter {
         this.pendingModeSwitch = undefined;
         appliedApprovalPath = true;
         shouldInjectPrefix = true;
-        console.warn(`[Session ${this.id}] Cannot call setPermissionMode — falling back to text prefix only (currentPermissionMode remains ${this.currentPermissionMode})`);
+        log.warn(`[Session ${this.id}] Cannot call setPermissionMode — falling back to text prefix only (currentPermissionMode remains ${this.currentPermissionMode})`);
       }
 
         if (appliedApprovalPath) {
@@ -810,7 +813,7 @@ export class Session extends EventEmitter {
           this.currentPermissionMode = "plan";
           this.applyControlEvent({ type: "permission.mode_changed", currentPermissionMode: "plan" });
         } catch (err: unknown) {
-          console.warn(`[Session ${this.id}] Failed to re-assert plan mode: ${errorMessage(err)}`);
+          log.warn(`[Session ${this.id}] Failed to re-assert plan mode: ${errorMessage(err)}`);
         }
       }
     }
@@ -944,12 +947,12 @@ export class Session extends EventEmitter {
     if (this.messageStream) this.messageStream.end();
     if (this.harnessHandle?.interrupt) {
       void this.harnessHandle.interrupt().catch((err: unknown) => {
-        console.warn(`[Session ${this.id}] interrupt during teardown failed: ${errorMessage(err)}`);
+        log.warn(`[Session ${this.id}] interrupt during teardown failed: ${errorMessage(err)}`);
       });
     }
     const closePromise = this.harnessHandle?.close
       ? this.harnessHandle.close().catch((err: unknown) => {
-        console.warn(`[Session ${this.id}] harness close during teardown failed: ${errorMessage(err)}`);
+        log.warn(`[Session ${this.id}] harness close during teardown failed: ${errorMessage(err)}`);
       })
       : Promise.resolve();
     this.teardownPromise = closePromise;

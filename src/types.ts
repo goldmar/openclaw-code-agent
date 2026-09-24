@@ -577,6 +577,8 @@ export interface PersistedTaskFlowMirror {
   flowId: string;
   revision: number;
   status?: "queued" | "running" | "waiting" | "blocked" | "succeeded" | "failed" | "cancelled" | "lost";
+  /** Host-recorded cancel intent (`openclaw tasks flow cancel` or an OCA user stop). */
+  cancelRequestedAt?: number;
 }
 
 export interface RepoPolicyRecord {

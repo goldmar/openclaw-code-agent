@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+import { loadJsonFile, saveJsonFile } from "openclaw/plugin-sdk/json-store";
 import { promisify } from "node:util";
 import { RuntimeDirectNotificationTransport, type DirectNotificationTransport } from "./direct-notification-transport";
 import { pluginConfig } from "./config";
@@ -8,11 +9,16 @@ import { routeFromOriginMetadata, type SessionRouteSource } from "./session-rout
 import type { SessionActionKind, SessionActionToken, SessionRoute } from "./types";
 import type { NotificationButton } from "./session-interactions";
 import type { NotificationRoute } from "./wake-route-resolver";
+import { createLogger } from "./logger";
+
+const log = createLogger("auto-update");
 
 const execFileAsync = promisify(execFile);
 const PACKAGE_NAME = "openclaw-code-agent";
 const NPM_PACKAGE_URL = `https://registry.npmjs.org/${encodeURIComponent(PACKAGE_NAME)}/latest`;
-const UPDATE_STATE_FILE = "openclaw-code-agent-auto-update.json";
+const UPDATE_STATE_FILE = "auto-update.json";
+/** Pre-5.0 state file name, written to either the OpenClaw state root or the plugin state dir. */
+const LEGACY_UPDATE_STATE_FILE = "openclaw-code-agent-auto-update.json";
 const DAY_MS = 24 * 60 * 60 * 1000;
 const WEEK_MS = 7 * DAY_MS;
 const FETCH_TIMEOUT_MS = 10_000;
@@ -73,7 +79,10 @@ export type AutoUpdateCheckContext = {
 };
 
 export type AutoUpdateServiceOptions = {
+  /** Plugin-owned state dir (`<stateDir>/plugin-state/openclaw-code-agent`). */
   stateDir: string;
+  /** Pre-5.0 state files read once when the current state file does not exist yet. */
+  legacyStatePaths?: string[];
   currentVersion: string;
   actionButtonFactory: ActionButtonFactory;
   notifier?: DirectNotificationTransport;
@@ -150,6 +159,16 @@ function parsePluginInspection(result: CommandResult): PluginInspection {
   throw new Error(`OpenClaw Code Agent self-update does not support managed install source ${source ?? "unknown"}.`);
 }
 
+/**
+ * Exact-version reinstall from the recorded source.
+ *
+ * `openclaw plugins update` is intentionally not used (re-checked on OpenClaw
+ * 2026.9.6): it can only retarget npm installs (`<package>@<version>` matches the
+ * npm install record); a ClawHub install rejects `<id>@<version>` ("No tracked
+ * plugin or hook pack found") and a bare-id update stays on the version pinned in
+ * the recorded `clawhub:<package>@<version>` spec ("is up to date"). Reinstalling
+ * the approved version keeps npm and ClawHub installs on one verified path.
+ */
 function installArgs(install: ManagedInstall, version: string): string[] {
   const spec = install.source === "npm"
     ? `${install.packageName}@${version}`
@@ -301,7 +320,7 @@ export class AutoUpdateService {
     if (this.checkInFlight) return;
     this.checkInFlight = this.checkForUpdate(context)
       .catch((error) => {
-        console.warn(`[auto-update] Update check failed: ${errorMessage(error)}`);
+        log.warn(`[auto-update] Update check failed: ${errorMessage(error)}`);
       })
       .finally(() => {
         this.checkInFlight = undefined;
@@ -341,7 +360,7 @@ export class AutoUpdateService {
         await this.sendRestartPrompt(route, normalizedVersion);
         return `OpenClaw Code Agent ${normalizedVersion} installation was verified. Restart confirmation was sent.`;
       } catch (error) {
-        console.warn(`[auto-update] OpenClaw Code Agent ${normalizedVersion} was updated, but the restart prompt failed: ${errorMessage(error)}`);
+        log.warn(`[auto-update] OpenClaw Code Agent ${normalizedVersion} was updated, but the restart prompt failed: ${errorMessage(error)}`);
       }
     }
 
@@ -499,17 +518,18 @@ export class AutoUpdateService {
 
   private readState(): AutoUpdateState {
     try {
-      return normalizeState(JSON.parse(readFileSync(this.statePath, "utf-8")));
+      if (existsSync(this.statePath)) return normalizeState(loadJsonFile(this.statePath));
+      for (const legacyPath of this.options.legacyStatePaths ?? []) {
+        if (existsSync(legacyPath)) return normalizeState(loadJsonFile(legacyPath));
+      }
+      return {};
     } catch {
       return {};
     }
   }
 
   private writeState(state: AutoUpdateState): void {
-    mkdirSync(dirname(this.statePath), { recursive: true });
-    const tmp = `${this.statePath}.tmp`;
-    writeFileSync(tmp, JSON.stringify(state, null, 2), "utf-8");
-    renameSync(tmp, this.statePath);
+    saveJsonFile(this.statePath, state);
   }
 }
 
@@ -517,6 +537,7 @@ export const autoUpdateInternals = {
   NPM_PACKAGE_URL,
   UPDATE_SESSION_ID,
   UPDATE_STATE_FILE,
+  LEGACY_UPDATE_STATE_FILE,
   DAY_MS,
   WEEK_MS,
   FETCH_TIMEOUT_MS,
