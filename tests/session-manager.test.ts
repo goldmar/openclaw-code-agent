@@ -2206,6 +2206,42 @@ describe("SessionManager.notifySession()", () => {
 // =========================================================================
 
 describe("SessionManager resumed launch routing", () => {
+  it("kills active sessions before waiting for a launch that is still preparing", async () => {
+    const harness = createFakeHarness("shutdown-order-harness");
+    registerHarness(harness);
+    const sm = new SessionManager(5, 5);
+    const active = await sm.spawn({
+      prompt: "active",
+      workdir: "/tmp",
+      harness: harness.name,
+      worktreeStrategy: "off",
+      route: { provider: "telegram", target: "12345" },
+    }, { notifyLaunch: false });
+    let releasePolicy!: () => void;
+    const policyGate = new Promise<void>((resolve) => { releasePolicy = resolve; });
+    const originalCheck = sm.checkRepoPolicyForLaunch.bind(sm);
+    (sm as any).checkRepoPolicyForLaunch = async (...args: [string, any]) => {
+      await policyGate;
+      return originalCheck(...args);
+    };
+    const slowLaunch = sm.spawn({
+      prompt: "slow",
+      workdir: "/tmp",
+      harness: harness.name,
+      worktreeStrategy: "off",
+      route: { provider: "telegram", target: "12345" },
+    }, { notifyLaunch: false });
+
+    const shutdown = sm.shutdown();
+    await tick(10);
+    assert.equal(active.status, "killed", "active sessions stop while a launch is still preparing");
+    assert.equal(active.killReason, "shutdown");
+
+    releasePolicy();
+    await assert.rejects(slowLaunch, /shutting down/);
+    await shutdown;
+  });
+
   it("does not start a launch that finished preparing after shutdown began", async () => {
     const harness = createFakeHarness("shutdown-race-harness");
     registerHarness(harness);

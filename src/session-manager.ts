@@ -2014,13 +2014,14 @@ export class SessionManager {
     this.shuttingDown = true;
     try {
       this.disposeMaintenance();
-      // Disposal stops new maintenance work; wait for git-backed work already in flight.
-      await this.maintenance.whenIdle();
-      // Launches still preparing fail at their post-preparation shutdown check;
-      // wait for them so none registers after the kill below.
-      await this.spawnTail;
+      // Stop active sessions first: a launch still preparing (for example running
+      // a worktree setup script) must not delay their termination.
       const sessions = [...this.sessions.values()];
       this.killAll("shutdown");
+      // Then wait for in-flight maintenance and launches. A launch that finishes
+      // preparing now fails its post-preparation shutdown check, and registration
+      // happens synchronously after that check, so none can register afterwards.
+      await Promise.all([this.maintenance.whenIdle(), this.spawnTail]);
       await Promise.all(sessions.map((session) => session.waitForTeardown()));
       await this.drainTaskLifecycle();
     } finally {
