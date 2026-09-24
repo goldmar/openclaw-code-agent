@@ -478,6 +478,7 @@ describe("ClaudeCodeHarness", () => {
 
       const { canUseTool, messages, finish } = await launchForCanUseTool("plan", { cwd: project }, [
         { type: "assistant", message: { content: [{ type: "tool_use", id: "t1", name: "Write", input: { file_path: ownPlan, content: "# Own plan" } }] } },
+        { type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: "ok" }] } },
       ]);
       // A concurrent session writes a newer plan into the shared plans directory.
       writeFileSync(join(configDir, "plans", "other-session.md"), "# Someone else's plan");
@@ -489,6 +490,38 @@ describe("ClaudeCodeHarness", () => {
       const request = messages.find((message) => message.type === "plan_approval_requested");
       assert.ok(request && request.type === "plan_approval_requested");
       assert.equal(request.request.artifact.markdown, "# Own plan");
+      await finish();
+    } finally {
+      if (previousConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = previousConfigDir;
+      rmSync(configDir, { recursive: true, force: true });
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  it("does not fall back to an older plan file when the plan revision write failed", async () => {
+    const configDir = mkdtempSync(join(tmpdir(), "oca-claude-config-"));
+    const project = mkdtempSync(join(tmpdir(), "oca-claude-project-"));
+    const previousConfigDir = process.env.CLAUDE_CONFIG_DIR;
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    try {
+      mkdirSync(join(configDir, "plans"));
+      const plan = join(configDir, "plans", "plan.md");
+      writeFileSync(plan, "# Stale plan v1");
+      const { canUseTool, messages, finish } = await launchForCanUseTool("plan", { cwd: project }, [
+        { type: "assistant", message: { content: [{ type: "tool_use", id: "w1", name: "Write", input: { file_path: plan, content: "# v1" } }] } },
+        { type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "w1", content: "ok" }] } },
+        { type: "assistant", message: { content: [{ type: "tool_use", id: "w2", name: "Edit", input: { file_path: plan, old_string: "v1", new_string: "v2" } }] } },
+        { type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "w2", content: "String not found", is_error: true }] } },
+      ]);
+      for (let i = 0; i < 5; i += 1) await new Promise((resolve) => setImmediate(resolve));
+      void canUseTool("ExitPlanMode", {}, {
+        signal: new AbortController().signal, requestId: "req-failed-write", toolUseID: "tool-failed-write",
+      });
+      await new Promise((resolve) => setImmediate(resolve));
+      const request = messages.find((message) => message.type === "plan_approval_requested");
+      assert.ok(request && request.type === "plan_approval_requested");
+      assert.equal(request.request.artifact.markdown, "", "a failed revision must not surface the stale plan");
       await finish();
     } finally {
       if (previousConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;

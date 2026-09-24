@@ -1,6 +1,6 @@
 import { assertBranchName } from "./worktree-ref-validation";
 import { runGh, runGit } from "./git-exec";
-import { hasHostedRemote, isGitHubCLIAvailable } from "./worktree-repo";
+import { hasGitHubRemote, isGitHubCLIAvailable } from "./worktree-repo";
 import { createLogger } from "./logger";
 
 const log = createLogger("worktree-pr");
@@ -118,8 +118,8 @@ export async function createPR(
 ): Promise<PRResult> {
   await assertBranchName(branch);
   await assertBranchName(base);
-  if (!targetRepo && !(await hasHostedRemote(repoDir))) {
-    return { success: false, error: "The repository has no hosted remote (only local-path remotes), so a pull request cannot be opened" };
+  if (!targetRepo && !(await hasGitHubRemote(repoDir))) {
+    return { success: false, error: "The repository has no GitHub remote that gh can serve, so a pull request cannot be opened" };
   }
   if (!(await isGitHubCLIAvailable())) {
     return { success: false, error: "GitHub CLI (gh) is not available" };
@@ -180,8 +180,8 @@ export async function createPR(
 
 export async function syncWorktreePR(repoDir: string, branchName: string, targetRepo?: string): Promise<PRStatus> {
   await assertBranchName(branchName);
-  // With only local-path remotes (and no explicit target repo) there is no PR to find.
-  if (!targetRepo && !(await hasHostedRemote(repoDir))) {
+  // Without a GitHub remote gh can serve (and no explicit target repo) there is no PR to find.
+  if (!targetRepo && !(await hasGitHubRemote(repoDir))) {
     return { exists: false, state: "none" };
   }
   if (!(await isGitHubCLIAvailable())) {

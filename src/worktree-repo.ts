@@ -1,6 +1,7 @@
 import { assertBranchName, branchOrRemoteTrackingRef, localBranchRef } from "./worktree-ref-validation";
 import { runGit, runGh, withRepoLock } from "./git-exec";
 import * as fs from "fs";
+import { homedir } from "os";
 import { basename, dirname, join } from "path";
 import { pluginConfig } from "./config";
 import { createLogger } from "./logger";
@@ -299,25 +300,54 @@ export async function deleteBranch(repoDir: string, branch: string): Promise<boo
   });
 }
 
+/** Host of a git remote URL (`https://host/...`, `ssh://user@host/...`, scp-style `user@host:path`). */
+export function remoteUrlHost(url: string): string | undefined {
+  const scheme = url.match(/^(?:https?|ssh|git):\/\/(?:[^@/]+@)?([^/:]+)/i);
+  if (scheme) return scheme[1]!.toLowerCase();
+  const scp = url.match(/^(?:[^/\\:@\s]+@)?([^/\\:\s]+):(?!\/\/)/);
+  // A bare `C:` drive letter is a local path, not a host.
+  return scp && scp[1]!.length > 1 ? scp[1]!.toLowerCase() : undefined;
+}
+
 /**
- * Whether any remote is hosted on a network host (`https://host/...`,
- * `ssh://host/...`, or scp-style `user@host:path`). Local-path and `file://`
- * remotes cannot have pull requests, so callers skip `gh` for repositories
- * whose remotes are all local. Any hosted remote qualifies, which keeps GitHub
- * Enterprise hosts (resolved by `gh` itself) working.
+ * GitHub hosts the GitHub CLI can serve: github.com, `GH_HOST`, and the hosts
+ * `gh` is logged in to (top-level keys of `hosts.yml`, host names only).
  */
-export async function hasHostedRemote(repoDir: string): Promise<boolean> {
+export function knownGitHubHosts(env: NodeJS.ProcessEnv = process.env): Set<string> {
+  const hosts = new Set(["github.com"]);
+  const ghHost = env.GH_HOST?.trim().toLowerCase();
+  if (ghHost) hosts.add(ghHost);
+  const configDir = env.GH_CONFIG_DIR?.trim()
+    || join(env.XDG_CONFIG_HOME?.trim() || join(env.HOME?.trim() || homedir(), ".config"), "gh");
+  try {
+    for (const line of fs.readFileSync(join(configDir, "hosts.yml"), "utf-8").split(/\r?\n/)) {
+      const match = line.match(/^([A-Za-z0-9.-]+):\s*$/);
+      if (match) hosts.add(match[1]!.toLowerCase());
+    }
+  } catch {
+    // gh not configured: only github.com and GH_HOST.
+  }
+  return hosts;
+}
+
+/**
+ * Whether any remote points at a GitHub host `gh` can serve (github.com, a
+ * GitHub Enterprise host from `GH_HOST`, or a host `gh` is logged in to).
+ * Callers skip `gh` otherwise: local-path remotes and other providers (GitLab,
+ * Bitbucket, ...) cannot have GitHub pull requests.
+ */
+export async function hasGitHubRemote(repoDir: string, env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
   let remotes: string;
   try {
     remotes = await runGit(["-C", repoDir, "remote", "-v"], { timeout: 5_000 });
   } catch {
     return false;
   }
+  const hosts = knownGitHubHosts(env);
   return remotes.split(/\r?\n/).some((line) => {
     const url = line.split(/\s+/)[1];
-    if (!url) return false;
-    if (/^(?:https?|ssh|git):\/\/[^/]+/i.test(url)) return true;
-    return /^[^/\\:@\s]+@[^/\\:\s]+:/.test(url);
+    const host = url ? remoteUrlHost(url) : undefined;
+    return host !== undefined && hosts.has(host);
   });
 }
 

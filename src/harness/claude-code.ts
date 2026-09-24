@@ -361,8 +361,11 @@ export class ClaudeCodeHarness implements AgentHarness {
 
   /** Launch a Claude Code session and adapt SDK messages into structured events. */
   launch(options: HarnessLaunchOptions): HarnessSession {
-    // Last trusted plan file this session wrote (fallback for an ExitPlanMode without plan text).
+    // Last trusted plan file this session wrote successfully (fallback for an
+    // ExitPlanMode without plan text). A write counts only once its tool_result
+    // reports success, so a failed revision never surfaces the older file.
     let lastPlanFileWritten: string | undefined;
+    const pendingPlanWrites = new Map<string, string>();
     const queue = new HarnessMessageQueue();
     let sawRunOutput = false;
     let requestCounter = 0;
@@ -707,6 +710,17 @@ export class ClaudeCodeHarness implements AgentHarness {
             continue;
           }
 
+          if (msg.type === "user" && pendingPlanWrites.size > 0) {
+            const content = msg.message?.content;
+            for (const block of Array.isArray(content) ? content : []) {
+              if (block?.type !== "tool_result") continue;
+              const planFile = pendingPlanWrites.get(block.tool_use_id);
+              if (!planFile) continue;
+              pendingPlanWrites.delete(block.tool_use_id);
+              if (block.is_error !== true) lastPlanFileWritten = planFile;
+            }
+          }
+
           if (msg.type === "assistant") {
             if (!sawRunOutput) {
               sawRunOutput = true;
@@ -719,8 +733,12 @@ export class ClaudeCodeHarness implements AgentHarness {
                 continue;
               }
               if (block.type === "tool_use" && block.name !== "AskUserQuestion") {
-                lastPlanFileWritten = planFileWrittenByTool(block.name, block.input, [options.cwd, options.originalWorkdir])
-                  ?? lastPlanFileWritten;
+                const planFile = planFileWrittenByTool(block.name, block.input, [options.cwd, options.originalWorkdir]);
+                if (planFile) {
+                  // Until its result arrives, a new plan write supersedes the previous file.
+                  lastPlanFileWritten = undefined;
+                  pendingPlanWrites.set(block.id, planFile);
+                }
                 queue.enqueue(createToolCallEvent(block.name, block.input));
               }
             }

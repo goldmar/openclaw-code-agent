@@ -314,30 +314,45 @@ describe("createPR", () => {
     assert.ok(lastCall.includes("pr create --base main --head agent/draft-retry"));
   });
 
-  it("skips gh entirely when the repository only has local-path remotes", async (t) => {
+  it("skips gh entirely when the repository has no GitHub remote", async (t) => {
     const { logPath } = installMockGh(t);
     const { createPR, syncWorktreePR } = await import("../src/worktree.js");
-    const localOnly = githubRepo(t, "");
-    const bare = mkdtempSync(join(tmpdir(), "openclaw-local-remote-"));
-    t.after(() => rmSync(bare, { recursive: true, force: true }));
-    execFileSync("git", ["remote", "add", "origin", bare], { cwd: localOnly, stdio: "ignore" });
-
-    assert.deepEqual(await syncWorktreePR(localOnly, "agent/no-hosted"), { exists: false, state: "none" });
-    const created = await createPR(localOnly, "agent/no-hosted", "main", "Title", "Body");
-    assert.equal(created.success, false);
-    assert.match(created.error ?? "", /no hosted remote/);
+    for (const remote of ["https://gitlab.example.com/acme/repo.git", "LOCAL_BARE"]) {
+      const repo = githubRepo(t, "");
+      let url = remote;
+      if (remote === "LOCAL_BARE") {
+        url = mkdtempSync(join(tmpdir(), "openclaw-local-remote-"));
+        t.after(() => rmSync(url, { recursive: true, force: true }));
+      }
+      execFileSync("git", ["remote", "add", "origin", url], { cwd: repo, stdio: "ignore" });
+      assert.deepEqual(await syncWorktreePR(repo, "agent/no-github"), { exists: false, state: "none" });
+      const created = await createPR(repo, "agent/no-github", "main", "Title", "Body");
+      assert.equal(created.success, false);
+      assert.match(created.error ?? "", /no GitHub remote/);
+    }
     assert.equal(existsSync(logPath) ? readFileSync(logPath, "utf-8").trim() : "", "", "gh must not be called");
   });
 
-  it("still asks gh about a GitHub Enterprise remote", async (t) => {
-    const { hasHostedRemote } = await import("../src/worktree-repo.js");
-    const repo = githubRepo(t, "");
-    execFileSync("git", ["remote", "add", "origin", "git@github.acme.internal:team/repo.git"], { cwd: repo, stdio: "ignore" });
-    assert.equal(await hasHostedRemote(repo), true);
-    execFileSync("git", ["remote", "set-url", "origin", "https://ghe.acme.internal/team/repo.git"], { cwd: repo, stdio: "ignore" });
-    assert.equal(await hasHostedRemote(repo), true);
-    execFileSync("git", ["remote", "set-url", "origin", "file:///srv/git/repo.git"], { cwd: repo, stdio: "ignore" });
-    assert.equal(await hasHostedRemote(repo), false);
+  it("recognizes github.com and GitHub Enterprise hosts gh can serve", async (t) => {
+    const { hasGitHubRemote, knownGitHubHosts, remoteUrlHost } = await import("../src/worktree-repo.js");
+    assert.equal(remoteUrlHost("git@github.acme.internal:team/repo.git"), "github.acme.internal");
+    assert.equal(remoteUrlHost("https://token@GHE.acme.internal/team/repo.git"), "ghe.acme.internal");
+    assert.equal(remoteUrlHost("ssh://git@github.com:22/team/repo.git"), "github.com");
+    assert.equal(remoteUrlHost("/srv/git/repo.git"), undefined);
+    assert.equal(remoteUrlHost("file:///srv/git/repo.git"), undefined);
+
+    const ghConfig = mkdtempSync(join(tmpdir(), "openclaw-gh-config-"));
+    t.after(() => rmSync(ghConfig, { recursive: true, force: true }));
+    writeFileSync(join(ghConfig, "hosts.yml"), "github.com:\n    user: someone\ngithub.acme.internal:\n    git_protocol: ssh\n");
+    const env = { GH_CONFIG_DIR: ghConfig } as NodeJS.ProcessEnv;
+    assert.deepEqual([...knownGitHubHosts(env)].sort(), ["github.acme.internal", "github.com"]);
+    assert.ok(knownGitHubHosts({ GH_HOST: "ghe.corp.example", GH_CONFIG_DIR: ghConfig } as NodeJS.ProcessEnv).has("ghe.corp.example"));
+
+    const repo = githubRepo(t, "git@github.acme.internal:team/repo.git");
+    assert.equal(await hasGitHubRemote(repo, env), true);
+    assert.equal(await hasGitHubRemote(repo, { GH_CONFIG_DIR: join(ghConfig, "missing") } as NodeJS.ProcessEnv), false);
+    const gitlab = githubRepo(t, "git@gitlab.com:team/repo.git");
+    assert.equal(await hasGitHubRemote(gitlab, env), false);
   });
 
   it("reuses the existing open PR when create reports a duplicate", async (t) => {
