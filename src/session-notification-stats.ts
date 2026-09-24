@@ -11,6 +11,7 @@ export type SessionNotificationStats = {
   harness?: string;
   model?: string;
   reasoningEffort?: ReasoningEffort;
+  backendInfo?: { reasoningEffortSupported?: boolean };
 };
 
 export function formatSessionStatsSuffix(stats: SessionNotificationStats): string {
@@ -29,6 +30,7 @@ export function formatSessionStatsSuffix(stats: SessionNotificationStats): strin
     harness: stats.harnessName ?? stats.harness,
     model: stats.model,
     reasoningEffort: stats.reasoningEffort,
+    reasoningEffortSupported: stats.backendInfo?.reasoningEffortSupported,
   });
   if (harnessModel) {
     parts.push(...harnessModel.split(" | "));

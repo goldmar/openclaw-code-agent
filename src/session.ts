@@ -1,7 +1,13 @@
 import { EventEmitter } from "events";
 import { nanoid } from "nanoid";
 import { getDefaultHarness, getHarness } from "./harness";
-import type { AgentHarness, HarnessSession, HarnessMessage } from "./harness";
+import type {
+  AgentHarness,
+  HarnessBackendInfo,
+  HarnessMessage,
+  HarnessSession,
+  HarnessUsage,
+} from "./harness";
 import type {
   ApprovalExecutionState,
   PendingInputState,
@@ -32,14 +38,13 @@ import type {
   ThreadAction,
 } from "./types";
 import {
-  getGlobalMcpServers,
   pluginConfig,
   resolveDefaultModelForHarness,
   resolveFastModeForHarness,
   resolveReasoningEffortForHarness,
 } from "./config";
 import { getBackendConversationId } from "./session-backend-ref";
-import { isModelFormatSupportedForHarness } from "./harness-models";
+import { canonicalizeModelForHarness } from "./harness-models";
 import {
   reduceSessionControlState,
   SESSION_STATUS_TRANSITIONS,
@@ -60,6 +65,26 @@ import { createLogger } from "./logger";
 const log = createLogger("session");
 
 const STARTUP_TIMEOUT_MS = 2 * 60 * 1000; // 2 minutes
+
+/** Approval phrases that carry no instructions beyond the approval itself. */
+const BARE_APPROVAL_MESSAGES = new Set([
+  "approve",
+  "approved",
+  "approved. go ahead",
+  "approved. implement the plan",
+  "go ahead",
+  "lgtm",
+]);
+
+function isBareApprovalMessage(text: string): boolean {
+  const normalized = text.trim().toLowerCase().replace(/[.!\s]+$/g, "").replace(/\s+/g, " ");
+  return !normalized || BARE_APPROVAL_MESSAGES.has(normalized);
+}
+
+const PLAN_APPROVED_PROMPT_PREFIX =
+  "[SYSTEM: The user has approved your plan. Exit plan mode immediately and implement the changes with full permissions. Do not ask for further confirmation.]\n\n";
+const PLAN_REVISION_PROMPT_PREFIX =
+  "[SYSTEM: The user wants changes to your plan. Revise the plan based on their feedback below, then re-submit your revised plan for approval. Do NOT start implementing yet.]\n\n";
 export { getSessionOutputFilePath } from "./session-output";
 
 function errorMessage(err: unknown): string {
@@ -174,6 +199,10 @@ export class Session extends EventEmitter {
 
   // Cost
   costUsd: number = 0;
+  /** Latest backend usage snapshot (per-model cost, context, background tasks). */
+  usage?: HarnessUsage;
+  /** Model/effort the backend reports it actually runs. */
+  backendInfo?: HarnessBackendInfo;
 
   // Origin
   originChannel?: string;
@@ -230,12 +259,12 @@ export class Session extends EventEmitter {
     this.harness = config.harness ? getHarness(config.harness) : getDefaultHarness();
     this.prompt = config.prompt;
     this.workdir = config.workdir;
-    this.model = config.model ?? resolveDefaultModelForHarness(this.harness.name);
     // Internal launches can construct sessions without passing through a tool
-    // resolver. Fail before the Claude SDK receives this unsupported spelling.
-    if (this.harness.name === "claude-code" && !isModelFormatSupportedForHarness(this.harness.name, this.model)) {
-      throw new Error(`Model "${this.model}" is not supported by Claude Code. Use the "opus" alias instead.`);
-    }
+    // resolver, so canonicalize provider-qualified spellings here as well.
+    this.model = canonicalizeModelForHarness(
+      this.harness.name,
+      config.model ?? resolveDefaultModelForHarness(this.harness.name),
+    );
     this.reasoningEffort = config.reasoningEffort ?? resolveReasoningEffortForHarness(this.harness.name);
     this.fastMode = this.harness.name === "codex"
       ? (config.fastMode ?? resolveFastModeForHarness(this.harness.name))
@@ -322,6 +351,21 @@ export class Session extends EventEmitter {
       },
       noteTextDelta: (text, pendingPlanApproval) => this.turnRuntime.noteTextDelta(text, pendingPlanApproval),
       noteToolCall: (args) => this.turnRuntime.noteToolCall(args),
+      notePlanApprovalRequest: (request, planModeApproved) => this.turnRuntime.notePlanApprovalRequest({
+        artifact: request.artifact,
+        planFilePath: request.planFilePath,
+        planModeApproved,
+      }),
+      noteBackendInfo: (info) => {
+        this.backendInfo = { ...this.backendInfo, ...info };
+        if (info.reasoningEffortSupported === false && this.reasoningEffort) {
+          this.logDiagnostic("backend.effort_unsupported", {
+            requestedEffort: this.reasoningEffort,
+            backendModel: info.model,
+          });
+        }
+      },
+      noteUsage: (usage) => this.mergeUsage(usage),
       setPendingInputState: (state) => this.setPendingInputState(state),
       notePendingInput: (state) => this.turnRuntime.notePendingInput(state),
       clearResolvedPendingInput: (requestId, currentState) => (
@@ -335,7 +379,9 @@ export class Session extends EventEmitter {
       },
       handleRunCompleted: (data) => {
         const reportedOutcome = data.outcome ?? (data.success ? "completed" : "failed");
-        const startupFailureText = data.num_turns === 0
+        // Backends with structured failure reporting classify outcomes
+        // themselves; the text heuristic only covers the others.
+        const startupFailureText = data.num_turns === 0 && !data.outcomeAuthoritative
           ? [
               data.result,
               ...this.outputBuffer.slice(-5),
@@ -357,6 +403,7 @@ export class Session extends EventEmitter {
           session_id: data.session_id,
         };
         this.costUsd = data.total_cost_usd;
+        if (data.usage) this.mergeUsage(data.usage);
 
         const isInterruptedTurn = this.multiTurn && this.messageStream && outcome === "interrupted";
         const isMultiTurnEndOfTurn = this.multiTurn && this.messageStream && outcome === "completed";
@@ -701,8 +748,9 @@ export class Session extends EventEmitter {
         resumeSessionId: this.resumeSessionId,
         forkSession: this.forkSession,
         rewindTurns: this.rewindTurns,
+        worktreeStrategy: this.worktreeStrategy,
+        originalWorkdir: this.originalWorkdir ?? this.workdir,
         abortController: this.abortController,
-        mcpServers: getGlobalMcpServers(),
         canUseTool: this.canUseTool,
       });
       this.harnessHandle = handle;
@@ -758,53 +806,48 @@ export class Session extends EventEmitter {
     this.turnRuntime.beginUserTurn();
     this.applyControlEvent({ type: "turn.started" });
 
+    const nativePlanDecisions = this.harness.capabilities.nativePlanDecisions === true;
     let effectiveText = text;
     if (this.pendingModeSwitch) {
       const newMode = this.pendingModeSwitch;
-      let shouldInjectPrefix = false;
-      let appliedApprovalPath = false;
-      if (this.harnessHandle?.setPermissionMode) {
+      if (await this.resolveNativePlanDecision({ kind: "approve", permissionMode: newMode })) {
+        // The backend received the approval as the native permission result
+        // (Claude: ExitPlanMode allow + setMode). Forward only extra words.
+        this.pendingModeSwitch = undefined;
+        this.applyApprovedPermissionMode(newMode);
+        if (isBareApprovalMessage(text)) return "queued";
+      } else if (this.harnessHandle?.setPermissionMode) {
         try {
           await this.harnessHandle.setPermissionMode(newMode);
-          this.currentPermissionMode = newMode;
-          this.applyControlEvent({ type: "permission.mode_changed", currentPermissionMode: newMode });
-          this.pendingModeSwitch = undefined;
-          appliedApprovalPath = true;
-          shouldInjectPrefix = true;
         } catch (err: unknown) {
           log.error(`[Session ${this.id}] setPermissionMode(${newMode}) FAILED: ${errorMessage(err)}`);
           // Preserve the pending approval state so callers can retry cleanly.
           this.markPendingPlanApproval(this.planApprovalContext ?? "plan-mode");
           throw new Error(`Failed to switch permission mode to ${newMode}: ${errorMessage(err)}`);
         }
+        this.pendingModeSwitch = undefined;
+        this.applyApprovedPermissionMode(newMode);
+        if (!nativePlanDecisions) effectiveText = `${PLAN_APPROVED_PROMPT_PREFIX}${text}`;
       } else {
         // Harness doesn't support setPermissionMode — inject text prefix as best-effort fallback
         this.pendingModeSwitch = undefined;
-        appliedApprovalPath = true;
-        shouldInjectPrefix = true;
-        log.warn(`[Session ${this.id}] Cannot call setPermissionMode — falling back to text prefix only (currentPermissionMode remains ${this.currentPermissionMode})`);
-      }
-
-        if (appliedApprovalPath) {
-          // Only clear pendingPlanApproval when the approval path is actually applied.
-          this.clearPendingPlanApproval();
-          if (newMode !== "plan") {
-            this.applyControlEvent({ type: "plan.approved" });
-          }
+        this.clearPendingPlanApproval();
+        if (newMode !== "plan") {
+          this.applyControlEvent({ type: "plan.approved" });
         }
-
-      if (shouldInjectPrefix) {
-        effectiveText = `[SYSTEM: The user has approved your plan. Exit plan mode immediately and implement the changes with full permissions. Do not ask for further confirmation.]\n\n${text}`;
+        effectiveText = `${PLAN_APPROVED_PROMPT_PREFIX}${text}`;
+        log.warn(`[Session ${this.id}] Cannot call setPermissionMode — falling back to text prefix only (currentPermissionMode remains ${this.currentPermissionMode})`);
       }
     } else if ((this.pendingPlanApproval || this.approvalState === "changes_requested") && !this.planModeApproved) {
       if (this.approvalState !== "changes_requested") {
         this.applyControlEvent({ type: "plan.changes_requested" });
       }
-      effectiveText = `[SYSTEM: The user wants changes to your plan. Revise the plan based on their feedback below, then re-submit your revised plan for approval. Do NOT start implementing yet.]\n\n${text}`;
+      // Native backends receive the feedback as the plan request's denial
+      // (Claude: ExitPlanMode deny message) and keep planning in the same turn.
+      if (await this.resolveNativePlanDecision({ kind: "revise", feedback: text })) return "queued";
+      if (!nativePlanDecisions) effectiveText = `${PLAN_REVISION_PROMPT_PREFIX}${text}`;
 
-      // Re-assert plan mode at the SDK level. CC's previous ExitPlanMode call
-      // may have changed its internal permissions — force it back to plan mode
-      // so it can only use read-only tools during revision.
+      // Re-assert plan mode at the backend level so revision stays read-only.
       if (this.harnessHandle?.setPermissionMode) {
         try {
           await this.harnessHandle.setPermissionMode("plan");
@@ -850,6 +893,34 @@ export class Session extends EventEmitter {
     this.turnRuntime.beginUserTurn();
     this.applyControlEvent({ type: "turn.started" });
     this.messageStream.push(this.harness.buildThreadActionMessage(action));
+  }
+
+  private async resolveNativePlanDecision(
+    decision: Parameters<NonNullable<HarnessSession["resolvePlanDecision"]>>[0],
+  ): Promise<boolean> {
+    if (!this.harnessHandle?.resolvePlanDecision) return false;
+    try {
+      return await this.harnessHandle.resolvePlanDecision(decision);
+    } catch (err: unknown) {
+      log.warn(`[Session ${this.id}] native plan decision (${decision.kind}) failed: ${errorMessage(err)}`);
+      return false;
+    }
+  }
+
+  private applyApprovedPermissionMode(mode: PermissionMode): void {
+    this.currentPermissionMode = mode;
+    this.applyControlEvent({ type: "permission.mode_changed", currentPermissionMode: mode });
+    this.clearPendingPlanApproval();
+    if (mode !== "plan") {
+      this.applyControlEvent({ type: "plan.approved" });
+    }
+  }
+
+  private mergeUsage(usage: HarnessUsage): void {
+    this.usage = {
+      ...this.usage,
+      ...Object.fromEntries(Object.entries(usage).filter(([, value]) => value !== undefined)),
+    };
   }
 
   /** Interrupt the currently running turn, if the harness supports it. */

@@ -100,13 +100,32 @@ describe("executeRespond", () => {
     assert.equal(capturedConfig.sessionIdOverride, "test-id");
   });
 
-  it("keeps completed non-Codex sessions closed by default", async () => {
+  it("auto-resumes completed Claude Code sessions", async () => {
     const session = createStubSession({
       status: "completed",
       lifecycle: "terminal",
       killReason: "done",
       harnessSessionId: "harness-done",
       backendRef: { kind: "claude-code", conversationId: "harness-done" },
+    });
+    const sm = createStubSessionManager({ "test-id": session });
+    let capturedConfig: any;
+    sm.spawn = (config: any) => {
+      capturedConfig = config;
+      return createStubSession({ name: "claude-complete", id: "test-id" });
+    };
+    const result = await executeRespond(sm, { session: "test-id", message: "continue" });
+    assert.match(result.text, /Resume started for session/);
+    assert.equal(capturedConfig.resumeSessionId, "harness-done");
+  });
+
+  it("keeps completed sessions without a resumable backend closed by default", async () => {
+    const session = createStubSession({
+      status: "completed",
+      lifecycle: "terminal",
+      killReason: "done",
+      harnessSessionId: undefined,
+      backendRef: undefined,
     });
     const sm = createStubSessionManager({ "test-id": session });
     const result = await executeRespond(sm, { session: "test-id", message: "continue" });
@@ -197,7 +216,7 @@ describe("executeRespond", () => {
     assert.equal(capturedConfig.approvalExecutionState, "awaiting_plan_output");
     assert.equal(capturedConfig.planModeApproved, true);
     assert.equal(capturedConfig.pendingPlanApproval, false);
-    assert.match(capturedConfig.prompt, /The user has approved your plan/i);
+    assert.match(capturedConfig.prompt, /The user approved your plan/i);
     assert.equal(capturedConfig.sessionIdOverride, "dead-plan");
   });
 
@@ -397,7 +416,7 @@ describe("executeRespond", () => {
     assert.match(result.text, /Plan approved for session/);
     assert.equal(capturedConfig.resumeSessionId, "harness-plan-shutdown");
     assert.equal(capturedConfig.permissionMode, "bypassPermissions");
-    assert.match(capturedConfig.prompt, /The user has approved your plan/i);
+    assert.match(capturedConfig.prompt, /The user approved your plan/i);
     assert.equal(capturedConfig.sessionIdOverride, "dead-plan-shutdown");
     assert.equal(capturedConfig.approvalRationale, "The plan stays in bounds and only touches low-risk files.");
     assert.equal(notifications.length, 1);
@@ -442,7 +461,7 @@ describe("executeRespond", () => {
     assert.ok(result.text.includes("Resume started"));
     assert.equal(capturedConfig.resumeSessionId, "harness-plan-revise");
     assert.equal(capturedConfig.permissionMode, "plan");
-    assert.doesNotMatch(capturedConfig.prompt, /The user has approved your plan/i);
+    assert.doesNotMatch(capturedConfig.prompt, /The user approved your plan/i);
     assert.equal(capturedConfig.sessionIdOverride, "dead-plan-revise");
   });
 

@@ -24,4 +24,22 @@ describe("session display formatting", () => {
       "opencode | xai/grok-build-0.1",
     );
   });
+
+  it("prefers the backend's own effort-support report for Claude Code", () => {
+    // Static tables would show max for opus; the backend said it was downgraded.
+    assert.equal(
+      formatHarnessModelLabel({ harness: "claude-code", model: "opus", reasoningEffort: "max", reasoningEffortSupported: false }),
+      "claude-code | opus",
+    );
+    // Unknown to the static table, but the backend confirmed support.
+    assert.equal(
+      formatHarnessModelLabel({ harness: "claude-code", model: "claude-fable-5-1", reasoningEffort: "high", reasoningEffortSupported: true }),
+      "claude-code | claude-fable-5-1 | reasoning: high",
+    );
+    // Without a backend report the static capability fallback still applies.
+    assert.equal(
+      formatHarnessModelLabel({ harness: "claude-code", model: "opus", reasoningEffort: "high" }),
+      "claude-code | opus | reasoning: high",
+    );
+  });
 });

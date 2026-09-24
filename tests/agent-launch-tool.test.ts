@@ -954,7 +954,7 @@ describe("agent_launch allowedModels validation", () => {
     const result = await tool.execute("tool-id", { prompt: "test", model: "anthropic/claude-opus-4-6" });
 
     assert.ok(spawnConfig, "spawn should be called");
-    assert.equal(spawnConfig.model, "anthropic/claude-opus-4-6");
+    assert.equal(spawnConfig.model, "claude-opus-4-6");
     assert.match((result.content[0] as { text: string }).text, /Session launched successfully/);
   });
 
@@ -980,7 +980,7 @@ describe("agent_launch allowedModels validation", () => {
     const result = await tool.execute("tool-id", { prompt: "test", model: "anthropic/claude-opus-4-6" });
 
     assert.ok(spawnConfig, "spawn should be called");
-    assert.equal(spawnConfig.model, "anthropic/claude-opus-4-6");
+    assert.equal(spawnConfig.model, "claude-opus-4-6");
     assert.match((result.content[0] as { text: string }).text, /Session launched successfully/);
   });
 
@@ -999,7 +999,7 @@ describe("agent_launch allowedModels validation", () => {
     const result = await tool.execute("tool-id", { prompt: "test", model: "anthropic/claude-SONNET-4-6" });
 
     assert.ok(spawnConfig, "spawn should be called");
-    assert.equal(spawnConfig.model, "anthropic/claude-SONNET-4-6");
+    assert.equal(spawnConfig.model, "claude-SONNET-4-6");
     assert.match((result.content[0] as { text: string }).text, /Session launched successfully/);
   });
 
@@ -1094,7 +1094,7 @@ describe("agent_launch allowedModels validation", () => {
     const text = (result.content[0] as { text: string }).text;
     assert.match(text, /Session launched successfully/);
     assert.ok(spawnConfig, "spawn should be called");
-    assert.equal(spawnConfig.model, "anthropic/claude-sonnet-4-7");
+    assert.equal(spawnConfig.model, "claude-sonnet-4-7");
   });
 
   it("normalizes provider-prefixed Codex model ids before spawn", async () => {
@@ -1203,6 +1203,6 @@ describe("agent_launch allowedModels validation", () => {
     const text = (result.content[0] as { text: string }).text;
     assert.match(text, /Session launched successfully/);
     assert.ok(spawnConfig, "spawn should be called");
-    assert.equal(spawnConfig.model, "anthropic/claude-sonnet-4-7");
+    assert.equal(spawnConfig.model, "claude-sonnet-4-7");
   });
 });

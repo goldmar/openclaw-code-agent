@@ -48,4 +48,9 @@ export type {
   HarnessMessage,
   HarnessResult,
   HarnessLaunchOptions,
+  HarnessBackendInfo,
+  HarnessModelUsage,
+  HarnessPlanApprovalRequest,
+  HarnessPlanDecision,
+  HarnessUsage,
 } from "./types";

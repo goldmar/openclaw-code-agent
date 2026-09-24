@@ -44,32 +44,58 @@ describe("SessionTurnRuntime", () => {
     assert.deepEqual(events, ["question", "question"]);
   });
 
-  it("marks pending plan approval when a plan-mode tool call requests it", () => {
+  it("marks pending plan approval only for native plan-approval requests", () => {
     const planRequests: string[] = [];
     const toolCalls: string[] = [];
+    const planPaths: string[] = [];
+    const artifacts: string[] = [];
+    const events: string[] = [];
     const runtime = new SessionTurnRuntime({
       appendOutput: () => {},
       emitOutput: () => {},
       emitToolUse: (name) => { toolCalls.push(name); },
-      emitTurnEnd: () => {},
+      emitTurnEnd: (hadQuestion) => { events.push(hadQuestion ? "question" : "done"); },
       markPendingPlanApproval: (context) => { planRequests.push(context); },
       markAwaitingUserInput: () => {},
       applyInputRequested: () => {},
       completeTurn: () => {},
-      setPlanFilePath: () => {},
-      setLatestPlanArtifact: () => {},
+      setPlanFilePath: (path) => { planPaths.push(path); },
+      setLatestPlanArtifact: (artifact) => { artifacts.push(artifact.markdown); },
     });
 
-    runtime.noteToolCall({
-      name: "ExitPlanMode",
-      input: {},
-      currentPermissionMode: "plan",
-      permissionMode: "plan",
+    // Tool names are display-only: no ExitPlanMode / plan-file heuristics.
+    runtime.noteToolCall({ name: "ExitPlanMode", input: {} });
+    runtime.noteToolCall({ name: "Write", input: { file_path: "/home/u/.claude/plans/p.md" } });
+    assert.deepEqual(planRequests, []);
+    assert.deepEqual(planPaths, []);
+    assert.deepEqual(toolCalls, ["ExitPlanMode", "Write"]);
+
+    runtime.notePlanApprovalRequest({
+      artifact: { steps: [], markdown: "1. Step" },
+      planFilePath: "/home/u/.claude/plans/p.md",
+      planModeApproved: false,
+    });
+    runtime.notePlanApprovalRequest({
+      artifact: { steps: [], markdown: "1. Step" },
       planModeApproved: false,
     });
 
-    assert.deepEqual(planRequests, ["plan-mode"]);
-    assert.deepEqual(toolCalls, ["ExitPlanMode"]);
+    assert.deepEqual(planRequests, ["plan-mode", "plan-mode"]);
+    assert.deepEqual(planPaths, ["/home/u/.claude/plans/p.md"]);
+    assert.deepEqual(artifacts, ["1. Step", "1. Step"]);
+    assert.deepEqual(events, ["question"], "one waiting notification until the next user turn");
+  });
+
+  it("ignores native plan requests after the plan was approved", () => {
+    const planRequests: string[] = [];
+    const runtime = new SessionTurnRuntime({
+      appendOutput: () => {}, emitOutput: () => {}, emitToolUse: () => {},
+      emitTurnEnd: () => {}, markPendingPlanApproval: (context) => { planRequests.push(context); },
+      markAwaitingUserInput: () => {}, applyInputRequested: () => {}, completeTurn: () => {},
+      setPlanFilePath: () => {}, setLatestPlanArtifact: () => {},
+    });
+    runtime.notePlanApprovalRequest({ artifact: { steps: [], markdown: "late" }, planModeApproved: true });
+    assert.deepEqual(planRequests, []);
   });
 
   it("completes a successful turn when no input is needed and no messages remain queued", () => {

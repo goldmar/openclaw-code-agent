@@ -5,7 +5,6 @@
  * must implement so the rest of the plugin stays harness-agnostic.
  */
 
-import type { McpServerConfig } from "../config";
 import type {
   BackendCapabilityFlags,
   PendingInputState,
@@ -14,20 +13,75 @@ import type {
   SessionBackendRef,
   SessionBackendKind,
   ThreadAction,
+  WorktreeStrategy,
 } from "../types";
 
 // ---------------------------------------------------------------------------
 // Harness message types (normalised from each SDK's wire format)
 // ---------------------------------------------------------------------------
 
+/** Per-model token and cost totals reported by a backend. */
+export interface HarnessModelUsage {
+  model: string;
+  /** Canonical pricing id when the backend reports one (e.g. Claude `canonicalModel`). */
+  canonicalModel?: string;
+  costUsd: number;
+  inputTokens: number;
+  outputTokens: number;
+  reasoningTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  /** Which price table the backend used; `unknown` means the cost is a guess. */
+  costBasis?: "list" | "managed" | "unknown";
+}
+
+/** Usage snapshot reported by a backend. Fields are replaced, not summed. */
+export interface HarnessUsage {
+  models?: HarnessModelUsage[];
+  contextTokens?: number;
+  contextWindow?: number;
+  /** Live, non-ambient background tasks the backend is still running. */
+  backgroundTasks?: number;
+}
+
 export interface HarnessResult {
   success: boolean;
   outcome?: "completed" | "failed" | "interrupted";
+  /**
+   * True when the backend classified success/failure itself (structured error
+   * codes). Session then skips the text-pattern startup-failure fallback that
+   * exists for backends without structured failure reporting.
+   */
+  outcomeAuthoritative?: boolean;
+  /** Structured backend failure code (e.g. Claude `authentication_failed`). */
+  errorCode?: string;
   duration_ms: number;
   total_cost_usd: number;
   num_turns: number;
   result?: string;
   session_id: string;
+  usage?: HarnessUsage;
+}
+
+/** A plan-approval request raised natively by the backend (Claude ExitPlanMode). */
+export interface HarnessPlanApprovalRequest {
+  requestId: string;
+  artifact: PlanArtifact;
+  planFilePath?: string;
+}
+
+/** Resolution of a native plan-approval request. */
+export type HarnessPlanDecision =
+  | { kind: "approve"; permissionMode: string }
+  | { kind: "revise"; feedback: string };
+
+/** Backend-reported model/effort facts (what actually runs, not what was requested). */
+export interface HarnessBackendInfo {
+  model?: string;
+  /** Effort the backend applies; null when it sends none. */
+  reasoningEffort?: ReasoningEffort | null;
+  /** Whether the requested effort is supported by the resolved model. */
+  reasoningEffortSupported?: boolean;
 }
 
 export type HarnessMessage =
@@ -39,6 +93,9 @@ export type HarnessMessage =
   | { type: "pending_input"; state: PendingInputState }
   | { type: "pending_input_resolved"; requestId?: string }
   | { type: "plan_artifact"; artifact: PlanArtifact; finalized: boolean }
+  | { type: "plan_approval_requested"; request: HarnessPlanApprovalRequest }
+  | { type: "backend_info"; info: HarnessBackendInfo }
+  | { type: "usage_updated"; usage: HarnessUsage }
   | { type: "settings_changed"; permissionMode?: string }
   | { type: "run_completed"; data: HarnessResult };
 
@@ -68,8 +125,11 @@ export interface HarnessLaunchOptions {
    * resumed thread's history is reverted in place. Files are not reverted.
    */
   rewindTurns?: number;
+  /** Worktree strategy of the session (Claude Code uses it for `projectConfigRoot`). */
+  worktreeStrategy?: WorktreeStrategy;
+  /** The repository checkout the session's worktree was created from. */
+  originalWorkdir?: string;
   abortController?: AbortController;
-  mcpServers?: McpServerConfig;
   /** Optional tool-intercept callback (CC sessions only). */
   canUseTool?: CanUseToolCallback;
 }
@@ -100,6 +160,12 @@ export interface HarnessSession {
 
   /** Resolve an active free-text pending-input request. */
   submitPendingInputText?(text: string): Promise<boolean>;
+
+  /**
+   * Resolve a pending native plan-approval request. Returns false when no
+   * native request is pending, so callers fall back to prompt-level handling.
+   */
+  resolvePlanDecision?(decision: HarnessPlanDecision): Promise<boolean>;
 
   /** Interrupt the current turn. */
   interrupt?(): Promise<void>;

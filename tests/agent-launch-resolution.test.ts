@@ -192,7 +192,7 @@ describe("resolveAgentLaunchRequest", () => {
 
     assert.equal(result.kind, "resolved");
     if (result.kind === "resolved") {
-      assert.equal(result.resolvedModel, "anthropic/claude-sonnet-5");
+      assert.equal(result.resolvedModel, "claude-sonnet-5");
     }
   });
 
@@ -207,7 +207,7 @@ describe("resolveAgentLaunchRequest", () => {
     if (result.kind === "resolved") assert.equal(result.resolvedModel, "sonnet");
   });
 
-  it("rejects the old provider-qualified Claude default even when its allowlist matches", () => {
+  it("canonicalizes the provider-qualified Claude default to the bare Claude Code id", () => {
     setPluginConfig({ harnesses: { "claude-code": {
       defaultModel: "anthropic/claude-opus-5-5",
       allowedModels: ["sonnet", "opus"],
@@ -218,18 +218,19 @@ describe("resolveAgentLaunchRequest", () => {
       {},
     );
 
-    assert.equal(result.kind, "error");
-    if (result.kind === "error") assert.match(result.text, /not supported by Claude Code.*"opus" alias/);
+    assert.equal(result.kind, "resolved");
+    if (result.kind === "resolved") assert.equal(result.resolvedModel, "claude-opus-5-5");
   });
 
-  it("rejects an explicit provider-qualified Opus 5.5 override", () => {
+  it("strips the anthropic/ provider prefix from an explicit Claude override", () => {
     const result = resolveAgentLaunchRequest(
       { prompt: "Use Opus", model: "anthropic/claude-opus-5-5" },
       { workspaceDir: "/tmp", oneShotCliRun: true } as any,
       {},
     );
 
-    assert.equal(result.kind, "error");
+    assert.equal(result.kind, "resolved");
+    if (result.kind === "resolved") assert.equal(result.resolvedModel, "claude-opus-5-5");
   });
 
   it("normalizes provider-prefixed Codex model ids before allowlist validation", () => {
@@ -527,7 +528,7 @@ describe("resolveAgentLaunchRequest", () => {
 
     assert.equal(result.kind, "resolved");
     if (result.kind === "resolved") {
-      assert.equal(result.resolvedModel, "anthropic/claude-opus-4-7");
+      assert.equal(result.resolvedModel, "claude-opus-4-7");
       assert.equal(result.permissionMode, "plan");
       assert.equal(result.planApproval, "delegate");
     }

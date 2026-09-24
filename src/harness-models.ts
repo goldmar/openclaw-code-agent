@@ -3,10 +3,13 @@ import { isModelAllowed } from "./model-allowlist";
 export function canonicalizeModelForHarness(harness: string, model: string | undefined): string | undefined {
   const trimmed = model?.trim();
   if (!trimmed) return undefined;
-  if (harness !== "codex") return trimmed;
+  // Claude Code and Codex take bare model ids; they reject OpenClaw's
+  // provider-qualified spellings (e.g. `anthropic/claude-opus-5-5`).
+  const nativeProvider = harness === "codex" ? "openai" : harness === "claude-code" ? "anthropic" : undefined;
+  if (!nativeProvider) return trimmed;
 
   const [provider, ...modelParts] = trimmed.split("/");
-  if (provider?.toLowerCase() === "openai" && modelParts.length === 1 && modelParts[0]?.trim()) {
+  if (provider?.toLowerCase() === nativeProvider && modelParts.length === 1 && modelParts[0]?.trim()) {
     return modelParts[0].trim();
   }
   return trimmed;
@@ -33,9 +36,6 @@ export function isModelAllowedForHarness(
 }
 
 export function isModelFormatSupportedForHarness(harness: string, model: string | undefined): boolean {
-  // Claude Code resolves the opus alias itself. This provider-qualified spelling
-  // matches the allowlist but is rejected by Claude Code before a turn starts.
-  if (harness === "claude-code" && model?.toLowerCase() === "anthropic/claude-opus-5-5") return false;
   if (harness !== "codex" || !model) return true;
   return !model.includes("/");
 }

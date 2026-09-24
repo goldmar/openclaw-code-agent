@@ -47,7 +47,7 @@ When a session already exists for the task, keep using it.
 - Waiting for plan approval: `agent_respond(session, message, approve=true)` or `agent_request_plan_approval(...)` if delegated approval must escalate to the user
 - Waiting for a question answer: `agent_respond(session, message)`
 - Killed/stopped by restart: `agent_respond(session, message)`
-- Completed but needs follow-up: `agent_launch(resume_session_id=session_id, prompt="...")`
+- Completed but needs follow-up: `agent_respond(session, message)` resumes the same backend conversation (Claude Code, Codex, and OpenCode), or `agent_launch(resume_session_id=session_id, prompt="...")` when you need to change launch settings
 - Running Codex session needs a correction mid-turn: `agent_respond(session, message)` steers it into the current turn; add `interrupt=true` only to stop the turn and restart from your message
 - Codex went down a wrong path in its last turn(s): `agent_launch(resume_session_id=session_id, fork_session=true, rewind_turns=1, prompt="...")` forks from before those turns (omit `fork_session` to revert the thread in place). File changes are not undone; tell the agent to revert them if needed
 - Long Codex session near its context limit: `agent_session_action(session, action="compact")`

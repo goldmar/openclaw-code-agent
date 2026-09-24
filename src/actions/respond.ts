@@ -129,8 +129,14 @@ async function spawnFreshRelaunch(
   }
 }
 
-const PLAN_APPROVAL_SYSTEM_PREFIX =
-  "[SYSTEM: The user has approved your plan. Exit plan mode immediately and implement the changes with full permissions. Do not ask for further confirmation.]\n\n";
+/**
+ * Resume-only approval framing. A live session receives approvals natively
+ * (Claude: the held ExitPlanMode request is allowed), but a session that was
+ * suspended while its plan waited for review restarts without that request, so
+ * the approval has to travel as the first user message of the resumed run.
+ */
+const RESUMED_PLAN_APPROVAL_PREFIX =
+  "The user approved your plan while this session was suspended. Implement the approved plan now; do not ask for further confirmation.\n\n";
 
 function normalizeApprovalRationale(rationale?: string): string | undefined {
   const normalized = rationale?.replace(/\s+/g, " ").trim();
@@ -279,11 +285,12 @@ async function tryAutoResume(
   const resumable = assessment.kind === "resume" || canAutoResumeStoppedPlanDecision(session);
   if (!resumable) return undefined;
 
-  // When approve=true is sent to a dead plan-mode session, forward the approval
-  // into the resumed session by switching its permission mode to bypassPermissions
-  // and prepending the system approval prefix. Without this, the resume would
-  // inherit permissionMode="plan", the first turn-end would re-set
-  // pendingPlanApproval=true, and Alice would be asked to approve a second time.
+  // When approve=true is sent to a suspended plan-mode session (e.g. idle-killed
+  // while its plan waited for review), forward the approval into the resumed
+  // session by starting it in bypassPermissions with a plain approval message.
+  // Without this, the resume would inherit permissionMode="plan", the first
+  // turn-end would re-set pendingPlanApproval=true, and the user would be asked
+  // to approve a second time.
   const isPlanApproval = !!(options.approve && canAutoResumePlanApproval(session));
   const approvalRationale = isPlanApproval ? normalizeApprovalRationale(options.approvalRationale) : undefined;
 
@@ -297,9 +304,9 @@ async function tryAutoResume(
     // Preserve all relevant runtime/session-routing knobs so auto-resume is a
     // continuation of the exact same lifecycle, not a best-effort relaunch.
     const resumeConfig: SessionConfig = {
-      // Inject the approval prefix so Claude knows it's approved and switches
-      // out of plan mode without re-presenting the plan.
-      prompt: isPlanApproval ? PLAN_APPROVAL_SYSTEM_PREFIX + message : message,
+      // Tell the agent its plan is approved so it implements without
+      // re-presenting the plan.
+      prompt: isPlanApproval ? RESUMED_PLAN_APPROVAL_PREFIX + message : message,
       sessionIdOverride: assessment.stableSessionId,
       workdir: session.workdir,
       name: session.name,

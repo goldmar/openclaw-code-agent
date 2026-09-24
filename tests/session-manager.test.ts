@@ -2097,7 +2097,6 @@ describe("SessionManager resumed launch routing", () => {
       capabilities: {
         nativePendingInput: true,
         nativePlanArtifacts: true,
-        worktrees: "plugin-managed" as const,
       },
       launch() {
         launchCalls += 1;
@@ -2190,7 +2189,6 @@ describe("SessionManager resumed launch routing", () => {
       capabilities: {
         nativePendingInput: true,
         nativePlanArtifacts: true,
-        worktrees: "plugin-managed" as const,
       },
       launch() {
         launchCalls += 1;

@@ -112,17 +112,17 @@ The opt-in `tests/session-task-lifecycle-candidate.test.ts` exercises actual asy
 
 `src/harness/types.ts` defines the `AgentHarness` interface. The built-in harnesses are:
 
-- `claude-code`: native Claude Code harness with plan-mode and `AskUserQuestion` interception
+- `claude-code`: native Claude Code harness. `canUseTool` intercepts `AskUserQuestion` (structured pending input) and holds `ExitPlanMode` open as a native plan-approval request that approve/revise decisions answer directly
 - `codex`: native Codex App Server harness (typed against vendored `codex app-server generate-ts` output in `src/harness/codex-app-server-protocol/`) with structured pending input and approvals, structured plan artifacts, backend refs, steering, rewind/fork, and compact/review thread actions
-- `opencode`: experimental OpenCode server harness using a per-session local `opencode serve` process, classic session lifecycle routes for prompt/status/messages/replies, native pending input, plugin-managed worktrees, and no native OpenClaw plan artifacts
+- `opencode`: experimental OpenCode server harness using one lazily started, shared local `opencode serve` process, classic session routes with `?directory=` for prompts/messages/replies, event-stream turn completion, OpenCode's built-in `plan`/`build` agents, native pending input, plugin-managed worktrees, and no native OpenClaw plan artifacts
 
 Important mapping detail:
 
-- Claude Code maps plugin `permissionMode` directly to the SDK modes.
+- Claude Code maps plugin `permissionMode` directly to the SDK modes. Plan approval leaves plan mode through the `ExitPlanMode` permission result (`setMode`), not through a prompt.
 - Codex runs through the Codex App Server transport. Plugin `plan` mode maps to Codex's `plan` collaboration mode and remains a plugin-owned approval workflow even when the backend exposes structured plan artifacts; the session system prompt travels as thread `developerInstructions`. Codex's sandbox/approval settings come from `harnesses.codex` and do not change with the OCA permission mode. Codex worktree launches use the plugin-managed worktree as the thread cwd (the App Server has no worktree API).
 - Codex follow-ups during a running turn are steered into it; `compact` and `review` thread actions travel through the same ordered prompt stream as user messages so they never overlap a turn.
 - OCA keeps its own verifier-driven goal loop for every harness instead of Codex's native `thread/goal/*`, which is Codex-only and model-judged.
-- OpenCode runs through a localhost OpenCode server transport. Fresh prompts use classic `prompt_async`, completion waits poll classic session status, message/result fetches use classic message routes, and permission/question replies use classic reply routes because v2 session wait is not available yet. Session create, fork, abort, and permission-rule updates also use classic routes.
+- OpenCode runs through one shared localhost OpenCode server. Fresh prompts use classic `prompt_async`; completion comes from the demultiplexed `/global/event` stream (`session.idle`), with session-status polling only while that stream is disconnected. Message/result fetches, permission/question replies, session create, fork, abort, and permission-rule updates use classic routes. Plan mode prompts the built-in `plan` agent; approved plans continue on the `build` agent. If the server dies, in-flight turns fail and the next turn starts a new server.
 - `agent_respond` is the only continuation primitive across built-in backends; fork flows still go through `agent_launch(..., resume_session_id=..., fork_session=true)`.
 
 Boundary note:

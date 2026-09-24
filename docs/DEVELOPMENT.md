@@ -115,7 +115,7 @@ Additional smoke entry points:
 - `pnpm test:integ:crabbox` for deterministic Codex proof/Crabbox harness coverage; live Telegram Desktop proof stays disabled unless `OPENCLAW_RUN_LIVE_TELEGRAM_PROOF=1` and `--allow-live` are both used
 - `pnpm smoke:codex-live` for opt-in real App Server validation when a live Codex environment is available (developer instructions, resume, steering, compaction, and rewind-fork; uses `gpt-6-luna` unless `OPENCLAW_CODEX_SMOKE_MODEL` is set)
 - `pnpm smoke:codex-release` for the opt-in release check covering structured plan delivery and resume after a plan turn
-- `pnpm smoke:opencode-live` for opt-in real OpenCode server validation when `opencode >= 1.16.2` and provider auth are available
+- `pnpm smoke:opencode-live` for opt-in real OpenCode server validation when `opencode >= 1.16.2` is available. Add `OPENCLAW_RUN_LIVE_OPENCODE_COMPLETION_SMOKE=1` to run a real prompt (needs provider auth), `OPENCLAW_OPENCODE_SMOKE_MODEL=provider/model` to pick its model, and `OPENCLAW_OPENCODE_COMMAND` to test a different `opencode` binary
 
 ### Codex App Server Protocol Types
 

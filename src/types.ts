@@ -133,6 +133,12 @@ export interface BackendCapabilityFlags {
   nativePlanArtifacts: boolean;
   /** Backend thread actions supported while the session is live. */
   threadActions?: readonly ThreadActionKind[];
+  /**
+   * The backend carries plan approve/revise decisions natively (Claude
+   * ExitPlanMode permission results, OpenCode plan/build agent switching), so
+   * OCA forwards the user's words without prompt-level plan-decision framing.
+   */
+  nativePlanDecisions?: boolean;
 }
 
 export type PendingInputDecision =

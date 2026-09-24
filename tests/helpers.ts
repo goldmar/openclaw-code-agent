@@ -2,7 +2,13 @@
  * Shared test helpers — fake harness, stub factories, and utilities.
  */
 
-import type { AgentHarness, HarnessSession, HarnessMessage, HarnessLaunchOptions } from "../src/harness/types";
+import type {
+  AgentHarness,
+  HarnessLaunchOptions,
+  HarnessMessage,
+  HarnessPlanDecision,
+  HarnessSession,
+} from "../src/harness/types";
 import type { SessionConfig } from "../src/types";
 
 type LegacyHarnessMessage =
@@ -54,15 +60,20 @@ export interface FakeHarness extends AgentHarness {
   /** When set, the session handle exposes `steer()` returning this value. */
   steerResult?: boolean;
   steerCalls: string[];
+  /** Native plan decisions resolved through resolvePlanDecision (nativePlanDecisions harnesses only). */
+  planDecisions: HarnessPlanDecision[];
+  /** Whether a native plan-approval request is pending in the fake backend. */
+  nativePlanRequestPending: boolean;
 }
 
 export function createFakeHarness(
   name: string = "fake-harness",
-  options?: { initialPromptConsumptionPaused?: boolean },
+  options?: { initialPromptConsumptionPaused?: boolean; nativePlanDecisions?: boolean },
 ): FakeHarness {
   let pushMessage: ((msg: HarnessMessage) => void) = () => {};
   let endMessages: (() => void) = () => {};
   let promptConsumptionPaused = options?.initialPromptConsumptionPaused ?? false;
+  const nativePlanDecisions = options?.nativePlanDecisions === true;
   let resumePromptConsumption: (() => void) | null = null;
 
   const harness: FakeHarness = {
@@ -72,7 +83,10 @@ export function createFakeHarness(
     capabilities: {
       nativePendingInput: false,
       nativePlanArtifacts: false,
+      ...(nativePlanDecisions ? { nativePlanDecisions: true } : {}),
     },
+    planDecisions: [],
+    nativePlanRequestPending: false,
     consumedPrompts: [],
     steerCalls: [],
     lastLaunchOptions: undefined,
@@ -137,6 +151,16 @@ export function createFakeHarness(
         async setPermissionMode(mode: string): Promise<void> {
           harness.lastSetPermissionMode = mode;
         },
+        ...(nativePlanDecisions
+          ? {
+              async resolvePlanDecision(decision: HarnessPlanDecision): Promise<boolean> {
+                if (!harness.nativePlanRequestPending) return false;
+                harness.nativePlanRequestPending = false;
+                harness.planDecisions.push(decision);
+                return true;
+              },
+            }
+          : {}),
         async streamInput(input: AsyncIterable<any>): Promise<void> {
           harness.lastStreamInput = input;
         },
