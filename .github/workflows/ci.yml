@@ -8,12 +8,14 @@ on:
     branches:
       - main
 
+# Superseded pull request runs are cancelled; every push to main runs to completion.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  REPORT_NODE_VERSION: 24.16.0
 
 permissions:
   contents: read
@@ -48,8 +50,192 @@ jobs:
           node-version: ${{ matrix.node-version }}
           cache: pnpm
 
-      - name: Install dependencies
+      # The frozen install is also the lockfile integrity check: it fails when
+      # pnpm-lock.yaml is out of sync with package.json.
+      - name: Install dependencies (frozen lockfile)
+        id: install
         run: pnpm install --frozen-lockfile
+        continue-on-error: true
+
+      - name: Fail if dependencies could not be installed
+        if: steps.install.outcome != 'success'
+        run: |
+          echo "ERR_PNPM_OUTDATED_LOCKFILE or install failure: pnpm install --frozen-lockfile failed."
+          exit 1
 
       - name: Verify
         run: pnpm run verify
+
+      - name: Measure bundle size
+        if: matrix.node-version == env.REPORT_NODE_VERSION
+        run: |
+          mkdir -p .reports
+          node --input-type=module -e "
+            import { writeFileSync } from 'node:fs';
+            import { createBundleSizeReport } from './scripts/check-bundle-size.mjs';
+            const { body, overLimit, sizeKb } = createBundleSizeReport('dist');
+            writeFileSync('.reports/bundle-size.json', JSON.stringify({ body, overLimit, sizeKb }));
+          "
+
+      - name: Verify packed npm consumer dependency graph
+        if: matrix.node-version == env.REPORT_NODE_VERSION
+        run: pnpm verify:npm-consumer
+
+      # The report jobs below read this. Written even when earlier steps failed,
+      # so a lockfile failure is reported as one.
+      - name: Record CI report
+        if: always() && matrix.node-version == env.REPORT_NODE_VERSION
+        env:
+          INSTALL_OUTCOME: ${{ steps.install.outcome }}
+        run: |
+          mkdir -p .reports
+          printf '%s\n' "$INSTALL_OUTCOME" > .reports/lockfile-outcome.txt
+
+      - name: Upload CI report
+        if: always() && matrix.node-version == env.REPORT_NODE_VERSION
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ci-report
+          path: .reports/
+          if-no-files-found: error
+          retention-days: 7
+
+  # Required check names. Both jobs reuse the Node 24 Verify leg's install and
+  # build instead of repeating them, and run with `!cancelled()` so a failed
+  # Verify leg fails them rather than skipping them (a skipped required check
+  # would count as passing).
+  size-check:
+    name: Bundle Size Check
+    needs: verify
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Download CI report
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ci-report
+          path: .reports
+
+      - name: Read bundle size report
+        id: bundle-size
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const fs = require('fs');
+            const path = '.reports/bundle-size.json';
+            if (!fs.existsSync(path)) {
+              core.setFailed('No bundle size report: the Node 24 Verify leg failed before the bundle was measured.');
+              return;
+            }
+            const { body, overLimit, sizeKb } = JSON.parse(fs.readFileSync(path, 'utf8'));
+            core.setOutput('body', body);
+            core.setOutput('size_kb', sizeKb);
+            core.setOutput('over_limit', overLimit ? 'true' : 'false');
+            await core.summary.addRaw(body, true).write();
+
+      - name: Comment bundle size on PR
+        if: steps.bundle-size.outputs.body != '' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          COMMENT_BODY: ${{ steps.bundle-size.outputs.body }}
+        with:
+          script: |
+            const body = process.env.COMMENT_BODY;
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const existing = comments.find(
+              c => c.user.login === 'github-actions[bot]' && c.body.includes('## Bundle Size Report')
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+              return;
+            }
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+
+      - name: Fail if bundle exceeds limit
+        if: steps.bundle-size.outputs.over_limit == 'true'
+        env:
+          SIZE_KB: ${{ steps.bundle-size.outputs.size_kb }}
+        run: |
+          echo "Complete bundle size $SIZE_KB KB exceeds the 700 KB limit."
+          exit 1
+
+  lockfile-check:
+    name: Lockfile Integrity Check
+    needs: verify
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Download CI report
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ci-report
+          path: .reports
+
+      - name: Read frozen install outcome
+        id: lockfile
+        run: |
+          outcome="$(cat .reports/lockfile-outcome.txt 2>/dev/null || echo missing)"
+          echo "outcome=$outcome" >> "$GITHUB_OUTPUT"
+          echo "Frozen install outcome on Node $REPORT_NODE_VERSION: $outcome"
+
+      - name: Comment on PR if lockfile is out of sync
+        if: steps.lockfile.outputs.outcome == 'failure' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const body = [
+              '## ⚠️ Lockfile Out of Sync',
+              '',
+              'The `pnpm-lock.yaml` file is out of sync with `package.json`.',
+              '',
+              'This happens when `package.json` is updated but the lockfile is not regenerated.',
+              '',
+              '**To fix, run locally:**',
+              '```bash',
+              'pnpm install',
+              'git add pnpm-lock.yaml',
+              'git commit -m "chore: update pnpm lockfile"',
+              '```',
+              '',
+              '> Always commit `pnpm-lock.yaml` alongside any changes to `package.json`.',
+            ].join('\n');
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+
+      - name: Fail unless the frozen install succeeded
+        if: steps.lockfile.outputs.outcome != 'success'
+        env:
+          OUTCOME: ${{ steps.lockfile.outputs.outcome }}
+        run: |
+          echo "pnpm install --frozen-lockfile did not succeed (outcome: $OUTCOME)."
+          echo "Run 'pnpm install' locally and commit the updated lockfile."
+          exit 1

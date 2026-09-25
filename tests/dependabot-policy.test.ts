@@ -12,12 +12,24 @@ const workflow = readFileSync(
 );
 
 describe("Dependabot maintenance policy", () => {
-  it("uses weekly updates without a publication-age cooldown and keeps CodeQL actions together", () => {
-    assert.equal((dependabot.match(/interval: weekly/g) ?? []).length, 2);
-    assert.doesNotMatch(dependabot, /cooldown:|default-days:/);
+  it("uses weekly updates with a 3-day cooldown and keeps CodeQL actions together", () => {
+    const entries = dependabot.split(/\n  - package-ecosystem: /).slice(1);
+    assert.equal(entries.length, 3);
+    for (const entry of entries) {
+      assert.match(entry, /interval: weekly/);
+      assert.match(entry, /cooldown:\n\s+default-days: 3\n/);
+    }
     assert.match(dependabot, /codeql:\n\s+patterns:\n\s+- github\/codeql-action\/\*/);
     assert.match(dependabot, /low-risk-development:[\s\S]*dependency-type: development/);
     assert.match(dependabot, /update-types:\n\s+- minor\n\s+- patch/);
+    assert.match(dependabot, /directory: \/\.github\/release-tools/);
+  });
+
+  it("keeps the bundle toolchain out of the grouped low-risk development updates", () => {
+    const group = dependabot.split("low-risk-development:")[1]?.split("open-pull-requests-limit")[0] ?? "";
+    for (const name of ["esbuild", "typescript", "tsx", "typebox"]) {
+      assert.match(group, new RegExp(`exclude-patterns:[\\s\\S]*- ${name}\\n`), name);
+    }
   });
 
   it("uses a pinned, least-privilege privileged workflow without checking out PR code", () => {
@@ -43,6 +55,11 @@ describe("Dependabot maintenance policy", () => {
     assert.match(workflow, /version-update:semver-patch\|version-update:semver-minor/);
     assert.match(workflow, /direct:development/);
     assert.match(workflow, /anthropic\*\|\*claude\*\|\*openclaw\*/);
+    assert.match(workflow, /\*esbuild\*\|\*typescript\*\|\*tsx\*\|\*typebox\*\)\n\s+echo "Manual review required for build toolchain dependency/);
+    assert.ok(
+      workflow.indexOf("*esbuild*|*typescript*|*tsx*|*typebox*") < workflow.indexOf('"$DEPENDENCY_TYPE" == "direct:development"'),
+      "toolchain updates must stop before the development-dependency auto-merge path",
+    );
     assert.match(workflow, /greptile-apps\[bot\]/);
     assert.match(workflow, /Confidence Score: 5\/5/);
     assert.match(workflow, /No blocking issues found/);
