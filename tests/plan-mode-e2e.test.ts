@@ -248,7 +248,7 @@ describe("Plan mode E2E: approve=true on idle-killed plan session (double-approv
     //  - getPersistedSession() returns the dead session
     //  - launchAndAwaitRunning() captures the config and returns a fake running session
     const sm = {
-      resolve: (_ref: string) => null,
+      resolve: (_ref: string): null => null,
       getPersistedSession: (_ref: string) => deadPersistedSession,
       notifySession: () => {},
       launchAndAwaitRunning: async (config: import("../src/types").SessionConfig) => {
@@ -310,7 +310,7 @@ describe("Plan mode E2E: approve=true on idle-killed plan session (double-approv
     let capturedResumeConfig: import("../src/types").SessionConfig | undefined;
 
     const sm = {
-      resolve: (_ref: string) => null,
+      resolve: (_ref: string): null => null,
       getPersistedSession: (_ref: string) => deadDefaultSession,
       notifySession: () => {},
       launchAndAwaitRunning: async (config: import("../src/types").SessionConfig) => {
@@ -357,7 +357,7 @@ describe("Plan mode E2E: approve=true on idle-killed plan session (double-approv
     let capturedConfig: any;
 
     const sm = {
-      resolve: (_ref: string) => null,
+      resolve: (_ref: string): null => null,
       getPersistedSession: (_ref: string) => deadPlanSession,
       notifySession: () => {},
       launchAndAwaitRunning: async (config: any) => {
@@ -509,7 +509,7 @@ describe("Plan mode E2E: native plan decisions", () => {
       session.switchPermissionMode("bypassPermissions");
       await session.sendMessage("Approved. Go ahead.");
       assert.deepEqual(pushed.texts, [], "the approval phrase is not replayed as a user turn");
-      assert.equal(session.planModeApproved, true);
+      assert.equal(session.controlStateSnapshot().planModeApproved, true);
       assert.equal(fakeHarness.lastSetPermissionMode, undefined, "native approval sets the mode inside the permission result");
     } finally {
       pushed.restore();

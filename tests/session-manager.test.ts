@@ -17,6 +17,8 @@ import { computeSessionMetrics } from "../src/session-metrics";
 import { registerHarness } from "../src/harness";
 import { createFakeHarness, TEST_RUNTIME_LLM, tick } from "./helpers";
 import { setGitHubCliAvailabilityForTests } from "../src/worktree-repo";
+import type { PersistedSessionInfo } from "../src/types";
+import type { NotificationButton } from "../src/session-interactions";
 
 // PR buttons depend on GitHub CLI availability; never probe the host `gh` (a slow
 // cold start used to hit the probe timeout and flip these tests).
@@ -68,7 +70,7 @@ function fakeSession(overrides: Record<string, any> = {}): any {
     approvalPromptFailedAt: undefined,
     latestPlanArtifact: undefined,
     latestPlanArtifactVersion: undefined,
-    getOutput: (n?: number) => [],
+    getOutput: (n?: number): never[] => [],
     kill: () => {},
     on: () => {},
     ...overrides,
@@ -1361,14 +1363,14 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     const scheduledKeys: string[] = [];
     let runtimeGcCallback: (() => void) | undefined;
 
-    (sm as any).store.getNextSessionOutputCleanupAt = () => undefined;
+    (sm as any).store.getNextSessionOutputCleanupAt = (): undefined => undefined;
     (sm as any).maintenance.schedule = ((key: string, _at: number, cb: () => void) => {
       scheduledKeys.push(key);
       runtimeGcCallback = cb;
     }) as any;
     (sm as any).store.shouldGcActiveSession = () => true;
     (sm as any).store.persistTerminal = () => {};
-    (sm as any).store.getPersistedSession = () => undefined;
+    (sm as any).store.getPersistedSession = (): undefined => undefined;
     (sm as any).registry.remove = () => {};
 
     const session = fakeSession({ id: "gc-session", status: "completed", completedAt: now });
@@ -1393,7 +1395,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
       sessionId: "evicted-session",
       harnessSessionId: "evicted-thread",
       backendRef: { kind: "claude-code", conversationId: "evicted-thread" },
-      outputPath: undefined,
+      outputPath: undefined as string | undefined,
     }];
 
     (sm as any).enforcePersistedRetention();
@@ -1770,7 +1772,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
 
     (sm as any).store.persisted.set(pending.harnessSessionId, pending);
     (sm as any).store.idIndex.set(pending.sessionId, pending.harnessSessionId);
-    (sm as any).resolveWorktreeRepoDir = () => undefined;
+    (sm as any).resolveWorktreeRepoDir = (): undefined => undefined;
     (sm as any).resolveRepoPolicy = () => {
       throw new Error("resolveRepoPolicy should not run without a repo dir");
     };
@@ -1837,7 +1839,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
     (sm as any).store.persisted.set(pending.harnessSessionId, pending);
     (sm as any).store.idIndex.set(pending.sessionId, pending.harnessSessionId);
     (sm as any).interactions.isGitHubCliAvailable = () => true;
-    (sm as any).resolveWorktreeRepoDir = () => undefined;
+    (sm as any).resolveWorktreeRepoDir = (): undefined => undefined;
     (sm as any).resolveRepoPolicy = () => {
       throw new Error("resolveRepoPolicy should not run without a repo dir");
     };
@@ -2088,7 +2090,7 @@ describe("SessionManager.bootstrapMaintenanceSchedules()", () => {
 
     try {
       const scheduled: Array<{ key: string; at: number; cb: () => void }> = [];
-      const pending = {
+      const pending: PersistedSessionInfo = {
         sessionId: "stale-pending-session",
         harnessSessionId: "stale-pending-thread",
         backendRef: { kind: "claude-code", conversationId: "stale-pending-thread" },
@@ -2204,10 +2206,12 @@ describe("SessionManager.notifySession()", () => {
 
     const presentation = buildPresentation(request.buttons);
     assert.deepEqual(
-      presentation?.blocks.map((block) => block.buttons.map((button) => button.label)),
+      presentation?.blocks.map((block) => (block.type === "buttons" ? block.buttons.map((button) => button.label) : [])),
       [["Start Plan", "Dismiss"]],
     );
-    assert.match(presentation?.blocks[0]?.buttons[0]?.value ?? "", /^code-agent:/);
+    const firstBlock = presentation?.blocks[0];
+    assert.ok(firstBlock?.type === "buttons");
+    assert.match(firstBlock.buttons[0]?.value ?? "", /^code-agent:/);
   });
 });
 
@@ -3174,7 +3178,7 @@ describe("SessionManager turn-end wake", () => {
     assert.match(rendered, /Unknowns \/ decisions:/);
     assert.doesNotMatch(rendered, /omitted for brevity/i);
     assert.equal(request.userMessages[0].buttons, undefined);
-    assert.equal(request.userMessages.every((message) => message.requiredForSequenceSuccess), true);
+    assert.equal(request.userMessages.every((message: { requiredForSequenceSuccess?: boolean }) => message.requiredForSequenceSuccess), true);
     assert.deepEqual(
       request.userMessages.at(-1).buttons.map((row: Array<{ label: string }>) => row.map((button) => button.label)),
       [["Approve", "Revise", "Reject"]],
@@ -3185,7 +3189,7 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(fallbackRequest.label, "plan-approval-fallback");
     assert.ok(fallbackRequest.userMessages.length > 1);
     assert.ok(fallbackRequest.userMessages.every((message: { text: string }) => message.text.length <= 3_000));
-    assert.equal(fallbackRequest.userMessages.every((message) => message.requiredForSequenceSuccess), true);
+    assert.equal(fallbackRequest.userMessages.every((message: { requiredForSequenceSuccess?: boolean }) => message.requiredForSequenceSuccess), true);
     assert.equal(fallbackRequest.failureWakeConfirmsNotificationDelivery, false);
     assert.match(fallbackRequest.userMessages.map((message: { text: string }) => message.text).join("\n"), /delete reviewed dated memory Markdown older than today/);
   });
@@ -3250,7 +3254,7 @@ describe("SessionManager turn-end wake", () => {
     assert.equal(fallbackRequest.label, "plan-approval-fallback");
     assert.equal(fallbackRequest.buttons, undefined);
     assert.match(fallbackRequest.userMessages[0].text, /buttons could not be delivered/i);
-    assert.equal(fallbackRequest.userMessages.every((message) => message.requiredForSequenceSuccess), true);
+    assert.equal(fallbackRequest.userMessages.every((message: { requiredForSequenceSuccess?: boolean }) => message.requiredForSequenceSuccess), true);
     assert.equal(fallbackRequest.failureWakeConfirmsNotificationDelivery, false);
     fallbackRequest.hooks.onNotifySucceeded();
     assert.equal(s.approvalPromptStatus, "fallback_delivered");
@@ -3405,7 +3409,7 @@ describe("SessionManager turn-end wake", () => {
       },
       canSubmitPendingInputOption: () => true,
       submitPendingInputOption: async (optionIndex: number) => optionIndex === 1,
-      getOutput: () => [],
+      getOutput: (): never[] => [],
     });
     (sm as any).sessions.set(s.id, s);
 
@@ -3449,7 +3453,7 @@ describe("SessionManager turn-end wake", () => {
       status: "running",
       canSubmitPendingInputOption: () => false,
       submitPendingInputOption: async () => false,
-      getOutput: () => [],
+      getOutput: (): never[] => [],
     });
     (sm as any).sessions.set(s.id, s);
 
@@ -3786,7 +3790,7 @@ describe("SessionManager restored button parity", () => {
     const olderButtons = (sm as any).interactions.getPlanApprovalButtons("restored-plan", {
       planDecisionVersion: 4,
     });
-    const olderTokenIds = olderButtons[0].map((button) => button.callbackData);
+    const olderTokenIds = olderButtons[0].map((button: NotificationButton) => button.callbackData);
     for (const tokenId of olderTokenIds) {
       assert.equal((sm as any).interactions.getActionToken(tokenId)?.planDecisionVersion, 4);
     }
@@ -3794,7 +3798,7 @@ describe("SessionManager restored button parity", () => {
     const newerButtons = (sm as any).interactions.getPlanApprovalButtons("restored-plan", {
       planDecisionVersion: 5,
     });
-    const newerTokenIds = newerButtons[0].map((button) => button.callbackData);
+    const newerTokenIds = newerButtons[0].map((button: NotificationButton) => button.callbackData);
 
     for (const tokenId of olderTokenIds) {
       assert.equal((sm as any).interactions.getActionToken(tokenId), undefined);
@@ -4179,7 +4183,7 @@ describe("SessionManager terminal wake behavior", () => {
         session_id: "",
         num_turns: 0,
       },
-      getOutput: () => [],
+      getOutput: (): never[] => [],
     });
 
     await (sm as any).onSessionTerminal(s);
@@ -4316,7 +4320,7 @@ describe("SessionManager terminal wake behavior", () => {
         session_id: "",
         num_turns: 0,
       },
-      getOutput: () => [],
+      getOutput: (): never[] => [],
     });
 
     await (sm as any).onSessionTerminal(s);
@@ -4808,7 +4812,7 @@ describe("SessionManager.handleAskUserQuestion()", () => {
       }],
     });
     const firstRejected = firstPending.then(
-      () => undefined,
+      (): undefined => undefined,
       (error) => error,
     );
     const firstRequest = (sm as any).__dispatchCalls[0][1];

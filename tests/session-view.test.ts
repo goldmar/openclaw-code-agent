@@ -19,7 +19,7 @@ describe("session-view app layer", () => {
         { status: "running", name: "s5", id: "5", duration: 1000, prompt: "x", multiTurn: true, workdir: "/tmp", costUsd: 0, phase: "running", startedAt: now - 5000 },
         { status: "running", name: "s6", id: "6", duration: 1000, prompt: "x", multiTurn: true, workdir: "/tmp", costUsd: 0, phase: "running", startedAt: now - 6 * 24 * 60 * 60 * 1000 },
       ],
-      listPersistedSessions: () => [],
+      listPersistedSessions: (): never[] => [],
     };
 
     const text = getSessionsListingText(sm, "all");
@@ -47,7 +47,7 @@ describe("session-view app layer", () => {
           startedAt: now - 1000,
         },
       ],
-      listPersistedSessions: () => [],
+      listPersistedSessions: (): never[] => [],
     };
 
     const text = getSessionsListingText(sm, "all", undefined, { full: true });
@@ -94,8 +94,8 @@ describe("session-view app layer", () => {
 
   it("returns not found when output session reference is unknown", () => {
     const sm: any = {
-      resolve: () => undefined,
-      getPersistedSession: () => undefined,
+      resolve: (): undefined => undefined,
+      getPersistedSession: (): undefined => undefined,
     };
     const text = getSessionOutputText(sm, "unknown");
     assert.equal(text, 'Error: Session "unknown" not found.');
@@ -112,9 +112,9 @@ describe("session-view app layer", () => {
       pendingPlanApproval: true,
       latestPlanArtifact: { steps: [], markdown: "# Plan\n- Add mul to calc.py" },
       latestPlanArtifactVersion: 1,
-      getOutput: () => [],
+      getOutput: (): never[] => [],
     };
-    const sm: any = { resolve: () => session, getPersistedSession: () => undefined };
+    const sm: any = { resolve: () => session, getPersistedSession: (): undefined => undefined };
 
     for (const full of [false, true]) {
       const text = getSessionOutputText(sm, "plan-1", { full });
@@ -148,7 +148,7 @@ describe("session-view app layer", () => {
           originChannel: "chan:b",
         },
       ],
-      listPersistedSessions: () => [],
+      listPersistedSessions: (): never[] => [],
     };
     const text = getSessionsListingText(sm, "all", "chan:b");
     assert.match(text, /🟢 b \[2\]/);
@@ -157,7 +157,7 @@ describe("session-view app layer", () => {
 
   it("shows persisted sessions in merged listing after GC from memory", () => {
     const sm: any = {
-      list: () => [],
+      list: (): never[] => [],
       listPersistedSessions: () => [
         {
           sessionId: "s-persisted",
@@ -179,7 +179,7 @@ describe("session-view app layer", () => {
 
   it("shows runtime recovery diagnostics for persisted rows recovered from running state", () => {
     const sm: any = {
-      list: () => [],
+      list: (): never[] => [],
       listPersistedSessions: () => [
         {
           sessionId: "s-recovered",
@@ -215,7 +215,7 @@ describe("session-view app layer", () => {
 
   it("does not crash when persisted rows are missing prompt/workdir fields", () => {
     const sm: any = {
-      list: () => [],
+      list: (): never[] => [],
       listPersistedSessions: () => [
         {
           sessionId: "s-legacy",
@@ -236,7 +236,7 @@ describe("session-view app layer", () => {
 
   it("skips malformed persisted rows missing valid status", () => {
     const sm: any = {
-      list: () => [],
+      list: (): never[] => [],
       listPersistedSessions: () => [
         { harnessSessionId: "h2", completedAt: 3000 },
         {
@@ -385,7 +385,7 @@ describe("session-view app layer", () => {
 
   it("uses updated persisted output label", () => {
     const sm: any = {
-      resolve: () => undefined,
+      resolve: (): undefined => undefined,
       getPersistedSession: () => ({
         name: "old",
         status: "completed",
@@ -399,7 +399,7 @@ describe("session-view app layer", () => {
 
   it("reports recovered persisted sessions even when no output path is stored", () => {
     const sm: any = {
-      resolve: () => undefined,
+      resolve: (): undefined => undefined,
       getPersistedSession: () => ({
         sessionId: "Pb1J9UBH",
         harnessSessionId: "backend-019deedc",
@@ -421,7 +421,7 @@ describe("session-view app layer", () => {
   it("reports recovered persisted sessions when the stored output file is missing", () => {
     const missingOutputPath = "/tmp/openclaw-code-agent-missing-output.log";
     const sm: any = {
-      resolve: () => undefined,
+      resolve: (): undefined => undefined,
       getPersistedSession: () => ({
         sessionId: "missing-output",
         harnessSessionId: "h-missing-output",
@@ -489,7 +489,7 @@ describe("session-view app layer", () => {
 
   it("uses harness session ID when persisted session name is missing", () => {
     const sm: any = {
-      resolve: () => undefined,
+      resolve: (): undefined => undefined,
       getPersistedSession: () => ({
         harnessSessionId: "h-123",
         status: "completed",

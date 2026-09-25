@@ -43,7 +43,7 @@ describe("agent_respond command", () => {
           },
         };
       },
-      getPersistedSession: () => undefined,
+      getPersistedSession: (): undefined => undefined,
       notifySession: () => {},
     } as any);
 

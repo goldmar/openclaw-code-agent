@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.typecheck.json",
+  "compilerOptions": {
+    // Tests run on Node >= 24 and may use ES2024 built-ins (Promise.withResolvers,
+    // Array.prototype.findLast); plugin source stays on the ES2022 library.
+    "lib": ["ES2024"],
+    // Type the imported scripts/*.mjs helpers from their JavaScript source.
+    "allowJs": true,
+    "checkJs": false
+  },
+  "include": ["api.ts", "index.ts", "src/**/*.ts", "tests/**/*.ts"]
+}

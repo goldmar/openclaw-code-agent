@@ -5,7 +5,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
-import type { PersistedSessionInfo } from "../src/types";
+import type { PersistedSessionInfo, SessionConfig } from "../src/types";
 import { SessionRestoreService } from "../src/session-restore-service";
 
 const DEFAULT_ROUTE = {
@@ -44,7 +44,7 @@ describe("SessionRestoreService", () => {
     };
 
     const service = new SessionRestoreService((ref) => ref === "h-session-1" ? persisted : undefined);
-    const config = {
+    const config: SessionConfig = {
       prompt: "Continue where you left off.",
       workdir: repoDir,
       resumeSessionId: "h-session-1",
@@ -85,7 +85,7 @@ describe("SessionRestoreService", () => {
     git(repoDir, "add", "README.md");
     git(repoDir, "commit", "-m", "init");
     const service = new SessionRestoreService(() => undefined);
-    const config = {
+    const config: SessionConfig = {
       prompt: "Implement the fix",
       workdir: repoDir,
       harness: "codex",

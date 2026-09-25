@@ -40,7 +40,7 @@ describe("agent_output command", () => {
           },
         };
       },
-      getPersistedSession: () => undefined,
+      getPersistedSession: (): undefined => undefined,
     } as any);
 
     const handler = captureAgentOutputCommand();

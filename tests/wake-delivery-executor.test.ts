@@ -2,8 +2,25 @@ import "./test-env";
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 
+import type { ChildProcess, ExecFileException } from "node:child_process";
 import { WakeDeliveryExecutor, wakeDeliveryExecutorInternals } from "../src/wake-delivery-executor";
 import { WakeTransport } from "../src/wake-transport";
+
+type ExecFileCallback = (error: ExecFileException | null, stdout: string, stderr: string) => void;
+
+/** A stand-in for the `execFile(file, args, options, callback)` form the executor uses. */
+function fakeExecFile(run: (file: string, args: string[], callback: ExecFileCallback) => void): typeof wakeDeliveryExecutorInternals.execFile {
+  const fake = (file: string, args: readonly string[], _options: unknown, callback: ExecFileCallback): ChildProcess => {
+    run(file, [...args], callback);
+    return {} as ChildProcess;
+  };
+  // execFile's overload set cannot be implemented by one function signature.
+  return fake as unknown as typeof wakeDeliveryExecutorInternals.execFile;
+}
+
+function execError(message: string): ExecFileException {
+  return Object.assign(new Error(message), { cmd: "openclaw gateway call chat.send" });
+}
 
 /** The only CLI dispatch production still runs: `openclaw gateway call chat.send`. */
 function chatSendArgs(message: string): string[] {
@@ -81,19 +98,18 @@ describe("WakeDeliveryExecutor", () => {
     });
 
     const attemptedArgs: string[][] = [];
-    t.mock.method(wakeDeliveryExecutorInternals, "execFile", ((file, args, _options, callback) => {
+    t.mock.method(wakeDeliveryExecutorInternals, "execFile", fakeExecFile((file, args, callback) => {
       assert.equal(file, "openclaw");
-      attemptedArgs.push([...(args as string[])]);
+      attemptedArgs.push(args);
       attempts += 1;
-      const error = new Error(attempts === 1 ? "Command timed out" : "gateway unavailable") as Error & { killed?: boolean; signal?: NodeJS.Signals };
+      const error = execError(attempts === 1 ? "Command timed out" : "gateway unavailable");
       if (attempts === 1) {
         // chat.send carries an idempotency key, so a killed attempt is safe to retry.
         error.killed = true;
         error.signal = "SIGKILL";
       }
-      callback?.(error, "", "forced failure");
-      return {} as any;
-    }) as typeof wakeDeliveryExecutorInternals.execFile);
+      callback(error, "", "forced failure");
+    }));
 
     executor.execute(
       chatSendArgs("launch wake"),
@@ -239,19 +255,18 @@ describe("WakeDeliveryExecutor", () => {
     global.clearTimeout = ((() => {}) as typeof clearTimeout);
 
     const dispatchedMessages: string[] = [];
-    t.mock.method(wakeDeliveryExecutorInternals, "execFile", ((file, args, _options, callback) => {
+    t.mock.method(wakeDeliveryExecutorInternals, "execFile", fakeExecFile((file, args, callback) => {
       assert.equal(file, "openclaw");
-      assert.deepEqual((args as string[]).slice(0, 3), ["gateway", "call", "chat.send"]);
-      dispatchedMessages.push(chatSendMessage(args as string[]));
-      if (chatSendMessage(args as string[]) === "first") {
+      assert.deepEqual(args.slice(0, 3), ["gateway", "call", "chat.send"]);
+      dispatchedMessages.push(chatSendMessage(args));
+      if (chatSendMessage(args) === "first") {
         shouldDeliverFirst = false;
-        callback?.(new Error("stale delivery failed"), "", "stale delivery failed");
-        return {} as any;
+        callback(execError("stale delivery failed"), "", "stale delivery failed");
+        return;
       }
       secondDispatchRuns += 1;
-      callback?.(null, "", "");
-      return {} as any;
-    }) as typeof wakeDeliveryExecutorInternals.execFile);
+      callback(null, "", "");
+    }));
 
     executor.execute(
       chatSendArgs("first"),

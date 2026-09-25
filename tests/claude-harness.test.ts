@@ -738,11 +738,12 @@ describe("ClaudeCodeHarness", () => {
 
     const permissionPromise = session.setPermissionMode?.("plan");
     const streamPromise = session.streamInput?.((async function* oneMessage() {
-      yield {
+      const message: SDKUserMessage = {
         type: "user",
         message: { role: "user", content: "continue" },
         parent_tool_use_id: null,
-      } satisfies SDKUserMessage;
+      };
+      yield message;
     })());
     const interruptPromise = session.interrupt?.();
 

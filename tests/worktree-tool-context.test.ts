@@ -22,7 +22,7 @@ describe("worktree-tool-context", () => {
     writeFileSync(outputPath, "Root cause:\n- Persisted report evidence.\n", "utf8");
     try {
       const target = resolveWorktreeToolTarget({
-        resolve: () => undefined,
+        resolve: (): undefined => undefined,
         getPersistedSession: () => ({
           sessionId: "persisted-1",
           name: "completed-session",
@@ -210,7 +210,7 @@ describe("worktree-tool-context", () => {
 
   it("preserves persisted-only notification target identity and origin metadata", () => {
     const target = resolveWorktreeToolTarget({
-      resolve: () => undefined,
+      resolve: (): undefined => undefined,
       getPersistedSession(ref: string) {
         return ref === "persisted-merge"
           ? {
@@ -285,7 +285,6 @@ describe("worktree-tool-context", () => {
       worktreeBranch: "agent/feature-work",
       workdir: "/definitely/missing/repo",
       backendConversationId: undefined,
-      harnessSessionId: undefined,
     });
 
     assert.equal(resolved.activeSession?.id, "active-1");

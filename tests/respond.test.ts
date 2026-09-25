@@ -976,7 +976,6 @@ describe("executeRespond", () => {
           num_turns: 0,
           session_id: "harness-resume-failure",
           result: "backend resume failed before running",
-          is_error: true,
         },
       });
       harness.endMessages();

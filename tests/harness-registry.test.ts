@@ -114,7 +114,7 @@ describe("ClaudeCodeHarness properties", () => {
 
   it("buildUserMessage returns correct structure", () => {
     const h = getHarness("claude-code");
-    const msg = h.buildUserMessage("hello world", "sess-123");
+    const msg = h.buildUserMessage("hello world", "sess-123") as { type: string; message: { role: string; content: unknown } };
     assert.equal(msg.type, "user");
     assert.equal(msg.message.role, "user");
     assert.equal(msg.message.content, "hello world");

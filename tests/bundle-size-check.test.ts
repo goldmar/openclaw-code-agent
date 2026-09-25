@@ -31,7 +31,7 @@ describe("complete bundle size reporting", () => {
 
     assert.equal(report.sizeBytes, 650);
     assert.equal(report.overLimit, true);
-    assert.deepEqual(report.files.map((file) => file.path), [
+    assert.deepEqual(report.files.map((file: { path: string }) => file.path), [
       `${distDir}/chunks/npm-release-client.js`,
       `${distDir}/index.js`,
     ]);

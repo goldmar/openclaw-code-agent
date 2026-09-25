@@ -99,7 +99,7 @@ describe("SessionStateSyncService", () => {
 
     const service = new SessionStateSyncService({
       store: {
-        getPersistedSession: () => undefined,
+        getPersistedSession: (): undefined => undefined,
         assertPersistedEntry: () => {},
         saveIndex: () => {},
       } as any,
@@ -133,7 +133,7 @@ describe("SessionStateSyncService", () => {
 
     const service = new SessionStateSyncService({
       store: {
-        getPersistedSession: () => undefined,
+        getPersistedSession: (): undefined => undefined,
         assertPersistedEntry: () => {},
         saveIndex: () => {},
       } as any,
@@ -170,7 +170,7 @@ describe("SessionStateSyncService", () => {
 
     const service = new SessionStateSyncService({
       store: {
-        getPersistedSession: () => undefined,
+        getPersistedSession: (): undefined => undefined,
         assertPersistedEntry: () => {},
         saveIndex: () => {},
       } as any,
@@ -237,7 +237,7 @@ describe("SessionStateSyncService", () => {
 
     const service = new SessionStateSyncService({
       store: {
-        getPersistedSession: () => undefined,
+        getPersistedSession: (): undefined => undefined,
         assertPersistedEntry: () => {},
         saveIndex: () => {},
       } as any,
@@ -281,7 +281,7 @@ describe("SessionStateSyncService", () => {
 
     const service = new SessionStateSyncService({
       store: {
-        getPersistedSession: () => undefined,
+        getPersistedSession: (): undefined => undefined,
         assertPersistedEntry: () => {},
         saveIndex: () => {},
       } as any,

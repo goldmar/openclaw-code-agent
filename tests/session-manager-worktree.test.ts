@@ -74,11 +74,11 @@ function hasButton(rows: string[][], label: string): boolean {
   return rows.some((row) => row.includes(label));
 }
 
-async function createPendingDelegateDecisionFixture(policy: "pr-required" | "never-pr" | "manual"): {
+async function createPendingDelegateDecisionFixture(policy: "pr-required" | "never-pr" | "manual"): Promise<{
   sm: SessionManager;
   cleanup: () => void;
   dispatchCalls: () => any[];
-} {
+}> {
   const repoDir = mkdtempSync(join(tmpdir(), `sm-worktree-live-policy-${policy}-`));
   git(repoDir, "init", "-b", "main");
   git(repoDir, "config", "user.name", "Test User");

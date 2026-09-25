@@ -9,7 +9,6 @@ function makeSession(overrides: Partial<Session>): Session {
     id: "session-id",
     name: "session-name",
     prompt: "test prompt",
-    harness: "codex",
     status: "completed",
     startedAt: 0,
     originChannel: "telegram|123",
@@ -25,8 +24,8 @@ describe("SessionReferenceService", () => {
       ["older-running", makeSession({ id: "older-running", name: "shared", status: "running", startedAt: 15 })],
     ]);
     const store = {
-      getPersistedSession: () => undefined,
-      resolveBackendConversationId: () => undefined,
+      getPersistedSession: (): undefined => undefined,
+      resolveBackendConversationId: (): undefined => undefined,
     };
 
     const service = new SessionReferenceService(sessions, store);
@@ -40,8 +39,8 @@ describe("SessionReferenceService", () => {
       ["newer", makeSession({ id: "newer", backendRef: { kind: "codex-app-server", conversationId: "conv-1" }, startedAt: 20 })],
     ]);
     const store = {
-      getPersistedSession: () => undefined,
-      resolveBackendConversationId: () => undefined,
+      getPersistedSession: (): undefined => undefined,
+      resolveBackendConversationId: (): undefined => undefined,
     };
 
     const service = new SessionReferenceService(sessions, store);
@@ -60,8 +59,8 @@ describe("SessionReferenceService", () => {
       ["legacy", makeSession({ id: "legacy", startedAt: 20, harnessSessionId: "conv-1" })],
     ]);
     const store = {
-      getPersistedSession: () => undefined,
-      resolveBackendConversationId: () => undefined,
+      getPersistedSession: (): undefined => undefined,
+      resolveBackendConversationId: (): undefined => undefined,
     };
 
     const service = new SessionReferenceService(sessions, store);

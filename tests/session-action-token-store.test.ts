@@ -59,7 +59,7 @@ describe("SessionActionTokenStore", () => {
   });
 
   it("consumes only sibling buttons for the answered wizard question", () => {
-    const store = new SessionActionTokenStore(() => {});
+    const store = new SessionActionTokenStore(() => {}, 100);
     const q1a = store.createActionToken("session-1", "question-answer", { pendingInputRequestId: "request-1", pendingInputQuestionId: "q1", optionIndex: 0 });
     const q1b = store.createActionToken("session-1", "question-answer", { pendingInputRequestId: "request-1", pendingInputQuestionId: "q1", optionIndex: 1 });
     const q2a = store.createActionToken("session-1", "question-answer", { pendingInputRequestId: "request-1", pendingInputQuestionId: "q2", optionIndex: 0 });
@@ -96,7 +96,7 @@ describe("SessionActionTokenStore", () => {
   });
 
   it("atomically consumes only one exact plan-decision version", () => {
-    const store = new SessionActionTokenStore(() => {});
+    const store = new SessionActionTokenStore(() => {}, 100);
     const approve = store.createActionToken("session-1", "plan-approve", { planDecisionVersion: 2 });
     const revise = store.createActionToken("session-1", "plan-request-changes", { planDecisionVersion: 2 });
     const reject = store.createActionToken("session-1", "plan-reject", { planDecisionVersion: 2 });

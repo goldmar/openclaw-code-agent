@@ -503,7 +503,7 @@ describe("session task lifecycle async adapter", () => {
     const created: unknown[] = [];
     setManagedTaskFlow({
       ...taskFlow,
-      async tryCreateManaged(params: Record<string, unknown>) {
+      async tryCreateManaged(params: Record<string, unknown>): Promise<null> {
         created.push(params);
         return null;
       },

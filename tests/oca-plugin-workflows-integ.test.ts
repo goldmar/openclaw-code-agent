@@ -438,7 +438,7 @@ describe("OCA plugin workflow integration coverage", () => {
       sessionId: "taskflow-failed",
       harnessSessionId: "h-taskflow-failed",
       status: "failed",
-      killReason: "error",
+      killReason: "unknown",
       taskFlowMirror: { flowId: "flow-failed", revision: 9, status: "running" },
     } as PersistedSessionInfo);
 

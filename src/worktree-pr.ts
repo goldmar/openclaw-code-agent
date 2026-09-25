@@ -1,5 +1,5 @@
 import { assertBranchName } from "./worktree-ref-validation";
-import { runGh, runGit } from "./git-exec";
+import { runGh, runGit, type CommandError } from "./git-exec";
 import { hasGitHubRemote, isGitHubCLIAvailable } from "./worktree-repo";
 import { createLogger } from "./logger";
 
@@ -65,6 +65,18 @@ function formatOutcomeStats(params: Pick<WorktreeOutcomeParams, "filesChanged" |
   return params.filesChanged !== undefined
     ? ` (${params.filesChanged} files, +${params.insertions ?? 0}/-${params.deletions ?? 0})`
     : "";
+}
+
+/**
+ * What gh reported for a failed command: its stderr when there is any. The
+ * thrown message starts with the full command line (`Command failed: gh pr
+ * create ... --draft ... --body <PR body>`), so matching on it would find
+ * `draft` or `already exists` in OCA's own arguments.
+ */
+function ghFailureReason(err: unknown): string {
+  const stderr = (err as CommandError | undefined)?.stderr?.trim();
+  if (stderr) return stderr;
+  return err instanceof Error ? err.message : String(err);
 }
 
 function isExistingPullRequestError(message: string): boolean {
@@ -145,36 +157,38 @@ export async function createPR(
     const prUrl = result.trim();
     return { success: true, prUrl };
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    if (isExistingPullRequestError(msg)) {
-      return (await recoverExistingPullRequest(repoDir, branch, targetRepo)) ?? { success: false, error: msg };
+    const reason = ghFailureReason(err);
+    if (isExistingPullRequestError(reason)) {
+      return (await recoverExistingPullRequest(repoDir, branch, targetRepo)) ?? { success: false, error: reason };
     }
-    // Recovery: if we requested draft and the error indicates drafts are not supported or enabled
+    // Recovery: if we requested draft and gh reports that drafts are not supported or enabled
     // on the target repo, retry once without --draft so that PR creation does not regress for repos
     // that previously accepted non-draft PRs.
     //
     // The /draft/i heuristic is intentionally broad (as noted in Greptile review) to catch common
-    // GitHub CLI messages about draft support ("draft PRs are not supported", "draft", etc.).
-    // Trade-off: if a non-draft-related error message happens to contain the substring "draft",
+    // GitHub CLI messages about draft support ("draft PRs are not supported", "draft", etc.). It
+    // reads gh's stderr only: the thrown message also echoes the command line, whose `--draft`
+    // flag (and PR body) would otherwise match every failure.
+    // Trade-off: if a non-draft-related gh error happens to contain the substring "draft",
     // we will still retry without the flag and surface an explicit warning to the caller.
     // The caller (agent-pr.ts) always appends warnings to the final tool output text, so there is
     // no silent fallback.
-    if ((options.draft ?? true) && args && /draft/i.test(msg)) {
+    if ((options.draft ?? true) && args && /draft/i.test(reason)) {
       try {
         const retryArgs = args.filter((a) => a !== "--draft");
         const retryResult = await runGh(retryArgs, { cwd: repoDir, timeout: 30_000 });
         const retryUrl = retryResult.trim();
         return { success: true, prUrl: retryUrl, warnings: ["Target repo does not support draft PRs; created as regular (non-draft) PR instead."] };
       } catch (retryErr) {
-        const retryMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
-        if (isExistingPullRequestError(retryMsg)) {
+        const retryReason = ghFailureReason(retryErr);
+        if (isExistingPullRequestError(retryReason)) {
           return (await recoverExistingPullRequest(repoDir, branch, targetRepo))
-            ?? { success: false, error: `Draft PR creation failed (${msg}); non-draft retry also failed: ${retryMsg}` };
+            ?? { success: false, error: `Draft PR creation failed (${reason}); non-draft retry also failed: ${retryReason}` };
         }
-        return { success: false, error: `Draft PR creation failed (${msg}); non-draft retry also failed: ${retryMsg}` };
+        return { success: false, error: `Draft PR creation failed (${reason}); non-draft retry also failed: ${retryReason}` };
       }
     }
-    return { success: false, error: msg };
+    return { success: false, error: reason };
   }
 }
 

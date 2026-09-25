@@ -1142,7 +1142,7 @@ exit 1
 
     assert.equal(result.ok, true);
     assert.ok("metadata" in result);
-    const metadata = (result as { ok: true; metadata: { title: string; summary: string[]; notes: string[] } }).metadata;
+    const metadata = result.metadata;
     assert.match(metadata.title, /OpenClaw agent changes/i);
     assert.ok(metadata.summary.some((s) => /no LLM PR metadata provider/i.test(s) || /deterministic fallback/i.test(s)));
 

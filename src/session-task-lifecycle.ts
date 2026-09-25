@@ -167,13 +167,27 @@ function buildStateJson(session: SessionTaskEvent, phase: "created" | "progress"
   };
 }
 
+/**
+ * The fields OCA keeps from a host Task Flow record. The host returns the whole
+ * record (goal, state and wait JSON, timestamps); only these are mirrored on
+ * the session and persisted in the session store.
+ */
+function toTaskFlowMirror(flow: ManagedTaskFlowRecord): ManagedTaskFlowRecord {
+  return {
+    flowId: flow.flowId,
+    revision: flow.revision,
+    ...(flow.status ? { status: flow.status } : {}),
+    ...(flow.cancelRequestedAt != null ? { cancelRequestedAt: flow.cancelRequestedAt } : {}),
+  };
+}
+
 function applyMutation(
   current: ManagedTaskFlowRecord | undefined,
   mutation: ManagedTaskFlowMutationResult,
 ): ManagedTaskFlowRecord | undefined {
-  if (mutation.applied === true) return mutation.flow;
+  if (mutation.applied === true) return toTaskFlowMirror(mutation.flow);
   const currentFlow = mutation.current;
-  if (currentFlow?.flowId && typeof currentFlow.revision === "number") return currentFlow;
+  if (currentFlow?.flowId && typeof currentFlow.revision === "number") return toTaskFlowMirror(currentFlow);
   return current;
 }
 
@@ -251,7 +265,7 @@ class ManagedTaskFlowSessionTaskLifecycleSink implements SessionTaskLifecycleSin
         log.warn("[SessionTaskLifecycle] create skipped: TaskFlow persistence is unavailable");
         return;
       }
-      this.flow = created;
+      this.flow = toTaskFlowMirror(created);
       session.taskFlowMirror = this.flow;
       this.lastProgressKey = this.progressKey(event, summary);
       this.startCancelPoll(session);
@@ -388,8 +402,8 @@ class ManagedTaskFlowSessionTaskLifecycleSink implements SessionTaskLifecycleSin
     try {
       const current = await this.taskFlow.get(this.flow.flowId);
       if (!isTaskFlowCancelRequested(current)) return;
-      this.flow = current;
-      session.taskFlowMirror = current;
+      this.flow = toTaskFlowMirror(current);
+      session.taskFlowMirror = this.flow;
       this.observeCancel(session);
     } catch (err) {
       warnLifecycleError("cancel-poll", err);

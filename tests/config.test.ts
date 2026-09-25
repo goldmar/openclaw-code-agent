@@ -608,7 +608,7 @@ describe("setPluginConfig", () => {
     assert.equal(pluginConfig.defaultWorkdir, undefined);
     assert.equal(pluginConfig.fallbackChannel, undefined);
     assert.equal(pluginConfig.agentChannels, undefined);
-    assert.equal(pluginConfig.allowedModels, undefined);
+    assert.equal("allowedModels" in pluginConfig, false);
   });
 
   it("handles empty object input", () => {
