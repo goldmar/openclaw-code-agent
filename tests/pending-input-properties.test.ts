@@ -286,4 +286,17 @@ describe("pending input regressions", () => {
     assert.deepEqual(resolvePendingInputAnswer(question, "add tests, yes, continue"), { ok: true, answers: ["tests", "continue"] });
     assert.deepEqual(resolvePendingInputAnswer(question, "Yes, 2"), { ok: true, answers: ["Yes", "tests"] });
   });
+
+  it("prefers separate options when a reply also spells a combined label", () => {
+    const question: PendingInputQuestion = {
+      id: "q",
+      question: "Pick",
+      multiSelect: true,
+      options: [{ label: "A" }, { label: "B" }, { label: "A, B" }, { label: "No" }, { label: "No, stop, and revert" }],
+    };
+    assert.deepEqual(resolvePendingInputAnswer(question, "A, B"), { ok: true, answers: ["A", "B"] });
+    assert.deepEqual(resolvePendingInputAnswer(question, "3"), { ok: true, answers: ["A, B"] });
+    assert.deepEqual(resolvePendingInputAnswer(question, "no, stop, and revert"), { ok: true, answers: ["No, stop, and revert"] });
+    assert.deepEqual(resolvePendingInputAnswer(question, "No, B"), { ok: true, answers: ["No", "B"] });
+  });
 });

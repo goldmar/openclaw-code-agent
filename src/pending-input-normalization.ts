@@ -150,13 +150,26 @@ export type PendingInputAnswerResolution =
   | { ok: true; answers: string[] }
   | { ok: false; error: string };
 
+/** Whether an entry names an option by label (case-insensitive) or in-range number. */
+function entrySelectsOption(entry: string, options: PendingInputOption[], labels: ReadonlySet<string>): boolean {
+  if (labels.has(entry.toLowerCase())) return true;
+  if (!/^\d+$/.test(entry)) return false;
+  const index = Number.parseInt(entry, 10);
+  return index >= 1 && index <= options.length;
+}
+
 /**
- * Split a multi-select reply at commas and newlines, but keep an option label
- * that itself contains a separator ("Yes, continue") whole: at each position
- * the longest run of pieces that spells a label (case-insensitive) wins.
+ * Split a multi-select reply at commas and newlines. When a plain split leaves
+ * a piece that is not an option, an option label that itself contains a
+ * separator ("Yes, continue") is kept whole: at each position the longest run
+ * of pieces that spells a label (case-insensitive) wins. A reply that splits
+ * into options only keeps that reading, so with options `A`, `B`, and `A, B`
+ * the reply `A, B` selects `A` and `B` (select `A, B` by its number).
  */
 function splitMultiSelectEntries(text: string, options: PendingInputOption[]): string[] {
   const labels = new Set(options.map((option) => option.label.toLowerCase()));
+  const plain = text.split(/[,\n]/).map((entry) => entry.trim()).filter(Boolean);
+  if (plain.every((entry) => entrySelectsOption(entry, options, labels))) return plain;
   // Even indexes are pieces, odd indexes the separators between them.
   const parts = text.split(/([,\n])/);
   const entries: string[] = [];

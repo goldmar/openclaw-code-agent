@@ -152,10 +152,11 @@ function parseSessionConversationRef(
     const kind = rawParts[index + 1]?.trim().toLowerCase();
     // The `per-account-channel-peer` DM scope puts the account between the
     // channel and the peer kind: `agent:<id>:<channel>:<account>:direct:<peer>`.
+    // Like the host's `parseSessionDeliveryRoute`, that shape wins whenever the
+    // third segment is `direct`/`dm`, even for an account named like a kind.
     const accountScopedKind = rawParts[index + 2]?.trim().toLowerCase();
     if (
       kind
-      && !PEER_KINDS.has(kind)
       && (accountScopedKind === "direct" || accountScopedKind === "dm")
       && rawParts.length - index >= 4
     ) {

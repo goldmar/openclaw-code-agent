@@ -32,7 +32,8 @@ type Peer = { kind: "direct" | "group" | "channel"; id: string };
 type DmScope = "per-channel-peer" | "per-account-channel-peer";
 
 const agentIdArb = fc.constantFrom("main", "ops", "review-bot");
-const accountIdArb = fc.constantFrom("default", "bot", "work", "acct2");
+// Includes account names that look like peer kinds.
+const accountIdArb = fc.constantFrom("default", "bot", "work", "acct2", "direct", "dm", "group", "channel");
 const snowflakeArb = fc.bigInt({ min: 10n ** 16n, max: 10n ** 19n }).map(String);
 const telegramChatArb = fc.oneof(
   fc.integer({ min: 1, max: 2 ** 40 }).map((id) => `-100${id}`),
@@ -280,6 +281,13 @@ describe("session route regressions", () => {
     const discordKey = buildAgentSessionKey({ agentId: "main", channel: "discord", accountId: "bot", peer: { kind: "direct", id: "998877665544332211" }, dmScope: "per-account-channel-peer" });
     assert.equal(routeFromOriginMetadata("discord|bot|998877665544332211", undefined, discordKey)?.target, "user:998877665544332211");
     assert.equal(routeFromOriginMetadata(undefined, undefined, discordKey)?.target, "user:998877665544332211");
+
+    // An account named like a peer kind is still the account.
+    for (const accountId of ["direct", "dm", "channel", "group"]) {
+      const key = buildAgentSessionKey({ agentId: "main", channel: "discord", accountId, peer: { kind: "direct", id: "123" }, dmScope: "per-account-channel-peer" });
+      assert.equal(key, `agent:main:discord:${accountId}:direct:123`);
+      assert.deepEqual(json(routeFromOriginMetadata(undefined, undefined, key)), { provider: "discord", accountId, target: "user:123", sessionKey: key });
+    }
   });
 
   it("reads Discord and Slack `:thread:` ids from session keys without losing precision", () => {
